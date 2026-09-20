@@ -9,6 +9,7 @@ import {
   meetings,
   projectRequests,
   representations,
+  rescheduleProposals,
   requestExpertRelationships,
   verticals,
 } from '../schema';
@@ -16,6 +17,7 @@ import {
   expertDraftFactory,
   projectRequestFactory,
   representationFactory,
+  rescheduleProposalFactory,
   requestExpertRelationshipFactory,
   userFactory,
 } from '../test/factories';
@@ -504,6 +506,43 @@ describe('close() — §4 cancels both request-grain meeting kinds inside the tr
         .where(and(eq(auditEvents.entityId, id), eq(auditEvents.action, 'meeting.cancelled')));
       expect(rows).toHaveLength(1);
     }
+  });
+
+  /**
+   * Reschedule proposals are case-grain only (`propose` requires a live case engagement), so
+   * this scenario is unreachable through normal use — but `cancelMeetingTx` is a DB-layer
+   * function that doesn't know that, and the cascade calls it directly, never
+   * `meetingsRepository.cancel`'s voiding wrapper. Proves the boundary holds at that layer too:
+   * a proposal seeded directly on a `project_discovery` meeting survives the cascade untouched.
+   */
+  it('does NOT void a reschedule proposal on a cancelled project_discovery meeting', async () => {
+    const seeded = await seedRequestWithTrack({
+      requestStatus: 'eoi_submitted',
+      relationshipStatus: 'eoi_submitted',
+    });
+    const discovery = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'project_discovery', contextId: seeded.requestId }],
+    });
+    const { proposal } = await rescheduleProposalFactory({
+      meetingId: discovery.meeting.id,
+      originalScheduledStart: discovery.meeting.scheduledStart,
+    });
+
+    const result = await closeAsBalo(seeded.requestId);
+
+    expect(result.cancelledMeetings.map((entry) => entry.meetingId)).toContain(
+      discovery.meeting.id
+    );
+    const [meeting] = await db.select().from(meetings).where(eq(meetings.id, discovery.meeting.id));
+    expect(meeting?.status).toBe('cancelled');
+
+    const [reloadedProposal] = await db
+      .select()
+      .from(rescheduleProposals)
+      .where(eq(rescheduleProposals.id, proposal.id));
+    expect(reloadedProposal?.status).toBe('pending');
+    expect(reloadedProposal?.resolvedAt).toBeNull();
   });
 
   it('§5 — D1 RESIDUAL: a waiting_for_participants meeting SURVIVES the close', async () => {

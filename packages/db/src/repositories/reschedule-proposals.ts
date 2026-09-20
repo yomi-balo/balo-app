@@ -566,6 +566,45 @@ export const rescheduleProposalsRepository = {
   },
 
   /**
+   * Voids every pending proposal on a meeting being cancelled, called inside the same
+   * transaction `meetingsRepository.cancel` already opens. Writes the existing `withdrawn`
+   * label — nothing reads a separate value.
+   *
+   * Not `withdraw`'s CAS: `answerableProposal` gates on `gt(expiresAt, now)`, which would
+   * silently skip a lapsed-but-`pending` row on a meeting that's still cancellable (no clock
+   * term in `resolveCancelRefusal`). This predicate has no expiry term for that reason.
+   *
+   * `actorUserId` is nullable because the cancel path's own `audit.actorUserId` accepts a null
+   * system actor, and the FK/CHECK constraint don't require it.
+   *
+   * Returns the count moved, not the rows — callers only need how many.
+   */
+  async voidForCancelledMeeting(
+    meetingId: string,
+    actorUserId: string | null,
+    now: Date,
+    exec: DbExecutor = db
+  ): Promise<number> {
+    const rows = await exec
+      .update(rescheduleProposals)
+      .set({
+        status: 'withdrawn',
+        resolvedAt: now,
+        resolvedByUserId: actorUserId,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(rescheduleProposals.meetingId, meetingId),
+          eq(rescheduleProposals.status, 'pending'),
+          isNull(rescheduleProposals.deletedAt)
+        )
+      )
+      .returning({ id: rescheduleProposals.id });
+    return rows.length;
+  },
+
+  /**
    * Mark every LAPSED pending proposal on one meeting `expired`, returning how many moved.
    * Zero is the normal case.
    *

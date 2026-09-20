@@ -6,8 +6,10 @@ import {
   type MeetingOutcomeLabel,
   type MeetingStatusLabel,
 } from '@balo/shared/engagements';
+import { resolveCancelRefusal, resolveRescheduleRefusal } from '@balo/shared/meetings';
 import { log } from '@/lib/logging';
 import { deriveConsultationOrdinal } from '@/lib/meetings/derive-consultation-ordinal';
+import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
 import type { CaseConsultationRowView } from '@/lib/cases/case-view-types';
 
 /**
@@ -62,6 +64,16 @@ export interface CaseConsultationCounts {
   meetingIdsWithLiveProposal: ReadonlySet<string>;
 }
 
+export interface CaseConsultationActionContext {
+  /** Decides which of `canReschedule` / `canProposeReschedule` can be true on a row; the other
+   *  is structurally `false`. */
+  lens: 'client' | 'expert';
+  /** The loader-resolved capability — `participate` (client) or `manage_engagement` (expert) —
+   *  ANDed with each row's own state below. `false` on a closed case, or when the viewer holds
+   *  neither axis (e.g. a colleague with visibility only). */
+  mayAct: boolean;
+}
+
 /** Whole minutes between the two stamps; `null` when either is missing (never a bare zero). */
 function durationMinutesOf(meeting: Meeting): number | null {
   const { startedAt, endedAt } = meeting;
@@ -70,21 +82,23 @@ function durationMinutesOf(meeting: Meeting): number | null {
 }
 
 /**
- * `/meetings/{id}?from=case_surface`, or `null`.
- *
- * ⚠ ONLY A TERMINAL MEETING HAS A RECAP. `loadRecap` returns `null` — and the recap page
- * 404s — for `scheduled` / `waiting_for_participants` / `in_progress`, so linking one of those
- * would send the viewer to a dead end from their own case. `cancelled` DOES render a recap
- * (the not-held panel), so it keeps its link. NEVER a disabled link.
+ * `/meetings/{id}?from=case_surface` for an `ended` meeting only, `null` otherwise — including
+ * `cancelled`, whose recap has no money block or artifacts, so the link would lead somewhere
+ * emptier than the row itself.
  */
 function recapHrefOf(meeting: Meeting): string | null {
-  if (meeting.status !== 'ended' && meeting.status !== 'cancelled') return null;
+  if (meeting.status !== 'ended') return null;
   return '/meetings/' + meeting.id + '?from=case_surface';
 }
 
 export function mapCaseConsultations(
   meetings: readonly Meeting[],
-  counts: CaseConsultationCounts
+  counts: CaseConsultationCounts,
+  /** Used only for the row action flags (join window, `resolveRescheduleRefusal`'s "already
+   *  started" check) — never for ordering or state derivation; see `deriveConsultationOrdinal`'s
+   *  own now-free purity note. */
+  now: Date,
+  action: CaseConsultationActionContext
 ): CaseConsultationRowView[] {
   const ordinalInputs = meetings.map((meeting) => ({
     id: meeting.id,
@@ -111,6 +125,20 @@ export function mapCaseConsultations(
       });
     }
 
+    // Every flag below reads the raw `meeting.status`, never the derived `state` above: `state`
+    // folds `waiting_for_participants` into `'scheduled'`, but neither
+    // `CANCELLABLE_MEETING_STATUSES` nor `RESCHEDULABLE_MEETING_STATUSES` admits it.
+    const live = insideCaseJoinWindow(now, meeting.scheduledStart.toISOString());
+    const hasLiveProposal = counts.meetingIdsWithLiveProposal.has(meeting.id);
+    const canCancel = action.mayAct && resolveCancelRefusal(meeting.status) === null;
+    // `canCancel` is deliberately not blocked by a live proposal or the join window, unlike the
+    // two move flags below — cancelling isn't a negotiation.
+    const canMove =
+      action.mayAct &&
+      !live &&
+      !hasLiveProposal &&
+      resolveRescheduleRefusal(meeting.status, meeting.scheduledStart, now) === null;
+
     return {
       meetingId: meeting.id,
       ordinal: deriveConsultationOrdinal(ordinalInputs, meeting.id).ordinal,
@@ -125,6 +153,16 @@ export function mapCaseConsultations(
       // ⚠ HARD-FALSE. No recording exists anywhere (BAL-126 / BAL-140 own capture); the
       // indicator does not render. Never wire this to a truthy guess.
       hasRecording: false,
+      canReschedule: action.lens === 'client' && canMove,
+      canProposeReschedule: action.lens === 'expert' && canMove,
+      canCancel,
+      // Hard-false / hard-zero — not yet wired; see `CaseConsultationRowView`'s own docblock.
+      canInvite: false,
+      guestCount: 0,
+      scheduledMinutes: Math.round(
+        (meeting.scheduledEnd.getTime() - meeting.scheduledStart.getTime()) / 60_000
+      ),
+      live,
     };
   });
 

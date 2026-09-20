@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
+import type { AvailabilityView } from '@/components/availability/use-expert-availability';
 import { ProposeTimesDialog } from './propose-times-dialog';
 
 /**
@@ -44,6 +45,15 @@ vi.mock('sonner', () => ({
 // again, which is what proves the calendar resets between picks.
 const { mockPickerMountCount } = vi.hoisted(() => ({ mockPickerMountCount: { value: 0 } }));
 
+// Defaults to a NON-ready view (no suggestions, no real fetch) so step 1 falls straight through
+// to the mocked calendar below — the shape every pre-suggested-view test in this file assumes.
+const { mockAvailabilityView } = vi.hoisted(() => ({
+  mockAvailabilityView: { value: { kind: 'not_configured' } as AvailabilityView },
+}));
+vi.mock('@/components/availability/use-expert-availability', () => ({
+  useExpertAvailability: () => ({ view: mockAvailabilityView.value, reload: vi.fn() }),
+}));
+
 let nextSlotStart = '2026-09-08T10:00:00.000Z';
 vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: ({
@@ -77,12 +87,14 @@ const BASE_PROPS = {
   currentScheduledStartIso: '2026-09-01T09:00:00.000Z',
   durationMinutes: 30,
   caseTitle: 'Salesforce integration',
+  ordinal: 2,
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockIsMobile.value = false;
   mockPickerMountCount.value = 0;
+  mockAvailabilityView.value = { kind: 'not_configured' };
   nextSlotStart = '2026-09-08T10:00:00.000Z';
   mockProposeRescheduleAction.mockResolvedValue({
     success: true,
@@ -109,6 +121,15 @@ describe('ProposeTimesDialog — picking up to 3 times', () => {
   it('renders nothing when closed', () => {
     render(<ProposeTimesDialog {...BASE_PROPS} open={false} />);
     expect(screen.queryByRole('button', { name: 'pick-slot' })).not.toBeInTheDocument();
+  });
+
+  // Wide enough for the embedded ExpertAvailabilityCalendar's two-pane layout, same width and
+  // reasoning as reschedule-dialog.tsx, capped so it never overflows a small viewport.
+  it('is wide enough to host the two-pane calendar, capped against the viewport', () => {
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+    expect(document.querySelector('[data-slot="dialog-content"]')).toHaveClass(
+      'sm:max-w-[min(92vw,840px)]'
+    );
   });
 
   it('adds a picked slot to the list and remounts the calendar for the next pick', async () => {
@@ -176,6 +197,8 @@ describe('ProposeTimesDialog — picking up to 3 times', () => {
     await user.click(screen.getByRole('button', { name: 'pick-slot' }));
 
     await waitFor(() => expect(screen.getByText(/maximum of 3 times/i)).toHaveFocus());
+    // Programmatic focus on this non-interactive note must not paint the default ring.
+    expect(screen.getByText(/maximum of 3 times/i)).toHaveClass('focus-visible:outline-none');
   });
 
   it('removing a pick to drop back under the cap returns focus to the dialog heading', async () => {
@@ -192,13 +215,35 @@ describe('ProposeTimesDialog — picking up to 3 times', () => {
     if (firstRemoveButton === undefined) throw new Error('expected a remove button');
     await user.click(firstRemoveButton);
 
-    // Two "Propose new times" headings exist (the sr-only `DialogTitle`, and the visible
-    // in-body one this focuses) — find the VISIBLE one specifically.
+    // The sr-only `DialogTitle`'s accessible name now carries the ordinal, so it no longer
+    // collides with the visible heading's exact "Propose new times" text.
     await waitFor(() => {
-      const headings = screen.getAllByRole('heading', { name: 'Propose new times' });
-      const visible = headings.find((h) => !h.className.includes('sr-only'));
-      expect(visible).toHaveFocus();
+      expect(screen.getByRole('heading', { name: 'Propose new times' })).toHaveFocus();
     });
+    expect(screen.getByRole('heading', { name: 'Propose new times' })).toHaveClass(
+      'focus-visible:outline-none'
+    );
+  });
+});
+
+// ── Subject identity ────────────────────────────────────────────────────────────
+
+describe('ProposeTimesDialog — subject identity (BAL-421)', () => {
+  it('shows a "Currently {date} · {duration} min" subject strip', () => {
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+    expect(screen.getByText(/Currently/).textContent).toContain('30 min');
+  });
+
+  it('the programmatic name carries the ordinal and the current time', () => {
+    render(<ProposeTimesDialog {...BASE_PROPS} ordinal={3} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAccessibleName(/Propose new times for consultation 3 — currently/);
+  });
+
+  it('the programmatic name omits the ordinal number when it is null', () => {
+    render(<ProposeTimesDialog {...BASE_PROPS} ordinal={null} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAccessibleName(/^Propose new times for consultation — currently/);
   });
 });
 
@@ -267,12 +312,39 @@ describe('ProposeTimesDialog — submission', () => {
 
   // Item 3 — BAL-409's `closeOnAcknowledge` precedent, carried over: a TERMINAL failure means
   // the dialog was rendered from state that no longer exists (the meeting/case/proposal is
-  // gone), so it must close AND refresh rather than re-offer a Send that will fail again.
-  it('a TERMINAL failure (meeting_not_reschedulable) toasts, closes, AND refreshes via onProposed', async () => {
+  // gone), so it must close rather than re-offer a Send that will fail again.
+  it('a TERMINAL failure (meeting_not_reschedulable) toasts and calls ONLY onTerminalFailure', async () => {
     mockProposeRescheduleAction.mockResolvedValue({
       success: false,
       code: 'meeting_not_reschedulable',
       error: 'This consultation can no longer be moved.',
+    });
+    const onClose = vi.fn();
+    const onProposed = vi.fn();
+    const onTerminalFailure = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProposeTimesDialog
+        {...BASE_PROPS}
+        onClose={onClose}
+        onProposed={onProposed}
+        onTerminalFailure={onTerminalFailure}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'pick-slot' }));
+    await user.click(screen.getByRole('button', { name: 'Send proposal (1)' }));
+
+    expect(mockToastError).toHaveBeenCalledWith('This consultation can no longer be moved.');
+    expect(onTerminalFailure).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onProposed).not.toHaveBeenCalled();
+  });
+
+  it('falls back to onClose when onTerminalFailure is not supplied — same posture as cancel/reschedule', async () => {
+    mockProposeRescheduleAction.mockResolvedValue({
+      success: false,
+      code: 'meeting_not_found',
+      error: "We couldn't find that consultation.",
     });
     const onClose = vi.fn();
     const onProposed = vi.fn();
@@ -281,19 +353,114 @@ describe('ProposeTimesDialog — submission', () => {
     await user.click(screen.getByRole('button', { name: 'pick-slot' }));
     await user.click(screen.getByRole('button', { name: 'Send proposal (1)' }));
 
-    expect(mockToastError).toHaveBeenCalledWith('This consultation can no longer be moved.');
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onProposed).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+    expect(onProposed).not.toHaveBeenCalled();
   });
 
-  it('Cancel resets the picked list and closes', async () => {
+  // "Cancel" reads as the CONSULTATION on this surface, and this dialog is reachable from the
+  // cancel confirmation itself — the dismiss button reads "Keep this time" instead.
+  it('"Keep this time" resets the picked list and closes', async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(<ProposeTimesDialog {...BASE_PROPS} onClose={onClose} />);
     await user.click(screen.getByRole('button', { name: 'pick-slot' }));
 
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Keep this time' }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+function readyView(starts: readonly string[]): AvailabilityView {
+  return {
+    kind: 'ready',
+    expertTimezone: 'UTC',
+    days: 14,
+    slots: starts.map((start) => ({
+      start,
+      end: new Date(new Date(start).getTime() + 30 * 60_000).toISOString(),
+      maxDuration: 30,
+    })),
+  };
+}
+
+// The accessible name also carries the sr-only zone announcement between the range and "— add"
+// (`<time>…<span class="sr-only"> (UTC)</span></time><span class="sr-only"> — add</span>`).
+const SUGGESTED_DAY2 = /Wed, 2 Sept, 9:00 – 9:30 am · 30 min.*— add/;
+const SUGGESTED_DAY3 = /Thu, 3 Sept, 9:00 – 9:30 am · 30 min.*— add/;
+
+describe('ProposeTimesDialog — suggested times', () => {
+  it('opens on suggested times when availability is ready with candidates', () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+
+    expect(screen.getByText('Suggested times')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: SUGGESTED_DAY2 })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'pick-slot' })).not.toBeInTheDocument();
+  });
+
+  it('opens straight on the calendar when availability is ready but nothing suggests', () => {
+    mockAvailabilityView.value = readyView([]);
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+
+    expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
+    expect(screen.queryByText('Suggested times')).not.toBeInTheDocument();
+  });
+
+  it('opens straight on the calendar when availability is not ready', () => {
+    mockAvailabilityView.value = { kind: 'error' };
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+
+    expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
+  });
+
+  it('a suggested pick ADDS to the list rather than advancing a step', async () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const user = userEvent.setup();
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+
+    await user.click(screen.getByRole('button', { name: SUGGESTED_DAY2 }));
+
+    expect(screen.getByRole('button', { name: 'Send proposal (1)' })).toBeInTheDocument();
+  });
+
+  it('a day already picked leaves the suggested pool — three options are three different days', async () => {
+    mockAvailabilityView.value = readyView([
+      '2026-09-02T09:00:00.000Z',
+      '2026-09-03T09:00:00.000Z',
+    ]);
+    const user = userEvent.setup();
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+
+    await user.click(screen.getByRole('button', { name: SUGGESTED_DAY2 }));
+
+    expect(screen.queryByRole('button', { name: SUGGESTED_DAY2 })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: SUGGESTED_DAY3 })).toBeInTheDocument();
+  });
+
+  it('"See more times" switches to the calendar, adding rather than advancing', async () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const user = userEvent.setup();
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+
+    await user.click(screen.getByRole('button', { name: 'See more times' }));
+    await user.click(screen.getByRole('button', { name: 'pick-slot' }));
+
+    expect(screen.getByRole('button', { name: 'Send proposal (1)' })).toBeInTheDocument();
+  });
+
+  it('exhausting every suggested day falls through to the calendar automatically', async () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const user = userEvent.setup();
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+
+    await user.click(screen.getByRole('button', { name: SUGGESTED_DAY2 }));
+
+    // The one candidate day is now picked, so nothing is left to suggest — the calendar takes
+    // over without a "See more times" click.
+    expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
   });
 });

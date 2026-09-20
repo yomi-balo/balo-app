@@ -409,6 +409,29 @@ describe('POST /meetings/:meetingId/reschedule-proposals/:proposalId (BAL-411 an
       expect(res.json()).toEqual({ error: 'proposal_not_answerable' });
     });
 
+    it.each(['waiting_for_participants', 'in_progress', 'ended', 'cancelled'])(
+      '409 meeting_not_reschedulable for status=%s, and the service is never called',
+      async (status) => {
+        mockAuthorizeMeetingReschedule.mockResolvedValue(
+          authOk({ meeting: meetingRow({ status }) })
+        );
+        const res = await call({ method: 'POST', url: URL, headers: AUTH });
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toEqual({ error: 'meeting_not_reschedulable' });
+        expect(mockDeclineRescheduleProposal).not.toHaveBeenCalled();
+      }
+    );
+
+    it('409 meeting_not_reschedulable once the meeting has already started', async () => {
+      mockAuthorizeMeetingReschedule.mockResolvedValue(
+        authOk({ meeting: meetingRow({ scheduledStart: new Date(fromNow(-MINUTE_MS)) }) })
+      );
+      const res = await call({ method: 'POST', url: URL, headers: AUTH });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'meeting_not_reschedulable' });
+      expect(mockDeclineRescheduleProposal).not.toHaveBeenCalled();
+    });
+
     it('200 happy path', async () => {
       const res = await call({ method: 'POST', url: URL, headers: AUTH });
       expect(res.statusCode).toBe(200);

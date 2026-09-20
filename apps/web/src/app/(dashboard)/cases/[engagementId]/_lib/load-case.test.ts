@@ -486,13 +486,20 @@ describe('loadCase — no meeting secret and no rate crosses the projection boun
     expect([...Object.keys(row)].sort()).toEqual(
       [
         'actionItemCount',
+        'canCancel',
+        'canInvite',
+        'canProposeReschedule',
+        'canReschedule',
         'durationMinutes',
         'fileCount',
+        'guestCount',
         'hasRecording',
         'hasTranscript',
+        'live',
         'meetingId',
         'ordinal',
         'recapHref',
+        'scheduledMinutes',
         'scheduledStartIso',
         'startedAtIso',
         'state',
@@ -853,11 +860,6 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
       optionCount: 2,
       originalScheduledStartIso: SCHEDULED_START.toISOString(),
       expiresAtIso: '2026-08-20T09:00:00.000Z',
-      proposedAtIso: '2026-08-13T09:00:00.000Z',
-      options: [
-        { optionId: 'opt-1', scheduledStartIso: '2026-08-21T10:00:00.000Z' },
-        { optionId: 'opt-2', scheduledStartIso: '2026-08-22T10:00:00.000Z' },
-      ],
       // BAL-567 — `findNamesByIds` is seeded EMPTY in the default fixture, so the rule falls
       // back to the expert PARTY label rather than inventing a person. The dedicated
       // attribution describe below drives the readable-name arms.
@@ -880,11 +882,6 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
       meetingId: 'm1',
       optionCount: 2,
       expiresAtIso: '2026-08-20T09:00:00.000Z',
-      proposedAtIso: '2026-08-13T09:00:00.000Z',
-      options: [
-        { optionId: 'opt-1', scheduledStartIso: '2026-08-21T10:00:00.000Z' },
-        { optionId: 'opt-2', scheduledStartIso: '2026-08-22T10:00:00.000Z' },
-      ],
       actorLabel: 'Amara Okafor',
     });
   });
@@ -1660,5 +1657,192 @@ describe('loadCase — actor attribution (BAL-567)', () => {
 
     expect(view.nudge).toMatchObject({ kind: 'upcoming', joinPath: '/meetings/m1/call' });
     expect(JSON.stringify(view.nudge)).not.toContain('/join/m/');
+  });
+});
+
+// ── per-row action flags widen beyond the NEXT meeting ─────────────────────────────────────
+
+/** `someUpcomingMeetingIsCancellable` is only the case-level short-circuit; `mapCaseConsultations`'s
+ *  own per-row predicate decides each row's own flag. */
+describe('loadCase — row action flags widen beyond the NEXT meeting (BAL-421)', () => {
+  const NEXT_START = new Date('2026-08-12T11:50:00Z');
+  const ROW2_START = new Date('2026-08-20T10:00:00Z');
+
+  function inProgressNext(): Record<string, unknown> {
+    return meeting('m-next', {
+      status: 'in_progress',
+      outcome: null,
+      scheduledStart: NEXT_START,
+      startedAt: new Date('2026-08-12T11:51:00Z'),
+    });
+  }
+  function scheduledRow2(): Record<string, unknown> {
+    return meeting('m-row2', {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: ROW2_START,
+    });
+  }
+
+  it('CLIENT — row #2 gets canCancel/canReschedule TRUE even though the NEXT meeting cannot be', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([inProgressNext(), scheduledRow2()]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm-next' });
+    const row2 = view.consultations.find((row) => row.meetingId === 'm-row2');
+    expect(row2).toMatchObject({ canCancel: true, canReschedule: true });
+    const nextRow = view.consultations.find((row) => row.meetingId === 'm-next');
+    expect(nextRow).toMatchObject({ canCancel: false, canReschedule: false });
+  });
+
+  it('EXPERT — row #2 gets canCancel/canProposeReschedule TRUE for the same reason', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([inProgressNext(), scheduledRow2()]);
+
+    const view = await loadOrThrow();
+
+    const row2 = view.consultations.find((row) => row.meetingId === 'm-row2');
+    expect(row2).toMatchObject({ canCancel: true, canProposeReschedule: true });
+  });
+
+  it('resolves the capability ONCE for the whole case, not once per row', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([inProgressNext(), scheduledRow2()]);
+    mockHasCapability.mockClear();
+
+    await loadOrThrow();
+
+    expect(mockHasCapability).toHaveBeenCalledTimes(1);
+  });
+
+  it('every row flag is FALSE when the case-level capability itself says no', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([scheduledRow2()]);
+    mockHasCapability.mockResolvedValue(false);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations[0]).toMatchObject({ canCancel: false, canReschedule: false });
+  });
+});
+
+// ── the proposal-hosting widening ───────────────────────────────────────────────────────────
+
+describe('loadCase — rescheduleProposals hosts a card per upcoming meeting (Ruling 4 / D4)', () => {
+  const NEXT_START = new Date('2026-08-20T10:00:00Z');
+  const ROW2_START = new Date('2026-08-25T10:00:00Z');
+
+  function nextMeeting(): Record<string, unknown> {
+    return meeting('m-next', {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: NEXT_START,
+    });
+  }
+  function row2Meeting(): Record<string, unknown> {
+    return meeting('m-row2', {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: ROW2_START,
+    });
+  }
+  function proposalSummary(
+    meetingId: string,
+    proposalId: string,
+    originalScheduledStart: Date
+  ): Record<string, unknown> {
+    return {
+      proposalId,
+      meetingId,
+      optionCount: 1,
+      originalScheduledStart,
+      expiresAt: new Date('2026-08-19T09:00:00Z'),
+      proposedByUserId: EXPERT_USER_ID,
+    };
+  }
+  function proposalDetail(proposalId: string): Record<string, unknown> {
+    return {
+      proposal: { id: proposalId, createdAt: new Date('2026-08-13T09:00:00Z') },
+      options: [{ id: `${proposalId}-opt`, scheduledStart: new Date('2026-08-21T10:00:00Z') }],
+    };
+  }
+
+  it('a live proposal on a NON-next meeting still gets a card — the "see above" fix', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([nextMeeting(), row2Meeting()]);
+    m.findLiveProposals.mockResolvedValue([proposalSummary('m-row2', 'proposal-row2', ROW2_START)]);
+    m.findProposalForAnswer.mockResolvedValue(proposalDetail('proposal-row2'));
+
+    const view = await loadOrThrow();
+
+    // The NUDGE still names the next meeting — the proposal is NOT on it.
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm-next' });
+    expect(view.rescheduleProposals).toHaveLength(1);
+    expect(view.rescheduleProposals[0]).toMatchObject({
+      proposalId: 'proposal-row2',
+      meetingId: 'm-row2',
+    });
+  });
+
+  it('GHOST-CARD BUG (Ruling 4) — a live proposal on an ALREADY-CANCELLED meeting gets NO card', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([
+      meeting('m-cancelled', { status: 'cancelled', outcome: null, scheduledStart: ROW2_START }),
+    ]);
+    m.findLiveProposals.mockResolvedValue([
+      proposalSummary('m-cancelled', 'proposal-1', ROW2_START),
+    ]);
+    // Without this, `seed()`'s default `findProposalForAnswer` mock makes `found === undefined`
+    // regardless of the `caseConsultationIsUpcoming` gate under test — this ensures the gate,
+    // not the mock default, is what produces the empty list.
+    m.findProposalForAnswer.mockResolvedValue(proposalDetail('proposal-1'));
+
+    const view = await loadOrThrow();
+
+    expect(view.rescheduleProposals).toEqual([]);
+  });
+
+  it('reuses the nudge’s already-resolved actor label rather than a second findNamesByIds call', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([nextMeeting()]);
+    m.findLiveProposals.mockResolvedValue([proposalSummary('m-next', 'proposal-next', NEXT_START)]);
+    m.findProposalForAnswer.mockResolvedValue(proposalDetail('proposal-next'));
+    m.findNames.mockResolvedValue([{ id: EXPERT_USER_ID, firstName: 'Amara', lastName: 'Okafor' }]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'reschedule_proposal', actorLabel: 'Amara' });
+    expect(view.rescheduleProposals).toHaveLength(1);
+    expect(view.rescheduleProposals[0]?.actorLabel).toBe('Amara');
+    expect(m.findNames).toHaveBeenCalledTimes(1);
+  });
+
+  it('is EMPTY in the common case — no live proposal anywhere', async () => {
+    const view = await loadOrThrow();
+    expect(view.rescheduleProposals).toEqual([]);
+  });
+
+  it('carries the MEETING’s booked length, not a fabricated per-option one', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([
+      meeting('m-next', {
+        status: 'scheduled',
+        outcome: null,
+        startedAt: null,
+        scheduledStart: NEXT_START,
+        scheduledEnd: new Date('2026-08-20T10:30:00Z'),
+      }),
+    ]);
+    m.findLiveProposals.mockResolvedValue([proposalSummary('m-next', 'proposal-next', NEXT_START)]);
+    m.findProposalForAnswer.mockResolvedValue(proposalDetail('proposal-next'));
+
+    const view = await loadOrThrow();
+
+    expect(view.rescheduleProposals[0]?.durationMinutes).toBe(30);
   });
 });

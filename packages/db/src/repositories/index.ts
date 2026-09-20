@@ -612,6 +612,7 @@ export {
   MeetingNotCancellableError,
   MeetingNotReschedulableError,
   type CancelMutationResult,
+  type MeetingCancelResult,
   type CreateMeetingInput,
   type CreatedMeeting,
   type MeetingContextInput,

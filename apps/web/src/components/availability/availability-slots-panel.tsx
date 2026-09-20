@@ -6,6 +6,7 @@ import { AlertTriangle, CalendarDays, CalendarCheck } from 'lucide-react';
 import type { AvailabilitySlotDto, SlotDurationMinutes } from '@balo/shared/availability';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { AvailabilityMessage } from './availability-states';
 import {
   formatDayHeading,
@@ -44,6 +45,25 @@ const rowVariants = {
   hidden: { opacity: 0, y: 8 },
   show: { opacity: 1, y: 0, transition: { duration: 0.2, ease: 'easeOut' as const } },
 };
+
+/** Pinned renders the same range `LocalDateTime` the rows use, so casing agrees within the
+ *  flow; unpinned keeps `formatSlotTime` (uppercase AM/PM), byte-for-byte. */
+function selectedTimeDisplay(
+  iso: string,
+  fixedDurationMinutes: SlotDurationMinutes | undefined,
+  viewerTimezone: string
+): React.ReactNode {
+  if (fixedDurationMinutes === undefined) return formatSlotTime(iso, viewerTimezone);
+  return (
+    <LocalDateTime
+      iso={iso}
+      variant="day-month-time-range"
+      durationMinutes={fixedDurationMinutes}
+      timeZone={viewerTimezone}
+      showDay={false}
+    />
+  );
+}
 
 /** Extracted so the three states stay flat — a nested ternary trips SonarCloud. */
 function confirmButtonLabel(
@@ -218,24 +238,12 @@ export function AvailabilitySlotsPanel({
 
         <div className="border-primary/30 bg-primary/5 mb-5 rounded-lg border px-4 py-3">
           <span className="text-primary text-base font-semibold">
-            {formatSlotTime(selectedSlot.start, viewerTimezone)}
+            {selectedTimeDisplay(selectedSlot.start, fixedDurationMinutes, viewerTimezone)}
           </span>
           <span className="text-muted-foreground ml-2 text-[13px]">{headDate}</span>
         </div>
 
-        {fixedDurationMinutes !== undefined ? (
-          // B6(a) — PINNED: ONE non-interactive line, never a radio group whose answer would be
-          // discarded server-side. `chosenDuration` is already auto-set to this value by the
-          // effect above, so the Confirm button below is enabled immediately.
-          <div className="border-border bg-card mb-5 rounded-lg border px-4 py-3">
-            <p className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wider uppercase">
-              Duration
-            </p>
-            <p className="text-foreground text-sm font-medium">
-              {fixedDurationMinutes} minutes — same as your current consultation
-            </p>
-          </div>
-        ) : (
+        {fixedDurationMinutes === undefined ? (
           <fieldset>
             <legend className="text-muted-foreground mb-2.5 text-[11px] font-semibold tracking-wider uppercase">
               How long do you need?
@@ -287,6 +295,18 @@ export function AvailabilitySlotsPanel({
               })}
             </div>
           </fieldset>
+        ) : (
+          // B6(a) — PINNED: ONE non-interactive line, never a radio group whose answer would be
+          // discarded server-side. `chosenDuration` is already auto-set to this value by the
+          // effect above, so the Confirm button below is enabled immediately.
+          <div className="border-border bg-card mb-5 rounded-lg border px-4 py-3">
+            <p className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wider uppercase">
+              Duration
+            </p>
+            <p className="text-foreground text-sm font-medium">
+              {fixedDurationMinutes} minutes — same as your current consultation
+            </p>
+          </div>
         )}
 
         <Button
@@ -325,7 +345,7 @@ export function AvailabilitySlotsPanel({
       {/* `tabIndex={-1}` makes this programmatically focusable without entering the tab order —
           it is where focus lands when a day is picked, so the next Tab continues from the day's
           slot list rather than restarting at the top of the page. */}
-      <div className="mb-4" ref={headingRef} tabIndex={-1}>
+      <div className="mb-4 focus-visible:outline-none" ref={headingRef} tabIndex={-1}>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-foreground text-[15px] font-semibold tracking-tight">
             {headDate}
@@ -423,7 +443,22 @@ export function AvailabilitySlotsPanel({
             const content = (
               <>
                 <span className="text-sm font-medium">
-                  {formatSlotTime(slot.start, viewerTimezone)}
+                  {/* A time is never shown without its length. UNPINNED keeps the bare start
+                      time — the "up to Nm" pill alongside it already carries the length.
+                      PINNED shows the actual range instead: `effectiveFilter` is never `'any'`
+                      while pinned, so `showDurationLabel` below stays silent and the bare start
+                      time would otherwise be the row's ONLY content. */}
+                  {fixedDurationMinutes === undefined ? (
+                    formatSlotTime(slot.start, viewerTimezone)
+                  ) : (
+                    <LocalDateTime
+                      iso={slot.start}
+                      variant="day-month-time-range"
+                      durationMinutes={fixedDurationMinutes}
+                      timeZone={viewerTimezone}
+                      showDay={false}
+                    />
+                  )}
                 </span>
                 <span className="flex items-center gap-1.5">
                   {crossesMidnight && (
@@ -465,7 +500,8 @@ export function AvailabilitySlotsPanel({
 
       {mode === 'selectable' && selectedSlot && (
         <Button type="button" className="mt-3.5 w-full" onClick={onContinue}>
-          Continue with {formatSlotTime(selectedSlot.start, viewerTimezone)} →
+          Continue with{' '}
+          {selectedTimeDisplay(selectedSlot.start, fixedDurationMinutes, viewerTimezone)} →
         </Button>
       )}
     </div>

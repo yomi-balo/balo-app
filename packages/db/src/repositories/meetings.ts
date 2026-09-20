@@ -43,6 +43,7 @@ import {
   recordMeetingRescheduled,
 } from './_shared/meeting-audit';
 import { meetingPresenceRepository } from './meeting-presence';
+import { rescheduleProposalsRepository } from './reschedule-proposals';
 import { createLogger } from '@balo/shared/logging';
 
 const logger = createLogger('meetings-repository');
@@ -331,6 +332,15 @@ export interface CancelMutationResult extends MeetingMutationResult {
    * event.
    */
   cancelAuditId: string;
+}
+
+/**
+ * Widens {@link CancelMutationResult}. Kept separate because `CancelMutationResult` is also
+ * `cancelMeetingTx`'s return shape, shared with the close cascade, which must not inherit this.
+ */
+export interface MeetingCancelResult extends CancelMutationResult {
+  /** Proposals voided by this cancel, same transaction — usually `0`. */
+  voidedProposalCount: number;
 }
 
 /**
@@ -1312,6 +1322,18 @@ export const meetingsRepository = {
    * transaction as the request write, and so may NOT call this method (it would take a second
    * pooled connection and commit independently, orchestrator D4) — drives the identical CAS
    * rather than a second copy of it. Change the sequence THERE, never here.
+   *
+   * A fourth step only here, not in `cancelMeetingTx`: after the shared core succeeds, this
+   * wrapper voids every pending reschedule proposal on the meeting in the SAME transaction, so
+   * it shares that transaction's fate — `cancelMeetingTx` skips it because the close cascade it
+   * powers can't orphan a proposal (reschedule proposals are case-grain; the cascade only
+   * cancels `project_discovery` / `request_interaction` meetings).
+   *
+   * Not fully closed: `revertAccept` CASes on `proposalId` alone (no meeting-status term), so a
+   * cancel landing between accept's answer-write and a failed `rescheduleMeeting` can miss this
+   * void and let `revertAccept` recreate a `pending` proposal on a cancelled meeting. Harmless
+   * today only because the decline route re-checks `cancelled` status independently; the orphan
+   * row itself is never cleaned up.
    */
   async cancel(
     id: string,
@@ -1323,13 +1345,19 @@ export const meetingsRepository = {
        */
       actorRole: 'client' | 'expert' | 'admin' | 'system';
     }
-  ): Promise<CancelMutationResult> {
+  ): Promise<MeetingCancelResult> {
     return db.transaction(async (tx) => {
       const result = await cancelMeetingTx(tx, id, audit);
       if (result === undefined) {
         throw new MeetingNotCancellableError(id);
       }
-      return result;
+      const voidedProposalCount = await rescheduleProposalsRepository.voidForCancelledMeeting(
+        id,
+        audit.actorUserId,
+        result.meeting.updatedAt,
+        tx
+      );
+      return { ...result, voidedProposalCount };
     });
   },
 

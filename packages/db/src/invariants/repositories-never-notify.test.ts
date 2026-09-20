@@ -66,6 +66,13 @@ const PINNED_REPOSITORIES: readonly string[] = [
   'meetings.ts',
   'consultations.ts',
   /**
+   * Transaction-reachable from `meetings.ts`: `cancel()` calls
+   * `rescheduleProposalsRepository.voidForCancelledMeeting` inside its own `db.transaction`.
+   * Same three-reason argument — a smuggled publish would fire from inside that transaction
+   * and could not be rolled back.
+   */
+  'reschedule-proposals.ts',
+  /**
    * BAL-396 adds the two CALENDAR repositories, for the same three reasons.
    *
    * `meeting-calendar-events.ts` is written from `services/consultation-events/` — a path

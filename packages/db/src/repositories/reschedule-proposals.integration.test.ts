@@ -725,6 +725,130 @@ describe('rescheduleProposalsRepository — the answer CAS (accept / decline / w
   });
 });
 
+/**
+ * `voidForCancelledMeeting` is exercised here at the predicate level only — that it runs inside
+ * `meetingsRepository.cancel`'s own transaction is pinned by `meetings.integration.test.ts`.
+ */
+describe('rescheduleProposalsRepository.voidForCancelledMeeting', () => {
+  it('moves a PENDING proposal to withdrawn, stamping resolvedAt/resolvedByUserId', async () => {
+    const { proposal, meetingId } = await rescheduleProposalFactory({
+      originalScheduledStart: new Date(Date.now() + 24 * HOUR_MS),
+    });
+    const canceller = await userFactory();
+    const now = new Date();
+
+    const count = await rescheduleProposalsRepository.voidForCancelledMeeting(
+      meetingId,
+      canceller.id,
+      now
+    );
+    expect(count).toBe(1);
+
+    const [reloaded] = await db
+      .select()
+      .from(rescheduleProposals)
+      .where(eq(rescheduleProposals.id, proposal.id));
+    expect(reloaded?.status).toBe('withdrawn');
+    expect(reloaded?.resolvedAt?.getTime()).toBe(now.getTime());
+    expect(reloaded?.resolvedByUserId).toBe(canceller.id);
+  });
+
+  it('moves a LAPSED-but-pending proposal too, where `withdraw` would silently miss it', async () => {
+    const lapsedStart = new Date(Date.now() - HOUR_MS);
+    const { proposal, meetingId } = await rescheduleProposalFactory({
+      originalScheduledStart: lapsedStart,
+    });
+    const actor = await userFactory();
+
+    expect(
+      await rescheduleProposalsRepository.withdraw(
+        { proposalId: proposal.id, meetingId, actorUserId: actor.id },
+        new Date()
+      )
+    ).toBeUndefined();
+
+    const count = await rescheduleProposalsRepository.voidForCancelledMeeting(
+      meetingId,
+      actor.id,
+      new Date()
+    );
+    expect(count).toBe(1);
+
+    const [reloaded] = await db
+      .select()
+      .from(rescheduleProposals)
+      .where(eq(rescheduleProposals.id, proposal.id));
+    expect(reloaded?.status).toBe('withdrawn');
+  });
+
+  it('accepts a NULL actorUserId — the ADR-1030 system-actor exemption', async () => {
+    const { proposal, meetingId } = await rescheduleProposalFactory({
+      originalScheduledStart: new Date(Date.now() + 24 * HOUR_MS),
+    });
+
+    const count = await rescheduleProposalsRepository.voidForCancelledMeeting(
+      meetingId,
+      null,
+      new Date()
+    );
+    expect(count).toBe(1);
+
+    const [reloaded] = await db
+      .select()
+      .from(rescheduleProposals)
+      .where(eq(rescheduleProposals.id, proposal.id));
+    expect(reloaded?.resolvedByUserId).toBeNull();
+  });
+
+  it('leaves an already-TERMINAL proposal untouched', async () => {
+    const { proposal, meetingId } = await rescheduleProposalFactory({
+      originalScheduledStart: new Date(Date.now() + 24 * HOUR_MS),
+      values: { status: 'declined' },
+    });
+    const actor = await userFactory();
+
+    const count = await rescheduleProposalsRepository.voidForCancelledMeeting(
+      meetingId,
+      actor.id,
+      new Date()
+    );
+    expect(count).toBe(0);
+
+    const [reloaded] = await db
+      .select()
+      .from(rescheduleProposals)
+      .where(eq(rescheduleProposals.id, proposal.id));
+    expect(reloaded?.status).toBe('declined');
+  });
+
+  it('is a no-op at zero — a meeting with no proposal at all', async () => {
+    const { meeting } = await meetingFactory({ contexts: [] });
+    const actor = await userFactory();
+
+    expect(
+      await rescheduleProposalsRepository.voidForCancelledMeeting(meeting.id, actor.id, new Date())
+    ).toBe(0);
+  });
+
+  it('respects deleted_at — a soft-deleted pending proposal is left alone', async () => {
+    const { proposal, meetingId } = await rescheduleProposalFactory({
+      originalScheduledStart: new Date(Date.now() + 24 * HOUR_MS),
+      values: { deletedAt: new Date() },
+    });
+    const actor = await userFactory();
+
+    expect(
+      await rescheduleProposalsRepository.voidForCancelledMeeting(meetingId, actor.id, new Date())
+    ).toBe(0);
+
+    const [reloaded] = await db
+      .select()
+      .from(rescheduleProposals)
+      .where(eq(rescheduleProposals.id, proposal.id));
+    expect(reloaded?.status).toBe('pending');
+  });
+});
+
 describe('rescheduleProposalsRepository.revertAccept', () => {
   it('restores answerability — status, resolution columns AND every option`s accepted_at', async () => {
     const start = new Date(Date.now() + 24 * HOUR_MS);

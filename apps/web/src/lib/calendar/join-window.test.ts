@@ -6,6 +6,7 @@ import {
   signedMinutesUntilCalendarStart,
   joinAffordanceTimingLabel,
   joinAffordanceAriaLabel,
+  joinCountdownLabel,
   calendarMeetingTiming,
 } from './join-window';
 
@@ -334,5 +335,58 @@ describe('calendarMeetingTiming', () => {
   )('isPast and joinVisible are never both true — $label / $status', ({ now, status }) => {
     const result = calendarMeetingTiming(now, SCHEDULED_START, SCHEDULED_END, status);
     expect(result.isPast && result.joinVisible).toBe(false);
+  });
+});
+
+describe('joinCountdownLabel', () => {
+  it('reads "Join now" throughout the window, including its close and past the start', () => {
+    expect(joinCountdownLabel(minutesBeforeStart(CASE_JOIN_WINDOW_MINUTES), SCHEDULED_START)).toBe(
+      'Join now'
+    );
+    expect(joinCountdownLabel(SCHEDULED_START, SCHEDULED_START)).toBe('Join now');
+    expect(joinCountdownLabel(minutesAfterEnd(10), SCHEDULED_START)).toBe('Join now');
+  });
+
+  it('counts plain minutes just outside the window', () => {
+    expect(
+      joinCountdownLabel(minutesBeforeStart(CASE_JOIN_WINDOW_MINUTES + 1), SCHEDULED_START)
+    ).toBe(`Join in ${CASE_JOIN_WINDOW_MINUTES + 1} minutes`);
+    expect(joinCountdownLabel(minutesBeforeStart(40), SCHEDULED_START)).toBe('Join in 40 minutes');
+    expect(joinCountdownLabel(minutesBeforeStart(59), SCHEDULED_START)).toBe('Join in 59 minutes');
+  });
+
+  it('rounds to the nearest hour from 60 minutes out, singularising exactly one', () => {
+    expect(joinCountdownLabel(minutesBeforeStart(60), SCHEDULED_START)).toBe('Join in 1 hour');
+    expect(joinCountdownLabel(minutesBeforeStart(90), SCHEDULED_START)).toBe('Join in 2 hours');
+    expect(joinCountdownLabel(minutesBeforeStart(3 * 60), SCHEDULED_START)).toBe('Join in 3 hours');
+  });
+
+  it('stays in hours for the rest of the SAME calendar day, even close to 24h elapsed', () => {
+    const midnight = new Date('2026-06-15T00:00:00.000Z');
+    const lateSameDay = new Date('2026-06-15T23:00:00.000Z'); // same date, 23h gap
+    expect(joinCountdownLabel(midnight, lateSameDay)).toBe('Join in 23 hours');
+  });
+
+  /**
+   * ⚠⚠ THE RULE THIS PINS. A 23-hour gap that crosses local midnight reads "tomorrow", never
+   * "in 23 hours" — the hour/day boundary is decided by calendar day, not elapsed time, so it
+   * agrees with the consultation row's own "Tomorrow at …".
+   */
+  it('reads "Join tomorrow" for a 23-hour gap that crosses midnight — not "in 23 hours"', () => {
+    const now = new Date('2026-06-14T01:30:00.000Z');
+    const start = new Date('2026-06-15T00:30:00.000Z'); // 23h later, next calendar day
+    expect(joinCountdownLabel(now, start)).toBe('Join tomorrow');
+  });
+
+  it('stays in minutes across a midnight crossing when the gap itself is short', () => {
+    const now = new Date('2026-06-14T23:50:00.000Z');
+    const start = new Date('2026-06-15T00:10:00.000Z'); // 20 minutes later, next calendar day
+    expect(joinCountdownLabel(now, start)).toBe('Join in 20 minutes');
+  });
+
+  it('counts calendar days, not 24h periods — 26h elapsed but two date turns reads "2 days"', () => {
+    const now = new Date('2026-06-13T23:00:00.000Z');
+    const start = new Date('2026-06-15T01:00:00.000Z');
+    expect(joinCountdownLabel(now, start)).toBe('Join in 2 days');
   });
 });

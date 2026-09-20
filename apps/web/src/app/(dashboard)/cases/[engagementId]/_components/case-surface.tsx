@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useState, useTransition } from 'react';
+import { useCallback, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Reveal } from '@/components/balo/engagement/reveal';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
-import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
+import { useRefreshOnFocus } from '@/hooks/use-refresh-on-focus';
+import type { CaseConsultationRowView, CaseSurfaceView } from '@/lib/cases/case-view-types';
 import { RescheduleDialog } from '@/components/booking/reschedule-dialog';
 import { ProposeTimesDialog } from '@/components/booking/propose-times-dialog';
 import { CancelConsultationDialog } from '@/components/booking/cancel-consultation-dialog';
@@ -16,6 +17,7 @@ import { CaseNudge } from './case-nudge';
 import { RescheduleProposalCard } from './reschedule-proposal-card';
 import { CaseConversationPanel } from './case-conversation-panel';
 import { ConsultationList } from './consultation-list';
+import type { ConsultationRowActionVerb } from './consultation-row-menu';
 import { CasePartyCard } from './case-party-card';
 import { CaseActionItems } from './case-action-items';
 import { CaseFilesCard } from './case-files-card';
@@ -46,19 +48,79 @@ import { MarkResolvedButton, RequestResolutionButton } from './case-actions';
  * excludes email. Optional/defaulted to `null` so the many existing render call-sites that
  * predate this prop keep compiling unchanged.
  */
+
+/**
+ * Exactly one of the three verbs, carrying everything the matching dialog needs — never
+ * re-read from `view`, so a dialog opened from row #3 can't end up showing row #1's data.
+ */
+export type ConsultationActionSelection =
+  | {
+      verb: 'cancel';
+      source: 'nudge' | 'row';
+      meetingId: string;
+      scheduledStartIso: string;
+      scheduledMinutes: number;
+      ordinal: number | null;
+      /** Sourced per-selection from the SAME row, never `view.nudge`. */
+      canReschedule: boolean;
+      canProposeReschedule: boolean;
+      isPendingReschedule: boolean;
+    }
+  | {
+      verb: 'reschedule';
+      source: 'nudge' | 'row';
+      meetingId: string;
+      scheduledStartIso: string;
+      scheduledMinutes: number;
+      ordinal: number | null;
+    }
+  | {
+      verb: 'propose';
+      source: 'nudge' | 'row';
+      meetingId: string;
+      scheduledStartIso: string;
+      scheduledMinutes: number;
+      ordinal: number | null;
+    };
+
 export function CaseSurface({
   view,
   viewerEmailDomain = null,
 }: Readonly<{ view: CaseSurfaceView; viewerEmailDomain?: string | null }>): React.JSX.Element {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  // BAL-409 — the reschedule dialog's open state, owned here exactly as `resolveCaseAction`'s
-  // transition is: `case-nudge.tsx` stays a presentational renderer of one `CaseNudgeView`.
-  const [rescheduleOpen, setRescheduleOpen] = useState(false);
-  // BAL-411 — the propose-times dialog's open state, owned the SAME way.
-  const [proposeOpen, setProposeOpen] = useState(false);
-  // BAL-410 — the cancel dialog's open state, owned the SAME way.
-  const [cancelOpen, setCancelOpen] = useState(false);
+
+  // Retained after close so the exiting dialog keeps its subject through the close animation;
+  // `dialogOpen` alone drives visibility.
+  const [selection, setSelection] = useState<ConsultationActionSelection | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  // Keyed by `meetingId` so a closed dialog can restore focus to the row that opened it — the
+  // row's own `DropdownMenu` has already unmounted by then, so Radix's own focus-return has
+  // nothing to fire into.
+  const triggerRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const registerTrigger = useCallback((meetingId: string, node: HTMLButtonElement | null) => {
+    if (node) {
+      triggerRefs.current.set(meetingId, node);
+    } else {
+      triggerRefs.current.delete(meetingId);
+    }
+  }, []);
+  const focusTrigger = useCallback((meetingId: string) => {
+    // Deferred a frame: the node may be re-registering (a re-render landed new props on the
+    // same row) at the instant the dialog's own callback fires.
+    requestAnimationFrame(() => {
+      triggerRefs.current.get(meetingId)?.focus();
+    });
+  }, []);
+
+  // `SectionHead` only becomes a focus target when this ref is supplied.
+  const consultationsHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  // Refresh-on-focus, not periodic polling: `router.refresh()` already runs from four existing
+  // handlers here, and the conversation composer's draft is local `useState`, so a focus
+  // refresh can't clobber a half-typed message.
+  useRefreshOnFocus();
 
   const counterpartyFirstName = view.conversation.counterpartyFirstName;
 
@@ -95,39 +157,114 @@ export function CaseSurface({
     });
   }, [router, view.engagementId, view.lens]);
 
-  const handleOpenReschedule = useCallback(() => {
-    setRescheduleOpen(true);
-  }, []);
+  // `selectNextScheduled` and `mapCaseConsultations` draw from the same `meetings` list, so
+  // this lookup is never structurally empty in practice; the `?? …` fallbacks are defensive only.
+  const nudgeMeetingId =
+    view.nudge !== null && view.nudge.kind === 'upcoming' ? view.nudge.meetingId : null;
+  const nudgeRow =
+    nudgeMeetingId === null
+      ? null
+      : (view.consultations.find((row) => row.meetingId === nudgeMeetingId) ?? null);
 
-  const handleRescheduled = useCallback(() => {
-    setRescheduleOpen(false);
-    router.refresh();
-  }, [router]);
+  const handleOpenReschedule = useCallback(() => {
+    if (view.nudge === null || view.nudge.kind !== 'upcoming') return;
+    setSelection({
+      verb: 'reschedule',
+      source: 'nudge',
+      meetingId: view.nudge.meetingId,
+      scheduledStartIso: view.nudge.scheduledStartIso,
+      scheduledMinutes: nudgeRow?.scheduledMinutes ?? view.nudge.durationMinutes,
+      ordinal: nudgeRow?.ordinal ?? null,
+    });
+    setDialogOpen(true);
+  }, [view.nudge, nudgeRow]);
 
   const handleOpenPropose = useCallback(() => {
-    setProposeOpen(true);
-  }, []);
+    if (view.nudge === null || view.nudge.kind !== 'upcoming') return;
+    setSelection({
+      verb: 'propose',
+      source: 'nudge',
+      meetingId: view.nudge.meetingId,
+      scheduledStartIso: view.nudge.scheduledStartIso,
+      scheduledMinutes: nudgeRow?.scheduledMinutes ?? view.nudge.durationMinutes,
+      ordinal: nudgeRow?.ordinal ?? null,
+    });
+    setDialogOpen(true);
+  }, [view.nudge, nudgeRow]);
 
-  const handleOpenCancel = useCallback(() => {
-    setCancelOpen(true);
-  }, []);
+  const handleRowAction = useCallback(
+    (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => {
+      if (verb === 'invite') return; // `canInvite` is hard-false, so this branch is unreachable.
+      const shared = {
+        source: 'row' as const,
+        meetingId: row.meetingId,
+        scheduledStartIso: row.scheduledStartIso,
+        scheduledMinutes: row.scheduledMinutes,
+        ordinal: row.ordinal,
+      };
+      if (verb === 'cancel') {
+        setSelection({
+          verb: 'cancel',
+          ...shared,
+          canReschedule: row.canReschedule,
+          canProposeReschedule: row.canProposeReschedule,
+          isPendingReschedule: row.state === 'pending_reschedule',
+        });
+      } else if (verb === 'reschedule') {
+        setSelection({ verb: 'reschedule', ...shared });
+      } else {
+        setSelection({ verb: 'propose', ...shared });
+      }
+      setDialogOpen(true);
+    },
+    []
+  );
+
+  /** The cancel dialog's "Reschedule instead" / "Propose a new time". Re-keys the CURRENT
+   *  selection in place; `dialogOpen` stays `true` throughout, so this is a straight component
+   *  swap (`CancelConsultationDialog` unmounts, `RescheduleDialog`/`ProposeTimesDialog`
+   *  mounts), not a close-then-reopen. */
+  const handleMoveFromCancel = useCallback(
+    (verb: 'reschedule' | 'propose') => {
+      if (selection === null || selection.verb !== 'cancel') return;
+      const { meetingId, scheduledStartIso, scheduledMinutes, ordinal, source } = selection;
+      setSelection({ verb, source, meetingId, scheduledStartIso, scheduledMinutes, ordinal });
+    },
+    [selection]
+  );
+
+  /** Dismissal without success. `selection` is guaranteed non-null: this only ever fires from
+   *  a mounted dialog, and a dialog only mounts when `selection` names it. */
+  const handleDialogClose = useCallback(() => {
+    setDialogOpen(false);
+    if (selection !== null) focusTrigger(selection.meetingId);
+  }, [selection, focusTrigger]);
 
   /**
-   * BAL-410 — close AND refresh. ⚠ THE REFRESH IS LOAD-BEARING HERE IN A WAY IT IS NOT FOR
-   * RESCHEDULE: `caseConsultationIsUpcoming` excludes `'cancelled'`, so a successful cancel
-   * drops the meeting out of `selectNextScheduled` and the `'upcoming'` nudge — and therefore
-   * this dialog's own mount gate — disappears. Reused for the TERMINAL-failure path too, where
-   * the CTA is equally stale.
+   * Cancel success, and every terminal failure. The selection's trigger is either gone (a
+   * successful cancel) or untrustworthy (a 409), so focus goes to the section heading instead.
    */
-  const handleCancelled = useCallback(() => {
-    setCancelOpen(false);
+  const closeAndFocusHeading = useCallback(() => {
+    setDialogOpen(false);
+    consultationsHeadingRef.current?.focus();
     router.refresh();
   }, [router]);
 
-  const handleProposed = useCallback(() => {
-    setProposeOpen(false);
+  /** Reschedule success. The row stays mounted (same `meetingId`, only the schedule changed),
+   *  so focus returns to the trigger rather than the heading. */
+  const handleRescheduled = useCallback(() => {
+    setDialogOpen(false);
+    if (selection !== null) focusTrigger(selection.meetingId);
     router.refresh();
-  }, [router]);
+  }, [selection, focusTrigger, router]);
+
+  /** Propose success (and its terminal failures — `propose-times-dialog.tsx` shares one
+   *  callback for both). The row survives either way, so the trigger is the right target. */
+  const handleProposed = useCallback(() => {
+    setDialogOpen(false);
+    if (selection !== null) focusTrigger(selection.meetingId);
+    router.refresh();
+  }, [selection, focusTrigger, router]);
 
   // BAL-411 — `RescheduleProposalCard`'s `onChanged`: no local dialog state to close, just a
   // refresh (accept/decline/withdraw all resolve to a page revalidate already; this covers the
@@ -141,9 +278,6 @@ export function CaseSurface({
   const canProposeReschedule = view.lens === 'expert' && view.canProposeReschedule;
   // Item 18 — same posture, for the Withdraw button's holder set (see `RescheduleProposalCard`).
   const canManageReschedule = view.lens === 'expert' && view.canManageReschedule;
-  // BAL-410 — read straight off the BASE (both lenses carry it, resolved on their own axis
-  // server-side), so no lens branch is needed and none is written.
-  const canCancelConsultation = view.canCancelConsultation;
 
   return (
     <div className="from-background to-muted/30 min-h-full bg-gradient-to-b">
@@ -160,94 +294,95 @@ export function CaseSurface({
               bookAgainHref={view.party.bookAgainHref}
               onMarkResolved={handleMarkResolved}
               onDismissAsk={handleDismissAsk}
+              canReschedule={nudgeRow?.canReschedule ?? false}
               onReschedule={handleOpenReschedule}
               canProposeReschedule={canProposeReschedule}
               onProposeReschedule={handleOpenPropose}
-              canCancel={canCancelConsultation}
-              onCancel={handleOpenCancel}
               busy={pending}
             />
-            {/* BAL-411 — the ONE place accept/decline/withdraw actually happen; the nudge above
-                is purely informational (see `case-nudge.tsx`'s own docblock). */}
-            {view.nudge !== null &&
-              (view.nudge.kind === 'reschedule_proposal' ||
-                view.nudge.kind === 'reschedule_proposal_pending') && (
-                <RescheduleProposalCard
-                  engagementId={view.engagementId}
-                  lens={view.lens}
-                  nudge={view.nudge}
-                  counterpartyLabel={counterpartyFirstName}
-                  onChanged={handleProposalChanged}
-                  canManageReschedule={canManageReschedule}
-                />
-              )}
+            {view.rescheduleProposals.map((proposal) => (
+              <RescheduleProposalCard
+                key={proposal.meetingId}
+                engagementId={view.engagementId}
+                lens={view.lens}
+                proposal={proposal}
+                counterpartyLabel={counterpartyFirstName}
+                onChanged={handleProposalChanged}
+                canManageReschedule={canManageReschedule}
+              />
+            ))}
           </div>
         </Reveal>
 
-        {/* BAL-409 — mounted only when there is an upcoming meeting to move; `open` still
-            gates rendering so the dialog's own data fetch never starts speculatively. */}
-        {view.nudge !== null && view.nudge.kind === 'upcoming' && (
+        {selection !== null && selection.verb === 'reschedule' && (
           <RescheduleDialog
-            open={rescheduleOpen}
-            onClose={() => setRescheduleOpen(false)}
+            open={dialogOpen}
+            onClose={handleDialogClose}
             onRescheduled={handleRescheduled}
-            // N14(c) — a TERMINAL failure (meeting_not_reschedulable / meeting_not_found) means
-            // this nudge/CTA is now stale, exactly like a successful move does: close AND
-            // refresh, reusing the same handler rather than a second near-identical one.
-            onTerminalFailure={handleRescheduled}
+            onTerminalFailure={closeAndFocusHeading}
             engagementId={view.engagementId}
-            meetingId={view.nudge.meetingId}
+            meetingId={selection.meetingId}
             expertProfileId={view.expertProfileId}
-            currentScheduledStartIso={view.nudge.scheduledStartIso}
-            durationMinutes={view.nudge.durationMinutes}
+            currentScheduledStartIso={selection.scheduledStartIso}
+            durationMinutes={selection.scheduledMinutes}
             caseTitle={view.header.title}
+            ordinal={selection.ordinal}
+            source={selection.source}
+            // The deterministic `onCloseAutoFocus` target for this dialog's terminal close;
+            // see `RescheduleDialog`'s module docblock.
+            headingRef={consultationsHeadingRef}
           />
         )}
 
-        {/* BAL-410 — same mount gate as the two dialogs around it. ⚠ Mounted for BOTH lenses,
-            because the AC gives cancel to the client AND the delivering expert; which one may
-            actually see the CTA is `canCancelConsultation`, resolved per-axis server-side. */}
-        {view.nudge !== null && view.nudge.kind === 'upcoming' && (
+        {selection !== null && selection.verb === 'cancel' && (
           <CancelConsultationDialog
-            open={cancelOpen}
-            onClose={() => setCancelOpen(false)}
-            onCancelled={handleCancelled}
-            // A TERMINAL failure means this nudge/CTA is now stale, exactly as a successful
-            // cancel does: close AND refresh, reusing the same handler.
-            onTerminalFailure={handleCancelled}
+            open={dialogOpen}
+            onClose={handleDialogClose}
+            onCancelled={closeAndFocusHeading}
+            onTerminalFailure={closeAndFocusHeading}
+            onMoveInstead={handleMoveFromCancel}
             lens={view.lens}
             engagementId={view.engagementId}
-            meetingId={view.nudge.meetingId}
-            // ⚠⚠ THE PARTY LABEL, NOT `counterpartyFirstName` — the one dialog on this surface
-            // that must NOT take the person. The whole body is PROSPECTIVE copy ("… will see the
-            // slot open up again"), which CLAUDE.md's attribution-by-tense rule requires to name
-            // the PARTY: the agency for an agency-delivered case (a client who booked through
-            // CloudPeak may never have been told the expert is Alex), the person's own name only
-            // when the expert is independent. `counterpartyPartyLabel` is resolved server-side
-            // from the SAME `expertPartyDisplayName` the cancellation email uses, so the dialog
-            // and the email cannot disagree.
+            meetingId={selection.meetingId}
+            // ⚠⚠ THE PARTY LABEL, NOT `counterpartyFirstName` — the one register this dialog's
+            // prospective copy ("… will see the slot open up again") must NOT take. CLAUDE.md's
+            // attribution-by-tense rule names the PARTY there: the agency for an agency-delivered
+            // case (a client who booked through CloudPeak may never have been told the expert is
+            // Alex), the person's own name only when the expert is independent.
+            // `counterpartyPartyLabel` is resolved server-side from the SAME
+            // `expertPartyDisplayName` the cancellation email uses, so the dialog and the email
+            // cannot disagree. `counterpartyFirstName` is passed alongside it for the ONE
+            // retrospective sentence (a live proposal's "who suggested it") that does take the
+            // person.
             counterpartyLabel={view.counterpartyPartyLabel}
-            scheduledStartIso={view.nudge.scheduledStartIso}
-            // N1 — the SAME `live` the nudge uses to hide Reschedule / Propose a new time. Cancel
-            // itself stays available inside the join window; only the copy that points at the
-            // now-absent alternative drops.
-            live={view.nudge.live}
+            counterpartyFirstName={counterpartyFirstName}
+            scheduledStartIso={selection.scheduledStartIso}
+            ordinal={selection.ordinal}
+            scheduledMinutes={selection.scheduledMinutes}
+            source={selection.source}
+            canReschedule={selection.canReschedule}
+            canProposeReschedule={selection.canProposeReschedule}
+            isPendingReschedule={selection.isPendingReschedule}
+            // The deterministic `onCloseAutoFocus` target for this dialog's terminal closes.
+            headingRef={consultationsHeadingRef}
           />
         )}
 
-        {/* BAL-411 — the EXPERT's symmetrical dialog, same mount gate as `RescheduleDialog`
-            (an `'upcoming'` nudge implies a meeting to propose against). */}
-        {view.nudge !== null && view.nudge.kind === 'upcoming' && (
+        {selection !== null && selection.verb === 'propose' && (
           <ProposeTimesDialog
-            open={proposeOpen}
-            onClose={() => setProposeOpen(false)}
+            open={dialogOpen}
+            onClose={handleDialogClose}
             onProposed={handleProposed}
+            // A terminal failure can leave the row unmounted, so it must not silently no-op
+            // through `focusTrigger`.
+            onTerminalFailure={closeAndFocusHeading}
             engagementId={view.engagementId}
-            meetingId={view.nudge.meetingId}
+            meetingId={selection.meetingId}
             expertProfileId={view.expertProfileId}
-            currentScheduledStartIso={view.nudge.scheduledStartIso}
-            durationMinutes={view.nudge.durationMinutes}
+            currentScheduledStartIso={selection.scheduledStartIso}
+            durationMinutes={selection.scheduledMinutes}
             caseTitle={view.header.title}
+            ordinal={selection.ordinal}
           />
         )}
 
@@ -268,6 +403,9 @@ export function CaseSurface({
                 consultations={view.consultations}
                 lens={view.lens}
                 counterpartyLabel={counterpartyFirstName}
+                onRowAction={handleRowAction}
+                registerTrigger={registerTrigger}
+                headingRef={consultationsHeadingRef}
               />
             </Reveal>
           </div>

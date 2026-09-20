@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import * as Sentry from '@sentry/nextjs';
@@ -14,9 +15,12 @@ import {
   ExpertAvailabilityCalendar,
   type AvailabilitySlotSelection,
 } from '@/components/availability';
+import { AvailabilitySkeleton } from '@/components/availability/availability-states';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { rescheduleConsultationAction } from '@/app/(dashboard)/cases/[engagementId]/_actions/reschedule-consultation';
 import type { RescheduleFailureCode } from '@/app/(dashboard)/cases/[engagementId]/_actions/_types/case-action-types';
+import { SuggestedTimesList, SuggestedTimesBackLink } from './suggested-times-list';
+import { useSuggestedTimesPicker } from './use-suggested-times-picker';
 
 /**
  * BAL-409 — the client-initiated reschedule dialog. Wires the ALREADY-SHIPPED BAL-236 slot
@@ -30,6 +34,19 @@ import type { RescheduleFailureCode } from '@/app/(dashboard)/cases/[engagementI
  * Structure copies the house pattern from `booking-flow-dialog.tsx`: desktop `Dialog` / mobile
  * `Sheet` via `useIsMobile(768)` — never a right-edge `Drawer`. Two steps with
  * `AnimatePresence` + a shared page transition.
+ *
+ * ⚠⚠ Terminal-failure focus is set from `onCloseAutoFocus`, not the caller's synchronous
+ * `.focus()` — same race as `CancelConsultationDialog`: a synchronous call fires while Radix's
+ * `FocusScope` is still trapping and gets overridden the instant the trap releases.
+ * `terminalCloseRef` marks ONLY the terminal-failure close; a successful reschedule leaves the
+ * row mounted and sends focus to its own trigger instead (`case-surface.tsx`'s
+ * `handleRescheduled`), never the heading.
+ *
+ * ⚠ STEP 1 OPENS ON UP TO FOUR SUGGESTIONS, CALENDAR BEHIND "See more times". `pickerView`
+ * stays `null` (a loading skeleton) until `useExpertAvailability` settles, so a slow fetch never
+ * flips the view out from under a user already reading it — after that it only changes on a
+ * click. `ExpertAvailabilityCalendar` still runs its own fetch when mounted (used exactly as
+ * shipped, not fed this dialog's slots) — a second request against the same cached endpoint.
  */
 
 const pageTransition = {
@@ -66,6 +83,15 @@ export interface RescheduleDialogProps {
    *  actual write regardless of what the picker returns. */
   durationMinutes: number;
   caseTitle: string;
+  /** 1-based, or `null`. Carried in the programmatic name so near-identical rows stay
+   *  distinguishable to a screen-reader user once any row can open this dialog, not only the
+   *  nudge. */
+  ordinal: number | null;
+  /** Where this dialog was opened from, for `BOOKING_EVENTS.RESCHEDULED`. */
+  source: 'nudge' | 'row';
+  /** Where a terminal close sends focus (optional; omitting it keeps Radix's default restore).
+   *  Never consulted on a successful reschedule — see the module docblock. */
+  headingRef?: RefObject<HTMLElement | null>;
 }
 
 /** Server-literal → user copy. Never echoes a server literal verbatim. */
@@ -113,11 +139,16 @@ export function RescheduleDialog({
   currentScheduledStartIso,
   durationMinutes,
   caseTitle,
+  ordinal,
+  source,
+  headingRef,
 }: Readonly<RescheduleDialogProps>): React.JSX.Element {
   const isMobile = useIsMobile(768);
   const [step, setStep] = useState<Step>('pick_time');
   const [picked, setPicked] = useState<AvailabilitySlotSelection | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** Set before the one close that must land on `headingRef`; cleared by `onCloseAutoFocus`. */
+  const terminalCloseRef = useRef(false);
   // Bumped on a `slot_unavailable` retry so the picker REMOUNTS and re-fetches rather than
   // re-showing the stale list that included the now-taken slot.
   const [pickerKey, setPickerKey] = useState(0);
@@ -135,6 +166,22 @@ export function RescheduleDialog({
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const pickTimeHeadingRef = useRef<HTMLHeadingElement>(null);
   const hasTransitionedRef = useRef(false);
+
+  // A4 — only pin the picker's filter when the CURRENT duration is a real ladder value. A
+  // seeded/admin-created meeting off-ladder omits the prop; the picker renders its normal
+  // free-choice pills and the server still pins the length regardless.
+  const fixedDurationMinutes: SlotDurationMinutes | undefined = (
+    SLOT_DURATION_LADDER as readonly number[]
+  ).includes(durationMinutes)
+    ? (durationMinutes as SlotDurationMinutes)
+    : undefined;
+
+  const { availabilityView, suggestions, pickerView, setPickerView } = useSuggestedTimesPicker({
+    expertProfileId,
+    fixedDurationMinutes,
+    originalStartIso: currentScheduledStartIso,
+  });
+
   useEffect(() => {
     if (!hasTransitionedRef.current) {
       hasTransitionedRef.current = true;
@@ -145,16 +192,7 @@ export function RescheduleDialog({
     } else {
       pickTimeHeadingRef.current?.focus();
     }
-  }, [step]);
-
-  // A4 — only pin the picker's filter when the CURRENT duration is a real ladder value. A
-  // seeded/admin-created meeting off-ladder omits the prop; the picker renders its normal
-  // free-choice pills and the server still pins the length regardless.
-  const fixedDurationMinutes: SlotDurationMinutes | undefined = (
-    SLOT_DURATION_LADDER as readonly number[]
-  ).includes(durationMinutes)
-    ? (durationMinutes as SlotDurationMinutes)
-    : undefined;
+  }, [step, pickerView]);
 
   /**
    * N14(c) — `terminal: true` routes to `onTerminalFailure` (falling back to `onClose`) instead
@@ -166,13 +204,19 @@ export function RescheduleDialog({
       setStep('pick_time');
       setPicked(null);
       setSubmitting(false);
+      // The component instance is reused across a different meeting's dialog (no `key` at the
+      // `case-surface.tsx` call site) — a stale decision here would show an empty suggested list
+      // for a meeting whose own suggestions differ.
+      setPickerView(null);
       if (options?.terminal === true && onTerminalFailure) {
+        // Must land on `headingRef`, not a plain dismiss.
+        terminalCloseRef.current = true;
         onTerminalFailure();
       } else {
         onClose();
       }
     },
-    [onClose, onTerminalFailure]
+    [onClose, onTerminalFailure, setPickerView]
   );
 
   const handleSlotSelect = useCallback((selection: AvailabilitySlotSelection) => {
@@ -227,6 +271,7 @@ export function RescheduleDialog({
       track(BOOKING_EVENTS.RESCHEDULED, {
         initiated_by: 'client',
         hours_before_start: hoursBetween(new Date().toISOString(), currentScheduledStartIso),
+        source,
       });
       // N5 — the SAME viewer-local component the dialog itself uses two lines up
       // (`<LocalDateTime>`, `day-month-time`), never a raw `toUTCString()`. `toUTCString()`
@@ -254,9 +299,40 @@ export function RescheduleDialog({
     engagementId,
     meetingId,
     currentScheduledStartIso,
+    source,
     onRescheduled,
     resetAndClose,
   ]);
+
+  let pickerPanel: React.JSX.Element;
+  if (availabilityView.kind === 'loading' || pickerView === null) {
+    pickerPanel = <AvailabilitySkeleton />;
+  } else if (pickerView === 'suggested' && fixedDurationMinutes !== undefined) {
+    pickerPanel = (
+      <SuggestedTimesList
+        slots={suggestions}
+        durationMinutes={fixedDurationMinutes}
+        onPick={handleSlotSelect}
+        onSeeMore={() => setPickerView('calendar')}
+      />
+    );
+  } else {
+    pickerPanel = (
+      <>
+        {suggestions.length > 0 && (
+          <SuggestedTimesBackLink onClick={() => setPickerView('suggested')} />
+        )}
+        <ExpertAvailabilityCalendar
+          key={pickerKey}
+          expertProfileId={expertProfileId}
+          mode="selectable"
+          viewerType="client"
+          fixedDurationMinutes={fixedDurationMinutes}
+          onSlotSelect={handleSlotSelect}
+        />
+      </>
+    );
+  }
 
   const body = (
     <div className="flex min-h-[420px] flex-col p-6">
@@ -269,64 +345,80 @@ export function RescheduleDialog({
             <h2
               ref={pickTimeHeadingRef}
               tabIndex={-1}
-              className="text-foreground mb-1 text-base font-semibold"
+              className="text-foreground mb-1 text-base font-semibold focus-visible:outline-none"
             >
               Reschedule consultation
             </h2>
+            {/* Shown before any time gets picked — on step 2 it would be too late to catch the wrong row. */}
+            <p className="text-muted-foreground mb-1 text-xs">
+              Currently{' '}
+              <LocalDateTime
+                iso={currentScheduledStartIso}
+                variant="day-month-time-range"
+                durationMinutes={durationMinutes}
+              />
+            </p>
             <p className="text-muted-foreground mb-4 text-sm">
               Pick a new time with the expert on {caseTitle} — same length, same link.
             </p>
-            <ExpertAvailabilityCalendar
-              key={pickerKey}
-              expertProfileId={expertProfileId}
-              mode="selectable"
-              viewerType="client"
-              fixedDurationMinutes={fixedDurationMinutes}
-              onSlotSelect={handleSlotSelect}
-            />
+            {pickerPanel}
           </motion.div>
         )}
         {step === 'confirm' && picked !== null && (
           <motion.div key="confirm" {...pageTransition} className="flex flex-1 flex-col">
-            <h2 className="text-foreground mb-4 text-base font-semibold">Confirm the new time</h2>
-            <div className="border-border bg-muted/30 mb-2 rounded-lg border px-4 py-3">
-              <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-                Currently
+            <div className="mx-auto flex w-full max-w-[512px] flex-1 flex-col">
+              <h2 className="text-foreground mb-4 text-base font-semibold">Confirm the new time</h2>
+              <div className="border-border bg-muted/30 mb-2 rounded-lg border px-4 py-3">
+                <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+                  Currently
+                </p>
+                <p className="text-foreground text-sm">
+                  <LocalDateTime
+                    iso={currentScheduledStartIso}
+                    variant="day-month-time-range"
+                    durationMinutes={durationMinutes}
+                  />
+                </p>
+              </div>
+              <div className="border-primary/30 bg-primary/5 mb-5 rounded-lg border px-4 py-3">
+                <p className="text-primary text-xs font-medium tracking-wide uppercase">
+                  Moving to
+                </p>
+                <p className="text-primary text-sm font-semibold">
+                  {/* The ORIGINAL length, not `picked.duration`: the server re-pins it regardless
+                      of what the picker returns, so this is what will actually be booked. */}
+                  <LocalDateTime
+                    iso={picked.start}
+                    variant="day-month-time-range"
+                    durationMinutes={durationMinutes}
+                  />
+                </p>
+              </div>
+              <p className="text-muted-foreground mb-5 text-sm">
+                Same length, same link — nothing else about this consultation changes.
               </p>
-              <p className="text-foreground text-sm">
-                <LocalDateTime iso={currentScheduledStartIso} variant="day-month-time" />
-              </p>
-            </div>
-            <div className="border-primary/30 bg-primary/5 mb-5 rounded-lg border px-4 py-3">
-              <p className="text-primary text-xs font-medium tracking-wide uppercase">Moving to</p>
-              <p className="text-primary text-sm font-semibold">
-                <LocalDateTime iso={picked.start} variant="day-month-time" />
-              </p>
-            </div>
-            <p className="text-muted-foreground mb-5 text-sm">
-              Same length, same link — nothing else about this consultation changes.
-            </p>
-            <div className="mt-auto flex gap-2">
-              <Button
-                ref={backButtonRef}
-                type="button"
-                variant="outline"
-                onClick={handleBack}
-                disabled={submitting}
-              >
-                {/* N14(a) — "Choose a different time", not "Back": the picker REMOUNTS fresh
-                    (mutually exclusive `AnimatePresence` children), so this is honest about
-                    starting the pick over rather than implying a resumable history stack. */}
-                Choose a different time
-              </Button>
-              <Button
-                type="button"
-                className="flex-1"
-                onClick={handleConfirm}
-                disabled={submitting}
-              >
-                {submitting ? 'Moving…' : 'Move consultation'}
-              </Button>
+              <div className="mt-auto flex gap-2">
+                <Button
+                  ref={backButtonRef}
+                  type="button"
+                  variant="outline"
+                  onClick={handleBack}
+                  disabled={submitting}
+                >
+                  {/* N14(a) — "Choose a different time", not "Back": the picker REMOUNTS fresh
+                      (mutually exclusive `AnimatePresence` children), so this is honest about
+                      starting the pick over rather than implying a resumable history stack. */}
+                  Choose a different time
+                </Button>
+                <Button
+                  type="button"
+                  className="flex-1"
+                  onClick={handleConfirm}
+                  disabled={submitting}
+                >
+                  {submitting ? 'Moving…' : 'Move consultation'}
+                </Button>
+              </div>
             </div>
           </motion.div>
         )}
@@ -334,11 +426,35 @@ export function RescheduleDialog({
     </div>
   );
 
+  // So a screen-reader user hears which consultation they're moving before the picker renders.
+  const programmaticTitle = (
+    <>
+      Reschedule consultation{ordinal === null ? '' : ` ${ordinal}`} — currently{' '}
+      <LocalDateTime iso={currentScheduledStartIso} variant="day-month-time" />
+    </>
+  );
+
+  // Shared by both branches below — see the module docblock.
+  const handleCloseAutoFocus = useCallback(
+    (event: Event) => {
+      if (terminalCloseRef.current) {
+        event.preventDefault();
+        headingRef?.current?.focus();
+      }
+      terminalCloseRef.current = false;
+    },
+    [headingRef]
+  );
+
   if (isMobile) {
     return (
       <Sheet open={open} onOpenChange={(next) => !next && resetAndClose()}>
-        <SheetContent side="bottom" className="max-h-[94dvh] overflow-y-auto rounded-t-2xl p-0">
-          <SheetTitle className="sr-only">Reschedule consultation</SheetTitle>
+        <SheetContent
+          side="bottom"
+          className="max-h-[94dvh] overflow-y-auto rounded-t-2xl p-0"
+          onCloseAutoFocus={handleCloseAutoFocus}
+        >
+          <SheetTitle className="sr-only">{programmaticTitle}</SheetTitle>
           <SheetDescription className="sr-only">
             Pick a new time for this consultation and confirm the move.
           </SheetDescription>
@@ -350,8 +466,14 @@ export function RescheduleDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && resetAndClose()}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto rounded-xl p-0 sm:max-w-[560px]">
-        <DialogTitle className="sr-only">Reschedule consultation</DialogTitle>
+      <DialogContent
+        // 300px slots column + ~440px for a seven-column month grid that doesn't bunch + the
+        // body's own p-6 (48px) needs ~790px; 840px leaves headroom. min(92vw, …) keeps it off
+        // a small laptop or a landscape tablet instead of a bare fixed width.
+        className="max-h-[85vh] overflow-y-auto rounded-xl p-0 sm:max-w-[min(92vw,840px)]"
+        onCloseAutoFocus={handleCloseAutoFocus}
+      >
+        <DialogTitle className="sr-only">{programmaticTitle}</DialogTitle>
         <DialogDescription className="sr-only">
           Pick a new time for this consultation and confirm the move.
         </DialogDescription>

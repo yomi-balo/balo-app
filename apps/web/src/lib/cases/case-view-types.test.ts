@@ -101,6 +101,7 @@ const BASE = {
   },
   nudge: null,
   consultations: [],
+  rescheduleProposals: [],
   conversation: {
     conversationId: 'v-1',
     writable: true,

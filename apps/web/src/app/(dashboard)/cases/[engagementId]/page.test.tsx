@@ -101,6 +101,13 @@ function consultation(n: number): CaseConsultationRowView {
     fileCount: 0,
     hasTranscript: false,
     hasRecording: false,
+    canReschedule: false,
+    canProposeReschedule: false,
+    canCancel: false,
+    canInvite: false,
+    guestCount: 0,
+    scheduledMinutes: 30,
+    live: false,
   };
 }
 
@@ -130,6 +137,7 @@ const BASE = {
   header: OPEN_HEADER,
   nudge: null,
   consultations: CONSULTATIONS,
+  rescheduleProposals: [],
   conversation: CONVERSATION,
   actionItems: {
     yours: [],

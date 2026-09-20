@@ -118,6 +118,39 @@ export function joinAffordanceAriaLabel(partyName: string, timingLabel: string |
   return `Join ${partyName}'s meeting, ${timingLabel ?? ''}`;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** VIEWER-LOCAL calendar days between two instants, floor-to-day on each side — so a 23-hour gap
+ *  that crosses local midnight still counts as 1, never a raw elapsed-24h period. Must agree with
+ *  `relativeDay`'s day-key comparison (`components/balo/date/relative-day.ts`), or the countdown
+ *  and a row's "Tomorrow at …" could disagree about the same meeting. */
+function calendarDaysBetween(from: Date, to: Date): number {
+  const dayNumber = (date: Date): number =>
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / MS_PER_DAY;
+  return dayNumber(to) - dayNumber(from);
+}
+
+/**
+ * The Join affordance's countdown label — ALWAYS occupies the slot: "Join now" once the window
+ * is open, otherwise how long until the scheduled start. Beside `joinAffordanceTimingLabel` /
+ * `joinAffordanceAriaLabel` so a future Up next / calendar consumer can adopt the same ladder
+ * without rewording it.
+ *
+ * ⚠ The hour/day boundary is decided by CALENDAR day, not elapsed minutes — a 23-hour gap that
+ * crosses local midnight reads "Join tomorrow", never "Join in 23 hours".
+ */
+export function joinCountdownLabel(now: Date, scheduledStart: Date): string {
+  const minutes = signedMinutesUntilCalendarStart(now, scheduledStart);
+  if (minutes <= CASE_JOIN_WINDOW_MINUTES) return 'Join now';
+  if (minutes < 60) return `Join in ${minutes} minutes`;
+  const days = calendarDaysBetween(now, scheduledStart);
+  if (days <= 0) {
+    const hours = Math.round(minutes / 60);
+    return `Join in ${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  return days === 1 ? 'Join tomorrow' : `Join in ${days} days`;
+}
+
 /** The three `now`-derived inputs a rendered meeting needs, as ONE composition of the primitives
  *  above — computed by the PARENT so `MeetingBlock` can take primitives and be `React.memo`'d
  *  (BAL-511 D1).
