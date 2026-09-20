@@ -637,6 +637,68 @@ describe('PeoplePanel — the footer', () => {
     expect(written).not.toMatch(/\b[0-9a-f]{64}\b/);
   });
 
+  /**
+   * ⚠⚠ THE SENTENCE THIS REPLACED SENT HOSTS TO THE ADDRESS BAR — "You can select it from the
+   * address bar instead." The People panel only mounts on the MEMBER call route
+   * (`/meetings/{meetingId}/call`), which is never the join link. A guest handed that URL is
+   * 307'd to `/login`; a signed-in non-participant is refused by `authorizeMeetingParticipation`.
+   * So the fallback sent hosts to the one URL that cannot work, exactly when copy had failed and
+   * they had no other way to get the right one.
+   *
+   * ⚠ `clipboard: undefined` IS THE BRANCH UNDER TEST — an insecure context, or an embedded
+   * webview with no Clipboard API at all. A rejected write (the next test) is a different
+   * branch with different copy, because there a retry can succeed.
+   */
+  it('⚠⚠ CLIPBOARD UNAVAILABLE: names the email invite, NEVER the address bar', async () => {
+    const user = userEvent.setup();
+    // ⚠ INSTALLED **AFTER** `userEvent.setup()` — see the COPY JOIN LINK test above for why.
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      writable: true,
+      configurable: true,
+      value: undefined,
+    });
+
+    const container = renderPanel(fakes());
+    await user.click(await screen.findByRole('button', { name: /copy join link/i }));
+
+    const sentence =
+      "We couldn't copy the link in this browser. Use Add people to invite them by email instead.";
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(sentence));
+    // ⚠ THE SAME SENTENCE IN BOTH CHANNELS — §16's one live region gets what the toast got.
+    expect(onAnnounce).toHaveBeenCalledWith(sentence);
+    // ⚠⚠ THE REGRESSION ITSELF, asserted independently of the literal above: a future copy edit
+    // updates that literal, and must still never bring the address bar back.
+    expect(toast.error).not.toHaveBeenCalledWith(expect.stringMatching(/address bar/i));
+    // ⚠ NOTHING WAS COPIED, so nothing may say it was.
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Copy join link' })).toBeInTheDocument();
+    // ⚠⚠ AND THE URL IS NOT REVEALED INSTEAD — `joinLinkUrl` stays out of the DOM on the
+    // failure path exactly as it does on the success path.
+    expect(container.innerHTML).not.toContain('/join/m/');
+  });
+
+  it('⚠ a REJECTED write is transient — it says try again, and never claims a copy', async () => {
+    const user = userEvent.setup();
+    // ⚠ A rejection is what a lost focus or a dismissed permission prompt produces: the API
+    // exists, so — unlike the unavailable case above — a retry CAN succeed.
+    const writeText = vi.fn().mockRejectedValue(new Error('NotAllowedError'));
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      writable: true,
+      configurable: true,
+      value: { writeText },
+    });
+
+    renderPanel(fakes());
+    await user.click(await screen.findByRole('button', { name: /copy join link/i }));
+
+    const sentence = "We couldn't copy the link. Try again in a moment.";
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(sentence));
+    expect(writeText).toHaveBeenCalledWith(JOIN_LINK);
+    expect(onAnnounce).toHaveBeenCalledWith(sentence);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Copy join link' })).toBeInTheDocument();
+  });
+
   it('says plainly that anyone using the link asks to be let in', async () => {
     renderPanel(fakes());
 
