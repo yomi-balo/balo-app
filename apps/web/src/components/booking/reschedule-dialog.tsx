@@ -337,7 +337,7 @@ export function RescheduleDialog({
   if (isMobile) {
     return (
       <Sheet open={open} onOpenChange={(next) => !next && resetAndClose()}>
-        <SheetContent side="bottom" className="max-h-[94dvh] overflow-hidden rounded-t-2xl p-0">
+        <SheetContent side="bottom" className="max-h-[94dvh] overflow-y-auto rounded-t-2xl p-0">
           <SheetTitle className="sr-only">Reschedule consultation</SheetTitle>
           <SheetDescription className="sr-only">
             Pick a new time for this consultation and confirm the move.
@@ -350,7 +350,7 @@ export function RescheduleDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && resetAndClose()}>
-      <DialogContent className="max-h-[85vh] overflow-hidden rounded-xl p-0 sm:max-w-[560px]">
+      <DialogContent className="max-h-[85vh] overflow-y-auto rounded-xl p-0 sm:max-w-[560px]">
         <DialogTitle className="sr-only">Reschedule consultation</DialogTitle>
         <DialogDescription className="sr-only">
           Pick a new time for this consultation and confirm the move.

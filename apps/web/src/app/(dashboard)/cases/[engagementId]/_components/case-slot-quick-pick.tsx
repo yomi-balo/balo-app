@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Video } from 'lucide-react';
 import { useExpertAvailability } from '@/components/availability/use-expert-availability';
 import { SLOT_DURATION_LADDER, type SlotDurationMinutes } from '@balo/shared/availability';
@@ -64,8 +65,24 @@ export function CaseSlotQuickPick({
   expert,
   viewerEmailDomain,
 }: Readonly<CaseSlotQuickPickProps>): React.JSX.Element | null {
-  const { view } = useExpertAvailability(expertProfileId, QUICK_PICK_WINDOW_DAYS);
+  const { view, reload } = useExpertAvailability(expertProfileId, QUICK_PICK_WINDOW_DAYS);
   const [presetSlot, setPresetSlot] = useState<PresetSlot | null>(null);
+  const router = useRouter();
+
+  /**
+   * This is the only booking entry point that does not leave the page — the nudge and the party
+   * card are `<Link>`s out to the expert profile, so they return through a fresh server render.
+   * Here the dialog opens over a server-rendered surface, so the refresh is what makes the new
+   * booking visible. `BookingFlowDialogProps` has no success callback, so this fires on any
+   * close; refreshing after an abandoned booking is harmless.
+   */
+  const handleDialogClose = useCallback((): void => {
+    setPresetSlot(null);
+    router.refresh();
+    // `router.refresh()` re-runs server components only; these slots come from a client hook
+    // with its own fetch, so it needs telling separately or it keeps offering the booked slot.
+    reload();
+  }, [router, reload]);
 
   if (view.kind !== 'ready') {
     return null;
@@ -112,7 +129,7 @@ export function CaseSlotQuickPick({
       {presetSlot !== null && (
         <BookingFlowDialog
           open
-          onClose={() => setPresetSlot(null)}
+          onClose={handleDialogClose}
           expert={expert}
           source="case_quick_pick"
           entry={{

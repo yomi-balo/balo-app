@@ -22,7 +22,7 @@ export default function CaseError({
 }: Readonly<{ error: Error & { digest?: string }; reset: () => void }>): React.JSX.Element {
   return (
     <div className="mx-auto w-full max-w-[1060px] px-4 py-12 sm:px-6 lg:px-8">
-      <div className="bg-card border-border rounded-3xl border p-6">
+      <div className="bg-card border-border rounded-xl border p-6">
         <SectionError
           label="this case"
           onRetry={reset}

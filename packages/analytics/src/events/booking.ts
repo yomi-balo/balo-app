@@ -44,7 +44,27 @@ export const BOOKING_EVENTS = {
   RESCHEDULE_PROPOSAL_ANSWERED: 'reschedule_proposal_answered',
   /** BAL-411 — the accepted option was gone at re-validation (409 `window_not_available`). */
   RESCHEDULE_PROPOSAL_SLOT_LOST: 'reschedule_proposal_slot_lost',
+  /**
+   * The viewer's credential was dead when they tried to book, so the flow showed the
+   * re-authenticate panel instead of a booking.
+   *
+   * ⚠ NOT AN ABANDON AND NOT A FAILURE — the user did nothing wrong and the platform did not
+   * refuse them, so counting it under either would poison both rates. It is the only signal
+   * that says how often silent token-refresh loss actually reaches a real user, which is
+   * otherwise invisible: the pre-flight arm never sends a request for the API to log.
+   */
+  SESSION_EXPIRED: 'booking_session_expired',
 } as const;
+
+/**
+ * WHERE the credential was found dead, which decides what the user loses.
+ *
+ * · `preflight` — caught before any write. Nothing exists; re-authenticating resumes cleanly.
+ * · `mid_submit` — the case row was already written and the meeting hop got the 401, so a case
+ *   now exists with no consultation on it. A rising share here is a different (and worse) bug
+ *   from a rising share of `preflight`.
+ */
+export type BookingSessionExpiryStage = 'preflight' | 'mid_submit';
 
 /** BAL-411 — who answered a reschedule proposal. Deliberately excludes `'expired'` (lazy, never fired). */
 export type RescheduleProposalOutcome = 'accepted' | 'declined' | 'withdrawn';
@@ -150,5 +170,9 @@ export interface BookingEventMap {
   [BOOKING_EVENTS.RESCHEDULE_PROPOSAL_SLOT_LOST]: {
     proposal_id: string;
     option_count: number;
+  };
+  [BOOKING_EVENTS.SESSION_EXPIRED]: {
+    expert_id: string;
+    stage: BookingSessionExpiryStage;
   };
 }

@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Search, X, Plus, ChevronDown, AlertCircle, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { TaxonomyChip } from './taxonomy-chip';
 import { SelectedToken } from '@/components/search/composer/selected-token';
@@ -69,31 +70,44 @@ export function TaxonomyMultiSelect({
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
-  // Close the overlay on outside-mousedown or Escape. Option chips use
-  // `onMouseDown` preventDefault so clicking one never blurs/closes mid-toggle.
-  useEffect(() => {
-    function onPointerDown(event: MouseEvent): void {
-      const root = rootRef.current;
-      if (root && event.target instanceof Node && !root.contains(event.target)) {
-        setOpen(false);
-      }
-    }
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') setOpen(false);
-    }
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, []);
+  /**
+   * ⚠ Outside-dismiss and Escape belong to Radix, not to hand-rolled `document` listeners: the
+   * browse list is portalled, so a listener testing `rootRef.contains` would read a click on an
+   * option chip as "outside" and unmount it before its `click` landed. Radix's
+   * `DismissableLayer` counts portalled content as part of this layer and nests correctly inside
+   * the booking Dialog.
+   */
 
   const openOverlay = useCallback((): void => {
     setOpen(true);
     inputRef.current?.focus();
   }, []);
+
+  /**
+   * ⚠ Portalled chips sit outside the field and outside the Dialog's focus trap, so Tab cannot
+   * reach them. ArrowDown is the standard combobox affordance for moving into the list; from
+   * the first chip, Tab/Shift+Tab walk the rest natively.
+   */
+  const focusFirstOption = useCallback((): boolean => {
+    const first = contentRef.current?.querySelector<HTMLElement>('button:not([disabled])');
+    if (!first) return false;
+    first.focus();
+    return true;
+  }, []);
+
+  const handleInputKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>): void => {
+      if (event.key !== 'ArrowDown') return;
+      if (!open) {
+        setOpen(true);
+        return;
+      }
+      if (focusFirstOption()) event.preventDefault();
+    },
+    [open, focusFirstOption]
+  );
 
   // Collapse when focus leaves the field entirely — the third dismiss path the
   // ticket requires alongside outside-mousedown and Escape. Chips, "+N more",
@@ -102,6 +116,8 @@ export function TaxonomyMultiSelect({
   const handleRootBlur = useCallback((event: React.FocusEvent<HTMLDivElement>): void => {
     const root = rootRef.current;
     const next = event.relatedTarget;
+    // Focus landing in the portalled list leaves `rootRef` but is an intra-field move.
+    if (next instanceof Node && contentRef.current?.contains(next)) return;
     if (root && (next === null || (next instanceof Node && !root.contains(next)))) {
       setOpen(false);
     }
@@ -188,62 +204,87 @@ export function TaxonomyMultiSelect({
   }
 
   return (
-    <div ref={rootRef} className="relative" onBlur={handleRootBlur}>
-      {/* 1 — Search control, anchored at the top. The input opens the overlay
-          on focus/click and the chevron is a real toggle button, so the click
-          affordances live on interactive elements (not the wrapper div). */}
-      <div className="border-border bg-card focus-within:border-ring focus-within:ring-ring/30 flex h-11 cursor-text items-center gap-2.5 rounded-[11px] border px-3.5 transition-shadow focus-within:ring-[3px]">
-        <Search className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden />
-        <label htmlFor={`taxonomy-search-${fieldId}`} className="sr-only">
-          {searchPlaceholder}
-        </label>
-        <input
-          ref={inputRef}
-          id={`taxonomy-search-${fieldId}`}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onFocus={() => setOpen(true)}
-          onClick={() => setOpen(true)}
-          placeholder={searchPlaceholder}
-          className="text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
-        />
-        {query !== '' && (
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => {
-              e.stopPropagation();
-              setQuery('');
-            }}
-            aria-label="Clear search"
-            className="text-muted-foreground hover:text-foreground flex shrink-0"
-          >
-            <X className="h-3.5 w-3.5" aria-hidden />
-          </button>
-        )}
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => (open ? setOpen(false) : openOverlay())}
-          aria-label={open ? 'Hide options' : 'Show options'}
-          aria-expanded={open}
-          aria-controls={open ? `taxonomy-browse-${fieldId}` : undefined}
-          className="text-muted-foreground hover:text-foreground flex shrink-0"
-        >
-          <ChevronDown
-            className={cn('h-4 w-4 transition-transform', open && 'rotate-180')}
-            aria-hidden
-          />
-        </button>
-      </div>
+    <Popover open={open} onOpenChange={setOpen}>
+      <div ref={rootRef} className="relative" onBlur={handleRootBlur}>
+        {/* 1 — Search control. The input opens the overlay on focus/click and the chevron is a
+            real toggle button, so the click affordances live on interactive elements. It is the
+            Popover ANCHOR, never a Trigger: the input owns its own open/close. */}
+        <PopoverAnchor asChild>
+          <div className="border-border bg-card focus-within:border-ring focus-within:ring-ring/30 flex h-11 cursor-text items-center gap-2.5 rounded-[11px] border px-3.5 transition-shadow focus-within:ring-[3px]">
+            <Search className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden />
+            <label htmlFor={`taxonomy-search-${fieldId}`} className="sr-only">
+              {searchPlaceholder}
+            </label>
+            <input
+              ref={inputRef}
+              id={`taxonomy-search-${fieldId}`}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => setOpen(true)}
+              onClick={() => setOpen(true)}
+              onKeyDown={handleInputKeyDown}
+              placeholder={searchPlaceholder}
+              className="text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
+            />
+            {query !== '' && (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setQuery('');
+                }}
+                aria-label="Clear search"
+                className="text-muted-foreground hover:text-foreground flex shrink-0"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            )}
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => (open ? setOpen(false) : openOverlay())}
+              aria-label={open ? 'Hide options' : 'Show options'}
+              aria-expanded={open}
+              aria-controls={open ? `taxonomy-browse-${fieldId}` : undefined}
+              className="text-muted-foreground hover:text-foreground flex shrink-0"
+            >
+              <ChevronDown
+                className={cn('h-4 w-4 transition-transform', open && 'rotate-180')}
+                aria-hidden
+              />
+            </button>
+          </div>
+        </PopoverAnchor>
 
-      {/* 2 — Browse overlay popup. Absolutely positioned so opening it never
-          reflows following sections (e.g. "Attach documents" stays put). */}
-      {open && (
-        <div
+        {/* 2 — Browse overlay. Portalled because `position: absolute` cannot escape an
+            ancestor's `overflow: hidden`, and the booking confirm step wraps this field in a
+            height-animating clipped container. Still never reflows the sections below. */}
+        <PopoverContent
+          ref={contentRef}
           id={`taxonomy-browse-${fieldId}`}
-          className="border-border bg-popover absolute top-[calc(2.75rem+0.5rem)] right-0 left-0 z-30 max-h-[300px] overflow-y-auto rounded-xl border p-2.5 shadow-lg"
           data-testid={`taxonomy-browse-${fieldId}`}
+          align="start"
+          side="bottom"
+          sideOffset={8}
+          /* Focus STAYS in the search input — the user is mid-type. */
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          /* …and is not yanked back on close, which would fight a Tab to the next field. */
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          /* ⚠ ESCAPE IS THE ONLY KEYBOARD WAY OUT OF THE LIST, so it is the one close path that
+             must place focus. Radix's focus scope loops, so once ArrowDown has landed on a chip
+             Tab only cycles the options; the blanket `onCloseAutoFocus` prevent above — right
+             for a Tab-away — would then leave focus on `<body>`. Restoring to the input returns
+             the user exactly where ArrowDown took them from. */
+          onEscapeKeyDown={() => inputRef.current?.focus()}
+          /* An ANCHOR is not exempted from outside-dismiss the way a Trigger is, so without
+             this a click on the input or chevron fights this component's own toggle. */
+          onInteractOutside={(event) => {
+            if (event.target instanceof Node && rootRef.current?.contains(event.target)) {
+              event.preventDefault();
+            }
+          }}
+          className="border-border bg-popover z-[60] max-h-[300px] w-(--radix-popover-trigger-width) overflow-y-auto rounded-xl border p-2.5 shadow-lg"
         >
           {filteredGroups.length === 0 && (
             <output className="text-muted-foreground block py-6 text-center text-[13px]">
@@ -306,49 +347,49 @@ export function TaxonomyMultiSelect({
               </div>
             );
           })}
-        </div>
-      )}
+        </PopoverContent>
 
-      {/* 3 — Selected band, below the search control, grows downward (in flow). */}
-      <AnimatePresence initial={false}>
-        {selectedItems.length > 0 && (
-          <motion.div
-            layout
-            initial={reduce ? false : { opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={reduce ? { opacity: 0 } : { opacity: 0, height: 0 }}
-            transition={{ duration: 0.22 }}
-            className="overflow-hidden"
-          >
-            <div className="bg-muted/60 border-border/60 mt-2.5 rounded-xl border p-3">
-              <div className="mb-2.5 flex items-center justify-between">
-                <span className="text-muted-foreground text-[11px] font-bold tracking-wide uppercase">
-                  {selectedItems.length} selected
-                </span>
-                <button
-                  type="button"
-                  onClick={onClear}
-                  className="text-muted-foreground hover:text-foreground focus-visible:ring-ring text-xs font-medium underline underline-offset-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
-                >
-                  Clear all
-                </button>
+        {/* 3 — Selected band, below the search control, grows downward (in flow). */}
+        <AnimatePresence initial={false}>
+          {selectedItems.length > 0 && (
+            <motion.div
+              layout
+              initial={reduce ? false : { opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={reduce ? { opacity: 0 } : { opacity: 0, height: 0 }}
+              transition={{ duration: 0.22 }}
+              className="overflow-hidden"
+            >
+              <div className="bg-muted/60 border-border/60 mt-2.5 rounded-xl border p-3">
+                <div className="mb-2.5 flex items-center justify-between">
+                  <span className="text-muted-foreground text-[11px] font-bold tracking-wide uppercase">
+                    {selectedItems.length} selected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onClear}
+                    className="text-muted-foreground hover:text-foreground focus-visible:ring-ring text-xs font-medium underline underline-offset-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                  >
+                    Clear all
+                  </button>
+                </div>
+                <motion.div layout className="flex flex-wrap gap-2">
+                  <AnimatePresence initial={false}>
+                    {selectedItems.map((item) => (
+                      <SelectedToken
+                        key={item.id}
+                        label={item.name}
+                        category={multiGroup ? item.category : undefined}
+                        onRemove={() => onToggle(item.id)}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </motion.div>
               </div>
-              <motion.div layout className="flex flex-wrap gap-2">
-                <AnimatePresence initial={false}>
-                  {selectedItems.map((item) => (
-                    <SelectedToken
-                      key={item.id}
-                      label={item.name}
-                      category={multiGroup ? item.category : undefined}
-                      onRemove={() => onToggle(item.id)}
-                    />
-                  ))}
-                </AnimatePresence>
-              </motion.div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </Popover>
   );
 }

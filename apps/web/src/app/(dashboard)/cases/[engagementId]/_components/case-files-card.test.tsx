@@ -50,6 +50,18 @@ const CONVERSATION_FILE: CaseFileRowView = {
   sourceLabel: 'Conversation',
 };
 
+const IMAGE_FILE: CaseFileRowView = {
+  origin: 'conversation',
+  id: 'cf-2',
+  meetingId: null,
+  fileName: 'whiteboard.png',
+  contentType: 'image/png',
+  sizeBytes: 90_000,
+  createdAtIso: '2026-07-03T10:00:00Z',
+  uploaderLabel: 'Amara',
+  sourceLabel: 'Conversation',
+};
+
 function renderCard(over: Partial<React.ComponentProps<typeof CaseFilesCard>> = {}) {
   return render(
     <CaseFilesCard
@@ -174,6 +186,33 @@ describe('CaseFilesCard — the download branches on origin, and never exposes a
     );
     // A refused presign is not a download — nothing may be reported to analytics.
     expect(track).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ THE VIEWER OPENS ONLY ON A MINTED URL. Opening it on the click and filling the URL in
+   * afterwards leaves a modal spinner on screen for ever when the presign is refused — the
+   * refusal arm toasts and returns, so nothing would ever close it.
+   */
+  it('opens the image viewer once the URL exists, and never on a refusal', async () => {
+    const user = userEvent.setup();
+    mockDownload.mockResolvedValue({ success: false, error: 'This file is no longer available.' });
+    renderCard({ files: [IMAGE_FILE] });
+    await user.click(screen.getByRole('button', { name: 'Download whiteboard.png' }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('This file is no longer available.')
+    );
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+
+    mockDownload.mockResolvedValue({ success: true, url: 'https://r2.example/signed.png' });
+    await user.click(screen.getByRole('button', { name: 'Download whiteboard.png' }));
+
+    const preview = await screen.findByAltText('whiteboard.png');
+    expect(preview).toHaveAttribute('src', 'https://r2.example/signed.png');
+    expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASE_ACTION_CLICKED, {
+      action: 'view_file',
+      lens: 'client',
+    });
   });
 
   it('toasts a generic message when the presign THROWS, and re-enables the row', async () => {

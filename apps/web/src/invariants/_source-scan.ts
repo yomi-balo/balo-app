@@ -322,6 +322,34 @@ export function hasUseServerDirective(source: string): boolean {
   return false;
 }
 
+/**
+ * `source` with every `/* … *\/` block comment removed. CSS has no line-comment syntax, so for a
+ * stylesheet this is the whole grammar; an unmatched (never-closed) comment stops the scan rather
+ * than looping.
+ *
+ * ⚠ SHARED BY `marketing-home-css.test.ts` AND `badge-contrast.test.ts` — a second verbatim copy
+ * is the duplication the >3% new-code gate exists to catch.
+ *
+ * ⚠ THE POINT OF STRIPPING IS THAT A SCAN MUST NOT READ ITS OWN EXPLANATION. Both consumers name,
+ * in prose, the very declarations and selectors they assert about — unstripped, each would find
+ * its own docblock and pass while proving nothing.
+ */
+export function stripBlockComments(source: string): string {
+  let result = '';
+  let i = 0;
+  while (i < source.length) {
+    if (source[i] === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2);
+      if (close === -1) break;
+      i = close + 2;
+      continue;
+    }
+    result += source[i];
+    i += 1;
+  }
+  return result;
+}
+
 /** One scanned source file: its path relative to the route root, plus two views of it. */
 export interface ScannedFile {
   readonly rel: string;

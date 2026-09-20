@@ -149,6 +149,8 @@ export type {
   BookingAbandonStep,
   /** BAL-411 CONSIDER item — the reschedule-proposal answer vocabulary. */
   RescheduleProposalOutcome,
+  /** Where a dead credential was caught — before any write, or after the case row existed. */
+  BookingSessionExpiryStage,
   /** BAL-495 — the nav registry's event payload and key/surface vocabularies. */
   NavEventMap,
   NavItemKey,

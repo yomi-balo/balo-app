@@ -14,8 +14,10 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { SectionHead } from '@/components/balo/section/section-states';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
+import { useViewerClock } from '@/hooks/use-viewer-clock';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import type {
   CaseConsultationRowView,
   CaseConsultationStateLabel,
@@ -44,8 +46,13 @@ export function ConsultationList({
   lens: 'client' | 'expert';
   counterpartyLabel: string;
 }>): React.JSX.Element {
+  /* ⚠ ONE CLOCK FOR THE WHOLE LIST, not a timer inside each date. Without a tick the relative
+     labels decay: a case left open overnight keeps calling a call that is now today
+     "Tomorrow at 9:00 am". `null` until mount, which is the absolute first paint. */
+  const clock = useViewerClock();
+
   return (
-    <section className="bg-card border-border rounded-3xl border px-5 py-4">
+    <section className="bg-card border-border rounded-xl border px-5 py-4">
       <SectionHead
         icon={Clock}
         title="Consultations"
@@ -58,6 +65,7 @@ export function ConsultationList({
               row={row}
               lens={lens}
               counterpartyLabel={counterpartyLabel}
+              now={clock?.now}
               last={index === consultations.length - 1}
             />
           </li>
@@ -66,6 +74,31 @@ export function ConsultationList({
     </section>
   );
 }
+
+/**
+ * The pill's colour, mapped to `Badge` variants below so the palette lives in one table.
+ *
+ * ⚠ Colour marks the exception, not the norm: most rows on a healthy case are `held`, so a
+ * saturated tone there would bury the one row that needs attention. `held` stays the quietest
+ * of the coloured tones.
+ *
+ * ⚠ `--destructive` is deliberately unused. A consultation that did not happen is a fact with a
+ * settlement story, not an error, and red reads as blame on a surface both parties read about
+ * themselves — see `stateLabel`. `cancelled` is not even `warning`: it is a supported action
+ * used correctly.
+ */
+type StateTone = 'neutral' | 'muted' | 'primary' | 'info' | 'success' | 'warning';
+
+const TONE_VARIANT: Readonly<
+  Record<StateTone, 'outline' | 'secondary' | 'default' | 'info' | 'success' | 'warning'>
+> = {
+  neutral: 'outline',
+  muted: 'secondary',
+  primary: 'default',
+  info: 'info',
+  success: 'success',
+  warning: 'warning',
+};
 
 /**
  * Per-state presentation, as a LOOKUP rather than a chain of ternaries (SonarCloud).
@@ -82,19 +115,66 @@ export function ConsultationList({
  * being silently folded into `held`, which would misreport an unrecorded call as delivered.
  */
 const STATE_PRESENTATION: Readonly<
-  Record<CaseConsultationStateLabel, { icon: LucideIcon; muted: boolean }>
+  Record<CaseConsultationStateLabel, { icon: LucideIcon; muted: boolean; tone: StateTone }>
 > = {
-  scheduled: { icon: CalendarClock, muted: false },
+  scheduled: { icon: CalendarClock, muted: false, tone: 'neutral' },
   // BAL-411 — same icon/weight as `scheduled` (the booking still stands); `stateNote` below
   // carries the one distinguishing fact.
-  pending_reschedule: { icon: CalendarClock, muted: false },
-  in_progress: { icon: Video, muted: false },
-  held: { icon: Video, muted: false },
-  no_show_client: { icon: CircleSlash, muted: true },
-  missed_call: { icon: CircleSlash, muted: true },
-  cancelled: { icon: CircleSlash, muted: true },
-  outcome_pending: { icon: CircleSlash, muted: true },
+  pending_reschedule: { icon: CalendarClock, muted: false, tone: 'info' },
+  in_progress: { icon: Video, muted: false, tone: 'primary' },
+  held: { icon: Video, muted: false, tone: 'success' },
+  no_show_client: { icon: CircleSlash, muted: true, tone: 'warning' },
+  missed_call: { icon: CircleSlash, muted: true, tone: 'warning' },
+  cancelled: { icon: CircleSlash, muted: true, tone: 'muted' },
+  outcome_pending: { icon: CircleSlash, muted: true, tone: 'muted' },
 };
+
+/**
+ * The states whose row is an APPOINTMENT rather than a record: these show a clock time and may
+ * say "Today"/"Tomorrow".
+ *
+ * ⚠ Everything terminal keeps its absolute date — `local-date-time.tsx` rules that a case is a
+ * record and never speaks in relative time, and a past call is exactly that record.
+ */
+const FORWARD_LOOKING: ReadonlySet<CaseConsultationStateLabel> = new Set([
+  'scheduled',
+  'pending_reschedule',
+  'in_progress',
+]);
+
+/**
+ * The pill's text, lens-aware for the two states where who-did-not-join is the load-bearing fact.
+ *
+ * ⚠ The two "did not join" states stay distinct, for the same reason `stateNote` keeps them
+ * distinct: one means the CLIENT never arrived and the other the EXPERT, and one shared "Not
+ * held" would tell the wronged party the call failed without saying who.
+ *
+ * ⚠ Never second person, and never name the reader as the one who failed — `stateNote`'s
+ * `missed_call` arm is impersonal for exactly this reason. The party who missed it reads a
+ * statement of the event; the other party reads who was absent.
+ */
+function stateLabel(state: CaseConsultationStateLabel, lens: 'client' | 'expert'): string {
+  switch (state) {
+    case 'scheduled':
+      return 'Upcoming';
+    case 'pending_reschedule':
+      return 'New times proposed';
+    case 'in_progress':
+      return 'Live now';
+    case 'held':
+      return 'Held';
+    case 'no_show_client':
+      // The CLIENT never arrived: impersonal for the client, explicit for the expert.
+      return lens === 'client' ? 'Not joined' : "Client didn't join";
+    case 'missed_call':
+      // The EXPERT never joined: impersonal for the expert, explicit for the client.
+      return lens === 'expert' ? "Didn't start" : "Expert didn't join";
+    case 'cancelled':
+      return 'Cancelled';
+    case 'outcome_pending':
+      return 'Not recorded';
+  }
+}
 
 /** The one line under the date. `null` ⇒ the row's indicators speak for it (the `held` case). */
 function stateNote(
@@ -146,18 +226,21 @@ function ConsultationRow({
   row,
   lens,
   counterpartyLabel,
+  now,
   last,
 }: Readonly<{
   row: CaseConsultationRowView;
   lens: 'client' | 'expert';
   counterpartyLabel: string;
+  /** The list's ticking "now", or `undefined` before it resolves. */
+  now: Date | undefined;
   last: boolean;
 }>): React.JSX.Element {
   const onViewRecap = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'view_recap', lens });
   }, [lens]);
 
-  const { icon: Icon, muted } = STATE_PRESENTATION[row.state];
+  const { icon: Icon, muted, tone } = STATE_PRESENTATION[row.state];
   const note = stateNote(row.state, lens, counterpartyLabel);
 
   return (
@@ -181,11 +264,24 @@ function ConsultationRow({
             )}
           >
             {row.ordinal !== null && <span className="sr-only">Consultation {row.ordinal}: </span>}
-            <LocalDateTime iso={row.scheduledStartIso} variant="day-month" />
+            {/* ⚠ Time and relative day on appointments only — several calls booked on one day
+                are otherwise indistinguishable. Past rows keep the compact date; the duration is
+                already on the row and the recap carries the full timestamp. */}
+            <LocalDateTime
+              iso={row.scheduledStartIso}
+              variant={FORWARD_LOOKING.has(row.state) ? 'day-month-time' : 'day-month'}
+              relativeDays={FORWARD_LOOKING.has(row.state)}
+              now={now}
+            />
           </span>
           {row.durationMinutes !== null && (
             <span className="text-muted-foreground text-xs">{row.durationMinutes} min</span>
           )}
+          {/* ⚠ Colour on the pill, not the row: shading whole rows turns the card into a stripe
+              of tinted blocks and makes the row needing attention compete with its background. */}
+          <Badge variant={TONE_VARIANT[tone]} className="text-[11px]">
+            {stateLabel(row.state, lens)}
+          </Badge>
         </div>
 
         {/* ⚠ THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'`. `recapHrefOf`

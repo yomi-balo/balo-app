@@ -20,10 +20,25 @@ import {
   type DurationFilter,
 } from './availability-filters';
 
-const listVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.06 } },
-} as const;
+/**
+ * The per-row reveal, budgeted rather than fixed: a flat stagger costs row-count × gap, so a
+ * fully-open 32-slot day would take ~1.9s to finish appearing. Capping the whole reveal keeps a
+ * short day's cadence and bounds a long one.
+ */
+const REVEAL_BUDGET_SECONDS = 0.45;
+const MAX_ROW_STAGGER_SECONDS = 0.06;
+
+function listVariantsFor(rowCount: number): {
+  hidden: { opacity: number };
+  show: { opacity: number; transition: { staggerChildren: number } };
+} {
+  const staggerChildren =
+    rowCount > 0 ? Math.min(MAX_ROW_STAGGER_SECONDS, REVEAL_BUDGET_SECONDS / rowCount) : 0;
+  return {
+    hidden: { opacity: 0 },
+    show: { opacity: 1, transition: { staggerChildren } },
+  };
+}
 
 const rowVariants = {
   hidden: { opacity: 0, y: 8 },
@@ -361,7 +376,7 @@ export function AvailabilitySlotsPanel({
             when the duration is PINNED, "Show all →" would be a visible control whose only job
             is to discard the pin (see the prop's own docblock). */}
         {!hideDurationFilter && filterAutoReset && (
-          <output className="text-warning mt-2 flex items-center gap-1.5 text-xs">
+          <output className="text-warning-strong mt-2 flex items-center gap-1.5 text-xs">
             <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
             {/* `durationFilter` is never `'any'` here: `filterAutoReset` is only set when
                 `shouldResetFilter` returned true, which requires a non-`'any'` filter. The old
@@ -381,8 +396,16 @@ export function AvailabilitySlotsPanel({
       {/* Unbounded on mobile (the page scrolls anyway); capped on DESKTOP, where the two-column
           layout is the thing that needs the list not to outgrow the calendar beside it. */}
       <ScrollArea className="max-h-none md:max-h-[340px]">
+        {/*
+          ⚠ The `key` is load-bearing. `staggerChildren` propagates only when the PARENT
+          transitions between variants, and this `motion.ul` keeps its place in the tree across a
+          day or filter change — only its children are replaced. Without a remount the parent
+          stays on `show`, never transitions again, and the new rows sit at `initial="hidden"`
+          forever.
+        */}
         <motion.ul
-          variants={listVariants}
+          key={`${dayKey}:${effectiveFilter}`}
+          variants={listVariantsFor(showing.length)}
           initial="hidden"
           animate="show"
           className="flex flex-col gap-1.5"

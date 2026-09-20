@@ -13,6 +13,7 @@ import {
 import { SLOT_DURATION_LADDER } from '@balo/shared/availability';
 import { CAPABILITIES } from '@/lib/authz';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
@@ -21,6 +22,7 @@ import { sanitizeCaseDescription } from '../sanitize-case-description';
 import { authorizeCaseAttach } from '../authorize-case-attach';
 import { resolveBookingExpertDisplay } from '../load-booking-context';
 import { postBookMeeting, postInviteGuests } from '../booking-api-client';
+import { isExpiredCredentialFailure, viewerApiCredentialIsLive } from '@/lib/api/balo-api-client';
 import type {
   BookConsultationInput,
   BookConsultationResult,
@@ -558,6 +560,12 @@ async function completeBooking(params: {
         caseTitle,
       };
     }
+    // ⚠ A dead credential is not a booking failure. Rare, since the pre-flight gate catches it
+    // first, but the partial-failure panel's "Try again" would re-send the same dead token
+    // forever. Classified before the catch-all so the client can offer sign-in instead.
+    if (isExpiredCredentialFailure(booked.status, booked.code)) {
+      return { ok: false, stage: 'meeting', code: 'session_expired', engagementId, caseTitle };
+    }
     // Decision 3 — accept the orphan. The case is NOT deleted; "Try again" re-enters via the
     // case-grain replay above.
     log.error('Booking meeting hop failed after case create', {
@@ -678,6 +686,33 @@ export async function bookConsultationAction(
     return { ok: false, stage: 'validation', code: 'invalid_request' };
   }
   const input = parsed.data;
+
+  /**
+   * ⚠ BEFORE the credential pre-flight below, which an impersonated session ALWAYS fails — it
+   * holds no `accessToken` by design. Ordering it second would report every impersonated
+   * booking as an expired session and invite the staff member to sign in, ending the
+   * impersonation. Booking commits the customer to a consultation their wallet settles, so the
+   * answer is refusal either way; only the message differs.
+   */
+  if (isImpersonatedSession(user)) {
+    log.warn('Booking refused — impersonated session', {
+      userId: user.id,
+      impersonatorUserId: user.impersonatorUserId,
+      expertProfileId: input.expertProfileId,
+    });
+    return { ok: false, stage: 'validation', code: 'impersonation_refused' };
+  }
+
+  /**
+   * ⚠ Gate BEFORE the first write. `requireOnboardedUser()` is satisfied by the 7-day cookie,
+   * which outlives the WorkOS token, so an idle viewer reaches here authenticated but holding a
+   * dead Bearer. Without this, `resolveCase` writes a real row and only the `apps/api` hop 401s,
+   * leaving an orphaned case behind a panel about the slot.
+   */
+  if (!(await viewerApiCredentialIsLive())) {
+    log.info('Booking refused before any write — viewer credential expired', { userId: user.id });
+    return { ok: false, stage: 'validation', code: 'session_expired' };
+  }
 
   const caseResult = await resolveCase(user.id, key, input);
   if (!caseResult.ok) {

@@ -107,7 +107,7 @@ export function ResolvePrompt({
       className={branch === 'ask' ? 'flex w-full flex-col items-center' : undefined}
     >
       {branch === 'done' && (
-        <div className="border-success/25 bg-success/10 flex w-full items-start gap-2.5 rounded-2xl border px-4 py-3 text-left">
+        <div className="border-success/25 bg-success/10 flex w-full items-start gap-2.5 rounded-lg border px-4 py-3 text-left">
           <CircleCheck className="text-success mt-0.5 h-4 w-4 flex-none" aria-hidden="true" />
           {/* ⚠ ONE LINE, NOT THE PROTOTYPE'S TERNARY. Its other branch ("We'll email you a short
               review request.") is STRUCTURALLY UNREACHABLE here: this prompt only mounts once a

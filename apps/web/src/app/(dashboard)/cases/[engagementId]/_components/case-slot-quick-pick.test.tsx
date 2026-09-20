@@ -12,7 +12,11 @@ import { CaseSlotQuickPick } from './case-slot-quick-pick';
 // This file scopes to the strip's OWN rendering + selection wiring, not BookingFlowDialog's
 // internals (covered by booking-flow-dialog.test.tsx) — stub it and assert on the props it's
 // mounted with.
-const { mockDialogProps } = vi.hoisted(() => ({ mockDialogProps: vi.fn() }));
+const { mockDialogProps, mockRefresh } = vi.hoisted(() => ({
+  mockDialogProps: vi.fn(),
+  mockRefresh: vi.fn(),
+}));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: mockRefresh }) }));
 vi.mock('@/components/booking', () => ({
   BookingFlowDialog: (props: BookingFlowDialogProps) => {
     mockDialogProps(props);
@@ -26,6 +30,7 @@ beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
   mockDialogProps.mockClear();
+  mockRefresh.mockClear();
 });
 
 afterEach(() => {
@@ -160,5 +165,45 @@ describe('CaseSlotQuickPick', () => {
 
     const lastCall = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps;
     expect(lastCall.viewerEmailDomain).toBe('northwind.com');
+  });
+});
+
+/**
+ * The only booking entry point that does not leave the page, so the only one that has to
+ * re-read the server surface itself.
+ */
+describe('CaseSlotQuickPick — refreshing the case surface after booking', () => {
+  async function openDialog(): Promise<BookingFlowDialogProps> {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        okAvailabilityBody({
+          slots: [
+            { start: '2026-06-05T09:00:00.000Z', end: '2026-06-05T10:00:00.000Z', maxDuration: 60 },
+          ],
+        })
+      )
+    );
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} />);
+    const [pill] = await screen.findAllByRole('button');
+    if (pill) await user.click(pill);
+    return mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps;
+  }
+
+  it('re-reads the server surface when the booking dialog closes', async () => {
+    const props = await openDialog();
+    expect(mockRefresh).not.toHaveBeenCalled();
+    const callsBeforeClose = fetchMock.mock.calls.length;
+
+    props.onClose();
+
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
+    // The strip's own fetch too — `router.refresh()` does not reach a client hook.
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBeforeClose));
+    // Mounted behind `presetSlot !== null`, so closing unmounts it.
+    await waitFor(() =>
+      expect(screen.queryByTestId('booking-dialog-stub')).not.toBeInTheDocument()
+    );
   });
 });

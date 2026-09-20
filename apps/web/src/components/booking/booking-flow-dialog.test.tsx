@@ -4,6 +4,7 @@ import { render, screen } from '@/test/utils';
 import { toast } from 'sonner';
 import { track } from '@/lib/analytics';
 import type { BookConsultationResult } from '@/lib/booking/actions/types';
+import { SESSION_EXPIRED_MESSAGE } from '@/lib/auth/auth-error-copy';
 import type { BookingFlowExpert, BookingContext } from './types';
 
 vi.mock('motion/react', async () => {
@@ -15,6 +16,11 @@ vi.mock('sonner', () => ({
 }));
 const { mockRouterPush } = vi.hoisted(() => ({ mockRouterPush: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockRouterPush }) }));
+
+const { mockAuthModalOpen } = vi.hoisted(() => ({ mockAuthModalOpen: vi.fn() }));
+vi.mock('@/hooks/use-auth-modal', () => ({
+  useAuthModal: () => ({ open: mockAuthModalOpen, close: vi.fn(), isOpen: false }),
+}));
 
 const { mockIsMobile } = vi.hoisted(() => ({ mockIsMobile: vi.fn(() => false) }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => mockIsMobile() }));
@@ -443,6 +449,102 @@ describe('BookingFlowDialog — failure panels + idempotent retry', () => {
     );
     await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
     expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+  });
+
+  describe('session_expired — sign-in, never a message about the slot', () => {
+    async function submitWith(
+      user: ReturnType<typeof userEvent.setup>,
+      result: Extract<BookConsultationResult, { ok: false }>
+    ): Promise<void> {
+      mockBookConsultationAction.mockResolvedValue(result);
+      render(
+        <BookingFlowDialog
+          open
+          onClose={vi.fn()}
+          expert={EXPERT}
+          source="profile"
+          entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+          viewerEmailDomain={null}
+          onMessage={vi.fn()}
+        />
+      );
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+      await user.type(
+        screen.getByLabelText("What you'd like to discuss"),
+        'A real problem statement.'
+      );
+      await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
+    }
+
+    it('pre-flight refusal offers sign-in and says nothing was saved', async () => {
+      const user = userEvent.setup();
+      await submitWith(user, { ok: false, stage: 'validation', code: 'session_expired' });
+
+      expect(await screen.findByText('Sign in to finish booking')).toBeInTheDocument();
+      expect(screen.getByText(/nothing was saved/i)).toBeInTheDocument();
+      // ⚠ Never the partial panel: its headline is about the SLOT, and its only action
+      // re-sends the same dead token.
+      expect(screen.queryByText(/couldn't lock in the time/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Try again/i })).not.toBeInTheDocument();
+    });
+
+    it('mid-submit refusal names the case that WAS written', async () => {
+      const user = userEvent.setup();
+      await submitWith(user, {
+        ok: false,
+        stage: 'meeting',
+        code: 'session_expired',
+        engagementId: 'engagement-9',
+        caseTitle: 'Migration planning',
+      });
+
+      expect(await screen.findByText('Sign in to finish booking')).toBeInTheDocument();
+      expect(screen.getByText(/“Migration planning” is saved/)).toBeInTheDocument();
+      expect(screen.queryByText(/nothing was saved/i)).not.toBeInTheDocument();
+    });
+
+    /**
+     * ⚠ The dialog must still be mounted afterwards. Re-authenticating is what lets the draft,
+     * the slot and the nonce survive — a navigation would discard all three, and the panel's
+     * own copy promises it does not.
+     */
+    it('"Sign in" re-authenticates in place and returns to confirm on success', async () => {
+      const user = userEvent.setup();
+      await submitWith(user, { ok: false, stage: 'validation', code: 'session_expired' });
+      await user.click(await screen.findByRole('button', { name: 'Sign in' }));
+
+      expect(mockRouterPush).not.toHaveBeenCalled();
+      expect(mockAuthModalOpen).toHaveBeenCalledTimes(1);
+      const options = mockAuthModalOpen.mock.calls[0]?.[0] as {
+        initialError?: string;
+        onSuccess?: () => void;
+      };
+      expect(options.initialError).toBe(SESSION_EXPIRED_MESSAGE);
+
+      options.onSuccess?.();
+      expect(await screen.findByRole('button', { name: /Confirm & book/i })).toBeInTheDocument();
+      expect(screen.queryByText('Sign in to finish booking')).not.toBeInTheDocument();
+    });
+
+    /**
+     * An impersonated session holds no access token at all, so it fails the credential
+     * pre-flight for a reason that has nothing to do with expiry. Offering it "Sign in" would
+     * sign the staff member in as themselves and end the impersonation.
+     */
+    it('an impersonation refusal names its own reason, with no sign-in and no retry', async () => {
+      const user = userEvent.setup();
+      await submitWith(user, {
+        ok: false,
+        stage: 'validation',
+        code: 'impersonation_refused',
+      });
+
+      expect(await screen.findByText(/can't be made while impersonating/i)).toBeInTheDocument();
+      expect(screen.queryByText('Sign in to finish booking')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Try again/i })).not.toBeInTheDocument();
+    });
   });
 
   it('shows the inline stale-slot banner (not a full panel) and preserves the typed title', async () => {

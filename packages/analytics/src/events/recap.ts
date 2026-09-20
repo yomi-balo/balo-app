@@ -119,6 +119,12 @@ export type CaseSurfaceAction =
   | 'dismiss_resolution_request'
   | 'view_recap'
   | 'download_file'
+  /**
+   * An image was opened in the in-app viewer rather than downloaded. ⚠ SEPARATE FROM
+   * `download_file`: the two are different intents on the same row, and folding a preview into
+   * the download count would inflate it with people who only ever looked.
+   */
+  | 'view_file'
   | 'join';
 
 /**

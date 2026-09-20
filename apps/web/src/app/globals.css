@@ -32,6 +32,18 @@
   --info: oklch(0.61 0.155 241.4);
   --info-foreground: oklch(1 0 0);
 
+  /* Status TEXT sitting on a status TINT (`text-warning-strong` on `bg-warning/15`), as the
+     soft Badge variants use. The plain tokens above are tuned to be read as a FILL or an
+     icon against the page; as small text on a 10-15% wash of themselves they measure
+     3.00:1 (success), 1.91:1 (warning) and 3.27:1 (info) — all under the 4.5:1 AA floor,
+     and the pills render at 11px. Same hue and chroma, dropped to L=0.48, which measures
+     5.25:1, 6.00:1 and 5.50:1 on those exact backgrounds. Pinned by badge-contrast.test.ts.
+     ⚠ In dark mode these are ALIASES of the plain tokens, which already measure 5.88-7.15:1
+     on `--card` — darkening there would make them WORSE. */
+  --success-strong: oklch(0.48 0.169 149.2);
+  --warning-strong: oklch(0.48 0.165 70.6);
+  --info-strong: oklch(0.48 0.155 241.4);
+
   /* BAL-493 — marketing surfaces (D4). Light values are converted from the design
      reference's palette (marketing-home.jsx:190-209). See the .dark block below for
      why the dark values are DESIGNED, not converted — the "For experts" band inverts
@@ -95,6 +107,10 @@
   --warning-foreground: oklch(0.147 0.019 264.6);
   --info: oklch(0.68 0.155 241.4);
   --info-foreground: oklch(0.147 0.019 264.6);
+  /* Already 5.88-7.15:1 on this card — see the light block. */
+  --success-strong: var(--success);
+  --warning-strong: var(--warning);
+  --info-strong: var(--info);
 
   /* BAL-493 (D4) — dark rhythm. These are DESIGNED, not converted from the light hexes.
      Invariant (pinned by marketing-home-css.test.ts, do not "fix" toward the light values):
@@ -157,6 +173,9 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-success-strong: var(--success-strong);
+  --color-warning-strong: var(--warning-strong);
+  --color-info-strong: var(--info-strong);
 
   /* BAL-493 (D4) — marketing surfaces. Colour tokens only; --grad/--grad-hover/--ease
      are not colours and are consumed directly as var(--grad) etc. in marketing-home.css. */

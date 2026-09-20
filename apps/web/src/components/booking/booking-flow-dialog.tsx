@@ -7,6 +7,8 @@ import * as Sentry from '@sentry/nextjs';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { useAuthModal } from '@/hooks/use-auth-modal';
+import { SESSION_EXPIRED_MESSAGE } from '@/lib/auth/auth-error-copy';
 import { track, BOOKING_EVENTS } from '@/lib/analytics';
 import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
 import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
@@ -21,11 +23,23 @@ import { StepPickTime } from './step-pick-time';
 import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confirm';
 import { StepBooked } from './step-booked';
 import { OnboardingRoutingState } from './onboarding-routing-state';
-import { HardFailurePanel, PartialFailurePanel } from './booking-error-panels';
+import {
+  HardFailurePanel,
+  PartialFailurePanel,
+  SessionExpiredPanel,
+  type HardFailurePanelCopy,
+} from './booking-error-panels';
 import type { GuestDraft } from './guest-invite-composer';
 import type { BookingFlowDialogProps, FixedCaseSummary, OpenCaseForExpert } from './types';
 
-type Phase = 'onboarding' | 'pick_time' | 'confirm' | 'booked' | 'error_hard' | 'error_partial';
+type Phase =
+  | 'onboarding'
+  | 'pick_time'
+  | 'confirm'
+  | 'booked'
+  | 'error_hard'
+  | 'error_partial'
+  | 'error_session';
 
 interface BookedSnapshot {
   engagementId: string;
@@ -202,8 +216,23 @@ function fireBookingSuccessAnalytics(params: {
   }
 }
 
+/**
+ * The `error_hard` copy for a staff member who tried to book while impersonating a customer.
+ *
+ * ⚠ NO RETRY, AND NO "SIGN IN". Retrying fails identically, and the sign-in the session-expired
+ * panel offers would end the impersonation — see `impersonation_refused` in `types.ts`. The
+ * body names the one thing the reader can actually do.
+ */
+const IMPERSONATION_REFUSAL_PANEL: HardFailurePanelCopy = {
+  title: "Bookings can't be made while impersonating",
+  body: 'Booking commits this account to a consultation its own balance settles, so it has to be their action. Ask them to book, or end the impersonation and book from your own account.',
+  hideRetry: true,
+};
+
 type SubmitFailureOutcome =
   | { kind: 'stale_slot' }
+  | { kind: 'impersonation_refused' }
+  | { kind: 'session_expired'; caseTitle: string | null }
   | { kind: 'partial'; engagementId: string; caseTitle: string }
   | { kind: 'company_fail_closed'; code: BookingFailureCode }
   | { kind: 'hard' };
@@ -211,16 +240,29 @@ type SubmitFailureOutcome =
 /**
  * `handleSubmit`'s failure-branch classification, pulled out to a pure function so the
  * component body only has to switch on an already-resolved discriminant. Order matters and is
- * preserved exactly from the original inline chain: `slot_unavailable` first (never treated as
- * a case-level partial failure, even though it also carries `engagementId`/`caseTitle`), then
- * any `stage:'meeting'` failure that names a case (the partial-recovery arm, D4b), then a
- * `stage:'company'` failure (M4's fail-closed arm), then the generic hard failure.
+ * preserved: `slot_unavailable` first (never treated as a case-level partial failure, even
+ * though it also carries `engagementId`/`caseTitle`), then `session_expired` (which carries the
+ * same fields and would otherwise be swallowed by the arm below it), then any `stage:'meeting'`
+ * failure that names a case (the partial-recovery arm, D4b), then a `stage:'company'` failure
+ * (M4's fail-closed arm), then the generic hard failure.
  */
 function resolveSubmitFailureOutcome(
   result: Extract<BookConsultationResult, { ok: false }>
 ): SubmitFailureOutcome {
   if (result.code === 'slot_unavailable') {
     return { kind: 'stale_slot' };
+  }
+  // ⚠ BEFORE the partial arm. A meeting-hop `session_expired` also carries
+  // `engagementId`/`caseTitle`, so the partial arm below would otherwise swallow it and offer a
+  // Try again that re-sends the same dead token forever. `caseTitle` is threaded through rather
+  // than dropped: on that path the case row IS real, and the panel says so.
+  // ⚠ BEFORE `session_expired`, which an impersonated session would otherwise be reported as —
+  // see that code's note in `types.ts`.
+  if (result.code === 'impersonation_refused') {
+    return { kind: 'impersonation_refused' };
+  }
+  if (result.code === 'session_expired') {
+    return { kind: 'session_expired', caseTitle: result.caseTitle ?? null };
   }
   if (
     result.stage === 'meeting' &&
@@ -255,6 +297,7 @@ export function BookingFlowDialog(
     productsTaxonomy = EMPTY_TAXONOMY,
   } = props;
   const isMobile = useIsMobile(768);
+  const authModal = useAuthModal();
 
   const [phase, setPhase] = useState<Phase>('pick_time');
   const [viewerTimezone, setViewerTimezone] = useState('UTC');
@@ -281,6 +324,13 @@ export function BookingFlowDialog(
   const [bookedResult, setBookedResult] = useState<BookedSnapshot | null>(null);
   /** Set once a partial failure creates a real case — every subsequent submit attaches to it. */
   const [recovered, setRecovered] = useState<FixedCaseSummary | null>(null);
+  /**
+   * The case title to name on the session-expired panel, or `null` when the credential was
+   * refused BEFORE any write (the pre-flight gate) and there is therefore no case to name.
+   */
+  const [sessionExpiredCaseTitle, setSessionExpiredCaseTitle] = useState<string | null>(null);
+  /** Copy overrides for `error_hard`. `null` ⇒ the panel's own defaults. */
+  const [hardFailure, setHardFailure] = useState<HardFailurePanelCopy | null>(null);
 
   const openFiredRef = useRef(false);
   /** Frozen true the moment ANY submit creates a real case row (D4b) — see `handleSubmit`. */
@@ -310,6 +360,7 @@ export function BookingFlowDialog(
     setRecovered(null);
     setSubmitting(false);
     setCaseChoiceLoading(false);
+    setSessionExpiredCaseTitle(null);
 
     if (entry.mode === 'fixed_case') {
       setPhase('confirm');
@@ -502,6 +553,85 @@ export function BookingFlowDialog(
     onClose();
   }, [bookedResult, phase, expert.expertProfileId, onClose]);
 
+  /**
+   * Every `{ ok: false }` arm of a submit, kept out of `handleSubmit` so that function holds
+   * only the happy path. Each arm ends the submit — there is no fallthrough to a booked state.
+   */
+  const applySubmitFailure = useCallback(
+    (result: Extract<BookConsultationResult, { ok: false }>): void => {
+      // ⚠ ANY `stage: 'meeting'` failure means the CASE row already exists (Data Flow steps
+      // 4-8 run to completion before `postBookMeeting` at step 9) — mark the nonce frozen so a
+      // later slot re-pick reuses the SAME `bookingIdempotencyKey` and re-enters against that
+      // case rather than minting a second one (D4b).
+      if (result.stage === 'meeting') {
+        caseAlreadyCreatedRef.current = true;
+      }
+      const outcome = resolveSubmitFailureOutcome(result);
+      if (outcome.kind === 'stale_slot') {
+        // ⚠ STALE SLOT STAYS IN "NEW CASE" FORM SHAPE — design's "all other field values
+        // preserved" means title/description/products/company stay EDITABLE, not switched to
+        // the read-only attach card. `recovered` is deliberately NOT set here; the frozen
+        // nonce above is what makes the eventual resubmit idempotent against the same case.
+        setStaleSlot(true);
+        return;
+      }
+      if (outcome.kind === 'impersonation_refused') {
+        setHardFailure(IMPERSONATION_REFUSAL_PANEL);
+        setPhase('error_hard');
+        return;
+      }
+      if (outcome.kind === 'session_expired') {
+        // ⚠ A `caseTitle` MEANS A CASE ROW WAS ALREADY WRITTEN and the meeting hop got the
+        // 401 — an open case with no consultation on it, which nothing downstream reports.
+        // The generic hard arm below logs to Sentry; this one would otherwise pass silently.
+        if (outcome.caseTitle !== null) {
+          Sentry.captureMessage('Booking credential expired after the case row was written', {
+            level: 'warning',
+            tags: { feature: 'booking', code: 'session_expired' },
+            extra: { expertProfileId: expert.expertProfileId, caseTitle: outcome.caseTitle },
+          });
+        }
+        track(BOOKING_EVENTS.SESSION_EXPIRED, {
+          expert_id: expert.expertProfileId,
+          stage: outcome.caseTitle === null ? 'preflight' : 'mid_submit',
+        });
+        setSessionExpiredCaseTitle(outcome.caseTitle);
+        setPhase('error_session');
+        return;
+      }
+      if (outcome.kind === 'partial') {
+        setRecovered({
+          engagementId: outcome.engagementId,
+          title: outcome.caseTitle,
+          consultationCount: 0,
+          openedAtIso: new Date().toISOString(),
+        });
+        setPhase('error_partial');
+        return;
+      }
+      if (outcome.kind === 'company_fail_closed') {
+        // M4 — a company-hop failure (a stale eligibility read, a race) must FAIL CLOSED, not
+        // dead-end on the generic hard panel with an invisible picker (Plan Decision 5: "read
+        // failed → Fail closed — inline retry banner where the picker would be; Confirm stays
+        // disabled"). Reuse the SAME `company_read_failed` retry banner rather than a second
+        // copy — `companyReadFailed` is already wired into `submitDisabled` below.
+        // A returned `{ok:false}`, not a thrown error — `captureMessage`, not
+        // `captureException` (there is no `Error` object to attach here).
+        Sentry.captureMessage('Booking failed at the company hop', {
+          level: 'warning',
+          tags: { feature: 'booking', code: outcome.code },
+          extra: { expertProfileId: expert.expertProfileId },
+        });
+        setCompanyReadFailed(true);
+        setPhase('confirm');
+        return;
+      }
+      setHardFailure(null);
+      setPhase('error_hard');
+    },
+    [expert.expertProfileId]
+  );
+
   const handleSubmit = useCallback(async () => {
     setShowValidation(true);
     if (slot === null) return;
@@ -538,50 +668,7 @@ export function BookingFlowDialog(
       });
 
       if (!result.ok) {
-        // ⚠ ANY `stage: 'meeting'` failure means the CASE row already exists (Data Flow steps
-        // 4-8 run to completion before `postBookMeeting` at step 9) — mark the nonce frozen so a
-        // later slot re-pick reuses the SAME `bookingIdempotencyKey` and re-enters against that
-        // case rather than minting a second one (D4b).
-        if (result.stage === 'meeting') {
-          caseAlreadyCreatedRef.current = true;
-        }
-        const outcome = resolveSubmitFailureOutcome(result);
-        if (outcome.kind === 'stale_slot') {
-          // ⚠ STALE SLOT STAYS IN "NEW CASE" FORM SHAPE — design's "all other field values
-          // preserved" means title/description/products/company stay EDITABLE, not switched to
-          // the read-only attach card. `recovered` is deliberately NOT set here; the frozen
-          // nonce above is what makes the eventual resubmit idempotent against the same case.
-          setStaleSlot(true);
-          return;
-        }
-        if (outcome.kind === 'partial') {
-          setRecovered({
-            engagementId: outcome.engagementId,
-            title: outcome.caseTitle,
-            consultationCount: 0,
-            openedAtIso: new Date().toISOString(),
-          });
-          setPhase('error_partial');
-          return;
-        }
-        if (outcome.kind === 'company_fail_closed') {
-          // M4 — a company-hop failure (a stale eligibility read, a race) must FAIL CLOSED, not
-          // dead-end on the generic hard panel with an invisible picker (Plan Decision 5: "read
-          // failed → Fail closed — inline retry banner where the picker would be; Confirm stays
-          // disabled"). Reuse the SAME `company_read_failed` retry banner rather than a second
-          // copy — `companyReadFailed` is already wired into `submitDisabled` below.
-          // A returned `{ok:false}`, not a thrown error — `captureMessage`, not
-          // `captureException` (there is no `Error` object to attach here).
-          Sentry.captureMessage('Booking failed at the company hop', {
-            level: 'warning',
-            tags: { feature: 'booking', code: outcome.code },
-            extra: { expertProfileId: expert.expertProfileId },
-          });
-          setCompanyReadFailed(true);
-          setPhase('confirm');
-          return;
-        }
-        setPhase('error_hard');
+        applySubmitFailure(result);
         return;
       }
 
@@ -643,7 +730,32 @@ export function BookingFlowDialog(
     guests,
     openCases,
     viewerEmailDomain,
+    applySubmitFailure,
   ]);
+
+  /**
+   * Re-authenticate WITHOUT leaving the dialog. `AuthModalProvider` is mounted at the app root,
+   * so the modal opens over this one and the flow behind it is never unmounted.
+   *
+   * ⚠ NAVIGATING TO `/login` WOULD STRAND THE USER, which this panel's copy promises it will
+   * not do: `/login` opens the same modal with no `onSuccess`, `password-step` navigates only
+   * when the account still needs onboarding, and the page ignores a `'success'` close — so an
+   * already-onboarded user lands on its "Preparing sign in…" placeholder with the slot, the
+   * draft and the nonce gone.
+   *
+   * ⚠ THE NONCE IS DELIBERATELY NOT RESET. On the mid-submit arm the case row already exists;
+   * re-entering with the SAME `bookingIdempotencyKey` books onto that case instead of minting a
+   * second one — the same reasoning as the frozen nonce on the partial-failure arm.
+   *
+   * ⚠ OAUTH STILL LEAVES THE PAGE. The draft cannot survive a full-document navigation to the
+   * identity provider, so only the email/password arm resumes in place.
+   */
+  const handleReauthenticate = useCallback(() => {
+    authModal.open({
+      initialError: SESSION_EXPIRED_MESSAGE,
+      onSuccess: () => setPhase('confirm'),
+    });
+  }, [authModal]);
 
   const handleRetryAfterPartial = useCallback(() => {
     setPhase('confirm');
@@ -713,8 +825,15 @@ export function BookingFlowDialog(
 
   const bookingStep = toBookingStep(phase);
 
+  /**
+   * ⚠ `min-h-0 flex-1`, never `h-full`, and the container must be `flex flex-col`.
+   * `DialogContent` is `display: grid` and capped with `max-h-[85vh]` and no definite height, so
+   * a child's `height: 100%` cannot resolve and falls back to `auto` — the column grows to
+   * content height, the `overflow-y-auto` below inherits it and has nothing to scroll, and the
+   * surplus is clipped. `flex-1` + `min-h-0` resolves against the clamped height.
+   */
   const body = (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <BookingHeader expert={expert} step={bookingStep} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <AnimatePresence mode="wait">
@@ -808,10 +927,21 @@ export function BookingFlowDialog(
           {phase === 'error_hard' && (
             <motion.div key="error_hard" {...pageTransition}>
               <HardFailurePanel
+                {...hardFailure}
                 onRetry={() => {
+                  setHardFailure(null);
                   setPhase('confirm');
                   handleSubmit().catch(() => {});
                 }}
+              />
+            </motion.div>
+          )}
+          {phase === 'error_session' && (
+            <motion.div key="error_session" {...pageTransition}>
+              <SessionExpiredPanel
+                caseTitle={sessionExpiredCaseTitle}
+                onSignIn={handleReauthenticate}
+                onClose={onClose}
               />
             </motion.div>
           )}
@@ -846,7 +976,7 @@ export function BookingFlowDialog(
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleAbandon()}>
-      <DialogContent className="max-h-[85vh] overflow-hidden rounded-xl p-0 sm:max-w-[640px]">
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[640px]">
         <DialogTitle className="sr-only">Book a consultation with {expert.name}</DialogTitle>
         <DialogDescription className="sr-only">
           Pick a time, review the details, and confirm your consultation.
