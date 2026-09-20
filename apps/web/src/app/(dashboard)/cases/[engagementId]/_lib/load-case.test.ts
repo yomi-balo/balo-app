@@ -1675,6 +1675,7 @@ describe('loadCase — canInvite axis resolution (BAL-573)', () => {
 
   it('clientCompanyName is on BOTH arms; caseScopeDomains is on the client arm ONLY, and listByParty is not called on the expert lens', async () => {
     seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
     m.listPartyDomains.mockResolvedValue([
       { id: 'd1', domain: 'northwind.test', source: 'auto_captured', createdAt: new Date() },
     ]);
@@ -1685,9 +1686,49 @@ describe('loadCase — canInvite axis resolution (BAL-573)', () => {
     expect(m.listPartyDomains).toHaveBeenCalledWith('company', COMPANY_ID);
 
     seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
     const expertView = await loadOrThrow();
     expect(expertView.clientCompanyName).toBe('Northwind Industrial');
     expect(m.listPartyDomains).not.toHaveBeenCalled();
+  });
+
+  /**
+   * F3 — the read used to sit in a wave gated only on `lens === 'client'`, so it fired on a
+   * closed case or one with only past consultations, where `caseScopeDomains` can never be
+   * consumed. It is now gated on the SAME `invitableMeetingIds` term as the guest count.
+   */
+  it('listByParty is NOT called on the client lens when nothing is upcoming (F3)', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([meeting('m1'), meeting('m2')]);
+
+    const view = await loadOrThrow();
+
+    expect(m.listPartyDomains).not.toHaveBeenCalled();
+    if (view.lens !== 'client') throw new Error('expected the client arm');
+    expect(view.caseScopeDomains).toEqual([]);
+  });
+
+  /**
+   * The one deliberate exception, mirroring the pinned guest-count exception above ("client — a
+   * CLOSED case with an upcoming meeting still reads and renders the guest count"): the two
+   * reads share ONE gate (`invitableMeetingIds`), so a closed case with a still-scheduled
+   * meeting reads both, even though `canInvite` is false there on the membership axis.
+   */
+  it('listByParty is called on a CLOSED case with an upcoming meeting — the SAME gate as the guest count (F3)', async () => {
+    seed({
+      access: { lens: 'client' },
+      caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' },
+    });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+    m.listPartyDomains.mockResolvedValue([
+      { id: 'd1', domain: 'northwind.test', source: 'auto_captured', createdAt: new Date() },
+    ]);
+
+    const view = await loadOrThrow();
+
+    expect(m.listPartyDomains).toHaveBeenCalledWith('company', COMPANY_ID);
+    if (view.lens !== 'client') throw new Error('expected the client arm');
+    expect(view.caseScopeDomains).toEqual(['northwind.test']);
   });
 });
 

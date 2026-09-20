@@ -62,7 +62,11 @@ function makeRow(overrides: Partial<CaseConsultationRowView> = {}): CaseConsulta
 function renderList(
   consultations: readonly CaseConsultationRowView[],
   lens: 'client' | 'expert' = 'client',
-  onRowAction: (verb: string, row: CaseConsultationRowView) => void = vi.fn(),
+  onRowAction: (
+    verb: string,
+    row: CaseConsultationRowView,
+    slot: 'menu' | 'guests'
+  ) => void = vi.fn(),
   registerTrigger: (
     meetingId: string,
     slot: 'menu' | 'guests',
@@ -733,14 +737,14 @@ describe('ConsultationList — the per-row kebab', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('calls onRowAction with the verb and the row when a menu item fires', async () => {
+  it('calls onRowAction with the verb, the row, and the "menu" slot when a menu item fires', async () => {
     const user = userEvent.setup();
     const onRowAction = vi.fn();
     const row = makeRow({ state: 'scheduled', canCancel: true });
     renderList([row], 'client', onRowAction);
     await user.click(screen.getByRole('button'));
     await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
-    expect(onRowAction).toHaveBeenCalledWith('cancel', row);
+    expect(onRowAction).toHaveBeenCalledWith('cancel', row, 'menu');
   });
 
   it('registers each row trigger keyed by its OWN meetingId and the "menu" slot', () => {
@@ -760,7 +764,7 @@ describe('ConsultationList — the per-row kebab', () => {
 });
 
 describe('ConsultationList — the guest-count control (BAL-573)', () => {
-  it('guestCount > 0 + canInvite ⇒ a button named "N guests … — manage", and clicking it calls onRowAction', async () => {
+  it('guestCount > 0 + canInvite ⇒ a button named "N guests … — manage", and clicking it calls onRowAction with the "guests" slot', async () => {
     const user = userEvent.setup();
     const onRowAction = vi.fn();
     const row = makeRow({ state: 'scheduled', guestCount: 2, canInvite: true });
@@ -768,7 +772,7 @@ describe('ConsultationList — the guest-count control (BAL-573)', () => {
 
     const button = screen.getByRole('button', { name: /2 guests .* — manage/ });
     await user.click(button);
-    expect(onRowAction).toHaveBeenCalledWith('invite', row);
+    expect(onRowAction).toHaveBeenCalledWith('invite', row, 'guests');
   });
 
   it('guestCount > 0 + canInvite=false ⇒ the same text, but NOT a button', () => {

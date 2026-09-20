@@ -30,7 +30,12 @@ export type ConsultationRowTriggerSlot = 'menu' | 'guests';
 
 export interface ConsultationRowMenuProps {
   row: CaseConsultationRowView;
-  onAction: (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => void;
+  /** Always fired with slot `'menu'` — this component IS the kebab. */
+  onAction: (
+    verb: ConsultationRowActionVerb,
+    row: CaseConsultationRowView,
+    slot: ConsultationRowTriggerSlot
+  ) => void;
   /**
    * For focus restoration: `case-surface.tsx` keeps a `meetingId#slot → HTMLButtonElement` map
    * so a dialog opened from this menu can restore focus here after the Radix menu has unmounted.
@@ -105,7 +110,7 @@ export function ConsultationRowMenu({
             {index === firstDestructiveIndex && index > 0 && <DropdownMenuSeparator />}
             <DropdownMenuItem
               variant={item.destructive ? 'destructive' : 'default'}
-              onSelect={() => onAction(item.key, row)}
+              onSelect={() => onAction(item.key, row, 'menu')}
             >
               <item.icon aria-hidden="true" />
               {item.label}

@@ -60,6 +60,15 @@ export interface GuestInviteComposerProps {
    * ⚠ ABSENT ⇒ BAL-400's behaviour, byte for byte. Both booking call sites are unchanged.
    */
   caseAccessDomains?: readonly string[];
+  /**
+   * BAL-573 (F2) — when true, `atCap` still computes and the warning line still renders, but it
+   * no longer disables the email input or the Add button. Defaults to `false`, so both booking
+   * call sites keep BAL-400's blocking behaviour byte for byte — their `otherParticipantCount`
+   * is a literal `2` that can never go stale. The case surface passes `true`: its count is a
+   * SERVER-RENDER snapshot, and a guest removed since render would otherwise lock the input
+   * with no way back short of a page refresh.
+   */
+  capAdvisoryOnly?: boolean;
 }
 
 const MAX_TOTAL_PARTICIPANTS = 10;
@@ -146,10 +155,13 @@ export function GuestInviteComposer({
   accessScope = 'case',
   showPricingNote = true,
   caseAccessDomains,
+  capAdvisoryOnly = false,
 }: Readonly<GuestInviteComposerProps>): React.JSX.Element {
   const [draftEmail, setDraftEmail] = useState('');
   const total = otherParticipantCount + guests.length;
   const atCap = total >= MAX_TOTAL_PARTICIPANTS;
+  // The warning line still keys off `atCap` alone; only the DISABLING is conditional.
+  const blockAtCap = atCap && !capAdvisoryOnly;
 
   const disclosure =
     draftEmail.trim().length > 0
@@ -175,7 +187,7 @@ export function GuestInviteComposer({
 
   function handleAdd(): void {
     const email = draftEmail.trim().toLowerCase();
-    if (!emailValid || alreadyAdded || atCap) return;
+    if (!emailValid || alreadyAdded || blockAtCap) return;
     onChange([...guests, { email }]);
     setDraftEmail('');
   }
@@ -240,7 +252,7 @@ export function GuestInviteComposer({
             }
           }}
           placeholder="name@company.com"
-          disabled={atCap}
+          disabled={blockAtCap}
           aria-label="Guest email address"
           className="flex-1"
         />
@@ -249,7 +261,7 @@ export function GuestInviteComposer({
           variant="outline"
           size="icon"
           onClick={handleAdd}
-          disabled={!emailValid || alreadyAdded || atCap}
+          disabled={!emailValid || alreadyAdded || blockAtCap}
           aria-label="Add guest"
         >
           <Plus className="h-4 w-4" aria-hidden="true" />

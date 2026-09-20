@@ -31,6 +31,7 @@ function renderDialog(
     onClose?: () => void;
     onInvited?: () => void;
     existingGuestCount?: number;
+    lens?: 'client' | 'expert';
   } = {}
 ) {
   return render(
@@ -45,6 +46,7 @@ function renderDialog(
       existingGuestCount={over.existingGuestCount ?? 0}
       clientCompanyName="Northwind Industrial"
       caseScopeDomains={['northwind.test']}
+      lens={over.lens ?? 'client'}
     />
   );
 }
@@ -72,15 +74,45 @@ describe('InviteColleagueDialog — empty state', () => {
   });
 });
 
+describe('InviteColleagueDialog — F1, lens gates COPY only, never authorization', () => {
+  it('does NOT render the "what you pay" clause on the EXPERT lens — an expert pays nothing here', () => {
+    renderDialog({ lens: 'expert' });
+    expect(screen.getByText('2 of 10')).toBeInTheDocument();
+    expect(screen.queryByText(/what you pay/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the "what you pay" clause on the CLIENT lens', () => {
+    renderDialog({ lens: 'client' });
+    expect(screen.getByText("2 of 10 · guests don't change what you pay")).toBeInTheDocument();
+  });
+});
+
+describe('InviteColleagueDialog — F2, the cap is advisory only (the count is a page-render snapshot)', () => {
+  /**
+   * ⚠ MUTATION PROOF: drop `capAdvisoryOnly` from the `GuestInviteComposer` call and this test
+   * goes red — `existingGuestCount: 8` alone (`RESERVED_BASE_PARTICIPANTS(2) + 8 = 10`) already
+   * reads as at-cap with zero drafts, which is exactly the stale-count lockout this closes.
+   */
+  it('the guest input stays enabled even when the page-rendered count already reads at-cap', () => {
+    renderDialog({ existingGuestCount: 8 });
+    expect(screen.getByLabelText('Guest email address')).toBeEnabled();
+  });
+
+  it('a guest can still be added at that same stale at-cap count', async () => {
+    const user = userEvent.setup();
+    renderDialog({ existingGuestCount: 8 });
+    await addDraft(user, 'dana@northwind.test');
+    expect(screen.getByText('dana@northwind.test')).toBeInTheDocument();
+  });
+});
+
 describe('InviteColleagueDialog — AC 6, Send is NEVER pre-emptively disabled by the cap', () => {
   /**
    * ⚠ MUTATION PROOF: add a `total >= cap` term to the Send button's `disabled` expression and
-   * this test goes red. `GuestInviteComposer`'s own `atCap` locks ADDING a draft (left exactly as
-   * shipped — 8 drafts is the most this test can add while `existingGuestCount: 0`, since
-   * `RESERVED_BASE_PARTICIPANTS(2) + 8 drafts` already hits the 10-cap); the seat count is then
-   * grown to 18 via a prop update — mirroring the real race `countLiveByMeeting`'s own docblock
-   * names, where the server's count moves between render and send — to prove Send answers to
-   * NEITHER quantity.
+   * this test goes red. Eight drafts plus `existingGuestCount: 0` already reaches the 10-cap
+   * (`RESERVED_BASE_PARTICIPANTS(2) + 8`); the seat count is then grown to 18 via a prop update —
+   * mirroring the real race `countLiveByMeeting`'s own docblock names, where the server's count
+   * moves between render and send — to prove Send answers to NEITHER quantity.
    */
   it('with 8 drafts and the seat count grown past the cap (total 18), Send is ENABLED', async () => {
     const user = userEvent.setup();
@@ -103,6 +135,7 @@ describe('InviteColleagueDialog — AC 6, Send is NEVER pre-emptively disabled b
         existingGuestCount={8}
         clientCompanyName="Northwind Industrial"
         caseScopeDomains={['northwind.test']}
+        lens="client"
       />
     );
 

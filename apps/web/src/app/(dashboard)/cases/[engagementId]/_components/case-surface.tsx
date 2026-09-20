@@ -234,7 +234,11 @@ export function CaseSurface({
   }, [view.nudge, nudgeRow]);
 
   const handleRowAction = useCallback(
-    (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => {
+    (
+      verb: ConsultationRowActionVerb,
+      row: CaseConsultationRowView,
+      slot: ConsultationRowTriggerSlot
+    ) => {
       const shared = {
         source: 'row' as const,
         meetingId: row.meetingId,
@@ -247,10 +251,7 @@ export function CaseSurface({
         setSelection({
           verb: 'invite',
           ...shared,
-          // ⚠ `triggerSlot` IS DERIVED FROM THE ROW, not from which handler fired, because both
-          // triggers call this same `onRowAction('invite', row)`. The count control is the only
-          // other trigger; a row with no guests has only the kebab.
-          triggerSlot: row.guestCount > 0 ? 'guests' : 'menu',
+          triggerSlot: slot,
           guestCount: row.guestCount,
         });
         setDialogOpen(true);
@@ -478,6 +479,7 @@ export function CaseSurface({
             // CLIENT-side inviter, so on the expert lens nothing the viewer types can widen
             // anything and the composer must not say it can.
             caseScopeDomains={view.lens === 'client' ? view.caseScopeDomains : EMPTY_SCOPE_DOMAINS}
+            lens={view.lens}
           />
         )}
 
@@ -540,6 +542,7 @@ export function CaseSurface({
                 people={view.people}
                 lens={view.lens}
                 clientCompanyName={view.clientCompanyName}
+                hasCaseScopeDomains={view.lens === 'client' && view.caseScopeDomains.length > 0}
               />
               {/* ⚠ THE TWO LIFECYCLE ACTIONS RENDER ONLY WHEN THE VIEW SAYS THEY CAN. Both
                   flags are FALSE on a closed case, so a resolved case offers neither — and

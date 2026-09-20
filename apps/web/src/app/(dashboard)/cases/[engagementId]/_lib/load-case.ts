@@ -661,32 +661,15 @@ export const loadCase = cache(
       occurredAt: meeting.startedAt ?? meeting.scheduledStart,
     }));
 
-    const [labels, fileResult, transcriptMeetingIds, liveProposals, caseScopeDomains] =
-      await Promise.all([
-        resolveCounterparty(lens, profile, clientCompanyName),
-        loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
-        readTranscriptMeetingIds(meetings),
-        // BAL-411 — needs `meetings`' ids, so it rides the SECOND wave, not the first.
-        rescheduleProposalsRepository.findLivePendingByMeetingIds(
-          meetings.map((meeting) => meeting.id)
-        ),
-        /**
-         * BAL-573 / D3 — the owning company's LIVE registered domains, projected to bare
-         * strings at the boundary. ⚠ CLIENT LENS ONLY, and that is the server's own rule, not a
-         * convenience: `resolveGuestAccessScope` step (2) requires `party === 'client'`, so on
-         * the expert lens there is nothing a domain match could widen and the composer must not
-         * estimate otherwise. It is the VIEWER'S OWN company's domains, never the
-         * counterparty's.
-         * ⚠ A RENDER HINT, NEVER AN AUTHORIZATION INPUT — the authoritative `access_scope` is
-         * computed and STORED by `inviteGuests` at invite time (ADR-1038); this only decides
-         * which sentence renders.
-         */
-        lens === 'client'
-          ? partyDomainsRepository
-              .listByParty('company', companyId)
-              .then((rows) => rows.map((row) => row.domain))
-          : Promise.resolve<string[]>([]),
-      ]);
+    const [labels, fileResult, transcriptMeetingIds, liveProposals] = await Promise.all([
+      resolveCounterparty(lens, profile, clientCompanyName),
+      loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
+      readTranscriptMeetingIds(meetings),
+      // BAL-411 — needs `meetings`' ids, so it rides the SECOND wave, not the first.
+      rescheduleProposalsRepository.findLivePendingByMeetingIds(
+        meetings.map((meeting) => meeting.id)
+      ),
+    ]);
 
     // ⚠ LIVENESS (expiry) IS DECIDED HERE, ONCE, via `rescheduleProposalIsLive` — the read
     // itself filters `status = 'pending'` only (never soft-deleted), never expiry. Both the
@@ -745,10 +728,29 @@ export const loadCase = cache(
     const invitableMeetingIds = derivedStates
       .filter((row) => caseConsultationIsUpcoming(row.state))
       .map((row) => row.meetingId);
-    const guestCountRows =
+    const [guestCountRows, caseScopeDomains] = await Promise.all([
       invitableMeetingIds.length === 0
-        ? []
-        : await meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds);
+        ? Promise.resolve<Array<{ meetingId: string; count: number }>>([])
+        : meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds),
+      /**
+       * BAL-573 / D3 — the owning company's LIVE registered domains, projected to bare strings
+       * at the boundary. ⚠ CLIENT LENS ONLY, and that is the server's own rule, not a
+       * convenience: `resolveGuestAccessScope` step (2) requires `party === 'client'`, so on the
+       * expert lens there is nothing a domain match could widen and the composer must not
+       * estimate otherwise. It is the VIEWER'S OWN company's domains, never the counterparty's.
+       * ⚠ GATED ON THE SAME `invitableMeetingIds` TERM AS THE GUEST COUNT ABOVE — a case with
+       * nothing upcoming has no invite affordance for a domain list to serve, so this must not
+       * run on a closed case or one with only past consultations either.
+       * ⚠ A RENDER HINT, NEVER AN AUTHORIZATION INPUT — the authoritative `access_scope` is
+       * computed and STORED by `inviteGuests` at invite time (ADR-1038); this only decides which
+       * sentence renders.
+       */
+      lens === 'client' && invitableMeetingIds.length > 0
+        ? partyDomainsRepository
+            .listByParty('company', companyId)
+            .then((rows) => rows.map((row) => row.domain))
+        : Promise.resolve<string[]>([]),
+    ]);
     const guestCountByMeetingId = new Map(guestCountRows.map((row) => [row.meetingId, row.count]));
 
     const actionItemCountByMeetingId = countByMeetingId(actionItems, (item) => item.meetingId);

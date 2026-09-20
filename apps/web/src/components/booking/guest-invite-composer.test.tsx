@@ -16,6 +16,7 @@ function renderComposer(
     accessScope?: GuestAccessScope;
     showPricingNote?: boolean;
     caseAccessDomains?: readonly string[];
+    capAdvisoryOnly?: boolean;
     onChange?: (g: readonly GuestDraft[]) => void;
   } = {}
 ) {
@@ -30,6 +31,7 @@ function renderComposer(
       accessScope={over.accessScope}
       showPricingNote={over.showPricingNote}
       caseAccessDomains={over.caseAccessDomains}
+      capAdvisoryOnly={over.capAdvisoryOnly}
     />
   );
   return { ...utils, onChange };
@@ -93,6 +95,27 @@ describe('GuestInviteComposer', () => {
       screen.getByText("You've reached the 10-person limit for this call.")
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Guest email address')).toBeDisabled();
+  });
+
+  /**
+   * BAL-573 (F2) — `capAdvisoryOnly`, for a surface whose `otherParticipantCount` is a
+   * page-render snapshot rather than a live read.
+   */
+  describe('capAdvisoryOnly — the cap warns but never disables (F2)', () => {
+    it('still shows the warning line, but leaves the input and Add ENABLED', () => {
+      const eightGuests = Array.from({ length: 8 }, (_, i) => ({ email: `g${i}@acme.com` }));
+      renderComposer({ guests: eightGuests, otherParticipantCount: 2, capAdvisoryOnly: true });
+      expect(
+        screen.getByText("You've reached the 10-person limit for this call.")
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText('Guest email address')).toBeEnabled();
+    });
+
+    it('defaults to false — every existing call site keeps the blocking behaviour byte for byte', () => {
+      const eightGuests = Array.from({ length: 8 }, (_, i) => ({ email: `g${i}@acme.com` }));
+      renderComposer({ guests: eightGuests, otherParticipantCount: 2 });
+      expect(screen.getByLabelText('Guest email address')).toBeDisabled();
+    });
   });
 
   /**

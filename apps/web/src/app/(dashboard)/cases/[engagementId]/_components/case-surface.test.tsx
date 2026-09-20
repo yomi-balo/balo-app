@@ -8,7 +8,7 @@ import type {
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
-import { PEOPLE_CARD_CLIENT_DISCLOSURE, PEOPLE_CARD_EXPERT_DISCLOSURE } from './case-people-card';
+import { PEOPLE_CARD_CLIENT_DISCLOSURE, PEOPLE_CARD_NARROW_DISCLOSURE } from './case-people-card';
 
 const trackMock = vi.mocked(track);
 
@@ -178,6 +178,7 @@ vi.mock('@/components/booking/invite-colleague-dialog', () => ({
     existingGuestCount: number;
     clientCompanyName: string | null;
     caseScopeDomains: readonly string[];
+    lens: string;
   }) =>
     props.open ? (
       <div data-testid="invite-dialog-stub">
@@ -186,6 +187,7 @@ vi.mock('@/components/booking/invite-colleague-dialog', () => ({
         <span>existingGuestCount: {props.existingGuestCount}</span>
         <span>clientCompanyName: {String(props.clientCompanyName)}</span>
         <span>caseScopeDomains: {props.caseScopeDomains.join(',')}</span>
+        <span>lens: {props.lens}</span>
         <button type="button" onClick={props.onClose}>
           Stub invite-close
         </button>
@@ -1367,6 +1369,17 @@ describe('CaseSurface — BAL-573 the invite dialog seam', () => {
     expect(stub.textContent ?? '').not.toContain('caseScopeDomains: northwind');
   });
 
+  it('threads lens from the view into the dialog (F1 — gates copy only, never authorization)', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canInvite: true, guestCount: 0 });
+    render(<CaseSurface view={expertView({ consultations: [row] })} />);
+
+    await user.click(screen.getByRole('button', { name: /Actions for consultation on/ }));
+    await user.click(screen.getByRole('menuitem', { name: 'Invite a colleague' }));
+
+    expect(screen.getByTestId('invite-dialog-stub')).toHaveTextContent('lens: expert');
+  });
+
   it('track(CASE_ACTION_CLICKED, {action: "invite", lens}) fires exactly once per open', async () => {
     const user = userEvent.setup();
     const row = upcomingRow({ meetingId: 'm-row-1', canInvite: true, guestCount: 0 });
@@ -1408,6 +1421,26 @@ describe('CaseSurface — BAL-573 the invite dialog seam', () => {
     await waitFor(() => expect(kebab).toHaveFocus());
   });
 
+  /**
+   * F5 — the trigger slot is tagged by whichever control fired, not derived from `row.guestCount`.
+   * A row WITH guests still has two triggers, and opening from the KEBAB must return focus there,
+   * never to the (unrelated) guest-count chip the user never touched.
+   */
+  it('dismissing returns focus to the KEBAB — not the guest-count chip — when the KEBAB opened it on a row WITH guests', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canInvite: true, guestCount: 2 });
+    render(<CaseSurface view={clientView({ consultations: [row] })} />);
+
+    const kebab = screen.getByRole('button', { name: /Actions for consultation on/ });
+    const guestChip = screen.getByRole('button', { name: /2 guests .* — manage/ });
+    await user.click(kebab);
+    await user.click(screen.getByRole('menuitem', { name: 'Invite a colleague' }));
+    await user.click(screen.getByRole('button', { name: 'Stub invite-close' }));
+
+    await waitFor(() => expect(kebab).toHaveFocus());
+    expect(guestChip).not.toHaveFocus();
+  });
+
   it('a successful invite refreshes the page and returns focus the same way a dismiss does', async () => {
     const user = userEvent.setup();
     const row = upcomingRow({ meetingId: 'm-row-1', canInvite: true, guestCount: 2 });
@@ -1431,22 +1464,45 @@ describe('CaseSurface — the People card disclosure is lens-accurate (BAL-573)'
       "Guests on Northwind Industrial's email domain see this whole case, including past consultations. Anyone else sees only the consultation they're invited to."
     );
 
-    render(<CaseSurface view={clientView({ clientCompanyName: 'Northwind Industrial' })} />);
+    render(
+      <CaseSurface
+        view={clientView({
+          clientCompanyName: 'Northwind Industrial',
+          caseScopeDomains: ['northwind.test'],
+        })}
+      />
+    );
     expect(
       screen.getByText(PEOPLE_CARD_CLIENT_DISCLOSURE('Northwind Industrial'))
     ).toBeInTheDocument();
+  });
+
+  /**
+   * F4 — a company with ZERO live `party_domains` rows (e.g. a freemail-founded individual
+   * company, ADR-1038) grants case scope to nobody, so the aggregate line must not name a
+   * widening that can never fire.
+   */
+  it('the CLIENT lens falls back to the narrow sentence when the company has NO live registered domains', () => {
+    render(
+      <CaseSurface
+        view={clientView({ clientCompanyName: 'Northwind Industrial', caseScopeDomains: [] })}
+      />
+    );
+    expect(screen.getByText(PEOPLE_CARD_NARROW_DISCLOSURE)).toBeInTheDocument();
+    expect(screen.queryByText(/past consultations/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/whole case/i)).not.toBeInTheDocument();
   });
 
   it('the EXPERT-lens sentence names NEITHER the company NOR past consultations, verbatim', () => {
     // ⚠ A LITERAL PIN, for the same reason as the client arm above: `getByText` alone compares
     // the constant against itself, so an over-promise ("…see this whole case.") would render,
     // be found, and stay green. The negative checks cover both phrasings of that over-promise.
-    expect(PEOPLE_CARD_EXPERT_DISCLOSURE).toBe(
+    expect(PEOPLE_CARD_NARROW_DISCLOSURE).toBe(
       "Guests you invite see only the consultation they're invited to."
     );
 
     render(<CaseSurface view={expertView()} />);
-    expect(screen.getByText(PEOPLE_CARD_EXPERT_DISCLOSURE)).toBeInTheDocument();
+    expect(screen.getByText(PEOPLE_CARD_NARROW_DISCLOSURE)).toBeInTheDocument();
     expect(screen.queryByText(/past consultations/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/whole case/i)).not.toBeInTheDocument();
   });

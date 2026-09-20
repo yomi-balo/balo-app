@@ -97,24 +97,24 @@ describe('ConsultationRowMenu', () => {
     expect(items).toEqual(['Reschedule', 'Propose a new time', 'Cancel consultation']);
   });
 
-  it('calls onAction with the verb and the row when a menu item is chosen', async () => {
+  it('calls onAction with the verb, the row, and the "menu" slot when a menu item is chosen', async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();
     const row = makeRow({ canReschedule: true, canCancel: true });
     render(<ConsultationRowMenu row={row} onAction={onAction} />);
     await user.click(screen.getByRole('button'));
     await user.click(screen.getByRole('menuitem', { name: 'Reschedule' }));
-    expect(onAction).toHaveBeenCalledWith('reschedule', row);
+    expect(onAction).toHaveBeenCalledWith('reschedule', row, 'menu');
   });
 
-  it('calls onAction with "cancel" for the destructive item', async () => {
+  it('calls onAction with "cancel" and the "menu" slot for the destructive item', async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();
     const row = makeRow({ canCancel: true });
     render(<ConsultationRowMenu row={row} onAction={onAction} />);
     await user.click(screen.getByRole('button'));
     await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
-    expect(onAction).toHaveBeenCalledWith('cancel', row);
+    expect(onAction).toHaveBeenCalledWith('cancel', row, 'menu');
   });
 
   it('registers and unregisters the trigger node for focus restoration', () => {
@@ -143,6 +143,16 @@ describe('ConsultationRowMenu', () => {
       'Cancel consultation',
     ]);
     expect(items[0]?.querySelector('svg.lucide-user-plus')).not.toBeNull();
+  });
+
+  it('calls onAction with "invite" and the "menu" slot when the kebab opens it (F5)', async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    const row = makeRow({ canInvite: true });
+    render(<ConsultationRowMenu row={row} onAction={onAction} />);
+    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('menuitem', { name: 'Invite a colleague' }));
+    expect(onAction).toHaveBeenCalledWith('invite', row, 'menu');
   });
 
   it('is ABSENT — never disabled — when canInvite is false', async () => {

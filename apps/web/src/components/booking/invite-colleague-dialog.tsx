@@ -26,8 +26,12 @@ import { inviteConsultationGuestsAction } from '@/app/(dashboard)/cases/[engagem
  * it into a sentence. Disabling on an EMPTY draft list is a different thing — there is nothing to
  * send — and is not a cap pre-emption.
  *
- * ⚠ `GuestInviteComposer`'s own `atCap` disables ADDING A DRAFT, which is upstream of Send and is
- * left exactly as shipped. Do not confuse the two.
+ * ⚠ `existingGuestCount` IS A SERVER-RENDER SNAPSHOT, NOT A LIVE READ, so `capAdvisoryOnly` is
+ * passed to `GuestInviteComposer`: its `atCap` warning still renders, but it no longer disables
+ * the email input or the Add button. Without it, a guest removed since render opens the dialog
+ * with the input already locked, with no round trip able to correct it short of a page refresh.
+ * The two booking call sites never pass it — their `otherParticipantCount` is a literal `2` that
+ * cannot go stale, so `atCap` there still blocks adding a draft exactly as shipped.
  */
 
 export interface InviteColleagueDialogProps {
@@ -43,6 +47,13 @@ export interface InviteColleagueDialogProps {
   existingGuestCount: number;
   clientCompanyName: string | null;
   caseScopeDomains: readonly string[];
+  /**
+   * BAL-573 (F1) — which side of the case the viewer is on. COPY ONLY, never an authorization
+   * input (CLAUDE.md / ADR-1029): it decides whether the composer's counter carries the "guests
+   * don't change what you pay" clause, which is false on the expert lens (an expert pays nothing
+   * here).
+   */
+  lens: 'client' | 'expert';
 }
 
 export function InviteColleagueDialog({
@@ -56,6 +67,7 @@ export function InviteColleagueDialog({
   existingGuestCount,
   clientCompanyName,
   caseScopeDomains,
+  lens,
 }: Readonly<InviteColleagueDialogProps>): React.JSX.Element {
   const isMobile = useIsMobile(768);
   const [drafts, setDrafts] = useState<readonly GuestDraft[]>([]);
@@ -126,7 +138,8 @@ export function InviteColleagueDialog({
           caseAccessDomains={caseScopeDomains}
           clientCompanyName={clientCompanyName}
           accessScope="case"
-          showPricingNote
+          showPricingNote={lens === 'client'}
+          capAdvisoryOnly
         />
       </fieldset>
 

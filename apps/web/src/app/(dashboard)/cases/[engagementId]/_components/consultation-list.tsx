@@ -56,7 +56,13 @@ export function ConsultationList({
   consultations: readonly CaseConsultationRowView[];
   lens: 'client' | 'expert';
   counterpartyLabel: string;
-  onRowAction: (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => void;
+  /** The slot names WHICH control fired, so a dialog can return focus to it rather than to a
+   *  derived guess. */
+  onRowAction: (
+    verb: ConsultationRowActionVerb,
+    row: CaseConsultationRowView,
+    slot: ConsultationRowTriggerSlot
+  ) => void;
   /** Keyed by `meetingId` AND the control's slot; `case-surface.tsx` uses it to restore focus
    *  to the control that opened a dialog after it closes without success. */
   registerTrigger: (
@@ -267,14 +273,18 @@ function ConsultationRow({
   /** The list's ticking "now", or `undefined` before it resolves. */
   now: Date | undefined;
   last: boolean;
-  onRowAction: (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => void;
+  onRowAction: (
+    verb: ConsultationRowActionVerb,
+    row: CaseConsultationRowView,
+    slot: ConsultationRowTriggerSlot
+  ) => void;
   registerTrigger: (slot: ConsultationRowTriggerSlot, node: HTMLButtonElement | null) => void;
 }>): React.JSX.Element {
   const onViewRecap = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'view_recap', lens });
   }, [lens]);
   const onOpenInvite = useCallback(() => {
-    onRowAction('invite', row);
+    onRowAction('invite', row, 'guests');
   }, [onRowAction, row]);
 
   const { icon: Icon, muted, tone } = STATE_PRESENTATION[row.state];
