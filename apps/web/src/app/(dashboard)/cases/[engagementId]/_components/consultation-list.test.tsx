@@ -17,9 +17,10 @@ import { ConsultationList } from './consultation-list';
  *      Folding them into one "not held" label would tell the wronged party that the call
  *      failed without saying who failed to show — so the exact strings are pinned, AND the
  *      two are asserted to differ from each other on the SAME lens.
- *   2. THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'`. `recapHrefOf` emits a href
- *      for `cancelled` and every terminal outcome, and the not-held recap panel is precisely
- *      where a no-show explains itself. A `cancelled` row with a href MUST link.
+ *   2. THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'` — the component renders
+ *      whatever `recapHref` says, never re-deriving from `state`. `recapHrefOf` emits a href
+ *      for every terminal OUTCOME (where the not-held panel explains a no-show), but never for
+ *      `cancelled` — that recap has no money block or artifacts to show.
  *   3. THE CONTENT INDICATORS DO stay under `held` — the exact inverse of (2), and a real
  *      divergence rather than an oversight: a transcript or file count on a call that never
  *      happened would promise artefacts that cannot exist.
@@ -46,16 +47,32 @@ function makeRow(overrides: Partial<CaseConsultationRowView> = {}): CaseConsulta
     fileCount: 0,
     hasTranscript: false,
     hasRecording: false,
+    // Defaults OFF so every existing case here still asserts a row with no kebab.
+    canReschedule: false,
+    canProposeReschedule: false,
+    canCancel: false,
+    canInvite: false,
+    guestCount: 0,
+    scheduledMinutes: 30,
+    live: false,
     ...overrides,
   };
 }
 
 function renderList(
   consultations: readonly CaseConsultationRowView[],
-  lens: 'client' | 'expert' = 'client'
+  lens: 'client' | 'expert' = 'client',
+  onRowAction: (verb: string, row: CaseConsultationRowView) => void = vi.fn(),
+  registerTrigger: (meetingId: string, node: HTMLButtonElement | null) => void = vi.fn()
 ) {
   return render(
-    <ConsultationList consultations={consultations} lens={lens} counterpartyLabel={COUNTERPARTY} />
+    <ConsultationList
+      consultations={consultations}
+      lens={lens}
+      counterpartyLabel={COUNTERPARTY}
+      onRowAction={onRowAction}
+      registerTrigger={registerTrigger}
+    />
   );
 }
 
@@ -66,7 +83,6 @@ function renderList(
  * bare `getByText`.
  */
 const ALL_NOTES: readonly string[] = [
-  'Upcoming · join link in your calendar',
   'Happening now',
   'Cancelled — nothing charged',
   `${COUNTERPARTY} waited — billed at the minimum`,
@@ -152,7 +168,7 @@ const STATE_CASES: readonly StateCase[] = [
   {
     state: 'scheduled',
     muted: false,
-    notes: bothLenses('Upcoming · join link in your calendar'),
+    notes: bothLenses(null),
     pill: bothPills('Upcoming'),
     variant: 'outline',
   },
@@ -423,12 +439,9 @@ describe('ConsultationList — no_show_client and missed_call are DIFFERENT even
 });
 
 describe('ConsultationList — the recap link follows recapHref, NOT state', () => {
-  it('links a CANCELLED row that has a recap href — the not-held panel needs a route in', () => {
-    renderList([makeRow({ state: 'cancelled', recapHref: '/meetings/m-9?from=case_surface' })]);
-    expect(screen.getByRole('link', { name: 'View recap' })).toHaveAttribute(
-      'href',
-      '/meetings/m-9?from=case_surface'
-    );
+  it('renders NO link on a CANCELLED row — recapHrefOf never gives one a href', () => {
+    renderList([makeRow({ state: 'cancelled', recapHref: null })]);
+    expect(screen.queryByRole('link', { name: 'View recap' })).not.toBeInTheDocument();
   });
 
   it.each(['no_show_client', 'missed_call', 'outcome_pending'] as const)(
@@ -536,6 +549,28 @@ describe('ConsultationList — counts, duration and the ordinal prefix', () => {
     expect(screen.getByText('0 min')).toBeInTheDocument();
   });
 
+  it('an UPCOMING row with no wall-clock duration yet shows the BOOKED length instead', () => {
+    renderList([
+      makeRow({
+        state: 'scheduled',
+        durationMinutes: null,
+        scheduledMinutes: 30,
+        recapHref: null,
+        startedAtIso: null,
+      }),
+    ]);
+
+    expect(screen.getByText('30 min')).toBeInTheDocument();
+  });
+
+  it('a CANCELLED row shows neither the wall-clock nor the booked length', () => {
+    renderList([
+      makeRow({ state: 'cancelled', durationMinutes: null, scheduledMinutes: 30, recapHref: null }),
+    ]);
+
+    expect(screen.queryByText(/\bmin\b/)).not.toBeInTheDocument();
+  });
+
   it('prefixes the date with a screen-reader-only ordinal when there is one', () => {
     renderList([makeRow({ ordinal: 3 })]);
     expect(screen.getByText('Consultation 3:')).toBeInTheDocument();
@@ -626,5 +661,96 @@ describe('ConsultationList — the section head and the newest-last ordering', (
     const [only] = rowElements();
     if (only === undefined) throw new Error('no consultation row rendered');
     expect(only.className).not.toContain('border-b');
+  });
+});
+
+describe('ConsultationList — the per-row kebab', () => {
+  it('renders no trigger at all when every row flag is false (a colleague, or a held row)', () => {
+    renderList([makeRow({ state: 'scheduled' })]);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('renders a trigger for an upcoming row with an actionable flag', () => {
+    renderList([makeRow({ state: 'scheduled', canCancel: true })]);
+    expect(screen.getByRole('button')).toBeInTheDocument();
+  });
+
+  it('renders Reschedule + Cancel for a client-actionable scheduled row', async () => {
+    const user = userEvent.setup();
+    renderList([makeRow({ state: 'scheduled', canReschedule: true, canCancel: true })], 'client');
+    await user.click(screen.getByRole('button'));
+    const items = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).toEqual(['Reschedule', 'Cancel consultation']);
+  });
+
+  it('renders Propose a new time + Cancel for an expert-actionable scheduled row', async () => {
+    const user = userEvent.setup();
+    renderList(
+      [makeRow({ state: 'scheduled', canProposeReschedule: true, canCancel: true })],
+      'expert'
+    );
+    await user.click(screen.getByRole('button'));
+    const items = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).toEqual(['Propose a new time', 'Cancel consultation']);
+  });
+
+  it('shows Cancel ONLY on a pending_reschedule row', async () => {
+    const user = userEvent.setup();
+    renderList([makeRow({ state: 'pending_reschedule', canCancel: true, canReschedule: false })]);
+    await user.click(screen.getByRole('button'));
+    const items = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).toEqual(['Cancel consultation']);
+  });
+
+  // Pins that the row renders correctly given the shape the loader already produces inside
+  // the join window (move flags refused, Cancel survives) — not re-deriving it here.
+  it('shows Cancel only, no move item, for a row inside the join window (live)', async () => {
+    const user = userEvent.setup();
+    renderList([
+      makeRow({ state: 'scheduled', live: true, canCancel: true, canReschedule: false }),
+    ]);
+    await user.click(screen.getByRole('button'));
+    expect(screen.getByRole('menuitem', { name: 'Cancel consultation' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Reschedule' })).not.toBeInTheDocument();
+    expect(screen.getByText('Starting soon')).toBeInTheDocument();
+  });
+
+  it('shows "Starting soon" instead of "Upcoming" once inside the join window', () => {
+    renderList([makeRow({ state: 'scheduled', live: true })]);
+    expect(screen.getByText('Starting soon')).toBeInTheDocument();
+    expect(screen.queryByText('Upcoming')).not.toBeInTheDocument();
+  });
+
+  it('a colleague (no capability, every flag false) sees no trigger on any row', () => {
+    renderList([
+      makeRow({ meetingId: 'm-a', state: 'scheduled' }),
+      makeRow({ meetingId: 'm-b', state: 'pending_reschedule' }),
+    ]);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('calls onRowAction with the verb and the row when a menu item fires', async () => {
+    const user = userEvent.setup();
+    const onRowAction = vi.fn();
+    const row = makeRow({ state: 'scheduled', canCancel: true });
+    renderList([row], 'client', onRowAction);
+    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
+    expect(onRowAction).toHaveBeenCalledWith('cancel', row);
+  });
+
+  it('registers each row trigger keyed by its OWN meetingId', () => {
+    const registerTrigger = vi.fn();
+    renderList(
+      [
+        makeRow({ meetingId: 'm-a', state: 'scheduled', canCancel: true }),
+        makeRow({ meetingId: 'm-b', state: 'scheduled', canCancel: true }),
+      ],
+      'client',
+      vi.fn(),
+      registerTrigger
+    );
+    expect(registerTrigger).toHaveBeenCalledWith('m-a', expect.any(HTMLButtonElement));
+    expect(registerTrigger).toHaveBeenCalledWith('m-b', expect.any(HTMLButtonElement));
   });
 });

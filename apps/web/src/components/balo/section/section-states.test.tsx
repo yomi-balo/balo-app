@@ -1,3 +1,4 @@
+import { createRef } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -42,6 +43,23 @@ describe('SectionHead', () => {
   it('has no accessibility violations', async () => {
     const { container } = render(<SectionHead icon={Sparkles} title="Files" meta="3" />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('is a focusable, tabIndex=-1 programmatic target when headingRef is supplied', () => {
+    const ref = createRef<HTMLHeadingElement>();
+    render(<SectionHead icon={Sparkles} title="Consultations" headingRef={ref} />);
+    const heading = screen.getByRole('heading', { name: /^Consultations$/ });
+    expect(heading).toHaveAttribute('tabindex', '-1');
+    expect(ref.current).toBe(heading);
+    heading.focus();
+    expect(heading).toHaveFocus();
+    // Programmatic focus on this non-interactive heading must not paint the default ring.
+    expect(heading).toHaveClass('outline-none');
+  });
+
+  it('omits tabIndex when no headingRef is given — the default, unfocusable heading', () => {
+    render(<SectionHead icon={Sparkles} title="Files" />);
+    expect(screen.getByRole('heading', { name: /^Files$/ })).not.toHaveAttribute('tabindex');
   });
 });
 

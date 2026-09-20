@@ -171,6 +171,26 @@ describe('BookingFlowDialog — wrapper shell', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
+  // Wide enough for Step 1's embedded ExpertAvailabilityCalendar's two-pane layout, same width
+  // and reasoning as reschedule-dialog.tsx, capped so it never overflows a small viewport.
+  it('is wide enough to host the two-pane calendar, capped against the viewport', () => {
+    mockIsMobile.mockReturnValue(false);
+    render(
+      <BookingFlowDialog
+        open
+        onClose={vi.fn()}
+        expert={EXPERT}
+        source="profile"
+        entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+      />
+    );
+    expect(document.querySelector('[data-slot="dialog-content"]')).toHaveClass(
+      'sm:max-w-[min(92vw,840px)]'
+    );
+  });
+
   it('renders a Sheet (not a Dialog) on mobile', () => {
     mockIsMobile.mockReturnValue(true);
     render(

@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { axe } from 'jest-axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
+import type { AvailabilityView } from '@/components/availability/use-expert-availability';
 import { RescheduleDialog } from './reschedule-dialog';
 
 vi.mock('motion/react', async () => {
@@ -53,6 +54,16 @@ const PICKED_END = '2026-09-08T10:30:00.000Z';
 // observed: a `key` bump unmounts and remounts the child, running its effect again.
 const { mockPickerMountCount } = vi.hoisted(() => ({ mockPickerMountCount: { value: 0 } }));
 
+// Defaults to a NON-ready view (no suggestions, no real fetch) so step 1 falls straight through
+// to the mocked calendar below — the same shape every pre-suggested-view test in this file
+// already assumes. The "suggested" describe block overrides this per test.
+const { mockAvailabilityView } = vi.hoisted(() => ({
+  mockAvailabilityView: { value: { kind: 'not_configured' } as AvailabilityView },
+}));
+vi.mock('@/components/availability/use-expert-availability', () => ({
+  useExpertAvailability: () => ({ view: mockAvailabilityView.value, reload: vi.fn() }),
+}));
+
 vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: ({
     onSlotSelect,
@@ -83,12 +94,15 @@ const BASE_PROPS = {
   currentScheduledStartIso: '2026-09-01T09:00:00.000Z',
   durationMinutes: 30,
   caseTitle: 'Salesforce integration',
+  ordinal: 2,
+  source: 'nudge' as const,
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockIsMobile.value = false;
   mockPickerMountCount.value = 0;
+  mockAvailabilityView.value = { kind: 'not_configured' };
 });
 
 async function advanceToConfirm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -270,13 +284,15 @@ describe('RescheduleDialog — T-WEB-UI', () => {
 
     await user.click(screen.getByRole('button', { name: 'Choose a different time' }));
 
-    // Two "Reschedule consultation" headings exist (the sr-only `DialogTitle`, and the visible
-    // in-body one this focuses) — find the VISIBLE one specifically.
+    // The sr-only `DialogTitle`'s accessible name now carries the ordinal, so it no longer
+    // collides with the visible heading's exact "Reschedule consultation" text.
     await waitFor(() => {
-      const headings = screen.getAllByRole('heading', { name: 'Reschedule consultation' });
-      const visible = headings.find((h) => !h.className.includes('sr-only'));
-      expect(visible).toHaveFocus();
+      expect(screen.getByRole('heading', { name: 'Reschedule consultation' })).toHaveFocus();
     });
+    // Programmatic focus on a non-interactive heading must not paint the browser's default ring.
+    expect(screen.getByRole('heading', { name: 'Reschedule consultation' })).toHaveClass(
+      'focus-visible:outline-none'
+    );
   });
 
   // N14(c) — a TERMINAL failure routes to `onTerminalFailure`, not plain `onClose`.
@@ -316,6 +332,82 @@ describe('RescheduleDialog — T-WEB-UI', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
+  // ── Focus lands on headingRef, deterministically, terminal only ──────────────────
+
+  /** `open` must actually flip to `false` here — `onCloseAutoFocus` only fires once Radix's own
+   *  `open` prop transitions and the content unmounts, so a static `open={true}` harness would
+   *  never observe it regardless of which callback fired. */
+  function Harness(): React.JSX.Element {
+    const headingRef = useRef<HTMLHeadingElement>(null);
+    const [open, setOpen] = useState(true);
+    const close = (): void => setOpen(false);
+    return (
+      <>
+        <h2 ref={headingRef} tabIndex={-1}>
+          Consultations
+        </h2>
+        <RescheduleDialog
+          {...BASE_PROPS}
+          open={open}
+          onClose={close}
+          onRescheduled={close}
+          onTerminalFailure={close}
+          headingRef={headingRef}
+        />
+      </>
+    );
+  }
+
+  it('sends focus to headingRef after a TERMINAL failure, deterministically via onCloseAutoFocus', async () => {
+    const user = userEvent.setup();
+    mockRescheduleAction.mockResolvedValue({
+      success: false,
+      code: 'meeting_not_reschedulable',
+      error: 'server literal',
+    });
+    render(<Harness />);
+    await advanceToConfirm(user);
+
+    await user.click(screen.getByRole('button', { name: 'Move consultation' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Consultations' })).toHaveFocus();
+    });
+  });
+
+  /** ⚠ Deliberately asymmetric with `CancelConsultationDialog`: a successful reschedule keeps
+   *  the row mounted, so `case-surface.tsx`'s `handleRescheduled` sends focus to the row's own
+   *  trigger instead — `terminalCloseRef` is never set on this path. */
+  it('does NOT send focus to headingRef on a SUCCESSFUL reschedule — that is the row trigger’s job, outside this dialog', async () => {
+    const user = userEvent.setup();
+    mockRescheduleAction.mockResolvedValue({
+      success: true,
+      scheduledStart: PICKED_START,
+      scheduledEnd: PICKED_END,
+    });
+    render(<Harness />);
+    await advanceToConfirm(user);
+
+    await user.click(screen.getByRole('button', { name: 'Move consultation' }));
+
+    await waitFor(() => {
+      expect(mockToastSuccess).toHaveBeenCalled();
+    });
+    expect(screen.getByRole('heading', { name: 'Consultations' })).not.toHaveFocus();
+  });
+
+  it('does NOT steal focus to headingRef on a plain dismiss (the "Close" button) — only the terminal close does', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Consultations' })).not.toHaveFocus();
+    });
+    expect(mockRescheduleAction).not.toHaveBeenCalled();
+  });
+
   it('has no accessibility violations', async () => {
     const { container } = render(<RescheduleDialog {...BASE_PROPS} />);
     expect(await axe(container)).toHaveNoViolations();
@@ -341,5 +433,154 @@ describe('RescheduleDialog — T-WEB-UI', () => {
 
     expect(document.querySelector('[data-slot="dialog-content"]')).toBeInTheDocument();
     expect(document.querySelector('[data-slot="sheet-content"]')).not.toBeInTheDocument();
+  });
+
+  // Wide enough for the embedded ExpertAvailabilityCalendar's two-pane layout (300px slots
+  // column + a month grid that doesn't bunch), capped so it never overflows a small viewport.
+  it('is wide enough to host the two-pane calendar, capped against the viewport', () => {
+    render(<RescheduleDialog {...BASE_PROPS} />);
+    expect(document.querySelector('[data-slot="dialog-content"]')).toHaveClass(
+      'sm:max-w-[min(92vw,840px)]'
+    );
+  });
+
+  // ── Subject identity ──────────────────────────────────────────────────────────
+
+  it('step 1 shows a "Currently {date} · {duration} min" subject strip', () => {
+    render(<RescheduleDialog {...BASE_PROPS} />);
+    expect(screen.getByText(/Currently/).textContent).toContain('30 min');
+  });
+
+  it('the programmatic name carries the ordinal and the current time', () => {
+    render(<RescheduleDialog {...BASE_PROPS} ordinal={3} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAccessibleName(/Reschedule consultation 3 — currently/);
+  });
+
+  it('the programmatic name omits the ordinal number when it is null', () => {
+    render(<RescheduleDialog {...BASE_PROPS} ordinal={null} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAccessibleName(/^Reschedule consultation — currently/);
+  });
+
+  it('threads `source` through to the analytics event', async () => {
+    const user = userEvent.setup();
+    mockRescheduleAction.mockResolvedValue({
+      success: true,
+      scheduledStart: PICKED_START,
+      scheduledEnd: PICKED_END,
+    });
+    render(<RescheduleDialog {...BASE_PROPS} source="row" />);
+    await advanceToConfirm(user);
+
+    await user.click(screen.getByRole('button', { name: 'Move consultation' }));
+
+    await waitFor(() =>
+      expect(mockTrack).toHaveBeenCalledWith(
+        'booking_rescheduled',
+        expect.objectContaining({ source: 'row' })
+      )
+    );
+  });
+});
+
+function readyView(starts: readonly string[]): AvailabilityView {
+  return {
+    kind: 'ready',
+    expertTimezone: 'UTC',
+    days: 14,
+    slots: starts.map((start) => ({
+      start,
+      end: new Date(new Date(start).getTime() + 30 * 60_000).toISOString(),
+      maxDuration: 30,
+    })),
+  };
+}
+
+const SUGGESTED_TIME = /Wed, 2 Sept, 9:00 – 9:30 am · 30 min/;
+
+describe('RescheduleDialog — suggested times', () => {
+  it('opens on suggested times when availability is ready with candidates', () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    render(<RescheduleDialog {...BASE_PROPS} />);
+
+    expect(screen.getByText('Suggested times')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: SUGGESTED_TIME })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'pick-slot' })).not.toBeInTheDocument();
+  });
+
+  it('opens straight on the calendar when availability is ready but nothing suggests', () => {
+    mockAvailabilityView.value = readyView([]);
+    render(<RescheduleDialog {...BASE_PROPS} />);
+
+    expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
+    expect(screen.queryByText('Suggested times')).not.toBeInTheDocument();
+  });
+
+  it('opens straight on the calendar when availability is not ready', () => {
+    mockAvailabilityView.value = { kind: 'error' };
+    render(<RescheduleDialog {...BASE_PROPS} />);
+
+    expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
+    expect(screen.queryByText('Suggested times')).not.toBeInTheDocument();
+  });
+
+  it('picking a suggested time advances straight to confirm', async () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const user = userEvent.setup();
+    render(<RescheduleDialog {...BASE_PROPS} />);
+
+    await user.click(screen.getByRole('button', { name: SUGGESTED_TIME }));
+
+    expect(screen.getByText('Currently')).toBeInTheDocument();
+    expect(screen.getByText('Moving to')).toBeInTheDocument();
+  });
+
+  it('"See more times" switches to the calendar', async () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const user = userEvent.setup();
+    render(<RescheduleDialog {...BASE_PROPS} />);
+
+    await user.click(screen.getByRole('button', { name: 'See more times' }));
+
+    expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
+    // The suggested SLOT is gone — a "← Suggested times" back link is expected here instead.
+    expect(screen.queryByRole('button', { name: SUGGESTED_TIME })).not.toBeInTheDocument();
+  });
+
+  it('"Choose a different time" returns to SUGGESTED when the pick came from there', async () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const user = userEvent.setup();
+    render(<RescheduleDialog {...BASE_PROPS} />);
+    await user.click(screen.getByRole('button', { name: SUGGESTED_TIME }));
+
+    await user.click(screen.getByRole('button', { name: 'Choose a different time' }));
+
+    expect(screen.getByRole('button', { name: SUGGESTED_TIME })).toBeInTheDocument();
+  });
+
+  it('"Choose a different time" returns to the CALENDAR when the pick came from there', async () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const user = userEvent.setup();
+    render(<RescheduleDialog {...BASE_PROPS} />);
+    await user.click(screen.getByRole('button', { name: 'See more times' }));
+    await advanceToConfirm(user);
+
+    await user.click(screen.getByRole('button', { name: 'Choose a different time' }));
+
+    expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: SUGGESTED_TIME })).not.toBeInTheDocument();
+  });
+
+  it('a suggested pick moves focus to "Choose a different time", same as the calendar path', async () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const user = userEvent.setup();
+    render(<RescheduleDialog {...BASE_PROPS} />);
+
+    await user.click(screen.getByRole('button', { name: SUGGESTED_TIME }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Choose a different time' })).toHaveFocus()
+    );
   });
 });

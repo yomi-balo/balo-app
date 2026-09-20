@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Meeting } from '@balo/db';
-import { mapCaseConsultations, type CaseConsultationCounts } from './map-case-consultations';
+import {
+  mapCaseConsultations,
+  type CaseConsultationActionContext,
+  type CaseConsultationCounts,
+} from './map-case-consultations';
 import { log } from '@/lib/logging';
 
 /**
@@ -30,6 +34,13 @@ const EMPTY_COUNTS: CaseConsultationCounts = {
   meetingIdsWithTranscript: new Set(),
   meetingIdsWithLiveProposal: new Set(),
 };
+
+/** A `now` well before every fixture's default `scheduledStart` — irrelevant to the tests that
+ *  don't assert on the new row-action fields, and the explicit clock for the ones that do. */
+const NOW = new Date('2026-01-01T00:00:00Z');
+
+/** No capability at all — the neutral default for tests that only pin state/duration/ordering. */
+const NO_ACTION: CaseConsultationActionContext = { lens: 'client', mayAct: false };
 
 /**
  * A FULL `Meeting` row — credentials included, exactly as the repository hands one over.
@@ -74,7 +85,9 @@ describe('mapCaseConsultations — the SECRET-LEAK boundary', () => {
         meeting({ id: 'm3', status: 'in_progress', startedAt: new Date('2026-07-02T10:00:00Z') }),
         meeting({ id: 'm4', status: 'cancelled' }),
       ],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
 
     const serialized = JSON.stringify(rows);
@@ -92,16 +105,23 @@ describe('mapCaseConsultations — the SECRET-LEAK boundary', () => {
    * payload would fail HERE — which is the whole reason the mapper builds field by field.
    */
   it('emits EXACTLY the declared field set — nothing joins the payload by accident', () => {
-    const [row] = mapCaseConsultations([held('m1')], EMPTY_COUNTS);
+    const [row] = mapCaseConsultations([held('m1')], EMPTY_COUNTS, NOW, NO_ACTION);
     expect(row === undefined ? [] : Object.keys(row).sort()).toEqual([
       'actionItemCount',
+      'canCancel',
+      'canInvite',
+      'canProposeReschedule',
+      'canReschedule',
       'durationMinutes',
       'fileCount',
+      'guestCount',
       'hasRecording',
       'hasTranscript',
+      'live',
       'meetingId',
       'ordinal',
       'recapHref',
+      'scheduledMinutes',
       'scheduledStartIso',
       'startedAtIso',
       'state',
@@ -109,7 +129,7 @@ describe('mapCaseConsultations — the SECRET-LEAK boundary', () => {
   });
 
   it('consumes `status` and `outcome` and NEVER serializes them — the client gets the LABEL', () => {
-    const [row] = mapCaseConsultations([held('m1')], EMPTY_COUNTS);
+    const [row] = mapCaseConsultations([held('m1')], EMPTY_COUNTS, NOW, NO_ACTION);
     expect(row?.state).toBe('held');
     expect(row).not.toHaveProperty('status');
     expect(row).not.toHaveProperty('outcome');
@@ -133,7 +153,9 @@ describe('mapCaseConsultations — state derivation', () => {
   ])('maps %s → %s', (_label, row, expected) => {
     const [mapped] = mapCaseConsultations(
       [meeting({ id: 'm1', ...(row as Partial<Meeting>) })],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
     expect(mapped?.state).toBe(expected);
   });
@@ -160,7 +182,9 @@ describe('mapCaseConsultations — state derivation', () => {
           startedAt: new Date('2026-07-02T10:00:00Z'),
         }),
       ],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
     expect(rows.map((r) => r.state)).toEqual(['no_show_client', 'missed_call']);
     expect(rows[0]?.state).not.toBe(rows[1]?.state);
@@ -168,7 +192,12 @@ describe('mapCaseConsultations — state derivation', () => {
 
   it('warns when a meeting ENDED with no outcome recorded — it must not be invisible', () => {
     vi.mocked(log.warn).mockClear();
-    mapCaseConsultations([meeting({ id: 'm1', status: 'ended', outcome: null })], EMPTY_COUNTS);
+    mapCaseConsultations(
+      [meeting({ id: 'm1', status: 'ended', outcome: null })],
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
+    );
     expect(log.warn).toHaveBeenCalledWith(
       'Case consultation ended with no outcome recorded',
       expect.objectContaining({ meetingId: 'm1', status: 'ended' })
@@ -177,10 +206,11 @@ describe('mapCaseConsultations — state derivation', () => {
 });
 
 /**
- * ⚠ ONLY A TERMINAL MEETING HAS A RECAP. `loadRecap` returns `null` — and the recap page 404s
- * — for the three non-terminal statuses, so linking one would send the viewer from their own
- * case to a dead end. `cancelled` DOES render a recap (the not-held panel), so it keeps its
- * link. NEVER a disabled link.
+ * ⚠ ONLY AN `ended` MEETING HAS A RECAP LINK. `loadRecap` returns `null` — and the recap page
+ * 404s — for the three non-terminal statuses, so linking one would send the viewer from their
+ * own case to a dead end. `cancelled` renders a recap (the not-held panel), but that panel is
+ * `body: 'This consultation was cancelled.'` and nothing else — no money block, no artifacts —
+ * so its link would lead somewhere emptier than the row itself. NEVER a disabled link.
  */
 describe('mapCaseConsultations — recapHref', () => {
   it.each([
@@ -188,11 +218,12 @@ describe('mapCaseConsultations — recapHref', () => {
     ['no_show_client', { status: 'ended', outcome: 'no_show_client' }],
     ['missed_call', { status: 'ended', outcome: 'missed_call' }],
     ['outcome_pending', { status: 'ended', outcome: null }],
-    ['cancelled', { status: 'cancelled', outcome: null }],
   ])('EMITS a recap link for %s', (_label, row) => {
     const [mapped] = mapCaseConsultations(
       [meeting({ id: 'm1', ...(row as Partial<Meeting>) })],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
     expect(mapped?.recapHref).toBe('/meetings/m1?from=case_surface');
   });
@@ -201,44 +232,54 @@ describe('mapCaseConsultations — recapHref', () => {
     ['scheduled', { status: 'scheduled', outcome: null }],
     ['waiting_for_participants', { status: 'waiting_for_participants', outcome: null }],
     ['in_progress', { status: 'in_progress', outcome: null }],
+    ['cancelled', { status: 'cancelled', outcome: null }],
   ])('emits NO recap link for %s — an absent action beats a dead one', (_label, row) => {
     const [mapped] = mapCaseConsultations(
       [meeting({ id: 'm1', ...(row as Partial<Meeting>) })],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
     expect(mapped?.recapHref).toBeNull();
   });
 
   it('carries the `from=case_surface` provenance param', () => {
-    const [mapped] = mapCaseConsultations([held('m1')], EMPTY_COUNTS);
+    const [mapped] = mapCaseConsultations([held('m1')], EMPTY_COUNTS, NOW, NO_ACTION);
     expect(mapped?.recapHref).toContain('?from=case_surface');
   });
 });
 
 describe('mapCaseConsultations — duration, counts and ordering', () => {
   it('computes WALL-CLOCK minutes between the two stamps', () => {
-    const [mapped] = mapCaseConsultations([held('m1')], EMPTY_COUNTS);
+    const [mapped] = mapCaseConsultations([held('m1')], EMPTY_COUNTS, NOW, NO_ACTION);
     expect(mapped?.durationMinutes).toBe(42);
   });
 
   it('reports NULL duration — never a bare zero — when a stamp is missing', () => {
-    const [scheduled] = mapCaseConsultations([meeting({ id: 'm1' })], EMPTY_COUNTS);
+    const [scheduled] = mapCaseConsultations([meeting({ id: 'm1' })], EMPTY_COUNTS, NOW, NO_ACTION);
     expect(scheduled?.durationMinutes).toBeNull();
 
     const [started] = mapCaseConsultations(
       [meeting({ id: 'm2', status: 'in_progress', startedAt: new Date('2026-07-01T10:00:00Z') })],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
     expect(started?.durationMinutes).toBeNull();
   });
 
   it('reads the three counts from the batched maps, defaulting to 0 / false', () => {
-    const rows = mapCaseConsultations([held('m1'), held('m2')], {
-      actionItemCountByMeetingId: new Map([['m1', 3]]),
-      fileCountByMeetingId: new Map([['m1', 2]]),
-      meetingIdsWithTranscript: new Set(['m1']),
-      meetingIdsWithLiveProposal: new Set(),
-    });
+    const rows = mapCaseConsultations(
+      [held('m1'), held('m2')],
+      {
+        actionItemCountByMeetingId: new Map([['m1', 3]]),
+        fileCountByMeetingId: new Map([['m1', 2]]),
+        meetingIdsWithTranscript: new Set(['m1']),
+        meetingIdsWithLiveProposal: new Set(),
+      },
+      NOW,
+      NO_ACTION
+    );
     const [first, second] = rows;
     expect(first).toMatchObject({ actionItemCount: 3, fileCount: 2, hasTranscript: true });
     expect(second).toMatchObject({ actionItemCount: 0, fileCount: 0, hasTranscript: false });
@@ -253,14 +294,23 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
   it('BAL-411 — a meeting in meetingIdsWithLiveProposal renders pending_reschedule, not scheduled', () => {
     const [withProposal, withoutProposal] = mapCaseConsultations(
       [meeting({ id: 'm1' }), meeting({ id: 'm2' })],
-      { ...EMPTY_COUNTS, meetingIdsWithLiveProposal: new Set(['m1']) }
+      { ...EMPTY_COUNTS, meetingIdsWithLiveProposal: new Set(['m1']) },
+      NOW,
+      NO_ACTION
     );
     expect(withProposal?.state).toBe('pending_reschedule');
     expect(withoutProposal?.state).toBe('scheduled');
   });
 
   it('hard-falses hasRecording — no capture exists anywhere on the platform', () => {
-    const rows = mapCaseConsultations([held('m1'), meeting({ id: 'm2' })], EMPTY_COUNTS);
+    const rows = mapCaseConsultations(
+      [held('m1'), meeting({ id: 'm2' })],
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
+    );
+    // `.every()` is vacuously true on `[]`; the length assertion guards against that.
+    expect(rows).toHaveLength(2);
     expect(rows.every((row) => row.hasRecording === false)).toBe(true);
   });
 
@@ -280,7 +330,9 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
           endedAt: new Date('2026-07-05T10:30:00Z'),
         }),
       ],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
     expect(rows.map((row) => row.meetingId)).toEqual(['m-early', 'm-mid', 'm-late']);
   });
@@ -289,7 +341,9 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
     const at = new Date('2026-07-03T09:00:00Z');
     const rows = mapCaseConsultations(
       [meeting({ id: 'm-b', scheduledStart: at }), meeting({ id: 'm-a', scheduledStart: at })],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
     expect(rows.map((row) => row.meetingId)).toEqual(['m-a', 'm-b']);
   });
@@ -311,7 +365,9 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
           endedAt: new Date('2026-07-03T10:30:00Z'),
         }),
       ],
-      EMPTY_COUNTS
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
     );
     const byId = new Map(rows.map((row) => [row.meetingId, row.ordinal]));
     expect(byId.get('m1')).toBe(1);
@@ -320,6 +376,163 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
   });
 
   it('returns an empty list for an empty input, without throwing', () => {
-    expect(mapCaseConsultations([], EMPTY_COUNTS)).toEqual([]);
+    expect(mapCaseConsultations([], EMPTY_COUNTS, NOW, NO_ACTION)).toEqual([]);
+  });
+});
+
+/** Every flag here reads the raw `meeting.status`, never the derived `state` label; see the
+ *  mutation-proof test at the bottom for what regressing to `state` would break. */
+describe('mapCaseConsultations — row action flags (canCancel / canReschedule / canProposeReschedule)', () => {
+  const FUTURE_START = new Date('2026-08-01T10:00:00Z');
+  const FUTURE_END = new Date('2026-08-01T11:00:00Z');
+  const CLIENT_MAY_ACT: CaseConsultationActionContext = { lens: 'client', mayAct: true };
+  const EXPERT_MAY_ACT: CaseConsultationActionContext = { lens: 'expert', mayAct: true };
+
+  function upcoming(over: Partial<Meeting> = {}): Meeting {
+    return meeting({
+      id: 'm1',
+      status: 'scheduled',
+      scheduledStart: FUTURE_START,
+      scheduledEnd: FUTURE_END,
+      ...over,
+    });
+  }
+
+  it.each([
+    ['scheduled', 'scheduled' as const, true],
+    ['waiting_for_participants', 'waiting_for_participants' as const, false],
+    ['in_progress', 'in_progress' as const, false],
+    ['ended', 'ended' as const, false],
+    ['cancelled', 'cancelled' as const, false],
+  ])(
+    'canCancel — status=%s → %s (client, capable, no live proposal)',
+    (_label, status, expectedCancel) => {
+      const [row] = mapCaseConsultations(
+        [upcoming({ status, outcome: status === 'ended' ? 'completed' : null })],
+        EMPTY_COUNTS,
+        NOW,
+        CLIENT_MAY_ACT
+      );
+      expect(row?.canCancel).toBe(expectedCancel);
+    }
+  );
+
+  it('a waiting_for_participants meeting folds to the scheduled LABEL yet every flag is false', () => {
+    const [row] = mapCaseConsultations(
+      [upcoming({ status: 'waiting_for_participants' })],
+      EMPTY_COUNTS,
+      NOW,
+      CLIENT_MAY_ACT
+    );
+    expect(row?.state).toBe('scheduled');
+    expect(row?.canCancel).toBe(false);
+    expect(row?.canReschedule).toBe(false);
+    expect(row?.canProposeReschedule).toBe(false);
+  });
+
+  it('canReschedule is true for a capable CLIENT on a movable meeting, and canProposeReschedule stays false', () => {
+    const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, CLIENT_MAY_ACT);
+    expect(row?.canReschedule).toBe(true);
+    expect(row?.canProposeReschedule).toBe(false);
+  });
+
+  it('canProposeReschedule is true for a capable EXPERT on a movable meeting, and canReschedule stays false', () => {
+    const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, EXPERT_MAY_ACT);
+    expect(row?.canProposeReschedule).toBe(true);
+    expect(row?.canReschedule).toBe(false);
+  });
+
+  it('every flag is false when the case-level capability is false, regardless of status', () => {
+    const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, {
+      lens: 'client',
+      mayAct: false,
+    });
+    expect(row?.canCancel).toBe(false);
+    expect(row?.canReschedule).toBe(false);
+  });
+
+  it('Ruling 2 — a live proposal drops canReschedule but leaves canCancel true', () => {
+    const [row] = mapCaseConsultations(
+      [upcoming()],
+      { ...EMPTY_COUNTS, meetingIdsWithLiveProposal: new Set(['m1']) },
+      NOW,
+      CLIENT_MAY_ACT
+    );
+    expect(row?.state).toBe('pending_reschedule');
+    expect(row?.canCancel).toBe(true);
+    expect(row?.canReschedule).toBe(false);
+  });
+
+  it('the join window drops canReschedule/canProposeReschedule but leaves canCancel true', () => {
+    const startsInFiveMinutes = new Date(NOW.getTime() + 5 * 60_000);
+    const [row] = mapCaseConsultations(
+      [upcoming({ scheduledStart: startsInFiveMinutes })],
+      EMPTY_COUNTS,
+      NOW,
+      CLIENT_MAY_ACT
+    );
+    expect(row?.live).toBe(true);
+    expect(row?.canCancel).toBe(true);
+    expect(row?.canReschedule).toBe(false);
+  });
+
+  it('canReschedule is false once the meeting has actually started, even though canCancel stays true', () => {
+    const past = new Date(NOW.getTime() - 60_000);
+    const [row] = mapCaseConsultations(
+      [upcoming({ scheduledStart: past })],
+      EMPTY_COUNTS,
+      NOW,
+      CLIENT_MAY_ACT
+    );
+    expect(row?.canCancel).toBe(true);
+    expect(row?.canReschedule).toBe(false);
+  });
+
+  /** MUTATION PROOF: `insideCaseJoinWindow` has no closing bound, so an UNGATED read would say
+   *  `live: true` for this row forever once its `scheduledStart` is behind `now` — even though
+   *  the meeting is long over. */
+  it('live is false on a past HELD row, even with scheduledStart inside what would be the join window', () => {
+    const justEnded = new Date(NOW.getTime() - 5 * 60_000);
+    const [row] = mapCaseConsultations(
+      [
+        held('m1', {
+          scheduledStart: justEnded,
+          scheduledEnd: new Date(justEnded.getTime() + 30 * 60_000),
+        }),
+      ],
+      EMPTY_COUNTS,
+      NOW,
+      CLIENT_MAY_ACT
+    );
+    expect(row?.state).toBe('held');
+    expect(row?.live).toBe(false);
+  });
+
+  it('computes scheduledMinutes from scheduled_end − scheduled_start, independent of durationMinutes', () => {
+    const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, CLIENT_MAY_ACT);
+    expect(row?.scheduledMinutes).toBe(60);
+    expect(row?.durationMinutes).toBeNull();
+  });
+
+  it('canInvite and guestCount are hard-false / hard-zero — phase 2', () => {
+    const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, CLIENT_MAY_ACT);
+    expect(row?.canInvite).toBe(false);
+    expect(row?.guestCount).toBe(0);
+  });
+
+  /** MUTATION PROOF: reverting the flags to `row.state === 'scheduled'` would pass this
+   *  `waiting_for_participants` meeting as cancellable/reschedulable, since its label folds to
+   *  `'scheduled'`. */
+  it('MUTATION PROOF — a state-based derivation would wrongly enable every flag here', () => {
+    const [row] = mapCaseConsultations(
+      [upcoming({ status: 'waiting_for_participants' })],
+      EMPTY_COUNTS,
+      NOW,
+      CLIENT_MAY_ACT
+    );
+    expect(row?.state).toBe('scheduled');
+    expect(row?.canCancel).toBe(false);
+    expect(row?.canReschedule).toBe(false);
+    expect(row?.canProposeReschedule).toBe(false);
   });
 });

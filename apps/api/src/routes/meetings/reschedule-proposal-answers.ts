@@ -221,6 +221,18 @@ async function resolveDeclineInput(
     return null;
   }
 
+  // Mirrors `resolveAcceptInput`'s reschedulability check — without it, a decline against an
+  // already-cancelled meeting publishes a stale `reschedule_proposal.declined` notification.
+  const meetingRefusal = resolveRescheduleRefusal(
+    authorized.meeting.status,
+    authorized.meeting.scheduledStart,
+    new Date()
+  );
+  if (meetingRefusal !== null) {
+    reply.code(409).send({ error: 'meeting_not_reschedulable' });
+    return null;
+  }
+
   return { meetingId, proposalId, userId };
 }
 

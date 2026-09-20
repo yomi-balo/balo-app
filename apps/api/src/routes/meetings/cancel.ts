@@ -243,6 +243,7 @@ export async function meetingCancelRoutes(fastify: FastifyInstance): Promise<voi
             initiatedBy: input.actorRole,
             holdReleased: result.holdReleased,
             cancelAuditId: result.cancelAuditId,
+            voidedProposalCount: result.voidedProposalCount,
           },
           'Consultation cancelled'
         );

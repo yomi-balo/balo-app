@@ -73,6 +73,33 @@ export interface CaseConsultationRowView {
    * one-line change when it does, not so a component can pretend.
    */
   hasRecording: boolean;
+
+  // ── Row actions — UPCOMING rows only, all FALSE / 0 on every other state. A component never
+  // re-derives availability from `state` (see the HARD BLOCKER on `mapCaseConsultations`).
+  // `scheduledMinutes` and `live` below are a SEPARATE group and do not follow this rule the
+  // same way — see their own docs.
+
+  /** CLIENT axis — structurally `false` on the expert lens. */
+  canReschedule: boolean;
+  /** EXPERT axis — structurally `false` on the client lens. */
+  canProposeReschedule: boolean;
+  /** Unlike the two move flags, NOT blocked by a live proposal ("one negotiation at a time"
+   *  governs moving, not cancelling). */
+  canCancel: boolean;
+  /** PHASE 2 — hard-`false` in phase 1. The menu item never renders until this is real. */
+  canInvite: boolean;
+  /** PHASE 2 — hard-`0` in phase 1. */
+  guestCount: number;
+  /** `scheduled_end − scheduled_start`, minutes. NOT `durationMinutes` above, which is
+   *  wall-clock and therefore `null` on every upcoming row — this is the duration that's always
+   *  present here. */
+  scheduledMinutes: number;
+  /** Inside `CASE_JOIN_WINDOW_MINUTES` of this row's own start AND the row is upcoming — mirrors
+   *  the nudge's `live` for the same meeting, per-row. Drives the "Starting soon" pill and the
+   *  move-item visibility rule. `false`, never a stray `true`, on a past/terminal row: the join
+   *  window itself has no closing bound, so the upcoming-state gate is what keeps this field
+   *  honest once a row's `scheduledStart` is behind `now`. */
+  live: boolean;
 }
 
 // ── files (the D4 merge) ─────────────────────────────────────────────────────────────────
@@ -256,7 +283,11 @@ export type CaseNudgeView =
        */
       joinPath: string;
     }
-  /** CLIENT lens (BAL-411) — the expert asked to move it; only the client can answer. */
+  /**
+   * CLIENT lens — the expert asked to move it; only the client can answer. `proposedAtIso` and
+   * `options` live on `CaseRescheduleProposalView` below, not here — this nudge stays purely
+   * informational; the accept/decline/withdraw affordances live on `RescheduleProposalCard`.
+   */
   | {
       kind: 'reschedule_proposal';
       proposalId: string;
@@ -264,42 +295,17 @@ export type CaseNudgeView =
       optionCount: number;
       originalScheduledStartIso: string;
       expiresAtIso: string;
-      /**
-       * ADDITIVE — when the ask was made, for the `hours_to_respond` analytics property.
-       * Fix round 1 item 12 — `null` ONLY when the loader's detail read raced the proposal
-       * resolving out from under it (the loader falls the whole nudge back to no-proposal in
-       * that case, so this is effectively unreachable through the normal path; kept nullable
-       * as the honest type rather than ever substituting the DEADLINE for the creation time).
-       */
-      proposedAtIso: string | null;
-      /**
-       * ADDITIVE on this WEB WIRE PROJECTION only, the SAME posture as `'upcoming'`'s
-       * `durationMinutes` above — `@balo/shared/engagements`'s `CaseNudge` union deliberately
-       * carries only `optionCount` (the shared core has no reason to hydrate full rows), but
-       * `RescheduleProposalCard` needs a real `optionId` per choice to accept one. Fetched by
-       * the loader ONLY when a live proposal is on the next meeting.
-       */
-      options: readonly { optionId: string; scheduledStartIso: string }[];
       /** BAL-567 — see {@link CaseNudgeView}'s attribution note. */
       actorLabel: string;
     }
-  /** EXPERT lens (BAL-411) — their own outstanding proposal. */
+  /** EXPERT lens — their own outstanding proposal. See the sibling arm's note above —
+   *  `proposedAtIso` / `options` live on `CaseRescheduleProposalView` for the identical reason. */
   | {
       kind: 'reschedule_proposal_pending';
       proposalId: string;
       meetingId: string;
       optionCount: number;
       expiresAtIso: string;
-      /**
-       * ADDITIVE — when the ask was made, for the `hours_to_respond` analytics property.
-       * Fix round 1 item 12 — `null` ONLY when the loader's detail read raced the proposal
-       * resolving out from under it (the loader falls the whole nudge back to no-proposal in
-       * that case, so this is effectively unreachable through the normal path; kept nullable
-       * as the honest type rather than ever substituting the DEADLINE for the creation time).
-       */
-      proposedAtIso: string | null;
-      /** See the sibling `reschedule_proposal` arm's note — same additive shape. */
-      options: readonly { optionId: string; scheduledStartIso: string }[];
       /** BAL-567 — see {@link CaseNudgeView}'s attribution note. */
       actorLabel: string;
     }
@@ -307,6 +313,35 @@ export type CaseNudgeView =
   | { kind: 'resolution_ask_pending'; actorLabel: string }
   | { kind: 'nothing_booked' }
   | null;
+
+// ── Reschedule proposal cards ────────────────────────────────────────────────────────────
+
+/**
+ * ONE live reschedule proposal, decoupled from `CaseNudgeView` so `RescheduleProposalCard` can
+ * be hosted per-row rather than only above the list under the nudge's own meeting.
+ * `case-surface.tsx` renders one card per entry in `CaseSurfaceViewBase.rescheduleProposals`,
+ * never derived from `nudge.kind`.
+ */
+export interface CaseRescheduleProposalView {
+  proposalId: string;
+  meetingId: string;
+  /** 1-based, or `null` (structurally unreachable here, kept nullable as the honest type). The
+   *  card's only subject-identifying field — without it, two live proposals render as visually
+   *  and programmatically identical cards, so accepting one risks moving the wrong meeting. */
+  ordinal: number | null;
+  optionCount: number;
+  originalScheduledStartIso: string;
+  expiresAtIso: string;
+  /** `null` only when the loader's detail read raced the proposal resolving out from under it
+   *  — structurally unreachable through the normal path, kept nullable as the honest type. */
+  proposedAtIso: string | null;
+  options: readonly { optionId: string; scheduledStartIso: string }[];
+  /** The meeting's booked length, minutes — a reschedule MOVES a booking, it never resizes it,
+   *  so every option renders it alongside the time (never a bare start). */
+  durationMinutes: number;
+  /** Attribution — resolved server-side, name columns only, never an email address. */
+  actorLabel: string;
+}
 
 // ── the root ─────────────────────────────────────────────────────────────────────────────
 
@@ -319,6 +354,10 @@ interface CaseSurfaceViewBase {
   header: CaseHeaderView;
   nudge: CaseNudgeView;
   consultations: CaseConsultationRowView[];
+  /** Every upcoming meeting's live reschedule proposal, independent of `nudge` — a proposal on
+   *  a meeting that isn't `nudge`'s own still appears here. `[]` in the overwhelming majority
+   *  of cases. */
+  rescheduleProposals: CaseRescheduleProposalView[];
   conversation: CaseConversationView;
   actionItems: CaseActionItemsView;
   files: CaseFileRowView[];
@@ -326,18 +365,6 @@ interface CaseSurfaceViewBase {
   filesTruncated: boolean;
   party: CasePartyView;
   people: CasePersonView[];
-  /**
-   * BAL-410 — may THIS viewer cancel the upcoming consultation? ⚠ ON THE **BASE**, so BOTH
-   * lenses carry it: the AC gives cancel to the client AND the delivering expert, on two
-   * different axes (membership `participate` / engagement `manage_engagement`), resolved
-   * server-side in `load-case.ts`.
-   *
-   * A RENDER HINT ONLY. `cancelConsultationAction` re-checks the axis independently, and
-   * `apps/api`'s `authorizeMeetingCancel` re-derives all three axes from the MEETING's own
-   * context row and is the actual authority. This exists so the surface never shows a
-   * dead-end CTA — the case surface's own rule is "an absent action beats a dead one".
-   */
-  canCancelConsultation: boolean;
   /**
    * BAL-410 — the counterparty's PARTY label, lens-relative: the expert's agency (or their own
    * name when independent) on the client lens, the client company on the expert lens.
@@ -379,21 +406,14 @@ export type CaseSurfaceView =
       earnings: CaseEarningsView;
       canRequestResolution: boolean;
       /**
-       * BAL-411 — `isOpen && nextScheduled !== null && rescheduleProposal === null &&
-       * hasEngagementCapability(...)`, resolved server-side the same
-       * resolve-server-side/re-check-in-the-action pattern as `canRequestResolution`. The
-       * action re-checks independently; this is a render hint only.
-       */
-      canProposeReschedule: boolean;
-      /**
-       * Fix round 1 item 18 (security LOW) — the SAME `manage_engagement` holder set as
-       * `canProposeReschedule`, without its "no live proposal already outstanding" condition.
-       * `canProposeReschedule` is structurally `false` exactly when Withdraw is relevant (a
-       * live proposal exists), so `RescheduleProposalCard` needs this SEPARATE flag to gate
-       * Withdraw on the actual holder set rather than `lens === 'expert'` alone — which also
-       * admits an agency member with role `expert`, deliberately and permanently NOT a
-       * `manage_engagement` holder (ADR-1046 §7). A render hint only; the withdraw action
-       * re-checks independently.
+       * Fix round 1 item 18 (security LOW) — the SAME `manage_engagement` holder set as the
+       * per-row `canProposeReschedule` (`CaseConsultationRowView`), without its "no live
+       * proposal already outstanding" condition. That per-row flag is structurally `false`
+       * exactly when Withdraw is relevant (a live proposal exists), so `RescheduleProposalCard`
+       * needs this SEPARATE flag to gate Withdraw on the actual holder set rather than
+       * `lens === 'expert'` alone — which also admits an agency member with role `expert`,
+       * deliberately and permanently NOT a `manage_engagement` holder (ADR-1046 §7). A render
+       * hint only; the withdraw action re-checks independently.
        */
       canManageReschedule: boolean;
     });

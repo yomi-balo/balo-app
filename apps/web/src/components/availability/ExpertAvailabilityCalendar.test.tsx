@@ -109,8 +109,9 @@ describe('ExpertAvailabilityCalendar', () => {
       );
       await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
 
-      // The 60-min slot (9:00 AM) shows; the 30-min-only slot (10:00 AM) is filtered out.
-      expect(await screen.findByText('9:00 AM')).toBeInTheDocument();
+      // The 60-min slot shows as its ACTUAL RANGE — a pinned row never shows a bare start
+      // time — and the 30-min-only slot at 10:00 AM is filtered out entirely.
+      expect(await screen.findByText(/9:00 – 10:00 am · 60 min/)).toBeInTheDocument();
       expect(screen.queryByText('10:00 AM')).not.toBeInTheDocument();
 
       // No manual duration pills — nothing to click.
@@ -137,7 +138,7 @@ describe('ExpertAvailabilityCalendar', () => {
         />
       );
       await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
-      await user.click(await screen.findByRole('button', { name: /9:00 AM/ }));
+      await user.click(await screen.findByRole('button', { name: /9:00 – 10:00 am · 60 min/ }));
       await user.click(screen.getByRole('button', { name: /Continue with/ }));
 
       // No radio group — the "How long do you need?" question never appears.
@@ -157,6 +158,34 @@ describe('ExpertAvailabilityCalendar', () => {
         end: '2026-06-05T10:00:00.000Z',
         duration: 60,
       });
+    });
+
+    // The row, the Continue button and the confirm step's own selected-time line must all
+    // agree once pinned — same range, same (lowercase) casing — rather than the row showing
+    // the new range variant while the other two still carry the house uppercase AM/PM.
+    it('pinned: the row, Continue button and confirm-step line all show the same range text', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const user = userEvent.setup();
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          daysAhead={14}
+          fixedDurationMinutes={60}
+        />
+      );
+      await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
+      await user.click(await screen.findByRole('button', { name: /9:00 – 10:00 am · 60 min/ }));
+
+      expect(
+        screen.getByRole('button', { name: /Continue with 9:00 – 10:00 am · 60 min/ })
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/9:00 AM/)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /Continue with/ }));
+
+      expect(screen.getByText(/9:00 – 10:00 am · 60 min/)).toBeInTheDocument();
+      expect(screen.queryByText(/9:00 AM/)).not.toBeInTheDocument();
     });
 
     // B6(b)/(c) — a day with NO ≥60-min slot must render as EMPTY while pinned, never silently
@@ -193,12 +222,12 @@ describe('ExpertAvailabilityCalendar', () => {
         />
       );
       await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
-      await screen.findByText('9:00 AM');
+      await screen.findByText(/9:00 – 10:00 am · 60 min/);
 
       await user.click(await screen.findByRole('button', { name: /June 6th, 2026/ }));
 
       // The 15-min-only slot never appears as a selectable row — not widened to 'any'.
-      expect(screen.queryByText('9:00 AM')).not.toBeInTheDocument();
+      expect(screen.queryByText(/9:00/)).not.toBeInTheDocument();
       // No escape hatch back to 'any' while pinned.
       expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
       expect(screen.queryByText(/No 60-min slots that day\./)).not.toBeInTheDocument();
@@ -221,6 +250,39 @@ describe('ExpertAvailabilityCalendar', () => {
       expect(screen.getByText('10:00 AM')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '60 min' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Any' })).toBeInTheDocument();
+    });
+
+    // Unpinned keeps the bare start time plus its own "up to Nm" pill; pinned drops both in
+    // favour of the actual range.
+    it('unpinned shows the bare start time with "up to Nm"; pinned shows the range instead', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const user = userEvent.setup();
+      const { unmount } = render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          daysAhead={14}
+        />
+      );
+      await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
+      expect(await screen.findByText('9:00 AM')).toBeInTheDocument();
+      expect(screen.getByText('up to 60m')).toBeInTheDocument();
+      expect(screen.queryByText(/9:00 – 10:00/)).not.toBeInTheDocument();
+      unmount();
+
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          daysAhead={14}
+          fixedDurationMinutes={60}
+        />
+      );
+      await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
+      expect(await screen.findByText(/9:00 – 10:00 am · 60 min/)).toBeInTheDocument();
+      expect(screen.queryByText('up to 60m')).not.toBeInTheDocument();
+      expect(screen.queryByText('9:00 AM')).not.toBeInTheDocument();
     });
   });
 
@@ -488,6 +550,8 @@ describe('ExpertAvailabilityCalendar', () => {
     await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
     await screen.findByRole('button', { name: /9:00 AM/ });
     expect(document.activeElement).not.toBe(document.body);
+    // Programmatic focus on a non-interactive heading block must not paint the browser's default ring.
+    expect(document.activeElement).toHaveClass('focus-visible:outline-none');
 
     await user.click(screen.getByRole('button', { name: /9:00 AM/ }));
     await user.click(screen.getByRole('button', { name: /Continue with/ }));

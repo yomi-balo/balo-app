@@ -4,10 +4,10 @@ import {
   meetingContextsRepository,
   meetingGuestsRepository,
   meetingsRepository,
-  type CancelMutationResult,
   type CreateMeetingInput,
   type CreatedMeeting,
   type Meeting,
+  type MeetingCancelResult,
   type MeetingMutationResult,
   type RescheduleMutationResult,
 } from '@balo/db';
@@ -539,7 +539,7 @@ async function tearDownRoomBestEffort(meeting: Meeting, log: FastifyBaseLogger):
 }
 
 /** BAL-410 — what `cancelMeeting` answers: the repository result plus whether a hold moved. */
-export interface CancelMeetingOutcome extends CancelMutationResult {
+export interface CancelMeetingOutcome extends MeetingCancelResult {
   /**
    * True IFF a credit hold actually moved `active → released`. `false` is the common case.
    * Load-bearing: the in-app copy must not claim a release that did not happen.

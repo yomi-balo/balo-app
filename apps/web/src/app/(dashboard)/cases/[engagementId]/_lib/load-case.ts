@@ -56,6 +56,7 @@ import type {
   CaseNudgeView,
   CasePartyView,
   CasePersonView,
+  CaseRescheduleProposalView,
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
 import { mapCaseConsultations } from './map-case-consultations';
@@ -230,7 +231,6 @@ async function resolveRescheduleProposalForNudge(
 function toNudgeView(
   nudge: CaseNudge,
   nextScheduled: { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null,
-  proposalDetail: RescheduleProposalDetailForNudge | null,
   /**
    * BAL-567 — WHO acted, already resolved by `resolveActorLabel`. Required rather than
    * optional: the four attributed arms cannot be constructed without it (see `CaseNudgeView`).
@@ -264,14 +264,6 @@ function toNudgeView(
       optionCount: nudge.optionCount,
       originalScheduledStartIso: nudge.originalScheduledStart.toISOString(),
       expiresAtIso: nudge.expiresAt.toISOString(),
-      // Item 12 — NEVER the deadline. `null` when there is genuinely no detail to report
-      // (structurally unreachable through the normal path now that the caller falls the whole
-      // nudge back to `rescheduleProposal: null` on the same condition — see `loadCase`).
-      proposedAtIso: proposalDetail?.createdAt.toISOString() ?? null,
-      options: (proposalDetail?.options ?? []).map((option) => ({
-        optionId: option.id,
-        scheduledStartIso: option.scheduledStart.toISOString(),
-      })),
       actorLabel,
     };
   }
@@ -282,14 +274,6 @@ function toNudgeView(
       meetingId: nudge.meetingId,
       optionCount: nudge.optionCount,
       expiresAtIso: nudge.expiresAt.toISOString(),
-      // Item 12 — NEVER the deadline. `null` when there is genuinely no detail to report
-      // (structurally unreachable through the normal path now that the caller falls the whole
-      // nudge back to `rescheduleProposal: null` on the same condition — see `loadCase`).
-      proposedAtIso: proposalDetail?.createdAt.toISOString() ?? null,
-      options: (proposalDetail?.options ?? []).map((option) => ({
-        optionId: option.id,
-        scheduledStartIso: option.scheduledStart.toISOString(),
-      })),
       actorLabel,
     };
   }
@@ -692,38 +676,25 @@ export const loadCase = cache(
       fileCountByMeetingId.set(file.meetingId, (fileCountByMeetingId.get(file.meetingId) ?? 0) + 1);
     }
 
-    const consultations = mapCaseConsultations(meetings, {
-      actionItemCountByMeetingId,
-      fileCountByMeetingId,
-      meetingIdsWithTranscript: transcriptMeetingIds,
-      meetingIdsWithLiveProposal,
-    });
-
     const isOpen = caseRow.closedAt === null;
     const nextScheduled = selectNextScheduled(meetings, meetingIdsWithLiveProposal);
     /**
-     * ⚠⚠ BAL-410 — THE CANCEL RENDER HINT'S STATUS TERM, AND THE **SAME SOURCE OF TRUTH THE
-     * WRITE PATH USES**. `nextScheduled !== null` is deliberately WIDER than cancellable: it
-     * admits `in_progress` (correctly — a call happening right now is the most urgent thing the
-     * header can say) and `waiting_for_participants` folds into the same `'scheduled'`
-     * consultation STATE. Neither is cancellable.
+     * `resolveCancelRefusal` / `CANCELLABLE_MEETING_STATUSES` from `@balo/shared/meetings` —
+     * the one definition, shared with the route guard and the repository CAS, so a new status
+     * is denied in all three places at once.
      *
-     * Without this term, the moment ONE party joins early the meeting flips to
-     * `waiting_for_participants` server-side and the OTHER party — who has seen nothing happen —
-     * still gets a fully enabled "Cancel" that can only 409. That is the AC "cancellation is
-     * unavailable once the meeting has started" leaking through the render hint.
-     *
-     * ⚠ `resolveCancelRefusal` / `CANCELLABLE_MEETING_STATUSES` FROM `@balo/shared/meetings`,
-     * NEVER A RE-LISTED STATUS LITERAL — the allow-list is the ONE definition, shared with the
-     * route guard and the repository CAS, so a sixth `meeting_status` label is denied by default
-     * in all three places at once.
-     *
-     * Per CLAUDE.md's empty-state rule this HIDES the affordance rather than disabling it: the
-     * nudge renders `canCancel ? <Button/> : null`, and a disabled Cancel with no explanation
-     * would be worse than its absence for a party who never saw the call start.
+     * `RESCHEDULABLE_MEETING_STATUSES` is the identical tuple (only the wall-clock term
+     * differs), so this one boolean short-circuits both the cancel and move capability calls
+     * below.
      */
-    const nextScheduledIsCancellable =
-      nextScheduled !== null && resolveCancelRefusal(nextScheduled.status) === null;
+    const someUpcomingMeetingIsCancellable = meetings.some((meeting) => {
+      const state = deriveCaseConsultationState({
+        status: meeting.status,
+        outcome: meeting.outcome,
+        hasLiveRescheduleProposal: meetingIdsWithLiveProposal.has(meeting.id),
+      });
+      return caseConsultationIsUpcoming(state) && resolveCancelRefusal(meeting.status) === null;
+    });
     // BAL-411 — the nudge cares about the proposal on THE NEXT meeting only: a live proposal's
     // meeting is always `caseConsultationIsUpcoming`, so if `nextScheduled` exists and carries a
     // proposal, this finds it; a proposal on some OTHER, later meeting is represented on that
@@ -755,6 +726,37 @@ export const loadCase = cache(
       now,
     });
 
+    // Lives on `CaseSurfaceViewBase` (both lenses have it) and `mapCaseConsultations` below
+    // needs it for every row's flags; the expert arm uses `expertCapabilities` instead, keeping
+    // the two authorization axes separate.
+    const mayCancelAsClient =
+      lens === 'client' &&
+      isOpen &&
+      someUpcomingMeetingIsCancellable &&
+      (await hasCapability({ id: userId }, CAPABILITIES.PARTICIPATE, { companyId }));
+
+    // Reused by both `mapCaseConsultations` and the expert return arm below; extracted to its
+    // own function to keep `loadCase` under SonarCloud's cognitive-complexity ceiling.
+    const expertCapabilities = await resolveExpertCapabilitiesIfNeeded(lens, {
+      userId,
+      engagementId,
+      isOpen,
+      resolutionRequestedAt: caseRow.resolutionRequestedAt,
+      nextScheduledIsCancellable: someUpcomingMeetingIsCancellable,
+    });
+
+    const consultations = mapCaseConsultations(
+      meetings,
+      {
+        actionItemCountByMeetingId,
+        fileCountByMeetingId,
+        meetingIdsWithTranscript: transcriptMeetingIds,
+        meetingIdsWithLiveProposal,
+      },
+      now,
+      { lens, mayAct: resolveRowActionCapability(lens, mayCancelAsClient, expertCapabilities) }
+    );
+
     // BAL-567 — WHO acted, for the four attributed nudge arms. One batched name read, name
     // columns only; `null` (and no read at all) for the arms nobody acted on.
     const actorLabel = await resolveNudgeActorLabel({
@@ -765,6 +767,34 @@ export const loadCase = cache(
       agencyName: labels.agencyLabel,
       partyFallbackLabel: labels.expertPartyShort,
     });
+
+    // `nudgeReuse` avoids a second `findNamesByIds` round trip when the live proposal is on
+    // `nextScheduled` — the nudge above already resolved that actor's name. `ordinalByMeetingId`
+    // looks up the ordinal from the consultation rows already built above, rather than a second
+    // `deriveConsultationOrdinal` pass.
+    const ordinalByMeetingId = new Map(consultations.map((row) => [row.meetingId, row.ordinal]));
+
+    const rescheduleProposals = await resolveRescheduleProposalViews(
+      meetings,
+      liveProposals,
+      meetingIdsWithLiveProposal,
+      lens,
+      {
+        viewerUserId: userId,
+        deliveringExpertUserId: profile?.userId ?? null,
+        agencyName: labels.agencyLabel,
+        partyFallbackLabel: labels.expertPartyShort,
+        ordinalByMeetingId,
+        nudgeReuse:
+          rescheduleProposalForNudge !== null && proposalDetailForNudge !== null
+            ? {
+                proposalId: rescheduleProposalForNudge.proposalId,
+                actorLabel,
+                detail: proposalDetailForNudge,
+              }
+            : null,
+      }
+    );
 
     const header: CaseHeaderView = {
       title: caseRow.title,
@@ -798,36 +828,15 @@ export const loadCase = cache(
       { name: labels.counterpartyName, isViewer: false },
     ];
 
-    // ⚠⚠ BAL-410 — THE **CLIENT** CANCEL FLAG, RESOLVED BEFORE THE LENS SPLIT because it lives on
-    // `CaseSurfaceViewBase` (both lenses have it — the AC gives cancel to client AND expert).
-    //
-    // ⚠ THE EXPERT ARM DOES **NOT** USE THIS VALUE. It is overwritten inside the `lens ===
-    // 'expert'` branch below with a FOURTH independent `hasEngagementCapability` call, because
-    // the two lenses are on DIFFERENT AXES: membership `participate` for the client, engagement
-    // `manage_engagement` for the expert. Computing one flag for both would be exactly the
-    // "lens alone is authorization" mistake CLAUDE.md forbids.
-    //
-    // ⚠ SHORT-CIRCUITS ON `isOpen` AND `nextScheduled` FIRST, so a closed case (or one with
-    // nothing booked) resolves NO capability call at all — the same pre-existing invariant the
-    // three engagement-capability flags below preserve.
-    //
-    // ⚠ THIS IS THE FIRST CAPABILITY-DERIVED FLAG ON THE CLIENT ARM (which previously returned
-    // only `canClose: isOpen`), so it is genuinely new surface area rather than a copy.
-    const mayCancelAsClient =
-      lens === 'client' &&
-      isOpen &&
-      nextScheduledIsCancellable &&
-      (await hasCapability({ id: userId }, CAPABILITIES.PARTICIPATE, { companyId }));
-
     const base = {
-      canCancelConsultation: mayCancelAsClient,
       counterpartyPartyLabel: labels.counterpartyPartyLabel,
       engagementId,
       expertProfileId,
       viewerUserId: userId,
       header,
-      nudge: toNudgeView(nudge, nextScheduled, proposalDetailForNudge, actorLabel),
+      nudge: toNudgeView(nudge, nextScheduled, actorLabel),
       consultations,
+      rescheduleProposals,
       conversation: await buildConversation(access, labels, messagePage, conversationFileRows),
       actionItems: buildActionItems(
         actionItems,
@@ -848,53 +857,38 @@ export const loadCase = cache(
     // object cannot HOLD an expert's earnings figure. The expert arm has no `canClose`,
     // because only a client may close a case (BAL-417); the expert may only ASK.
     if (lens === 'expert') {
-      const expertCapabilities = await resolveExpertLensCapabilities({
-        userId,
-        engagementId,
-        isOpen,
-        resolutionRequestedAt: caseRow.resolutionRequestedAt,
-        nextScheduled,
-        nextScheduledIsCancellable,
-        rescheduleProposalForNudge,
-      });
+      // Never null here — resolved above under the same `lens === 'expert'` guard. The
+      // fallback covers a TS narrowing gap across the intervening `await`s, not a real arm.
+      const capabilities = expertCapabilities ?? EMPTY_EXPERT_CAPABILITIES;
       return {
         ...base,
-        canCancelConsultation: expertCapabilities.mayCancelAsExpert,
         lens: 'expert',
         earnings: toEarningsView(earningsAggregate ?? EMPTY_EARNINGS),
-        canRequestResolution: expertCapabilities.mayRequestResolution,
-        canProposeReschedule: expertCapabilities.mayProposeReschedule,
-        canManageReschedule: expertCapabilities.canManageReschedule,
+        canRequestResolution: capabilities.mayRequestResolution,
+        canManageReschedule: capabilities.canManageReschedule,
       };
     }
     return { ...base, lens: 'client', canClose: isOpen };
   }
 );
 
-/** `selectNextScheduled`'s return shape — named so `resolveExpertLensCapabilities` need not repeat it. */
-type NextScheduledMeeting = ReturnType<typeof selectNextScheduled>;
-
 interface ExpertLensCapabilitiesInput {
   userId: string;
   engagementId: string;
   isOpen: boolean;
   resolutionRequestedAt: Date | null;
-  nextScheduled: NextScheduledMeeting;
+  /** True when at least one upcoming meeting is cancellable — not only the next one. */
   nextScheduledIsCancellable: boolean;
-  rescheduleProposalForNudge: Awaited<
-    ReturnType<typeof resolveRescheduleProposalForNudge>
-  >['proposal'];
 }
 
 interface ExpertLensCapabilities {
   mayRequestResolution: boolean;
-  mayProposeReschedule: boolean;
   canManageReschedule: boolean;
   mayCancelAsExpert: boolean;
 }
 
 /**
- * The four independent, short-circuiting `manage_engagement` capability checks gated on the
+ * The three independent, short-circuiting `manage_engagement` capability checks gated on the
  * expert lens — extracted from `loadCase` to keep it under SonarCloud's cognitive-complexity
  * ceiling of 15. Behaviour is UNCHANGED by the extraction; every reasoning comment below is
  * copied verbatim from the call site it used to sit at.
@@ -910,23 +904,15 @@ interface ExpertLensCapabilities {
  * ⚠ EACH FLAG SHORT-CIRCUITS ITS OWN `await hasEngagementCapability(...)` INDEPENDENTLY — NOT a
  * shared/hoisted call. A shared call was tried and reverted: it made the capability check
  * unconditional on `isOpen` alone, which broke the pre-existing invariant (pinned by its own
- * test) that a CLOSED case resolves no capability call at all. Four calls with identical
- * short-circuit shape cost nothing extra in the common case — at most one of the four ever
- * actually awaits, because at most one of `canRequestResolution`/`canProposeReschedule`/
- * `canManageReschedule`/`mayCancelAsExpert` is relevant to any one case state.
+ * test) that a CLOSED case resolves no capability call at all. Three calls with identical
+ * short-circuit shape cost nothing extra in the common case — at most one of the three ever
+ * actually awaits, because at most one of `canRequestResolution`/`canManageReschedule`/
+ * `mayCancelAsExpert` is relevant to any one case state.
  */
 async function resolveExpertLensCapabilities(
   input: ExpertLensCapabilitiesInput
 ): Promise<ExpertLensCapabilities> {
-  const {
-    userId,
-    engagementId,
-    isOpen,
-    resolutionRequestedAt,
-    nextScheduled,
-    nextScheduledIsCancellable,
-    rescheduleProposalForNudge,
-  } = input;
+  const { userId, engagementId, isOpen, resolutionRequestedAt, nextScheduledIsCancellable } = input;
   const contextSubject = { contextType: 'case' as const, contextId: engagementId };
 
   const mayRequestResolution =
@@ -937,28 +923,14 @@ async function resolveExpertLensCapabilities(
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
       contextSubject
     ));
-  // BAL-411 — the SAME resolve-server-side/re-check-in-the-action pattern as
-  // `mayRequestResolution` immediately above. `rescheduleProposalForNudge === null` is the
-  // "no LIVE proposal already outstanding on the next meeting" half — mirroring the DB's
-  // own partial unique index (at most one pending proposal per meeting), so the button
-  // never invites a 409 `proposal_already_pending` the picker itself could have prevented.
-  const mayProposeReschedule =
-    isOpen &&
-    nextScheduled !== null &&
-    rescheduleProposalForNudge === null &&
-    (await hasEngagementCapability(
-      { id: userId },
-      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-      contextSubject
-    ));
-  // Item 18 (security LOW) — the WITHDRAW holder set. `canProposeReschedule` is
-  // STRUCTURALLY FALSE exactly when Withdraw would be relevant (a live proposal already
-  // exists — that is `rescheduleProposalForNudge !== null`), so it cannot be reused as-is
-  // to gate the Withdraw button the way its own docblock suggested; this is the SAME
-  // capability check, without the "no live proposal" condition, so the card can gate
-  // Withdraw on the actual holder set instead of `lens === 'expert'` alone (which also
-  // admits an agency member with role `expert` — a legitimate viewer of the case surface
-  // who is deliberately and permanently NOT a `manage_engagement` holder, ADR-1046 §7).
+  // Item 18 (security LOW) — the WITHDRAW holder set: the SAME `manage_engagement` check as
+  // the per-row `canProposeReschedule`, without its "no live proposal already outstanding"
+  // condition — that per-row flag is structurally FALSE exactly when Withdraw would be
+  // relevant (a live proposal already exists), so it cannot be reused as-is to gate the
+  // Withdraw button; this gives the card the actual holder set instead of `lens === 'expert'`
+  // alone (which also admits an agency member with role `expert` — a legitimate viewer of the
+  // case surface who is deliberately and permanently NOT a `manage_engagement` holder,
+  // ADR-1046 §7).
   const canManageReschedule =
     isOpen &&
     (await hasEngagementCapability(
@@ -966,10 +938,11 @@ async function resolveExpertLensCapabilities(
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
       contextSubject
     ));
-  // BAL-410 — the FOURTH independent short-circuiting call, on the SAME pattern and for the
-  // same reason the docblock above gives: at most one of the four ever actually awaits for
+  // BAL-410 — the THIRD independent short-circuiting call, on the SAME pattern and for the
+  // same reason the docblock above gives: at most one of the three ever actually awaits for
   // any given case state, and hoisting them would break the pinned invariant that a CLOSED
-  // case resolves no capability call at all.
+  // case resolves no capability call at all. Also gates `mapCaseConsultations`'s per-row flags
+  // on the expert lens (the caller reuses this result).
   const mayCancelAsExpert =
     isOpen &&
     nextScheduledIsCancellable &&
@@ -979,7 +952,27 @@ async function resolveExpertLensCapabilities(
       contextSubject
     ));
 
-  return { mayRequestResolution, mayProposeReschedule, canManageReschedule, mayCancelAsExpert };
+  return { mayRequestResolution, canManageReschedule, mayCancelAsExpert };
+}
+
+async function resolveExpertCapabilitiesIfNeeded(
+  lens: 'client' | 'expert',
+  input: ExpertLensCapabilitiesInput
+): Promise<ExpertLensCapabilities | null> {
+  if (lens !== 'expert') return null;
+  return resolveExpertLensCapabilities(input);
+}
+
+/** The one case-level capability `mapCaseConsultations` ANDs into every row's flags:
+ *  `mayCancelAsClient` (membership `participate`) or `mayCancelAsExpert` (engagement
+ *  `manage_engagement`). */
+function resolveRowActionCapability(
+  lens: 'client' | 'expert',
+  mayCancelAsClient: boolean,
+  expertCapabilities: ExpertLensCapabilities | null
+): boolean {
+  if (lens === 'client') return mayCancelAsClient;
+  return expertCapabilities?.mayCancelAsExpert ?? false;
 }
 
 /**
@@ -993,6 +986,168 @@ const EMPTY_EARNINGS: CaseExpertEarningsAggregate = {
   pendingSessionCount: 0,
   earningsAudMinor: null,
 };
+
+/** The all-`false` fallback for the unreachable branch where `expertCapabilities` is read
+ *  outside the `lens === 'expert'` guard — visibly the empty state, never a fabricated grant. */
+const EMPTY_EXPERT_CAPABILITIES: ExpertLensCapabilities = {
+  mayRequestResolution: false,
+  canManageReschedule: false,
+  mayCancelAsExpert: false,
+};
+
+/**
+ * Decoupled from `nudge` — a proposal on another meeting still gets a card, not just the
+ * nudge's own.
+ *
+ * Gates on `caseConsultationIsUpcoming` explicitly: `findLivePendingByMeetingIds` has no
+ * meeting-status term, so without this a proposal on an already-cancelled meeting would still
+ * render a live card.
+ *
+ * Loops rather than batches the detail read: at most one pending proposal per meeting (a
+ * partial unique index) and a handful of upcoming meetings per case, so this never becomes a
+ * real N+1.
+ */
+async function resolveRescheduleProposalViews(
+  meetings: readonly Meeting[],
+  liveProposals: readonly LiveRescheduleProposalSummary[],
+  meetingIdsWithLiveProposal: ReadonlySet<string>,
+  lens: 'client' | 'expert',
+  input: {
+    viewerUserId: string;
+    deliveringExpertUserId: string | null;
+    agencyName: string | null;
+    partyFallbackLabel: string;
+    /** Per-meeting ordinal for the subject line — see the call site for why this is a lookup,
+     *  not a second derivation. */
+    ordinalByMeetingId: ReadonlyMap<string, number | null>;
+    /** The nudge's own proposal — reused verbatim for the matching row rather than a second
+     *  `findPendingForAnswer` + `findNamesByIds` round trip when the live proposal is on
+     *  `nextScheduled`. `null` when the nudge isn't a proposal arm. */
+    nudgeReuse: {
+      proposalId: string;
+      actorLabel: string;
+      detail: RescheduleProposalDetailForNudge;
+    } | null;
+  }
+): Promise<CaseRescheduleProposalView[]> {
+  const upcomingMeetingIdsWithLiveProposal = new Set(
+    meetings
+      .filter((meeting) => {
+        if (!meetingIdsWithLiveProposal.has(meeting.id)) return false;
+        const state = deriveCaseConsultationState({
+          status: meeting.status,
+          outcome: meeting.outcome,
+          hasLiveRescheduleProposal: true,
+        });
+        return caseConsultationIsUpcoming(state);
+      })
+      .map((meeting) => meeting.id)
+  );
+  if (upcomingMeetingIdsWithLiveProposal.size === 0) {
+    return [];
+  }
+
+  const summaries = liveProposals.filter((proposal) =>
+    upcomingMeetingIdsWithLiveProposal.has(proposal.meetingId)
+  );
+
+  // `scheduled_end − scheduled_start`, the same formula `mapCaseConsultations` uses for
+  // `scheduledMinutes` — a reschedule moves this meeting, it never resizes it, so every option
+  // below renders against the CURRENT booked length, never each option's own (nonexistent) one.
+  const durationByMeetingId = new Map(
+    meetings.map((meeting) => [
+      meeting.id,
+      Math.round((meeting.scheduledEnd.getTime() - meeting.scheduledStart.getTime()) / 60_000),
+    ])
+  );
+
+  // Only proposals other than the nudge's own need a detail read and a name lookup.
+  const toResolve = summaries.filter(
+    (summary) => summary.proposalId !== input.nudgeReuse?.proposalId
+  );
+
+  const resolved = await Promise.all(
+    toResolve.map(async (summary) => ({
+      summary,
+      found: await rescheduleProposalsRepository.findPendingForAnswer({
+        proposalId: summary.proposalId,
+        meetingId: summary.meetingId,
+      }),
+    }))
+  );
+
+  const idsToQuery = [...new Set(toResolve.map((summary) => summary.proposedByUserId))];
+  const actors = idsToQuery.length === 0 ? [] : await usersRepository.findNamesByIds(idsToQuery);
+  const firstNameById = new Map(actors.map((actor) => [actor.id, actor.firstName ?? null]));
+
+  const views: CaseRescheduleProposalView[] = [];
+
+  if (input.nudgeReuse !== null) {
+    const nudgeSummary = summaries.find(
+      (summary) => summary.proposalId === input.nudgeReuse?.proposalId
+    );
+    if (nudgeSummary !== undefined) {
+      views.push(
+        toRescheduleProposalView(
+          nudgeSummary,
+          input.nudgeReuse.detail,
+          input.nudgeReuse.actorLabel,
+          input.ordinalByMeetingId.get(nudgeSummary.meetingId) ?? null,
+          durationByMeetingId.get(nudgeSummary.meetingId) ?? 0
+        )
+      );
+    }
+  }
+
+  for (const { summary, found } of resolved) {
+    // A detail read racing the proposal resolving out from under it is treated as GONE, not
+    // rendered with fabricated options.
+    if (found === undefined) continue;
+    const actorLabel = resolveActorLabel({
+      side: lens,
+      actorUserId: summary.proposedByUserId,
+      actorFirstName: firstNameById.get(summary.proposedByUserId) ?? null,
+      viewerUserId: input.viewerUserId,
+      deliveringExpertUserId: input.deliveringExpertUserId ?? '',
+      agencyName: input.agencyName,
+      partyFallbackLabel: input.partyFallbackLabel,
+    });
+    views.push(
+      toRescheduleProposalView(
+        summary,
+        { createdAt: found.proposal.createdAt, options: found.options },
+        actorLabel,
+        input.ordinalByMeetingId.get(summary.meetingId) ?? null,
+        durationByMeetingId.get(summary.meetingId) ?? 0
+      )
+    );
+  }
+  return views;
+}
+
+function toRescheduleProposalView(
+  summary: LiveRescheduleProposalSummary,
+  detail: RescheduleProposalDetailForNudge,
+  actorLabel: string,
+  ordinal: number | null,
+  durationMinutes: number
+): CaseRescheduleProposalView {
+  return {
+    proposalId: summary.proposalId,
+    meetingId: summary.meetingId,
+    ordinal,
+    optionCount: summary.optionCount,
+    originalScheduledStartIso: summary.originalScheduledStart.toISOString(),
+    expiresAtIso: summary.expiresAt.toISOString(),
+    proposedAtIso: detail.createdAt.toISOString(),
+    durationMinutes,
+    options: detail.options.map((option) => ({
+      optionId: option.id,
+      scheduledStartIso: option.scheduledStart.toISOString(),
+    })),
+    actorLabel,
+  };
+}
 
 /**
  * The soonest consultation still expected to happen — what the `upcoming` nudge names. It has

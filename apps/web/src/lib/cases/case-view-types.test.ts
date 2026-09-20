@@ -101,6 +101,7 @@ const BASE = {
   },
   nudge: null,
   consultations: [],
+  rescheduleProposals: [],
   conversation: {
     conversationId: 'v-1',
     writable: true,
@@ -137,9 +138,6 @@ const BASE = {
   // genuinely assignable — freezing it would make them fail for a reason unrelated to the
   // invariant being pinned.
   people: [{ name: 'Dana Reyes', isViewer: true }],
-  // BAL-410 — on `CaseSurfaceViewBase`, so BOTH lens arms must carry it. That placement is the
-  // point: the AC gives cancel to the client AND the expert, on two different axes.
-  canCancelConsultation: false,
   counterpartyPartyLabel: 'CloudPeak Consulting',
 };
 
@@ -150,7 +148,6 @@ const EXPERT_VIEW: CaseSurfaceView = {
   lens: 'expert',
   earnings: { state: 'not_yet', earningsAudMinor: null, finalizedCount: 0, pendingCount: 0 },
   canRequestResolution: true,
-  canProposeReschedule: true,
   canManageReschedule: true,
 };
 
@@ -182,11 +179,6 @@ describe('CaseSurfaceView — the lens is a discriminant, not a flag', () => {
     expect('canClose' in CLIENT_VIEW).toBe(true);
     expect('canRequestResolution' in CLIENT_VIEW).toBe(false);
     expect('canRequestResolution' in EXPERT_VIEW).toBe(true);
-  });
-
-  it('BAL-411 — only the EXPERT arm carries canProposeReschedule', () => {
-    expect('canProposeReschedule' in CLIENT_VIEW).toBe(false);
-    expect('canProposeReschedule' in EXPERT_VIEW).toBe(true);
   });
 
   it('fix round 1 item 18 — only the EXPERT arm carries canManageReschedule', () => {

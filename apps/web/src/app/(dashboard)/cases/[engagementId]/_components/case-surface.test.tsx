@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@/test/utils';
+import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
 import type {
@@ -55,10 +55,14 @@ vi.mock('@/components/booking/reschedule-dialog', () => ({
     onRescheduled: () => void;
     onTerminalFailure?: () => void;
     meetingId: string;
+    ordinal: number | null;
+    source: 'nudge' | 'row';
   }) =>
     props.open ? (
       <div data-testid="reschedule-dialog-stub">
         <span>meeting: {props.meetingId}</span>
+        <span>ordinal: {String(props.ordinal)}</span>
+        <span>source: {props.source}</span>
         <button type="button" onClick={props.onClose}>
           Stub close
         </button>
@@ -80,16 +84,22 @@ vi.mock('@/components/booking/propose-times-dialog', () => ({
     open: boolean;
     onClose: () => void;
     onProposed: () => void;
+    onTerminalFailure?: () => void;
     meetingId: string;
+    ordinal: number | null;
   }) =>
     props.open ? (
       <div data-testid="propose-times-dialog-stub">
         <span>meeting: {props.meetingId}</span>
+        <span>ordinal: {String(props.ordinal)}</span>
         <button type="button" onClick={props.onClose}>
           Stub close
         </button>
         <button type="button" onClick={props.onProposed}>
           Stub proposed
+        </button>
+        <button type="button" onClick={props.onTerminalFailure}>
+          Stub propose-terminal
         </button>
       </div>
     ) : null,
@@ -103,9 +113,17 @@ vi.mock('@/components/booking/cancel-consultation-dialog', () => ({
     onClose: () => void;
     onCancelled: () => void;
     onTerminalFailure?: () => void;
+    onMoveInstead: (verb: 'reschedule' | 'propose') => void;
     lens: string;
     meetingId: string;
     counterpartyLabel: string;
+    counterpartyFirstName: string;
+    ordinal: number | null;
+    scheduledMinutes: number;
+    source: 'nudge' | 'row';
+    canReschedule: boolean;
+    canProposeReschedule: boolean;
+    isPendingReschedule: boolean;
   }) =>
     props.open ? (
       <div data-testid="cancel-dialog-stub">
@@ -114,6 +132,15 @@ vi.mock('@/components/booking/cancel-consultation-dialog', () => ({
         {/* ⚠ SURFACED so the PARTY-vs-PERSON wiring is pinned here rather than assumed — see
             the test named "⚠ hands the dialog the PARTY label" below. */}
         <span data-testid="cancel-dialog-counterparty">{props.counterpartyLabel}</span>
+        <span data-testid="cancel-dialog-counterparty-first-name">
+          {props.counterpartyFirstName}
+        </span>
+        <span>ordinal: {String(props.ordinal)}</span>
+        <span>scheduledMinutes: {props.scheduledMinutes}</span>
+        <span>source: {props.source}</span>
+        <span>canReschedule: {String(props.canReschedule)}</span>
+        <span>canProposeReschedule: {String(props.canProposeReschedule)}</span>
+        <span>isPendingReschedule: {String(props.isPendingReschedule)}</span>
         <button type="button" onClick={props.onClose}>
           Stub cancel-close
         </button>
@@ -122,6 +149,12 @@ vi.mock('@/components/booking/cancel-consultation-dialog', () => ({
         </button>
         <button type="button" onClick={props.onTerminalFailure}>
           Stub cancel-terminal
+        </button>
+        <button type="button" onClick={() => props.onMoveInstead('reschedule')}>
+          Stub cancel-to-reschedule
+        </button>
+        <button type="button" onClick={() => props.onMoveInstead('propose')}>
+          Stub cancel-to-propose
         </button>
       </div>
     ) : null,
@@ -181,6 +214,7 @@ const BASE = {
   },
   nudge: null,
   consultations: [],
+  rescheduleProposals: [],
   conversation: {
     conversationId: 'v-1',
     writable: true,
@@ -215,9 +249,6 @@ const BASE = {
     { name: 'Dana Reyes', isViewer: true },
     { name: 'Amara Okafor', isViewer: false },
   ],
-  // BAL-410 — defaulted OFF so every pre-existing case still asserts a surface with no Cancel
-  // affordance; the new render gates opt in explicitly.
-  canCancelConsultation: false,
   counterpartyPartyLabel: 'CloudPeak Consulting',
 } satisfies Omit<CaseSurfaceView, 'lens' | 'canClose'>;
 
@@ -231,7 +262,6 @@ function expertView(over: Record<string, unknown> = {}): CaseSurfaceView {
     lens: 'expert',
     earnings: { state: 'not_yet', earningsAudMinor: null, finalizedCount: 0, pendingCount: 0 },
     canRequestResolution: true,
-    canProposeReschedule: true,
     canManageReschedule: true,
     ...over,
   } as CaseSurfaceView;
@@ -262,7 +292,56 @@ const HELD_CONSULTATION: CaseConsultationRowView = {
   fileCount: 1,
   hasTranscript: true,
   hasRecording: false,
+  canReschedule: false,
+  canProposeReschedule: false,
+  canCancel: false,
+  canInvite: false,
+  guestCount: 0,
+  scheduledMinutes: 30,
+  live: false,
 };
+
+/**
+ * `useUpcomingJoinClock` (`case-nudge.tsx`) derives liveness from the REAL clock rather than
+ * trusting a `kind: 'upcoming'` nudge's `live` flag past first paint, so a hardcoded past date
+ * silently reads as live (and fires an unwanted `router.refresh()` on mount) the moment real
+ * time passes it. Every upcoming fixture below is offset from `Date.now()` instead.
+ */
+function farFutureIso(): string {
+  return new Date(Date.now() + 3 * 24 * 60 * 60_000).toISOString();
+}
+
+function withinJoinWindowIso(): string {
+  return new Date(Date.now() + 5 * 60_000).toISOString();
+}
+
+/**
+ * `CaseNudge`'s `canReschedule` prop is looked up from `view.consultations` by
+ * `case-surface.tsx`, never re-derived from `nudge.live` — a matching row is required.
+ */
+function upcomingRow(over: Partial<CaseConsultationRowView> = {}): CaseConsultationRowView {
+  return {
+    meetingId: 'm-upcoming-1',
+    ordinal: 1,
+    state: 'scheduled',
+    scheduledStartIso: farFutureIso(),
+    startedAtIso: null,
+    durationMinutes: null,
+    recapHref: null,
+    actionItemCount: 0,
+    fileCount: 0,
+    hasTranscript: false,
+    hasRecording: false,
+    canReschedule: false,
+    canProposeReschedule: false,
+    canCancel: false,
+    canInvite: false,
+    guestCount: 0,
+    scheduledMinutes: 45,
+    live: false,
+    ...over,
+  };
+}
 
 const CASE_FILE: CaseFileRowView = {
   origin: 'meeting',
@@ -459,7 +538,7 @@ describe('CaseSurface — the conditional regions', () => {
     const UPCOMING_NUDGE = {
       kind: 'upcoming' as const,
       meetingId: 'm-upcoming-1',
-      scheduledStartIso: '2026-09-01T10:00:00Z',
+      scheduledStartIso: farFutureIso(),
       live: false,
       durationMinutes: 45,
     };
@@ -474,9 +553,15 @@ describe('CaseSurface — the conditional regions', () => {
       expect(screen.queryByTestId('reschedule-dialog-stub')).not.toBeInTheDocument();
     });
 
+    const RESCHEDULABLE_ROW = upcomingRow({ canReschedule: true });
+
     it('clicking "Reschedule" opens the dialog, mounted with the nudge’s meetingId', async () => {
       const user = userEvent.setup();
-      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      render(
+        <CaseSurface
+          view={clientView({ nudge: UPCOMING_NUDGE, consultations: [RESCHEDULABLE_ROW] })}
+        />
+      );
 
       await user.click(screen.getByRole('button', { name: 'Reschedule' }));
 
@@ -487,7 +572,11 @@ describe('CaseSurface — the conditional regions', () => {
 
     it('onClose closes the dialog WITHOUT refreshing the page', async () => {
       const user = userEvent.setup();
-      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      render(
+        <CaseSurface
+          view={clientView({ nudge: UPCOMING_NUDGE, consultations: [RESCHEDULABLE_ROW] })}
+        />
+      );
       await user.click(screen.getByRole('button', { name: 'Reschedule' }));
       expect(screen.getByTestId('reschedule-dialog-stub')).toBeInTheDocument();
 
@@ -499,7 +588,11 @@ describe('CaseSurface — the conditional regions', () => {
 
     it('onRescheduled closes the dialog AND refreshes the page', async () => {
       const user = userEvent.setup();
-      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      render(
+        <CaseSurface
+          view={clientView({ nudge: UPCOMING_NUDGE, consultations: [RESCHEDULABLE_ROW] })}
+        />
+      );
       await user.click(screen.getByRole('button', { name: 'Reschedule' }));
 
       await user.click(screen.getByRole('button', { name: 'Stub rescheduled' }));
@@ -512,7 +605,11 @@ describe('CaseSurface — the conditional regions', () => {
     // ALSO close AND refresh, exactly like a successful reschedule — the CTA is stale either way.
     it('onTerminalFailure closes the dialog AND refreshes the page', async () => {
       const user = userEvent.setup();
-      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      render(
+        <CaseSurface
+          view={clientView({ nudge: UPCOMING_NUDGE, consultations: [RESCHEDULABLE_ROW] })}
+        />
+      );
       await user.click(screen.getByRole('button', { name: 'Reschedule' }));
 
       await user.click(screen.getByRole('button', { name: 'Stub terminal failure' }));
@@ -522,7 +619,27 @@ describe('CaseSurface — the conditional regions', () => {
     });
 
     it('offers no client "Reschedule" CTA on the EXPERT lens — it gets its OWN CTA (BAL-411)', () => {
-      render(<CaseSurface view={expertView({ nudge: UPCOMING_NUDGE })} />);
+      // The CLIENT axis is structurally false on a real expert-lens row (`mapCaseConsultations`);
+      // `RESCHEDULABLE_ROW` is shaped for the client-lens tests above, so this one builds its own.
+      const row = upcomingRow({ canReschedule: false });
+      render(<CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, consultations: [row] })} />);
+      expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
+    });
+
+    it('offers NO "Reschedule" button when no row backs the nudge’s canReschedule', () => {
+      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
+    });
+
+    // The prior test (no rows at all) would still pass with a `consultations[0]` lookup instead
+    // of a by-`meetingId` one; only a non-matching-but-present row can tell the two apart.
+    it('offers NO "Reschedule" button when the only row does not match the nudge’s meetingId, even though IT can reschedule', () => {
+      const nonMatchingRow = upcomingRow({ meetingId: 'm-somewhere-else', canReschedule: true });
+      render(
+        <CaseSurface
+          view={clientView({ nudge: UPCOMING_NUDGE, consultations: [nonMatchingRow] })}
+        />
+      );
       expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
     });
   });
@@ -532,15 +649,23 @@ describe('CaseSurface — the conditional regions', () => {
     const UPCOMING_NUDGE = {
       kind: 'upcoming' as const,
       meetingId: 'm-upcoming-1',
-      scheduledStartIso: '2026-09-01T10:00:00Z',
+      scheduledStartIso: farFutureIso(),
       live: false,
       durationMinutes: 45,
     };
+    // The nudge's `canProposeReschedule` reads the ROW for the nudge's own meeting
+    // (`nudgeRow?.canProposeReschedule`), mirroring `canReschedule` on the client side.
+    const PROPOSABLE_ROW = upcomingRow({ canProposeReschedule: true });
 
     it('mounts the dialog only when the EXPERT has an upcoming meeting and canProposeReschedule', async () => {
       const user = userEvent.setup();
       render(
-        <CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, canProposeReschedule: true })} />
+        <CaseSurface
+          view={expertView({
+            nudge: UPCOMING_NUDGE,
+            consultations: [PROPOSABLE_ROW],
+          })}
+        />
       );
       expect(screen.queryByTestId('propose-times-dialog-stub')).not.toBeInTheDocument();
 
@@ -556,23 +681,53 @@ describe('CaseSurface — the conditional regions', () => {
       expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
     });
 
+    it('offers no propose CTA when the nudge row itself does not carry canProposeReschedule', () => {
+      render(
+        <CaseSurface
+          view={expertView({
+            nudge: UPCOMING_NUDGE,
+            consultations: [upcomingRow({ canProposeReschedule: false })],
+          })}
+        />
+      );
+      expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
+    });
+
     it('onProposed closes the dialog AND refreshes the page', async () => {
       const user = userEvent.setup();
       render(
-        <CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, canProposeReschedule: true })} />
+        <CaseSurface
+          view={expertView({
+            nudge: UPCOMING_NUDGE,
+            consultations: [PROPOSABLE_ROW],
+          })}
+        />
       );
       await user.click(screen.getByRole('button', { name: 'Propose a new time' }));
       await user.click(screen.getByRole('button', { name: 'Stub proposed' }));
       expect(screen.queryByTestId('propose-times-dialog-stub')).not.toBeInTheDocument();
       expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
     });
+
+    it('onTerminalFailure closes the dialog AND refreshes the page — parity with cancel/reschedule (F12)', async () => {
+      const user = userEvent.setup();
+      render(
+        <CaseSurface
+          view={expertView({
+            nudge: UPCOMING_NUDGE,
+            consultations: [PROPOSABLE_ROW],
+          })}
+        />
+      );
+      await user.click(screen.getByRole('button', { name: 'Propose a new time' }));
+      await user.click(screen.getByRole('button', { name: 'Stub propose-terminal' }));
+      expect(screen.queryByTestId('propose-times-dialog-stub')).not.toBeInTheDocument();
+      expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+    });
   });
 
-  /** BAL-411 — the ONE place accept/decline/withdraw happen; mounted whenever the nudge is a
-   *  live proposal, on EITHER lens. */
-  describe('CaseSurface — the conditional regions › BAL-411 — the reschedule-proposal card', () => {
-    const PROPOSAL_NUDGE = {
-      kind: 'reschedule_proposal' as const,
+  describe('CaseSurface — the conditional regions › BAL-421 (D4) — the reschedule-proposal cards', () => {
+    const PROPOSAL_VIEW = {
       proposalId: 'proposal-1',
       meetingId: 'm-upcoming-1',
       optionCount: 2,
@@ -580,32 +735,65 @@ describe('CaseSurface — the conditional regions', () => {
       expiresAtIso: '2026-08-31T10:00:00Z',
       proposedAtIso: '2026-08-25T10:00:00Z',
       options: [{ optionId: 'opt-1', scheduledStartIso: '2026-09-02T10:00:00Z' }],
+      actorLabel: 'Amara',
     };
 
-    it('mounts on the CLIENT lens for a reschedule_proposal nudge', () => {
-      render(<CaseSurface view={clientView({ nudge: PROPOSAL_NUDGE })} />);
+    it('mounts one card per entry in view.rescheduleProposals, on the CLIENT lens', () => {
+      render(<CaseSurface view={clientView({ rescheduleProposals: [PROPOSAL_VIEW] })} />);
       const stub = screen.getByTestId('reschedule-proposal-card-stub');
       expect(stub).toHaveTextContent('lens: client');
     });
 
-    it('mounts on the EXPERT lens for a reschedule_proposal_pending nudge', () => {
-      render(
-        <CaseSurface
-          view={expertView({ nudge: { ...PROPOSAL_NUDGE, kind: 'reschedule_proposal_pending' } })}
-        />
-      );
+    it('mounts on the EXPERT lens too — the SAME list, no lens filtering', () => {
+      render(<CaseSurface view={expertView({ rescheduleProposals: [PROPOSAL_VIEW] })} />);
       const stub = screen.getByTestId('reschedule-proposal-card-stub');
       expect(stub).toHaveTextContent('lens: expert');
     });
 
-    it('does NOT mount for any other nudge kind', () => {
-      render(<CaseSurface view={clientView({ nudge: { kind: 'nothing_booked' } })} />);
+    it('does NOT mount when the list is empty, regardless of the nudge', () => {
+      render(
+        <CaseSurface
+          view={clientView({ nudge: { kind: 'nothing_booked' }, rescheduleProposals: [] })}
+        />
+      );
       expect(screen.queryByTestId('reschedule-proposal-card-stub')).not.toBeInTheDocument();
     });
 
-    it('router.refresh() fires when the card reports a change', async () => {
+    it('mounts even when the nudge names a COMPLETELY DIFFERENT meeting', () => {
+      render(
+        <CaseSurface
+          view={clientView({
+            nudge: {
+              kind: 'upcoming',
+              meetingId: 'm-other',
+              scheduledStartIso: farFutureIso(),
+              live: false,
+              durationMinutes: 30,
+            },
+            rescheduleProposals: [PROPOSAL_VIEW],
+          })}
+        />
+      );
+      expect(screen.getByTestId('reschedule-proposal-card-stub')).toBeInTheDocument();
+    });
+
+    it('mounts N cards for N live proposals', () => {
+      render(
+        <CaseSurface
+          view={clientView({
+            rescheduleProposals: [
+              PROPOSAL_VIEW,
+              { ...PROPOSAL_VIEW, proposalId: 'proposal-2', meetingId: 'm-2' },
+            ],
+          })}
+        />
+      );
+      expect(screen.getAllByTestId('reschedule-proposal-card-stub')).toHaveLength(2);
+    });
+
+    it('router.refresh() fires when a card reports a change', async () => {
       const user = userEvent.setup();
-      render(<CaseSurface view={clientView({ nudge: PROPOSAL_NUDGE })} />);
+      render(<CaseSurface view={clientView({ rescheduleProposals: [PROPOSAL_VIEW] })} />);
       await user.click(screen.getByRole('button', { name: 'Stub changed' }));
       expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
     });
@@ -726,84 +914,68 @@ describe('CaseSurface — no meeting join secret crosses the projection boundary
   });
 });
 
-// ── BAL-410 — the cancel CTA → dialog seam ────────────────────────────────────
+// ── the cancel dialog — mounted only from a row's kebab ───────────────────────
 
-describe('BAL-410 — cancel CTA → dialog seam', () => {
+/**
+ * The nudge offers no Cancel of its own (it was removed — Cancel lives only on the row's
+ * kebab), so every seam below opens the dialog through `ROW_TRIGGER_NAME` +
+ * "Cancel consultation", including for a row that shares the nudge's OWN meetingId — proving
+ * the nudge's meeting is still cancellable even though the nudge itself offers no button.
+ */
+describe('the cancel dialog — mount/close/refresh, opened from a row', () => {
+  const ROW_TRIGGER_NAME = /Actions for consultation on/;
   const UPCOMING_NUDGE = {
     kind: 'upcoming' as const,
     meetingId: 'm-upcoming-1',
-    scheduledStartIso: '2026-09-01T10:00:00Z',
+    scheduledStartIso: farFutureIso(),
     live: false,
     durationMinutes: 45,
   };
+  const CANCELLABLE_ROW = upcomingRow({ meetingId: 'm-upcoming-1', canCancel: true });
 
-  it('renders NO Cancel button when the server flag is false', () => {
-    render(
-      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: false })} />
-    );
+  async function openCancelDialog(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+    await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
+  }
 
-    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
-  });
-
-  it('renders Cancel for a CLIENT-lens upcoming nudge when the flag is true', () => {
-    render(
-      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
-    );
-
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-  });
-
-  /**
-   * ⚠⚠ THE §10.3 DIVERGENCE, PINNED. Cancel renders INSIDE the join window (`live: true`) where
-   * Reschedule and Propose deliberately do not — because `live` starts 15 minutes before the
-   * start and the product promise is "free until scheduled start". This is not the client being
-   * looser than the server: the server's guard is STATE-based, and a meeting nobody has joined
-   * is still `scheduled` inside that window.
-   */
-  it('⚠ renders Cancel even when the nudge is LIVE, where Reschedule does not', () => {
+  it('renders NO Cancel button anywhere on the nudge, even for its own live meeting', () => {
     render(
       <CaseSurface
         view={clientView({
-          nudge: { ...UPCOMING_NUDGE, live: true },
-          canCancelConsultation: true,
+          nudge: { ...UPCOMING_NUDGE, scheduledStartIso: withinJoinWindowIso(), live: true },
+          consultations: [{ ...CANCELLABLE_ROW, live: true }],
         })}
       />
     );
-
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
   });
 
-  it('renders Cancel beside "Propose a new time" on the EXPERT lens', () => {
+  it('the ROW for the nudge’s own meeting still offers "Cancel consultation" in its menu', async () => {
+    const user = userEvent.setup();
     render(
-      <CaseSurface
-        view={expertView({
-          nudge: UPCOMING_NUDGE,
-          canProposeReschedule: true,
-          canCancelConsultation: true,
-        })}
-      />
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
     );
 
-    expect(screen.getByRole('button', { name: 'Propose a new time' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+
+    expect(screen.getByRole('menuitem', { name: 'Cancel consultation' })).toBeInTheDocument();
   });
 
-  it('the dialog is NOT mounted while closed, even with an upcoming nudge', () => {
+  it('the dialog is NOT mounted while closed', () => {
     render(
-      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
     );
 
     expect(screen.queryByTestId('cancel-dialog-stub')).not.toBeInTheDocument();
   });
 
-  it('clicking Cancel opens the dialog, mounted with the nudge’s meetingId and the lens', async () => {
+  it('opens the dialog, mounted with the row’s meetingId and the lens', async () => {
     const user = userEvent.setup();
     render(
-      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
     );
 
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await openCancelDialog(user);
 
     const stub = screen.getByTestId('cancel-dialog-stub');
     expect(stub).toHaveTextContent('meeting: m-upcoming-1');
@@ -821,22 +993,24 @@ describe('BAL-410 — cancel CTA → dialog seam', () => {
   it('⚠ hands the dialog the PARTY label, never the counterparty’s first name', async () => {
     const user = userEvent.setup();
     render(
-      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
     );
 
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await openCancelDialog(user);
 
     const label = screen.getByTestId('cancel-dialog-counterparty');
     expect(label).toHaveTextContent('CloudPeak Consulting');
     expect(label).not.toHaveTextContent('Amara');
+    // The person-addressed register still reaches the dialog, under its own prop.
+    expect(screen.getByTestId('cancel-dialog-counterparty-first-name')).toHaveTextContent('Amara');
   });
 
   it('onClose closes the dialog WITHOUT refreshing the page', async () => {
     const user = userEvent.setup();
     render(
-      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
     );
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await openCancelDialog(user);
 
     await user.click(screen.getByRole('button', { name: 'Stub cancel-close' }));
 
@@ -844,12 +1018,12 @@ describe('BAL-410 — cancel CTA → dialog seam', () => {
     expect(mockRouterRefresh).not.toHaveBeenCalled();
   });
 
-  it('onCancelled closes the dialog AND refreshes — the nudge itself is about to disappear', async () => {
+  it('onCancelled closes the dialog AND refreshes — the row itself is about to disappear', async () => {
     const user = userEvent.setup();
     render(
-      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
     );
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await openCancelDialog(user);
 
     await user.click(screen.getByRole('button', { name: 'Stub cancelled' }));
 
@@ -860,13 +1034,230 @@ describe('BAL-410 — cancel CTA → dialog seam', () => {
   it('onTerminalFailure closes the dialog AND refreshes, exactly like a success', async () => {
     const user = userEvent.setup();
     render(
-      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
     );
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await openCancelDialog(user);
 
     await user.click(screen.getByRole('button', { name: 'Stub cancel-terminal' }));
 
     expect(screen.queryByTestId('cancel-dialog-stub')).not.toBeInTheDocument();
     expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The hop: `onMoveInstead('reschedule')` re-keys the SAME selection to `verb: 'reschedule'`
+   * while `dialogOpen` stays `true`, so this is a straight component swap — the cancel stub
+   * unmounts and the reschedule stub mounts, same meetingId, in one commit.
+   */
+  it('"Reschedule instead" swaps to the reschedule dialog for the SAME meetingId', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
+    );
+    await openCancelDialog(user);
+
+    await user.click(screen.getByRole('button', { name: 'Stub cancel-to-reschedule' }));
+
+    expect(screen.queryByTestId('cancel-dialog-stub')).not.toBeInTheDocument();
+    const stub = screen.getByTestId('reschedule-dialog-stub');
+    expect(stub).toHaveTextContent('meeting: m-upcoming-1');
+    expect(stub).toHaveTextContent('source: row');
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+  });
+
+  /** Same hop, the expert's move: `onMoveInstead('propose')` re-keys to `verb: 'propose'`. */
+  it('"Propose a new time" swaps to the propose dialog for the SAME meetingId', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, consultations: [CANCELLABLE_ROW] })} />
+    );
+    await openCancelDialog(user);
+
+    await user.click(screen.getByRole('button', { name: 'Stub cancel-to-propose' }));
+
+    expect(screen.queryByTestId('cancel-dialog-stub')).not.toBeInTheDocument();
+    const stub = screen.getByTestId('propose-times-dialog-stub');
+    expect(stub).toHaveTextContent('meeting: m-upcoming-1');
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('CaseSurface — BAL-421 row-sourced actions', () => {
+  const ROW_TRIGGER_NAME = /Actions for consultation on/;
+
+  it('opens the cancel dialog from a ROW kebab, with the ROW’s own meetingId and source "row"', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', ordinal: 2, canCancel: true });
+    render(<CaseSurface view={clientView({ consultations: [row] })} />);
+
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+    await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
+
+    const stub = screen.getByTestId('cancel-dialog-stub');
+    expect(stub).toHaveTextContent('meeting: m-row-1');
+    // No nudge in this fixture, so a regression reading `view.nudge` instead of the row would
+    // have nothing to fall back to and would fail loudly here.
+    expect(stub).toHaveTextContent('ordinal: 2');
+    expect(stub).toHaveTextContent('scheduledMinutes: 45');
+    expect(stub).toHaveTextContent('source: row');
+    expect(stub).toHaveTextContent('canReschedule: false');
+    expect(stub).toHaveTextContent('canProposeReschedule: false');
+    expect(stub).toHaveTextContent('isPendingReschedule: false');
+  });
+
+  it('opens the reschedule dialog from a ROW kebab', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canReschedule: true });
+    render(<CaseSurface view={clientView({ consultations: [row] })} />);
+
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+    await user.click(screen.getByRole('menuitem', { name: 'Reschedule' }));
+
+    const stub = screen.getByTestId('reschedule-dialog-stub');
+    expect(stub).toHaveTextContent('meeting: m-row-1');
+    expect(stub).toHaveTextContent('ordinal: 1');
+    expect(stub).toHaveTextContent('source: row');
+  });
+
+  it('opens the propose dialog from an EXPERT-lens ROW kebab', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canProposeReschedule: true });
+    render(<CaseSurface view={expertView({ consultations: [row] })} />);
+
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+    await user.click(screen.getByRole('menuitem', { name: 'Propose a new time' }));
+
+    const stub = screen.getByTestId('propose-times-dialog-stub');
+    expect(stub).toHaveTextContent('meeting: m-row-1');
+    expect(stub).toHaveTextContent('ordinal: 1');
+  });
+
+  // The selection is keyed per-row, so a row untouched by a live proposal on another meeting
+  // opens its own dialog regardless of what the nudge is doing.
+  it('a row can be cancelled even while the nudge is showing a live proposal on ANOTHER meeting', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canCancel: true });
+    render(
+      <CaseSurface
+        view={clientView({
+          nudge: {
+            kind: 'reschedule_proposal',
+            proposalId: 'proposal-1',
+            meetingId: 'm-nudge',
+            optionCount: 1,
+            originalScheduledStartIso: '2026-09-01T10:00:00Z',
+            expiresAtIso: '2026-08-31T10:00:00Z',
+            proposedAtIso: '2026-08-25T10:00:00Z',
+            options: [{ optionId: 'opt-1', scheduledStartIso: '2026-09-02T10:00:00Z' }],
+            actorLabel: 'Amara',
+          },
+          consultations: [row],
+        })}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+    await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
+
+    expect(screen.getByTestId('cancel-dialog-stub')).toHaveTextContent('meeting: m-row-1');
+  });
+
+  it('a pending_reschedule row offers Cancel ONLY — Ruling 2', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({
+      meetingId: 'm-row-1',
+      state: 'pending_reschedule',
+      canCancel: true,
+      canReschedule: false,
+    });
+    render(<CaseSurface view={clientView({ consultations: [row] })} />);
+
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+    expect(screen.getByRole('menuitem', { name: 'Cancel consultation' })).toBeInTheDocument();
+  });
+});
+
+describe('CaseSurface — BAL-421 focus contract', () => {
+  const ROW_TRIGGER_NAME = /Actions for consultation on/;
+
+  it('sends focus to the Consultations heading after a row-sourced cancel succeeds', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canCancel: true });
+    render(<CaseSurface view={clientView({ consultations: [row] })} />);
+
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+    await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
+    await user.click(screen.getByRole('button', { name: 'Stub cancelled' }));
+
+    expect(screen.getByRole('heading', { name: 'Consultations' })).toHaveFocus();
+  });
+
+  it('sends focus to the Consultations heading after a TERMINAL cancel failure too', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canCancel: true });
+    render(<CaseSurface view={clientView({ consultations: [row] })} />);
+
+    await user.click(screen.getByRole('button', { name: ROW_TRIGGER_NAME }));
+    await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
+    await user.click(screen.getByRole('button', { name: 'Stub cancel-terminal' }));
+
+    expect(screen.getByRole('heading', { name: 'Consultations' })).toHaveFocus();
+  });
+
+  it('returns focus to the ROW’S OWN trigger after its dialog closes WITHOUT success', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canCancel: true });
+    render(<CaseSurface view={clientView({ consultations: [row] })} />);
+
+    const trigger = screen.getByRole('button', { name: ROW_TRIGGER_NAME });
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
+    await user.click(screen.getByRole('button', { name: 'Stub cancel-close' }));
+
+    // `focusTrigger` runs on a `requestAnimationFrame` — real timers, so `waitFor` lets it land.
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it('returns focus to the trigger after a successful reschedule too — the row stays mounted', async () => {
+    const user = userEvent.setup();
+    const row = upcomingRow({ meetingId: 'm-row-1', canReschedule: true });
+    render(<CaseSurface view={clientView({ consultations: [row] })} />);
+
+    const trigger = screen.getByRole('button', { name: ROW_TRIGGER_NAME });
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name: 'Reschedule' }));
+    await user.click(screen.getByRole('button', { name: 'Stub rescheduled' }));
+
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  // Every test above uses exactly one actionable row, so a regression from the `Map` to a
+  // single `useRef` would still pass them all; only two rows can tell them apart.
+  it('returns focus to the SECOND row’s own trigger when two rows are actionable — the map is keyed, not a single ref', async () => {
+    const user = userEvent.setup();
+    const row1 = upcomingRow({ meetingId: 'm-row-1', canCancel: true });
+    const row2 = upcomingRow({
+      meetingId: 'm-row-2',
+      canCancel: true,
+      scheduledStartIso: '2026-09-02T10:00:00Z',
+    });
+    render(<CaseSurface view={clientView({ consultations: [row1, row2] })} />);
+
+    const triggers = screen.getAllByRole('button', { name: ROW_TRIGGER_NAME });
+    expect(triggers).toHaveLength(2);
+    const [firstTrigger, secondTrigger] = triggers;
+    if (firstTrigger === undefined || secondTrigger === undefined) {
+      throw new Error('expected two row triggers');
+    }
+
+    await user.click(secondTrigger);
+    await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
+    expect(screen.getByTestId('cancel-dialog-stub')).toHaveTextContent('meeting: m-row-2');
+    await user.click(screen.getByRole('button', { name: 'Stub cancel-close' }));
+
+    await waitFor(() => expect(secondTrigger).toHaveFocus());
+    expect(firstTrigger).not.toHaveFocus();
   });
 });

@@ -101,6 +101,13 @@ function consultation(n: number): CaseConsultationRowView {
     fileCount: 0,
     hasTranscript: false,
     hasRecording: false,
+    canReschedule: false,
+    canProposeReschedule: false,
+    canCancel: false,
+    canInvite: false,
+    guestCount: 0,
+    scheduledMinutes: 30,
+    live: false,
   };
 }
 
@@ -130,6 +137,7 @@ const BASE = {
   header: OPEN_HEADER,
   nudge: null,
   consultations: CONSULTATIONS,
+  rescheduleProposals: [],
   conversation: CONVERSATION,
   actionItems: {
     yours: [],
@@ -155,8 +163,6 @@ const BASE = {
     { name: 'Dana Reyes', isViewer: true },
     { name: 'Amara Okafor', isViewer: false },
   ],
-  // BAL-410 — on the BASE, so both lenses carry it.
-  canCancelConsultation: false,
   counterpartyPartyLabel: 'CloudPeak Consulting',
 };
 
@@ -167,7 +173,6 @@ const EXPERT_VIEW: CaseSurfaceView = {
   lens: 'expert',
   earnings: { state: 'not_yet', earningsAudMinor: null, finalizedCount: 0, pendingCount: 0 },
   canRequestResolution: false,
-  canProposeReschedule: false,
   canManageReschedule: false,
 };
 

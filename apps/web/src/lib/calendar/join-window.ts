@@ -13,6 +13,7 @@
  */
 import { CASE_JOIN_WINDOW_MINUTES, MEETING_OVERRUN_GRACE_MINUTES } from '@balo/shared/engagements';
 import { meetingIsClosedToJoin, type MeetingLifecycleStatus } from '@balo/shared/meetings';
+import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
 
 const MS_PER_MINUTE = 60_000;
 
@@ -116,6 +117,46 @@ export function joinAffordanceTimingLabel(now: Date, scheduledStart: Date): stri
  */
 export function joinAffordanceAriaLabel(partyName: string, timingLabel: string | null): string {
   return `Join ${partyName}'s meeting, ${timingLabel ?? ''}`;
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** VIEWER-LOCAL calendar days between two instants, floor-to-day on each side — so a 23-hour gap
+ *  that crosses local midnight still counts as 1, never a raw elapsed-24h period. Must agree with
+ *  `relativeDay`'s day-key comparison (`components/balo/date/relative-day.ts`), or the countdown
+ *  and a row's "Tomorrow at …" could disagree about the same meeting. */
+function calendarDaysBetween(from: Date, to: Date): number {
+  const dayNumber = (date: Date): number =>
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / MS_PER_DAY;
+  return dayNumber(to) - dayNumber(from);
+}
+
+/**
+ * The Join affordance's countdown label — ALWAYS occupies the slot: "Join now" once the window
+ * is open, otherwise how long until the scheduled start. Beside `joinAffordanceTimingLabel` /
+ * `joinAffordanceAriaLabel` so a future Up next / calendar consumer can adopt the same ladder
+ * without rewording it.
+ *
+ * ⚠ The hour/day boundary is decided by CALENDAR day, not elapsed minutes — a 23-hour gap that
+ * crosses local midnight reads "Join tomorrow", never "Join in 23 hours".
+ *
+ * ⚠ The "Join now" branch reuses `insideCaseJoinWindow` — the same millisecond-exact predicate
+ * `case-nudge.tsx` renders from — rather than rounding `signedMinutesUntilCalendarStart` against
+ * `CASE_JOIN_WINDOW_MINUTES`: that rounding let this label read "Join now" for up to ~30s while
+ * the render was still showing the inactive countdown. The pre-window minutes below use
+ * `Math.ceil`, not `signedMinutesUntilCalendarStart` — that primitive's rounding is pinned to the
+ * analytics contract and must not change; this label alone needed a different one.
+ */
+export function joinCountdownLabel(now: Date, scheduledStart: Date): string {
+  if (insideCaseJoinWindow(now, scheduledStart.toISOString())) return 'Join now';
+  const minutes = Math.ceil((scheduledStart.getTime() - now.getTime()) / MS_PER_MINUTE);
+  if (minutes < 60) return `Join in ${minutes} minutes`;
+  const days = calendarDaysBetween(now, scheduledStart);
+  if (days <= 0) {
+    const hours = Math.round(minutes / 60);
+    return `Join in ${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  return days === 1 ? 'Join tomorrow' : `Join in ${days} days`;
 }
 
 /** The three `now`-derived inputs a rendered meeting needs, as ONE composition of the primitives

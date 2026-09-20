@@ -10,6 +10,7 @@ import {
   meetingContexts,
   meetingGuests,
   meetings,
+  rescheduleProposals,
   type AuditEvent,
 } from '../schema';
 import {
@@ -19,6 +20,7 @@ import {
   meetingFactory,
   meetingGuestFactory,
   projectRequestFactory,
+  rescheduleProposalFactory,
   requestExpertRelationshipFactory,
   userFactory,
 } from '../test/factories';
@@ -1878,6 +1880,109 @@ describe('meetingsRepository.cancel (BAL-410)', () => {
       (row) => row.action === 'meeting.cancelled'
     );
     expect(cancelled[0]?.metadata).toMatchObject({ expertProfileId: null });
+  });
+
+  /** Cancelling a meeting with a live reschedule proposal must void it in the SAME transaction
+   *  — otherwise `RescheduleProposalCard` keeps rendering above the list for a dead meeting. */
+  describe('BAL-421 (D1) — voiding a live reschedule proposal on cancel', () => {
+    it('voids a pending proposal on the meeting, in the SAME transaction as the cancel', async () => {
+      const actor = await userFactory();
+      const { meetingId, window } = await bookedCase();
+      const { proposal } = await rescheduleProposalFactory({
+        meetingId,
+        originalScheduledStart: window.scheduledStart,
+      });
+
+      const result = await meetingsRepository.cancel(meetingId, {
+        actorUserId: actor.id,
+        actorRole: 'client',
+      });
+
+      expect(result.meeting.status).toBe('cancelled');
+      expect(result.voidedProposalCount).toBe(1);
+
+      const [reloaded] = await db
+        .select()
+        .from(rescheduleProposals)
+        .where(eq(rescheduleProposals.id, proposal.id));
+      expect(reloaded?.status).toBe('withdrawn');
+      expect(reloaded?.resolvedByUserId).toBe(actor.id);
+      // The SAME instant as the meeting's own CAS — not a second `new Date()`.
+      expect(reloaded?.resolvedAt?.getTime()).toBe(result.meeting.updatedAt.getTime());
+    });
+
+    it('voids a LAPSED-but-pending proposal too — the population `withdraw` would miss', async () => {
+      const actor = await userFactory();
+      const { meetingId } = await bookedCase();
+      const { proposal } = await rescheduleProposalFactory({
+        meetingId,
+        originalScheduledStart: new Date(Date.now() - HOUR_MS),
+      });
+
+      const result = await meetingsRepository.cancel(meetingId, {
+        actorUserId: actor.id,
+        actorRole: 'client',
+      });
+
+      expect(result.voidedProposalCount).toBe(1);
+      const [reloaded] = await db
+        .select()
+        .from(rescheduleProposals)
+        .where(eq(rescheduleProposals.id, proposal.id));
+      expect(reloaded?.status).toBe('withdrawn');
+    });
+
+    it('returns ZERO and writes nothing when there is no live proposal — the common case', async () => {
+      const { meetingId } = await bookedCase();
+      const result = await meetingsRepository.cancel(meetingId, SYSTEM_CANCEL_AUDIT);
+      expect(result.voidedProposalCount).toBe(0);
+    });
+
+    it('accepts the ADR-1030 system actor (null) the same way the meeting audit row does', async () => {
+      const { meetingId, window } = await bookedCase();
+      const { proposal } = await rescheduleProposalFactory({
+        meetingId,
+        originalScheduledStart: window.scheduledStart,
+      });
+
+      const result = await meetingsRepository.cancel(meetingId, SYSTEM_CANCEL_AUDIT);
+
+      expect(result.voidedProposalCount).toBe(1);
+      const [reloaded] = await db
+        .select()
+        .from(rescheduleProposals)
+        .where(eq(rescheduleProposals.id, proposal.id));
+      expect(reloaded?.resolvedByUserId).toBeNull();
+    });
+
+    /**
+     * A regression guard for "a failed cancel leaves no side effects" — not a witness for which
+     * executor the void runs on. The failure aborts inside `cancelMeetingTx`, before `cancel()`'s
+     * void call is ever reached, so this test is identical whether that call passes `tx`, `db`,
+     * or doesn't exist. The executor-identity property is witnessed by
+     * `invariants/cancel-voids-proposal-on-tx.test.ts` instead, as a source scan.
+     */
+    it('a FAILED cancel rolls back the WHOLE transaction — the proposal survives, still pending', async () => {
+      const { meetingId, window } = await bookedCase();
+      const { proposal } = await rescheduleProposalFactory({
+        meetingId,
+        originalScheduledStart: window.scheduledStart,
+      });
+
+      await expect(
+        meetingsRepository.cancel(meetingId, { actorUserId: randomUUID(), actorRole: 'client' })
+      ).rejects.toThrow();
+
+      const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId));
+      expect(meeting?.status).toBe('scheduled');
+
+      const [reloaded] = await db
+        .select()
+        .from(rescheduleProposals)
+        .where(eq(rescheduleProposals.id, proposal.id));
+      expect(reloaded?.status).toBe('pending');
+      expect(reloaded?.resolvedAt).toBeNull();
+    });
   });
 });
 

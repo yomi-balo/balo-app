@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useId, useState } from 'react';
 import { toast } from 'sonner';
 import * as Sentry from '@sentry/nextjs';
 import { CalendarSync } from 'lucide-react';
@@ -8,8 +8,8 @@ import { Button } from '@/components/ui/button';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { formatLocalShortDate } from '@/lib/format/local-date';
 import { track, BOOKING_EVENTS } from '@/lib/analytics';
-import type { CaseNudgeView } from '@/lib/cases/case-view-types';
 import { isTerminalProposalFailure } from '@/lib/meetings/is-terminal-proposal-failure';
+import type { CaseRescheduleProposalView } from '@/lib/cases/case-view-types';
 import type { RescheduleProposalFailureCode } from '../_actions/_types/case-action-types';
 import {
   acceptRescheduleProposalAction,
@@ -26,10 +26,10 @@ type SimpleProposalAnswerResult =
 /**
  * BAL-411 (§D7 / §D5) — the LIVE reschedule proposal, both lenses.
  *
- * ⚠⚠ THE NUDGE ABOVE IS PURELY INFORMATIONAL (`case-nudge.tsx`'s own docblock) — THIS is where
- * accept / decline / withdraw actually happen. "Pick one of up to three times" does not fit
- * the nudge's two-button shell the way `resolution_ask` does, so it gets its own card, mounted
- * by `case-surface.tsx` whenever `nudge.kind` is one of the two proposal kinds.
+ * ⚠⚠ Takes a plain `proposal: CaseRescheduleProposalView`; `case-surface.tsx` renders one card
+ * per entry in `view.rescheduleProposals`, never derived from which meeting the nudge names.
+ * The nudge above stays purely informational — this is where accept / decline / withdraw
+ * actually happen.
  *
  * CLIENT lens: the ≤3 options as selectable rows + Accept / Keep my time (decline). The §D7
  * slot-lost re-prompt is CLIENT STATE ONLY — a dead option is marked disabled locally; nothing
@@ -41,17 +41,16 @@ type SimpleProposalAnswerResult =
  * All four states (loading / empty / error / success) and a Sonner toast on every mutation
  * (CLAUDE.md). "Empty" does not apply here — the card only mounts when there IS a live
  * proposal to show.
+ *
+ * ⚠⚠ Two live proposals render identical cards and `aria-label`s unless anchored — accepting
+ * the wrong one moves the wrong consultation. `subjectPrefix` / `sectionAriaLabel` below anchor
+ * each card by `proposal.ordinal`, mirroring `CancelConsultationDialog`'s `subjectLine`.
  */
-
-type ProposalNudge = Extract<
-  CaseNudgeView,
-  { kind: 'reschedule_proposal' } | { kind: 'reschedule_proposal_pending' }
->;
 
 export interface RescheduleProposalCardProps {
   engagementId: string;
   lens: 'client' | 'expert';
-  nudge: ProposalNudge;
+  proposal: CaseRescheduleProposalView;
   /** The OTHER party's short name — the expert's first name (client lens) or the client
    *  company (expert lens). Same value `case-nudge.tsx` and `consultation-list.tsx` receive. */
   counterpartyLabel: string;
@@ -73,12 +72,22 @@ function hoursBetween(fromIso: string, toIso: string): number {
   return Math.round(Math.abs(new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000);
 }
 
-/**
- * Item 12 — `nudge.proposedAtIso` is `string | null` (the loader's honest type after the fix);
- * `null` there is structurally unreachable through this card (it only mounts on a nudge the
- * loader already backed with a real proposal DETAIL — see `load-case.ts`), so `0` here is a
- * defensive default, never a fabricated "since when" the way reading `expiresAtIso` was.
- */
+/** `ordinal === null` is structurally unreachable here (every card hosts an upcoming meeting)
+ *  — kept as the honest, defensive fallback. Mirrors `subjectLine` in `cancel-consultation-dialog.tsx`. */
+function subjectPrefix(ordinal: number | null): string {
+  return ordinal === null ? '' : `Consultation ${ordinal} · `;
+}
+
+/** A plain integer, unlike a locale-formatted date, can't hydration-mismatch between server and
+ *  client render — so `ordinal` alone is what's appended to keep two live proposals from
+ *  announcing identically. */
+function sectionAriaLabel(base: string, ordinal: number | null): string {
+  return ordinal === null ? base : `${base} — consultation ${ordinal}`;
+}
+
+/** `proposedAtIso` is `string | null`, unreachable-null here (see `load-case.ts`'s
+ *  `resolveRescheduleProposalViews`), so `0` is a defensive default, never a fabricated
+ *  "since when". */
 function hoursToRespond(proposedAtIso: string | null): number {
   return proposedAtIso === null ? 0 : hoursBetween(proposedAtIso, new Date().toISOString());
 }
@@ -86,7 +95,7 @@ function hoursToRespond(proposedAtIso: string | null): number {
 export function RescheduleProposalCard({
   engagementId,
   lens,
-  nudge,
+  proposal,
   counterpartyLabel,
   onChanged,
   canManageReschedule,
@@ -94,21 +103,15 @@ export function RescheduleProposalCard({
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [deadOptionIds, setDeadOptionIds] = useState<ReadonlySet<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  // `case-surface.tsx` renders one card per live proposal; a shared literal `name` here would
+  // put every mounted card's radios in the same native group (document-scoped), so selecting in
+  // one silently unchecks another's DOM state.
+  const radioGroupId = useId();
 
-  const liveOptions = nudge.options.filter((option) => !deadOptionIds.has(option.optionId));
-  // Item 8 — ONLY the `'reschedule_proposal'` (client-lens) arm carries this; Accept only ever
-  // renders on that arm, so this is always defined when `handleAccept` actually reads it below.
-  const originalScheduledStartIso =
-    nudge.kind === 'reschedule_proposal' ? nudge.originalScheduledStartIso : null;
-  // CONSIDER item — §D7's copy is "Your original time **on {date}** still stands"; the date
-  // had been dropped even though `originalScheduledStartIso` was already on the wire with no
-  // reader. Local-timezone short date — a toast/panel is CLIENT-rendered only, never SSR'd, so
-  // there is no hydration-mismatch concern the way `LocalDateTime`'s own dual formatter guards
-  // against.
-  const originalTimePhrase =
-    originalScheduledStartIso === null
-      ? 'Your original time'
-      : `Your original time on ${formatLocalShortDate(originalScheduledStartIso)}`;
+  const liveOptions = proposal.options.filter((option) => !deadOptionIds.has(option.optionId));
+  // This toast/panel is client-only (never SSR'd), so the local-timezone short date has no
+  // hydration-mismatch concern the way `LocalDateTime`'s own dual formatter guards against.
+  const originalTimePhrase = `Your original time on ${formatLocalShortDate(proposal.originalScheduledStartIso)}`;
 
   const handleSelect = useCallback((optionId: string) => {
     setSelectedOptionId(optionId);
@@ -122,16 +125,16 @@ export function RescheduleProposalCard({
     (async () => {
       const result = await acceptRescheduleProposalAction({
         engagementId,
-        meetingId: nudge.meetingId,
-        proposalId: nudge.proposalId,
+        meetingId: proposal.meetingId,
+        proposalId: proposal.proposalId,
         optionId,
       });
 
       if (!result.success) {
         if (result.code === 'slot_unavailable') {
           track(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_SLOT_LOST, {
-            proposal_id: nudge.proposalId,
-            option_count: nudge.optionCount,
+            proposal_id: proposal.proposalId,
+            option_count: proposal.optionCount,
           });
           const stillLive = liveOptions.filter((option) => option.optionId !== optionId);
           setDeadOptionIds((prev) => new Set(prev).add(optionId));
@@ -157,21 +160,25 @@ export function RescheduleProposalCard({
       }
 
       track(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_ANSWERED, {
-        proposal_id: nudge.proposalId,
+        proposal_id: proposal.proposalId,
         outcome: 'accepted',
-        hours_to_respond: hoursToRespond(nudge.proposedAtIso),
-        option_count: nudge.optionCount,
+        hours_to_respond: hoursToRespond(proposal.proposedAtIso),
+        option_count: proposal.optionCount,
       });
       // Item 8 — hours before the EXISTING start (notice given), matching what BAL-409's
       // `reschedule-dialog.tsx` fires on the same event for `initiated_by: 'client'`. The
       // NEW start would make an `initiated_by` split read as though experts reschedule with
       // far more notice than clients, when it is really measuring a different thing entirely.
-      if (originalScheduledStartIso !== null) {
-        track(BOOKING_EVENTS.RESCHEDULED, {
-          initiated_by: 'expert',
-          hours_before_start: hoursBetween(new Date().toISOString(), originalScheduledStartIso),
-        });
-      }
+      track(BOOKING_EVENTS.RESCHEDULED, {
+        initiated_by: 'expert',
+        hours_before_start: hoursBetween(
+          new Date().toISOString(),
+          proposal.originalScheduledStartIso
+        ),
+        // Committed by accepting a live proposal card, never the nudge's Reschedule button or
+        // a row's menu.
+        source: 'proposal',
+      });
       toast.success('Consultation moved', {
         description: (
           <>
@@ -190,11 +197,10 @@ export function RescheduleProposalCard({
     selectedOptionId,
     submitting,
     engagementId,
-    nudge,
+    proposal,
     liveOptions,
     counterpartyLabel,
     onChanged,
-    originalScheduledStartIso,
     originalTimePhrase,
   ]);
 
@@ -217,8 +223,8 @@ export function RescheduleProposalCard({
       (async () => {
         const result = await action({
           engagementId,
-          meetingId: nudge.meetingId,
-          proposalId: nudge.proposalId,
+          meetingId: proposal.meetingId,
+          proposalId: proposal.proposalId,
         });
 
         if (!result.success) {
@@ -231,10 +237,10 @@ export function RescheduleProposalCard({
         }
 
         track(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_ANSWERED, {
-          proposal_id: nudge.proposalId,
+          proposal_id: proposal.proposalId,
           outcome,
-          hours_to_respond: hoursToRespond(nudge.proposedAtIso),
-          option_count: nudge.optionCount,
+          hours_to_respond: hoursToRespond(proposal.proposedAtIso),
+          option_count: proposal.optionCount,
         });
         toast.success(successMessage);
         setSubmitting(false);
@@ -245,7 +251,7 @@ export function RescheduleProposalCard({
         setSubmitting(false);
       });
     },
-    [submitting, engagementId, nudge, onChanged]
+    [submitting, engagementId, proposal, onChanged]
   );
 
   const handleDecline = useCallback(() => {
@@ -263,17 +269,25 @@ export function RescheduleProposalCard({
   if (lens === 'expert') {
     return (
       <section
-        aria-label="Your reschedule proposal"
+        aria-label={sectionAriaLabel('Your reschedule proposal', proposal.ordinal)}
         className="bg-card border-border mt-3 rounded-xl border px-5 py-4"
       >
         <div className="flex items-center gap-2">
           <CalendarSync size={16} className="text-primary" aria-hidden="true" />
           <h3 className="text-foreground text-sm font-semibold">Waiting on {counterpartyLabel}</h3>
         </div>
+        <p className="text-muted-foreground mt-0.5 text-xs">
+          {subjectPrefix(proposal.ordinal)}currently{' '}
+          <LocalDateTime iso={proposal.originalScheduledStartIso} variant="day-month-time" />
+        </p>
         <ul className="mt-3 list-none space-y-2">
-          {nudge.options.map((option) => (
+          {proposal.options.map((option) => (
             <li key={option.optionId} className="border-border rounded-lg border px-3 py-2 text-sm">
-              <LocalDateTime iso={option.scheduledStartIso} variant="day-month-time" />
+              <LocalDateTime
+                iso={option.scheduledStartIso}
+                variant="day-month-time-range"
+                durationMinutes={proposal.durationMinutes}
+              />
             </li>
           ))}
         </ul>
@@ -301,7 +315,7 @@ export function RescheduleProposalCard({
 
   return (
     <section
-      aria-label="Reschedule proposal"
+      aria-label={sectionAriaLabel('Reschedule proposal', proposal.ordinal)}
       className="bg-card border-border mt-3 rounded-xl border px-5 py-4"
     >
       {/* Item 14 — the NUDGE above already carries the headline ("{counterparty} suggested
@@ -312,6 +326,10 @@ export function RescheduleProposalCard({
         <CalendarSync size={16} className="text-primary" aria-hidden="true" />
         <h3 className="text-foreground text-sm font-semibold">Pick a new time</h3>
       </div>
+      <p className="text-muted-foreground mt-0.5 text-xs">
+        {subjectPrefix(proposal.ordinal)}currently{' '}
+        <LocalDateTime iso={proposal.originalScheduledStartIso} variant="day-month-time" />
+      </p>
 
       {liveOptions.length === 0 ? (
         <p className="text-muted-foreground mt-2 text-sm">
@@ -322,7 +340,7 @@ export function RescheduleProposalCard({
         <fieldset className="mt-3">
           <legend className="sr-only">Choose a new time</legend>
           <div className="space-y-2">
-            {nudge.options.map((option) => {
+            {proposal.options.map((option) => {
               const isDead = deadOptionIds.has(option.optionId);
               return (
                 <label
@@ -338,14 +356,18 @@ export function RescheduleProposalCard({
                       design system instead of the browser default. */}
                   <input
                     type="radio"
-                    name="reschedule-proposal-option"
+                    name={radioGroupId}
                     value={option.optionId}
                     disabled={isDead || submitting}
                     checked={selectedOptionId === option.optionId}
                     onChange={() => handleSelect(option.optionId)}
                     className="accent-primary"
                   />
-                  <LocalDateTime iso={option.scheduledStartIso} variant="day-month-time" />
+                  <LocalDateTime
+                    iso={option.scheduledStartIso}
+                    variant="day-month-time-range"
+                    durationMinutes={proposal.durationMinutes}
+                  />
                   {isDead && <span className="text-xs">no longer free</span>}
                 </label>
               );

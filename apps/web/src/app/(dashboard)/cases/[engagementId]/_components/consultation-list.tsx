@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
+import type { RefObject } from 'react';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -22,6 +23,7 @@ import type {
   CaseConsultationRowView,
   CaseConsultationStateLabel,
 } from '@/lib/cases/case-view-types';
+import { ConsultationRowMenu, type ConsultationRowActionVerb } from './consultation-row-menu';
 
 /**
  * BAL-421 — the consultation list.
@@ -41,10 +43,19 @@ export function ConsultationList({
   consultations,
   lens,
   counterpartyLabel,
+  onRowAction,
+  registerTrigger,
+  headingRef,
 }: Readonly<{
   consultations: readonly CaseConsultationRowView[];
   lens: 'client' | 'expert';
   counterpartyLabel: string;
+  onRowAction: (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => void;
+  /** Keyed by `meetingId`; `case-surface.tsx` uses it to restore focus after a dialog closes
+   *  without success. */
+  registerTrigger: (meetingId: string, node: HTMLButtonElement | null) => void;
+  /** Forwarded to `SectionHead`, the focus target for a row-sourced cancel. */
+  headingRef?: RefObject<HTMLHeadingElement | null>;
 }>): React.JSX.Element {
   /* ⚠ ONE CLOCK FOR THE WHOLE LIST, not a timer inside each date. Without a tick the relative
      labels decay: a case left open overnight keeps calling a call that is now today
@@ -57,6 +68,7 @@ export function ConsultationList({
         icon={Clock}
         title="Consultations"
         meta={`${consultations.length} · newest last`}
+        headingRef={headingRef}
       />
       <ul className="list-none">
         {consultations.map((row, index) => (
@@ -67,6 +79,8 @@ export function ConsultationList({
               counterpartyLabel={counterpartyLabel}
               now={clock?.now}
               last={index === consultations.length - 1}
+              onRowAction={onRowAction}
+              registerTrigger={(node) => registerTrigger(row.meetingId, node)}
             />
           </li>
         ))}
@@ -153,10 +167,16 @@ const FORWARD_LOOKING: ReadonlySet<CaseConsultationStateLabel> = new Set([
  * `missed_call` arm is impersonal for exactly this reason. The party who missed it reads a
  * statement of the event; the other party reads who was absent.
  */
-function stateLabel(state: CaseConsultationStateLabel, lens: 'client' | 'expert'): string {
+/** `pending_reschedule` deliberately keeps its own pill inside the join window too — its
+ *  Cancel-only state there is a different reason than the join window. */
+function stateLabel(
+  state: CaseConsultationStateLabel,
+  lens: 'client' | 'expert',
+  live: boolean
+): string {
   switch (state) {
     case 'scheduled':
-      return 'Upcoming';
+      return live ? 'Starting soon' : 'Upcoming';
     case 'pending_reschedule':
       return 'New times proposed';
     case 'in_progress':
@@ -184,7 +204,7 @@ function stateNote(
 ): string | null {
   switch (state) {
     case 'scheduled':
-      return 'Upcoming · join link in your calendar';
+      return null;
     // BAL-411 — the original time still stands; the proposal card above the list is where
     // either side actually acts. This note only says WHY the badge differs from a plain
     // `scheduled` row — it never restates the option count or the deadline.
@@ -228,6 +248,8 @@ function ConsultationRow({
   counterpartyLabel,
   now,
   last,
+  onRowAction,
+  registerTrigger,
 }: Readonly<{
   row: CaseConsultationRowView;
   lens: 'client' | 'expert';
@@ -235,6 +257,8 @@ function ConsultationRow({
   /** The list's ticking "now", or `undefined` before it resolves. */
   now: Date | undefined;
   last: boolean;
+  onRowAction: (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => void;
+  registerTrigger: (node: HTMLButtonElement | null) => void;
 }>): React.JSX.Element {
   const onViewRecap = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'view_recap', lens });
@@ -242,6 +266,10 @@ function ConsultationRow({
 
   const { icon: Icon, muted, tone } = STATE_PRESENTATION[row.state];
   const note = stateNote(row.state, lens, counterpartyLabel);
+  // Held rows carry the ACTUAL length (`durationMinutes`); upcoming ones have none yet, so they
+  // carry the BOOKED one instead. Every other state shows neither.
+  const minutes =
+    row.durationMinutes ?? (FORWARD_LOOKING.has(row.state) ? row.scheduledMinutes : null);
 
   return (
     <div className={cn('flex items-start gap-3 py-3', last ? undefined : 'border-border border-b')}>
@@ -274,22 +302,19 @@ function ConsultationRow({
               now={now}
             />
           </span>
-          {row.durationMinutes !== null && (
-            <span className="text-muted-foreground text-xs">{row.durationMinutes} min</span>
-          )}
+          {minutes !== null && <span className="text-muted-foreground text-xs">{minutes} min</span>}
           {/* ⚠ Colour on the pill, not the row: shading whole rows turns the card into a stripe
               of tinted blocks and makes the row needing attention compete with its background. */}
           <Badge variant={TONE_VARIANT[tone]} className="text-[11px]">
-            {stateLabel(row.state, lens)}
+            {stateLabel(row.state, lens, row.live)}
           </Badge>
         </div>
 
-        {/* ⚠ THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'`. `recapHrefOf`
-            deliberately emits a href for `cancelled` AND every terminal outcome, and the
-            not-held panel it lands on (`resolveNotHeld`) is precisely where a no-show or
-            missed call explains itself — including its money block. Gating the link on
-            `held` stranded that panel with no route to it from the case. The CONTENT
-            INDICATORS below stay under `held`: a transcript or file count on a call that
+        {/* ⚠ THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'`. `recapHrefOf` emits a
+            href for every terminal OUTCOME (no_show_client, missed_call, outcome_pending), so
+            the not-held panel it lands on (`resolveNotHeld`) is reachable — but not for
+            `cancelled`, whose recap has no money block or artifacts to show. CONTENT
+            INDICATORS below still gate on `held`: a transcript or file count on a call that
             never happened would promise artefacts that cannot exist. */}
         {(row.recapHref !== null || row.state === 'held') && (
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -324,6 +349,8 @@ function ConsultationRow({
 
         {note !== null && <p className="text-muted-foreground mt-0.5 text-xs">{note}</p>}
       </div>
+
+      <ConsultationRowMenu row={row} onAction={onRowAction} registerTrigger={registerTrigger} />
     </div>
   );
 }

@@ -410,8 +410,7 @@ describe('loadCase — canRequestResolution carries the CAPABILITY term, not jus
     // case above. Fix round 1 item 18 added a SEPARATE `canManageReschedule` flag with a
     // DIFFERENT (broader) short-circuit condition (`isOpen` alone — Withdraw eligibility does
     // not care whether a resolution was already asked for), so on an OPEN case it legitimately
-    // calls the capability once on its own; the case is open with no meeting seeded, so
-    // `mayProposeReschedule`'s own call stays skipped (`nextScheduled !== null` is false).
+    // calls the capability once on its own.
     expect(mockHasEngagementCapability).toHaveBeenCalledTimes(1);
   });
 });
@@ -486,13 +485,20 @@ describe('loadCase — no meeting secret and no rate crosses the projection boun
     expect([...Object.keys(row)].sort()).toEqual(
       [
         'actionItemCount',
+        'canCancel',
+        'canInvite',
+        'canProposeReschedule',
+        'canReschedule',
         'durationMinutes',
         'fileCount',
+        'guestCount',
         'hasRecording',
         'hasTranscript',
+        'live',
         'meetingId',
         'ordinal',
         'recapHref',
+        'scheduledMinutes',
         'scheduledStartIso',
         'startedAtIso',
         'state',
@@ -853,11 +859,6 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
       optionCount: 2,
       originalScheduledStartIso: SCHEDULED_START.toISOString(),
       expiresAtIso: '2026-08-20T09:00:00.000Z',
-      proposedAtIso: '2026-08-13T09:00:00.000Z',
-      options: [
-        { optionId: 'opt-1', scheduledStartIso: '2026-08-21T10:00:00.000Z' },
-        { optionId: 'opt-2', scheduledStartIso: '2026-08-22T10:00:00.000Z' },
-      ],
       // BAL-567 — `findNamesByIds` is seeded EMPTY in the default fixture, so the rule falls
       // back to the expert PARTY label rather than inventing a person. The dedicated
       // attribution describe below drives the readable-name arms.
@@ -880,11 +881,6 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
       meetingId: 'm1',
       optionCount: 2,
       expiresAtIso: '2026-08-20T09:00:00.000Z',
-      proposedAtIso: '2026-08-13T09:00:00.000Z',
-      options: [
-        { optionId: 'opt-1', scheduledStartIso: '2026-08-21T10:00:00.000Z' },
-        { optionId: 'opt-2', scheduledStartIso: '2026-08-22T10:00:00.000Z' },
-      ],
       actorLabel: 'Amara Okafor',
     });
   });
@@ -925,7 +921,7 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
   });
 });
 
-describe('loadCase — canProposeReschedule (BAL-411)', () => {
+describe('loadCase — canProposeReschedule axis resolution (BAL-411)', () => {
   const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
 
   function scheduledMeeting(id = 'm1'): Record<string, unknown> {
@@ -942,7 +938,7 @@ describe('loadCase — canProposeReschedule (BAL-411)', () => {
     m.listMeetings.mockResolvedValue([scheduledMeeting()]);
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: true });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: true });
   });
 
   it('is FALSE when a live proposal is already outstanding on the next meeting', async () => {
@@ -959,13 +955,15 @@ describe('loadCase — canProposeReschedule (BAL-411)', () => {
     ]);
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
   });
 
-  it('is FALSE when nothing is booked — there is no meeting to propose a move on', async () => {
+  it('is FALSE when nothing is booked — there is no UPCOMING meeting to propose a move on', async () => {
+    // `seed()`'s default meeting is `status: 'ended'` — a row still exists (past consultation
+    // history), it is simply not movable.
     seed({ access: { lens: 'expert' } });
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
     expect(view.nudge).toEqual({ kind: 'nothing_booked' });
   });
 
@@ -977,7 +975,7 @@ describe('loadCase — canProposeReschedule (BAL-411)', () => {
     m.listMeetings.mockResolvedValue([scheduledMeeting()]);
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
   });
 
   it('is FALSE when the engagement axis says no', async () => {
@@ -986,13 +984,13 @@ describe('loadCase — canProposeReschedule (BAL-411)', () => {
     mockHasEngagementCapability.mockResolvedValue(false);
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
   });
 });
 
 // Item 18 (security LOW) — `canManageReschedule` is the WITHDRAW holder set, deliberately
-// separate from `canProposeReschedule`: it must stay TRUE precisely when a live proposal
-// exists (the one case `canProposeReschedule` is always FALSE), so it needs its OWN coverage
+// separate from the per-row `canProposeReschedule`: it must stay TRUE precisely when a live
+// proposal exists (the one case that row flag is always FALSE), so it needs its OWN coverage
 // rather than inheriting the sibling's.
 describe('loadCase — canManageReschedule (fix round 1 item 18)', () => {
   const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
@@ -1024,7 +1022,8 @@ describe('loadCase — canManageReschedule (fix round 1 item 18)', () => {
     });
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false, canManageReschedule: true });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
+    expect(view).toMatchObject({ canManageReschedule: true });
   });
 
   it('is FALSE on a CLOSED case, without resolving any capability for it', async () => {
@@ -1311,11 +1310,15 @@ describe('loadCase — the surface identity', () => {
 });
 
 /**
- * BAL-410 — `canCancelConsultation` lives on `CaseSurfaceViewBase`, so BOTH lenses carry it —
- * but each resolves it on its OWN AXIS. That split is the whole point of this block: a shared
- * flag would be the "lens alone is authorization" mistake CLAUDE.md forbids.
+ * BAL-410 — the cancel capability resolution BOTH lenses share, each on its OWN AXIS. It used
+ * to also serialize as the case-level `canCancelConsultation`; this PR's per-row generalization
+ * (BAL-410's own row `canCancel`, superseding the single-`nextScheduled` case-level flag — see
+ * `case-surface.tsx`'s ALSO-FIX item 8) made that field dead, so these cases now read the row
+ * the SAME axis resolution feeds (`view.consultations[0].canCancel`) rather than a field that no
+ * longer exists on the wire. That split is still the whole point of this block: a shared flag
+ * would be the "lens alone is authorization" mistake CLAUDE.md forbids.
  */
-describe('loadCase — canCancelConsultation (BAL-410)', () => {
+describe('loadCase — canCancel axis resolution (BAL-410)', () => {
   const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
 
   function scheduledMeeting(id = 'm1'): Record<string, unknown> {
@@ -1334,7 +1337,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: true });
+      expect(view.consultations[0]).toMatchObject({ canCancel: true });
     });
 
     it('asks the MEMBERSHIP axis, and NOT the engagement axis', async () => {
@@ -1355,15 +1358,17 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
 
-    it('is FALSE when nothing is booked — there is no meeting to cancel', async () => {
+    it('is FALSE when nothing is booked — there is no UPCOMING meeting to cancel', async () => {
+      // `seed()`'s default meeting is `status: 'ended'` — a row still exists (past consultation
+      // history), it is simply not cancellable.
       seed({ access: { lens: 'client' } });
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
 
     /** ⚠ The short-circuit invariant: a closed case resolves NO capability call at all. */
@@ -1377,7 +1382,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
       expect(mockHasCapability).not.toHaveBeenCalled();
     });
   });
@@ -1389,7 +1394,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: true });
+      expect(view.consultations[0]).toMatchObject({ canCancel: true });
     });
 
     it('asks the ENGAGEMENT axis, and NOT the membership axis', async () => {
@@ -1415,15 +1420,15 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
 
-    it('is FALSE when nothing is booked', async () => {
+    it('is FALSE when nothing is booked — there is no UPCOMING meeting', async () => {
       seed({ access: { lens: 'expert' } });
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
 
     it('is FALSE on a CLOSED case, without resolving any capability for it', async () => {
@@ -1436,7 +1441,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
       expect(mockHasEngagementCapability).not.toHaveBeenCalled();
     });
   });
@@ -1452,9 +1457,9 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
    *
    * ⚠ AND NO CANCEL CAPABILITY IS RESOLVED, on the same short-circuit invariant as a closed
    * case: the status term sits ahead of the `await` in both arms. On the client arm that means
-   * ZERO membership reads (cancel is its only one); on the expert arm it means THREE engagement
-   * reads instead of four — the other three flags (`canRequestResolution`,
-   * `canProposeReschedule`, `canManageReschedule`) are unaffected by cancellability and still run.
+   * ZERO membership reads (cancel is its only one); on the expert arm it means TWO engagement
+   * reads instead of three — the other two flags (`canRequestResolution`, `canManageReschedule`)
+   * are unaffected by cancellability and still run.
    */
   describe('once the meeting has STARTED — the affordance collapses on BOTH arms', () => {
     it.each(['waiting_for_participants', 'in_progress'] as const)(
@@ -1466,13 +1471,13 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
         const view = await loadOrThrow();
 
-        expect(view).toMatchObject({ canCancelConsultation: false });
+        expect(view.consultations[0]).toMatchObject({ canCancel: false });
         expect(mockHasCapability).not.toHaveBeenCalled();
       }
     );
 
     it.each(['waiting_for_participants', 'in_progress'] as const)(
-      'is FALSE for the EXPERT on a %s meeting, without the fourth engagement read',
+      'is FALSE for the EXPERT on a %s meeting, without the third engagement read',
       async (status) => {
         seed({ access: { lens: 'expert' } });
         m.listMeetings.mockResolvedValue([meeting('m1', { status, outcome: null, endedAt: null })]);
@@ -1480,10 +1485,10 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
         const view = await loadOrThrow();
 
-        expect(view).toMatchObject({ canCancelConsultation: false });
-        // 3, not 4 — the cancel term short-circuits ahead of its `await`; the other three
+        expect(view.consultations[0]).toMatchObject({ canCancel: false });
+        // 2, not 3 — the cancel term short-circuits ahead of its `await`; the other two
         // engagement flags are unaffected by cancellability and still resolve.
-        expect(mockHasEngagementCapability).toHaveBeenCalledTimes(3);
+        expect(mockHasEngagementCapability).toHaveBeenCalledTimes(2);
       }
     );
 
@@ -1501,7 +1506,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
       const view = await loadOrThrow();
 
       expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm1' });
-      expect(view.canCancelConsultation).toBe(false);
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
   });
 });
@@ -1660,5 +1665,192 @@ describe('loadCase — actor attribution (BAL-567)', () => {
 
     expect(view.nudge).toMatchObject({ kind: 'upcoming', joinPath: '/meetings/m1/call' });
     expect(JSON.stringify(view.nudge)).not.toContain('/join/m/');
+  });
+});
+
+// ── per-row action flags widen beyond the NEXT meeting ─────────────────────────────────────
+
+/** `someUpcomingMeetingIsCancellable` is only the case-level short-circuit; `mapCaseConsultations`'s
+ *  own per-row predicate decides each row's own flag. */
+describe('loadCase — row action flags widen beyond the NEXT meeting (BAL-421)', () => {
+  const NEXT_START = new Date('2026-08-12T11:50:00Z');
+  const ROW2_START = new Date('2026-08-20T10:00:00Z');
+
+  function inProgressNext(): Record<string, unknown> {
+    return meeting('m-next', {
+      status: 'in_progress',
+      outcome: null,
+      scheduledStart: NEXT_START,
+      startedAt: new Date('2026-08-12T11:51:00Z'),
+    });
+  }
+  function scheduledRow2(): Record<string, unknown> {
+    return meeting('m-row2', {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: ROW2_START,
+    });
+  }
+
+  it('CLIENT — row #2 gets canCancel/canReschedule TRUE even though the NEXT meeting cannot be', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([inProgressNext(), scheduledRow2()]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm-next' });
+    const row2 = view.consultations.find((row) => row.meetingId === 'm-row2');
+    expect(row2).toMatchObject({ canCancel: true, canReschedule: true });
+    const nextRow = view.consultations.find((row) => row.meetingId === 'm-next');
+    expect(nextRow).toMatchObject({ canCancel: false, canReschedule: false });
+  });
+
+  it('EXPERT — row #2 gets canCancel/canProposeReschedule TRUE for the same reason', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([inProgressNext(), scheduledRow2()]);
+
+    const view = await loadOrThrow();
+
+    const row2 = view.consultations.find((row) => row.meetingId === 'm-row2');
+    expect(row2).toMatchObject({ canCancel: true, canProposeReschedule: true });
+  });
+
+  it('resolves the capability ONCE for the whole case, not once per row', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([inProgressNext(), scheduledRow2()]);
+    mockHasCapability.mockClear();
+
+    await loadOrThrow();
+
+    expect(mockHasCapability).toHaveBeenCalledTimes(1);
+  });
+
+  it('every row flag is FALSE when the case-level capability itself says no', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([scheduledRow2()]);
+    mockHasCapability.mockResolvedValue(false);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations[0]).toMatchObject({ canCancel: false, canReschedule: false });
+  });
+});
+
+// ── the proposal-hosting widening ───────────────────────────────────────────────────────────
+
+describe('loadCase — rescheduleProposals hosts a card per upcoming meeting (Ruling 4 / D4)', () => {
+  const NEXT_START = new Date('2026-08-20T10:00:00Z');
+  const ROW2_START = new Date('2026-08-25T10:00:00Z');
+
+  function nextMeeting(): Record<string, unknown> {
+    return meeting('m-next', {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: NEXT_START,
+    });
+  }
+  function row2Meeting(): Record<string, unknown> {
+    return meeting('m-row2', {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: ROW2_START,
+    });
+  }
+  function proposalSummary(
+    meetingId: string,
+    proposalId: string,
+    originalScheduledStart: Date
+  ): Record<string, unknown> {
+    return {
+      proposalId,
+      meetingId,
+      optionCount: 1,
+      originalScheduledStart,
+      expiresAt: new Date('2026-08-19T09:00:00Z'),
+      proposedByUserId: EXPERT_USER_ID,
+    };
+  }
+  function proposalDetail(proposalId: string): Record<string, unknown> {
+    return {
+      proposal: { id: proposalId, createdAt: new Date('2026-08-13T09:00:00Z') },
+      options: [{ id: `${proposalId}-opt`, scheduledStart: new Date('2026-08-21T10:00:00Z') }],
+    };
+  }
+
+  it('a live proposal on a NON-next meeting still gets a card — the "see above" fix', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([nextMeeting(), row2Meeting()]);
+    m.findLiveProposals.mockResolvedValue([proposalSummary('m-row2', 'proposal-row2', ROW2_START)]);
+    m.findProposalForAnswer.mockResolvedValue(proposalDetail('proposal-row2'));
+
+    const view = await loadOrThrow();
+
+    // The NUDGE still names the next meeting — the proposal is NOT on it.
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm-next' });
+    expect(view.rescheduleProposals).toHaveLength(1);
+    expect(view.rescheduleProposals[0]).toMatchObject({
+      proposalId: 'proposal-row2',
+      meetingId: 'm-row2',
+    });
+  });
+
+  it('GHOST-CARD BUG (Ruling 4) — a live proposal on an ALREADY-CANCELLED meeting gets NO card', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([
+      meeting('m-cancelled', { status: 'cancelled', outcome: null, scheduledStart: ROW2_START }),
+    ]);
+    m.findLiveProposals.mockResolvedValue([
+      proposalSummary('m-cancelled', 'proposal-1', ROW2_START),
+    ]);
+    // Without this, `seed()`'s default `findProposalForAnswer` mock makes `found === undefined`
+    // regardless of the `caseConsultationIsUpcoming` gate under test — this ensures the gate,
+    // not the mock default, is what produces the empty list.
+    m.findProposalForAnswer.mockResolvedValue(proposalDetail('proposal-1'));
+
+    const view = await loadOrThrow();
+
+    expect(view.rescheduleProposals).toEqual([]);
+  });
+
+  it('reuses the nudge’s already-resolved actor label rather than a second findNamesByIds call', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([nextMeeting()]);
+    m.findLiveProposals.mockResolvedValue([proposalSummary('m-next', 'proposal-next', NEXT_START)]);
+    m.findProposalForAnswer.mockResolvedValue(proposalDetail('proposal-next'));
+    m.findNames.mockResolvedValue([{ id: EXPERT_USER_ID, firstName: 'Amara', lastName: 'Okafor' }]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'reschedule_proposal', actorLabel: 'Amara' });
+    expect(view.rescheduleProposals).toHaveLength(1);
+    expect(view.rescheduleProposals[0]?.actorLabel).toBe('Amara');
+    expect(m.findNames).toHaveBeenCalledTimes(1);
+  });
+
+  it('is EMPTY in the common case — no live proposal anywhere', async () => {
+    const view = await loadOrThrow();
+    expect(view.rescheduleProposals).toEqual([]);
+  });
+
+  it('carries the MEETING’s booked length, not a fabricated per-option one', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([
+      meeting('m-next', {
+        status: 'scheduled',
+        outcome: null,
+        startedAt: null,
+        scheduledStart: NEXT_START,
+        scheduledEnd: new Date('2026-08-20T10:30:00Z'),
+      }),
+    ]);
+    m.findLiveProposals.mockResolvedValue([proposalSummary('m-next', 'proposal-next', NEXT_START)]);
+    m.findProposalForAnswer.mockResolvedValue(proposalDetail('proposal-next'));
+
+    const view = await loadOrThrow();
+
+    expect(view.rescheduleProposals[0]?.durationMinutes).toBe(30);
   });
 });

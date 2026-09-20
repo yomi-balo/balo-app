@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { AlertTriangle, Info, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -53,6 +53,8 @@ interface SectionHeadProps {
   title: string;
   /** Right-aligned muted meta ("AI-generated", "2/3 done", a file count). */
   meta?: string;
+  /** For moving focus here after removing the control the viewer was just on. */
+  headingRef?: RefObject<HTMLHeadingElement | null>;
 }
 
 /**
@@ -69,12 +71,19 @@ export function SectionHead({
   icon: Icon,
   title,
   meta,
+  headingRef,
 }: Readonly<SectionHeadProps>): React.JSX.Element {
   return (
     <div className="mb-2.5 flex items-baseline justify-between gap-3">
       <div className="flex items-center gap-2">
         <Icon size={15} className="text-muted-foreground" aria-hidden="true" />
-        <h2 className="text-foreground text-sm font-semibold">{title}</h2>
+        <h2
+          ref={headingRef}
+          tabIndex={headingRef ? -1 : undefined}
+          className="text-foreground text-sm font-semibold outline-none"
+        >
+          {title}
+        </h2>
       </div>
       {meta && <span className="text-muted-foreground text-xs">{meta}</span>}
     </div>

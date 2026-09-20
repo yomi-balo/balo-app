@@ -1,9 +1,22 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import { render, screen } from '@/test/utils';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseNudgeView } from '@/lib/cases/case-view-types';
 import { CaseNudge } from './case-nudge';
+
+/**
+ * `useUpcomingJoinClock` calls `useRouter()` unconditionally (it owns the once-only refresh on
+ * the crossing), so every `'upcoming'`-kind render needs the app router mocked, not only the
+ * crossing tests. N8 idiom, copied from `case-surface.test.tsx`: a shared, hoisted spy so tests
+ * can assert `router.refresh()` fired, which a fresh `vi.fn()` per `useRouter()` call could not.
+ */
+const { mockRouterRefresh } = vi.hoisted(() => ({ mockRouterRefresh: vi.fn() }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: mockRouterRefresh }),
+}));
 
 /**
  * BAL-567 — `JoinMeetingButton` navigates with `globalThis.location.assign`, and jsdom's
@@ -44,25 +57,40 @@ const BASE = {
   bookAgainHref: '/experts/amara-okafor',
   onMarkResolved: vi.fn(),
   onDismissAsk: vi.fn(),
+  // Defaulted on; tests that need the gated-off case override explicitly with
+  // `canReschedule={false}`.
+  canReschedule: true,
   onReschedule: vi.fn(),
   canProposeReschedule: false,
   onProposeReschedule: vi.fn(),
-  // BAL-410 — defaulted OFF, so every pre-existing case still asserts a nudge with no Cancel
-  // button and the new affordance has to be opted into explicitly.
-  canCancel: false,
-  onCancel: vi.fn(),
   busy: false,
 };
 
 const JOIN_PATH = '/meetings/m1/call';
 
+/** An ISO stamp `offsetMs` from the real now — never a fixed literal date, which `insideCase-
+ *  JoinWindow`'s "no closing bound" would silently turn permanently live the moment real time
+ *  passes it (reference_hardcoded_date_fixtures_are_time_bombs). */
+function isoFromNow(offsetMs: number): string {
+  return new Date(Date.now() + offsetMs).toISOString();
+}
+
+const THREE_DAYS_MS = 3 * 24 * 60 * 60_000;
+
 const UPCOMING: CaseNudgeView = {
   kind: 'upcoming',
   meetingId: 'm1',
-  scheduledStartIso: '2026-09-01T10:00:00Z',
+  scheduledStartIso: isoFromNow(THREE_DAYS_MS),
   live: false,
   durationMinutes: 60,
   joinPath: JOIN_PATH,
+};
+
+/** Inside the join window on both the server flag AND the clock — the ordinary live case. */
+const UPCOMING_LIVE: CaseNudgeView = {
+  ...UPCOMING,
+  scheduledStartIso: isoFromNow(5 * 60_000),
+  live: true,
 };
 
 /**
@@ -226,8 +254,6 @@ describe('CaseNudge — the four attributed arms name the ACTOR, never the count
         optionCount: 2,
         originalScheduledStartIso: '2026-09-01T10:00:00Z',
         expiresAtIso: '2026-09-01T09:00:00Z',
-        proposedAtIso: '2026-08-30T09:00:00Z',
-        options: [],
         actorLabel: 'Priya @ CloudPeak',
       },
       lens: 'client',
@@ -242,8 +268,6 @@ describe('CaseNudge — the four attributed arms name the ACTOR, never the count
         meetingId: 'm1',
         optionCount: 2,
         expiresAtIso: '2026-09-01T09:00:00Z',
-        proposedAtIso: '2026-08-30T09:00:00Z',
-        options: [],
         actorLabel: 'Priya',
       },
       lens: 'expert',
@@ -324,7 +348,7 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
    * the opposite, on BOTH sides.
    */
   it.each(LENSES)('renders JOIN inside the window, as a <button>, %s lens', (lens) => {
-    render(<CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens={lens} />);
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens={lens} />);
     const join = screen.getByRole('button', { name: /^Join .*meeting/i });
     expect(join).toBeInTheDocument();
     // ⚠ A `<button>`, NEVER AN `href` — `join-link-never-writes.test.ts` is the source-side half
@@ -334,18 +358,35 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
     // The stale instruction is gone: BAL-475 ships client invites, and the button is the nearer
     // door either way (decisions D5).
     expect(screen.queryByText(/join link is in your calendar/i)).not.toBeInTheDocument();
+    // "Join now" replaces "Join call".
+    expect(join).toHaveTextContent('Join now');
+    expect(screen.queryByText('Join call')).not.toBeInTheDocument();
+    // The slot holds only the ONE active control — no leftover inactive countdown beside it.
+    expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
   });
 
-  it.each(LENSES)('renders NO join button OUTSIDE the window, %s lens', (lens) => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens={lens} />);
-    expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
-  });
+  /** The join slot never empties: outside the window it is `JoinCountdown`, an inactive but
+   *  focusable control, never a live `JoinMeetingButton`. */
+  it.each(LENSES)(
+    'renders an inactive countdown, never a live Join, OUTSIDE the window, %s lens',
+    (lens) => {
+      render(<CaseNudge {...BASE} nudge={UPCOMING} lens={lens} />);
+      expect(screen.queryByRole('button', { name: /^Join .*meeting/i })).not.toBeInTheDocument();
+      const countdown = screen.getByTestId('join-countdown');
+      expect(countdown).toBeInTheDocument();
+      expect(countdown).toHaveTextContent('Join in 3 days');
+      expect(countdown).toHaveAttribute('aria-disabled', 'true');
+      // `aria-disabled`, NEVER `disabled` — "in 3 days" is information, so it stays focusable.
+      expect(countdown).not.toBeDisabled();
+      expect(countdown).toHaveAccessibleDescription(
+        `Opens ${CASE_JOIN_WINDOW_MINUTES} minutes before the start.`
+      );
+    }
+  );
 
   it('navigates to the member call path and tracks the click, never rendering the path', async () => {
     const user = userEvent.setup();
-    const { container } = render(
-      <CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens="client" />
-    );
+    const { container } = render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="client" />);
 
     expect(container.innerHTML).not.toContain(JOIN_PATH);
 
@@ -360,7 +401,7 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
 
   it('tracks the EXPERT side under its own lens value', async () => {
     const user = userEvent.setup();
-    render(<CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens="expert" />);
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="expert" />);
     await user.click(screen.getByRole('button', { name: /^Join .*meeting/i }));
     expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASE_ACTION_CLICKED, {
       action: 'join',
@@ -379,12 +420,28 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
   });
 
   it('does NOT render the (client) reschedule CTA for the expert lens — it gets its own', () => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule={true} />);
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={UPCOMING}
+        lens="expert"
+        canReschedule={false}
+        canProposeReschedule={true}
+      />
+    );
     expect(screen.queryByRole('button', { name: /^reschedule$/i })).not.toBeInTheDocument();
   });
 
-  it('does NOT render the reschedule CTA while the consultation is LIVE', () => {
-    render(<CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens="client" />);
+  // Join-window exclusion is the caller's job, not derived here — `mapCaseConsultations` is
+  // what actually excludes it. `canReschedule={false}` alongside a live nudge is the shape the
+  // real caller would produce.
+  it('does NOT render the reschedule CTA when canReschedule is false, even on a live nudge', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="client" canReschedule={false} />);
+    expect(screen.queryByRole('button', { name: /reschedule/i })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the reschedule CTA for the client lens when canReschedule is false', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" canReschedule={false} />);
     expect(screen.queryByRole('button', { name: /reschedule/i })).not.toBeInTheDocument();
   });
 
@@ -395,17 +452,28 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
    * all — never a disabled one.
    */
   it('renders "Propose a new time" for the EXPERT lens when canProposeReschedule is true', () => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule={true} />);
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={UPCOMING}
+        lens="expert"
+        canReschedule={false}
+        canProposeReschedule={true}
+      />
+    );
     expect(screen.getByRole('button', { name: 'Propose a new time' })).toBeInTheDocument();
   });
 
   it('renders NO propose CTA for the expert when canProposeReschedule is false', () => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule={false} />);
-    expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
-  });
-
-  it('does NOT render the propose CTA for the CLIENT lens, even when the flag is true', () => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" canProposeReschedule={true} />);
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={UPCOMING}
+        lens="expert"
+        canReschedule={false}
+        canProposeReschedule={false}
+      />
+    );
     expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
   });
 
@@ -413,8 +481,9 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
     render(
       <CaseNudge
         {...BASE}
-        nudge={{ ...UPCOMING, live: true }}
+        nudge={UPCOMING_LIVE}
         lens="expert"
+        canReschedule={false}
         canProposeReschedule={true}
       />
     );
@@ -429,6 +498,7 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
         {...BASE}
         nudge={UPCOMING}
         lens="expert"
+        canReschedule={false}
         canProposeReschedule={true}
         onProposeReschedule={onProposeReschedule}
       />
@@ -457,11 +527,6 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
  * countdown crosses zero, where "starts in 0 minutes" would read as a broken clock.
  */
 describe('CaseNudge — a LIVE consultation counts down, and never past zero', () => {
-  /** An ISO stamp `offsetMs` from the real now, so the effect computes a known minute count. */
-  function isoFromNow(offsetMs: number): string {
-    return new Date(Date.now() + offsetMs).toISOString();
-  }
-
   it('singularises exactly one minute', () => {
     render(
       <CaseNudge
@@ -497,16 +562,28 @@ describe('CaseNudge — a LIVE consultation counts down, and never past zero', (
     expect(container.textContent ?? '').not.toContain('starts in');
   });
 
-  it('states the absolute time instead when the consultation is NOT live', () => {
+  it('states the absolute time instead when the consultation is genuinely NOT live', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" />);
+    expect(screen.queryByText(/starts in/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Next consultation/i)).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠⚠ THE SERVER-SUPPLIED `live` IS SEEDED ONLY FOR FIRST PAINT, NEVER TRUSTED AFTER. Here it
+   * is stale (`live: false`) but the scheduled start is already inside the window — the clock
+   * must correct it on its own next tick, or a page left open across the boundary would sit
+   * with a dead countdown forever.
+   */
+  it('self-corrects to live when the server flag is stale — a page left open across the boundary', () => {
     render(
       <CaseNudge
         {...BASE}
-        nudge={{ ...UPCOMING, scheduledStartIso: isoFromNow(60_000) }}
+        nudge={{ ...UPCOMING, scheduledStartIso: isoFromNow(5 * 60_000), live: false }}
         lens="client"
       />
     );
-    expect(screen.queryByText(/starts in/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/Next consultation/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
   });
 });
 
@@ -581,88 +658,174 @@ describe('CaseNudge — the resolution ask is the only interactive nudge', () =>
   });
 });
 
-// ── BAL-410 — the Cancel affordance ───────────────────────────────────────────
+// ── the nudge never offers Cancel ─────────────────────────────────────────────
 
-describe('CaseNudge — the Cancel affordance (BAL-410)', () => {
-  it.each(LENSES)('does not render Cancel for the %s lens when canCancel is false', (lens) => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens={lens} canCancel={false} />);
-
+/**
+ * Cancel has no seat in the nudge at all — it lives only on the row's kebab
+ * (`consultation-row-menu.tsx`), including for the nudge's own meeting, and the row's Cancel is
+ * deliberately not join-window-gated. There is no prop left to opt into a nudge Cancel button
+ * with, so this is a blanket absence check across lens and liveness rather than a flag table.
+ */
+describe('CaseNudge — never renders a Cancel affordance', () => {
+  it.each(LENSES)('renders no Cancel button on an upcoming nudge, %s lens', (lens) => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens={lens} />);
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
   });
 
-  it.each(LENSES)('renders Cancel for the %s lens when canCancel is true', (lens) => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens={lens} canCancel />);
-
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-  });
-
-  it('calls onCancel when clicked', async () => {
-    const user = userEvent.setup();
-    const onCancel = vi.fn();
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" canCancel onCancel={onCancel} />);
-
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
-
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
-  /**
-   * ⚠⚠ THE §10.3 DIVERGENCE. Cancel renders INSIDE the join window where Reschedule and Propose
-   * deliberately do not: `live` starts 15 minutes before the start, and the product promise is
-   * "free until scheduled start". The server's guard is STATE-based, so this is the client
-   * MATCHING the server, not loosening it.
-   */
-  it.each(LENSES)('⚠ renders Cancel for the %s lens even when the nudge is LIVE', (lens) => {
-    render(
-      <CaseNudge
-        {...BASE}
-        nudge={{ ...UPCOMING, live: true }}
-        lens={lens}
-        canCancel
-        canProposeReschedule
-      />
-    );
-
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-    // …and the two MOVE actions are correctly hidden inside that same window.
-    expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
-  });
-
-  it('renders BOTH actions on the client lens, with Reschedule first', () => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" canCancel />);
-
-    const buttons = screen
-      .getAllByRole('button')
-      .map((button) => button.textContent)
-      .filter((label) => label === 'Reschedule' || label === 'Cancel');
-    expect(buttons).toEqual(['Reschedule', 'Cancel']);
-  });
-
-  it('renders BOTH actions on the expert lens, with Propose first', () => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule canCancel />);
-
-    const buttons = screen
-      .getAllByRole('button')
-      .map((button) => button.textContent)
-      .filter((label) => label === 'Propose a new time' || label === 'Cancel');
-    expect(buttons).toEqual(['Propose a new time', 'Cancel']);
-  });
-
-  it('renders Cancel alone when no move action applies', () => {
-    // An expert with no `canProposeReschedule` still gets Cancel — the two are independent
-    // holder sets resolved by two independent server-side reads.
-    render(
-      <CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule={false} canCancel />
-    );
-
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
-  });
-
-  it('does not render Cancel on a non-"upcoming" nudge, whatever the flag says', () => {
-    render(<CaseNudge {...BASE} nudge={{ kind: 'nothing_booked' }} lens="client" canCancel />);
-
+  it.each(LENSES)('renders no Cancel button on a LIVE upcoming nudge, %s lens', (lens) => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens={lens} />);
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+
+  it('renders only Join on a live nudge — no Cancel beside it', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="client" />);
+    const labels = screen.getAllByRole('button').map((button) => button.textContent);
+    expect(labels).not.toContain('Cancel');
+  });
+});
+
+/**
+ * The join slot never empties, and the clock (not the server-resolved `nudge.live`) owns the
+ * crossing. `useUpcomingJoinClock` ticks unconditionally; these cases drive the tick.
+ */
+describe('CaseNudge — the clock owns the join window crossing', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('crosses from countdown to Join on its own tick, announces once, and refreshes once', () => {
+    // 20 seconds outside the window — one 30s tick later it has opened.
+    const nudge = {
+      ...UPCOMING,
+      scheduledStartIso: isoFromNow(CASE_JOIN_WINDOW_MINUTES * 60_000 + 20_000),
+      live: false,
+    };
+    render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
+
+    // 20s outside the window rounds to the SAME minute as the boundary itself, so a
+    // rounded-minute comparison reads this instant as "Join now" while the control is still
+    // rendering aria-disabled — the label must say WHEN it opens instead.
+    expect(screen.getByTestId('join-countdown')).toHaveTextContent(
+      `Join in ${CASE_JOIN_WINDOW_MINUTES + 1} minutes`
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('');
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('You can join now.');
+    expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+
+    // Further ticks — still crossed, never announced or refreshed again.
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('status').map((node) => node.textContent)).toEqual([
+      'You can join now.',
+    ]);
+  });
+
+  it('never fires the crossing side effects when already live at mount', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="client" />);
+    expect(screen.getByRole('status')).toHaveTextContent('');
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
+
+  /** A device clock running behind the server's must never HIDE Join once the server already
+   *  considers the meeting joinable — the server's word only ever ADDS liveness. */
+  it('renders Join, not the countdown, when the server says live but the device clock disagrees', () => {
+    const nudge = {
+      ...UPCOMING,
+      // 20 minutes out by this (behind) device clock — outside the window on the clock alone.
+      scheduledStartIso: isoFromNow(20 * 60_000),
+      live: true,
+    };
+    render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
+
+    const join = screen.getByRole('button', { name: /^Join .*meeting/i });
+    expect(join).toBeInTheDocument();
+    expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
+    // The visible label must agree with liveness too — not just the accessible name — or a
+    // device clock running behind the server's shows an active button reading a countdown.
+    expect(join).toHaveTextContent('Join now');
+  });
+});
+
+/**
+ * `joinCountdownLabel`'s ladder itself, exhaustively including the calendar-day boundary, is
+ * pinned in `join-window.test.ts`; this only checks the nudge renders whatever it returns, in
+ * the right slot. `now` is pinned to a fixed noon so the "tomorrow" case can't flip to "in 2
+ * days" depending on what wall-clock hour the suite happens to run at.
+ */
+describe('CaseNudge — the countdown label renders in the inactive slot', () => {
+  const NOW = new Date('2026-01-06T12:00:00.000Z');
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['Join now', CASE_JOIN_WINDOW_MINUTES * 60_000],
+    // Just outside the window — the boundary the inactive-vs-live disagreement lived on. Must
+    // NOT read "Join now": `insideCaseJoinWindow` (the render's own liveness predicate) is
+    // already false here, one second past the inclusive boundary.
+    [`Join in ${CASE_JOIN_WINDOW_MINUTES + 1} minutes`, CASE_JOIN_WINDOW_MINUTES * 60_000 + 1_000],
+    ['Join in 40 minutes', 40 * 60_000],
+    ['Join in 3 hours', 3 * 60 * 60_000 + 30_000],
+    ['Join tomorrow', 25 * 60 * 60_000],
+    ['Join in 3 days', 3 * 24 * 60 * 60_000],
+  ])('renders "%s"', (label, offsetMs) => {
+    const nudge = {
+      ...UPCOMING,
+      scheduledStartIso: new Date(NOW.getTime() + offsetMs).toISOString(),
+      live: offsetMs <= CASE_JOIN_WINDOW_MINUTES * 60_000,
+    };
+    render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+});
+
+describe('CaseNudge — exactly one moving thing', () => {
+  it('the title dot no longer pulses while live', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="client" />);
+    // The dot is `aria-hidden`, so it has no role or text a query can target.
+    const dot = document.querySelector('.bg-destructive');
+    expect(dot).not.toBeNull();
+    expect(dot?.className ?? '').not.toContain('animate-pulse');
+  });
+
+  it('the Join button keeps its ping-ring cue and reduced-motion fallback', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="client" />);
+    const join = screen.getByRole('button', { name: /^Join .*meeting/i });
+    expect(join.className).toContain('motion-safe:before:animate-ping-slow');
+    expect(join.className).toContain('motion-reduce:ring-primary');
+  });
+
+  it('the countdown carries no animation classes of its own', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" />);
+    expect(screen.getByTestId('join-countdown').className).not.toMatch(/animate-/);
   });
 });

@@ -853,7 +853,7 @@ export function BookingFlowDialog(
             </motion.div>
           )}
           {phase === 'confirm' && slot !== null && (
-            <motion.div key="confirm" {...pageTransition}>
+            <motion.div key="confirm" {...pageTransition} className="mx-auto w-full max-w-[640px]">
               {showResolvedCaseNote && (
                 <p className="text-muted-foreground px-6 pt-4 text-xs leading-relaxed">
                   Your last case with {expert.firstName ?? 'this expert'} is resolved — this starts
@@ -976,7 +976,9 @@ export function BookingFlowDialog(
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleAbandon()}>
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[640px]">
+      {/* Same width, same reason, as reschedule-dialog.tsx — Step 1 embeds the identical
+          calendar and was squeezed the same way at 640px. */}
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[min(92vw,840px)]">
         <DialogTitle className="sr-only">Book a consultation with {expert.name}</DialogTitle>
         <DialogDescription className="sr-only">
           Pick a time, review the details, and confirm your consultation.

@@ -132,6 +132,8 @@ export interface BookingEventMap {
     /** `'client'` (BAL-409, client-initiated) or `'expert'` (BAL-411, accept of a proposal). */
     initiated_by: 'client' | 'expert';
     hours_before_start: number;
+    /** Where the move was opened from: the nudge, a row's kebab menu, or a proposal card's accept. */
+    source: 'nudge' | 'row' | 'proposal';
   };
   [BOOKING_EVENTS.CANCELLED]: {
     /**
@@ -152,9 +154,15 @@ export interface BookingEventMap {
      * no-show to settle. The cutoff analysis must treat it that way rather than filtering it out.
      */
     hours_before_start: number;
+    /** The case surface's single nudge, or a per-row kebab menu. */
+    source: 'nudge' | 'row';
   };
-  /** ⚠ NO PROPERTIES, per the ticket. Opened the dialog, backed out — nothing else is known. */
-  [BOOKING_EVENTS.CANCEL_ABANDONED]: Record<string, never>;
+  [BOOKING_EVENTS.CANCEL_ABANDONED]: {
+    /** Which move button the viewer left through, or `null` for a plain dismiss (Keep it / ESC)
+     *  with no divert. Clicking a move button only reaches this far — `booking_rescheduled` is
+     *  the one that counts a completed save. */
+    diverted_to: 'reschedule' | 'propose' | null;
+  };
   [BOOKING_EVENTS.RESCHEDULE_PROPOSED]: {
     proposal_id: string;
     /** 1–3 — `RESCHEDULE_PROPOSAL_MAX_OPTIONS` in `@balo/shared/meetings`. */

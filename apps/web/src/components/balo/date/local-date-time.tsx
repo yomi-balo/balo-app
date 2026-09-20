@@ -32,18 +32,17 @@ import { relativeDay } from './relative-day';
  * answer for a travelling expert. It also means server and client render the SAME string on
  * first paint, so this path has no hydration gap to close. All five pre-existing consumers
  * omit the prop and keep the viewer-upgrade behaviour above, byte-for-byte.
+ *
+ * ⚠ `'day-month-time-range'` BAKES THE LENGTH INTO THE STRING — a reschedule moves a
+ * booking, it never resizes it, so the length is always known before the range renders, and a
+ * separate call site can no longer drop it by omission. `durationMinutes` is required only on
+ * this variant (a discriminated union, not an optional prop every other variant ignores).
+ * `relativeDays` is not offered here: no range consumer collapses to "Today"/"Tomorrow".
  */
-export type LocalDateTimeVariant = 'full' | 'day-month' | 'day-month-time';
+export type LocalDateTimeVariant = 'full' | 'day-month' | 'day-month-time' | 'day-month-time-range';
 
-export function LocalDateTime({
-  iso,
-  variant = 'full',
-  timeZone,
-  relativeDays = false,
-  now,
-}: Readonly<{
+type LocalDateTimeSharedProps = Readonly<{
   iso: string;
-  variant?: LocalDateTimeVariant;
   timeZone?: string;
   /**
    * Render "Today at 6:00 pm" / "Tomorrow at 6:00 pm" when the instant falls on one of those
@@ -61,21 +60,49 @@ export function LocalDateTime({
    * every row instead of one per rendered date. Omitted, the label is computed once at mount.
    */
   now?: Date;
-}>): React.JSX.Element {
-  const [label, setLabel] = useState(() => formatIn(iso, timeZone ?? 'UTC', variant));
+}>;
+
+export type LocalDateTimeProps =
+  | (LocalDateTimeSharedProps & { variant?: Exclude<LocalDateTimeVariant, 'day-month-time-range'> })
+  | (LocalDateTimeSharedProps & {
+      variant: 'day-month-time-range';
+      /** Minutes from `iso`. The range's end and its "· N min" suffix both derive from this. */
+      durationMinutes: number;
+      /** Default `true`. `false` drops the leading date, for a row already grouped under a day
+       *  heading (`availability-slots-panel.tsx`) — the ONE consumer of this variant that must
+       *  not repeat it on every row. */
+      showDay?: boolean;
+    });
+
+export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
+  const { iso, timeZone, relativeDays = false, now } = props;
+  const variant = props.variant ?? 'full';
+  const isRange = props.variant === 'day-month-time-range';
+  // Primitives, not an object — an object literal here would be a NEW reference every render
+  // and re-fire the effect below on every re-render regardless of whether either value changed.
+  const durationMinutes = isRange ? props.durationMinutes : undefined;
+  const showDay = isRange ? (props.showDay ?? true) : true;
+
+  const [label, setLabel] = useState(() =>
+    formatFor(iso, timeZone ?? 'UTC', variant, durationMinutes, showDay)
+  );
   const [zone, setZone] = useState(timeZone ?? 'UTC');
 
   useEffect(() => {
     const resolved = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!resolved) return;
     setZone(resolved);
-    setLabel(labelFor(iso, resolved, variant, relativeDays, now ?? new Date()));
-  }, [iso, variant, timeZone, relativeDays, now]);
+    setLabel(
+      durationMinutes === undefined
+        ? labelFor(iso, resolved, variant, relativeDays, now ?? new Date())
+        : formatFor(iso, resolved, variant, durationMinutes, showDay)
+    );
+  }, [iso, variant, timeZone, relativeDays, now, durationMinutes, showDay]);
 
   /* ⚠ THE TOOLTIP STAYS ABSOLUTE even when the visible label reads "Today at 6:00 pm". The
      relative form is the convenience; the exact date is the thing a record must always be able
      to answer, and the `sr-only` zone below is announced against it for the same reason. */
-  const absolute = formatIn(iso, zone, variant);
+  const absolute = formatFor(iso, zone, variant, durationMinutes, showDay);
 
   return (
     <time dateTime={iso} title={absolute + ' (' + zone + ')'}>
@@ -85,6 +112,8 @@ export function LocalDateTime({
   );
 }
 
+type NonRangeVariant = Exclude<LocalDateTimeVariant, 'day-month-time-range'>;
+
 /**
  * ⚠ A LOOKUP OBJECT, NOT A NESTED TERNARY (SonarCloud). Each entry is the `Intl` option set
  * for one variant:
@@ -92,7 +121,7 @@ export function LocalDateTime({
  *   · `day-month`      — "12 Jun" (the case header's "Opened", the consultation row)
  *   · `day-month-time` — "Tue 4 Aug, 10:00" (the upcoming-consultation nudge)
  */
-const VARIANT_OPTIONS: Readonly<Record<LocalDateTimeVariant, Intl.DateTimeFormatOptions>> = {
+const VARIANT_OPTIONS: Readonly<Record<NonRangeVariant, Intl.DateTimeFormatOptions>> = {
   full: {
     weekday: 'short',
     day: 'numeric',
@@ -136,12 +165,76 @@ function labelFor(
       return `${day === 'today' ? 'Today' : 'Tomorrow'} at ${time}`;
     }
   }
-  return formatIn(iso, timeZone, variant);
+  // Callers only ever reach this with a non-range variant (the range variant carries its own
+  // `durationMinutes` and is formatted by `formatFor` directly) — the fallback is unreachable
+  // through the exported component, kept only so this function's own type stays honest.
+  return formatIn(iso, timeZone, variant === 'day-month-time-range' ? 'day-month-time' : variant);
 }
 
-function formatIn(iso: string, timeZone: string, variant: LocalDateTimeVariant): string {
+function formatIn(iso: string, timeZone: string, variant: NonRangeVariant): string {
   return new Intl.DateTimeFormat('en-AU', {
     timeZone,
     ...VARIANT_OPTIONS[variant],
   }).format(new Date(iso));
+}
+
+/** `iso`'s hour/minute/dayPeriod parts in `timeZone` — never the punctuation, which varies by
+ *  ICU version. Sourced by `formatTimeRange` for both ends of a range. */
+function timeParts(iso: string, timeZone: string): { clock: string; period: string } {
+  const parts = new Intl.DateTimeFormat('en-AU', {
+    timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+  }).formatToParts(new Date(iso));
+  const hour = parts.find((p) => p.type === 'hour')?.value ?? '';
+  const minute = parts.find((p) => p.type === 'minute')?.value ?? '';
+  const period = parts.find((p) => p.type === 'dayPeriod')?.value ?? '';
+  return { clock: `${hour}:${minute}`, period };
+}
+
+/** "6:00 – 6:30 pm", or "11:45 am – 12:15 pm" once the range crosses the am/pm boundary — the
+ *  period is stated once unless the two ends disagree. */
+function formatTimeRange(startIso: string, endIso: string, timeZone: string): string {
+  const start = timeParts(startIso, timeZone);
+  const end = timeParts(endIso, timeZone);
+  return start.period === end.period
+    ? `${start.clock} – ${end.clock} ${end.period}`
+    : `${start.clock} ${start.period} – ${end.clock} ${end.period}`;
+}
+
+/** The day half of `'day-month-time'` (weekday + day + month), reused so the range's date reads
+ *  identically to every other variant that shows one. */
+function formatDayFor(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-AU', {
+    timeZone,
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  }).format(new Date(iso));
+}
+
+function formatRangeIn(
+  iso: string,
+  timeZone: string,
+  durationMinutes: number,
+  showDay: boolean
+): string {
+  const endIso = new Date(new Date(iso).getTime() + durationMinutes * 60_000).toISOString();
+  const range = `${formatTimeRange(iso, endIso, timeZone)} · ${durationMinutes} min`;
+  return showDay ? `${formatDayFor(iso, timeZone)}, ${range}` : range;
+}
+
+function formatFor(
+  iso: string,
+  timeZone: string,
+  variant: LocalDateTimeVariant,
+  durationMinutes: number | undefined,
+  showDay: boolean
+): string {
+  if (variant === 'day-month-time-range') {
+    // Guaranteed a real number by `LocalDateTimeProps`'s discriminated union — the `?? 0` is
+    // unreachable through the exported component, not a real fallback.
+    return formatRangeIn(iso, timeZone, durationMinutes ?? 0, showDay);
+  }
+  return formatIn(iso, timeZone, variant);
 }

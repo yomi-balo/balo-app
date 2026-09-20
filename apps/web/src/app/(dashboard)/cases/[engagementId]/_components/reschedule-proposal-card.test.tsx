@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen } from '@/test/utils';
+import { render, screen, within } from '@/test/utils';
 import { RescheduleProposalCard } from './reschedule-proposal-card';
 
 /**
@@ -47,10 +47,14 @@ vi.mock('sonner', () => ({
 
 const ENGAGEMENT_ID = 'e0000000-0000-4000-8000-000000000001';
 
-const CLIENT_NUDGE = {
-  kind: 'reschedule_proposal' as const,
+/** One fixture for both lenses — `CaseRescheduleProposalView` has no `kind` discriminant; only
+ *  the `lens` prop picks the half that renders. */
+const PROPOSAL = {
   proposalId: 'proposal-1',
   meetingId: 'm1',
+  // `2` is deliberately distinct from any default so an assertion on it can't pass by
+  // coincidence.
+  ordinal: 2,
   optionCount: 2,
   originalScheduledStartIso: '2026-09-01T10:00:00.000Z',
   expiresAtIso: '2026-08-31T10:00:00.000Z',
@@ -59,15 +63,10 @@ const CLIENT_NUDGE = {
     { optionId: 'opt-1', scheduledStartIso: '2026-09-02T10:00:00.000Z' },
     { optionId: 'opt-2', scheduledStartIso: '2026-09-03T10:00:00.000Z' },
   ],
-  // BAL-567 — required on every attributed nudge arm. This card renders the OPTIONS, never the
-  // headline (item 14), so it does not display the label; it is present only because the union
-  // it is typed against can no longer be constructed without it.
+  durationMinutes: 30,
+  // Unused by this card (which renders options, not the headline) — present only because the
+  // type requires it.
   actorLabel: 'Amara',
-};
-
-const EXPERT_NUDGE = {
-  ...CLIENT_NUDGE,
-  kind: 'reschedule_proposal_pending' as const,
 };
 
 beforeEach(() => {
@@ -82,13 +81,90 @@ beforeEach(() => {
   mockWithdrawAction.mockResolvedValue({ success: true, proposalId: 'proposal-1' });
 });
 
+describe('RescheduleProposalCard — subject identity (F7)', () => {
+  it('CLIENT lens — the subject line carries the ordinal and the ORIGINAL time, and the section names it', () => {
+    const { container } = render(
+      <RescheduleProposalCard
+        engagementId={ENGAGEMENT_ID}
+        lens="client"
+        proposal={PROPOSAL}
+        counterpartyLabel="Amara"
+        onChanged={vi.fn()}
+        canManageReschedule={true}
+      />
+    );
+    expect(container.textContent ?? '').toContain('Consultation 2 · currently');
+    expect(screen.getByRole('region')).toHaveAccessibleName('Reschedule proposal — consultation 2');
+  });
+
+  it('EXPERT lens — the same identity, on the "Waiting on…" section', () => {
+    const { container } = render(
+      <RescheduleProposalCard
+        engagementId={ENGAGEMENT_ID}
+        lens="expert"
+        proposal={PROPOSAL}
+        counterpartyLabel="Northwind Industrial"
+        onChanged={vi.fn()}
+        canManageReschedule={true}
+      />
+    );
+    expect(container.textContent ?? '').toContain('Consultation 2 · currently');
+    expect(screen.getByRole('region')).toHaveAccessibleName(
+      'Your reschedule proposal — consultation 2'
+    );
+  });
+
+  it('two proposals on DIFFERENT meetings render DISTINGUISHABLE section names', () => {
+    const { unmount } = render(
+      <RescheduleProposalCard
+        engagementId={ENGAGEMENT_ID}
+        lens="client"
+        proposal={PROPOSAL}
+        counterpartyLabel="Amara"
+        onChanged={vi.fn()}
+        canManageReschedule={true}
+      />
+    );
+    expect(screen.getByRole('region')).toHaveAccessibleName(/consultation 2/);
+    unmount();
+
+    render(
+      <RescheduleProposalCard
+        engagementId={ENGAGEMENT_ID}
+        lens="client"
+        proposal={{ ...PROPOSAL, proposalId: 'proposal-2', meetingId: 'm2', ordinal: 5 }}
+        counterpartyLabel="Amara"
+        onChanged={vi.fn()}
+        canManageReschedule={true}
+      />
+    );
+    expect(screen.getByRole('region')).toHaveAccessibleName(/consultation 5/);
+  });
+
+  it('drops the ordinal clause, keeping only the date, when ordinal is null', () => {
+    const { container } = render(
+      <RescheduleProposalCard
+        engagementId={ENGAGEMENT_ID}
+        lens="client"
+        proposal={{ ...PROPOSAL, ordinal: null }}
+        counterpartyLabel="Amara"
+        onChanged={vi.fn()}
+        canManageReschedule={true}
+      />
+    );
+    expect(container.textContent ?? '').not.toContain('Consultation');
+    expect(container.textContent ?? '').toContain('currently');
+    expect(screen.getByRole('region')).toHaveAccessibleName('Reschedule proposal');
+  });
+});
+
 describe('RescheduleProposalCard — CLIENT lens', () => {
   it('lists every option and disables Accept until one is chosen', () => {
     render(
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={vi.fn()}
         canManageReschedule={true}
@@ -96,6 +172,22 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
     );
     expect(screen.getAllByRole('radio')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Accept' })).toBeDisabled();
+  });
+
+  it('each option shows its RANGE and the booked length, not a bare start time', () => {
+    render(
+      <RescheduleProposalCard
+        engagementId={ENGAGEMENT_ID}
+        lens="client"
+        proposal={PROPOSAL}
+        counterpartyLabel="Amara"
+        onChanged={vi.fn()}
+        canManageReschedule={true}
+      />
+    );
+    // 2026-09-02T10:00:00.000Z + 30 min, under TZ=UTC. Both options share the exact same
+    // TIME of day (only the day differs), so the day prefix disambiguates which one matched.
+    expect(screen.getByText(/Wed, 2 Sept, 10:00 – 10:30 am · 30 min/)).toBeInTheDocument();
   });
 
   // Item 14 — the NUDGE (`case-nudge.tsx`) owns the headline and the deadline; this card owns
@@ -106,7 +198,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={vi.fn()}
         canManageReschedule={true}
@@ -124,7 +216,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -149,7 +241,8 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
     );
     expect(mockTrack).toHaveBeenCalledWith(
       'booking_rescheduled',
-      expect.objectContaining({ initiated_by: 'expert' })
+      // Distinct from the nudge's Reschedule button and a row's menu, which use other sources.
+      expect.objectContaining({ initiated_by: 'expert', source: 'proposal' })
     );
     expect(onChanged).toHaveBeenCalledTimes(1);
   });
@@ -163,14 +256,14 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
     // themselves rely on (the `notification-bell.test.tsx` precedent), and the test hangs.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      // CLIENT_NUDGE.originalScheduledStartIso is 2026-09-01T10:00:00.000Z; "now" is 2h before.
+      // PROPOSAL.originalScheduledStartIso is 2026-09-01T10:00:00.000Z; "now" is 2h before.
       vi.setSystemTime(new Date('2026-09-01T08:00:00.000Z'));
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       render(
         <RescheduleProposalCard
           engagementId={ENGAGEMENT_ID}
           lens="client"
-          nudge={CLIENT_NUDGE}
+          proposal={PROPOSAL}
           counterpartyLabel="Amara"
           onChanged={vi.fn()}
           canManageReschedule={true}
@@ -196,13 +289,13 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
   // the proposal resolving out from under it; structurally unreachable in normal use, but the
   // card must still degrade to `hours_to_respond: 0` rather than crash or fabricate a value.
   it('degrades hours_to_respond to 0 rather than crashing when proposedAtIso is null', async () => {
-    const nudgeWithoutDetail = { ...CLIENT_NUDGE, proposedAtIso: null };
+    const proposalWithoutDetail = { ...PROPOSAL, proposedAtIso: null };
     const user = userEvent.setup();
     render(
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={nudgeWithoutDetail}
+        proposal={proposalWithoutDetail}
         counterpartyLabel="Amara"
         onChanged={vi.fn()}
         canManageReschedule={true}
@@ -222,7 +315,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -256,7 +349,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={vi.fn()}
         canManageReschedule={true}
@@ -285,9 +378,9 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
   // CONSIDER item — §D7: once every option is dead, Accept must be ABSENT, not merely disabled
   // — "an absent action beats a dead one" (`case-nudge.test.tsx`'s own rule).
   it('hides Accept entirely once every option is dead — only Keep my time remains', async () => {
-    const [firstOption] = CLIENT_NUDGE.options;
+    const [firstOption] = PROPOSAL.options;
     if (firstOption === undefined) throw new Error('expected a fixture option');
-    const ONE_OPTION_NUDGE = { ...CLIENT_NUDGE, options: [firstOption] };
+    const ONE_OPTION_PROPOSAL = { ...PROPOSAL, options: [firstOption] };
     mockAcceptAction.mockResolvedValue({
       success: false,
       code: 'slot_unavailable',
@@ -298,7 +391,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={ONE_OPTION_NUDGE}
+        proposal={ONE_OPTION_PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={vi.fn()}
         canManageReschedule={true}
@@ -314,7 +407,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
     expect(screen.getByRole('button', { name: 'Keep my time' })).toBeInTheDocument();
     expect(screen.getByText(/Those times are no longer free/)).toBeInTheDocument();
     // CONSIDER item — §D7's copy carries the DATE ("Your original time on {date} still
-    // stands"), not just the bare claim. CLIENT_NUDGE.originalScheduledStartIso is
+    // stands"), not just the bare claim. PROPOSAL.originalScheduledStartIso is
     // 2026-09-01T10:00:00.000Z → "1 Sep" under TZ=UTC.
     expect(screen.getByText(/Your original time on 1 Sep still stands/)).toBeInTheDocument();
   });
@@ -331,7 +424,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -364,7 +457,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -391,7 +484,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -417,7 +510,7 @@ describe('RescheduleProposalCard — CLIENT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="client"
-        nudge={CLIENT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Amara"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -436,7 +529,7 @@ describe('RescheduleProposalCard — EXPERT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="expert"
-        nudge={EXPERT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Northwind Industrial"
         onChanged={vi.fn()}
         canManageReschedule={true}
@@ -444,6 +537,8 @@ describe('RescheduleProposalCard — EXPERT lens', () => {
     );
     expect(screen.queryAllByRole('radio')).toHaveLength(0);
     expect(screen.getByText(/Waiting on Northwind Industrial/i)).toBeInTheDocument();
+    // 2026-09-02T10:00:00.000Z + 30 min, under TZ=UTC.
+    expect(screen.getByText(/Wed, 2 Sept, 10:00 – 10:30 am · 30 min/)).toBeInTheDocument();
   });
 
   // Item 18 (security LOW) — an agency member with role `expert` legitimately reads this
@@ -455,7 +550,7 @@ describe('RescheduleProposalCard — EXPERT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="expert"
-        nudge={EXPERT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Northwind Industrial"
         onChanged={vi.fn()}
         canManageReschedule={false}
@@ -471,7 +566,7 @@ describe('RescheduleProposalCard — EXPERT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="expert"
-        nudge={EXPERT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Northwind Industrial"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -505,7 +600,7 @@ describe('RescheduleProposalCard — EXPERT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="expert"
-        nudge={EXPERT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Northwind Industrial"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -528,7 +623,7 @@ describe('RescheduleProposalCard — EXPERT lens', () => {
       <RescheduleProposalCard
         engagementId={ENGAGEMENT_ID}
         lens="expert"
-        nudge={EXPERT_NUDGE}
+        proposal={PROPOSAL}
         counterpartyLabel="Northwind Industrial"
         onChanged={onChanged}
         canManageReschedule={true}
@@ -537,5 +632,67 @@ describe('RescheduleProposalCard — EXPERT lens', () => {
     await user.click(screen.getByRole('button', { name: 'Withdraw' }));
     expect(mockToastError).toHaveBeenCalledWith('Too many changes just now — try again shortly.');
     expect(onChanged).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `case-surface.tsx` mounts one card per entry in `view.rescheduleProposals` — several live
+ * proposals at once, never unmounting one before the next mounts. A shared literal `name` on
+ * the radio inputs would put every card's options in ONE native radio group (document-scoped,
+ * with no `<form>` between them), so choosing an option in one card unchecks another's option in
+ * the DOM while that other card's own React state still holds its selection.
+ */
+describe('RescheduleProposalCard — two live cards do not share a native radio group', () => {
+  it('selecting an option in one card leaves the other card untouched', async () => {
+    const user = userEvent.setup();
+    const proposalA = { ...PROPOSAL, proposalId: 'proposal-a', meetingId: 'm-a', ordinal: 1 };
+    const proposalB = {
+      ...PROPOSAL,
+      proposalId: 'proposal-b',
+      meetingId: 'm-b',
+      ordinal: 3,
+      options: [
+        { optionId: 'opt-b1', scheduledStartIso: '2026-09-05T10:00:00.000Z' },
+        { optionId: 'opt-b2', scheduledStartIso: '2026-09-06T10:00:00.000Z' },
+      ],
+    };
+
+    render(
+      <>
+        <RescheduleProposalCard
+          engagementId={ENGAGEMENT_ID}
+          lens="client"
+          proposal={proposalA}
+          counterpartyLabel="Amara"
+          onChanged={vi.fn()}
+          canManageReschedule={true}
+        />
+        <RescheduleProposalCard
+          engagementId={ENGAGEMENT_ID}
+          lens="client"
+          proposal={proposalB}
+          counterpartyLabel="Amara"
+          onChanged={vi.fn()}
+          canManageReschedule={true}
+        />
+      </>
+    );
+
+    const cardA = screen.getByRole('region', { name: /consultation 1/ });
+    const cardB = screen.getByRole('region', { name: /consultation 3/ });
+    const [radioA] = within(cardA).getAllByRole('radio');
+    const [radioB] = within(cardB).getAllByRole('radio');
+    if (radioA === undefined || radioB === undefined) throw new Error('expected two radios');
+
+    await user.click(radioA);
+    expect(radioA).toBeChecked();
+    expect(within(cardA).getByRole('button', { name: 'Accept' })).toBeEnabled();
+
+    await user.click(radioB);
+
+    expect(radioA).toBeChecked();
+    expect(within(cardA).getByRole('button', { name: 'Accept' })).toBeEnabled();
+    expect(radioB).toBeChecked();
+    expect(within(cardB).getByRole('button', { name: 'Accept' })).toBeEnabled();
   });
 });

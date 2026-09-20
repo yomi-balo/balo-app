@@ -1,12 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { CalendarClock, CalendarSync, MessageSquare, Sparkles, Video, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
-import { joinAffordanceAriaLabel, joinAffordanceTimingLabel } from '@/lib/calendar/join-window';
+import { JoinCountdown } from '@/components/balo/meetings/join-countdown';
+import {
+  joinAffordanceAriaLabel,
+  joinAffordanceTimingLabel,
+  joinCountdownLabel,
+  signedMinutesUntilCalendarStart,
+} from '@/lib/calendar/join-window';
+import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { resolutionAskPendingTitle } from '@/lib/cases/actor-attribution';
 import type { CaseNudgeView } from '@/lib/cases/case-view-types';
@@ -16,14 +24,15 @@ import type { CaseNudgeView } from '@/lib/cases/case-view-types';
  * renders what it is given; it never re-derives priority, because a second copy of that
  * ordering is a second place the "ask is suppressed while anything is booked" rule lives.
  *
- * ⚠⚠ BAL-567 — JOIN IS NOW THE PRIMARY IN-WINDOW ACTION, ON BOTH SIDES. The docblock that used
- * to sit here said there was no Join button and no participant join route; BAL-435 shipped
- * `/meetings/{id}/call` and BAL-566 gave it its one builder (`memberCallPath`), so the claim was
- * stale rather than merely dated — and `case-nudge.test.tsx` was actively asserting the button's
- * ABSENCE. Both are gone. Join renders as `JoinMeetingButton` (a `<button>` +
- * `globalThis.location.assign`, NEVER an `href` — see that component's docblock) whenever
- * `nudge.live`, FIRST in the action row, with Reschedule/Propose still hidden inside the window
- * and Cancel still second and ghost.
+ * ⚠⚠ THE JOIN SLOT NEVER DISAPPEARS. Before the window it is `JoinCountdown`, a same-size
+ * inactive control; once open it is `JoinMeetingButton` (a `<button>` +
+ * `globalThis.location.assign`, NEVER an `href` — see that component's docblock), FIRST in the
+ * action row. Liveness is owned by `useUpcomingJoinClock`'s own ticking clock, not trusted from
+ * `nudge.live` past the first paint — see that hook's docblock. Reschedule/Propose are text-link
+ * buttons beside it, matching the row's "View recap" treatment — a demoted, secondary affordance,
+ * hidden inside the join window. Cancel does not live here at all: it is on every upcoming row's
+ * kebab (`consultation-row-menu.tsx`), including the nudge's own meeting, and the row's Cancel is
+ * deliberately NOT join-window-gated.
  *
  * ⚠ THE RESCHEDULE CTA (BAL-409) IS CLIENT-INITIATED AND AUTO-APPROVES — it needs NO proposal
  * state (the slot was already offered on the expert's live availability), so it lands here on
@@ -48,6 +57,9 @@ interface CaseNudgeProps {
   bookAgainHref: string | null;
   onMarkResolved: () => void;
   onDismissAsk: () => void;
+  /** Server-resolved — the same value as the row-hosted `canReschedule` for this meeting, so
+   *  the nudge and its row can never disagree about whether it can be moved. */
+  canReschedule: boolean;
   /** BAL-409 — opens the reschedule dialog. Presentational only: `case-surface.tsx` owns the
    *  dialog's open state, exactly as it owns `resolveCaseAction`'s transition. */
   onReschedule: () => void;
@@ -56,11 +68,6 @@ interface CaseNudgeProps {
   canProposeReschedule: boolean;
   /** BAL-411 — opens `ProposeTimesDialog`. Presentational only, mirroring `onReschedule`. */
   onProposeReschedule: () => void;
-  /** BAL-410 — BOTH lenses. Whether "Cancel" renders at all — server-resolved
-   *  (`canCancelConsultation`, on two different axes by lens), never derived here. */
-  canCancel: boolean;
-  /** BAL-410 — opens `CancelConsultationDialog`. Presentational only, mirroring `onReschedule`. */
-  onCancel: () => void;
   /** True while the close/dismiss mutation is in flight. */
   busy: boolean;
 }
@@ -72,11 +79,10 @@ export function CaseNudge({
   bookAgainHref,
   onMarkResolved,
   onDismissAsk,
+  canReschedule,
   onReschedule,
   canProposeReschedule,
   onProposeReschedule,
-  canCancel,
-  onCancel,
   busy,
 }: Readonly<CaseNudgeProps>): React.JSX.Element | null {
   if (nudge === null) {
@@ -88,11 +94,10 @@ export function CaseNudge({
         nudge={nudge}
         lens={lens}
         counterpartyLabel={counterpartyLabel}
-        canProposeReschedule={canProposeReschedule}
+        canReschedule={canReschedule}
         onReschedule={onReschedule}
+        canProposeReschedule={canProposeReschedule}
         onProposeReschedule={onProposeReschedule}
-        canCancel={canCancel}
-        onCancel={onCancel}
       />
     );
   }
@@ -183,11 +188,10 @@ interface UpcomingNudgeProps {
   nudge: Extract<CaseNudgeView, { kind: 'upcoming' }>;
   lens: 'client' | 'expert';
   counterpartyLabel: string;
-  canProposeReschedule: boolean;
+  canReschedule: boolean;
   onReschedule: () => void;
+  canProposeReschedule: boolean;
   onProposeReschedule: () => void;
-  canCancel: boolean;
-  onCancel: () => void;
 }
 
 /**
@@ -198,15 +202,13 @@ function UpcomingNudge({
   nudge,
   lens,
   counterpartyLabel,
-  canProposeReschedule,
+  canReschedule,
   onReschedule,
+  canProposeReschedule,
   onProposeReschedule,
-  canCancel,
-  onCancel,
 }: Readonly<UpcomingNudgeProps>): React.JSX.Element {
-  // ⚠ ONE CLIENT CLOCK FOR THE WHOLE ARM (BAL-567). The countdown in the title and the Join
-  // button's `aria-label` are two views of the same instant; computing them separately would let
-  // a screen-reader user hear "starting in 4 minutes" beside a heading saying 3.
+  // ⚠ ONE CLIENT CLOCK FOR THE WHOLE ARM (BAL-567), and it OWNS liveness rather than trusting
+  // `nudge.live` past the first paint — see the hook's own docblock.
   const clock = useUpcomingJoinClock(nudge.scheduledStartIso, nudge.live);
 
   // ⚠ BAL-567 — JOIN IS FIRST AND PRIMARY INSIDE THE WINDOW, on BOTH sides. It is the action
@@ -215,7 +217,10 @@ function UpcomingNudge({
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'join', lens });
   }, [lens]);
 
-  const joinAction = nudge.live ? (
+  // THE SLOT NEVER EMPTIES: `JoinCountdown` before the window, `JoinMeetingButton` inside it,
+  // same place, same size. `JoinCountdown` is its own element, never `JoinMeetingButton` plus a
+  // `disabled` prop (that component's "rendered ONLY inside the join window" invariant stays).
+  const joinAction = clock.live ? (
     <JoinMeetingButton
       joinUrl={nudge.joinPath}
       size="sm"
@@ -224,117 +229,130 @@ function UpcomingNudge({
       onJoin={handleJoin}
     >
       <span className="size-[7px] rounded-full bg-emerald-400" aria-hidden="true" />
-      Join call
+      {clock.joinLabel}
     </JoinMeetingButton>
-  ) : null;
+  ) : (
+    <JoinCountdown label={clock.joinLabel} />
+  );
 
-  // `!nudge.live` on BOTH sides — inside the join window the honest action is to join, not
-  // to move, and the nudge is already the "starting soon" moment. This is STRICTER than the
-  // server (which allows until `start > now`); client-stricter-than-server is the safe
-  // direction — a stale page that submits at T-2min still succeeds server-side.
-  const canReschedule = lens === 'client' && !nudge.live;
-  const canPropose = lens === 'expert' && !nudge.live && canProposeReschedule;
+  // Both drop the instant the clock crosses into the window — not on the next server refresh —
+  // so the nudge's own move affordance can never linger beside a live Join.
+  const showReschedule = !clock.live && canReschedule;
+  const canPropose = !clock.live && canProposeReschedule;
+  // Text-link treatment, matching the row's "View recap" — a demoted, secondary affordance next
+  // to Join. Cancel lives only on the row's kebab now (`consultation-row-menu.tsx`).
+  const linkClassName =
+    'text-primary focus-visible:ring-ring rounded text-xs font-medium focus-visible:ring-2 focus-visible:outline-none';
   let moveAction: React.ReactNode;
-  if (canReschedule) {
+  if (showReschedule) {
     moveAction = (
-      <Button type="button" size="sm" variant="outline" onClick={onReschedule}>
+      <button type="button" className={linkClassName} onClick={onReschedule}>
         Reschedule
-      </Button>
+      </button>
     );
   } else if (canPropose) {
     moveAction = (
-      <Button type="button" size="sm" variant="outline" onClick={onProposeReschedule}>
+      <button type="button" className={linkClassName} onClick={onProposeReschedule}>
         Propose a new time
-      </Button>
+      </button>
     );
   }
 
-  /**
-   * ⚠⚠ BAL-410 — CANCEL RENDERS EVEN WHEN `nudge.live` IS TRUE, UNLIKE RESCHEDULE AND PROPOSE,
-   * AND THAT DIVERGENCE IS DELIBERATE. `live` turns true `CASE_JOIN_WINDOW_MINUTES` (15) BEFORE
-   * the start, so hiding cancel there would contradict the product's own promise — "free until
-   * scheduled start" — and the AC's "up to scheduled start". Unlike the two move actions this
-   * is NOT the client being stricter than the server: the server's guard is STATE-based
-   * (`CANCELLABLE_MEETING_STATUSES`), and a meeting nobody has joined is still `scheduled`
-   * inside the join window. So this is the client matching the server exactly.
-   *
-   * VISUAL WEIGHT: `ghost` with a destructive HOVER, and rendered LAST — cancel must never
-   * outrank "Reschedule" or "Join" (which landed in BAL-567). It is available, not invited.
-   */
-  const cancelAction = canCancel ? (
-    <Button
-      type="button"
-      size="sm"
-      variant="ghost"
-      className="text-muted-foreground hover:text-destructive"
-      onClick={onCancel}
-    >
-      Cancel
-    </Button>
-  ) : null;
-
-  const upcomingAction =
-    joinAction || moveAction || cancelAction ? (
-      <div className="flex flex-wrap items-center gap-2">
-        {joinAction}
-        {moveAction}
-        {cancelAction}
-      </div>
-    ) : undefined;
-
   return (
-    <NudgeShell
-      icon={nudge.live ? Video : CalendarClock}
-      live={nudge.live}
-      title={
-        <UpcomingTitle iso={nudge.scheduledStartIso} live={nudge.live} minutes={clock.minutes} />
-      }
-      body={upcomingBody(lens, counterpartyLabel, nudge.live)}
-      actions={upcomingAction}
-    />
+    <>
+      <NudgeShell
+        icon={clock.live ? Video : CalendarClock}
+        live={clock.live}
+        title={
+          <UpcomingTitle iso={nudge.scheduledStartIso} live={clock.live} minutes={clock.minutes} />
+        }
+        body={upcomingBody(lens, counterpartyLabel, clock.live)}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {joinAction}
+            {moveAction}
+          </div>
+        }
+      />
+      {/* Exactly one polite announcement, on the crossing — never the ticking label itself. */}
+      <span role="status" className="sr-only">
+        {clock.announcement}
+      </span>
+    </>
   );
 }
 
+interface UpcomingJoinClock {
+  readonly live: boolean;
+  readonly minutes: number | null;
+  readonly timingLabel: string | null;
+  readonly joinLabel: string;
+  readonly announcement: string;
+}
+
 /**
- * The ONE client clock the `'upcoming'` arm needs: minutes to start (for the heading) and the
- * Join `aria-label`'s timing phrase, computed from the SAME instant on the same 30s tick.
+ * The ONE client clock the `'upcoming'` arm needs, ticking on a 30s interval regardless of
+ * liveness — the countdown must keep counting down to zero, not just while already live.
  *
- * ⚠ THE SERVER RENDER CARRIES NEITHER, AND THAT IS A HYDRATION RULE, NOT A STYLE CHOICE. "in N
- * minutes" computed during SSR would be stale by the time it painted and would differ between
- * the server and client renders. The first paint states the absolute time; the effect swaps in
- * the countdown. Same posture as `LocalDateTime`.
- *
- * ⚠ `joinAffordanceTimingLabel` IS THE SHARED BUILDER, never a second phrase table — it is the
- * same function the calendar and the dashboard Up next row label their Join buttons with, and it
- * is the one that gets `-0` right at the boundary minute.
+ * ⚠⚠ THIS HOOK OWNS THE WINDOW, NOT THE SERVER — but `initialLive` (`nudge.live`) stays in the
+ * OR on every tick, not just the seed render: `live = initialLive || insideCaseJoinWindow(...)`,
+ * so the server's word can only ever ADD liveness, never take it away. A browser clock running
+ * behind the server's would otherwise HIDE Join past the moment the server already considers the
+ * meeting joinable — the one direction this hook must never drift in. Every tick still
+ * re-derives from `insideCaseJoinWindow` against the browser's own clock — the same case-domain
+ * predicate the loader used — for the OTHER direction: flipping live BEFORE the next server
+ * refresh lands. On the tick that flips `live` false → true, it fires `router.refresh()` exactly
+ * once — never again for this meeting, and never on a tick that doesn't cross — so the row
+ * list's own `live`/`canReschedule` (server-resolved) catch up. The server stays the sole
+ * authority on the join CLICK (`assertMeetingJoinable`); this hook is presentation only.
  */
-function useUpcomingJoinClock(
-  iso: string,
-  live: boolean
-): { readonly minutes: number | null; readonly timingLabel: string | null } {
-  const [clock, setClock] = useState<{ minutes: number | null; timingLabel: string | null }>({
-    minutes: null,
-    timingLabel: null,
+function useUpcomingJoinClock(iso: string, initialLive: boolean): UpcomingJoinClock {
+  const router = useRouter();
+  // ⚠ A REF, NOT A TICK-EFFECT DEPENDENCY. `next/navigation`'s `useRouter()` is not guaranteed
+  // to return the same object across renders (it doesn't in this file's own test mock), and the
+  // tick effect below calls `setState` on every run — putting `router` in its dependency array
+  // would re-fire the effect every render it changed identity, which calls `setState` again,
+  // which re-renders, forever. The ref always reads the LATEST router without re-arming the tick.
+  const routerRef = useRef(router);
+  useEffect(() => {
+    routerRef.current = router;
   });
 
+  const [clock, setClock] = useState<{
+    live: boolean;
+    minutes: number | null;
+    timingLabel: string | null;
+    joinLabel: string | null;
+  }>({ live: initialLive, minutes: null, timingLabel: null, joinLabel: null });
+  const [announcement, setAnnouncement] = useState('');
+  const wasLiveRef = useRef(initialLive);
+
   useEffect(() => {
-    if (!live) return;
+    wasLiveRef.current = initialLive;
+    const scheduledStart = new Date(iso);
     const tick = (): void => {
       const now = new Date();
-      const scheduledStart = new Date(iso);
+      const live = initialLive || insideCaseJoinWindow(now, iso);
       setClock({
-        minutes: Math.round((scheduledStart.getTime() - now.getTime()) / 60_000),
-        timingLabel: joinAffordanceTimingLabel(now, scheduledStart),
+        live,
+        minutes: live ? signedMinutesUntilCalendarStart(now, scheduledStart) : null,
+        timingLabel: live ? joinAffordanceTimingLabel(now, scheduledStart) : null,
+        joinLabel: live ? 'Join now' : joinCountdownLabel(now, scheduledStart),
       });
+      if (live && !wasLiveRef.current) {
+        setAnnouncement('You can join now.');
+        routerRef.current.refresh();
+      }
+      wasLiveRef.current = live;
     };
     tick();
     const timer = setInterval(tick, 30_000);
     return () => {
       clearInterval(timer);
     };
-  }, [iso, live]);
+  }, [iso, initialLive]);
 
-  return clock;
+  return { ...clock, joinLabel: clock.joinLabel ?? 'Join', announcement };
 }
 
 /**
@@ -443,10 +461,11 @@ function NudgeShell({
       <Icon size={17} className="text-primary mt-0.5 shrink-0" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
+          {/* Deliberately still — the pulse ring on Join is the nudge's only animation. */}
           {live && (
             <span
               aria-hidden="true"
-              className="bg-destructive inline-block h-[7px] w-[7px] shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+              className="bg-destructive inline-block h-[7px] w-[7px] shrink-0 rounded-full"
             />
           )}
           <p className="text-foreground text-sm font-semibold">{title}</p>
