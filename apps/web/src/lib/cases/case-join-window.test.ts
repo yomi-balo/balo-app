@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
+import { CASE_JOIN_WINDOW_MINUTES, selectCaseNudge } from '@balo/shared/engagements';
 import { insideCaseJoinWindow } from './case-join-window';
 
 const SCHEDULED_START = new Date('2026-06-15T10:00:00.000Z');
@@ -42,5 +42,47 @@ describe('insideCaseJoinWindow', () => {
     const overdueStart = new Date(SCHEDULED_START.getTime() - 60 * 60_000);
     const laterNow = SCHEDULED_START;
     expect(insideCaseJoinWindow(laterNow, overdueStart.toISOString())).toBe(true);
+  });
+});
+
+/**
+ * `insideCaseJoinWindow` and the private `withinJoinWindow` (`@balo/shared/engagements`) are two
+ * hand-duplicated formulas that MUST agree (see both functions' docblocks). `selectCaseNudge` is
+ * the private predicate's ONE public door, so this table drives it straight through and asserts
+ * agreement at exactly the offsets where the two could diverge without either module's own tests
+ * noticing.
+ */
+describe('insideCaseJoinWindow agrees with the shared withinJoinWindow at the boundary', () => {
+  const BOUNDARY = minutesBeforeStart(CASE_JOIN_WINDOW_MINUTES).getTime();
+
+  const CASES: readonly { readonly label: string; readonly now: Date }[] = [
+    { label: '1ms before the window opens', now: new Date(BOUNDARY - 1) },
+    {
+      label: 'exactly CASE_JOIN_WINDOW_MINUTES before the start — inclusive boundary',
+      now: new Date(BOUNDARY),
+    },
+    { label: '1ms inside the window', now: new Date(BOUNDARY + 1) },
+    { label: '1 minute before the start', now: minutesBeforeStart(1) },
+    { label: 'at the scheduled start', now: SCHEDULED_START },
+    { label: '1 minute past the start', now: new Date(SCHEDULED_START.getTime() + 60_000) },
+  ];
+
+  it('covers every boundary case (guards a shrunken table)', () => {
+    expect(CASES).toHaveLength(6);
+  });
+
+  it.each(CASES)('agrees $label', ({ now }) => {
+    const nudge = selectCaseNudge({
+      lens: 'client',
+      isOpen: true,
+      nextScheduled: { meetingId: 'm1', scheduledStart: SCHEDULED_START },
+      resolutionRequestedAt: null,
+      rescheduleProposal: null,
+      now,
+    });
+    if (nudge === null || nudge.kind !== 'upcoming') {
+      throw new Error('expected an upcoming nudge');
+    }
+    expect(insideCaseJoinWindow(now, SCHEDULED_START.toISOString())).toBe(nudge.live);
   });
 });

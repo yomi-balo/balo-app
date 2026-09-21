@@ -126,7 +126,17 @@ export type CaseNudge =
   /** A CLOSED case has no nudge at all — there is nothing left to prompt. */
   | null;
 
-/** True from `CASE_JOIN_WINDOW_MINUTES` before the start onwards. Inclusive at the boundary. */
+/**
+ * True from `CASE_JOIN_WINDOW_MINUTES` before the start onwards. Inclusive at the boundary.
+ *
+ * ⚠⚠ INVARIANT: this predicate and the web's `insideCaseJoinWindow`
+ * (`apps/web/src/lib/cases/case-join-window.ts`) MUST AGREE at every instant, not merely today.
+ * The web predicate is a deliberate duplicate, not a copy-paste accident (BAL-574) — the client
+ * clock that owns the case nudge's join-window liveness applies THAT formula to the server's
+ * render instant, so it can only reproduce what `selectCaseNudge` decided here if the two stay
+ * formula-identical. `case-join-window.test.ts` pins agreement against this function's public
+ * `live` output at the boundary.
+ */
 function withinJoinWindow(now: Date, scheduledStart: Date): boolean {
   return scheduledStart.getTime() - now.getTime() <= CASE_JOIN_WINDOW_MINUTES * MS_PER_MINUTE;
 }

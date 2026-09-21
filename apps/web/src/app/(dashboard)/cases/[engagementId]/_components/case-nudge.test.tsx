@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { useLayoutEffect } from 'react';
 import { act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
@@ -68,30 +69,49 @@ const BASE = {
 
 const JOIN_PATH = '/meetings/m1/call';
 
-/** An ISO stamp `offsetMs` from the real now — never a fixed literal date, which `insideCase-
- *  JoinWindow`'s "no closing bound" would silently turn permanently live the moment real time
- *  passes it (reference_hardcoded_date_fixtures_are_time_bombs). */
-function isoFromNow(offsetMs: number): string {
-  return new Date(Date.now() + offsetMs).toISOString();
-}
-
 const THREE_DAYS_MS = 3 * 24 * 60 * 60_000;
 
-const UPCOMING: CaseNudgeView = {
-  kind: 'upcoming',
-  meetingId: 'm1',
-  scheduledStartIso: isoFromNow(THREE_DAYS_MS),
-  live: false,
-  durationMinutes: 60,
-  joinPath: JOIN_PATH,
-};
+type UpcomingArm = Extract<CaseNudgeView, { kind: 'upcoming' }>;
+
+/**
+ * BAL-574 — `deviceSkewMs > 0` ⇒ the DEVICE clock runs FAST by that much: the server's instant
+ * sits that far BEHIND `Date.now()`. Negative ⇒ the device clock runs SLOW (the server's instant
+ * sits that far AHEAD of `Date.now()`). `offsetMs` is measured from the SERVER's instant — the
+ * same relationship a real `scheduledStart` has to `serverNowIso` — never from the device's own
+ * (possibly skewed) `Date.now()`.
+ */
+function upcomingWithSkew(
+  offsetMs: number,
+  deviceSkewMs: number,
+  over: Partial<UpcomingArm> = {}
+): UpcomingArm {
+  const serverNowMs = Date.now() - deviceSkewMs;
+  return {
+    kind: 'upcoming',
+    meetingId: 'm1',
+    scheduledStartIso: new Date(serverNowMs + offsetMs).toISOString(),
+    serverNowIso: new Date(serverNowMs).toISOString(),
+    live: false,
+    durationMinutes: 60,
+    joinPath: JOIN_PATH,
+    ...over,
+  };
+}
+
+/**
+ * BAL-574 — a fixture's two instants must come from ONE reading of the clock: `serverNowIso` is
+ * the anchor every derived label is measured from, so pairing it with a `scheduledStartIso` taken
+ * from a SEPARATE `Date.now()` reading would inject a skew the test did not ask for. A zero-skew
+ * `upcomingWithSkew` — for a fixture that needs no device/server disagreement at all.
+ */
+function upcomingAt(offsetMs: number, over: Partial<UpcomingArm> = {}): UpcomingArm {
+  return upcomingWithSkew(offsetMs, 0, over);
+}
+
+const UPCOMING: CaseNudgeView = upcomingAt(THREE_DAYS_MS);
 
 /** Inside the join window on both the server flag AND the clock — the ordinary live case. */
-const UPCOMING_LIVE: CaseNudgeView = {
-  ...UPCOMING,
-  scheduledStartIso: isoFromNow(5 * 60_000),
-  live: true,
-};
+const UPCOMING_LIVE: CaseNudgeView = upcomingAt(5 * 60_000, { live: true });
 
 /**
  * Each kind's ONE identifying heading, per lens. The component renders exactly one
@@ -99,7 +119,9 @@ const UPCOMING_LIVE: CaseNudgeView = {
  */
 const HEADINGS: readonly RegExp[] = [
   /Next consultation/i,
-  /consultation is about to start|consultation starts in|consultation is starting now/i,
+  // A `live` arm always carries a minute count, so "consultation is about to start" is
+  // structurally unrepresentable and is deliberately absent from this alternation.
+  /consultation starts in|consultation is starting now/i,
   /suggested some new times/i,
   // BAL-567 — was `/Waiting on a reply to your suggested times/i`. The pending-proposal title now
   // names the ACTOR ("You suggested new times" / "Priya suggested new times"), so the pattern
@@ -528,34 +550,18 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
  */
 describe('CaseNudge — a LIVE consultation counts down, and never past zero', () => {
   it('singularises exactly one minute', () => {
-    render(
-      <CaseNudge
-        {...BASE}
-        nudge={{ ...UPCOMING, live: true, scheduledStartIso: isoFromNow(60_000) }}
-        lens="client"
-      />
-    );
+    render(<CaseNudge {...BASE} nudge={upcomingAt(60_000, { live: true })} lens="client" />);
     expect(screen.getByText('Your consultation starts in 1 minute')).toBeInTheDocument();
   });
 
   it('pluralises more than one minute', () => {
-    render(
-      <CaseNudge
-        {...BASE}
-        nudge={{ ...UPCOMING, live: true, scheduledStartIso: isoFromNow(8 * 60_000) }}
-        lens="client"
-      />
-    );
+    render(<CaseNudge {...BASE} nudge={upcomingAt(8 * 60_000, { live: true })} lens="client" />);
     expect(screen.getByText('Your consultation starts in 8 minutes')).toBeInTheDocument();
   });
 
   it('says it is STARTING NOW once the start time has passed — never a negative count', () => {
     const { container } = render(
-      <CaseNudge
-        {...BASE}
-        nudge={{ ...UPCOMING, live: true, scheduledStartIso: isoFromNow(-2 * 60_000) }}
-        lens="client"
-      />
+      <CaseNudge {...BASE} nudge={upcomingAt(-2 * 60_000, { live: true })} lens="client" />
     );
     expect(screen.getByText('Your consultation is starting now')).toBeInTheDocument();
     expect(container.textContent ?? '').not.toMatch(/-\d/);
@@ -569,19 +575,14 @@ describe('CaseNudge — a LIVE consultation counts down, and never past zero', (
   });
 
   /**
-   * ⚠⚠ THE SERVER-SUPPLIED `live` IS SEEDED ONLY FOR FIRST PAINT, NEVER TRUSTED AFTER. Here it
-   * is stale (`live: false`) but the scheduled start is already inside the window — the clock
-   * must correct it on its own next tick, or a page left open across the boundary would sit
-   * with a dead countdown forever.
+   * ⚠⚠ THE SERVER-SUPPLIED `live` (`initialLive`) IS ONLY THE CROSSING BASELINE, NEVER TRUSTED
+   * FOR LIVENESS ITSELF (BAL-574). Here it is stale (`live: false`) but the scheduled start is
+   * already inside the join window measured against `serverNowIso` — the server-anchored clock
+   * derives the correct answer from RENDER 0, not on "its own next tick": there is no gap left
+   * open across the boundary for a page to sit in.
    */
   it('self-corrects to live when the server flag is stale — a page left open across the boundary', () => {
-    render(
-      <CaseNudge
-        {...BASE}
-        nudge={{ ...UPCOMING, scheduledStartIso: isoFromNow(5 * 60_000), live: false }}
-        lens="client"
-      />
-    );
+    render(<CaseNudge {...BASE} nudge={upcomingAt(5 * 60_000, { live: false })} lens="client" />);
     expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
     expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
   });
@@ -685,6 +686,123 @@ describe('CaseNudge — never renders a Cancel affordance', () => {
 });
 
 /**
+ * BAL-574 — liveness and the countdown derive from ONE server-anchored clock. These cases drive
+ * a DEVICE clock that disagrees with the server in both directions, using `upcomingWithSkew` —
+ * never `vi.setSystemTime`, because the anchoring primitive reads `Date.now()` only to measure
+ * an offset once, so the meaningful skew is the one baked into the fixture's own two instants.
+ */
+describe('CaseNudge — liveness anchors to the server instant, never the device clock', () => {
+  it('a device clock FAST by 30 min does not render an active Join before the server window opens', () => {
+    // Server's own view: the start is 20 minutes away — outside the 15-minute window. A device
+    // clock running 30 minutes fast would, read naively, place the start 10 minutes IN THE PAST.
+    const nudge = upcomingWithSkew(20 * 60_000, 30 * 60_000, { live: false });
+    render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
+
+    const countdown = screen.getByTestId('join-countdown');
+    expect(countdown).toBeInTheDocument();
+    expect(countdown).toHaveTextContent('Join in 20 minutes');
+    expect(screen.queryByRole('button', { name: /^Join .*meeting/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠⚠ THE DIRECT PIN ON THE DELETED `initialLive ||` GUARD. `live: true` here is a deliberately
+   * INCOHERENT fixture — production can never construct it, because `live` and `serverNowIso`
+   * come from the SAME `now` in ONE object literal (`toNudgeView`) — it exists solely so a
+   * reintroduced OR has something to break.
+   */
+  it('the stale server flag can no longer ADD liveness the anchored clock disagrees with', () => {
+    const nudge = upcomingAt(20 * 60_000, { live: true });
+    render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
+
+    const countdown = screen.getByTestId('join-countdown');
+    expect(countdown).toBeInTheDocument();
+    expect(countdown).toHaveTextContent('Join in 20 minutes');
+    expect(screen.queryByRole('button', { name: /^Join .*meeting/i })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * `joinCountdownLabel`'s ≥60-minute branch reads the VIEWER's local calendar day
+ * (`calendarDaysBetween`), so calling it on render 0 (a render that can still run on the SERVER)
+ * disagrees between the server's host timezone and the client's browser timezone — a hydration
+ * mismatch for every non-UTC viewer. Render 0 passes `{ calendarDaysAvailable: false }` to skip
+ * that ONE branch, in the SAME function, rather than a second, parallel implementation.
+ * `CaptureCountdownText` reads the countdown text from inside a
+ * `useLayoutEffect`, which React guarantees fires for EVERY committed tree, across the WHOLE
+ * tree, before any `useEffect` (passive effect) anywhere runs — so `seen[0]` is render 0's own
+ * text, captured before `useServerAnchoredClock`'s mount effect (a `useEffect`) has had any
+ * chance to run. `screen.getByText`/`getByRole` cannot observe this: RTL's `render()` flushes
+ * mount effects inside its own `act()`, so by the time it returns, the DOM already reflects the
+ * POST-effect value.
+ */
+function CaptureCountdownText({ seen }: { readonly seen: (string | null)[] }): null {
+  useLayoutEffect(() => {
+    seen.push(screen.queryByTestId('join-countdown')?.textContent ?? null);
+  });
+  return null;
+}
+
+describe('CaseNudge — render 0 countdown label is TZ-independent', () => {
+  // ~26.5h apart, which crosses a calendar-day boundary in UTC but not in UTC+14 — exactly the
+  // branch `calendarDaysBetween` decides.
+  const FAR_FUTURE_NUDGE: CaseNudgeView = {
+    kind: 'upcoming',
+    meetingId: 'm1',
+    scheduledStartIso: '2026-09-23T02:00:00.000Z',
+    live: false,
+    serverNowIso: '2026-09-21T23:30:00.000Z',
+    durationMinutes: 60,
+    joinPath: JOIN_PATH,
+  };
+
+  /** Renders under the given ambient `TZ`, captures render 0's countdown text, unmounts, and
+   *  restores `TZ` — the `zoned-grid.test.ts` / `decision-outcome-banner.test.tsx` precedent:
+   *  Node re-reads `process.env.TZ` on assignment. */
+  function renderZeroCountdownTextUnder(timeZone: string): string | null {
+    // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
+    const originalTz = process.env.TZ;
+    try {
+      // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
+      process.env.TZ = timeZone;
+      const seen: (string | null)[] = [];
+      const { unmount } = render(
+        <>
+          <CaseNudge {...BASE} nudge={FAR_FUTURE_NUDGE} lens="client" />
+          <CaptureCountdownText seen={seen} />
+        </>
+      );
+      unmount();
+      return seen[0] ?? null;
+    } finally {
+      // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
+      process.env.TZ = originalTz;
+    }
+  }
+
+  it('renders the identical countdown text at render 0 under UTC and under UTC+14', () => {
+    const underUtc = renderZeroCountdownTextUnder('UTC');
+    const underKiritimati = renderZeroCountdownTextUnder('Pacific/Kiritimati');
+
+    // Non-vacuity: the countdown must actually be present under BOTH zones, not merely equal
+    // because neither rendered anything.
+    expect(underUtc).not.toBeNull();
+    expect(underKiritimati).not.toBeNull();
+    expect(underUtc).toBe(underKiritimati);
+  });
+
+  /**
+   * Pins the SPECIFIC render-0 value for the ≥60-minute bucket to the literal `'Join'`, never an
+   * hours/days approximation. The TZ-equality test above would also pass for a second, parallel
+   * ladder that merely happened to agree with `joinCountdownLabel`; this pins the ACTUAL value,
+   * so any such reimplementation has something concrete to disagree with.
+   */
+  it('renders the literal "Join" at render 0 for the ≥60-minute bucket — never an hours approximation', () => {
+    const underUtc = renderZeroCountdownTextUnder('UTC');
+    expect(underUtc).toBe('Join');
+  });
+});
+
+/**
  * The join slot never empties, and the clock (not the server-resolved `nudge.live`) owns the
  * crossing. `useUpcomingJoinClock` ticks unconditionally; these cases drive the tick.
  */
@@ -698,12 +816,8 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
   });
 
   it('crosses from countdown to Join on its own tick, announces once, and refreshes once', () => {
-    // 20 seconds outside the window — one 30s tick later it has opened.
-    const nudge = {
-      ...UPCOMING,
-      scheduledStartIso: isoFromNow(CASE_JOIN_WINDOW_MINUTES * 60_000 + 20_000),
-      live: false,
-    };
+    // 20 seconds outside the window, zero device/server skew — one 30s tick later it has opened.
+    const nudge = upcomingAt(CASE_JOIN_WINDOW_MINUTES * 60_000 + 20_000, { live: false });
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
 
     // 20s outside the window rounds to the SAME minute as the boundary itself, so a
@@ -737,6 +851,51 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
     ]);
   });
 
+  /**
+   * A meeting SWAP without unmount (a refresh lands with a DIFFERENT meeting occupying the
+   * nudge slot) must re-seed the crossing baseline from the NEW meeting's own `initialLive`.
+   * Meeting A never goes live, so `wasLiveRef` sits at `false`; meeting B arrives ALREADY live.
+   * Without the re-seed, the stale `false` baseline reads B's arrival as a crossing and fires an
+   * unwanted announcement + refresh for a meeting the viewer never watched cross anything.
+   */
+  it('re-seeds the crossing baseline on a meeting swap, so an already-live new meeting refreshes nothing', () => {
+    const meetingA = upcomingAt(THREE_DAYS_MS, { live: false, meetingId: 'm1' });
+    const { rerender } = render(<CaseNudge {...BASE} nudge={meetingA} lens="client" />);
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+
+    const meetingB = upcomingAt(5 * 60_000, { live: true, meetingId: 'm2' });
+    rerender(<CaseNudge {...BASE} nudge={meetingB} lens="client" />);
+
+    expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The crossing baseline re-seed must clear `announcement` as well as `wasLiveRef`, or a swap to
+   * a DIFFERENT, not-yet-live meeting leaves `role="status"` reading "You can join now." about a
+   * meeting the viewer never watched cross anything.
+   */
+  it('clears a stale crossing announcement when the nudge swaps to a different, not-yet-live meeting', () => {
+    const meetingA = upcomingAt(CASE_JOIN_WINDOW_MINUTES * 60_000 + 20_000, {
+      live: false,
+      meetingId: 'm1',
+    });
+    const { rerender } = render(<CaseNudge {...BASE} nudge={meetingA} lens="client" />);
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('You can join now.');
+
+    const meetingB = upcomingAt(CASE_JOIN_WINDOW_MINUTES * 60_000 + 20_000, {
+      live: false,
+      meetingId: 'm2',
+    });
+    rerender(<CaseNudge {...BASE} nudge={meetingB} lens="client" />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
+
   it('never fires the crossing side effects when already live at mount', () => {
     render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="client" />);
     expect(screen.getByRole('status')).toHaveTextContent('');
@@ -749,15 +908,21 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
     expect(screen.getByRole('status')).toHaveTextContent('');
   });
 
+  /** Guards a MOUNT-time spurious refresh specifically under device/server skew: a device clock
+   *  fast by 30 min must not make an already-live meeting look like a false→true crossing. */
+  it('does not refresh at mount when a device clock 30 min fast still agrees the meeting is live', () => {
+    const nudge = upcomingWithSkew(5 * 60_000, 30 * 60_000, { live: true });
+    render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
+    expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+  });
+
   /** A device clock running behind the server's must never HIDE Join once the server already
    *  considers the meeting joinable — the server's word only ever ADDS liveness. */
   it('renders Join, not the countdown, when the server says live but the device clock disagrees', () => {
-    const nudge = {
-      ...UPCOMING,
-      // 20 minutes out by this (behind) device clock — outside the window on the clock alone.
-      scheduledStartIso: isoFromNow(20 * 60_000),
-      live: true,
-    };
+    // Device 30 min SLOW: the server's instant sits 30 min AHEAD of Date.now(), so a meeting the
+    // server considers live can read as not-yet-open by the raw device clock alone.
+    const nudge = upcomingWithSkew(5 * 60_000, -30 * 60_000, { live: true });
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
 
     const join = screen.getByRole('button', { name: /^Join .*meeting/i });
@@ -798,9 +963,13 @@ describe('CaseNudge — the countdown label renders in the inactive slot', () =>
     ['Join tomorrow', 25 * 60 * 60_000],
     ['Join in 3 days', 3 * 24 * 60 * 60_000],
   ])('renders "%s"', (label, offsetMs) => {
+    // ⚠ BAL-574 — `serverNowIso` MUST be `NOW`, not the module-load reading `UPCOMING` carries:
+    // the anchor primitive derives every tick from this field, so an unset or stale one here
+    // injects a multi-year skew against the fixed `NOW` this describe pins its system clock to.
     const nudge = {
       ...UPCOMING,
       scheduledStartIso: new Date(NOW.getTime() + offsetMs).toISOString(),
+      serverNowIso: NOW.toISOString(),
       live: offsetMs <= CASE_JOIN_WINDOW_MINUTES * 60_000,
     };
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);

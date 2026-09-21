@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CalendarClock, CalendarSync, MessageSquare, Sparkles, Video, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -17,6 +17,7 @@ import {
 import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { resolutionAskPendingTitle } from '@/lib/cases/actor-attribution';
+import { useServerAnchoredClock } from '@/hooks/use-server-anchored-clock';
 import type { CaseNudgeView } from '@/lib/cases/case-view-types';
 
 /**
@@ -27,8 +28,9 @@ import type { CaseNudgeView } from '@/lib/cases/case-view-types';
  * ⚠⚠ THE JOIN SLOT NEVER DISAPPEARS. Before the window it is `JoinCountdown`, a same-size
  * inactive control; once open it is `JoinMeetingButton` (a `<button>` +
  * `globalThis.location.assign`, NEVER an `href` — see that component's docblock), FIRST in the
- * action row. Liveness is owned by `useUpcomingJoinClock`'s own ticking clock, not trusted from
- * `nudge.live` past the first paint — see that hook's docblock. Reschedule/Propose are text-link
+ * action row. Liveness is derived, every tick, from one server-anchored clock
+ * (`useUpcomingJoinClock`) — `nudge.live` is only that clock's CROSSING BASELINE, never the
+ * liveness value itself; see that hook's docblock. Reschedule/Propose are text-link
  * buttons beside it, matching the row's "View recap" treatment — a demoted, secondary affordance,
  * hidden inside the join window. Cancel does not live here at all: it is on every upcoming row's
  * kebab (`consultation-row-menu.tsx`), including the nudge's own meeting, and the row's Cancel is
@@ -207,9 +209,9 @@ function UpcomingNudge({
   canProposeReschedule,
   onProposeReschedule,
 }: Readonly<UpcomingNudgeProps>): React.JSX.Element {
-  // ⚠ ONE CLIENT CLOCK FOR THE WHOLE ARM (BAL-567), and it OWNS liveness rather than trusting
-  // `nudge.live` past the first paint — see the hook's own docblock.
-  const clock = useUpcomingJoinClock(nudge.scheduledStartIso, nudge.live);
+  // ⚠ ONE CLIENT CLOCK FOR THE WHOLE ARM (BAL-567), anchored to the SERVER's instant (BAL-574).
+  // `nudge.live` is passed through as the crossing baseline only — see the hook's own docblock.
+  const clock = useUpcomingJoinClock(nudge.scheduledStartIso, nudge.serverNowIso, nudge.live);
 
   // ⚠ BAL-567 — JOIN IS FIRST AND PRIMARY INSIDE THE WINDOW, on BOTH sides. It is the action
   // that opens the credit session (`apps/api`'s `joinMeetingAsMember`); a calendar entry is not.
@@ -264,7 +266,11 @@ function UpcomingNudge({
         icon={clock.live ? Video : CalendarClock}
         live={clock.live}
         title={
-          <UpcomingTitle iso={nudge.scheduledStartIso} live={clock.live} minutes={clock.minutes} />
+          clock.live ? (
+            <UpcomingTitle live minutes={clock.minutes} />
+          ) : (
+            <UpcomingTitle live={false} iso={nudge.scheduledStartIso} />
+          )
         }
         body={upcomingBody(lens, counterpartyLabel, clock.live)}
         actions={
@@ -282,101 +288,134 @@ function UpcomingNudge({
   );
 }
 
-interface UpcomingJoinClock {
-  readonly live: boolean;
-  readonly minutes: number | null;
-  readonly timingLabel: string | null;
+interface UpcomingJoinClockBase {
   readonly joinLabel: string;
   readonly announcement: string;
 }
 
 /**
+ * ⚠ DISCRIMINATED ON `live`, NOT A FLAT SHAPE — `minutes` and `timingLabel` are BOTH `number` /
+ * `string` exactly when `live` is `true`, never independently `null`. This is what lets
+ * `UpcomingTitle` (below) make "`live: true` with no minute count" a compile error rather than a
+ * runtime fallback.
+ */
+type UpcomingJoinClock =
+  | (UpcomingJoinClockBase & {
+      readonly live: true;
+      readonly minutes: number;
+      readonly timingLabel: string;
+    })
+  | (UpcomingJoinClockBase & {
+      readonly live: false;
+      readonly minutes: null;
+      readonly timingLabel: null;
+    });
+
+/** BAL-574 — the nudge's own tick cadence. Deliberately NOT `VIEWER_CLOCK_TICK_MS` (60s): the
+ *  countdown must reach zero without a visible half-minute of staleness at the boundary. */
+export const JOIN_CLOCK_TICK_MS = 30_000;
+
+/**
  * The ONE client clock the `'upcoming'` arm needs, ticking on a 30s interval regardless of
  * liveness — the countdown must keep counting down to zero, not just while already live.
  *
- * ⚠⚠ THIS HOOK OWNS THE WINDOW, NOT THE SERVER — but `initialLive` (`nudge.live`) stays in the
- * OR on every tick, not just the seed render: `live = initialLive || insideCaseJoinWindow(...)`,
- * so the server's word can only ever ADD liveness, never take it away. A browser clock running
- * behind the server's would otherwise HIDE Join past the moment the server already considers the
- * meeting joinable — the one direction this hook must never drift in. Every tick still
- * re-derives from `insideCaseJoinWindow` against the browser's own clock — the same case-domain
- * predicate the loader used — for the OTHER direction: flipping live BEFORE the next server
- * refresh lands. On the tick that flips `live` false → true, it fires `router.refresh()` exactly
- * once — never again for this meeting, and never on a tick that doesn't cross — so the row
- * list's own `live`/`canReschedule` (server-resolved) catch up. The server stays the sole
+ * ⚠⚠ BAL-574 — LIVENESS IS DERIVED FROM A SERVER-ANCHORED CLOCK, NEVER THE DEVICE CLOCK.
+ * `useServerAnchoredClock` seeds `now` to the server's own render instant and advances it by
+ * elapsed real time, so `live = insideCaseJoinWindow(now, iso)` is bit-for-bit what the server
+ * itself computed for `initialLive` at render 0 — a device clock running fast or slow never
+ * enters the comparison. `initialLive` (`nudge.live`) is NO LONGER part of that computation; it
+ * survives only as the CROSSING BASELINE — the value `wasLiveRef` starts from, so a meeting that
+ * is already live at mount does not read as a false→true crossing and fire a spurious
+ * `router.refresh()`. On the tick that flips `live` false → true, this fires `router.refresh()`
+ * exactly once — never again for this meeting, and never on a tick that doesn't cross — so the
+ * row list's own `live`/`canReschedule` (server-resolved) catch up. The server stays the sole
  * authority on the join CLICK (`assertMeetingJoinable`); this hook is presentation only.
  */
-function useUpcomingJoinClock(iso: string, initialLive: boolean): UpcomingJoinClock {
+function useUpcomingJoinClock(
+  iso: string,
+  serverNowIso: string,
+  initialLive: boolean
+): UpcomingJoinClock {
   const router = useRouter();
   // ⚠ A REF, NOT A TICK-EFFECT DEPENDENCY. `next/navigation`'s `useRouter()` is not guaranteed
   // to return the same object across renders (it doesn't in this file's own test mock), and the
-  // tick effect below calls `setState` on every run — putting `router` in its dependency array
-  // would re-fire the effect every render it changed identity, which calls `setState` again,
-  // which re-renders, forever. The ref always reads the LATEST router without re-arming the tick.
+  // crossing effect below can call `setState` on every run — putting `router` in its dependency
+  // array would re-fire the effect every render it changed identity, which calls `setState`
+  // again, which re-renders, forever. The ref always reads the LATEST router without re-arming.
   const routerRef = useRef(router);
   useEffect(() => {
     routerRef.current = router;
   });
 
-  const [clock, setClock] = useState<{
-    live: boolean;
-    minutes: number | null;
-    timingLabel: string | null;
-    joinLabel: string | null;
-  }>({ live: initialLive, minutes: null, timingLabel: null, joinLabel: null });
+  const { now, anchored } = useServerAnchoredClock(serverNowIso, JOIN_CLOCK_TICK_MS);
+  const scheduledStart = useMemo(() => new Date(iso), [iso]);
+
+  const live = insideCaseJoinWindow(now, iso);
+  // Until the clock is anchored this render can still be the server's, so the viewer-local
+  // calendar-day branch must not run — see `joinCountdownLabel`.
+  const joinLabel = joinCountdownLabel(now, scheduledStart, { calendarDaysAvailable: anchored });
+
   const [announcement, setAnnouncement] = useState('');
+  // ⚠ SEEDED FROM `initialLive`, NOT `false` — deleting this seed makes a meeting that is
+  // ALREADY live at mount look like a false→true crossing on the first effect run, which fires
+  // an unwanted `router.refresh()` at mount. See the hook's own docblock.
   const wasLiveRef = useRef(initialLive);
+  // The last server word this hook re-seeded `wasLiveRef` from — `iso` alone is not enough,
+  // because a `router.refresh()` on the SAME meeting must not re-seed the crossing baseline.
+  const serverWordRef = useRef({ iso, initialLive });
 
   useEffect(() => {
-    wasLiveRef.current = initialLive;
-    const scheduledStart = new Date(iso);
-    const tick = (): void => {
-      const now = new Date();
-      const live = initialLive || insideCaseJoinWindow(now, iso);
-      setClock({
-        live,
-        minutes: live ? signedMinutesUntilCalendarStart(now, scheduledStart) : null,
-        timingLabel: live ? joinAffordanceTimingLabel(now, scheduledStart) : null,
-        joinLabel: live ? 'Join now' : joinCountdownLabel(now, scheduledStart),
-      });
-      if (live && !wasLiveRef.current) {
-        setAnnouncement('You can join now.');
-        routerRef.current.refresh();
-      }
-      wasLiveRef.current = live;
-    };
-    tick();
-    const timer = setInterval(tick, 30_000);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [iso, initialLive]);
+    const previous = serverWordRef.current;
+    if (previous.iso !== iso || previous.initialLive !== initialLive) {
+      serverWordRef.current = { iso, initialLive };
+      wasLiveRef.current = initialLive;
+      // A DIFFERENT meeting's crossing announcement must not linger once that meeting is gone —
+      // otherwise a swap to a not-yet-live meeting keeps `role="status"` reading "You can join
+      // now." for a meeting the viewer never watched cross anything.
+      setAnnouncement('');
+    }
+    if (live && !wasLiveRef.current) {
+      setAnnouncement('You can join now.');
+      routerRef.current.refresh();
+    }
+    wasLiveRef.current = live;
+  }, [iso, initialLive, live]);
 
-  return { ...clock, joinLabel: clock.joinLabel ?? 'Join', announcement };
+  if (live) {
+    return {
+      live: true,
+      minutes: signedMinutesUntilCalendarStart(now, scheduledStart),
+      timingLabel: joinAffordanceTimingLabel(now, scheduledStart),
+      joinLabel,
+      announcement,
+    };
+  }
+  return { live: false, minutes: null, timingLabel: null, joinLabel, announcement };
 }
 
 /**
- * "Your consultation starts in 8 minutes" — but only once the browser has a clock.
+ * "Your consultation starts in 8 minutes" — the live arm's minute count, or the absolute time
+ * for the not-yet-live arm.
  *
- * ⚠ PURE AS OF BAL-567: `minutes` is INJECTED by {@link useUpcomingJoinClock}, which the Join
- * button's `aria-label` reads from too, so the heading and the label can never disagree about
- * how long is left. The hydration rule is unchanged — `minutes` is `null` on the server render.
+ * ⚠ DISCRIMINATED ON `live` (BAL-574) — `live: true` STRUCTURALLY CARRIES `minutes: number`, so
+ * "live with no minute count" cannot be constructed and this component has no fallback branch for
+ * it. `minutes` and the Join button's `aria-label` both read off the same
+ * {@link useUpcomingJoinClock} tick, so the heading and the label can never disagree about how
+ * long is left.
  */
-function UpcomingTitle({
-  iso,
-  live,
-  minutes,
-}: Readonly<{ iso: string; live: boolean; minutes: number | null }>): React.JSX.Element {
-  if (!live) {
+type UpcomingTitleProps =
+  | { readonly live: false; readonly iso: string }
+  | { readonly live: true; readonly minutes: number };
+
+function UpcomingTitle(props: Readonly<UpcomingTitleProps>): React.JSX.Element {
+  if (!props.live) {
     return (
       <>
-        Next consultation · <LocalDateTime iso={iso} variant="day-month-time" />
+        Next consultation · <LocalDateTime iso={props.iso} variant="day-month-time" />
       </>
     );
   }
-  if (minutes === null) {
-    return <>Your consultation is about to start</>;
-  }
+  const { minutes } = props;
   if (minutes <= 0) {
     return <>Your consultation is starting now</>;
   }

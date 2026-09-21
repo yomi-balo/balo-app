@@ -347,10 +347,11 @@ const HELD_CONSULTATION: CaseConsultationRowView = {
 };
 
 /**
- * `useUpcomingJoinClock` (`case-nudge.tsx`) derives liveness from the REAL clock rather than
- * trusting a `kind: 'upcoming'` nudge's `live` flag past first paint, so a hardcoded past date
- * silently reads as live (and fires an unwanted `router.refresh()` on mount) the moment real
- * time passes it. Every upcoming fixture below is offset from `Date.now()` instead.
+ * `useUpcomingJoinClock` (`case-nudge.tsx`) derives liveness from a SERVER-ANCHORED clock —
+ * `serverNowIso` plus elapsed real time — never from a `kind: 'upcoming'` nudge's `live` flag,
+ * which is only the crossing baseline. A hardcoded past `scheduledStartIso` therefore silently
+ * reads as live (and fires an unwanted `router.refresh()` on mount) the moment real time passes
+ * it, so every upcoming fixture below is offset from `Date.now()` instead.
  */
 function farFutureIso(): string {
   return new Date(Date.now() + 3 * 24 * 60 * 60_000).toISOString();
@@ -358,6 +359,12 @@ function farFutureIso(): string {
 
 function withinJoinWindowIso(): string {
   return new Date(Date.now() + 5 * 60_000).toISOString();
+}
+
+/** BAL-574 — every `'upcoming'` nudge fixture needs `serverNowIso`; a missing one compiles
+ *  silently (these fixtures are `as CaseSurfaceView`) and produces a permanently dead clock. */
+function nowIso(): string {
+  return new Date().toISOString();
 }
 
 /**
@@ -585,6 +592,7 @@ describe('CaseSurface — the conditional regions', () => {
       meetingId: 'm-upcoming-1',
       scheduledStartIso: farFutureIso(),
       live: false,
+      serverNowIso: nowIso(),
       durationMinutes: 45,
     };
 
@@ -696,6 +704,7 @@ describe('CaseSurface — the conditional regions', () => {
       meetingId: 'm-upcoming-1',
       scheduledStartIso: farFutureIso(),
       live: false,
+      serverNowIso: nowIso(),
       durationMinutes: 45,
     };
     // The nudge's `canProposeReschedule` reads the ROW for the nudge's own meeting
@@ -813,6 +822,7 @@ describe('CaseSurface — the conditional regions', () => {
               meetingId: 'm-other',
               scheduledStartIso: farFutureIso(),
               live: false,
+              serverNowIso: nowIso(),
               durationMinutes: 30,
             },
             rescheduleProposals: [PROPOSAL_VIEW],
@@ -974,6 +984,7 @@ describe('the cancel dialog — mount/close/refresh, opened from a row', () => {
     meetingId: 'm-upcoming-1',
     scheduledStartIso: farFutureIso(),
     live: false,
+    serverNowIso: nowIso(),
     durationMinutes: 45,
   };
   const CANCELLABLE_ROW = upcomingRow({ meetingId: 'm-upcoming-1', canCancel: true });
