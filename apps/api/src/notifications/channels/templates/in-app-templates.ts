@@ -1177,19 +1177,18 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
-  // BAL-478 funding-blocked — company billing admins. A Case booking was refused before any
-  // write for lack of funding. Names the booker (data.requestedByName, carried verbatim on the
-  // payload) and the expert PARTY (data.expertPartyLabel). Deep-links to billing settings.
+  // BAL-478 funding-blocked — company billing admins (minus the booker, if they hold — fix
+  // round 2 B2). `requestedByLabel` arrives PRE-COMPOSED from the resolver's
+  // `hydrateBookingFundingBlockedActor` (F4/F5 — "@ company" staple-on only when a real name
+  // resolved), matching the email factory's body and its own subject; this factory does NOT
+  // recompute `personWithOrgLabel` a second time. B3 — "couldn't go through", never "waiting" /
+  // "held": nothing was written and the slot is still open to anyone.
   'booking-funding-blocked': (data) => {
-    const requestedByName = (data.requestedByName as string) ?? 'A teammate';
+    const requestedByLabel = (data.requestedByLabel as string) ?? 'A teammate';
     const expertPartyLabel = (data.expertPartyLabel as string) ?? 'an expert';
-    // UX-1 (fix round) — retrospective copy names the person labelled "@ company" on first
-    // mention (CLAUDE.md), matching the email factory's body and its own subject.
-    const company = data.company as { name?: string } | undefined;
-    const requestedByLabel = personWithOrgLabel(requestedByName, company?.name);
     return {
-      title: 'A booking is waiting on billing',
-      body: `${requestedByLabel} went to book a consultation with ${expertPartyLabel}. Add a payment method or top up and they can pick a time.`,
+      title: "A booking couldn't go through",
+      body: `${requestedByLabel} tried to book a consultation with ${expertPartyLabel}, but it couldn't go through. Add a payment method or top up and your team can book right away.`,
       actionUrl: '/settings/billing',
     };
   },

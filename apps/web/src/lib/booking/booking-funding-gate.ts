@@ -61,7 +61,6 @@ export type BookingFundingResult =
 
 interface EnforceBookingFundingInput {
   readonly actorUserId: string;
-  readonly actorDisplayName: string;
   readonly companyId: string;
   readonly expertProfileId: string;
   readonly estimatedMinutes: number;
@@ -181,6 +180,12 @@ async function resolveCanManageBilling(input: EnforceBookingFundingInput): Promi
  * The zero-arm side effects — fan-out + analytics. A publish failure is logged (Axiom + Sentry)
  * and swallowed: the refusal is still returned, and the fan-out is best-effort behind BullMQ's
  * own retries (orchestrator ruling, REV-3 — not a second promise-keeping mechanism).
+ *
+ * ⚠⚠ THE PAYLOAD CARRIES `requestedByUserId`, NEVER A PRE-RENDERED NAME (fix round 2, B2). The
+ * resolver hydrates the display name AND checks whether the booker is themselves a fan-out
+ * recipient, dropping them from `data.billingUserIds` when they are — a pre-rendered name here
+ * could not express that filter, and a bare id is also the shape every other actor-naming event
+ * in this codebase uses (`credit.saved_card.detached`, `billing.email_changed`).
  */
 async function publishFundingBlocked(
   input: EnforceBookingFundingInput,
@@ -194,7 +199,7 @@ async function publishFundingBlocked(
     publishNotificationEvent('booking.funding_blocked', {
       correlationId: `booking-funding:${input.companyId}:${input.actorUserId}:${hourBucket}`,
       companyId: input.companyId,
-      requestedByName: input.actorDisplayName,
+      requestedByUserId: input.actorUserId,
       expertPartyLabel: expertDisplay.partyLabel,
     });
 

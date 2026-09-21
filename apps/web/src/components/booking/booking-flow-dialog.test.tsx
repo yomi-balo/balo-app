@@ -615,7 +615,7 @@ describe('BookingFlowDialog — failure panels + idempotent retry', () => {
       });
 
       expect(await screen.findByText('One setup step first')).toBeInTheDocument();
-      expect(screen.getByText(/billing admins have been told/i)).toBeInTheDocument();
+      expect(screen.getByText(/billing admins have been notified/i)).toBeInTheDocument();
       // ⚠ Per-assertion mutation proof: the holder-arm control IS present in the OTHER case
       // (above), so this negative is not vacuous.
       expect(screen.queryByRole('button', { name: /set up billing/i })).toBeNull();

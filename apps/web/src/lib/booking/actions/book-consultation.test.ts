@@ -644,6 +644,59 @@ describe('bookConsultationAction', () => {
   });
 
   describe('funding pre-condition (BAL-478)', () => {
+    /**
+     * B1 (external review of PR #333) — the gate's minutes input was spoofable: nothing tied
+     * `slot.durationMinutes` to `slot.startIso`/`slot.endIso`, and the two are consumed by
+     * DIFFERENT downstream steps (the gate sizes its estimate from `durationMinutes`; the
+     * meeting is booked from the raw window). A crafted `durationMinutes: 15` against a 3-hour
+     * window passed the balance arm on a fraction of the funds, then booked the full window.
+     *
+     * This is the property worth pinning now: a mismatched pair is refused AT VALIDATION and
+     * never reaches the gate at all — replacing the old R3 pin's implicit assumption that a
+     * mismatched fixture could even reach `bookConsultationAction` in the first place.
+     */
+    it('B1 — a slot window that disagrees with durationMinutes is rejected at validation, before the gate', async () => {
+      const spoofed: BookConsultationInput = {
+        ...NEW_CASE_INPUT,
+        slot: {
+          // A 3-hour window declaring the cheapest rung on the duration ladder.
+          startIso: '2026-09-01T04:00:00.000Z',
+          endIso: '2026-09-01T07:00:00.000Z',
+          durationMinutes: 15,
+        },
+      };
+
+      const result = await bookConsultationAction(spoofed);
+
+      expect(result).toEqual({ ok: false, stage: 'validation', code: 'invalid_request' });
+      expect(mockEnforceBookingFunding).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(mockPostBookMeeting).not.toHaveBeenCalled();
+    });
+
+    /**
+     * B1 — an unparseable instant must fail as a NAMED validation error, not fall through to
+     * `NaN` arithmetic in the duration cross-check (`NaN !== anything` happens to be `true`,
+     * so the check would still reject it, but only as an unnamed side effect). `.datetime()`
+     * (mirroring `book-intro-call.ts`'s shipped fix for the identical shape) catches this
+     * before the cross-check ever runs.
+     */
+    it('B1 — an unparseable startIso is rejected at validation, never reaches NaN arithmetic', async () => {
+      const malformed: BookConsultationInput = {
+        ...NEW_CASE_INPUT,
+        slot: {
+          startIso: 'not-a-real-instant',
+          endIso: '2026-09-01T04:30:00.000Z',
+          durationMinutes: 30,
+        },
+      };
+
+      const result = await bookConsultationAction(malformed);
+
+      expect(result).toEqual({ ok: false, stage: 'validation', code: 'invalid_request' });
+      expect(mockEnforceBookingFunding).not.toHaveBeenCalled();
+    });
+
     it('new-case arm: a zero-arm refusal writes NOTHING', async () => {
       mockEnforceBookingFunding.mockResolvedValue({
         ok: false,

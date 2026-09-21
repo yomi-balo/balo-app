@@ -1387,22 +1387,20 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     };
   },
 
-  // BAL-478 funding-blocked — EMAIL to each fanned-out MANAGE_BILLING holder. A Case booking was
-  // refused before any write for lack of funding. `requestedByName` (the booker) is retrospective
-  // (CLAUDE.md) — SUBJECT uses the labelled "@ company" form, the SAME F4 precedent
-  // `credit-saved-card-detached` establishes, using `data.company`'s name (hydrated by the
-  // resolver from `payload.companyId`). `expertPartyLabel` is prospective, carried verbatim. NO
-  // money figure anywhere (D4c). CTA lands on billing settings.
+  // BAL-478 funding-blocked — EMAIL to each fanned-out MANAGE_BILLING holder (minus the booker
+  // themselves, if they hold — fix round 2 B2). `requestedByLabel` arrives PRE-COMPOSED from the
+  // resolver's `hydrateBookingFundingBlockedActor` (the SAME F4/F5 precedent
+  // `credit-saved-card-detached` establishes) — SUBJECT reuses it verbatim rather than
+  // recomputing `personWithOrgLabel` a second time. `expertPartyLabel` is prospective, carried
+  // verbatim. NO money figure anywhere (D4c). CTA lands on billing settings.
   'booking-funding-blocked': (data) => {
-    const requestedByName = (data.requestedByName as string) ?? 'A teammate';
+    const requestedByLabel = (data.requestedByLabel as string) ?? 'A teammate';
     const expertPartyLabel = (data.expertPartyLabel as string) ?? 'an expert';
-    const companyName = (data.company as { name?: string } | undefined)?.name;
-    const subject = `${sanitizeSubjectTitle(personWithOrgLabel(requestedByName, companyName))} needs billing set up to book`;
+    const subject = `${sanitizeSubjectTitle(requestedByLabel)} needs billing set up to book`;
     return {
       component: React.createElement(BookingFundingBlockedEmail, {
         firstName: (data.recipientName as string) ?? 'there',
-        requestedByName,
-        companyName,
+        requestedByLabel,
         expertPartyLabel,
         ctaUrl: `${BASE_URL}/settings/billing`,
         baseUrl: BASE_URL,

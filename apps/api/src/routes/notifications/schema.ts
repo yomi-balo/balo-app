@@ -637,7 +637,7 @@ const bookingRescheduledPayload = z.object({
 const bookingFundingBlockedPayload = z.object({
   correlationId: z.string().min(1).max(200),
   companyId: z.uuid(),
-  requestedByName: z.string().min(1).max(200),
+  requestedByUserId: z.uuid(),
   expertPartyLabel: z.string().min(1).max(200),
 });
 

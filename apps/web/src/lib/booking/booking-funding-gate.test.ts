@@ -55,7 +55,6 @@ const USER_ID = 'user-1';
 
 const BASE_INPUT = {
   actorUserId: USER_ID,
-  actorDisplayName: 'Dana Okoro',
   companyId: COMPANY_ID,
   expertProfileId: EXPERT_PROFILE_ID,
   estimatedMinutes: 30,
@@ -241,10 +240,21 @@ describe('enforceBookingFunding', () => {
   /**
    * REV-3 — a publish failure must not turn the refusal into `'unavailable'` either. Logged
    * (Axiom + Sentry) and swallowed; the refusal is still returned.
+   *
+   * ⚠ NB (fix round 2) — reaches the catch at the ACTUAL publish call, not at
+   * `resolveBookingExpertDisplay` (that helper is documented fail-soft and never throws in
+   * production — mocking it to reject would test an unreachable path). `publishNotificationEvent`
+   * is called synchronously without `await`, so only a SYNCHRONOUS throw from it is caught here
+   * — hence `mockImplementation`, not `mockRejectedValue`.
    */
   it('REV-3 — a publish failure is logged to Sentry and swallowed; the refusal is still returned', async () => {
     mockFindByCompanyId.mockResolvedValue(undefined);
-    mockResolveBookingExpertDisplay.mockRejectedValue(new Error('expert display blew up'));
+    // `mockImplementationOnce` — NOT `mockImplementation` — so the throw is scoped to this one
+    // call and cannot leak into a later test the way `vi.clearAllMocks()` (which resets call
+    // history but not a standing implementation) would otherwise allow.
+    mockPublishNotificationEvent.mockImplementationOnce(() => {
+      throw new Error('queue unavailable');
+    });
 
     const result = await enforceBookingFunding(BASE_INPUT);
 
@@ -272,7 +282,9 @@ describe('enforceBookingFunding', () => {
       expect.objectContaining({
         correlationId: `booking-funding:${COMPANY_ID}:${USER_ID}:${expectedBucket}`,
         companyId: COMPANY_ID,
-        requestedByName: 'Dana Okoro',
+        // B2 — a bare user id, never a pre-rendered name (the resolver hydrates the name and
+        // decides whether the booker should be dropped from the fan-out).
+        requestedByUserId: USER_ID,
         expertPartyLabel: 'CloudPeak',
       })
     );

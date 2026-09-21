@@ -1367,13 +1367,24 @@ export interface BookingRescheduledPayload {
  * an amount. ⚠ NO CASE TITLE either: it is client-typed text on the new-case arm and has no
  * business in a Balo-branded email. ⚠ No email address (ADR-1044 §3).
  *
- * Retrospective copy names the PERSON (`requestedByName`, labelled "@ {company}" by the
- * template); prospective copy names the PARTY (`expertPartyLabel`). Defined ONCE here.
+ * ⚠⚠ `requestedByUserId`, NOT A PRE-RENDERED NAME (fix round 2, B2). The resolver hydrates the
+ * booker's display name AND label from this id — the SAME shape as `credit.saved_card.detached`
+ * / `billing.email_changed`'s `…ByUserId` fields — because the resolver is the only place that
+ * can also check whether the booker is themselves a fan-out recipient and drop them from
+ * `data.billingUserIds`: the common `no_wallet` case is a solo owner who IS the only billing
+ * admin, and mailing them "Sam @ Northwind went to book…" about themselves is not a
+ * confirmation the way a billing-email change is — it's self-referential noise. A payload
+ * carrying only a pre-rendered name cannot express that filter.
+ *
+ * Retrospective copy names the PERSON (`data.requestedByLabel`, "@ {company}" on first mention,
+ * hydrated by the resolver); prospective copy names the PARTY (`expertPartyLabel`, carried
+ * verbatim — it never identifies a fan-out recipient, so it needs no id-based hydration).
+ * Defined ONCE here.
  */
 export interface BookingFundingBlockedPayload {
   correlationId: string; // booking-funding:{companyId}:{userId}:{hourBucket} → jobId dedup
   companyId: string; // → data.billingUserIds (fan-out) + data.company (name)
-  requestedByName: string; // the booker's display name, or 'A teammate'
+  requestedByUserId: string; // → data.requestedByName / data.requestedByLabel; may be filtered out of billingUserIds
   expertPartyLabel: string; // agency name, or the independent expert's own name
 }
 

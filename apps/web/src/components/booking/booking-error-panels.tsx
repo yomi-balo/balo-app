@@ -134,7 +134,7 @@ export function FundingSetupPanel({
         <p className="text-muted-foreground text-sm leading-relaxed">
           {canManageBilling
             ? 'Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Set that up and pick your time straight after.'
-            : "Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Your billing admins have been told, so it's already in motion — come back and pick a time once it's set up."}
+            : "Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Your billing admins have been notified — come back and pick a time once it's set up."}
         </p>
       </div>
       {canManageBilling ? (

@@ -190,7 +190,17 @@ export interface BookingEventMap {
 
 /** BAL-478 — the booking flow's first SERVER event. Emitted by `enforceBookingFunding`. */
 export const BOOKING_SERVER_EVENTS = {
-  /** A Case booking was refused before any write because neither funding arm held. */
+  /**
+   * A Case booking was refused before any write because neither funding arm held.
+   *
+   * ⚠ COUNTS ATTEMPTS, NOT DISTINCT BLOCKED BOOKERS (fix round 2 NB). The billing-admin EMAIL
+   * is hour-bucketed (`booking-funding:{companyId}:{userId}:{hourBucket}`), but this event
+   * fires on EVERY refused submit — a booker retrying the same doomed booking five times in a
+   * minute emits five events. The existing/replay arms also never touch the case-create rate
+   * limit (`enforceCaseCreateRateLimit`), which only bounds the NEW-case path. A dashboard
+   * answering "how many bookers hit this?" must dedupe on `(distinct_id, hour bucket)`, not
+   * count raw events.
+   */
   FUNDING_BLOCKED: 'booking_funding_blocked',
 } as const;
 

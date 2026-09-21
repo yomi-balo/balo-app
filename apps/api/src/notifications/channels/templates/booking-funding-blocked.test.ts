@@ -18,8 +18,7 @@ function clean(html: string): string {
 describe('BookingFundingBlockedEmail (BAL-478)', () => {
   const props = (over: Record<string, unknown> = {}) => ({
     firstName: 'Sam',
-    requestedByName: 'Dana',
-    companyName: 'Northwind Industrial',
+    requestedByLabel: 'Dana @ Northwind Industrial',
     expertPartyLabel: 'CloudPeak',
     ctaUrl: `${BASE}/settings/billing`,
     baseUrl: BASE,
@@ -27,25 +26,25 @@ describe('BookingFundingBlockedEmail (BAL-478)', () => {
   });
 
   /**
-   * UX-1 (fix round) — the BODY's first mention is retrospective copy and must carry the SAME
-   * "@ company" label the subject already applies (`getEmailTemplate` test below), matching the
-   * `credit-saved-card-detached` F4 precedent. A bare name here was the defect.
+   * B2 (fix round 2) — the component takes `requestedByLabel` PRE-COMPOSED (by the resolver)
+   * and renders it verbatim; it does no `personWithOrgLabel` computation of its own.
+   *
+   * B3 (fix round 2) — every line is LITERALLY TRUE: nothing was written, so the copy never
+   * claims a time was "held" or a booking is "waiting". The pill never claims to be "from your
+   * team" — this is a Balo notice ABOUT a teammate's attempt.
    */
-  it('renders the setup-step copy — labelled first mention, no money figure, no urgency', async () => {
+  it('renders the setup-step copy — labelled first mention, no false reservation claim, no urgency', async () => {
     const html = clean(await render(BookingFundingBlockedEmail(props())));
     expect(html).toContain('Hi Sam,');
-    expect(html).toContain('A booking is waiting on billing');
+    expect(html).toContain("A booking couldn't go through");
     expect(html).toContain(
-      'Dana @ Northwind Industrial went to book a consultation with CloudPeak'
+      'Dana @ Northwind Industrial tried to book a consultation with CloudPeak'
     );
+    expect(html).toContain('The time is still open to anyone');
     expect(html).toContain('Set up billing');
     expect(html).toContain(`${BASE}/settings/billing`);
-  });
-
-  it('degrades to the bare name when no company name is known (personWithOrgLabel collapse)', async () => {
-    const html = clean(await render(BookingFundingBlockedEmail(props({ companyName: undefined }))));
-    expect(html).toContain('Dana went to book a consultation with CloudPeak');
-    expect(html).not.toContain('Dana @');
+    // B3 — never implies a pending reservation, and never misattributes the notice to the team.
+    expect(html).not.toMatch(/waiting|is held|has been held|from your team/i);
   });
 
   it('carries no money figure and no dunning/urgency language', async () => {
@@ -60,12 +59,11 @@ describe('BookingFundingBlockedEmail (BAL-478)', () => {
 });
 
 describe('getEmailTemplate — booking-funding-blocked factory', () => {
-  it('subject uses the labelled "@ company" form (F4 precedent)', async () => {
+  it('subject and body reuse the resolver-composed requestedByLabel verbatim (never a second personWithOrgLabel call)', async () => {
     const out = getEmailTemplate('booking-funding-blocked', {
       recipientName: 'Sam',
-      requestedByName: 'Dana',
+      requestedByLabel: 'Dana @ Northwind Industrial',
       expertPartyLabel: 'CloudPeak',
-      company: { name: 'Northwind Industrial' },
     });
     expect(out.subject).toBe('Dana @ Northwind Industrial needs billing set up to book');
     const html = clean(await render(out.component));
@@ -84,32 +82,23 @@ describe('getEmailTemplate — booking-funding-blocked factory', () => {
 });
 
 describe('getInAppTemplate — booking-funding-blocked factory', () => {
-  it('returns title/body/actionUrl with the labelled first mention, and carries no money figure', () => {
+  it('returns title/body/actionUrl reusing requestedByLabel verbatim, and carries no money figure', () => {
     const out = getInAppTemplate('booking-funding-blocked', {
-      requestedByName: 'Dana',
+      requestedByLabel: 'Dana @ Northwind Industrial',
       expertPartyLabel: 'CloudPeak',
-      company: { name: 'Northwind Industrial' },
     });
-    expect(out.title).toBe('A booking is waiting on billing');
+    expect(out.title).toBe("A booking couldn't go through");
     expect(out.body).toBe(
-      'Dana @ Northwind Industrial went to book a consultation with CloudPeak. Add a payment method or top up and they can pick a time.'
+      "Dana @ Northwind Industrial tried to book a consultation with CloudPeak, but it couldn't go through. Add a payment method or top up and your team can book right away."
     );
     expect(out.actionUrl).toBe('/settings/billing');
     expect(out.body).not.toMatch(/\$/);
-  });
-
-  it('degrades to the bare name when no company name is known', () => {
-    const out = getInAppTemplate('booking-funding-blocked', {
-      requestedByName: 'Dana',
-      expertPartyLabel: 'CloudPeak',
-    });
-    expect(out.body).toContain('Dana went to book a consultation with CloudPeak.');
-    expect(out.body).not.toContain('Dana @');
+    expect(out.body).not.toMatch(/waiting|is held|has been held/i);
   });
 
   it('degrades to placeholders on empty data, without throwing', () => {
     const out = getInAppTemplate('booking-funding-blocked', {});
-    expect(out.title).toBe('A booking is waiting on billing');
-    expect(out.body).toContain('A teammate went to book a consultation with an expert.');
+    expect(out.title).toBe("A booking couldn't go through");
+    expect(out.body).toContain('A teammate tried to book a consultation with an expert');
   });
 });
