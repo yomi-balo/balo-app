@@ -29,22 +29,29 @@ describe('BookingFundingBlockedEmail (BAL-478)', () => {
    * B2 (fix round 2) — the component takes `requestedByLabel` PRE-COMPOSED (by the resolver)
    * and renders it verbatim; it does no `personWithOrgLabel` computation of its own.
    *
-   * B3 (fix round 2) — every line is LITERALLY TRUE: nothing was written, so the copy never
-   * claims a time was "held" or a booking is "waiting". The pill never claims to be "from your
-   * team" — this is a Balo notice ABOUT a teammate's attempt.
+   * Fix round 3 — every line is LITERALLY TRUE AT READ TIME, not just at send time: "nothing
+   * was booked, so no time was held" is a past fact, never a present-tense claim about the
+   * slot's live availability (which could be false by the time a billing admin reads it). The
+   * pill never claims to be "from your team". And no line PROMISES an outcome ("goes straight
+   * through" / "book right away") — the gate can refuse a second attempt too, so copy describes
+   * the action available ("try booking again"), never a guaranteed result.
    */
-  it('renders the setup-step copy — labelled first mention, no false reservation claim, no urgency', async () => {
+  it('renders the setup-step copy — labelled first mention, no false claims, no promised outcome', async () => {
     const html = clean(await render(BookingFundingBlockedEmail(props())));
     expect(html).toContain('Hi Sam,');
     expect(html).toContain("A booking couldn't go through");
     expect(html).toContain(
       'Dana @ Northwind Industrial tried to book a consultation with CloudPeak'
     );
-    expect(html).toContain('The time is still open to anyone');
+    expect(html).toContain('Nothing was booked, so no time was held');
+    expect(html).toContain('your team can try booking again');
     expect(html).toContain('Set up billing');
     expect(html).toContain(`${BASE}/settings/billing`);
-    // B3 — never implies a pending reservation, and never misattributes the notice to the team.
-    expect(html).not.toMatch(/waiting|is held|has been held|from your team/i);
+    // Never implies a pending reservation or a present-tense availability claim, never
+    // misattributes the notice to the team, and never promises a guaranteed outcome.
+    expect(html).not.toMatch(
+      /waiting|is held|has been held|from your team|still open|straight through|right away|without this happening again/i
+    );
   });
 
   it('carries no money figure and no dunning/urgency language', async () => {
@@ -89,11 +96,13 @@ describe('getInAppTemplate — booking-funding-blocked factory', () => {
     });
     expect(out.title).toBe("A booking couldn't go through");
     expect(out.body).toBe(
-      "Dana @ Northwind Industrial tried to book a consultation with CloudPeak, but it couldn't go through. Add a payment method or top up and your team can book right away."
+      "Dana @ Northwind Industrial tried to book a consultation with CloudPeak, but it couldn't go through. Nothing was booked, so no time was held. Add a payment method or top up, then try booking again."
     );
     expect(out.actionUrl).toBe('/settings/billing');
     expect(out.body).not.toMatch(/\$/);
-    expect(out.body).not.toMatch(/waiting|is held|has been held/i);
+    expect(out.body).not.toMatch(
+      /waiting|is held|has been held|still open|right away|without this happening again/i
+    );
   });
 
   it('degrades to placeholders on empty data, without throwing', () => {

@@ -103,7 +103,7 @@ export function SessionExpiredPanel({
  *
  * ⚠ NO DEAD-END CTA ON THE MEMBER ARM. Booking needs CONSUME_CREDITS; adding a card needs
  * MANAGE_BILLING, so `/settings/billing` would refuse the ordinary booker. The member arm's
- * promise ("your billing admins have been told") is kept by `enforceBookingFunding`, which
+ * promise ("your billing admins have been notified") is kept by `enforceBookingFunding`, which
  * publishes `booking.funding_blocked` before it returns — do not weaken that copy to a maybe.
  *
  * ⚠ NO MONEY FIGURE, EITHER ARM. No balance, no shortfall, no rate — BAL-400 D4c ("the ONLY
@@ -111,6 +111,12 @@ export function SessionExpiredPanel({
  *
  * ⚠ NOT DESTRUCTIVE-TONED. This is a setup step, not a failure: `bg-info/10` + `Wallet`, never
  * the `AlertCircle`/`destructive` treatment `HardFailurePanel` uses.
+ *
+ * ⚠⚠ EVERY SENTENCE MUST STAY TRUE AT READ TIME (fix round 3). Neither arm promises a RESULT
+ * ("pick your time straight after" / "goes straight through") — a top-up covers only what it
+ * covers, a longer booking or a drained balance hits the gate again, and a card can be removed
+ * between setup and the next attempt (BAL-474's residual). Both arms describe the ACTION
+ * available ("you can try booking again"), never a guaranteed outcome.
  *
  * Copy is an UNCLEARED MJ checkpoint (R6) — workable placeholders, gender-neutral, no figure,
  * framed as a solvable setup step. See the BAL-478 plan §6.3 / PR description.
@@ -133,8 +139,8 @@ export function FundingSetupPanel({
         <h2 className="text-foreground text-lg font-semibold">One setup step first</h2>
         <p className="text-muted-foreground text-sm leading-relaxed">
           {canManageBilling
-            ? 'Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Set that up and pick your time straight after.'
-            : "Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Your billing admins have been notified — come back and pick a time once it's set up."}
+            ? 'Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Set that up, then you can try booking again.'
+            : "Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Your billing admins have been notified — come back and try again once it's set up."}
         </p>
       </div>
       {canManageBilling ? (

@@ -2,7 +2,6 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { SLOT_DURATION_LADDER } from '@balo/shared/availability';
 // ⚠ `@balo/analytics/events` — the PURE constants subpath, never `/client` (which pulls
 // `posthog-js` into a `server-only` module's graph).
 import { CONVERSATION_CALL_SURFACES } from '@balo/analytics/events';
@@ -18,6 +17,7 @@ import { assertNoLiveIntroCall } from '@/lib/project-request/assert-no-live-intr
 // denial and the CTA that hides itself can never disagree about where the decision line is.
 import { requestStatusRank } from '@/lib/project-request/conversation-view-types';
 import { deriveBookingIdempotencyKey } from '../booking-idempotency';
+import { bookingSlotSchema, MS_PER_MINUTE } from '../booking-slot-schema';
 import { resolveBookingExpertDisplay } from '../load-booking-context';
 import { postBookMeeting, postInviteGuests } from '../booking-api-client';
 import type { BookIntroCallInput, BookIntroCallResult } from './book-intro-call-types';
@@ -60,49 +60,28 @@ import type { BookIntroCallInput, BookIntroCallResult } from './book-intro-call-
  */
 
 const MAX_GUESTS = 8;
-const slotDurations = SLOT_DURATION_LADDER as readonly number[];
-const MS_PER_MINUTE = 60_000;
 
 /**
- * ⚠⚠ THE SLOT WINDOW MUST *AGREE* WITH `durationMinutes` (round-1 security MEDIUM). Before
- * this, `durationMinutes` was validated against `SLOT_DURATION_LADDER` and then NEVER SENT and
- * NEVER CROSS-CHECKED — only the raw window crossed the wire, and the api's only bound is
- * `validateBookingWindow`, which permits `MAX_MEETING_MINUTES = 480`. So
- * `{durationMinutes: 15, slot: {09:00 → 17:00}}` passed everything and consumed the expert's
- * WHOLE published day as ONE free confirmed consultation — costing a single unit of the 10/hr
- * rate limit instead of 32 — while the confirmation email cheerfully said "480 min".
+ * ⚠⚠ THE SLOT WINDOW MUST *AGREE* WITH `durationMinutes` (round-1 security MEDIUM) — enforced
+ * by `bookingSlotSchema`, extracted to `../booking-slot-schema` in BAL-478 fix round 3 so this
+ * SECURITY CHECK cannot diverge from `book-consultation.ts`'s identical one. See that module's
+ * docblock for the full rationale. Before it existed here, `durationMinutes` was validated
+ * against the duration ladder and then NEVER SENT and NEVER CROSS-CHECKED — only the raw window
+ * crossed the wire, and the api's only bound is `validateBookingWindow`, which permits
+ * `MAX_MEETING_MINUTES = 480`. So `{durationMinutes: 15, slot: {09:00 → 17:00}}` passed
+ * everything and consumed the expert's WHOLE published day as ONE free confirmed consultation —
+ * costing a single unit of the 10/hr rate limit instead of 32 — while the confirmation email
+ * cheerfully said "480 min".
  *
  * ⚠ THIS IS NOT THE BANNED BILLING FLOOR AND IT DOES NOT WEAKEN `validateBookingWindow`. The
  * api-side window bounds (`MIN_MEETING_MINUTES = 15` / `MAX_MEETING_MINUTES = 480`) stay
  * exactly as they are; this only refuses a client that contradicts ITSELF.
- *
- * ⚠ `.datetime()`, NOT `.min(1)` — an unparseable instant would make the subtraction `NaN`,
- * and `NaN === anything` is false, so the refinement would technically hold; typing both
- * instants makes the failure a named `invalid_request` at the boundary instead.
  */
 const bookIntroCallSchema = z
   .object({
     requestId: z.string().uuid(),
     relationshipId: z.string().uuid(),
-    slot: z
-      .object({
-        startIso: z.string().datetime(),
-        endIso: z.string().datetime(),
-        durationMinutes: z
-          .number()
-          .refine((value) => slotDurations.includes(value), { message: 'invalid duration' }),
-      })
-      .strict()
-      .superRefine((slot, ctx) => {
-        const spanMs = Date.parse(slot.endIso) - Date.parse(slot.startIso);
-        if (spanMs !== slot.durationMinutes * MS_PER_MINUTE) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['endIso'],
-            message: 'slot window does not match durationMinutes',
-          });
-        }
-      }),
+    slot: bookingSlotSchema,
     bookingNonce: z.string().uuid(),
     guests: z
       .array(

@@ -37,11 +37,19 @@ const setupPillStyle = {
  * to book a consultation and the team's billing isn't set up to cover it yet. Warm, factual,
  * gender-neutral, non-adversarial: a solvable setup step, never a rejection.
  *
- * ⚠ B3 (fix round 2) — every line here is LITERALLY TRUE, not merely unpolished. Nothing was
- * written by the refused submit (the funding gate runs before the only write) and the slot is
- * still open to anyone — so this copy never says a time was "held" or a booking is "waiting".
- * The pill never claims to be "from your team" either — this is a Balo notice ABOUT a teammate's
- * attempt, not a message the team sent.
+ * ⚠⚠ EVERY LINE MUST STAY TRUE AT READ TIME, NOT JUST AT SEND TIME (fix round 3). Nothing was
+ * written by the refused submit (the funding gate runs before the only write), so the copy
+ * states that PAST FACT ("nothing was booked, so no time was held") rather than a PRESENT-TENSE
+ * claim about the slot's current availability — a billing admin might read this hours later,
+ * by which point "the slot is still open" could easily be false. The pill never claims to be
+ * "from your team" either — this is a Balo notice ABOUT a teammate's attempt, not a message the
+ * team sent.
+ *
+ * ⚠⚠ NO PROMISED OUTCOME, EITHER (fix round 3). "The next attempt goes straight through" / "book
+ * without this happening again" are promises the gate itself is designed to break — a top-up
+ * covers only what it covers, a longer booking or a drained balance hits the gate again, and a
+ * card can be removed between now and the next attempt (BAL-474's residual). This copy describes
+ * the ACTION available ("your team can try booking again"), never a guaranteed result.
  */
 export function BookingFundingBlockedEmail({
   firstName = 'there',
@@ -60,7 +68,7 @@ export function BookingFundingBlockedEmail({
         <StatusPill label="🔔 A quick setup step" style={setupPillStyle} />
         <Heading style={shared.smallHeroHeading}>A booking couldn&apos;t go through</Heading>
         <Text style={shared.smallHeroSubtext}>
-          One quick setup and the next attempt goes straight through.
+          One quick setup and your team can try booking again.
         </Text>
       </Section>
 
@@ -70,8 +78,8 @@ export function BookingFundingBlockedEmail({
         <Text style={shared.bodyText}>
           {requestedByLabel} tried to book a consultation with {expertPartyLabel}, but it
           couldn&apos;t go through — your team needs a payment method on file, or enough credit to
-          cover it. The time is still open to anyone; adding either one means your team can book
-          without this happening again.
+          cover it. Nothing was booked, so no time was held. Add either one and your team can try
+          booking again.
         </Text>
 
         <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>

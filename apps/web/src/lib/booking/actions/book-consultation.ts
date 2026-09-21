@@ -10,7 +10,6 @@ import {
   referenceDataRepository,
   isUniqueViolation,
 } from '@balo/db';
-import { SLOT_DURATION_LADDER } from '@balo/shared/availability';
 import { CAPABILITIES } from '@/lib/authz';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
@@ -18,6 +17,7 @@ import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { deriveBookingIdempotencyKey } from '../booking-idempotency';
+import { bookingSlotSchema, MS_PER_MINUTE } from '../booking-slot-schema';
 import { sanitizeCaseDescription } from '../sanitize-case-description';
 import { authorizeCaseAttach } from '../authorize-case-attach';
 import { enforceBookingFunding } from '../booking-funding-gate';
@@ -53,7 +53,6 @@ import type {
 
 const MAX_PRODUCTS = 39;
 const MAX_GUESTS = 8;
-const MS_PER_MINUTE = 60_000;
 
 /**
  * S4 — a DoS guard, not the UX limit, exactly as the shipped project-request precedent states
@@ -79,8 +78,6 @@ const MAX_DESCRIPTION_HTML = 20_000;
 const CASE_CREATE_MAX_PER_WINDOW = 30;
 const CASE_CREATE_WINDOW_MS = 3_600_000;
 
-const slotDurations = SLOT_DURATION_LADDER as readonly number[];
-
 const caseChoiceSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -101,43 +98,21 @@ const caseChoiceSchema = z.discriminatedUnion('kind', [
 
 /**
  * ⚠⚠ THE SLOT WINDOW MUST *AGREE* WITH `durationMinutes` (fix round: B1, external review of
- * PR #333). Before this, `durationMinutes` was checked against `SLOT_DURATION_LADDER` and then
- * consumed by TWO DIFFERENT DOWNSTREAM STEPS that never cross-checked it against the window:
- * `enforceBookingFunding` sizes the estimate from `durationMinutes`
- * (`estimatedMinutes: input.slot.durationMinutes`), while the meeting is booked — and admission
- * later re-estimates — from `slot.startIso`/`slot.endIso`. A crafted submit declaring
- * `durationMinutes: 15` against a 3-hour window passed the balance arm on a fraction of the
- * funds, then booked the full window — precisely the unbilled consultation this ticket exists
- * to prevent (admission's `insufficient_no_mandate` is the ONLY thing that would still catch
- * it, and only for a mandate-less wallet).
- *
- * Mirrors `book-intro-call.ts`'s shipped `bookIntroCallSchema` fix for the identical shape,
- * including `.datetime()` over `.min(1)`: an unparseable instant makes the subtraction `NaN`,
- * and `NaN !== anything` is `true`, so a bare numeric refinement would ALSO reject it — but as
- * an unnamed arithmetic side effect rather than a named `invalid_request` at the boundary.
+ * PR #333) — enforced by `bookingSlotSchema`, extracted to `../booking-slot-schema` in fix
+ * round 3 so this SECURITY CHECK cannot diverge from `book-intro-call.ts`'s identical one. See
+ * that module's docblock for the full rationale. Before it existed here, `durationMinutes` was
+ * checked against the duration ladder and then consumed by TWO DIFFERENT DOWNSTREAM STEPS that
+ * never cross-checked it against the window: `enforceBookingFunding` sizes the estimate from
+ * `durationMinutes` (`estimatedMinutes: input.slot.durationMinutes`), while the meeting is
+ * booked — and admission later re-estimates — from `slot.startIso`/`slot.endIso`. A crafted
+ * submit declaring `durationMinutes: 15` against a 3-hour window passed the balance arm on a
+ * fraction of the funds, then booked the full window — precisely the unbilled consultation this
+ * ticket exists to prevent.
  */
 const bookConsultationSchema = z
   .object({
     expertProfileId: z.string().uuid(),
-    slot: z
-      .object({
-        startIso: z.string().datetime(),
-        endIso: z.string().datetime(),
-        durationMinutes: z
-          .number()
-          .refine((value) => slotDurations.includes(value), { message: 'invalid duration' }),
-      })
-      .strict()
-      .superRefine((slot, ctx) => {
-        const spanMs = Date.parse(slot.endIso) - Date.parse(slot.startIso);
-        if (spanMs !== slot.durationMinutes * MS_PER_MINUTE) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['endIso'],
-            message: 'slot window does not match durationMinutes',
-          });
-        }
-      }),
+    slot: bookingSlotSchema,
     bookingNonce: z.string().uuid(),
     guests: z
       .array(
