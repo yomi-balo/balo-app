@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
+import { GUEST_RECAP_INDEX_LINK_LABEL } from '../_components/guest-recap-card';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
@@ -141,6 +142,31 @@ describe('GuestRecapPage', () => {
       meetingId: MEETING_ID,
       clientIpHash: expect.any(String),
     });
+  });
+
+  /**
+   * BAL-492 — `indexHref` is computed at the page as
+   * `result.accessScope === 'engagement' ? guestRecapIndexPath(token) : null`
+   * (`page.tsx:112`). Both arms are asserted on the RENDERED link the real `GuestRecapCard`
+   * produces, not on a spy over the component — a spy would not notice the ternary inverting.
+   */
+  it('engagement scope — GuestRecapCard renders the index link with href `/join/{token}/recap`', async () => {
+    mockLoad.mockResolvedValue({ ...VIEW_RESULT, accessScope: 'engagement' as const });
+
+    await renderPage();
+
+    const link = screen.getByRole('link', { name: GUEST_RECAP_INDEX_LINK_LABEL });
+    expect(link).toHaveAttribute('href', `/join/${RAW_TOKEN}/recap`);
+  });
+
+  it('meeting scope — no index link renders', async () => {
+    mockLoad.mockResolvedValue({ ...VIEW_RESULT, accessScope: 'meeting' as const });
+
+    await renderPage();
+
+    expect(
+      screen.queryByRole('link', { name: GUEST_RECAP_INDEX_LINK_LABEL })
+    ).not.toBeInTheDocument();
   });
 
   it('fires `GUEST_RECAP_VIEWED` on a SUCCESSFUL render only', async () => {

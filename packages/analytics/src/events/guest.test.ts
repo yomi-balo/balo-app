@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  ASSERT_GUEST_RECAP_INDEX_KEYS_COMPLETE,
   ASSERT_GUEST_REENTRY_KEYS_COMPLETE,
   GUEST_SERVER_EVENTS,
   type GuestServerEventMap,
@@ -33,10 +34,15 @@ describe('GUEST_SERVER_EVENTS', () => {
       // code-unit order — after `GUEST_JOINED` (`J` < `L`) and before `GUEST_RECAP_VIEWED`
       // (`L` < `R`) — so its position is not collation-sensitive either.
       'GUEST_LINK_RESENT',
-      // ⚠ BAL-439 (R12). `GUEST_RECAP_VIEWED` sorts here under BOTH ICU `localeCompare` and
-      // code-unit order — after `GUEST_LINK_RESENT` (`L` < `R`) and before `GUEST_REMOVED`
-      // (shared `GUEST_RE` prefix, then `C` < `M`) — so its position is not
+      // ⚠ BAL-492. `GUEST_RECAP_INDEX_VIEWED` sorts here under BOTH ICU `localeCompare` and
+      // code-unit order — after `GUEST_LINK_RESENT` (`L` < `R`) and before `GUEST_RECAP_VIEWED`
+      // (shared `GUEST_RECAP_` prefix, then `I` < `V`) — so its position is not
       // collation-sensitive either.
+      'GUEST_RECAP_INDEX_VIEWED',
+      // ⚠ BAL-439 (R12). `GUEST_RECAP_VIEWED` sorts here under BOTH ICU `localeCompare` and
+      // code-unit order — after `GUEST_RECAP_INDEX_VIEWED` (shared `GUEST_RECAP_` prefix,
+      // `I` < `V`) and before `GUEST_REMOVED` (shared `GUEST_RE` prefix, then `C` < `M`) — so
+      // its position is not collation-sensitive either.
       'GUEST_RECAP_VIEWED',
       // ⚠ BAL-442. After the shared `GUEST_RE` prefix: `GUEST_RECAP_VIEWED` (`C`),
       // `GUEST_REENTRY_REQUESTED` (`E`), `GUEST_REMOVED` (`M`) — `C` < `E` < `M` under BOTH
@@ -54,6 +60,7 @@ describe('GUEST_SERVER_EVENTS', () => {
     expect(GUEST_SERVER_EVENTS.GUEST_INVITED).toBe('guest_invited');
     expect(GUEST_SERVER_EVENTS.GUEST_JOINED).toBe('guest_joined');
     expect(GUEST_SERVER_EVENTS.GUEST_LINK_RESENT).toBe('guest_link_resent');
+    expect(GUEST_SERVER_EVENTS.GUEST_RECAP_INDEX_VIEWED).toBe('guest_recap_index_viewed');
     expect(GUEST_SERVER_EVENTS.GUEST_RECAP_VIEWED).toBe('guest_recap_viewed');
     expect(GUEST_SERVER_EVENTS.GUEST_REENTRY_REQUESTED).toBe('guest_reentry_requested');
     expect(GUEST_SERVER_EVENTS.GUEST_REMOVED).toBe('guest_removed');
@@ -141,6 +148,35 @@ describe('GUEST_SERVER_EVENTS', () => {
   });
 
   /**
+   * ⚠⚠ BAL-492 — `guest_recap_index_viewed` ARRIVED WITH ITS PRODUCER, in the same PR
+   * (`app/join/[token]/recap/page.tsx`). Same discipline as `guest_recap_viewed` below.
+   */
+  it('⚠ `guest_recap_index_viewed` carries no PII, no counterparty identity, and no access_scope', () => {
+    const viewed: GuestServerEventMap['guest_recap_index_viewed'] = {
+      meeting_count: 3,
+      distinct_id: 'guest-7',
+    };
+
+    // ⚠ EXACT KEY SET — a future edit that adds `access_scope`, an email, a company name or a
+    // counterparty name would widen this set and fail here loudly, rather than shipping
+    // unnoticed. `access_scope` is deliberately absent — see the map entry's own docblock.
+    expect(Object.keys(viewed).sort((a, b) => a.localeCompare(b))).toEqual([
+      'distinct_id',
+      'meeting_count',
+    ]);
+  });
+
+  /**
+   * `Object.keys(viewed)` above only ever sees the keys a hand-written literal happens to set,
+   * so an OPTIONAL field added to the map would never make it fail. `ASSERT_GUEST_RECAP_INDEX_KEYS_COMPLETE`
+   * is the compile-time witness that catches that — referenced here so it cannot rot into
+   * "declared but unused".
+   */
+  it('⚠ `guest_recap_index_viewed` — the compile-time key-set witness holds', () => {
+    expect(ASSERT_GUEST_RECAP_INDEX_KEYS_COMPLETE).toBe(true);
+  });
+
+  /**
    * ⚠⚠ BAL-439 (R12) — `guest_recap_viewed` ARRIVED WITH ITS PRODUCER, in the same PR
    * (`app/join/[token]/recap/[meetingId]/page.tsx`). Like `guest_converted_to_member` after it
    * (BAL-489), this event arrived WITH its producer — the exact rule R8 cites approvingly and
@@ -157,7 +193,7 @@ describe('GUEST_SERVER_EVENTS', () => {
 
     // ⚠ EXACT KEY SET — a future edit that adds an email, a company name or a counterparty
     // name would widen this set and fail here loudly, rather than shipping unnoticed.
-    expect(Object.keys(viewed).sort()).toEqual([
+    expect(Object.keys(viewed).sort((a, b) => a.localeCompare(b))).toEqual([
       'access_scope',
       'days_since_meeting',
       'distinct_id',

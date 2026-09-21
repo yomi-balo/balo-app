@@ -186,6 +186,10 @@ const ALLOWED_DB_IMPORTS: Readonly<Record<string, readonly string[]>> = {
     'transcriptArtifactsRepository',
     'transcriptsRepository',
   ],
+  // BAL-492 — the guest recap INDEX's loader. ONE repository, one member: the shipped reverse
+  // read, used as a CANDIDATE GENERATOR only. Every candidate is re-gated per row through
+  // `resolveGuestRecapAccess` (already pinned above with an EMPTY repository-call set).
+  'app/join/[token]/recap/_lib/load-guest-recap-index.ts': ['meetingContextsRepository'],
   // BAL-439 — pinned by the NEW coverage assertion below, which is what forced it into view.
   // The join landing reads seven repositories for an unauthenticated external visitor and was
   // pinned on the participation axis only (join-link-never-writes.test.ts) until now.
@@ -240,6 +244,11 @@ const ALLOWED_LIB_REPOSITORY_CALLS: Readonly<
     { object: 'transcriptsRepository', member: 'findByMeetingId' },
     { object: 'transcriptArtifactsRepository', member: 'findByTranscriptAndKind' },
   ],
+  // BAL-492 — the ONLY repository call the index loader may make: the reverse read, used
+  // purely as a candidate generator (D1). It must never call anything else here.
+  'app/join/[token]/recap/_lib/load-guest-recap-index.ts': [
+    { object: 'meetingContextsRepository', member: 'listMeetingsForContexts' },
+  ],
 };
 
 /** Reads and comment-strips a `src/`-relative module, for the two transitive pins above. */
@@ -260,7 +269,7 @@ const scannedActions = scanRouteSources(ACTIONS_DIR, '', []);
 const guestActionSubjects = scannedActions
   .filter((file) => file.code.includes(GUEST_AUTH_HELPER))
   .map((file) => `app/join/_actions/${file.rel}`)
-  .sort();
+  .sort((a, b) => a.localeCompare(b));
 
 describe('guest read actions never reach a write member on any repository (BAL-445 G1)', () => {
   /**
@@ -366,8 +375,12 @@ describe('guest read actions never reach a write member on any repository (BAL-4
     (rel, allowed) => {
       const code = readModuleCode(rel);
       const used = namedImportsFrom(code, '@balo/db');
-      const unexpected = [...new Set(used.filter((name) => !allowed.includes(name)))].sort();
-      const stale = [...allowed].filter((name) => !used.includes(name)).sort();
+      const unexpected = [...new Set(used.filter((name) => !allowed.includes(name)))].sort((a, b) =>
+        a.localeCompare(b)
+      );
+      const stale = [...allowed]
+        .filter((name) => !used.includes(name))
+        .sort((a, b) => a.localeCompare(b));
       expect(
         unexpected,
         `${rel} now imports ${unexpected.join(', ')} from @balo/db, which is not on its pinned ` +
@@ -438,7 +451,7 @@ describe('guest read actions never reach a write member on any repository (BAL-4
       .filter((f) => f.code.includes("from '@balo/db'") || f.code.includes('from "@balo/db"'))
       .map((f) => f.rel)
       .filter((rel) => !Object.hasOwn(ALLOWED_DB_IMPORTS, rel))
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
     expect(
       unpinned,
       `These app/join modules (outside _actions) import @balo/db but are not pinned in ` +

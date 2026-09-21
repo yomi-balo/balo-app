@@ -51,9 +51,11 @@ const FORBIDDEN_TOKENS: readonly string[] = [
 describe('invariant: the guest recap never reaches a closed surface (BAL-439)', () => {
   const scanned = scanRouteSources(RECAP_DIR, '', []);
 
-  it('guards the guard: the recap tree resolves, has at least seven files, and the files card genuinely calls the shipped download action', () => {
+  it('guards the guard: the recap tree resolves, has at least fourteen files, and the files card genuinely calls the shipped download action', () => {
     expect(RECAP_DIR).not.toBe('');
-    expect(scanned.length).toBeGreaterThanOrEqual(7);
+    // BAL-492 — raised from 7: the tree holds 8 files pre-PR and 15 after the guest recap
+    // INDEX ships (7 new files). A floor of 7 would have survived half the tree being deleted.
+    expect(scanned.length).toBeGreaterThanOrEqual(14);
     const filesCard = scanned.find((file) => file.rel === '_components/guest-recap-files.tsx');
     expect(filesCard).toBeDefined();
     expect(filesCard?.code ?? '').toContain('getGuestMeetingFileDownloadAction');

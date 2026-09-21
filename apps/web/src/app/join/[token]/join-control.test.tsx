@@ -275,15 +275,26 @@ describe('⚠ JoinControl — the BAL-439 recap link', () => {
       'src/app/join/[token]/recap/_components/guest-recap-card.tsx',
       'apps/web/src/app/join/[token]/recap/_components/guest-recap-card.tsx',
     ]);
-    // Non-vacuity: the scan must have actually found both files.
+    // BAL-492 — the index card's own row/back links carry it too. ⚠ THIS SCAN IS VACUOUS FOR
+    // BAL-492 (file-level `toContain`, and both files it now covers hold TWO links each) — the
+    // real proof is the PER-LINK assertion in `guest-recap-card.test.tsx` /
+    // `guest-recap-index-card.test.tsx`. This line only keeps the existing guard current.
+    const guestRecapIndexCardPath = resolveRouteDir([
+      'src/app/join/[token]/recap/_components/guest-recap-index-card.tsx',
+      'apps/web/src/app/join/[token]/recap/_components/guest-recap-index-card.tsx',
+    ]);
+    // Non-vacuity: the scan must have actually found all three files.
     expect(joinControlPath).not.toBe('');
     expect(guestRecapCardPath).not.toBe('');
+    expect(guestRecapIndexCardPath).not.toBe('');
 
     const joinControlCode = codeLinesOf(readFileSync(joinControlPath, 'utf8'));
     const guestRecapCardCode = codeLinesOf(readFileSync(guestRecapCardPath, 'utf8'));
+    const guestRecapIndexCardCode = codeLinesOf(readFileSync(guestRecapIndexCardPath, 'utf8'));
 
     expect(joinControlCode).toContain('prefetch={false}');
     expect(guestRecapCardCode).toContain('prefetch={false}');
+    expect(guestRecapIndexCardCode).toContain('prefetch={false}');
   });
 
   it('is ABSENT when the meeting has ended but recapHref is null (no artefact-bearing recap resolved is not the reason — see the RSC)', () => {
