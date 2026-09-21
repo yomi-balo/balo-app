@@ -63,6 +63,8 @@ export interface CaseConsultationCounts {
    *  the loader from `rescheduleProposalsRepository.findLivePendingByMeetingIds` +
    *  `rescheduleProposalIsLive`. Threaded into `deriveCaseConsultationState` below. */
   meetingIdsWithLiveProposal: ReadonlySet<string>;
+  /** BAL-573 — live seat counts for UPCOMING meetings only, from one batched read. Absent ⇒ 0. */
+  guestCountByMeetingId: ReadonlyMap<string, number>;
 }
 
 export interface CaseConsultationActionContext {
@@ -73,6 +75,12 @@ export interface CaseConsultationActionContext {
    *  ANDed with each row's own state below. `false` on a closed case, or when the viewer holds
    *  neither axis (e.g. a colleague with visibility only). */
   mayAct: boolean;
+  /**
+   * BAL-573 — the loader-resolved INVITE capability, ANDed with each row's upcoming state below.
+   * ⚠ DELIBERATELY SEPARATE FROM `mayAct`: `mayAct` carries the cancel/move condition, which is
+   * narrower than the api's invite gate.
+   */
+  mayInvite: boolean;
 }
 
 /** Whole minutes between the two stamps; `null` when either is missing (never a bare zero). */
@@ -133,10 +141,10 @@ export function mapCaseConsultations(
     // `insideCaseJoinWindow` has no closing bound (true forever once `scheduledStart` is past),
     // so it alone would read `live: true` on every past row regardless of state — gated on
     // `caseConsultationIsUpcoming` to match this field's own contract (false on every non-
-    // upcoming row).
-    const live =
-      caseConsultationIsUpcoming(state) &&
-      insideCaseJoinWindow(now, meeting.scheduledStart.toISOString());
+    // upcoming row). `upcoming` is computed once here and reused by `canInvite`/`guestCount`
+    // below, instead of calling `caseConsultationIsUpcoming(state)` a second time.
+    const upcoming = caseConsultationIsUpcoming(state);
+    const live = upcoming && insideCaseJoinWindow(now, meeting.scheduledStart.toISOString());
     const hasLiveProposal = counts.meetingIdsWithLiveProposal.has(meeting.id);
     const canCancel = action.mayAct && resolveCancelRefusal(meeting.status) === null;
     // `canCancel` is deliberately not blocked by a live proposal or the join window, unlike the
@@ -164,9 +172,11 @@ export function mapCaseConsultations(
       canReschedule: action.lens === 'client' && canMove,
       canProposeReschedule: action.lens === 'expert' && canMove,
       canCancel,
-      // Hard-false / hard-zero — not yet wired; see `CaseConsultationRowView`'s own docblock.
-      canInvite: false,
-      guestCount: 0,
+      canInvite: action.mayInvite && upcoming,
+      /** ⚠ ZEROED ON EVERY NON-UPCOMING ROW AT THE PROJECTION BOUNDARY, not just at render. The
+       *  map only holds upcoming ids today; this makes a future widening of that read unable to
+       *  put a guest count on a past consultation by accident. */
+      guestCount: upcoming ? (counts.guestCountByMeetingId.get(meeting.id) ?? 0) : 0,
       scheduledMinutes: Math.round(
         (meeting.scheduledEnd.getTime() - meeting.scheduledStart.getTime()) / 60_000
       ),

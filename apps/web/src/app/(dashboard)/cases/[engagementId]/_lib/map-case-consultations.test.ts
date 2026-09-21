@@ -33,6 +33,7 @@ const EMPTY_COUNTS: CaseConsultationCounts = {
   fileCountByMeetingId: new Map(),
   meetingIdsWithTranscript: new Set(),
   meetingIdsWithLiveProposal: new Set(),
+  guestCountByMeetingId: new Map(),
 };
 
 /** A `now` well before every fixture's default `scheduledStart` — irrelevant to the tests that
@@ -40,7 +41,11 @@ const EMPTY_COUNTS: CaseConsultationCounts = {
 const NOW = new Date('2026-01-01T00:00:00Z');
 
 /** No capability at all — the neutral default for tests that only pin state/duration/ordering. */
-const NO_ACTION: CaseConsultationActionContext = { lens: 'client', mayAct: false };
+const NO_ACTION: CaseConsultationActionContext = {
+  lens: 'client',
+  mayAct: false,
+  mayInvite: false,
+};
 
 /**
  * A FULL `Meeting` row — credentials included, exactly as the repository hands one over.
@@ -276,6 +281,7 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
         fileCountByMeetingId: new Map([['m1', 2]]),
         meetingIdsWithTranscript: new Set(['m1']),
         meetingIdsWithLiveProposal: new Set(),
+        guestCountByMeetingId: new Map(),
       },
       NOW,
       NO_ACTION
@@ -385,8 +391,16 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
 describe('mapCaseConsultations — row action flags (canCancel / canReschedule / canProposeReschedule)', () => {
   const FUTURE_START = new Date('2026-08-01T10:00:00Z');
   const FUTURE_END = new Date('2026-08-01T11:00:00Z');
-  const CLIENT_MAY_ACT: CaseConsultationActionContext = { lens: 'client', mayAct: true };
-  const EXPERT_MAY_ACT: CaseConsultationActionContext = { lens: 'expert', mayAct: true };
+  const CLIENT_MAY_ACT: CaseConsultationActionContext = {
+    lens: 'client',
+    mayAct: true,
+    mayInvite: true,
+  };
+  const EXPERT_MAY_ACT: CaseConsultationActionContext = {
+    lens: 'expert',
+    mayAct: true,
+    mayInvite: true,
+  };
 
   function upcoming(over: Partial<Meeting> = {}): Meeting {
     return meeting({
@@ -446,9 +460,11 @@ describe('mapCaseConsultations — row action flags (canCancel / canReschedule /
     const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, {
       lens: 'client',
       mayAct: false,
+      mayInvite: false,
     });
     expect(row?.canCancel).toBe(false);
     expect(row?.canReschedule).toBe(false);
+    expect(row?.canInvite).toBe(false);
   });
 
   it('Ruling 2 — a live proposal drops canReschedule but leaves canCancel true', () => {
@@ -514,10 +530,90 @@ describe('mapCaseConsultations — row action flags (canCancel / canReschedule /
     expect(row?.durationMinutes).toBeNull();
   });
 
-  it('canInvite and guestCount are hard-false / hard-zero — phase 2', () => {
-    const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, CLIENT_MAY_ACT);
-    expect(row?.canInvite).toBe(false);
-    expect(row?.guestCount).toBe(0);
+  /**
+   * BAL-573 — item 17. `canInvite` truth table: 7 of the 8 `CaseConsultationStateLabel` values
+   * via `STATE_FIXTURES` (a `(status, outcome)` pair each) × `mayInvite` both ways, plus
+   * `pending_reschedule` in its own case just below — it cannot be reached through `(status,
+   * outcome)` alone, only through `meetingIdsWithLiveProposal` (see
+   * `deriveCaseConsultationState`). True iff `mayInvite && caseConsultationIsUpcoming(state)`.
+   */
+  describe('canInvite — true iff mayInvite && caseConsultationIsUpcoming(state)', () => {
+    const STATE_FIXTURES: readonly [string, Partial<Meeting>][] = [
+      ['scheduled', { status: 'scheduled', outcome: null }],
+      ['waiting_for_participants', { status: 'waiting_for_participants', outcome: null }],
+      ['in_progress', { status: 'in_progress', outcome: null }],
+      ['ended+completed', { status: 'ended', outcome: 'completed' }],
+      ['ended+no_show_client', { status: 'ended', outcome: 'no_show_client' }],
+      ['ended+missed_call', { status: 'ended', outcome: 'missed_call' }],
+      ['cancelled', { status: 'cancelled', outcome: null }],
+      ['ended+NULL outcome', { status: 'ended', outcome: null }],
+    ];
+    const UPCOMING_LABELS: ReadonlySet<string> = new Set([
+      'scheduled',
+      'waiting_for_participants',
+      'in_progress',
+    ]);
+
+    it.each(STATE_FIXTURES)('mayInvite=true, state=%s', (label, over) => {
+      const [row] = mapCaseConsultations(
+        [meeting({ id: 'm1', ...over })],
+        EMPTY_COUNTS,
+        NOW,
+        CLIENT_MAY_ACT
+      );
+      expect(row?.canInvite).toBe(UPCOMING_LABELS.has(label));
+    });
+
+    it.each(STATE_FIXTURES)('mayInvite=false, state=%s ⇒ always false', (_label, over) => {
+      const [row] = mapCaseConsultations([meeting({ id: 'm1', ...over })], EMPTY_COUNTS, NOW, {
+        lens: 'client',
+        mayAct: true,
+        mayInvite: false,
+      });
+      expect(row?.canInvite).toBe(false);
+    });
+
+    it('the 8th state — pending_reschedule, reached only via meetingIdsWithLiveProposal — is invitable', () => {
+      const [row] = mapCaseConsultations(
+        [meeting({ id: 'm1', status: 'scheduled', outcome: null })],
+        { ...EMPTY_COUNTS, meetingIdsWithLiveProposal: new Set(['m1']) },
+        NOW,
+        CLIENT_MAY_ACT
+      );
+      expect(row?.state).toBe('pending_reschedule');
+      expect(row?.canInvite).toBe(true);
+    });
+  });
+
+  /** BAL-573 — item 18. `guestCount` reads the batched map for upcoming rows and is FORCED to 0
+   *  on a terminal row even when the map carries a number for it (the projection-boundary leak
+   *  guard). */
+  describe('guestCount', () => {
+    it('reads the batched map for an upcoming row', () => {
+      const [row] = mapCaseConsultations(
+        [upcoming()],
+        { ...EMPTY_COUNTS, guestCountByMeetingId: new Map([['m1', 3]]) },
+        NOW,
+        CLIENT_MAY_ACT
+      );
+      expect(row?.guestCount).toBe(3);
+    });
+
+    it('defaults to 0 for an upcoming row absent from the map', () => {
+      const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, CLIENT_MAY_ACT);
+      expect(row?.guestCount).toBe(0);
+    });
+
+    it('is FORCED to 0 on a terminal (held) row, even when the map carries a number for it', () => {
+      const [row] = mapCaseConsultations(
+        [held('m1')],
+        { ...EMPTY_COUNTS, guestCountByMeetingId: new Map([['m1', 5]]) },
+        NOW,
+        CLIENT_MAY_ACT
+      );
+      expect(row?.state).toBe('held');
+      expect(row?.guestCount).toBe(0);
+    });
   });
 
   /** MUTATION PROOF: reverting the flags to `row.state === 'scheduled'` would pass this

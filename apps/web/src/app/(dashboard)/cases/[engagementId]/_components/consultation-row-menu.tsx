@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment } from 'react';
 import { CalendarClock, CalendarX, MoreVertical, UserPlus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -11,21 +11,34 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useAbsoluteConsultationTime } from '@/hooks/use-consultation-time-label';
 import type { CaseConsultationRowView } from '@/lib/cases/case-view-types';
 
 /**
- * Menu items come from `row`'s server-resolved flags; renders null when none are true.
- * `canInvite` is hard-false today — the item stays wired for a future flip.
+ * Menu items come from `row`'s server-resolved flags alone, and the order is fixed; renders
+ * null when none are true.
  */
 
 export type ConsultationRowActionVerb = 'invite' | 'reschedule' | 'propose' | 'cancel';
 
+/**
+ * BAL-573 — WHICH control on the row opened an action, so a dialog can return focus to the one
+ * that opened it rather than always the kebab. `'menu'` is the kebab; `'guests'` is the row's
+ * guest-count control (`consultation-list.tsx`).
+ */
+export type ConsultationRowTriggerSlot = 'menu' | 'guests';
+
 export interface ConsultationRowMenuProps {
   row: CaseConsultationRowView;
-  onAction: (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => void;
+  /** Always fired with slot `'menu'` — this component IS the kebab. */
+  onAction: (
+    verb: ConsultationRowActionVerb,
+    row: CaseConsultationRowView,
+    slot: ConsultationRowTriggerSlot
+  ) => void;
   /**
-   * For focus restoration: `case-surface.tsx` keeps a `meetingId → HTMLButtonElement` map so a
-   * dialog opened from this menu can restore focus here after the Radix menu has unmounted.
+   * For focus restoration: `case-surface.tsx` keeps a `meetingId#slot → HTMLButtonElement` map
+   * so a dialog opened from this menu can restore focus here after the Radix menu has unmounted.
    */
   registerTrigger?: (node: HTMLButtonElement | null) => void;
 }
@@ -54,26 +67,10 @@ function buildMenuItems(row: CaseConsultationRowView): MenuItemSpec[] {
   return items;
 }
 
-/**
- * Always the absolute date/time, never "Tomorrow" — an overnight dwell would make the
- * control's name a lie. Renders in UTC first, like `LocalDateTime`, then upgrades to the
- * viewer's timezone in an effect so hydration cannot mismatch the attribute.
- */
+/** The kebab's accessible name, built from the SHARED absolute time string so it cannot drift
+ *  from the row's guest-count control label. */
 function useMenuLabel(scheduledStartIso: string): string {
-  const [zone, setZone] = useState('UTC');
-  useEffect(() => {
-    const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (resolved) setZone(resolved);
-  }, []);
-  const absolute = new Intl.DateTimeFormat('en-AU', {
-    timeZone: zone,
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(scheduledStartIso));
-  return `Actions for consultation on ${absolute}`;
+  return `Actions for consultation on ${useAbsoluteConsultationTime(scheduledStartIso)}`;
 }
 
 export function ConsultationRowMenu({
@@ -113,7 +110,7 @@ export function ConsultationRowMenu({
             {index === firstDestructiveIndex && index > 0 && <DropdownMenuSeparator />}
             <DropdownMenuItem
               variant={item.destructive ? 'destructive' : 'default'}
-              onSelect={() => onAction(item.key, row)}
+              onSelect={() => onAction(item.key, row, 'menu')}
             >
               <item.icon aria-hidden="true" />
               {item.label}

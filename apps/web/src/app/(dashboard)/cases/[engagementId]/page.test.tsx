@@ -164,9 +164,15 @@ const BASE = {
     { name: 'Amara Okafor', isViewer: false },
   ],
   counterpartyPartyLabel: 'CloudPeak Consulting',
+  clientCompanyName: 'Northwind Industrial',
 };
 
-const CLIENT_VIEW: CaseSurfaceView = { ...BASE, lens: 'client', canClose: true };
+const CLIENT_VIEW: CaseSurfaceView = {
+  ...BASE,
+  lens: 'client',
+  canClose: true,
+  caseScopeDomains: [],
+};
 
 const EXPERT_VIEW: CaseSurfaceView = {
   ...BASE,

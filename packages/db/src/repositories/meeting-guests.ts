@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, ne, sql, type SQL } from 'drizzle-orm';
 import { canonicalGuestEmail } from '@balo/shared/meetings';
 import { db } from '../client';
 import { meetingGuests, meetings } from '../schema';
@@ -305,6 +305,24 @@ export interface MeetingGuestPublic {
   createdAt: Date;
 }
 
+/**
+ * BAL-573 — ⚠⚠ THE ONE DEFINITION OF "HOLDS A SEAT", shared by {@link meetingGuestsRepository}'s
+ * `countLiveByMeeting` and `countsLiveByMeetingIds`. Extracted rather than restated so the case
+ * surface's per-row guest count and the invite cap can never disagree about what a seat is — the
+ * four predicates (`deleted_at`, `revoked_at`, `admission IN ('pre_admitted','admitted')`,
+ * `expires_at > now()`) each closed a real defect; see `countLiveByMeeting`'s own docblock for
+ * each one's history.
+ */
+function liveSeatPredicate(meetingIdTerm: SQL): SQL | undefined {
+  return and(
+    meetingIdTerm,
+    isNull(meetingGuests.deletedAt),
+    isNull(meetingGuests.revokedAt),
+    inArray(meetingGuests.admission, ['pre_admitted', 'admitted']),
+    gt(meetingGuests.expiresAt, sql`now()`)
+  );
+}
+
 const PUBLIC_COLUMNS = {
   id: meetingGuests.id,
   meetingId: meetingGuests.meetingId,
@@ -520,20 +538,30 @@ export const meetingGuestsRepository = {
     const [row] = await db
       .select({ count: sql<number>`cast(count(*) as int)` })
       .from(meetingGuests)
-      .where(
-        and(
-          eq(meetingGuests.meetingId, meetingId),
-          isNull(meetingGuests.deletedAt),
-          isNull(meetingGuests.revokedAt),
-          // ⚠ A SEAT IS HELD ONLY BY A TRUSTED-BY-DEFAULT INVITEE OR AN ADMITTED GUEST.
-          // `pending` has not been given one yet; `denied` never will be.
-          inArray(meetingGuests.admission, ['pre_admitted', 'admitted']),
-          // ⚠ AND AN EXPIRED HANDLE HOLDS NOTHING. `findLiveByTokenHash` already refuses to
-          // resolve one, so counting it would reserve a seat nobody can occupy.
-          gt(meetingGuests.expiresAt, sql`now()`)
-        )
-      );
+      .where(liveSeatPredicate(eq(meetingGuests.meetingId, meetingId)));
     return row?.count ?? 0;
+  },
+
+  /**
+   * BAL-573 — the live seat count for SEVERAL meetings in ONE pass, for the case surface's
+   * per-row guest indicator.
+   *
+   * ⚠ A MEETING WITH NO LIVE GUEST IS ABSENT FROM THE RESULT — `GROUP BY` emits no row for it.
+   * Callers default to 0; never treat absence as an error.
+   * ⚠ A COUNT, NEVER A ROSTER. No email, no name, no `token_hash` is projected — ADR-1044 says
+   * counterparty NAMES may cross the party boundary and email addresses never may, and a count
+   * carries no identity at all, which is why this is the only guest read the case surface makes.
+   * ⚠ UNSYNCHRONISED WITH THE INSERT, exactly as `countLiveByMeeting` is. It is a display number.
+   */
+  countsLiveByMeetingIds: async (
+    meetingIds: readonly string[]
+  ): Promise<Array<{ meetingId: string; count: number }>> => {
+    if (meetingIds.length === 0) return [];
+    return db
+      .select({ meetingId: meetingGuests.meetingId, count: sql<number>`cast(count(*) as int)` })
+      .from(meetingGuests)
+      .where(liveSeatPredicate(inArray(meetingGuests.meetingId, [...meetingIds])))
+      .groupBy(meetingGuests.meetingId);
   },
 
   /**

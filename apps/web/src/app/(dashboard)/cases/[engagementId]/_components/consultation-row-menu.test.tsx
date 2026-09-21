@@ -97,24 +97,24 @@ describe('ConsultationRowMenu', () => {
     expect(items).toEqual(['Reschedule', 'Propose a new time', 'Cancel consultation']);
   });
 
-  it('calls onAction with the verb and the row when a menu item is chosen', async () => {
+  it('calls onAction with the verb, the row, and the "menu" slot when a menu item is chosen', async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();
     const row = makeRow({ canReschedule: true, canCancel: true });
     render(<ConsultationRowMenu row={row} onAction={onAction} />);
     await user.click(screen.getByRole('button'));
     await user.click(screen.getByRole('menuitem', { name: 'Reschedule' }));
-    expect(onAction).toHaveBeenCalledWith('reschedule', row);
+    expect(onAction).toHaveBeenCalledWith('reschedule', row, 'menu');
   });
 
-  it('calls onAction with "cancel" for the destructive item', async () => {
+  it('calls onAction with "cancel" and the "menu" slot for the destructive item', async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();
     const row = makeRow({ canCancel: true });
     render(<ConsultationRowMenu row={row} onAction={onAction} />);
     await user.click(screen.getByRole('button'));
     await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
-    expect(onAction).toHaveBeenCalledWith('cancel', row);
+    expect(onAction).toHaveBeenCalledWith('cancel', row, 'menu');
   });
 
   it('registers and unregisters the trigger node for focus restoration', () => {
@@ -131,15 +131,75 @@ describe('ConsultationRowMenu', () => {
     expect(registerTrigger).toHaveBeenLastCalledWith(null);
   });
 
-  // `mapCaseConsultations` hard-codes `canInvite` false today, so this flag never fires in the
-  // shipped product — the component still honours it, wiring the item for a phase-2 flip.
-  it('wires "Invite a colleague" for phase 2, first in the fixed order, when canInvite is true', async () => {
+  it('renders "Invite a colleague" first, with the UserPlus icon, and its exact label', async () => {
     const user = userEvent.setup();
     render(
       <ConsultationRowMenu row={makeRow({ canInvite: true, canCancel: true })} onAction={vi.fn()} />
     );
     await user.click(screen.getByRole('button'));
-    const items = screen.getAllByRole('menuitem').map((item) => item.textContent);
-    expect(items).toEqual(['Invite a colleague', 'Cancel consultation']);
+    const items = screen.getAllByRole('menuitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      'Invite a colleague',
+      'Cancel consultation',
+    ]);
+    expect(items[0]?.querySelector('svg.lucide-user-plus')).not.toBeNull();
+  });
+
+  it('calls onAction with "invite" and the "menu" slot when the kebab opens it (F5)', async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    const row = makeRow({ canInvite: true });
+    render(<ConsultationRowMenu row={row} onAction={onAction} />);
+    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('menuitem', { name: 'Invite a colleague' }));
+    expect(onAction).toHaveBeenCalledWith('invite', row, 'menu');
+  });
+
+  it('is ABSENT — never disabled — when canInvite is false', async () => {
+    const user = userEvent.setup();
+    render(
+      <ConsultationRowMenu
+        row={makeRow({ canInvite: false, canCancel: true })}
+        onAction={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button'));
+    expect(screen.queryByRole('menuitem', { name: /invite/i })).not.toBeInTheDocument();
+  });
+
+  it('all four flags true ⇒ four items with the separator immediately before "Cancel consultation"', async () => {
+    const user = userEvent.setup();
+    render(
+      <ConsultationRowMenu
+        row={makeRow({
+          canInvite: true,
+          canReschedule: true,
+          canProposeReschedule: true,
+          canCancel: true,
+        })}
+        onAction={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button'));
+    const menu = screen.getByRole('menu');
+    const rows = Array.from(
+      menu.querySelectorAll<HTMLElement>('[role="menuitem"], [role="separator"]')
+    );
+    expect(
+      rows.map((node) =>
+        node.getAttribute('role') === 'separator' ? 'separator' : node.textContent
+      )
+    ).toEqual([
+      'Invite a colleague',
+      'Reschedule',
+      'Propose a new time',
+      'separator',
+      'Cancel consultation',
+    ]);
+  });
+
+  it('canInvite ALONE is enough to render the kebab', () => {
+    render(<ConsultationRowMenu row={makeRow({ canInvite: true })} onAction={vi.fn()} />);
+    expect(screen.getByRole('button')).toBeInTheDocument();
   });
 });

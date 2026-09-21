@@ -119,6 +119,12 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   // ⚠ `guests-api-client.ts` IS DELIBERATELY ABSENT, on exactly the grounds this allow-list
   // exists for: it is `server-only` and therefore legitimately imports `@/lib/logging`, the
   // same carve-out `join-api-client.ts` already has. Every OTHER new module is here.
+  //
+  // ⚠ `invite-guests-flow.ts` (BAL-573) IS ALSO DELIBERATELY ABSENT, on the identical grounds:
+  // it is `server-only` and imports `@/lib/logging`. It sits in `lib/meetings/` because it is
+  // shared with the case surface's own entry point, but it is scanned by neither this
+  // allow-list nor `PINNED_FILES`; `invite-meeting-guests.ts` (the in-call wrapper that calls
+  // it) stays on `PINNED_FILES` and stays scannable — it names no `lens`.
   'guest-roster.ts',
   'guests-copy.ts',
   'guests-poll.ts',

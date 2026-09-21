@@ -10,12 +10,14 @@ import {
   Clock,
   FileText,
   Paperclip,
+  Users,
   Video,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { SectionHead } from '@/components/balo/section/section-states';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { useViewerClock } from '@/hooks/use-viewer-clock';
+import { useAbsoluteConsultationTime } from '@/hooks/use-consultation-time-label';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -23,7 +25,11 @@ import type {
   CaseConsultationRowView,
   CaseConsultationStateLabel,
 } from '@/lib/cases/case-view-types';
-import { ConsultationRowMenu, type ConsultationRowActionVerb } from './consultation-row-menu';
+import {
+  ConsultationRowMenu,
+  type ConsultationRowActionVerb,
+  type ConsultationRowTriggerSlot,
+} from './consultation-row-menu';
 
 /**
  * BAL-421 — the consultation list.
@@ -50,10 +56,20 @@ export function ConsultationList({
   consultations: readonly CaseConsultationRowView[];
   lens: 'client' | 'expert';
   counterpartyLabel: string;
-  onRowAction: (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => void;
-  /** Keyed by `meetingId`; `case-surface.tsx` uses it to restore focus after a dialog closes
-   *  without success. */
-  registerTrigger: (meetingId: string, node: HTMLButtonElement | null) => void;
+  /** The slot names WHICH control fired, so a dialog can return focus to it rather than to a
+   *  derived guess. */
+  onRowAction: (
+    verb: ConsultationRowActionVerb,
+    row: CaseConsultationRowView,
+    slot: ConsultationRowTriggerSlot
+  ) => void;
+  /** Keyed by `meetingId` AND the control's slot; `case-surface.tsx` uses it to restore focus
+   *  to the control that opened a dialog after it closes without success. */
+  registerTrigger: (
+    meetingId: string,
+    slot: ConsultationRowTriggerSlot,
+    node: HTMLButtonElement | null
+  ) => void;
   /** Forwarded to `SectionHead`, the focus target for a row-sourced cancel. */
   headingRef?: RefObject<HTMLHeadingElement | null>;
 }>): React.JSX.Element {
@@ -80,7 +96,7 @@ export function ConsultationList({
               now={clock?.now}
               last={index === consultations.length - 1}
               onRowAction={onRowAction}
-              registerTrigger={(node) => registerTrigger(row.meetingId, node)}
+              registerTrigger={(slot, node) => registerTrigger(row.meetingId, slot, node)}
             />
           </li>
         ))}
@@ -257,12 +273,19 @@ function ConsultationRow({
   /** The list's ticking "now", or `undefined` before it resolves. */
   now: Date | undefined;
   last: boolean;
-  onRowAction: (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => void;
-  registerTrigger: (node: HTMLButtonElement | null) => void;
+  onRowAction: (
+    verb: ConsultationRowActionVerb,
+    row: CaseConsultationRowView,
+    slot: ConsultationRowTriggerSlot
+  ) => void;
+  registerTrigger: (slot: ConsultationRowTriggerSlot, node: HTMLButtonElement | null) => void;
 }>): React.JSX.Element {
   const onViewRecap = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'view_recap', lens });
   }, [lens]);
+  const onOpenInvite = useCallback(() => {
+    onRowAction('invite', row, 'guests');
+  }, [onRowAction, row]);
 
   const { icon: Icon, muted, tone } = STATE_PRESENTATION[row.state];
   const note = stateNote(row.state, lens, counterpartyLabel);
@@ -270,6 +293,8 @@ function ConsultationRow({
   // carry the BOOKED one instead. Every other state shows neither.
   const minutes =
     row.durationMinutes ?? (FORWARD_LOOKING.has(row.state) ? row.scheduledMinutes : null);
+  const absoluteTime = useAbsoluteConsultationTime(row.scheduledStartIso);
+  const guestText = `${row.guestCount} guest${row.guestCount === 1 ? '' : 's'}`;
 
   return (
     <div className={cn('flex items-start gap-3 py-3', last ? undefined : 'border-border border-b')}>
@@ -347,10 +372,39 @@ function ConsultationRow({
           </div>
         )}
 
+        {/* BAL-573 — guest state takes the slot the retired `scheduled` note held, so an
+            invitation is never invisible state behind a menu. ⚠ COUNT ONLY — ADR-1044: names
+            may cross the party boundary, email addresses never do, and this row shows neither.
+            A CONTROL when the viewer may invite, plain text when they may not: an absent action
+            beats a dead one, and a disabled count would be a dead one. */}
+        {row.guestCount > 0 && (
+          <div className="mt-1.5">
+            {row.canInvite ? (
+              <button
+                type="button"
+                ref={(node) => registerTrigger('guests', node)}
+                onClick={onOpenInvite}
+                aria-label={`${guestText} invited to the consultation on ${absoluteTime} — manage`}
+                className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1.5 rounded text-xs focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <Users size={12} aria-hidden="true" /> {guestText}
+              </button>
+            ) : (
+              <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
+                <Users size={12} aria-hidden="true" /> {guestText}
+              </span>
+            )}
+          </div>
+        )}
+
         {note !== null && <p className="text-muted-foreground mt-0.5 text-xs">{note}</p>}
       </div>
 
-      <ConsultationRowMenu row={row} onAction={onRowAction} registerTrigger={registerTrigger} />
+      <ConsultationRowMenu
+        row={row}
+        onAction={onRowAction}
+        registerTrigger={(node) => registerTrigger('menu', node)}
+      />
     </div>
   );
 }

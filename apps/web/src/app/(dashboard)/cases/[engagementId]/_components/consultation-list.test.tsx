@@ -62,8 +62,16 @@ function makeRow(overrides: Partial<CaseConsultationRowView> = {}): CaseConsulta
 function renderList(
   consultations: readonly CaseConsultationRowView[],
   lens: 'client' | 'expert' = 'client',
-  onRowAction: (verb: string, row: CaseConsultationRowView) => void = vi.fn(),
-  registerTrigger: (meetingId: string, node: HTMLButtonElement | null) => void = vi.fn()
+  onRowAction: (
+    verb: string,
+    row: CaseConsultationRowView,
+    slot: 'menu' | 'guests'
+  ) => void = vi.fn(),
+  registerTrigger: (
+    meetingId: string,
+    slot: 'menu' | 'guests',
+    node: HTMLButtonElement | null
+  ) => void = vi.fn()
 ) {
   return render(
     <ConsultationList
@@ -729,17 +737,17 @@ describe('ConsultationList — the per-row kebab', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('calls onRowAction with the verb and the row when a menu item fires', async () => {
+  it('calls onRowAction with the verb, the row, and the "menu" slot when a menu item fires', async () => {
     const user = userEvent.setup();
     const onRowAction = vi.fn();
     const row = makeRow({ state: 'scheduled', canCancel: true });
     renderList([row], 'client', onRowAction);
     await user.click(screen.getByRole('button'));
     await user.click(screen.getByRole('menuitem', { name: 'Cancel consultation' }));
-    expect(onRowAction).toHaveBeenCalledWith('cancel', row);
+    expect(onRowAction).toHaveBeenCalledWith('cancel', row, 'menu');
   });
 
-  it('registers each row trigger keyed by its OWN meetingId', () => {
+  it('registers each row trigger keyed by its OWN meetingId and the "menu" slot', () => {
     const registerTrigger = vi.fn();
     renderList(
       [
@@ -750,7 +758,53 @@ describe('ConsultationList — the per-row kebab', () => {
       vi.fn(),
       registerTrigger
     );
-    expect(registerTrigger).toHaveBeenCalledWith('m-a', expect.any(HTMLButtonElement));
-    expect(registerTrigger).toHaveBeenCalledWith('m-b', expect.any(HTMLButtonElement));
+    expect(registerTrigger).toHaveBeenCalledWith('m-a', 'menu', expect.any(HTMLButtonElement));
+    expect(registerTrigger).toHaveBeenCalledWith('m-b', 'menu', expect.any(HTMLButtonElement));
+  });
+});
+
+describe('ConsultationList — the guest-count control (BAL-573)', () => {
+  it('guestCount > 0 + canInvite ⇒ a button named "N guests … — manage", and clicking it calls onRowAction with the "guests" slot', async () => {
+    const user = userEvent.setup();
+    const onRowAction = vi.fn();
+    const row = makeRow({ state: 'scheduled', guestCount: 2, canInvite: true });
+    renderList([row], 'client', onRowAction);
+
+    const button = screen.getByRole('button', { name: /2 guests .* — manage/ });
+    await user.click(button);
+    expect(onRowAction).toHaveBeenCalledWith('invite', row, 'guests');
+  });
+
+  it('guestCount > 0 + canInvite=false ⇒ the same text, but NOT a button', () => {
+    renderList([makeRow({ state: 'scheduled', guestCount: 2, canInvite: false })]);
+    expect(screen.getByText(/2 guests/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /guests/ })).not.toBeInTheDocument();
+  });
+
+  it('pluralises "1 guest" (singular)', () => {
+    renderList([makeRow({ state: 'scheduled', guestCount: 1, canInvite: true })]);
+    expect(screen.getByText(/^1 guest\b/)).toBeInTheDocument();
+    expect(screen.queryByText(/1 guests/)).not.toBeInTheDocument();
+  });
+
+  it('renders nothing for guestCount: 0', () => {
+    renderList([makeRow({ state: 'scheduled', guestCount: 0, canInvite: true })]);
+    expect(screen.queryByText(/guest/i)).not.toBeInTheDocument();
+  });
+
+  it('AC 5 — the rendered row carries no "@" anywhere, for a row with guests', () => {
+    renderList([makeRow({ state: 'scheduled', guestCount: 3, canInvite: true })]);
+    expect(firstRow().textContent ?? '').not.toContain('@');
+  });
+
+  it('registers the guest-count control keyed by meetingId and the "guests" slot', () => {
+    const registerTrigger = vi.fn();
+    renderList(
+      [makeRow({ meetingId: 'm-a', state: 'scheduled', guestCount: 2, canInvite: true })],
+      'client',
+      vi.fn(),
+      registerTrigger
+    );
+    expect(registerTrigger).toHaveBeenCalledWith('m-a', 'guests', expect.any(HTMLButtonElement));
   });
 });
