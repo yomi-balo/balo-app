@@ -21,6 +21,7 @@ const mockPublishNotificationEvent = vi.fn();
 const mockLogInfo = vi.fn();
 const mockLogWarn = vi.fn();
 const mockLogError = vi.fn();
+const mockEnforceBookingFunding = vi.fn();
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/auth/session', () => ({
@@ -70,6 +71,9 @@ vi.mock('../sanitize-case-description', () => ({
 vi.mock('../authorize-case-attach', () => ({
   authorizeCaseAttach: (...args: unknown[]) => mockAuthorizeCaseAttach(...args),
 }));
+vi.mock('../booking-funding-gate', () => ({
+  enforceBookingFunding: (...args: unknown[]) => mockEnforceBookingFunding(...args),
+}));
 vi.mock('../load-booking-context', () => ({
   resolveBookingExpertDisplay: (...args: unknown[]) => mockResolveBookingExpertDisplay(...args),
 }));
@@ -98,6 +102,7 @@ const MEETING_ID = '22222222-2222-4222-8222-222222222222';
 const COMPANY_ID = '33333333-3333-4333-8333-333333333333';
 const ENGAGEMENT_ID = '44444444-4444-4444-8444-444444444444';
 const OTHER_EXPERT_PROFILE_ID = '99999999-9999-4999-8999-999999999999';
+const OTHER_COMPANY_ID = '88888888-8888-4888-8888-888888888888';
 const PRODUCT_ID = '77777777-7777-4777-8777-777777777777';
 /** ⚠ THE SERVER'S window — deliberately NOT the slot `NEW_CASE_INPUT` submits. */
 const SERVER_START = '2026-09-01T06:00:00.000Z';
@@ -167,6 +172,7 @@ beforeEach(() => {
     partyLabel: 'Dana Okoro',
   });
   mockListOpenForCompanyAndExpert.mockResolvedValue({ openCases: [], resolvedCaseCount: 0 });
+  mockEnforceBookingFunding.mockResolvedValue({ ok: true });
 });
 
 describe('bookConsultationAction', () => {
@@ -635,6 +641,138 @@ describe('bookConsultationAction', () => {
       expect.objectContaining({ engagementId: ENGAGEMENT_ID })
     );
     expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+  });
+
+  describe('funding pre-condition (BAL-478)', () => {
+    it('new-case arm: a zero-arm refusal writes NOTHING', async () => {
+      mockEnforceBookingFunding.mockResolvedValue({
+        ok: false,
+        reason: 'unfunded',
+        canManageBilling: false,
+      });
+
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+      expect(result).toEqual({ ok: false, stage: 'funding', code: 'funding_admins_notified' });
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(mockPostBookMeeting).not.toHaveBeenCalled();
+      expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The anti-vacuity pin for the case above: identical input, gate passes ⇒ `mockCreate` WAS
+     * called exactly once. Without this, the previous test's "not called" assertions would pass
+     * for the wrong reason (memory `feedback_mutation_proof_is_per_assertion_not_per_suite`).
+     */
+    it('positive control: the SAME new-case input creates the case when the gate passes', async () => {
+      mockEnforceBookingFunding.mockResolvedValue({ ok: true });
+
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * REV-1 (fix round) — the ORIGINAL version of this test was VACUOUS: the default
+     * `mockAuthorizeCaseAttach` (`beforeEach`) echoes back the SAME `COMPANY_ID` /
+     * `EXPERT_PROFILE_ID` the request already carries, so asserting the gate received those
+     * proved nothing about which one it actually reads from. Mutating `resolveCase`'s
+     * `planFundingSubject` call to read `input.expertProfileId` (the request's CLAIM) instead of
+     * the row's own field left this test green.
+     *
+     * Fixed by making the attach mock return a DISTINCT company AND expert from what the request
+     * claims, then asserting the gate received THOSE — a value only reachable by reading the
+     * row, never the claim. Re-run against the described mutation: RED (the gate then reports
+     * `expertProfileId: EXPERT_PROFILE_ID`, not `OTHER_EXPERT_PROFILE_ID`).
+     */
+    it('existing-case (attach) arm: the gate is fed from the ROW, not the request claim', async () => {
+      mockAuthorizeCaseAttach.mockResolvedValue({
+        ok: true,
+        engagementId: ENGAGEMENT_ID,
+        companyId: OTHER_COMPANY_ID,
+        expertProfileId: OTHER_EXPERT_PROFILE_ID,
+        title: 'Existing case',
+      });
+      mockEnforceBookingFunding.mockResolvedValue({
+        ok: false,
+        reason: 'unfunded',
+        canManageBilling: false,
+      });
+
+      const result = await bookConsultationAction(EXISTING_CASE_INPUT);
+
+      expect(result).toEqual({ ok: false, stage: 'funding', code: 'funding_admins_notified' });
+      expect(mockEnforceBookingFunding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          companyId: OTHER_COMPANY_ID,
+          expertProfileId: OTHER_EXPERT_PROFILE_ID,
+        })
+      );
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it('replay arm: a zero-arm refusal on a replayed case does NOT re-book the meeting', async () => {
+      mockFindByBookingIdempotencyKey.mockResolvedValue({
+        id: ENGAGEMENT_ID,
+        companyId: COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        title: 'Already created case',
+      });
+      mockEnforceBookingFunding.mockResolvedValue({
+        ok: false,
+        reason: 'unfunded',
+        canManageBilling: false,
+      });
+
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+      expect(result).toEqual({ ok: false, stage: 'funding', code: 'funding_admins_notified' });
+      expect(mockPostBookMeeting).not.toHaveBeenCalled();
+    });
+
+    it('canManageBilling:true maps to funding_setup_required', async () => {
+      mockEnforceBookingFunding.mockResolvedValue({
+        ok: false,
+        reason: 'unfunded',
+        canManageBilling: true,
+      });
+
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+      expect(result).toEqual({ ok: false, stage: 'funding', code: 'funding_setup_required' });
+    });
+
+    it("reason:'unavailable' maps to the generic case-hop failure, NOT a funding code", async () => {
+      mockEnforceBookingFunding.mockResolvedValue({ ok: false, reason: 'unavailable' });
+
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+      expect(result).toEqual({ ok: false, stage: 'case', code: 'booking_failed' });
+    });
+
+    it('order pin: a rate-limited submit never reaches the funding gate', async () => {
+      mockCountByActorAndActionSince.mockResolvedValue(30);
+
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+      expect(result).toEqual({ ok: false, stage: 'case', code: 'rate_limited' });
+      expect(mockEnforceBookingFunding).not.toHaveBeenCalled();
+    });
+
+    /**
+     * R3 — the gate must use the SLOT'S DECLARED DURATION, never the server window. This is the
+     * one assertion that would catch someone "fixing" the gate to use `windowMinutes` instead —
+     * `NEW_CASE_INPUT.slot.durationMinutes` is 30, but its mocked server window
+     * (`SERVER_START`..`SERVER_END`) is deliberately 45 minutes.
+     */
+    it("uses the slot's declared duration (30), never the server's window (45)", async () => {
+      await bookConsultationAction(NEW_CASE_INPUT);
+
+      expect(mockEnforceBookingFunding).toHaveBeenCalledWith(
+        expect.objectContaining({ estimatedMinutes: 30 })
+      );
+    });
   });
 
   describe('session_expired (dead WorkOS credential, not a booking refusal)', () => {

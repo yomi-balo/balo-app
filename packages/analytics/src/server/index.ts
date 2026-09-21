@@ -26,6 +26,10 @@ export { CREDIT_SERVER_EVENTS } from '../events/credit';
 export { PROMO_SERVER_EVENTS } from '../events/promo';
 export { SESSION_SERVER_EVENTS } from '../events/session';
 export { CASE_BILLING_SERVER_EVENTS } from '../events/case-billing';
+// BAL-478 — the booking flow's first SERVER family. `apps/web`'s `enforceBookingFunding`
+// imports from `@balo/analytics/server` ONLY.
+export { BOOKING_SERVER_EVENTS } from '../events/booking';
+export type { BookingFundingBlockReason } from '../events/booking';
 // BAL-441 — the session receipt/payout pages' lens/source/state dimensions.
 export type {
   SessionStatementLens,

@@ -26,6 +26,7 @@ import type {
   ExpertSearchabilityRestoredPayload,
   BookingConfirmedPayload,
   BookingRescheduledPayload,
+  BookingFundingBlockedPayload,
   RescheduleProposalSentPayload,
   RescheduleProposalDeclinedPayload,
   ConversationAvailabilitySharedPayload,
@@ -278,6 +279,11 @@ export type NotificationEvent =
   // apps/api/src/notifications/events.ts — keep in lockstep. ⚠ `meeting.guest_rescheduled` is
   // deliberately NOT mirrored here — it is SERVER-ONLY (see that event's docblock).
   | 'booking.rescheduled'
+  // BAL-478 — a Case booking was refused before any write because the paying company has
+  // neither an active mandate nor enough available credit. Published from
+  // `enforceBookingFunding` (apps/web). Mirror of apps/api/src/notifications/events.ts — keep in
+  // lockstep.
+  | 'booking.funding_blocked'
   // BAL-411 — the expert proposed alternative times / the client declined every option. Both
   // published from apps/web Server Actions after their api route returns 200. Mirror of
   // apps/api/src/notifications/events.ts — keep in lockstep. ⚠ `reschedule_proposal.unanswered`
@@ -346,6 +352,7 @@ export interface EventPayloadMap {
   'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
   'booking.confirmed': BookingConfirmedPayload;
   'booking.rescheduled': BookingRescheduledPayload;
+  'booking.funding_blocked': BookingFundingBlockedPayload;
   'reschedule_proposal.sent': RescheduleProposalSentPayload;
   'reschedule_proposal.declined': RescheduleProposalDeclinedPayload;
   'conversation.availability_shared': ConversationAvailabilitySharedPayload;

@@ -71,6 +71,10 @@ const BILLING_FANOUT_EVENTS = new Set<string>([
   // the actor, as confirmation). Omitting this entry fails SILENTLY the same way — see the
   // warning above.
   'billing.email_changed',
+  // BAL-478: a Case booking was refused before any write for lack of funding → the company's
+  // MANAGE_BILLING holders. Omitting this entry fails SILENTLY the same way — see the warning
+  // above: the rule still resolves, the dispatcher just finds no `data.billingUserIds`.
+  'booking.funding_blocked',
   // ⚠⚠ BAL-412's `session.missed_call` is DELIBERATELY NOT LISTED HERE, and the omission is a
   // DECISION, not a gap (omitting an entry for a genuine fan-out event would silently drop the
   // alert — see the file docblock's warning). This event has NO `company_billing_admins`

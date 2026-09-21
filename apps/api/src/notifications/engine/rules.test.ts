@@ -1558,6 +1558,24 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('booking.funding_blocked (BAL-478)', () => {
+    it('is exactly two rules — email + in-app, both company_billing_admins, no SMS', () => {
+      const rules = notificationRules['booking.funding_blocked'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('company_billing_admins');
+        expect(rule.template).toBe('booking-funding-blocked');
+        expect(rule.timing).toBe('immediate');
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+      expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
+    });
+  });
+
   describe('credit.saved_card.detached (BAL-521 §3)', () => {
     it('resolves to email + in-app on company_billing_admins with template credit-saved-card-detached, no SMS', () => {
       const rules = notificationRules['credit.saved_card.detached'];

@@ -1177,6 +1177,23 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-478 funding-blocked — company billing admins. A Case booking was refused before any
+  // write for lack of funding. Names the booker (data.requestedByName, carried verbatim on the
+  // payload) and the expert PARTY (data.expertPartyLabel). Deep-links to billing settings.
+  'booking-funding-blocked': (data) => {
+    const requestedByName = (data.requestedByName as string) ?? 'A teammate';
+    const expertPartyLabel = (data.expertPartyLabel as string) ?? 'an expert';
+    // UX-1 (fix round) — retrospective copy names the person labelled "@ company" on first
+    // mention (CLAUDE.md), matching the email factory's body and its own subject.
+    const company = data.company as { name?: string } | undefined;
+    const requestedByLabel = personWithOrgLabel(requestedByName, company?.name);
+    return {
+      title: 'A booking is waiting on billing',
+      body: `${requestedByLabel} went to book a consultation with ${expertPartyLabel}. Add a payment method or top up and they can pick a time.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
   // BAL-521 §3 saved card removed — company billing admins, from EITHER door. Copy comes from
   // the ONE shared derivation (`buildSavedCardDetachedCopy`, F3) the email factory in `index.ts`
   // also calls, so the two channels cannot drift. Deep-links to billing settings (NOT

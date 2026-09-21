@@ -19,9 +19,6 @@ import {
 // `SQL` in a column position. Write-once must be enforced in SQL, so these are the correct types.
 import type { PgInsertValue, PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import {
-  applyBaloFee,
-  deriveMinuteRateCents,
-  DEFAULT_BALO_FEE_BPS,
   DEFAULT_OVERDRAFT_CEILING_MINOR,
   LOW_BALANCE_WARNING_MINUTES,
   MAX_SESSION_MINUTES,
@@ -29,6 +26,7 @@ import {
   OVERDRAFT_GRACE_MINUTES,
 } from '@balo/shared/pricing';
 import {
+  deriveSessionEstimate,
   isWalletMandateActive,
   minutesOfRunway,
   walletAllowsOverdraftGrace,
@@ -1056,11 +1054,16 @@ export const creditSessionsRepository = {
       }
 
       const expertHourly = expert.rateCents;
-      const baloFeeBps = input.baloFeeBps ?? DEFAULT_BALO_FEE_BPS;
-      const clientHourly = applyBaloFee(expertHourly, baloFeeBps);
-      const clientRateMinorPerMinute = deriveMinuteRateCents(clientHourly);
-      const expertRateMinorPerMinute = deriveMinuteRateCents(expertHourly);
-      const estimateMinor = input.estimatedMinutes * clientRateMinorPerMinute;
+      // BAL-478 — ONE estimator. This block used to inline the arithmetic; it now calls the
+      // shared pure helper the booking pre-check also calls, so the advisory gate and this
+      // authoritative one can never drift. Figures are byte-identical (see
+      // `packages/shared/src/credit/session-estimate.test.ts`).
+      const { baloFeeBps, clientRateMinorPerMinute, expertRateMinorPerMinute, estimateMinor } =
+        deriveSessionEstimate({
+          expertHourlyMinor: expertHourly,
+          estimatedMinutes: input.estimatedMinutes,
+          baloFeeBps: input.baloFeeBps,
+        });
 
       // 4. Re-derive available UNDER the lock (the money gate must not trust the advisory read).
       const available = wallet.balanceMinor - (await activeHoldsSum(tx, input.walletId));

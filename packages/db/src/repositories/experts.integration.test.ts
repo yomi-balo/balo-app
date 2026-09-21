@@ -1507,6 +1507,37 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
 });
 
 /**
+ * BAL-478 — the booking funding pre-check's narrow rate read. The raw-rate assertion below is
+ * what makes "no markup in `packages/db`" a real, provable claim rather than a restatement of
+ * the docblock: it asserts the EXACT seeded cents, not merely a non-null number.
+ */
+describe('expertsRepository.findRateCentsById (BAL-478)', () => {
+  it('returns the raw, un-marked-up rate for a seeded profile', async () => {
+    const expert = await expertFactory();
+    await db
+      .update(expertProfiles)
+      .set({ rateCents: 30_000 })
+      .where(eq(expertProfiles.id, expert.id));
+
+    const row = await expertsRepository.findRateCentsById(expert.id);
+
+    expect(row).toEqual({ rateCents: 30_000 });
+  });
+
+  it('returns { rateCents: null } for a rate-less profile', async () => {
+    const expert = await expertFactory();
+
+    const row = await expertsRepository.findRateCentsById(expert.id);
+
+    expect(row).toEqual({ rateCents: null });
+  });
+
+  it('returns undefined for an unknown profile id', async () => {
+    await expect(expertsRepository.findRateCentsById(randomUUID())).resolves.toBeUndefined();
+  });
+});
+
+/**
  * BAL-548 / ADR-1055 — the `expert.application_pending` finder read.
  *
  * ⚠ `expert_profiles` HAS NO `deleted_at`, so there is no soft-deleted-profile case to

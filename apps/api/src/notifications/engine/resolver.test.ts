@@ -720,4 +720,27 @@ describe('resolveContext', () => {
       expect(context.data.user).toBeUndefined();
     });
   });
+
+  describe('booking.funding_blocked hydration (BAL-478)', () => {
+    it('hydrates data.billingUserIds from companyId (the BILLING_FANOUT_EVENTS entry) — the silent-failure guard', async () => {
+      // ⚠ The ONLY thing standing between this event and a silently unaddressed email is its
+      // one-line entry in `BILLING_FANOUT_EVENTS`, whose own docblock says omission fails
+      // SILENTLY (the rule resolves `company_billing_admins` from `data.billingUserIds`, so an
+      // un-hydrated payload fans out to nobody and throws nothing). Deleting that line fails
+      // HERE, by name.
+      mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+
+      const context = await resolveContext('booking.funding_blocked', {
+        correlationId: 'booking-funding:company-1:user-1:481234',
+        companyId: 'company-1',
+        requestedByName: 'Dana',
+        expertPartyLabel: 'CloudPeak',
+      });
+
+      expect(mockListBillingUserIds).toHaveBeenCalledWith('company-1');
+      expect(context.data.billingUserIds).toEqual(['owner-1', 'admin-1']);
+      expect(context.data.company).toEqual({ id: 'company-1', name: 'Northwind Industrial' });
+    });
+  });
 });

@@ -64,6 +64,7 @@ import { SessionSettlementFailedEmail } from './session-settlement-failed.js';
 import { CreditTopupCompletedEmail } from './credit-topup-completed.js';
 import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
 import { CreditSavedCardDetachedEmail } from './credit-saved-card-detached.js';
+import { BookingFundingBlockedEmail } from './booking-funding-blocked.js';
 import {
   BillingEmailChangedEmail,
   BillingEmailChangedPreviousEmail,
@@ -1383,6 +1384,30 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(memberName)} asked you to top up your team's balance`,
+    };
+  },
+
+  // BAL-478 funding-blocked — EMAIL to each fanned-out MANAGE_BILLING holder. A Case booking was
+  // refused before any write for lack of funding. `requestedByName` (the booker) is retrospective
+  // (CLAUDE.md) — SUBJECT uses the labelled "@ company" form, the SAME F4 precedent
+  // `credit-saved-card-detached` establishes, using `data.company`'s name (hydrated by the
+  // resolver from `payload.companyId`). `expertPartyLabel` is prospective, carried verbatim. NO
+  // money figure anywhere (D4c). CTA lands on billing settings.
+  'booking-funding-blocked': (data) => {
+    const requestedByName = (data.requestedByName as string) ?? 'A teammate';
+    const expertPartyLabel = (data.expertPartyLabel as string) ?? 'an expert';
+    const companyName = (data.company as { name?: string } | undefined)?.name;
+    const subject = `${sanitizeSubjectTitle(personWithOrgLabel(requestedByName, companyName))} needs billing set up to book`;
+    return {
+      component: React.createElement(BookingFundingBlockedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        requestedByName,
+        companyName,
+        expertPartyLabel,
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject,
     };
   },
 

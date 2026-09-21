@@ -1350,6 +1350,34 @@ export interface BookingRescheduledPayload {
 }
 
 /**
+ * BAL-478 — a Case booking was refused because the paying company has neither an active payment
+ * mandate nor enough available credit to cover the consultation. Published from apps/web's
+ * booking Server Action BEFORE any row is written, so nothing exists to reference.
+ *
+ * Fans out to the company's MANAGE_BILLING holders (recipient 'company_billing_admins' → the
+ * resolver hydrates `data.billingUserIds` AND `data.company` from `companyId`).
+ *
+ * ⚠ `correlationId` IS HOUR-BUCKETED, not a fresh uuid — `booking-funding:{companyId}:{userId}:
+ * {hourBucket}`, the `credit.topup.requested` shape verbatim. A booker retrying the same doomed
+ * submit five times in a minute must not email-bomb the billing admins; a genuine later attempt
+ * still fans out. BullMQ jobId dedup does the collapsing (`buildJobId` escapes the colons).
+ *
+ * ⚠ NO MONEY FIGURE ANYWHERE — no balance, no shortfall, no rate, no estimate. Booking renders
+ * no rate (BAL-400 D4c) and the Balo fee is concealed; the billing admin needs the ACTION, not
+ * an amount. ⚠ NO CASE TITLE either: it is client-typed text on the new-case arm and has no
+ * business in a Balo-branded email. ⚠ No email address (ADR-1044 §3).
+ *
+ * Retrospective copy names the PERSON (`requestedByName`, labelled "@ {company}" by the
+ * template); prospective copy names the PARTY (`expertPartyLabel`). Defined ONCE here.
+ */
+export interface BookingFundingBlockedPayload {
+  correlationId: string; // booking-funding:{companyId}:{userId}:{hourBucket} → jobId dedup
+  companyId: string; // → data.billingUserIds (fan-out) + data.company (name)
+  requestedByName: string; // the booker's display name, or 'A teammate'
+  expertPartyLabel: string; // agency name, or the independent expert's own name
+}
+
+/**
  * BAL-410 — a booked consultation was CANCELLED. Published by `apps/api`'s cancel ROUTE after
  * the meeting flip commits, so nothing notifies on a failed cancel.
  *

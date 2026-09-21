@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertCircle, AlertTriangle, LogIn } from 'lucide-react';
+import { AlertCircle, AlertTriangle, LogIn, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 /** The overridable half of {@link HardFailurePanelProps} — what a caller can restate. */
@@ -92,6 +92,65 @@ export function SessionExpiredPanel({
           I&apos;ll finish this later
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * BAL-478 (R6) — the funding pre-condition's panel. ONE condition, TWO audiences, branched on the
+ * ACTOR'S CAPABILITY (resolved server-side via `hasCapability`, ADR-1029 — never a role string,
+ * and never `activeMode`).
+ *
+ * ⚠ NO DEAD-END CTA ON THE MEMBER ARM. Booking needs CONSUME_CREDITS; adding a card needs
+ * MANAGE_BILLING, so `/settings/billing` would refuse the ordinary booker. The member arm's
+ * promise ("your billing admins have been told") is kept by `enforceBookingFunding`, which
+ * publishes `booking.funding_blocked` before it returns — do not weaken that copy to a maybe.
+ *
+ * ⚠ NO MONEY FIGURE, EITHER ARM. No balance, no shortfall, no rate — BAL-400 D4c ("the ONLY
+ * billing copy in the whole flow"; no rate is rendered anywhere) and fee concealment both hold.
+ *
+ * ⚠ NOT DESTRUCTIVE-TONED. This is a setup step, not a failure: `bg-info/10` + `Wallet`, never
+ * the `AlertCircle`/`destructive` treatment `HardFailurePanel` uses.
+ *
+ * Copy is an UNCLEARED MJ checkpoint (R6) — workable placeholders, gender-neutral, no figure,
+ * framed as a solvable setup step. See the BAL-478 plan §6.3 / PR description.
+ */
+export function FundingSetupPanel({
+  canManageBilling,
+  onManageBilling,
+  onClose,
+}: Readonly<{
+  canManageBilling: boolean;
+  onManageBilling: () => void;
+  onClose: () => void;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
+      <span className="bg-info/10 flex h-14 w-14 items-center justify-center rounded-xl p-4">
+        <Wallet className="text-info h-6 w-6" aria-hidden="true" />
+      </span>
+      <div className="max-w-[360px] space-y-1.5">
+        <h2 className="text-foreground text-lg font-semibold">One setup step first</h2>
+        <p className="text-muted-foreground text-sm leading-relaxed">
+          {canManageBilling
+            ? 'Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Set that up and pick your time straight after.'
+            : "Before a consultation can be booked, your team needs a payment method on file — or enough credit to cover it. Your billing admins have been told, so it's already in motion — come back and pick a time once it's set up."}
+        </p>
+      </div>
+      {canManageBilling ? (
+        <div className="flex flex-col items-center gap-2">
+          <Button className="min-h-11" onClick={onManageBilling}>
+            Set up billing
+          </Button>
+          <Button variant="ghost" size="sm" className="min-h-11" onClick={onClose}>
+            I&apos;ll do this later
+          </Button>
+        </div>
+      ) : (
+        <Button className="min-h-11" onClick={onClose}>
+          Got it
+        </Button>
+      )}
     </div>
   );
 }
