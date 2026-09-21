@@ -627,6 +627,20 @@ const bookingRescheduledPayload = z.object({
   initiatedBy: z.enum(['client', 'expert']),
 });
 
+// BAL-478 — a Case booking was refused because the paying company has neither an active
+// mandate nor enough available credit (web-published). `correlationId` is hour-bucketed —
+// `booking-funding:{companyId}:{userId}:{hourBucket}` — the `credit.topup.requested` shape
+// verbatim, so a burst of retried submits collapses to one dispatch per hour via BullMQ jobId
+// dedup. No money field — no balance, no shortfall, no rate, no estimate (D4c). No case title —
+// client-typed text with no business in a Balo-branded email. Mirrors
+// packages/shared/src/notifications/index.ts.
+const bookingFundingBlockedPayload = z.object({
+  correlationId: z.string().min(1).max(200),
+  companyId: z.uuid(),
+  requestedByUserId: z.uuid(),
+  expertPartyLabel: z.string().min(1).max(200),
+});
+
 // BAL-411 — the expert proposed alternative times (web-published, mirroring
 // `booking.rescheduled`). `correlationId` = proposalId — a fresh row per propose, so
 // re-proposing mints a genuinely new id. No rate/total/hold field — a proposal moves no money.
@@ -942,6 +956,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('booking.rescheduled'),
     payload: bookingRescheduledPayload,
+  }),
+  z.object({
+    event: z.literal('booking.funding_blocked'),
+    payload: bookingFundingBlockedPayload,
   }),
   z.object({
     event: z.literal('reschedule_proposal.sent'),

@@ -1,8 +1,7 @@
 /**
- * BAL-400 — case-booking flow analytics. ALL are CLIENT events (`track`); there is no
- * `BOOKING_SERVER_EVENTS` (D4c: no rate anywhere, and the money path is out of scope — D1).
+ * BAL-400 — case-booking flow CLIENT analytics.
  *
- * ⚠ REGISTRATION IS SIX FILES FOR A CLIENT FAMILY, NOT CLAUDE.md's THREE (memory
+ * ⚠ REGISTRATION IS SIX FILES FOR THE CLIENT FAMILY, NOT CLAUDE.md's THREE (memory
  * `reference_analytics_registration_is_five_files`, and this family needs one more than that):
  *   1. this file
  *   2. `packages/analytics/src/events/index.ts` — re-export
@@ -11,6 +10,10 @@
  *   5. `apps/web/src/lib/analytics/index.ts` — re-export in the web client barrel
  *   6. `apps/web/src/test/setup.ts` — the `vi.mock('@/lib/analytics', …)` export list, else
  *      every booking component test throws on an undefined constant
+ *
+ * BAL-478 ADDS THE FIRST `BOOKING_SERVER_EVENTS` — see below. That family's registration is a
+ * DIFFERENT five files (§8 of the BAL-478 plan), not these six: it joins `ServerEvents`, never
+ * `AllEvents`.
  */
 
 export const BOOKING_EVENTS = {
@@ -182,5 +185,36 @@ export interface BookingEventMap {
   [BOOKING_EVENTS.SESSION_EXPIRED]: {
     expert_id: string;
     stage: BookingSessionExpiryStage;
+  };
+}
+
+/** BAL-478 — the booking flow's first SERVER event. Emitted by `enforceBookingFunding`. */
+export const BOOKING_SERVER_EVENTS = {
+  /**
+   * A Case booking was refused before any write because neither funding arm held.
+   *
+   * ⚠ COUNTS ATTEMPTS, NOT DISTINCT BLOCKED BOOKERS (fix round 2 NB). The billing-admin EMAIL
+   * is hour-bucketed (`booking-funding:{companyId}:{userId}:{hourBucket}`), but this event
+   * fires on EVERY refused submit — a booker retrying the same doomed booking five times in a
+   * minute emits five events. The existing/replay arms also never touch the case-create rate
+   * limit (`enforceCaseCreateRateLimit`), which only bounds the NEW-case path. A dashboard
+   * answering "how many bookers hit this?" must dedupe on `(distinct_id, hour bucket)`, not
+   * count raw events.
+   */
+  FUNDING_BLOCKED: 'booking_funding_blocked',
+} as const;
+
+/** WHICH zero-arm shape it was — separates "never transacted" from "lapsed card / drained balance". */
+export type BookingFundingBlockReason = 'no_wallet' | 'no_mandate_insufficient_balance';
+
+export interface BookingServerEventMap {
+  [BOOKING_SERVER_EVENTS.FUNDING_BLOCKED]: {
+    expert_id: string;
+    reason: BookingFundingBlockReason;
+    /** True ⇒ the panel offered the self-serve route; false ⇒ only the billing-admin fan-out. */
+    can_manage_billing: boolean;
+    /** The slot's declared duration — the estimate's minutes input. */
+    duration_minutes: number;
+    distinct_id: string;
   };
 }

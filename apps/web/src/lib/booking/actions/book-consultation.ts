@@ -10,7 +10,6 @@ import {
   referenceDataRepository,
   isUniqueViolation,
 } from '@balo/db';
-import { SLOT_DURATION_LADDER } from '@balo/shared/availability';
 import { CAPABILITIES } from '@/lib/authz';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
@@ -18,8 +17,10 @@ import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { deriveBookingIdempotencyKey } from '../booking-idempotency';
+import { bookingSlotSchema, MS_PER_MINUTE } from '../booking-slot-schema';
 import { sanitizeCaseDescription } from '../sanitize-case-description';
 import { authorizeCaseAttach } from '../authorize-case-attach';
+import { enforceBookingFunding } from '../booking-funding-gate';
 import { resolveBookingExpertDisplay } from '../load-booking-context';
 import { postBookMeeting, postInviteGuests } from '../booking-api-client';
 import { isExpiredCredentialFailure, viewerApiCredentialIsLive } from '@/lib/api/balo-api-client';
@@ -33,10 +34,14 @@ import type {
 /**
  * BAL-400 — `bookConsultationAction`, the two-hop booking orchestration (Decisions 1/3/4/5/6/7).
  *
- * ⚠⚠ THE MONEY IS OUT OF SCOPE (D1). This action never calls `openSession` or
- * `creditHoldsRepository.place`. It resolves a BILLING COMPANY (D1a) because
- * `engagements.company_id` is NOT NULL and a case pins the wallet every later consultation
- * bills — but it moves no money, places no hold, and shows no balance.
+ * ⚠⚠ THE MONEY IS READ-ONLY (D1, NARROWED BY BAL-478). This action still never calls
+ * `openSession`, never places a hold, and still renders no rate and no balance (D4c). What
+ * BAL-478 added is ONE READ-ONLY PRE-CONDITION: before the first write, `enforceBookingFunding`
+ * proves the paying company can settle this consultation — an active mandate OR available
+ * balance >= the estimate, the SAME two arms, the SAME predicate and the SAME estimate helper
+ * as the authoritative in-txn gate in `creditSessionsRepository.open`. It is ADVISORY by
+ * construction (unlocked reads); the authoritative gate is unchanged and still lives under the
+ * wallet lock at admission (BAL-466 D2 — admission is never blocked on funding).
  *
  * TWO NON-ATOMIC HOPS: a `@balo/db` write (open or attach a case) THEN a Bearer hop to
  * `POST /meetings`. A hop-2 failure leaves a real, zero-consultation case — an ACCEPTABLE
@@ -73,8 +78,6 @@ const MAX_DESCRIPTION_HTML = 20_000;
 const CASE_CREATE_MAX_PER_WINDOW = 30;
 const CASE_CREATE_WINDOW_MS = 3_600_000;
 
-const slotDurations = SLOT_DURATION_LADDER as readonly number[];
-
 const caseChoiceSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -93,18 +96,23 @@ const caseChoiceSchema = z.discriminatedUnion('kind', [
     .strict(),
 ]);
 
+/**
+ * ⚠⚠ THE SLOT WINDOW MUST *AGREE* WITH `durationMinutes` (fix round: B1, external review of
+ * PR #333) — enforced by `bookingSlotSchema`, extracted to `../booking-slot-schema` in fix
+ * round 3 so this SECURITY CHECK cannot diverge from `book-intro-call.ts`'s identical one. See
+ * that module's docblock for the full rationale. Before it existed here, `durationMinutes` was
+ * checked against the duration ladder and then consumed by TWO DIFFERENT DOWNSTREAM STEPS that
+ * never cross-checked it against the window: `enforceBookingFunding` sizes the estimate from
+ * `durationMinutes` (`estimatedMinutes: input.slot.durationMinutes`), while the meeting is
+ * booked — and admission later re-estimates — from `slot.startIso`/`slot.endIso`. A crafted
+ * submit declaring `durationMinutes: 15` against a 3-hour window passed the balance arm on a
+ * fraction of the funds, then booked the full window — precisely the unbilled consultation this
+ * ticket exists to prevent.
+ */
 const bookConsultationSchema = z
   .object({
     expertProfileId: z.string().uuid(),
-    slot: z
-      .object({
-        startIso: z.string().min(1),
-        endIso: z.string().min(1),
-        durationMinutes: z
-          .number()
-          .refine((value) => slotDurations.includes(value), { message: 'invalid duration' }),
-      })
-      .strict(),
+    slot: bookingSlotSchema,
     bookingNonce: z.string().uuid(),
     guests: z
       .array(
@@ -147,7 +155,10 @@ type CaseResolution =
   | { readonly ok: false; readonly result: BookConsultationResult & { ok: false } };
 
 /** A `stage`/`code` rejection, in the shape `resolveCase` hands back. */
-function caseFailure(stage: BookingStage, code: BookingFailureCode): CaseResolution {
+function caseFailure(
+  stage: BookingStage,
+  code: BookingFailureCode
+): { readonly ok: false; readonly result: BookConsultationResult & { ok: false } } {
   return { ok: false, result: { ok: false, stage, code } };
 }
 
@@ -328,7 +339,7 @@ async function resolveExistingCaseByKey(
 /**
  * The 'new' arm's create-path error handler: a concurrent double-submit racing the SAME
  * idempotency key surfaces as a unique violation, which we resolve by re-reading (through the
- * gate) rather than guessing. Extracted from `createCase` purely to keep that function's own
+ * gate) rather than guessing. Extracted from `writeCase` purely to keep that function's own
  * cognitive complexity under the SonarCloud ceiling — behavior is unchanged.
  */
 async function handleCaseCreateError(
@@ -360,13 +371,42 @@ async function handleCaseCreateError(
   return caseFailure('case', 'booking_failed');
 }
 
-/** The 'new' arm's create path: bound, validate, resolve the company, then write. */
-async function createCase(
+/** What the booking WILL do once funding is proven. Nothing here has been written. */
+type CasePlan =
+  | { readonly kind: 'existing'; readonly resolved: ResolvedCase }
+  | {
+      readonly kind: 'create';
+      readonly companyId: string;
+      readonly expertProfileId: string;
+      readonly title: string;
+      readonly descriptionHtml: string; // already sanitized
+      readonly productIds: readonly string[];
+    };
+
+type CasePlanResult =
+  | { readonly ok: true; readonly plan: CasePlan }
+  | { readonly ok: false; readonly result: BookConsultationResult & { ok: false } };
+
+/**
+ * The (company, expert) pair the funding gate evaluates. On the `existing` arm it is the ROW's
+ * own expert (S1/M5), never the request's claim; on the `create` arm it is the id the row is
+ * about to be written with. `authorizeCaseAttach`'s `expert_mismatch` denial makes the two
+ * byte-equal on every reachable path — this function exists so the gate is never the place
+ * that has to know that.
+ */
+function planFundingSubject(plan: CasePlan): { companyId: string; expertProfileId: string } {
+  if (plan.kind === 'existing') {
+    return { companyId: plan.resolved.companyId, expertProfileId: plan.resolved.expertProfileId };
+  }
+  return { companyId: plan.companyId, expertProfileId: plan.expertProfileId };
+}
+
+/** The 'new' arm's PRE-WRITE half: bound, resolve the company, sanitize, validate. NO WRITE. */
+async function planNewCase(
   userId: string,
-  key: string,
   claimedExpertProfileId: string,
   choice: NewCaseChoice
-): Promise<CaseResolution> {
+): Promise<CasePlanResult> {
   const limit = await enforceCaseCreateRateLimit(userId);
   if (!limit.ok) {
     return caseFailure('case', limit.code);
@@ -387,15 +427,34 @@ async function createCase(
     return caseFailure('validation', products.code);
   }
 
-  try {
-    const created = await caseEngagementsRepository.create({
+  return {
+    ok: true,
+    plan: {
+      kind: 'create',
       companyId: companyResult.companyId,
       expertProfileId: claimedExpertProfileId,
       title: choice.title,
-      description: sanitized.html,
+      descriptionHtml: sanitized.html,
+      productIds: choice.productIds,
+    },
+  };
+}
+
+/** The 'new' arm's ONLY write. Unchanged body: `caseEngagementsRepository.create` + log + handler. */
+async function writeCase(
+  userId: string,
+  key: string,
+  plan: Extract<CasePlan, { kind: 'create' }>
+): Promise<CaseResolution> {
+  try {
+    const created = await caseEngagementsRepository.create({
+      companyId: plan.companyId,
+      expertProfileId: plan.expertProfileId,
+      title: plan.title,
+      description: plan.descriptionHtml,
       actorUserId: userId,
       bookingIdempotencyKey: key,
-      productIds: choice.productIds,
+      productIds: plan.productIds,
     });
     log.info('Case opened at booking', {
       engagementId: created.id,
@@ -414,16 +473,20 @@ async function createCase(
       },
     };
   } catch (error) {
-    return handleCaseCreateError(error, userId, key, claimedExpertProfileId);
+    return handleCaseCreateError(error, userId, key, plan.expertProfileId);
   }
 }
 
-/** Open-or-replay-or-attach the case. Returns the resolved case identity, never throws. */
-async function resolveCase(
+/**
+ * ⚠⚠ THE PRE-WRITE HALF OF CASE RESOLUTION. Every arm here resolves an identity and WRITES
+ * NOTHING — that is what makes ONE funding gate (in `resolveCase` below) able to cover all
+ * three arms with a single call site instead of three copies of the rule.
+ */
+async function planCase(
   userId: string,
   key: string,
   input: ValidatedInput
-): Promise<CaseResolution> {
+): Promise<CasePlanResult> {
   if (input.caseChoice.kind === 'existing') {
     const attach = await authorizeCaseAttach({
       actorUserId: userId,
@@ -435,12 +498,15 @@ async function resolveCase(
     }
     return {
       ok: true,
-      resolved: {
-        engagementId: attach.engagementId,
-        companyId: attach.companyId,
-        expertProfileId: attach.expertProfileId,
-        title: attach.title,
-        isNewCase: false,
+      plan: {
+        kind: 'existing',
+        resolved: {
+          engagementId: attach.engagementId,
+          companyId: attach.companyId,
+          expertProfileId: attach.expertProfileId,
+          title: attach.title,
+          isNewCase: false,
+        },
       },
     };
   }
@@ -453,13 +519,47 @@ async function resolveCase(
     return caseFailure('case', 'case_not_available');
   }
   if (replay.kind === 'resolved') {
-    return { ok: true, resolved: replay.resolved };
+    return { ok: true, plan: { kind: 'existing', resolved: replay.resolved } };
   }
 
-  return createCase(userId, key, input.expertProfileId, input.caseChoice);
+  return planNewCase(userId, input.expertProfileId, input.caseChoice);
 }
 
-const MS_PER_MINUTE = 60_000;
+/**
+ * ⚠⚠ THE FUNDING GATE'S ONE CALL SITE (BAL-478 / R1). Both company sources reach it:
+ * `resolveBillingCompanyId` (the new-case arm, via `planNewCase`) and `authorizeCaseAttach`
+ * (the existing + replay arms). It runs AFTER every cheap validation — so a rate-limited or
+ * malformed submit is not reported as a funding problem, and a doomed submit never publishes a
+ * notice to billing admins — and BEFORE `writeCase`, the module's ONLY write. A refusal below
+ * therefore leaves no case row, no engagement, no meeting: the same invariant
+ * `viewerApiCredentialIsLive()` states at `bookConsultationAction`'s own pre-flight.
+ */
+async function resolveCase(
+  userId: string,
+  key: string,
+  input: ValidatedInput
+): Promise<CaseResolution> {
+  const planned = await planCase(userId, key, input);
+  if (!planned.ok) return { ok: false, result: planned.result };
+
+  const subject = planFundingSubject(planned.plan);
+  const funding = await enforceBookingFunding({
+    actorUserId: userId,
+    companyId: subject.companyId,
+    expertProfileId: subject.expertProfileId,
+    estimatedMinutes: input.slot.durationMinutes,
+  });
+  if (!funding.ok) {
+    if (funding.reason === 'unavailable') return caseFailure('case', 'booking_failed');
+    return caseFailure(
+      'funding',
+      funding.canManageBilling ? 'funding_setup_required' : 'funding_admins_notified'
+    );
+  }
+
+  if (planned.plan.kind === 'existing') return { ok: true, resolved: planned.plan.resolved };
+  return writeCase(userId, key, planned.plan);
+}
 
 /**
  * S2 — the duration OF THE MEETING, derived from the server's own window rather than from the
@@ -714,6 +814,11 @@ export async function bookConsultationAction(
     return { ok: false, stage: 'validation', code: 'session_expired' };
   }
 
+  // BAL-478 fix round 2 (B2) — the funding gate's fan-out names the booker by USER ID
+  // (`requestedByUserId`), never a pre-rendered name computed here: the resolver is the only
+  // place that can ALSO drop the booker from `data.billingUserIds` when they are themselves a
+  // holder, so a display-name fallback duplicated here would be a second, incomplete copy of
+  // that logic (the earlier version of this comment's "not a second copy" claim was wrong).
   const caseResult = await resolveCase(user.id, key, input);
   if (!caseResult.ok) {
     return caseResult.result;

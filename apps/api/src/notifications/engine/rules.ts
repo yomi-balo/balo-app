@@ -413,6 +413,11 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     ...emailAndInApp('client', 'booking-rescheduled-client', (ctx) => !!ctx.payload.recipientId),
     ...emailAndInApp('expert', 'booking-rescheduled-expert'),
   ],
+  // BAL-478 — a Case booking was refused before any write because the paying company has
+  // neither an active mandate nor enough available credit. Fans out to the company's
+  // MANAGE_BILLING holders (recipient 'company_billing_admins', resolved from
+  // data.billingUserIds) via email + in-app. NO SMS.
+  'booking.funding_blocked': emailAndInApp('company_billing_admins', 'booking-funding-blocked'),
   // BAL-410 — a booked consultation was CANCELLED. THREE recipient arms, not two, and the third
   // is what closes the ticket's "Cancelled by expert → client → email + in-app" requirement:
   //

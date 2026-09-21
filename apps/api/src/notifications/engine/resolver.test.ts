@@ -720,4 +720,120 @@ describe('resolveContext', () => {
       expect(context.data.user).toBeUndefined();
     });
   });
+
+  describe('booking.funding_blocked hydration (BAL-478, fix round 2 B2)', () => {
+    it('hydrates data.billingUserIds from companyId (the BILLING_FANOUT_EVENTS entry) — the silent-failure guard', async () => {
+      // ⚠ The ONLY thing standing between this event and a silently unaddressed email is its
+      // one-line entry in `BILLING_FANOUT_EVENTS`, whose own docblock says omission fails
+      // SILENTLY (the rule resolves `company_billing_admins` from `data.billingUserIds`, so an
+      // un-hydrated payload fans out to nobody and throws nothing). Deleting that line fails
+      // HERE, by name.
+      mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockFindById.mockResolvedValue({ id: 'user-2', firstName: 'Dana', lastName: 'Okoro' });
+
+      const context = await resolveContext('booking.funding_blocked', {
+        correlationId: 'booking-funding:company-1:user-2:481234',
+        companyId: 'company-1',
+        requestedByUserId: 'user-2',
+        expertPartyLabel: 'CloudPeak',
+      });
+
+      expect(mockListBillingUserIds).toHaveBeenCalledWith('company-1');
+      expect(context.data.billingUserIds).toEqual(['owner-1', 'admin-1']);
+      expect(context.data.company).toEqual({ id: 'company-1', name: 'Northwind Industrial' });
+    });
+
+    it('hydrates data.requestedByName (bare) and data.requestedByLabel ("Name @ Company") from requestedByUserId', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-2', firstName: 'Dana', lastName: 'Okoro' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue(['owner-1']);
+
+      const context = await resolveContext('booking.funding_blocked', {
+        correlationId: 'booking-funding:company-1:user-2:481234',
+        companyId: 'company-1',
+        requestedByUserId: 'user-2',
+        expertPartyLabel: 'CloudPeak',
+      });
+
+      expect(mockFindById).toHaveBeenCalledWith('user-2');
+      expect(context.data.requestedByName).toBe('Dana Okoro');
+      expect(context.data.requestedByLabel).toBe('Dana Okoro @ Northwind Industrial');
+    });
+
+    it('degrades to "A teammate" (no org clause, F5) when the booker has no resolvable name', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-2', firstName: null, lastName: null });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue(['owner-1']);
+
+      const context = await resolveContext('booking.funding_blocked', {
+        correlationId: 'booking-funding:company-1:user-2:481234',
+        companyId: 'company-1',
+        requestedByUserId: 'user-2',
+        expertPartyLabel: 'CloudPeak',
+      });
+
+      expect(context.data.requestedByName).toBe('A teammate');
+      expect(context.data.requestedByLabel).toBe('A teammate');
+    });
+
+    // The payload's actor key is `requestedByUserId`, NOT `userId`: the generic
+    // `payload.userId → data.user` hydration must never fire, or the booker could be mailed
+    // twice (once via the fan-out, once as a `self` recipient).
+    it('never hydrates data.user — the actor key is requestedByUserId, not userId', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-2', firstName: 'Dana' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue(['owner-1']);
+
+      const context = await resolveContext('booking.funding_blocked', {
+        correlationId: 'booking-funding:company-1:user-2:481234',
+        companyId: 'company-1',
+        requestedByUserId: 'user-2',
+        expertPartyLabel: 'CloudPeak',
+      });
+
+      expect(context.data.user).toBeUndefined();
+    });
+
+    /**
+     * B2 — THE bug this hydrator exists to fix. The booker (`user-2`) is ALSO one of the
+     * company's billing admins (the common `no_wallet` case: a solo owner who hasn't set up
+     * billing yet). Without the filter below, `user-2` would be mailed "Dana @ Northwind went
+     * to book a consultation…" about themselves.
+     */
+    it('drops the booker from billingUserIds when the booker is themselves a billing admin', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-2', firstName: 'Dana', lastName: 'Okoro' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue(['user-2']);
+
+      const context = await resolveContext('booking.funding_blocked', {
+        correlationId: 'booking-funding:company-1:user-2:481234',
+        companyId: 'company-1',
+        requestedByUserId: 'user-2',
+        expertPartyLabel: 'CloudPeak',
+      });
+
+      expect(context.data.billingUserIds).toEqual([]);
+    });
+
+    /**
+     * Positive control for the case above (mutation proof): a DIFFERENT billing admin is
+     * untouched by the filter — the booker being present in the roster does not suppress the
+     * fan-out to everyone else, only to themselves.
+     */
+    it('positive control: a billing admin who is NOT the booker is NOT dropped', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-2', firstName: 'Dana', lastName: 'Okoro' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue(['user-2', 'owner-1', 'admin-3']);
+
+      const context = await resolveContext('booking.funding_blocked', {
+        correlationId: 'booking-funding:company-1:user-2:481234',
+        companyId: 'company-1',
+        requestedByUserId: 'user-2',
+        expertPartyLabel: 'CloudPeak',
+      });
+
+      expect(context.data.billingUserIds).toEqual(['owner-1', 'admin-3']);
+    });
+  });
 });

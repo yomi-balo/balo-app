@@ -567,6 +567,95 @@ describe('BookingFlowDialog — failure panels + idempotent retry', () => {
     });
   });
 
+  describe('funding pre-condition (BAL-478)', () => {
+    async function submitWithFundingResult(
+      user: ReturnType<typeof userEvent.setup>,
+      result: Extract<BookConsultationResult, { ok: false }>
+    ): Promise<void> {
+      mockBookConsultationAction.mockResolvedValue(result);
+      render(
+        <BookingFlowDialog
+          open
+          onClose={vi.fn()}
+          expert={EXPERT}
+          source="profile"
+          entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+          viewerEmailDomain={null}
+          onMessage={vi.fn()}
+        />
+      );
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+      await user.type(
+        screen.getByLabelText("What you'd like to discuss"),
+        'A real problem statement.'
+      );
+      await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
+    }
+
+    it('funding_setup_required renders the panel, and "Set up billing" routes to /settings/billing', async () => {
+      const user = userEvent.setup();
+      await submitWithFundingResult(user, {
+        ok: false,
+        stage: 'funding',
+        code: 'funding_setup_required',
+      });
+
+      expect(await screen.findByText('One setup step first')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Set up billing' }));
+      expect(mockRouterPush).toHaveBeenCalledWith('/settings/billing');
+    });
+
+    it('funding_admins_notified renders the panel, mentions billing admins, and offers NO dead-end CTA', async () => {
+      const user = userEvent.setup();
+      await submitWithFundingResult(user, {
+        ok: false,
+        stage: 'funding',
+        code: 'funding_admins_notified',
+      });
+
+      expect(await screen.findByText('One setup step first')).toBeInTheDocument();
+      expect(screen.getByText(/billing admins have been notified/i)).toBeInTheDocument();
+      // ⚠ Per-assertion mutation proof: the holder-arm control IS present in the OTHER case
+      // (above), so this negative is not vacuous.
+      expect(screen.queryByRole('button', { name: /set up billing/i })).toBeNull();
+      expect(mockRouterPush).not.toHaveBeenCalled();
+    });
+
+    // REV-6 (fix round) — the original version of this test exercised `funding_setup_required`
+    // only; `funding_admins_notified` renders DIFFERENT copy (the "billing admins have been
+    // told" body) and needs its own no-money-figure proof.
+    it.each([['funding_setup_required' as const], ['funding_admins_notified' as const]])(
+      'the %s arm renders no money figure',
+      async (code) => {
+        const user = userEvent.setup();
+        const { container } = render(
+          <BookingFlowDialog
+            open
+            onClose={vi.fn()}
+            expert={EXPERT}
+            source="profile"
+            entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+            viewerEmailDomain={null}
+            onMessage={vi.fn()}
+          />
+        );
+        mockBookConsultationAction.mockResolvedValue({ ok: false, stage: 'funding', code });
+        await user.click(screen.getByText('Pick 9:00am slot'));
+        await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+        await user.type(
+          screen.getByLabelText("What you'd like to discuss"),
+          'A real problem statement.'
+        );
+        await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
+        expect(await screen.findByText('One setup step first')).toBeInTheDocument();
+
+        expect(container.textContent).not.toContain('$');
+        expect(container.textContent).not.toContain('A$');
+      }
+    );
+  });
+
   it('shows the inline stale-slot banner (not a full panel) and preserves the typed title', async () => {
     const user = userEvent.setup();
     mockBookConsultationAction.mockResolvedValue({

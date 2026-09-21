@@ -29,7 +29,7 @@ export interface BookConsultationInput {
 }
 
 /** Which hop failed — surfaces which panel the wrapper renders. */
-export type BookingStage = 'validation' | 'company' | 'case' | 'meeting';
+export type BookingStage = 'validation' | 'company' | 'case' | 'funding' | 'meeting';
 
 export type BookingFailureCode =
   | 'invalid_request'
@@ -40,6 +40,26 @@ export type BookingFailureCode =
   | 'slot_unavailable'
   | 'rate_limited'
   | 'idempotency_key_conflict'
+  /**
+   * BAL-478 — the paying company has neither an active payment mandate nor enough available
+   * credit to cover this consultation, AND the booker holds MANAGE_BILLING, so they can fix it
+   * themselves at `/settings/billing`.
+   *
+   * ⚠ NOT AN ERROR AND NOT A REJECTION. Nothing was written (the gate runs before the only
+   * write) and nothing is wrong with the slot, the case or the session. The panel must read as
+   * a solvable setup step.
+   */
+  | 'funding_setup_required'
+  /**
+   * BAL-478 — the same condition, for a booker who does NOT hold MANAGE_BILLING (the ordinary
+   * case: booking needs CONSUME_CREDITS, adding a card needs MANAGE_BILLING).
+   *
+   * ⚠ ITS OWN CODE SO THE PANEL NEVER OFFERS A DEAD-END CTA (R6). `/settings/billing` would
+   * refuse this actor. The panel instead states that the company's billing admins were told —
+   * which is TRUE by construction: `enforceBookingFunding` publishes
+   * `booking.funding_blocked` at the moment it determines the zero-arm, before returning.
+   */
+  | 'funding_admins_notified'
   /**
    * The viewer's WorkOS credential is dead — not a refusal of the booking itself.
    *

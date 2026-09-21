@@ -71,6 +71,10 @@ const BILLING_FANOUT_EVENTS = new Set<string>([
   // the actor, as confirmation). Omitting this entry fails SILENTLY the same way — see the
   // warning above.
   'billing.email_changed',
+  // BAL-478: a Case booking was refused before any write for lack of funding → the company's
+  // MANAGE_BILLING holders. Omitting this entry fails SILENTLY the same way — see the warning
+  // above: the rule still resolves, the dispatcher just finds no `data.billingUserIds`.
+  'booking.funding_blocked',
   // ⚠⚠ BAL-412's `session.missed_call` is DELIBERATELY NOT LISTED HERE, and the omission is a
   // DECISION, not a gap (omitting an entry for a genuine fan-out event would silently drop the
   // alert — see the file docblock's warning). This event has NO `company_billing_admins`
@@ -164,6 +168,50 @@ async function hydrateSavedCardDetachActor(
     data.detachedByName = bareName;
     const company = data.company as { name?: string } | undefined;
     data.detachedByLabel = name.length > 0 ? personWithOrgLabel(bareName, company?.name) : bareName;
+  }
+}
+
+/**
+ * BAL-478 fix round 2 (B2) — name the booker for `booking.funding_blocked`'s retrospective
+ * copy, AND drop them from the billing-admin fan-out when they are themselves a holder. The
+ * payload carries `requestedByUserId` (NOT `userId`), so the generic `payload.userId → data.user`
+ * hydration never fires and the booker is never mailed as a `self` recipient on top of the
+ * fan-out.
+ *
+ * ⚠⚠ UNLIKE `hydrateSavedCardDetachActor` / `hydrateBillingEmailChangeActor`, whose actor
+ * self-inclusion is DELIBERATE ("receipt of your own billing action" — BAL-522/BAL-381), the
+ * booker here took no billing action at all — they tried to book a consultation. Mailing them
+ * about their own company's funding gap ("Hi Sam, Sam @ Northwind went to book…") is not a
+ * confirmation, it is self-referential noise, and the common case (`no_wallet`) is exactly a
+ * solo owner who IS the only billing admin. Filtering `data.billingUserIds` here is therefore
+ * CORRECT for this event specifically — do not copy the filter to the other actor-naming
+ * events above without the same reasoning holding for them.
+ *
+ * An empty `billingUserIds` after filtering already skips dispatch — no separate "skip" branch
+ * needed. Hydrates TWO fields from ONE lookup, mirroring `hydrateSavedCardDetachActor`:
+ * `requestedByName` (bare) and `requestedByLabel` ("Dana @ Northwind Industrial" via
+ * `personWithOrgLabel`, staple-on ONLY when a real name resolved — F5, so a nameless booker
+ * reads as the bare 'A teammate' rather than 'A teammate @ Northwind Industrial').
+ */
+async function hydrateBookingFundingBlockedActor(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (event !== 'booking.funding_blocked' || typeof payload.requestedByUserId !== 'string') {
+    return;
+  }
+  const requestedByUserId = payload.requestedByUserId;
+  const user = await usersRepository.findById(requestedByUserId);
+  const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+  const bareName = name.length > 0 ? name : 'A teammate';
+  data.requestedByName = bareName;
+  const company = data.company as { name?: string } | undefined;
+  data.requestedByLabel = name.length > 0 ? personWithOrgLabel(bareName, company?.name) : bareName;
+
+  const billingUserIds = data.billingUserIds;
+  if (Array.isArray(billingUserIds)) {
+    data.billingUserIds = billingUserIds.filter((id) => id !== requestedByUserId);
   }
 }
 
@@ -265,6 +313,11 @@ export async function resolveContext(
 
   // BAL-522: name the member who changed the billing email, for the fan-out copy.
   await hydrateBillingEmailChangeActor(event, payload, data);
+
+  // BAL-478 fix round 2 (B2): name the booker for booking.funding_blocked AND drop them from
+  // the billing fan-out if they are themselves a holder (extracted — see
+  // hydrateBookingFundingBlockedActor).
+  await hydrateBookingFundingBlockedActor(event, payload, data);
 
   // BAL-348: agency.provisioned hydration (extracted — see hydrateAgencyProvisioned).
   await hydrateAgencyProvisioned(event, payload, data);

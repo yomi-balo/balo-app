@@ -1177,6 +1177,27 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-478 funding-blocked — company billing admins (minus the booker, if they hold — fix
+  // round 2 B2). `requestedByLabel` arrives PRE-COMPOSED from the resolver's
+  // `hydrateBookingFundingBlockedActor` (F4/F5 — "@ company" staple-on only when a real name
+  // resolved), matching the email factory's body and its own subject; this factory does NOT
+  // recompute `personWithOrgLabel` a second time.
+  //
+  // ⚠⚠ FIX ROUND 3 — every sentence must stay true AT READ TIME, and promise no OUTCOME.
+  // "Nothing was booked, so no time was held" is a past fact, never a present-tense claim about
+  // the slot's live availability. "Try booking again" describes the action available, never a
+  // guaranteed result ("book right away") — a top-up covers only what it covers and the gate can
+  // refuse a second time.
+  'booking-funding-blocked': (data) => {
+    const requestedByLabel = (data.requestedByLabel as string) ?? 'A teammate';
+    const expertPartyLabel = (data.expertPartyLabel as string) ?? 'an expert';
+    return {
+      title: "A booking couldn't go through",
+      body: `${requestedByLabel} tried to book a consultation with ${expertPartyLabel}, but it couldn't go through. Nothing was booked, so no time was held. Add a payment method or top up, then try booking again.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
   // BAL-521 §3 saved card removed — company billing admins, from EITHER door. Copy comes from
   // the ONE shared derivation (`buildSavedCardDetachedCopy`, F3) the email factory in `index.ts`
   // also calls, so the two channels cannot drift. Deep-links to billing settings (NOT

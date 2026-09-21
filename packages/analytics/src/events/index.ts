@@ -298,6 +298,11 @@ export {
   // `AvailabilityConflictResolution`.
   type RescheduleProposalOutcome,
   type BookingSessionExpiryStage,
+  // BAL-478 — the booking flow's first SERVER family. ⚠ `BookingServerEventMap` joins
+  // `ServerEvents` in types.ts, NEVER `AllEvents` — it is server-only.
+  BOOKING_SERVER_EVENTS,
+  type BookingServerEventMap,
+  type BookingFundingBlockReason,
 } from './booking';
 // BAL-494 / ADR-1053 — `WORKSPACE_SERVER_EVENTS` is SERVER-ONLY: the switch is decided and
 // dispatched entirely in `switchWorkspace()` (apps/web); no browser code ever emits it.

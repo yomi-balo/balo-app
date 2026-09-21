@@ -33,6 +33,7 @@ vi.mock('@/lib/booking/actions/refetch-booking-context', () => ({
 
 import { BookingFlowDialog } from './booking-flow-dialog';
 import { StepBooked } from './step-booked';
+import { FundingSetupPanel } from './booking-error-panels';
 
 const EXPERT: BookingFlowExpert = {
   expertProfileId: 'expert-1',
@@ -129,6 +130,28 @@ describe('StepBooked — accessibility', () => {
         guestInviteFailed={false}
         onDone={vi.fn()}
       />
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+/**
+ * BAL-478 — the funding pre-condition's panel, both capability arms. Rendered directly (the
+ * `ExpertAvailabilityCalendar` mock in this file has no slot-pick affordance to drive a real
+ * submit through to `error_funding`, unlike `booking-flow-dialog.test.tsx`'s interaction-level
+ * mock), matching this file's own `StepBooked` precedent above.
+ */
+describe('FundingSetupPanel — accessibility', () => {
+  it('has no violations on the self-serve (MANAGE_BILLING) arm', async () => {
+    const { container } = render(
+      <FundingSetupPanel canManageBilling onManageBilling={vi.fn()} onClose={vi.fn()} />
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('has no violations on the billing-admins-notified arm', async () => {
+    const { container } = render(
+      <FundingSetupPanel canManageBilling={false} onManageBilling={vi.fn()} onClose={vi.fn()} />
     );
     expect(await axe(container)).toHaveNoViolations();
   });

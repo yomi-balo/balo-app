@@ -55,6 +55,7 @@ import type {
   BookingConfirmedPayload,
   BookingCancelledPayload,
   BookingRescheduledPayload,
+  BookingFundingBlockedPayload,
   RescheduleProposalSentPayload,
   RescheduleProposalDeclinedPayload,
   ConversationAvailabilitySharedPayload,
@@ -571,6 +572,12 @@ export type NotificationEvent =
   // `booking.confirmed`. Publishable from apps/web — deliberately NOT in
   // `ServerOnlyNotificationEvent` below — so it needs a `publishBodySchema` arm.
   | 'booking.rescheduled'
+  // BAL-478 — a Case booking was refused before any write because the paying company has
+  // neither an active mandate nor enough available credit to cover the consultation. Published
+  // from `enforceBookingFunding` (apps/web) at the moment the zero-arm is determined.
+  // Publishable from apps/web — deliberately NOT in `ServerOnlyNotificationEvent` below — so it
+  // needs a `publishBodySchema` arm.
+  | 'booking.funding_blocked'
   // BAL-410 — a booked consultation was CANCELLED, by the client, the delivering expert, or a
   // platform admin. SERVER-ONLY (see below), unlike its two `booking.*` siblings: the ADMIN
   // override arm is an explicit AC and has no web surface at all, so a web publisher would
@@ -889,6 +896,7 @@ export interface EventPayloadMap {
   'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
   'booking.confirmed': BookingConfirmedPayload;
   'booking.rescheduled': BookingRescheduledPayload;
+  'booking.funding_blocked': BookingFundingBlockedPayload;
   'booking.cancelled': BookingCancelledPayload;
   'meeting.guest_rescheduled': MeetingGuestRescheduledPayload;
   'reschedule_proposal.sent': RescheduleProposalSentPayload;

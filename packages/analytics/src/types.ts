@@ -45,7 +45,7 @@ import type { ReviewServerEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
-import type { BookingEventMap } from './events/booking';
+import type { BookingEventMap, BookingServerEventMap } from './events/booking';
 import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/workspace';
 import type { RequestFileServerEventMap } from './events/request-files';
 import type { NavEventMap } from './events/nav';
@@ -94,7 +94,8 @@ export type AllEvents = AuthEventMap &
   // Availability CLIENT family — BAL-416's time-off conflict warnings PLUS BAL-236's
   // slot-picker events. One map, two tickets; see `./events/availability.ts`.
   AvailabilityEventMap &
-  // BAL-400 — the case-booking flow. All eight are client events; no server family.
+  // BAL-400 — the case-booking flow CLIENT family. ⚠ `BookingServerEventMap` (BAL-478) stays in
+  // `ServerEvents` below; the two must never cross.
   BookingEventMap &
   // BAL-496 — the workspace switcher's CLIENT family. ⚠ `WorkspaceServerEventMap` stays in
   // `ServerEvents` below; the two must never cross.
@@ -181,6 +182,10 @@ export type ServerEvents = ExpertServerEventMap &
   // BAL-431 / ADR-1048 — SERVER-ONLY: deliberately absent from `AllEvents` above.
   // `uploader_side` / `viewer_side` / `via_all_audience` are gate-resolved facts; a client
   // emission would let the browser assert its own side.
-  RequestFileServerEventMap;
+  RequestFileServerEventMap &
+  // BAL-478 — SERVER-ONLY: deliberately absent from `AllEvents` above. The refusal is decided
+  // entirely inside `enforceBookingFunding` (apps/web, `import 'server-only'`); no browser code
+  // emits it.
+  BookingServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

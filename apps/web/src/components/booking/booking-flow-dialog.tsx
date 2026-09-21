@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import * as Sentry from '@sentry/nextjs';
@@ -24,6 +25,7 @@ import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confir
 import { StepBooked } from './step-booked';
 import { OnboardingRoutingState } from './onboarding-routing-state';
 import {
+  FundingSetupPanel,
   HardFailurePanel,
   PartialFailurePanel,
   SessionExpiredPanel,
@@ -39,7 +41,8 @@ type Phase =
   | 'booked'
   | 'error_hard'
   | 'error_partial'
-  | 'error_session';
+  | 'error_session'
+  | 'error_funding';
 
 interface BookedSnapshot {
   engagementId: string;
@@ -235,6 +238,7 @@ type SubmitFailureOutcome =
   | { kind: 'session_expired'; caseTitle: string | null }
   | { kind: 'partial'; engagementId: string; caseTitle: string }
   | { kind: 'company_fail_closed'; code: BookingFailureCode }
+  | { kind: 'funding'; canManageBilling: boolean }
   | { kind: 'hard' };
 
 /**
@@ -274,6 +278,12 @@ function resolveSubmitFailureOutcome(
   if (result.stage === 'company') {
     return { kind: 'company_fail_closed', code: result.code };
   }
+  // BAL-478 — the funding pre-condition refused before any write. `funding_setup_required` ⇒
+  // the actor holds MANAGE_BILLING and can self-serve; `funding_admins_notified` ⇒ they don't,
+  // and the billing-admin fan-out (published by the gate itself) is the only affordance.
+  if (result.stage === 'funding') {
+    return { kind: 'funding', canManageBilling: result.code === 'funding_setup_required' };
+  }
   return { kind: 'hard' };
 }
 
@@ -298,6 +308,7 @@ export function BookingFlowDialog(
   } = props;
   const isMobile = useIsMobile(768);
   const authModal = useAuthModal();
+  const router = useRouter();
 
   const [phase, setPhase] = useState<Phase>('pick_time');
   const [viewerTimezone, setViewerTimezone] = useState('UTC');
@@ -331,6 +342,8 @@ export function BookingFlowDialog(
   const [sessionExpiredCaseTitle, setSessionExpiredCaseTitle] = useState<string | null>(null);
   /** Copy overrides for `error_hard`. `null` ⇒ the panel's own defaults. */
   const [hardFailure, setHardFailure] = useState<HardFailurePanelCopy | null>(null);
+  /** BAL-478 — which `error_funding` copy arm to render. Reset every open→close→open cycle. */
+  const [fundingCanManageBilling, setFundingCanManageBilling] = useState(false);
 
   const openFiredRef = useRef(false);
   /** Frozen true the moment ANY submit creates a real case row (D4b) — see `handleSubmit`. */
@@ -361,6 +374,7 @@ export function BookingFlowDialog(
     setSubmitting(false);
     setCaseChoiceLoading(false);
     setSessionExpiredCaseTitle(null);
+    setFundingCanManageBilling(false);
 
     if (entry.mode === 'fixed_case') {
       setPhase('confirm');
@@ -624,6 +638,16 @@ export function BookingFlowDialog(
         });
         setCompanyReadFailed(true);
         setPhase('confirm');
+        return;
+      }
+      if (outcome.kind === 'funding') {
+        // BAL-478 — an expected business refusal, not an exception: nothing was written and
+        // nothing is wrong with the slot, the case or the session. NO Sentry capture (unlike
+        // `company_fail_closed` above, whose failing eligibility READ is a defect) and NO
+        // analytics `track()` — the server-side event in `enforceBookingFunding` is the single
+        // emit for this refusal.
+        setFundingCanManageBilling(outcome.canManageBilling);
+        setPhase('error_funding');
         return;
       }
       setHardFailure(null);
@@ -952,6 +976,15 @@ export function BookingFlowDialog(
                 onRetry={handleRetryAfterPartial}
                 onChooseDifferentTime={handleChooseDifferentTimeAfterPartial}
                 onFinishLater={onClose}
+              />
+            </motion.div>
+          )}
+          {phase === 'error_funding' && (
+            <motion.div key="error_funding" {...pageTransition}>
+              <FundingSetupPanel
+                canManageBilling={fundingCanManageBilling}
+                onManageBilling={() => router.push('/settings/billing')}
+                onClose={onClose}
               />
             </motion.div>
           )}

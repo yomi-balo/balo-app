@@ -54,7 +54,11 @@ export {
   // the client `@/lib/analytics` barrel and NOT in `src/test/setup.ts`'s client `vi.mock` list —
   // this family is server-only (`events/case-billing.ts:25-26`).
   CASE_BILLING_SERVER_EVENTS,
+  // BAL-478 — the booking flow's first server event. `enforceBookingFunding`
+  // (`@/lib/booking/booking-funding-gate.ts`) is the ONE dispatch point.
+  BOOKING_SERVER_EVENTS,
 } from '@balo/analytics/server';
+export type { BookingFundingBlockReason } from '@balo/analytics/server';
 export type {
   RecapState,
   RecapLens,

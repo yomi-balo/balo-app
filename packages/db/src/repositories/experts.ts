@@ -623,6 +623,28 @@ export const expertsRepository = {
   },
 
   /**
+   * BAL-478 — THE ONE COLUMN the booking funding pre-check needs, and nothing else.
+   *
+   * ⚠ WHY NOT `findProfileById`: that returns the FULL row (`stripeConnectId`, `cronofyUserId`,
+   * every staff-only flag). Same reasoning as `findDisplayProfileById`'s docblock — concealment
+   * is enforced by what the row CAN hold, because TypeScript does not catch a spread.
+   *
+   * ⚠ THE RAW, UN-MARKED-UP CONSULTANT RATE (`experts.integration.test.ts` pins that invariant).
+   * The Balo markup is applied by `deriveSessionEstimate` at the caller, never in `packages/db`.
+   *
+   * `undefined` ⇒ no such profile. `{ rateCents: null }` ⇒ the expert has set no rate; the
+   * caller decides (BAL-478's gate treats it as unevaluable, never as unfunded).
+   */
+  async findRateCentsById(
+    expertProfileId: string
+  ): Promise<{ rateCents: number | null } | undefined> {
+    return db.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.id, expertProfileId),
+      columns: { rateCents: true },
+    });
+  },
+
+  /**
    * BAL-356: link an expert draft/profile to its payout agency by setting
    * `agency_id`. A single UPDATE — `expert_profiles` has no `deletedAt`, so only a
    * not-found guard applies (no soft-delete predicate). Executor-aware: the three

@@ -51,6 +51,7 @@ export {
   type MeetingSettlement,
 } from './meeting-settlement';
 export { minutesOfRunway, type RunwayInputs } from './runway';
+export { deriveSessionEstimate, type SessionEstimate } from './session-estimate';
 export {
   buildClientMoneyBlock,
   buildExpertMoneyBlock,
