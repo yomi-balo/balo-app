@@ -101,7 +101,6 @@ function renderTab(
       referenceData={REFERENCE_DATA}
       initialPhone={null}
       phoneVerifiedAt={null}
-      accessToken="at_test"
     />
   );
 }

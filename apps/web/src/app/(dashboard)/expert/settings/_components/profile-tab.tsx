@@ -57,7 +57,6 @@ interface ProfileTabProps {
   };
   initialPhone: string | null;
   phoneVerifiedAt: string | null;
-  accessToken: string;
 }
 
 export function ProfileTab({
@@ -65,7 +64,6 @@ export function ProfileTab({
   referenceData,
   initialPhone,
   phoneVerifiedAt,
-  accessToken,
 }: Readonly<ProfileTabProps>): React.JSX.Element {
   const router = useRouter();
   const [isSaving, setIsSaving] = useState(false);
@@ -203,7 +201,6 @@ export function ProfileTab({
         <PhoneVerificationFlow
           mode="settings"
           initialPhone={phoneVerifiedAt ? (initialPhone ?? undefined) : undefined}
-          accessToken={accessToken}
           onVerified={() => {
             toast.success('Phone number verified');
             router.refresh();

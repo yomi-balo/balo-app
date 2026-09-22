@@ -55,7 +55,6 @@ function renderTabs(over: RenderOptions = {}): void {
       certCategories={over.certCategories ?? null}
       initialPhone={null}
       phoneVerifiedAt={null}
-      accessToken=""
       canManageAgency={over.canManageAgency ?? false}
       agencyDomains={over.agencyDomains ?? null}
     />

@@ -30,7 +30,6 @@ const VALID_TABS = new Set<string>([
 const VALID_SETUP_KEYS = new Set<string>(CHECKLIST_ITEMS.map((item) => item.key));
 
 interface ExpertSettingsData {
-  accessToken: string;
   initialPayoutDetails: PayoutDetailsSummary | null;
   profileData: ProfileSettingsData | null;
   languages: Array<{ id: string; name: string; code: string; flagEmoji: string | null }>;
@@ -43,7 +42,6 @@ interface ExpertSettingsData {
 }
 
 const EMPTY_SETTINGS_DATA: ExpertSettingsData = {
-  accessToken: '',
   initialPayoutDetails: null,
   profileData: null,
   languages: [],
@@ -62,10 +60,9 @@ const EMPTY_SETTINGS_DATA: ExpertSettingsData = {
  */
 async function loadExpertSettingsData(): Promise<ExpertSettingsData> {
   const session = await getSession();
-  const accessToken = session?.accessToken ?? '';
   const user = session?.user;
   if (!user?.expertProfileId) {
-    return { ...EMPTY_SETTINGS_DATA, accessToken };
+    return EMPTY_SETTINGS_DATA;
   }
 
   const [payoutDetails, profile, languages, industries, certs, userData] = await Promise.all([
@@ -82,7 +79,6 @@ async function loadExpertSettingsData(): Promise<ExpertSettingsData> {
   const agencyResult = await resolveAgencyDomainsTab(user, profile?.agencyId ?? null);
 
   return {
-    accessToken,
     initialPayoutDetails: payoutDetails
       ? {
           countryCode: payoutDetails.countryCode,
@@ -167,7 +163,6 @@ export default async function ExpertSettingsPage({
         certCategories={data.certCategories}
         initialPhone={data.phone}
         phoneVerifiedAt={data.phoneVerifiedAt}
-        accessToken={data.accessToken}
         canManageAgency={data.canManageAgency}
         agencyDomains={data.agencyDomains}
       />

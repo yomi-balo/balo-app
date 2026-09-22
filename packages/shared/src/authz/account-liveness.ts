@@ -27,8 +27,10 @@ import { userRowIsLive } from './staff-access';
  * the caller's own account state TO THE CALLER — exactly what `/login?error=account_suspended`
  * already discloses on the page path (BAL-197). Nothing about a third party is enumerable.
  *
- * ⚠ `apps/api/src/app.ts` MUST list this in the CORS `exposedHeaders`, or a browser fetch cannot
- * read it cross-origin (`:3000` → `:3002`) and the browser arm is silently dead.
+ * Every reader today is server-side (`apps/web`'s `lib/auth/api-account-refusal.ts`, via
+ * `lib/api/balo-api-client.ts`), where CORS does not apply. `apps/api/src/app.ts` still lists it
+ * in the CORS `exposedHeaders` so that any browser-side reader could see it cross-origin
+ * (`:3000` → `:3002`) instead of having it silently stripped.
  */
 export const ACCOUNT_REFUSAL_HEADER = 'x-balo-session-invalid';
 

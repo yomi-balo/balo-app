@@ -81,7 +81,6 @@ interface SettingsTabsProps {
   certCategories: CertificationsByCategory[] | null;
   initialPhone: string | null;
   phoneVerifiedAt: string | null;
-  accessToken: string;
   /** BAL-347: present + true only for agency owners/admins (adds the Domains tab). */
   canManageAgency: boolean;
   agencyDomains: AgencyDomainsTabData | null;
@@ -97,7 +96,6 @@ export function SettingsTabs({
   certCategories,
   initialPhone,
   phoneVerifiedAt,
-  accessToken,
   canManageAgency,
   agencyDomains,
 }: SettingsTabsProps): React.JSX.Element {
@@ -209,7 +207,6 @@ export function SettingsTabs({
           certCategories={certCategories}
           initialPhone={initialPhone}
           phoneVerifiedAt={phoneVerifiedAt}
-          accessToken={accessToken}
           initialRateCents={initialRateCents}
           initialPayoutDetails={initialPayoutDetails}
           agencyDomains={agencyDomains}
@@ -226,7 +223,6 @@ interface TabPanelContentProps {
   certCategories: CertificationsByCategory[] | null;
   initialPhone: string | null;
   phoneVerifiedAt: string | null;
-  accessToken: string;
   initialRateCents: number | null;
   initialPayoutDetails: PayoutDetailsSummary | null;
   agencyDomains: AgencyDomainsTabData | null;
@@ -240,7 +236,6 @@ function ProfileSubTabContent({
   certCategories,
   initialPhone,
   phoneVerifiedAt,
-  accessToken,
 }: Readonly<TabPanelContentProps>): React.JSX.Element | null {
   if (tab === 'profile') {
     if (profileData && referenceData) {
@@ -250,7 +245,6 @@ function ProfileSubTabContent({
           referenceData={referenceData}
           initialPhone={initialPhone}
           phoneVerifiedAt={phoneVerifiedAt}
-          accessToken={accessToken}
         />
       );
     }
