@@ -4,13 +4,14 @@
  * Why a separate file from session.ts?
  *   - session.ts imports 'server-only' (fails in Edge Runtime)
  *   - session.ts uses cookies() from next/headers (unavailable in middleware)
- *   - Middleware must use request/response cookies via getIronSession(req, res, config)
+ *   - Middleware reads and writes the request/response cookies directly — see
+ *     {@link responseForRefreshedSession} for how a refresh reaches both the browser and the
+ *     request being handled
  */
 
 import { getIronSession, type IronSession } from 'iron-session';
 import { WorkOS } from '@workos-inc/node';
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import type { SessionData } from './session';
 import { sessionConfig, impersonatedSessionConfig } from './session-config';
 import { isAccessTokenExpired } from './access-token';
@@ -28,6 +29,53 @@ function getWorkOS(): WorkOS {
     _workos = new WorkOS(apiKey);
   }
   return _workos;
+}
+
+/** One `set` call iron-session's cookie-store form makes on `save()`. */
+type CookieWrite = Parameters<NextResponse['cookies']['set']>;
+
+/**
+ * The middleware response for a refreshed session: the new seal forwarded to THIS request, and
+ * one `Set-Cookie` for the browser.
+ *
+ * ⚠⚠ THE REQUEST HALF IS THE POINT. The request that triggered the refresh goes on to the page
+ * render, a Server Action or a Route Handler, and each reads the session through `cookies()`.
+ * Forwarding it with its `cookie` header rewritten (`NextResponse.next({ request: { headers } })`)
+ * makes that read return the live token. Neither obvious alternative works:
+ *   - `getIronSession(request, response, …)` saves with a raw `set-cookie` header, which reaches
+ *     only the browser. This request still reads the EXPIRED token and every `apps/api` call it
+ *     makes 401s.
+ *   - `response.cookies.set` does reach this request (via `x-middleware-set-cookie`), but Next then
+ *     counts the cookie as CHANGED BY a Server Action the refresh lands on: the action responds
+ *     `x-action-revalidated`, re-renders the whole route, and the client purges its router cache.
+ *     The in-call page polls with Server Actions, so it would take that mid-call.
+ *
+ * ⚠ THE OVERRIDE CARRIES EVERY REQUEST HEADER. Next drops any downstream request header missing
+ * from `x-middleware-override-headers`, so the forwarded headers start as a full copy.
+ */
+function responseForRefreshedSession(
+  request: NextRequest,
+  writes: readonly CookieWrite[]
+): NextResponse {
+  const forwarded = new NextRequest(request.url, { headers: new Headers(request.headers) });
+  // Serialises the browser cookie with Next's attribute handling; its own
+  // `x-middleware-set-cookie` is discarded with it.
+  const serializer = NextResponse.next();
+  for (const write of writes) {
+    const [nameOrCookie, value] = write;
+    if (typeof nameOrCookie === 'string') {
+      forwarded.cookies.set(nameOrCookie, value ?? '');
+    } else {
+      forwarded.cookies.set(nameOrCookie.name, nameOrCookie.value);
+    }
+    serializer.cookies.set(...write);
+  }
+
+  const response = NextResponse.next({ request: { headers: forwarded.headers } });
+  for (const cookie of serializer.headers.getSetCookie()) {
+    response.headers.append('set-cookie', cookie);
+  }
+  return response;
 }
 
 // ── Public API ────────────────────────────────────────────────
@@ -85,9 +133,18 @@ export async function refreshSessionIfNeeded(
       refreshToken: session.refreshToken,
     });
 
-    // Build a new response with the updated session cookie
-    const response = NextResponse.next();
-    const updatedSession = await getIronSession<SessionData>(request, response, sessionConfig);
+    // iron-session's cookie-store form: `save()` hands the sealed cookie to `writes` instead of
+    // writing a header, so it can be forwarded to this request as well as the browser.
+    const writes: CookieWrite[] = [];
+    const updatedSession = await getIronSession<SessionData>(
+      {
+        get: (name: string) => request.cookies.get(name),
+        set: (...args: CookieWrite): void => {
+          writes.push(args);
+        },
+      },
+      sessionConfig
+    );
     updatedSession.user = session.user;
     updatedSession.accessToken = result.accessToken;
     updatedSession.refreshToken = result.refreshToken;
@@ -104,7 +161,7 @@ export async function refreshSessionIfNeeded(
 
     await updatedSession.save();
 
-    return response;
+    return responseForRefreshedSession(request, writes);
   } catch (error) {
     console.log(
       JSON.stringify({
