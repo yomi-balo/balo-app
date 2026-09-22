@@ -8,7 +8,7 @@ import { LogOut, Loader2 } from 'lucide-react';
 /**
  * BAL-361: the fail-closed onboarding gate traps an authenticated but un-onboarded
  * user on `/onboarding` — this is their only exit besides completing the wizard.
- * Rendered under the wizard so the sign-out Server Action POSTs to `/onboarding`
+ * Rendered in the onboarding header so the sign-out Server Action POSTs to `/onboarding`
  * (an allowlisted route), then destroys the session and redirects home.
  * Presentation-only: no toast (sign-out navigates away).
  */
@@ -29,13 +29,15 @@ export function OnboardingSignOut(): React.JSX.Element {
     <Button
       type="button"
       variant="ghost"
-      size="sm"
       onClick={handleSignOut}
       disabled={isPending}
-      className="text-muted-foreground hover:text-foreground focus-visible:ring-ring gap-2"
+      className="text-muted-foreground hover:text-foreground h-11 rounded-[10px] has-[>svg]:px-2.5 md:has-[>svg]:px-3.5"
     >
-      {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
-      Not you? Sign out
+      {isPending ? <Loader2 className="animate-spin" /> : <LogOut />}
+      {/* The mobile header has room for the verb only. */}
+      <span>
+        <span className="hidden md:inline">Not you?</span> Sign out
+      </span>
     </Button>
   );
 }

@@ -7,6 +7,7 @@ import {
 import { getCurrentUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { JoinResultView } from '../_components/join-result-view';
+import { OnboardingFrame } from '../_components/onboarding-frame';
 
 type JoinPhase = 'approved' | 'declined';
 
@@ -125,10 +126,12 @@ export default async function JoinResultPage({
   }
 
   return (
-    <JoinResultView
-      status={phase}
-      companyName={companyName}
-      alreadyOnboarded={user.onboardingCompleted}
-    />
+    <OnboardingFrame>
+      <JoinResultView
+        status={phase}
+        companyName={companyName}
+        alreadyOnboarded={user.onboardingCompleted}
+      />
+    </OnboardingFrame>
   );
 }

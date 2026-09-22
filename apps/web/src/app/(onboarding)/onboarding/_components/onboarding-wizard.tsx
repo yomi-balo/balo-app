@@ -8,7 +8,8 @@ import { WelcomeStep } from './welcome-step';
 import { TimezoneStep } from './timezone-step';
 import { IntentStep } from './intent-step';
 import { CompanyStep } from './company-step';
-import { ProgressDots } from './progress-dots';
+import { OnboardingFrame } from './onboarding-frame';
+import { OnboardingProgress, onboardingStepLabel } from './onboarding-progress';
 import { cn } from '@/lib/utils';
 import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 import type { AuthMethodSignal } from '@/lib/auth/auth-method';
@@ -206,18 +207,34 @@ export function OnboardingWizard({
     }
   }
 
-  // Determine if the current step is the intent step (full-width for card grid)
+  // The intent step is the wide one (its two-card grid) and the only one that left-aligns
+  // its copy on mobile, so the lines above the step follow its alignment.
   const isIntentStep = needsNameStep ? currentStep === 4 : currentStep === 3;
+  const leadAlign = isIntentStep ? 'text-left md:text-center' : 'text-center';
 
   return (
-    <div className="flex w-full flex-col items-center">
+    <OnboardingFrame progress={<OnboardingProgress current={currentStep} total={totalSteps} />}>
       {forced && (
-        <p className="text-muted-foreground mb-6 text-center text-sm">
+        <p className={cn('text-muted-foreground mb-6 w-full text-sm', leadAlign)}>
           Finish setting up your account to continue.
         </p>
       )}
+      {/* Mobile moves the step count out of the header to sit over the heading. The
+          progressbar's `aria-valuetext` already announces it. */}
+      <p
+        aria-hidden="true"
+        className={cn(
+          'text-muted-foreground mb-2.5 w-full text-[13px] leading-[1.3] font-medium md:hidden',
+          leadAlign
+        )}
+      >
+        {onboardingStepLabel(currentStep, totalSteps)}
+      </p>
       <div
-        className={cn('w-full', isIntentStep ? 'max-w-2xl' : 'max-w-lg')}
+        className={cn(
+          'flex w-full flex-1 flex-col md:flex-none',
+          isIntentStep ? 'md:max-w-[864px]' : 'max-w-lg'
+        )}
         aria-live="polite"
         aria-atomic="true"
       >
@@ -230,15 +247,12 @@ export function OnboardingWizard({
             animate="center"
             exit="exit"
             transition={{ duration: 0.3, ease: 'easeInOut' }}
+            className="flex flex-1 flex-col"
           >
             {renderStep()}
           </motion.div>
         </AnimatePresence>
       </div>
-
-      <div className="mt-8">
-        <ProgressDots current={currentStep} total={totalSteps} />
-      </div>
-    </div>
+    </OnboardingFrame>
   );
 }
