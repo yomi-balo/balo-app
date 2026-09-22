@@ -113,7 +113,7 @@ interface ExpertSettingsPageProps {
 
 export default async function ExpertSettingsPage({
   searchParams,
-}: ExpertSettingsPageProps): Promise<React.JSX.Element> {
+}: Readonly<ExpertSettingsPageProps>): Promise<React.JSX.Element> {
   const params = await searchParams;
   const activeTab = VALID_TABS.has(params.tab ?? '') ? params.tab! : 'profile';
   const setupStep = params.setup && VALID_SETUP_KEYS.has(params.setup) ? params.setup : null;

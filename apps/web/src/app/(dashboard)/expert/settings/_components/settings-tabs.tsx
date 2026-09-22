@@ -98,7 +98,7 @@ export function SettingsTabs({
   phoneVerifiedAt,
   canManageAgency,
   agencyDomains,
-}: SettingsTabsProps): React.JSX.Element {
+}: Readonly<SettingsTabsProps>): React.JSX.Element {
   const [tab, setTab] = useState(defaultTab);
   const router = useRouter();
   const mainTabs = canManageAgency ? [...MAIN_TABS, DOMAINS_TAB] : MAIN_TABS;

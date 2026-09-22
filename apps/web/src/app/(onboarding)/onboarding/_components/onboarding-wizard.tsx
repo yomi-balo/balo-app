@@ -29,7 +29,7 @@ const variants = {
 export function OnboardingWizard({
   firstName,
   authMethod,
-}: OnboardingWizardProps): React.JSX.Element {
+}: Readonly<OnboardingWizardProps>): React.JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
 
