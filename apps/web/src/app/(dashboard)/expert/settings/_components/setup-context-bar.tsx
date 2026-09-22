@@ -12,16 +12,29 @@ interface SetupContextBarProps {
   checklistStatus: ChecklistStatus;
 }
 
+type DotState = 'complete' | 'current' | 'upcoming';
+
+/**
+ * A step being worked on and not yet done is a HOLLOW ring, so it can never read as complete
+ * beside the filled dots. A completed step being revisited keeps its fill and gains the ring.
+ */
+const DOT_CLASSES: Record<DotState, string> = {
+  complete: 'from-primary to-violet bg-gradient-to-br',
+  current: 'border-violet bg-card border-2',
+  upcoming: 'bg-border',
+};
+
 export function SetupContextBar({
   activeSetupStep,
   checklistStatus,
-}: SetupContextBarProps): React.JSX.Element {
+}: Readonly<SetupContextBarProps>): React.JSX.Element {
   const router = useRouter();
 
   const stepIndex = CHECKLIST_ITEMS.findIndex((item) => item.key === activeSetupStep);
   const matchedItem = stepIndex >= 0 ? CHECKLIST_ITEMS[stepIndex] : undefined;
   const stepLabel = matchedItem?.label ?? activeSetupStep;
   const stepNumber = stepIndex >= 0 ? stepIndex + 1 : 1;
+  const totalSteps = CHECKLIST_ITEMS.length;
 
   return (
     <motion.div
@@ -52,28 +65,32 @@ export function SetupContextBar({
           </span>
           <span style={{ color: '#7C3AED' }}>&middot;</span>
           <span className="text-muted-foreground text-sm">
-            Step {stepNumber} of 5 — {stepLabel}
+            Step {stepNumber} of {totalSteps} — {stepLabel}
           </span>
         </div>
 
         {/* Progress dots -- hidden on mobile */}
-        <div className="hidden items-center gap-1.5 sm:ml-auto sm:flex">
+        <div
+          role="img"
+          aria-label={`${checklistStatus.completedCount} of ${totalSteps} steps complete`}
+          className="hidden items-center gap-1.5 sm:ml-auto sm:flex"
+        >
           {CHECKLIST_ITEMS.map((item) => {
-            const isComplete =
-              checklistStatus.items[item.key as keyof typeof checklistStatus.items];
+            const isComplete = checklistStatus.items[item.key];
             const isCurrent = item.key === activeSetupStep;
+            let state: DotState = 'upcoming';
+            if (isComplete) state = 'complete';
+            else if (isCurrent) state = 'current';
 
             return (
               <div
                 key={item.key}
-                className={cn('h-2 w-2 rounded-full', !isComplete && !isCurrent && 'bg-border')}
-                style={{
-                  ...(isComplete
-                    ? { background: 'linear-gradient(135deg, #2563EB, #7C3AED)' }
-                    : isCurrent
-                      ? { background: '#7C3AED', boxShadow: '0 0 0 3px rgba(124,58,237,0.2)' }
-                      : {}),
-                }}
+                data-state={state}
+                className={cn(
+                  'h-2 w-2 rounded-full',
+                  DOT_CLASSES[state],
+                  isCurrent && 'ring-violet/20 ring-[3px]'
+                )}
               />
             );
           })}
