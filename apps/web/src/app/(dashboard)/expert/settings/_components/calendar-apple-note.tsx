@@ -1,15 +1,14 @@
-import { InfoNote } from '@/components/balo/section/section-states';
-
 /**
- * A thin wrapper over the house `InfoNote` primitive — composition over a new abstraction.
- * No hooks, no handlers of its own, so it stays a server component even though it is only
- * ever rendered from inside the client tree.
+ * The Calendars card's iCloud line. Apple calendars are not a supported provider (Google and
+ * Microsoft only), so this says so plainly and points at what still works — the weekly hours —
+ * without promising a date. No hooks or handlers, so it stays a server component even though
+ * it only ever renders inside the client tree.
  */
 export function CalendarAppleNote(): React.JSX.Element {
   return (
-    <InfoNote>
-      On iCloud? Apple calendar sync is coming soon. In the meantime you can set your weekly hours
-      by hand — clients can still book you.
-    </InfoNote>
+    <p className="text-muted-foreground text-xs leading-relaxed">
+      On iCloud? Apple calendars can&apos;t be connected yet — your weekly hours still work on their
+      own, and clients can book you as normal.
+    </p>
   );
 }

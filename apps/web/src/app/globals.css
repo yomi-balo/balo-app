@@ -43,6 +43,9 @@
   --success-strong: oklch(0.48 0.169 149.2);
   --warning-strong: oklch(0.48 0.165 70.6);
   --info-strong: oklch(0.48 0.155 241.4);
+  /* Destructive text on a destructive tint (`text-destructive-strong` on `bg-destructive/10`):
+     the plain token measures 3.31:1 there; this measures 5.78:1 (6.59:1 on `--card`). */
+  --destructive-strong: oklch(0.5 0.208 25.4);
 
   /* BAL-493 — marketing surfaces (D4). Light values are converted from the design
      reference's palette (marketing-home.jsx:190-209). See the .dark block below for
@@ -111,6 +114,9 @@
   --success-strong: var(--success);
   --warning-strong: var(--warning);
   --info-strong: var(--info);
+  /* NOT an alias: dark `--destructive` is a deep red tuned as a FILL, which measures 1.87:1 as
+     text on its own tint. This lighter red measures 6.89:1 there and 7.07:1 on `--card`. */
+  --destructive-strong: oklch(0.72 0.17 22);
 
   /* BAL-493 (D4) — dark rhythm. These are DESIGNED, not converted from the light hexes.
      Invariant (pinned by marketing-home-css.test.ts, do not "fix" toward the light values):
@@ -176,6 +182,7 @@
   --color-success-strong: var(--success-strong);
   --color-warning-strong: var(--warning-strong);
   --color-info-strong: var(--info-strong);
+  --color-destructive-strong: var(--destructive-strong);
 
   /* BAL-493 (D4) — marketing surfaces. Colour tokens only; --grad/--grad-hover/--ease
      are not colours and are consumed directly as var(--grad) etc. in marketing-home.css. */

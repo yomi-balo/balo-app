@@ -12,21 +12,30 @@ describe('CalendarO365WaitingNotice', () => {
     expect(container.querySelector('[data-slot="card"]')).not.toBeInTheDocument();
   });
 
-  it('renders the waiting status pill', () => {
+  it('renders the heading at the level below the row title', () => {
     render(<CalendarO365WaitingNotice onTryAgain={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByText('Waiting for IT admin approval')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 4, name: 'Your IT admin needs to take action' })
+    ).toBeInTheDocument();
   });
 
-  it('renders the heading', () => {
+  it('labels the steps with the shared eyebrow', () => {
     render(<CalendarO365WaitingNotice onTryAgain={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByText('Your IT admin needs to take action')).toBeInTheDocument();
+    const eyebrow = screen.getByText('What to do next');
+    expect(eyebrow.tagName).toBe('P');
+    expect(eyebrow.className.split(' ')).toEqual(
+      expect.arrayContaining(['uppercase', 'text-[11px]', 'mb-1.5'])
+    );
   });
 
-  it('renders the three instruction steps', () => {
+  it('renders the three instruction steps as an ordered list', () => {
     render(<CalendarO365WaitingNotice onTryAgain={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByText(/Ask your IT admin to approve "Balo"/i)).toBeInTheDocument();
-    expect(screen.getByText(/This approval only needs to happen once/i)).toBeInTheDocument();
-    expect(screen.getByText(/Once approved, click "Try connecting again"/i)).toBeInTheDocument();
+    const steps = screen.getAllByRole('listitem');
+    expect(steps).toHaveLength(3);
+    expect(steps[0]?.parentElement?.tagName).toBe('OL');
+    expect(steps[0]).toHaveTextContent(/Ask your IT admin to approve "Balo"/i);
+    expect(steps[1]).toHaveTextContent(/This approval only needs to happen once/i);
+    expect(steps[2]).toHaveTextContent(/Once approved, click "Try connecting again"/i);
   });
 
   it('renders the external admin approval guide link', () => {

@@ -1,14 +1,14 @@
 'use client';
 
-import { useState } from 'react';
-import { Camera, User, Sparkles, Briefcase, Globe, Plus, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Loader2, Plus, X } from 'lucide-react';
 import { type UseFormReturn, useFieldArray } from 'react-hook-form';
-import { AnimatePresence, motion } from 'motion/react';
-import { Card } from '@/components/ui/card';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
@@ -27,72 +27,206 @@ import {
 } from '@/components/ui/command';
 import { cn } from '@/lib/utils';
 import { CountryCombobox } from '@/components/country-combobox';
+import { PhoneVerificationFlow } from '@/components/balo/phone-verification-flow';
 import { ChipPicker } from '@/app/(apply)/expert/apply/_components/chip-picker';
 import { PhotoUpload } from './photo-upload';
 import { UsernameInput } from './username-input';
+import { SettingsCard, SettingsEyebrow, SettingsStatusPill } from './settings-card';
 import type { ProfileFormData } from './profile-tab';
 
-// ── Section Label ────────────────────────────────────────────────
+const HEADLINE_MAX = 100;
+const BIO_MAX = 1000;
 
-const SECTION_COLORS: Record<string, { text: string; bg: string }> = {
-  primary: { text: 'text-primary', bg: 'bg-primary/10' },
-  violet: {
-    text: 'text-violet-600 dark:text-violet-400',
-    bg: 'bg-violet-600/10 dark:bg-violet-400/10',
-  },
-  cyan: { text: 'text-cyan-600 dark:text-cyan-400', bg: 'bg-cyan-600/10 dark:bg-cyan-400/10' },
-  emerald: {
-    text: 'text-emerald-600 dark:text-emerald-400',
-    bg: 'bg-emerald-600/10 dark:bg-emerald-400/10',
-  },
-};
+const PROFICIENCIES = ['beginner', 'intermediate', 'advanced', 'native'] as const;
+type Proficiency = (typeof PROFICIENCIES)[number];
 
-function SectionLabel({
-  icon: Icon,
-  color = 'primary',
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  color?: string;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  const c = SECTION_COLORS[color] ?? SECTION_COLORS.primary!;
-  return (
-    <div className="mb-3.5 flex items-center gap-2">
-      <div className={cn('flex h-6 w-6 items-center justify-center rounded-md', c.bg)}>
-        <Icon className={cn('h-[13px] w-[13px]', c.text)} aria-hidden="true" />
-      </div>
-      <p className={cn('text-[11px] font-semibold tracking-[0.08em] uppercase', c.text)}>
-        {children}
-      </p>
-    </div>
-  );
+function isProficiency(value: string): value is Proficiency {
+  return (PROFICIENCIES as readonly string[]).includes(value);
 }
+
+/** "+61406431059" → "+61 406 431 059"; anything unparseable is shown as stored. */
+function formatPhoneForDisplay(e164: string): string {
+  return parsePhoneNumberFromString(e164)?.formatInternational() ?? e164;
+}
+
+const FIELD_LABEL_CLASS = 'text-foreground text-[13px] font-medium';
+
+/**
+ * One height for every control in the Identity card — names, username, country, phone — so
+ * its two-column rows line up: the 44px touch floor on mobile, the standard input height from
+ * `sm` up.
+ */
+const IDENTITY_CONTROL_HEIGHT = 'h-11 sm:h-9';
 
 // ── Character Counter ─────────────────────────────────────────────
 
-function CharCounter({ current, max }: { current: number; max: number }): React.JSX.Element {
+function CharCounter({
+  current,
+  max,
+}: Readonly<{ current: number; max: number }>): React.JSX.Element {
   const ratio = current / max;
+  let tone = 'text-muted-foreground';
+  if (ratio >= 1) tone = 'text-destructive-strong';
+  else if (ratio >= 0.8) tone = 'text-warning-strong';
   return (
-    <span
-      className={cn(
-        'text-[11px] tabular-nums transition-colors duration-200',
-        ratio >= 1 ? 'text-destructive' : ratio >= 0.8 ? 'text-warning' : 'text-muted-foreground'
-      )}
-    >
+    <span className={cn('text-xs tabular-nums transition-colors duration-200', tone)}>
       {current}/{max}
     </span>
   );
 }
 
-// ── Proficiency badge styles ──────────────────────────────────────
+// ── Read-only name field ──────────────────────────────────────────
 
-const PROFICIENCY_BADGE_STYLES: Record<string, string> = {
-  native: 'border-success/30 bg-success/10 text-success',
-  advanced: 'border-primary/30 bg-primary/10 text-primary',
-  intermediate: 'border-warning/30 bg-warning/10 text-warning',
-  beginner: 'bg-muted text-muted-foreground',
-};
+function ReadOnlyNameField({
+  label,
+  value,
+  hintId,
+}: Readonly<{ label: string; value: string; hintId: string }>): React.JSX.Element {
+  const id = useId();
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} className={cn(FIELD_LABEL_CLASS, 'gap-1')}>
+        {label}
+        <span className="text-muted-foreground font-normal">&middot; read-only</span>
+      </Label>
+      <Input
+        id={id}
+        value={value}
+        readOnly
+        title="Contact support to change your name"
+        aria-describedby={hintId}
+        className={cn('bg-muted text-muted-foreground cursor-default', IDENTITY_CONTROL_HEIGHT)}
+      />
+    </div>
+  );
+}
+
+// ── Country + phone ───────────────────────────────────────────────
+
+interface ContactFieldsProps {
+  countryCode: string;
+  onCountryChange: (code: string) => void;
+  initialPhone: string | null;
+  phoneVerifiedAt: string | null;
+  onPhoneVerified: (e164: string) => void;
+}
+
+/**
+ * Country beside the phone number. A verified number reads as a field with its "Verified"
+ * pill; the full `PhoneVerificationFlow` (entry → code → verified, with every error state)
+ * replaces it only while a number is being added or changed, and takes the card's full width
+ * because its six code boxes do not fit a half-width column.
+ */
+function ContactFields({
+  countryCode,
+  onCountryChange,
+  initialPhone,
+  phoneVerifiedAt,
+  onPhoneVerified,
+}: Readonly<ContactFieldsProps>): React.JSX.Element {
+  const phoneId = useId();
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(
+    phoneVerifiedAt ? initialPhone : null
+  );
+  const [isChangingPhone, setIsChangingPhone] = useState(false);
+  const changeButtonRef = useRef<HTMLButtonElement>(null);
+  // Set when the flow closes (cancel or success) so focus returns to "Change" instead of
+  // falling to <body> with the unmounted flow.
+  const restoreFocusRef = useRef(false);
+
+  useEffect(() => {
+    if (!isChangingPhone && restoreFocusRef.current) {
+      restoreFocusRef.current = false;
+      changeButtonRef.current?.focus();
+    }
+  }, [isChangingPhone, verifiedPhone]);
+
+  const stopChanging = useCallback((): void => {
+    restoreFocusRef.current = true;
+    setIsChangingPhone(false);
+  }, []);
+
+  const handleVerified = useCallback(
+    (e164: string): void => {
+      restoreFocusRef.current = true;
+      setVerifiedPhone(e164);
+      setIsChangingPhone(false);
+      onPhoneVerified(e164);
+    },
+    [onPhoneVerified]
+  );
+
+  const showVerified = verifiedPhone !== null && !isChangingPhone;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 items-end gap-4 sm:grid-cols-2">
+        <fieldset className="min-w-0">
+          <legend className={cn(FIELD_LABEL_CLASS, 'mb-1.5')}>Country</legend>
+          <CountryCombobox
+            value={countryCode}
+            onValueChange={onCountryChange}
+            className={IDENTITY_CONTROL_HEIGHT}
+          />
+        </fieldset>
+
+        {showVerified && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={phoneId} className={FIELD_LABEL_CLASS}>
+                Phone number
+              </Label>
+              <button
+                ref={changeButtonRef}
+                type="button"
+                onClick={() => setIsChangingPhone(true)}
+                aria-label="Change phone number"
+                className="text-primary focus-visible:ring-ring/50 relative rounded-sm text-[13px] leading-none font-medium outline-none after:absolute after:-inset-x-2 after:-inset-y-2 hover:underline focus-visible:ring-[3px]"
+              >
+                Change
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                id={phoneId}
+                value={formatPhoneForDisplay(verifiedPhone)}
+                readOnly
+                className={cn(
+                  'bg-muted/50 flex-1 cursor-default tabular-nums',
+                  IDENTITY_CONTROL_HEIGHT
+                )}
+              />
+              <SettingsStatusPill tone="success">Verified</SettingsStatusPill>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {!showVerified && (
+        <div className="flex flex-col gap-3">
+          {verifiedPhone !== null && (
+            <p className="text-muted-foreground text-xs">
+              SMS keeps going to {formatPhoneForDisplay(verifiedPhone)} until the new number is
+              verified.
+            </p>
+          )}
+          {/* Focused only once the expert asks to change the number: an unverified phone mounts
+              the flow on page load, mid-card, where focusing it would scroll the page there. */}
+          <PhoneVerificationFlow
+            mode="settings"
+            onVerified={handleVerified}
+            onCancel={isChangingPhone ? stopChanging : undefined}
+            focusOnMount={isChangingPhone}
+          />
+        </div>
+      )}
+
+      <p className="text-muted-foreground text-xs">
+        Country auto-detects from timezone. Changing your number requires re-verification.
+      </p>
+    </div>
+  );
+}
 
 // ── Props ─────────────────────────────────────────────────────────
 
@@ -115,6 +249,13 @@ interface ProfileFormProps {
   countryCode: string;
   onCountryChange: (code: string) => void;
   onAvatarChange: (url: string | null) => void;
+  /** The number on file, shown as verified only when `phoneVerifiedAt` is set. */
+  initialPhone: string | null;
+  phoneVerifiedAt: string | null;
+  onPhoneVerified: (e164: string) => void;
+  /** Form fields OR the country differ from what is saved. */
+  isDirty: boolean;
+  onReset: () => void;
   onSave: () => void;
   isSaving: boolean;
 }
@@ -130,6 +271,11 @@ export function ProfileForm({
   countryCode,
   onCountryChange,
   onAvatarChange,
+  initialPhone,
+  phoneVerifiedAt,
+  onPhoneVerified,
+  isDirty,
+  onReset,
   onSave,
   isSaving,
 }: Readonly<ProfileFormProps>): React.JSX.Element {
@@ -139,6 +285,17 @@ export function ProfileForm({
   });
 
   const [langOpen, setLangOpen] = useState(false);
+  const reduceMotion = useReducedMotion();
+
+  const identityId = useId();
+  const nameHintId = useId();
+  const usernameId = useId();
+  const publicProfileId = useId();
+  const headlineId = useId();
+  const headlineHintId = useId();
+  const bioId = useId();
+  const industriesId = useId();
+  const languagesId = useId();
 
   const headline = form.watch('headline');
   const bio = form.watch('bio');
@@ -152,126 +309,114 @@ export function ProfileForm({
   const initials = `${firstName?.charAt(0) ?? ''}${lastName?.charAt(0) ?? ''}`.toUpperCase();
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Photo Card */}
-      <Card className="p-6">
-        <SectionLabel icon={Camera} color="primary">
-          Photo
-        </SectionLabel>
+    <div className="flex min-w-0 flex-col gap-[22px]">
+      <SettingsCard>
         <PhotoUpload
           currentAvatarUrl={avatarUrl}
           initials={initials}
           onUploadComplete={(url) => onAvatarChange(url)}
           onRemoveComplete={() => onAvatarChange(null)}
         />
-      </Card>
+      </SettingsCard>
 
-      {/* Identity Card */}
-      <Card className="p-6">
-        <SectionLabel icon={User} color="primary">
-          Identity
-        </SectionLabel>
+      <SettingsCard aria-labelledby={identityId} className="flex flex-col gap-[18px]">
+        <SettingsEyebrow id={identityId}>Identity</SettingsEyebrow>
 
-        {/* Name (read-only) */}
-        <div className="mb-4">
-          <div className="mb-1.5 flex items-center gap-1.5">
-            <Label className="text-foreground text-[13px] font-semibold">Name</Label>
-            <span className="text-muted-foreground text-xs">
-              &middot; Read-only &mdash; contact support to change
-            </span>
-          </div>
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-            <Input value={firstName} disabled className="bg-muted" />
-            <Input value={lastName} disabled className="bg-muted" />
-          </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <ReadOnlyNameField label="First name" value={firstName} hintId={nameHintId} />
+          <ReadOnlyNameField label="Last name" value={lastName} hintId={nameHintId} />
         </div>
+        <span id={nameHintId} className="sr-only">
+          Contact support to change your name.
+        </span>
 
-        {/* Username */}
-        <div className="mb-4">
-          <Label className="text-foreground mb-1.5 block text-[13px] font-semibold">Username</Label>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={usernameId} className={FIELD_LABEL_CLASS}>
+            Username
+          </Label>
           <UsernameInput
+            id={usernameId}
             value={form.watch('username') ?? ''}
             onChange={(v) => form.setValue('username', v, { shouldDirty: true })}
             expertProfileId={expertProfileId}
+            className={IDENTITY_CONTROL_HEIGHT}
           />
         </div>
 
-        {/* Country */}
-        <div>
-          <Label className="text-foreground mb-1.5 block text-[13px] font-semibold">Country</Label>
-          <CountryCombobox value={countryCode} onValueChange={onCountryChange} />
-          <p className="text-muted-foreground mt-1.5 text-[11px]">
-            Auto-detected from your timezone. You can change it manually.
-          </p>
-        </div>
-      </Card>
+        <hr className="border-border/70" />
 
-      {/* Public Profile Card */}
-      <Card className="p-6">
-        <SectionLabel icon={Sparkles} color="violet">
-          Public profile
-        </SectionLabel>
+        <ContactFields
+          countryCode={countryCode}
+          onCountryChange={onCountryChange}
+          initialPhone={initialPhone}
+          phoneVerifiedAt={phoneVerifiedAt}
+          onPhoneVerified={onPhoneVerified}
+        />
+      </SettingsCard>
 
-        {/* Headline */}
-        <div className="mb-4">
-          <div className="mb-1.5 flex items-center justify-between">
-            <Label className="text-foreground text-[13px] font-semibold">Headline</Label>
-            <CharCounter current={headline?.length ?? 0} max={100} />
+      <SettingsCard aria-labelledby={publicProfileId} className="flex flex-col gap-[18px]">
+        <SettingsEyebrow id={publicProfileId}>Public profile</SettingsEyebrow>
+
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor={headlineId} className={FIELD_LABEL_CLASS}>
+              Headline
+            </Label>
+            <CharCounter current={headline?.length ?? 0} max={HEADLINE_MAX} />
           </div>
           <Input
+            id={headlineId}
             value={headline}
             onChange={(e) => {
-              if (e.target.value.length <= 100) {
+              if (e.target.value.length <= HEADLINE_MAX) {
                 form.setValue('headline', e.target.value, { shouldDirty: true });
               }
             }}
             placeholder="e.g. Salesforce Architect specialising in Sales Cloud & integrations"
-            maxLength={100}
+            maxLength={HEADLINE_MAX}
+            aria-describedby={headlineHintId}
           />
-          <p className="text-muted-foreground mt-1.5 text-[11px]">
-            Shown below your name in search results and on your profile card.
+          <p id={headlineHintId} className="text-muted-foreground text-xs">
+            Shown under your name in search results and on your profile card.
           </p>
         </div>
 
-        {/* Bio */}
-        <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <Label className="text-foreground text-[13px] font-semibold">Bio</Label>
-            <CharCounter current={bio?.length ?? 0} max={1000} />
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor={bioId} className={FIELD_LABEL_CLASS}>
+              Bio
+            </Label>
+            <CharCounter current={bio?.length ?? 0} max={BIO_MAX} />
           </div>
-          <textarea
+          <Textarea
+            id={bioId}
             value={bio}
             onChange={(e) => {
-              if (e.target.value.length <= 1000) {
+              if (e.target.value.length <= BIO_MAX) {
                 form.setValue('bio', e.target.value, { shouldDirty: true });
               }
             }}
             placeholder="Tell clients about your experience, the problems you solve, and what makes you the right consultant for them..."
-            maxLength={1000}
-            rows={5}
-            className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring flex w-full rounded-md border px-3 py-2.5 text-sm leading-relaxed focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+            maxLength={BIO_MAX}
+            rows={4}
+            className="field-sizing-fixed min-h-0 resize-y leading-relaxed"
           />
         </div>
-      </Card>
+      </SettingsCard>
 
-      {/* Industries Card */}
-      <Card className="p-6">
-        <SectionLabel icon={Briefcase} color="cyan">
-          Industries
-        </SectionLabel>
+      <SettingsCard aria-labelledby={industriesId} className="flex flex-col gap-3.5">
+        <SettingsEyebrow id={industriesId}>Industries</SettingsEyebrow>
         <ChipPicker
+          size="compact"
           options={industryOptions}
           selected={industryIds ?? []}
           onChange={(v) => form.setValue('industryIds', v, { shouldDirty: true })}
         />
-      </Card>
+      </SettingsCard>
 
-      {/* Languages Card */}
-      <Card className="p-6">
-        <div className="mb-3 flex items-center justify-between">
-          <SectionLabel icon={Globe} color="emerald">
-            Languages
-          </SectionLabel>
+      <SettingsCard aria-labelledby={languagesId} className="flex flex-col gap-3.5">
+        <div className="flex items-center justify-between gap-3">
+          <SettingsEyebrow id={languagesId}>Languages</SettingsEyebrow>
           <Popover open={langOpen} onOpenChange={setLangOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -279,9 +424,9 @@ export function ProfileForm({
                 variant="ghost"
                 size="sm"
                 disabled={availableLanguages.length === 0}
-                className="text-primary"
+                className="text-primary hover:text-primary -my-1 -mr-2"
               >
-                <Plus className="mr-1 h-4 w-4" />
+                <Plus aria-hidden="true" />
                 Add language
               </Button>
             </PopoverTrigger>
@@ -315,96 +460,91 @@ export function ProfileForm({
         </div>
 
         {fields.length === 0 ? (
-          <div className="border-border rounded-xl border-2 border-dashed p-6 text-center">
-            <p className="text-muted-foreground text-sm">No languages added yet</p>
+          <div className="border-border rounded-lg border border-dashed px-4 py-5 text-center">
+            <p className="text-muted-foreground text-sm">Add the languages you consult in.</p>
           </div>
         ) : (
-          <div className="border-border overflow-hidden rounded-xl border">
+          <ul className="border-border overflow-hidden rounded-lg border">
             <AnimatePresence mode="popLayout">
               {fields.map((field, index) => {
                 const langInfo = allLanguages.find((l) => l.id === field.languageId);
+                const languageName = langInfo?.name ?? 'Unknown';
                 const proficiency = form.watch(`languages.${index}.proficiency`);
                 return (
-                  <motion.div
+                  <motion.li
                     key={field.id}
-                    initial={{ x: 20, opacity: 0 }}
+                    initial={reduceMotion ? false : { x: 20, opacity: 0 }}
                     animate={{ x: 0, opacity: 1 }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2, delay: index * 0.06 }}
-                    className="border-border/50 flex items-center gap-3 border-b px-4 py-3 last:border-b-0"
+                    exit={reduceMotion ? undefined : { opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2, delay: reduceMotion ? 0 : index * 0.06 }}
+                    className="border-border/60 flex items-center gap-3 border-b px-4 py-2.5 last:border-b-0"
                   >
                     <span className="text-foreground flex min-w-0 flex-1 items-center gap-2 text-sm font-medium">
-                      {langInfo?.flagEmoji && <span>{langInfo.flagEmoji}</span>}
-                      <span className="truncate">{langInfo?.name ?? 'Unknown'}</span>
+                      {langInfo?.flagEmoji && <span aria-hidden="true">{langInfo.flagEmoji}</span>}
+                      <span className="truncate">{languageName}</span>
                     </span>
                     <Select
                       value={proficiency}
-                      onValueChange={(val) =>
-                        form.setValue(
-                          `languages.${index}.proficiency`,
-                          val as 'beginner' | 'intermediate' | 'advanced' | 'native',
-                          { shouldDirty: true }
-                        )
-                      }
+                      onValueChange={(val) => {
+                        if (isProficiency(val)) {
+                          form.setValue(`languages.${index}.proficiency`, val, {
+                            shouldDirty: true,
+                          });
+                        }
+                      }}
                     >
-                      <SelectTrigger className="w-[120px] sm:w-[140px]">
+                      <SelectTrigger
+                        aria-label={`${languageName} proficiency`}
+                        className="w-[128px] sm:w-[140px]"
+                      >
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {(['beginner', 'intermediate', 'advanced', 'native'] as const).map(
-                          (prof) => (
-                            <SelectItem key={prof} value={prof}>
-                              {prof.charAt(0).toUpperCase() + prof.slice(1)}
-                            </SelectItem>
-                          )
-                        )}
+                        {PROFICIENCIES.map((prof) => (
+                          <SelectItem key={prof} value={prof}>
+                            {prof.charAt(0).toUpperCase() + prof.slice(1)}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        'hidden sm:inline-flex',
-                        PROFICIENCY_BADGE_STYLES[proficiency] ?? 'bg-muted text-muted-foreground'
-                      )}
-                    >
-                      {proficiency}
-                    </Badge>
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 shrink-0"
+                      className="text-muted-foreground hover:text-foreground h-8 w-8 shrink-0"
                       onClick={() => remove(index)}
                       aria-label={`Remove ${langInfo?.name ?? 'language'}`}
                     >
                       <X className="h-4 w-4" aria-hidden="true" />
                     </Button>
-                  </motion.div>
+                  </motion.li>
                 );
               })}
             </AnimatePresence>
-          </div>
+          </ul>
         )}
-      </Card>
+      </SettingsCard>
 
-      {/* Save row */}
-      <div className="flex flex-col-reverse gap-3 pb-2 sm:flex-row sm:justify-end">
+      <div className="flex flex-col-reverse gap-3 pb-2 sm:flex-row sm:items-center sm:justify-between">
         <Button
           type="button"
-          variant="ghost"
-          onClick={() => form.reset()}
-          disabled={!form.formState.isDirty || isSaving}
-          className="w-full sm:w-auto"
+          variant="link"
+          onClick={onReset}
+          disabled={!isDirty || isSaving}
+          className="h-11 w-full sm:h-9 sm:w-auto sm:px-0"
         >
           Reset changes
         </Button>
         <Button
           type="button"
           onClick={onSave}
-          disabled={!form.formState.isDirty || isSaving}
-          className="from-primary w-full bg-gradient-to-r to-violet-600 text-white sm:w-auto"
+          disabled={!isDirty || isSaving}
+          className="h-11 w-full sm:h-9 sm:w-auto"
         >
-          {isSaving ? 'Saving...' : 'Save profile'}
+          {isSaving && (
+            <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          )}
+          {isSaving ? 'Saving…' : 'Save profile'}
         </Button>
       </div>
     </div>

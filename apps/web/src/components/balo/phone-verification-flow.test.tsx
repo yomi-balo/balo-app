@@ -180,6 +180,38 @@ describe('PhoneVerificationFlow', () => {
     });
   });
 
+  describe('entry stage focus', () => {
+    it('focuses the phone input on mount by default', () => {
+      render(<PhoneVerificationFlow {...DEFAULT_PROPS} />);
+
+      expect(screen.getByPlaceholderText('412 345 678')).toHaveFocus();
+    });
+
+    it('leaves focus alone on mount when focusOnMount is false', () => {
+      render(<PhoneVerificationFlow {...DEFAULT_PROPS} focusOnMount={false} />);
+
+      expect(screen.getByPlaceholderText('412 345 678')).not.toHaveFocus();
+    });
+
+    it('still focuses the phone input on returning to entry when focusOnMount is false', async () => {
+      setupApiResponses([sendOtpSuccess()]);
+      const user = userEvent.setup();
+      render(<PhoneVerificationFlow {...DEFAULT_PROPS} focusOnMount={false} />);
+
+      await user.type(screen.getByPlaceholderText('412 345 678'), '412345678');
+      await user.click(screen.getByRole('button', { name: /send verification code/i }));
+      await waitFor(() => {
+        expect(screen.getByText('Enter 6-digit code')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Change number' }));
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText('412 345 678')).toHaveFocus();
+      });
+    });
+  });
+
   // ── 2. Current stage rendering (settings with initialPhone) ───
 
   describe('current stage rendering', () => {

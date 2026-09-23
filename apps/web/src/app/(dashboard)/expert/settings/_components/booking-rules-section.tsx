@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback } from 'react';
-import { CalendarClock } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -9,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { SettingsEyebrow } from './settings-card';
 import { BUFFER_OPTIONS, NOTICE_OPTIONS, type RuleOption } from '../_lib/schedule-helpers';
 import type { BookingSettings } from '../_types/schedule';
 
@@ -47,6 +47,11 @@ interface BookingRulesSectionProps {
   onChange: (settings: BookingSettings) => void;
 }
 
+/**
+ * The "Booking rules" block of the Availability card: three labelled selects side by side
+ * (stacked on phones). Each field's help sentence is its control's accessible description
+ * rather than visible text, so the row stays compact without hiding meaning behind hover.
+ */
 export function BookingRulesSection({
   settings,
   onChange,
@@ -59,33 +64,26 @@ export function BookingRulesSection({
   );
 
   return (
-    <section className="border-border bg-card rounded-xl border p-6">
-      <div className="mb-1.5 flex items-center gap-2">
-        <CalendarClock className="text-primary h-3.5 w-3.5" aria-hidden="true" />
-        <span className="text-primary text-[11px] font-bold tracking-wider uppercase">
-          Booking rules
-        </span>
-      </div>
-      <p className="text-muted-foreground mb-5 text-sm leading-relaxed">
-        How your open hours are turned into bookable times.
-      </p>
-
-      <div className="grid gap-5 sm:grid-cols-2">
+    <div className="flex flex-col gap-3">
+      <SettingsEyebrow>Booking rules</SettingsEyebrow>
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
         {RULE_FIELDS.map((field) => {
           const fieldId = `booking-${field.key}`;
+          const helpId = `${fieldId}-help`;
           return (
-            <div key={field.key}>
-              <label htmlFor={fieldId} className="text-foreground text-sm font-medium">
+            <div key={field.key} className="flex min-w-0 flex-col gap-1.5">
+              <label htmlFor={fieldId} className="text-foreground text-[13px] font-medium">
                 {field.label}
               </label>
-              <p className="text-muted-foreground mt-0.5 mb-2 text-xs leading-relaxed">
-                {field.help}
-              </p>
               <Select
                 value={String(settings[field.key])}
                 onValueChange={(value) => handleChange(field.key, value)}
               >
-                <SelectTrigger id={fieldId} className="w-full">
+                <SelectTrigger
+                  id={fieldId}
+                  aria-describedby={helpId}
+                  className="w-full text-[13px]"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -96,10 +94,13 @@ export function BookingRulesSection({
                   ))}
                 </SelectContent>
               </Select>
+              <p id={helpId} className="sr-only">
+                {field.help}
+              </p>
             </div>
           );
         })}
       </div>
-    </section>
+    </div>
   );
 }

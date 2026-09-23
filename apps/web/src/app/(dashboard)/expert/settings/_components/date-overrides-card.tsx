@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CalendarDays, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { IconBadge } from '@/components/balo/icon-badge';
 import { getAvailabilityOverridesAction } from '../_actions/get-availability-overrides';
 import {
   createAvailabilityOverrideAction,
@@ -14,10 +13,10 @@ import { getOverrideConflictsAction } from '../_actions/get-override-conflicts';
 import { formatOverrideRange } from '../_lib/format-override-range';
 import { DateOverrideAddPopover, type CreateOverrideInput } from './date-override-add-popover';
 import { DateOverrideDeleteConfirm } from './date-override-delete-confirm';
+import { SettingsCard, SettingsEyebrow } from './settings-card';
 import type { AvailabilityOverrideDto } from '../_types/availability-override';
 
-/** Brand violet for the Time-off IconBadge (header + row tiles). */
-const OVERRIDE_ICON_COLOR = '#7C3AED';
+const TIME_OFF_HEADING_ID = 'time-off-heading';
 
 function sortByStart(list: AvailabilityOverrideDto[]): AvailabilityOverrideDto[] {
   return [...list].sort((a, b) => a.startDate.localeCompare(b.startDate));
@@ -52,16 +51,18 @@ function DateOverrideRow({
   const handleConfirm = useCallback(() => onDelete(override.id), [onDelete, override.id]);
 
   return (
-    <div className="flex items-center gap-3 py-3">
-      <IconBadge icon={CalendarDays} color={OVERRIDE_ICON_COLOR} size={40} iconSize={18} />
+    <li className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+      <div className="bg-violet/10 flex size-7 shrink-0 items-center justify-center rounded-lg">
+        <CalendarDays className="text-violet size-3.5" aria-hidden="true" />
+      </div>
       <div className="min-w-0 flex-1">
-        <div className="text-foreground truncate text-sm font-semibold">{rangeLabel}</div>
-        <div className="text-muted-foreground mt-0.5 truncate text-sm">
+        <div className="text-foreground truncate text-[13.5px] font-semibold">{rangeLabel}</div>
+        <div className="text-muted-foreground truncate text-xs">
           {override.label ?? 'Unavailable'}
         </div>
       </div>
       <DateOverrideDeleteConfirm rangeLabel={rangeLabel} onConfirm={handleConfirm} />
-    </div>
+    </li>
   );
 }
 
@@ -141,16 +142,15 @@ export function DateOverridesCard(): React.JSX.Element {
   const visibleOverrides = overrides.filter((o) => o.endDate >= todayIso);
 
   return (
-    <div className="border-border bg-card mt-4 rounded-xl border p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <IconBadge icon={CalendarDays} color={OVERRIDE_ICON_COLOR} size={44} iconSize={22} />
-          <div>
-            <h2 className="text-foreground text-base font-semibold">Time off</h2>
-            <p className="text-muted-foreground mt-0.5 text-sm leading-relaxed">
-              Block dates for holidays or leave — clients can&apos;t book you on blocked days.
-            </p>
-          </div>
+    <SettingsCard aria-labelledby={TIME_OFF_HEADING_ID} className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <SettingsEyebrow as="h2" id={TIME_OFF_HEADING_ID}>
+            Time off
+          </SettingsEyebrow>
+          <p className="text-muted-foreground text-[13px] leading-relaxed">
+            Block dates for holidays or leave — clients can&apos;t book you on blocked days.
+          </p>
         </div>
         <DateOverrideAddPopover
           onCreate={handleCreate}
@@ -159,34 +159,32 @@ export function DateOverridesCard(): React.JSX.Element {
         />
       </div>
 
-      <div className="mt-4">
-        {state === 'loading' && (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" aria-hidden="true" />
-            <span className="sr-only">Loading time off</span>
-          </div>
-        )}
+      {state === 'loading' && (
+        <div className="flex items-center justify-center py-6">
+          <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" aria-hidden="true" />
+          <span className="sr-only">Loading time off</span>
+        </div>
+      )}
 
-        {state === 'error' && (
-          <div className="border-border text-muted-foreground rounded-lg border border-dashed px-4 py-6 text-center text-sm leading-relaxed">
-            Couldn&apos;t load your time off. Refresh the page to try again.
-          </div>
-        )}
+      {state === 'error' && (
+        <div className="border-border text-muted-foreground rounded-lg border border-dashed px-4 py-5 text-center text-[13px] leading-relaxed">
+          Couldn&apos;t load your time off. Refresh the page to try again.
+        </div>
+      )}
 
-        {state === 'ready' && visibleOverrides.length === 0 && (
-          <div className="border-border text-muted-foreground rounded-lg border border-dashed px-4 py-6 text-center text-sm leading-relaxed">
-            No time off scheduled — add dates when you&apos;re unavailable.
-          </div>
-        )}
+      {state === 'ready' && visibleOverrides.length === 0 && (
+        <div className="border-border text-muted-foreground rounded-lg border border-dashed px-4 py-5 text-center text-[13px] leading-relaxed">
+          Planning a break? Add the dates and clients won&apos;t be able to book you on them.
+        </div>
+      )}
 
-        {state === 'ready' && visibleOverrides.length > 0 && (
-          <div className="divide-border divide-y">
-            {visibleOverrides.map((override) => (
-              <DateOverrideRow key={override.id} override={override} onDelete={handleDelete} />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+      {state === 'ready' && visibleOverrides.length > 0 && (
+        <ul className="divide-border/60 flex flex-col divide-y">
+          {visibleOverrides.map((override) => (
+            <DateOverrideRow key={override.id} override={override} onDelete={handleDelete} />
+          ))}
+        </ul>
+      )}
+    </SettingsCard>
   );
 }

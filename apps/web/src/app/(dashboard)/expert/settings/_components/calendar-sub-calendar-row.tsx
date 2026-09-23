@@ -1,6 +1,5 @@
 'use client';
 
-import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import type { SubCalendar } from '../_types/calendar';
@@ -22,6 +21,10 @@ interface CalendarSubCalendarRowProps {
   disabled?: boolean;
 }
 
+/**
+ * One sub-calendar's busy toggle: colour dot, name, a "Primary" tag, and the Switch. The row
+ * keeps the 44px touch height on mobile and tightens from `sm` up.
+ */
 export function CalendarSubCalendarRow({
   calendar,
   onToggle,
@@ -33,44 +36,31 @@ export function CalendarSubCalendarRow({
     : `Block time from ${calendar.name}`;
 
   return (
-    <div
-      aria-busy={pending}
-      className={cn(
-        'hover:bg-muted/50 flex min-h-[44px] items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors'
-      )}
-    >
-      {/* Calendar color dot */}
+    <div aria-busy={pending} className="flex min-h-11 items-center gap-2.5 sm:min-h-9">
       <div
-        className="h-2.5 w-2.5 shrink-0 rounded-full"
+        className="size-2 shrink-0 rounded-full"
         style={{ backgroundColor: calendar.color ?? 'var(--primary)' }}
         aria-hidden="true"
       />
 
-      {/* Calendar name + badge */}
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <span
           className={cn(
-            'text-foreground truncate text-sm',
-            calendar.primary ? 'font-semibold' : 'font-normal'
+            'text-foreground truncate text-[13px]',
+            calendar.primary ? 'font-medium' : 'font-normal'
           )}
         >
           {calendar.name}
         </span>
         {calendar.primary && (
-          <Badge
-            variant="secondary"
-            className="bg-primary/10 text-primary border-primary/20 border px-1.5 py-0 text-[10px] font-bold"
-          >
+          <span className="border-border bg-muted text-muted-foreground shrink-0 rounded-md border px-1.5 text-[10px] leading-4 font-medium">
             Primary
-          </Badge>
+          </span>
         )}
       </div>
 
-      {/* Toggle */}
       <div className="flex shrink-0 items-center gap-2">
-        {calendar.primary && (
-          <span className="text-muted-foreground text-[11px] italic">Always on</span>
-        )}
+        {calendar.primary && <span className="text-muted-foreground text-[11px]">Always on</span>}
         <Switch
           checked={calendar.conflictChecking}
           onCheckedChange={(checked) => !calendar.primary && onToggle(calendar.id, checked)}

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { expertSettingsHrefFor, CHECKLIST_ITEMS, type ChecklistItemKey } from './expert-checklist';
+import {
+  expertSettingsHrefFor,
+  expertSettingsTabFor,
+  CHECKLIST_ITEMS,
+  type ChecklistItemKey,
+  type ExpertSettingsTabKey,
+} from './expert-checklist';
 
 /**
  * BAL-566 fix round 2 (W2) — a full table over every `ChecklistItemKey`, with explicit expected
@@ -30,6 +36,36 @@ describe('expertSettingsHrefFor (BAL-566)', () => {
 
     for (const key of keys) {
       expect(expertSettingsHrefFor(key)).toBe(EXPECTED_HREF_BY_KEY[key]);
+    }
+  });
+});
+
+/**
+ * Explicit literals per key, same shape as the href table above: a derived-and-compared
+ * assertion would pass with the underlying record wrong on both sides.
+ */
+const EXPECTED_TAB_BY_KEY: Readonly<Record<ChecklistItemKey, ExpertSettingsTabKey>> = {
+  profile: 'profile',
+  phone: 'profile',
+  rate: 'rate',
+  calendar: 'schedule',
+  availability: 'schedule',
+  payouts: 'payouts',
+};
+
+describe('expertSettingsTabFor', () => {
+  it('names the settings tab every checklist item lives on', () => {
+    const keys = Object.keys(EXPECTED_TAB_BY_KEY) as ChecklistItemKey[];
+    expect(keys.length).toBe(CHECKLIST_ITEMS.length);
+
+    for (const key of keys) {
+      expect(expertSettingsTabFor(key)).toBe(EXPECTED_TAB_BY_KEY[key]);
+    }
+  });
+
+  it('is the same tab the deep link carries', () => {
+    for (const item of CHECKLIST_ITEMS) {
+      expect(expertSettingsHrefFor(item.key)).toContain(`?tab=${expertSettingsTabFor(item.key)}&`);
     }
   });
 });

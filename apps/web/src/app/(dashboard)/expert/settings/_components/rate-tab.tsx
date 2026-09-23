@@ -7,7 +7,6 @@ import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { IconBadge } from '@/components/balo/icon-badge';
 import { track, EXPERT_RATE_EVENTS } from '@/lib/analytics';
 import { PLATFORM_PRICING } from '@/lib/constants/platform';
 import {
@@ -18,6 +17,7 @@ import {
   perMinuteToPerHour,
 } from '@/lib/utils/currency';
 import { saveRateAction } from '../_actions/save-rate';
+import { SettingsPageHeader } from './settings-page-header';
 
 interface RateTabProps {
   /** Current saved rate in cents, or null if not yet set */
@@ -108,20 +108,18 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
-      {/* Hero header */}
-      <motion.div variants={itemVariants} className="mb-9 text-center">
-        <IconBadge
+      <motion.div variants={itemVariants} className="mb-8">
+        <SettingsPageHeader
           icon={DollarSign}
           color="#059669"
-          size={52}
-          iconSize={24}
-          className="mx-auto mb-4"
+          title="Set Your Rate"
+          description={
+            <>
+              This is your take-home amount per minute. Clients see a higher rate that includes
+              Balo&apos;s service fee.
+            </>
+          }
         />
-        <h1 className="text-foreground text-2xl font-semibold">Set Your Rate</h1>
-        <p className="text-muted-foreground mx-auto mt-2 max-w-[440px] text-sm leading-relaxed">
-          This is your take-home amount per minute. Clients see a higher rate that includes
-          Balo&apos;s service fee.
-        </p>
       </motion.div>
 
       {/* Rate input card */}

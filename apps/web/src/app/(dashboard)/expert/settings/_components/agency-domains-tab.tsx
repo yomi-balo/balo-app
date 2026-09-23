@@ -31,19 +31,17 @@ export function AgencyDomainsTab({
 
   if (domains === null) {
     return (
-      <div className="mx-auto max-w-[620px]">
-        <SectionCard
-          title="Domains"
-          description="Email domains that identify your agency. Anyone who signs up with one joins your team."
-        >
-          <SectionError label="your domains" onRetry={handleRetry} />
-        </SectionCard>
-      </div>
+      <SectionCard
+        title="Domains"
+        description="Email domains that identify your agency. Anyone who signs up with one joins your team."
+      >
+        <SectionError label="your domains" onRetry={handleRetry} />
+      </SectionCard>
     );
   }
 
   return (
-    <div className="mx-auto flex max-w-[620px] flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <DomainsSection party="agency" partyId={agencyId} partyName={partyName} domains={domains} />
       <InfoNote icon={Lock}>
         Agencies don&apos;t use join modes or request approvals. Membership is decided by verified

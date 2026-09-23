@@ -70,6 +70,12 @@ interface PhoneVerificationFlowProps {
   onVerified: (e164: string) => void;
   /** Settings mode only — called when user clicks Cancel */
   onCancel?: () => void;
+  /**
+   * Focus the phone input when the flow MOUNTS in the entry stage (default `true`). Pass `false`
+   * where the flow sits mid-page, so landing on the page does not scroll to it. Returning to
+   * entry from a later stage ("Change number") focuses the input either way.
+   */
+  focusOnMount?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -939,6 +945,7 @@ export function PhoneVerificationFlow({
   initialPhone,
   onVerified,
   onCancel,
+  focusOnMount = true,
 }: Readonly<PhoneVerificationFlowProps>): React.JSX.Element {
   const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [localNumber, setLocalNumber] = useState('');
@@ -962,12 +969,17 @@ export function PhoneVerificationFlow({
     onVerified,
   });
 
-  // Autofocus phone input when entering the entry stage
+  // Focus the phone input on entering the entry stage: on mount only when `focusOnMount`, and
+  // on every return from a later stage. `previousStageRef` is null until the first run, and a
+  // re-run with the stage unchanged (StrictMode's double effect) never focuses.
+  const previousStageRef = useRef<Stage | null>(null);
   useEffect(() => {
-    if (otp.stage === 'entry') {
-      phoneInputRef.current?.focus();
-    }
-  }, [otp.stage]);
+    const previousStage = previousStageRef.current;
+    previousStageRef.current = otp.stage;
+    if (otp.stage !== 'entry') return;
+    const shouldFocus = previousStage === null ? focusOnMount : previousStage !== 'entry';
+    if (shouldFocus) phoneInputRef.current?.focus();
+  }, [otp.stage, focusOnMount]);
 
   const handleChangeNumber = useCallback((): void => {
     otp.handleChangeNumber();

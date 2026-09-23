@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CalendarBusyCalendarsPanel } from './calendar-busy-calendars-panel';
 import type { CalendarConnection, SubCalendar } from '../_types/calendar';
@@ -24,6 +24,44 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
 });
 
 describe('CalendarBusyCalendarsPanel', () => {
+  it('groups the toggles under a "Busy calendars" label', () => {
+    render(
+      <CalendarBusyCalendarsPanel
+        connection={makeConnection({
+          subCalendars: [makeSubCalendar({ id: 'b', name: 'Team', primary: false })],
+        })}
+        pending={false}
+        onToggle={vi.fn()}
+      />
+    );
+    const group = screen.getByRole('group', { name: 'Busy calendars' });
+    // A native <fieldset>, not a role on a <div> (SonarCloud S6819).
+    expect(group.tagName).toBe('FIELDSET');
+    expect(within(group).getByRole('switch', { name: 'Block time from Team' })).toBeInTheDocument();
+  });
+
+  it('gives two panels on one page distinct group labels', () => {
+    render(
+      <>
+        <CalendarBusyCalendarsPanel
+          connection={makeConnection()}
+          pending={false}
+          onToggle={vi.fn()}
+        />
+        <CalendarBusyCalendarsPanel
+          connection={makeConnection()}
+          pending={false}
+          onToggle={vi.fn()}
+        />
+      </>
+    );
+    const [first, second] = screen.getAllByRole('group', { name: 'Busy calendars' });
+    expect(first?.getAttribute('aria-labelledby')).toBeTruthy();
+    expect(first?.getAttribute('aria-labelledby')).not.toBe(
+      second?.getAttribute('aria-labelledby')
+    );
+  });
+
   it('renders a row per sub-calendar', () => {
     render(
       <CalendarBusyCalendarsPanel

@@ -44,4 +44,19 @@ describe('ScheduleTimeSelect', () => {
       'badge-1 err-1'
     );
   });
+
+  it('shows a "(next day)" end label in full rather than clipping it at a fixed width', () => {
+    render(
+      <ScheduleTimeSelect
+        value="01:00"
+        options={[{ value: '01:00', label: '1:00 AM (next day)' }]}
+        onChange={vi.fn()}
+        ariaLabel="Friday range 1 end time"
+      />
+    );
+    const trigger = screen.getByRole('combobox', { name: 'Friday range 1 end time' });
+    expect(trigger).toHaveTextContent('1:00 AM (next day)');
+    expect(trigger).toHaveClass('min-w-[112px]');
+    expect(trigger).not.toHaveClass('w-[112px]');
+  });
 });

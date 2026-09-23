@@ -23,7 +23,7 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
 });
 
 describe('CalendarTargetCalendarPanel', () => {
-  it('renders a unique per-provider trigger id, matching the label', () => {
+  it('labels the trigger "Where bookings go" and describes it with the routing copy', () => {
     render(
       <CalendarTargetCalendarPanel
         connection={makeConnection()}
@@ -33,10 +33,41 @@ describe('CalendarTargetCalendarPanel', () => {
       />
     );
     const trigger = screen.getByRole('combobox', { name: 'Where bookings go' });
-    expect(trigger).toHaveAttribute('id', 'target-calendar-google');
+    expect(trigger.id).toMatch(/^target-calendar-google-/);
+    expect(trigger).toHaveAccessibleDescription(
+      'Confirmed consultations on this account are added to this calendar. We start with your primary one — change it any time.'
+    );
   });
 
-  it('scopes the trigger id to microsoft for a microsoft connection — no duplicate DOM id', () => {
+  // Two accounts of the SAME provider render two panels on one page: a provider-scoped id
+  // alone would collide, and the second label would point at the first trigger.
+  it('gives two panels for the same provider distinct ids, each label bound to its own trigger', () => {
+    render(
+      <>
+        <CalendarTargetCalendarPanel
+          connection={makeConnection()}
+          provider="google"
+          pending={false}
+          onChange={vi.fn()}
+        />
+        <CalendarTargetCalendarPanel
+          connection={makeConnection({ providerEmail: 'dana.work@example.com' })}
+          provider="google"
+          pending
+          onChange={vi.fn()}
+        />
+      </>
+    );
+    const [first, second] = screen.getAllByRole('combobox', { name: 'Where bookings go' });
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(first?.id).not.toBe(second?.id);
+    // The label → trigger binding is per panel: the pending one is the second.
+    expect(first).not.toBeDisabled();
+    expect(second).toBeDisabled();
+  });
+
+  it('scopes the trigger id to microsoft for a microsoft connection', () => {
     render(
       <CalendarTargetCalendarPanel
         connection={makeConnection({ provider: 'microsoft' })}
@@ -45,9 +76,8 @@ describe('CalendarTargetCalendarPanel', () => {
         onChange={vi.fn()}
       />
     );
-    expect(screen.getByRole('combobox', { name: 'Where bookings go' })).toHaveAttribute(
-      'id',
-      'target-calendar-microsoft'
+    expect(screen.getByRole('combobox', { name: 'Where bookings go' }).id).toMatch(
+      /^target-calendar-microsoft-/
     );
   });
 
@@ -85,6 +115,105 @@ describe('CalendarTargetCalendarPanel', () => {
       />
     );
     expect(screen.queryByText(/no longer on this account/)).not.toBeInTheDocument();
+  });
+
+  it('shows the placeholder rather than a stale target', () => {
+    render(
+      <CalendarTargetCalendarPanel
+        connection={makeConnection({ targetCalendarId: 'cal-gone' })}
+        provider="google"
+        pending={false}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('combobox', { name: 'Where bookings go' })).toHaveTextContent(
+      'Choose a calendar'
+    );
+  });
+
+  it('keeps a long calendar name whole: truncatable in the trigger, in full on its title', () => {
+    render(
+      <CalendarTargetCalendarPanel
+        connection={makeConnection({
+          subCalendars: [makeSubCalendar({ name: 'charles.akintunde@gmail.com' })],
+        })}
+        provider="google"
+        pending={false}
+        onChange={vi.fn()}
+      />
+    );
+    const trigger = screen.getByRole('combobox', { name: 'Where bookings go' });
+    expect(trigger).toHaveAttribute('title', 'charles.akintunde@gmail.com (Primary)');
+    const value = screen.getByText('charles.akintunde@gmail.com (Primary)');
+    expect(trigger).toContainElement(value);
+    expect(value.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
+    // Sized to its content from `sm` up, never a fixed width that clips an email.
+    expect(trigger.className.split(' ')).toEqual(
+      expect.arrayContaining(['sm:w-auto', 'sm:min-w-[240px]', 'min-w-0', 'max-w-full'])
+    );
+    expect(trigger.className).not.toContain('sm:w-56');
+  });
+
+  it('names a non-primary calendar without the Primary suffix, and titles no placeholder', () => {
+    const { rerender } = render(
+      <CalendarTargetCalendarPanel
+        connection={makeConnection({
+          targetCalendarId: 'cal-2',
+          subCalendars: [
+            makeSubCalendar(),
+            makeSubCalendar({ id: 'cal-2', name: 'Team', primary: false }),
+          ],
+        })}
+        provider="google"
+        pending={false}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('combobox', { name: 'Where bookings go' })).toHaveAttribute(
+      'title',
+      'Team'
+    );
+
+    rerender(
+      <CalendarTargetCalendarPanel
+        connection={makeConnection({ targetCalendarId: null })}
+        provider="google"
+        pending={false}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('combobox', { name: 'Where bookings go' })).not.toHaveAttribute(
+      'title'
+    );
+  });
+
+  it('renders its label with the shared eyebrow styling', () => {
+    render(
+      <CalendarTargetCalendarPanel
+        connection={makeConnection()}
+        provider="google"
+        pending={false}
+        onChange={vi.fn()}
+      />
+    );
+    const label = screen.getByText('Where bookings go');
+    expect(label.tagName).toBe('LABEL');
+    expect(label.className.split(' ')).toEqual(
+      expect.arrayContaining(['uppercase', 'text-[11px]', 'block'])
+    );
+  });
+
+  it('disables the trigger when the panel itself is inert', () => {
+    render(
+      <CalendarTargetCalendarPanel
+        connection={makeConnection()}
+        provider="google"
+        pending={false}
+        disabled
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('combobox', { name: 'Where bookings go' })).toBeDisabled();
   });
 
   it('disables the trigger while pending', () => {

@@ -1,20 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { motion, useReducedMotion } from 'motion/react';
-import { Calendar as CalendarIcon } from 'lucide-react';
+import { useReducedMotion } from 'motion/react';
 import { toast } from 'sonner';
-import { IconBadge } from '@/components/balo/icon-badge';
 import { SectionError } from '@/components/balo/section/section-states';
 import { track, CALENDAR_EVENTS } from '@/lib/analytics';
 import { CalendarConnectionsSkeleton } from './calendar-connections-skeleton';
-import { CalendarEmptyState } from './calendar-empty-state';
-import { CalendarConnectAnother } from './calendar-connect-another';
 import { CalendarConnectionCard } from './calendar-connection-card';
+import { CalendarAddMenu, type CalendarAddMenuOption } from './calendar-add-menu';
 import { CalendarO365GuidanceModal } from './calendar-o365-guidance-modal';
 import { CalendarAppleNote } from './calendar-apple-note';
-import { CalendarTrustRow } from './calendar-trust-row';
+import { SettingsCard, SettingsEyebrow } from './settings-card';
 import { useCalendarPolling } from '../_hooks/use-calendar-polling';
 import { getCalendarConnectionsAction } from '../_actions/get-calendar-connections';
 import { initiateCalendarConnectAction } from '../_actions/initiate-calendar-connect';
@@ -28,28 +25,18 @@ import {
   isCalendarProvider,
   isCalendarCredentialStatus,
 } from '../_lib/calendar-providers';
-import { deriveSlotState, type CalendarTransientState } from '../_lib/calendar-slot-state';
+import {
+  deriveSlotState,
+  type CalendarSlotState,
+  type CalendarTransientState,
+} from '../_lib/calendar-slot-state';
+import { CALENDAR_SLOT_STATUS } from '../_lib/calendar-slot-status';
 import type { CalendarConnection, CalendarProvider } from '../_types/calendar';
 
 type CalendarSectionState = 'loading' | 'error' | 'ready';
 type ConnectSource = 'first_connect' | 'add_another' | 'reconnect' | 'fix_permissions';
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
-
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.08 } },
-} as const;
-
-const itemVariants = {
-  hidden: { opacity: 0, y: 12 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' as const } },
-};
-
-const REDUCED_VARIANTS = {
-  hidden: { opacity: 1, y: 0 },
-  show: { opacity: 1, y: 0, transition: { duration: 0 } },
-};
 
 function sortByProviderOrder(connections: readonly CalendarConnection[]): CalendarConnection[] {
   return [...connections].sort(
@@ -85,15 +72,14 @@ export function mergeConnectionsByProvider(
 }
 
 /**
- * Does this transient state claim a provider CARD?
+ * Does this transient state claim a provider ROW?
  *
- * ⚠ `o365_guidance` DOES NOT (BAL-397 fix round). It is a modal — plan §4.3 classifies it as
- * "per provider (state) / SURFACE (render)" and designs neither a body nor a badge for it. When
- * it counted as a slot, clicking **Connect** on the Microsoft card in the empty state flipped
- * `showHero` to `false`, so the hero and BOTH provider cards unmounted and were replaced —
- * behind the modal overlay — by a bodyless Microsoft card and a dashed "Connect Google Calendar"
- * CTA. Cancelling the dialog reinstated the hero. Pure thrash, invisible to a test that only
- * asserts the dialog opened.
+ * ⚠ `o365_guidance` DOES NOT (BAL-397). It is a modal — plan §4.3 classifies it as
+ * "per provider (state) / SURFACE (render)" and designs neither a body nor a badge for it. If it
+ * claimed a row, picking Microsoft Outlook from the Add calendar menu would add a bodyless
+ * Microsoft row behind the modal overlay (replacing the empty-state invitation when it is the
+ * first calendar), flip the analytics source to `add_another`, and undo it all on Cancel. Pure
+ * thrash, invisible to a test that only asserts the dialog opened.
  */
 export function occupiesSlot(transient: CalendarTransientState | undefined): boolean {
   return transient !== undefined && transient !== 'o365_guidance';
@@ -133,6 +119,73 @@ function withTargetCalendar(
   return connections.map((c) => (c.provider === provider ? { ...c, targetCalendarId } : c));
 }
 
+/** One row of the Calendars card: a connection, or an in-flight attempt, with its slot state. */
+export interface CalendarRowModel {
+  readonly key: string;
+  readonly provider: CalendarProvider;
+  readonly slotState: CalendarSlotState;
+  readonly connection: CalendarConnection | undefined;
+}
+
+/**
+ * The card's rows, in `PROVIDER_ORDER`. Each provider contributes one row PER CONNECTION it
+ * holds, or — with none — one row for an in-flight attempt that claims a slot (see
+ * `occupiesSlot`). A provider with neither has NO row: adding one is the Add calendar menu's job.
+ * Grouping by provider keeps a row in place as it moves from attempt → connection, instead of
+ * jumping above or below its neighbours.
+ *
+ * Rows are built from the connection ARRAY, not a provider-keyed map, so a provider holding
+ * several accounts renders several rows. Their `key`s are positional within the provider
+ * until `CalendarConnection` carries its own id.
+ */
+export function buildCalendarRows(
+  connections: readonly CalendarConnection[],
+  transient: Partial<Record<CalendarProvider, CalendarTransientState>>
+): CalendarRowModel[] {
+  return PROVIDER_ORDER.flatMap((provider): CalendarRowModel[] => {
+    const providerTransient = transient[provider];
+    const providerConnections = connections.filter((c) => c.provider === provider);
+    if (providerConnections.length > 0) {
+      return providerConnections.map((connection, index) => ({
+        key: `${provider}-${index}`,
+        provider,
+        connection,
+        slotState: deriveSlotState({ connection, transient: providerTransient }),
+      }));
+    }
+    if (occupiesSlot(providerTransient)) {
+      return [
+        {
+          key: `${provider}-0`,
+          provider,
+          connection: undefined,
+          slotState: deriveSlotState({ connection: undefined, transient: providerTransient }),
+        },
+      ];
+    }
+    return [];
+  });
+}
+
+/**
+ * The "Add calendar" menu's options: every provider, always.
+ *
+ * ⚠ A provider that already has a row (a connection, or an attempt in flight) is listed but
+ * DISABLED, with its row's status beside it. Connections are still addressed by provider end
+ * to end, so connecting a second account of the same provider today silently REPLACES the
+ * first (BAL-575). This lifts once calendar connections are keyed by connection id (BAL-578).
+ */
+export function buildAddMenuOptions(rows: readonly CalendarRowModel[]): CalendarAddMenuOption[] {
+  return PROVIDER_ORDER.map((provider) => {
+    const slotRow = rows.find((row) => row.provider === provider);
+    if (!slotRow) return { provider, unavailableReason: null };
+    const unavailableReason = slotRow.connection
+      ? 'Connected'
+      : (CALENDAR_SLOT_STATUS[slotRow.slotState]?.words ?? 'Connected');
+    return { provider, unavailableReason };
+  });
+}
+
 /**
  * BAL-397 — replaces `CalendarTab`. Container: owns the fetch, callback-param consumption,
  * transient per-provider state, and every mutation handler. See plan §3–§6 for the full design.
@@ -167,7 +220,8 @@ export function CalendarConnectionsSection(): React.JSX.Element {
     {}
   );
   const pendingMicrosoftSourceRef = useRef<ConnectSource>('first_connect');
-  const sectionRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const headingId = useId();
 
   /**
    * ⚠ A RENDER-PHASE MIRROR OF `connections`, read by the polling callback (BAL-397 fix round,
@@ -250,8 +304,8 @@ export function CalendarConnectionsSection(): React.JSX.Element {
    *
    * ⚠ USE IT FOR RECONCILIATION REFETCHES (BAL-397 fix round). A refetch that follows a
    * successful optimistic mutation is confirming what the expert already sees; blanking the
-   * Apple note, the trust row and the surviving provider's card back to a skeleton to confirm
-   * it undoes the optimism three lines earlier (plan T20 asks for optimism, plan T1 makes
+   * card's rows and footer back to a skeleton to confirm it undoes the optimism three lines
+   * earlier (plan T20 asks for optimism, plan T1 makes
    * `refresh()` reset to `loading` — the two are only reconcilable with this flag). And on
    * failure, the optimistic view is still the better thing to keep on screen than a
    * whole-section error: the mutation itself already succeeded.
@@ -309,7 +363,7 @@ export function CalendarConnectionsSection(): React.JSX.Element {
     [beginOAuthDirect]
   );
 
-  // T5/T6 — hero card / "Connect another calendar".
+  // T5/T6 — the "Add calendar" menu.
   const handleConnectEntry = useCallback(
     (provider: CalendarProvider, source: ConnectSource) => {
       if (provider === 'microsoft') {
@@ -410,8 +464,8 @@ export function CalendarConnectionsSection(): React.JSX.Element {
         // calendar …" meant the BRAND, not the display label.
         toast.success(`${PROVIDER_META[provider].label} disconnected`);
         // SILENT — the optimistic removal three lines up is already on screen and the action
-        // has already called `revalidatePath`; a loud refetch would replace the whole section
-        // (Apple note, trust row, the surviving provider's card) with the skeleton and undo it.
+        // has already called `revalidatePath`; a loud refetch would replace the card's rows and
+        // footer (including the surviving provider's row) with the skeleton and undo it.
         void fetchConnections({ silent: true });
       } else {
         setConnections(previous);
@@ -623,106 +677,91 @@ export function CalendarConnectionsSection(): React.JSX.Element {
 
   // ── Which providers render where (§3.3) ──────────────────────
 
-  const connectionByProvider = useMemo(
-    () => new Map(connections.map((c) => [c.provider, c] as const)),
-    [connections]
-  );
-  const hasSlot = useCallback(
-    (provider: CalendarProvider) =>
-      connectionByProvider.has(provider) || occupiesSlot(transient[provider]),
-    [connectionByProvider, transient]
-  );
-  const visibleSlots = PROVIDER_ORDER.filter(hasSlot);
-  const offerableProviders = PROVIDER_ORDER.filter((provider) => !hasSlot(provider));
-  const showHero = visibleSlots.length === 0;
-  const [nextOfferable] = offerableProviders;
-
-  const motionContainer = reduceMotion
-    ? { hidden: REDUCED_VARIANTS.hidden, show: REDUCED_VARIANTS.show }
-    : containerVariants;
-  const motionItem = reduceMotion ? REDUCED_VARIANTS : itemVariants;
+  const rows = useMemo(() => buildCalendarRows(connections, transient), [connections, transient]);
+  // Analytics source for every connect entry point on this card: the expert's first calendar,
+  // or one added beside a row that is already there.
+  const connectSource: ConnectSource = rows.length > 0 ? 'add_another' : 'first_connect';
+  const handleAddProvider = (provider: CalendarProvider): void =>
+    handleConnectEntry(provider, connectSource);
 
   return (
-    <div ref={sectionRef}>
-      <motion.div variants={motionContainer} initial="hidden" animate="show">
-        <motion.div variants={motionItem} className="mb-6 flex items-center gap-3">
-          <IconBadge icon={CalendarIcon} color="#7C3AED" size={44} iconSize={22} />
-          <div>
-            <h2 className="text-foreground text-xl font-semibold">Calendar</h2>
-            <p className="text-muted-foreground mt-0.5 text-sm leading-relaxed">
-              Connect a calendar to keep your availability accurate and send confirmed bookings
-              straight to your schedule.
+    <SettingsCard
+      ref={sectionRef}
+      aria-labelledby={headingId}
+      className="flex flex-col gap-4 px-6 py-[22px]"
+    >
+      <div className="flex min-h-11 items-center justify-between gap-3 sm:min-h-9">
+        <SettingsEyebrow as="h2" id={headingId}>
+          Calendars
+        </SettingsEyebrow>
+        {sectionState === 'ready' && (
+          <CalendarAddMenu options={buildAddMenuOptions(rows)} onSelect={handleAddProvider} />
+        )}
+      </div>
+
+      {sectionState === 'loading' && <CalendarConnectionsSkeleton />}
+
+      {sectionState === 'error' && (
+        <SectionError
+          label="your calendars"
+          body="This is usually temporary. Your calendar connection itself is safe."
+          onRetry={refresh}
+        />
+      )}
+
+      {sectionState === 'ready' && (
+        <>
+          {rows.length === 0 ? (
+            <p
+              data-testid="calendars-empty"
+              className="border-border text-muted-foreground rounded-lg border border-dashed px-4 py-5 text-center text-[13px] leading-relaxed"
+            >
+              Connect Google Calendar or Microsoft Outlook with Add calendar, and anything busy on
+              it is hidden from clients automatically.
             </p>
-          </div>
-        </motion.div>
-
-        <motion.div variants={motionItem}>
-          {sectionState === 'loading' && <CalendarConnectionsSkeleton />}
-
-          {sectionState === 'error' && (
-            <SectionError
-              label="your calendars"
-              body="This is usually temporary. Your calendar connection itself is safe."
-              onRetry={refresh}
-            />
-          )}
-
-          {sectionState === 'ready' && (
-            <div className="space-y-4">
-              {showHero && (
-                <CalendarEmptyState
-                  providers={offerableProviders}
-                  onConnect={(provider) => handleConnectEntry(provider, 'first_connect')}
-                />
-              )}
-
-              {/* `showHero` is `visibleSlots.length === 0`, so this map is already empty when
-                  the hero shows — no redundant `!showHero &&` guard. */}
-              {visibleSlots.map((provider) => (
-                <CalendarConnectionCard
-                  key={provider}
-                  provider={provider}
-                  slotState={deriveSlotState({
-                    connection: connectionByProvider.get(provider),
-                    transient: transient[provider],
-                  })}
-                  connection={connectionByProvider.get(provider)}
-                  // ⚠ PENDING IS TRACKED PER PROVIDER, NOT PER ROW — a DELIBERATE simplification
-                  // of plan §6.1, not an oversight. One in-flight toggle therefore disables every
-                  // switch on that connection. It is coarser and mildly worse UX, but it is also
-                  // exactly the granularity the poll skip set uses (`pendingProvidersRef`), so
-                  // splitting them would mean two pending models that must agree. Revisit only
-                  // alongside a per-row skip set.
-                  pending={pendingProviders.has(provider)}
-                  onConnect={handleCardRetryConnect}
-                  onCancelConnect={handleCancelConnect}
-                  onReconnect={handleReconnect}
-                  onFixPermissions={handleFixPermissions}
-                  onDisconnect={handleDisconnect}
-                  onToggleBusy={handleToggleBusy}
-                  onChangeTarget={(calendarId) => handleChangeTarget(provider, calendarId)}
-                />
+          ) : (
+            <ul className="divide-border/60 flex flex-col divide-y">
+              {rows.map((row) => (
+                <li key={row.key} className="py-3.5 first:pt-0 last:pb-0">
+                  <CalendarConnectionCard
+                    provider={row.provider}
+                    slotState={row.slotState}
+                    connection={row.connection}
+                    // ⚠ PENDING IS TRACKED PER PROVIDER, NOT PER ROW — a DELIBERATE
+                    // simplification of plan §6.1, not an oversight. One in-flight toggle
+                    // therefore disables every switch on that connection. It is coarser and
+                    // mildly worse UX, but it is also exactly the granularity the poll skip set
+                    // uses (`pendingProvidersRef`), so splitting them would mean two pending
+                    // models that must agree. Revisit only alongside a per-row skip set.
+                    pending={pendingProviders.has(row.provider)}
+                    onConnect={handleCardRetryConnect}
+                    onCancelConnect={handleCancelConnect}
+                    onReconnect={handleReconnect}
+                    onFixPermissions={handleFixPermissions}
+                    onDisconnect={handleDisconnect}
+                    onToggleBusy={handleToggleBusy}
+                    onChangeTarget={(calendarId) => handleChangeTarget(row.provider, calendarId)}
+                  />
+                </li>
               ))}
-
-              {!showHero && nextOfferable && (
-                <CalendarConnectAnother
-                  provider={nextOfferable}
-                  onConnect={(provider) => handleConnectEntry(provider, 'add_another')}
-                />
-              )}
-
-              <CalendarAppleNote />
-              <CalendarTrustRow />
-            </div>
+            </ul>
           )}
-        </motion.div>
-      </motion.div>
+
+          <footer className="flex flex-col gap-1">
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              Events on any connected calendar block that time from client bookings. We only read
+              event times — details are never shared with clients.
+            </p>
+            <CalendarAppleNote />
+          </footer>
+        </>
+      )}
 
       <CalendarO365GuidanceModal
         open={transient.microsoft === 'o365_guidance'}
         onContinue={handleGuidanceContinue}
         onCancel={handleGuidanceCancel}
       />
-    </div>
+    </SettingsCard>
   );
 }

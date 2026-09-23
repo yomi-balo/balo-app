@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import { Camera, Upload, X, Loader2 } from 'lucide-react';
+import { Camera, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -182,67 +182,64 @@ export function PhotoUpload({
   const displayUrl = getAvatarUrl(currentAvatarUrl, 'profile');
 
   return (
-    <div className="flex items-start gap-6">
-      {/* Avatar */}
-      <div className="relative shrink-0">
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          disabled={isUploading}
+    <div className="flex items-center gap-4">
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        disabled={isUploading}
+        className={cn(
+          'group bg-muted focus-visible:ring-ring/50 relative flex size-14 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full transition-shadow duration-200 outline-none focus-visible:ring-[3px]',
+          isDragging
+            ? 'ring-primary ring-offset-card ring-2 ring-offset-2'
+            : 'hover:ring-primary/30 hover:ring-4'
+        )}
+        aria-label="Change profile photo"
+      >
+        {displayUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing
+          <img src={displayUrl} alt="Profile" className="h-full w-full object-cover" />
+        ) : (
+          <span className="text-muted-foreground text-base font-semibold">{initials}</span>
+        )}
+
+        {/* Hover overlay */}
+        <span
+          aria-hidden="true"
           className={cn(
-            'group relative flex h-[88px] w-[88px] cursor-pointer items-center justify-center overflow-hidden rounded-full transition-all duration-200',
-            isDragging
-              ? 'ring-primary ring-dashed ring-2 ring-offset-2'
-              : 'hover:ring-primary/30 hover:ring-4',
-            !currentAvatarUrl && 'from-primary bg-gradient-to-br to-violet-600'
+            'absolute inset-0 flex items-center justify-center bg-black/50 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100',
+            isUploading ? 'opacity-100' : 'opacity-0'
           )}
-          aria-label="Change profile photo"
         >
-          {displayUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing
-            <img src={displayUrl} alt="Profile" className="h-full w-full object-cover" />
+          {isUploading ? (
+            <Loader2 className="h-4 w-4 animate-spin text-white motion-reduce:animate-none" />
           ) : (
-            <span className="text-2xl font-semibold text-white">{initials}</span>
+            <Camera className="h-4 w-4 text-white" />
           )}
+        </span>
+      </button>
 
-          {/* Hover overlay */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
-            {isUploading ? (
-              <Loader2 className="h-5 w-5 animate-spin text-white" />
-            ) : (
-              <>
-                <Camera className="h-[18px] w-[18px] text-white" />
-                <span className="text-[10px] font-semibold text-white">Change</span>
-              </>
-            )}
-          </div>
-        </button>
-
-        {/* Online indicator */}
-        <div className="border-background bg-success absolute right-0.5 bottom-0.5 h-4 w-4 rounded-full border-2" />
-      </div>
-
-      {/* Upload instructions */}
-      <div className="flex-1">
-        <p className="text-foreground text-sm font-semibold">Profile Photo</p>
-        <p className="text-muted-foreground mt-1 mb-3 text-xs leading-relaxed">
+      <div className="min-w-0 flex-1">
+        <h3 className="text-foreground text-sm font-semibold">Profile Photo</h3>
+        <p className="text-muted-foreground mt-0.5 mb-2.5 text-[12.5px] leading-relaxed">
           A professional headshot helps clients feel confident booking you. Max 5 MB.
         </p>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-3.5">
           <Button
             type="button"
             variant="outline"
             size="sm"
             onClick={() => fileInputRef.current?.click()}
             disabled={isUploading}
+            className="text-[13px]"
           >
-            {isUploading ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Upload className="mr-1.5 h-3.5 w-3.5" />
+            {isUploading && (
+              <Loader2
+                className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
             )}
             {uploadStep ? STEP_LABELS[uploadStep] : 'Upload photo'}
           </Button>
@@ -253,12 +250,13 @@ export function PhotoUpload({
               size="sm"
               onClick={handleRemove}
               disabled={isRemoving}
-              className="text-muted-foreground"
+              className="text-primary hover:text-primary px-1 text-[13px] hover:bg-transparent hover:underline"
             >
-              {isRemoving ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <X className="mr-1.5 h-3.5 w-3.5" />
+              {isRemoving && (
+                <Loader2
+                  className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
               )}
               Remove
             </Button>
@@ -274,6 +272,8 @@ export function PhotoUpload({
         onChange={handleFileChange}
         className="hidden"
         aria-hidden="true"
+        tabIndex={-1}
+        data-testid="photo-file-input"
       />
     </div>
   );
