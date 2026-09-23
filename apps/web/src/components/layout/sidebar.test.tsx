@@ -263,7 +263,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(bottomHrefs).toEqual(['/expert/settings', '/settings/team', '/settings/account']);
   });
 
-  it('checklist badge, incomplete: shows N/5 on the Expert Settings link only', () => {
+  it('checklist badge, incomplete: shows N/6 on the Expert Settings link only', () => {
     renderSidebar({
       mode: 'expert',
       canManageCompany: false,
@@ -271,21 +271,21 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
       checklistAllComplete: false,
     });
     const expertSettingsLink = screen.getByRole('link', { name: /Expert Settings/ });
-    expect(within(expertSettingsLink).getByText('3/5')).toBeInTheDocument();
+    expect(within(expertSettingsLink).getByText('3/6')).toBeInTheDocument();
 
     const dashboardLink = screen.getByRole('link', { name: /^Dashboard/ });
-    expect(within(dashboardLink).queryByText('3/5')).not.toBeInTheDocument();
+    expect(within(dashboardLink).queryByText('3/6')).not.toBeInTheDocument();
   });
 
-  it('checklist badge, complete: N/5 text is gone, check glyph is present', () => {
+  it('checklist badge, complete: N/6 text is gone, check glyph is present', () => {
     renderSidebar({
       mode: 'expert',
       canManageCompany: false,
-      checklistCompletedCount: 5,
+      checklistCompletedCount: 6,
       checklistAllComplete: true,
     });
     const expertSettingsLink = screen.getByRole('link', { name: /Expert Settings/ });
-    expect(within(expertSettingsLink).queryByText(/\/5/)).not.toBeInTheDocument();
+    expect(within(expertSettingsLink).queryByText(/\/6/)).not.toBeInTheDocument();
     expect(expertSettingsLink.querySelector('.bg-success\\/10')).toBeInTheDocument();
   });
 
@@ -312,7 +312,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(screen.getByRole('link', { name: 'Dashboard' })).toBe(dashboardLabel.closest('a'));
 
     // Badges still hide entirely when collapsed (unchanged).
-    expect(screen.queryByText('3/5')).not.toBeInTheDocument();
+    expect(screen.queryByText('3/6')).not.toBeInTheDocument();
     expect(screen.getAllByRole('link').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
   });

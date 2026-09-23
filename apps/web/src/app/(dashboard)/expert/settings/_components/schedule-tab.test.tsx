@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { track } from '@/lib/analytics';
 import { SCHEDULE_EVENTS } from '@balo/analytics/events';
@@ -12,21 +12,23 @@ vi.mock('sonner', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
 
-// Stub the calendar section (has its own fetch + searchParams) — we only assert it mounts below.
+// Stub the calendar section (has its own fetch + searchParams) — we only assert where it mounts.
 vi.mock('./calendar-connections-section', () => ({
   CalendarConnectionsSection: () => (
     <div data-testid="calendar-connections-section-stub">calendar</div>
   ),
 }));
 
-// BAL-397 §3.1 — DateOverridesCard moved up out of the calendar section into ScheduleTab
-// itself, so it now needs its own stub here (it has its own fetch, unrelated to the calendar
-// section's, and a failed calendar fetch must not take it down).
+// BAL-397 §3.1 — DateOverridesCard renders from ScheduleTab as a sibling of the calendar
+// section, with its own fetch (a failed calendar fetch must not take it down), so it needs
+// its own stub here.
 vi.mock('./date-overrides-card', () => ({
   DateOverridesCard: () => <div data-testid="date-overrides-card-stub">time off</div>,
 }));
 
-// Stub the Radix-heavy timezone combobox so we can drive the timezone handler deterministically.
+// Stub the Radix-heavy timezone combobox (rendered by the header's timezone line) so we can
+// drive the timezone handler deterministically. Its own list behaviour is covered by
+// schedule-timezone-combobox.test.tsx.
 vi.mock('./schedule-timezone-combobox', () => ({
   ScheduleTimezoneCombobox: ({
     value,
@@ -41,9 +43,6 @@ vi.mock('./schedule-timezone-combobox', () => ({
   ),
 }));
 
-// Stub the Radix-heavy booking-rules selects; expose a deterministic change button so
-// the booking_rules_saved change-gate can be driven without pointer events. Field
-// rendering itself is covered by booking-rules-section.test.tsx.
 // BAL-236 — stub the picker. Its own behaviour is covered by
 // `components/availability/ExpertAvailabilityCalendar.test.tsx`; this suite only proves the
 // mount condition and the expertProfileId ref→state promotion (D15).
@@ -53,6 +52,9 @@ vi.mock('@/components/availability', () => ({
   ),
 }));
 
+// Stub the Radix-heavy booking-rules selects; expose a deterministic change button so
+// the booking_rules_saved change-gate can be driven without pointer events. Field
+// rendering itself is covered by booking-rules-section.test.tsx.
 vi.mock('./booking-rules-section', () => ({
   BookingRulesSection: ({
     settings,
@@ -107,6 +109,7 @@ vi.mock('motion/react', () => {
       ),
     },
     AnimatePresence: ({ children }: React.PropsWithChildren) => children,
+    useReducedMotion: () => false,
   };
 });
 
@@ -156,12 +159,95 @@ describe('ScheduleTab', () => {
     render(<ScheduleTab />);
     expect(await screen.findByText('Weekly hours')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save schedule' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear schedule' })).toBeInTheDocument();
     expect(screen.getByTestId('calendar-connections-section-stub')).toBeInTheDocument();
   });
 
-  // Relocated from calendar-tab.test.tsx (BAL-397 §3.1) — DateOverridesCard now renders
-  // from ScheduleTab directly, no longer nested inside the calendar section, so a broken
-  // calendar fetch can never take Time off down with it.
+  it('heads the tab with the title, description and the timezone line — no separate timezone card', async () => {
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Schedule' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/These hours, minus anything busy on your calendar, become the times/)
+    ).toBeInTheDocument();
+    const line = screen.getByText(/Hours are set in/);
+    expect(line).toHaveTextContent(/Hours are set in Melbourne \(GMT\+1[01]\)/);
+    expect(line).toHaveTextContent(/currently (Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2}:\d{2} (AM|PM)/);
+    expect(
+      screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ })
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Timezone')).not.toBeInTheDocument();
+  });
+
+  it('orders the cards Availability → Time off → Calendars → What clients see', async () => {
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    const sequence = [
+      screen.getByRole('region', { name: 'Availability' }),
+      screen.getByTestId('date-overrides-card-stub'),
+      screen.getByTestId('calendar-connections-section-stub'),
+      screen.getByRole('region', { name: 'What clients see' }),
+    ];
+    for (const [index, node] of sequence.entries()) {
+      const next = sequence[index + 1];
+      if (next === undefined) break;
+      expect(node.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it('renders the calendar section bare, as a direct sibling of the other cards', async () => {
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    const availability = screen.getByRole('region', { name: 'Availability' });
+    const calendars = screen.getByTestId('calendar-connections-section-stub');
+    expect(calendars.parentElement).toBe(availability.parentElement);
+  });
+
+  it('keeps weekly hours, booking rules, the footnote and the actions inside the Availability card', async () => {
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    const card = screen.getByRole('region', { name: 'Availability' });
+    expect(
+      within(card).getByText('Your open hours, turned into bookable slots.')
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByRole('heading', { level: 3, name: 'Weekly hours' })
+    ).toBeInTheDocument();
+    expect(within(card).getAllByRole('switch')).toHaveLength(7);
+    expect(within(card).getByText('Booking rules')).toBeInTheDocument();
+    expect(
+      within(card).getByText(
+        'Clients see these hours minus anything already busy on your connected calendar, converted to their own timezone.'
+      )
+    ).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Clear schedule' })).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Save schedule' })).toBeInTheDocument();
+    // The footnote is the only calendar explainer — nothing repeats it outside the card.
+    expect(screen.queryByText(/We automatically hide any times/)).not.toBeInTheDocument();
+  });
+
+  it('shows a loading skeleton inside the Availability card, with no timezone line or actions', () => {
+    mockGetSchedule.mockReturnValue(new Promise(() => {})); // never resolves
+    render(<ScheduleTab />);
+
+    const card = screen.getByRole('region', { name: 'Availability' });
+    const loading = within(card).getByRole('status');
+    expect(loading).toHaveTextContent('Loading your hours');
+    // A native <output>, not a role on a <div> (SonarCloud S6819).
+    expect(loading.tagName).toBe('OUTPUT');
+    expect(screen.queryByText(/Hours are set in/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument();
+    // Time off and Calendars load independently, so they mount regardless.
+    expect(screen.getByTestId('date-overrides-card-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('calendar-connections-section-stub')).toBeInTheDocument();
+  });
+
+  // BAL-397 §3.1 — DateOverridesCard renders from ScheduleTab directly, not nested inside
+  // the calendar section, so a broken calendar fetch can never take Time off down with it.
   it('mounts the Time off card even when no calendar is connected', async () => {
     render(<ScheduleTab />);
     await screen.findByText('Weekly hours');
@@ -182,8 +268,32 @@ describe('ScheduleTab', () => {
     render(<ScheduleTab />);
 
     expect(await screen.findByText('Set your weekly hours')).toBeInTheDocument();
+    const card = screen.getByRole('region', { name: 'Availability' });
+    expect(within(card).getByText('Set your weekly hours')).toBeInTheDocument();
+    // The timezone line stays available — it persists on its own, independent of rules.
+    expect(screen.getByText(/Hours are set in/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument();
+
     await user.click(screen.getByRole('button', { name: 'Use these hours' }));
     expect(await screen.findByText('Weekly hours')).toBeInTheDocument();
+    for (const day of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']) {
+      expect(screen.getByRole('switch', { name: `${day} availability` })).toBeChecked();
+    }
+    expect(screen.getByRole('switch', { name: 'Saturday availability' })).not.toBeChecked();
+  });
+
+  it('starts "set them up myself" from Monday alone', async () => {
+    mockGetSchedule.mockResolvedValue(loadResult({ rules: [] }));
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+
+    await user.click(await screen.findByRole('button', { name: 'Set them up myself' }));
+    expect(await screen.findByText('Weekly hours')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Monday availability' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Tuesday availability' })).not.toBeChecked();
+    expect(screen.getByRole('combobox', { name: 'Monday range 1 start time' })).toHaveTextContent(
+      '9:00 AM'
+    );
   });
 
   // ── BAL-236 — the availability preview mount (D15) ────────────
@@ -193,8 +303,13 @@ describe('ScheduleTab', () => {
     render(<ScheduleTab />);
 
     await screen.findByText('Weekly hours');
-    expect(screen.getByText('What clients see')).toBeInTheDocument();
-    expect(screen.getByTestId('availability-preview-stub')).toHaveTextContent(
+    const preview = screen.getByRole('region', { name: 'What clients see' });
+    expect(
+      within(preview).getByText(
+        'Your hours, minus anything already busy on your connected calendar.'
+      )
+    ).toBeInTheDocument();
+    expect(within(preview).getByTestId('availability-preview-stub')).toHaveTextContent(
       'preview:profile-xyz'
     );
   });
@@ -220,7 +335,11 @@ describe('ScheduleTab', () => {
     render(<ScheduleTab />);
 
     expect(await screen.findByText("We couldn't load your hours")).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Try again/ }));
+    const card = screen.getByRole('region', { name: 'Availability' });
+    expect(within(card).getByText("We couldn't load your hours")).toBeInTheDocument();
+    // The zone is unknown until the load succeeds, so the line waits for it.
+    expect(screen.queryByText(/Hours are set in/)).not.toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: /Try again/ }));
     expect(await screen.findByText('Weekly hours')).toBeInTheDocument();
   });
 
@@ -244,6 +363,8 @@ describe('ScheduleTab', () => {
     );
     // Booking settings equal the persisted values → the change-gate suppresses the event.
     expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.BOOKING_RULES_SAVED, expect.anything());
+    // The toast is the confirmation — no separate saved-hours summary is rendered.
+    expect(screen.queryByText('Your bookable hours')).not.toBeInTheDocument();
   });
 
   it('fires schedule_saved with has_overnight_window when a rule crosses midnight', async () => {
@@ -314,6 +435,7 @@ describe('ScheduleTab', () => {
     // Editing any control clears the stale highlight (markEdited).
     await user.click(screen.getByRole('switch', { name: 'Tuesday availability' }));
     expect(screen.queryByText(/Overlaps with/)).not.toBeInTheDocument();
+    expect(screen.getByText('Tue')).toHaveClass('text-muted-foreground');
   });
 
   it('fires booking_rules_saved with the new values when a booking rule changes', async () => {
@@ -393,14 +515,40 @@ describe('ScheduleTab', () => {
     const user = userEvent.setup();
     render(<ScheduleTab />);
 
-    // Enter the editor from the empty state — nothing is persisted, so no reinterpret risk.
-    await user.click(await screen.findByRole('button', { name: 'Use these hours' }));
-    await screen.findByText('Weekly hours');
-
-    await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
+    // Straight from the empty state — nothing is persisted, so no reinterpret risk.
+    await user.click(await screen.findByRole('button', { name: /timezone:Australia\/Melbourne/ }));
 
     await waitFor(() => expect(mockUpdateTimezone).toHaveBeenCalledWith('Australia/Sydney'));
     expect(screen.queryByText('Change your timezone?')).not.toBeInTheDocument();
+    expect(toast.success).toHaveBeenCalledWith('Timezone updated');
+    expect(screen.getByText(/Hours are set in/)).toHaveTextContent(/Hours are set in Sydney/);
+  });
+
+  it('changes timezone immediately after clearing, since no rules remain to reinterpret', async () => {
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    await user.click(screen.getByRole('button', { name: 'Clear schedule' }));
+    await user.click(await screen.findByRole('button', { name: 'Yes, clear it' }));
+    await screen.findByText('Set your weekly hours');
+
+    await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
+    await waitFor(() => expect(mockUpdateTimezone).toHaveBeenCalledWith('Australia/Sydney'));
+    expect(screen.queryByText('Change your timezone?')).not.toBeInTheDocument();
+  });
+
+  it('reverts the timezone line and reports the error when the change fails', async () => {
+    mockGetSchedule.mockResolvedValue(loadResult({ rules: [] }));
+    mockUpdateTimezone.mockResolvedValue({ success: false, error: 'Timezone rejected' });
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+
+    await user.click(await screen.findByRole('button', { name: /timezone:Australia\/Melbourne/ }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Timezone rejected'));
+    expect(screen.getByText(/Hours are set in/)).toHaveTextContent(/Melbourne/);
+    expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.TIMEZONE_CHANGED, expect.anything());
   });
 
   it('surfaces a non-blocking DST warning when a range lands in a spring-forward gap', async () => {
@@ -413,6 +561,14 @@ describe('ScheduleTab', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/daylight saving/i);
+    // An inline note inside the Availability card, not a card of its own.
+    expect(screen.getByRole('region', { name: 'Availability' })).toContainElement(alert);
+  });
+
+  it('shows no DST note when no range lands in a spring-forward gap', async () => {
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('surfaces the previous-day-attribution DST copy when the gap lands in an overnight tail', async () => {
@@ -439,6 +595,20 @@ describe('ScheduleTab', () => {
     expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.SAVED, expect.anything());
   });
 
+  it('reports a clear failure and keeps the editor', async () => {
+    mockClearSchedule.mockResolvedValue({ success: false, error: 'Could not clear' });
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    await user.click(screen.getByRole('button', { name: 'Clear schedule' }));
+    await user.click(await screen.findByRole('button', { name: 'Yes, clear it' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not clear'));
+    expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.CLEARED, expect.anything());
+    expect(screen.getByText('Weekly hours')).toBeInTheDocument();
+  });
+
   // Explicit timeout: four sequential real Radix Select/Popover interactions comfortably
   // clear the default 5s under an isolated run but can miss it under full-repo worker
   // contention (matches the repo's other pointer-capture-driven tests' behaviour).
@@ -447,11 +617,8 @@ describe('ScheduleTab', () => {
     render(<ScheduleTab />);
     await screen.findByText('Weekly hours');
 
-    // Add a second range to Monday (first "Add a time range" button in display order).
-    const addButtons = screen.getAllByRole('button', { name: /Add a time range/ });
-    const [firstAddButton] = addButtons;
-    if (!firstAddButton) throw new Error('expected an Add a time range button');
-    await user.click(firstAddButton);
+    // Add a second range to Monday.
+    await user.click(screen.getByRole('button', { name: 'Add range to Monday' }));
     expect(screen.getByRole('combobox', { name: 'Monday range 2 start time' })).toBeInTheDocument();
 
     // Change Monday's range 1 start time via the real Radix Select.

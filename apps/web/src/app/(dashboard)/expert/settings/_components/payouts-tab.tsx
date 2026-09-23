@@ -20,11 +20,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { IconBadge } from '@/components/balo/icon-badge';
 import { track, EXPERT_PAYOUT_EVENTS } from '@/lib/analytics';
 import { PayoutCountrySelector } from './payout-country-selector';
 import { PayoutDynamicForm } from './payout-dynamic-form';
 import { PayoutSavedState } from './payout-saved-state';
+import { SettingsPageHeader } from './settings-page-header';
 import { COMPANY_LABEL_OVERRIDES } from '../_constants/payout-labels';
 import type { BeneficiaryStatus } from '@balo/db';
 import { savePayoutDetailsAction } from '../_actions/save-payout-details';
@@ -81,6 +81,8 @@ const HIDDEN_FIELD_KEYS = new Set([
   // Hidden defaults auto-injected from schema (not user-facing)
   'beneficiary.bank_details.account_routing_type1',
 ]);
+
+const PAYOUTS_ACCENT = '#4F6EF7';
 
 // ── Animation variants ──────────────────────────────────────────
 
@@ -409,14 +411,13 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
     return (
       <div>
         <motion.div variants={containerVariants} initial="hidden" animate="show">
-          <motion.div variants={itemVariants} className="mb-8 flex items-center gap-3">
-            <IconBadge icon={CreditCard} color="#4F6EF7" size={44} iconSize={22} />
-            <div>
-              <h1 className="text-foreground text-2xl font-semibold">Payout Details</h1>
-              <p className="text-muted-foreground mt-0.5 text-sm leading-relaxed">
-                Your bank details are saved and will be used for payout disbursements.
-              </p>
-            </div>
+          <motion.div variants={itemVariants} className="mb-8">
+            <SettingsPageHeader
+              icon={CreditCard}
+              color={PAYOUTS_ACCENT}
+              title="Payout Details"
+              description="Your bank details are saved and will be used for payout disbursements."
+            />
           </motion.div>
         </motion.div>
 
@@ -429,16 +430,13 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
-      {/* Header — left-aligned, icon inline */}
       <motion.div variants={itemVariants} className="mb-8">
-        <div className="flex items-center gap-3">
-          <IconBadge icon={CreditCard} color="#4F6EF7" size={44} iconSize={22} />
-          <h1 className="text-foreground text-2xl font-semibold">Payout Details</h1>
-        </div>
-        <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-          Where you want to receive your earnings. Balo admin disburses payouts manually after each
-          payout cycle.
-        </p>
+        <SettingsPageHeader
+          icon={CreditCard}
+          color={PAYOUTS_ACCENT}
+          title="Payout Details"
+          description="Where you want to receive your earnings. Balo admin disburses payouts manually after each payout cycle."
+        />
       </motion.div>
 
       {/* Card with country + bank details sections */}

@@ -34,6 +34,7 @@ import {
   getApiUrl,
   isExpiredCredentialFailure,
   postBaloApiJson,
+  postBaloApiJsonWithFailureDetail,
   readInstant,
   readRetryAfter,
   readString,
@@ -167,6 +168,49 @@ describe('postBaloApiJson', () => {
     const result = await postBaloApiJson('/x', {}, (p) => p, 'Widget');
 
     expect(result).toEqual({ ok: false, status: 401, code: 'unauthenticated' });
+  });
+});
+
+describe('postBaloApiJsonWithFailureDetail', () => {
+  const readCooldown = (body: Record<string, unknown>): unknown => body.cooldownSeconds;
+
+  it('hands the NON-2XX body to parseFailure and keeps the typed failure intact', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      response(429, { error: 'rate_limited', cooldownSeconds: 540 })
+    );
+
+    const result = await postBaloApiJsonWithFailureDetail('/x', {}, (p) => p, readCooldown, 'W');
+
+    expect(result).toEqual({ ok: false, status: 429, code: 'rate_limited', detail: 540 });
+  });
+
+  it('resolves the parsed data on a 2xx without consulting parseFailure', async () => {
+    const parseFailure = vi.fn();
+    mockLoggedFetch.mockResolvedValue(response(200, { sent: true }));
+
+    const result = await postBaloApiJsonWithFailureDetail('/x', {}, (p) => p, parseFailure, 'W');
+
+    expect(result).toEqual({ ok: true, data: { sent: true } });
+    expect(parseFailure).not.toHaveBeenCalled();
+  });
+
+  it('gives parseFailure an empty body when there was no response to read', async () => {
+    mockLoggedFetch.mockRejectedValue(new Error('network down'));
+    const parseFailure = vi.fn(() => 'none');
+
+    const result = await postBaloApiJsonWithFailureDetail('/x', {}, (p) => p, parseFailure, 'W');
+
+    expect(result).toEqual({ ok: false, status: 0, code: 'request_failed', detail: 'none' });
+    expect(parseFailure).toHaveBeenCalledWith({});
+  });
+
+  it('fails closed on a missing credential exactly as postBaloApiJson does', async () => {
+    mockGetSession.mockResolvedValue({ user: { id: 'user-1' }, accessToken: '' });
+
+    const result = await postBaloApiJsonWithFailureDetail('/x', {}, (p) => p, readCooldown, 'W');
+
+    expect(result).toEqual({ ok: false, status: 401, code: 'unauthenticated', detail: undefined });
+    expect(mockLoggedFetch).not.toHaveBeenCalled();
   });
 });
 

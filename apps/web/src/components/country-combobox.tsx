@@ -20,12 +20,15 @@ interface CountryComboboxProps {
   value: string;
   onValueChange: (code: string) => void;
   disabled?: boolean;
+  /** Merged onto the trigger, e.g. to match the height of the fields beside it. */
+  className?: string;
 }
 
 export function CountryCombobox({
   value,
   onValueChange,
   disabled = false,
+  className,
 }: Readonly<CountryComboboxProps>): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const priorityCountries = getPriorityCountries();
@@ -39,7 +42,7 @@ export function CountryCombobox({
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
-          className="h-11 w-full justify-between text-left font-normal"
+          className={cn('h-11 w-full justify-between text-left font-normal', className)}
         >
           {selected ? (
             <span className="flex items-center gap-2">

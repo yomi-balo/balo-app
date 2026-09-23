@@ -157,7 +157,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
       })
     );
     const expertSettingsLink = screen.getByRole('link', { name: /Expert Settings/ });
-    expect(within(expertSettingsLink).getByText('3/5')).toBeInTheDocument();
+    expect(within(expertSettingsLink).getByText('3/6')).toBeInTheDocument();
   });
 
   it('row click closes the sheet and tracks nav_item_clicked with surface "more_sheet"', async () => {

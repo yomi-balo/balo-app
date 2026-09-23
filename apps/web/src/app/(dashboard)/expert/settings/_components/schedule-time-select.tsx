@@ -26,7 +26,11 @@ interface ScheduleTimeSelectProps {
   disabled?: boolean;
 }
 
-/** 15-minute wall-clock picker. Callers shape the option list — end pickers pass a wrapping list built by `buildEndOptions`. */
+/**
+ * 15-minute wall-clock picker. Callers shape the option list — end pickers pass a wrapping
+ * list built by `buildEndOptions`. The trigger grows past its minimum width so a
+ * "(next day)" label is never clipped.
+ */
 export function ScheduleTimeSelect({
   value,
   onChange,
@@ -43,7 +47,7 @@ export function ScheduleTimeSelect({
         aria-label={ariaLabel}
         aria-describedby={ariaDescribedBy}
         aria-invalid={invalid ? true : undefined}
-        className={cn('h-9 w-[112px] tabular-nums', triggerClassName)}
+        className={cn('min-w-[112px] text-[13px] tabular-nums', triggerClassName)}
       >
         <SelectValue />
       </SelectTrigger>

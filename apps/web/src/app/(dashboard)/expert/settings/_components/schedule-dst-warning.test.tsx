@@ -23,6 +23,9 @@ describe('ScheduleDstWarning', () => {
     expect(alert).toHaveTextContent(/2:00 AM/);
     expect(alert).toHaveTextContent(/3:00 AM/);
     expect(alert).toHaveTextContent(/Melbourne/);
+    expect(screen.getByText('Daylight saving affects one of your hours')).toHaveClass(
+      'text-warning-strong'
+    );
   });
 
   it('renders the previous-day attribution copy for the tail of an overnight range', () => {

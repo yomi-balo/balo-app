@@ -14,7 +14,7 @@ export type ChecklistItemKey = (typeof CHECKLIST_ITEMS)[number]['key'];
  * `CHECKLIST_ITEMS` carry its own `tab` field AND this record repeat the same six literals a
  * second time, with nothing tying the two together — a wrong tab in either place still compiled.
  * `CHECKLIST_ITEMS` no longer has a `tab` field: every reader of it in `apps/web/src`
- * (`expert-dashboard.tsx`, `expert/settings/page.tsx`, `setup-context-bar.tsx`) uses only `.key`
+ * (`expert-dashboard.tsx`, `expert/settings/page.tsx`, `setup-banner.tsx`) uses only `.key`
  * and/or `.label`, never `.tab`. This Record is now the SOLE definition, and `satisfies` keeps it
  * total BY CONSTRUCTION: TypeScript refuses to compile if a `ChecklistItemKey` is added above
  * without a matching entry here. No throw is needed, and none was reachable anyway — every
@@ -29,6 +29,17 @@ const CHECKLIST_TAB_BY_KEY = {
   payouts: 'payouts',
 } as const satisfies Record<ChecklistItemKey, string>;
 
+/** The `?tab=` value of the expert-settings tab a checklist item lives on. */
+export type ExpertSettingsTabKey = (typeof CHECKLIST_TAB_BY_KEY)[ChecklistItemKey];
+
+/**
+ * The settings tab a checklist item lives on — read by the settings setup banner to tell
+ * whether that tab is already the one on screen, from the same record the deep link uses.
+ */
+export function expertSettingsTabFor(key: ChecklistItemKey): ExpertSettingsTabKey {
+  return CHECKLIST_TAB_BY_KEY[key];
+}
+
 /**
  * BAL-566 — the ONE definition of "which settings tab does this checklist item deep-link to",
  * extracted from `getting-started-checklist.tsx`'s inline template so the dashboard's R2
@@ -37,5 +48,5 @@ const CHECKLIST_TAB_BY_KEY = {
  * URL Calendar's own connect CTA uses) without a second hand-written template.
  */
 export function expertSettingsHrefFor(key: ChecklistItemKey): string {
-  return `/expert/settings?tab=${CHECKLIST_TAB_BY_KEY[key]}&setup=${key}`;
+  return `/expert/settings?tab=${expertSettingsTabFor(key)}&setup=${key}`;
 }

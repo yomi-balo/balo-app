@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ChevronDown, ChevronUp, Phone } from 'lucide-react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 // ⚠ `@balo/shared/reviews` is dependency-free and CLIENT-SAFE by construction (no `@balo/db`,
 // so no transitive `postgres` → unresolvable `tls` at `next build`). That is exactly why
@@ -12,14 +12,12 @@ import { toast } from 'sonner';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { cn } from '@/lib/utils';
 import { calculateClientRate, centsToDollars } from '@/lib/utils/currency';
 import type { ExpertCardData } from '@/components/expert';
 import { buildExpertise } from '@/components/expert';
 import { useRouter } from 'next/navigation';
 import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
-import { PhoneVerificationFlow } from '@/components/balo/phone-verification-flow';
 import { saveProfileAction } from '../_actions/save-profile';
 import { saveCountryAction } from '../_actions/save-country';
 import type { ProfileSettingsData } from '@balo/db';
@@ -57,7 +55,6 @@ interface ProfileTabProps {
   };
   initialPhone: string | null;
   phoneVerifiedAt: string | null;
-  accessToken: string;
 }
 
 export function ProfileTab({
@@ -65,13 +62,15 @@ export function ProfileTab({
   referenceData,
   initialPhone,
   phoneVerifiedAt,
-  accessToken,
 }: Readonly<ProfileTabProps>): React.JSX.Element {
   const router = useRouter();
   const [isSaving, setIsSaving] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState(initialProfile.user.avatarUrl);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [countryCode, setCountryCode] = useState(initialProfile.user.countryCode ?? '');
+  // The country is saved beside the form (its own action), so it carries its own baseline for
+  // dirty-tracking and Reset.
+  const [savedCountryCode, setSavedCountryCode] = useState(initialProfile.user.countryCode ?? '');
 
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileFormSchema),
@@ -150,8 +149,7 @@ export function ProfileTab({
     setIsSaving(true);
     try {
       const values = form.getValues();
-      const initialCountryCode = initialProfile.user.countryCode ?? '';
-      const countryChanged = countryCode !== initialCountryCode;
+      const countryChanged = countryCode !== savedCountryCode;
 
       const promises: Promise<{ success: boolean; error?: string }>[] = [
         saveProfileAction({
@@ -176,6 +174,7 @@ export function ProfileTab({
         toast.success('Profile saved');
         // Reset dirty state with current values
         form.reset(values);
+        setSavedCountryCode(countryCode);
       }
     } catch {
       toast.error('Failed to save profile. Please try again.');
@@ -183,6 +182,18 @@ export function ProfileTab({
       setIsSaving(false);
     }
   };
+
+  const handleReset = (): void => {
+    form.reset();
+    setCountryCode(savedCountryCode);
+  };
+
+  const handlePhoneVerified = useCallback((): void => {
+    toast.success('Phone number verified');
+    router.refresh();
+  }, [router]);
+
+  const isDirty = form.formState.isDirty || countryCode !== savedCountryCode;
 
   const previewPanel = (
     <ProfilePreviewPanel
@@ -193,34 +204,17 @@ export function ProfileTab({
   );
 
   return (
-    <div>
-      {/* Phone Number Verification */}
-      <div className="border-border bg-card mb-6 rounded-xl border p-6">
-        <div className="mb-4 flex items-center gap-2">
-          <Phone className="text-primary h-4 w-4" />
-          <h3 className="text-foreground text-sm font-semibold">Phone Number</h3>
-        </div>
-        <PhoneVerificationFlow
-          mode="settings"
-          initialPhone={phoneVerifiedAt ? (initialPhone ?? undefined) : undefined}
-          accessToken={accessToken}
-          onVerified={() => {
-            toast.success('Phone number verified');
-            router.refresh();
-          }}
-        />
-      </div>
-
-      {/* Mobile: Collapsible preview */}
-      <div className="mb-6 lg:hidden">
+    <div className="grid items-start gap-7 lg:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)]">
+      {/* Mobile: the preview collapses above the form */}
+      <div className="lg:hidden">
         <Collapsible open={previewOpen} onOpenChange={setPreviewOpen}>
           <CollapsibleTrigger asChild>
-            <Button variant="outline" className="w-full justify-between" type="button">
+            <Button variant="outline" className="h-11 w-full justify-between" type="button">
               {previewOpen ? 'Hide preview' : 'Show preview'}
               {previewOpen ? (
-                <ChevronUp className="ml-2 h-4 w-4" />
+                <ChevronUp className="ml-2 h-4 w-4" aria-hidden="true" />
               ) : (
-                <ChevronDown className="ml-2 h-4 w-4" />
+                <ChevronDown className="ml-2 h-4 w-4" aria-hidden="true" />
               )}
             </Button>
           </CollapsibleTrigger>
@@ -228,30 +222,29 @@ export function ProfileTab({
         </Collapsible>
       </div>
 
-      {/* Desktop: Side-by-side layout */}
-      <div className="flex gap-6">
-        {/* Left: Form */}
-        <div className="min-w-0 flex-1">
-          <ProfileForm
-            form={form}
-            firstName={firstName}
-            lastName={lastName}
-            avatarUrl={avatarUrl}
-            expertProfileId={initialProfile.id}
-            allLanguages={referenceData.languages}
-            allIndustries={referenceData.industries}
-            countryCode={countryCode}
-            onCountryChange={setCountryCode}
-            onAvatarChange={setAvatarUrl}
-            onSave={handleSave}
-            isSaving={isSaving}
-          />
-        </div>
+      <ProfileForm
+        form={form}
+        firstName={firstName}
+        lastName={lastName}
+        avatarUrl={avatarUrl}
+        expertProfileId={initialProfile.id}
+        allLanguages={referenceData.languages}
+        allIndustries={referenceData.industries}
+        countryCode={countryCode}
+        onCountryChange={setCountryCode}
+        onAvatarChange={setAvatarUrl}
+        initialPhone={initialPhone}
+        phoneVerifiedAt={phoneVerifiedAt}
+        onPhoneVerified={handlePhoneVerified}
+        isDirty={isDirty}
+        onReset={handleReset}
+        onSave={handleSave}
+        isSaving={isSaving}
+      />
 
-        {/* Right: Preview (desktop only) */}
-        <div className={cn('hidden w-[300px] shrink-0 self-start lg:sticky lg:top-24 lg:block')}>
-          {previewPanel}
-        </div>
+      {/* Desktop: the preview rides alongside the form */}
+      <div data-testid="preview-desktop" className="hidden lg:sticky lg:top-24 lg:block">
+        {previewPanel}
       </div>
     </div>
   );

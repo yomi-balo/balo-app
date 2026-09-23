@@ -26,7 +26,6 @@ import {
   newRangeId,
   nextRangeDefault,
   rulesToWeek,
-  summarizeWeek,
   validateWeek,
   weekToRules,
   type TimeRange,
@@ -253,50 +252,6 @@ describe('validateWeek', () => {
       monday.ranges = [{ id: newRangeId(), start: '09:00', end: '09:00' }];
     }
     expect(validateWeek(week)).toMatch(/different start and end/);
-  });
-});
-
-describe('summarizeWeek', () => {
-  it('groups consecutive identical days into a single segment', () => {
-    expect(summarizeWeek(createDefaultWeek())).toEqual([
-      { days: 'Mon–Fri', hours: '9:00 AM – 5:00 PM' },
-    ]);
-  });
-
-  it('splits a day with different hours into its own segment', () => {
-    const week = createDefaultWeek();
-    const wed = week[2];
-    if (wed) wed.ranges = [{ id: newRangeId(), start: '10:00', end: '14:00' }];
-    const segments = summarizeWeek(week);
-    expect(segments).toEqual([
-      { days: 'Mon–Tue', hours: '9:00 AM – 5:00 PM' },
-      { days: 'Wed', hours: '10:00 AM – 2:00 PM' },
-      { days: 'Thu–Fri', hours: '9:00 AM – 5:00 PM' },
-    ]);
-  });
-
-  it('renders a crossing range with the (next day) suffix', () => {
-    const week = createEmptyWeek();
-    const monday = week[0];
-    if (monday) {
-      monday.enabled = true;
-      monday.ranges = [{ id: newRangeId(), start: '21:00', end: '01:00' }];
-    }
-    expect(summarizeWeek(week)).toEqual([{ days: 'Mon', hours: '9:00 PM – 1:00 AM (next day)' }]);
-  });
-
-  it('compresses five identical crossing weeknights into one Mon–Fri segment', () => {
-    const week = createEmptyWeek();
-    for (let i = 0; i < 5; i++) {
-      const day = week[i];
-      if (day) {
-        day.enabled = true;
-        day.ranges = [{ id: newRangeId(), start: '21:00', end: '01:00' }];
-      }
-    }
-    expect(summarizeWeek(week)).toEqual([
-      { days: 'Mon–Fri', hours: '9:00 PM – 1:00 AM (next day)' },
-    ]);
   });
 });
 

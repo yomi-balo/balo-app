@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { track } from '@/lib/analytics';
 import { CALENDAR_EVENTS } from '@balo/analytics/events';
@@ -113,6 +113,8 @@ vi.mock('./calendar-target-calendar-panel', () => ({
 
 import {
   CalendarConnectionsSection,
+  buildAddMenuOptions,
+  buildCalendarRows,
   mergeConnectionsByProvider,
   occupiesSlot,
 } from './calendar-connections-section';
@@ -152,6 +154,24 @@ async function findReady(): Promise<void> {
   await waitFor(() => expect(mockGetConnections).toHaveBeenCalled());
 }
 
+/** The card root — a `<section>` named by its "Calendars" heading. */
+function getCard(): HTMLElement {
+  return screen.getByRole('region', { name: 'Calendars' });
+}
+
+async function openAddMenu(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(await screen.findByRole('button', { name: /Add calendar/ }));
+}
+
+/** Connect a provider the only way the card offers it: through the Add calendar menu. */
+async function pickFromAddMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  provider: RegExp
+): Promise<void> {
+  await openAddMenu(user);
+  await user.click(await screen.findByRole('menuitem', { name: provider }));
+}
+
 // ── Tests ───────────────────────────────────────────────────────
 
 describe('CalendarConnectionsSection', () => {
@@ -168,54 +188,77 @@ describe('CalendarConnectionsSection', () => {
     vi.useRealTimers();
   });
 
-  // ── Header (always rendered) ─────────────────────────────────
+  // ── Card shell (always rendered) ─────────────────────────────
 
-  it('renders the Calendar heading and description regardless of state', async () => {
+  it('renders ONE card, named by its "Calendars" heading, in every state', async () => {
     render(<CalendarConnectionsSection />);
-    expect(screen.getByText('Calendar')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Connect a calendar to keep your availability accurate/)
-    ).toBeInTheDocument();
-    await screen.findByText('Connect your calendar');
+    const card = getCard();
+    expect(card.tagName).toBe('SECTION');
+    expect(within(card).getByRole('heading', { level: 2, name: 'Calendars' })).toBeInTheDocument();
+    await within(card).findByRole('button', { name: /Add calendar/ });
   });
 
-  // ── Four surface states ───────────────────────────────────────
+  // ── Four surface states, all inside the card ──────────────────
 
-  it('renders the loading skeleton before the fetch resolves', () => {
+  it('renders the loading skeleton inside the card, with no Add calendar menu yet', () => {
     mockGetConnections.mockReturnValue(new Promise(() => {})); // never resolves
     render(<CalendarConnectionsSection />);
-    expect(screen.getByLabelText('Loading')).toBeInTheDocument();
+    expect(within(getCard()).getByLabelText('Loading')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add calendar/ })).not.toBeInTheDocument();
   });
 
-  it('renders SectionError and retries on click when the fetch fails', async () => {
+  it('renders SectionError inside the card and retries on click when the fetch fails', async () => {
     mockGetConnections.mockResolvedValue({ ok: false, error: 'boom' });
     const user = userEvent.setup();
     render(<CalendarConnectionsSection />);
 
-    expect(await screen.findByText("We couldn't load your calendars")).toBeInTheDocument();
+    const alert = await within(getCard()).findByRole('alert');
+    expect(alert).toHaveTextContent("We couldn't load your calendars");
+    expect(screen.queryByRole('button', { name: /Add calendar/ })).not.toBeInTheDocument();
 
     mockGetConnections.mockResolvedValue({ ok: true, connections: [] });
     await user.click(screen.getByRole('button', { name: /Try again/ }));
-    expect(await screen.findByText('Connect your calendar')).toBeInTheDocument();
+    expect(await within(getCard()).findByTestId('calendars-empty')).toBeInTheDocument();
   });
 
-  it('renders the empty-state hero with both provider cards when there are zero connections', async () => {
+  it('shows ONE invitation pointing at Add calendar, and no provider rows, with zero connections', async () => {
     render(<CalendarConnectionsSection />);
-    expect(await screen.findByText('Connect your calendar')).toBeInTheDocument();
-    expect(screen.getByText('Google Calendar')).toBeInTheDocument();
-    expect(screen.getByText('Microsoft Outlook')).toBeInTheDocument();
+
+    const empty = await within(getCard()).findByTestId('calendars-empty');
+    expect(empty).toHaveTextContent(
+      'Connect Google Calendar or Microsoft Outlook with Add calendar, and anything busy on it is hidden from clients automatically.'
+    );
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: /^Connect / })).not.toBeInTheDocument();
+    expect(screen.queryByText('Google Workspace or Gmail')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Not connected/i)).not.toBeInTheDocument();
+    // The one way in stays available.
+    expect(screen.getByRole('button', { name: /Add calendar/ })).toBeInTheDocument();
   });
 
-  it('renders a card for a live connection, and offers "Connect another" for the remaining provider', async () => {
+  it('renders a row for a live connection and NO standalone row for the unconnected provider', async () => {
     mockGetConnections.mockResolvedValue({ ok: true, connections: [makeConnection()] });
     render(<CalendarConnectionsSection />);
 
     expect(await screen.findByText('yomi@gmail.com')).toBeInTheDocument();
-    expect(screen.queryByText('Connect your calendar')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Connect Microsoft Outlook/ })).toBeInTheDocument();
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.queryByRole('heading', { name: 'Microsoft Outlook' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Microsoft 365 or Outlook.com')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Connect / })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('calendars-empty')).not.toBeInTheDocument();
   });
 
-  it('offers no "Connect another" CTA once both providers are connected', async () => {
+  it("shows the connected row's busy toggles and booking target with nothing to expand", async () => {
+    mockGetConnections.mockResolvedValue({ ok: true, connections: [makeToggleableConnection()] });
+    render(<CalendarConnectionsSection />);
+
+    expect(await screen.findByRole('switch', { name: 'Block time from Team' })).toBeVisible();
+    expect(screen.getByRole('group', { name: 'Busy calendars' })).toBeInTheDocument();
+    expect(screen.getByTestId('target-value')).toHaveTextContent('cal-1');
+  });
+
+  it('renders exactly the two connection rows once both providers are connected', async () => {
     mockGetConnections.mockResolvedValue({
       ok: true,
       connections: [
@@ -226,19 +269,136 @@ describe('CalendarConnectionsSection', () => {
     render(<CalendarConnectionsSection />);
 
     await screen.findByText('yomi@outlook.com');
-    expect(
-      screen.queryByRole('button', { name: /Connect Microsoft Outlook/ })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /Connect Google Calendar/ })
-    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /^Connect / })).not.toBeInTheDocument();
   });
 
-  it('always renders the Apple note and trust row in the ready state', async () => {
+  it('renders one row per connection, so two accounts of one provider are two rows', async () => {
+    mockGetConnections.mockResolvedValue({
+      ok: true,
+      connections: [makeConnection(), makeConnection({ providerEmail: 'yomi.work@gmail.com' })],
+    });
+    render(<CalendarConnectionsSection />);
+
+    expect(await screen.findByText('yomi@gmail.com')).toBeInTheDocument();
+    expect(screen.getByText('yomi.work@gmail.com')).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 3, name: 'Google Calendar' })).toHaveLength(2);
+    // Each row's booking-target picker still renders its own copy of the panel.
+    expect(screen.getAllByTestId('target-value')).toHaveLength(2);
+  });
+
+  it('always renders the trust line and the iCloud line in the card footer', async () => {
     render(<CalendarConnectionsSection />);
     await findReady();
-    expect(await screen.findByText(/On iCloud\?/)).toBeInTheDocument();
-    expect(screen.getByText('We only read your event times')).toBeInTheDocument();
+    const card = getCard();
+    expect(
+      await within(card).findByText(
+        'Events on any connected calendar block that time from client bookings. We only read event times — details are never shared with clients.'
+      )
+    ).toBeInTheDocument();
+    expect(within(card).getByText(/On iCloud\?/)).toBeInTheDocument();
+  });
+
+  // ── "Add calendar" menu ───────────────────────────────────────
+
+  describe('Add calendar menu', () => {
+    it('always lists both providers, each with its brand label', async () => {
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+      await openAddMenu(user);
+
+      const items = await screen.findAllByRole('menuitem');
+      expect(items).toHaveLength(2);
+      expect(items[0]).toHaveTextContent('Google Calendar');
+      expect(items[1]).toHaveTextContent('Microsoft Outlook');
+      for (const item of items) expect(item).not.toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('disables a provider that is already connected, and says so', async () => {
+      mockGetConnections.mockResolvedValue({ ok: true, connections: [makeConnection()] });
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+      await screen.findByText('yomi@gmail.com');
+      await openAddMenu(user);
+
+      const google = await screen.findByRole('menuitem', { name: /Google Calendar/ });
+      expect(google).toHaveAttribute('aria-disabled', 'true');
+      expect(google).toHaveTextContent('Connected');
+      const microsoft = screen.getByRole('menuitem', { name: /Microsoft Outlook/ });
+      expect(microsoft).not.toHaveAttribute('aria-disabled', 'true');
+      expect(microsoft).not.toHaveTextContent('Connected');
+    });
+
+    it('disables a provider with an attempt in flight, naming the attempt rather than "Connected"', async () => {
+      mockSearchParams = new URLSearchParams(
+        'calendar_error=callback_failed&calendar_provider=google'
+      );
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+      await screen.findByText(/didn't finish/);
+      await openAddMenu(user);
+
+      const google = await screen.findByRole('menuitem', { name: /Google Calendar/ });
+      expect(google).toHaveAttribute('aria-disabled', 'true');
+      expect(google).toHaveTextContent("Didn't finish");
+      expect(google).not.toHaveTextContent('Connected');
+    });
+
+    it('starts Google OAuth as a first connect when nothing is connected yet', async () => {
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+      await openAddMenu(user);
+      await user.click(await screen.findByRole('menuitem', { name: /Google Calendar/ }));
+
+      await waitFor(() => expect(mockInitiateConnect).toHaveBeenCalledWith('google'));
+      expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_INITIATED, {
+        provider: 'google',
+        source: 'first_connect',
+      });
+    });
+
+    it('counts a connect beside an existing row as add_another', async () => {
+      mockGetConnections.mockResolvedValue({
+        ok: true,
+        connections: [makeConnection({ provider: 'microsoft', providerEmail: 'yomi@outlook.com' })],
+      });
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+      await screen.findByText('yomi@outlook.com');
+      await openAddMenu(user);
+      await user.click(await screen.findByRole('menuitem', { name: /Google Calendar/ }));
+
+      await waitFor(() =>
+        expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_INITIATED, {
+          provider: 'google',
+          source: 'add_another',
+        })
+      );
+    });
+
+    it('routes Microsoft through the O365 guidance dialog, carrying the add_another source through Continue', async () => {
+      mockGetConnections.mockResolvedValue({ ok: true, connections: [makeConnection()] });
+      mockInitiateConnect.mockResolvedValue({
+        success: true,
+        connectUrl: 'https://vendor.example/o',
+      });
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+      await screen.findByText('yomi@gmail.com');
+      await openAddMenu(user);
+      await user.click(await screen.findByRole('menuitem', { name: /Microsoft Outlook/ }));
+
+      expect(await screen.findByText('Connect Microsoft 365')).toBeInTheDocument();
+      expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.O365_GUIDANCE_SHOWN, {});
+      expect(mockInitiateConnect).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole('button', { name: /Continue to Microsoft 365/ }));
+      await waitFor(() => expect(mockInitiateConnect).toHaveBeenCalledWith('microsoft'));
+      expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_INITIATED, {
+        provider: 'microsoft',
+        source: 'add_another',
+      });
+    });
   });
 
   // ── Callback params ───────────────────────────────────────────
@@ -257,6 +417,23 @@ describe('CalendarConnectionsSection', () => {
       expect(toast.success).toHaveBeenCalledWith('Google Calendar connected');
     });
     expect(mockReplace).toHaveBeenCalledWith('/expert/settings?tab=schedule', { scroll: false });
+  });
+
+  it('scrolls the card itself into view after consuming the OAuth callback', async () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      mockSearchParams = new URLSearchParams('calendar_connected=true&calendar_provider=google');
+      mockGetConnections.mockResolvedValue({ ok: true, connections: [makeConnection()] });
+      render(<CalendarConnectionsSection />);
+
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      expect(scrollIntoView.mock.contexts[0]).toBe(getCard());
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 
   // BAL-397 fix round, CRITICAL — `router.replace` changes the URL, so the `[searchParams]`
@@ -342,8 +519,9 @@ describe('CalendarConnectionsSection', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith("That sign-in didn't finish — nothing changed.");
     });
-    // No transient was set for any specific provider — the empty hero still renders.
-    expect(await screen.findByText('Connect your calendar')).toBeInTheDocument();
+    // No transient was set for any specific provider — no attempt row, just the invitation.
+    expect(await within(getCard()).findByTestId('calendars-empty')).toBeInTheDocument();
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
   });
 
   it('treats a tampered calendar_status as absent rather than casting it', async () => {
@@ -394,8 +572,7 @@ describe('CalendarConnectionsSection', () => {
     const user = userEvent.setup();
     render(<CalendarConnectionsSection />);
 
-    await screen.findByText('Connect your calendar');
-    await user.click(screen.getAllByRole('button', { name: 'Connect' })[1]!);
+    await pickFromAddMenu(user, /Microsoft Outlook/);
 
     expect(await screen.findByText('Connect Microsoft 365')).toBeInTheDocument();
     expect(mockInitiateConnect).not.toHaveBeenCalled();
@@ -409,8 +586,7 @@ describe('CalendarConnectionsSection', () => {
     const user = userEvent.setup();
     render(<CalendarConnectionsSection />);
 
-    await screen.findByText('Connect your calendar');
-    await user.click(screen.getAllByRole('button', { name: 'Connect' })[1]!);
+    await pickFromAddMenu(user, /Microsoft Outlook/);
     await user.click(await screen.findByRole('button', { name: /Continue to Microsoft 365/ }));
 
     await waitFor(() => {
@@ -424,8 +600,7 @@ describe('CalendarConnectionsSection', () => {
     const user = userEvent.setup();
     render(<CalendarConnectionsSection />);
 
-    await screen.findByText('Connect your calendar');
-    await user.click(screen.getAllByRole('button', { name: 'Connect' })[1]!);
+    await pickFromAddMenu(user, /Microsoft Outlook/);
     await user.click(await screen.findByRole('button', { name: /Continue to Microsoft 365/ }));
 
     // First attempt fails -> attempt_failed
@@ -460,8 +635,8 @@ describe('CalendarConnectionsSection', () => {
   });
 
   // BAL-397 fix round — the reconciliation refetch is SILENT. A loud one set
-  // `sectionState = 'loading'` and replaced the whole section (Apple note, trust row, the
-  // surviving provider's card) with the skeleton, undoing the optimistic removal on screen.
+  // `sectionState = 'loading'` and replaced the whole section (the card's rows and footer)
+  // with the skeleton, undoing the optimistic removal on screen.
   it('never flashes the skeleton over the optimistic removal when disconnect succeeds', async () => {
     mockGetConnections.mockResolvedValue({
       ok: true,
@@ -776,6 +951,88 @@ describe('CalendarConnectionsSection', () => {
     });
   });
 
+  describe('buildCalendarRows', () => {
+    const google = makeConnection();
+    const microsoft = makeConnection({ provider: 'microsoft', providerEmail: 'yomi@outlook.com' });
+
+    it('has no rows when there is nothing connected and nothing in flight', () => {
+      expect(buildCalendarRows([], {})).toEqual([]);
+    });
+
+    it('gives a connected provider a slot row with its derived state, in provider order', () => {
+      const rows = buildCalendarRows([microsoft, google], {});
+      expect(rows.map((row) => row.provider)).toEqual(['google', 'microsoft']);
+      expect(rows[0]).toMatchObject({ slotState: 'connected', connection: google });
+    });
+
+    it('gives each of several same-provider connections its own row', () => {
+      const work = makeConnection({ providerEmail: 'yomi.work@gmail.com' });
+      const rows = buildCalendarRows([google, work], {});
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({ key: 'google-0', connection: google });
+      expect(rows[1]).toMatchObject({ key: 'google-1', connection: work });
+    });
+
+    it('gives a slot-claiming attempt with no connection a connection-less slot row', () => {
+      expect(buildCalendarRows([], { google: 'attempt_failed' })).toEqual([
+        {
+          key: 'google-0',
+          provider: 'google',
+          connection: undefined,
+          slotState: 'attempt_failed',
+        },
+      ]);
+    });
+
+    it('lets an in-flight transient override the connection it sits on', () => {
+      expect(buildCalendarRows([google], { google: 'connecting' })[0]).toMatchObject({
+        slotState: 'connecting',
+        connection: google,
+      });
+    });
+
+    it('adds no row while only the O365 guidance modal is open', () => {
+      expect(buildCalendarRows([], { microsoft: 'o365_guidance' })).toEqual([]);
+    });
+  });
+
+  describe('buildAddMenuOptions', () => {
+    it('lists both providers, enabled, when neither has a row', () => {
+      expect(buildAddMenuOptions(buildCalendarRows([], {}))).toEqual([
+        { provider: 'google', unavailableReason: null },
+        { provider: 'microsoft', unavailableReason: null },
+      ]);
+    });
+
+    it('marks a provider with a connection as Connected, whatever its credential state', () => {
+      const expired = makeConnection({ credentialStatus: 'EXPIRED' });
+      expect(buildAddMenuOptions(buildCalendarRows([expired], {}))).toEqual([
+        { provider: 'google', unavailableReason: 'Connected' },
+        { provider: 'microsoft', unavailableReason: null },
+      ]);
+    });
+
+    it("names a connection-less attempt by its row's status", () => {
+      expect(buildAddMenuOptions(buildCalendarRows([], { microsoft: 'o365_waiting' }))).toEqual([
+        { provider: 'google', unavailableReason: null },
+        { provider: 'microsoft', unavailableReason: 'Waiting on IT' },
+      ]);
+    });
+
+    it('falls back to Connected for a connection-less slot whose state has no status words', () => {
+      const idleSlot = {
+        key: 'google-0',
+        provider: 'google',
+        connection: undefined,
+        slotState: 'idle',
+      } as const;
+      expect(buildAddMenuOptions([idleSlot])).toEqual([
+        { provider: 'google', unavailableReason: 'Connected' },
+        { provider: 'microsoft', unavailableReason: null },
+      ]);
+    });
+  });
+
   describe('occupiesSlot', () => {
     it.each(['connecting', 'o365_waiting', 'attempt_failed'] as const)(
       '%s claims a provider card',
@@ -795,24 +1052,21 @@ describe('CalendarConnectionsSection', () => {
 
   // ── O365 guidance is a MODAL, not a slot (plan §4.3) ──────────
 
-  it('keeps the hero and both provider cards mounted while the guidance dialog is open', async () => {
+  it('keeps the empty-state invitation mounted, and adds no row, while the guidance dialog is open', async () => {
     const user = userEvent.setup();
     render(<CalendarConnectionsSection />);
 
-    await screen.findByText('Connect your calendar');
-    await user.click(screen.getAllByRole('button', { name: 'Connect' })[1]!);
+    await pickFromAddMenu(user, /Microsoft Outlook/);
     expect(await screen.findByText('Connect Microsoft 365')).toBeInTheDocument();
 
-    // ⚠ BAL-397 fix round — `o365_guidance` used to claim a provider SLOT, so opening the
-    // dialog flipped `showHero` to false: the hero and both provider cards unmounted behind
-    // the overlay and were replaced by a bodyless Microsoft card plus a dashed "Connect Google
-    // Calendar" CTA. Cancelling reinstated the hero. Pure thrash.
-    expect(screen.getByText('Connect your calendar')).toBeInTheDocument();
-    expect(screen.getByText('Google Calendar')).toBeInTheDocument();
-    expect(screen.getByText('Microsoft Outlook')).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /Connect another calendar/ })
-    ).not.toBeInTheDocument();
+    // ⚠ BAL-397 — `o365_guidance` is a modal, not a slot. If it claimed one, a bodyless
+    // Microsoft row would replace the invitation behind the overlay (and every connect source
+    // would flip to add_another) until the dialog closed. The modal hides everything behind it
+    // from the accessibility tree, hence `hidden: true`.
+    const card = screen.getByRole('region', { name: 'Calendars', hidden: true });
+    expect(within(card).getByTestId('calendars-empty')).toBeInTheDocument();
+    expect(within(card).queryAllByRole('listitem', { hidden: true })).toHaveLength(0);
+    expect(within(card).queryByText('Waiting for you')).not.toBeInTheDocument();
   });
 
   // ── T17 — O365 waiting retry goes straight to OAuth (plan §12.1, "Explicitly preserved") ──

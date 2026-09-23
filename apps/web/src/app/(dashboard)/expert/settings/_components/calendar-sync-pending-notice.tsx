@@ -13,8 +13,8 @@ interface CalendarSyncPendingNoticeProps {
 }
 
 /**
- * BAL-397 §9.4 — renamed from `-card`: this now renders INSIDE the connection `Card` (the
- * header row is owned by `CalendarConnectionCard`), so the root is a plain `<div>`.
+ * BAL-397 §9.4 — the `setting_up` body, rendered INSIDE a connection row (the header line is
+ * owned by `CalendarConnectionCard`), so the root is a plain `<div>` with no padding of its own.
  *
  * Copy correction: the shipped copy said "some permissions weren't granted", which is
  * Cronofy-era and now false — Apiroc rejects a partial grant server-side and creates no
@@ -34,18 +34,18 @@ export function CalendarSyncPendingNotice({
     : { duration: 0.2, ease: 'easeOut' as const };
 
   return (
-    <div className="px-5 py-4">
+    <div className="flex flex-col gap-3">
       {/* Warning message */}
-      <div className="bg-warning/5 border-warning/20 mb-4 flex gap-2.5 rounded-[10px] border p-3">
+      <div className="bg-warning/10 border-warning/30 flex gap-2 rounded-lg border p-3">
         <AlertTriangle
-          className="text-warning mt-0.5 h-[15px] w-[15px] shrink-0"
+          className="text-warning-strong mt-0.5 size-3.5 shrink-0"
           aria-hidden="true"
         />
         <div>
-          <p className="text-foreground text-[13px] font-semibold">
+          <p className="text-foreground text-[12.5px] font-semibold">
             We&apos;re still setting up this calendar
           </p>
-          <p className="text-warning mt-1 text-[13px] leading-relaxed">
+          <p className="text-warning-strong mt-0.5 text-[12.5px] leading-relaxed">
             We connected your account but couldn&apos;t read the calendars on it yet. This usually
             clears on its own within a few minutes — we keep retrying in the background.
           </p>
@@ -57,7 +57,7 @@ export function CalendarSyncPendingNotice({
         type="button"
         aria-expanded={showDetail}
         onClick={() => setShowDetail(!showDetail)}
-        className="text-muted-foreground hover:text-foreground mb-3 flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 text-xs font-semibold transition-colors"
+        className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex w-fit cursor-pointer items-center gap-1.5 rounded-sm border-none bg-transparent p-0 text-xs font-semibold transition-colors outline-none focus-visible:ring-[3px]"
       >
         <Info className="text-muted-foreground h-3 w-3" aria-hidden="true" />
         Why did this happen?
@@ -76,14 +76,14 @@ export function CalendarSyncPendingNotice({
             transition={disclosureTransition}
             className="overflow-hidden"
           >
-            <div className="bg-muted mb-3.5 rounded-lg p-3">
-              <p className="text-muted-foreground text-[13px] leading-relaxed">
+            <div className="bg-muted rounded-lg p-3">
+              <p className="text-muted-foreground text-[12.5px] leading-relaxed">
                 This usually means we didn&apos;t finish reading your calendar list the first time —
                 nothing you did wrong. Clicking &quot;Fix permissions&quot; re-runs the connection
                 without creating a new account.
               </p>
               {provider === 'google' && (
-                <p className="text-muted-foreground mt-2 text-[13px] leading-relaxed">
+                <p className="text-muted-foreground mt-2 text-[12.5px] leading-relaxed">
                   If it doesn&apos;t clear, the quickest fix is to remove Balo at
                   myaccount.google.com/permissions and connect again — re-running sign-in on its own
                   won&apos;t re-show the permission checkboxes.
@@ -95,12 +95,12 @@ export function CalendarSyncPendingNotice({
       </AnimatePresence>
 
       {/* CTAs */}
-      <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-2.5">
         <Button
           size="sm"
           // `text-warning-foreground`, not `text-white` — the token exists in `globals.css` for
           // both themes; the hardcoded colour was carried over verbatim from the deleted card.
-          className="bg-warning hover:bg-warning/90 text-warning-foreground gap-1.5 shadow-sm"
+          className="bg-warning hover:bg-warning/90 text-warning-foreground h-11 gap-1.5 shadow-sm sm:h-8"
           onClick={onFixPermissions}
         >
           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -118,9 +118,9 @@ export function CalendarSyncPendingNotice({
       </div>
 
       {/* Self-healing note */}
-      <div className="bg-success/5 border-success/20 mt-3.5 flex items-start gap-1.5 rounded-lg border p-2.5">
-        <Check className="text-success mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-        <span className="text-success text-xs leading-relaxed">
+      <div className="flex items-start gap-1.5">
+        <Check className="text-success-strong mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+        <span className="text-success-strong text-xs leading-relaxed">
           Once permissions are granted, your calendar will sync automatically — no further action
           needed.
         </span>

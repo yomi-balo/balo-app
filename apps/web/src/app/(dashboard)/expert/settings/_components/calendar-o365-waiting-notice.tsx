@@ -1,9 +1,9 @@
 'use client';
 
-import { Clock, ExternalLink, RefreshCw } from 'lucide-react';
+import { ExternalLink, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CALENDAR_HELP_URL } from '../_lib/calendar-help';
-import { MicrosoftIcon } from './calendar-provider-icons';
+import { SettingsEyebrow } from './settings-card';
 
 interface CalendarO365WaitingNoticeProps {
   readonly onTryAgain: () => void;
@@ -16,77 +16,64 @@ const INSTRUCTIONS = [
   'Once approved, click "Try connecting again" below',
 ] as const;
 
+/** In-row action buttons: the 44px touch floor on mobile, compact from `sm` up. */
+const ACTION_CLASS = 'h-11 sm:h-8';
+
 /**
- * BAL-397 §9.6 — renamed from `-card`: renders inside the Microsoft connection card now, so
- * the root is a `<div>`. No provider prop — it is Microsoft-branded by construction (it is
- * unreachable for Google, per the slot-state machine's Microsoft-only enforcement).
+ * BAL-397 §9.6 — the `o365_waiting` body, rendered inside the Microsoft row (whose header
+ * already shows the brand tile and the "Waiting on IT" pill), so the root is a plain `<div>`.
+ * No provider prop — it is Microsoft-branded by construction (it is unreachable for Google,
+ * per the slot-state machine's Microsoft-only enforcement).
  */
 export function CalendarO365WaitingNotice({
   onTryAgain,
   onCancel,
 }: Readonly<CalendarO365WaitingNoticeProps>): React.JSX.Element {
   return (
-    <div className="px-8 py-10 text-center">
-      {/* Microsoft badge with clock overlay */}
-      <div className="relative mx-auto mb-5 h-[68px] w-[68px]">
-        <div className="bg-card border-border flex h-[68px] w-[68px] items-center justify-center rounded-[18px] border shadow-md">
-          <MicrosoftIcon size={32} />
-        </div>
-        <div className="bg-warning/10 border-card absolute -right-1 -bottom-1 flex h-6 w-6 items-center justify-center rounded-full border-2">
-          <Clock className="text-warning h-3 w-3" aria-hidden="true" />
-        </div>
-      </div>
-
-      {/* Status pill */}
-      <div className="bg-warning/10 border-warning/20 mb-3.5 inline-flex items-center gap-2 rounded-full border px-4 py-1.5">
-        <div className="bg-warning h-2 w-2 animate-pulse rounded-full" />
-        <span className="text-warning text-[13px] font-semibold">
-          Waiting for IT admin approval
-        </span>
-      </div>
-
-      <h3 className="text-foreground mb-2.5 text-lg font-semibold">
-        Your IT admin needs to take action
-      </h3>
-      <p className="text-muted-foreground mx-auto max-w-[400px] text-sm leading-relaxed">
-        You&apos;ve requested access, but your company&apos;s Microsoft administrator needs to
-        approve the Balo calendar integration in their admin portal.
-      </p>
-
-      {/* Instructions box */}
-      <div className="bg-muted border-border mx-auto mt-5 max-w-[400px] rounded-[10px] border p-4 text-left">
-        <p className="text-muted-foreground mb-2.5 text-[11px] font-bold tracking-wider uppercase">
-          What to do next
+    <div className="flex flex-col gap-3">
+      <div>
+        <h4 className="text-foreground text-[13px] font-semibold">
+          Your IT admin needs to take action
+        </h4>
+        <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-relaxed">
+          You&apos;ve requested access, but your company&apos;s Microsoft administrator needs to
+          approve the Balo calendar integration in their admin portal.
         </p>
-        <div className="space-y-2">
-          {INSTRUCTIONS.map((text, step) => (
-            <div key={text} className="flex gap-2">
-              <div className="bg-primary/10 border-primary/20 text-primary flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px] font-bold">
-                {step + 1}
-              </div>
-              <span className="text-muted-foreground text-[13px] leading-snug">{text}</span>
-            </div>
+      </div>
+
+      <div className="bg-muted rounded-lg p-3">
+        <SettingsEyebrow as="p" className="mb-1.5">
+          What to do next
+        </SettingsEyebrow>
+        <ol className="text-muted-foreground list-decimal space-y-1 pl-4 text-[12.5px] leading-snug">
+          {INSTRUCTIONS.map((text) => (
+            <li key={text}>{text}</li>
           ))}
-        </div>
+        </ol>
       </div>
 
       <a
         href={CALENDAR_HELP_URL}
         target="_blank"
         rel="noreferrer"
-        className="text-primary mt-4 mb-5 inline-flex items-center gap-1 text-[13px] hover:underline"
+        className="text-primary inline-flex w-fit items-center gap-1 text-[12.5px] hover:underline"
       >
         View admin approval guide
         <ExternalLink className="h-3 w-3" aria-hidden="true" />
       </a>
 
-      {/* CTAs */}
-      <div className="flex justify-center gap-2.5">
-        <Button className="gap-1.5" onClick={onTryAgain}>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" className={`${ACTION_CLASS} gap-1.5`} onClick={onTryAgain}>
           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
           Try connecting again
         </Button>
-        <Button variant="outline" onClick={onCancel}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={ACTION_CLASS}
+          onClick={onCancel}
+        >
           Not now
         </Button>
       </div>

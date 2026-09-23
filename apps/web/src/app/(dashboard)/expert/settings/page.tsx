@@ -1,7 +1,6 @@
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
 import { SettingsTabs, type AgencyDomainsTabData } from './_components/settings-tabs';
-import { SetupContextBar } from './_components/setup-context-bar';
-import { ListingStatusLine } from './_components/listing-status-line';
+import { SetupBanner } from './_components/setup-banner';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
@@ -30,7 +29,6 @@ const VALID_TABS = new Set<string>([
 const VALID_SETUP_KEYS = new Set<string>(CHECKLIST_ITEMS.map((item) => item.key));
 
 interface ExpertSettingsData {
-  accessToken: string;
   initialPayoutDetails: PayoutDetailsSummary | null;
   profileData: ProfileSettingsData | null;
   languages: Array<{ id: string; name: string; code: string; flagEmoji: string | null }>;
@@ -43,7 +41,6 @@ interface ExpertSettingsData {
 }
 
 const EMPTY_SETTINGS_DATA: ExpertSettingsData = {
-  accessToken: '',
   initialPayoutDetails: null,
   profileData: null,
   languages: [],
@@ -62,10 +59,9 @@ const EMPTY_SETTINGS_DATA: ExpertSettingsData = {
  */
 async function loadExpertSettingsData(): Promise<ExpertSettingsData> {
   const session = await getSession();
-  const accessToken = session?.accessToken ?? '';
   const user = session?.user;
   if (!user?.expertProfileId) {
-    return { ...EMPTY_SETTINGS_DATA, accessToken };
+    return EMPTY_SETTINGS_DATA;
   }
 
   const [payoutDetails, profile, languages, industries, certs, userData] = await Promise.all([
@@ -82,7 +78,6 @@ async function loadExpertSettingsData(): Promise<ExpertSettingsData> {
   const agencyResult = await resolveAgencyDomainsTab(user, profile?.agencyId ?? null);
 
   return {
-    accessToken,
     initialPayoutDetails: payoutDetails
       ? {
           countryCode: payoutDetails.countryCode,
@@ -117,9 +112,9 @@ interface ExpertSettingsPageProps {
 
 export default async function ExpertSettingsPage({
   searchParams,
-}: ExpertSettingsPageProps): Promise<React.JSX.Element> {
+}: Readonly<ExpertSettingsPageProps>): Promise<React.JSX.Element> {
   const params = await searchParams;
-  const activeTab = VALID_TABS.has(params.tab ?? '') ? params.tab! : 'profile';
+  const activeTab = params.tab && VALID_TABS.has(params.tab) ? params.tab : 'profile';
   const setupStep = params.setup && VALID_SETUP_KEYS.has(params.setup) ? params.setup : null;
 
   let checklistStatus = null;
@@ -148,12 +143,11 @@ export default async function ExpertSettingsPage({
   const hasReferenceData = data.languages.length > 0 || data.industries.length > 0;
 
   return (
-    <div>
-      {/* BAL-414 (D11) — the one-line listing-status surface, derived from the same
-          checklistStatus already fetched above. No second query, no shape change. */}
-      {checklistStatus && <ListingStatusLine status={checklistStatus} />}
-      {setupStep && checklistStatus && !checklistStatus.allComplete && (
-        <SetupContextBar activeSetupStep={setupStep} checklistStatus={checklistStatus} />
+    <div className="flex flex-col gap-7">
+      {/* BAL-414 (D11) — the listing-status surface, derived from the same checklistStatus
+          already fetched above. No second query, no shape change. */}
+      {checklistStatus && (
+        <SetupBanner status={checklistStatus} activeTab={resolvedTab} setupStep={setupStep} />
       )}
       <SettingsTabs
         defaultTab={resolvedTab}
@@ -167,7 +161,6 @@ export default async function ExpertSettingsPage({
         certCategories={data.certCategories}
         initialPhone={data.phone}
         phoneVerifiedAt={data.phoneVerifiedAt}
-        accessToken={data.accessToken}
         canManageAgency={data.canManageAgency}
         agencyDomains={data.agencyDomains}
       />

@@ -158,7 +158,8 @@ async function findByUserVertical(
 async function insertDraftOrAdopt(
   exec: DbExecutor,
   data: CreateDraftInput,
-  username: string | null
+  username: string | null,
+  timezone: string
 ): Promise<ExpertProfile> {
   const [profile] = await exec
     .insert(expertProfiles)
@@ -168,6 +169,7 @@ async function insertDraftOrAdopt(
       type: data.type,
       applicationStatus: 'draft',
       username,
+      timezone,
     })
     .onConflictDoNothing({ target: [expertProfiles.userId, expertProfiles.verticalId] })
     .returning();
@@ -1154,7 +1156,18 @@ export const expertsRepository = {
     const existing = await findByUserVertical(exec, data.userId, data.verticalId);
     if (existing) return existing;
 
-    // 2. Generate a username and insert idempotently on (user_id, vertical_id).
+    // 2. The schedule timezone starts as the one the expert chose at onboarding, never the
+    //    column's bare 'UTC' default: the schedule editor shows this value, and its first save
+    //    syncs it back onto `users.timezone` (schedule.ts), so a UTC default here would also
+    //    overwrite the onboarding choice.
+    const [owner] = await exec
+      .select({ timezone: users.timezone })
+      .from(users)
+      .where(eq(users.id, data.userId))
+      .limit(1);
+    const timezone = owner?.timezone ?? 'UTC';
+
+    // 3. Generate a username and insert idempotently on (user_id, vertical_id).
     const base = generateBaseUsername(data.firstName, data.lastName);
     let username =
       base === null ? null : pickNextAvailable(base, await this.findUsernamesWithPrefix(base));
@@ -1165,7 +1178,7 @@ export const expertsRepository = {
     let usernameRetries = 0;
     for (;;) {
       try {
-        return await insertDraftOrAdopt(exec, data, username);
+        return await insertDraftOrAdopt(exec, data, username, timezone);
       } catch (error: unknown) {
         // A (user_id, vertical_id) conflict is swallowed by onConflictDoNothing (not
         // thrown), so we never throw on `expert_user_vertical_idx`. The only retryable

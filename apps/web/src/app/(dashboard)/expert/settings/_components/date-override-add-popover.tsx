@@ -372,7 +372,11 @@ export function DateOverrideAddPopover({
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-11 shrink-0 gap-1.5 focus-visible:ring-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-11 shrink-0 gap-1.5 text-[13px] focus-visible:ring-2 sm:h-9"
+        >
           <Plus className="h-4 w-4" aria-hidden="true" />
           Add time off
         </Button>

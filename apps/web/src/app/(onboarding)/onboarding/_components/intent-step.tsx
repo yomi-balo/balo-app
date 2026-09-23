@@ -1,16 +1,20 @@
 'use client';
 
-import { useState, useTransition, forwardRef, useEffect, useRef } from 'react';
+import { useState, useTransition, forwardRef, useEffect, useId, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { motion } from 'motion/react';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronRight, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
 import { completeOnboardingAction } from '@/lib/auth/actions/complete-onboarding';
 import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
-import { toast } from 'sonner';
-import { FindExpertIllustration, BecomeExpertIllustration } from './illustrations';
 import { cn } from '@/lib/utils';
+import {
+  FindExpertIllustration,
+  BecomeExpertIllustration,
+  FindExpertIcon,
+  BecomeExpertIcon,
+} from './illustrations';
 
 interface IntentStepProps {
   onBack: () => void;
@@ -29,6 +33,59 @@ interface IntentStepProps {
 
 type Intent = 'client' | 'expert';
 
+interface Choice {
+  intent: Intent;
+  eyebrow: string;
+  title: string;
+  description: string;
+  cta: string;
+  Illustration: (props: { className?: string }) => React.JSX.Element;
+  Icon: (props: { className?: string }) => React.JSX.Element;
+}
+
+const CHOICES: readonly Choice[] = [
+  {
+    intent: 'client',
+    eyebrow: 'For businesses',
+    title: 'Find an Expert',
+    description: 'Get matched with top Salesforce consultants for your business.',
+    cta: 'Get started',
+    Illustration: FindExpertIllustration,
+    Icon: FindExpertIcon,
+  },
+  {
+    intent: 'expert',
+    eyebrow: 'For consultants',
+    title: 'Become an Expert',
+    description: 'Apply to join our consultant network and grow your practice.',
+    cta: 'Apply now',
+    Illustration: BecomeExpertIllustration,
+    Icon: BecomeExpertIcon,
+  },
+];
+
+/**
+ * Per-intent colour — Balo Blue for the client path, violet for the expert path.
+ * `--tint` is the OPAQUE panel colour (a token mixed into the card), so the artwork's badge
+ * rings can stroke with it and read as cut-outs against the panel.
+ */
+const TONE: Record<Intent, { tint: string; hover: string; eyebrow: string; cta: string }> = {
+  client: {
+    tint: '[--tint:color-mix(in_oklch,var(--primary)_7%,var(--card))] dark:[--tint:color-mix(in_oklch,var(--primary)_14%,var(--card))]',
+    hover:
+      'hover:border-primary/30 hover:shadow-[0_1px_2px_rgb(15_23_42/0.04),0_18px_40px_-12px_color-mix(in_oklch,var(--primary)_22%,transparent)]',
+    eyebrow: 'text-primary',
+    cta: 'text-primary md:bg-primary md:text-primary-foreground md:hover:bg-[color-mix(in_oklch,var(--primary)_94%,black)]',
+  },
+  expert: {
+    tint: '[--tint:color-mix(in_oklch,var(--violet)_8%,var(--card))] dark:[--tint:color-mix(in_oklch,var(--violet)_16%,var(--card))]',
+    hover:
+      'hover:border-violet/30 hover:shadow-[0_1px_2px_rgb(15_23_42/0.04),0_18px_40px_-12px_color-mix(in_oklch,var(--violet)_22%,transparent)]',
+    eyebrow: 'text-violet-deep dark:text-violet-400',
+    cta: 'text-violet-deep dark:text-violet-400 md:border md:border-violet/25 md:bg-card md:hover:border-violet/40 md:hover:bg-violet/5',
+  },
+};
+
 const container = {
   hidden: { opacity: 0 },
   show: { opacity: 1, transition: { staggerChildren: 0.1 } },
@@ -38,6 +95,126 @@ const item = {
   hidden: { opacity: 0, y: 20 },
   show: { opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' as const } },
 };
+
+interface IntentChoiceProps {
+  choice: Choice;
+  /** This choice was picked and is completing. */
+  pending: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}
+
+/**
+ * One intent card: a horizontal row (icon tile, copy, chevron) on mobile; a tall card
+ * (illustration panel, copy, full-width CTA) on desktop. The CTA is the card's only
+ * interactive element — its `::after` stretches over the whole card, so the entire card
+ * is the click target without nesting a button inside a button.
+ *
+ * The overlay resolves against the card only while the button itself is NOT a containing
+ * block: no `filter`, `transform`/`translate`, `will-change` or `contain` on the button in
+ * any state, or the overlay collapses onto the button and most of the card stops taking
+ * clicks. Hover feedback on the button is therefore colour-only.
+ */
+function IntentChoice({
+  choice,
+  pending,
+  disabled,
+  onSelect,
+}: Readonly<IntentChoiceProps>): React.JSX.Element {
+  const id = useId();
+  const titleId = `${id}-title`;
+  const descriptionId = `${id}-description`;
+  const ctaId = `${id}-cta`;
+  const tone = TONE[choice.intent];
+  const { Illustration, Icon } = choice;
+
+  return (
+    <motion.div variants={item} className="flex">
+      <div
+        className={cn(
+          'bg-card relative flex w-full items-center gap-4 rounded-[20px] border p-4',
+          'shadow-[0_1px_2px_rgb(15_23_42/0.04),0_8px_24px_-14px_rgb(15_23_42/0.12)]',
+          'transition-[translate,box-shadow,border-color,opacity] duration-200 ease-out',
+          'md:flex-col md:items-stretch md:gap-6 md:rounded-[22px] md:p-3',
+          'md:shadow-[0_1px_2px_rgb(15_23_42/0.04),0_8px_24px_-12px_rgb(15_23_42/0.10)]',
+          // Mobile has no visible button chrome to ring, so the focus ring moves to the card.
+          'max-md:has-[button:focus-visible]:ring-ring/50 max-md:has-[button:focus-visible]:ring-[3px]',
+          tone.tint,
+          !disabled && cn('motion-safe:hover:-translate-y-[3px]', tone.hover),
+          disabled && !pending && 'opacity-50'
+        )}
+      >
+        <div
+          aria-hidden="true"
+          className="flex size-18 shrink-0 items-center justify-center rounded-2xl bg-(--tint) md:hidden"
+        >
+          <Icon />
+        </div>
+        <div
+          aria-hidden="true"
+          className="hidden h-50 items-center justify-center overflow-hidden rounded-[14px] bg-(--tint) md:flex"
+        >
+          <Illustration />
+        </div>
+
+        <div className="flex min-w-0 flex-1 items-center gap-4 md:flex-col md:items-stretch md:gap-6 md:px-4 md:pb-4">
+          <div className="flex min-w-0 flex-1 flex-col gap-1 md:gap-2">
+            <p
+              className={cn('text-xs font-semibold tracking-[0.02em] md:text-[13px]', tone.eyebrow)}
+            >
+              {choice.eyebrow}
+            </p>
+            <h2
+              id={titleId}
+              className="text-foreground text-lg leading-[1.3] font-semibold tracking-[-0.02em] md:text-[22px] md:leading-[1.25]"
+            >
+              {choice.title}
+            </h2>
+            <p
+              id={descriptionId}
+              className="text-muted-foreground text-sm leading-[1.45] md:text-[15px] md:leading-[1.55]"
+            >
+              {choice.description}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onSelect}
+            disabled={disabled}
+            aria-busy={pending || undefined}
+            aria-labelledby={`${titleId} ${ctaId}`}
+            aria-describedby={descriptionId}
+            className={cn(
+              'flex shrink-0 cursor-pointer items-center justify-center gap-2 outline-none disabled:cursor-default',
+              'after:absolute after:inset-0 after:rounded-[20px] md:after:rounded-[22px]',
+              'md:h-12 md:w-full md:rounded-[12px] md:text-[15px] md:font-semibold',
+              'md:transition-[background-color,border-color] md:duration-150',
+              'md:focus-visible:ring-ring/50 md:focus-visible:ring-[3px]',
+              tone.cta
+            )}
+          >
+            <span id={ctaId} className="sr-only md:not-sr-only">
+              {pending ? 'Setting up...' : choice.cta}
+            </span>
+            {pending ? (
+              <Loader2 aria-hidden="true" className="size-5 animate-spin md:size-4" />
+            ) : (
+              <>
+                <ChevronRight aria-hidden="true" strokeWidth={2.2} className="size-5 md:hidden" />
+                <ArrowRight
+                  aria-hidden="true"
+                  strokeWidth={2.2}
+                  className="hidden size-4 md:block"
+                />
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(function IntentStep(
   { onBack, timezone, stepNumber = 3, onClientContinue, pendingApplyReturnTo = null },
@@ -105,130 +282,47 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
   const isDisabled = isPending || selectedIntent !== null;
 
   return (
-    <div className="flex w-full flex-col items-center text-center">
-      <h1
-        ref={ref}
-        tabIndex={-1}
-        className="text-foreground text-xl font-semibold outline-none sm:text-2xl"
-      >
-        What brings you to Balo?
-      </h1>
-
-      <p className="text-muted-foreground mt-2 text-sm">
-        Choose how you&apos;d like to get started. You can always switch later.
-      </p>
+    <div className="flex w-full flex-1 flex-col gap-7 md:flex-none md:items-center md:gap-10">
+      <div className="flex flex-col gap-2.5 md:items-center md:gap-3 md:text-center">
+        <h1
+          ref={ref}
+          tabIndex={-1}
+          className="text-foreground text-3xl leading-[1.15] font-semibold tracking-[-0.03em] outline-none md:text-[40px] md:leading-[1.1]"
+        >
+          What brings you to Balo?
+        </h1>
+        <p className="text-muted-foreground text-base leading-normal md:text-[17px]">
+          Choose how you&apos;d like to get started. You can always switch later.
+        </p>
+      </div>
 
       <motion.div
         variants={container}
         initial="hidden"
         animate="show"
-        className="mt-8 grid w-full grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6"
+        className="flex flex-col gap-3.5 md:grid md:w-full md:grid-cols-2 md:gap-6"
       >
-        {/* Find an Expert */}
-        <motion.div
-          variants={item}
-          whileHover={isDisabled ? undefined : { y: -4 }}
-          whileTap={isDisabled ? undefined : { scale: 0.98 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-        >
-          <Card
-            role="button"
-            tabIndex={isDisabled ? -1 : 0}
-            aria-label="Find an Expert — Get matched with top Salesforce consultants for your business"
-            onClick={() => handleSelect('client')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleSelect('client');
-              }
-            }}
-            className={cn(
-              'dark:hover:shadow-primary/5 cursor-pointer overflow-hidden transition-shadow duration-200 hover:shadow-lg',
-              isDisabled && selectedIntent !== 'client' && 'pointer-events-none opacity-50'
-            )}
-          >
-            <div className="h-[100px] sm:h-[120px]">
-              <FindExpertIllustration />
-            </div>
-            <div className="p-6">
-              <h3 className="text-foreground text-lg font-semibold">Find an Expert</h3>
-              <p className="text-muted-foreground mt-2 text-sm">
-                Get matched with top Salesforce consultants for your business.
-              </p>
-              <Button
-                variant="default"
-                size="lg"
-                className="mt-4 w-full"
-                disabled={isDisabled}
-                tabIndex={-1}
-              >
-                {selectedIntent === 'client' ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Setting up...
-                  </>
-                ) : (
-                  'Get Started'
-                )}
-              </Button>
-            </div>
-          </Card>
-        </motion.div>
-
-        {/* Become an Expert */}
-        <motion.div
-          variants={item}
-          whileHover={isDisabled ? undefined : { y: -4 }}
-          whileTap={isDisabled ? undefined : { scale: 0.98 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-        >
-          <Card
-            role="button"
-            tabIndex={isDisabled ? -1 : 0}
-            aria-label="Become an Expert — Apply to join our consultant network and grow your practice"
-            onClick={() => handleSelect('expert')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleSelect('expert');
-              }
-            }}
-            className={cn(
-              'dark:hover:shadow-primary/5 cursor-pointer overflow-hidden transition-shadow duration-200 hover:shadow-lg',
-              isDisabled && selectedIntent !== 'expert' && 'pointer-events-none opacity-50'
-            )}
-          >
-            <div className="h-[100px] sm:h-[120px]">
-              <BecomeExpertIllustration />
-            </div>
-            <div className="p-6">
-              <h3 className="text-foreground text-lg font-semibold">Become an Expert</h3>
-              <p className="text-muted-foreground mt-2 text-sm">
-                Apply to join our consultant network and grow your practice.
-              </p>
-              <Button
-                variant="outline"
-                size="lg"
-                className="mt-4 w-full"
-                disabled={isDisabled}
-                tabIndex={-1}
-              >
-                {selectedIntent === 'expert' ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Setting up...
-                  </>
-                ) : (
-                  'Apply Now'
-                )}
-              </Button>
-            </div>
-          </Card>
-        </motion.div>
+        {CHOICES.map((choice) => (
+          <IntentChoice
+            key={choice.intent}
+            choice={choice}
+            pending={selectedIntent === choice.intent}
+            disabled={isDisabled}
+            onSelect={() => handleSelect(choice.intent)}
+          />
+        ))}
       </motion.div>
 
-      <Button variant="ghost" size="sm" onClick={onBack} disabled={isDisabled} className="mt-6">
-        <ArrowLeft className="mr-2 h-4 w-4" />
+      {/* Mobile pins Back to the bottom of the screen; desktop keeps it under the cards. */}
+      <div aria-hidden="true" className="flex-1 md:hidden" />
+
+      <Button
+        variant="ghost"
+        onClick={onBack}
+        disabled={isDisabled}
+        className="text-foreground/80 hover:text-foreground h-11 self-center rounded-[10px] text-[15px] has-[>svg]:px-4"
+      >
+        <ArrowLeft />
         Back
       </Button>
     </div>

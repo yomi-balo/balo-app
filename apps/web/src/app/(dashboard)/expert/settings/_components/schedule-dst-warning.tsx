@@ -27,6 +27,7 @@ function formatGapDate(dateISO: string): string {
 /**
  * Non-blocking heads-up shown when an enabled range lands in the timezone's upcoming
  * daylight-saving spring-forward gap (that wall-clock hour does not exist that day).
+ * A compact inline note, sized to sit directly under the weekly-hours rows.
  */
 export function ScheduleDstWarning({
   gap,
@@ -40,13 +41,16 @@ export function ScheduleDstWarning({
   return (
     <div
       role="alert"
-      className="border-warning/40 bg-warning/10 flex items-start gap-2.5 rounded-xl border p-4"
+      className="border-warning/40 bg-warning/10 flex items-start gap-2 rounded-lg border px-3 py-2.5"
     >
-      <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-      <div className="text-sm leading-relaxed">
-        <p className="text-foreground font-medium">Daylight saving affects one of your hours</p>
+      <AlertTriangle
+        className="text-warning-strong mt-0.5 h-3.5 w-3.5 shrink-0"
+        aria-hidden="true"
+      />
+      <div className="text-[12.5px] leading-relaxed">
+        <p className="text-warning-strong font-medium">Daylight saving affects one of your hours</p>
         {match.isOvernightTail && sourceMeta && gapDayMeta ? (
-          <p className="text-muted-foreground mt-0.5">
+          <p className="text-foreground/80 mt-0.5">
             On {formatGapDate(gap.dateISO)}, clocks in {city} skip from{' '}
             {formatGapMinutes(gap.gapStartMinutes)} to {formatGapMinutes(gap.gapEndMinutes)}. The{' '}
             {sourceMeta.full}–{gapDayMeta.full} overnight range you set (which continues into the
@@ -54,7 +58,7 @@ export function ScheduleDstWarning({
             — no need to change anything, we just won&apos;t offer bookings in the skipped hour.
           </p>
         ) : (
-          <p className="text-muted-foreground mt-0.5">
+          <p className="text-foreground/80 mt-0.5">
             On {formatGapDate(gap.dateISO)}, clocks in {city} skip from{' '}
             {formatGapMinutes(gap.gapStartMinutes)} to {formatGapMinutes(gap.gapEndMinutes)}. A
             range you&apos;ve set that day falls in this window, so it won&apos;t exist that once —

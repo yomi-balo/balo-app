@@ -11,7 +11,7 @@ import type { AvailabilitySlotDto } from '@balo/shared/availability';
  * here must treat 404, 503-`unavailable`, and 500 differently and must NOT auto-retry a 404 —
  * whereas react-query's default `retry: 1` would. The repo's actual precedent for
  * browser→Fastify is bare `fetch` against `NEXT_PUBLIC_API_URL`
- * (`components/balo/phone-verification-flow.tsx`, `expert/settings/_components/payouts-tab.tsx`).
+ * (`expert/settings/_components/payouts-tab.tsx`).
  */
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
 

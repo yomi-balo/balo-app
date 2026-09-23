@@ -18,7 +18,9 @@ import { isAccountRefusalCode } from '@balo/shared/authz';
  * caller keeps only its own `parse*Response` functions and route paths.
  *
  * ⚠ NOTHING HERE THROWS. Every transport error and every non-2xx resolves to a typed failure.
- * ⚠ NOTHING HERE INTERPRETS AN ERROR BODY BEYOND ITS `error` LITERAL.
+ * ⚠ NOTHING HERE INTERPRETS AN ERROR BODY BEYOND ITS `error` LITERAL. A caller that needs more of
+ * a non-2xx body (a cooldown, an attempts counter) supplies its own `parseFailure` to
+ * {@link postBaloApiJsonWithFailureDetail}, exactly as `parse` owns the 2xx body.
  */
 
 /** ⚠ 3002, NOT 3001 — CLAUDE.md's port table is stale; the API dev server listens on 3002. */
@@ -112,6 +114,17 @@ export function readRetryAfter(response: Response): number | undefined {
   return Math.min(seconds, 300);
 }
 
+/** A failure plus the caller's own reading of the non-2xx body. */
+export type BaloApiDetailedResult<T, F> =
+  | { readonly ok: true; readonly data: T }
+  | (Extract<BaloApiResult<T>, { ok: false }> & { readonly detail: F });
+
+interface BaloApiCall<T> {
+  readonly result: BaloApiResult<T>;
+  /** The parsed non-2xx body; `{}` for a success, a transport failure or a missing credential. */
+  readonly failureBody: Record<string, unknown>;
+}
+
 /**
  * One call to a `requireAuth`-gated `apps/api` route, with the viewer's Bearer resolved
  * server-side. `parse` turns a 2xx body into the caller's typed shape, or returns `null` on a
@@ -129,10 +142,36 @@ export async function postBaloApiJson<T>(
   parse: (parsed: Record<string, unknown>) => T | null,
   logLabel: string
 ): Promise<BaloApiResult<T>> {
+  return (await callBaloApi(path, body, parse, logLabel)).result;
+}
+
+/**
+ * {@link postBaloApiJson}, plus `parseFailure`'s reading of a non-2xx body on the failure arm.
+ * `parseFailure` receives `{}` when there was no body to read (transport failure, missing
+ * credential, malformed 2xx), so it must tolerate absent fields.
+ */
+export async function postBaloApiJsonWithFailureDetail<T, F>(
+  path: string,
+  body: unknown,
+  parse: (parsed: Record<string, unknown>) => T | null,
+  parseFailure: (parsed: Record<string, unknown>) => F,
+  logLabel: string
+): Promise<BaloApiDetailedResult<T, F>> {
+  const { result, failureBody } = await callBaloApi(path, body, parse, logLabel);
+  if (result.ok) return result;
+  return { ...result, detail: parseFailure(failureBody) };
+}
+
+async function callBaloApi<T>(
+  path: string,
+  body: unknown,
+  parse: (parsed: Record<string, unknown>) => T | null,
+  logLabel: string
+): Promise<BaloApiCall<T>> {
   const session = await getSession();
   const accessToken = session.accessToken;
   if (session.user?.id === undefined || accessToken === undefined || accessToken.length === 0) {
-    return { ok: false, status: 401, code: 'unauthenticated' };
+    return { result: { ok: false, status: 401, code: 'unauthenticated' }, failureBody: {} };
   }
 
   try {
@@ -156,22 +195,25 @@ export async function postBaloApiJson<T>(
       // caller has to infer "suspended" from a bare 401.
       const refusal = await consumeApiAccountRefusal(response);
       return {
-        ok: false,
-        status: response.status,
-        code: refusal ?? readString(parsedBody, 'error') ?? 'request_failed',
-        // ⚠ THE KEY IS OMITTED, NOT SET TO `undefined` — a present-but-undefined optional
-        // survives an `in` check and violates the declared type under
-        // `exactOptionalPropertyTypes`.
-        ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+        result: {
+          ok: false,
+          status: response.status,
+          code: refusal ?? readString(parsedBody, 'error') ?? 'request_failed',
+          // ⚠ THE KEY IS OMITTED, NOT SET TO `undefined` — a present-but-undefined optional
+          // survives an `in` check and violates the declared type under
+          // `exactOptionalPropertyTypes`.
+          ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+        },
+        failureBody: parsedBody,
       };
     }
 
     const data = parse(parsedBody);
     if (data === null) {
       log.error(`${logLabel} api returned a malformed 200 body`, { path });
-      return { ok: false, status: 0, code: 'request_failed' };
+      return { result: { ok: false, status: 0, code: 'request_failed' }, failureBody: {} };
     }
-    return { ok: true, data };
+    return { result: { ok: true, data }, failureBody: {} };
   } catch (error) {
     // ⚠ NO TOKEN, NO EMAIL, NO DESCRIPTION HTML IN THIS LOG.
     log.error(`${logLabel} api call failed`, {
@@ -179,6 +221,6 @@ export async function postBaloApiJson<T>(
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return { ok: false, status: 0, code: 'request_failed' };
+    return { result: { ok: false, status: 0, code: 'request_failed' }, failureBody: {} };
   }
 }

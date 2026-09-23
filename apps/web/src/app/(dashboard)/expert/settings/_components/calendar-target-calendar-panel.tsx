@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import {
   Select,
   SelectContent,
@@ -7,7 +8,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { CalendarConnection, CalendarProvider } from '../_types/calendar';
+import type { CalendarConnection, CalendarProvider, SubCalendar } from '../_types/calendar';
+import { SettingsEyebrow } from './settings-card';
 
 interface CalendarTargetCalendarPanelProps {
   readonly connection: CalendarConnection;
@@ -20,12 +22,18 @@ interface CalendarTargetCalendarPanelProps {
   readonly onChange: (calendarId: string) => void;
 }
 
+/** A calendar as the picker names it — in the list and, once chosen, on the trigger. */
+function calendarOptionLabel(cal: SubCalendar): string {
+  return cal.primary ? `${cal.name} (Primary)` : cal.name;
+}
+
 /**
- * BAL-397 §8/§11 — the shipped card hardcoded `id="target-calendar-select"` (a DUPLICATE DOM
- * id the moment two connections render). `id` is scoped per provider here, and the trigger
- * value falls back to the placeholder (never a client-side auto-correct) when
- * `targetCalendarId` is null (edge 9) or points at a calendar no longer in `subCalendars`
- * (edge 10, a rename/removal at the provider between provisions).
+ * "Where bookings go" for ONE connection. The trigger and description ids come from `useId`
+ * (prefixed with the provider for readability), so they stay unique however many accounts —
+ * of the same provider or not — render on the page; a fixed id duplicates the moment a second
+ * panel mounts. The trigger value falls back to the placeholder (never a client-side
+ * auto-correct) when `targetCalendarId` is null (edge 9) or points at a calendar no longer in
+ * `subCalendars` (edge 10, a rename/removal at the provider between provisions).
  */
 export function CalendarTargetCalendarPanel({
   connection,
@@ -34,36 +42,51 @@ export function CalendarTargetCalendarPanel({
   disabled = false,
   onChange,
 }: Readonly<CalendarTargetCalendarPanelProps>): React.JSX.Element {
-  const triggerId = `target-calendar-${provider}`;
-  const descriptionId = `target-calendar-${provider}-description`;
+  const idBase = `target-calendar-${provider}-${useId()}`;
+  const triggerId = `${idBase}-trigger`;
+  const descriptionId = `${idBase}-description`;
   const { targetCalendarId, subCalendars } = connection;
   const targetIsStale =
     targetCalendarId !== null && !subCalendars.some((cal) => cal.id === targetCalendarId);
   const selectValue = targetIsStale ? '' : (targetCalendarId ?? '');
+  const selected = subCalendars.find((cal) => cal.id === selectValue);
+  const selectedLabel = selected ? calendarOptionLabel(selected) : undefined;
 
   return (
-    <div className="px-5 py-4">
-      <label htmlFor={triggerId} className="text-foreground mb-1 block text-sm font-medium">
-        Where bookings go
-      </label>
-      <p id={descriptionId} className="text-muted-foreground mb-3 text-xs leading-relaxed">
-        Confirmed consultations on this account are added to this calendar. We start with your
-        primary one — change it any time.
-      </p>
-      {targetIsStale && (
-        <p className="text-warning mb-2 text-xs leading-relaxed">
-          The calendar bookings were going to is no longer on this account — pick another.
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+      <div className="min-w-0 sm:flex-1">
+        <SettingsEyebrow as="label" htmlFor={triggerId} className="block">
+          Where bookings go
+        </SettingsEyebrow>
+        <p id={descriptionId} className="text-muted-foreground mt-1 text-xs leading-relaxed">
+          Confirmed consultations on this account are added to this calendar. We start with your
+          primary one — change it any time.
         </p>
-      )}
+        {targetIsStale && (
+          <p className="text-warning-strong mt-1 text-xs leading-relaxed">
+            The calendar bookings were going to is no longer on this account — pick another.
+          </p>
+        )}
+      </div>
       <Select value={selectValue} onValueChange={onChange} disabled={pending || disabled}>
-        <SelectTrigger id={triggerId} size="sm" className="w-full" aria-describedby={descriptionId}>
-          <SelectValue placeholder="Choose a calendar" />
+        {/* Sized to the chosen calendar's name — Google names the primary calendar after the
+            account email — from 240px up to 60% of the row, then truncated with an ellipsis;
+            the full name stays on `title`. Full width, never wider, when stacked on mobile. */}
+        <SelectTrigger
+          id={triggerId}
+          size="sm"
+          title={selectedLabel}
+          className="w-full max-w-full min-w-0 text-[13px] data-[size=sm]:h-11 sm:w-auto sm:max-w-[60%] sm:min-w-[240px] sm:data-[size=sm]:h-8"
+          aria-describedby={descriptionId}
+        >
+          <SelectValue placeholder="Choose a calendar">
+            <span className="block truncate">{selectedLabel}</span>
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {subCalendars.map((cal) => (
             <SelectItem key={cal.id} value={cal.id}>
-              {cal.name}
-              {cal.primary ? ' (Primary)' : ''}
+              {calendarOptionLabel(cal)}
             </SelectItem>
           ))}
         </SelectContent>

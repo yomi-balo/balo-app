@@ -25,7 +25,14 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { track, PHONE_EVENTS } from '@/lib/analytics';
-import { ACCOUNT_REFUSAL_HEADER } from '@balo/shared/authz';
+import { useAuthModal } from '@/hooks/use-auth-modal';
+import { SESSION_EXPIRED_MESSAGE } from '@/lib/auth/auth-error-copy';
+import { sendPhoneOtpAction, verifyPhoneOtpAction } from '@/lib/phone/actions';
+import type {
+  PhoneOtpFailureCode,
+  SendPhoneOtpResult,
+  VerifyPhoneOtpResult,
+} from '@/lib/phone/types';
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -40,7 +47,12 @@ type ErrorState =
   | 'locked_out'
   | 'code_expired'
   | 'rate_limited'
+  | 'session_expired'
+  | 'impersonation_refused'
   | 'network_error';
+
+/** A send refusal that no edit to the number can clear — it replaces the Send button. */
+type SendBlock = 'session_expired' | 'impersonation_refused';
 
 interface Country {
   code: string;
@@ -54,12 +66,16 @@ interface PhoneVerificationFlowProps {
   mode: 'onboarding' | 'settings';
   /** Settings mode: pre-fill with already-verified number to show 'current' stage initially */
   initialPhone?: string;
-  /** WorkOS access token for API auth header */
-  accessToken: string;
   /** Called when phone is successfully verified — passes E.164 string */
   onVerified: (e164: string) => void;
   /** Settings mode only — called when user clicks Cancel */
   onCancel?: () => void;
+  /**
+   * Focus the phone input when the flow MOUNTS in the entry stage (default `true`). Pass `false`
+   * where the flow sits mid-page, so landing on the page does not scroll to it. Returning to
+   * entry from a later stage ("Change number") focuses the input either way.
+   */
+  focusOnMount?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -75,7 +91,6 @@ const COUNTRIES: Country[] = [
 ];
 
 const DEFAULT_COUNTRY = COUNTRIES[0]!;
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 const RESEND_COOLDOWN_SECONDS = 30;
 
 // ── Error messages ────────────────────────────────────────────────
@@ -90,6 +105,9 @@ const ERROR_MESSAGES: Record<ErrorState, string> = {
     'Too many incorrect attempts. Request a new code to continue \u2014 the previous code is now invalid.',
   code_expired: 'Your code has expired. Request a new one to continue.',
   rate_limited: 'Too many requests for this number. Please wait before trying again.',
+  session_expired: SESSION_EXPIRED_MESSAGE,
+  impersonation_refused:
+    "Verification sends a code to this account's own phone, so it has to be their action. Ask them to verify their number, or end the impersonation first.",
   network_error: 'Something went wrong sending the code. Check your connection and try again.',
 };
 
@@ -310,27 +328,38 @@ function StatusBanner({
 // ── API response handlers (extracted to reduce cognitive complexity) ──
 
 /**
- * BAL-568 — THE ONE BROWSER-SIDE BEARER CALLER IN THE APP, and the one place the browser can
- * drive a REAL, IMMEDIATE sign-out. `apps/api`'s `requireAuth` marks an account-state 401 with
- * {@link ACCOUNT_REFUSAL_HEADER}; navigating to the session-sync Route Handler makes it re-read
- * the live row, destroy the cookie, and land on `/login?error=account_suspended|account_deleted`
- * with BAL-197's shipped copy.
+ * BAL-568 — the browser's half of an account-state refusal. `apps/api`'s `requireAuth` marks a
+ * suspended or deleted account's 401; the Server Action reports it as `account_refused`.
+ * Navigating to the session-sync Route Handler makes it re-read the live row, destroy the cookie,
+ * and land on `/login?error=account_suspended|account_deleted` with BAL-197's shipped copy.
  *
- * ⚠ WE DO NOT PICK THE CODE HERE — the route owns the precedence (a suspended-AND-deleted row
- * reads `account_deleted`). We only detect that the marker is present.
+ * ⚠ WE DO NOT PICK THE LOGIN CODE HERE — the route owns the precedence (a suspended-AND-deleted
+ * row reads `account_deleted`).
  * ⚠ IT MUST NOT CALL `logoutAction()`: destroying the cookie from this side would make the sync
  * route take its no-session arm and redirect to a BARE `/login`, losing the message entirely.
- * ⚠ THE CONSTANT COMES FROM `@balo/shared/authz` (pure constants, no `@balo/db`), never from
- * `@/lib/auth/*` — this is a client component, and the web logger/db seams cannot be bundled
- * into one.
  *
- * Returns `true` when it has taken over the response, so the caller returns without running its
- * normal error mapping.
+ * Returns `true` when it has taken over, so the caller returns without running its normal error
+ * mapping.
  */
-function signOutOnAccountRefusal(res: Response): boolean {
-  if (res.headers.get(ACCOUNT_REFUSAL_HEADER) === null) return false;
+function signOutOnAccountRefusal(code: PhoneOtpFailureCode): boolean {
+  if (code !== 'account_refused') return false;
   globalThis.location.assign('/api/auth/session-sync?returnTo=/login');
   return true;
+}
+
+/**
+ * Run an OTP action, retrying ONCE when it reports `session_expired`. That result means this
+ * request's middleware refresh did not land — most often because a concurrent request's refresh
+ * consumed the refresh token first, in which case the browser holds that request's renewed
+ * cookie and the retry carries a live token. A retry that is still expired is a dead refresh
+ * token, and the caller offers a fresh sign-in. The api refused the first call at `requireAuth`,
+ * before any code was sent or checked, so the retry never double-sends or spends an attempt.
+ */
+async function retryOnceIfSessionExpired<R extends SendPhoneOtpResult | VerifyPhoneOtpResult>(
+  call: () => Promise<R>
+): Promise<R> {
+  const first = await call();
+  return 'code' in first && first.code === 'session_expired' ? call() : first;
 }
 
 interface SendErrorHandlers {
@@ -338,28 +367,36 @@ interface SendErrorHandlers {
   setRateLimited: (v: boolean) => void;
   setCooldownSeconds: (n: number) => void;
   setPhoneError: (e: string | null) => void;
+  setSendBlock: (b: SendBlock | null) => void;
 }
 
-/** Map a send-otp error response to the correct UI state. */
-function handleSendError(data: Record<string, unknown>, handlers: SendErrorHandlers): void {
+type SendFailure = Extract<SendPhoneOtpResult, { ok: false }>;
+type VerifyFailure = Extract<VerifyPhoneOtpResult, { ok: false }>;
+
+const SEND_ERROR_MESSAGE_CODES: ReadonlySet<PhoneOtpFailureCode> = new Set([
+  'invalid_phone',
+  'landline_not_supported',
+  'brevo_rejected',
+]);
+
+/** Map a send-otp failure to the correct UI state. */
+function handleSendError(failure: SendFailure, handlers: SendErrorHandlers): void {
   handlers.setStage('entry');
 
-  const errorMap: Record<string, () => void> = {
-    rate_limited: () => {
-      handlers.setRateLimited(true);
-      handlers.setCooldownSeconds((data.cooldownSeconds as number) ?? 600);
-    },
-    invalid_phone: () => handlers.setPhoneError(ERROR_MESSAGES.invalid_phone),
-    landline_not_supported: () => handlers.setPhoneError(ERROR_MESSAGES.landline_not_supported),
-    brevo_rejected: () => handlers.setPhoneError(ERROR_MESSAGES.brevo_rejected),
-  };
-
-  const handler = errorMap[data.error as string];
-  if (handler) {
-    handler();
-  } else {
-    handlers.setPhoneError(ERROR_MESSAGES.network_error);
+  if (failure.code === 'rate_limited') {
+    handlers.setRateLimited(true);
+    handlers.setCooldownSeconds(failure.cooldownSeconds ?? 600);
+    return;
   }
+  if (failure.code === 'session_expired' || failure.code === 'impersonation_refused') {
+    handlers.setSendBlock(failure.code);
+    return;
+  }
+  handlers.setPhoneError(
+    SEND_ERROR_MESSAGE_CODES.has(failure.code)
+      ? ERROR_MESSAGES[failure.code as ErrorState]
+      : ERROR_MESSAGES.network_error
+  );
 }
 
 interface VerifyErrorHandlers {
@@ -369,23 +406,37 @@ interface VerifyErrorHandlers {
   setShakeKey: (fn: (n: number) => number) => void;
 }
 
-/** Map a verify-otp error response to the correct UI state. */
-function handleVerifyError(data: Record<string, unknown>, handlers: VerifyErrorHandlers): void {
-  const errorType = data.error as string;
-
-  if (errorType === 'locked_out') {
-    handlers.setAttemptsRemaining(0);
-    handlers.setOtpError('locked_out');
-  } else if (errorType === 'code_expired') {
-    handlers.setOtpError('code_expired');
-  } else {
-    const remaining = (data.attemptsRemaining as number) ?? 0;
-    handlers.setAttemptsRemaining(remaining);
-    handlers.setOtpError(remaining === 1 ? 'final_attempt' : 'wrong_code');
-    handlers.setShakeKey((n) => n + 1);
-  }
-
+/**
+ * Map a verify-otp failure to the correct UI state. Only `wrong_code` / `final_attempt` read as a
+ * wrong code — anything else (an expired session, a failed request) must never shake the boxes
+ * and claim the code was incorrect when it was never checked.
+ */
+function handleVerifyError(failure: VerifyFailure, handlers: VerifyErrorHandlers): void {
   handlers.setStage('otp');
+
+  switch (failure.code) {
+    case 'locked_out':
+      handlers.setAttemptsRemaining(0);
+      handlers.setOtpError('locked_out');
+      return;
+    case 'code_expired':
+    case 'session_expired':
+    case 'impersonation_refused':
+      handlers.setOtpError(failure.code);
+      return;
+    case 'wrong_code':
+    case 'final_attempt': {
+      const remaining = failure.attemptsRemaining;
+      if (remaining !== undefined) handlers.setAttemptsRemaining(remaining);
+      handlers.setOtpError(
+        failure.code === 'final_attempt' || remaining === 1 ? 'final_attempt' : 'wrong_code'
+      );
+      handlers.setShakeKey((n) => n + 1);
+      return;
+    }
+    default:
+      handlers.setOtpError('network_error');
+  }
 }
 
 // ── Custom Hooks (extracted to reduce component cognitive complexity) ──
@@ -480,7 +531,6 @@ function usePhoneValidation(
 
 /** Handle OTP send/verify API calls and state transitions. */
 function usePhoneOtp(opts: {
-  accessToken: string;
   selectedCountry: Country;
   localNumber: string;
   e164Phone: string;
@@ -500,13 +550,15 @@ function usePhoneOtp(opts: {
   maskedPhone: string;
   cooldownSeconds: number;
   rateLimited: boolean;
+  sendBlock: SendBlock | null;
   handleSend: () => Promise<void>;
   handleOtpComplete: (code: string) => Promise<void>;
   handleResend: () => void;
   handleChangeNumber: () => void;
+  /** After a successful sign-in: drop the session refusal so the step can be retried in place. */
+  clearSessionExpired: () => void;
 } {
   const {
-    accessToken,
     selectedCountry,
     localNumber,
     e164Phone: initialE164,
@@ -528,6 +580,7 @@ function usePhoneOtp(opts: {
   const [maskedPhone, setMaskedPhone] = useState('');
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [rateLimited, setRateLimited] = useState(false);
+  const [sendBlock, setSendBlock] = useState<SendBlock | null>(null);
 
   const handleSend = useCallback(async (): Promise<void> => {
     if (!validatePhone()) return;
@@ -536,27 +589,20 @@ function usePhoneOtp(opts: {
     setE164Phone(phone);
     setStage('sending');
     setRateLimited(false);
+    setSendBlock(null);
 
     try {
-      const res = await fetch(`${API_BASE}/phone/send-otp`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ phone }),
-      });
+      const result = await retryOnceIfSessionExpired(() => sendPhoneOtpAction(phone));
 
-      // ⚠ BAL-568 — THE MARKER CHECK RUNS BEFORE `res.json()` (fix round 1, F11). It reads only
-      // headers, and a non-JSON body on a marked 401 (an edge 401 page, say) would otherwise throw
-      // in the parse and land in the network-error catch below — showing "try again" to an account
-      // that can never succeed, instead of signing it out. Unreachable today; free to get right.
-      if (signOutOnAccountRefusal(res)) return;
-
-      const data = (await res.json()) as Record<string, unknown>;
-
-      if (!res.ok) {
-        handleSendError(data, { setStage, setRateLimited, setCooldownSeconds, setPhoneError });
+      if (!result.ok) {
+        if (signOutOnAccountRefusal(result.code)) return;
+        handleSendError(result, {
+          setStage,
+          setRateLimited,
+          setCooldownSeconds,
+          setPhoneError,
+          setSendBlock,
+        });
         return;
       }
 
@@ -569,7 +615,7 @@ function usePhoneOtp(opts: {
       setStage('entry');
       setPhoneError(ERROR_MESSAGES.network_error);
     }
-  }, [validatePhone, selectedCountry, localNumber, accessToken, getMasked, setPhoneError]);
+  }, [validatePhone, selectedCountry, localNumber, getMasked, setPhoneError]);
 
   const handleOtpComplete = useCallback(
     async (code: string): Promise<void> => {
@@ -577,22 +623,11 @@ function usePhoneOtp(opts: {
       setOtpError(null);
 
       try {
-        const res = await fetch(`${API_BASE}/phone/verify-otp`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({ phone: e164Phone, code }),
-        });
+        const result = await retryOnceIfSessionExpired(() => verifyPhoneOtpAction(e164Phone, code));
 
-        // ⚠ BAL-568 — BEFORE `res.json()`, same reasoning as the send arm above (fix round 1, F11).
-        if (signOutOnAccountRefusal(res)) return;
-
-        const data = (await res.json()) as Record<string, unknown>;
-
-        if (!res.ok) {
-          handleVerifyError(data, { setStage, setAttemptsRemaining, setOtpError, setShakeKey });
+        if (!result.ok) {
+          if (signOutOnAccountRefusal(result.code)) return;
+          handleVerifyError(result, { setStage, setAttemptsRemaining, setOtpError, setShakeKey });
           return;
         }
 
@@ -610,7 +645,7 @@ function usePhoneOtp(opts: {
         setOtpError('network_error');
       }
     },
-    [accessToken, e164Phone, selectedCountry, mode, onVerified]
+    [e164Phone, selectedCountry, mode, onVerified]
   );
 
   const handleResend = useCallback((): void => {
@@ -627,6 +662,13 @@ function usePhoneOtp(opts: {
     setPhoneError(null);
   }, [setPhoneError]);
 
+  // The api refused the expired call before sending or checking anything, so the code already
+  // sent is still live: clearing the error re-opens the boxes for the same code.
+  const clearSessionExpired = useCallback((): void => {
+    setSendBlock((block) => (block === 'session_expired' ? null : block));
+    setOtpError((error) => (error === 'session_expired' ? null : error));
+  }, []);
+
   return {
     stage,
     setStage,
@@ -638,10 +680,12 @@ function usePhoneOtp(opts: {
     maskedPhone,
     cooldownSeconds,
     rateLimited,
+    sendBlock,
     handleSend,
     handleOtpComplete,
     handleResend,
     handleChangeNumber,
+    clearSessionExpired,
   };
 }
 
@@ -658,6 +702,7 @@ interface OtpActiveAreaProps {
   onResend: () => void;
   onChangeNumber: () => void;
   onRetrySend: () => Promise<void>;
+  onReauthenticate: () => void;
 }
 
 function OtpActiveArea({
@@ -671,6 +716,7 @@ function OtpActiveArea({
   onResend,
   onChangeNumber,
   onRetrySend,
+  onReauthenticate,
 }: Readonly<OtpActiveAreaProps>): React.JSX.Element {
   return (
     <>
@@ -766,35 +812,75 @@ function OtpActiveArea({
         </>
       )}
 
-      {/* Default: active OTP input */}
-      {otpError !== 'locked_out' && otpError !== 'code_expired' && otpError !== 'network_error' && (
+      {/* Error state 9: the session could not be renewed — the code was never checked */}
+      {otpError === 'session_expired' && (
         <>
-          <OtpBoxes onComplete={onComplete} disabled={stage === 'verifying'} shakeKey={shakeKey} />
-
-          {otpError === 'wrong_code' && attemptsRemaining > 1 && (
-            <FieldMessage type="error">
-              Incorrect code — {attemptsRemaining} attempts remaining
-            </FieldMessage>
-          )}
-
-          {otpError === 'final_attempt' && attemptsRemaining === 1 && (
-            <div className="mt-2">
-              <FieldMessage type="warning">
-                One more wrong attempt will lock you out. Request a new code if unsure.
-              </FieldMessage>
-            </div>
-          )}
-
-          {stage === 'otp' && <ResendRow key={resendKey} onResend={onResend} />}
-
-          {stage === 'verifying' && (
-            <div className="flex items-center justify-center gap-2.5 py-3.5">
-              <Loader2 className="text-primary h-4 w-4 animate-spin" />
-              <span className="text-muted-foreground text-[13px]">Verifying&hellip;</span>
-            </div>
-          )}
+          <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
+          <div className="mt-3.5">
+            <StatusBanner type="info" icon={Clock}>
+              {ERROR_MESSAGES.session_expired}
+            </StatusBanner>
+            <Button
+              variant="outline"
+              className="mt-3.5 w-full gap-2"
+              size="lg"
+              onClick={onReauthenticate}
+            >
+              Sign in again
+            </Button>
+          </div>
         </>
       )}
+
+      {/* Error state 10: a staff member is impersonating — nothing here can succeed */}
+      {otpError === 'impersonation_refused' && (
+        <>
+          <OtpBoxes onComplete={() => {}} disabled shakeKey={0} />
+          <div className="mt-3.5">
+            <StatusBanner type="warning" icon={Info}>
+              {ERROR_MESSAGES.impersonation_refused}
+            </StatusBanner>
+          </div>
+        </>
+      )}
+
+      {/* Default: active OTP input */}
+      {otpError !== 'locked_out' &&
+        otpError !== 'code_expired' &&
+        otpError !== 'network_error' &&
+        otpError !== 'session_expired' &&
+        otpError !== 'impersonation_refused' && (
+          <>
+            <OtpBoxes
+              onComplete={onComplete}
+              disabled={stage === 'verifying'}
+              shakeKey={shakeKey}
+            />
+
+            {otpError === 'wrong_code' && attemptsRemaining > 1 && (
+              <FieldMessage type="error">
+                Incorrect code — {attemptsRemaining} attempts remaining
+              </FieldMessage>
+            )}
+
+            {otpError === 'final_attempt' && attemptsRemaining === 1 && (
+              <div className="mt-2">
+                <FieldMessage type="warning">
+                  One more wrong attempt will lock you out. Request a new code if unsure.
+                </FieldMessage>
+              </div>
+            )}
+
+            {stage === 'otp' && <ResendRow key={resendKey} onResend={onResend} />}
+
+            {stage === 'verifying' && (
+              <div className="flex items-center justify-center gap-2.5 py-3.5">
+                <Loader2 className="text-primary h-4 w-4 animate-spin" />
+                <span className="text-muted-foreground text-[13px]">Verifying&hellip;</span>
+              </div>
+            )}
+          </>
+        )}
     </>
   );
 }
@@ -857,9 +943,9 @@ function VerifiedView({
 export function PhoneVerificationFlow({
   mode,
   initialPhone,
-  accessToken,
   onVerified,
   onCancel,
+  focusOnMount = true,
 }: Readonly<PhoneVerificationFlowProps>): React.JSX.Element {
   const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [localNumber, setLocalNumber] = useState('');
@@ -873,7 +959,6 @@ export function PhoneVerificationFlow({
   );
 
   const otp = usePhoneOtp({
-    accessToken,
     selectedCountry,
     localNumber,
     e164Phone: initialPhone ?? '',
@@ -884,17 +969,30 @@ export function PhoneVerificationFlow({
     onVerified,
   });
 
-  // Autofocus phone input when entering the entry stage
+  // Focus the phone input on entering the entry stage: on mount only when `focusOnMount`, and
+  // on every return from a later stage. `previousStageRef` is null until the first run, and a
+  // re-run with the stage unchanged (StrictMode's double effect) never focuses.
+  const previousStageRef = useRef<Stage | null>(null);
   useEffect(() => {
-    if (otp.stage === 'entry') {
-      phoneInputRef.current?.focus();
-    }
-  }, [otp.stage]);
+    const previousStage = previousStageRef.current;
+    previousStageRef.current = otp.stage;
+    if (otp.stage !== 'entry') return;
+    const shouldFocus = previousStage === null ? focusOnMount : previousStage !== 'entry';
+    if (shouldFocus) phoneInputRef.current?.focus();
+  }, [otp.stage, focusOnMount]);
 
   const handleChangeNumber = useCallback((): void => {
     otp.handleChangeNumber();
     setLocalNumber('');
   }, [otp]);
+
+  // The one retry has already failed, so the session cannot be renewed silently (a dead refresh
+  // token). Signing in again mints a live one; a reload would not. Same move as the booking flow.
+  const authModal = useAuthModal();
+  const { clearSessionExpired } = otp;
+  const handleReauthenticate = useCallback((): void => {
+    authModal.open({ initialError: SESSION_EXPIRED_MESSAGE, onSuccess: clearSessionExpired });
+  }, [authModal, clearSessionExpired]);
 
   const canSend =
     localNumber.trim().replaceAll(/\s/g, '').length >= 4 && !phoneError && !otp.rateLimited;
@@ -1005,10 +1103,27 @@ export function PhoneVerificationFlow({
           </div>
         )}
 
+        {/* Error state 11: a send refused for the session, not the number */}
+        {otp.stage === 'entry' && otp.sendBlock !== null && (
+          <div className="mt-3">
+            <StatusBanner
+              type={otp.sendBlock === 'session_expired' ? 'info' : 'warning'}
+              icon={otp.sendBlock === 'session_expired' ? Clock : Info}
+            >
+              {ERROR_MESSAGES[otp.sendBlock]}
+            </StatusBanner>
+          </div>
+        )}
+
         {/* Send / sending button */}
         {(otp.stage === 'entry' || otp.stage === 'sending') && (
           <div className="mt-5 flex gap-2.5">
-            {!otp.rateLimited && (
+            {otp.sendBlock === 'session_expired' && (
+              <Button onClick={handleReauthenticate} className="flex-1 gap-2" size="lg">
+                Sign in again
+              </Button>
+            )}
+            {!otp.rateLimited && otp.sendBlock === null && (
               <Button
                 disabled={!canSend || otp.stage === 'sending'}
                 onClick={otp.handleSend}
@@ -1056,6 +1171,7 @@ export function PhoneVerificationFlow({
                 onResend={otp.handleResend}
                 onChangeNumber={handleChangeNumber}
                 onRetrySend={otp.handleSend}
+                onReauthenticate={handleReauthenticate}
               />
             )}
 

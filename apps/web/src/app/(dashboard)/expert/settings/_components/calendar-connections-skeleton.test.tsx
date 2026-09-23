@@ -9,4 +9,11 @@ describe('CalendarConnectionsSkeleton', () => {
     expect(output.tagName.toLowerCase()).toBe('output');
     expect(screen.getByText('Loading…')).toBeInTheDocument();
   });
+
+  it('renders placeholder rows with no card shell of its own — it sits inside the Calendars card', () => {
+    const { container } = render(<CalendarConnectionsSkeleton />);
+    expect(container.querySelector('[data-slot="card"]')).toBeNull();
+    const rows = screen.getByLabelText('Loading').firstElementChild;
+    expect(rows?.children).toHaveLength(2);
+  });
 });

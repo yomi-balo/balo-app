@@ -1,10 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'motion/react';
-import { AlertTriangle, CalendarDays, Clock, Info, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { motion, useReducedMotion } from 'motion/react';
+import { AlertTriangle, Calendar, Clock, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { IconBadge } from '@/components/balo/icon-badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { ExpertAvailabilityCalendar } from '@/components/availability';
 import {
@@ -22,11 +21,12 @@ import { track, SCHEDULE_EVENTS } from '@/lib/analytics';
 import { CalendarConnectionsSection } from './calendar-connections-section';
 import { DateOverridesCard } from './date-overrides-card';
 import { ScheduleDayRow } from './schedule-day-row';
-import { ScheduleTimezoneCombobox } from './schedule-timezone-combobox';
+import { ScheduleTimezoneLine } from './schedule-timezone-line';
 import { BookingRulesSection } from './booking-rules-section';
 import { ScheduleEmptyState } from './schedule-empty-state';
-import { ScheduleSavedSummary } from './schedule-saved-summary';
 import { ScheduleDstWarning } from './schedule-dst-warning';
+import { SettingsCard, SettingsEyebrow } from './settings-card';
+import { SettingsPageHeader } from './settings-page-header';
 import { getScheduleAction } from '../_actions/get-schedule';
 import { saveScheduleAction } from '../_actions/save-schedule';
 import { clearScheduleAction } from '../_actions/clear-schedule';
@@ -58,23 +58,16 @@ import type { BookingSettings } from '../_types/schedule';
 
 type ViewState = 'loading' | 'empty' | 'error' | 'ready';
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.06 } },
-} as const;
-
-const itemVariants = {
-  hidden: { opacity: 0, y: 12 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' as const } },
-};
+const AVAILABILITY_HEADING_ID = 'schedule-availability-heading';
+const PREVIEW_HEADING_ID = 'schedule-preview-heading';
 
 export function ScheduleTab(): React.JSX.Element {
+  const reduceMotion = useReducedMotion();
   const [viewState, setViewState] = useState<ViewState>('loading');
   const [week, setWeek] = useState<WeekState>(createEmptyWeek);
   const [bookingSettings, setBookingSettings] = useState<BookingSettings>(DEFAULT_BOOKING_SETTINGS);
   const [timezone, setTimezone] = useState('Australia/Melbourne');
   const [saving, setSaving] = useState(false);
-  const [showSavedSummary, setShowSavedSummary] = useState(false);
   // BAL-236 (D15) — promoted from `expertIdRef` so the availability preview (mounted only in
   // the `ready` branch) re-renders once the id is known. The ref is KEPT: four `track(...)`
   // call sites read it synchronously inside callbacks and must not be disturbed.
@@ -117,12 +110,10 @@ export function ScheduleTab(): React.JSX.Element {
     setBookingSettings(data.bookingSettings);
     if (data.rules.length === 0) {
       setWeek(createEmptyWeek());
-      setShowSavedSummary(false);
       setViewState('empty');
       return;
     }
     setWeek(rulesToWeek(data.rules));
-    setShowSavedSummary(true);
     setViewState('ready');
   }, []);
 
@@ -132,11 +123,10 @@ export function ScheduleTab(): React.JSX.Element {
 
   // ── Weekly-grid mutations ────────────────────────────────────────
 
-  // One rule, no exceptions: every mutation clears both the saved-summary flag and
-  // any active conflict highlight (a stale red after the expert has already fixed
-  // it but not yet re-saved would be worse than no highlight at all).
+  // One rule, no exceptions: every mutation clears any active conflict highlight (a stale
+  // red after the expert has already fixed it but not yet re-saved would be worse than no
+  // highlight at all).
   const markEdited = useCallback((): void => {
-    setShowSavedSummary(false);
     setConflict(null);
   }, []);
 
@@ -307,7 +297,6 @@ export function ScheduleTab(): React.JSX.Element {
         });
       }
       persistedBookingSettingsRef.current = bookingSettings;
-      setShowSavedSummary(true);
       toast.success('Schedule saved');
     } else {
       toast.error(result.error ?? 'Failed to save schedule');
@@ -322,7 +311,6 @@ export function ScheduleTab(): React.JSX.Element {
       hasPersistedRulesRef.current = false;
       track(SCHEDULE_EVENTS.CLEARED, { expert_id: expertIdRef.current });
       setWeek(createEmptyWeek());
-      setShowSavedSummary(false);
       setViewState('empty');
       toast.success('Schedule cleared');
     } else {
@@ -344,223 +332,251 @@ export function ScheduleTab(): React.JSX.Element {
     [conflict, week]
   );
 
+  const timezoneKnown = viewState === 'ready' || viewState === 'empty';
+
   return (
-    <div>
-      <motion.div variants={containerVariants} initial="hidden" animate="show">
-        {/* Header */}
-        <motion.div variants={itemVariants} className="mb-8 flex items-center gap-3">
-          <IconBadge icon={Clock} color="#2563EB" size={44} iconSize={22} />
+    <motion.div
+      className="flex flex-col gap-7"
+      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+    >
+      <SettingsPageHeader
+        icon={Calendar}
+        color="#2563EB"
+        title="Schedule"
+        description={
+          <>
+            Set when you&apos;re open to consultations. These hours, minus anything busy on your
+            calendar, become the times clients can book.
+          </>
+        }
+      >
+        {timezoneKnown && (
+          <ScheduleTimezoneLine timezone={timezone} onChange={handleTimezoneChange} />
+        )}
+        {viewState === 'loading' && (
+          <div
+            aria-hidden="true"
+            className="bg-muted h-5 w-72 max-w-full animate-pulse rounded motion-reduce:animate-none"
+          />
+        )}
+      </SettingsPageHeader>
+
+      <SettingsCard
+        aria-labelledby={AVAILABILITY_HEADING_ID}
+        className="flex flex-col gap-6 p-5 sm:p-7"
+      >
+        <div className="flex items-start gap-3">
+          <div className="bg-violet/10 flex size-[34px] shrink-0 items-center justify-center rounded-[9px]">
+            <Clock className="text-violet size-[17px]" aria-hidden="true" />
+          </div>
           <div>
-            <h1 className="text-foreground text-2xl font-semibold">Schedule</h1>
-            <p className="text-muted-foreground mt-0.5 text-sm leading-relaxed">
-              Set when you&apos;re open to consultations. These hours, minus anything busy on your
-              calendar, become the times clients can book.
+            <h2 id={AVAILABILITY_HEADING_ID} className="text-foreground text-base font-semibold">
+              Availability
+            </h2>
+            <p className="text-muted-foreground mt-0.5 text-[13px]">
+              Your open hours, turned into bookable slots.
             </p>
           </div>
-        </motion.div>
+        </div>
 
-        <motion.div variants={itemVariants}>
-          {viewState === 'loading' && (
-            <div className="flex items-center justify-center py-12">
-              <Loader2
-                className="text-muted-foreground h-6 w-6 animate-spin"
-                aria-label="Loading"
-              />
-            </div>
-          )}
+        {viewState === 'loading' && <ScheduleLoadingState />}
 
-          {viewState === 'error' && <ScheduleErrorState onRetry={loadSchedule} />}
+        {viewState === 'error' && <ScheduleErrorState onRetry={loadSchedule} />}
 
-          {viewState === 'empty' && (
-            <ScheduleEmptyState onUseDefaults={handleUseDefaults} onSetUp={handleSetUp} />
-          )}
+        {viewState === 'empty' && (
+          <ScheduleEmptyState onUseDefaults={handleUseDefaults} onSetUp={handleSetUp} />
+        )}
 
-          {viewState === 'ready' && (
-            <div className="flex flex-col gap-4">
-              {/* Timezone */}
-              <section className="border-border bg-card rounded-xl border p-6">
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="text-primary text-[11px] font-bold tracking-wider uppercase">
-                    Timezone
-                  </span>
-                </div>
-                <ScheduleTimezoneCombobox value={timezone} onChange={handleTimezoneChange} />
-                <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
-                  Your hours are set in this timezone. Clients see slots converted to their own.
-                </p>
-              </section>
-
-              {/* Reinterpret warning — only reached when active rules exist (AC12) */}
-              <AlertDialog
-                open={pendingTimezone !== null}
-                onOpenChange={(open) => {
-                  if (!open) setPendingTimezone(null);
-                }}
-              >
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Change your timezone?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Your weekly hours are saved as clock times. Switching timezone keeps the same
-                      clock times but reads them in the new zone — 9:00 AM stays 9:00 AM, but it now
-                      lands at a different real moment, so every bookable slot shifts. Busy times on
-                      your connected calendar aren&apos;t affected.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Keep current timezone</AlertDialogCancel>
-                    <AlertDialogAction onClick={confirmTimezoneChange}>
-                      Change timezone
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-
-              {/* Weekly hours */}
-              <section className="border-border bg-card rounded-xl border p-6">
-                <div className="mb-1.5 flex items-center gap-2">
-                  <Clock className="text-primary h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="text-primary text-[11px] font-bold tracking-wider uppercase">
-                    Weekly hours
-                  </span>
-                </div>
-                <p className="text-muted-foreground mb-2 text-sm leading-relaxed">
-                  Set the hours you&apos;re open to consultations each week.
-                </p>
-                <div>
-                  {week.map((day, index) => {
-                    const meta = DAY_META[index];
-                    return (
-                      <ScheduleDayRow
-                        key={meta?.dayOfWeek ?? index}
-                        dayIndex={index}
-                        day={day}
-                        conflictMessages={conflictMessages}
-                        onToggle={(enabled) => handleToggleDay(index, enabled)}
-                        onRangeChange={(rangeId, field, value) =>
-                          handleRangeChange(index, rangeId, field, value)
-                        }
-                        onAddRange={() => handleAddRange(index)}
-                        onRemoveRange={(rangeId) => handleRemoveRange(index, rangeId)}
-                        onCopyToDays={(targets) => handleCopyToDays(index, targets)}
-                      />
-                    );
-                  })}
-                </div>
-              </section>
-
+        {viewState === 'ready' && (
+          <>
+            <div className="flex flex-col gap-3">
+              <SettingsEyebrow>Weekly hours</SettingsEyebrow>
+              {week.map((day, index) => {
+                const meta = DAY_META[index];
+                return (
+                  <ScheduleDayRow
+                    key={meta?.dayOfWeek ?? index}
+                    dayIndex={index}
+                    day={day}
+                    conflictMessages={conflictMessages}
+                    onToggle={(enabled) => handleToggleDay(index, enabled)}
+                    onRangeChange={(rangeId, field, value) =>
+                      handleRangeChange(index, rangeId, field, value)
+                    }
+                    onAddRange={() => handleAddRange(index)}
+                    onRemoveRange={(rangeId) => handleRemoveRange(index, rangeId)}
+                    onCopyToDays={(targets) => handleCopyToDays(index, targets)}
+                  />
+                );
+              })}
               {springForwardGap && dstMatch && (
                 <ScheduleDstWarning gap={springForwardGap} timezone={timezone} match={dstMatch} />
               )}
-
-              {/* Booking rules */}
-              <BookingRulesSection settings={bookingSettings} onChange={handleBookingChange} />
-
-              {showSavedSummary && <ScheduleSavedSummary week={week} timezone={timezone} />}
-
-              {/* BAL-236 — the resolved bookable-slot preview. Only inside `ready` (the expert
-                  has saved rules); in `empty`, `ScheduleEmptyState` already owns the message and
-                  a `not_configured` preview would just duplicate it. */}
-              {expertProfileId && (
-                <section className="border-border bg-card rounded-xl border p-6">
-                  <div className="mb-1.5 flex items-center gap-2">
-                    <CalendarDays className="text-primary h-3.5 w-3.5" aria-hidden="true" />
-                    <span className="text-primary text-[11px] font-bold tracking-wider uppercase">
-                      What clients see
-                    </span>
-                  </div>
-                  <p className="text-muted-foreground mb-4 text-sm leading-relaxed">
-                    Your hours, minus anything already busy on your connected calendar.
-                  </p>
-                  <ExpertAvailabilityCalendar
-                    expertProfileId={expertProfileId}
-                    mode="preview"
-                    viewerTimezone={persistedTimezone}
-                    daysAhead={14}
-                    viewerType="expert"
-                  />
-                </section>
-              )}
-
-              {/* Actions */}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={saving}
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" aria-hidden="true" />
-                      Clear schedule
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Clear your whole schedule?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Clients won&apos;t be able to book you until you set your hours again.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={handleClear}
-                        className={buttonVariants({ variant: 'destructive' })}
-                      >
-                        Yes, clear it
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-                <Button type="button" onClick={handleSave} disabled={saving}>
-                  {saving && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-                  Save schedule
-                </Button>
-              </div>
             </div>
-          )}
-        </motion.div>
 
-        {/* Calendar link context — between the editor and the calendar connection */}
-        <motion.div
-          variants={itemVariants}
-          className="text-muted-foreground mt-6 flex items-start gap-2 px-0.5 text-xs leading-relaxed"
-        >
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span>
-            These are the hours you&apos;re open. We automatically hide any times you&apos;re
-            already busy on your connected calendar, so clients only see when you&apos;re genuinely
-            free.
-          </span>
-        </motion.div>
-      </motion.div>
+            <CardDivider />
 
-      {/* Calendar connections, stacked below the weekly editor */}
-      <div className="border-border/60 mt-8 border-t pt-8">
-        <CalendarConnectionsSection />
-      </div>
+            <BookingRulesSection settings={bookingSettings} onChange={handleBookingChange} />
 
-      {/* BAL-397 §3.1 — moved up from inside the calendar section: a failed calendar fetch
-          must not take Time off (an independent feature with its own fetch) down with it. */}
+            <CardDivider />
+
+            <p className="text-muted-foreground text-[12.5px] leading-relaxed">
+              Clients see these hours minus anything already busy on your connected calendar,
+              converted to their own timezone.
+            </p>
+
+            <ScheduleActions saving={saving} onClear={handleClear} onSave={handleSave} />
+          </>
+        )}
+      </SettingsCard>
+
+      {/* BAL-397 §3.1 — Time off renders as a sibling of the calendar section, never inside
+          it: a failed calendar fetch must not take Time off (an independent feature with its
+          own fetch) down with it. */}
       <DateOverridesCard />
+
+      <CalendarConnectionsSection />
+
+      {/* BAL-236 — the resolved bookable-slot preview. Only inside `ready` (the expert has
+          saved rules); in `empty`, `ScheduleEmptyState` already owns the message and a
+          `not_configured` preview would just duplicate it. */}
+      {viewState === 'ready' && expertProfileId && (
+        <SettingsCard aria-labelledby={PREVIEW_HEADING_ID} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <SettingsEyebrow as="h2" id={PREVIEW_HEADING_ID}>
+              What clients see
+            </SettingsEyebrow>
+            <p className="text-muted-foreground text-[13px] leading-relaxed">
+              Your hours, minus anything already busy on your connected calendar.
+            </p>
+          </div>
+          <ExpertAvailabilityCalendar
+            expertProfileId={expertProfileId}
+            mode="preview"
+            viewerTimezone={persistedTimezone}
+            daysAhead={14}
+            viewerType="expert"
+          />
+        </SettingsCard>
+      )}
+
+      {/* Reinterpret warning — only reached when active rules exist (AC12) */}
+      <AlertDialog
+        open={pendingTimezone !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingTimezone(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Change your timezone?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your weekly hours are saved as clock times. Switching timezone keeps the same clock
+              times but reads them in the new zone — 9:00 AM stays 9:00 AM, but it now lands at a
+              different real moment, so every bookable slot shifts. Busy times on your connected
+              calendar aren&apos;t affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep current timezone</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmTimezoneChange}>Change timezone</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </motion.div>
+  );
+}
+
+function CardDivider(): React.JSX.Element {
+  return <div aria-hidden="true" className="bg-border/60 h-px" />;
+}
+
+interface ScheduleActionsProps {
+  saving: boolean;
+  onClear: () => Promise<void>;
+  onSave: () => Promise<void>;
+}
+
+/** "Clear schedule" (confirmed first — it is destructive) on the left, "Save schedule" right. */
+function ScheduleActions({
+  saving,
+  onClear,
+  onSave,
+}: Readonly<ScheduleActionsProps>): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <AlertDialog>
+        <AlertDialogTrigger asChild>
+          <Button
+            type="button"
+            variant="link"
+            disabled={saving}
+            className="text-muted-foreground hover:text-destructive h-11 px-0 text-[13px] sm:h-9"
+          >
+            Clear schedule
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear your whole schedule?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Clients won&apos;t be able to book you until you set your hours again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onClear}
+              className={buttonVariants({ variant: 'destructive' })}
+            >
+              Yes, clear it
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <Button type="button" onClick={onSave} disabled={saving}>
+        {saving && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+        Save schedule
+      </Button>
     </div>
+  );
+}
+
+/** Skeleton of the seven day rows, so the card keeps its shape while hours load. */
+function ScheduleLoadingState(): React.JSX.Element {
+  return (
+    <output className="flex flex-col gap-3">
+      <span className="sr-only">Loading your hours</span>
+      {DAY_META.map((meta) => (
+        <div key={meta.dayOfWeek} aria-hidden="true" className="flex h-9 items-center gap-3.5">
+          <div className="bg-muted h-[18px] w-8 animate-pulse rounded-full motion-reduce:animate-none" />
+          <div className="bg-muted h-3.5 w-10 animate-pulse rounded motion-reduce:animate-none" />
+          <div className="bg-muted h-8 w-[112px] animate-pulse rounded-md motion-reduce:animate-none" />
+          <div className="bg-muted hidden h-8 w-[112px] animate-pulse rounded-md motion-reduce:animate-none sm:block" />
+        </div>
+      ))}
+    </output>
   );
 }
 
 function ScheduleErrorState({ onRetry }: Readonly<{ onRetry: () => void }>): React.JSX.Element {
   return (
-    <div className="border-border bg-card rounded-xl border p-10 text-center">
-      <div className="mb-4 flex justify-center">
-        <IconBadge icon={AlertTriangle} color="#DC2626" size={52} iconSize={24} />
+    <div className="border-destructive/30 bg-destructive/5 flex flex-col items-start gap-3 rounded-lg border p-4">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="text-destructive mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <div>
+          <h3 className="text-foreground text-sm font-semibold">
+            We couldn&apos;t load your hours
+          </h3>
+          <p className="text-muted-foreground mt-1 max-w-md text-[13px] leading-relaxed">
+            Something went wrong on our end. Try again in a moment — if it keeps happening,
+            we&apos;re already looking into it.
+          </p>
+        </div>
       </div>
-      <h2 className="text-foreground text-base font-semibold">We couldn&apos;t load your hours</h2>
-      <p className="text-muted-foreground mx-auto mt-2 max-w-sm text-sm leading-relaxed">
-        Something went wrong on our end. Try again in a moment — if it keeps happening, we&apos;re
-        already looking into it.
-      </p>
-      <Button type="button" variant="outline" className="mt-5" onClick={onRetry}>
+      <Button type="button" variant="outline" size="sm" onClick={onRetry}>
         <RefreshCw className="h-4 w-4" aria-hidden="true" />
         Try again
       </Button>

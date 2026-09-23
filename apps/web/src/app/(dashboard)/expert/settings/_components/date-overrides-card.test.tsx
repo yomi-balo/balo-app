@@ -92,8 +92,34 @@ describe('DateOverridesCard', () => {
     render(<DateOverridesCard />);
 
     expect(
-      await screen.findByText(/No time off scheduled — add dates when you're unavailable\./i)
+      await screen.findByText(
+        /Planning a break\? Add the dates and clients won't be able to book you on them\./
+      )
     ).toBeInTheDocument();
+    expect(screen.queryByText(/No time off/i)).not.toBeInTheDocument();
+  });
+
+  it('is a labelled card with a "Time off" heading and its add control in the header', async () => {
+    mockGet.mockResolvedValue({ overrides: [], expertProfileId: 'profile-1' });
+    render(<DateOverridesCard />);
+
+    const heading = screen.getByRole('heading', { level: 2, name: 'Time off' });
+    const card = screen.getByRole('region', { name: 'Time off' });
+    expect(card).toContainElement(heading);
+    expect(within(card).getByRole('button', { name: /add time off/i })).toBeInTheDocument();
+    await screen.findByText(/Planning a break\?/);
+  });
+
+  it('shows a loading indicator until the fetch settles', () => {
+    mockGet.mockReturnValue(new Promise(() => {}));
+    render(<DateOverridesCard />);
+    expect(screen.getByText('Loading time off')).toBeInTheDocument();
+  });
+
+  it('falls back to the empty state when there is no expert profile', async () => {
+    mockGet.mockResolvedValue(null);
+    render(<DateOverridesCard />);
+    expect(await screen.findByText(/Planning a break\?/)).toBeInTheDocument();
   });
 
   it('renders existing time-off blocks with a formatted range and label', async () => {
@@ -102,6 +128,30 @@ describe('DateOverridesCard', () => {
 
     expect(await screen.findByText('Fri, 25 Dec 2026')).toBeInTheDocument();
     expect(screen.getByText('Holiday')).toBeInTheDocument();
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  it('labels a block with no label as "Unavailable"', async () => {
+    mockGet.mockResolvedValue({
+      overrides: [{ ...CHRISTMAS, label: null }],
+      expertProfileId: 'profile-1',
+    });
+    render(<DateOverridesCard />);
+
+    expect(await screen.findByText('Fri, 25 Dec 2026')).toBeInTheDocument();
+    expect(screen.getByText('Unavailable')).toBeInTheDocument();
+  });
+
+  it('lists blocks in start-date order, one row each', async () => {
+    mockGet.mockResolvedValue({ overrides: [CHRISTMAS, NEW_YEAR], expertProfileId: 'profile-1' });
+    render(<DateOverridesCard />);
+
+    await screen.findByText('Fri, 25 Dec 2026');
+    const rows = screen.getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    const [first, second] = rows;
+    expect(first).toHaveTextContent('24 Dec 2026 – 26 Dec 2026');
+    expect(second).toHaveTextContent('Fri, 25 Dec 2026');
   });
 
   it('hides a block that ended yesterday (local) while showing a still-active one', async () => {
@@ -144,7 +194,9 @@ describe('DateOverridesCard', () => {
     render(<DateOverridesCard />);
 
     expect(
-      await screen.findByText(/No time off scheduled — add dates when you're unavailable\./i)
+      await screen.findByText(
+        /Planning a break\? Add the dates and clients won't be able to book you on them\./
+      )
     ).toBeInTheDocument();
     expect(screen.queryByText('Old leave')).not.toBeInTheDocument();
   });
@@ -162,7 +214,7 @@ describe('DateOverridesCard', () => {
     mockCreate.mockResolvedValue({ success: true, override: NEW_YEAR });
     render(<DateOverridesCard />);
 
-    await screen.findByText(/No time off scheduled/i);
+    await screen.findByText(/Planning a break\?/);
 
     await user.click(screen.getByRole('button', { name: /add time off/i }));
 
@@ -194,7 +246,7 @@ describe('DateOverridesCard', () => {
     });
     render(<DateOverridesCard />);
 
-    await screen.findByText(/No time off scheduled/i);
+    await screen.findByText(/Planning a break\?/);
     await user.click(screen.getByRole('button', { name: /add time off/i }));
     await pickToday(user);
     await user.click(screen.getByRole('button', { name: /block these dates/i }));

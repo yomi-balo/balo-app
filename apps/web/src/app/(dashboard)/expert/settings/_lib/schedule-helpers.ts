@@ -402,9 +402,9 @@ function effectiveEndMinutes(range: TimeRange): number {
 
 /**
  * '9:00 PM – 1:00 AM' or, for a range that crosses midnight, '9:00 PM – 1:00 AM (next
- * day)'. The ONE definition of the en-dash hours label — every conflict message and the
- * saved-summary route through this, so a crossing range is never rendered as though its
- * end were earlier in the same day.
+ * day)'. The ONE definition of the en-dash hours label — every conflict message routes
+ * through this, so a crossing range is never rendered as though its end were earlier in
+ * the same day.
  */
 function hoursLabel(range: TimeRange): string {
   const base = `${formatHhmm(range.start)} – ${formatHhmm(range.end)}`;
@@ -604,63 +604,6 @@ export function evaluateWeek(week: WeekState): ScheduleValidation | null {
 /** Message-only view of `evaluateWeek`, for callers that don't need the row highlight. */
 export function validateWeek(week: WeekState): string | null {
   return evaluateWeek(week)?.message ?? null;
-}
-
-// ── Saved-summary text (BAL-236 fallback) ───────────────────────────
-
-export interface ScheduleSummarySegment {
-  /** e.g. 'Mon–Fri' or 'Wed'. */
-  days: string;
-  /** e.g. '9:00 AM – 5:00 PM' or '9:00 AM – 1:00 PM, 2:00 PM – 5:00 PM'. */
-  hours: string;
-}
-
-function rangesSignature(ranges: TimeRange[]): string {
-  return ranges.map((range) => `${range.start}-${range.end}`).join(',');
-}
-
-function rangesLabel(ranges: readonly TimeRange[]): string {
-  return ranges.map((range) => hoursLabel(range)).join(', ');
-}
-
-/**
- * Groups consecutive (display-order) enabled days sharing identical ranges into
- * segments like { days: 'Mon–Fri', hours: '9:00 AM – 5:00 PM' }.
- */
-export function summarizeWeek(week: WeekState): ScheduleSummarySegment[] {
-  const segments: ScheduleSummarySegment[] = [];
-  let runStart = -1;
-  let runSignature = '';
-
-  const flush = (endIndex: number): void => {
-    if (runStart === -1) return;
-    const startMeta = DAY_META[runStart];
-    const endMeta = DAY_META[endIndex];
-    const startRanges = week[runStart]?.ranges ?? [];
-    if (!startMeta || !endMeta) return;
-    const days = runStart === endIndex ? startMeta.short : `${startMeta.short}–${endMeta.short}`;
-    segments.push({ days, hours: rangesLabel(startRanges) });
-  };
-
-  week.forEach((day, index) => {
-    const active = day.enabled && day.ranges.length > 0;
-    const signature = active ? rangesSignature(day.ranges) : '';
-    if (active && signature === runSignature && runStart !== -1) {
-      return; // extend current run
-    }
-    // Close any open run at the previous index.
-    if (runStart !== -1) flush(index - 1);
-    if (active) {
-      runStart = index;
-      runSignature = signature;
-    } else {
-      runStart = -1;
-      runSignature = '';
-    }
-  });
-  if (runStart !== -1) flush(week.length - 1);
-
-  return segments;
 }
 
 // ── DST spring-forward conflict (non-blocking warning) ──────────────

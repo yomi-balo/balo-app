@@ -909,6 +909,31 @@ describe('expertsRepository.findOrCreateDraft', () => {
     });
     expect(rows).toHaveLength(1);
   });
+  it('starts the schedule timezone from the one the user chose at onboarding', async () => {
+    const user = await userFactory({ timezone: 'Australia/Melbourne' });
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+
+    const draft = await expertsRepository.findOrCreateDraft({
+      userId: user.id,
+      verticalId: vertical.id,
+      type: 'freelancer',
+    });
+
+    expect(draft.timezone).toBe('Australia/Melbourne');
+  });
+
+  it('falls back to UTC when the user never chose a timezone', async () => {
+    const user = await userFactory({ timezone: null });
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+
+    const draft = await expertsRepository.findOrCreateDraft({
+      userId: user.id,
+      verticalId: vertical.id,
+      type: 'freelancer',
+    });
+
+    expect(draft.timezone).toBe('UTC');
+  });
 });
 
 // ── saveProfileStep ──────────────────────────────────────────────────
@@ -1339,6 +1364,8 @@ function fakeExecutor(opts: {
   let i = 0;
   const exec = {
     query: { expertProfiles: { findFirst: () => Promise.resolve(opts.findFirst[f++]) } },
+    // The owner's timezone read — no user row, so the draft falls back to UTC.
+    select: () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([]) }) }) }),
     insert: () => ({
       values: () => ({
         onConflictDoNothing: () => ({

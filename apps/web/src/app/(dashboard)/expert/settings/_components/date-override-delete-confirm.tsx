@@ -44,7 +44,7 @@ export function DateOverrideDeleteConfirm({
         <Button
           variant="ghost"
           size="icon"
-          className="text-muted-foreground hover:text-destructive size-11 shrink-0 focus-visible:ring-2"
+          className="text-muted-foreground hover:text-destructive size-11 shrink-0 focus-visible:ring-2 sm:size-9"
           aria-label={`Remove time off: ${rangeLabel}`}
         >
           <Trash2 className="h-4 w-4" aria-hidden="true" />

@@ -5,7 +5,7 @@ import { CountryCombobox } from './country-combobox';
 
 // cmdk / Radix UI need browser APIs not in jsdom
 beforeAll(() => {
-  global.ResizeObserver = class {
+  globalThis.ResizeObserver = class {
     observe(): void {}
     unobserve(): void {}
     disconnect(): void {}
@@ -23,6 +23,17 @@ describe('CountryCombobox', () => {
   it('renders selected country name and flag', () => {
     render(<CountryCombobox value="AU" onValueChange={vi.fn()} />);
     expect(screen.getByRole('combobox')).toHaveTextContent('Australia');
+  });
+
+  it('keeps its 44px trigger by default', () => {
+    render(<CountryCombobox value="AU" onValueChange={vi.fn()} />);
+    expect(screen.getByRole('combobox').className.split(' ')).toContain('h-11');
+  });
+
+  it('merges a className onto the trigger', () => {
+    render(<CountryCombobox value="AU" onValueChange={vi.fn()} className="sm:h-9" />);
+    const classes = screen.getByRole('combobox').className.split(' ');
+    expect(classes).toEqual(expect.arrayContaining(['h-11', 'sm:h-9', 'w-full']));
   });
 
   it('renders disabled state', () => {

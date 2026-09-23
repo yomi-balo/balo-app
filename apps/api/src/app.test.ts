@@ -58,9 +58,10 @@ describe('buildApp', () => {
    * ⚠⚠ BAL-568 — REQUIRED, AND THE FAILURE IT PREVENTS IS SILENT. A browser cannot READ a custom
    * response header cross-origin without `Access-Control-Expose-Headers`, and web (`:3000`) → api
    * (`:3002`) is cross-origin. Without `exposedHeaders` on the CORS registration the browser
-   * strips `x-balo-session-invalid` before any JavaScript sees it, so the one browser-side Bearer
-   * caller's sign-out arm is dead code — and NO test that only inspects `requireAuth`'s reply
-   * would notice, because the header IS sent; it just never arrives.
+   * strips `x-balo-session-invalid` before any JavaScript sees it, so a browser-side Bearer
+   * caller could never act on it — and NO test that only inspects `requireAuth`'s reply would
+   * notice, because the header IS sent; it just never arrives. (No browser caller exists today;
+   * every current reader is server-side, where CORS does not apply.)
    *
    * ⚠ BEHAVIOURAL, NOT A SOURCE SCAN: it sends a real cross-origin request through the real CORS
    * plugin and reads the header a browser would read.

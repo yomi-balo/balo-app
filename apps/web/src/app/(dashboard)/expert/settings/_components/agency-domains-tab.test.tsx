@@ -54,6 +54,24 @@ describe('AgencyDomainsTab', () => {
     expect(refreshMock).toHaveBeenCalledOnce();
   });
 
+  // The settings panel wrapper owns the width; a centred cap here would float the tab away from
+  // the tab strip's left edge.
+  it.each([
+    ['loaded', [DOMAIN]],
+    ['error', null],
+  ] as const)('sets no centring or width cap of its own (%s)', (_state, domains) => {
+    const { container } = render(
+      <AgencyDomainsTab
+        agencyId={AGENCY_ID}
+        partyName="Lattice"
+        domains={domains === null ? null : [...domains]}
+      />
+    );
+    const root = container.firstElementChild;
+    expect(root).not.toBeNull();
+    expect(root?.className).not.toMatch(/\bmx-auto\b|\bmax-w-/);
+  });
+
   it('has no accessibility violations', async () => {
     const { container } = render(
       <AgencyDomainsTab agencyId={AGENCY_ID} partyName="Lattice" domains={[DOMAIN]} />

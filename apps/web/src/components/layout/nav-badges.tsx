@@ -1,6 +1,7 @@
 'use client';
 
 import { Check } from 'lucide-react';
+import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
 import type { EnabledNavEntry, NavBadgeSource } from './nav-registry';
 
 export interface NavBadgeCounts {
@@ -27,6 +28,13 @@ export const NAV_BADGE_RENDERERS: Record<
   ),
 };
 
+/**
+ * The denominator is `CHECKLIST_ITEMS.length`, never a literal — it was hard-coded to 5 when
+ * this badge shipped and silently went stale ("5/5", reading as done) once the phone step made
+ * the checklist six items long. `completedCount` still comes from the caller's `ChecklistStatus`
+ * read; only the total is derived here, from the same list `expert/settings/page.tsx` and
+ * `SetupBanner` already use.
+ */
 function ChecklistBadge({
   completedCount,
   allComplete,
@@ -47,7 +55,7 @@ function ChecklistBadge({
 
   return (
     <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5 text-[10px] font-semibold">
-      {completedCount}/5
+      {completedCount}/{CHECKLIST_ITEMS.length}
     </span>
   );
 }

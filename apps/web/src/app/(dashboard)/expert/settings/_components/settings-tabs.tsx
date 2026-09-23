@@ -1,18 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  AlertCircle,
-  Calendar,
-  User,
-  DollarSign,
-  CreditCard,
-  Shield,
-  Briefcase,
-  Award,
-  Globe,
-} from 'lucide-react';
+import { AlertCircle, Calendar, CreditCard, DollarSign, Globe, User } from 'lucide-react';
 import { RateTab } from './rate-tab';
 import { PayoutsTab, type PayoutDetailsSummary } from './payouts-tab';
 import { ProfileTab } from './profile-tab';
@@ -29,7 +19,7 @@ import type {
   PartyDomainWithCreator,
 } from '@balo/db';
 
-// ── Main tabs (pill style) ──────────────────────────────────────
+// ── Main tabs (pill strip) ──────────────────────────────────────
 const MAIN_TABS = [
   { key: 'profile', label: 'Profile', icon: User },
   { key: 'rate', label: 'Rate', icon: DollarSign },
@@ -47,16 +37,45 @@ export interface AgencyDomainsTabData {
   domains: PartyDomainWithCreator[] | null;
 }
 
-// ── Sub tabs (underline style, under Profile main tab) ──────────
+// ── Sub tabs (underline strip, under the Profile main tab) ──────
 const PROFILE_SUB_TABS = [
-  { key: 'profile', label: 'Profile', icon: User },
-  { key: 'expertise', label: 'Expertise', icon: Shield },
-  { key: 'workHistory', label: 'Work History', icon: Briefcase },
-  { key: 'certifications', label: 'Certifications', icon: Award },
+  { key: 'profile', label: 'Profile' },
+  { key: 'expertise', label: 'Expertise' },
+  { key: 'workHistory', label: 'Work History' },
+  { key: 'certifications', label: 'Certifications' },
 ] as const;
 
 // Sub-tab keys that live under the "Profile" main tab
 const PROFILE_SUB_TAB_KEYS = new Set<string>(PROFILE_SUB_TABS.map((t) => t.key));
+
+/**
+ * The two levels read differently on purpose: the main row is a pill strip, the Profile sub-tab
+ * row an underline strip.
+ *
+ * The underline strip's rule is an inset shadow, not a border, so each tab's 2px underline paints
+ * over it from inside the scroll container: a `-mb-px` overhang past a border would be clipped by
+ * `overflow-x-auto`, or scroll the strip by a pixel.
+ *
+ * `contain-inline-size` keeps a strip's unwrapped width out of its ancestors' min-content: the
+ * dashboard shell's flex column has no `min-w-0`, so without it a strip wider than a 375px
+ * viewport widens the whole page instead of scrolling. The pill is `inline-flex` (it hugs its
+ * tabs), and inline-size containment would collapse a shrink-to-fit box to zero width — so the
+ * pill carries the containment on a block wrapper and scrolls inside it at `max-w-full`.
+ */
+const UNDERLINE_STRIP_CLASSES =
+  'scrollbar-none flex overflow-x-auto contain-inline-size shadow-[inset_0_-1px_0_var(--border)]';
+
+const PILL_STRIP_CLASSES =
+  'bg-muted scrollbar-none inline-flex max-w-full gap-1 overflow-x-auto rounded-xl p-1';
+
+const PILL_TAB_CLASSES =
+  'inline-flex items-center gap-1.5 rounded-lg px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors duration-200 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none sm:py-2';
+
+const UNDERLINE_TAB_CLASSES =
+  'border-b-2 font-medium whitespace-nowrap transition-colors duration-150 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset';
+
+const INACTIVE_UNDERLINE_TAB_CLASSES =
+  'text-muted-foreground hover:text-foreground border-transparent';
 
 /** Derive which main tab is active from a URL tab value */
 function getMainTab(tab: string): string {
@@ -81,7 +100,6 @@ interface SettingsTabsProps {
   certCategories: CertificationsByCategory[] | null;
   initialPhone: string | null;
   phoneVerifiedAt: string | null;
-  accessToken: string;
   /** BAL-347: present + true only for agency owners/admins (adds the Domains tab). */
   canManageAgency: boolean;
   agencyDomains: AgencyDomainsTabData | null;
@@ -97,12 +115,12 @@ export function SettingsTabs({
   certCategories,
   initialPhone,
   phoneVerifiedAt,
-  accessToken,
   canManageAgency,
   agencyDomains,
-}: SettingsTabsProps): React.JSX.Element {
+}: Readonly<SettingsTabsProps>): React.JSX.Element {
   const [tab, setTab] = useState(defaultTab);
   const router = useRouter();
+  const idBase = useId();
   const mainTabs = canManageAgency ? [...MAIN_TABS, DOMAINS_TAB] : MAIN_TABS;
 
   // Sync tab state when URL changes externally (browser back/forward, checklist click)
@@ -112,6 +130,11 @@ export function SettingsTabs({
 
   const mainTab = getMainTab(tab);
   const subTab = getSubTab(tab);
+  const showSubTabs = mainTab === 'profile';
+
+  const mainTabId = (key: string): string => `${idBase}-tab-${key}`;
+  const subTabId = (key: string): string => `${idBase}-subtab-${key}`;
+  const panelId = `${idBase}-panel`;
 
   const handleTabChange = (key: string): void => {
     setTab(key);
@@ -128,67 +151,63 @@ export function SettingsTabs({
 
   return (
     <div>
-      {/* ── Main tabs (pill style) — BAL-511 / ADR-1053 "tabs deliberately static" ── */}
-      <div
-        role="tablist"
-        aria-label="Settings sections"
-        className="bg-muted mb-7 inline-flex gap-1 overflow-x-auto rounded-xl p-1"
-      >
-        {mainTabs.map((t) => {
-          const Icon = t.icon;
-          const isActive = mainTab === t.key;
-          return (
-            <button
-              type="button"
-              key={t.key}
-              role="tab"
-              aria-selected={isActive}
-              onClick={() => handleMainTabChange(t.key)}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors duration-200',
-                isActive
-                  ? 'bg-card text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Icon
-                className={cn('h-4 w-4', isActive ? 'text-primary' : 'text-muted-foreground')}
-                aria-hidden="true"
-              />
-              <span>{t.label}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Profile sub tabs (underline style) ── */}
-      {mainTab === 'profile' && (
-        <div
-          role="tablist"
-          aria-label="Profile sections"
-          className="border-border mb-7 flex gap-0 overflow-x-auto border-b"
-        >
-          {PROFILE_SUB_TABS.map((t) => {
+      {/* ── Main tabs: pill strip — BAL-511 / ADR-1053 "tabs deliberately static" ── */}
+      <div className={cn('contain-inline-size', showSubTabs ? 'mb-6' : 'mb-7')}>
+        <div role="tablist" aria-label="Settings sections" className={PILL_STRIP_CLASSES}>
+          {mainTabs.map((t) => {
             const Icon = t.icon;
-            const isActive = subTab === t.key;
+            const isActive = mainTab === t.key;
             return (
               <button
                 type="button"
                 key={t.key}
+                id={mainTabId(t.key)}
                 role="tab"
                 aria-selected={isActive}
-                onClick={() => handleTabChange(t.key)}
+                aria-controls={isActive ? panelId : undefined}
+                onClick={() => handleMainTabChange(t.key)}
                 className={cn(
-                  '-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors duration-150',
+                  PILL_TAB_CLASSES,
                   isActive
-                    ? 'border-primary text-primary'
-                    : 'text-muted-foreground hover:text-foreground hover:border-border border-transparent'
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
                 )}
               >
                 <Icon
                   className={cn('h-4 w-4', isActive ? 'text-primary' : 'text-muted-foreground')}
                   aria-hidden="true"
                 />
+                <span>{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Profile sub tabs ── */}
+      {showSubTabs && (
+        <div
+          role="tablist"
+          aria-label="Profile sections"
+          className={cn(UNDERLINE_STRIP_CLASSES, 'mb-6 gap-5')}
+        >
+          {PROFILE_SUB_TABS.map((t) => {
+            const isActive = subTab === t.key;
+            return (
+              <button
+                type="button"
+                key={t.key}
+                id={subTabId(t.key)}
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={isActive ? panelId : undefined}
+                onClick={() => handleTabChange(t.key)}
+                className={cn(
+                  UNDERLINE_TAB_CLASSES,
+                  'px-0.5 py-3 text-[13.5px] sm:py-2',
+                  isActive ? 'border-primary text-primary' : INACTIVE_UNDERLINE_TAB_CLASSES
+                )}
+              >
                 {t.label}
               </button>
             );
@@ -201,7 +220,15 @@ export function SettingsTabs({
           commit as the state change, with no exit hold. ⚠ `key={tab}` STAYS — it is not
           decoration, it forces the same remount-per-tab semantics the earlier exit-hold
           implementation had, so no tab's subtree can inherit another's internal state. */}
-      <div role="tabpanel" key={tab}>
+      {/* `contain-inline-size` for the same reason as the strips: a panel's min-content (a
+          schedule row, a long email) must not widen a phone-width page past the viewport. */}
+      <div
+        role="tabpanel"
+        key={tab}
+        id={panelId}
+        aria-labelledby={showSubTabs ? subTabId(subTab) : mainTabId(mainTab)}
+        className="contain-inline-size"
+      >
         <TabPanelContent
           tab={tab}
           profileData={profileData}
@@ -209,7 +236,6 @@ export function SettingsTabs({
           certCategories={certCategories}
           initialPhone={initialPhone}
           phoneVerifiedAt={phoneVerifiedAt}
-          accessToken={accessToken}
           initialRateCents={initialRateCents}
           initialPayoutDetails={initialPayoutDetails}
           agencyDomains={agencyDomains}
@@ -219,6 +245,13 @@ export function SettingsTabs({
   );
 }
 
+/**
+ * Panel widths. Every panel is left-aligned with the tab strip; only the width differs. The
+ * Profile sub-tab builds its own two-column grid, so it takes the full container.
+ */
+const FORM_PANEL_CLASSES = 'max-w-[620px]';
+const WIDE_PANEL_CLASSES = 'max-w-[860px]';
+
 interface TabPanelContentProps {
   tab: string;
   profileData: ProfileSettingsData | null;
@@ -226,7 +259,6 @@ interface TabPanelContentProps {
   certCategories: CertificationsByCategory[] | null;
   initialPhone: string | null;
   phoneVerifiedAt: string | null;
-  accessToken: string;
   initialRateCents: number | null;
   initialPayoutDetails: PayoutDetailsSummary | null;
   agencyDomains: AgencyDomainsTabData | null;
@@ -240,7 +272,6 @@ function ProfileSubTabContent({
   certCategories,
   initialPhone,
   phoneVerifiedAt,
-  accessToken,
 }: Readonly<TabPanelContentProps>): React.JSX.Element | null {
   if (tab === 'profile') {
     if (profileData && referenceData) {
@@ -250,7 +281,6 @@ function ProfileSubTabContent({
           referenceData={referenceData}
           initialPhone={initialPhone}
           phoneVerifiedAt={phoneVerifiedAt}
-          accessToken={accessToken}
         />
       );
     }
@@ -264,7 +294,7 @@ function ProfileSubTabContent({
 
   if (tab === 'expertise') {
     return (
-      <div className="mx-auto max-w-[620px]">
+      <div className={FORM_PANEL_CLASSES}>
         <ExpertiseTab
           competencies={profileData.competencies}
           skillsLocked={profileData.skillsLocked}
@@ -274,14 +304,14 @@ function ProfileSubTabContent({
   }
   if (tab === 'workHistory') {
     return (
-      <div className="mx-auto max-w-[620px]">
+      <div className={FORM_PANEL_CLASSES}>
         <WorkHistoryTab initialEntries={profileData.workHistory} />
       </div>
     );
   }
   if (tab === 'certifications' && certCategories) {
     return (
-      <div className="mx-auto max-w-[620px]">
+      <div className={FORM_PANEL_CLASSES}>
         <CertificationsTab
           initialCerts={profileData.certifications as ApplicationCertWithRelations[]}
           certCategories={certCategories}
@@ -301,11 +331,13 @@ function TabPanelContent(props: Readonly<TabPanelContentProps>): React.JSX.Eleme
   if (tab === 'domains') {
     if (!agencyDomains) return null;
     return (
-      <AgencyDomainsTab
-        agencyId={agencyDomains.agencyId}
-        partyName={agencyDomains.partyName}
-        domains={agencyDomains.domains}
-      />
+      <div className={WIDE_PANEL_CLASSES}>
+        <AgencyDomainsTab
+          agencyId={agencyDomains.agencyId}
+          partyName={agencyDomains.partyName}
+          domains={agencyDomains.domains}
+        />
+      </div>
     );
   }
 
@@ -315,21 +347,21 @@ function TabPanelContent(props: Readonly<TabPanelContentProps>): React.JSX.Eleme
 
   if (tab === 'rate') {
     return (
-      <div className="mx-auto max-w-[620px]">
+      <div className={FORM_PANEL_CLASSES}>
         <RateTab initialRateCents={initialRateCents} />
       </div>
     );
   }
   if (tab === 'payouts') {
     return (
-      <div className="mx-auto max-w-[620px]">
+      <div className={FORM_PANEL_CLASSES}>
         <PayoutsTab initialPayoutDetails={initialPayoutDetails} />
       </div>
     );
   }
   if (tab === 'schedule') {
     return (
-      <div className="mx-auto max-w-[620px]">
+      <div className={WIDE_PANEL_CLASSES}>
         <ScheduleTab />
       </div>
     );
