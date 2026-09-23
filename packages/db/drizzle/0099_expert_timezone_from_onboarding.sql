@@ -5,11 +5,20 @@
 -- onboarding choice onto every profile still sitting on that untouched default.
 --
 -- ⚠ WHY "profile = 'UTC' AND user ≠ 'UTC'" CAN ONLY MEAN "NEVER SET". Once a profile exists,
--- `users.timezone` is written only by the two schedule routes (apps/api routes/experts/
--- schedule.ts), and both set `expert_profiles.timezone` to the same value in the same
--- transaction. An expert who deliberately chose UTC therefore has `users.timezone = 'UTC'` too,
--- and is not matched here. The only other writer, onboarding's timezone step, runs before the
--- profile is created.
+-- `users.timezone` is written only by the two schedule routes — both calls to
+-- `usersRepository.updateTimezone` inside a transaction that also sets `expert_profiles.timezone`
+-- to the same value (`apps/api/src/routes/experts/schedule.ts:234,333`). An expert who
+-- deliberately chose UTC therefore has `users.timezone = 'UTC'` too, and is not matched here.
+--
+-- The only OTHER writer is `updateTimezoneAction` (apps/web/src/lib/auth/actions/update-timezone
+-- .ts, called from the onboarding wizard's `timezone-step.tsx`), and it runs before any profile
+-- exists: `expert_profiles` rows are created only from `findOrCreateDraft`, itself reachable only
+-- through the expert-application flow, which the middleware onboarding gate
+-- (`middleware.ts:175-185`) refuses until `onboardingCompleted === true` — and nothing in the
+-- codebase ever resets that flag back to `false` for an existing user. Verified by grepping every
+-- `usersRepository.update(...)` call site for a `timezone` field (2026-09-23): only the schedule
+-- routes and this one onboarding action write it, confirming no third writer can race the
+-- profile's creation.
 --
 -- The integration harness migrates an EMPTY database, so this touches 0 rows there.
 UPDATE "expert_profiles" AS ep

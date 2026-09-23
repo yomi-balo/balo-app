@@ -57,7 +57,7 @@ export function SidebarNavLink({
   // §0.2/D6-AMENDED — a collapsed icon-only link has NO accessible name today (the Radix Tooltip
   // supplies only `aria-describedby`, never a name). `aria-label` is added ONLY when collapsed or
   // jumpOut — an unconditional one would override the link's rendered content and silently drop
-  // the expert-checklist badge ("3/5") from the announced name.
+  // the expert-checklist badge ("3/6") from the announced name.
   let accessibleName: string | undefined;
   if (jumpOut) {
     accessibleName = `${label}, opens the public directory`;
