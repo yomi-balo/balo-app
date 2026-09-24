@@ -707,7 +707,7 @@ const CLIENT_MISSED_CALL_BLOCK = {
 };
 
 const NOBODY_JOINED_NOT_HELD = {
-  reason: 'missed_call',
+  reason: 'nobody_joined',
   headline: "This one didn't go ahead",
   body: 'Neither side joined this call.',
 };

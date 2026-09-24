@@ -1,6 +1,9 @@
 import { durationLine, finalizedAmountMinor } from '@balo/shared/credit';
 import { formatAud } from '@/lib/credit/display-constants';
-import type { SessionStatementView } from '../_lib/session-statement-view';
+import {
+  statementDurationPresence,
+  type SessionStatementView,
+} from '../_lib/session-statement-view';
 import { STATEMENT_COPY, STATEMENT_SHARED_COPY } from '../_lib/statement-copy';
 
 interface RowProps {
@@ -47,7 +50,7 @@ export function StatementLineItems({
   view,
 }: Readonly<{ view: SessionStatementView }>): React.JSX.Element {
   const copy = STATEMENT_COPY[view.lens];
-  const line = durationLine(view.block);
+  const line = durationLine(view.block, statementDurationPresence(view));
   const bareDuration = `${view.block.durationMinutes} min`;
   const subLine = line === bareDuration ? null : line;
   const total = finalizedAmountMinor(view.block);

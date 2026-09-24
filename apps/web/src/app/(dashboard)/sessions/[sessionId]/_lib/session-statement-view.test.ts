@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionStatement } from '@balo/shared/credit';
-import { toSessionStatementView, isStatementDownloadable } from './session-statement-view';
+import {
+  toSessionStatementView,
+  isStatementDownloadable,
+  statementDurationPresence,
+} from './session-statement-view';
 
 const CLIENT_MONEY: SessionStatement = {
   lens: 'client',
@@ -142,6 +146,25 @@ describe('toSessionStatementView — client-side presence', () => {
     const view = toSessionStatementView(EXPERT_MONEY);
     expect(view.lens).toBe('expert');
     expect(view).not.toHaveProperty('clientSideEverPresent');
+  });
+});
+
+describe('statementDurationPresence', () => {
+  it.each([false, true, null])(
+    'hands the client view’s clientSideEverPresent (%s) to durationLine',
+    (clientSideEverPresent) => {
+      const view = toSessionStatementView({
+        ...CLIENT_ZERO,
+        context: { ...CLIENT_ZERO.context, clientSideEverPresent },
+      });
+      expect(statementDurationPresence(view)).toEqual({ clientSideEverPresent });
+    }
+  );
+
+  it('reports presence as NOT READ on the expert view', () => {
+    expect(statementDurationPresence(toSessionStatementView(EXPERT_MONEY))).toEqual({
+      clientSideEverPresent: null,
+    });
   });
 });
 

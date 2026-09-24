@@ -9,6 +9,7 @@
  */
 import type {
   ClientMoneyBlock,
+  DurationLinePresence,
   ExpertMoneyBlock,
   SessionStatement,
   SessionStatementCounterparty,
@@ -100,6 +101,15 @@ export function toSessionStatementView(statement: SessionStatement): SessionStat
     };
   }
   return { ...base, lens: 'expert', block: statement.block, payout: statement.context.payout };
+}
+
+/**
+ * What `durationLine` knows about client-side presence for this statement. Only the client view
+ * carries it; the expert's `missed_call` line names nobody whatever the presence, so that lens
+ * reports it as not read. ONE definition for the page, the line items and the PDF.
+ */
+export function statementDurationPresence(view: SessionStatementView): DurationLinePresence {
+  return { clientSideEverPresent: view.lens === 'client' ? view.clientSideEverPresent : null };
 }
 
 /**

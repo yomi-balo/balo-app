@@ -202,7 +202,7 @@ export function resolveNotHeld(input: NotHeldInput): RecapNotHeldView | null {
 
   if (outcome === 'missed_call') {
     return {
-      reason: 'missed_call',
+      reason: clientSideEverPresent === false ? 'nobody_joined' : 'missed_call',
       headline: NOT_HELD_HEADLINE,
       body: missedCallBody(lens, expertPersonLabel, clientSideEverPresent),
     };

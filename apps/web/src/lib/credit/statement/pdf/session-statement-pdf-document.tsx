@@ -8,7 +8,10 @@ import {
   ensurePdfFontsRegistered,
   PDF_FONT_FAMILY,
 } from '@/lib/project-request/proposal/pdf/pdf-fonts';
-import type { SessionStatementView } from '@/app/(dashboard)/sessions/[sessionId]/_lib/session-statement-view';
+import {
+  statementDurationPresence,
+  type SessionStatementView,
+} from '@/app/(dashboard)/sessions/[sessionId]/_lib/session-statement-view';
 import {
   STATEMENT_COPY,
   STATEMENT_SHARED_COPY,
@@ -106,7 +109,7 @@ const styles = StyleSheet.create({
 
 function LineItems({ view }: Readonly<{ view: SessionStatementView }>): React.JSX.Element {
   const copy = STATEMENT_COPY[view.lens];
-  const line = durationLine(view.block);
+  const line = durationLine(view.block, statementDurationPresence(view));
   const bareDuration = `${view.block.durationMinutes} min`;
   const subLine = line === bareDuration ? null : line;
   const total = finalizedAmountMinor(view.block);

@@ -34,8 +34,6 @@ export interface DurationLinePresence {
   readonly clientSideEverPresent: boolean | null;
 }
 
-const UNKNOWN_PRESENCE: DurationLinePresence = { clientSideEverPresent: null };
-
 /**
  * BAL-412 (D13, plan §7.3) — the finalized duration line. Keyed on `settlementShape` FIRST (the
  * two zero shapes have no number to attach — there is nothing to floor when nobody was charged)
@@ -52,17 +50,15 @@ const UNKNOWN_PRESENCE: DurationLinePresence = { clientSideEverPresent: null };
  * before anyone connects), so the caller passes `clientSideEverPresent` from the presence rows.
  * Only a KNOWN `false` swaps the client line for the one that names nobody; `null` (not read)
  * keeps the line that names the consultant, since a client who waited must never be told
- * nobody turned up.
+ * nobody turned up. REQUIRED, with no default: every call site states what it knows, so a new
+ * caller cannot fall into the consultant line without deciding to.
  *
  * ⚠ MJ COPY CHECKPOINT — every string below is pending MJ sign-off (flagged in the PR body).
  * ⚠ BAL-441 — THIS MOVED FROM `money-block.tsx` (see this module's docblock for why the move is
  * safe against `no-money-block-in-call.test.ts`; that test's scan is a module-specifier match,
  * not a "must stay in React" rule).
  */
-export function durationLine(
-  block: SessionMoneyBlock,
-  presence: DurationLinePresence = UNKNOWN_PRESENCE
-): string {
+export function durationLine(block: SessionMoneyBlock, presence: DurationLinePresence): string {
   if (block.settlementShape === 'missed_call') {
     if (block.lens === 'expert') {
       return "No earnings recorded — the call didn't take place"; // pending-MJ

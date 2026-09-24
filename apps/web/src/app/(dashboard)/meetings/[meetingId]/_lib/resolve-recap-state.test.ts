@@ -312,7 +312,7 @@ describe('resolveNotHeld', () => {
         clientSideEverPresent: false,
       });
       expect(out).toEqual({
-        reason: 'missed_call',
+        reason: 'nobody_joined',
         headline: "This one didn't go ahead",
         body: 'Neither side joined this call.',
       });
@@ -361,7 +361,7 @@ describe('resolveNotHeld', () => {
 });
 
 describe('resolveRecapState — all six values', () => {
-  const notHeld = (reason: 'no_show_client' | 'cancelled') => ({
+  const notHeld = (reason: 'no_show_client' | 'nobody_joined' | 'cancelled') => ({
     reason,
     headline: 'h',
     body: 'b',
@@ -376,6 +376,12 @@ describe('resolveRecapState — all six values', () => {
   it('not_held', () => {
     expect(
       resolveRecapState({ notHeld: notHeld('no_show_client'), artifacts: READY_ARTIFACTS })
+    ).toBe('not_held');
+  });
+
+  it('not_held for a nobody-joined meeting too — the reason is its own dimension', () => {
+    expect(
+      resolveRecapState({ notHeld: notHeld('nobody_joined'), artifacts: READY_ARTIFACTS })
     ).toBe('not_held');
   });
 

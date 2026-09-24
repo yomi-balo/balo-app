@@ -2,6 +2,7 @@ import type { SessionMoneyBlock } from '@balo/shared/credit';
 import type { MeetingRecordingView } from '@balo/shared/meetings';
 import type {
   RecapContextType,
+  RecapNotHeldReason,
   RecapResolvePromptVariant,
   RecapState,
 } from '@balo/analytics/events';
@@ -36,6 +37,7 @@ import type { ActionItemsPanelView } from '@/lib/engagement/action-items-view';
 /** Re-exported so a consumer needs ONE import for the whole recap contract. */
 export type {
   RecapContextType,
+  RecapNotHeldReason,
   RecapState,
   SessionMoneyBlock,
   MeetingFileView,
@@ -220,8 +222,6 @@ export interface RecapRecordingRowView {
    */
   readonly isLongTailProcessing: boolean;
 }
-
-export type RecapNotHeldReason = 'no_show_client' | 'missed_call' | 'cancelled';
 
 export interface RecapNotHeldView {
   reason: RecapNotHeldReason;
