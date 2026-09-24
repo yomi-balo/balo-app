@@ -119,8 +119,10 @@ describe('resolvePanelCapabilities', () => {
         fetchToken: async () =>
           ({ success: true, token: 't', expiresAt: '2026-01-01T00:00:00.000Z' }) as never,
         sendReaction: async () => ({ success: true }),
+        sendTyping: async () => ({ success: true }),
         meetingChannel: 'meeting:m',
         conversationChannel: 'conversation:c',
+        typingChannel: 'typing:c',
       },
       balance: { loadDrawdownState: async () => ({ success: true, state: null }) },
     };

@@ -29,11 +29,18 @@ import {
   type RequestProposalResult,
 } from '@/app/(dashboard)/projects/[requestId]/_actions/request-proposal';
 import { createConversationRealtimeTokenAction } from '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token';
+import { sendConversationTypingAction } from '@/app/(dashboard)/projects/[requestId]/_actions/send-conversation-typing';
+import type { TypingSignal } from '@/lib/realtime/channels';
 // BAL-421 — the five ANCHOR-AGNOSTIC leaves moved to `components/balo/conversation/`; the
 // case surface is their second consumer. Pure path move, no behaviour change.
 import { useConversationRealtime } from '@/components/balo/conversation/use-conversation-realtime';
 import { MessageList, type ThreadDataState } from '@/components/balo/conversation/message-list';
 import { MessageComposer } from '@/components/balo/conversation/message-composer';
+import { TypingIndicator } from '@/components/balo/conversation/typing-indicator';
+import {
+  firstNamesByUserId,
+  resolveTypingNames,
+} from '@/components/balo/conversation/typing-names';
 import { deriveThreadActions } from './thread-actions';
 import { ThreadTabs } from './thread-tabs';
 import { ThreadHeader } from './thread-header';
@@ -316,8 +323,9 @@ function EmptyConversationStage({
 /**
  * THE Phase-2 client island (BAL-271 / A4): tabbed multi-expert threads
  * (smart unread-aware default), per-thread nudges, realtime via Ably
- * (subscribe-only), plain-text composer. Tab ORDER is `view.threads` verbatim —
- * selection, never order, reacts to activity.
+ * (subscribe-only; the "typing…" signal for the ACTIVE thread is read here and sent through a
+ * Server Action), plain-text composer. Tab ORDER is `view.threads`
+ * verbatim — selection, never order, reacts to activity.
  * BAL-212 guard: the ONLY message write path is the composer submit.
  *
  * ── ⚠⚠ NO FILE AFFORDANCE. RETIRED BY BAL-431 (OSD-2). ─────────────────────────────────────
@@ -417,6 +425,13 @@ export function ConversationStage({
   const activeThread = threads.find((t) => t.relationshipId === activeThreadId) ?? null;
   const activeData: ThreadData =
     (activeThreadId === null ? undefined : threadData[activeThreadId]) ?? EMPTY_THREAD_DATA;
+  /**
+   * ⚠ THE ONE CONDITION FOR A LIVE COMPOSER. Without it the stage renders
+   * `EmptyConversationStage`, whose composer is disabled; with it, the active thread's composer
+   * is live. The typing subscription reads the SAME value, so "typing…" is attached exactly when
+   * there is a composer to type into — and never for a thread that is not on screen.
+   */
+  const hasLiveComposer = threads.length > 0 && activeThread !== null;
 
   // ── Read-state plumbing ────────────────────────────────────────────────
   const markReadSafe = useCallback(
@@ -530,7 +545,8 @@ export function ConversationStage({
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [clearUnread, markReadSafe]);
 
-  // ── Realtime (subscribe-only; optimistic echoes deduped by id) ─────────
+  // ── Realtime (subscribe-only on every thread's durable channel, plus the "typing…" signal
+  //    for the ACTIVE thread only; optimistic echoes deduped by id) ─────────
   // The message handler keeps its state updaters PURE: the dedupe decision is made BEFORE
   // dispatching (the updaters are idempotent by construction). Never mutate a closure variable
   // inside one updater and read it in another — queued updaters replay per hook in declaration
@@ -593,13 +609,47 @@ export function ConversationStage({
     () => createConversationRealtimeTokenAction({ requestId }),
     [requestId]
   );
-  const { status: realtimeStatus } = useConversationRealtime({
+  // ⚠ TYPING FOR THE OPEN THREAD ONLY (AC6). Messages fan out to every thread, but Ably caps
+  // attached channels at 200 per connection, so the typing channel follows the active tab: a tab
+  // switch releases the old thread's typing channel and attaches the new one's.
+  // The server publishes the viewer's typing signal after re-running the post gate, which speaks
+  // relationship ids — so the conversation id the hook passes back is mapped to its thread here.
+  const sendTyping = useCallback(
+    (conversationId: string, signal: TypingSignal): Promise<unknown> => {
+      const relationshipId = threadIdByConversationId.get(conversationId);
+      if (relationshipId === undefined) return Promise.resolve();
+      return sendConversationTypingAction({ requestId, relationshipId, signal });
+    },
+    [requestId, threadIdByConversationId]
+  );
+
+  const { status: realtimeStatus, typing } = useConversationRealtime({
     enabled: view.realtimeEnabled && conversationIds.length > 0,
     fetchToken: fetchRealtimeToken,
     conversationIds,
     onMessage: handleRealtimeMessage,
     onFile: handleRealtimeFile,
+    typingConversationId: hasLiveComposer ? activeThread.conversationId : null,
+    sendTyping,
   });
+
+  // Names for the "typing…" line, from the active thread's already-loaded messages only — never
+  // a new read. An id they do not name reads as "Someone".
+  const namesByUserId = useMemo(
+    () =>
+      firstNamesByUserId(
+        activeData.messages.map((message) => ({
+          userId: message.senderUserId,
+          name: message.senderName,
+        }))
+      ),
+    [activeData.messages]
+  );
+  const typingClientIds = typing?.typingClientIds;
+  const typingNames = useMemo(
+    () => resolveTypingNames(typingClientIds ?? [], namesByUserId),
+    [typingClientIds, namesByUserId]
+  );
 
   // ── Composer: per-thread drafts + send ─────────────────────────────────
   const activeDraft = activeThreadId === null ? '' : (drafts[activeThreadId] ?? '');
@@ -1000,7 +1050,7 @@ export function ConversationStage({
   }, [focusComposer]);
 
   // ── Zero open threads — invitation, never a blank panel ────────────────
-  if (threads.length === 0 || activeThread === null) {
+  if (!hasLiveComposer) {
     return <EmptyConversationStage lens={lens} />;
   }
 
@@ -1119,6 +1169,8 @@ export function ConversationStage({
         onFileClick={noopFileClick}
       />
 
+      {typing !== null && <TypingIndicator names={typingNames} className="px-4 pb-1" />}
+
       {/* No `onAttach` — the composer therefore renders NO attach button (BAL-431 / OSD-2). */}
       <div ref={composerContainerRef}>
         <MessageComposer
@@ -1130,6 +1182,8 @@ export function ConversationStage({
           onChange={handleDraftChange}
           onSend={handleSend}
           onFocusChange={setComposerFocused}
+          onTyping={typing?.onKeystroke}
+          onTypingStopped={typing?.onStopped}
         />
       </div>
 

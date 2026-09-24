@@ -37,7 +37,8 @@ vi.mock('motion/react', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
-// The realtime hook opens an Ably channel; nothing here is about transport.
+// The realtime hook opens an Ably channel; nothing here is about transport. Its return value is
+// set per test (default: no typing view) — the panel reads `typing` off it.
 const mockUseRealtime = vi.fn();
 vi.mock('@/components/balo/conversation/use-conversation-realtime', () => ({
   useConversationRealtime: (...a: unknown[]) => mockUseRealtime(...a),
@@ -75,6 +76,10 @@ vi.mock('../_actions/confirm-case-file-upload', () => ({
 }));
 vi.mock('../_actions/get-case-file-download', () => ({
   getCaseFileDownloadAction: (...a: unknown[]) => mockGetDownload(...a),
+}));
+const mockSendTyping = vi.fn();
+vi.mock('../_actions/send-case-typing', () => ({
+  sendCaseTypingAction: (...a: unknown[]) => mockSendTyping(...a),
 }));
 
 import { CaseConversationPanel } from './case-conversation-panel';
@@ -191,6 +196,21 @@ interface RealtimeArgs {
   conversationIds: string[];
   onMessage: (incoming: ConversationMessageView) => void;
   onFile: (incoming: ConversationFileView) => void;
+  typingConversationId?: string | null;
+  sendTyping?: (conversationId: string, signal: 'started' | 'stopped') => Promise<unknown>;
+}
+
+/** A typing view as the hook reports it: who is typing, plus the two composer hooks. */
+function typingView(typingClientIds: readonly string[]): {
+  typingClientIds: readonly string[];
+  onKeystroke: Mock;
+  onStopped: Mock;
+} {
+  return { typingClientIds, onKeystroke: vi.fn(), onStopped: vi.fn() };
+}
+
+function withTyping(typing: ReturnType<typeof typingView> | null): void {
+  mockUseRealtime.mockReturnValue({ status: 'connected', typing });
 }
 
 /** The live handler pair the panel handed the (mocked) Ably hook on its latest render. */
@@ -210,6 +230,7 @@ beforeEach(() => {
   mockConfirmUpload.mockReset();
   mockGetDownload.mockReset();
   mockMarkRead.mockResolvedValue({ success: true });
+  mockUseRealtime.mockReturnValue({ status: 'disabled', typing: null });
 });
 
 describe('CaseConversationPanel — a CLOSED case is read-only but fully readable', () => {
@@ -882,5 +903,94 @@ describe('CaseConversationPanel — realtime arrivals', () => {
 
     expect(screen.getByText('One last note.')).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ⚠ The "typing…" line. The hook is mocked, so each test states the typing view it reports and
+ * asserts what the panel does with it: which thread it asks typing for, whose first name it
+ * shows (from data ALREADY on the page), and that a closed case or a disabled realtime renders
+ * no typing UI at all.
+ */
+describe('CaseConversationPanel — typing indicator', () => {
+  it('asks for typing on THIS thread while the case is writable', () => {
+    renderPanel({ writable: true });
+    expect(realtimeArgs().typingConversationId).toBe(CONVERSATION_ID);
+  });
+
+  it('asks for NO typing on a closed, read-only case', () => {
+    renderPanel({ writable: false });
+    expect(realtimeArgs().typingConversationId).toBeNull();
+  });
+
+  it('⚠ sends typing through the server, keyed on the ENGAGEMENT — the case action’s own claim', async () => {
+    mockSendTyping.mockResolvedValue({ success: true });
+    renderPanel({ writable: true });
+
+    await realtimeArgs().sendTyping?.(CONVERSATION_ID, 'stopped');
+
+    expect(mockSendTyping).toHaveBeenCalledWith({ engagementId: ENGAGEMENT_ID, signal: 'stopped' });
+  });
+
+  it('shows the typist’s FIRST name, resolved from a message they sent', () => {
+    withTyping(typingView(['u-other']));
+    renderPanel({
+      initialMessages: [
+        messageView('msg-1', { senderUserId: 'u-other', senderName: 'Amara Okafor' }),
+      ],
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Amara is typing…');
+  });
+
+  it('resolves a typist the thread knows only as a file uploader', () => {
+    withTyping(typingView(['u-files']));
+    renderPanel({
+      initialFiles: [
+        fileView('brief', { uploadedByUserId: 'u-files', uploadedByName: 'Kofi Mensah' }),
+      ],
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Kofi is typing…');
+  });
+
+  it('says "Someone is typing…" for an id nothing on the page names', () => {
+    withTyping(typingView(['u-stranger']));
+    renderPanel();
+    expect(screen.getByRole('status')).toHaveTextContent('Someone is typing…');
+  });
+
+  it('keeps an EMPTY live region mounted while nobody types', () => {
+    withTyping(typingView([]));
+    renderPanel();
+    const region = screen.getByRole('status');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toHaveTextContent('');
+  });
+
+  it('renders no typing UI at all when the hook reports no typing view (realtime off)', () => {
+    withTyping(null);
+    renderPanel();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/typing…/)).not.toBeInTheDocument();
+  });
+
+  it('never renders the indicator on a closed case, whatever the hook reports', () => {
+    withTyping(typingView(['u-other']));
+    renderPanel({ writable: false });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/typing…/)).not.toBeInTheDocument();
+  });
+
+  it('wires the composer: a keystroke reports typing, and a send reports the stop', async () => {
+    const user = userEvent.setup();
+    const typing = typingView([]);
+    withTyping(typing);
+    mockPostMessage.mockResolvedValue({ success: true, message: messageView('msg-2') });
+    renderPanel();
+
+    await user.type(screen.getByRole('textbox'), 'Hi{Enter}');
+
+    expect(typing.onKeystroke).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockPostMessage).toHaveBeenCalled());
+    expect(typing.onStopped).toHaveBeenCalledTimes(1);
   });
 });

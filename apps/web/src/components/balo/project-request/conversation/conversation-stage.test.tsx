@@ -56,6 +56,10 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/post-conversation-messa
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/mark-thread-read', () => ({
   markThreadReadAction: (...args: unknown[]) => mockMarkRead(...args),
 }));
+const mockSendTyping = vi.fn();
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/send-conversation-typing', () => ({
+  sendConversationTypingAction: (...args: unknown[]) => mockSendTyping(...args),
+}));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/fetch-thread', () => ({
   fetchThreadAction: (...args: unknown[]) => mockFetchThread(...args),
 }));
@@ -115,24 +119,36 @@ vi.mock('@/components/balo/document-uploader/upload-file', () => ({
   formatBytes: (bytes: number) => `${bytes} B`,
 }));
 
-// Capture the realtime wiring so tests can inject incoming events + status.
+// Capture the realtime wiring so tests can inject incoming events, status and a typing view.
 interface RealtimeInput {
   enabled: boolean;
   requestId: string;
   conversationIds: string[];
   onMessage: (m: unknown) => void;
   onFile: (f: unknown) => void;
+  typingConversationId?: string | null;
+  sendTyping?: (conversationId: string, signal: 'started' | 'stopped') => Promise<unknown>;
 }
-const realtimeCapture: { input: RealtimeInput | null; status: string } = {
+interface TypingViewStub {
+  typingClientIds: readonly string[];
+  onKeystroke: () => void;
+  onStopped: () => void;
+}
+const realtimeCapture: {
+  input: RealtimeInput | null;
+  status: string;
+  typing: TypingViewStub | null;
+} = {
   input: null,
   status: 'connected',
+  typing: null,
 };
 // BAL-421 moved the hook to the anchor-agnostic path; the mock must follow the
 // component's import specifier or the real hook runs and the realtime cases hang.
 vi.mock('@/components/balo/conversation/use-conversation-realtime', () => ({
   useConversationRealtime: (input: RealtimeInput) => {
     realtimeCapture.input = input;
-    return { status: realtimeCapture.status };
+    return { status: realtimeCapture.status, typing: realtimeCapture.typing };
   },
 }));
 
@@ -209,6 +225,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   realtimeCapture.input = null;
   realtimeCapture.status = 'connected';
+  realtimeCapture.typing = null;
   mockMarkRead.mockResolvedValue({ success: true, lastReadAtIso: new Date().toISOString() });
   mockFetchThread.mockResolvedValue({ success: true, messages: [], hasEarlier: false });
   mockPostMessage.mockResolvedValue({
@@ -1033,5 +1050,107 @@ describe('ConversationStage — realtime status chip', () => {
   it('renders no chip while connected', () => {
     renderStage(view());
     expect(screen.queryByText(/Live updates paused/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ⚠ The "typing…" line. Typing follows the ACTIVE thread only (AC6 — Ably caps attached channels
+ * per connection, and a project request fans out to one thread per expert), exactly while that
+ * thread's composer is live. The hook is mocked, so each test states the typing view it reports.
+ */
+describe('ConversationStage — typing indicator', () => {
+  function typingView(typingClientIds: readonly string[]): TypingViewStub {
+    return { typingClientIds, onKeystroke: vi.fn(), onStopped: vi.fn() };
+  }
+
+  const TWO_THREADS = (): ConversationView =>
+    view({
+      threads: [
+        thread(),
+        thread({ relationshipId: 'rel-2', conversationId: 'conv-2', expertFirstName: 'Marcus' }),
+      ],
+    });
+
+  it('asks for typing on the ACTIVE thread only — messages still fan out to every thread', () => {
+    renderStage(view({ ...TWO_THREADS(), defaultThreadId: 'rel-2' }));
+    expect(realtimeCapture.input?.typingConversationId).toBe('conv-2');
+    expect(realtimeCapture.input?.conversationIds).toEqual(['conv-1', 'conv-2']);
+  });
+
+  it('moves typing to the newly active thread on a tab switch', async () => {
+    const user = userEvent.setup();
+    renderStage(TWO_THREADS());
+    expect(realtimeCapture.input?.typingConversationId).toBe('conv-1');
+
+    await user.click(screen.getByRole('button', { name: 'Marcus' }));
+
+    expect(realtimeCapture.input?.typingConversationId).toBe('conv-2');
+  });
+
+  it('asks for NO typing when the composer is disabled (zero open threads)', () => {
+    realtimeCapture.typing = typingView(['user-expert']);
+    renderStage(view({ threads: [], defaultThreadId: null }));
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    expect(realtimeCapture.input?.typingConversationId).toBeNull();
+    // …and the disabled stage renders no typing line, whatever the hook reports.
+    expect(screen.queryByText(/typing…/)).not.toBeInTheDocument();
+  });
+
+  it('⚠ sends typing through the server under the RELATIONSHIP id the conversation maps to', async () => {
+    mockSendTyping.mockResolvedValue({ success: true });
+    renderStage(view({ ...TWO_THREADS(), defaultThreadId: 'rel-2' }));
+
+    await realtimeCapture.input?.sendTyping?.('conv-2', 'started');
+
+    // The action's gate speaks relationship ids; the hook speaks conversation ids.
+    expect(mockSendTyping).toHaveBeenCalledWith({
+      requestId: REQUEST_ID,
+      relationshipId: 'rel-2',
+      signal: 'started',
+    });
+  });
+
+  it('sends nothing for a conversation that is not one of this request’s threads', async () => {
+    renderStage(TWO_THREADS());
+
+    await realtimeCapture.input?.sendTyping?.('conv-unknown', 'started');
+
+    expect(mockSendTyping).not.toHaveBeenCalled();
+  });
+
+  it('asks for NO typing when no thread is active', () => {
+    renderStage(view({ defaultThreadId: null }));
+    expect(realtimeCapture.input?.typingConversationId).toBeNull();
+  });
+
+  it('shows the typist’s FIRST name, resolved from the active thread’s loaded messages', () => {
+    realtimeCapture.typing = typingView(['user-expert']);
+    renderStage(view({ initialMessages: [message('m-1') as never] }));
+    expect(screen.getByRole('status')).toHaveTextContent('Priya is typing…');
+  });
+
+  it('says "Someone is typing…" for an id the thread’s messages do not name', () => {
+    realtimeCapture.typing = typingView(['user-stranger']);
+    renderStage(view({ initialMessages: [message('m-1') as never] }));
+    expect(screen.getByRole('status')).toHaveTextContent('Someone is typing…');
+  });
+
+  it('renders no typing UI at all when the hook reports no typing view (realtime off)', () => {
+    renderStage(view({ initialMessages: [message('m-1') as never] }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/typing…/)).not.toBeInTheDocument();
+  });
+
+  it('wires the composer: a keystroke reports typing, and blur reports the stop', async () => {
+    const user = userEvent.setup();
+    const typing = typingView([]);
+    realtimeCapture.typing = typing;
+    renderStage(view());
+
+    await user.type(screen.getByRole('textbox', { name: 'Message Priya' }), 'Hi');
+    expect(typing.onKeystroke).toHaveBeenCalledTimes(2);
+    await user.tab();
+
+    expect(typing.onStopped).toHaveBeenCalledTimes(1);
   });
 });

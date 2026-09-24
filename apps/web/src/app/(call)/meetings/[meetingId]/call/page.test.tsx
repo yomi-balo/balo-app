@@ -92,6 +92,7 @@ vi.mock('./_components/call-client', () => ({
     hasChat,
     isRealtimeEnabled,
     chatChannelName,
+    typingChannelName,
     hasBalance,
   }: {
     meetingId: string;
@@ -99,6 +100,7 @@ vi.mock('./_components/call-client', () => ({
     hasChat: boolean;
     isRealtimeEnabled: boolean;
     chatChannelName: string | null;
+    typingChannelName: string | null;
     hasBalance: boolean;
   }) => (
     <div
@@ -108,6 +110,8 @@ vi.mock('./_components/call-client', () => ({
       data-has-chat={String(hasChat)}
       data-realtime={String(isRealtimeEnabled)}
       data-chat-channel={chatChannelName ?? ''}
+      // ⚠ `String`, not `?? ''`: `null` renders "null", so an `undefined` or empty name fails.
+      data-typing-channel={String(typingChannelName)}
       data-has-balance={String(hasBalance)}
     />
   ),
@@ -260,6 +264,13 @@ describe('MeetingCallPage — BAL-437, ⚠⚠ the CHAT SLOT is resolved server-s
     expect(client).toHaveAttribute('data-chat-channel', `conversation:${CONVERSATION_ID}`);
   });
 
+  it('⚠⚠ hands down the TYPING channel for the SAME thread — never the meeting channel', async () => {
+    const container = await renderPage();
+    const client = container.querySelector('[data-testid="call-client"]');
+
+    expect(client).toHaveAttribute('data-typing-channel', `typing:${CONVERSATION_ID}`);
+  });
+
   it('⚠⚠ NO ANCHOR ⇒ the slot is ABSENT — `hasChat` false and NO channel', async () => {
     // The four shapes that answer this — `project_discovery`, `admin`, ambiguous, and an
     // unprovisioned thread — are indistinguishable here on purpose.
@@ -275,17 +286,17 @@ describe('MeetingCallPage — BAL-437, ⚠⚠ the CHAT SLOT is resolved server-s
 
     expect(client).toHaveAttribute('data-has-chat', 'false');
     expect(client).toHaveAttribute('data-chat-channel', '');
+    expect(client).toHaveAttribute('data-typing-channel', 'null');
   });
 
   it('⚠ a DENIED gate is the same absence — never an error page', async () => {
     mockResolveChatAccess.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
 
     const container = await renderPage();
+    const client = container.querySelector('[data-testid="call-client"]');
 
-    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
-      'data-has-chat',
-      'false'
-    );
+    expect(client).toHaveAttribute('data-has-chat', 'false');
+    expect(client).toHaveAttribute('data-typing-channel', 'null');
   });
 
   it('⚠⚠ a THROWN gate degrades to no-chat, LOGS the reason, and still renders the call', async () => {
@@ -296,6 +307,7 @@ describe('MeetingCallPage — BAL-437, ⚠⚠ the CHAT SLOT is resolved server-s
 
     expect(client).toBeInTheDocument();
     expect(client).toHaveAttribute('data-has-chat', 'false');
+    expect(client).toHaveAttribute('data-typing-channel', 'null');
     expect(mockLogWarn).toHaveBeenCalledTimes(1);
     const [, fields] = mockLogWarn.mock.calls[0] ?? [];
     expect(fields).toMatchObject({ meetingId: MEETING_ID });
@@ -305,12 +317,11 @@ describe('MeetingCallPage — BAL-437, ⚠⚠ the CHAT SLOT is resolved server-s
     mockGetCurrentUser.mockResolvedValue(null);
 
     const container = await renderPage();
+    const client = container.querySelector('[data-testid="call-client"]');
 
     expect(mockResolveChatAccess).not.toHaveBeenCalled();
-    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
-      'data-has-chat',
-      'false'
-    );
+    expect(client).toHaveAttribute('data-has-chat', 'false');
+    expect(client).toHaveAttribute('data-typing-channel', 'null');
   });
 });
 

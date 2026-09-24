@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@/test/utils';
+import { fireEvent, render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { MessageComposer } from './message-composer';
 import { MESSAGE_MAX_TEXT } from '@/lib/project-request/conversation-view-types';
@@ -57,6 +57,26 @@ function renderComposer(
   const onAttach = vi.fn();
   render(<Harness onSend={onSend} onAttach={onAttach} {...overrides} />);
   return { onSend, onAttach };
+}
+
+/** The composer with both typing hooks wired to spies. */
+function renderTypingComposer(
+  overrides: Partial<Omit<ComposerProps, 'value' | 'onChange'>> & { initialValue?: string } = {}
+): {
+  onSend: ReturnType<typeof vi.fn>;
+  onTyping: ReturnType<typeof vi.fn>;
+  onTypingStopped: ReturnType<typeof vi.fn>;
+  textarea: HTMLElement;
+} {
+  const onTyping = vi.fn();
+  const onTypingStopped = vi.fn();
+  const { onSend } = renderComposer({ onTyping, onTypingStopped, ...overrides });
+  return {
+    onSend,
+    onTyping,
+    onTypingStopped,
+    textarea: screen.getByRole('textbox', { name: 'Message Priya' }),
+  };
 }
 
 describe('MessageComposer', () => {
@@ -245,5 +265,114 @@ describe('MessageComposer', () => {
       'placeholder',
       'Messaging opens once you express interest…'
     );
+  });
+
+  /**
+   * The "typing…" hooks. The composer reports RAW edits — the caller's typing machine throttles
+   * — so these pin exactly which interaction maps to which hook, and that a composer without
+   * them behaves exactly as before.
+   */
+  describe('typing signal hooks', () => {
+    it('reports onTyping on every edit that leaves real text — and no stop', async () => {
+      const user = userEvent.setup();
+      const { onTyping, onTypingStopped, textarea } = renderTypingComposer();
+
+      await user.type(textarea, 'Hi!');
+
+      expect(onTyping).toHaveBeenCalledTimes(3);
+      expect(onTypingStopped).not.toHaveBeenCalled();
+    });
+
+    it('treats whitespace-only edits as NOT typing', async () => {
+      const user = userEvent.setup();
+      const { onTyping, onTypingStopped, textarea } = renderTypingComposer();
+
+      await user.type(textarea, '  ');
+
+      expect(onTyping).not.toHaveBeenCalled();
+      expect(onTypingStopped).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports onTypingStopped once the input is cleared', async () => {
+      const user = userEvent.setup();
+      const { onTyping, onTypingStopped, textarea } = renderTypingComposer();
+
+      await user.type(textarea, 'ok');
+      await user.type(textarea, '{Backspace}');
+      // One character left — still typing.
+      expect(onTyping).toHaveBeenCalledTimes(3);
+      expect(onTypingStopped).not.toHaveBeenCalled();
+
+      await user.type(textarea, '{Backspace}');
+      expect(textarea).toHaveValue('');
+      expect(onTypingStopped).toHaveBeenCalledTimes(1);
+      expect(onTyping).toHaveBeenCalledTimes(3);
+    });
+
+    it('reports onTypingStopped when Enter sends — AFTER the send is dispatched', async () => {
+      const user = userEvent.setup();
+      const { onSend, onTypingStopped, textarea } = renderTypingComposer();
+
+      await user.type(textarea, 'Hello{Enter}');
+
+      expect(onSend).toHaveBeenCalledWith('Hello');
+      // Enter keeps focus, so this stop can only have come from the send itself.
+      expect(textarea).toHaveFocus();
+      expect(onTypingStopped).toHaveBeenCalledTimes(1);
+      const [stopOrder] = onTypingStopped.mock.invocationCallOrder;
+      const [sendOrder] = onSend.mock.invocationCallOrder;
+      // ⚠ Next runs a page's Server Actions one at a time: the message must not queue behind
+      // the typing stop.
+      expect(sendOrder).toBeLessThan(stopOrder ?? 0);
+    });
+
+    it('reports onTypingStopped when the send BUTTON sends', async () => {
+      const { onSend, onTypingStopped } = renderTypingComposer({ initialValue: 'Hello' });
+
+      // `fireEvent` moves no focus, so no blur can stand in for the send path here.
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('Hello'));
+      expect(onTypingStopped).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT report a stop for a blocked (over-limit) Enter — the writer is still composing', async () => {
+      const { onSend, onTypingStopped, textarea } = renderTypingComposer({
+        initialValue: 'x'.repeat(MESSAGE_MAX_TEXT + 1),
+      });
+
+      fireEvent.keyDown(textarea, { key: 'Enter' });
+
+      expect(onSend).not.toHaveBeenCalled();
+      expect(onTypingStopped).not.toHaveBeenCalled();
+    });
+
+    it('reports onTypingStopped on blur', async () => {
+      const user = userEvent.setup();
+      const onFocusChange = vi.fn();
+      const { onTypingStopped, textarea } = renderTypingComposer({ onFocusChange });
+
+      await user.type(textarea, 'Draft');
+      expect(onTypingStopped).not.toHaveBeenCalled();
+      await user.tab();
+
+      expect(onTypingStopped).toHaveBeenCalledTimes(1);
+      // The existing focus hook still fires alongside it.
+      expect(onFocusChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it('changes nothing when the hooks are absent — typing, clearing, sending and blur all work', async () => {
+      const user = userEvent.setup();
+      const { onSend } = renderComposer();
+      const textarea = screen.getByRole('textbox', { name: 'Message Priya' });
+
+      await user.type(textarea, 'ab{Backspace}{Backspace}');
+      expect(textarea).toHaveValue('');
+      await user.type(textarea, 'Sent anyway{Enter}');
+      await user.tab();
+
+      expect(onSend).toHaveBeenCalledWith('Sent anyway');
+      await waitFor(() => expect(textarea).toHaveValue(''));
+    });
   });
 });

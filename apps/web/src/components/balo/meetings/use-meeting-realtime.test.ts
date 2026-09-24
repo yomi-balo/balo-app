@@ -30,25 +30,101 @@ import {
 
 const MEETING_CHANNEL = 'meeting:0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const CONVERSATION_CHANNEL = 'conversation:3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+/** The SAME conversation as {@link CONVERSATION_CHANNEL}, in the typing namespace. */
+const TYPING_CHANNEL = 'typing:3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+/** The viewer's own Ably `clientId` (= `users.id`), as the token would stamp it. */
+const SELF_ID = '11111111-2222-4333-8444-555555555555';
+const OTHER_ID = '22222222-3333-4444-8555-666666666666';
+
+type Handler = (msg: unknown) => void;
 
 interface FakeChannel {
   subscribe: ReturnType<typeof vi.fn>;
-  handlers: Map<string, (msg: { data: unknown }) => void>;
+  unsubscribe: ReturnType<typeof vi.fn>;
+  publish: ReturnType<typeof vi.fn>;
+  detach: ReturnType<typeof vi.fn>;
+  state: string;
+  handlers: Map<string, Handler>;
 }
 
-const { channels, connectionHandlers, close, realtimeOptions, getCalls } = vi.hoisted(() => ({
+const {
+  channels,
+  connectionHandlers,
+  connectionListeners,
+  close,
+  realtimeOptions,
+  getCalls,
+  clientState,
+  callLog,
+  constructed,
+} = vi.hoisted(() => ({
   channels: new Map<string, FakeChannel>(),
+  /**
+   * One DISPATCHER per connection state, fanning out to every listener registered for it — the
+   * hook's status listener AND the typing channel's re-attach listener both listen for
+   * `connected`, as they do on a real client.
+   */
   connectionHandlers: new Map<string, () => void>(),
+  connectionListeners: new Map<string, Set<() => void>>(),
   close: vi.fn(),
   realtimeOptions: { current: undefined as unknown },
   /** ⚠ EVERY argument list `channels.get` was called with — this is the `rewind` guard. */
   getCalls: [] as unknown[][],
+  /** What the fake client reports as its own identity and connection state, read live. */
+  clientState: { selfClientId: '' as unknown, connectionState: 'connected' },
+  /** Typing-channel SDK calls in order, so teardown can be asserted as stop → release → close. */
+  callLog: [] as string[],
+  /** How many `Ably.Realtime` clients were built — typing must never add one. */
+  constructed: { count: 0 },
 }));
 
 vi.mock('ably', () => {
+  function fakeChannel(name: string): FakeChannel {
+    const handlers = new Map<string, Handler>();
+    const channel: FakeChannel = {
+      handlers,
+      state: 'initialized',
+      subscribe: vi.fn((event: string, handler: Handler) => {
+        handlers.set(event, handler);
+        channel.state = 'attached';
+        return Promise.resolve();
+      }),
+      unsubscribe: vi.fn((event: string) => {
+        callLog.push(`unsubscribe:${name}:${event}`);
+        handlers.delete(event);
+      }),
+      publish: vi.fn(() => Promise.resolve()),
+      detach: vi.fn(() => {
+        callLog.push(`detach:${name}`);
+        channel.state = 'detached';
+        return Promise.resolve();
+      }),
+    };
+    return channel;
+  }
+
   class Realtime {
+    auth = {
+      get clientId(): unknown {
+        return clientState.selfClientId;
+      },
+    };
     connection = {
-      on: (state: string, handler: () => void) => connectionHandlers.set(state, handler),
+      get state(): string {
+        return clientState.connectionState;
+      },
+      on: (state: string, handler: () => void) => {
+        const listeners = connectionListeners.get(state) ?? new Set<() => void>();
+        listeners.add(handler);
+        connectionListeners.set(state, listeners);
+        connectionHandlers.set(state, () => {
+          for (const listener of [...listeners]) listener();
+        });
+      },
+      off: (state: string, handler: () => void) => {
+        connectionListeners.get(state)?.delete(handler);
+      },
     };
     channels = {
       get: (...args: unknown[]) => {
@@ -56,21 +132,25 @@ vi.mock('ably', () => {
         const name = String(args[0]);
         let channel = channels.get(name);
         if (channel === undefined) {
-          const handlers = new Map<string, (msg: { data: unknown }) => void>();
-          channel = {
-            handlers,
-            subscribe: vi.fn((event: string, handler: (msg: { data: unknown }) => void) => {
-              handlers.set(event, handler);
-              return Promise.resolve();
-            }),
-          };
+          channel = fakeChannel(name);
           channels.set(name, channel);
         }
         return channel;
       },
+      get all(): Record<string, FakeChannel> {
+        return Object.fromEntries(channels);
+      },
+      release: (name: string) => {
+        callLog.push(`release:${name}`);
+        channels.delete(name);
+      },
     };
-    close = close;
+    close = (): void => {
+      callLog.push('close');
+      close();
+    };
     constructor(options: unknown) {
+      constructed.count += 1;
       realtimeOptions.current = options;
     }
   }
@@ -83,11 +163,16 @@ function registration(
   return {
     fetchToken: vi.fn().mockResolvedValue({ success: false, disabled: true }),
     sendReaction: vi.fn().mockResolvedValue({ success: true }),
+    sendTyping: vi.fn().mockResolvedValue({ success: true }),
     meetingChannel: MEETING_CHANNEL,
     conversationChannel: CONVERSATION_CHANNEL,
+    typingChannel: TYPING_CHANNEL,
     ...overrides,
   };
 }
+
+/** The real no-anchor shape: both conversation-grain channels `null` together. */
+const NO_ANCHOR = { conversationChannel: null, typingChannel: null } as const;
 
 /** Deliver an inbound payload on `channel`'s `event` handler, inside `act`. */
 async function deliver(channel: string, event: string, data: unknown): Promise<void> {
@@ -95,6 +180,39 @@ async function deliver(channel: string, event: string, data: unknown): Promise<v
   expect(handler).toBeDefined();
   await act(async () => {
     handler?.({ data });
+  });
+}
+
+/**
+ * An inbound typing message whose every field read is recorded, and whose `data` THROWS — so
+ * "the typing path never reads `data`" is an observation, not a hope. It carries a hostile
+ * payload a careless reader would render.
+ */
+function hostileTypingMessage(name: string, clientId: unknown, reads: string[]): unknown {
+  const target: Record<string, unknown> = {
+    name,
+    clientId,
+    data: { html: '<img src=x onerror=alert(1)>', clientId: SELF_ID },
+  };
+  return new Proxy(target, {
+    get(object, key) {
+      reads.push(String(key));
+      if (key === 'data') throw new Error('the typing path read `data`');
+      return Reflect.get(object, key) as unknown;
+    },
+  });
+}
+
+/** Deliver one typing signal on the typing channel, as ably-js dispatches it: by name. */
+async function deliverTyping(
+  event: 'typing.started' | 'typing.stopped',
+  clientId: unknown,
+  reads: string[] = []
+): Promise<void> {
+  const handler = channels.get(TYPING_CHANNEL)?.handlers.get(event);
+  expect(handler).toBeDefined();
+  await act(async () => {
+    handler?.(hostileTypingMessage(event, clientId, reads));
   });
 }
 
@@ -148,8 +266,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   channels.clear();
   connectionHandlers.clear();
+  connectionListeners.clear();
   getCalls.length = 0;
   realtimeOptions.current = undefined;
+  clientState.selfClientId = SELF_ID;
+  clientState.connectionState = 'connected';
+  callLog.length = 0;
+  constructed.count = 0;
 });
 
 afterEach(() => {
@@ -220,7 +343,7 @@ describe('useMeetingRealtime — the subscriptions', () => {
   it('⚠ subscribes ONLY the meeting channel when there is no anchor', async () => {
     renderHook(() =>
       useMeetingRealtime({
-        registration: registration({ conversationChannel: null }),
+        registration: registration(NO_ANCHOR),
         onMessage: vi.fn(),
         onFile: vi.fn(),
         onReaction: vi.fn(),
@@ -229,6 +352,7 @@ describe('useMeetingRealtime — the subscriptions', () => {
 
     await waitFor(() => expect(channels.has(MEETING_CHANNEL)).toBe(true));
     expect(channels.has(CONVERSATION_CHANNEL)).toBe(false);
+    expect(channels.has(TYPING_CHANNEL)).toBe(false);
   });
 
   it('⚠ `registration: null` ⇒ terminal `disabled`, NO client at all', () => {
@@ -898,5 +1022,232 @@ describe('useMeetingCallRealtime — ⚠ the unread dot', () => {
     await deliver(CONVERSATION_CHANNEL, 'message', MESSAGE);
 
     expect(result.current.chatFeed).toHaveLength(1);
+  });
+});
+
+/**
+ * ⚠⚠ TYPING — read on the call's ONE client, sent through the SERVER.
+ *
+ * Inbound rides `typing:{conversationId}` only, through `attachTypingChannel` (the one reader of
+ * that namespace, whose own suite pins the trust rules). Outbound is `registration.sendTyping` —
+ * a Server Action — and this client publishes nothing on any channel. What is held here is the
+ * WIRING: the channel it reads, the client it rides, the path into the frame state, and which
+ * way a signal leaves.
+ */
+describe('useMeetingRealtime — ⚠⚠ typing rides the SAME client', () => {
+  function renderTransport(reg: MeetingRealtimeRegistration | null = registration()) {
+    return renderHook(() =>
+      useMeetingRealtime({
+        registration: reg,
+        onMessage: vi.fn(),
+        onFile: vi.fn(),
+        onReaction: vi.fn(),
+      })
+    );
+  }
+
+  it('attaches `typing:{id}` on the ONE client — never a second `Ably.Realtime`', async () => {
+    const { result } = renderTransport();
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    expect(constructed.count).toBe(1);
+    const typingEvents = [...(channels.get(TYPING_CHANNEL)?.handlers.keys() ?? [])];
+    expect(new Set(typingEvents)).toEqual(new Set(['typing.started', 'typing.stopped']));
+    expect(typingEvents).toHaveLength(2);
+    expect(result.current.status).not.toBe('disabled');
+  });
+
+  it('⚠⚠ NEVER on `meeting:{id}` or `conversation:{id}` — those keep exactly their own events', async () => {
+    renderTransport();
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    const meetingEvents = [...(channels.get(MEETING_CHANNEL)?.handlers.keys() ?? [])];
+    const conversationEvents = [...(channels.get(CONVERSATION_CHANNEL)?.handlers.keys() ?? [])];
+    expect(new Set(meetingEvents)).toEqual(new Set(['reaction', 'file']));
+    expect(meetingEvents).toHaveLength(2);
+    expect(conversationEvents).toEqual(['message']);
+  });
+
+  it('⚠⚠ a typing channel named in the MEETING namespace is refused — nothing typing lands there', async () => {
+    const { result } = renderTransport(registration({ typingChannel: MEETING_CHANNEL }));
+
+    // The whole `connect` body after the SDK import runs in one tick, so once the conversation
+    // channel exists the typing attach has already been attempted.
+    await waitFor(() => expect(channels.has(CONVERSATION_CHANNEL)).toBe(true));
+    const meetingEvents = [...(channels.get(MEETING_CHANNEL)?.handlers.keys() ?? [])];
+    expect(new Set(meetingEvents)).toEqual(new Set(['reaction', 'file']));
+    expect(meetingEvents).toHaveLength(2);
+    expect(result.current.status).not.toBe('disabled');
+  });
+
+  it('⚠ NO typing channel (no anchor) ⇒ nothing typing is attached', async () => {
+    renderTransport(registration(NO_ANCHOR));
+
+    await waitFor(() => expect(channels.has(MEETING_CHANNEL)).toBe(true));
+    expect(channels.has(TYPING_CHANNEL)).toBe(false);
+    for (const channel of channels.values()) {
+      expect(channel.handlers.has('typing.started')).toBe(false);
+    }
+  });
+
+  it('⚠ `registration: null` ⇒ no client exists', () => {
+    const { result } = renderTransport(null);
+
+    expect(result.current.status).toBe('disabled');
+    expect(constructed.count).toBe(0);
+  });
+
+  it('⚠ passes NO `params` for the typing channel either — a replayed "started" is a phantom typist', async () => {
+    renderTransport();
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    const typingGets = getCalls.filter(([name]) => name === TYPING_CHANNEL);
+    expect(typingGets.length).toBeGreaterThan(0);
+    for (const args of typingGets) expect(args).toHaveLength(1);
+  });
+});
+
+describe('useMeetingCallRealtime — ⚠⚠ the typing view', () => {
+  it('`typing` is null when there is no registration — no typing UI, not a broken one', () => {
+    const { result } = renderHook(() =>
+      useMeetingCallRealtime(callRealtimeInput({ registration: null }))
+    );
+
+    expect(result.current.typing).toBeNull();
+  });
+
+  it('`typing` is null for a meeting with no conversation anchor', async () => {
+    const { result } = renderHook(() =>
+      useMeetingCallRealtime(callRealtimeInput({ registration: registration(NO_ANCHOR) }))
+    );
+
+    await waitFor(() => expect(channels.has(MEETING_CHANNEL)).toBe(true));
+    expect(result.current.typing).toBeNull();
+  });
+
+  it('an anchored call exposes an empty typing view', async () => {
+    const { result } = renderHook(() => useMeetingCallRealtime(callRealtimeInput()));
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    expect(result.current.typing?.typingClientIds).toEqual([]);
+  });
+
+  it('shows somebody else typing, and clears them on `typing.stopped`', async () => {
+    const { result } = renderHook(() => useMeetingCallRealtime(callRealtimeInput()));
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    await deliverTyping('typing.started', OTHER_ID);
+    expect(result.current.typing?.typingClientIds).toEqual([OTHER_ID]);
+
+    await deliverTyping('typing.stopped', OTHER_ID);
+    expect(result.current.typing?.typingClientIds).toEqual([]);
+  });
+
+  it('⚠ a typist’s MESSAGE landing clears them at once — before their `stopped` arrives', async () => {
+    const { result } = renderHook(() => useMeetingCallRealtime(callRealtimeInput()));
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    await deliverTyping('typing.started', OTHER_ID);
+    expect(result.current.typing?.typingClientIds).toEqual([OTHER_ID]);
+
+    await deliver(CONVERSATION_CHANNEL, 'message', {
+      id: 'm-typed',
+      conversationId: 'c1',
+      bodyHtml: '<p>done</p>',
+      senderUserId: OTHER_ID,
+      senderName: 'Priya',
+      createdAtIso: '2026-08-14T09:00:00.000Z',
+    });
+
+    expect(result.current.typing?.typingClientIds).toEqual([]);
+  });
+
+  it('⚠⚠ NEVER shows the viewer typing — their own `clientId` (and so their other tabs) is dropped', async () => {
+    const { result } = renderHook(() => useMeetingCallRealtime(callRealtimeInput()));
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    await deliverTyping('typing.started', SELF_ID);
+
+    expect(result.current.typing?.typingClientIds).toEqual([]);
+  });
+
+  it('⚠⚠ NEVER READS `data` — a hostile payload still yields only the server-stamped clientId', async () => {
+    const reads: string[] = [];
+    const { result } = renderHook(() => useMeetingCallRealtime(callRealtimeInput()));
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    await deliverTyping('typing.started', OTHER_ID, reads);
+
+    expect(result.current.typing?.typingClientIds).toEqual([OTHER_ID]);
+    expect(reads).not.toContain('data');
+  });
+
+  /** Every `publish` the fake client's channels received — the client must make none. */
+  function clientPublishes(): number {
+    return [...channels.values()].reduce(
+      (total, channel) => total + channel.publish.mock.calls.length,
+      0
+    );
+  }
+
+  it('⚠⚠ a keystroke goes to the SERVER — `sendTyping("started")` — and the client publishes NOTHING', async () => {
+    const reg = registration();
+    const { result } = renderHook(() =>
+      useMeetingCallRealtime(callRealtimeInput({ registration: reg }))
+    );
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    act(() => result.current.typing?.onKeystroke());
+
+    expect(reg.sendTyping).toHaveBeenCalledTimes(1);
+    expect(reg.sendTyping).toHaveBeenCalledWith('started');
+    expect(clientPublishes()).toBe(0);
+  });
+
+  it('⚠⚠ UNMOUNT mid-burst sends `stopped` through the server, releases the channel and closes', async () => {
+    const reg = registration();
+    const { result, unmount } = renderHook(() =>
+      useMeetingCallRealtime(callRealtimeInput({ registration: reg }))
+    );
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    act(() => result.current.typing?.onKeystroke());
+    unmount();
+
+    await waitFor(() => expect(reg.sendTyping).toHaveBeenLastCalledWith('stopped'));
+    await waitFor(() => expect(callLog).toContain(`release:${TYPING_CHANNEL}`));
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(clientPublishes()).toBe(0);
+  });
+
+  it('⚠ a switched thread stops through the OLD registration, forgets its typists and attaches the NEW one', async () => {
+    const NEXT_CONVERSATION = 'conversation:9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5';
+    const NEXT_TYPING = 'typing:9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5';
+    const first = registration();
+    const second = registration({
+      conversationChannel: NEXT_CONVERSATION,
+      typingChannel: NEXT_TYPING,
+    });
+    const { result, rerender } = renderHook(
+      ({ reg }: { reg: MeetingRealtimeRegistration }) =>
+        useMeetingCallRealtime(callRealtimeInput({ registration: reg })),
+      { initialProps: { reg: first } }
+    );
+
+    await waitFor(() => expect(channels.has(TYPING_CHANNEL)).toBe(true));
+    await deliverTyping('typing.started', OTHER_ID);
+    act(() => result.current.typing?.onKeystroke());
+    expect(result.current.typing?.typingClientIds).toEqual([OTHER_ID]);
+
+    await act(async () => {
+      rerender({ reg: second });
+    });
+
+    await waitFor(() => expect(channels.has(NEXT_TYPING)).toBe(true));
+    await waitFor(() => expect(first.sendTyping).toHaveBeenLastCalledWith('stopped'));
+    expect(second.sendTyping).not.toHaveBeenCalled();
+    expect(result.current.typing?.typingClientIds).toEqual([]);
+    expect(channels.get(NEXT_TYPING)?.handlers.has('typing.started')).toBe(true);
+    expect(clientPublishes()).toBe(0);
   });
 });

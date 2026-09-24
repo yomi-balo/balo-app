@@ -31,6 +31,10 @@ import { useMeetingFileUpload } from './use-meeting-file-upload';
  *
  * ⚠ THE UPLOAD IS THE SHARED HOOK, BOUND TO `source: 'chat'` UPSTREAM. One definition of
  * "share a file with this call"; the composer cannot see or choose the source.
+ *
+ * ⚠ TYPING SIGNALS FIRE ONLY FROM THE LIVE TEXTAREA. `onTyping` / `onTypingStopped` are
+ * optional; the read-only arm renders no textarea, so a closed thread can never signal, and a
+ * caller that passes neither gets exactly the composer it had before.
  */
 
 export interface ChatComposerProps {
@@ -41,6 +45,13 @@ export interface ChatComposerProps {
   readonly onFileShared: (file: MeetingFileView) => void;
   readonly meetingProps: Readonly<{ meeting_id?: string }>;
   readonly report: (kind: 'success' | 'info' | 'error', message: string) => void;
+  /**
+   * Called on every edit that leaves non-empty text in the box — the typing state machine's
+   * `onKeystroke`, which does its own throttling. Absent ⇒ no typing signal at all.
+   */
+  readonly onTyping?: () => void;
+  /** Called when the box is cleared, on send and on blur. Idempotent by contract. */
+  readonly onTypingStopped?: () => void;
 }
 
 /** ⚠ THE ONE SENTENCE, SHARED WITH `postCaseMessageAction`. Two surfaces, one wording. */
@@ -56,6 +67,8 @@ export function ChatComposer({
   onFileShared,
   meetingProps,
   report,
+  onTyping,
+  onTypingStopped,
 }: Readonly<ChatComposerProps>): React.JSX.Element {
   const [draft, setDraft] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -73,6 +86,19 @@ export function ChatComposer({
     successMessage: (fileName) => `${fileName} is shared with the call — you'll find it in Files.`,
   });
 
+  /**
+   * ⚠ WHITESPACE IS NOT TYPING. The same `trim()` the send uses decides it, so "typing…" never
+   * shows for a draft the Send button would refuse.
+   */
+  const onDraftChange = useCallback(
+    (value: string): void => {
+      setDraft(value);
+      if (value.trim().length > 0) onTyping?.();
+      else onTypingStopped?.();
+    },
+    [onTyping, onTypingStopped]
+  );
+
   const submit = useCallback((): void => {
     const body = draft.trim();
     if (body.length === 0 || isSending) return;
@@ -84,7 +110,12 @@ export function ChatComposer({
         if (ok) setDraft('');
       })
       .finally(() => setIsSending(false));
-  }, [draft, isSending, onSend]);
+    // ⚠ THE SIGNAL STOPS WHEN THE MESSAGE GOES, not when it lands — and it is dispatched AFTER
+    // the send: both are Server Actions, and Next runs a page's actions one at a time, so a stop
+    // dispatched first would make the message wait for it. Receivers also clear a typist the
+    // moment their message lands.
+    onTypingStopped?.();
+  }, [draft, isSending, onSend, onTypingStopped]);
 
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -150,7 +181,8 @@ export function ChatComposer({
           readOnly={isSending}
           rows={1}
           maxLength={MESSAGE_MAX_TEXT}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => onDraftChange(event.target.value)}
+          onBlur={onTypingStopped}
           onKeyDown={onKeyDown}
           placeholder="Message everyone…"
           className="border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring max-h-28 min-h-11 flex-1 resize-none rounded-xl border px-3 py-2.5 text-sm leading-relaxed focus-visible:ring-2 focus-visible:outline-none"

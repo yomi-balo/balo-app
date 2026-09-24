@@ -49,6 +49,7 @@ import { createMeetingRealtimeTokenAction } from '../_actions/create-meeting-rea
 import { fetchMeetingThreadAction } from '../_actions/fetch-meeting-thread';
 import { postMeetingMessageAction } from '../_actions/post-meeting-message';
 import { sendMeetingReactionAction } from '../_actions/send-meeting-reaction';
+import { sendMeetingTypingAction } from '../_actions/send-meeting-typing';
 import { listMeetingFilesAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/list-meeting-files';
 import { requestMeetingFileUploadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/request-meeting-file-upload';
 import { confirmMeetingFileUploadAction } from '@/app/(dashboard)/meetings/[meetingId]/_actions/confirm-meeting-file-upload';
@@ -118,6 +119,13 @@ export interface CallClientProps {
    */
   readonly chatChannelName: string | null;
   /**
+   * `typing:{conversationId}` for the SAME thread as {@link chatChannelName}, built by the same
+   * RSC resolution, or `null` exactly when that is `null`. Handed through to the realtime
+   * registration unchanged, for the reason `chatChannelName` is: the client needs the channel
+   * name, never the conversation id.
+   */
+  readonly typingChannelName: string | null;
+  /**
    * BAL-403 — ⚠⚠ **RESOLVED SERVER-SIDE, ONCE**, mirroring `hasChat` exactly. `false` ⇒ the
    * Balance slot is ABSENT: no toolbar button, no More-sheet row, no poll, no fetch, no panel.
    *
@@ -136,6 +144,7 @@ export function CallClient({
   hasChat,
   isRealtimeEnabled,
   chatChannelName,
+  typingChannelName,
   hasBalance,
 }: Readonly<CallClientProps>): React.JSX.Element {
   const router = useRouter();
@@ -472,13 +481,19 @@ export function CallClient({
        * therefore gets no chat, **no reactions and no token at all** — its artefacts resolve on
        * the platform axis (ADR-1035). Same for an `ambiguous` context. `project_discovery` is
        * the shape that really does grant the meeting channel while naming no thread.
+       *
+       * ⚠ THE TYPING CHANNEL TRAVELS WITH THE CONVERSATION CHANNEL — both from the RSC's one
+       * resolution, both `null` together — and never falls back to the meeting channel: typing
+       * is conversation-grain, exactly as chat is.
        */
       realtime: isRealtimeEnabled
         ? {
             fetchToken: () => createMeetingRealtimeTokenAction({ meetingId }),
             sendReaction: (input) => sendMeetingReactionAction({ meetingId, ...input }),
+            sendTyping: (signal) => sendMeetingTypingAction({ meetingId, signal }),
             meetingChannel: meetingChannelName(meetingId),
             conversationChannel: chatChannelName,
+            typingChannel: typingChannelName,
           }
         : null,
       /**
@@ -503,6 +518,7 @@ export function CallClient({
       hasChat,
       isRealtimeEnabled,
       chatChannelName,
+      typingChannelName,
       hasBalance,
       balanceAppeared,
     ]

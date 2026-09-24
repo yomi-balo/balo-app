@@ -11,7 +11,7 @@ import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
 import { isThreadOpenStatus } from '@/lib/project-request/conversation-view-types';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { mintSubscribeOnlyToken } from '@/lib/realtime/mint-subscribe-token';
-import { conversationChannelName } from '@/lib/realtime/channels';
+import { conversationChannelName, typingChannelName } from '@/lib/realtime/channels';
 
 const inputSchema = z.object({ requestId: z.uuid() });
 
@@ -33,6 +33,12 @@ export type CreateConversationRealtimeTokenResult =
  * request graph and the lens speak), but the granted channels are keyed on the
  * CONVERSATION each one anchors. Capabilities stay subscribe-only over an
  * explicit channel list — never a wildcard.
+ *
+ * Each entitled conversation grants BOTH its `conversation:{id}` and its `typing:{id}` signal
+ * channel, built from the same ensured ids — so a typing grant never names a thread the lens
+ * filter dropped. The client attaches typing for the ACTIVE thread only (Ably caps ATTACHED
+ * channels at 200 per connection), but every entitled thread is granted: the viewer switches
+ * threads without a token refresh.
  */
 export async function createConversationRealtimeTokenAction(
   input: z.infer<typeof inputSchema>
@@ -105,9 +111,13 @@ export async function createConversationRealtimeTokenAction(
     );
 
     // ⚠ BAL-437 — THE SHARED MINTING TAIL. Subscribe-only, explicit channels, one TTL.
+    const conversationIds = [...conversationIdByRelationship.values()];
     const minted = await mintSubscribeOnlyToken({
       clientId: user.id,
-      channels: [...conversationIdByRelationship.values()].map(conversationChannelName),
+      channels: [
+        ...conversationIds.map(conversationChannelName),
+        ...conversationIds.map(typingChannelName),
+      ],
     });
     if (!minted.success) {
       return { success: false, disabled: true };

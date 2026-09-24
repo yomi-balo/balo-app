@@ -6,6 +6,8 @@ import type {
 } from '@balo/analytics/client';
 import type { ConversationMessageView } from '@/lib/conversations/conversation-view-types';
 import type { RealtimeTokenResult } from '@/lib/realtime/ably-auth';
+import type { TypingSignal } from '@/lib/realtime/channels';
+import type { SendTypingSignalResult } from '@/lib/realtime/typing-relay';
 import type { MeetingFileView } from './meeting-file-view-types';
 import type { MeetingReactionEmoji } from './meeting-reactions';
 
@@ -277,7 +279,7 @@ export interface MeetingChatPanelActions {
  * has a durable record and works entirely over HTTP — it degrades visibly with one line in the
  * panel instead.
  *
- * ⚠ BOTH CHANNEL NAMES ARE BUILT SERVER-ADJACENT (in `call-client.tsx`, from the RSC's
+ * ⚠ EVERY CHANNEL NAME IS BUILT SERVER-ADJACENT (in `call-client.tsx`, from the RSC's
  * resolution) rather than assembled inside the hook, for the same reason `meetingId` is not on
  * this interface: no panel component handles an id it could point at the wrong call.
  */
@@ -297,6 +299,22 @@ export interface MeetingRealtimeRegistration {
   readonly meetingChannel: string;
   /** `conversation:{conversationId}`, or `null` when the meeting has no anchor. */
   readonly conversationChannel: string | null;
+  /**
+   * `typing:{conversationId}` — the payload-free "someone is typing" signal for the SAME thread
+   * as {@link conversationChannel}, or `null` EXACTLY when that is `null`. Both names come from
+   * one resolution in `page.tsx`, so the typing channel can never name a thread the chat does
+   * not.
+   *
+   * ⚠⚠ NEVER `meeting:{meetingId}`. Chat is conversation-grain, and so is typing (see
+   * `meetingChannelName`).
+   */
+  readonly typingChannel: string | null;
+  /**
+   * ⚠⚠ TYPING RIDES A **SERVER ACTION** TOO, like {@link sendReaction} (ruling R2): the server
+   * re-runs the chat POST gate and publishes on {@link typingChannel}, so this client's token
+   * stays subscribe-only everywhere. Closes over `meetingId` in `call-client.tsx`.
+   */
+  readonly sendTyping: (signal: TypingSignal) => Promise<SendTypingSignalResult>;
 }
 
 // ── BAL-403 — the BALANCE slot ───────────────────────────────────────────────────────────

@@ -7,7 +7,15 @@ import {
   CONVERSATION_EVENT_MESSAGE,
   MEETING_EVENT_FILE,
   MEETING_EVENT_REACTION,
+  type TypingSignal,
 } from '@/lib/realtime/channels';
+import { attachTypingChannel, type TypingChannelHandle } from '@/lib/realtime/typing-channel';
+import { createTypingRelay, type SendTypingSignal } from '@/lib/realtime/typing-relay';
+import {
+  useTypingIndicator,
+  type TypingIndicator,
+  type TypingIndicatorView,
+} from '@/components/balo/conversation/use-typing-indicator';
 import {
   isMeetingReactionPayload,
   type MeetingReactionEmoji,
@@ -52,7 +60,9 @@ import {
  *
  * ⚠ THE SUBSCRIBE-ONLY TOKEN IS WHY THERE IS NO `echoMessages: false`. The client never
  * publishes, so it cannot echo. The sender receives their own reaction ONLY via the server
- * fan-out — which is exactly why the nonce dedupe exists.
+ * fan-out — which is exactly why the nonce dedupe exists. Typing is the same: the server
+ * publishes it (`registration.sendTyping`), and `attachTypingChannel` drops the sender's own
+ * signal by `clientId` — which also hides the viewer's other tabs.
  *
  * ⚠ THE `ably` SDK IS DYNAMICALLY IMPORTED inside the effect: never in the initial bundle of a
  * call page, never evaluated during SSR.
@@ -105,19 +115,36 @@ export interface UseMeetingRealtimeInput {
   readonly onMessage: (message: ConversationMessageView) => void;
   readonly onFile: (file: MeetingFileView) => void;
   readonly onReaction: (reaction: MeetingReactionPayload) => void;
+  /**
+   * One inbound typing signal from somebody else — already self-filtered by
+   * `attachTypingChannel`. Absent ⇒ inbound typing is dropped; the call frame always passes it.
+   */
+  readonly onTypingSignal?: (signal: TypingSignal, clientId: string) => void;
+  /**
+   * ⚠ CALLED ON TEARDOWN WHILE THE TYPING HANDLE IS STILL LIVE, then the channel is released. It
+   * is the state machine's chance to publish `stopped` on the channel that is going away (a
+   * `publish` after release is a no-op) and to drop every inbound typist that channel reported.
+   */
+  readonly onTypingDetach?: () => void;
 }
 
+export interface MeetingRealtimeTransport {
+  readonly status: MeetingRealtimeStatus;
+}
+
+const NOOP = (): void => undefined;
+
 /**
- * The raw transport: one client, up to two channels, three event names.
+ * The raw transport: one client, up to three channels, five event names.
  *
  * ⚠ HANDLERS ARE HELD IN REFS so a re-render never tears down and re-subscribes a channel —
  * flapping subscriptions look like flapping connectivity rather than like a bug, and would be
  * found in production rather than in review.
  */
-export function useMeetingRealtime(input: UseMeetingRealtimeInput): {
-  status: MeetingRealtimeStatus;
-} {
+export function useMeetingRealtime(input: UseMeetingRealtimeInput): MeetingRealtimeTransport {
   const { registration, onMessage, onFile, onReaction } = input;
+  const onTypingSignal = input.onTypingSignal ?? null;
+  const onTypingDetach = input.onTypingDetach ?? NOOP;
   const [status, setStatus] = useState<MeetingRealtimeStatus>(
     registration === null ? 'disabled' : 'connecting'
   );
@@ -125,6 +152,8 @@ export function useMeetingRealtime(input: UseMeetingRealtimeInput): {
   const onMessageRef = useRef(onMessage);
   const onFileRef = useRef(onFile);
   const onReactionRef = useRef(onReaction);
+  const onTypingSignalRef = useRef(onTypingSignal);
+  const onTypingDetachRef = useRef(onTypingDetach);
   const fetchTokenRef = useRef(registration?.fetchToken);
 
   /**
@@ -145,11 +174,14 @@ export function useMeetingRealtime(input: UseMeetingRealtimeInput): {
     onMessageRef.current = onMessage;
     onFileRef.current = onFile;
     onReactionRef.current = onReaction;
+    onTypingSignalRef.current = onTypingSignal;
+    onTypingDetachRef.current = onTypingDetach;
     fetchTokenRef.current = registration?.fetchToken;
-  }, [onMessage, onFile, onReaction, registration?.fetchToken]);
+  }, [onMessage, onFile, onReaction, onTypingSignal, onTypingDetach, registration?.fetchToken]);
 
   /**
-   * ⚠⚠ THE EFFECT KEYS ON THE **CHANNEL NAMES** — TWO PLAIN STRINGS — AND ON NOTHING ELSE.
+   * ⚠⚠ THE EFFECT KEYS ON THE **CHANNEL NAMES** — THREE PLAIN STRINGS (meeting, conversation,
+   * typing) — AND ON NOTHING ELSE.
    *
    * `fetchToken` is held in a ref rather than being an effect dependency, and that is a
    * correctness decision rather than an optimisation. The shipped conversation hook makes it a
@@ -161,10 +193,13 @@ export function useMeetingRealtime(input: UseMeetingRealtimeInput): {
    * one captured when the connection opened.
    *
    * ⚠ THE CHANNELS ARE THE ONLY THING THAT SHOULD EVER FORCE A RECONNECT — they are what the
-   * token's capability list is built from.
+   * token's capability list is built from. The typing channel is one of them, and it only ever
+   * changes together with the conversation channel (both come from one RSC resolution), so it
+   * adds no reconnect of its own.
    */
   const meetingChannel = registration?.meetingChannel ?? null;
   const conversationChannel = registration?.conversationChannel ?? null;
+  const typingChannel = registration?.typingChannel ?? null;
 
   useEffect(() => {
     if (meetingChannel === null) {
@@ -174,6 +209,7 @@ export function useMeetingRealtime(input: UseMeetingRealtimeInput): {
 
     let disposed = false;
     let client: Ably.Realtime | null = null;
+    let typingHandle: TypingChannelHandle | null = null;
     /**
      * ⚠ HAS THIS CONNECTION EVER BEEN UP? It is what separates `'connecting'` (first attempt)
      * from `'reconnecting'` (a drop) — see {@link MeetingRealtimeStatus}. Local to the effect
@@ -243,11 +279,27 @@ export function useMeetingRealtime(input: UseMeetingRealtimeInput): {
                 // ⚠ DEFENCE IN DEPTH BEFORE `dangerouslySetInnerHTML`. See the docblock.
                 bodyHtml: sanitizeRealtimeBodyHtml(msg.data.bodyHtml),
               });
+              // Their message landed, so they are no longer typing it — the typing channel is
+              // this same thread's. Cleared at once rather than on their `stopped`, which is sent
+              // after the post.
+              onTypingSignalRef.current?.('stopped', msg.data.senderUserId);
             }
           })
           .catch(() => {
             // Attach failures surface via the connection-state listeners.
           });
+      }
+
+      /*
+        ⚠⚠ TYPING IS READ ON THIS SAME CLIENT — never a second `Ably.Realtime`, and never on
+        `meeting:{id}`: `attachTypingChannel` refuses any name outside the `typing` namespace.
+        It owns the trust rules (name + server-stamped `clientId` only, never `data`; own and
+        own-other-tab signals dropped), so nothing here re-reads a message.
+      */
+      if (typingChannel !== null) {
+        typingHandle = attachTypingChannel(client, typingChannel, (signal, clientId) => {
+          if (!disposed) onTypingSignalRef.current?.(signal, clientId);
+        });
       }
     };
 
@@ -257,10 +309,14 @@ export function useMeetingRealtime(input: UseMeetingRealtimeInput): {
 
     return () => {
       disposed = true;
+      // ⚠ STOP (through the server — see `useCallTypingView`) AND FORGET THIS CHANNEL'S
+      // TYPISTS, THEN RELEASE IT. The stop travels over HTTP, so the close below cannot cancel it.
+      onTypingDetachRef.current();
+      typingHandle?.release();
       client?.close();
       client = null;
     };
-  }, [meetingChannel, conversationChannel]);
+  }, [meetingChannel, conversationChannel, typingChannel]);
 
   return { status };
 }
@@ -327,6 +383,49 @@ export interface MeetingCallRealtime {
   readonly unreadChat: boolean;
   /** Optimistic float + fire-and-forget send. Reports the outcome to the frame. */
   readonly sendReaction: (emoji: MeetingReactionEmoji) => void;
+  /**
+   * "Someone is typing…" for the call's thread, or `null` when there is no typing channel — no
+   * realtime registration, or a meeting with no conversation anchor. `null` means NO typing UI
+   * at all, never an empty one. Held at frame level for the same reason as {@link chatFeed}: the
+   * channel stays attached while the Chat panel is unmounted.
+   */
+  readonly typing: TypingIndicatorView | null;
+}
+
+/**
+ * The typing state machine, sending through the registration's Server Action, plus the view the
+ * Chat panel renders.
+ *
+ * ⚠ OUTBOUND GOES THROUGH THE SERVER, one call at a time (`createTypingRelay`), so a `stopped`
+ * can never overtake its `started` on the channel. INBOUND arrives from the transport through
+ * `sinkRef`: the transport's handlers are stable forwarders into it, synced on commit like every
+ * other handler ref in this file.
+ *
+ * `null` view ⇒ no typing channel (no registration, or no conversation anchor) ⇒ no typing UI.
+ */
+function useCallTypingView(
+  registration: MeetingRealtimeRegistration | null,
+  sinkRef: React.RefObject<TypingIndicator | null>
+): TypingIndicatorView | null {
+  // Optional chaining, not `!== null`: the frame hands in `panels.realtime`, and the same `?.`
+  // convention runs through `useMeetingRealtime` above.
+  const available = (registration?.typingChannel ?? null) !== null;
+  const sendTyping: SendTypingSignal | null = available ? (registration?.sendTyping ?? null) : null;
+  const relay = useMemo(
+    () => (sendTyping === null ? null : createTypingRelay(sendTyping)),
+    [sendTyping]
+  );
+
+  const indicator = useTypingIndicator({ publish: relay?.publish ?? null });
+  useEffect(() => {
+    sinkRef.current = indicator;
+  }, [indicator, sinkRef]);
+
+  const { typingClientIds, onKeystroke, onStopped } = indicator;
+  return useMemo(
+    () => (available ? { typingClientIds, onKeystroke, onStopped } : null),
+    [available, typingClientIds, onKeystroke, onStopped]
+  );
 }
 
 /**
@@ -409,7 +508,24 @@ export function useMeetingCallRealtime(input: {
     [pushFloater]
   );
 
-  const { status } = useMeetingRealtime({ registration, onMessage, onFile, onReaction });
+  const typingSinkRef = useRef<TypingIndicator | null>(null);
+  const onTypingSignal = useCallback((signal: TypingSignal, clientId: string): void => {
+    typingSinkRef.current?.receive(signal, clientId);
+  }, []);
+  const onTypingDetach = useCallback((): void => {
+    typingSinkRef.current?.onStopped();
+    typingSinkRef.current?.clear();
+  }, []);
+
+  const { status } = useMeetingRealtime({
+    registration,
+    onMessage,
+    onFile,
+    onReaction,
+    onTypingSignal,
+    onTypingDetach,
+  });
+  const typing = useCallTypingView(registration, typingSinkRef);
 
   /**
    * ⚠⚠ THE FAILURE PATH: UNDO THE OPTIMISTIC FLOAT, THEN SAY SO.
@@ -477,7 +593,16 @@ export function useMeetingCallRealtime(input: {
   );
 
   return useMemo(
-    () => ({ status, chatFeed, fileFeed, fileRevision, floaters, unreadChat, sendReaction }),
-    [status, chatFeed, fileFeed, fileRevision, floaters, unreadChat, sendReaction]
+    () => ({
+      status,
+      chatFeed,
+      fileFeed,
+      fileRevision,
+      floaters,
+      unreadChat,
+      sendReaction,
+      typing,
+    }),
+    [status, chatFeed, fileFeed, fileRevision, floaters, unreadChat, sendReaction, typing]
   );
 }

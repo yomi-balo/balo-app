@@ -35,6 +35,14 @@ interface MessageComposerProps {
    */
   onAttach?: (file: File) => void;
   onFocusChange?: (focused: boolean) => void;
+  /**
+   * The "typing…" signal's two composer hooks — both OPTIONAL, and omitting them changes
+   * nothing. `onTyping` fires on every edit that leaves non-empty (trimmed) text;
+   * `onTypingStopped` fires when the edit empties the box, when a message is actually sent, and
+   * on blur. The caller's typing machine throttles and dedupes, so this reports raw edits.
+   */
+  onTyping?: () => void;
+  onTypingStopped?: () => void;
 }
 
 const TEXTAREA_MAX_HEIGHT_PX = 160;
@@ -64,6 +72,8 @@ export function MessageComposer({
   onSend,
   onAttach,
   onFocusChange,
+  onTyping,
+  onTypingStopped,
 }: Readonly<MessageComposerProps>): React.JSX.Element {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -98,7 +108,11 @@ export function MessageComposer({
       .catch(() => {
         // The stage toasts; the draft stays.
       });
-  }, [value, sending, disabled, onSend]);
+    // ⚠ AFTER THE SEND IS DISPATCHED, NEVER BEFORE. Both are Server Actions, and Next runs a
+    // page's actions one at a time: a stop dispatched first would make every message wait for
+    // it. Receivers also clear a typist the moment their message lands.
+    onTypingStopped?.();
+  }, [value, sending, disabled, onSend, onTypingStopped]);
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -113,9 +127,13 @@ export function MessageComposer({
   const handleChange = useCallback(
     (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
       if (sending) return; // readOnly guards typing; belt-and-braces for IME edge cases.
-      onChange(event.target.value);
+      const next = event.target.value;
+      onChange(next);
+      // Whitespace alone is not "typing a message" — the send button treats it the same way.
+      if (next.trim().length > 0) onTyping?.();
+      else onTypingStopped?.();
     },
-    [onChange, sending]
+    [onChange, sending, onTyping, onTypingStopped]
   );
 
   const handleAttachClick = useCallback((): void => {
@@ -133,7 +151,10 @@ export function MessageComposer({
   );
 
   const handleFocus = useCallback((): void => onFocusChange?.(true), [onFocusChange]);
-  const handleBlur = useCallback((): void => onFocusChange?.(false), [onFocusChange]);
+  const handleBlur = useCallback((): void => {
+    onFocusChange?.(false);
+    onTypingStopped?.();
+  }, [onFocusChange, onTypingStopped]);
 
   const isUploading = uploading !== null;
 

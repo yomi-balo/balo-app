@@ -301,6 +301,22 @@
     }
   }
 
+  /* The "is typing…" dots: an ABSOLUTE 3px rise, so it reads on 4px dots (`animate-bounce`
+     moves by 25% of the element's own height — 1px here). Used under `motion-safe:` only. */
+  --animate-typing-dot: typingDot 1.2s ease-in-out infinite;
+  @keyframes typingDot {
+    0%,
+    60%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.45;
+    }
+    30% {
+      transform: translateY(-3px);
+      opacity: 1;
+    }
+  }
+
   --animate-pulse-dot: pulseDot 2s infinite;
   @keyframes pulseDot {
     0%,
@@ -513,6 +529,7 @@
   .animate-slide-up,
   .animate-bar-fill,
   .animate-pulse-dot,
+  .animate-typing-dot,
   .animate-float-glow,
   .animate-tab-icon-pop, /* BAL-501 */
   .animate-spin,

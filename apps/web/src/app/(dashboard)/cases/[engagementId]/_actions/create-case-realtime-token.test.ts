@@ -96,7 +96,7 @@ beforeEach(() => {
 });
 
 describe('createCaseRealtimeTokenAction — the minted capability', () => {
-  it('grants SUBSCRIBE ONLY, over EXACTLY ONE channel — the gate conversation', async () => {
+  it('grants SUBSCRIBE ONLY, over EXACTLY TWO channels — the gate conversation and its typing signal', async () => {
     expect(await createCaseRealtimeTokenAction(INPUT)).toEqual({
       success: true,
       tokenRequest: TOKEN,
@@ -106,8 +106,11 @@ describe('createCaseRealtimeTokenAction — the minted capability', () => {
     // The channel name is restated as a LITERAL rather than built with
     // `conversationChannelName`: sharing the builder with production would make this pass
     // through any rename, and a renamed channel disconnects every live subscriber.
-    expect(parsed).toEqual({ [`conversation:${GATE_CONVERSATION_ID}`]: ['subscribe'] });
-    expect(Object.keys(parsed as Record<string, unknown>)).toHaveLength(1);
+    expect(parsed).toEqual({
+      [`conversation:${GATE_CONVERSATION_ID}`]: ['subscribe'],
+      [`typing:${GATE_CONVERSATION_ID}`]: ['subscribe'],
+    });
+    expect(Object.keys(parsed as Record<string, unknown>)).toHaveLength(2);
   });
 
   it('contains NO publish grant and NO wildcard ANYWHERE in the raw capability', async () => {
@@ -139,6 +142,7 @@ describe('createCaseRealtimeTokenAction — the minted capability', () => {
     await createCaseRealtimeTokenAction(INPUT);
     expect(JSON.parse(tokenParams().capability)).toEqual({
       [`conversation:${OTHER_TENANT_CONVERSATION_ID}`]: ['subscribe'],
+      [`typing:${OTHER_TENANT_CONVERSATION_ID}`]: ['subscribe'],
     });
   });
 
@@ -269,6 +273,7 @@ describe('createCaseRealtimeTokenAction — a CLOSED case still gets a subscribe
     });
     expect(JSON.parse(tokenParams().capability)).toEqual({
       [`conversation:${GATE_CONVERSATION_ID}`]: ['subscribe'],
+      [`typing:${GATE_CONVERSATION_ID}`]: ['subscribe'],
     });
   });
 });

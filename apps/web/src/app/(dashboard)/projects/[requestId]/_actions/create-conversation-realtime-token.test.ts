@@ -128,6 +128,8 @@ describe('createConversationRealtimeTokenAction', () => {
     expect(JSON.parse(params.capability)).toEqual({
       [`conversation:${CONV_OPEN}`]: ['subscribe'],
       [`conversation:${CONV_OPEN_2}`]: ['subscribe'],
+      [`typing:${CONV_OPEN}`]: ['subscribe'],
+      [`typing:${CONV_OPEN_2}`]: ['subscribe'],
     });
     // ⚠ ENSURE, not find: a thread whose conversation did not yet exist would silently drop
     // out of the capability list, and its first message would be invisible to the
@@ -158,8 +160,10 @@ describe('createConversationRealtimeTokenAction', () => {
     const result = await createConversationRealtimeTokenAction({ requestId: REQUEST_ID });
     expect(result.success).toBe(true);
     const params = mockCreateTokenRequest.mock.calls[0]?.[0] as { capability: string };
+    // ⚠ The typing grant follows the lens filter: the other expert's thread is in neither list.
     expect(JSON.parse(params.capability)).toEqual({
       [`conversation:${CONV_OPEN}`]: ['subscribe'],
+      [`typing:${CONV_OPEN}`]: ['subscribe'],
     });
   });
 

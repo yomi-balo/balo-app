@@ -63,11 +63,16 @@ beforeEach(() => {
 });
 
 describe('createMeetingRealtimeTokenAction — ⚠⚠ the channel list', () => {
-  it('grants BOTH channels when the meeting has a conversation anchor', async () => {
+  it('grants the meeting, conversation AND typing channels when the meeting has an anchor', async () => {
     const result = await createMeetingRealtimeTokenAction({ meetingId: MEETING_ID });
 
     expect(result).toMatchObject({ success: true });
-    expect(capabilityKeys()).toEqual([`meeting:${MEETING_ID}`, `conversation:${CONVERSATION_ID}`]);
+    // ⚠ The typing channel is the SAME thread's, and never keyed by the meeting.
+    expect(capabilityKeys()).toEqual([
+      `meeting:${MEETING_ID}`,
+      `conversation:${CONVERSATION_ID}`,
+      `typing:${CONVERSATION_ID}`,
+    ]);
   });
 
   it('⚠⚠ grants EXACTLY the meeting channel when there is NO anchor — no placeholder', async () => {

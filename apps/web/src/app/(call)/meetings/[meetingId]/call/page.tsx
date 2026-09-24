@@ -8,7 +8,7 @@ import { meetingJoinLinkUrl } from '@/lib/meetings/join-link';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
-import { conversationChannelName } from '@/lib/realtime/channels';
+import { conversationChannelName, typingChannelName } from '@/lib/realtime/channels';
 import { CallClient } from './_components/call-client';
 
 /**
@@ -51,6 +51,22 @@ export const metadata: Metadata = {
 };
 
 /**
+ * The chat slot as the RSC resolves it.
+ *
+ * ⚠⚠ BOTH CHANNEL NAMES COME FROM THE ONE `anchor.conversationId`, IN ONE RETURN. The typing
+ * channel is therefore `null` exactly when the conversation channel is, and can never name a
+ * thread the chat does not — the same pairing `create-meeting-realtime-token.ts` mints.
+ */
+interface ChatSlot {
+  readonly hasChat: boolean;
+  readonly chatChannelName: string | null;
+  readonly typingChannelName: string | null;
+}
+
+/** No session, a denied gate, no anchor, or a throw — one absent shape for all four. */
+const NO_CHAT_SLOT: ChatSlot = { hasChat: false, chatChannelName: null, typingChannelName: null };
+
+/**
  * BAL-437 — ⚠⚠ **THE CHAT SLOT IS RESOLVED HERE, SERVER-SIDE, AND NOWHERE ELSE.**
  *
  * Two reasons it is not a client fetch:
@@ -71,23 +87,20 @@ export const metadata: Metadata = {
  * page's own body scored 16 against SonarCloud's allowed 15. The repo's precedent is to
  * EXTRACT, never to disable the rule.
  */
-async function resolveChatSlot(
-  meetingId: string,
-  userId: string | null
-): Promise<{ hasChat: boolean; chatChannelName: string | null }> {
-  if (userId === null) return { hasChat: false, chatChannelName: null };
+async function resolveChatSlot(meetingId: string, userId: string | null): Promise<ChatSlot> {
+  if (userId === null) return NO_CHAT_SLOT;
 
   try {
     const access = await resolveMeetingChatAccess({
       meetingId,
       actor: { kind: 'member', userId },
     });
-    if (!access.ok || access.anchor === null) {
-      return { hasChat: false, chatChannelName: null };
-    }
+    if (!access.ok || access.anchor === null) return NO_CHAT_SLOT;
+    const { conversationId } = access.anchor;
     return {
       hasChat: true,
-      chatChannelName: conversationChannelName(access.anchor.conversationId),
+      chatChannelName: conversationChannelName(conversationId),
+      typingChannelName: typingChannelName(conversationId),
     };
   } catch (error) {
     log.warn('Call page could not resolve the chat anchor', {
@@ -95,7 +108,7 @@ async function resolveChatSlot(
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return { hasChat: false, chatChannelName: null };
+    return NO_CHAT_SLOT;
   }
 }
 
@@ -190,7 +203,7 @@ export default async function MeetingCallPage({
   // ⚠ TWO INDEPENDENT SLOT RESOLUTIONS, RUN CONCURRENTLY — never a sequential waterfall for
   // unrelated reads (vercel-react-best-practices). Both degrade to `false` on their own; neither
   // can fail the other.
-  const [{ hasChat, chatChannelName }, hasBalance] = await Promise.all([
+  const [chatSlot, hasBalance] = await Promise.all([
     resolveChatSlot(meetingId, userId),
     resolveBalanceSlot(meetingId, userId),
   ]);
@@ -202,7 +215,7 @@ export default async function MeetingCallPage({
       // ⚠⚠ BUILT SERVER-SIDE, TOKENLESS. See `meetingJoinLinkUrl` — including why the builder
       // lives in `lib/meetings/` rather than in this file.
       joinLinkUrl={meetingJoinLinkUrl(meetingId)}
-      hasChat={hasChat}
+      hasChat={chatSlot.hasChat}
       // BAL-403 / BAL-466 — ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this
       // used to say "`false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED". `true` is now the
       // real answer for a `case` meeting once its client has been admitted — see
@@ -212,7 +225,8 @@ export default async function MeetingCallPage({
       // ⚠ THE ENV READ HAPPENS ON THE SERVER. `ABLY_API_KEY` is not `NEXT_PUBLIC_*` and must
       // never become one; the client only ever learns the BOOLEAN.
       isRealtimeEnabled={isRealtimeConfigured()}
-      chatChannelName={chatChannelName}
+      chatChannelName={chatSlot.chatChannelName}
+      typingChannelName={chatSlot.typingChannelName}
     />
   );
 }
