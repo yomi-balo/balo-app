@@ -8,7 +8,11 @@ import { log } from '@/lib/logging';
 import { callActionErrorFields, enterCallAction } from '@/lib/meetings/call-action-entry';
 import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
 import { mintSubscribeOnlyToken } from '@/lib/realtime/mint-subscribe-token';
-import { conversationChannelName, meetingChannelName } from '@/lib/realtime/channels';
+import {
+  conversationChannelName,
+  meetingChannelName,
+  typingChannelName,
+} from '@/lib/realtime/channels';
 import type { RealtimeTokenResult } from '@/lib/realtime/ably-auth';
 
 const inputSchema = z.object({ meetingId: z.uuid() }).strict();
@@ -16,10 +20,12 @@ const inputSchema = z.object({ meetingId: z.uuid() }).strict();
 /**
  * BAL-437 — the Ably token endpoint for the IN-CALL surface.
  *
- * ⚠⚠ SUBSCRIBE-ONLY, EXPLICIT, NON-WILDCARD, OVER **AT MOST TWO** CHANNELS:
+ * ⚠⚠ SUBSCRIBE-ONLY, EXPLICIT, NON-WILDCARD, OVER **AT MOST THREE** CHANNELS:
  *
  *   · `meeting:{meetingId}`           — always. Reactions and file invalidations.
  *   · `conversation:{conversationId}` — ONLY when the meeting resolves to a thread anchor.
+ *   · `typing:{conversationId}`       — ONLY alongside that same anchor. The server publishes
+ *     it (`sendMeetingTypingAction`); it is conversation-grain, so never on `meeting:{id}`.
  *
  * A meeting with no anchor gets ONE channel, not a placeholder and not a wildcard. That is the
  * whole reason the gate returns `anchor: null` rather than throwing.
@@ -63,7 +69,10 @@ export async function createMeetingRealtimeTokenAction(
 
     const channels = [meetingChannelName(meetingId)];
     if (access.anchor !== null) {
-      channels.push(conversationChannelName(access.anchor.conversationId));
+      channels.push(
+        conversationChannelName(access.anchor.conversationId),
+        typingChannelName(access.anchor.conversationId)
+      );
     }
 
     const minted = await mintSubscribeOnlyToken({ clientId: user.id, channels });

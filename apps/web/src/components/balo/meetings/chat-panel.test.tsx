@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
@@ -8,6 +8,7 @@ import type {
   MeetingChatPanelActions,
   MeetingFilePanelActions,
 } from '@/lib/meetings/meeting-panels';
+import type { TypingIndicatorView } from '@/components/balo/conversation/use-typing-indicator';
 import { ChatPanel } from './chat-panel';
 import { mergeChatTimeline } from './chat-panel-list';
 import type { MeetingRealtimeStatus } from './use-meeting-realtime';
@@ -128,6 +129,7 @@ function renderPanel(
     chatFeed?: ConversationMessageView[];
     fileFeed?: MeetingFileView[];
     onOpenFiles?: () => void;
+    typing?: TypingIndicatorView | null;
   } = {}
 ): HTMLElement {
   return render(
@@ -141,8 +143,17 @@ function renderPanel(
       fileFeed={overrides.fileFeed ?? []}
       meetingProps={MEETING_PROPS}
       onAnnounce={vi.fn()}
+      typing={overrides.typing}
     />
   ).container;
+}
+
+/** A typing view with the given inbound typists and spy composer hooks. */
+function typingView(typingClientIds: readonly string[] = []): TypingIndicatorView & {
+  readonly onKeystroke: Mock<() => void>;
+  readonly onStopped: Mock<() => void>;
+} {
+  return { typingClientIds, onKeystroke: vi.fn<() => void>(), onStopped: vi.fn<() => void>() };
 }
 
 beforeEach(() => {
@@ -442,6 +453,117 @@ describe('ChatPanel — the composer', () => {
       await screen.findByText('This case is closed, so the conversation is read-only.')
     ).toBeInTheDocument();
     expect(screen.queryByLabelText('Send message')).not.toBeInTheDocument();
+  });
+});
+
+describe('ChatPanel — ⚠⚠ the typing line', () => {
+  const THIRD_ID = '33333333-4444-4555-8666-777777777777';
+  const UNKNOWN_ID = '44444444-5555-4666-8777-888888888888';
+
+  it('names a typist by FIRST name, from the thread the panel already loaded', async () => {
+    renderPanel(
+      fakes({
+        messages: [message({ id: 'm1', senderUserId: OTHER_ID, senderName: 'Priya Raman' })],
+      }),
+      { typing: typingView([OTHER_ID]) }
+    );
+
+    expect(await screen.findByText('Priya is typing…')).toBeInTheDocument();
+  });
+
+  it('⚠ names come from the MERGED timeline — a realtime-only message names its sender too', async () => {
+    renderPanel(fakes(), {
+      chatFeed: [message({ id: 'live-1', senderUserId: THIRD_ID, senderName: 'Sam Lee' })],
+      typing: typingView([THIRD_ID]),
+    });
+
+    expect(await screen.findByText('Sam is typing…')).toBeInTheDocument();
+  });
+
+  it('⚠ an id no loaded message names is "Someone" — never a new read for a name', async () => {
+    const fake = fakes({ messages: [message({ id: 'm1' })] });
+    renderPanel(fake, { typing: typingView([UNKNOWN_ID]) });
+
+    expect(await screen.findByText('Someone is typing…')).toBeInTheDocument();
+    expect(fake.fetchThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠⚠ the line is VISUAL ONLY — no live region; the call frame keeps ONE (§16)', async () => {
+    const container = renderPanel(
+      fakes({
+        messages: [message({ id: 'm1', senderUserId: OTHER_ID, senderName: 'Priya Raman' })],
+      }),
+      { typing: typingView([OTHER_ID]) }
+    );
+
+    const line = await screen.findByText('Priya is typing…');
+    expect(line).not.toHaveAttribute('aria-hidden');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(container.querySelector('[aria-live]')).toBeNull();
+  });
+
+  it('⚠⚠ `typing: null` ⇒ NO typing UI at all — realtime off is not a broken indicator', async () => {
+    renderPanel(fakes(), { typing: null });
+
+    await screen.findByLabelText('Send message');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/is typing/i)).not.toBeInTheDocument();
+  });
+
+  it('⚠ an ABSENT `typing` prop is the same as null', async () => {
+    renderPanel(fakes());
+
+    await screen.findByLabelText('Send message');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('⚠⚠ a READ-ONLY thread shows no typing line — even with typists on the channel', async () => {
+    renderPanel(
+      fakes({
+        writable: false,
+        messages: [message({ id: 'm1', senderUserId: OTHER_ID, senderName: 'Priya Raman' })],
+      }),
+      { typing: typingView([OTHER_ID]) }
+    );
+
+    await screen.findByText('This case is closed, so the conversation is read-only.');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/is typing/i)).not.toBeInTheDocument();
+  });
+
+  it('no typing line while the thread is still loading — the composer is not there yet', () => {
+    const fake = fakes();
+    fake.fetchThread.mockReturnValue(new Promise(() => {}));
+    fake.list.mockReturnValue(new Promise(() => {}));
+
+    renderPanel(fake, { typing: typingView([OTHER_ID]) });
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('the composer drives the view: keystrokes signal, sending stops', async () => {
+    const view = typingView();
+    const fake = fakes();
+    renderPanel(fake, { typing: view });
+
+    const box = await screen.findByLabelText(/message everyone in the call/i);
+    await userEvent.type(box, 'Hi');
+    expect(view.onKeystroke).toHaveBeenCalledTimes(2);
+    expect(view.onStopped).not.toHaveBeenCalled();
+
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(fake.postMessage).toHaveBeenCalledWith('Hi'));
+    expect(view.onStopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('has no violations with somebody typing', async () => {
+    const container = renderPanel(
+      fakes({ messages: [message({ id: 'm1', senderUserId: OTHER_ID })] }),
+      { typing: typingView([OTHER_ID]) }
+    );
+
+    await screen.findByText('Priya is typing…');
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
 

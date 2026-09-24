@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { deriveDrawdownState, type DrawdownState } from '@balo/shared/credit';
@@ -75,6 +75,37 @@ vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
 // BAL-134 — the end action's FAILURE arm is a toast, and it is the only voice that arm has.
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+
+/**
+ * The frame's realtime state, passed through UNCHANGED unless a test sets `typingOverride` — in
+ * which case that typing view is laid over whatever the real hook returned. It lets the typing
+ * WIRING be tested (which panel receives the view) without a live Ably client; the transport
+ * itself is covered in `use-meeting-realtime.test.ts`.
+ */
+const { typingOverride } = vi.hoisted(() => ({
+  typingOverride: {
+    current: null as null | {
+      typingClientIds: readonly string[];
+      onKeystroke: () => void;
+      onStopped: () => void;
+    },
+  },
+}));
+
+vi.mock('./use-meeting-realtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./use-meeting-realtime')>();
+  const { useMemo } = await import('react');
+  return {
+    ...actual,
+    useMeetingCallRealtime: (
+      input: Parameters<typeof actual.useMeetingCallRealtime>[0]
+    ): ReturnType<typeof actual.useMeetingCallRealtime> => {
+      const real = actual.useMeetingCallRealtime(input);
+      const typing = typingOverride.current;
+      return useMemo(() => (typing === null ? real : { ...real, typing }), [real, typing]);
+    },
+  };
+});
 
 const RAW_GRANT = {
   roomUrl: 'https://balo.daily.co/balo-0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d',
@@ -285,6 +316,7 @@ beforeEach(() => {
   globalThis.localStorage.clear();
   vi.mocked(track).mockClear();
   vi.mocked(toast.error).mockClear();
+  typingOverride.current = null;
 });
 
 describe('MeetingFrame — ⚠⚠ the terminal latch', () => {
@@ -792,6 +824,95 @@ describe('MeetingFrame — the side panel (BAL-436)', () => {
 
     expect(await screen.findByRole('heading', { name: CALL_ENDED_TITLE })).toBeInTheDocument();
     expect(screen.queryByTestId('meeting-side-panel')).toBeNull();
+  });
+});
+
+/**
+ * The typing view reaches the MEMBER Chat panel only. The guest arm renders a read-only panel
+ * with no composer, so even a typing view sitting on the frame's realtime state has nowhere to
+ * render there — pinned by laying one over the real hook's answer for both audiences.
+ */
+describe('MeetingFrame — ⚠⚠ the typing line is member-only', () => {
+  const PRIYA_ID = '22222222-3333-4444-8555-666666666666';
+  const PRIYA_MESSAGE = {
+    id: 'm1',
+    conversationId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+    bodyHtml: '<p>Hello there</p>',
+    senderUserId: PRIYA_ID,
+    senderName: 'Priya Raman',
+    createdAtIso: '2026-08-14T09:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+    typingOverride.current = {
+      typingClientIds: [PRIYA_ID],
+      onKeystroke: vi.fn(),
+      onStopped: vi.fn(),
+    };
+  });
+
+  it('a MEMBER with a writable thread sees who is typing, above the composer', async () => {
+    const user = userEvent.setup();
+    renderMember({
+      panels: {
+        ...panelsFake(),
+        chat: {
+          fetchThread: vi.fn().mockResolvedValue({
+            success: true,
+            messages: [PRIYA_MESSAGE],
+            hasEarlier: false,
+            viewerUserId: '11111111-2222-4333-8444-555555555555',
+            writable: true,
+          }),
+          postMessage: vi.fn(),
+          requestUpload: vi.fn(),
+          confirmUpload: vi.fn(),
+        },
+        realtime: null,
+      } as unknown as MeetingMemberPanelRegistration,
+    });
+    await join();
+
+    await user.click(await screen.findByRole('button', { name: 'Chat' }));
+
+    const panel = await screen.findByTestId('meeting-side-panel');
+    expect(await within(panel).findByText('Priya is typing…')).toBeInTheDocument();
+    // ⚠⚠ THE PANEL ADDS NO LIVE REGION WHILE SOMEONE TYPES. The typing line is visual only, so
+    // the frame's §16 region stays the only one the side panel announces through; a second would
+    // race it.
+    expect(panel.querySelectorAll('output, [aria-live]')).toHaveLength(0);
+  });
+
+  it('⚠⚠ a GUEST never gets a typing line — even with a typing view on the frame', async () => {
+    const user = userEvent.setup();
+    renderGuest({
+      ...guestPanelsFake(),
+      chat: {
+        fetchThread: vi
+          .fn()
+          .mockResolvedValue({ success: true, messages: [PRIYA_MESSAGE], hasEarlier: false }),
+      },
+    });
+    await join();
+
+    await user.click(await screen.findByRole('button', { name: 'Chat' }));
+
+    const panel = await screen.findByTestId('meeting-side-panel');
+    // The transcript is on screen, so the panel has fully rendered its read-only body.
+    await within(panel).findByText('Hello there');
+    expect(within(panel).queryByRole('status')).toBeNull();
+    // ⚠ AND NOWHERE ELSE ON THE SURFACE — the frame's own §16 region never carries it either.
+    expect(screen.queryByText(/is typing/i)).toBeNull();
   });
 });
 

@@ -211,8 +211,9 @@ vi.mock('./reschedule-proposal-card', () => ({
   ),
 }));
 
+// The hook's real return shape with realtime off: the panel reads `typing` off it.
 vi.mock('@/components/balo/conversation/use-conversation-realtime', () => ({
-  useConversationRealtime: vi.fn(),
+  useConversationRealtime: () => ({ status: 'disabled', typing: null }),
 }));
 
 vi.mock('../_actions/resolve-case', () => ({ resolveCaseAction: vi.fn() }));

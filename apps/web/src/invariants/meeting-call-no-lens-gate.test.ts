@@ -338,6 +338,7 @@ const PINNED_FILES: readonly string[] = [
   'app/(call)/meetings/[meetingId]/call/_actions/fetch-meeting-thread.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/post-meeting-message.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/send-meeting-reaction.ts',
+  'app/(call)/meetings/[meetingId]/call/_actions/send-meeting-typing.ts',
   // ── BAL-403 — the in-call balance slot. ⚠ PINNED **AND** ALLOW-LISTED, same reasoning as
   // BAL-436/BAL-134/BAL-437 above.
   'lib/meetings/drawdown-auto-open.ts',

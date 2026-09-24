@@ -7,7 +7,7 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { errorMessage, log } from '@/lib/logging';
 import { resolveCaseAccess } from '@/lib/cases/resolve-case-access';
 import { mintSubscribeOnlyToken } from '@/lib/realtime/mint-subscribe-token';
-import { conversationChannelName } from '@/lib/realtime/channels';
+import { conversationChannelName, typingChannelName } from '@/lib/realtime/channels';
 import type { ConversationRealtimeTokenResult } from '@/components/balo/conversation/use-conversation-realtime';
 
 const inputSchema = z.object({ engagementId: z.uuid() }).strict();
@@ -15,10 +15,12 @@ const inputSchema = z.object({ engagementId: z.uuid() }).strict();
 /**
  * BAL-421 — the Ably token endpoint for the CASE conversation island.
  *
- * ⚠ SUBSCRIBE-ONLY, OVER EXACTLY ONE EXPLICIT CHANNEL — never a wildcard. A case has exactly
- * one thread, so the capability list is the single `conversation:{conversationId}` the gate
- * resolved. (The project-request equivalent grants a LIST because a request fans out to many
- * experts; a case has one counterparty and one thread.)
+ * ⚠ SUBSCRIBE-ONLY, OVER EXACTLY TWO EXPLICIT CHANNELS — never a wildcard. A case has exactly
+ * one thread, so the capability list is that thread's `conversation:{conversationId}` and its
+ * `typing:{conversationId}` signal, both named from the ONE id the gate resolved. The server
+ * publishes on both (typing via `sendCaseTypingAction`). (The project-request equivalent grants
+ * a LIST because a request fans out to many experts; a case has one counterparty and one
+ * thread.)
  *
  * ⚠⚠ IT RESOLVES THE CONVERSATION FROM **THE GATE**, AND MUST NEVER MINT ONE. The
  * project-request token action deliberately calls `ensureManyForContexts` (a WRITE) because a
@@ -66,7 +68,10 @@ export async function createCaseRealtimeTokenAction(
 
     const minted = await mintSubscribeOnlyToken({
       clientId: user.id,
-      channels: [conversationChannelName(access.conversationId)],
+      channels: [
+        conversationChannelName(access.conversationId),
+        typingChannelName(access.conversationId),
+      ],
     });
     if (!minted.success) {
       // ⚠ THE LOG STAYS HERE, NOT IN THE HELPER — `engagementId` is the whole value of the

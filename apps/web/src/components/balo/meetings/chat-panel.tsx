@@ -9,6 +9,12 @@ import type {
   MeetingChatPanelActions,
   MeetingFilePanelActions,
 } from '@/lib/meetings/meeting-panels';
+import { TypingIndicator } from '@/components/balo/conversation/typing-indicator';
+import {
+  firstNamesByUserId,
+  resolveTypingNames,
+} from '@/components/balo/conversation/typing-names';
+import type { TypingIndicatorView } from '@/components/balo/conversation/use-typing-indicator';
 import { MeetingSidePanel } from './meeting-side-panel';
 import { ChatComposer } from './chat-composer';
 import { mergeChatTimeline } from './chat-panel-list';
@@ -48,6 +54,11 @@ export { ChatThreadBody, type ChatThreadBodyProps } from './chat-thread-body';
  * Skeleton / error+retry / INVITATION empty / thread. The realtime line is orthogonal to all
  * four: chat works entirely over HTTP, so a dead transport degrades the RECEIVE path only and
  * is said in one persistent line rather than by disabling anything.
+ *
+ * ⚠ THE TYPING LINE IS ORTHOGONAL TOO, AND MEMBER-ONLY BY STRUCTURE. It renders in this panel's
+ * footer, above a WRITABLE composer, only when the frame hands down a typing view — so realtime
+ * off means no typing UI at all, and the read-only `GuestChatPanel` (no footer, no composer) has
+ * nowhere to render one.
  *
  * ⚠⚠ **THE COMPOSER IS PRESENT IN THREE OF THE FOUR** — everything except the skeleton, and
  * that includes the ERROR state. Reading the thread and posting to it are separate questions
@@ -93,6 +104,11 @@ export interface ChatPanelProps {
   readonly fileFeed: readonly MeetingFileView[];
   readonly meetingProps: Readonly<{ meeting_id?: string }>;
   readonly onAnnounce: (message: string) => void;
+  /**
+   * The frame's typing view for this thread, or `null`/absent when there is none (realtime off,
+   * or no typing channel). Only a WRITABLE thread shows it or signals through it.
+   */
+  readonly typing?: TypingIndicatorView | null;
 }
 
 /**
@@ -304,6 +320,38 @@ function EmptyThreadLine({ writable }: Readonly<{ writable: boolean }>): React.J
   );
 }
 
+/**
+ * "Dana is typing…" above the composer, named from the messages this panel already holds.
+ *
+ * ⚠ NO NEW READ FOR A NAME. A typist who has not spoken in the loaded thread is "Someone" —
+ * the typing path reads no payload, and a typing event must not be able to make the page fetch.
+ *
+ * ⚠ VISUAL ONLY — NO LIVE REGION (`announce={false}`). The call frame keeps ONE polite region,
+ * §16's, and two regions on one surface race (see `meeting-frame-impl.tsx`). A live call is also
+ * the worst place for a stream of "is typing" announcements to compete with speech; the message
+ * itself is announced by the thread's `role="log"` when it lands.
+ */
+function ChatTypingLine({
+  typingClientIds,
+  messages,
+}: Readonly<{
+  typingClientIds: readonly string[];
+  messages: readonly ConversationMessageView[];
+}>): React.JSX.Element {
+  const namesByUserId = useMemo(
+    () =>
+      firstNamesByUserId(
+        messages.map((message) => ({ userId: message.senderUserId, name: message.senderName }))
+      ),
+    [messages]
+  );
+  const names = useMemo(
+    () => resolveTypingNames(typingClientIds, namesByUserId),
+    [typingClientIds, namesByUserId]
+  );
+  return <TypingIndicator names={names} announce={false} className="px-1" />;
+}
+
 export function ChatPanel({
   chat,
   files,
@@ -314,6 +362,7 @@ export function ChatPanel({
   fileFeed,
   meetingProps,
   onAnnounce,
+  typing,
 }: Readonly<ChatPanelProps>): React.JSX.Element {
   const {
     thread,
@@ -371,6 +420,10 @@ export function ChatPanel({
 
   const items = useMemo(() => mergeChatTimeline(messages, chatFiles), [messages, chatFiles]);
   const realtimeLine = realtimeLineFor(realtimeStatus);
+  const writable = thread?.writable ?? true;
+  // ⚠ A READ-ONLY THREAD NEITHER SHOWS NOR SENDS TYPING — its composer is a sentence, so there
+  // is nobody on this side who could be typing into it, and no line to reserve for it.
+  const liveTyping = writable ? (typing ?? null) : null;
 
   return (
     <MeetingSidePanel
@@ -391,16 +444,26 @@ export function ChatPanel({
          * refused with the exact read-only sentence, which the panel surfaces as an error. The
          * alternative — assuming read-only — silently removes the composer from everyone whose
          * read merely timed out, which is the far more common case and the worse failure.
+         *
+         * ⚠ THE TYPING LINE SITS DIRECTLY ABOVE THE COMPOSER and lives exactly as long as a
+         * WRITABLE one does — the same gate, so the line never outlives the box it describes.
          */
         isLoading ? null : (
-          <ChatComposer
-            actions={chat}
-            writable={thread?.writable ?? true}
-            onSend={onSend}
-            onFileShared={addLocal}
-            meetingProps={meetingProps}
-            report={report}
-          />
+          <div className="flex flex-col gap-1.5">
+            {liveTyping === null ? null : (
+              <ChatTypingLine typingClientIds={liveTyping.typingClientIds} messages={messages} />
+            )}
+            <ChatComposer
+              actions={chat}
+              writable={writable}
+              onSend={onSend}
+              onFileShared={addLocal}
+              meetingProps={meetingProps}
+              report={report}
+              onTyping={liveTyping?.onKeystroke}
+              onTypingStopped={liveTyping?.onStopped}
+            />
+          </div>
         )
       }
     >
@@ -414,7 +477,7 @@ export function ChatPanel({
         errorBody="The call itself is fine. Try again, or carry on talking — nothing is lost."
         hasLoaded={thread !== null}
         items={items}
-        emptyNode={<EmptyThreadLine writable={thread?.writable ?? true} />}
+        emptyNode={<EmptyThreadLine writable={writable} />}
         viewerUserId={thread?.viewerUserId ?? null}
         hasEarlier={thread?.hasEarlier ?? false}
         isLoadingEarlier={isLoadingEarlier}

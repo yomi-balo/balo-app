@@ -2230,6 +2230,9 @@ function FramePanel({
         fileFeed={realtime.fileFeed}
         meetingProps={meetingProps}
         onAnnounce={onAnnounce}
+        // ⚠ MEMBER ARM ONLY. The guest arm above mints no Ably token and renders a panel with
+        // no composer, so it has neither a typing view nor anywhere to show one.
+        typing={realtime.typing}
       />
     );
   }

@@ -87,7 +87,10 @@ const inputSchema = z
  * `postMeetingMessageAction` is an UNBOUNDED WRITE path — every accepted call INSERTs a
  * `conversation_messages` row and publishes — and `fetchMeetingThreadAction` is an unbounded
  * READ that pages 30 rows per call behind a bare `requireUser()`. Neither has any rate limit
- * either. Reactions are merely the cheapest to abuse, not the only one exposed.
+ * either. Reactions are merely the cheapest to abuse, not the only one exposed. The three typing
+ * relays — `sendMeetingTypingAction` here, and `sendCaseTypingAction` /
+ * `sendConversationTypingAction` on the dashboard — share the gap too: each runs its surface's
+ * full post gate and one Ably publish per call (see `relay-typing-signal.ts`).
  *
  * ⚠⚠ **BAL-461 MUST CHECK THE RATE *BEFORE* THE TENANCY GATE.** Every action in this family
  * authenticates, then authorizes, then acts — and the authorization is ~4–6 indexed reads. A

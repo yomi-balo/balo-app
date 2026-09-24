@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
@@ -71,6 +71,8 @@ function renderComposer(
     onFileShared?: (file: MeetingFileView) => void;
     report?: (kind: 'success' | 'info' | 'error', message: string) => void;
     fake?: Fakes;
+    onTyping?: () => void;
+    onTypingStopped?: () => void;
   } = {}
 ): { container: HTMLElement; fake: Fakes } {
   const fake = overrides.fake ?? fakes();
@@ -82,6 +84,8 @@ function renderComposer(
       onFileShared={overrides.onFileShared ?? vi.fn()}
       meetingProps={MEETING_PROPS}
       report={overrides.report ?? vi.fn()}
+      onTyping={overrides.onTyping}
+      onTypingStopped={overrides.onTypingStopped}
     />
   );
   return { container, fake };
@@ -151,6 +155,117 @@ describe('ChatComposer — sending', () => {
     expect(box).not.toBeDisabled();
 
     settle(true);
+    await waitFor(() => expect(box).toHaveValue(''));
+  });
+});
+
+describe('ChatComposer — ⚠ the typing signals', () => {
+  function typingSpies(): { onTyping: Mock<() => void>; onTypingStopped: Mock<() => void> } {
+    return { onTyping: vi.fn<() => void>(), onTypingStopped: vi.fn<() => void>() };
+  }
+
+  it('signals typing on every edit that leaves real text, and nothing else yet', async () => {
+    const spies = typingSpies();
+    renderComposer(spies);
+
+    await userEvent.type(screen.getByLabelText(/message everyone in the call/i), 'Hi');
+
+    expect(spies.onTyping).toHaveBeenCalledTimes(2);
+    expect(spies.onTypingStopped).not.toHaveBeenCalled();
+  });
+
+  it('⚠ whitespace is NOT typing — the same trim the send uses', () => {
+    const spies = typingSpies();
+    renderComposer(spies);
+
+    fireEvent.change(screen.getByLabelText(/message everyone in the call/i), {
+      target: { value: '   ' },
+    });
+
+    expect(spies.onTyping).not.toHaveBeenCalled();
+    expect(spies.onTypingStopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('clearing the box stops the signal', () => {
+    const spies = typingSpies();
+    renderComposer(spies);
+    const box = screen.getByLabelText(/message everyone in the call/i);
+
+    fireEvent.change(box, { target: { value: 'Draft' } });
+    fireEvent.change(box, { target: { value: '' } });
+
+    expect(spies.onTyping).toHaveBeenCalledTimes(1);
+    expect(spies.onTypingStopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠⚠ a REAL click on Send keeps focus in the box — the send is dispatched BEFORE the stop', async () => {
+    const spies = typingSpies();
+    const onSend = vi.fn().mockReturnValue(new Promise<boolean>(() => {}));
+    renderComposer({ ...spies, onSend });
+    const box = screen.getByLabelText(/message everyone in the call/i);
+
+    await userEvent.type(box, 'Hello');
+    // `userEvent.click` moves focus on mousedown, exactly as a browser does — unlike `fireEvent`.
+    await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect(onSend).toHaveBeenCalledWith('Hello');
+    expect(box).toHaveFocus();
+    // No blur stop ahead of the send: exactly one stop, and it follows the send.
+    expect(spies.onTypingStopped).toHaveBeenCalledTimes(1);
+    const [sendOrder] = onSend.mock.invocationCallOrder;
+    const [stopOrder] = spies.onTypingStopped.mock.invocationCallOrder;
+    expect(sendOrder).toBeLessThan(stopOrder ?? 0);
+  });
+
+  it('⚠ sending stops the signal — before the send resolves', async () => {
+    const spies = typingSpies();
+    const onSend = vi.fn().mockReturnValue(new Promise<boolean>(() => {}));
+    renderComposer({ ...spies, onSend });
+
+    await userEvent.type(screen.getByLabelText(/message everyone in the call/i), 'Hello');
+    expect(spies.onTypingStopped).not.toHaveBeenCalled();
+    await userEvent.keyboard('{Enter}');
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(spies.onTypingStopped).toHaveBeenCalledTimes(1);
+    // ⚠ AFTER the send is dispatched: Next runs a page's Server Actions one at a time, so the
+    // message must not queue behind the typing stop.
+    const [sendOrder] = onSend.mock.invocationCallOrder;
+    const [stopOrder] = spies.onTypingStopped.mock.invocationCallOrder;
+    expect(sendOrder).toBeLessThan(stopOrder ?? 0);
+  });
+
+  it('an empty send is refused and signals nothing', async () => {
+    const spies = typingSpies();
+    renderComposer(spies);
+
+    await userEvent.click(screen.getByLabelText('Send message'));
+
+    expect(spies.onTyping).not.toHaveBeenCalled();
+    // The click moved focus from nowhere to the button: no textarea blur, no stop.
+    expect(spies.onTypingStopped).not.toHaveBeenCalled();
+  });
+
+  it('leaving the box (blur) stops the signal', async () => {
+    const spies = typingSpies();
+    renderComposer(spies);
+
+    await userEvent.type(screen.getByLabelText(/message everyone in the call/i), 'Hold on');
+    await userEvent.tab();
+
+    expect(spies.onTypingStopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ with NO typing props the composer behaves exactly as before — send still works', async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    renderComposer({ onSend });
+
+    const box = screen.getByLabelText(/message everyone in the call/i);
+    await userEvent.type(box, 'Plain');
+    await userEvent.tab();
+    await userEvent.click(screen.getByLabelText('Send message'));
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('Plain'));
     await waitFor(() => expect(box).toHaveValue(''));
   });
 });

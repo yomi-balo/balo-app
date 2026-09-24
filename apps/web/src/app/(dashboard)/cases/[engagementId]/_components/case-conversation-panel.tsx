@@ -7,12 +7,19 @@ import { SectionHead } from '@/components/balo/section/section-states';
 import { MessageList, type ThreadDataState } from '@/components/balo/conversation/message-list';
 import { MessageComposer } from '@/components/balo/conversation/message-composer';
 import { useConversationRealtime } from '@/components/balo/conversation/use-conversation-realtime';
+import { TypingIndicator } from '@/components/balo/conversation/typing-indicator';
+import {
+  firstNamesByUserId,
+  resolveTypingNames,
+} from '@/components/balo/conversation/typing-names';
 import type {
   ConversationFileView,
   ConversationMessageView,
 } from '@/lib/conversations/conversation-view-types';
 import type { CaseConversationView } from '@/lib/cases/case-view-types';
+import type { TypingSignal } from '@/lib/realtime/channels';
 import { createCaseRealtimeTokenAction } from '../_actions/create-case-realtime-token';
+import { sendCaseTypingAction } from '../_actions/send-case-typing';
 import { fetchCaseThreadAction } from '../_actions/fetch-case-thread';
 import { postCaseMessageAction } from '../_actions/post-case-message';
 import { markCaseThreadReadAction } from '../_actions/mark-case-thread-read';
@@ -40,6 +47,11 @@ import { isConversationViewableImage } from '@/lib/storage/conversation-file-con
  * ⚠ A CLOSED CASE IS READ-ONLY BUT FULLY READABLE. `writable` was composed ONCE at the gate
  * from `engagementConversationIsWritable(status)`; the composer is disabled from that single
  * value, and `postCaseMessageAction` re-checks it server-side. The two cannot disagree.
+ *
+ * ⚠ "TYPING…" FOLLOWS THE SAME VALUE. The typing channel is attached only while `writable` —
+ * a closed case has no live composer, so there is nothing to signal and nobody to watch — and
+ * the indicator sits inside the writable branch, so a closed case cannot render it. Names come
+ * from the messages and files already on the page, never from a new read.
  */
 export function CaseConversationPanel({
   engagementId,
@@ -96,13 +108,40 @@ export function CaseConversationPanel({
     [conversation.conversationId]
   );
 
-  useConversationRealtime({
+  // The server publishes the viewer's typing signal after re-running the post gate; a case has
+  // one thread, so the conversation id the hook passes back is not needed to route it.
+  const sendTyping = useCallback(
+    (_conversationId: string, signal: TypingSignal) =>
+      sendCaseTypingAction({ engagementId, signal }),
+    [engagementId]
+  );
+
+  const { typing } = useConversationRealtime({
     enabled: conversation.realtimeEnabled,
     fetchToken: fetchRealtimeToken,
     conversationIds,
     onMessage: handleRealtimeMessage,
     onFile: handleRealtimeFile,
+    typingConversationId: conversation.writable ? conversation.conversationId : null,
+    sendTyping,
   });
+
+  // ── typing names ────────────────────────────────────────────────────────────────────────
+  // Everyone the thread already names — message senders and file uploaders. An id nobody here
+  // names resolves to `null`, which the indicator reads as "Someone".
+  const namesByUserId = useMemo(
+    () =>
+      firstNamesByUserId([
+        ...messages.map((message) => ({ userId: message.senderUserId, name: message.senderName })),
+        ...files.map((file) => ({ userId: file.uploadedByUserId, name: file.uploadedByName })),
+      ]),
+    [messages, files]
+  );
+  const typingClientIds = typing?.typingClientIds;
+  const typingNames = useMemo(
+    () => resolveTypingNames(typingClientIds ?? [], namesByUserId),
+    [typingClientIds, namesByUserId]
+  );
 
   // ── read watermark ──────────────────────────────────────────────────────────────────────
   // Fire-and-forget on mount: opening the case IS reading its thread. A failure is silent —
@@ -318,6 +357,7 @@ export function CaseConversationPanel({
 
       {conversation.writable ? (
         <div className="mt-2">
+          {typing !== null && <TypingIndicator names={typingNames} className="mb-1 px-1" />}
           <MessageComposer
             expertFirstName={conversation.counterpartyFirstName}
             sending={sending}
@@ -326,6 +366,8 @@ export function CaseConversationPanel({
             onChange={setDraft}
             onSend={handleSend}
             onAttach={handleAttach}
+            onTyping={typing?.onKeystroke}
+            onTypingStopped={typing?.onStopped}
           />
           <p className="text-muted-foreground mt-2 text-xs">
             {lens === 'client'

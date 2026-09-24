@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import {
@@ -10,6 +10,7 @@ import {
 } from '@/lib/meetings/lobby';
 import { MEMBER_JOIN_EXHAUSTED_LINE } from '@/lib/meetings/member-join-retry';
 import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
+import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
 
 /**
  * BAL-435 — the member route's client, and the first production caller of `joinAsMemberAction`.
@@ -26,14 +27,20 @@ import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
  *      frame showed the delivering EXPERT the CLIENT's billing promise.
  */
 
-const { mockJoinAsMemberAction, mockPush, mockReplace, mockGetMeetingDrawdownStateAction } =
-  vi.hoisted(() => ({
-    mockJoinAsMemberAction: vi.fn(),
-    mockPush: vi.fn(),
-    mockReplace: vi.fn(),
-    /** BAL-466 — the post-join re-resolve probe. */
-    mockGetMeetingDrawdownStateAction: vi.fn(),
-  }));
+const {
+  mockJoinAsMemberAction,
+  mockPush,
+  mockReplace,
+  mockGetMeetingDrawdownStateAction,
+  mockSendMeetingTypingAction,
+} = vi.hoisted(() => ({
+  mockJoinAsMemberAction: vi.fn(),
+  mockPush: vi.fn(),
+  mockReplace: vi.fn(),
+  /** BAL-466 — the post-join re-resolve probe. */
+  mockGetMeetingDrawdownStateAction: vi.fn(),
+  mockSendMeetingTypingAction: vi.fn(),
+}));
 
 /**
  * ⚠ BOTH `push` AND `replace` ARE MOCKED even though the component only calls `replace`. Keeping
@@ -47,10 +54,22 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/app/join/_actions/join-as-member', () => ({
   joinAsMemberAction: mockJoinAsMemberAction,
 }));
+vi.mock('../_actions/send-meeting-typing', () => ({
+  sendMeetingTypingAction: mockSendMeetingTypingAction,
+}));
 vi.mock('@/components/balo/meetings/meeting-frame', () => ({ preloadMeetingFrame: vi.fn() }));
 vi.mock('../_actions/get-meeting-drawdown-state', () => ({
   getMeetingDrawdownStateAction: mockGetMeetingDrawdownStateAction,
 }));
+
+/** One channel name off the member realtime registration, for the probe below. */
+function realtimeChannel(
+  panels: MeetingPanelRegistration | null,
+  key: 'conversationChannel' | 'typingChannel'
+): string {
+  if (panels?.audience !== 'member' || panels.realtime === null) return 'none';
+  return panels.realtime[key] ?? 'null';
+}
 
 /**
  * ⚠ THE SURFACE IS STOOD IN FOR BY A **ROUTE-CONTEXT PROBE**, deliberately. This file is about
@@ -79,7 +98,22 @@ vi.mock('@/components/balo/meetings/meeting-call-surface', () => ({
         data-has-balance={String(
           route.panels?.audience === 'member' && route.panels.balance !== null
         )}
+        // ⚠ The realtime registration's channel names, `none` when realtime is unregistered and
+        // `null` when a channel is. Three distinct strings, so an absent registration and an
+        // absent channel cannot be confused.
+        data-conversation-channel={realtimeChannel(route.panels, 'conversationChannel')}
+        data-typing-channel={realtimeChannel(route.panels, 'typingChannel')}
       >
+        <button
+          type="button"
+          onClick={() => {
+            if (route.panels?.audience === 'member') {
+              route.panels.realtime?.sendTyping('started').catch(() => undefined);
+            }
+          }}
+        >
+          fake typing
+        </button>
         <button type="button" onClick={() => route.onExit?.('host_ended')}>
           fake host ended
         </button>
@@ -112,7 +146,19 @@ const JOIN_LINK = `https://balo.test/join/m/${MEETING_ID}`;
 /** BAL-437 — the conversation the RSC resolved this meeting's chat onto. */
 const CONVERSATION_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
-function renderClient(overrides: Partial<{ hasBalance: boolean }> = {}): HTMLElement {
+/**
+ * The RSC's chat resolution for a meeting WITHOUT a conversation anchor: no slot, and both
+ * channel names `null` together — exactly what `page.tsx`'s `resolveChatSlot` answers.
+ */
+const NO_ANCHOR = { hasChat: false, chatChannelName: null, typingChannelName: null } as const;
+
+function renderClient(
+  overrides: Partial<{
+    hasBalance: boolean;
+    isRealtimeEnabled: boolean;
+    chat: { hasChat: boolean; chatChannelName: string | null; typingChannelName: string | null };
+  }> = {}
+): HTMLElement {
   return render(
     <CallClient
       meetingId={MEETING_ID}
@@ -122,9 +168,18 @@ function renderClient(overrides: Partial<{ hasBalance: boolean }> = {}): HTMLEle
       // configured. The absent-slot cases are covered where they are decided
       // (`meeting-chat-anchor.test.ts`) and where they are rendered
       // (`meeting-toolbar.test.tsx`), not here.
-      hasChat
-      isRealtimeEnabled
-      chatChannelName={`conversation:${CONVERSATION_ID}`}
+      hasChat={overrides.chat?.hasChat ?? true}
+      isRealtimeEnabled={overrides.isRealtimeEnabled ?? true}
+      chatChannelName={
+        overrides.chat === undefined
+          ? `conversation:${CONVERSATION_ID}`
+          : overrides.chat.chatChannelName
+      }
+      typingChannelName={
+        overrides.chat === undefined
+          ? `typing:${CONVERSATION_ID}`
+          : overrides.chat.typingChannelName
+      }
       // ⚠ BAL-403 — `false` by default, mirroring the RSC's expected-inert answer today. The
       // registration itself is covered below (`CallClient — the balance registration`).
       hasBalance={overrides.hasBalance ?? false}
@@ -264,6 +319,7 @@ describe('CallClient — ⚠⚠ the retry schedule is ONE chain', () => {
         hasChat={false}
         isRealtimeEnabled={false}
         chatChannelName={null}
+        typingChannelName={null}
         hasBalance={false}
       />
     );
@@ -474,6 +530,45 @@ describe('CallClient — ⚠ where a member goes when the call ends', () => {
   });
 });
 
+describe('CallClient — the realtime registration’s channel names', () => {
+  it('an anchored meeting registers the conversation AND the typing channel for ONE thread', async () => {
+    renderClient();
+
+    const probe = await surface();
+    expect(probe).toHaveAttribute('data-conversation-channel', `conversation:${CONVERSATION_ID}`);
+    expect(probe).toHaveAttribute('data-typing-channel', `typing:${CONVERSATION_ID}`);
+  });
+
+  it('⚠⚠ NO ANCHOR ⇒ BOTH channels are null together — typing never falls back to the meeting channel', async () => {
+    renderClient({ chat: NO_ANCHOR });
+
+    const probe = await surface();
+    expect(probe).toHaveAttribute('data-conversation-channel', 'null');
+    expect(probe).toHaveAttribute('data-typing-channel', 'null');
+  });
+
+  it('⚠ the registration sends typing through the server action, closing over THIS meeting', async () => {
+    mockSendMeetingTypingAction.mockResolvedValue({ success: true });
+    renderClient();
+
+    await surface();
+    fireEvent.click(screen.getByRole('button', { name: 'fake typing' }));
+
+    expect(mockSendMeetingTypingAction).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      signal: 'started',
+    });
+  });
+
+  it('realtime unconfigured ⇒ no registration at all, so no typing channel either', async () => {
+    renderClient({ isRealtimeEnabled: false });
+
+    const probe = await surface();
+    expect(probe).toHaveAttribute('data-conversation-channel', 'none');
+    expect(probe).toHaveAttribute('data-typing-channel', 'none');
+  });
+});
+
 describe('CallClient — BAL-403, the balance registration', () => {
   it('⚠ hasBalance: false ⇒ `panels.balance` is null', async () => {
     renderClient({ hasBalance: false });
@@ -650,6 +745,7 @@ describe('CallClient — BAL-466, the post-join re-resolve probe', () => {
           hasChat
           isRealtimeEnabled
           chatChannelName={`conversation:${CONVERSATION_ID}`}
+          typingChannelName={`typing:${CONVERSATION_ID}`}
           hasBalance={false}
         />
       );
