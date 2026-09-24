@@ -88,13 +88,11 @@ export function createTypingRelay(send: SendTypingSignal): TypingRelay {
   const dispatch = (signal: TypingSignal): void => {
     inFlight = true;
     const startedAt = Date.now();
-    let call: Promise<unknown>;
-    try {
-      call = send(signal);
-    } catch {
-      call = Promise.reject(new Error('typing send threw'));
-    }
-    Promise.resolve(call)
+    // The executor runs `send` synchronously and turns a synchronous throw into a rejection, so
+    // one pair of handlers settles every outcome — a resolved answer, a rejection, or a throw.
+    new Promise<unknown>((resolve) => {
+      resolve(send(signal));
+    })
       .then(
         (result) => settle(startedAt, !isRefusal(result)),
         () => settle(startedAt, false)
