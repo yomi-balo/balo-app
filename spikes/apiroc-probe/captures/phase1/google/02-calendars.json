@@ -1,0 +1,66 @@
+{
+  "probe": "calendars",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/calendars/cmssf6bhg1pnwoi2k3ovlula8",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 530,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "39feda00d2d5ee7873b82331fe50aabe",
+      "date": "Fri, 14 Aug 2026 07:28:31 GMT"
+    },
+    "bodyRaw": "{\"data\":[{\"id\":\"«email-redacted»\",\"name\":\"«email-redacted»\",\"readOnly\":false,\"hexColor\":\"#9fe1e7\",\"inviteEmail\":\"«email-redacted»\",\"isPrimary\":true,\"isShared\":false,\"timeZone\":\"Australia/Melbourne\",\"allowedOnlineMeetingProviders\":[\"hangoutsMeet\"]},{\"id\":\"family08440323956599785867@group.calendar.google.com\",\"name\":\"Family\",\"readOnly\":false,\"hexColor\":\"#f83a22\",\"inviteEmail\":\"family08440323956599785867@group.calendar.google.com\",\"isShared\":false,\"timeZone\":\"UTC\",\"allowedOnlineMeetingProviders\":[\"hangoutsMeet\"]},{\"id\":\"en.australian#holiday@group.v.calendar.google.com\",\"name\":\"Holidays in Australia\",\"readOnly\":true,\"hexColor\":\"#16a765\",\"inviteEmail\":\"en.australian#holiday@group.v.calendar.google.com\",\"isShared\":true,\"timeZone\":\"Australia/Melbourne\",\"allowedOnlineMeetingProviders\":[\"hangoutsMeet\"]},{\"id\":\"en-gb.australian#holiday@group.v.calendar.google.com\",\"name\":\"Holidays in Australia\",\"readOnly\":true,\"hexColor\":\"#16a765\",\"inviteEmail\":\"en-gb.australian#holiday@group.v.calendar.google.com\",\"isShared\":true,\"timeZone\":\"Australia/Melbourne\",\"allowedOnlineMeetingProviders\":[\"hangoutsMeet\"]}],\"nextSyncToken\":\"CL-8z6Kfn5YDEhd5b21pa2FkcmkyMDIzQGdtYWlsLmNvbQ==\"}",
+    "bodyParsed": {
+      "data": [
+        {
+          "id": "«email-redacted»",
+          "name": "«email-redacted»",
+          "readOnly": false,
+          "hexColor": "#9fe1e7",
+          "inviteEmail": "«email-redacted»",
+          "isPrimary": true,
+          "isShared": false,
+          "timeZone": "Australia/Melbourne",
+          "allowedOnlineMeetingProviders": ["hangoutsMeet"]
+        },
+        {
+          "id": "family08440323956599785867@group.calendar.google.com",
+          "name": "Family",
+          "readOnly": false,
+          "hexColor": "#f83a22",
+          "inviteEmail": "family08440323956599785867@group.calendar.google.com",
+          "isShared": false,
+          "timeZone": "UTC",
+          "allowedOnlineMeetingProviders": ["hangoutsMeet"]
+        },
+        {
+          "id": "en.australian#holiday@group.v.calendar.google.com",
+          "name": "Holidays in Australia",
+          "readOnly": true,
+          "hexColor": "#16a765",
+          "inviteEmail": "en.australian#holiday@group.v.calendar.google.com",
+          "isShared": true,
+          "timeZone": "Australia/Melbourne",
+          "allowedOnlineMeetingProviders": ["hangoutsMeet"]
+        },
+        {
+          "id": "en-gb.australian#holiday@group.v.calendar.google.com",
+          "name": "Holidays in Australia",
+          "readOnly": true,
+          "hexColor": "#16a765",
+          "inviteEmail": "en-gb.australian#holiday@group.v.calendar.google.com",
+          "isShared": true,
+          "timeZone": "Australia/Melbourne",
+          "allowedOnlineMeetingProviders": ["hangoutsMeet"]
+        }
+      ],
+      "nextSyncToken": "CL-8z6Kfn5YDEhd5b21pa2FkcmkyMDIzQGdtYWlsLmNvbQ=="
+    }
+  }
+}

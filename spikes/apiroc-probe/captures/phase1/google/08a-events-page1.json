@@ -1,0 +1,779 @@
+{
+  "probe": "events-page-1",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/events/cmssf6bhg1pnwoi2k3ovlula8/«email-redacted»",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 497,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "cf05571f7eda20cde07516a38cf76424",
+      "date": "Fri, 14 Aug 2026 07:28:36 GMT"
+    },
+    "bodyRaw": "{\"data\":[{\"id\":\"vo7beiq5brermvq6bvokjeuvg4\",\"title\":\"Despicable Me 4 (PG)\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DONOXSvB32kr8xTNm1PEKQxTEIt5YH4cgg\\n\",\"etag\":\"\\\"3440301957430000\\\"\",\"createdAt\":\"2024-07-05T03:42:58.000Z\",\"updatedAt\":\"2024-07-05T03:42:58.715Z\",\"start\":{\"dateTime\":\"2024-07-05T14:45:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2024-07-05T15:45:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Docklands\",\"webLink\":\"https://www.google.com/calendar/event?eid=dm83YmVpcTVicmVybXZxNmJ2b2tqZXV2ZzQgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"vo7beiq5brermvq6bvokjeuvg4@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"9atvcopn2mujapssnt9mmnns8c\",\"title\":\"Inside Out 2 (PG)\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DNHklegew2T-AUgNdBAGPo_D2CopsKFH28\\n\",\"etag\":\"\\\"3442596251836000\\\"\",\"createdAt\":\"2024-07-18T10:22:05.000Z\",\"updatedAt\":\"2024-07-18T10:22:05.918Z\",\"start\":{\"dateTime\":\"2024-07-19T18:30:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2024-07-19T19:30:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Docklands\",\"webLink\":\"https://www.google.com/calendar/event?eid=OWF0dmNvcG4ybXVqYXBzc250OW1tbm5zOGMgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"9atvcopn2mujapssnt9mmnns8c@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"7lhv3nf2edlkt337hml96u6950\",\"title\":\"Kingdom of the Planet of the Apes (M)\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DPwNJlBIH-VHhRaHTFYAW0P6GHPZEaPMLY\\n\",\"etag\":\"\\\"3457922142898000\\\"\",\"createdAt\":\"2024-05-10T13:16:54.000Z\",\"updatedAt\":\"2024-10-15T02:57:51.449Z\",\"start\":{\"dateTime\":\"2024-05-11T18:00:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2024-05-11T19:00:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Docklands\",\"webLink\":\"https://www.google.com/calendar/event?eid=N2xodjNuZjJlZGxrdDMzN2htbDk2dTY5NTAgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"7lhv3nf2edlkt337hml96u6950@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"meusik90nvr252ahqfleupvr60\",\"title\":\"Kingdom of the Planet of the Apes (M)\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DOHSPi_ob87IdIu-j4HfobpLbfrRIPQM4w\\n\",\"etag\":\"\\\"3457922142898000\\\"\",\"createdAt\":\"2024-05-11T07:45:47.000Z\",\"updatedAt\":\"2024-10-15T02:57:51.449Z\",\"start\":{\"dateTime\":\"2024-05-12T18:00:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2024-05-12T19:00:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Docklands\",\"webLink\":\"https://www.google.com/calendar/event?eid=bWV1c2lrOTBudnIyNTJhaHFmbGV1cHZyNjAgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"meusik90nvr252ahqfleupvr60@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"20dk29niecbhfod683afsb53fc\",\"title\":\"Mickey's Very Merry Christmas Party - December 20, 2024\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DNOH-mhqui1a5zBMSzxWHM0C19BsDNJd0Q\\n\",\"etag\":\"\\\"3459591457854000\\\"\",\"createdAt\":\"2024-10-24T18:48:48.000Z\",\"updatedAt\":\"2024-10-24T18:48:48.927Z\",\"start\":{\"dateTime\":\"2024-12-20T00:00:00\",\"timeZone\":\"Etc/UTC\"},\"end\":{\"dateTime\":\"2024-12-21T00:00:00\",\"timeZone\":\"Etc/UTC\"},\"isAllDay\":true,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"webLink\":\"https://www.google.com/calendar/event?eid=MjBkazI5bmllY2JoZm9kNjgzYWZzYjUzZmMgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"20dk29niecbhfod683afsb53fc@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":false,\"overrides\":[{\"method\":\"popup\",\"minutes\":420}]}},{\"id\":\"mn9tnosq85tt2e4u1qa02cm394\",\"title\":\"Reservation at Chancery Lane\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DMoXQZK8R85KyBWr3bbo5sUEaDglKpot4w\\n\",\"etag\":\"\\\"3478316682840000\\\"\",\"createdAt\":\"2025-02-10T03:32:21.000Z\",\"updatedAt\":\"2025-02-10T03:32:21.420Z\",\"start\":{\"dateTime\":\"2025-02-10T18:30:00+11:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2025-02-10T19:30:00+11:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Chancery Lane, 430 Little Collins St, Melbourne, VIC 3000\",\"webLink\":\"https://www.google.com/calendar/event?eid=bW45dG5vc3E4NXR0MmU0dTFxYTAyY20zOTQgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"mn9tnosq85tt2e4u1qa02cm394@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"diprpke1n0ffsarjoft70ptq6o\",\"title\":\"Reservation at Devine Food & Wine\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DMAOqpIKNIelze8fWBrUqPajRngRGDSBlM\\n\",\"etag\":\"\\\"3481263353040126\\\"\",\"createdAt\":\"2025-02-27T04:47:56.000Z\",\"updatedAt\":\"2025-02-27T04:47:56.520Z\",\"start\":{\"dateTime\":\"2025-02-27T18:30:00+11:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2025-02-27T19:30:00+11:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Devine Food & Wine, 32 Market Street, Sydney, AU-NSW, 2000, Australia\",\"webLink\":\"https://www.google.com/calendar/event?eid=ZGlwcnBrZTFuMGZmc2Fyam9mdDcwcHRxNm8geW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"diprpke1n0ffsarjoft70ptq6o@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"98skeu8rsih2hac88p59rkvvjg\",\"title\":\"Reservation at Butcher's Prime Restaurant\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\",\"etag\":\"\\\"3489671666456126\\\"\",\"createdAt\":\"2025-03-17T00:31:17.000Z\",\"updatedAt\":\"2025-04-16T20:37:13.228Z\",\"start\":{\"dateTime\":\"2025-03-17T12:30:00+11:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2025-03-17T13:30:00+11:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Butcher's Prime Restaurant, 42 Newquay Promenade, Docklands, VIC, 3008\",\"webLink\":\"https://www.google.com/calendar/event?eid=OThza2V1OHJzaWgyaGFjODhwNTlya3Z2amcgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"98skeu8rsih2hac88p59rkvvjg@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"2u9bdj0eikfr4p1cb3khrjq1n8\",\"title\":\"Reservation at Melba Restaurant\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\",\"etag\":\"\\\"3495546883790398\\\"\",\"createdAt\":\"2025-04-19T07:33:52.000Z\",\"updatedAt\":\"2025-05-20T20:37:21.895Z\",\"start\":{\"dateTime\":\"2025-04-19T18:15:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2025-04-19T19:15:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Melba Restaurant, 1 Southgate Avenue, Southbank, VIC 3006\",\"webLink\":\"https://www.google.com/calendar/event?eid=MnU5YmRqMGVpa2ZyNHAxY2Iza2hyanExbjggeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"2u9bdj0eikfr4p1cb3khrjq1n8@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"tmh6paoccr80f076tok94inf98\",\"title\":\"Reservation at Humble Rays Swanston\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\",\"etag\":\"\\\"3510062028366142\\\"\",\"createdAt\":\"2025-06-06T01:41:42.000Z\",\"updatedAt\":\"2025-08-12T20:36:54.183Z\",\"start\":{\"dateTime\":\"2025-06-06T13:00:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2025-06-06T14:00:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Humble Rays Swanston, 555 Swanston Street, Melbourne, VIC 3053\",\"webLink\":\"https://www.google.com/calendar/event?eid=dG1oNnBhb2NjcjgwZjA3NnRvazk0aW5mOTggeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"tmh6paoccr80f076tok94inf98@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"2764f30k8i62fk9jan66u05sog\",\"title\":\"Reservation at Society Restaurant\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\",\"etag\":\"\\\"3510062033333182\\\"\",\"createdAt\":\"2025-07-01T15:01:57.000Z\",\"updatedAt\":\"2025-08-12T20:36:56.666Z\",\"start\":{\"dateTime\":\"2025-07-02T20:30:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2025-07-02T21:30:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Society Restaurant, 80 Collins Street, Melbourne, VIC 3000\",\"webLink\":\"https://www.google.com/calendar/event?eid=Mjc2NGYzMGs4aTYyZms5amFuNjZ1MDVzb2cgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"2764f30k8i62fk9jan66u05sog@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"5j81r9t3hf1krh717tc6hbd0vm\",\"title\":\"Invitation from an unknown sender: Josh Yu @ Fri Jan 30, 2026 3am - 3:30am (UTC) («email-redacted»)\",\"etag\":\"\\\"3539306244900894\\\"\",\"createdAt\":\"2026-01-29T02:18:42.000Z\",\"updatedAt\":\"2026-01-29T02:18:42.450Z\",\"start\":{\"dateTime\":\"2026-01-30T00:00:00+11:00\",\"timeZone\":\"Australia/Hobart\"},\"end\":{\"dateTime\":\"2026-01-30T01:00:00+11:00\",\"timeZone\":\"Australia/Hobart\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"webLink\":\"https://www.google.com/calendar/event?eid=NWo4MXI5dDNoZjFrcmg3MTd0YzZoYmQwdm0geW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"5j81r9t3hf1krh717tc6hbd0vm@google.com\",\"eventType\":\"default\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"jqjjsdvhggtgjrni82vktbtmjs\",\"title\":\"Reservation at Society Restaurant\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DP9ggUnz89vclhYDpcMVevjWfaDX0cmZ2U\\n\",\"etag\":\"\\\"3548489538485726\\\"\",\"createdAt\":\"2026-03-23T05:46:08.000Z\",\"updatedAt\":\"2026-03-23T05:46:09.242Z\",\"start\":{\"dateTime\":\"2026-03-23T20:00:00+11:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-03-23T21:00:00+11:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Society Restaurant, 80 Collins Street, Melbourne, VIC 3000\",\"webLink\":\"https://www.google.com/calendar/event?eid=anFqanNkdmhnZ3RnanJuaTgydmt0YnRtanMgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"jqjjsdvhggtgjrni82vktbtmjs@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"508rju21cvf2f6oh36p369ojcc\",\"title\":\"Josh Yu\",\"description\":\"\\n\\n==========\\n\\nPhone:- 0406 431 059\\nEmail:- «email-redacted»\\n\\nNeed to make a change to this event?\\nReschedule:-\\nhttps://link.cashflowascension.com/widget/booking/uNa01v0JtAhUxOieBbix?event_id=4eHtY6EX8fCVQRNFVUSN\\n\\nCancel:-\\nhttps://link.cashflowascension.com/widget/cancel-booking?event_id=4eHtY6EX8fCVQRNFVUSN\",\"etag\":\"\\\"3550719232610782\\\"\",\"createdAt\":\"2026-01-27T02:49:50.000Z\",\"updatedAt\":\"2026-04-05T03:26:56.305Z\",\"start\":{\"dateTime\":\"2026-01-30T14:00:00+11:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-01-30T14:30:00+11:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"webLink\":\"https://www.google.com/calendar/event?eid=NTA4cmp1MjFjdmYyZjZvaDM2cDM2OW9qY2MgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"508rju21cvf2f6oh36p369ojcc@google.com\",\"eventType\":\"default\",\"organizer\":{\"email\":\"«email-redacted»\"},\"creator\":{\"email\":\"«email-redacted»\"},\"reminders\":{\"useDefault\":true}},{\"id\":\"t5053ouasbsvvu39v67vl9f748\",\"title\":\"Reservation at Society Restaurant\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\",\"etag\":\"\\\"3551361223953438\\\"\",\"createdAt\":\"2026-03-07T13:04:59.000Z\",\"updatedAt\":\"2026-04-08T20:36:51.976Z\",\"start\":{\"dateTime\":\"2026-03-09T19:00:00+11:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-03-09T20:00:00+11:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Society Restaurant, 80 Collins Street, Melbourne, VIC 3000\",\"webLink\":\"https://www.google.com/calendar/event?eid=dDUwNTNvdWFzYnN2dnUzOXY2N3ZsOWY3NDggeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"t5053ouasbsvvu39v67vl9f748@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"tns0es6h3gl0lt77gim92nd0uc\",\"title\":\"Reservation at Kiss & Tell\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\",\"etag\":\"\\\"3557736807337278\\\"\",\"createdAt\":\"2026-04-13T07:02:12.000Z\",\"updatedAt\":\"2026-05-15T18:06:43.668Z\",\"start\":{\"dateTime\":\"2026-04-13T20:30:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-04-13T21:30:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Kiss & Tell, 37-41 Little Bourke St level 1, Melbourne, AU-VIC, 3000, Australia\",\"webLink\":\"https://www.google.com/calendar/event?eid=dG5zMGVzNmgzZ2wwbHQ3N2dpbTkybmQwdWMgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"tns0es6h3gl0lt77gim92nd0uc@google.com\",\"transparency\":\"transparent\",\"eventType\":\"fromGmail\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}},{\"id\":\"d0116o5dfsqamjrfoof1eo1qg0\",\"title\":\"Reservation at Society Restaurant\",\"description\":\"To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\\n\\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DOe8ho17v4xAzOxr8pWTJ4g31qFVzbgg20\\n\",\"etag\":\"\\\"3563390173043102\\\"\",\"createdAt\":\"2026-06-17T11:18:05.000Z\",\"updatedAt\":\"2026-06-17T11:18:06.521Z\",\"start\":{\"dateTime\":\"2026-06-18T20:30:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-06-18T21:30:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"myResponseStatus\":\"accepted\",\"attendees\":[{\"email\":\"«email-redacted»\",\"responseStatus\":\"accepted\"}],\"visibility\":\"private\",\"location\":\"Society Restaurant, 80 Collins Street, Melbourne, VIC 3000\",\"webLink\":\"https://www.google.com/calendar/event?eid=ZDAxMTZvNWRmc3FhbWpyZm9vZjFlbzFxZ…«truncated»",
+    "bodyParsed": {
+      "data": [
+        {
+          "id": "vo7beiq5brermvq6bvokjeuvg4",
+          "title": "Despicable Me 4 (PG)",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DONOXSvB32kr8xTNm1PEKQxTEIt5YH4cgg\n",
+          "etag": "\"3440301957430000\"",
+          "createdAt": "2024-07-05T03:42:58.000Z",
+          "updatedAt": "2024-07-05T03:42:58.715Z",
+          "start": {
+            "dateTime": "2024-07-05T14:45:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2024-07-05T15:45:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Docklands",
+          "webLink": "https://www.google.com/calendar/event?eid=dm83YmVpcTVicmVybXZxNmJ2b2tqZXV2ZzQgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "vo7beiq5brermvq6bvokjeuvg4@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "9atvcopn2mujapssnt9mmnns8c",
+          "title": "Inside Out 2 (PG)",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DNHklegew2T-AUgNdBAGPo_D2CopsKFH28\n",
+          "etag": "\"3442596251836000\"",
+          "createdAt": "2024-07-18T10:22:05.000Z",
+          "updatedAt": "2024-07-18T10:22:05.918Z",
+          "start": {
+            "dateTime": "2024-07-19T18:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2024-07-19T19:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Docklands",
+          "webLink": "https://www.google.com/calendar/event?eid=OWF0dmNvcG4ybXVqYXBzc250OW1tbm5zOGMgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "9atvcopn2mujapssnt9mmnns8c@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "7lhv3nf2edlkt337hml96u6950",
+          "title": "Kingdom of the Planet of the Apes (M)",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DPwNJlBIH-VHhRaHTFYAW0P6GHPZEaPMLY\n",
+          "etag": "\"3457922142898000\"",
+          "createdAt": "2024-05-10T13:16:54.000Z",
+          "updatedAt": "2024-10-15T02:57:51.449Z",
+          "start": {
+            "dateTime": "2024-05-11T18:00:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2024-05-11T19:00:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Docklands",
+          "webLink": "https://www.google.com/calendar/event?eid=N2xodjNuZjJlZGxrdDMzN2htbDk2dTY5NTAgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "7lhv3nf2edlkt337hml96u6950@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "meusik90nvr252ahqfleupvr60",
+          "title": "Kingdom of the Planet of the Apes (M)",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DOHSPi_ob87IdIu-j4HfobpLbfrRIPQM4w\n",
+          "etag": "\"3457922142898000\"",
+          "createdAt": "2024-05-11T07:45:47.000Z",
+          "updatedAt": "2024-10-15T02:57:51.449Z",
+          "start": {
+            "dateTime": "2024-05-12T18:00:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2024-05-12T19:00:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Docklands",
+          "webLink": "https://www.google.com/calendar/event?eid=bWV1c2lrOTBudnIyNTJhaHFmbGV1cHZyNjAgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "meusik90nvr252ahqfleupvr60@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "20dk29niecbhfod683afsb53fc",
+          "title": "Mickey's Very Merry Christmas Party - December 20, 2024",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DNOH-mhqui1a5zBMSzxWHM0C19BsDNJd0Q\n",
+          "etag": "\"3459591457854000\"",
+          "createdAt": "2024-10-24T18:48:48.000Z",
+          "updatedAt": "2024-10-24T18:48:48.927Z",
+          "start": {
+            "dateTime": "2024-12-20T00:00:00",
+            "timeZone": "Etc/UTC"
+          },
+          "end": {
+            "dateTime": "2024-12-21T00:00:00",
+            "timeZone": "Etc/UTC"
+          },
+          "isAllDay": true,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "webLink": "https://www.google.com/calendar/event?eid=MjBkazI5bmllY2JoZm9kNjgzYWZzYjUzZmMgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "20dk29niecbhfod683afsb53fc@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": false,
+            "overrides": [
+              {
+                "method": "popup",
+                "minutes": 420
+              }
+            ]
+          }
+        },
+        {
+          "id": "mn9tnosq85tt2e4u1qa02cm394",
+          "title": "Reservation at Chancery Lane",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DMoXQZK8R85KyBWr3bbo5sUEaDglKpot4w\n",
+          "etag": "\"3478316682840000\"",
+          "createdAt": "2025-02-10T03:32:21.000Z",
+          "updatedAt": "2025-02-10T03:32:21.420Z",
+          "start": {
+            "dateTime": "2025-02-10T18:30:00+11:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2025-02-10T19:30:00+11:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Chancery Lane, 430 Little Collins St, Melbourne, VIC 3000",
+          "webLink": "https://www.google.com/calendar/event?eid=bW45dG5vc3E4NXR0MmU0dTFxYTAyY20zOTQgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "mn9tnosq85tt2e4u1qa02cm394@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "diprpke1n0ffsarjoft70ptq6o",
+          "title": "Reservation at Devine Food & Wine",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DMAOqpIKNIelze8fWBrUqPajRngRGDSBlM\n",
+          "etag": "\"3481263353040126\"",
+          "createdAt": "2025-02-27T04:47:56.000Z",
+          "updatedAt": "2025-02-27T04:47:56.520Z",
+          "start": {
+            "dateTime": "2025-02-27T18:30:00+11:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2025-02-27T19:30:00+11:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Devine Food & Wine, 32 Market Street, Sydney, AU-NSW, 2000, Australia",
+          "webLink": "https://www.google.com/calendar/event?eid=ZGlwcnBrZTFuMGZmc2Fyam9mdDcwcHRxNm8geW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "diprpke1n0ffsarjoft70ptq6o@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "98skeu8rsih2hac88p59rkvvjg",
+          "title": "Reservation at Butcher's Prime Restaurant",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar",
+          "etag": "\"3489671666456126\"",
+          "createdAt": "2025-03-17T00:31:17.000Z",
+          "updatedAt": "2025-04-16T20:37:13.228Z",
+          "start": {
+            "dateTime": "2025-03-17T12:30:00+11:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2025-03-17T13:30:00+11:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Butcher's Prime Restaurant, 42 Newquay Promenade, Docklands, VIC, 3008",
+          "webLink": "https://www.google.com/calendar/event?eid=OThza2V1OHJzaWgyaGFjODhwNTlya3Z2amcgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "98skeu8rsih2hac88p59rkvvjg@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "2u9bdj0eikfr4p1cb3khrjq1n8",
+          "title": "Reservation at Melba Restaurant",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar",
+          "etag": "\"3495546883790398\"",
+          "createdAt": "2025-04-19T07:33:52.000Z",
+          "updatedAt": "2025-05-20T20:37:21.895Z",
+          "start": {
+            "dateTime": "2025-04-19T18:15:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2025-04-19T19:15:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Melba Restaurant, 1 Southgate Avenue, Southbank, VIC 3006",
+          "webLink": "https://www.google.com/calendar/event?eid=MnU5YmRqMGVpa2ZyNHAxY2Iza2hyanExbjggeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "2u9bdj0eikfr4p1cb3khrjq1n8@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "tmh6paoccr80f076tok94inf98",
+          "title": "Reservation at Humble Rays Swanston",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar",
+          "etag": "\"3510062028366142\"",
+          "createdAt": "2025-06-06T01:41:42.000Z",
+          "updatedAt": "2025-08-12T20:36:54.183Z",
+          "start": {
+            "dateTime": "2025-06-06T13:00:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2025-06-06T14:00:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Humble Rays Swanston, 555 Swanston Street, Melbourne, VIC 3053",
+          "webLink": "https://www.google.com/calendar/event?eid=dG1oNnBhb2NjcjgwZjA3NnRvazk0aW5mOTggeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "tmh6paoccr80f076tok94inf98@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "2764f30k8i62fk9jan66u05sog",
+          "title": "Reservation at Society Restaurant",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar",
+          "etag": "\"3510062033333182\"",
+          "createdAt": "2025-07-01T15:01:57.000Z",
+          "updatedAt": "2025-08-12T20:36:56.666Z",
+          "start": {
+            "dateTime": "2025-07-02T20:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2025-07-02T21:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Society Restaurant, 80 Collins Street, Melbourne, VIC 3000",
+          "webLink": "https://www.google.com/calendar/event?eid=Mjc2NGYzMGs4aTYyZms5amFuNjZ1MDVzb2cgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "2764f30k8i62fk9jan66u05sog@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "5j81r9t3hf1krh717tc6hbd0vm",
+          "title": "Invitation from an unknown sender: Josh Yu @ Fri Jan 30, 2026 3am - 3:30am (UTC) («email-redacted»)",
+          "etag": "\"3539306244900894\"",
+          "createdAt": "2026-01-29T02:18:42.000Z",
+          "updatedAt": "2026-01-29T02:18:42.450Z",
+          "start": {
+            "dateTime": "2026-01-30T00:00:00+11:00",
+            "timeZone": "Australia/Hobart"
+          },
+          "end": {
+            "dateTime": "2026-01-30T01:00:00+11:00",
+            "timeZone": "Australia/Hobart"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "webLink": "https://www.google.com/calendar/event?eid=NWo4MXI5dDNoZjFrcmg3MTd0YzZoYmQwdm0geW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "5j81r9t3hf1krh717tc6hbd0vm@google.com",
+          "eventType": "default",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "jqjjsdvhggtgjrni82vktbtmjs",
+          "title": "Reservation at Society Restaurant",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DP9ggUnz89vclhYDpcMVevjWfaDX0cmZ2U\n",
+          "etag": "\"3548489538485726\"",
+          "createdAt": "2026-03-23T05:46:08.000Z",
+          "updatedAt": "2026-03-23T05:46:09.242Z",
+          "start": {
+            "dateTime": "2026-03-23T20:00:00+11:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2026-03-23T21:00:00+11:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Society Restaurant, 80 Collins Street, Melbourne, VIC 3000",
+          "webLink": "https://www.google.com/calendar/event?eid=anFqanNkdmhnZ3RnanJuaTgydmt0YnRtanMgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "jqjjsdvhggtgjrni82vktbtmjs@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "508rju21cvf2f6oh36p369ojcc",
+          "title": "Josh Yu",
+          "description": "\n\n==========\n\nPhone:- 0406 431 059\nEmail:- «email-redacted»\n\nNeed to make a change to this event?\nReschedule:-\nhttps://link.cashflowascension.com/widget/booking/uNa01v0JtAhUxOieBbix?event_id=4eHtY6EX8fCVQRNFVUSN\n\nCancel:-\nhttps://link.cashflowascension.com/widget/cancel-booking?event_id=4eHtY6EX8fCVQRNFVUSN",
+          "etag": "\"3550719232610782\"",
+          "createdAt": "2026-01-27T02:49:50.000Z",
+          "updatedAt": "2026-04-05T03:26:56.305Z",
+          "start": {
+            "dateTime": "2026-01-30T14:00:00+11:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2026-01-30T14:30:00+11:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "webLink": "https://www.google.com/calendar/event?eid=NTA4cmp1MjFjdmYyZjZvaDM2cDM2OW9qY2MgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "508rju21cvf2f6oh36p369ojcc@google.com",
+          "eventType": "default",
+          "organizer": {
+            "email": "«email-redacted»"
+          },
+          "creator": {
+            "email": "«email-redacted»"
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "t5053ouasbsvvu39v67vl9f748",
+          "title": "Reservation at Society Restaurant",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar",
+          "etag": "\"3551361223953438\"",
+          "createdAt": "2026-03-07T13:04:59.000Z",
+          "updatedAt": "2026-04-08T20:36:51.976Z",
+          "start": {
+            "dateTime": "2026-03-09T19:00:00+11:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2026-03-09T20:00:00+11:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Society Restaurant, 80 Collins Street, Melbourne, VIC 3000",
+          "webLink": "https://www.google.com/calendar/event?eid=dDUwNTNvdWFzYnN2dnUzOXY2N3ZsOWY3NDggeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "t5053ouasbsvvu39v67vl9f748@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "tns0es6h3gl0lt77gim92nd0uc",
+          "title": "Reservation at Kiss & Tell",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar",
+          "etag": "\"3557736807337278\"",
+          "createdAt": "2026-04-13T07:02:12.000Z",
+          "updatedAt": "2026-05-15T18:06:43.668Z",
+          "start": {
+            "dateTime": "2026-04-13T20:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2026-04-13T21:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Kiss & Tell, 37-41 Little Bourke St level 1, Melbourne, AU-VIC, 3000, Australia",
+          "webLink": "https://www.google.com/calendar/event?eid=dG5zMGVzNmgzZ2wwbHQ3N2dpbTkybmQwdWMgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "tns0es6h3gl0lt77gim92nd0uc@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        },
+        {
+          "id": "d0116o5dfsqamjrfoof1eo1qg0",
+          "title": "Reservation at Society Restaurant",
+          "description": "To see detailed information for automatically created events like this one, use the official Google Calendar app. https://g.co/calendar\n\nThis event was created from an email that you received in Gmail. https://mail.google.com/mail?extsrc=cal&plid=ACUX6DOe8ho17v4xAzOxr8pWTJ4g31qFVzbgg20\n",
+          "etag": "\"3563390173043102\"",
+          "createdAt": "2026-06-17T11:18:05.000Z",
+          "updatedAt": "2026-06-17T11:18:06.521Z",
+          "start": {
+            "dateTime": "2026-06-18T20:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2026-06-18T21:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "myResponseStatus": "accepted",
+          "attendees": [
+            {
+              "email": "«email-redacted»",
+              "responseStatus": "accepted"
+            }
+          ],
+          "visibility": "private",
+          "location": "Society Restaurant, 80 Collins Street, Melbourne, VIC 3000",
+          "webLink": "https://www.google.com/calendar/event?eid=ZDAxMTZvNWRmc3FhbWpyZm9vZjFlbzFxZzAgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "d0116o5dfsqamjrfoof1eo1qg0@google.com",
+          "transparency": "transparent",
+          "eventType": "fromGmail",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        }
+      ],
+      "nextSyncToken": "CM_q36XMn5YDEM_q36XMn5YDGAUghdnxyAMohdnxyAM="
+    }
+  }
+}

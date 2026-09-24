@@ -1,0 +1,45 @@
+{
+  "name": "malformed-body-freebusy",
+  "raw": {
+    "probe": "malformed-body-freebusy",
+    "request": {
+      "method": "POST",
+      "url": "https://api.apiroc.com/api/v1/freeBusy/cmssf6bhg1pnwoi2k3ovlula8",
+      "authMode": "valid",
+      "body": {
+        "startDateTime": "2026-08-20T00:00:00Z",
+        "endDateTime": "2026-08-21T00:00:00Z"
+      }
+    },
+    "durationMs": 264,
+    "response": {
+      "status": 400,
+      "statusText": "Bad Request",
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "f5fa003c7f5a806bb080f474fc131e67",
+        "date": "Fri, 14 Aug 2026 07:28:29 GMT"
+      },
+      "bodyRaw": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[{\\\"expected\\\":\\\"string\\\",\\\"code\\\":\\\"invalid_type\\\",\\\"path\\\":[\\\"timeZone\\\"],\\\"message\\\":\\\"Invalid input: expected string, received undefined\\\"},{\\\"expected\\\":\\\"array\\\",\\\"code\\\":\\\"invalid_type\\\",\\\"path\\\":[\\\"calendarIds\\\"],\\\"message\\\":\\\"Invalid input: expected array, received undefined\\\"}]\"}}",
+      "bodyParsed": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[{\"expected\":\"string\",\"code\":\"invalid_type\",\"path\":[\"timeZone\"],\"message\":\"Invalid input: expected string, received undefined\"},{\"expected\":\"array\",\"code\":\"invalid_type\",\"path\":[\"calendarIds\"],\"message\":\"Invalid input: expected array, received undefined\"}]"
+        }
+      }
+    }
+  },
+  "sdk": {
+    "probe": "malformed-body-freebusy",
+    "threw": true,
+    "durationMs": 265,
+    "errorClass": "_APIRequestError",
+    "code": null,
+    "status": 400,
+    "message": "Request failed with status code 400",
+    "details": null,
+    "retryAfter": null,
+    "ownKeys": ["name", "status", "code", "details"]
+  }
+}

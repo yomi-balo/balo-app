@@ -1,0 +1,40 @@
+{
+  "name": "unknown-account",
+  "raw": {
+    "probe": "unknown-account",
+    "request": {
+      "method": "GET",
+      "url": "https://api.apiroc.com/api/v1/endUserAccounts/euacc_bal393_does_not_exist",
+      "authMode": "valid",
+      "body": null
+    },
+    "durationMs": 306,
+    "response": {
+      "status": 404,
+      "statusText": "Not Found",
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "b96994ab8ded9e24ba496b1d94611f47",
+        "date": "Fri, 14 Aug 2026 07:28:27 GMT"
+      },
+      "bodyRaw": "{\"error\":\"Error\",\"message\":\"End user account not found\",\"requestId\":\"b96994ab8ded9e24ba496b1d94611f47\"}",
+      "bodyParsed": {
+        "error": "Error",
+        "message": "End user account not found",
+        "requestId": "b96994ab8ded9e24ba496b1d94611f47"
+      }
+    }
+  },
+  "sdk": {
+    "probe": "unknown-account",
+    "threw": true,
+    "durationMs": 265,
+    "errorClass": "_NotFoundError",
+    "code": "NOT_FOUND",
+    "status": 404,
+    "message": "End user account not found",
+    "details": null,
+    "retryAfter": null,
+    "ownKeys": ["name", "status", "code", "details"]
+  }
+}

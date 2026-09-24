@@ -1,0 +1,93 @@
+{
+  "provider": "GOOGLE",
+  "capturedAt": "2026-08-14",
+  "calendarId": "«email-redacted»",
+  "findings": {
+    "account": {
+      "accountStatus": "ACTIVE",
+      "credentialStatus": "ACTIVE",
+      "expiresAt": "2026-08-14T08:20:51.028Z",
+      "scopes": [
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "openid"
+      ]
+    },
+    "calendars": {
+      "count": 4,
+      "primaryId": "«email-redacted»",
+      "isPrimaryReliable": true,
+      "fields": [
+        "id",
+        "name",
+        "readOnly",
+        "hexColor",
+        "inviteEmail",
+        "isPrimary",
+        "isShared",
+        "timeZone",
+        "allowedOnlineMeetingProviders"
+      ]
+    },
+    "freeBusy-before": {
+      "status": 200,
+      "body": [
+        {
+          "calendarId": "«email-redacted»",
+          "busySlots": []
+        }
+      ]
+    },
+    "event-create": {
+      "customIdHonoured": false,
+      "customIdSilentlyIgnored": false,
+      "eventId": "kavrdnlpm8s67cm6gbbkpi29ek",
+      "echoedPrivateProps": {
+        "baloBookingId": "spike-test-1"
+      }
+    },
+    "metadata-roundtrip": {
+      "status": 200,
+      "matched": 1,
+      "foundOurEvent": true
+    },
+    "freeBusy-after": {
+      "status": 200,
+      "body": [
+        {
+          "calendarId": "«email-redacted»",
+          "busySlots": [
+            {
+              "start": {
+                "dateTime": "2026-08-20T10:00:00Z",
+                "timeZone": "UTC"
+              },
+              "end": {
+                "dateTime": "2026-08-20T10:30:00Z",
+                "timeZone": "UTC"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "event-update-delete": {
+      "updateStatus": 200,
+      "privatePropsSurvivePut": {
+        "baloBookingId": "spike-test-1"
+      },
+      "deleteStatus": 200
+    },
+    "paging-sync-tokens": {
+      "defaultPageSize": 17,
+      "hasNextPageToken": false,
+      "hasNextSyncToken": true,
+      "envelopeKeys": ["data", "nextSyncToken"],
+      "deltaStatus": 200
+    }
+  }
+}

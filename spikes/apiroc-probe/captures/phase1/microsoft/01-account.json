@@ -1,0 +1,32 @@
+{
+  "probe": "account",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/endUserAccounts/cmssgqb791pukoi2kuqn2trt0",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 318,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "ab844d78a1c6462fa701c55ad2c19da8",
+      "date": "Fri, 14 Aug 2026 07:28:37 GMT"
+    },
+    "bodyRaw": "{\"id\":\"cmssgqb791pukoi2kuqn2trt0\",\"createdAt\":\"2026-08-14T04:44:29.878Z\",\"updatedAt\":\"2026-08-14T04:44:29.878Z\",\"email\":\"«email-redacted»\",\"externalId\":\"\",\"authorizedScopes\":[\"openid\",\"email\",\"profile\",\"User.Read\",\"Calendars.ReadWrite\"],\"providerAccountId\":\"AAAAAAAAAAAAAAAAAAAAAOJMG72Kz3P1K0UXIM-IBE0\",\"applicationId\":\"cmssdxh231phkoi2kfad0cuse\",\"status\":\"ACTIVE\",\"providerType\":\"MICROSOFT\"}",
+    "bodyParsed": {
+      "id": "cmssgqb791pukoi2kuqn2trt0",
+      "createdAt": "2026-08-14T04:44:29.878Z",
+      "updatedAt": "2026-08-14T04:44:29.878Z",
+      "email": "«email-redacted»",
+      "externalId": "",
+      "authorizedScopes": ["openid", "email", "profile", "User.Read", "Calendars.ReadWrite"],
+      "providerAccountId": "AAAAAAAAAAAAAAAAAAAAAOJMG72Kz3P1K0UXIM-IBE0",
+      "applicationId": "cmssdxh231phkoi2kfad0cuse",
+      "status": "ACTIVE",
+      "providerType": "MICROSOFT"
+    }
+  }
+}
