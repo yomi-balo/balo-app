@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
@@ -1311,5 +1311,151 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
     });
     expect(clocks.expertPresentMs).toBe(0);
     expect(clocks.billableMs).toBe(0);
+  });
+});
+
+// ── The batched structural-facts read (missed_call "nobody joined" labelling) ───────────────
+
+describe('meetingPresenceRepository.factsByMeetingIds', () => {
+  it('returns an empty map for no ids, without querying', async () => {
+    const spy = vi.spyOn(db, 'select');
+    try {
+      const result = await meetingPresenceRepository.factsByMeetingIds([]);
+
+      expect(result.size).toBe(0);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keys EVERY requested meeting — one with no rows maps to the all-false facts', async () => {
+    const { meeting } = await meetingFactory();
+
+    const result = await meetingPresenceRepository.factsByMeetingIds([meeting.id]);
+
+    expect(result.size).toBe(1);
+    expect(result.get(meeting.id)).toEqual({
+      expertEverPresent: false,
+      expertOpen: false,
+      clientSideEverPresent: false,
+      anyOpen: false,
+      lastLeftAt: null,
+      expertFirstJoinedAt: null,
+    });
+  });
+
+  it('reports a client member who waited for an expert who never came', async () => {
+    const { meeting } = await meetingFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, client.id, 'client', 0);
+    await leave(meeting.id, client.id, 10);
+
+    const facts = (await meetingPresenceRepository.factsByMeetingIds([meeting.id])).get(meeting.id);
+
+    expect(facts?.clientSideEverPresent).toBe(true);
+    expect(facts?.expertEverPresent).toBe(false);
+  });
+
+  it('counts a client-side GUEST as client-side presence', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    await guestJoin(meeting.id, guest.id, 'client', 0);
+    await guestLeave(meeting.id, guest.id, 4);
+
+    const facts = (await meetingPresenceRepository.factsByMeetingIds([meeting.id])).get(meeting.id);
+
+    expect(facts?.clientSideEverPresent).toBe(true);
+  });
+
+  it('does NOT count an observer, and counts a still-OPEN client interval', async () => {
+    const { meeting: observed } = await meetingFactory();
+    const { meeting: open } = await meetingFactory();
+    const staffer = await userFactory();
+    const client = await userFactory();
+
+    await join(observed.id, staffer.id, 'observer', 0);
+    await leave(observed.id, staffer.id, 12);
+    await join(open.id, client.id, 'client', 0);
+
+    const result = await meetingPresenceRepository.factsByMeetingIds([observed.id, open.id]);
+
+    expect(result.get(observed.id)?.clientSideEverPresent).toBe(false);
+    expect(result.get(open.id)?.clientSideEverPresent).toBe(true);
+    expect(result.get(open.id)?.anyOpen).toBe(true);
+  });
+
+  it('counts a ZERO-LENGTH client interval — a drop-in still happened', async () => {
+    const { meeting } = await meetingFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, client.id, 'client', 3);
+    await leave(meeting.id, client.id, 3);
+
+    const facts = (await meetingPresenceRepository.factsByMeetingIds([meeting.id])).get(meeting.id);
+
+    expect(facts?.clientSideEverPresent).toBe(true);
+  });
+
+  it('ignores a SOFT-DELETED interval', async () => {
+    const { meeting } = await meetingFactory();
+    const client = await userFactory();
+
+    const interval = await join(meeting.id, client.id, 'client', 0);
+    await leave(meeting.id, client.id, 5);
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, interval.id));
+
+    const facts = (await meetingPresenceRepository.factsByMeetingIds([meeting.id])).get(meeting.id);
+
+    expect(facts?.clientSideEverPresent).toBe(false);
+  });
+
+  it('keeps meetings apart in one batch and returns no meeting that was not asked for', async () => {
+    const { meeting: attended } = await meetingFactory();
+    const { meeting: empty } = await meetingFactory();
+    const { meeting: notAsked } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+    const other = await userFactory();
+
+    await join(attended.id, expert.id, 'expert', 0);
+    await join(attended.id, client.id, 'client', 2);
+    await leave(attended.id, client.id, 30);
+    await leave(attended.id, expert.id, 30);
+    await join(notAsked.id, other.id, 'client', 0);
+
+    const result = await meetingPresenceRepository.factsByMeetingIds([attended.id, empty.id]);
+
+    expect([...result.keys()].sort((a, b) => a.localeCompare(b))).toEqual(
+      [attended.id, empty.id].sort((a, b) => a.localeCompare(b))
+    );
+    expect(result.get(attended.id)?.clientSideEverPresent).toBe(true);
+    expect(result.get(attended.id)?.expertEverPresent).toBe(true);
+    expect(result.get(empty.id)?.clientSideEverPresent).toBe(false);
+    expect(result.get(empty.id)?.expertEverPresent).toBe(false);
+    expect(result.has(notAsked.id)).toBe(false);
+  });
+
+  it('agrees with settlementFacts — one definition of client-side presence', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, client.id, 'client', 0);
+    await leave(meeting.id, client.id, 3);
+    await join(meeting.id, expert.id, 'expert', 5);
+    await leave(meeting.id, expert.id, 25);
+
+    const batched = (await meetingPresenceRepository.factsByMeetingIds([meeting.id])).get(
+      meeting.id
+    );
+    const { facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+
+    expect(batched).toEqual(facts);
   });
 });

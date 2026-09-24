@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { PresenceFacts } from '@balo/shared/meetings';
 
 const {
   mockFindProfileById,
   mockFindUser,
   mockFindMeeting,
+  mockFactsByMeetingIds,
   mockPublish,
   mockTrackServer,
   mockLogError,
@@ -11,6 +13,7 @@ const {
   mockFindProfileById: vi.fn(),
   mockFindUser: vi.fn(),
   mockFindMeeting: vi.fn(),
+  mockFactsByMeetingIds: vi.fn(),
   mockPublish: vi.fn(),
   mockTrackServer: vi.fn(),
   mockLogError: vi.fn(),
@@ -23,6 +26,7 @@ vi.mock('@balo/db', () => ({
   expertsRepository: { findProfileById: mockFindProfileById },
   usersRepository: { findById: mockFindUser },
   meetingsRepository: { findById: mockFindMeeting },
+  meetingPresenceRepository: { factsByMeetingIds: mockFactsByMeetingIds },
   deriveIdempotencyKey: (input: { sessionId?: string }) =>
     `overdraft_settlement:${input.sessionId}`,
 }));
@@ -488,7 +492,29 @@ describe('notify helpers', () => {
   });
 });
 
+/** `factsByMeetingIds`'s result for the missed meeting, with the client-side flag under test. */
+function presenceFacts(clientSideEverPresent: boolean): Map<string, PresenceFacts> {
+  return new Map([
+    [
+      'meeting_1',
+      {
+        expertEverPresent: false,
+        expertOpen: false,
+        clientSideEverPresent,
+        anyOpen: false,
+        lastLeftAt: null,
+        expertFirstJoinedAt: null,
+      },
+    ],
+  ]);
+}
+
 describe('publishSessionMissedCall (BAL-412, ADR-1044 §7, D8)', () => {
+  const MISSED_CALL_SESSION = {
+    ...SESSION,
+    meetingId: 'meeting_1',
+  } as unknown as Parameters<typeof publishSessionMissedCall>[0];
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindProfileById.mockResolvedValue({ userId: 'expert_user_1' });
@@ -497,14 +523,12 @@ describe('publishSessionMissedCall (BAL-412, ADR-1044 §7, D8)', () => {
       id: 'meeting_1',
       scheduledStart: new Date('2026-07-16T10:00:00.000Z'),
     });
+    mockFactsByMeetingIds.mockResolvedValue(presenceFacts(true));
   });
 
   it('publishes ONE event carrying both recipients — no figure anywhere (nothing was charged)', async () => {
-    const session = {
-      ...SESSION,
-      meetingId: 'meeting_1',
-    } as unknown as Parameters<typeof publishSessionMissedCall>[0];
-    await publishSessionMissedCall(session, NOW);
+    await publishSessionMissedCall(MISSED_CALL_SESSION, NOW);
+    expect(mockPublish).toHaveBeenCalledTimes(1);
     expect(mockPublish).toHaveBeenCalledWith('session.missed_call', {
       correlationId: 'session_1:missed_call',
       sessionId: 'session_1',
@@ -514,10 +538,52 @@ describe('publishSessionMissedCall (BAL-412, ADR-1044 §7, D8)', () => {
       expertProfileId: 'expert_1',
       expertName: 'Jordan Ellis',
       scheduledOn: '16 July 2026',
+      clientSideEverPresent: true,
     });
     const payload = mockPublish.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(payload).not.toHaveProperty('amountAudMinor');
     expect(payload).not.toHaveProperty('overdraftSettledMinor');
+  });
+
+  it('reads presence for exactly the missed meeting, once', async () => {
+    await publishSessionMissedCall(MISSED_CALL_SESSION, NOW);
+    expect(mockFactsByMeetingIds).toHaveBeenCalledTimes(1);
+    expect(mockFactsByMeetingIds).toHaveBeenCalledWith(['meeting_1']);
+  });
+
+  it('carries clientSideEverPresent: false when nobody on the client side ever joined', async () => {
+    mockFactsByMeetingIds.mockResolvedValue(presenceFacts(false));
+    await publishSessionMissedCall(MISSED_CALL_SESSION, NOW);
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    const payload = mockPublish.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload.clientSideEverPresent).toBe(false);
+  });
+
+  it('a failed presence read STILL publishes, with presence unknown (null), and logs the error', async () => {
+    mockFactsByMeetingIds.mockRejectedValue(new Error('connection reset'));
+    await expect(publishSessionMissedCall(MISSED_CALL_SESSION, NOW)).resolves.toBeUndefined();
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    const payload = mockPublish.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).toHaveProperty('clientSideEverPresent', null);
+    expect(payload.expertName).toBe('Jordan Ellis');
+    expect(mockLogError).toHaveBeenCalledTimes(1);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op: 'publishSessionMissedCall',
+        sessionId: 'session_1',
+        meetingId: 'meeting_1',
+        error: 'connection reset',
+        stack: expect.any(String),
+      }),
+      expect.any(String)
+    );
+  });
+
+  it('a result missing the meeting degrades to null rather than guessing', async () => {
+    mockFactsByMeetingIds.mockResolvedValue(new Map());
+    await publishSessionMissedCall(MISSED_CALL_SESSION, NOW);
+    const payload = mockPublish.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).toHaveProperty('clientSideEverPresent', null);
   });
 
   it('skips (no publish) when the session has no meetingId — defensively, should be unreachable', async () => {
@@ -528,15 +594,13 @@ describe('publishSessionMissedCall (BAL-412, ADR-1044 §7, D8)', () => {
     await publishSessionMissedCall(session, NOW);
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockFindMeeting).not.toHaveBeenCalled();
+    expect(mockFactsByMeetingIds).not.toHaveBeenCalled();
   });
 
   it('skips (no publish) when the meeting is not found', async () => {
     mockFindMeeting.mockResolvedValue(undefined);
-    const session = {
-      ...SESSION,
-      meetingId: 'meeting_1',
-    } as unknown as Parameters<typeof publishSessionMissedCall>[0];
-    await publishSessionMissedCall(session, NOW);
+    await publishSessionMissedCall(MISSED_CALL_SESSION, NOW);
     expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockFactsByMeetingIds).not.toHaveBeenCalled();
   });
 });

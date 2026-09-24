@@ -232,6 +232,43 @@ function noShowClientSentence(
   );
 }
 
+/** The lines of `session-missed-call-client` that depend on who turned up. */
+interface MissedCallClientCopy {
+  subject: string;
+  previewText: string;
+  heading: string;
+  firstLine: string;
+}
+
+/**
+ * `session-missed-call-client`'s variable lines. `missed_call` only records that the expert never
+ * joined; the client side may not have either, since a session opens when the call page mints a
+ * join grant, before anyone connects. When the payload's `clientSideEverPresent` is a KNOWN
+ * `false`, the notice says the session didn't go ahead and names NOBODY as absent — not the
+ * expert, and not the recipient, who did open the call page. `true`, `null` (presence read
+ * failed) and an absent field keep the apology that names the expert.
+ */
+function missedCallClientCopy(
+  data: Record<string, unknown>,
+  expertName: string,
+  scheduledOn: string
+): MissedCallClientCopy {
+  if (data.clientSideEverPresent === false) {
+    return {
+      subject: `Your session with ${sanitizeSubjectTitle(expertName)} didn't go ahead`,
+      previewText: 'Nobody joined — nothing was charged.',
+      heading: "Your session didn't go ahead",
+      firstLine: `Your session with ${expertName} scheduled for ${scheduledOn} didn't go ahead — neither side joined the call.`,
+    };
+  }
+  return {
+    subject: `We're sorry — your session with ${sanitizeSubjectTitle(expertName)} didn't connect`,
+    previewText: `${expertName} wasn't able to join — nothing was charged.`,
+    heading: "We're sorry — your session didn't connect",
+    firstLine: `Your session with ${expertName} scheduled for ${scheduledOn} didn't connect — ${expertName} wasn't able to join.`,
+  };
+}
+
 /**
  * BAL-414 — the human label for each checklist item key. Deliberately owned by the TEMPLATE
  * REGISTRY, not the payload: `expert.searchability_lost`'s `failingItems` stays a plain key
@@ -1533,21 +1570,23 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
 
   // BAL-412 (ADR-1044 §7) missed call — the acting MEMBER (recipient 'self'). APOLOGETIC
   // register (D8): Balo failed to connect them, nothing was charged, and the funds set aside
-  // are back in their balance. Reuses `CaseBillingReceiptEmail` (the same shared scaffold as
+  // are back in their balance — or NEUTRAL when nobody on the client side joined either (see
+  // `missedCallClientCopy`). Reuses `CaseBillingReceiptEmail` (the same shared scaffold as
   // payment-charged/payout-recorded) — carries NO figure, since nothing was charged.
   'session-missed-call-client': (data) => {
     const expertName = (data.expertName as string) ?? 'your expert';
     const scheduledOn = (data.scheduledOn as string) ?? '';
+    const copy = missedCallClientCopy(data, expertName, scheduledOn);
     return {
       component: React.createElement(CaseBillingReceiptEmail, {
         firstName: (data.recipientName as string) ?? 'there',
-        previewText: `${expertName} wasn't able to join — nothing was charged.`,
+        previewText: copy.previewText,
         pillLabel: 'Missed call',
         pillTone: 'primary',
-        heading: "We're sorry — your session didn't connect",
+        heading: copy.heading,
         subtext: 'Nothing has been charged for this one.',
         bodyLines: [
-          `Your session with ${expertName} scheduled for ${scheduledOn} didn't connect — ${expertName} wasn't able to join.`,
+          copy.firstLine,
           'Nothing has been charged, and the funds we set aside are back in your balance.',
         ],
         ctaLabel: 'View billing →',
@@ -1555,7 +1594,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         footerPrefix: 'Questions about this?',
         baseUrl: BASE_URL,
       }),
-      subject: `We're sorry — your session with ${sanitizeSubjectTitle(expertName)} didn't connect`,
+      subject: copy.subject,
     };
   },
 

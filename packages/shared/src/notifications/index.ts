@@ -766,17 +766,25 @@ export interface PayoutRecordedPayload {
 /**
  * BAL-412 (ADR-1044 §7) — the expert never joined. Nothing was charged and the credit hold is
  * released in full. TWO conditioned rules on ONE event (the `recap.ready` pattern): the acting
- * member (recipient 'self', APOLOGETIC — Balo failed them) and the delivering expert (recipient
- * 'expert' via `expertProfileId`, FACTUAL — no penalty in v1, but they should know it was
- * recorded). SERVER-ONLY — published exclusively by `apps/api`'s presence-settlement service
- * (`finalizeBilling`, gated on `settlementShape === 'missed_call'`), never from apps/web, so it
- * has NO `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
+ * member (recipient 'self', APOLOGETIC — Balo failed them; NEUTRAL when nobody joined, see
+ * `clientSideEverPresent`) and the delivering expert (recipient 'expert' via `expertProfileId`,
+ * FACTUAL — no penalty in v1, but they should know it was recorded). SERVER-ONLY — published
+ * exclusively by `apps/api`'s presence-settlement service (`finalizeBilling`, gated on
+ * `settlementShape === 'missed_call'`), never from apps/web, so it has NO `publishBodySchema`
+ * arm; adding one would be a `StraySchemaArm` and fail `tsc`.
  *
  * ⚠ CARRIES NO FIGURE AT ALL — nothing was charged, so concealment is trivial (both templates
  * read the same payload safely).
  *
  * ⚠ `abandoned_wait` publishes NOTHING (D2) — see `finalize-billing.ts`'s gate. This event is
  * ONLY for `missed_call` (the expert never joined at all).
+ *
+ * ⚠ `missed_call` says nothing about the CLIENT side: a session opens when the call page mints a
+ * join grant, before anyone connects, so the acting member may never have joined either.
+ * `clientSideEverPresent` is `summarisePresence(...).clientSideEverPresent` over the meeting's
+ * presence rows, read at publish time — `null` when that read failed. Only a KNOWN `false`
+ * switches the client templates to the copy that names nobody as absent; `true` and `null` keep
+ * the copy that names the expert.
  */
 export interface SessionMissedCallPayload {
   correlationId: string; // `${sessionId}:missed_call` → BullMQ jobId dedup
@@ -787,6 +795,7 @@ export interface SessionMissedCallPayload {
   expertProfileId: string; // → data.expert → recipient 'expert'
   expertName: string;
   scheduledOn: string; // pre-formatted UTC date, matching the credit-email convention
+  clientSideEverPresent: boolean | null; // null ⇒ the presence read failed ⇒ expert-naming copy
 }
 
 // BAL-387 (ADR-1013 + ADR-1043) — a transcript recap is ready. SERVER-ONLY (published from the

@@ -5,7 +5,8 @@ import type { RecapNotHeldView } from '@/lib/meetings/recap-view-types';
  * BAL-388 §R11 — the NOT-HELD panel. REPLACES summary / action items / transcript; the party
  * card, the files card and Rule M's money line all still render around it.
  *
- * ⚠ MJ COPY CHECKPOINT — all four cells (no-show × lens, missed-call × lens), plus the
+ * ⚠ MJ COPY CHECKPOINT — all four cells (no-show × lens, missed-call × lens), the
+ * missed-call-with-nobody-client-side cell (one neutral body on both lenses), plus the
  * URL-reachable `cancelled` case.
  *
  * ⚠ ONE SHARED HEADLINE, AND NO CTA. The meeting is the subject; the body carries who was

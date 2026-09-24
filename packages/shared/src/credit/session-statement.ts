@@ -44,7 +44,18 @@ interface SessionStatementContextBase {
   cancelled: boolean;
 }
 
-export type ClientSessionStatementContext = SessionStatementContextBase;
+export interface ClientSessionStatementContext extends SessionStatementContextBase {
+  /**
+   * `summarisePresence(...).clientSideEverPresent` for the session's meeting — did anybody on the
+   * client side ever join? A `missed_call` shape only records that the expert never did, and
+   * the session cannot say more (it opens when the call page mints a join grant, before anyone
+   * connects), so the presence rows are read for the `missed_call` shape ONLY. `null` on every
+   * other shape, when there is no meeting, and when the read failed — `durationLine` then keeps
+   * the line that names the consultant. A boolean, never the rows. Client lens only: the
+   * expert's `missed_call` line names nobody already.
+   */
+  clientSideEverPresent: boolean | null;
+}
 
 /** The payout obligation's citable reference. Present only once the obligation is booked. */
 export interface ExpertPayoutReference {

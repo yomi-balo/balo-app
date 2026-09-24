@@ -58,8 +58,12 @@ export const CASE_TAGS_SHOWN = { comfortable: 2, dense: 1 } as const;
 /**
  * `deriveCaseConsultationState`'s label → the mark the trail draws.
  *
- * ⚠ TOTAL OVER THE UNION, and stated as a `Record` so a ninth `CaseConsultationStateLabel` fails
+ * ⚠ TOTAL OVER THE UNION, and stated as a `Record` so a new `CaseConsultationStateLabel` fails
  * `tsc` here rather than falling through to a default that quietly draws the wrong dot.
+ *
+ * `nobody_joined` draws as `missed`, like `missed_call`: the word names nobody, so it is as true
+ * of a call neither side joined as of one only the expert missed. The index reads no presence,
+ * so it never derives `nobody_joined` today — the entry keeps the map total for whoever does.
  *
  * ⚠ `pending_reschedule` DRAWS AS `booked`, NOT AS SOMETHING OF ITS OWN. The original booking
  * stands until an option is accepted, so the consultation is still expected to happen — the
@@ -74,6 +78,7 @@ const TRAIL_MARK_BY_STATE: Readonly<Record<CaseConsultationStateLabel, CaseTrail
   cancelled: 'cancelled',
   no_show_client: 'missed',
   missed_call: 'missed',
+  nobody_joined: 'missed',
   outcome_pending: 'unrecorded',
 };
 

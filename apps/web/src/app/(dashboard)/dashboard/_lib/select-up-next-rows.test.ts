@@ -122,7 +122,12 @@ describe('selectUpNextRows', () => {
     ];
     for (const status of ALL_STATUSES) {
       const upcoming = caseConsultationIsUpcoming(
-        deriveCaseConsultationState({ status, outcome: null, hasLiveRescheduleProposal: false })
+        deriveCaseConsultationState({
+          status,
+          outcome: null,
+          hasLiveRescheduleProposal: false,
+          clientSideEverPresent: null,
+        })
       );
       expect(!meetingIsClosedToJoin(status)).toBe(upcoming);
     }

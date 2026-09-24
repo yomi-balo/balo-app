@@ -70,6 +70,12 @@ describe('caseTrailMark', () => {
     expect(caseTrailMark('missed_call')).toBe('missed');
   });
 
+  /** `missed` names nobody, so it is as true of a call neither side joined as of a missed one. */
+  it('draws nobody_joined as missed — the same mark as missed_call', () => {
+    expect(caseTrailMark('nobody_joined')).toBe('missed');
+    expect(caseTrailMark('nobody_joined')).toBe(caseTrailMark('missed_call'));
+  });
+
   it('maps held and cancelled to their own marks', () => {
     expect(caseTrailMark('held')).toBe('held');
     expect(caseTrailMark('cancelled')).toBe('cancelled');

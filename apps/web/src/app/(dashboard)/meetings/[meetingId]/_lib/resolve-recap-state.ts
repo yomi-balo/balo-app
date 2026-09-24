@@ -7,6 +7,7 @@ import type {
   RecapNotHeldView,
   SessionMoneyBlock,
 } from '@/lib/meetings/recap-view-types';
+import { NOBODY_JOINED_NOTE } from '@/lib/meetings/nobody-joined-copy';
 
 /**
  * BAL-388 — the recap's PURE state machine: outcome (§R11), artefacts (§R5 / §R7), Rule M
@@ -114,16 +115,26 @@ export function resolveArtifacts(input: ArtifactsInput): RecapArtifactsView {
  * renders is already floor-inclusive; restating the policy would be a claim this page cannot
  * recompute (the floor is env-resolvable in `apps/api` alone), and a stale one the day it
  * changes.
+ *
+ * `clientSideEverPresent` rides the session arm untouched: the fragment's `missed_call` line
+ * names the consultant unless it is a KNOWN `false`. A session is no proof the client side
+ * joined — it opens when the call page mints a join grant, before anyone connects.
  */
 export function resolveMoneyView(input: {
   hasSession: boolean;
   block: SessionMoneyBlock | null;
   elapsedMinutes: number;
+  clientSideEverPresent: boolean | null;
 }): RecapMoneyView {
   if (!input.hasSession) {
     return { kind: 'absent' };
   }
-  return { kind: 'session', block: input.block, elapsedMinutes: input.elapsedMinutes };
+  return {
+    kind: 'session',
+    block: input.block,
+    elapsedMinutes: input.elapsedMinutes,
+    clientSideEverPresent: input.clientSideEverPresent,
+  };
 }
 
 export interface NotHeldInput {
@@ -134,9 +145,16 @@ export interface NotHeldInput {
   expertPersonLabel: string;
   /** Prospective — the client COMPANY's name. Client-side absence names the PARTY. */
   clientCompanyName: string;
+  /**
+   * `summarisePresence(...).clientSideEverPresent`, or `null` when presence was not read or the
+   * read failed. Consulted on `missed_call` only. ⚠ `null` IS UNKNOWN, NOT ABSENT — only a
+   * KNOWN `false` yields the body that names nobody, so a client who waited is never told
+   * nobody turned up.
+   */
+  clientSideEverPresent: boolean | null;
 }
 
-/** ONE headline across all four cells. The MEETING is the subject; the body carries who. */
+/** ONE headline across every cell. The MEETING is the subject; the body carries who. */
 const NOT_HELD_HEADLINE = "This one didn't go ahead";
 
 /**
@@ -148,6 +166,10 @@ const NOT_HELD_HEADLINE = "This one didn't go ahead";
  * is identifiable as "the absentee"); expert-side absence is RETROSPECTIVE and names the
  * person, per CLAUDE.md's attribution rule.
  *
+ * ⚠ A `missed_call` NOBODY CLIENT-SIDE ATTENDED EITHER NAMES NOBODY. The outcome only says the
+ * delivering expert never joined; when presence shows no client side either, nobody waited and
+ * nobody was let down, so both lenses read the same neutral {@link NOBODY_JOINED_NOTE}.
+ *
  * ⚠ NO MONEY PROSE HERE. The design reference's "you were not charged. The no-show policy
  * applied." is DELETED, not reworded — Rule M's one line replaces it, and there is no
  * no-show-policy page to link to.
@@ -156,7 +178,8 @@ const NOT_HELD_HEADLINE = "This one didn't go ahead";
  * cannot 500.
  */
 export function resolveNotHeld(input: NotHeldInput): RecapNotHeldView | null {
-  const { status, outcome, lens, expertPersonLabel, clientCompanyName } = input;
+  const { status, outcome, lens, expertPersonLabel, clientCompanyName, clientSideEverPresent } =
+    input;
 
   if (status === 'cancelled') {
     return {
@@ -181,12 +204,23 @@ export function resolveNotHeld(input: NotHeldInput): RecapNotHeldView | null {
     return {
       reason: 'missed_call',
       headline: NOT_HELD_HEADLINE,
-      body:
-        lens === 'client' ? expertPersonLabel + " wasn't able to join." : "The call didn't start.",
+      body: missedCallBody(lens, expertPersonLabel, clientSideEverPresent),
     };
   }
 
   return null;
+}
+
+/** The `missed_call` body — see {@link resolveNotHeld} for who each cell names. */
+function missedCallBody(
+  lens: RecapLens,
+  expertPersonLabel: string,
+  clientSideEverPresent: boolean | null
+): string {
+  if (clientSideEverPresent === false) {
+    return NOBODY_JOINED_NOTE + '.';
+  }
+  return lens === 'client' ? expertPersonLabel + " wasn't able to join." : "The call didn't start.";
 }
 
 /**

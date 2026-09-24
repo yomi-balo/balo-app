@@ -161,6 +161,8 @@ function selectNextBooking(
           status: meeting.status,
           outcome: meeting.outcome,
           hasLiveRescheduleProposal: proposalByMeetingId.has(meeting.meetingId),
+          // Unread: presence only splits `missed_call` from `nobody_joined`, neither upcoming.
+          clientSideEverPresent: null,
         })
       )
     )
@@ -191,6 +193,8 @@ function buildTrail(
           status: meeting.status,
           outcome: meeting.outcome,
           hasLiveRescheduleProposal: proposalByMeetingId.has(meeting.meetingId),
+          // Unread: `missed_call` and `nobody_joined` draw the same `missed` mark.
+          clientSideEverPresent: null,
         })
       ),
     }))

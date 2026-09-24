@@ -260,9 +260,9 @@ describe('MEETING_OVERRUN_GRACE_MINUTES — BAL-513', () => {
 
 describe('deriveCaseConsultationState', () => {
   /**
-   * TOTAL over every representable `(status, outcome, hasLiveRescheduleProposal)` triple.
-   * `meeting_outcome_requires_ended` is one-directional, so `ended` + `null` IS legal and must
-   * have its own honest state.
+   * TOTAL over every representable `(status, outcome, hasLiveRescheduleProposal,
+   * clientSideEverPresent)` combination. `meeting_outcome_requires_ended` is one-directional, so
+   * `ended` + `null` IS legal and must have its own honest state.
    */
   const STATUSES: readonly MeetingStatusLabel[] = [
     'scheduled',
@@ -278,13 +278,20 @@ describe('deriveCaseConsultationState', () => {
     'missed_call',
   ];
 
-  it('is TOTAL — every (status, outcome, hasLiveRescheduleProposal) triple yields a label', () => {
+  it('is TOTAL — every (status, outcome, proposal, client presence) combination yields a label', () => {
     for (const status of STATUSES) {
       for (const outcome of OUTCOMES) {
         for (const hasLiveRescheduleProposal of [false, true]) {
-          expect(
-            typeof deriveCaseConsultationState({ status, outcome, hasLiveRescheduleProposal })
-          ).toBe('string');
+          for (const clientSideEverPresent of [null, false, true]) {
+            expect(
+              typeof deriveCaseConsultationState({
+                status,
+                outcome,
+                hasLiveRescheduleProposal,
+                clientSideEverPresent,
+              })
+            ).toBe('string');
+          }
         }
       }
     }
@@ -304,9 +311,14 @@ describe('deriveCaseConsultationState', () => {
     outcome: MeetingOutcomeLabel | null;
     expected: CaseConsultationStateLabel;
   }>)('$status + $outcome → $expected (no live proposal)', ({ status, outcome, expected }) => {
-    expect(deriveCaseConsultationState({ status, outcome, hasLiveRescheduleProposal: false })).toBe(
-      expected
-    );
+    expect(
+      deriveCaseConsultationState({
+        status,
+        outcome,
+        hasLiveRescheduleProposal: false,
+        clientSideEverPresent: null,
+      })
+    ).toBe(expected);
   });
 
   /**
@@ -320,7 +332,12 @@ describe('deriveCaseConsultationState', () => {
     'status=%s + a live reschedule proposal → pending_reschedule',
     (status) => {
       expect(
-        deriveCaseConsultationState({ status, outcome: null, hasLiveRescheduleProposal: true })
+        deriveCaseConsultationState({
+          status,
+          outcome: null,
+          hasLiveRescheduleProposal: true,
+          clientSideEverPresent: null,
+        })
       ).toBe('pending_reschedule');
     }
   );
@@ -339,11 +356,13 @@ describe('deriveCaseConsultationState', () => {
         status,
         outcome,
         hasLiveRescheduleProposal: false,
+        clientSideEverPresent: null,
       });
       const withProposal = deriveCaseConsultationState({
         status,
         outcome,
         hasLiveRescheduleProposal: true,
+        clientSideEverPresent: null,
       });
       expect(withProposal).toBe(withoutProposal);
       expect(withProposal).not.toBe('pending_reschedule');
@@ -360,13 +379,65 @@ describe('deriveCaseConsultationState', () => {
       status: 'ended',
       outcome: 'no_show_client',
       hasLiveRescheduleProposal: false,
+      clientSideEverPresent: null,
     });
     const missed = deriveCaseConsultationState({
       status: 'ended',
       outcome: 'missed_call',
       hasLiveRescheduleProposal: false,
+      clientSideEverPresent: null,
     });
     expect(noShow).not.toBe(missed);
+  });
+
+  /**
+   * `missed_call` only says the expert never joined. With NO client-side presence either,
+   * nobody was wronged and the row must not read as the expert standing somebody up.
+   */
+  it.each([
+    { clientSideEverPresent: false, expected: 'nobody_joined' },
+    { clientSideEverPresent: true, expected: 'missed_call' },
+    { clientSideEverPresent: null, expected: 'missed_call' },
+  ] as ReadonlyArray<{
+    clientSideEverPresent: boolean | null;
+    expected: CaseConsultationStateLabel;
+  }>)(
+    'ended + missed_call with clientSideEverPresent=$clientSideEverPresent → $expected',
+    ({ clientSideEverPresent, expected }) => {
+      expect(
+        deriveCaseConsultationState({
+          status: 'ended',
+          outcome: 'missed_call',
+          hasLiveRescheduleProposal: false,
+          clientSideEverPresent,
+        })
+      ).toBe(expected);
+    }
+  );
+
+  /** Client presence is a `missed_call` refinement ONLY — it never moves any other row. */
+  it('ignores clientSideEverPresent on every row that is not ended + missed_call', () => {
+    for (const status of STATUSES) {
+      for (const outcome of OUTCOMES) {
+        if (status === 'ended' && outcome === 'missed_call') continue;
+        const unknown = deriveCaseConsultationState({
+          status,
+          outcome,
+          hasLiveRescheduleProposal: false,
+          clientSideEverPresent: null,
+        });
+        for (const clientSideEverPresent of [false, true]) {
+          expect(
+            deriveCaseConsultationState({
+              status,
+              outcome,
+              hasLiveRescheduleProposal: false,
+              clientSideEverPresent,
+            })
+          ).toBe(unknown);
+        }
+      }
+    }
   });
 
   /** A cancelled meeting is cancelled whatever else the row happens to carry. */
@@ -377,6 +448,7 @@ describe('deriveCaseConsultationState', () => {
           status: 'cancelled',
           outcome,
           hasLiveRescheduleProposal: false,
+          clientSideEverPresent: false,
         })
       ).toBe('cancelled');
     }
@@ -391,6 +463,7 @@ describe('caseConsultationIsUpcoming', () => {
     { state: 'held', upcoming: false },
     { state: 'no_show_client', upcoming: false },
     { state: 'missed_call', upcoming: false },
+    { state: 'nobody_joined', upcoming: false },
     { state: 'cancelled', upcoming: false },
     { state: 'outcome_pending', upcoming: false },
   ] as ReadonlyArray<{ state: CaseConsultationStateLabel; upcoming: boolean }>)(

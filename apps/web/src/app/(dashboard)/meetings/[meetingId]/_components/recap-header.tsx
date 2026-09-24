@@ -127,7 +127,13 @@ function MoneyLine({ money }: Readonly<{ money: RecapMoneyView }>): React.JSX.El
   if (money.kind === 'absent') {
     return <span className="text-muted-foreground">No consultation charge for this one.</span>;
   }
-  return <MoneyBlock block={money.block} elapsedMinutes={money.elapsedMinutes} />;
+  return (
+    <MoneyBlock
+      block={money.block}
+      elapsedMinutes={money.elapsedMinutes}
+      clientSideEverPresent={money.clientSideEverPresent}
+    />
+  );
 }
 
 /**

@@ -40,6 +40,7 @@ const CLIENT_STATEMENT = {
     counterparty: { name: 'Priya Sharma', orgLabel: 'CloudPeak Consulting' },
     meetingId: 'meeting_1',
     cancelled: false,
+    clientSideEverPresent: null,
   },
 };
 

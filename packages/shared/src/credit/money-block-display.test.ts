@@ -142,6 +142,32 @@ describe('durationLine', () => {
     );
   });
 
+  it('names nobody on the client lens when NO client-side participant was ever present', () => {
+    expect(durationLine(CLIENT_MISSED_CALL, { clientSideEverPresent: false })).toBe(
+      'Not charged — nobody joined this time'
+    );
+  });
+
+  it('keeps the consultant line when the client side was present, or presence is unknown', () => {
+    const consultantLine = "Not charged — your consultant didn't join this time";
+    expect(durationLine(CLIENT_MISSED_CALL, { clientSideEverPresent: true })).toBe(consultantLine);
+    expect(durationLine(CLIENT_MISSED_CALL, { clientSideEverPresent: null })).toBe(consultantLine);
+  });
+
+  it('keeps the expert missed-call line whatever the client-side presence', () => {
+    for (const clientSideEverPresent of [false, true, null]) {
+      expect(durationLine(EXPERT_MISSED_CALL, { clientSideEverPresent })).toBe(
+        "No earnings recorded — the call didn't take place"
+      );
+    }
+  });
+
+  it('ignores client-side presence on every non-missed-call shape', () => {
+    for (const block of [CLIENT_FINALIZED, CLIENT_NO_SHOW, CLIENT_ABANDONED_WAIT]) {
+      expect(durationLine(block, { clientSideEverPresent: false })).toBe(durationLine(block));
+    }
+  });
+
   it('renders the abandoned-wait line, per lens, WITHOUT actualMinutes', () => {
     expect(durationLine(CLIENT_ABANDONED_WAIT)).toBe('Not charged');
     expect(durationLine(EXPERT_ABANDONED_WAIT)).toBe('No earnings recorded');

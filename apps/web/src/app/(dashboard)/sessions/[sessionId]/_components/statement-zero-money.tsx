@@ -1,7 +1,15 @@
 import { Ban } from 'lucide-react';
-import { durationLine } from '@balo/shared/credit';
+import { durationLine, type DurationLinePresence } from '@balo/shared/credit';
 import type { SessionStatementView } from '../_lib/session-statement-view';
 import { STATEMENT_COPY } from '../_lib/statement-copy';
+
+/**
+ * What `durationLine` needs to know about client-side presence. Only the client view carries it;
+ * the expert's `missed_call` line names nobody, so that lens passes nothing.
+ */
+function presenceOf(view: SessionStatementView): DurationLinePresence | undefined {
+  return view.lens === 'client' ? { clientSideEverPresent: view.clientSideEverPresent } : undefined;
+}
 
 /**
  * The non-monetary composition for `missed_call` / `abandoned_wait` (D-A) and the cancelled
@@ -16,7 +24,7 @@ export function StatementZeroMoney({
   const line =
     view.mode.kind === 'cancelled'
       ? STATEMENT_COPY[view.lens].cancelledLine
-      : durationLine(view.block);
+      : durationLine(view.block, presenceOf(view));
 
   return (
     <div className="mt-8 flex flex-col items-center gap-3 py-6 text-center">

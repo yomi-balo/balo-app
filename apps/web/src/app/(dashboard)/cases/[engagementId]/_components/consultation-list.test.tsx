@@ -16,7 +16,8 @@ import { ConsultationList } from './consultation-list';
  *   1. `no_show_client` and `missed_call` ARE DIFFERENT EVENTS WITH DIFFERENT COPY, per lens.
  *      Folding them into one "not held" label would tell the wronged party that the call
  *      failed without saying who failed to show — so the exact strings are pinned, AND the
- *      two are asserted to differ from each other on the SAME lens.
+ *      two are asserted to differ from each other on the SAME lens. `nobody_joined` is the
+ *      third: no wronged party, so it names nobody on either lens.
  *   2. THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'` — the component renders
  *      whatever `recapHref` says, never re-deriving from `state`. `recapHrefOf` emits a href
  *      for every terminal OUTCOME (where the not-held panel explains a no-show), but never for
@@ -97,6 +98,7 @@ const ALL_NOTES: readonly string[] = [
   "Client didn't join — settled at the minimum",
   `${COUNTERPARTY} wasn't able to join`,
   "The call didn't start",
+  'Neither side joined this call',
   'Outcome not recorded',
   // Item 13 — `pending_reschedule` (BAL-411), the 8th state; §D4 flagged it as NOT
   // compile-forced (`stateNote`'s `default: return null`), so nothing but a test catches a
@@ -148,7 +150,7 @@ beforeEach(() => {
   trackMock.mockClear();
 });
 
-// ── the 7 states × 2 lenses sweep ────────────────────────────────────────────────────────
+// ── the state × lens sweep ───────────────────────────────────────────────────────────────
 
 interface StateCase {
   readonly state: CaseConsultationStateLabel;
@@ -216,6 +218,15 @@ const STATE_CASES: readonly StateCase[] = [
     // The EXPERT never joined: impersonal for the expert, explicit for the client.
     pill: { client: "Expert didn't join", expert: "Didn't start" },
     variant: 'warning',
+  },
+  // Neither side joined: the same neutral words on both lenses, naming nobody, and the muted
+  // tone — there is no absent party to flag.
+  {
+    state: 'nobody_joined',
+    muted: true,
+    notes: bothLenses('Neither side joined this call'),
+    pill: bothPills('Nobody joined'),
+    variant: 'secondary',
   },
   {
     state: 'cancelled',
@@ -293,14 +304,18 @@ describe('ConsultationList — relative days, on appointments only', () => {
    * call landing on today would otherwise read "Today at 10:00 am" where it should read the
    * date it will still read next week.
    */
-  it.each(['held', 'missed_call', 'no_show_client', 'cancelled', 'outcome_pending'] as const)(
-    'never says Today/Tomorrow for the terminal %s row',
-    async (state) => {
-      renderList([makeRow({ state, scheduledStartIso: '2026-06-11T09:00:00.000Z' })]);
-      await waitFor(() => expect(firstTimeElement().textContent).toContain('11 Jun'));
-      expect(firstTimeElement().textContent).not.toMatch(/Today|Tomorrow/);
-    }
-  );
+  it.each([
+    'held',
+    'missed_call',
+    'nobody_joined',
+    'no_show_client',
+    'cancelled',
+    'outcome_pending',
+  ] as const)('never says Today/Tomorrow for the terminal %s row', async (state) => {
+    renderList([makeRow({ state, scheduledStartIso: '2026-06-11T09:00:00.000Z' })]);
+    await waitFor(() => expect(firstTimeElement().textContent).toContain('11 Jun'));
+    expect(firstTimeElement().textContent).not.toMatch(/Today|Tomorrow/);
+  });
 
   /** A terminal row shows no clock time either — the duration already carries the detail. */
   it('shows no clock time on a terminal row', async () => {
@@ -364,15 +379,22 @@ describe("ConsultationList — the status pill's three standing rules", () => {
       'secondary'
     );
   });
+
+  it.each(LENSES)('gives nobody_joined a neutral tone, never warning, on the %s lens', (lens) => {
+    renderList([makeRow({ state: 'nobody_joined' })], lens);
+    const badge = document.querySelector('[data-slot="badge"]');
+    expect(badge).toHaveAttribute('data-variant', 'secondary');
+    expect(badge).not.toHaveAttribute('data-variant', 'warning');
+  });
 });
 
 describe('ConsultationList — every state renders, on every lens', () => {
-  it('sweeps all eight states across both lenses', () => {
-    // A guard on the table itself: 8 states × 2 lenses. If a state is added to
+  it('sweeps all nine states across both lenses', () => {
+    // A guard on the table itself: 9 states × 2 lenses. If a state is added to
     // `CaseConsultationStateLabel` without landing here, `STATE_PRESENTATION` would throw at
     // render time in production — this keeps the sweep honest about its own breadth.
-    expect(SWEEP).toHaveLength(16);
-    expect(new Set(STATE_CASES.map((c) => c.state)).size).toBe(8);
+    expect(SWEEP).toHaveLength(18);
+    expect(new Set(STATE_CASES.map((c) => c.state)).size).toBe(9);
   });
 
   it.each(SWEEP)(
@@ -431,8 +453,8 @@ describe('ConsultationList — no_show_client and missed_call are DIFFERENT even
   /**
    * ⚠ NON-SCOLDING AND MONEY-FREE. `missed_call` means THE EXPERT never joined, so the expert
    * arm is impersonal ("The call didn't start", never "you didn't join"), and NEITHER arm makes
-   * a money claim — no settlement path reads `missed_call` today, so "nothing was charged"
-   * would assert an unverified fact.
+   * a money claim — what a missed call settles to is the money block's to state, on the recap
+   * and the receipt, never the row's.
    */
   it('keeps the missed-call copy blameless and money-free on both lenses', () => {
     const { unmount } = renderList([makeRow({ state: 'missed_call' })], 'client');
@@ -446,13 +468,55 @@ describe('ConsultationList — no_show_client and missed_call are DIFFERENT even
   });
 });
 
+describe('ConsultationList — nobody_joined names NOBODY', () => {
+  /**
+   * ⚠ NEITHER SIDE JOINED, SO THERE IS NO WRONGED PARTY AND NOBODY TO NAME. The whole row —
+   * pill, note, link — must carry no counterparty, no party word, and no second person, on
+   * BOTH lenses; the pill and note are asserted exactly so the sweep cannot pass on a blank row.
+   */
+  it.each(LENSES)('names neither party and never the reader on the %s lens', (lens) => {
+    renderList([makeRow({ state: 'nobody_joined', durationMinutes: null })], lens);
+
+    expect(document.querySelector('[data-slot="badge"]')?.textContent?.trim()).toBe(
+      'Nobody joined'
+    );
+    expect(renderedNotes()).toEqual(['Neither side joined this call']);
+
+    const text = firstRow().textContent ?? '';
+    expect(text).toContain('Neither side joined this call');
+    expect(text).not.toContain(COUNTERPARTY);
+    expect(text).not.toMatch(/\bexpert\b|\bclient\b|\bconsultant\b/i);
+    expect(text).not.toMatch(/\byou\b|\byour\b/i);
+    expect(text).not.toMatch(/charged|billed|minimum/i);
+  });
+
+  it.each(LENSES)('never shares a pill or a note with missed_call on the %s lens', (lens) => {
+    const { unmount } = renderList([makeRow({ state: 'missed_call' })], lens);
+    const missedPill = document.querySelector('[data-slot="badge"]')?.textContent?.trim();
+    const [missedNote] = renderedNotes();
+    unmount();
+
+    renderList([makeRow({ state: 'nobody_joined' })], lens);
+    const nobodyPill = document.querySelector('[data-slot="badge"]')?.textContent?.trim();
+    const [nobodyNote] = renderedNotes();
+
+    if (missedNote === undefined || nobodyNote === undefined) {
+      throw new Error('both states must emit a note on both lenses');
+    }
+    expect(missedPill).toBeTruthy();
+    expect(nobodyPill).toBeTruthy();
+    expect(nobodyPill).not.toBe(missedPill);
+    expect(nobodyNote).not.toBe(missedNote);
+  });
+});
+
 describe('ConsultationList — the recap link follows recapHref, NOT state', () => {
   it('renders NO link on a CANCELLED row — recapHrefOf never gives one a href', () => {
     renderList([makeRow({ state: 'cancelled', recapHref: null })]);
     expect(screen.queryByRole('link', { name: 'View recap' })).not.toBeInTheDocument();
   });
 
-  it.each(['no_show_client', 'missed_call', 'outcome_pending'] as const)(
+  it.each(['no_show_client', 'missed_call', 'nobody_joined', 'outcome_pending'] as const)(
     'links a %s row that has a recap href',
     (state) => {
       renderList([makeRow({ state, recapHref: '/meetings/m-4?from=case_surface' })]);
@@ -484,6 +548,7 @@ describe('ConsultationList — the content indicators stay gated on `held`', () 
     'in_progress',
     'no_show_client',
     'missed_call',
+    'nobody_joined',
     'cancelled',
     'outcome_pending',
   ] as const)(

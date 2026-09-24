@@ -87,10 +87,21 @@ export interface RecapArtifactsView {
  *   · `session` (M2/M3) — a row exists. The SHIPPED `MoneyBlock` fragment renders its own
  *                      pending / finalized / loading / error states. `block: null` is the
  *                      fragment's OWN muted fallback — never a second error state around it.
+ *
+ * `clientSideEverPresent` is `summarisePresence(...).clientSideEverPresent` for the meeting,
+ * reduced server-side, or `null` when presence was not read (any outcome but `missed_call`) or
+ * the read failed. The fragment consults it on the `missed_call` settlement shape only, where a
+ * KNOWN `false` swaps the client line naming the consultant for one that names nobody. ⚠ A
+ * BOOLEAN, NEVER THE ROWS OR FACTS — nothing else from presence crosses to the client.
  */
 export type RecapMoneyView =
   | { kind: 'absent' }
-  | { kind: 'session'; block: SessionMoneyBlock | null; elapsedMinutes: number };
+  | {
+      kind: 'session';
+      block: SessionMoneyBlock | null;
+      elapsedMinutes: number;
+      clientSideEverPresent: boolean | null;
+    };
 
 /** Chip tone — the shipped semantic tokens, no hardcoded colour. */
 export type RecapStatusTone = 'success' | 'warning' | 'neutral';
@@ -214,9 +225,12 @@ export type RecapNotHeldReason = 'no_show_client' | 'missed_call' | 'cancelled';
 
 export interface RecapNotHeldView {
   reason: RecapNotHeldReason;
-  /** ONE shared headline across all four cells — the meeting is the subject, not a person. */
+  /** ONE shared headline across every cell — the meeting is the subject, not a person. */
   headline: string;
-  /** Who was where. Client-side absence names the PARTY; expert-side names the person. */
+  /**
+   * Who was where. Client-side absence names the PARTY; expert-side names the person. A
+   * `missed_call` that nobody client-side attended either names NOBODY, on both lenses.
+   */
   body: string;
 }
 

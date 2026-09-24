@@ -340,6 +340,16 @@ const HISTORY = [
     at: 1516,
     recap: true,
   },
+  // A `missed_call` that nobody client-side joined either — derived from presence, never
+  // stored. Nobody was let down, so nobody is named, on either lens.
+  {
+    id: 'mN',
+    state: 'nobody_joined',
+    label: '17 Sept',
+    abs: 'Thu, 17 Sept, 11:00 am',
+    at: 1711,
+    recap: true,
+  },
 ];
 
 const SEED_GUESTS = [
@@ -535,6 +545,9 @@ function pillFor(row, who) {
       return who === 'client'
         ? { text: 'Expert didn’t join', tone: 'warn' }
         : { text: 'Didn’t start', tone: 'warn' };
+    case 'nobody_joined':
+      // Same words on every lens, and never `warn`: there is no absent party to flag.
+      return { text: 'Nobody joined', tone: 'muted' };
     case 'pending_reschedule':
       return { text: 'New time suggested', tone: 'brand' };
     case 'cancelled':
@@ -561,6 +574,8 @@ function noteFor(row, who) {
       return who === 'client'
         ? `${counterparty(who)} wasn’t able to join`
         : 'The call didn’t start';
+    case 'nobody_joined':
+      return 'Neither side joined this call';
     default:
       return null;
   }
@@ -726,7 +741,8 @@ function ConsultationRow({
   onChoose,
   registerTrigger,
 }) {
-  const muted = row.state === 'cancelled' || row.state === 'missed_call';
+  const muted =
+    row.state === 'cancelled' || row.state === 'missed_call' || row.state === 'nobody_joined';
   const upcoming = isUpcoming(row);
   const Icon = muted ? CircleSlash : upcoming ? CalendarClock : Video;
   const items = menuItems(flags);

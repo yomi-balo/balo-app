@@ -354,7 +354,8 @@ describe('MoneyBlock', () => {
     expect(screen.queryByText(/billed/)).not.toBeInTheDocument();
   });
 
-  // UX review round 1, F11 — names the responsible party (the consultant), never neutral.
+  // UX review round 1, F11 — names the responsible party (the consultant), never neutral, while
+  // the client side joined or presence is unknown (the prop omitted is unknown).
   it('renders the apologetic missed-call line for the client lens', () => {
     render(<MoneyBlock block={CLIENT_MISSED_CALL} />);
     expect(
@@ -362,11 +363,60 @@ describe('MoneyBlock', () => {
     ).toBeInTheDocument();
   });
 
+  it.each([true, null] as const)(
+    'keeps the consultant line on the client lens when clientSideEverPresent=%s',
+    (clientSideEverPresent) => {
+      const { container } = render(
+        <MoneyBlock block={CLIENT_MISSED_CALL} clientSideEverPresent={clientSideEverPresent} />
+      );
+      expect(container.textContent).toBe("Not charged — your consultant didn't join this time");
+    }
+  );
+
+  // Nobody client-side joined either — nobody waited, so the line names nobody.
+  it('renders the line that names NOBODY on the client lens when nobody client-side joined', () => {
+    const { container } = render(
+      <MoneyBlock block={CLIENT_MISSED_CALL} clientSideEverPresent={false} />
+    );
+    expect(container.textContent).toBe('Not charged — nobody joined this time');
+    expect(container.textContent).not.toMatch(/consultant/);
+    // Still the zero-money shape: no currency, no anchor.
+    expect(container.textContent).not.toContain('A$');
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+  });
+
   it('renders the distinct missed-call line for the expert lens', () => {
     render(<MoneyBlock block={EXPERT_MISSED_CALL} />);
     expect(
       screen.getByText("No earnings recorded — the call didn't take place")
     ).toBeInTheDocument();
+  });
+
+  it.each([true, false, null] as const)(
+    'leaves the expert missed-call line unchanged when clientSideEverPresent=%s',
+    (clientSideEverPresent) => {
+      const { container } = render(
+        <MoneyBlock block={EXPERT_MISSED_CALL} clientSideEverPresent={clientSideEverPresent} />
+      );
+      expect(container.textContent).toBe("No earnings recorded — the call didn't take place");
+    }
+  );
+
+  it('consults presence on the missed_call shape ONLY', () => {
+    const abandoned = render(
+      <MoneyBlock block={CLIENT_ABANDONED_WAIT} clientSideEverPresent={false} />
+    );
+    expect(abandoned.container.textContent).toBe('Not charged');
+    abandoned.unmount();
+    const finalized = render(<MoneyBlock block={CLIENT_FINALIZED} clientSideEverPresent={false} />);
+    expect(finalized.container.textContent).toBe('ChargedA$150.0045 min');
+  });
+
+  it('has no accessibility violations in the nobody-joined render', async () => {
+    const { container } = render(
+      <MoneyBlock block={CLIENT_MISSED_CALL} clientSideEverPresent={false} />
+    );
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it('renders "Not charged" for an abandoned wait, factually, never punitive (client)', () => {

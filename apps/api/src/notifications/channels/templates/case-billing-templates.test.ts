@@ -309,3 +309,128 @@ describe('BAL-412 F16 — payout-recorded carries the no-show accrual confirmati
     expect(held.body).not.toContain('minimum');
   });
 });
+
+// ── `session-missed-call-client` WHEN NOBODY JOINED ────────────────────────────────────────
+//
+// `missed_call` only records that the expert never joined. A session opens when the call page
+// mints a join grant, before anyone connects, so the acting member may never have joined either —
+// the payload's `clientSideEverPresent` (read from the presence rows) says which. Only a KNOWN
+// `false` switches to the neutral copy that names nobody as absent; `true`, `null` (presence read
+// failed) and an absent field (a payload published before the field existed) keep the apology
+// that names the expert, byte-for-byte.
+
+const MISSED_CALL_DATA = {
+  recipientName: 'Jordan',
+  expertName: 'Amara Okafor',
+  scheduledOn: '20 July 2026',
+};
+
+/** Phrases that would name somebody as the absent party — never in the nobody-joined copy. */
+const ABSENCE_ATTRIBUTION = ["wasn't able to join", "didn't join", 'you missed', "we're sorry"];
+
+describe('session-missed-call-client — nobody on either side joined (clientSideEverPresent: false)', () => {
+  it('email: says the session did not go ahead and names nobody as absent', async () => {
+    const out = getEmailTemplate('session-missed-call-client', {
+      ...MISSED_CALL_DATA,
+      clientSideEverPresent: false,
+    });
+    expect(out.subject).toBe("Your session with Amara Okafor didn't go ahead");
+    const html = clean(await render(out.component));
+    expect(html).toContain('Hi Jordan,');
+    expect(html).toContain('Nobody joined — nothing was charged.');
+    expect(html).toContain('Missed call');
+    expect(html).toContain("Your session didn't go ahead");
+    expect(html).toContain('Nothing has been charged for this one.');
+    expect(html).toContain(
+      "Your session with Amara Okafor scheduled for 20 July 2026 didn't go ahead — neither side joined the call."
+    );
+    expect(html).toContain(
+      'Nothing has been charged, and the funds we set aside are back in your balance.'
+    );
+    expect(html).toContain('View billing →');
+    expect(html).toContain('/settings/billing');
+    expect(html).not.toContain('A$');
+    const lower = `${out.subject} ${html}`.toLowerCase();
+    for (const phrase of [...BLAME_WORDS, ...ABSENCE_ATTRIBUTION]) {
+      expect(lower).not.toContain(phrase);
+    }
+  });
+
+  it('in-app: the neutral title and body, still naming the expert as the other party', () => {
+    const out = getInAppTemplate('session-missed-call-client', {
+      expertName: 'Amara Okafor',
+      clientSideEverPresent: false,
+    });
+    expect(out).toEqual({
+      title: "Your session didn't go ahead",
+      body: 'Nobody joined your session with Amara Okafor. Nothing has been charged, and the funds we set aside are back in your balance.',
+      actionUrl: '/settings/billing',
+    });
+    const lower = `${out.title} ${out.body}`.toLowerCase();
+    for (const phrase of [...BLAME_WORDS, ...ABSENCE_ATTRIBUTION]) {
+      expect(lower).not.toContain(phrase);
+    }
+  });
+});
+
+describe.each([
+  ['the client side was present', { clientSideEverPresent: true }],
+  ['presence is unknown (read failed)', { clientSideEverPresent: null }],
+  ['the payload predates the field', {}],
+])(
+  'session-missed-call-client — %s keeps the apology that names the expert',
+  (_label, presence) => {
+    it('email: the unchanged subject, preview, heading and body', async () => {
+      const out = getEmailTemplate('session-missed-call-client', {
+        ...MISSED_CALL_DATA,
+        ...presence,
+      });
+      expect(out.subject).toBe("We're sorry — your session with Amara Okafor didn't connect");
+      const html = clean(await render(out.component));
+      expect(html).toContain("Amara Okafor wasn't able to join — nothing was charged.");
+      expect(html).toContain("We're sorry — your session didn't connect");
+      expect(html).toContain(
+        "Your session with Amara Okafor scheduled for 20 July 2026 didn't connect — Amara Okafor wasn't able to join."
+      );
+      expect(html).toContain(
+        'Nothing has been charged, and the funds we set aside are back in your balance.'
+      );
+      expect(html).not.toContain("didn't go ahead");
+      expect(html).not.toContain('neither side');
+    });
+
+    it('in-app: the unchanged title and body', () => {
+      const out = getInAppTemplate('session-missed-call-client', {
+        expertName: 'Amara Okafor',
+        ...presence,
+      });
+      expect(out).toEqual({
+        title: "We're sorry — your session didn't connect",
+        body: "Amara Okafor wasn't able to join. Nothing has been charged, and the funds we set aside are back in your balance.",
+        actionUrl: '/settings/billing',
+      });
+    });
+  }
+);
+
+describe('session-missed-call-expert — unchanged when nobody joined', () => {
+  it('ignores clientSideEverPresent on both channels', async () => {
+    const email = getEmailTemplate('session-missed-call-expert', {
+      recipientName: 'Amara',
+      scheduledOn: '20 July 2026',
+      clientSideEverPresent: false,
+    });
+    expect(email.subject).toBe('A consultation was recorded as a missed call');
+    const html = clean(await render(email.component));
+    expect(html).toContain(
+      'Your consultation scheduled for 20 July 2026 was recorded as a missed call — no payment applies.'
+    );
+    expect(
+      getInAppTemplate('session-missed-call-expert', { clientSideEverPresent: false })
+    ).toEqual({
+      title: 'A consultation was recorded as a missed call',
+      body: 'No payment applies for this one. If something went wrong on your end, let us know.',
+      actionUrl: '/settings/earnings',
+    });
+  });
+});

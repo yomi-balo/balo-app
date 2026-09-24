@@ -520,6 +520,7 @@ describe('resolveContext', () => {
         expertProfileId: 'expert-profile-1',
         expertName: 'Jordan Ellis',
         scheduledOn: '16 July 2026',
+        clientSideEverPresent: false,
       });
 
       expect(context.data.user).toEqual({ id: 'user-1', firstName: 'Dana' });
