@@ -326,6 +326,23 @@ describe('MessageComposer', () => {
       expect(sendOrder).toBeLessThan(stopOrder ?? 0);
     });
 
+    it('⚠⚠ a REAL click on Send keeps focus in the box — the send is dispatched BEFORE the stop', async () => {
+      const user = userEvent.setup();
+      const { onSend, onTypingStopped, textarea } = renderTypingComposer();
+
+      await user.type(textarea, 'Hello');
+      // `user.click` moves focus on mousedown, exactly as a browser does — unlike `fireEvent`.
+      await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('Hello'));
+      expect(textarea).toHaveFocus();
+      // No blur stop ahead of the send: exactly one stop, and it follows the send.
+      expect(onTypingStopped).toHaveBeenCalledTimes(1);
+      const [sendOrder] = onSend.mock.invocationCallOrder;
+      const [stopOrder] = onTypingStopped.mock.invocationCallOrder;
+      expect(sendOrder).toBeLessThan(stopOrder ?? 0);
+    });
+
     it('reports onTypingStopped when the send BUTTON sends', async () => {
       const { onSend, onTypingStopped } = renderTypingComposer({ initialValue: 'Hello' });
 

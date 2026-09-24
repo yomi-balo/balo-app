@@ -198,6 +198,25 @@ describe('ChatComposer — ⚠ the typing signals', () => {
     expect(spies.onTypingStopped).toHaveBeenCalledTimes(1);
   });
 
+  it('⚠⚠ a REAL click on Send keeps focus in the box — the send is dispatched BEFORE the stop', async () => {
+    const spies = typingSpies();
+    const onSend = vi.fn().mockReturnValue(new Promise<boolean>(() => {}));
+    renderComposer({ ...spies, onSend });
+    const box = screen.getByLabelText(/message everyone in the call/i);
+
+    await userEvent.type(box, 'Hello');
+    // `userEvent.click` moves focus on mousedown, exactly as a browser does — unlike `fireEvent`.
+    await userEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect(onSend).toHaveBeenCalledWith('Hello');
+    expect(box).toHaveFocus();
+    // No blur stop ahead of the send: exactly one stop, and it follows the send.
+    expect(spies.onTypingStopped).toHaveBeenCalledTimes(1);
+    const [sendOrder] = onSend.mock.invocationCallOrder;
+    const [stopOrder] = spies.onTypingStopped.mock.invocationCallOrder;
+    expect(sendOrder).toBeLessThan(stopOrder ?? 0);
+  });
+
   it('⚠ sending stops the signal — before the send resolves', async () => {
     const spies = typingSpies();
     const onSend = vi.fn().mockReturnValue(new Promise<boolean>(() => {}));

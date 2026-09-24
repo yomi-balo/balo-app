@@ -40,9 +40,10 @@ export interface RelayTypingSignalInput {
  * Order is SESSION → GATE → PUBLISH, and a rate check belongs between the first two (see
  * `send-meeting-reaction.ts`: a limiter placed after the gate makes a refused request cost the
  * reads it exists to protect). The web tier has no shared counter; **BAL-461** is the ticket for
- * one, and it currently names the in-call actions only — these three typing actions must be ADDED
- * to it (they are listed with the others in `send-meeting-reaction.ts`). A throttled typing call
- * must answer quietly: the relay already treats any refusal as "back off", never as an error.
+ * one, and its 2026-09-25 addendum names these three typing actions, their per-call gate cost and
+ * what limiting them requires (they are also listed with the in-call actions in
+ * `send-meeting-reaction.ts`). A throttled typing call must answer quietly: the relay already
+ * treats any refusal as "back off", never as an error.
  *
  * The bound on an HONEST client is structural: per tab and per surface, `typing-relay.ts` keeps
  * one call in flight with the latest signal winning, and backs off after a slow or refused call.

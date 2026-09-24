@@ -203,6 +203,11 @@ export function ChatComposer({
         */}
         <button
           type="button"
+          // ⚠ KEEP FOCUS IN THE TEXTAREA. A real click moves focus on `mousedown`, so the
+          // textarea's blur — which stops the typing signal — would dispatch BEFORE `click` sends
+          // the message, and the post would queue behind that Server Action (Next runs a page's
+          // actions one at a time). Holding focus also keeps the mobile keyboard up mid-call.
+          onMouseDown={(event) => event.preventDefault()}
           onClick={submit}
           aria-label={isSending ? 'Sending…' : 'Send message'}
           aria-disabled={draft.trim().length === 0 || isSending}
