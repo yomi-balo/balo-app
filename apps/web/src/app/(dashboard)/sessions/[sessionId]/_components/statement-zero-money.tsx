@@ -1,6 +1,9 @@
 import { Ban } from 'lucide-react';
 import { durationLine } from '@balo/shared/credit';
-import type { SessionStatementView } from '../_lib/session-statement-view';
+import {
+  statementDurationPresence,
+  type SessionStatementView,
+} from '../_lib/session-statement-view';
 import { STATEMENT_COPY } from '../_lib/statement-copy';
 
 /**
@@ -16,7 +19,7 @@ export function StatementZeroMoney({
   const line =
     view.mode.kind === 'cancelled'
       ? STATEMENT_COPY[view.lens].cancelledLine
-      : durationLine(view.block);
+      : durationLine(view.block, statementDurationPresence(view));
 
   return (
     <div className="mt-8 flex flex-col items-center gap-3 py-6 text-center">

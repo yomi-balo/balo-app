@@ -26,12 +26,16 @@ const m = {
   findRequest: vi.fn(),
   findRelationship: vi.fn(),
   findLiveReview: vi.fn(),
+  presenceFacts: vi.fn(),
 };
 
 vi.mock('@balo/db', () => ({
   isTwoSidedParty: (party: unknown) => party === 'client' || party === 'expert',
   meetingFilesRepository: { listByMeeting: (...a: unknown[]) => m.listFiles(...a) },
   meetingRecordingsRepository: { listByMeeting: (...a: unknown[]) => m.listRecordings(...a) },
+  meetingPresenceRepository: {
+    factsByMeetingIds: (...a: unknown[]) => m.presenceFacts(...a),
+  },
   actionItemsRepository: { listByMeeting: (...a: unknown[]) => m.listActionItems(...a) },
   transcriptsRepository: { findByMeetingId: (...a: unknown[]) => m.findTranscript(...a) },
   creditSessionsRepository: { findIdByMeetingId: (...a: unknown[]) => m.findSession(...a) },
@@ -67,6 +71,7 @@ vi.mock('@/lib/meetings/resolve-recap-access', () => ({
   resolveRecapAccess: (...a: unknown[]) => mockResolveAccess(...a),
 }));
 
+import { log } from '@/lib/logging';
 import { loadRecap } from './load-recap';
 
 const MEETING = {
@@ -176,6 +181,7 @@ function seedRecapMocks(seed: RecapMockSeed = {}): void {
   m.findNames.mockResolvedValue(seed.names ?? []);
   m.findAgency.mockResolvedValue(seed.agency);
   m.findLiveReview.mockResolvedValue(undefined);
+  m.presenceFacts.mockResolvedValue(new Map());
   mockFetchMoneyBlock.mockResolvedValue(null);
 }
 
@@ -347,7 +353,12 @@ describe('loadRecap', () => {
     m.findSession.mockResolvedValue({ id: 'sess-1' });
     mockFetchMoneyBlock.mockRejectedValue(new Error('api down'));
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
-    expect(view?.money).toEqual({ kind: 'session', block: null, elapsedMinutes: 45 });
+    expect(view?.money).toEqual({
+      kind: 'session',
+      block: null,
+      elapsedMinutes: 45,
+      clientSideEverPresent: null,
+    });
   });
 
   it('carries NO money at all on a non-case context', async () => {
@@ -654,5 +665,212 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     m.findRequest.mockResolvedValue(undefined);
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
     expect(view?.header.title).toBe('Discovery call');
+  });
+});
+
+/**
+ * `summarisePresence` output for a meeting — the shape `factsByMeetingIds` maps each id to. The
+ * instants are DISTINCTIVE so the concealment test below can prove none of them is composed.
+ */
+function presenceFacts(clientSideEverPresent: boolean): Map<string, unknown> {
+  return new Map([
+    [
+      MEETING_ID,
+      {
+        expertEverPresent: false,
+        expertOpen: false,
+        clientSideEverPresent,
+        anyOpen: false,
+        lastLeftAt: clientSideEverPresent ? new Date('2031-01-02T03:04:05Z') : null,
+        expertFirstJoinedAt: null,
+      },
+    ],
+  ]);
+}
+
+/** An ended `missed_call` meeting: `started_at` is stamped on `in_progress` only, so it is null. */
+const MISSED_CALL_MEETING = { ...MEETING, outcome: 'missed_call', startedAt: null };
+
+const CLIENT_MISSED_CALL_BLOCK = {
+  lens: 'client',
+  state: 'finalized',
+  sessionId: 'sess-1',
+  durationMinutes: 0,
+  amountAudMinor: 0,
+  ratePerMinuteMinor: 333,
+  settlementStatus: 'not_required',
+  finalizationPath: 'presence',
+  actualMinutes: 0,
+  billingFloorApplied: false,
+  billingFloorMinutes: 15,
+  settlementShape: 'missed_call',
+};
+
+const NOBODY_JOINED_NOT_HELD = {
+  reason: 'nobody_joined',
+  headline: "This one didn't go ahead",
+  body: 'Neither side joined this call.',
+};
+
+describe('loadRecap — missed_call reads client-side presence', () => {
+  beforeEach(() => {
+    seedRecapMocks({
+      profile: AGENCY_PROFILE,
+      user: { firstName: 'Amara', lastName: 'Okafor', avatarUrl: null },
+      names: [{ id: 'u-expert', firstName: 'Amara', lastName: 'Okafor' }],
+      agency: { id: 'agency-1', name: 'CloudPeak', memberCount: 4 },
+    });
+    mockResolveAccess.mockResolvedValue({ ...CASE_ACCESS, meeting: MISSED_CALL_MEETING });
+  });
+
+  it.each([
+    ['ended', 'completed'],
+    ['ended', 'no_show_client'],
+    ['ended', null],
+    ['cancelled', null],
+  ] as const)('reads NO presence for a %s meeting with outcome %s', async (status, outcome) => {
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      meeting: { ...MEETING, status, outcome },
+    });
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    // The render happened — the missing call is not a short-circuit.
+    expect(view).not.toBeNull();
+    expect(m.listFiles).toHaveBeenCalledTimes(1);
+    expect(m.presenceFacts).not.toHaveBeenCalled();
+  });
+
+  it('reads presence ONCE, for exactly this meeting, on a missed_call', async () => {
+    m.presenceFacts.mockResolvedValue(presenceFacts(true));
+    await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(m.presenceFacts).toHaveBeenCalledTimes(1);
+    expect(m.presenceFacts).toHaveBeenCalledWith([MEETING_ID]);
+  });
+
+  it('names NOBODY on the client lens when nobody client-side ever joined', async () => {
+    m.presenceFacts.mockResolvedValue(presenceFacts(false));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens).toBe('client');
+    expect(view?.state).toBe('not_held');
+    expect(view?.header.status.label).toBe('Not held');
+    expect(view?.notHeld).toEqual(NOBODY_JOINED_NOT_HELD);
+  });
+
+  it('names NOBODY on the expert lens when nobody client-side ever joined', async () => {
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      lens: 'expert',
+      meeting: MISSED_CALL_MEETING,
+    });
+    m.presenceFacts.mockResolvedValue(presenceFacts(false));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens).toBe('expert');
+    expect(view?.notHeld).toEqual(NOBODY_JOINED_NOT_HELD);
+  });
+
+  it('keeps naming the expert on the client lens when the client side DID join', async () => {
+    m.presenceFacts.mockResolvedValue(presenceFacts(true));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.notHeld?.body).toBe("Amara Okafor @ CloudPeak wasn't able to join.");
+  });
+
+  it('keeps the expert-lens body when the client side DID join', async () => {
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      lens: 'expert',
+      meeting: MISSED_CALL_MEETING,
+    });
+    m.presenceFacts.mockResolvedValue(presenceFacts(true));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.notHeld?.body).toBe("The call didn't start.");
+  });
+
+  it('FAILS SAFE to the copy naming the expert when the presence read throws, and logs it', async () => {
+    m.findSession.mockResolvedValue({ id: 'sess-1' });
+    mockFetchMoneyBlock.mockResolvedValue(CLIENT_MISSED_CALL_BLOCK);
+    m.presenceFacts.mockRejectedValue(new Error('presence db down'));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view).not.toBeNull();
+    expect(view?.notHeld?.body).toBe("Amara Okafor @ CloudPeak wasn't able to join.");
+    expect(view?.money).toEqual({
+      kind: 'session',
+      block: CLIENT_MISSED_CALL_BLOCK,
+      elapsedMinutes: 0,
+      clientSideEverPresent: null,
+    });
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalledWith(
+      'Recap presence read failed',
+      expect.objectContaining({ meetingId: MEETING_ID, userId: USER_ID, error: 'presence db down' })
+    );
+  });
+
+  it('treats a result WITHOUT this meeting as unknown, never as absent', async () => {
+    m.presenceFacts.mockResolvedValue(new Map());
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.notHeld?.body).toBe("Amara Okafor @ CloudPeak wasn't able to join.");
+  });
+
+  it('hands the presence flag to the session money view', async () => {
+    m.findSession.mockResolvedValue({ id: 'sess-1' });
+    mockFetchMoneyBlock.mockResolvedValue(CLIENT_MISSED_CALL_BLOCK);
+    m.presenceFacts.mockResolvedValue(presenceFacts(false));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.money).toEqual({
+      kind: 'session',
+      block: CLIENT_MISSED_CALL_BLOCK,
+      elapsedMinutes: 0,
+      clientSideEverPresent: false,
+    });
+  });
+
+  it('carries an UNKNOWN presence flag on the money view for any outcome but missed_call', async () => {
+    mockResolveAccess.mockResolvedValue(CASE_ACCESS);
+    m.findSession.mockResolvedValue({ id: 'sess-1' });
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.money).toEqual({
+      kind: 'session',
+      block: null,
+      elapsedMinutes: 45,
+      clientSideEverPresent: null,
+    });
+    expect(m.presenceFacts).not.toHaveBeenCalled();
+  });
+
+  it('reads presence WITHOUT a credit session — the absent money line and a neutral body', async () => {
+    m.presenceFacts.mockResolvedValue(presenceFacts(false));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(m.findSession).toHaveBeenCalledTimes(1);
+    expect(view?.money).toEqual({ kind: 'absent' });
+    expect(view?.notHeld).toEqual(NOBODY_JOINED_NOT_HELD);
+    expect(m.presenceFacts).toHaveBeenCalledWith([MEETING_ID]);
+  });
+
+  it('reads presence on a NON-case context too — every context renders the not-held panel', async () => {
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      subject: { contextType: 'project_discovery', contextId: 'req-1' },
+      meeting: MISSED_CALL_MEETING,
+    });
+    m.findRequest.mockResolvedValue({ title: 'Migrate the CPQ stack' });
+    m.presenceFacts.mockResolvedValue(presenceFacts(false));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.money).toBeNull();
+    expect(view?.notHeld).toEqual(NOBODY_JOINED_NOT_HELD);
+    expect(m.presenceFacts).toHaveBeenCalledWith([MEETING_ID]);
+  });
+
+  it('NEVER lets a presence fact beyond the one boolean reach the view', async () => {
+    m.findSession.mockResolvedValue({ id: 'sess-1' });
+    mockFetchMoneyBlock.mockResolvedValue(CLIENT_MISSED_CALL_BLOCK);
+    m.presenceFacts.mockResolvedValue(presenceFacts(true));
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    const serialised = JSON.stringify(view);
+    // The boolean itself IS carried — so this is not a payload that never saw presence.
+    expect(view?.money).toMatchObject({ clientSideEverPresent: true });
+    expect(serialised).not.toContain('2031');
+    expect(serialised).not.toContain('lastLeftAt');
+    expect(serialised).not.toContain('expertEverPresent');
+    expect(serialised).not.toContain('anyOpen');
   });
 });

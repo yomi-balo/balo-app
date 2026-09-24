@@ -71,7 +71,11 @@ export {
   type ExpertMoneyBlockInput,
   type AdminMoneyBlockInput,
 } from './money-block';
-export { durationLine, finalizedAmountMinor } from './money-block-display';
+export {
+  durationLine,
+  finalizedAmountMinor,
+  type DurationLinePresence,
+} from './money-block-display';
 export {
   type SessionStatementCounterparty,
   type ClientSessionStatementContext,

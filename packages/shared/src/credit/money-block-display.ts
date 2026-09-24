@@ -26,6 +26,15 @@ export function finalizedAmountMinor(block: SessionMoneyBlock): number {
 }
 
 /**
+ * What the caller knows about client-side presence on the session's meeting —
+ * `summarisePresence(...).clientSideEverPresent`, or `null` when it did not read it. Consulted
+ * on the `missed_call` shape only.
+ */
+export interface DurationLinePresence {
+  readonly clientSideEverPresent: boolean | null;
+}
+
+/**
  * BAL-412 (D13, plan §7.3) — the finalized duration line. Keyed on `settlementShape` FIRST (the
  * two zero shapes have no number to attach — there is nothing to floor when nobody was charged)
  * and on `billingFloorApplied` second. `no_show_client` is checked ahead of `billingFloorApplied`
@@ -36,16 +45,27 @@ export function finalizedAmountMinor(block: SessionMoneyBlock): number {
  * Quiet fact, never punitive, never scolding, gender-neutral, no absence framing — the same
  * register as the booking-flow billing line.
  *
- * ⚠ MJ COPY CHECKPOINT — all six strings below are pending MJ sign-off (flagged in the PR body).
+ * ⚠ `missed_call` only means the consultant never joined — the client side may not have either.
+ * The settlement shape cannot say which (a session opens when the call page mints a join grant,
+ * before anyone connects), so the caller passes `clientSideEverPresent` from the presence rows.
+ * Only a KNOWN `false` swaps the client line for the one that names nobody; `null` (not read)
+ * keeps the line that names the consultant, since a client who waited must never be told
+ * nobody turned up. REQUIRED, with no default: every call site states what it knows, so a new
+ * caller cannot fall into the consultant line without deciding to.
+ *
+ * ⚠ MJ COPY CHECKPOINT — every string below is pending MJ sign-off (flagged in the PR body).
  * ⚠ BAL-441 — THIS MOVED FROM `money-block.tsx` (see this module's docblock for why the move is
  * safe against `no-money-block-in-call.test.ts`; that test's scan is a module-specifier match,
  * not a "must stay in React" rule).
  */
-export function durationLine(block: SessionMoneyBlock): string {
+export function durationLine(block: SessionMoneyBlock, presence: DurationLinePresence): string {
   if (block.settlementShape === 'missed_call') {
-    return block.lens === 'client'
-      ? "Not charged — your consultant didn't join this time" // pending-MJ
-      : "No earnings recorded — the call didn't take place"; // pending-MJ
+    if (block.lens === 'expert') {
+      return "No earnings recorded — the call didn't take place"; // pending-MJ
+    }
+    return presence.clientSideEverPresent === false
+      ? 'Not charged — nobody joined this time' // pending-MJ
+      : "Not charged — your consultant didn't join this time"; // pending-MJ
   }
   if (block.settlementShape === 'abandoned_wait') {
     // F12(b), UX review round 1 — `actualMinutes` (the real connected time before the

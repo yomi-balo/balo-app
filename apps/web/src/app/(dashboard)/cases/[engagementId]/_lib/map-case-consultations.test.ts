@@ -34,6 +34,7 @@ const EMPTY_COUNTS: CaseConsultationCounts = {
   meetingIdsWithTranscript: new Set(),
   meetingIdsWithLiveProposal: new Set(),
   guestCountByMeetingId: new Map(),
+  clientSideEverPresentByMeetingId: new Map(),
 };
 
 /** A `now` well before every fixture's default `scheduledStart` — irrelevant to the tests that
@@ -195,6 +196,108 @@ describe('mapCaseConsultations — state derivation', () => {
     expect(rows[0]?.state).not.toBe(rows[1]?.state);
   });
 
+  /**
+   * ⚠ `nobody_joined` IS DERIVED FROM THE LOADER'S PRESENCE MAP, AND ONLY FROM A KNOWN `false`.
+   * An id ABSENT from the map is "unknown" — a read that did not happen or failed — and must
+   * keep `missed_call`, or a client who waited would be told nobody turned up.
+   */
+  describe('nobody_joined — a missed call nobody client-side joined either', () => {
+    const MISSED = { status: 'ended', outcome: 'missed_call' } as const;
+
+    it('maps ended+missed_call with a KNOWN-false client presence → nobody_joined', () => {
+      const [row] = mapCaseConsultations(
+        [meeting({ id: 'm1', ...MISSED })],
+        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', false]]) },
+        NOW,
+        NO_ACTION
+      );
+      expect(row?.state).toBe('nobody_joined');
+    });
+
+    it('keeps missed_call when somebody client-side WAS present', () => {
+      const [row] = mapCaseConsultations(
+        [meeting({ id: 'm1', ...MISSED })],
+        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', true]]) },
+        NOW,
+        NO_ACTION
+      );
+      expect(row?.state).toBe('missed_call');
+    });
+
+    it('keeps missed_call when the meeting is ABSENT from the map — unknown, never "absent"', () => {
+      const [row] = mapCaseConsultations(
+        [meeting({ id: 'm1', ...MISSED })],
+        // A `false` for a DIFFERENT meeting, so a lookup that ignored the id would fail here.
+        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m-other', false]]) },
+        NOW,
+        NO_ACTION
+      );
+      expect(row?.state).toBe('missed_call');
+    });
+
+    it('reads presence PER MEETING — one row of each from a single call', () => {
+      const rows = mapCaseConsultations(
+        [
+          meeting({ id: 'm1', ...MISSED, scheduledStart: new Date('2026-07-01T10:00:00Z') }),
+          meeting({ id: 'm2', ...MISSED, scheduledStart: new Date('2026-07-02T10:00:00Z') }),
+          meeting({ id: 'm3', ...MISSED, scheduledStart: new Date('2026-07-03T10:00:00Z') }),
+        ],
+        {
+          ...EMPTY_COUNTS,
+          clientSideEverPresentByMeetingId: new Map([
+            ['m1', false],
+            ['m2', true],
+          ]),
+        },
+        NOW,
+        NO_ACTION
+      );
+      expect(rows.map((row) => [row.meetingId, row.state])).toEqual([
+        ['m1', 'nobody_joined'],
+        ['m2', 'missed_call'],
+        ['m3', 'missed_call'],
+      ]);
+    });
+
+    it.each([
+      ['ended+completed', { status: 'ended', outcome: 'completed' }, 'held'],
+      ['ended+no_show_client', { status: 'ended', outcome: 'no_show_client' }, 'no_show_client'],
+      ['ended+NULL outcome', { status: 'ended', outcome: null }, 'outcome_pending'],
+      ['cancelled', { status: 'cancelled', outcome: null }, 'cancelled'],
+    ])('ignores a false presence on %s → %s', (_label, row, expected) => {
+      const [mapped] = mapCaseConsultations(
+        [meeting({ id: 'm1', ...(row as Partial<Meeting>) })],
+        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', false]]) },
+        NOW,
+        NO_ACTION
+      );
+      expect(mapped?.state).toBe(expected);
+    });
+
+    it('serializes the LABEL only — no presence fact joins the row', () => {
+      const [row] = mapCaseConsultations(
+        [meeting({ id: 'm1', ...MISSED })],
+        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', false]]) },
+        NOW,
+        NO_ACTION
+      );
+      expect(row?.state).toBe('nobody_joined');
+      expect(row).not.toHaveProperty('clientSideEverPresent');
+      expect(JSON.stringify(row)).not.toMatch(/presen/i);
+    });
+
+    it('keeps the recap link on a nobody_joined row — the not-held panel explains it', () => {
+      const [row] = mapCaseConsultations(
+        [meeting({ id: 'm1', ...MISSED })],
+        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', false]]) },
+        NOW,
+        NO_ACTION
+      );
+      expect(row?.state).toBe('nobody_joined');
+      expect(row?.recapHref).toBe('/meetings/m1?from=case_surface');
+    });
+  });
+
   it('warns when a meeting ENDED with no outcome recorded — it must not be invisible', () => {
     vi.mocked(log.warn).mockClear();
     mapCaseConsultations(
@@ -282,6 +385,7 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
         meetingIdsWithTranscript: new Set(['m1']),
         meetingIdsWithLiveProposal: new Set(),
         guestCountByMeetingId: new Map(),
+        clientSideEverPresentByMeetingId: new Map(),
       },
       NOW,
       NO_ACTION
@@ -531,11 +635,12 @@ describe('mapCaseConsultations — row action flags (canCancel / canReschedule /
   });
 
   /**
-   * BAL-573 — item 17. `canInvite` truth table: 7 of the 8 `CaseConsultationStateLabel` values
+   * BAL-573 — item 17. `canInvite` truth table: 7 of the 9 `CaseConsultationStateLabel` values
    * via `STATE_FIXTURES` (a `(status, outcome)` pair each) × `mayInvite` both ways, plus
-   * `pending_reschedule` in its own case just below — it cannot be reached through `(status,
-   * outcome)` alone, only through `meetingIdsWithLiveProposal` (see
-   * `deriveCaseConsultationState`). True iff `mayInvite && caseConsultationIsUpcoming(state)`.
+   * `pending_reschedule` and `nobody_joined` in their own cases just below — neither can be
+   * reached through `(status, outcome)` alone, only through `meetingIdsWithLiveProposal` /
+   * `clientSideEverPresentByMeetingId` (see `deriveCaseConsultationState`). True iff
+   * `mayInvite && caseConsultationIsUpcoming(state)`.
    */
   describe('canInvite — true iff mayInvite && caseConsultationIsUpcoming(state)', () => {
     const STATE_FIXTURES: readonly [string, Partial<Meeting>][] = [
@@ -582,6 +687,18 @@ describe('mapCaseConsultations — row action flags (canCancel / canReschedule /
       );
       expect(row?.state).toBe('pending_reschedule');
       expect(row?.canInvite).toBe(true);
+    });
+
+    it('the 9th state — nobody_joined, reached only via clientSideEverPresentByMeetingId — is NOT invitable', () => {
+      const [row] = mapCaseConsultations(
+        [meeting({ id: 'm1', status: 'ended', outcome: 'missed_call' })],
+        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', false]]) },
+        NOW,
+        CLIENT_MAY_ACT
+      );
+      expect(row?.state).toBe('nobody_joined');
+      expect(row?.canInvite).toBe(false);
+      expect(row?.live).toBe(false);
     });
   });
 

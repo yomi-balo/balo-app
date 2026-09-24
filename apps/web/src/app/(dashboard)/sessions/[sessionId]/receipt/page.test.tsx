@@ -69,6 +69,7 @@ const CLIENT_VIEW: SessionStatementView = {
   title: 'Static analysis walkthrough',
   counterparty: { name: 'Priya Sharma', orgLabel: 'CloudPeak Consulting' },
   meetingId: 'meeting_1',
+  clientSideEverPresent: null,
   block: {
     lens: 'client',
     state: 'finalized',

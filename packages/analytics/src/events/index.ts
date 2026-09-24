@@ -189,6 +189,9 @@ export {
   // BAL-440 — the recording posture dimension on `recap_viewed`, and `deriveRecordingState`'s
   // (apps/web) return type.
   type RecapRecordingState,
+  // Why the recap rendered its not-held panel — `recap_viewed.not_held_reason`, and the
+  // `RecapNotHeldView.reason` type `apps/web` aliases.
+  type RecapNotHeldReason,
   // BAL-567 — the `/cases` index dimensions. The two TUPLES are runtime values (the guard test
   // pins their exact ordered membership); the three types are derived from them.
   CASES_INDEX_TARGETS,

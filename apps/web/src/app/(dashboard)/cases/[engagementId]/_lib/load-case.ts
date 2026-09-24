@@ -11,6 +11,7 @@ import {
   expertsRepository,
   meetingContextsRepository,
   meetingGuestsRepository,
+  meetingPresenceRepository,
   partyDomainsRepository,
   rescheduleProposalsRepository,
   transcriptsRepository,
@@ -666,7 +667,13 @@ export const loadCase = cache(
       occurredAt: meeting.startedAt ?? meeting.scheduledStart,
     }));
 
-    const [labels, fileResult, transcriptMeetingIds, liveProposals] = await Promise.all([
+    const [
+      labels,
+      fileResult,
+      transcriptMeetingIds,
+      liveProposals,
+      clientSideEverPresentByMeetingId,
+    ] = await Promise.all([
       resolveCounterparty(lens, profile, clientCompanyName),
       loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
       readTranscriptMeetingIds(meetings),
@@ -674,6 +681,7 @@ export const loadCase = cache(
       rescheduleProposalsRepository.findLivePendingByMeetingIds(
         meetings.map((meeting) => meeting.id)
       ),
+      readClientSideEverPresent(meetings),
     ]);
 
     // ⚠ LIVENESS (expiry) IS DECIDED HERE, ONCE, via `rescheduleProposalIsLive` — the read
@@ -698,6 +706,9 @@ export const loadCase = cache(
         status: meeting.status,
         outcome: meeting.outcome,
         hasLiveRescheduleProposal: meetingIdsWithLiveProposal.has(meeting.id),
+        // The same value the consultation row derives from, so this `state` never disagrees
+        // with the row's own label — even though only `caseConsultationIsUpcoming` reads it.
+        clientSideEverPresent: clientSideEverPresentByMeetingId.get(meeting.id) ?? null,
       }),
     }));
 
@@ -840,6 +851,7 @@ export const loadCase = cache(
         meetingIdsWithTranscript: transcriptMeetingIds,
         meetingIdsWithLiveProposal,
         guestCountByMeetingId,
+        clientSideEverPresentByMeetingId,
       },
       now,
       {
@@ -1170,6 +1182,9 @@ async function resolveRescheduleProposalViews(
           status: meeting.status,
           outcome: meeting.outcome,
           hasLiveRescheduleProposal: true,
+          // Presence is not read here: it only splits `missed_call` from `nobody_joined`, and
+          // neither is upcoming — the one question this state answers.
+          clientSideEverPresent: null,
         });
         return caseConsultationIsUpcoming(state);
       })
@@ -1306,6 +1321,9 @@ function selectNextScheduled(
         status: meeting.status,
         outcome: meeting.outcome,
         hasLiveRescheduleProposal: meetingIdsWithLiveProposal.has(meeting.id),
+        // Presence is not read here: it only splits `missed_call` from `nobody_joined`, and
+        // neither is upcoming — the one question this state answers.
+        clientSideEverPresent: null,
       });
       // BAL-411 — `caseConsultationIsUpcoming`, NOT a hand-rolled `'scheduled' | 'in_progress'`
       // check: it ALSO admits `pending_reschedule`, so a meeting carrying a live proposal is
@@ -1373,5 +1391,44 @@ async function readTranscriptMeetingIds(
       error: errorMessage(error),
     });
     return new Set();
+  }
+}
+
+/**
+ * `clientSideEverPresent` for each of this case's `ended` + `missed_call` consultations — the
+ * one fact that separates `nobody_joined` from a `missed_call` somebody client-side waited
+ * through (`deriveCaseConsultationState`). Reduced to a boolean HERE, so no presence row and no
+ * other `PresenceFacts` field reaches the mapper or the view.
+ *
+ * ⚠ READ ONLY WHERE IT CAN CHANGE A LABEL. Presence decides nothing on any other consultation,
+ * so a case with no missed call — most cases — makes no query at all. ONE query for the rest,
+ * never one per consultation.
+ *
+ * ⚠ A FAILED READ IS "UNKNOWN", NEVER "NOBODY CAME". Unlike `readTranscriptMeetingIds`, an
+ * empty SET here would not be a harmless degradation: read as "no client-side presence", it
+ * would turn every missed call into "Nobody joined" and clear an expert whose client really
+ * waited. The failure returns an EMPTY MAP instead, which the mapper reads as `null` for every
+ * meeting — the `missed_call` label and its existing copy.
+ */
+async function readClientSideEverPresent(
+  meetings: readonly Meeting[]
+): Promise<ReadonlyMap<string, boolean>> {
+  const missedCallIds = meetings
+    .filter((meeting) => meeting.status === 'ended' && meeting.outcome === 'missed_call')
+    .map((meeting) => meeting.id);
+  if (missedCallIds.length === 0) return new Map();
+
+  try {
+    const factsByMeetingId = await meetingPresenceRepository.factsByMeetingIds(missedCallIds);
+    return new Map(
+      [...factsByMeetingId].map(([meetingId, facts]) => [meetingId, facts.clientSideEverPresent])
+    );
+  } catch (error) {
+    log.error('Case surface presence lookup failed', {
+      meetingCount: missedCallIds.length,
+      error: errorMessage(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return new Map();
   }
 }

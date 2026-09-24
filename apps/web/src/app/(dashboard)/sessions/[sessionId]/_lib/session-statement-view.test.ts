@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionStatement } from '@balo/shared/credit';
-import { toSessionStatementView, isStatementDownloadable } from './session-statement-view';
+import {
+  toSessionStatementView,
+  isStatementDownloadable,
+  statementDurationPresence,
+} from './session-statement-view';
 
 const CLIENT_MONEY: SessionStatement = {
   lens: 'client',
@@ -22,6 +26,7 @@ const CLIENT_MONEY: SessionStatement = {
     counterparty: { name: 'Priya Sharma', orgLabel: 'CloudPeak Consulting' },
     meetingId: 'meeting_1',
     cancelled: false,
+    clientSideEverPresent: null,
   },
 };
 
@@ -110,6 +115,56 @@ describe('toSessionStatementView', () => {
     expect(view.title).toBe('Static analysis walkthrough');
     expect(view.counterparty).toEqual({ name: 'Priya Sharma', orgLabel: 'CloudPeak Consulting' });
     expect(view.meetingId).toBe('meeting_1');
+  });
+});
+
+describe('toSessionStatementView — client-side presence', () => {
+  it.each([false, true])(
+    'carries clientSideEverPresent: %s onto the client view unchanged',
+    (clientSideEverPresent) => {
+      const view = toSessionStatementView({
+        ...CLIENT_ZERO,
+        context: { ...CLIENT_ZERO.context, clientSideEverPresent },
+      } as SessionStatement);
+      if (view.lens !== 'client') throw new Error('expected client lens');
+      expect(view.clientSideEverPresent).toBe(clientSideEverPresent);
+    }
+  );
+
+  it('a wire payload WITHOUT the field (an api build that predates it) reads as unknown (null)', () => {
+    const legacyContext: Record<string, unknown> = { ...CLIENT_ZERO.context };
+    delete legacyContext.clientSideEverPresent;
+    const view = toSessionStatementView({
+      ...CLIENT_ZERO,
+      context: legacyContext,
+    } as unknown as SessionStatement);
+    if (view.lens !== 'client') throw new Error('expected client lens');
+    expect(view).toHaveProperty('clientSideEverPresent', null);
+  });
+
+  it('the expert arm carries no clientSideEverPresent key', () => {
+    const view = toSessionStatementView(EXPERT_MONEY);
+    expect(view.lens).toBe('expert');
+    expect(view).not.toHaveProperty('clientSideEverPresent');
+  });
+});
+
+describe('statementDurationPresence', () => {
+  it.each([false, true, null])(
+    'hands the client view’s clientSideEverPresent (%s) to durationLine',
+    (clientSideEverPresent) => {
+      const view = toSessionStatementView({
+        ...CLIENT_ZERO,
+        context: { ...CLIENT_ZERO.context, clientSideEverPresent },
+      });
+      expect(statementDurationPresence(view)).toEqual({ clientSideEverPresent });
+    }
+  );
+
+  it('reports presence as NOT READ on the expert view', () => {
+    expect(statementDurationPresence(toSessionStatementView(EXPERT_MONEY))).toEqual({
+      clientSideEverPresent: null,
+    });
   });
 });
 

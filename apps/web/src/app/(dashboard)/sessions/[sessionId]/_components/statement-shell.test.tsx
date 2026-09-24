@@ -21,6 +21,7 @@ const CLIENT_MONEY: SessionStatementView = {
   title: 'Static analysis walkthrough',
   counterparty: { name: 'Priya Sharma', orgLabel: 'CloudPeak Consulting' },
   meetingId: 'meeting_1',
+  clientSideEverPresent: null,
   block: {
     lens: 'client',
     state: 'finalized',
@@ -93,6 +94,19 @@ describe('StatementShell', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Download/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/A record of/)).not.toBeInTheDocument();
+  });
+
+  it('renders the line that names nobody when nobody on the client side joined either', () => {
+    const view: SessionStatementView = {
+      ...CLIENT_MONEY,
+      mode: { kind: 'zero' },
+      block: { ...CLIENT_MONEY.block, settlementShape: 'missed_call' },
+      clientSideEverPresent: false,
+    };
+    render(<StatementShell view={view} />);
+    expect(screen.getByText('Not charged — nobody joined this time')).toBeInTheDocument();
+    expect(screen.queryByText(/your consultant didn't join/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Download/ })).not.toBeInTheDocument();
   });
 
   it('renders the pending composition with no line items and no download link', () => {

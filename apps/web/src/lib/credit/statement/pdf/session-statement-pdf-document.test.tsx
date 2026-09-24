@@ -26,6 +26,7 @@ const CLIENT_MONEY: SessionStatementView = {
     billingFloorApplied: false,
     billingFloorMinutes: 0,
   },
+  clientSideEverPresent: null,
 };
 
 const EXPERT_MONEY: SessionStatementView = {

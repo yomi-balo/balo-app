@@ -117,34 +117,69 @@ const EXPERT_ABANDONED_WAIT: SessionMoneyBlock = {
   settlementShape: 'abandoned_wait',
 };
 
+/** Presence not read — the default a caller must now state explicitly. */
+const NOT_READ = { clientSideEverPresent: null } as const;
+
 describe('durationLine', () => {
   it('renders a bare duration line with no floor and no settlement shape', () => {
-    expect(durationLine(CLIENT_FINALIZED)).toBe('45 min');
-    expect(durationLine(EXPERT_FINALIZED)).toBe('45 min');
+    expect(durationLine(CLIENT_FINALIZED, NOT_READ)).toBe('45 min');
+    expect(durationLine(EXPERT_FINALIZED, NOT_READ)).toBe('45 min');
   });
 
   it('renders the split "actual · billed/paid at the floor" line when the floor bound', () => {
-    expect(durationLine(CLIENT_FLOOR_APPLIED)).toBe('6 min · billed at the 15-minute minimum');
-    expect(durationLine(EXPERT_FLOOR_APPLIED)).toBe('6 min · paid the 15-minute minimum');
+    expect(durationLine(CLIENT_FLOOR_APPLIED, NOT_READ)).toBe(
+      '6 min · billed at the 15-minute minimum'
+    );
+    expect(durationLine(EXPERT_FLOOR_APPLIED, NOT_READ)).toBe('6 min · paid the 15-minute minimum');
   });
 
   it('renders the no-show line keyed on shape, using actualMinutes not durationMinutes', () => {
-    expect(durationLine(CLIENT_NO_SHOW)).toBe('18 min held · billed at the 15-minute minimum');
-    expect(durationLine(EXPERT_NO_SHOW)).toBe('18 min held · paid the 15-minute minimum');
+    expect(durationLine(CLIENT_NO_SHOW, NOT_READ)).toBe(
+      '18 min held · billed at the 15-minute minimum'
+    );
+    expect(durationLine(EXPERT_NO_SHOW, NOT_READ)).toBe('18 min held · paid the 15-minute minimum');
   });
 
   it('renders the missed-call line, per lens', () => {
-    expect(durationLine(CLIENT_MISSED_CALL)).toBe(
+    expect(durationLine(CLIENT_MISSED_CALL, NOT_READ)).toBe(
       "Not charged — your consultant didn't join this time"
     );
-    expect(durationLine(EXPERT_MISSED_CALL)).toBe(
+    expect(durationLine(EXPERT_MISSED_CALL, NOT_READ)).toBe(
       "No earnings recorded — the call didn't take place"
     );
   });
 
+  it('names nobody on the client lens when NO client-side participant was ever present', () => {
+    expect(durationLine(CLIENT_MISSED_CALL, { clientSideEverPresent: false })).toBe(
+      'Not charged — nobody joined this time'
+    );
+  });
+
+  it('keeps the consultant line when the client side was present, or presence is unknown', () => {
+    const consultantLine = "Not charged — your consultant didn't join this time";
+    expect(durationLine(CLIENT_MISSED_CALL, { clientSideEverPresent: true })).toBe(consultantLine);
+    expect(durationLine(CLIENT_MISSED_CALL, { clientSideEverPresent: null })).toBe(consultantLine);
+  });
+
+  it('keeps the expert missed-call line whatever the client-side presence', () => {
+    for (const clientSideEverPresent of [false, true, null]) {
+      expect(durationLine(EXPERT_MISSED_CALL, { clientSideEverPresent })).toBe(
+        "No earnings recorded — the call didn't take place"
+      );
+    }
+  });
+
+  it('ignores client-side presence on every non-missed-call shape', () => {
+    for (const block of [CLIENT_FINALIZED, CLIENT_NO_SHOW, CLIENT_ABANDONED_WAIT]) {
+      expect(durationLine(block, { clientSideEverPresent: false })).toBe(
+        durationLine(block, NOT_READ)
+      );
+    }
+  });
+
   it('renders the abandoned-wait line, per lens, WITHOUT actualMinutes', () => {
-    expect(durationLine(CLIENT_ABANDONED_WAIT)).toBe('Not charged');
-    expect(durationLine(EXPERT_ABANDONED_WAIT)).toBe('No earnings recorded');
+    expect(durationLine(CLIENT_ABANDONED_WAIT, NOT_READ)).toBe('Not charged');
+    expect(durationLine(EXPERT_ABANDONED_WAIT, NOT_READ)).toBe('No earnings recorded');
   });
 });
 

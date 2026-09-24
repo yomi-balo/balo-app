@@ -21,6 +21,7 @@ import { useAbsoluteConsultationTime } from '@/hooks/use-consultation-time-label
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
+import { NOBODY_JOINED_LABEL, NOBODY_JOINED_NOTE } from '@/lib/meetings/nobody-joined-copy';
 import type {
   CaseConsultationRowView,
   CaseConsultationStateLabel,
@@ -135,10 +136,15 @@ const TONE_VARIANT: Readonly<
  *
  * ⚠⚠ `no_show_client` AND `missed_call` ARE SEPARATE ENTRIES WITH DIFFERENT COPY. They are
  * genuinely different events — `no_show_client` means the expert waited and nobody
- * client-side arrived; `missed_call` means THE EXPERT NEVER JOINED (`meetingOutcomeEnum`,
- * `enums.ts:611-613` — NOT "the call never connected", which reads as nobody's fault).
- * Folding them into one "not held" label would tell the wronged party that the call failed
- * without saying who failed to show, which is the single most load-bearing fact in the row.
+ * client-side arrived; `missed_call` means THE EXPERT NEVER JOINED (`meetingOutcomeEnum` in
+ * `enums.ts` — NOT "the call never connected", which reads as nobody's fault) while somebody
+ * client-side did, or while that is unknown. Folding them into one "not held" label would tell
+ * the wronged party that the call failed without saying who failed to show, which is the
+ * single most load-bearing fact in the row.
+ *
+ * ⚠ `nobody_joined` IS THE ONE NOT-HELD STATE WITH NO WRONGED PARTY — the expert never joined
+ * AND nobody client-side did. It takes the `muted` tone `cancelled` and `outcome_pending` use,
+ * never `warning`: there is no absence to flag to either reader.
  *
  * ⚠ `outcome_pending` IS REPRESENTABLE, NOT IMPOSSIBLE. `meeting_outcome_requires_ended` is
  * one-directional, so `ended` with a NULL outcome is legal. It renders neutrally rather than
@@ -155,6 +161,7 @@ const STATE_PRESENTATION: Readonly<
   held: { icon: Video, muted: false, tone: 'success' },
   no_show_client: { icon: CircleSlash, muted: true, tone: 'warning' },
   missed_call: { icon: CircleSlash, muted: true, tone: 'warning' },
+  nobody_joined: { icon: CircleSlash, muted: true, tone: 'muted' },
   cancelled: { icon: CircleSlash, muted: true, tone: 'muted' },
   outcome_pending: { icon: CircleSlash, muted: true, tone: 'muted' },
 };
@@ -182,6 +189,9 @@ const FORWARD_LOOKING: ReadonlySet<CaseConsultationStateLabel> = new Set([
  * ⚠ Never second person, and never name the reader as the one who failed — `stateNote`'s
  * `missed_call` arm is impersonal for exactly this reason. The party who missed it reads a
  * statement of the event; the other party reads who was absent.
+ *
+ * ⚠ `nobody_joined` is NOT lens-aware: neither side joined, so there is no "other party" to
+ * name, and both lenses read the same words the recap's not-held panel uses.
  */
 /** `pending_reschedule` deliberately keeps its own pill inside the join window too — its
  *  Cancel-only state there is a different reason than the join window. */
@@ -205,6 +215,8 @@ function stateLabel(
     case 'missed_call':
       // The EXPERT never joined: impersonal for the expert, explicit for the client.
       return lens === 'expert' ? "Didn't start" : "Expert didn't join";
+    case 'nobody_joined':
+      return NOBODY_JOINED_LABEL;
     case 'cancelled':
       return 'Cancelled';
     case 'outcome_pending':
@@ -237,20 +249,25 @@ function stateNote(
         ? `${counterpartyLabel} waited — billed at the minimum`
         : "Client didn't join — settled at the minimum";
     case 'missed_call':
-      // ⚠ `missed_call` = THE EXPERT NEVER JOINED (`meetingOutcomeEnum`, `enums.ts:611-613`)
-      // — the mirror image of `no_show_client`, so it is LENS-AWARE for the same reason.
-      // Strings taken verbatim from the shipped recap (`resolve-recap-state.ts:178-185`) so
-      // the two surfaces cannot drift, and they carry its two deliberate rules:
+      // ⚠ `missed_call` = THE EXPERT NEVER JOINED (`meetingOutcomeEnum` in `enums.ts`) while
+      // somebody client-side did, or while that is unknown — the mirror image of
+      // `no_show_client`, so it is LENS-AWARE for the same reason. Strings taken from the
+      // recap's not-held panel (`resolveNotHeld` in `resolve-recap-state.ts`), and they carry
+      // its two deliberate rules:
       //   · NON-SCOLDING — an expert reading their OWN `missed_call` is never told they
       //     failed, which is why the expert arm is impersonal, not "you didn't join".
       //   · NO MONEY PROSE — the recap DELETED it rather than reworded it (there is no
-      //     no-show-policy page to link to), and no settlement path reads `missed_call`
-      //     today, so a "nothing was charged" line here would assert an unverified fact.
-      //     This is why it reads asymmetrically against `no_show_client` above, which has a
-      //     settled money story (BAL-412) and states it.
+      //     no-show-policy page to link to). What a missed call settles to is the money
+      //     block's to state (`durationLine`, on the recap and the receipt), never this row's.
+      //     This is why it reads asymmetrically against `no_show_client` above, which states
+      //     its settled minimum (BAL-412).
       return lens === 'client'
         ? `${counterpartyLabel} wasn't able to join`
         : "The call didn't start";
+    case 'nobody_joined':
+      // Neither side joined: one neutral sentence for both lenses that names nobody — no
+      // counterparty, no second person — and, like `missed_call`, no money prose.
+      return NOBODY_JOINED_NOTE;
     case 'outcome_pending':
       return 'Outcome not recorded';
     default:
@@ -336,11 +353,11 @@ function ConsultationRow({
         </div>
 
         {/* ⚠ THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'`. `recapHrefOf` emits a
-            href for every terminal OUTCOME (no_show_client, missed_call, outcome_pending), so
-            the not-held panel it lands on (`resolveNotHeld`) is reachable — but not for
-            `cancelled`, whose recap has no money block or artifacts to show. CONTENT
-            INDICATORS below still gate on `held`: a transcript or file count on a call that
-            never happened would promise artefacts that cannot exist. */}
+            href for every terminal OUTCOME (no_show_client, missed_call, nobody_joined,
+            outcome_pending), so the not-held panel it lands on (`resolveNotHeld`) is
+            reachable — but not for `cancelled`, whose recap has no money block or artifacts
+            to show. CONTENT INDICATORS below still gate on `held`: a transcript or file count
+            on a call that never happened would promise artefacts that cannot exist. */}
         {(row.recapHref !== null || row.state === 'held') && (
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             {row.recapHref !== null && (

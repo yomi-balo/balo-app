@@ -114,6 +114,7 @@ export function resolveRescheduleNote(
     status: row.status,
     outcome: null,
     hasLiveRescheduleProposal: true,
+    clientSideEverPresent: null,
   });
   if (state !== 'pending_reschedule') {
     return null;

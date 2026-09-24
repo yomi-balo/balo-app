@@ -139,32 +139,83 @@ describe('resolveMoneyView — RULE M', () => {
   };
 
   it('M1 — NO credit_sessions row gives the absent branch, keyed on absence not on a policy', () => {
-    expect(resolveMoneyView({ hasSession: false, block: null, elapsedMinutes: 0 })).toEqual({
-      kind: 'absent',
-    });
+    expect(
+      resolveMoneyView({
+        hasSession: false,
+        block: null,
+        elapsedMinutes: 0,
+        clientSideEverPresent: null,
+      })
+    ).toEqual({ kind: 'absent' });
+  });
+
+  it('M1 stays the absent branch when presence is known — nothing about presence is carried', () => {
+    expect(
+      resolveMoneyView({
+        hasSession: false,
+        block: null,
+        elapsedMinutes: 0,
+        clientSideEverPresent: false,
+      })
+    ).toEqual({ kind: 'absent' });
   });
 
   it('M2 — a PENDING row gives the shipped fragment, with the elapsed minutes', () => {
-    expect(resolveMoneyView({ hasSession: true, block: PENDING, elapsedMinutes: 12 })).toEqual({
+    expect(
+      resolveMoneyView({
+        hasSession: true,
+        block: PENDING,
+        elapsedMinutes: 12,
+        clientSideEverPresent: null,
+      })
+    ).toEqual({
       kind: 'session',
       block: PENDING,
       elapsedMinutes: 12,
+      clientSideEverPresent: null,
     });
   });
 
   it('M3 — a FINALIZED row gives the shipped fragment, figure passed straight through', () => {
-    const out = resolveMoneyView({ hasSession: true, block: FINALIZED, elapsedMinutes: 45 });
+    const out = resolveMoneyView({
+      hasSession: true,
+      block: FINALIZED,
+      elapsedMinutes: 45,
+      clientSideEverPresent: null,
+    });
     expect(out.kind).toBe('session');
     expect(out).toMatchObject({ block: { state: 'finalized' } });
   });
 
+  it.each([true, false, null] as const)(
+    'carries clientSideEverPresent=%s on the session branch, unchanged',
+    (clientSideEverPresent) => {
+      expect(
+        resolveMoneyView({
+          hasSession: true,
+          block: FINALIZED,
+          elapsedMinutes: 0,
+          clientSideEverPresent,
+        })
+      ).toEqual({ kind: 'session', block: FINALIZED, elapsedMinutes: 0, clientSideEverPresent });
+    }
+  );
+
   it('a FAILED block fetch stays the SESSION branch with a null block, never the absent line', () => {
     // The fragment owns its own muted fallback. Reporting a fetch failure as
     // no-consultation-charge would be a different, and false, claim.
-    expect(resolveMoneyView({ hasSession: true, block: null, elapsedMinutes: 3 })).toEqual({
+    expect(
+      resolveMoneyView({
+        hasSession: true,
+        block: null,
+        elapsedMinutes: 3,
+        clientSideEverPresent: null,
+      })
+    ).toEqual({
       kind: 'session',
       block: null,
       elapsedMinutes: 3,
+      clientSideEverPresent: null,
     });
   });
 });
@@ -173,6 +224,7 @@ describe('resolveNotHeld', () => {
   const base = {
     expertPersonLabel: 'Amara @ CloudPeak',
     clientCompanyName: 'Northwind Industrial',
+    clientSideEverPresent: null,
   };
 
   it('returns null for a meeting that was actually held', () => {
@@ -214,7 +266,7 @@ describe('resolveNotHeld', () => {
       lens: 'client',
       ...base,
     });
-    expect(out?.body).toMatch(/wasn.t able to join/);
+    expect(out?.body).toBe("Amara @ CloudPeak wasn't able to join.");
   });
 
   it('missed_call on the EXPERT lens NEVER tells the expert they failed', () => {
@@ -224,18 +276,83 @@ describe('resolveNotHeld', () => {
       lens: 'expert',
       ...base,
     });
-    expect(out?.body).toMatch(/The call didn.t start/);
+    expect(out?.body).toBe("The call didn't start.");
     expect(out?.body).not.toMatch(/you/i);
   });
 
+  // ── missed_call × client-side presence. `null` (unknown / read failed) and `true` (the
+  // client side waited) both keep the bodies above; only a KNOWN `false` names nobody. ─────
+  it.each([
+    ['client', null, "Amara @ CloudPeak wasn't able to join."],
+    ['client', true, "Amara @ CloudPeak wasn't able to join."],
+    ['expert', null, "The call didn't start."],
+    ['expert', true, "The call didn't start."],
+  ] as const)(
+    'missed_call on the %s lens with clientSideEverPresent=%s keeps its body',
+    (lens, clientSideEverPresent, body) => {
+      const out = resolveNotHeld({
+        status: 'ended',
+        outcome: 'missed_call',
+        lens,
+        ...base,
+        clientSideEverPresent,
+      });
+      expect(out).toEqual({ reason: 'missed_call', headline: "This one didn't go ahead", body });
+    }
+  );
+
+  it.each(['client', 'expert'] as const)(
+    'missed_call with NOBODY client-side on the %s lens names nobody — not the expert, not the reader',
+    (lens) => {
+      const out = resolveNotHeld({
+        status: 'ended',
+        outcome: 'missed_call',
+        lens,
+        ...base,
+        clientSideEverPresent: false,
+      });
+      expect(out).toEqual({
+        reason: 'nobody_joined',
+        headline: "This one didn't go ahead",
+        body: 'Neither side joined this call.',
+      });
+      expect(out?.body).not.toMatch(/Amara|CloudPeak|Northwind/);
+      expect(out?.body).not.toMatch(/\byou(r)?\b/i);
+    }
+  );
+
+  it('presence is consulted on missed_call ONLY — a no-show body ignores it', () => {
+    const out = resolveNotHeld({
+      status: 'ended',
+      outcome: 'no_show_client',
+      lens: 'client',
+      ...base,
+      clientSideEverPresent: false,
+    });
+    expect(out?.body).toBe('Amara @ CloudPeak joined and waited.');
+    expect(
+      resolveNotHeld({
+        status: 'ended',
+        outcome: 'completed',
+        lens: 'client',
+        ...base,
+        clientSideEverPresent: false,
+      })
+    ).toBeNull();
+  });
+
   it('uses ONE shared headline across every cell, and never names the absentee', () => {
+    const nobody = { ...base, clientSideEverPresent: false };
     const cells = [
       resolveNotHeld({ status: 'ended', outcome: 'no_show_client', lens: 'client', ...base }),
       resolveNotHeld({ status: 'ended', outcome: 'no_show_client', lens: 'expert', ...base }),
       resolveNotHeld({ status: 'ended', outcome: 'missed_call', lens: 'client', ...base }),
       resolveNotHeld({ status: 'ended', outcome: 'missed_call', lens: 'expert', ...base }),
+      resolveNotHeld({ status: 'ended', outcome: 'missed_call', lens: 'client', ...nobody }),
+      resolveNotHeld({ status: 'ended', outcome: 'missed_call', lens: 'expert', ...nobody }),
       resolveNotHeld({ status: 'cancelled', outcome: null, lens: 'expert', ...base }),
     ];
+    expect(cells).toHaveLength(7);
     for (const cell of cells) {
       expect(cell?.headline).toMatch(/didn.t go ahead/);
       expect(cell?.headline).not.toMatch(/Amara|Northwind/);
@@ -244,7 +361,7 @@ describe('resolveNotHeld', () => {
 });
 
 describe('resolveRecapState — all six values', () => {
-  const notHeld = (reason: 'no_show_client' | 'cancelled') => ({
+  const notHeld = (reason: 'no_show_client' | 'nobody_joined' | 'cancelled') => ({
     reason,
     headline: 'h',
     body: 'b',
@@ -259,6 +376,12 @@ describe('resolveRecapState — all six values', () => {
   it('not_held', () => {
     expect(
       resolveRecapState({ notHeld: notHeld('no_show_client'), artifacts: READY_ARTIFACTS })
+    ).toBe('not_held');
+  });
+
+  it('not_held for a nobody-joined meeting too — the reason is its own dimension', () => {
+    expect(
+      resolveRecapState({ notHeld: notHeld('nobody_joined'), artifacts: READY_ARTIFACTS })
     ).toBe('not_held');
   });
 

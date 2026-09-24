@@ -1270,11 +1270,25 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // BAL-412 (ADR-1044 §7) missed call — the acting MEMBER (recipient 'self'). APOLOGETIC
   // register: Balo failed to connect them, nothing was charged, the hold is back in their
   // balance. Carries NO figure (nothing was charged) — nothing to conceal.
+  //
+  // ⚠ `missed_call` only records that the expert never joined. When the payload's
+  // `clientSideEverPresent` is a KNOWN `false`, nobody on the client side joined either, so the
+  // notice is NEUTRAL and names nobody as absent — the email's `missedCallClientCopy` rule.
+  // `true`, `null` (presence read failed) and an absent field keep the apology.
   'session-missed-call-client': (data) => {
     const expertName = (data.expertName as string) ?? 'your expert';
+    const released =
+      'Nothing has been charged, and the funds we set aside are back in your balance.';
+    if (data.clientSideEverPresent === false) {
+      return {
+        title: "Your session didn't go ahead",
+        body: `Nobody joined your session with ${expertName}. ${released}`,
+        actionUrl: '/settings/billing',
+      };
+    }
     return {
       title: "We're sorry — your session didn't connect",
-      body: `${expertName} wasn't able to join. Nothing has been charged, and the funds we set aside are back in your balance.`,
+      body: `${expertName} wasn't able to join. ${released}`,
       actionUrl: '/settings/billing',
     };
   },

@@ -269,6 +269,22 @@ export type RecapCta = 'book_again' | 'case_resolved';
  */
 export type RecapRecordingState = 'absent' | 'processing' | 'ready' | 'failed';
 
+/**
+ * WHY a recap rendered its not-held panel, for `recap_viewed.not_held_reason`. `recap_state`
+ * folds every not-held meeting into `'not_held'`, which hides who didn't turn up.
+ *
+ *   · `no_show_client` — the expert waited; nobody client-side arrived.
+ *   · `missed_call`    — the delivering expert never joined, and somebody client-side did (or
+ *                        presence is unknown — a failed read keeps this value, never a guess).
+ *   · `nobody_joined`  — the delivering expert never joined AND nobody client-side did. The
+ *                        `meeting_outcome` is still `missed_call`; this is read from presence.
+ *   · `cancelled`      — the meeting was cancelled (also `recap_state: 'cancelled'`).
+ *
+ * Every value has a producer: `resolveNotHeld` in `apps/web`, whose `RecapNotHeldView.reason`
+ * IS this type (aliased there, not restated).
+ */
+export type RecapNotHeldReason = 'no_show_client' | 'missed_call' | 'nobody_joined' | 'cancelled';
+
 // ── Client (browser `track`) ──────────────────────────────────────────────
 export const RECAP_EVENTS = {
   /** The transcript section was expanded. */
@@ -433,6 +449,12 @@ export interface RecapServerEventMap {
     resolve_prompt_variant: RecapResolvePromptVariant;
     /** BAL-440 — the meeting's recording posture at render time. See {@link RecapRecordingState}. */
     recording_state: RecapRecordingState;
+    /**
+     * Why the not-held panel rendered, or `'none'` when the meeting was held. See
+     * {@link RecapNotHeldReason} — this is what separates a nobody-joined meeting from a missed
+     * call that somebody client-side waited through.
+     */
+    not_held_reason: RecapNotHeldReason | 'none';
     /** = the viewing user id. */
     distinct_id: string;
   };

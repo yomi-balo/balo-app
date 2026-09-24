@@ -9,6 +9,7 @@ import {
   expertsRepository,
   meetingContextsRepository,
   meetingFilesRepository,
+  meetingPresenceRepository,
   meetingRecordingsRepository,
   projectRequestsRepository,
   requestExpertRelationshipsRepository,
@@ -52,9 +53,10 @@ import { mapRecapFiles } from './map-recap-files';
 import { mapRecapRecordings } from './map-recap-recordings';
 
 /**
- * BAL-388 — the recap's SINGLE loader. Assembles six already-shipped primitives (meeting +
+ * BAL-388 — the recap's SINGLE loader. Assembles seven already-shipped primitives (meeting +
  * context seam, transcript artefacts, action items, meeting files, meeting recordings (BAL-440),
- * credit-session money block) into ONE lens-aware payload.
+ * credit-session money block, and — on a `missed_call` meeting only — meeting presence) into ONE
+ * lens-aware payload.
  *
  * ⚠ BAL-440 — `recordings` rides THIS SAME gate. `mapRecapRecordings` mints the poster URL
  * downstream of `resolveRecapAccess`, so there is no second authorization decision anywhere on
@@ -86,6 +88,9 @@ import { mapRecapRecordings } from './map-recap-recordings';
  * ⚠ NO MEETING ROW CROSSES TO THE CLIENT. `listMeetingsForContext` returns full `Meeting`
  * rows including `dailyRoomName` and `joinUrl`; they are narrowed to five fields and reduced
  * to two NUMBERS by `deriveConsultationOrdinal` before anything is composed.
+ *
+ * ⚠ PRESENCE IS THE SAME RULE: `factsByMeetingIds` projects no identity column, and its facts
+ * are reduced to ONE boolean in {@link readClientSideEverPresent} before anything is composed.
  */
 
 /**
@@ -277,6 +282,42 @@ async function readMoneyBlock(
 }
 
 /**
+ * Did anybody on the client side EVER join this meeting? `summarisePresence`'s
+ * `clientSideEverPresent`, from the presence rows — the only reliable record. `missed_call` means
+ * only that the delivering expert never joined, and a credit session is no proxy either way: it
+ * opens when the call page mints a join grant (before any Daily connection), and a client-side
+ * guest is present without one.
+ *
+ * Presence can only change the copy on a `missed_call` (the not-held body and the money line), so
+ * every other outcome is `null` without a read. NOT gated on context type — every context renders
+ * the not-held panel — nor on a credit session existing.
+ *
+ * NEVER throws. A failed read is `null` — UNKNOWN, never "absent" — so the page keeps the copy
+ * that names the expert rather than telling a client who waited that nobody turned up. The
+ * meeting id comes from the already-authorised access gate (`meeting_presence` has no RLS).
+ */
+async function readClientSideEverPresent(
+  meeting: Pick<Meeting, 'id' | 'outcome'>,
+  userId: string
+): Promise<boolean | null> {
+  if (meeting.outcome !== 'missed_call') {
+    return null;
+  }
+  try {
+    const facts = await meetingPresenceRepository.factsByMeetingIds([meeting.id]);
+    return facts.get(meeting.id)?.clientSideEverPresent ?? null;
+  } catch (error) {
+    log.error('Recap presence read failed', {
+      meetingId: meeting.id,
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return null;
+  }
+}
+
+/**
  * Load the whole recap, or `null`.
  *
  * ⚠ ONE `null` FOR EVERY DENIAL — missing, soft-deleted, unauthorised, declined, ADMIN-ONLY
@@ -322,6 +363,7 @@ export const loadRecap = cache(
       caseRow,
       siblings,
       existingReview,
+      clientSideEverPresent,
     ] = await Promise.all([
       meetingFilesRepository.listByMeeting(meetingId),
       meetingRecordingsRepository.listByMeeting(meetingId),
@@ -345,6 +387,7 @@ export const loadRecap = cache(
       isCase && lens === 'client' && expertProfileId !== null
         ? reviewsRepository.findLive(subject.contextId, userId, expertProfileId)
         : Promise.resolve(undefined),
+      readClientSideEverPresent(meeting, userId),
     ]);
 
     const clientCompanyName = company?.name ?? 'the client';
@@ -392,6 +435,7 @@ export const loadRecap = cache(
       lens,
       expertPersonLabel: labels.expertPersonLabel,
       clientCompanyName,
+      clientSideEverPresent,
     });
 
     const durationMinutes = durationMinutesOf(meeting);
@@ -403,6 +447,7 @@ export const loadRecap = cache(
           hasSession: session !== undefined,
           block: moneyBlock,
           elapsedMinutes: durationMinutes ?? 0,
+          clientSideEverPresent,
         })
       : null;
 

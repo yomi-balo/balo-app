@@ -65,6 +65,16 @@ export interface CaseConsultationCounts {
   meetingIdsWithLiveProposal: ReadonlySet<string>;
   /** BAL-573 — live seat counts for UPCOMING meetings only, from one batched read. Absent ⇒ 0. */
   guestCountByMeetingId: ReadonlyMap<string, number>;
+  /**
+   * `summarisePresence(...).clientSideEverPresent` for the `ended` + `missed_call` meetings the
+   * loader read presence for — already reduced to a boolean, so no presence row reaches this
+   * module. Threaded into `deriveCaseConsultationState` below, where `false` yields
+   * `nobody_joined`.
+   *
+   * ⚠ ABSENT ⇒ UNKNOWN (`null`), NEVER "ABSENT". A meeting the loader did not read, or whose
+   * read failed, keeps the `missed_call` label.
+   */
+  clientSideEverPresentByMeetingId: ReadonlyMap<string, boolean>;
 }
 
 export interface CaseConsultationActionContext {
@@ -122,6 +132,7 @@ export function mapCaseConsultations(
       status: meeting.status,
       outcome: meeting.outcome,
       hasLiveRescheduleProposal: counts.meetingIdsWithLiveProposal.has(meeting.id),
+      clientSideEverPresent: counts.clientSideEverPresentByMeetingId.get(meeting.id) ?? null,
     });
 
     if (state === 'outcome_pending') {

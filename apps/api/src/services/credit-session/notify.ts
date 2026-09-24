@@ -12,6 +12,7 @@ import {
   expertsRepository,
   usersRepository,
   meetingsRepository,
+  meetingPresenceRepository,
   type CreditSession,
   // BAL-412 (F17) — the four settlement shapes come from the pgEnum's own derived type, never
   // re-spelled inline (CLAUDE.md's repeated-string-union rule). This file already imports from
@@ -290,6 +291,9 @@ export async function publishPayoutRecorded(session: CreditSession, now: Date): 
  * `publish*` functions `finalizeBilling` calls uniformly — `scheduledOn` anchors on the
  * MEETING's `scheduledStart` (the call's actual scheduled time), never "now" (when settlement
  * happened, which can be well after the meeting).
+ *
+ * ⚠ `clientSideEverPresent` is read from the meeting's presence rows here, because the session
+ * row cannot answer it (see {@link readClientSideEverPresent}).
  */
 export async function publishSessionMissedCall(session: CreditSession, _now: Date): Promise<void> {
   if (session.meetingId === null) {
@@ -307,7 +311,10 @@ export async function publishSessionMissedCall(session: CreditSession, _now: Dat
     );
     return;
   }
-  const expertName = await resolveExpertName(session.expertProfileId);
+  const [expertName, clientSideEverPresent] = await Promise.all([
+    resolveExpertName(session.expertProfileId),
+    readClientSideEverPresent(session.id, meeting.id),
+  ]);
   await notificationEvents.publish('session.missed_call', {
     correlationId: `${session.id}:missed_call`,
     sessionId: session.id,
@@ -317,7 +324,40 @@ export async function publishSessionMissedCall(session: CreditSession, _now: Dat
     expertProfileId: session.expertProfileId,
     expertName,
     scheduledOn: formatSettledOn(meeting.scheduledStart),
+    clientSideEverPresent,
   });
+}
+
+/**
+ * Did anybody on the client side ever turn up to the missed call's meeting? A credit session
+ * cannot say — it opens when the call page mints a join grant, before any Daily connection — so
+ * this reads the presence rows through `factsByMeetingIds`, the same `summarisePresence`
+ * reduction settlement ran.
+ *
+ * ⚠ NEVER THROWS. It runs inside `finalizeBilling`'s best-effort block, where a throw would lose
+ * the whole notice (both recipients). A failed read degrades to `null` (unknown), which keeps the
+ * copy that names the expert — a client who waited must never be told nobody turned up.
+ */
+async function readClientSideEverPresent(
+  sessionId: string,
+  meetingId: string
+): Promise<boolean | null> {
+  try {
+    const facts = await meetingPresenceRepository.factsByMeetingIds([meetingId]);
+    return facts.get(meetingId)?.clientSideEverPresent ?? null;
+  } catch (err: unknown) {
+    log.error(
+      {
+        op: 'publishSessionMissedCall',
+        sessionId,
+        meetingId,
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      },
+      'Failed to read meeting presence for the missed-call notice (publishing with presence unknown)'
+    );
+    return null;
+  }
 }
 
 /**

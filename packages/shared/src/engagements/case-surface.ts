@@ -236,9 +236,16 @@ export type MeetingOutcomeLabel = 'completed' | 'no_show_client' | 'missed_call'
  *
  * ⚠ `no_show_client` AND `missed_call` ARE DISTINCT MEMBERS, AND BOTH RENDER DISTINCTLY.
  * They are genuinely different events — `no_show_client` means the expert waited and nobody
- * client-side arrived; `missed_call` means the EXPERT never joined (see `meetingOutcomeEnum`).
- * Folding them into one "not held" label would tell the wronged party the call failed without
- * saying who failed to show, which is the single most load-bearing fact in the row.
+ * client-side arrived; `missed_call` means the EXPERT never joined (see `meetingOutcomeEnum`)
+ * while somebody client-side did, or while that is unknown. Folding them into one "not held"
+ * label would tell the wronged party the call failed without saying who failed to show, which
+ * is the single most load-bearing fact in the row.
+ *
+ * ⚠ `nobody_joined` is the `missed_call` outcome with NO client-side presence either — the
+ * expert never joined AND nobody client-side did. `meeting_outcome` cannot tell the two apart
+ * (`missedCallApplies` reads `expertEverPresent` alone), so this label is DERIVED from the
+ * presence rows at read time, never stored. There is no wronged party, so a surface must
+ * name nobody for it.
  *
  * ⚠ `pending_reschedule` (BAL-411) — a `scheduled` / `waiting_for_participants` consultation
  * that ALSO carries a LIVE reschedule proposal. It is nested INSIDE the `scheduled` branch of
@@ -252,6 +259,7 @@ export type CaseConsultationStateLabel =
   | 'held'
   | 'no_show_client'
   | 'missed_call'
+  | 'nobody_joined'
   | 'cancelled'
   | 'outcome_pending';
 
@@ -260,11 +268,21 @@ export interface CaseConsultationStateInput {
   readonly outcome: MeetingOutcomeLabel | null;
   /** BAL-411 — a LIVE (pending, unexpired) reschedule proposal exists on THIS meeting. */
   readonly hasLiveRescheduleProposal: boolean;
+  /**
+   * `summarisePresence(...).clientSideEverPresent` for THIS meeting, or `null` when the caller
+   * did not read presence. Consulted ONLY on an `ended` + `missed_call` meeting, where `false`
+   * yields `nobody_joined`.
+   *
+   * ⚠ `null` IS "UNKNOWN", NOT "ABSENT" — it keeps the `missed_call` label. A surface that
+   * cannot read presence (or whose read failed) must never tell a client who waited that
+   * nobody turned up.
+   */
+  readonly clientSideEverPresent: boolean | null;
 }
 
 /**
- * TOTAL over every `(status, outcome, hasLiveRescheduleProposal)` triple — no fallthrough, no
- * `default: 'held'`.
+ * TOTAL over every `(status, outcome, hasLiveRescheduleProposal, clientSideEverPresent)`
+ * combination — no fallthrough, no `default: 'held'`.
  *
  * ⚠ `in_progress` AND `outcome_pending` EXIST BECAUSE BOTH ARE REPRESENTABLE, NOT AS SCOPE
  * CREEP. The CHECK `meeting_outcome_requires_ended` is ONE-DIRECTIONAL (`outcome ⇒ ended`), so
@@ -283,7 +301,7 @@ export interface CaseConsultationStateInput {
 export function deriveCaseConsultationState(
   input: CaseConsultationStateInput
 ): CaseConsultationStateLabel {
-  const { status, outcome, hasLiveRescheduleProposal } = input;
+  const { status, outcome, hasLiveRescheduleProposal, clientSideEverPresent } = input;
 
   if (status === 'cancelled') return 'cancelled';
   if (status === 'in_progress') return 'in_progress';
@@ -294,7 +312,9 @@ export function deriveCaseConsultationState(
   // `status === 'ended'` — the outcome decides, and a NULL one is its own honest state.
   if (outcome === 'completed') return 'held';
   if (outcome === 'no_show_client') return 'no_show_client';
-  if (outcome === 'missed_call') return 'missed_call';
+  if (outcome === 'missed_call') {
+    return clientSideEverPresent === false ? 'nobody_joined' : 'missed_call';
+  }
   return 'outcome_pending';
 }
 

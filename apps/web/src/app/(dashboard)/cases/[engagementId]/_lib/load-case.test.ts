@@ -67,6 +67,7 @@ const m = {
   findProposalForAnswer: vi.fn(),
   countsLiveByMeetingIds: vi.fn(),
   listPartyDomains: vi.fn(),
+  factsByMeetingIds: vi.fn(),
 };
 
 vi.mock('@balo/db', () => ({
@@ -88,6 +89,9 @@ vi.mock('@balo/db', () => ({
   meetingFilesRepository: { listByMeeting: (...a: unknown[]) => m.listMeetingFiles(...a) },
   meetingGuestsRepository: {
     countsLiveByMeetingIds: (...a: unknown[]) => m.countsLiveByMeetingIds(...a),
+  },
+  meetingPresenceRepository: {
+    factsByMeetingIds: (...a: unknown[]) => m.factsByMeetingIds(...a),
   },
   partyDomainsRepository: { listByParty: (...a: unknown[]) => m.listPartyDomains(...a) },
   rescheduleProposalsRepository: {
@@ -235,6 +239,7 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.findProposalForAnswer.mockResolvedValue(undefined);
   m.countsLiveByMeetingIds.mockResolvedValue([]);
   m.listPartyDomains.mockResolvedValue([]);
+  m.factsByMeetingIds.mockResolvedValue(new Map());
 }
 
 /** Load and assert non-null, so each test can read the view without re-narrowing. */
@@ -1288,6 +1293,108 @@ describe('loadCase — per-consultation counts and the transcript indicator', ()
     expect(log.warn).toHaveBeenCalledWith(
       'Case surface transcript lookup failed',
       expect.objectContaining({ meetingCount: 1 })
+    );
+  });
+});
+
+/** `PresenceFacts` as `factsByMeetingIds` returns them — only `clientSideEverPresent` varies. */
+function presenceFacts(clientSideEverPresent: boolean): Record<string, unknown> {
+  return {
+    expertEverPresent: false,
+    expertOpen: false,
+    clientSideEverPresent,
+    anyOpen: false,
+    lastLeftAt: clientSideEverPresent ? new Date('2026-07-29T04:20:00Z') : null,
+    expertFirstJoinedAt: null,
+  };
+}
+
+/** An `ended` + `missed_call` meeting: the expert never joined, so it never started. */
+function missedCall(id: string): Record<string, unknown> {
+  return meeting(id, { outcome: 'missed_call', startedAt: null });
+}
+
+/**
+ * `missed_call` only says the delivering expert never joined. Whether anybody client-side did
+ * is read from presence, and ONLY for those meetings; a known `false` renders `nobody_joined`.
+ */
+describe('loadCase — nobody_joined: the presence read behind a missed call', () => {
+  it('makes NO presence query on a case with no missed call', async () => {
+    m.listMeetings.mockResolvedValue([
+      meeting('m1'),
+      meeting('m2', { outcome: 'no_show_client' }),
+      meeting('m3', { outcome: null }),
+      meeting('m4', { status: 'scheduled', outcome: null, startedAt: null }),
+      meeting('m5', { status: 'cancelled', outcome: null, startedAt: null }),
+    ]);
+    const view = await loadOrThrow();
+    expect(view.consultations).toHaveLength(5);
+    expect(m.factsByMeetingIds).not.toHaveBeenCalled();
+  });
+
+  it('asks ONCE for the whole case, restricted to the missed-call consultations', async () => {
+    m.listMeetings.mockResolvedValue([
+      meeting('m1'),
+      missedCall('m2'),
+      meeting('m3', { outcome: 'no_show_client' }),
+      missedCall('m4'),
+      meeting('m5', { status: 'scheduled', outcome: null, startedAt: null }),
+    ]);
+    await loadOrThrow();
+    expect(m.factsByMeetingIds).toHaveBeenCalledTimes(1);
+    expect(m.factsByMeetingIds).toHaveBeenCalledWith(['m2', 'm4']);
+  });
+
+  it('renders nobody_joined ONLY where the client side is KNOWN to have been absent', async () => {
+    m.listMeetings.mockResolvedValue([missedCall('m1'), missedCall('m2'), missedCall('m3')]);
+    // `m3` is absent from the answer — unknown, so it keeps `missed_call`.
+    m.factsByMeetingIds.mockResolvedValue(
+      new Map([
+        ['m1', presenceFacts(false)],
+        ['m2', presenceFacts(true)],
+      ])
+    );
+    const view = await loadOrThrow();
+    const stateById = new Map(view.consultations.map((row) => [row.meetingId, row.state]));
+    expect(stateById.size).toBe(3);
+    expect(stateById.get('m1')).toBe('nobody_joined');
+    expect(stateById.get('m2')).toBe('missed_call');
+    expect(stateById.get('m3')).toBe('missed_call');
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps every presence fact server-side — the view carries the derived label only', async () => {
+    m.listMeetings.mockResolvedValue([missedCall('m1'), missedCall('m2')]);
+    m.factsByMeetingIds.mockResolvedValue(
+      new Map([
+        ['m1', presenceFacts(false)],
+        ['m2', presenceFacts(true)],
+      ])
+    );
+    const view = await loadOrThrow();
+    expect(view.consultations.map((row) => row.state)).toContain('nobody_joined');
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain('EverPresent');
+    expect(serialized).not.toContain('2026-07-29T04:20:00');
+  });
+
+  /**
+   * ⚠ A FAILED READ IS "UNKNOWN", NEVER "NOBODY CAME". Degrading to "no client-side presence"
+   * would render "Nobody joined" on every missed call and clear an expert whose client waited.
+   */
+  it('degrades a FAILED presence read to the missed_call label, logs it, and still renders', async () => {
+    m.listMeetings.mockResolvedValue([meeting('m1'), missedCall('m2'), missedCall('m3')]);
+    m.factsByMeetingIds.mockRejectedValue(new Error('presence store down'));
+    const view = await loadOrThrow();
+    const stateById = new Map(view.consultations.map((row) => [row.meetingId, row.state]));
+    expect(stateById.size).toBe(3);
+    expect(stateById.get('m1')).toBe('held');
+    expect(stateById.get('m2')).toBe('missed_call');
+    expect(stateById.get('m3')).toBe('missed_call');
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalledWith(
+      'Case surface presence lookup failed',
+      expect.objectContaining({ meetingCount: 2, error: 'presence store down' })
     );
   });
 });

@@ -27,6 +27,13 @@ interface MoneyBlockProps {
   loading?: boolean;
   /** Elapsed session minutes, shown in the PENDING state (from the recap page's timing). */
   elapsedMinutes?: number;
+  /**
+   * Did anybody client-side ever join the meeting? A primitive the recap loader reduced from the
+   * presence rows, or `null` when it did not read them. Consulted on the `missed_call` shape only
+   * (see `durationLine`): a KNOWN `false` swaps the client line naming the consultant for one
+   * that names nobody. Omitted ⇒ `null` ⇒ the consultant line.
+   */
+  clientSideEverPresent?: boolean | null;
 }
 
 /**
@@ -125,9 +132,12 @@ function statementHref(block: SessionMoneyBlock): string {
  * asserted the amount on those fixtures. There is also nothing to link to — the receipt/payout
  * page for these shapes has no money region to land on (plan §7.4, §9 state 8/9).
  */
-function MoneyBlockFinalized({ block }: Readonly<{ block: SessionMoneyBlock }>) {
+function MoneyBlockFinalized({
+  block,
+  clientSideEverPresent,
+}: Readonly<{ block: SessionMoneyBlock; clientSideEverPresent: boolean | null }>) {
   const { Icon, finalizedLabel } = LENS_COPY[block.lens];
-  const line = durationLine(block);
+  const line = durationLine(block, { clientSideEverPresent });
 
   if (block.settlementShape === 'missed_call' || block.settlementShape === 'abandoned_wait') {
     return (
@@ -162,6 +172,7 @@ export function MoneyBlock({
   block,
   loading = false,
   elapsedMinutes = 0,
+  clientSideEverPresent = null,
 }: Readonly<MoneyBlockProps>) {
   if (loading) {
     return <MoneyBlockSkeleton />;
@@ -172,7 +183,7 @@ export function MoneyBlock({
   if (block.state === 'pending') {
     return <MoneyBlockPending block={block} elapsedMinutes={elapsedMinutes} />;
   }
-  return <MoneyBlockFinalized block={block} />;
+  return <MoneyBlockFinalized block={block} clientSideEverPresent={clientSideEverPresent} />;
 }
 
 // `formatAud` re-exported unchanged so `cases/[engagementId]/_components/case-earnings-block.tsx`

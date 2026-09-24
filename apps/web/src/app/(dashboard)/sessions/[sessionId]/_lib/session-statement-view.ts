@@ -9,6 +9,7 @@
  */
 import type {
   ClientMoneyBlock,
+  DurationLinePresence,
   ExpertMoneyBlock,
   SessionStatement,
   SessionStatementCounterparty,
@@ -40,6 +41,12 @@ interface SessionStatementViewBase {
 export interface ClientSessionStatementView extends SessionStatementViewBase {
   lens: 'client';
   block: ClientMoneyBlock;
+  /**
+   * Did anybody on the client side ever join the session's meeting? Read by the api for the
+   * `missed_call` shape only; `null` otherwise or when unknown. Feeds `durationLine`, which
+   * names nobody as absent only on a KNOWN `false`.
+   */
+  clientSideEverPresent: boolean | null;
 }
 
 export interface ExpertSessionStatementView extends SessionStatementViewBase {
@@ -84,9 +91,25 @@ export function toSessionStatementView(statement: SessionStatement): SessionStat
     meetingId: statement.context.meetingId,
   };
   if (statement.lens === 'client') {
-    return { ...base, lens: 'client', block: statement.block };
+    return {
+      ...base,
+      lens: 'client',
+      block: statement.block,
+      // `?? null`: an api build that predates the field sends nothing, which must read as
+      // unknown — the line that names the consultant — never as a guess.
+      clientSideEverPresent: statement.context.clientSideEverPresent ?? null,
+    };
   }
   return { ...base, lens: 'expert', block: statement.block, payout: statement.context.payout };
+}
+
+/**
+ * What `durationLine` knows about client-side presence for this statement. Only the client view
+ * carries it; the expert's `missed_call` line names nobody whatever the presence, so that lens
+ * reports it as not read. ONE definition for the page, the line items and the PDF.
+ */
+export function statementDurationPresence(view: SessionStatementView): DurationLinePresence {
+  return { clientSideEverPresent: view.lens === 'client' ? view.clientSideEverPresent : null };
 }
 
 /**

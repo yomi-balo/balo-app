@@ -635,6 +635,62 @@ export const meetingPresenceRepository = {
   },
 
   /**
+   * The structural presence facts for MANY meetings, from ONE query — the read-side answer to
+   * "did anybody on the client side ever turn up?" for surfaces that label a finished meeting.
+   *
+   * ⚠ WHY IT EXISTS: `missed_call` means only that the delivering expert never joined
+   * (`missedCallApplies` reads `expertEverPresent` alone), so a meeting NOBODY attended carries
+   * the same outcome as one where the client waited. The outcome cannot say which, and a
+   * credit session cannot either — it opens when the call page mints a join grant, before any
+   * Daily connection, and a client-side guest is present without ever opening one. The rows
+   * are the only reliable record.
+   *
+   * ⚠ ONE DEFINITION. Every meeting is reduced through `summarisePresence` — the same reducer
+   * the lifecycle sweep ran when it wrote the outcome, and the one {@link settlementFacts}
+   * uses — so a surface can never disagree with settlement about who was present. No
+   * `party = 'client'` rule is restated in SQL.
+   *
+   * Every requested id is a key in the result; a meeting with no live rows maps to the
+   * all-false facts. Projects `party` and the two instants only — never the identity columns,
+   * so nothing that joins to `meeting_guests` leaves this method.
+   *
+   * ⚠ NO TENANCY OF ITS OWN (`meeting_presence` has no RLS). Pass only ids that came from an
+   * already-authorised read. Reads no clock ceiling: `summarisePresence` reports booleans and
+   * instants only.
+   */
+  async factsByMeetingIds(meetingIds: readonly string[]): Promise<Map<string, PresenceFacts>> {
+    if (meetingIds.length === 0) {
+      return new Map();
+    }
+    const rows = await db
+      .select({
+        meetingId: meetingPresence.meetingId,
+        party: meetingPresence.party,
+        joinedAt: meetingPresence.joinedAt,
+        leftAt: meetingPresence.leftAt,
+      })
+      .from(meetingPresence)
+      .where(
+        and(inArray(meetingPresence.meetingId, [...meetingIds]), isNull(meetingPresence.deletedAt))
+      );
+
+    const intervalsByMeeting = new Map<string, LifecyclePresenceInterval[]>(
+      meetingIds.map((id) => [id, []])
+    );
+    for (const row of rows) {
+      intervalsByMeeting
+        .get(row.meetingId)
+        ?.push({ party: row.party, joinedAt: row.joinedAt, leftAt: row.leftAt });
+    }
+    return new Map(
+      [...intervalsByMeeting].map(([meetingId, intervals]) => [
+        meetingId,
+        summarisePresence(intervals),
+      ])
+    );
+  },
+
+  /**
    * BAL-390 — the DISTINCT authenticated CLIENT-SIDE people who actually attended any
    * live meeting held for this engagement. The review nudge's participant source: an ask
    * goes to people who were IN THE ROOM, not to everyone with a membership.

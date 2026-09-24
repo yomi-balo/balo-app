@@ -152,6 +152,7 @@ export default async function RecapPage({
     // BAL-440 — the meeting's recording posture at render time, so
     // `recap_recording_played ÷ recap_viewed` is answerable BY STATE.
     recording_state: deriveRecordingState(view.recordings),
+    not_held_reason: view.notHeld?.reason ?? 'none',
     distinct_id: user.id,
   });
 
