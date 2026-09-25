@@ -64,7 +64,7 @@ Every subsequent phase happens in this worktree on this branch; **Phase 9 just c
 Spawn the designer sub-agent:
 
 ```bash
-claude -p --model sonnet --effort high \
+claude -p --model claude-opus-5-5 --effort high \
   --system-prompt "$(cat .claude/commands/design.md)" \
   "Design the user experience for: {TASK_DESCRIPTION}. Read the balo-ui skill first. Ask clarifying questions if anything is ambiguous."
 ```
@@ -92,7 +92,7 @@ Save the approved design to `/tmp/balo-design-bal-<NNN>.md`.
 Spawn the resolver sub-agent to verify the ticket's premises against the actual codebase before the architect designs anything:
 
 ```bash
-claude -p --model opus --effort medium \
+claude -p --model claude-opus-5-5 --effort medium \
   --system-prompt "$(cat .claude/commands/resolver.md)" \
   "Run a pre-flight check on this ticket and update its description with a Pre-flight Check section. Ticket: {TASK_DESCRIPTION}. Linear issue ID: {LINEAR_ISSUE_ID}. Verify every factual claim about the codebase state — dependencies, schemas, existing files, completed sub-tasks. Use the Linear MCP to update the ticket description once done."
 ```
@@ -112,7 +112,7 @@ claude -p --model opus --effort medium \
 Spawn the architect sub-agent:
 
 ```bash
-claude -p --model opus --effort xhigh \
+claude -p --model claude-opus-5-5 --effort xhigh \
   --system-prompt "$(cat .claude/commands/architect.md)" \
   "Design the technical plan for: {TASK_DESCRIPTION}. $([ -f /tmp/balo-design-bal-<NNN>.md ] && echo "Approved design spec: $(cat /tmp/balo-design-bal-<NNN>.md)") Read all relevant skills before proposing anything."
 ```
@@ -128,7 +128,7 @@ Only run this phase if the architect's plan includes database changes.
 Spawn the DBA sub-agent:
 
 ```bash
-claude -p --model opus --effort xhigh \
+claude -p --model claude-opus-5-5 --effort xhigh \
   --system-prompt "$(cat .claude/commands/dba.md)" \
   "Implement the database layer from this plan: $(cat /tmp/balo-plan-bal-<NNN>.md). Read drizzle-schema skill first (including rls-patterns.md reference)."
 ```
@@ -168,7 +168,7 @@ If CRITICAL issues → back to Phase 3 with fix instructions.
 Spawn the security sub-agent:
 
 ```bash
-git diff --staged | claude -p --model opus --effort xhigh \
+git diff --staged | claude -p --model claude-opus-5-5 --effort xhigh \
   --system-prompt "$(cat .claude/commands/secure.md)" \
   "Audit these changes for the Balo platform. Read workos-auth and drizzle-schema skills first. Diff: $(git diff --staged)"
 ```
@@ -182,7 +182,7 @@ If CRITICAL issues → back to Phase 3 with fix instructions.
 Spawn the reviewer sub-agent:
 
 ```bash
-git diff --staged | claude -p --model opus --effort xhigh \
+git diff --staged | claude -p --model claude-opus-5-5 --effort xhigh \
   --system-prompt "$(cat .claude/commands/review.md)" \
   "Review this implementation. Task: {TASK_DESCRIPTION}. Plan: $(cat /tmp/balo-plan-bal-<NNN>.md). Diff: $(git diff --staged). Read each changed file in full before reviewing."
 ```
@@ -241,21 +241,21 @@ Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a
 
 Each phase spawns a fresh headless `claude -p` process, so both the reasoning effort (`--effort`) and the model (`--model`) are set **per phase** rather than as one blanket level for the whole run. Keep these in sync when editing a spawn command:
 
-| Phase | Agent     | Effort   | Model    |
-| ----- | --------- | -------- | -------- |
-| 0     | design    | `high`   | `sonnet` |
-| 0.5   | resolver  | `medium` | `opus`   |
-| 1     | architect | `xhigh`  | `opus`   |
-| 2     | dba       | `xhigh`  | `opus`   |
-| 3     | build     | `high`   | `sonnet` |
-| 4     | ux-review | `high`   | `sonnet` |
-| 5     | secure    | `xhigh`  | `opus`   |
-| 6     | review    | `xhigh`  | `opus`   |
-| 7     | pre-pr    | `medium` | `sonnet` |
+| Phase | Agent     | Effort   | Model             |
+| ----- | --------- | -------- | ----------------- |
+| 0     | design    | `high`   | `claude-opus-5-5` |
+| 0.5   | resolver  | `medium` | `claude-opus-5-5` |
+| 1     | architect | `xhigh`  | `claude-opus-5-5` |
+| 2     | dba       | `xhigh`  | `claude-opus-5-5` |
+| 3     | build     | `high`   | `sonnet`          |
+| 4     | ux-review | `high`   | `sonnet`          |
+| 5     | secure    | `xhigh`  | `claude-opus-5-5` |
+| 6     | review    | `xhigh`  | `claude-opus-5-5` |
+| 7     | pre-pr    | `medium` | `sonnet`          |
 
 **Effort rationale:** `xhigh` goes to the deep convergent gates that land irreversible design decisions with no human approval step (architect, dba, secure, review); `medium` goes to the run-fix-verify gates (resolver, pre-pr) where the work is checking and repairing, not deciding.
 
-**Model rationale:** effort is the reasoning _budget_; model is the reasoning _capability_ — separate axes. Opus goes to the phases whose failure mode is a silent, high-consequence judgment error that no later human gate catches: the convergent architecture gates (architect, dba), the security audit (secure — never run the cyber-weaker model here), the technical review (review), and the pre-flight resolver. Resolver runs at `medium` effort but on Opus deliberately: its job is spotting where a ticket's premises are out of sync with the code, its misses are invisible false negatives that poison every downstream phase, and it is a light phase so the Opus cost is negligible. Sonnet handles the phases that implement or validate against an existing spec — design, build, ux-review — and the mechanical pre-pr gate, all at `high`/`medium` effort where Sonnet is cost-efficient.
+**Model rationale:** effort is the reasoning _budget_; model is the reasoning _capability_ — separate axes. High-reasoning steps are pinned to `claude-opus-5-5` explicitly (not the floating `opus` alias) so the pipeline's convergent gates don't silently shift models on an alias re-point: the convergent architecture gates (architect, dba), the security audit (secure — never run the cyber-weaker model here), the technical review (review), the pre-flight resolver, and design. Resolver runs at `medium` effort but on Opus 5.5 deliberately: its job is spotting where a ticket's premises are out of sync with the code, its misses are invisible false negatives that poison every downstream phase, and it is a light phase so the Opus cost is negligible. Design also moves to Opus 5.5: it's cheap enough at this tier that the extra design judgment on user journeys, edge cases, and interaction patterns is worth it, and errors here flow straight into the architect and builder. Build and ux-review stay on Sonnet — they implement or validate against an already-decided spec rather than originate judgment calls — along with the mechanical pre-pr gate, all at `high`/`medium` effort where Sonnet is cost-efficient.
 
 **Never set `CLAUDE_CODE_EFFORT_LEVEL` or a global model** — they apply to every spawned process and fight the per-phase flags. Effort and model belong on the individual spawn command, nowhere else.
 
