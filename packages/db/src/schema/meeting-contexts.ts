@@ -76,10 +76,12 @@ import { timestamps, softDelete } from './helpers';
  * **BAL-409/BAL-410/BAL-411** (reschedule + cancel — these take a bare `meeting_id` rather
  * than a `context_id`, so their check is "who owns THIS MEETING", resolved through this
  * seam; see `apps/api/src/services/meetings/meeting-availability.ts`),
- * **BAL-421** (the case surface — the first caller of `listMeetingsForContext`), and
- * **the inactivity sweep** (the first caller of
- * `consultationTimestampsForEngagements`, which must pass only engagement ids it already
- * scoped).
+ * **BAL-421** (the case surface — the first caller of `listMeetingsForContext`), and the
+ * two callers of `consultationTimestampsForEngagements`, each of which passes only
+ * engagement ids a system-scoped repository read already returned: **the BAL-572
+ * inactivity sweep** (from `listOpenCreatedBefore`; it also calls
+ * `engagementIdsWithLiveCaseMeeting` on the same ids) and **the review-nudge sweep** (from
+ * `listClosedBetween`, for its `auto_inactive` candidates).
  *
  * ── BAL-424 HAS NOW COPIED THIS SHAPE, AND DISCHARGED THE OBLIGATION ──────────────────
  * `conversation_contexts` (`schema/conversations.ts`) is the second cross-cutting primitive

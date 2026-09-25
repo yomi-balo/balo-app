@@ -4,6 +4,7 @@ import {
   caseEngagementsRepository,
   companiesRepository,
   expertsRepository,
+  meetingContextsRepository,
   meetingPresenceRepository,
   projectEngagementsRepository,
   reviewsRepository,
@@ -48,11 +49,17 @@ import { mintReviewInviteToken } from '../lib/review-token.js';
  * that reason — see it, and the band-math docstring, before touching either.
  *
  * TWO ANCHORS, QUERIED EVERY TICK (D5): `project_engagements.accepted_at` and
- * `case_engagements.closed_at`. The CASE reader returns `[]` today — `close()` has zero
- * production callers, so nothing stamps `closed_at` yet — and that is EXPECTED, not dead
- * code: it self-activates with zero code change the moment BAL-420/BAL-421 land. The
- * unit test asserts both anchors are queried precisely so a future "the case one always
- * returns empty, drop it" cannot land.
+ * `case_engagements.closed_at`. BOTH ARE LIVE: BAL-421's case-surface resolve stamps
+ * `closed_at` with `resolved`, and BAL-572's hourly inactivity sweep stamps it with
+ * `auto_inactive`. The unit test asserts both anchors are queried precisely so a future
+ * "the case one always returns empty, drop it" cannot land.
+ *
+ * ⚠ BAL-572 — AN `auto_inactive` CANDIDATE THAT NEVER HAD A COMPLETED CONSULTATION IS
+ * DROPPED BEFORE NUDGING. `dropNeverConsultedAutoCloses` makes ONE batched BAL-425 seam call
+ * over the `auto_inactive` case ids in a band and removes any whose `lastCompletedConsultationAt`
+ * is not a `Date` — otherwise the nudge would ask "How was your consultation with {X}?" about a
+ * call that never happened. `resolved` candidates are untouched; a `resolved` case can only be
+ * closed from a consultation that took place (see `resolve-case.ts`'s `NOT_YET_HELD` refusal).
  *
  * NO THIRD NUDGE, AND NO SCHEMA STATE. An anchor older than `7d + 1h` is outside every
  * band forever, so the hard stop is window math: no `nudge_sent_at` column, no
@@ -295,6 +302,47 @@ async function nudgeCandidate(
 }
 
 /**
+ * BAL-572 — drop an `auto_inactive` CASE candidate that never had a completed
+ * consultation. `close()` lets a case with zero held consultations auto-close (it anchors on
+ * its own creation), but the nudge asks "How was your consultation with {X}?" — a question
+ * with no honest answer for a call that never happened. `resolved` candidates and every
+ * PROJECT candidate pass through untouched: a `resolved` case can only be closed from a
+ * consultation that took place at all (see `resolve-case.ts`'s `NOT_YET_HELD` refusal).
+ *
+ * ONE BATCHED SEAM CALL, over the `auto_inactive` case ids in THIS band only — never per
+ * candidate. Drops an id whose `lastCompletedConsultationAt` is not a `Date` (`null`, or the
+ * seam-Map has no entry for it at all, which a batched read from `listClosedBetween`'s own
+ * ids should never produce, but failing closed here costs nothing).
+ */
+async function dropNeverConsultedAutoCloses(
+  candidates: readonly RatingNudgeCandidate[],
+  now: Date
+): Promise<RatingNudgeCandidate[]> {
+  const autoInactiveCaseIds = candidates
+    .filter(
+      (candidate) =>
+        candidate.engagementKind === 'case' && candidate.closeReason === 'auto_inactive'
+    )
+    .map((candidate) => candidate.engagementId);
+
+  if (autoInactiveCaseIds.length === 0) {
+    return [...candidates];
+  }
+
+  const timestamps = await meetingContextsRepository.consultationTimestampsForEngagements(
+    autoInactiveCaseIds,
+    now
+  );
+
+  return candidates.filter((candidate) => {
+    if (candidate.engagementKind !== 'case' || candidate.closeReason !== 'auto_inactive') {
+      return true;
+    }
+    return timestamps.get(candidate.engagementId)?.lastCompletedConsultationAt instanceof Date;
+  });
+}
+
+/**
  * The sweep body (exported for unit testing without a Redis-backed Worker). For each
  * cadence step it resolves the half-open `(after, until]` band from the shared band math
  * and queries BOTH terminal anchors, then nudges every unrated reviewer of every
@@ -319,12 +367,14 @@ export async function runReviewNudgeSweep(
   const tick = quantiseNudgeTick(now);
 
   for (const { step, after, until } of reviewNudgeBands(tick)) {
-    // D5 — BOTH anchors, EVERY tick. The case reader is empty until BAL-420/BAL-421
-    // stamp `closed_at`; that is the seam, not dead code.
+    // BOTH anchors, EVERY tick: BAL-421's case-surface resolve stamps `closed_at` with
+    // `resolved`, and BAL-572's hourly inactivity sweep stamps it with `auto_inactive`.
     const accepted = await projectEngagementsRepository.listAcceptedBetween(after, until);
     const closed = await caseEngagementsRepository.listClosedBetween(after, until);
+    // Never ask about a consultation that never happened.
+    const nudgeable = await dropNeverConsultedAutoCloses(closed, now);
 
-    for (const candidate of [...accepted, ...closed]) {
+    for (const candidate of [...accepted, ...nudgeable]) {
       try {
         sent += await nudgeCandidate(candidate, step, log);
       } catch (error) {

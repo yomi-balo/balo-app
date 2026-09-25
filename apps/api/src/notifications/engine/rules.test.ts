@@ -76,13 +76,19 @@ describe('notificationRules', () => {
 
     it('notifies the expert on email AND in-app', () => {
       const expertRules = rules.filter((r) => r.recipient === 'expert');
-      expect(expertRules.map((r) => r.channel).sort()).toEqual(['email', 'in-app']);
+      expect(expertRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
       expect(expertRules.every((r) => r.template === 'project-request-submitted')).toBe(true);
     });
 
     it('notifies Balo staff on email AND in-app, with the staff-specific template', () => {
       const adminRules = rules.filter((r) => r.recipient === 'admin_users');
-      expect(adminRules.map((r) => r.channel).sort()).toEqual(['email', 'in-app']);
+      expect(adminRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
       // ⚠ NOT `project-request-submitted` — staff get a triage-framed message, not the
       // expert's "a client chose you".
       expect(adminRules.every((r) => r.template === 'project-request-submitted-admin')).toBe(true);
@@ -1034,11 +1040,16 @@ describe('notificationRules', () => {
       }
     });
 
-    it('engagement.case_closed: client email + in-app, gated on recipientId, no admin fan-out', () => {
+    it('engagement.case_closed: 4 rules total, client + expert pairs, no admin fan-out', () => {
       const rules = rulesFor('engagement.case_closed');
+      expect(rules).toHaveLength(4);
+      expect(rules.some((r) => r.recipient === 'admin_users')).toBe(false);
+    });
+
+    it('engagement.case_closed: client email + in-app, gated on recipientId', () => {
+      const rules = rulesFor('engagement.case_closed').filter((r) => r.recipient === 'client');
       expect(rules).toHaveLength(2);
       for (const rule of rules) {
-        expect(rule.recipient).toBe('client');
         expect(rule.template).toBe('engagement-case-closed-client');
         expect(rule.timing).toBe('immediate');
         expect(rule.condition).toBeDefined();
@@ -1047,15 +1058,38 @@ describe('notificationRules', () => {
         'email',
         'in-app',
       ]);
-      expect(rules.some((r) => r.recipient === 'admin_users')).toBe(false);
     });
 
     it('engagement.case_closed skips when no client-side reviewer resolved', () => {
-      const [rule] = rulesFor('engagement.case_closed');
+      const [rule] = rulesFor('engagement.case_closed').filter((r) => r.recipient === 'client');
       const condition = rule?.condition;
       expect(condition).toBeDefined();
       const base = { event: 'engagement.case_closed', data: {} };
       expect(condition?.({ ...base, payload: { recipientId: 'user-1' } })).toBe(true);
+      expect(condition?.({ ...base, payload: {} })).toBe(false);
+    });
+
+    it('engagement.case_closed: expert email + in-app, gated to auto_inactive only (BAL-572)', () => {
+      const rules = rulesFor('engagement.case_closed').filter((r) => r.recipient === 'expert');
+      expect(rules).toHaveLength(2);
+      for (const rule of rules) {
+        expect(rule.template).toBe('engagement-case-closed-expert');
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeDefined();
+      }
+      expect(rules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+
+    it('engagement.case_closed: the expert arm never fires for a deliberate resolve', () => {
+      const [rule] = rulesFor('engagement.case_closed').filter((r) => r.recipient === 'expert');
+      const condition = rule?.condition;
+      expect(condition).toBeDefined();
+      const base = { event: 'engagement.case_closed', data: {} };
+      expect(condition?.({ ...base, payload: { closeReason: 'auto_inactive' } })).toBe(true);
+      expect(condition?.({ ...base, payload: { closeReason: 'resolved' } })).toBe(false);
       expect(condition?.({ ...base, payload: {} })).toBe(false);
     });
 

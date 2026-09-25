@@ -244,9 +244,11 @@ export type NotificationEvent =
   | 'engagement.accepted'
   | 'engagement.changes_requested'
   // BAL-390 (D4) — a case was closed (the fused close + rating email). PUBLISHED FROM
-  // apps/web as of BAL-388: `resolveCaseAction` on the recap is the platform's first and
-  // today only publisher of this key. BAL-420's auto_inactive sweep adds the second, from
-  // apps/api.
+  // apps/web as of BAL-388: `resolveCaseAction` on the recap is the platform's first
+  // publisher of this key, with the `resolved` reason. BAL-572's hourly inactivity sweep
+  // (`apps/api`) is the second, publishing `auto_inactive` IN-PROCESS — it calls
+  // `notificationEvents.publish` directly and never goes through this HTTP route, which
+  // in fact accepts `resolved` only. Both are live.
   | 'engagement.case_closed'
   | 'party.member_joined_via_domain'
   | 'party.join_request_created'

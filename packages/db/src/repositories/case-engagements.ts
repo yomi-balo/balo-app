@@ -836,15 +836,20 @@ export const caseEngagementsRepository = {
    * `schema/credit-sessions.ts` (the caveat sits above the columns, not on `engagement_id`,
    * whose own comment is the denormalisation note).
    *
-   * ⚠ THE BAL-425 PROHIBITION, RESTATED RATHER THAN DELETED. The old wording ("MUST NOT
-   * run a sweep over this before BAL-418 lands") is discharged: BAL-418 landed in
-   * `5b843429` and the rule is now SATISFIABLE end-to-end. That is NOT a licence to run a
-   * sweep. No case-inactivity sweep exists, and whichever ticket builds one still owes,
-   * BEFORE it runs in production: (a) excluding engagements with a live `in_progress`
-   * meeting from the candidate list (the mid-call hazard on
-   * `consultationTimestampsForEngagements`), and (b) calling the seam for every candidate
-   * — passing `null, null` is a BUG, not a gap. The caller computes
-   * `cutoff = now - CASE_INACTIVITY_DAYS`; the repo stays policy-free.
+   * ⚠ THE CALLER'S TWO OBLIGATIONS. The production caller is the case-inactivity sweep
+   * (`apps/api/src/jobs/case-inactivity-sweep.ts`), and it discharges both on every tick:
+   * (a) it drops every candidate that still has a JOINABLE case meeting, via
+   * `meetingContextsRepository.engagementIdsWithLiveCaseMeeting(ids,
+   * now − MEETING_TOKEN_TTL_AFTER_END_MS)` — the join window, not `in_progress` alone (the
+   * seam's anchors ignore a running call, so without it a case could close mid-call); and
+   * (b) it takes the anchors ONLY from the seam's Map. A `null, null` entry the seam RETURNS
+   * is legitimate — a never-consulted case anchors on creation and closes — but CONSTRUCTING
+   * `null, null` for an id the Map lacks is a BUG, not a gap (composition case 3b). The
+   * caller computes `cutoff = now - CASE_INACTIVITY_DAYS`; the repo stays policy-free.
+   *
+   * NO LIMIT, deliberately: the superset is oldest first and includes long-running ACTIVE
+   * cases, so a LIMIT would let those fill the window on every tick and starve the inactive
+   * cases behind them. The caller chunks its batched reads and caps closes per tick instead.
    */
   async listOpenCreatedBefore(cutoff: Date): Promise<CaseEngagementRow[]> {
     const rows = await db
@@ -876,11 +881,12 @@ export const caseEngagementsRepository = {
    * ENGAGEMENT-level suppression (no reviewer predicate): read that method's docblock, and
    * `review-nudge-sweep.ts`'s header, before changing this subquery.
    *
-   * ⚠ THIS RETURNS `[]` TODAY, AND THAT IS EXPECTED (D5). `close()` has ZERO production
-   * callers, so nothing stamps `closed_at` yet. DO NOT delete this method, its index, or
-   * the sweep's call to it on the grounds that "it always returns empty" — it
-   * SELF-ACTIVATES with zero code change the moment BAL-420/BAL-421 land, and the sweep's
-   * unit test asserts both anchors are queried precisely to stop that deletion.
+   * LIVE FOR BOTH CLOSE REASONS. `close()` stamps `closed_at` from two production paths: a
+   * client member resolving the case (`resolved`, the web resolve actions) and the
+   * case-inactivity sweep (`auto_inactive`). This read is reason-agnostic and threads
+   * `closeReason` through so the nudge copy can tell them apart. The review-nudge sweep then
+   * drops an `auto_inactive` candidate that never had a completed consultation (read from
+   * the BAL-425 seam), because there is nothing to rate.
    *
    * CHILD-ROOTED so it rides `case_engagement_closed_at_idx`; both parent and child
    * `deleted_at` are guarded.

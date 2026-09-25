@@ -867,18 +867,18 @@ export interface ReviewReminderPayload {
 /**
  * BAL-390 (D4) — a case was closed; the fused close-confirmation + rating email.
  *
- * ⚠ LIVE AS OF BAL-388. The recap's `resolveCaseAction` is the FIRST and (today) only
- * publisher: a `@balo/db` repository structurally cannot publish, so `close()` gets its
- * publish line at the caller's layer. The `auto_inactive` arm is still unpublished
- * (the inactivity sweep owns it). Do not describe this event as inert.
+ * ⚠ LIVE AS OF BAL-388. The recap's `resolveCaseAction` is web's `resolved` publisher: a
+ * `@balo/db` repository structurally cannot publish, so `close()` gets its publish line at
+ * the caller's layer. BAL-572's hourly `case-inactivity-sweep` (`apps/api`) is the second
+ * publisher, for the `auto_inactive` arm — both live, neither inert.
  *
  * ⚠ THIS EVENT IS **PUBLISHABLE**, NOT SERVER-ONLY. BAL-421's caller is a web Server
  * Action, which publishes over HTTP → `apps/api/src/routes/notifications/schema.ts`.
  * Adding it to `ServerOnlyNotificationEvent` would leave it with no Zod arm and make
  * BAL-421 physically unable to publish it.
  *
- * `reviewToken` ABSENT ⇒ already rated ⇒ the template omits the review block ENTIRELY
- * (not greyed — gone), replaced by one warm line.
+ * `reviewToken` ABSENT ⇒ no star block; `resolved` renders a thank-you line, `auto_inactive`
+ * renders nothing.
  */
 export interface EngagementCaseClosedPayload {
   correlationId: string; // `${engagementId}:case_closed` → BullMQ jobId dedup
@@ -892,14 +892,16 @@ export interface EngagementCaseClosedPayload {
    */
   meetingId?: string;
   recipientId?: string; // client-side reviewer → recipient 'client'; absent ⇒ the rule skips
-  expertProfileId: string; // → resolver hydrates data.expert (context; no expert rule today)
+  expertProfileId: string; // → resolver hydrates data.expert; the BAL-572 expert rule sits
+  // on this arm too (recipient 'expert', gated to closeReason === 'auto_inactive')
   clientCompanyName: string; // {Client} — prospective party
   expertPartyLabel: string; // {Expert} — prospective party (BAL-329)
   caseTitle: string; // subject + body + in-app body
   closedDate: string; // pre-formatted UTC
   closeReason: 'resolved' | 'auto_inactive';
-  consultationCount?: number; // OPTIONAL — regrounding copy; BAL-420/421 must supply a source
-  reviewToken?: string; // RAW review-invite token; absent ⇒ already rated ⇒ no review block
+  consultationCount?: number; // OPTIONAL — regrounding copy; every publisher (the sweep, the
+  // recap and the case-surface actions) supplies it via summariseCaseCloseAnchors
+  reviewToken?: string; // RAW review-invite token; absent ⇒ no star block (see the docblock)
 }
 
 /**

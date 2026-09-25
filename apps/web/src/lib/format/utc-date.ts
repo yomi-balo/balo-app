@@ -9,25 +9,12 @@
  * gate catches. `engagement-lifecycle-shared.ts` now RE-EXPORTS these, so its three existing
  * importers are untouched.
  *
+ * ⚠⚠ RE-EXPORTED FROM `@balo/shared/timezone` (`packages/shared/src/timezone/utc-date.ts`),
+ * the ONE definition both apps share, so the api's case-inactivity sweep formats `closedDate`
+ * identically without importing `apps/web`. Every existing importer here (and
+ * `engagement-lifecycle-shared.ts`'s three, one level further out) resolves unchanged.
+ *
  * Deterministic under `TZ=UTC` and identical on server and client (the timeZone option is
  * explicit), so either may format a stored instant without a hydration mismatch.
  */
-
-/** "4 Jul" — day + short month, UTC. */
-export function formatShortUtc(date: Date): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'UTC',
-    day: 'numeric',
-    month: 'short',
-  }).format(date);
-}
-
-/** "9 Jul 2026" — day + short month + year, UTC. */
-export function formatLongUtc(date: Date): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'UTC',
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(date);
-}
+export { formatShortUtc, formatLongUtc } from '@balo/shared/timezone';

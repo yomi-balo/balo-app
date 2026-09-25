@@ -227,10 +227,12 @@ export type CaseSurfaceState = 'open' | 'resolved' | 'auto_inactive';
  * post-commit half (`@/lib/cases/close-case-effects`); only the `source` differs, which is the
  * point.
  *
- * ⚠ `sweep` is still NOT declared — the +30d dormancy sweep closes with `auto_inactive` from
- * `apps/api` without emitting this event at all. The ticket that emits it declares the value.
+ * ⚠ `sweep` (BAL-572) is the FOURTH entry point and the only server-published one: the +30d
+ * dormancy sweep (`apps/api/src/jobs/case-inactivity-sweep.ts`) closes with `auto_inactive` and
+ * fires this event with `distinct_id: 'system:case-inactivity'` — there is no acting user, so
+ * the sweep's own system identity stands in for one.
  */
-export type CaseResolveSource = 'recap' | 'end_of_call' | 'case_surface';
+export type CaseResolveSource = 'recap' | 'end_of_call' | 'case_surface' | 'sweep';
 
 /**
  * Which shape the resolve prompt took, when it was shown.
@@ -445,7 +447,7 @@ export interface RecapServerEventMap {
      */
     source: CaseResolveSource;
     engagement_id: string;
-    /** = the acting user id. */
+    /** = the acting user id, or `system:case-inactivity` on `sweep` (there is no actor). */
     distinct_id: string;
   };
   [RECAP_SERVER_EVENTS.RECAP_VIEWED]: {

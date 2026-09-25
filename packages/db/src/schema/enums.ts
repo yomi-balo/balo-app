@@ -257,7 +257,7 @@ export const projectDeliveryStatusEnum = pgEnum('project_delivery_status', [
 
 /**
  * Why a case was closed (BAL-417). `resolved` = a client-side member closed it
- * deliberately (`closed_by_user_id` NOT NULL). `auto_inactive` = the BAL-420
+ * deliberately (`closed_by_user_id` NOT NULL). `auto_inactive` = the BAL-572
  * inactivity sweep closed it (`closed_by_user_id` NULL — no human actor; the
  * ADR-1030 system-actor attribution exemption, same ruling as BAL-387).
  * Enforced by CHECK `case_engagement_close_coherent`.

@@ -643,3 +643,8 @@ export function isWallClockInSpringForwardGap(
   // Interval overlap between [start, end) and [gapStart, gapEnd).
   return range.startMinutes < gap.gapEndMinutes && range.endMinutes > gap.gapStartMinutes;
 }
+
+// ── UTC display-date formatters (BAL-572) ────────────────────────
+//
+// `formatShortUtc` / `formatLongUtc` — see `./utc-date` for the full docblock.
+export * from './utc-date';

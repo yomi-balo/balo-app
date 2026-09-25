@@ -731,6 +731,83 @@ describe('getInAppTemplate', () => {
       expect(result.body).toContain('today');
       expect(result.actionUrl).toBeUndefined();
     });
+
+    /**
+     * BAL-572 — pinning test, no code change: the client in-app body never had rating
+     * copy to begin with (the star row and its token live in the email only), so a tokenless
+     * `auto_inactive` close carries no rating content by construction, same as every other
+     * `engagement-case-closed-client` render.
+     */
+    it('carries no rating copy for a tokenless auto_inactive close', () => {
+      const result = getInAppTemplate('engagement-case-closed-client', {
+        caseTitle: 'Apex CPU limit',
+        closedDate: '3 Aug',
+        closeReason: 'auto_inactive',
+        engagementId: 'eng-4',
+      });
+      expect(result.body).not.toContain('Thanks for rating');
+      expect(result.body).not.toContain('★');
+      expect(result.body).not.toContain('/review/');
+    });
+  });
+
+  describe('engagement-case-closed-expert (BAL-572)', () => {
+    it('names the client company, states the day count, and reads as tidying up', () => {
+      const result = getInAppTemplate('engagement-case-closed-expert', {
+        caseTitle: 'Flow interview stuck on a loop',
+        clientCompanyName: 'Northwind Industrial',
+        closedDate: '3 Aug',
+        engagementId: 'eng-1',
+      });
+      expect(result).toEqual({
+        title: "We've closed this case",
+        body: "'Flow interview stuck on a loop' with Northwind Industrial had been quiet for 30 days with nothing booked, so we closed it out on 3 Aug rather than leave it hanging.",
+        actionUrl: '/cases/eng-1',
+      });
+    });
+
+    it('deep-links to the CASE, never the recap or the engagements route', () => {
+      const result = getInAppTemplate('engagement-case-closed-expert', {
+        caseTitle: 'Apex CPU limit',
+        engagementId: 'eng-5',
+      });
+      expect(result.actionUrl).toBe('/cases/eng-5');
+    });
+
+    it('appends the worked-consultations clause only at count 1+', () => {
+      const zero = getInAppTemplate('engagement-case-closed-expert', {
+        caseTitle: 'Apex CPU limit',
+        engagementId: 'eng-6',
+        consultationCount: 0,
+      });
+      expect(zero.body).not.toContain('You worked on it');
+
+      const three = getInAppTemplate('engagement-case-closed-expert', {
+        caseTitle: 'Apex CPU limit',
+        engagementId: 'eng-6',
+        consultationCount: 3,
+      });
+      expect(three.body).toContain('You worked on it across 3 consultations.');
+    });
+
+    it('spells out a count of 1 as "one" — identical wording to the expert EMAIL, never "1"', () => {
+      const one = getInAppTemplate('engagement-case-closed-expert', {
+        caseTitle: 'Apex CPU limit',
+        engagementId: 'eng-6',
+        consultationCount: 1,
+      });
+      expect(one.body).toContain('You worked on it across one consultation.');
+      expect(one.body).not.toContain('across 1 consultation');
+    });
+
+    it('degrades gracefully with no payload fields', () => {
+      const result = getInAppTemplate('engagement-case-closed-expert', {});
+      expect(result.title).toBe("We've closed this case");
+      expect(result.body).toContain("'A case'");
+      expect(result.body).toContain('The client');
+      expect(result.body).toContain('today');
+      expect(result.actionUrl).toBe('/cases/');
+    });
   });
 
   /**

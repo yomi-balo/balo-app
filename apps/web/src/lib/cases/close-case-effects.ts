@@ -10,15 +10,25 @@ import {
   reviewsRepository,
   usersRepository,
 } from '@balo/db';
-import { expertPartyDisplayName } from '@balo/shared/parties';
-import { formatLongUtc } from '@/lib/format/utc-date';
+import {
+  buildCaseClosedPayload,
+  summariseCaseCloseAnchors,
+  type CaseCloseAnchors,
+} from '@balo/shared/engagements';
 import { log } from '@/lib/logging';
 import { sha256Hex } from '@/lib/magic-link';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
-import {
-  deriveConsultationOrdinal,
-  type MeetingOrdinalInput,
-} from '@/lib/meetings/derive-consultation-ordinal';
+import type { MeetingOrdinalInput } from '@/lib/meetings/derive-consultation-ordinal';
+
+/**
+ * BAL-572 — `capCaseTitle` / `CASE_TITLE_MAX` now live in `@balo/shared/engagements`
+ * (`buildCaseClosedPayload` applies the cap itself), re-exported here so the two
+ * `resolve-case.ts` callers, which still pre-cap `caseRow.title` before constructing
+ * `PublishCaseClosedInput`, keep resolving the same import. The cap is idempotent
+ * (`capCaseTitle(capCaseTitle(x)) === capCaseTitle(x)`), so a pre-capped title reaching
+ * `buildCaseClosedPayload` a second time is a no-op, never a double ellipsis.
+ */
+export { capCaseTitle, CASE_TITLE_MAX } from '@balo/shared/engagements';
 
 /**
  * BAL-421 — THE POST-COMMIT HALF OF THE CASE-CLOSE CONTRACT, SHARED BY ITS TWO ENTRY POINTS:
@@ -54,19 +64,6 @@ import {
  * proof, not a convenience — the same standard `packages/shared/src/meetings/context-owner.ts`
  * records for its own refactor.
  */
-
-/**
- * `case_title` is an UNCAPPED `text` column, but the publish schema caps it at 200 and
- * `publishNotificationEvent` SWALLOWS a 400 — so a long title would silently mean no close
- * email at all. Truncating here is the difference between a slightly shortened subject line
- * and a missing email.
- */
-export const CASE_TITLE_MAX = 200;
-
-export function capCaseTitle(title: string): string {
-  if (title.length <= CASE_TITLE_MAX) return title;
-  return title.slice(0, CASE_TITLE_MAX - 1) + '…';
-}
 
 /**
  * A driver/Postgres error `code` (`23505`, `ECONNREFUSED`, …) when the thrown value carries one.
@@ -156,40 +153,6 @@ async function readSiblings(engagementId: string): Promise<readonly MeetingOrdin
 }
 
 /**
- * How many of this case's consultations were actually HELD — PURE, over an already-read
- * sibling set.
- *
- * `deriveConsultationOrdinal` needs a subject id for the ordinal; the count is
- * subject-independent, so an id that matches nothing is correct and honest here.
- */
-function heldCountOf(siblings: readonly MeetingOrdinalInput[]): number {
-  return deriveConsultationOrdinal(siblings, '').heldCount;
-}
-
-/**
- * The MOST RECENT HELD consultation, or `undefined` — PURE, over an already-read sibling set.
- *
- * ⚠ THE CTA ANCHOR FOR A CASE-SURFACE CLOSE, AND IT IS DELIBERATELY "MOST RECENT **HELD**"
- * RATHER THAN "MOST RECENT". `EngagementCaseClosedPayload.meetingId` is OPTIONAL and its
- * docblock states that when it is absent "the templates render NO link at all rather than a
- * dead one" — so `undefined` is a fully supported, documented outcome, and a case closed
- * before any consultation was held correctly emails no deep link. A cancelled or no-show
- * meeting would resolve to a recap that says the call never happened, which is a worse CTA
- * than none. NEVER fabricate an id.
- */
-function mostRecentHeldIdOf(siblings: readonly MeetingOrdinalInput[]): string | undefined {
-  const held = siblings
-    .filter((meeting) => meeting.status === 'ended' && meeting.outcome === 'completed')
-    .slice()
-    .sort((a, b) => {
-      const delta =
-        (a.startedAt ?? a.scheduledStart).getTime() - (b.startedAt ?? b.scheduledStart).getTime();
-      return delta !== 0 ? delta : a.id.localeCompare(b.id);
-    });
-  return held.at(-1)?.id;
-}
-
-/**
  * How many of this case's consultations were actually HELD, for
  * `engagement.case_closed.consultationCount`. ONE query for the whole sibling set — N+1 is
  * closed by construction. Degrades to 0 rather than throwing (see {@link readSiblings}).
@@ -197,28 +160,32 @@ function mostRecentHeldIdOf(siblings: readonly MeetingOrdinalInput[]): string | 
  * ⚠ THE RECAP ENTRY POINT'S READ, AND IT NEEDS ONLY THIS ONE FIGURE — it already HAS a meeting
  * in scope, so it never asks for a CTA anchor. The case surface, which needs both, uses
  * {@link readCloseAnchors} so the sibling set is still read exactly once.
+ *
+ * ⚠ BAL-572 — the derivation itself (held count + CTA anchor) now lives in
+ * `summariseCaseCloseAnchors` (`@balo/shared/engagements`), ported from this file's own
+ * `heldCountOf` / `mostRecentHeldIdOf` line for line so the api's inactivity sweep can share
+ * it. This function's contract is unchanged.
  */
 export async function readHeldConsultationCount(engagementId: string): Promise<number> {
-  return heldCountOf(await readSiblings(engagementId));
+  return summariseCaseCloseAnchors(await readSiblings(engagementId)).heldCount;
 }
 
-/** Both figures a case-surface close needs, derived from ONE sibling read. */
-export interface CaseCloseAnchors {
-  heldCount: number;
-  /** `undefined` ⇒ the templates render NO deep link. See {@link mostRecentHeldIdOf}. */
-  anchorMeetingId: string | undefined;
-}
+/**
+ * Both figures a case-surface close needs, derived from ONE sibling read. Re-exported from
+ * `@balo/shared/engagements` (BAL-572) — same shape, same import site for external callers.
+ */
+export type { CaseCloseAnchors };
 
 /**
  * ⚠⚠ **ONE** `listMeetingsForContext` FOR THE WHOLE CLOSE, AND THAT IS WHY IT IS ONE FUNCTION
  * RATHER THAN TWO. The case surface needs the held COUNT and the CTA ANCHOR, both derived from
  * the same sibling set; two separate exported readers each called `readSiblings`, so a single
  * close issued the query TWICE while both docblocks claimed "ONE query for the whole sibling
- * set". The read happens here once and the two PURE derivations run over its result.
+ * set". The read happens here once and `summariseCaseCloseAnchors` (shared, BAL-572) runs the
+ * two PURE derivations over its result.
  */
 export async function readCloseAnchors(engagementId: string): Promise<CaseCloseAnchors> {
-  const siblings = await readSiblings(engagementId);
-  return { heldCount: heldCountOf(siblings), anchorMeetingId: mostRecentHeldIdOf(siblings) };
+  return summariseCaseCloseAnchors(await readSiblings(engagementId));
 }
 
 export interface PublishCaseClosedInput {
@@ -260,6 +227,11 @@ export interface PublishCaseClosedInput {
  *
  * ⚠ `closeReason: resolved` IS THE HONEST REASON. Passing `auto_inactive` would make
  * BAL-390's +7d nudge assert that things went quiet about an action the client just took.
+ *
+ * ⚠ BAL-572 — the ASSEMBLY (fallback strings, party label, title cap, date format,
+ * correlation id) now lives in `buildCaseClosedPayload` (`@balo/shared/engagements`), shared
+ * with the api's inactivity sweep. This function keeps its own reads (the RAW inputs
+ * `buildCaseClosedPayload` needs) and its own transport — only the assembly moved.
  */
 export async function publishCaseClosed(input: PublishCaseClosedInput): Promise<void> {
   const [company, profile] = await Promise.all([
@@ -275,25 +247,24 @@ export async function publishCaseClosed(input: PublishCaseClosedInput): Promise<
       : agenciesRepository.getSummaryById(profile.agencyId),
   ]);
 
-  publishNotificationEvent('engagement.case_closed', {
-    correlationId: input.engagementId + ':case_closed',
+  const payload = buildCaseClosedPayload({
     engagementId: input.engagementId,
     meetingId: input.meetingId,
     recipientId: input.recipientId,
     expertProfileId: input.expertProfileId,
-    clientCompanyName: company?.name ?? 'your company',
-    expertPartyLabel: expertPartyDisplayName({
-      type: profile?.type ?? 'freelancer',
-      agencyName: agency?.name ?? null,
-      firstName: expertUser?.firstName ?? null,
-      lastName: expertUser?.lastName ?? null,
-    }),
+    companyName: company?.name,
+    expertProfileType: profile?.type,
+    agencyName: agency?.name,
+    expertFirstName: expertUser?.firstName,
+    expertLastName: expertUser?.lastName,
     caseTitle: input.caseTitle,
-    closedDate: formatLongUtc(input.closedAt),
+    closedAt: input.closedAt,
     closeReason: 'resolved',
     consultationCount: input.consultationCount,
     reviewToken: input.reviewToken,
-  }).catch(() => {
+  });
+
+  publishNotificationEvent('engagement.case_closed', payload).catch(() => {
     // publishNotificationEvent logs internally and never throws to the caller.
   });
 }

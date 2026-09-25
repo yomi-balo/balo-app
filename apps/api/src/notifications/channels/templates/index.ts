@@ -38,6 +38,7 @@ import { ReviewReminderEmail } from './engagement-review-reminder.js';
 import { AutoAcceptedEmail } from './engagement-auto-accepted.js';
 import { AcceptedClientEmail } from './engagement-accepted-emails.js';
 import { CaseClosedEmail } from './engagement-case-closed.js';
+import { CaseClosedExpertEmail } from './engagement-case-closed-expert.js';
 import { ReviewNudgeEmail } from './review-nudge.js';
 import {
   EngagementAcceptedExpertEmail,
@@ -994,6 +995,26 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     };
   },
 
+  // BAL-572 case closed — EXPERT. `auto_inactive` ONLY (the rule gates delivery to that
+  // arm) — a client's deliberate `resolved` close never reaches an expert here. No review
+  // block: the expert is not the one asked to rate. The CTA is the CASE, not the recap —
+  // `/cases/{id}` always resolves, unlike the client half's recap deep link.
+  'engagement-case-closed-expert': (data) => {
+    const caseTitle = (data.caseTitle as string) ?? 'your case';
+    const engagementId = (data.engagementId as string) ?? '';
+    return {
+      component: React.createElement(CaseClosedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientCompany: (data.clientCompanyName as string) ?? 'the client',
+        caseTitle,
+        closedDate: (data.closedDate as string) ?? '',
+        consultationCount: data.consultationCount as number | undefined,
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+      }),
+      subject: `We've closed ${sanitizeSubjectTitle(caseTitle)}`,
+    };
+  },
+
   // BAL-390 — the star-rating nudge (+24h / +7d), server-published by the hourly
   // review-nudge sweep, EMAIL ONLY to the reviewer. `cadenceStep` drives the copy: step
   // 1 is a light touch, step 2 LEADS with the regrounding and is the last ask (the band
@@ -1003,11 +1024,20 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     const engagementTitle = (data.engagementTitle as string) ?? 'your engagement';
     const step = clampNudgeStep(data.cadenceStep);
     const expertParty = (data.expertPartyLabel as string) ?? 'your expert';
+    const engagementKind = engagementKindOf(data.engagementKind);
+    const engagementId = (data.engagementId as string) ?? '';
+    // BAL-572 — `/engagements/{id}` 404s for a CASE by construction (the route's loader
+    // filters engagement_type = project); the case surface is `/cases/{id}`. A project nudge
+    // keeps its unchanged `/engagements/{id}` footer link.
+    const engagementUrl =
+      engagementKind === 'case'
+        ? `${BASE_URL}/cases/${engagementId}`
+        : `${BASE_URL}/engagements/${engagementId}`;
     return {
       component: React.createElement(ReviewNudgeEmail, {
         firstName: (data.recipientName as string) ?? 'there',
         cadenceStep: step,
-        engagementKind: engagementKindOf(data.engagementKind),
+        engagementKind,
         engagementTitle,
         expertParty,
         clientCompany: (data.clientCompanyName as string) ?? 'your team',
@@ -1017,7 +1047,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         // close must never be described as having gone quiet. Absent ⇒ neutral wording.
         closeReason: closeReasonOf(data.closeReason),
         reviewToken: (data.reviewToken as string) ?? '',
-        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        engagementUrl,
         baseUrl: BASE_URL,
       }),
       subject:

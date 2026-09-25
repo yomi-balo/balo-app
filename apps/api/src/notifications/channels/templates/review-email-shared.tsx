@@ -276,10 +276,12 @@ export function heroTitleOr(title: string, fallback: string): string {
 
 /**
  * BAL-390 — " across 3 consultations", or an EMPTY string when the count is absent or
- * zero. `consultationCount` is optional on both carrying payloads and has no producer
- * yet (BAL-420/BAL-421 must supply one), so every count-bearing sentence in the case
- * family has to read naturally with the clause dropped entirely. Shared by
- * `review-nudge` and `engagement-case-closed` so the two never drift.
+ * zero. `consultationCount` is optional on both carrying payloads; every
+ * `engagement-case-closed` publisher (the recap and case-surface actions, and BAL-572's
+ * inactivity sweep) supplies it via `summariseCaseCloseAnchors`, while `review-nudge` still
+ * has none — so every count-bearing sentence in the case family has to read naturally with
+ * the clause dropped entirely either way. Shared by `review-nudge` and
+ * `engagement-case-closed` so the two never drift.
  */
 export function consultationClause(count: number | undefined): string {
   if (count === undefined || count <= 0) return '';
