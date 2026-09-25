@@ -8,6 +8,7 @@ import { track, DASHBOARD_EVENTS } from '@/lib/analytics';
 import { joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
 import { meetingTypeLabel } from '@/lib/meetings/meeting-type-label';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
+import { RoomSettingUpSlot } from '@/components/balo/meetings/room-setting-up-slot';
 import {
   formatUpNextWhen,
   resolveRescheduleNote,
@@ -187,6 +188,9 @@ export function UpNextRow({
           <span className="size-[7px] rounded-full bg-emerald-400" aria-hidden="true" />
           {UP_NEXT_JOIN}
         </JoinMeetingButton>
+      )}
+      {clock !== null && timing !== null && timing.roomSettingUp && (
+        <RoomSettingUpSlot variant="button" label="short" className="min-h-11 px-4" />
       )}
     </div>
   );

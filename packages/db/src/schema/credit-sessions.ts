@@ -200,9 +200,11 @@ export const creditSessions = pgTable(
      * presence-settled.
      *
      * ⚠ IT IS NOT REDUNDANT WITH `meetings.outcome`: `abandoned_wait` has NO outcome label —
-     * BAL-412 mints no fourth `meeting_outcome` value, so it lands as `completed` with a zero
+     * BAL-412 mints no `meeting_outcome` value for it, so it lands as `completed` with a zero
      * settlement — and `missed_call` is ALSO a zero settlement. The two zero shapes are
-     * indistinguishable on the meeting row and distinguishable ONLY here.
+     * indistinguishable on the meeting row and distinguishable ONLY here. The fourth outcome,
+     * `venue_unavailable` (the call room was never ready), never reaches this column: no room
+     * means no admission, and no admission means no credit session to settle.
      */
     settlementShape: creditSettlementShapeEnum('settlement_shape'),
     /**

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockMeetingFindById,
@@ -32,7 +32,11 @@ vi.mock('./schedule.js', () => ({ scheduleNotification: mockScheduleNotification
 // ⚠ `@balo/shared/meetings` is NOT mocked — `summarisePresence` is the shared reduction both
 // guards read, and mocking it would make this file assert its own fixtures.
 
-import { DEFAULT_MEETING_TIMERS } from '@balo/shared/meetings';
+import {
+  DEFAULT_MEETING_TIMERS,
+  dailyRoomNameForMeeting,
+  isMeetingVenueReady,
+} from '@balo/shared/meetings';
 import {
   clientAbsentKey,
   expertAbsentKey,
@@ -63,8 +67,33 @@ function row(payload: Record<string, unknown> = {}, attempts = 1): ScheduledNoti
   } as unknown as ScheduledNotification;
 }
 
-function meeting(status = 'waiting_for_participants') {
-  return { id: MEETING_ID, status, scheduledStart: START };
+const MINUTE = 60_000;
+
+/** `START + n` minutes. */
+function at(minutes: number): Date {
+  return new Date(START.getTime() + minutes * MINUTE);
+}
+
+const ROOM = dailyRoomNameForMeeting(MEETING_ID);
+
+/**
+ * ⚠⚠ BAL-581 — VENUE-COMPLETE BY DEFAULT, AND THAT IS THE CANARY. `meetingVenueReadyAt` needs
+ * `dailyRoomName`/`joinUrl` (matching `dailyRoomNameForMeeting(id)`) AND `venueProvisionedAt`.
+ * Without them this fixture reads as NOT READY and every existing "PUBLISHES" row in this file
+ * would silently skip `venue_unavailable` instead. `venueProvisionedAt: at(-1440)` is "ready at
+ * booking", the ordinary case every pre-BAL-581 row means.
+ */
+function meeting(status = 'waiting_for_participants', overrides: Record<string, unknown> = {}) {
+  return {
+    id: MEETING_ID,
+    status,
+    scheduledStart: START,
+    dailyRoomName: ROOM,
+    joinUrl: `https://balo.daily.co/${ROOM}`,
+    createdAt: at(-1440),
+    venueProvisionedAt: at(-1440),
+    ...overrides,
+  };
 }
 
 describe('the dedupe keys', () => {
@@ -81,6 +110,12 @@ describe('meetingExpertAbsentRecheck (BAL-134 §6.3)', () => {
     vi.clearAllMocks();
     mockMeetingFindById.mockResolvedValue(meeting());
     mockListByMeeting.mockResolvedValue([]);
+  });
+
+  /** ⚠⚠ THE CANARY — if this ever goes red every other "PUBLISHES" row below it is silently
+   * exercising `venue_unavailable` instead of the reason it claims to. */
+  it('⚠⚠ the default fixture is venue-READY — the canary for every other row in this file', () => {
+    expect(isMeetingVenueReady(meeting())).toBe(true);
   });
 
   it('PUBLISHES when the expert still has not joined', async () => {
@@ -121,6 +156,62 @@ describe('meetingExpertAbsentRecheck (BAL-134 §6.3)', () => {
       reason: 'expert_joined_before_alert',
     });
     expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  /**
+   * BAL-581 — the alert blames the EXPERT; a room that was never ready is the
+   * `meeting.unprovisioned` admin alert's meeting, not a missing expert's.
+   */
+  it('⚠ BAL-581 — SKIPS `venue_unavailable` for a never-provisioned meeting, no analytics either', async () => {
+    mockMeetingFindById.mockResolvedValue(
+      meeting('waiting_for_participants', {
+        dailyRoomName: null,
+        joinUrl: null,
+        venueProvisionedAt: null,
+      })
+    );
+
+    await expect(meetingExpertAbsentRecheck(row({ minutesPastStart: 5 }))).resolves.toEqual({
+      publish: false,
+      reason: 'venue_unavailable',
+    });
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  /**
+   * BAL-581 — a promise armed before the room existed (an older build's arm, or clock skew):
+   * skip, freeing the pending slot for the next sweep tick to re-arm at the anchored instant.
+   */
+  describe('BAL-581 — a LATE-ready venue', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('⚠ SKIPS `venue_ready_late` — room ready at start+3, checked at start+5 (inside the window)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(at(5));
+      mockMeetingFindById.mockResolvedValue(
+        meeting('waiting_for_participants', { venueProvisionedAt: at(3) })
+      );
+
+      await expect(meetingExpertAbsentRecheck(row({ minutesPastStart: 5 }))).resolves.toEqual({
+        publish: false,
+        reason: 'venue_ready_late',
+      });
+      expect(mockTrackServer).not.toHaveBeenCalled();
+    });
+
+    it('PUBLISHES the same meeting once checked at start+8 (anchor + alert window)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(at(8));
+      mockMeetingFindById.mockResolvedValue(
+        meeting('waiting_for_participants', { venueProvisionedAt: at(3) })
+      );
+
+      const result = await meetingExpertAbsentRecheck(row({ minutesPastStart: 8 }));
+
+      expect(result.publish).toBe(true);
+    });
   });
 
   it.each(['ended', 'cancelled'])('SKIPS a %s meeting', async (status) => {
@@ -307,6 +398,9 @@ describe('the two schedulers (§6.1)', () => {
     await scheduleExpertAbsentAlert({
       meetingId: MEETING_ID,
       scheduledStart: START,
+      // ⚠ BAL-581 — the venue was ready before the start, so the anchor equals `scheduledStart`
+      // and the fire time is unchanged from before this ticket.
+      absenceAnchor: START,
       contextType: 'case',
       timers: DEFAULT_MEETING_TIMERS,
     });
@@ -328,6 +422,29 @@ describe('the two schedulers (§6.1)', () => {
       mode: 'first_wins',
       recheck: MEETING_EXPERT_ABSENT_RECHECK,
     });
+  });
+
+  /**
+   * BAL-581 — a LATE anchor shifts BOTH the fire time and `minutesPastStart` together, so the
+   * ops email's "N minutes after the scheduled start" sentence stays literally true.
+   */
+  it('⚠ BAL-581 — a LATE anchor (a repaired venue) shifts scheduledFor AND minutesPastStart together', async () => {
+    await scheduleExpertAbsentAlert({
+      meetingId: MEETING_ID,
+      scheduledStart: START,
+      absenceAnchor: at(3),
+      contextType: 'case',
+      timers: DEFAULT_MEETING_TIMERS,
+    });
+
+    const [, payload, options] = mockScheduleNotification.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    // anchor at(3) + the 5-minute alert window = at(8), NOT at(5).
+    expect(payload).toMatchObject({ minutesPastStart: 8 });
+    expect(options.at).toEqual(at(8));
   });
 
   /**
@@ -369,12 +486,14 @@ describe('the two schedulers (§6.1)', () => {
     await scheduleExpertAbsentAlert({
       meetingId: MEETING_ID,
       scheduledStart: START,
+      absenceAnchor: START,
       contextType: 'case',
       timers: DEFAULT_MEETING_TIMERS,
     });
     await scheduleExpertAbsentAlert({
       meetingId: MEETING_ID,
       scheduledStart: START,
+      absenceAnchor: START,
       contextType: 'case',
       timers: DEFAULT_MEETING_TIMERS,
     });
@@ -412,6 +531,7 @@ describe('the two schedulers (§6.1)', () => {
     await scheduleExpertAbsentAlert({
       meetingId: MEETING_ID,
       scheduledStart: START,
+      absenceAnchor: START,
       contextType: 'case',
       timers: DEFAULT_MEETING_TIMERS,
     });

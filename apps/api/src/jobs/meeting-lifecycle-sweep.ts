@@ -15,9 +15,11 @@ import {
   dailyParticipantIdFor,
   dailyRoomNameForMeeting,
   expertClockStart,
+  meetingVenueReadyAt,
   resolveTerminalRule,
   selectPrimaryMeetingContext,
   summarisePresence,
+  venueAbsenceAnchor,
   type MeetingTerminalDecision,
   type MeetingTimers,
   type PresenceFacts,
@@ -283,7 +285,7 @@ function claimFor(userId: string | null, meetingGuestId: string | null): string 
   return null;
 }
 
-/** PASS 2 — evaluate the four terminal rules and, on a match, end the meeting. */
+/** PASS 2 — evaluate the five terminal rules and, on a match, end the meeting. */
 async function terminateIfDue(
   state: CandidateState,
   timers: MeetingTimers,
@@ -295,15 +297,41 @@ async function terminateIfDue(
     presence: state.facts,
     timers,
     now,
+    venueReadyAt: meetingVenueReadyAt(state.meeting),
   });
   if (decision === null) {
     return null;
   }
 
+  if (decision.rule === 'venue_unavailable') {
+    // ⚠⚠ BAL-581 — CONFIRM ON A FRESH ROW. Candidates are read once per tick, and a
+    // roomless meeting skips reconciliation (`roomRosterFor` returns `null`), so its snapshot is
+    // never re-read by anything else. A repair whose `setVenue` lands after the batch read —
+    // with a client already admitted to the fresh room — must not be ended `venue_unavailable`
+    // on a stale "not ready" read, and its fresh room must not go undeleted below.
+    const fresh = await meetingsRepository.findById(state.meeting.id);
+    if (fresh === undefined) {
+      // Soft-deleted between the batch read and now. Nothing to terminate.
+      return null;
+    }
+    const confirmed = resolveTerminalRule({
+      status: fresh.status,
+      scheduledStart: fresh.scheduledStart,
+      presence: state.facts,
+      timers,
+      now,
+      venueReadyAt: meetingVenueReadyAt(fresh),
+    });
+    if (confirmed === null || confirmed.rule !== 'venue_unavailable') {
+      // The next tick decides from fresh state — a repair landed, or the meeting moved on.
+      return null;
+    }
+  }
+
   const ended = await meetingsRepository.endMeeting({
     id: state.meeting.id,
     outcome: decision.outcome,
-    // ⚠ ALL FOUR SYSTEM RULES REPORT `system_idle` — `ended_by` answers "person or system?", and
+    // ⚠ ALL FIVE SYSTEM RULES REPORT `system_idle` — `ended_by` answers "person or system?", and
     // WHICH rule fired is answered by `outcome` plus the `meeting.ended` audit row. A label per
     // rule would duplicate `outcome` and then be free to disagree with it.
     endedBy: 'system_idle',
@@ -328,7 +356,7 @@ async function terminateIfDue(
     'Terminal rule fired'
   );
 
-  emitRuleAnalytics(state, decision);
+  emitRuleAnalytics(state, decision, ended.meeting);
   await emitMeetingEnded({
     meeting: ended.meeting,
     endedBy: 'system_idle',
@@ -364,15 +392,18 @@ async function terminateIfDue(
     );
   }
 
-  // ⚠⚠ BAL-473 (§5.2, ARCHITECT AMENDMENT to OD-2) — also hook the four SYSTEM terminal rules,
-  // not just the human `end-meeting.ts` path. Exactly one of the four (`idle_end`) is scoped
+  // ⚠⚠ BAL-473 (§5.2, ARCHITECT AMENDMENT to OD-2) — also hook the five SYSTEM terminal rules,
+  // not just the human `end-meeting.ts` path. Exactly one of the five (`idle_end`) is scoped
   // to a meeting that reached `in_progress`, which is the only status under which a recording
-  // exists; the other three no-op for free inside `recording-stop` itself (nothing capturing).
+  // exists; the other four no-op for free inside `recording-stop` itself (nothing capturing).
   // BEST-EFFORT, the same posture as `tearDownRoom` immediately below: the meeting is already
   // terminal in Postgres, so an enqueue fault must never abort this sweep tick.
   await enqueueRecordingStopBestEffort(state.meeting.id);
 
-  await tearDownRoom(state.meeting);
+  // ⚠ TORN DOWN FROM THE CAS ROW, NEVER `state.meeting` — a room a repair stamped
+  // after this tick's batch read is still on the RETURNING row `endMeeting` handed back, and
+  // must still be deleted even though this tick decided the meeting on the stale snapshot.
+  await tearDownRoom(ended.meeting);
   return decision;
 }
 
@@ -391,12 +422,21 @@ async function enqueueRecordingStopBestEffort(meetingId: string): Promise<void> 
 /**
  * The per-rule analytics event, beside the universal `meeting_ended`.
  *
- * ⚠ TWO OF THE FOUR RULES HAVE THEIR OWN EVENT AND TWO DO NOT, and that is the ticket's list
- * rather than an omission: `meeting_waiting_abandoned` and `meeting_missed_call` name failure
- * modes the product needs to count separately, while the idle end and the no-show are fully
- * described by `meeting_ended.outcome`.
+ * ⚠ THREE OF THE FIVE RULES HAVE THEIR OWN EVENT AND TWO DO NOT, and that is the ticket's list
+ * rather than an omission: `meeting_waiting_abandoned`, `meeting_missed_call` and
+ * `meeting_venue_unavailable` name failure modes the product needs to count separately — a
+ * provisioning failure is a platform incident the product must count separately from any
+ * no-show — while the idle end and the no-show are fully described by `meeting_ended.outcome`.
+ *
+ * ⚠ `endedMeeting` IS THE CAS `RETURNING` ROW, NEVER `state.meeting` — the venue arm's
+ * `room_name_stamped` must read whatever `endMeeting` actually returned, not this tick's stale
+ * batch snapshot.
  */
-function emitRuleAnalytics(state: CandidateState, decision: MeetingTerminalDecision): void {
+function emitRuleAnalytics(
+  state: CandidateState,
+  decision: MeetingTerminalDecision,
+  endedMeeting: Meeting
+): void {
   if (decision.rule === 'abandoned_wait') {
     trackServer(MEETING_SERVER_EVENTS.MEETING_WAITING_ABANDONED, {
       meeting_id: state.meeting.id,
@@ -411,6 +451,14 @@ function emitRuleAnalytics(state: CandidateState, decision: MeetingTerminalDecis
       meeting_id: state.meeting.id,
       client_joined: state.facts.clientSideEverPresent,
       distinct_id: state.meeting.id,
+    });
+    return;
+  }
+  if (decision.rule === 'venue_unavailable') {
+    trackServer(MEETING_SERVER_EVENTS.MEETING_VENUE_UNAVAILABLE, {
+      meeting_id: endedMeeting.id,
+      room_name_stamped: endedMeeting.dailyRoomName !== null,
+      distinct_id: endedMeeting.id,
     });
   }
 }
@@ -470,12 +518,22 @@ async function armAbsenceReminders(
   }
 
   if (!facts.expertEverPresent) {
+    // ⚠ BAL-581 — the ops alert says "the EXPERT has not joined". With no ready room nobody
+    // COULD join: that meeting is the `meeting.unprovisioned` admin alert's, and arming here
+    // would page ops to chase an expert who was locked out too. Measured from the venue absence
+    // anchor, the SAME instant rule 3 and the waiting phase use — `null` (never ready) or still
+    // before the room existed both skip; the next tick re-evaluates from fresh venue facts.
+    const anchor = venueAbsenceAnchor(meeting.scheduledStart, meetingVenueReadyAt(meeting));
+    if (anchor === null || now.getTime() < anchor.getTime()) {
+      return;
+    }
     const primary = selectPrimaryMeetingContext(
       await meetingContextsRepository.listByMeeting(meeting.id)
     );
     await scheduleExpertAbsentAlert({
       meetingId: meeting.id,
       scheduledStart: meeting.scheduledStart,
+      absenceAnchor: anchor,
       contextType: primary.ok ? primary.context.contextType : 'unknown',
       timers,
     });

@@ -245,22 +245,25 @@ describe('RecapPage — analytics', () => {
     });
   });
 
-  it.each(['no_show_client', 'missed_call', 'nobody_joined', 'cancelled'] as const)(
-    'reports not_held_reason: %s from the not-held panel it rendered',
-    async (reason) => {
-      mockLoadRecap.mockResolvedValue({
-        ...CLIENT_VIEW,
-        state: reason === 'cancelled' ? 'cancelled' : 'not_held',
-        notHeld: { reason, headline: "This one didn't go ahead", body: 'b' },
-      });
-      await RecapPage(props());
-      expect(mockTrack).toHaveBeenCalledTimes(1);
-      expect(mockTrack).toHaveBeenCalledWith(
-        'recap_viewed',
-        expect.objectContaining({ not_held_reason: reason })
-      );
-    }
-  );
+  it.each([
+    'no_show_client',
+    'missed_call',
+    'nobody_joined',
+    'venue_unavailable',
+    'cancelled',
+  ] as const)('reports not_held_reason: %s from the not-held panel it rendered', async (reason) => {
+    mockLoadRecap.mockResolvedValue({
+      ...CLIENT_VIEW,
+      state: reason === 'cancelled' ? 'cancelled' : 'not_held',
+      notHeld: { reason, headline: "This one didn't go ahead", body: 'b' },
+    });
+    await RecapPage(props());
+    expect(mockTrack).toHaveBeenCalledTimes(1);
+    expect(mockTrack).toHaveBeenCalledWith(
+      'recap_viewed',
+      expect.objectContaining({ not_held_reason: reason })
+    );
+  });
 
   it('BAL-440 — reports recording_state: ready when the view carries a ready recording', async () => {
     mockLoadRecap.mockResolvedValue({

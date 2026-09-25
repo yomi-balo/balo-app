@@ -11,6 +11,7 @@ import { formatZonedTimeRange, formatZonedTime } from '@/lib/calendar/zoned-grid
 import { joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
+import { RoomSettingUpSlot } from '@/components/balo/meetings/room-setting-up-slot';
 
 interface MeetingBlockProps {
   readonly meeting: CalendarMeetingView;
@@ -24,6 +25,9 @@ interface MeetingBlockProps {
   readonly isPast: boolean;
   /** Join is inside its window, as of the shell's last 60-second tick. */
   readonly joinVisible: boolean;
+  /** BAL-581 — inside the join window with no ready call room. Renders `RoomSettingUpSlot`
+   *  instead of Join. Never `true` while `joinVisible` is. */
+  readonly roomSettingUp: boolean;
   /** The Join `aria-label`'s timing suffix ("starting now" / "starting in 5 minutes").
    *  `null` exactly when `joinVisible` is false — see `calendarMeetingTiming`. */
   readonly joinTimingLabel: string | null;
@@ -53,8 +57,8 @@ const COMPACT_HEIGHT_PX = 24;
  * ⚠ MEMOISED — DO NOT REINTRODUCE A `now`/OBJECT PROP (BAL-511 D1). `CalendarShell` ticks `now`
  * every 60 seconds and re-renders the whole tree; without this memo every `MeetingBlock` on the
  * page — a full week's worth — re-rendered on every tick regardless of whether anything about it
- * actually changed. `WeekGrid` now computes `isPast`/`joinVisible`/`joinTimingLabel` via
- * `calendarMeetingTiming` and hands down three PRIMITIVES, never the composed object and never
+ * actually changed. `WeekGrid` computes `isPast`/`joinVisible`/`roomSettingUp`/`joinTimingLabel`
+ * via `calendarMeetingTiming` and hands down four PRIMITIVES, never the composed object and never
  * `now` itself — every prop here must stay a primitive or a reference the parent memoises, or the
  * comparison this wrapper performs degrades back to a no-op.
  */
@@ -67,6 +71,7 @@ export const MeetingBlock = memo(function MeetingBlock({
   widthPercent,
   isPast,
   joinVisible,
+  roomSettingUp,
   joinTimingLabel,
   onJoinClick,
   isContinuationFragment = false,
@@ -159,6 +164,9 @@ export const MeetingBlock = memo(function MeetingBlock({
           <Video className="h-3 w-3" aria-hidden="true" />
         </JoinMeetingButton>
       )}
+      {roomSettingUp && !compact && (
+        <RoomSettingUpSlot variant="chip" className="absolute top-0.5 right-0.5 z-10" />
+      )}
       {compact && (
         <Popover>
           <PopoverTrigger asChild>
@@ -198,6 +206,9 @@ export const MeetingBlock = memo(function MeetingBlock({
                 <Video className="h-4 w-4" aria-hidden="true" />
                 Join
               </JoinMeetingButton>
+            )}
+            {roomSettingUp && (
+              <RoomSettingUpSlot variant="button" label="short" className="mt-2 min-h-11 w-full" />
             )}
           </PopoverContent>
         </Popover>

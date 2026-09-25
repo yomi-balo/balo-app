@@ -1,5 +1,5 @@
 /**
- * BAL-134 / ADR-1049 (§5.4) — THE HUMAN END. Path 5 of the five-path termination taxonomy, and
+ * BAL-134 / ADR-1049 (§5.4) — THE HUMAN END. Path 6 of the six-path termination taxonomy, and
  * the only one a person initiates.
  *
  * ── THE SEQUENCE, AND WHY EVERY STEP SITS WHERE IT DOES ─────────────────────────────────
@@ -29,7 +29,7 @@
  * `outcome: null`, always, on this path. ADR-1049 is explicit — the end endpoint STOPS THE
  * ROOM; BAL-412 resolves the outcome from `meeting_presence`. `meeting_outcome_requires_ended`
  * is one-directional, so `ended` with a NULL outcome is legal and is exactly what this writes.
- * The three SYSTEM paths that are *defined by* their outcome carry one; this one must not.
+ * The four SYSTEM paths that are *defined by* their outcome carry one; this one must not.
  */
 import { meetingPresenceRepository, meetingsRepository, type Meeting } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
@@ -305,8 +305,8 @@ export async function endMeeting(input: EndMeetingInput): Promise<EndMeetingResu
 /**
  * Emit `meeting_ended` from the meeting's LIVE presence rows.
  *
- * ⚠ EXPORTED, because ALL FIVE terminal paths must emit the same event with the same shape and
- * the sweep is the other four. One definition, one place to get `distinct_id` right.
+ * ⚠ EXPORTED, because ALL SIX terminal paths must emit the same event with the same shape and
+ * the sweep is the other five. One definition, one place to get `distinct_id` right.
  *
  * ⚠ `distinct_id` IS THE ACTING USER ON A HUMAN END AND THE **MEETING ID** ON A SYSTEM PATH —
  * `trackServer` promotes it to PostHog's `distinctId`, and the cast means a missing property

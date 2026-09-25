@@ -21,6 +21,7 @@ import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
  * field of any shape here; every view is plain projected data, and the projection happens
  * SERVER-SIDE in `_lib/map-case-consultations.ts`. Corollaries, each load-bearing:
  *   · `joinUrl` / `dailyRoomName` are STRUCTURALLY ABSENT from `CaseConsultationRowView`;
+ *     BAL-581 — `roomReady` is the only venue fact that crosses, and it is a boolean ONLY;
  *   · `r2Key` is STRUCTURALLY ABSENT from `CaseFileRowView` — it is the exact object locator
  *     the presigner signs;
  *   · a relational `with:` is FORBIDDEN upstream (`with: { guests: true }` hydrates
@@ -119,6 +120,9 @@ export interface CaseConsultationRowView {
    *  window itself has no closing bound, so the upcoming-state gate is what keeps this field
    *  honest once a row's `scheduledStart` is behind `now`. */
   live: boolean;
+  /** BAL-581 — `isMeetingVenueReady` for an UPCOMING row; `false` on every other row (it is read
+   *  only beside `live`). A boolean only — never the room name or join url. */
+  roomReady: boolean;
 }
 
 // ── files (the D4 merge) ─────────────────────────────────────────────────────────────────
@@ -310,6 +314,14 @@ export type CaseNudgeView =
        * every shape in this file (see the module docblock).
        */
       joinPath: string;
+      /**
+       * BAL-581 — the meeting's call room exists and is ours (`isMeetingVenueReady`,
+       * server-side). A SEPARATE field, never folded into `live`: `live` is re-derived
+       * client-side on a ticking clock, so ANDing readiness into it would re-open Join the
+       * moment the clock crosses the window.
+       * ⚠ A boolean ONLY — `meetings.join_url` / `daily_room_name` stay structurally absent.
+       */
+      roomReady: boolean;
     }
   /**
    * CLIENT lens — the expert asked to move it; only the client can answer. `proposedAtIso` and

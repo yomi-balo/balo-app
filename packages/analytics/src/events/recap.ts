@@ -278,12 +278,20 @@ export type RecapRecordingState = 'absent' | 'processing' | 'ready' | 'failed';
  *                        presence is unknown — a failed read keeps this value, never a guess).
  *   · `nobody_joined`  — the delivering expert never joined AND nobody client-side did. The
  *                        `meeting_outcome` is still `missed_call`; this is read from presence.
+ *   · `venue_unavailable` — BAL-581. The call room was never ready, so nobody COULD join. A
+ *                        STORED `meeting_outcome`, never derived like `nobody_joined`. No party
+ *                        is at fault; Balo owns it.
  *   · `cancelled`      — the meeting was cancelled (also `recap_state: 'cancelled'`).
  *
  * Every value has a producer: `resolveNotHeld` in `apps/web`, whose `RecapNotHeldView.reason`
  * IS this type (aliased there, not restated).
  */
-export type RecapNotHeldReason = 'no_show_client' | 'missed_call' | 'nobody_joined' | 'cancelled';
+export type RecapNotHeldReason =
+  | 'no_show_client'
+  | 'missed_call'
+  | 'nobody_joined'
+  | 'venue_unavailable'
+  | 'cancelled';
 
 // ── Client (browser `track`) ──────────────────────────────────────────────
 export const RECAP_EVENTS = {

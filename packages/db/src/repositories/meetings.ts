@@ -1,6 +1,7 @@
-import { and, asc, eq, gt, gte, inArray, isNull, lt, ne, notInArray } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNull, lt, lte, ne, notInArray, sql } from 'drizzle-orm';
 import {
   assertMeetingTransition,
+  DAILY_ROOM_NAME_PREFIX,
   RESCHEDULABLE_MEETING_STATUSES,
   GUEST_TOKEN_TTL_AFTER_END_MS,
   selectPrimaryMeetingContext,
@@ -138,15 +139,46 @@ export interface ListLifecycleCandidatesInput {
   limit: number;
 }
 
+/**
+ * BAL-581 — SQL TWIN of `isMeetingVenueReady` (`@balo/shared/meetings`): both venue columns
+ * stamped AND the name equals `'balo-' || <uuid without hyphens>`. `uuid::text` is canonical
+ * lowercase, matching `dailyRoomNameForMeeting`. Pinned to the TS predicate by
+ * `meetings.integration.test.ts` ("SQL twin agrees with isMeetingVenueReady"). Never NULL: each
+ * IS NOT NULL guard short-circuits the AND before the comparison can see a NULL.
+ * Used by `listUnprovisionedScheduled` (negated) and by the three list reads, which select it as
+ * `roomReady` INSTEAD of the join credential — a list surface never selects `dailyRoomName` /
+ * `joinUrl` directly.
+ */
+export const meetingVenueReadySql = sql`(${meetings.dailyRoomName} IS NOT NULL AND ${meetings.joinUrl} IS NOT NULL AND ${meetings.dailyRoomName} = ${DAILY_ROOM_NAME_PREFIX}::text || replace(${meetings.id}::text, '-', ''))`;
+
+/** BAL-581 — {@link meetingsRepository.listUnprovisionedScheduled}'s input. */
+export interface ListUnprovisionedScheduledInput {
+  /** Inclusive. Meetings whose `scheduled_start` is earlier are out of scope for the caller. */
+  scheduledStartAfter: Date;
+  /** Inclusive. The finder's in-flight-booking grace; the repair producer passes `now`. */
+  createdBefore: Date;
+  /** Hard bound. ⚠ The CALLER must `log.warn` when the result length equals it. */
+  limit: number;
+}
+
+/** BAL-581 — one live `scheduled` meeting whose call room is NOT ready. No venue column. */
+export interface UnprovisionedScheduledMeeting {
+  readonly meetingId: string;
+  readonly scheduledStart: Date;
+  readonly createdAt: Date;
+  /** `daily_room_name IS NOT NULL` — a stamped-but-mismatched room vs one never created. */
+  readonly roomNameStamped: boolean;
+}
+
 /** BAL-134 — the terminal transition's input (§4.3). */
 export interface EndMeetingInput {
   id: string;
   /**
    * WHY it ended, or NULL. ⚠ NULL IS A REAL, CORRECT VALUE, NOT "unknown" (D5): the two HUMAN
    * paths and the abandoned-wait path deliberately leave it unset — "the ender never sets the
-   * outcome" (ADR-1049); BAL-412 resolves it from `meeting_presence`. Only the three system
-   * paths that are DEFINED by their outcome (`completed` / `no_show_client` / `missed_call`)
-   * pass one.
+   * outcome" (ADR-1049); BAL-412 resolves it from `meeting_presence`. Only the four system
+   * paths that are DEFINED by their outcome (`completed` / `no_show_client` / `missed_call` /
+   * `venue_unavailable`) pass one.
    */
   outcome: MeetingOutcome | null;
   /** WHO ended it. Required on EVERY path — unlike `outcome`, this is never unknown. */
@@ -154,7 +186,7 @@ export interface EndMeetingInput {
   /** The authoritative end instant. Becomes `meetings.ended_at` AND the presence ceiling. */
   endedAt: Date;
   /**
-   * The acting human, or NULL for the four system paths (the ADR-1030 system-actor
+   * The acting human, or NULL for the five system paths (the ADR-1030 system-actor
    * exemption — an unattributed row, never a fabricated actor).
    */
   actorUserId: string | null;
@@ -201,6 +233,11 @@ export interface CreateMeetingInput {
   scheduledEnd: Date;
   /** ≥1 required — the "every meeting has a context row" invariant (decision B). */
   contexts: MeetingContextInput[];
+  /**
+   * An INLINE venue (seeder/tests). ⚠ A second venue writer beside `setVenue` that never stamps
+   * `venue_provisioned_at`; `meetingVenueReadyAt` (`@balo/shared/meetings`) reads such a ready row
+   * as ready since `created_at`, which is exactly when an inline venue was written.
+   */
   dailyRoomName?: string | null;
   joinUrl?: string | null;
   /**
@@ -438,6 +475,9 @@ export interface RawMeetingContextRow {
   /** Nullable pre-fold — `admin` contexts carry a `null` `context_id`. Never null post-fold:
    *  {@link selectPrimaryMeetingContext} drops any candidate with a null id. */
   contextId: string | null;
+  /** Per-MEETING (identical on each of a meeting's context rows): {@link meetingVenueReadySql},
+   *  the readiness boolean a list read selects INSTEAD of the join credential. */
+  roomReady: boolean;
 }
 
 const MS_PER_DAY = 86_400_000;
@@ -548,6 +588,8 @@ export interface FoldedCalendarMeeting {
   status: MeetingStatus;
   contextType: MeetingContextTypeWithHolder;
   contextId: string;
+  /** Copied from the meeting's first context row — see {@link RawMeetingContextRow.roomReady}. */
+  roomReady: boolean;
 }
 
 /** Told about every meeting the fold omits, and why. The CALLER owns the log line and its scope. */
@@ -601,6 +643,7 @@ export function foldMeetingContextRows(
       status: first.status,
       contextType: primary.context.contextType,
       contextId: primary.context.contextId,
+      roomReady: first.roomReady,
     });
   }
   return folded;
@@ -733,6 +776,7 @@ export function assembleCalendarMeetings(
       // `ExpertCalendarMeeting` an unverified cross-tenant identifier behind nothing but a
       // docblock. Fail closed here, once, rather than at each call site.
       contextId: resolved.owningRowFound ? meeting.contextId : null,
+      roomReady: meeting.roomReady,
       ...resolved,
     });
   }
@@ -1091,12 +1135,14 @@ export const meetingsRepository = {
 
   /**
    * BAL-129 PROVISIONING SEAM — stamp the Daily room + join url once the room exists.
-   * BAL-418 ships the seam; BAL-129 is the only caller that will ever exist.
+   * Callers are `provisionVenue` (booking, replay and the venue repair job); every stamp moves
+   * `venue_provisioned_at` to the write instant (last write wins).
    */
   async setVenue(id: string, venue: { dailyRoomName: string; joinUrl: string }): Promise<Meeting> {
     return updateLiveMeeting(id, {
       dailyRoomName: venue.dailyRoomName,
       joinUrl: venue.joinUrl,
+      venueProvisionedAt: new Date(),
     });
   },
 
@@ -1473,6 +1519,47 @@ export const meetingsRepository = {
   },
 
   /**
+   * BAL-581 — live `scheduled` meetings whose call room is NOT ready (`NOT meetingVenueReadySql`),
+   * soonest first. THE ONE READ behind both the venue repair producer and the
+   * `meeting.unprovisioned` admin-alert finder, each calling it INDEPENDENTLY (ADR-1055: the
+   * finder never enqueues, self-heal stays the repair job's). Rides
+   * `meeting_status_scheduled_start_idx`: `status` equality then a
+   * `scheduled_start` range under the index's own `deleted_at IS NULL` predicate; readiness and
+   * `created_at` are residual filters over the (bounded) population of future scheduled meetings.
+   * Returns NO room name or join url — only whether a name is stamped.
+   *
+   * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`** — the same no-silent-caps
+   * rule as {@link meetingsRepository.listLifecycleCandidates}. A `limit <= 0` returns `[]`
+   * without a query.
+   */
+  async listUnprovisionedScheduled(
+    input: ListUnprovisionedScheduledInput
+  ): Promise<UnprovisionedScheduledMeeting[]> {
+    if (input.limit <= 0) return [];
+    return db
+      .select({
+        meetingId: meetings.id,
+        scheduledStart: meetings.scheduledStart,
+        createdAt: meetings.createdAt,
+        roomNameStamped: sql<boolean>`${meetings.dailyRoomName} IS NOT NULL`,
+      })
+      .from(meetings)
+      .where(
+        and(
+          // Enum literals at QUERY time are always safe — the house restriction is on index
+          // predicates and CHECKs.
+          eq(meetings.status, 'scheduled'),
+          isNull(meetings.deletedAt),
+          gte(meetings.scheduledStart, input.scheduledStartAfter),
+          lte(meetings.createdAt, input.createdBefore),
+          sql`NOT ${meetingVenueReadySql}`
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .limit(input.limit);
+  },
+
+  /**
    * BAL-134 — `scheduled → waiting_for_participants`, on the FIRST presence interval opening
    * for a meeting (any party). Compare-and-set from `scheduled`.
    *
@@ -1640,10 +1727,10 @@ export const meetingsRepository = {
    *
    * BAL-134 deliberately leaves `outcome` NULL on the two HUMAN end paths and on the
    * abandoned wait (ADR-1049 D5: "the ender never sets the outcome — BAL-412 resolves it from
-   * `meeting_presence`"). This is that resolution's write seam. The three system paths DEFINED
-   * by their outcome (`completed` / `no_show_client` / `missed_call`) already carry one from
-   * the sweep, and settlement re-derives the same label — so this method must be able to
-   * observe "already resolved" and do nothing, rather than overwrite it.
+   * `meeting_presence`"). This is that resolution's write seam. The four system paths DEFINED
+   * by their outcome (`completed` / `no_show_client` / `missed_call` / `venue_unavailable`)
+   * already carry one from the sweep, and settlement re-derives the same label — so this method
+   * must be able to observe "already resolved" and do nothing, rather than overwrite it.
    *
    * ⚠⚠ `outcome IS NULL` IS IN THE **PREDICATE**, NOT AN ASSERTION, AND THAT IS THE WHOLE
    * DESIGN. A read-then-write ("is it null? then set it") is a TOCTOU on a row the lifecycle
@@ -1730,7 +1817,8 @@ export const meetingsRepository = {
    *
    * Selects NO join credential (`dailyRoomName`/`joinUrl`) — the Join affordance is built
    * from the meeting id alone via `memberCallPath` (BAL-566 fix round 1, F1 / user ruling J1;
-   * previously the tokenless lobby URL).
+   * previously the tokenless lobby URL). It selects only `roomReady`, the SQL twin's boolean
+   * ({@link meetingVenueReadySql}), so a surface can hide Join for a room that is not ready.
    *
    * A meeting whose contexts fold to `'none'` or `'ambiguous'` (via
    * {@link selectPrimaryMeetingContext}) is OMITTED, fail-closed, and logged.
@@ -1771,6 +1859,7 @@ export const meetingsRepository = {
         status: meetings.status,
         contextType: meetingContexts.contextType,
         contextId: meetingContexts.contextId,
+        roomReady: sql<boolean>`${meetingVenueReadySql}`,
       })
       .from(consultations)
       .innerJoin(meetings, eq(meetings.id, consultations.meetingId))
@@ -1913,6 +2002,10 @@ export interface ExpertCalendarMeeting {
   readonly projectRequestId: string | null;
   /** The CLIENT COMPANY. `null` when the owning row is absent/soft-deleted (drifted projection). */
   readonly counterpartyCompanyName: string | null;
+  /** BAL-581 — the meeting's call room exists and is ours: `meetingVenueReadySql`, the pinned
+   *  SQL twin of `isMeetingVenueReady`. A readiness BOOLEAN — this read still selects no join
+   *  credential (`dailyRoomName`/`joinUrl`), same as every other list surface. */
+  readonly roomReady: boolean;
   /**
    * `true` only when the per-arm re-check (`expert_profile_id = :expertProfileId` on the owning
    * engagement/request/relationship row) actually matched a live row. `false` on a drifted or

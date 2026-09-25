@@ -8,8 +8,10 @@ import {
 import {
   MEMBER_JOIN_EXHAUSTED_LINE,
   MEMBER_JOIN_MAX_ATTEMPTS,
+  isRetryableMemberJoinFailure,
   memberJoinRetryDelayMs,
 } from './member-join-retry';
+import type { MemberJoinFailureReason } from './member-join-failure';
 
 describe('memberJoinRetryDelayMs', () => {
   it('⚠ reuses the SHIPPED lobby cadence rather than inventing a second one', () => {
@@ -33,5 +35,21 @@ describe('memberJoinRetryDelayMs', () => {
   it('offers a way forward rather than an apology when it gives up', () => {
     expect(MEMBER_JOIN_EXHAUSTED_LINE).toContain('try again');
     expect(MEMBER_JOIN_EXHAUSTED_LINE).toContain('head back');
+  });
+
+  it('⚠ promises no email — nothing sends one when a room becomes ready', () => {
+    expect(MEMBER_JOIN_EXHAUSTED_LINE).not.toMatch(/email/i);
+  });
+});
+
+describe('isRetryableMemberJoinFailure', () => {
+  it.each<[MemberJoinFailureReason, boolean]>([
+    ['outage', true],
+    ['not_provisioned', true],
+    ['not_open', false],
+    ['account_refused', false],
+    ['unavailable', false],
+  ])('%s → %s', (reason, expected) => {
+    expect(isRetryableMemberJoinFailure(reason)).toBe(expected);
   });
 });

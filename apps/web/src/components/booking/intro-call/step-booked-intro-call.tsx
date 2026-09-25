@@ -56,8 +56,9 @@ export function StepBookedIntroCall({
         <p className="text-muted-foreground text-sm leading-relaxed">
           {when} · Intro call with {name}.
         </p>
-        {/* Same D2a non-negotiable honesty rule as `StepBooked`: no repair sweep, no retry job
-            and no provision-on-join exists — this branch may state only what is TRUE. */}
+        {/* Same honesty rule as `StepBooked`: the promise holds. A provisioning failure is
+            captured to Sentry at booking time and raises the `meeting.unprovisioned` admin
+            alert, and the venue repair job provisions the room automatically. */}
         <p className="text-muted-foreground text-sm leading-relaxed">
           {provisioned
             ? 'The join link is on its way to your email.'

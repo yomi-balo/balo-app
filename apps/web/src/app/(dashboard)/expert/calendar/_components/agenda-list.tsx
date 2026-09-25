@@ -14,6 +14,7 @@ import { ENGAGEMENT_TYPE_INDICATOR } from '@/lib/calendar/engagement-type-indica
 import { calendarMeetingTiming, joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
+import { RoomSettingUpSlot } from '@/components/balo/meetings/room-setting-up-slot';
 
 interface AgendaListProps {
   readonly meetings: readonly CalendarMeetingView[];
@@ -110,11 +111,47 @@ export function AgendaList({
                   now,
                   start,
                   new Date(meeting.scheduledEnd),
-                  meeting.status
+                  meeting.status,
+                  meeting.roomReady
                 );
                 const isPast = timing.isPast;
                 const joinVisible = timing.joinVisible;
                 const joinAriaLabel = joinAffordanceAriaLabel(partyName, timing.joinTimingLabel);
+                // BAL-581 — Join REPLACES the chevron on an imminent, ready row; a not-ready row
+                // inside the window replaces it with the "setting up" slot instead; an if/else
+                // chain (not a nested ternary — SonarCloud S3358) so the three outcomes stay
+                // readable.
+                let trailingSlot: React.ReactNode;
+                if (joinVisible) {
+                  trailingSlot = (
+                    <JoinMeetingButton
+                      joinUrl={meeting.joinUrl}
+                      ariaLabel={joinAriaLabel}
+                      onJoin={() => onJoinClick(meeting)}
+                      size="sm"
+                      // A1 — Agenda is the MOBILE DEFAULT surface and this is the page's one
+                      // moment of urgency: `min-h-11` + `px-4` puts the real tap target at
+                      // 44px, up from `size="sm"`'s 32px. The live ping ring and its
+                      // reduced-motion fallback (BAL-511 / ADR-1053) are baked into
+                      // `JoinMeetingButton` itself.
+                      className="min-h-11 px-4"
+                    >
+                      <Video className="h-4 w-4" aria-hidden="true" />
+                      Join
+                    </JoinMeetingButton>
+                  );
+                } else if (timing.roomSettingUp) {
+                  trailingSlot = (
+                    <RoomSettingUpSlot variant="button" label="short" className="min-h-11 px-4" />
+                  );
+                } else {
+                  trailingSlot = (
+                    <ChevronRight
+                      className="text-muted-foreground h-4 w-4 shrink-0"
+                      aria-hidden="true"
+                    />
+                  );
+                }
                 // ⚠ NEVER NEST INTERACTIVE ELEMENTS. The row-body link and the Join control are
                 // SIBLING click targets, not parent/child — an `<a>`/`<button>` inside an `<a>`
                 // is invalid HTML that browsers/jsdom silently reparent, breaking both the
@@ -151,28 +188,7 @@ export function AgendaList({
                           {rowBody}
                         </Link>
                       )}
-                      {joinVisible ? (
-                        <JoinMeetingButton
-                          joinUrl={meeting.joinUrl}
-                          ariaLabel={joinAriaLabel}
-                          onJoin={() => onJoinClick(meeting)}
-                          size="sm"
-                          // A1 — Agenda is the MOBILE DEFAULT surface and this is the page's one
-                          // moment of urgency: `min-h-11` + `px-4` puts the real tap target at
-                          // 44px, up from `size="sm"`'s 32px. The live ping ring and its
-                          // reduced-motion fallback (BAL-511 / ADR-1053) are baked into
-                          // `JoinMeetingButton` itself.
-                          className="min-h-11 px-4"
-                        >
-                          <Video className="h-4 w-4" aria-hidden="true" />
-                          Join
-                        </JoinMeetingButton>
-                      ) : (
-                        <ChevronRight
-                          className="text-muted-foreground h-4 w-4 shrink-0"
-                          aria-hidden="true"
-                        />
-                      )}
+                      {trailingSlot}
                     </motion.div>
                   </div>
                 );

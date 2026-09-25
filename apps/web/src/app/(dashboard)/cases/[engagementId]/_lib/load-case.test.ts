@@ -128,6 +128,7 @@ vi.mock('@/lib/realtime/ably-server', () => ({
   isRealtimeConfigured: () => mockIsRealtimeConfigured(),
 }));
 
+import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import { loadCase } from './load-case';
 import { log } from '@/lib/logging';
 import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
@@ -161,8 +162,14 @@ function access(over: Partial<Access> = {}): Access {
  * ⚠ THE FIXTURE SEEDS THE SECRETS ON PURPOSE. `dailyRoomName` and `joinUrl` are what a full
  * `Meeting` row carries; without them in the fixture, "no secret crosses the boundary" would
  * pass vacuously.
+ *
+ * ⚠ BAL-581 — THE DERIVED NAME, NOT AN ARBITRARY LITERAL. `isMeetingVenueReady` requires
+ * `dailyRoomName === dailyRoomNameForMeeting(id)`, so a fixture meaning "a normally booked,
+ * ready meeting" must stamp the room this `id` would actually derive — an arbitrary literal like
+ * the old `'room-secret-abc'` would make every upcoming fixture read as NOT ready.
  */
 function meeting(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  const roomName = dailyRoomNameForMeeting(id);
   return {
     id,
     status: 'ended',
@@ -174,8 +181,8 @@ function meeting(id: string, over: Record<string, unknown> = {}): Record<string,
     scheduledEnd: new Date('2026-07-29T05:00:00Z'),
     startedAt: new Date('2026-07-29T04:14:00Z'),
     endedAt: new Date('2026-07-29T04:59:00Z'),
-    dailyRoomName: 'room-secret-abc',
-    joinUrl: 'https://daily.co/room-secret-abc',
+    dailyRoomName: roomName,
+    joinUrl: `https://balo.daily.co/${roomName}`,
     ...over,
   };
 }
@@ -478,9 +485,12 @@ describe('loadCase — no meeting secret and no rate crosses the projection boun
     const view = await loadOrThrow();
     const serialised = JSON.stringify(view);
 
-    expect(serialised).not.toContain('room-secret-abc');
+    expect(serialised).not.toContain(dailyRoomNameForMeeting('m1'));
+    expect(serialised).not.toContain('daily.co');
     expect(serialised).not.toContain('joinUrl');
     expect(serialised).not.toContain('dailyRoomName');
+    // BAL-581 — `roomReady` IS the one venue fact that crosses, and it is a boolean only.
+    expect(serialised).toContain('roomReady');
     // The consultation itself IS present, so the assertion is not passing by emptiness.
     expect(view.consultations).toHaveLength(1);
   });
@@ -511,6 +521,7 @@ describe('loadCase — no meeting secret and no rate crosses the projection boun
         'meetingId',
         'ordinal',
         'recapHref',
+        'roomReady',
         'scheduledMinutes',
         'scheduledStartIso',
         'startedAtIso',
@@ -814,6 +825,58 @@ describe('loadCase — the nudge', () => {
   it('nudges nothing-booked when every consultation is already behind us', async () => {
     const view = await loadOrThrow();
     expect(view.nudge).toEqual({ kind: 'nothing_booked' });
+  });
+});
+
+/**
+ * BAL-581 — `nudge.roomReady`, resolved via `isVenueReadyById` against the SAME full rows this
+ * loader already read for the `'upcoming'` arm. Fail-closed by construction: `isVenueReadyById`
+ * returns `false` for a meeting id it cannot find in `meetings`.
+ */
+describe("loadCase — the nudge's roomReady (BAL-581)", () => {
+  const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
+
+  it('is TRUE when the upcoming meeting is stamped with the derived room name', async () => {
+    m.listMeetings.mockResolvedValue([
+      meeting('m1', {
+        status: 'scheduled',
+        outcome: null,
+        startedAt: null,
+        scheduledStart: SCHEDULED_START,
+      }),
+    ]);
+    const view = await loadOrThrow();
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', roomReady: true });
+  });
+
+  it('is FALSE when the upcoming meeting has no venue at all', async () => {
+    m.listMeetings.mockResolvedValue([
+      meeting('m1', {
+        status: 'scheduled',
+        outcome: null,
+        startedAt: null,
+        scheduledStart: SCHEDULED_START,
+        dailyRoomName: null,
+        joinUrl: null,
+      }),
+    ]);
+    const view = await loadOrThrow();
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', roomReady: false });
+  });
+
+  it('is FALSE when the stamped room name does not match the derived one', async () => {
+    m.listMeetings.mockResolvedValue([
+      meeting('m1', {
+        status: 'scheduled',
+        outcome: null,
+        startedAt: null,
+        scheduledStart: SCHEDULED_START,
+        dailyRoomName: 'balo-mismatched00000000000000000',
+        joinUrl: 'https://balo.daily.co/balo-mismatched00000000000000000',
+      }),
+    ]);
+    const view = await loadOrThrow();
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', roomReady: false });
   });
 });
 

@@ -160,9 +160,10 @@ describe('expert-end-of-call — the rating and the resolve prompt are STRUCTURA
   });
 
   it('reaches for NO Rejoin destination — the owner decision, pinned by name', () => {
-    // `/join/m/{id}` is the ANONYMOUS lobby (the wrong arm for a signed-in member) and
-    // `joinAsMemberAction` has no entry point by design. BAL-435 adds the button, the
-    // destination and the `'rejoin'` analytics value together.
+    // `/join/m/{id}` is the ANONYMOUS lobby (the wrong arm for a signed-in member). BAL-435
+    // shipped the member call route (`call-client.tsx`), which is `joinAsMemberAction`'s only
+    // caller — but it has no Rejoin link back to THIS screen, by the owner decision this test
+    // pins: `end/page.tsx` reaches for no destination and declares no `'rejoin'` analytics value.
     for (const file of FILES) {
       expect(file.code.includes('/join/m/'), file.rel + ' must not link to the guest lobby').toBe(
         false

@@ -42,24 +42,21 @@ export const metadata: Metadata = {
  * prop: this screen reads no query string, and declaring a prop nothing reads is a promise the
  * file does not keep.
  *
- * ⚠⚠ NOTHING NAVIGATES HERE YET, AND THAT IS THE ONE DELIBERATELY-STUBBED BOUNDARY. **BAL-435**
- * owns the in-meeting route and the Leave handler, and supplies the producer with a one-line
- * `router.replace('/meetings/{id}/end')`. Everything else on this screen is live and
- * test-exercised: the gate, the loader, the rating read, the rating write, the close, the close
- * gate, both analytics events and all four route states. Do NOT add an entry point here — no
- * redirect from another route, no dev-only "simulate leave" button, no link from the recap, the
- * lobby, the dashboard or `MeetingCallSurface`. Shipping an entry point that dead-ends at
- * "Connecting…" is exactly what `join-as-member.ts`'s docblock forbids.
+ * ⚠⚠ NOTHING NAVIGATES **BACK TO THIS SCREEN**, AND THAT IS AN EXPLICIT OWNER DECISION, NOT A
+ * STUBBED BOUNDARY. **BAL-435** shipped the in-meeting route (`call-client.tsx`) and its Leave
+ * handler, which produces this screen via a one-line `router.replace('/meetings/{id}/end')`.
+ * Everything on this screen is live and test-exercised: the gate, the loader, the rating read,
+ * the rating write, the close, the close gate, both analytics events and all four route states.
+ * Do NOT add a Rejoin entry point here — no redirect from another route, no dev-only "simulate
+ * leave" button, no link from the recap, the lobby, the dashboard or `MeetingCallSurface`.
  *
  * ⚠⚠ THERE IS NO REJOIN AFFORDANCE, AND ITS ABSENCE IS AN EXPLICIT OWNER DECISION — the ONE
  * deviation from the design reference's element list, and a ROUTING FACT rather than a design
  * judgement. `/join/m/[meetingId]` is the ANONYMOUS lobby: routing a signed-in, already-
  * authorised member there would enqueue them through the GUEST identity-claim path. The member
- * arm, `join/_actions/join-as-member.ts`, has no caller BY DESIGN and names BAL-435 as its
- * consumer. And both arms terminate at `MeetingCallSurface`'s "Connecting…" placeholder, because
- * no Daily SDK ships in `apps/web`. BAL-435 adds the button, its destination and its
- * `EndOfCallAction` value together; `'rejoin'` is therefore NOT declared today, and
- * `end-of-call.test.ts` pins its absence by name.
+ * arm, `join/_actions/join-as-member.ts`, IS called — by `call-client.tsx`, the in-meeting route
+ * — but that route has no Rejoin link back to THIS screen. `EndOfCallAction` therefore declares
+ * no `'rejoin'` value, and `end-of-call.test.ts` pins its absence by name.
  *
  * ⚠ ONE `notFound()` WITH ONE COPY for missing, soft-deleted, unauthorised, declined, ambiguous
  * AND ADMIN-CONTEXT meetings. A distinct 403 would confirm the meeting exists, which makes the

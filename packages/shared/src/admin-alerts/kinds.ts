@@ -2,15 +2,13 @@ import type { AdminAlertDetail } from './detail';
 import type { AdminAlertGroup, AdminAlertCadence } from './groups';
 
 /**
- * BAL-548 / ADR-1055 — the kind registry: THE thirteen-row table (twelve registered kinds,
+ * BAL-548 / ADR-1055 — the kind registry: THE thirteen-row table (thirteen registered kinds,
  * one of which — `sweep.failed` — has no finder) that a `packages/db` invariant
  * (`admin-alert-kinds-have-exactly-one-writer.test.ts`) value-imports to prove every kind has
  * EXACTLY one writer: a finder XOR a `raise()` call site.
  *
- * ⚠ SEVEN FINDER KINDS, FOUR EVENT-DRIVEN, PLUS `sweep.failed` (rulings addendum §A2). The
- * ticket/rulings prose header said "eight finder kinds" at one point; the table — and this
- * file — are the seven-kind reading. `calendar.subscription_lapse` is ONE kind consuming
- * THREE finder reads, which is what inflated the miscount.
+ * ⚠ EIGHT FINDER KINDS, FOUR EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
+ * `calendar.subscription_lapse` is ONE kind consuming THREE finder reads.
  */
 export const ADMIN_ALERT_KIND_KEYS = [
   'expert.application_pending',
@@ -24,6 +22,7 @@ export const ADMIN_ALERT_KIND_KEYS = [
   'transcript_capture.withheld_source',
   'calendar.subscription_lapse',
   'calendar.amend_failed',
+  'meeting.unprovisioned',
   'sweep.failed',
 ] as const;
 
@@ -225,6 +224,14 @@ export const ADMIN_ALERT_KINDS: Readonly<Record<AdminAlertKind, AdminAlertKindMe
     finder: null,
     cadence: null,
     closes: 'No row to re-check — closes with a note after the amend is re-driven',
+    target: targetMeeting,
+  },
+  'meeting.unprovisioned': {
+    group: 'meetings',
+    finder: 'meetingUnprovisioned',
+    cadence: '1m',
+    closes:
+      "Closes itself once the meeting's call room is ready, or when the meeting is cancelled or ends without one",
     target: targetMeeting,
   },
   'sweep.failed': {

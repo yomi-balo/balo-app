@@ -56,3 +56,8 @@ export const BOOKABLE_CONTEXT_TYPES = [
  * sixth label cannot be admitted to one layer and not another.
  */
 export type MeetingBookingContextType = (typeof BOOKABLE_CONTEXT_TYPES)[number];
+
+/** Type predicate over {@link BOOKABLE_CONTEXT_TYPES} — never a cast. */
+export function isBookableContextType(type: string): type is MeetingBookingContextType {
+  return (BOOKABLE_CONTEXT_TYPES as readonly string[]).includes(type);
+}

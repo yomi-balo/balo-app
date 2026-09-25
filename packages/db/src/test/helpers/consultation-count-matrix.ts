@@ -23,8 +23,8 @@ import { meetingFactory } from '../factories/meeting.factory';
  *   · FUTURE BOOKINGS — a projection row exists the instant a meeting is created, so an
  *     expert with zero delivered calls and three bookings next month would advertise
  *     "3 sessions". Trivially self-inflatable, since the booking side is the CLIENT's.
- *   · NO-SHOWS AND MISSED CALLS — `ended` + `no_show_client` / `missed_call` is not
- *     delivered work.
+ *   · NO-SHOWS, MISSED CALLS AND NEVER-READY ROOMS — `ended` + `no_show_client` /
+ *     `missed_call` / `venue_unavailable` is not delivered work.
  *
  * Hence `m.status='ended' AND m.outcome='completed'`. Rows 3–6 below are that fix's
  * regression surface: each one COUNTED before it and must count ZERO after.
@@ -117,6 +117,18 @@ export const CONSULTATION_COUNT_MATRIX: readonly ConsultationCountCase[] = [
     projectionStatus: 'confirmed',
     softDelete: 'none',
     offsetDays: 0,
+    counted: false,
+  },
+  // ── BAL-581 — the fourth outcome label ──
+  {
+    // The call room was never ready, so nobody could join and nothing was delivered. The
+    // `= 'completed'` filter needs no change to exclude it; this row proves that it does.
+    label: 'an ENDED call with outcome=venue_unavailable (the call room was never ready)',
+    meetingStatus: 'ended',
+    meetingOutcome: 'venue_unavailable',
+    projectionStatus: 'confirmed',
+    softDelete: 'none',
+    offsetDays: -2,
     counted: false,
   },
   // ── The pre-existing predicates, still asserted ──

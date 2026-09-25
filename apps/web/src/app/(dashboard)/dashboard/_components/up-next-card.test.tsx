@@ -38,6 +38,7 @@ function row(overrides: Partial<UpNextRowView> = {}): UpNextRowView {
     href: '/cases/eng-1',
     joinPath: '/meetings/m-1/call',
     rescheduleProposalExpiresAt: null,
+    roomReady: true,
     ...overrides,
   };
 }
@@ -163,6 +164,26 @@ describe('UpNextCard — Join affordance', () => {
     const joinButtons = screen.getAllByTestId('calendar-join');
     expect(joinButtons).toHaveLength(1);
     expect(document.querySelector('a[href*="/join/"]')).toBeNull();
+  });
+
+  it('BAL-581 — an in-window row with roomReady:false renders the setting-up slot, no Join, and is not featured', () => {
+    const notReady = row({
+      meetingId: 'not-ready',
+      scheduledStart: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      roomReady: false,
+    });
+    const { container } = render(
+      <UpNextCard
+        data={{ kind: 'ready', rows: [notReady] }}
+        workspaceType="company"
+        subtitle="sub"
+        footerLinks={FOOTER_LINKS}
+      />
+    );
+    expect(screen.queryByTestId('calendar-join')).not.toBeInTheDocument();
+    expect(screen.getByText('Setting up room')).toBeInTheDocument();
+    // Not featured: the card features only a row whose Join is visible.
+    expect(container.querySelectorAll('.bg-success\\/10')).toHaveLength(0);
   });
 
   it('Join is absent entirely while clock is null (SSR pass)', () => {

@@ -73,13 +73,10 @@ function bodyLines(props: Readonly<BookingConfirmedEmailProps>): string[] {
     );
   }
 
-  // ⚠ M6 — THE `provisioned: false` LINE MUST NOT PROMISE A DELIVERY NOTHING PERFORMS. There
-  // is no repair sweep, no retry job and no on-demand provisioning at join time
-  // (`join-meeting.ts` step 3 refuses an unprovisioned meeting outright), so the earlier copy
-  // — "the join link will be ready before your call" — was an undertaking the platform cannot
-  // keep. What IS true on this branch is that the failure was recorded loudly: `provisionVenue`
-  // `log.error`s it and emits `meeting_provision_failed`. Say only that. The follow-up ticket
-  // that adds the repair path is the one allowed to promise a link again.
+  // The `provisioned: false` line's promise holds: a provisioning failure is captured to
+  // Sentry at booking time and raises the `meeting.unprovisioned` admin alert, and the venue
+  // repair job provisions the room automatically — so "open the case for the latest" is
+  // literally true.
   lines.push(
     props.provisioned
       ? `Join link: ${props.joinUrl}`

@@ -19,6 +19,8 @@ export interface UpNextCandidate {
   readonly contextId: string | null;
   readonly projectRequestId: string | null;
   readonly owningRowFound: boolean;
+  /** BAL-581 — the repository's SQL-twin readiness boolean. */
+  readonly roomReady: boolean;
 }
 
 /** `now − 2h .. now + 14d` — the ONE window both the company and expert reads use. */
@@ -49,7 +51,13 @@ export function selectUpNextRows<T extends UpNextCandidate>(
   const kept: Array<T & { readonly contextType: UpNextMeetingType }> = [];
   for (const row of rows) {
     if (!isUpNextMeetingType(row.contextType)) continue;
-    const timing = calendarMeetingTiming(now, row.scheduledStart, row.scheduledEnd, row.status);
+    const timing = calendarMeetingTiming(
+      now,
+      row.scheduledStart,
+      row.scheduledEnd,
+      row.status,
+      row.roomReady
+    );
     if (timing.isPast) continue;
     kept.push({ ...row, contextType: row.contextType });
     if (kept.length >= limit) break;

@@ -4,6 +4,7 @@ import { startWorkers } from './jobs/worker.js';
 import { assertNoShowFloorOverrideUnsetInProduction } from './config/billing-floor.js';
 import { assertAppUrlSetInProduction } from './lib/app-url.js';
 import { readCalendarSmtpConfig } from './notifications/channels/calendar-smtp-config.js';
+import { isDailyApiKeyConfigured } from './services/daily/client.js';
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -39,6 +40,21 @@ try {
     app.log.error(workerErr, 'BullMQ workers failed to start (server continues)');
   }
 
+  // BAL-581 — the Daily REST key. ⚠ NEVER A THROW (lines above reserve throws for MONEY config):
+  // crash-looping Railway over a vendor secret takes every route down to protect one integration.
+  // Production: `log.error` + an explicit `Sentry.captureMessage` — a Pino line never reaches Sentry
+  // on its own (`Sentry.init` has no pino integration). Elsewhere: a warning (dev often runs keyless).
+  if (!isDailyApiKeyConfigured()) {
+    const message =
+      'DAILY_API_KEY is not set — every Daily call room provision will fail: bookings commit with no room, nobody can join them, and the venue repair job skips every pass until it is set';
+    if (process.env.NODE_ENV === 'production') {
+      app.log.error(message);
+      Sentry.captureMessage(message, { level: 'error' });
+    } else {
+      app.log.warn(message);
+    }
+  }
+
   // BAL-134 — ⚠ A WARNING, NOT AN ASSERTION, AND BOTH HALVES OF THAT ARE DELIBERATE.
   //
   // `recipient: 'admin'` rules resolve to the literal `OPS_NOTIFICATION_EMAIL`, and when it is
@@ -56,13 +72,15 @@ try {
     );
   }
 
-  // BAL-475 — the calendar-invite SMTP relay. Same posture as the two vendor-secret warnings
-  // in this file: a WARNING outside production (dev/staging routinely runs without it), an
-  // ERROR in production (so it surfaces in Axiom/Sentry immediately), and NEVER a throw —
-  // throwing here would crash-loop Railway on a missing vendor secret and take down every
-  // route to protect one notification. Absent config means every `meeting.calendar_invite`
-  // delivery is skipped and logged (`calendar-invite-delivery.ts`'s own `smtp_not_configured`
-  // skip); it never blocks a booking, a guest-add or a reschedule.
+  // BAL-475 — the calendar-invite SMTP relay. The same never-throw posture as the vendor-secret
+  // warnings, but split by environment: a WARNING outside production (dev/staging routinely runs
+  // without it), an ERROR in production (so it surfaces in Axiom immediately — a log line alone
+  // never reaches Sentry, unlike the DAILY_API_KEY check above which also calls
+  // `Sentry.captureMessage`), and NEVER a throw — throwing here would crash-loop Railway on a
+  // missing vendor secret and take down every route to protect one notification. Absent config
+  // means every `meeting.calendar_invite` delivery is skipped and logged
+  // (`calendar-invite-delivery.ts`'s own `smtp_not_configured` skip); it never blocks a booking,
+  // a guest-add or a reschedule.
   if (readCalendarSmtpConfig() === undefined) {
     const message =
       'Calendar invite SMTP relay is not configured — every meeting.calendar_invite will be SKIPPED';

@@ -136,7 +136,7 @@ export const JOIN_UNAVAILABLE_BODY =
   'Links like this stop working after a while, and they can be replaced at any time. Whoever shared it with you can send a fresh one.';
 
 /**
- * ⚠ THE ONE FAILURE THAT IS **NOT** COLLAPSED, AND WHY THAT IS SAFE (BAL-132 fix).
+ * ⚠ THE ONE GUEST FAILURE THAT IS **NOT** COLLAPSED, AND WHY THAT IS SAFE (BAL-132 fix).
  *
  * A `503` on the guest poll means OUR OWN upstream could not mint — Daily is down, or
  * `DAILY_API_KEY` is missing. It is reachable ONLY after a ≥256-bit token has already resolved
@@ -144,9 +144,14 @@ export const JOIN_UNAVAILABLE_BODY =
  * already know: they are a real, admitted guest of a real meeting. Rendering the uniform
  * dead-link card there is an outright lie that costs them the call.
  *
- * ⚠⚠ A `429` MUST STAY COLLAPSED. It fires PRE-AUTHORIZATION, before any token has resolved, so
- * a distinct message would tell an anonymous scanner "you are being counted" — a signal about
- * the platform they must not get for free.
+ * ⚠⚠ A `429` MUST STAY COLLAPSED ON THE GUEST POLL. It fires PRE-AUTHORIZATION, before any token
+ * has resolved, so a distinct message would tell an anonymous scanner "you are being counted" —
+ * a signal about the platform they must not get for free.
+ *
+ * ⚠⚠ BAL-581 — THIS IS ALSO THE MEMBER ROUTE'S RETRY CARD, for a transport failure or ANY 5xx
+ * from a signed-in member's join (`MemberJoinFailureReason` = `'outage'`), not only a `503` on
+ * the guest poll. Both readings are honest for the same reason: neither leaks anything about a
+ * meeting the caller was not already authorized to reach.
  */
 export const JOIN_TEMPORARILY_UNAVAILABLE_TITLE = "We couldn't connect you just now";
 
@@ -181,26 +186,27 @@ export const JOIN_LONG_WAIT_BODY =
   'This is taking a little longer than usual. They may not be at their desk yet — you can keep waiting, or come back to this link later.';
 
 /**
- * BAL-435 — the MEMBER join action's two distinguishable failures, hoisted so the action and its
- * caller cannot disagree about which one happened.
+ * BAL-581 — THE MEMBER ROUTE'S REFUSAL COPY. A signed-in member is never shown the guest
+ * "whoever shared it" card: every reason below is safe to state because the api reaches each one
+ * only AFTER authorization succeeded (`join-meeting.ts:31-42`); `unavailable` is the collapse for
+ * everything else, member-worded. Here, not in the action, because a `'use server'` file may
+ * export only async functions.
  *
- * ⚠⚠ THEY ARE HERE, NOT IN `join-as-member.ts`, FOR THE REASON THIS WHOLE MODULE EXISTS: a
- * `'use server'` file may export ONLY async functions, so `export const MEMBER_JOIN_… = '…'`
- * there would fail `next build` while `tsc`, eslint and vitest all pass.
- *
- * ⚠ THE ACTION'S FAILURE COPY IS OTHERWISE INTENTIONALLY COARSE — the api collapses "no such
- * meeting", "not your party" and "no capability" into ONE literal, so this layer cannot and must
- * not try to say more. The only two it distinguishes are facts about the CALLER's own state (a
- * signed-out session) or a genuine upstream outage.
+ * ⚠⚠ EACH REASON BELOW IS DISTINGUISHED RATHER THAN COLLAPSED, because collapsing them would
+ * cost a real member real information for no anonymity gain: `meeting_not_provisioned` and
+ * `meeting_not_open_for_join` have been `409`s — unreachable before authorization — since
+ * `ee5fce50` (BAL-132). `MemberJoinFailureReason`'s allowlist (`member-join-failure.ts`) is the
+ * one place that decides what may be distinguished.
  */
-export const MEMBER_JOIN_SIGNED_OUT_ERROR = 'Please sign in and try again.';
-
-/** ⚠ A **503**: the call room did not answer. Retryable — the caller schedules another attempt. */
-export const MEMBER_JOIN_OUTAGE_ERROR =
-  "We couldn't set up your call room just now. Please try again in a moment.";
-
-/** ⚠ THE COLLAPSE. Everything else, byte for byte, so nothing can be inferred from the wording. */
-export const MEMBER_JOIN_UNAVAILABLE_ERROR = "This meeting isn't available to join.";
+export const MEMBER_JOIN_SETTING_UP_TITLE = "We're still setting up your call room";
+export const MEMBER_JOIN_SETTING_UP_BODY =
+  "This one's on us, not you — the call room for this meeting isn't ready yet, and our team has been alerted. We'll try again for you in a moment, or you can try again yourself.";
+export const MEMBER_JOIN_NOT_OPEN_TITLE = "This meeting isn't open to join";
+export const MEMBER_JOIN_NOT_OPEN_BODY =
+  'It may have ended or been cancelled, or its time to join has passed. Your dashboard has the latest.';
+export const MEMBER_JOIN_UNAVAILABLE_TITLE = "This meeting isn't available to join";
+export const MEMBER_JOIN_UNAVAILABLE_BODY =
+  'It may have moved, or you may no longer have access to it. Your dashboard shows the meetings you can join.';
 
 /**
  * BAL-445 — ⚠ ONE STRING FOR EVERY WAY A GUEST'S IN-CALL READ CAN FAIL: a revoked token, an

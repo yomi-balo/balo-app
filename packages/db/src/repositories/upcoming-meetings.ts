@@ -30,6 +30,7 @@ import {
 } from '../schema';
 import {
   foldMeetingContextRows,
+  meetingVenueReadySql,
   type FoldedCalendarMeeting,
   type RawMeetingContextRow,
 } from './meetings';
@@ -148,6 +149,10 @@ export interface CompanyUpcomingMeeting {
    * so the row structurally satisfies the web layer's `hrefForMeeting` input (D6).
    */
   readonly owningRowFound: true;
+  /** BAL-581 — the meeting's call room exists and is ours: `meetingVenueReadySql`, the pinned
+   *  SQL twin of `isMeetingVenueReady`. A readiness BOOLEAN — this read selects no join
+   *  credential (`daily_room_name` / `join_url`); the Join href is built from the meeting id. */
+  readonly roomReady: boolean;
 }
 
 export interface UpcomingMeetingTitles {
@@ -251,6 +256,7 @@ export function assembleCompanyUpcomingMeetings(
       projectRequestId: owned.projectRequestId,
       expertProfileId: owned.expertProfileId,
       owningRowFound: true,
+      roomReady: meeting.roomReady,
     });
   }
   return result;
@@ -449,6 +455,7 @@ async function listInteractionArm(
  * Keyed by `meeting_id` ONLY — no `context_id` is ever used as a lookup key here. `meetingInWindow`
  * is repeated so a meeting that closed between the two reads drops out. Bounded by the step-1
  * caps (candidates) × the few contexts a meeting carries (`meeting_context_unique_idx`).
+ * Selects `roomReady` (the SQL twin's boolean), never the join credential.
  */
 async function readAllLiveContexts(
   candidateMeetingIds: readonly string[],
@@ -462,6 +469,7 @@ async function readAllLiveContexts(
       status: meetings.status,
       contextType: meetingContexts.contextType,
       contextId: meetingContexts.contextId,
+      roomReady: sql<boolean>`${meetingVenueReadySql}`,
     })
     .from(meetings)
     .innerJoin(

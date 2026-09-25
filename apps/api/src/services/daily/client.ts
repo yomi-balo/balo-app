@@ -60,6 +60,18 @@ export function getDailyApiKey(): string {
 }
 
 /**
+ * BAL-581 — `true` when `DAILY_API_KEY` is set and non-empty, the SAME rule
+ * {@link getDailyApiKey} enforces (`!key`), restated as a non-throwing predicate. The venue
+ * repair producer and handler (`jobs/meeting-venue-repair.ts`) and the boot check
+ * (`index.ts`) call this rather than a bare `try`/`catch` around `getDailyApiKey`, because a
+ * repeatable per-minute job must decide "should I even try" without minting and discarding an
+ * exception on every keyless tick.
+ */
+export function isDailyApiKeyConfigured(): boolean {
+  return Boolean(process.env.DAILY_API_KEY);
+}
+
+/**
  * Every HTTP method this seam issues.
  *
  * ⚠ BAL-134 WIDENED THIS FROM `'GET' | 'POST'`, AND THAT WAS A **CLIENT** CHANGE RATHER THAN A

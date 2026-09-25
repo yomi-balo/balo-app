@@ -288,6 +288,8 @@ function buildCard(row: CasesIndexCaseRow, context: CasesIndexCardContext): Case
     // ⚠ ONLY THE FEATURED CARD CARRIES A JOIN PATH, because only the featured card renders Join.
     // Every other card's meeting id therefore never leaves the server at all.
     joinPath: isFeatured && nextBooking !== null ? memberCallPath(nextBooking.meetingId) : null,
+    // BAL-581 — copied through from the repository's SQL-twin boolean, never recomputed.
+    nextBookingRoomReady: nextBooking?.roomReady ?? null,
   };
 }
 

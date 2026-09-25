@@ -345,6 +345,7 @@ const HELD_CONSULTATION: CaseConsultationRowView = {
   guestCount: 0,
   scheduledMinutes: 30,
   live: false,
+  roomReady: false,
 };
 
 /**
@@ -392,6 +393,7 @@ function upcomingRow(over: Partial<CaseConsultationRowView> = {}): CaseConsultat
     guestCount: 0,
     scheduledMinutes: 45,
     live: false,
+    roomReady: false,
     ...over,
   };
 }
@@ -595,6 +597,7 @@ describe('CaseSurface — the conditional regions', () => {
       live: false,
       serverNowIso: nowIso(),
       durationMinutes: 45,
+      roomReady: true,
     };
 
     it('the dialog is NOT mounted while closed, even with an upcoming nudge', () => {
@@ -707,6 +710,7 @@ describe('CaseSurface — the conditional regions', () => {
       live: false,
       serverNowIso: nowIso(),
       durationMinutes: 45,
+      roomReady: true,
     };
     // The nudge's `canProposeReschedule` reads the ROW for the nudge's own meeting
     // (`nudgeRow?.canProposeReschedule`), mirroring `canReschedule` on the client side.
@@ -825,6 +829,7 @@ describe('CaseSurface — the conditional regions', () => {
               live: false,
               serverNowIso: nowIso(),
               durationMinutes: 30,
+              roomReady: true,
             },
             rescheduleProposals: [PROPOSAL_VIEW],
           })}
@@ -987,6 +992,7 @@ describe('the cancel dialog — mount/close/refresh, opened from a row', () => {
     live: false,
     serverNowIso: nowIso(),
     durationMinutes: 45,
+    roomReady: true,
   };
   const CANCELLABLE_ROW = upcomingRow({ meetingId: 'm-upcoming-1', canCancel: true });
 

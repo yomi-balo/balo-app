@@ -59,6 +59,7 @@ function card(overrides: Partial<CasesIndexCardView> = {}): CasesIndexCardView {
     actorLabel: null,
     bookAgainHref: '/experts/marcus',
     joinPath: JOIN_PATH,
+    nextBookingRoomReady: true,
     ...overrides,
   };
 }
@@ -144,6 +145,49 @@ describe('FeaturedCaseCard — the Join window', () => {
       />
     );
     expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('FeaturedCaseCard — room not ready (BAL-581)', () => {
+  it('shows the setting-up slot instead of Join inside the window, with no green pill', () => {
+    render(
+      <FeaturedCaseCard
+        card={startingIn(9, { nextBookingRoomReady: false })}
+        now={NOW}
+        timeZone="UTC"
+        onTrack={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Setting up your call room')).toBeInTheDocument();
+    expect(screen.queryByText('Starts in 9 mins')).not.toBeInTheDocument();
+  });
+
+  it('shows NOTHING — never the hint — outside the window when the room is not ready', () => {
+    render(
+      <FeaturedCaseCard
+        card={card({ nextBookingRoomReady: false })}
+        now={NOW}
+        timeZone="UTC"
+        onTrack={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Join opens 15 min before')).not.toBeInTheDocument();
+    expect(screen.queryByText('Setting up your call room')).not.toBeInTheDocument();
+  });
+
+  it('is not "Happening now" while the room is not ready, even once the call would have begun', () => {
+    render(
+      <FeaturedCaseCard
+        card={startingIn(-5, { nextBookingStatus: 'in_progress', nextBookingRoomReady: false })}
+        now={NOW}
+        timeZone="UTC"
+        onTrack={vi.fn()}
+      />
+    );
+    expect(screen.queryByText('Happening now')).not.toBeInTheDocument();
+    expect(screen.getByText('Setting up your call room')).toBeInTheDocument();
   });
 });
 

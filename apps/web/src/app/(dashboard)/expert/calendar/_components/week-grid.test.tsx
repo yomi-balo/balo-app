@@ -24,6 +24,7 @@ function meeting(overrides: Partial<CalendarMeetingView>): CalendarMeetingView {
     href: '/cases/e1',
     joinUrl: '/meetings/meeting-1/call',
     counterpartyCompanyName: 'Northwind',
+    roomReady: true,
     ...overrides,
   };
 }
@@ -531,6 +532,30 @@ describe('WeekGrid — the now-derived MeetingBlock inputs are computed HERE (BA
     );
 
     expect(container.innerHTML).not.toContain('opacity-60');
+  });
+
+  it('BAL-581 — a not-ready room inside the window shows the setting-up chip, never Join', () => {
+    render(
+      <WeekGrid
+        weekStartDayKey="2026-08-24"
+        timezone="UTC"
+        meetings={[
+          meeting({
+            meetingId: 'not-ready',
+            scheduledStart: '2026-08-25T09:05:00.000Z',
+            scheduledEnd: '2026-08-25T09:35:00.000Z',
+            counterpartyCompanyName: 'Pending Co',
+            roomReady: false,
+          }),
+        ]}
+        now={WG_NOW}
+        onJoinClick={NOOP}
+        isMobile={false}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Join Pending Co/i })).not.toBeInTheDocument();
+    expect(screen.getByTitle('Setting up your call room')).toBeInTheDocument();
   });
 
   it('mutes a terminal meeting immediately, even mid-slot', () => {

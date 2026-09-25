@@ -3,6 +3,7 @@ import {
   creditSessionsRepository,
   expertsRepository,
   meetingRecordingsRepository,
+  meetingsRepository,
   transcriptsRepository,
   calendarRepository,
   calendarSubscriptionsRepository,
@@ -18,11 +19,12 @@ import {
   SUBSCRIPTION_EXPIRY_ALERT_MS,
   SUBSCRIPTION_UNCONFIRMED_GRACE_MS,
 } from './calendar-subscription-monitor.js';
+import { resolveMeetingTimers } from '../config/meeting-timers.js';
 import { formatAudMinor } from '../notifications/channels/templates/credit-format.js';
 import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
 
 /**
- * BAL-548 / ADR-1055 — the seven `admin_alerts` FINDER implementations, keyed by the NAME the
+ * BAL-548 / ADR-1055 — the eight `admin_alerts` FINDER implementations, keyed by the NAME the
  * registry (`@balo/shared/admin-alerts`) holds on each finder-kind's `finder` field.
  * `packages/shared` cannot hold these functions (it imports no db, by rule), so the registry
  * holds a NAME and this module holds the implementation.
@@ -57,6 +59,25 @@ function formatDateShort(date: Date): string {
     year: 'numeric',
     timeZone: 'UTC',
   });
+}
+
+/**
+ * BAL-581 — `en-GB`, UTC — e.g. `12 Jul 2027, 14:30 UTC`. `formatDateShort`'s DATE-only
+ * precision loses the start TIME, which matters for a same-day meeting (`meeting.unprovisioned`
+ * can fire minutes before a same-day start).
+ */
+function formatDateTimeShortUtc(date: Date): string {
+  return (
+    date.toLocaleString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'UTC',
+      hour12: false,
+    }) + ' UTC'
+  );
 }
 
 function personName(firstName: string | null, lastName: string | null): string {
@@ -94,6 +115,8 @@ export const TRANSCRIPT_FAILED_CUTOFF_MS = 15 * MS_PER_MINUTE;
  *  capture-health lens's `withheld` chip threshold); this export's NAME and every reference to
  *  it stay untouched (D1). */
 export const TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS = TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS;
+/** An in-flight booking-time provision (≤ 4 Daily calls, ≤ 40 s) must not flap a row open. */
+export const MEETING_UNPROVISIONED_GRACE_MS = 3 * MS_PER_MINUTE;
 
 // ── expert.application_pending ──────────────────────────────────────────
 
@@ -451,6 +474,49 @@ async function calendarSubscriptionLapse(
   return { findings, batchFilled };
 }
 
+// ── meeting.unprovisioned ────────────────────────────────────────────────
+
+/**
+ * BAL-581 — live `scheduled` meetings whose call room is not ready. Calls the SAME repository
+ * read as the venue repair producer (`jobs/meeting-venue-repair.ts`), INDEPENDENTLY of it
+ * (ADR-1055: a finder never enqueues — self-heal stays the repair job's, exactly the
+ * `calendarSubscriptionLapse` precedent above). Rows self-close when the room becomes ready, or
+ * when the meeting leaves `scheduled` (cancelled / ended `venue_unavailable`) or its
+ * `scheduled_start` falls out of the lookback (past `scheduled_start + missedCallTerminationMs`
+ * — the instant the lifecycle sweep ends it) — exactly the registry's `closes` sentence.
+ */
+async function meetingUnprovisioned(
+  ctx: AdminAlertFinderContext
+): Promise<AdminAlertFinderOutcome> {
+  const timers = resolveMeetingTimers();
+  const rows = await meetingsRepository.listUnprovisionedScheduled({
+    scheduledStartAfter: new Date(ctx.now.getTime() - timers.missedCallTerminationMs),
+    createdBefore: new Date(ctx.now.getTime() - MEETING_UNPROVISIONED_GRACE_MS),
+    limit: ctx.limit,
+  });
+  const batchFilled = rows.length === ctx.limit;
+
+  const findings: AdminAlertFinding[] = rows.map((row) => ({
+    entityType: 'meeting',
+    entityId: row.meetingId,
+    detail: {
+      title: 'Meeting has no call room',
+      entityLabel: `Meeting ${formatDateTimeShortUtc(row.scheduledStart)}`,
+      evidence: row.roomNameStamped
+        ? 'A call room is stamped on this meeting but its name does not match the meeting, so nobody can join. The repair job retries booked consultations on a bounded checkpoint schedule until shortly after the start; this row closes once the room is set up or the meeting leaves scheduled.'
+        : "The Daily call room was never created, so nobody can join. The repair job retries booked consultations on a bounded checkpoint schedule until shortly after the start; if this row persists, check Sentry and the meeting's context.",
+      facts: [
+        ['Starts', formatDateTimeShortUtc(row.scheduledStart)],
+        ['Booked', formatDateTimeShortUtc(row.createdAt)],
+        ['Room', row.roomNameStamped ? 'name mismatch' : 'never created'],
+        ['Meeting id', row.meetingId],
+      ],
+    },
+  }));
+
+  return { findings, batchFilled };
+}
+
 // ── The registry ─────────────────────────────────────────────────────────
 
 /**
@@ -467,4 +533,5 @@ export const ADMIN_ALERT_FINDERS: Readonly<Record<string, AdminAlertFinder>> = {
   transcriptFailed,
   transcriptCaptureWithheldSource,
   calendarSubscriptionLapse,
+  meetingUnprovisioned,
 };

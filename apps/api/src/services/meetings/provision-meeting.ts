@@ -42,19 +42,22 @@
  *     expert — the worst of the three outcomes, because the user rebooks and now two slots
  *     are blocked.
  *
- * CONSEQUENCE FOR THE CLIENT, stated so BAL-400 designs for it: the meeting exists, the slot
- * is blocked, the calendar is correct, and there is NO JOIN URL YET. A `provisioned: false`
- * response is a SUCCESS WITH A MISSING ARTEFACT, not a failure.
+ * CONSEQUENCE FOR THE CLIENT: the meeting exists, the slot is blocked, the calendar is
+ * correct, and there is NO JOIN URL YET. A `provisioned: false` response is a SUCCESS WITH A
+ * MISSING ARTEFACT, not a failure — the venue repair job (`jobs/meeting-venue-repair.ts`,
+ * BAL-581) is what closes the gap, on its own checkpoint schedule, no user action required.
  *
  * ── IDEMPOTENCY (D2), AND ITS ONE ARBITER ────────────────────────────────────
  *
- * `provisionMeeting` short-circuits on an already-stamped meeting. The arbiter for two
- * concurrent calls is THE DETERMINISTIC ROOM NAME AND NOTHING ELSE: both racers derive the
- * same name, so the loser's create is a `400 already-exists` that resolves to THE SAME room,
- * and both `setVenue` writes are byte-identical `UPDATE`s on ONE row (they serialize on the
- * row lock; last-writer-wins is indistinguishable from first-writer-wins). **THE CONCURRENT
- * RACE THEREFORE STRANDS NO ROOM** — the loser does not create a second one, it finds the
- * first — which is why there is no `deleteRoom` call on the race path.
+ * `provisionMeeting` short-circuits on a meeting whose venue is READY per `isMeetingVenueReady`
+ * (`@balo/shared/meetings` — both columns non-null AND the stamped name equals
+ * `dailyRoomNameForMeeting(id)`, BAL-581). The arbiter for two concurrent calls is THE
+ * DETERMINISTIC ROOM NAME AND NOTHING ELSE: both racers derive the same name, so the loser's
+ * create is a `400 already-exists` that resolves to THE SAME room, and both `setVenue` writes
+ * stamp identical `daily_room_name`/`join_url` columns (they serialize on the row lock; only
+ * `venue_provisioned_at` can differ, by the race's gap, and last-write-wins there is harmless).
+ * **THE CONCURRENT RACE THEREFORE STRANDS NO ROOM** — the loser does not create a second one,
+ * it finds the first — which is why there is no `deleteRoom` call on the race path.
  *
  * ⚠⚠ THAT IS THE WHOLE SCOPE OF THE CLAIM. IT IS **NOT** "NO ORPHAN ROOM CAN EXIST", and an
  * earlier version of this block said so — which mattered, because that sentence was the stated
@@ -62,10 +65,9 @@
  * BAL-129 ACCEPTS BOTH rather than fixing them here:
  *
  *   (i) `createRoom` SUCCEEDS AND `setVenue` THROWS. The room exists under this meeting's
- *       derived name with nothing in the database pointing at it, and NO REPAIR PATH SHIPS in
- *       this PR — nothing calls `provisionMeeting` again, so nothing ever claims it. Owner:
- *       **BAL-400** (which owns the booking UX and is the only surface that will know a
- *       meeting is unprovisioned). Cheap to fix precisely because the name is re-derivable.
+ *       derived name with nothing in the database pointing at it — but the venue repair job
+ *       (`jobs/meeting-venue-repair.ts`, BAL-581) re-derives the same name and adopts the room
+ *       on its next checkpoint, via `createOrFindRoom`'s already-exists path.
  *  (ii) `softDeleteMeeting` DELETES NO DAILY ROOM. ⚠ NARROWED BY BAL-410, which CLOSED the
  *       cancel half: `cancelMeeting` now deletes the room post-commit (guarded by the
  *       derived-name check, best-effort and non-fatal — `meeting-availability.ts`'s
@@ -75,7 +77,12 @@
  * (iii) `createRoom` REFUSES ITS OWN CREATION. The vendor-response checks in
  *       `services/daily/rooms.ts` — privacy, then the `name`/`url` fields — run AFTER the POST
  *       has already created the room, so a room the platform then refuses is stranded by the
- *       refusal itself.
+ *       refusal itself. The PRIVACY arm converges (BAL-581): `createRoom` throws
+ *       `DailyRoomNotPrivateError` and `provisionVenue`'s catch best-effort deletes that public
+ *       room, so the venue repair job's next checkpoint creates a private one instead of
+ *       adopting the same refused room forever. The missing-FIELD arm has no such repair — a
+ *       room missing `name`/`url` in its response is not a privacy hazard (see the exposure
+ *       note below) and is simply left stranded, unadvertised.
  *
  * Rooms are created with NO `exp` (D9 — every Daily knob except `privacy` is left at the
  * vendor default), so a stranded room persists at the vendor indefinitely.
@@ -84,15 +91,15 @@
  * version is BACKWARDS for the one case it most needs to cover. "The room is private, so it
  * admits nobody without a token" holds for (i) and (ii) — those rooms passed the privacy check.
  * It does NOT hold for the privacy arm of (iii): that room is stranded PRECISELY BECAUSE it
- * came back PUBLIC. Worse, it is permanently un-adoptable — every re-provision derives the same
- * name, the POST returns `400 already-exists`, the GET returns the same public room, and the
- * check throws again — so no code path can ever fix or reuse it.
+ * came back PUBLIC — the adoption path is POST `400` (already-exists) → reconcile
+ * `POST /rooms/:name` (BAL-473's recording knob) → GET, and every leg of it re-checks privacy
+ * and re-throws on the same public room. BAL-581 closes it: `provisionVenue` deletes
+ * that public room (`DailyRoomNotPrivateError`) so the next attempt creates a private one.
  *
- * The harm is nevertheless low, and this is the honest reason: `setVenue` never ran, so that
- * URL was never stored, never returned in a response and never shown to anyone. What is
- * stranded is an EMPTY, UNADVERTISED room whose address is only computable by someone who
- * already holds the `meetings.id`. Accepted and recorded, not dismissed — deleting it is
- * BAL-400's repair path, alongside (i).
+ * The harm was nevertheless always low, and this is the honest reason: `setVenue` never ran,
+ * so that URL was never stored, never returned in a response and never shown to anyone. What
+ * is stranded (best-effort deletion aside) is an EMPTY, UNADVERTISED room whose address is
+ * only computable by someone who already holds the `meetings.id`.
  *
  * ⚠ THIS TICKET WRITES NO `onConflict` CLAUSE ANYWHERE, and that is worth recording: `create`
  * is a bare INSERT, `setVenue` is a bare UPDATE, and the arbiter is the name, not an index.
@@ -107,35 +114,42 @@
  * the conditional would match zero rows and the update would throw "Meeting not found" — an
  * error whose message would be a lie.
  *
- * ⚠ WHAT THIS DOES **NOT** DELIVER: booking-level double-submit dedup (D2). `POST /meetings`
- * takes no meeting id and no idempotency key, `meetings.id` is `defaultRandom()`, and there
- * is no idempotency-key column — so TWO IDENTICAL POSTS CREATE TWO MEETINGS AND TWO ROOMS.
- * That is D2's explicit narrowing, not a defect of this design; closing it needs a schema
- * change. **BAL-400** owns it. The idempotent entry point is `provisionMeeting(meetingId, …)`.
+ * ⚠ BOOKING-LEVEL DOUBLE-SUBMIT DEDUP (D2) IS BAL-400'S, NOT THIS MODULE'S SHORT-CIRCUIT:
+ * `POST /meetings` accepts an optional `bookingIdempotencyKey` (a `sha256(userId:nonce)`
+ * digest), stored on `meetings.booking_idempotency_key` behind a partial unique index. A lost
+ * `201` retries through `lookupBookingReplay` / `replayByIdempotencyKey`, below — NOT through
+ * this short-circuit, which only ever sees a meeting id that already exists. A caller with no
+ * key still creates two meetings and two rooms on two identical POSTs; that is unchanged.
  *
- * ⚠ `provisionMeeting` IS EXPORTED SEPARATELY FROM `bookAndProvisionMeeting` PRECISELY SO
- * BAL-400'S REPAIR PATH HAS SOMETHING TO CALL. Nothing calls it automatically today: there is
- * no sweep, no retry job and no repair endpoint in this PR. A sweep would mean a new jobs
- * module, which means a `startWorkers()` registration, which means `worker.test.ts` must mock
- * it or CI hangs on real Redis — real cost for a path that has no producer yet (D6).
+ * ⚠ `provisionMeeting` IS EXPORTED SEPARATELY FROM `bookAndProvisionMeeting` because it has
+ * TWO OTHER CALLERS besides the fresh-booking path: the lost-201 REPLAY
+ * (`replayByIdempotencyKey`, below) and the venue repair job
+ * (`jobs/meeting-venue-repair.ts`, BAL-581) — a per-minute producer that re-provisions a
+ * `scheduled` meeting whose venue never became ready, on a deterministic checkpoint schedule.
  *
  * ⚠ THIS MODULE RESOLVES NO AUTHORIZATION **AND VALIDATES NO AVAILABILITY**, and both are the
  * caller's obligation. Before a `contextId` reaches here the caller must have run
  * `authorizeMeetingBooking` (tenancy — see that module and `schema/meeting-contexts.ts`) AND
  * `isWindowAvailableForExpert` (`services/availability/window-availability.ts` — the aggregate
  * availability-DoS bound). `POST /meetings` does both, in that order.
- *   Neither check lives HERE on purpose: this module is also the entry point for BAL-400's
- *   repair path, which re-provisions a meeting that was ALREADY authorized and whose window is
+ *   Neither check lives HERE on purpose: this module is also the entry point for the venue
+ *   repair job, which re-provisions a meeting that was ALREADY authorized and whose window is
  *   already booked — re-running an availability check there would refuse to heal exactly the
  *   bookings that need healing, because the meeting's own consultation row now reads as busy.
  */
+import * as Sentry from '@sentry/node';
 import { meetingsRepository, type CreatedMeeting, type Meeting } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
-import { dailyRoomNameForMeeting, type MeetingBookingContextType } from '@balo/shared/meetings';
+import {
+  dailyRoomNameForMeeting,
+  isMeetingVenueReady,
+  type MeetingBookingContextType,
+  type MeetingProvisionTrigger,
+} from '@balo/shared/meetings';
 import type { FastifyBaseLogger } from 'fastify';
-import { DailyApiError } from '../daily/errors.js';
-import type { RoomProvisioner } from '../daily/rooms.js';
-import { dailyRoomProvisioner } from '../daily/rooms.js';
+import { DailyApiError, DailyRoomNotPrivateError } from '../daily/errors.js';
+import type { RoomProvisioner, RoomTeardown } from '../daily/rooms.js';
+import { dailyRoomProvisioner, dailyRoomTeardown } from '../daily/rooms.js';
 import { publishBookingCalendarInvites } from '../calendar-invites/publish-calendar-invites.js';
 import {
   projectBookingCalendarEvent,
@@ -175,7 +189,7 @@ export interface MeetingVenue {
 
 export interface ProvisionMeetingResult extends MeetingVenue {
   meetingId: string;
-  /** `true` when the meeting was ALREADY stamped: no Daily call, no write (D2). */
+  /** `true` when the meeting was ALREADY venue-ready per `isMeetingVenueReady`: no Daily call, no write (D2). */
   replayed: boolean;
 }
 
@@ -183,12 +197,29 @@ export interface ProvisionMeetingResult extends MeetingVenue {
 export interface MeetingProvisionContext {
   contextType: MeetingBookingContextType;
   engagementType: BookableEngagementType | null;
-  /** The booking actor — PostHog's `distinct_id`. */
-  userId: string;
+  /**
+   * PostHog's `distinct_id`: the BOOKING ACTOR on `trigger: 'booking'` / `'replay'`; the
+   * MEETING id on `trigger: 'repair'` (the venue repair job has no acting human — see
+   * `jobs/meeting-venue-repair.ts`, the same non-user shape `meeting_ended`'s system paths
+   * already use). Named `distinctId`, not `userId`, because it does not always hold one.
+   */
+  distinctId: string;
+  /** What caused this attempt. Segments `lead_time_minutes` (a repair's lead
+   * time measures salvage lateness, not booking lead time) and the Sentry volume rule below. */
+  trigger: MeetingProvisionTrigger;
+  /**
+   * `true` ⇒ a failure is `log.error` + `Sentry.captureException`; `false` ⇒
+   * `log.warn` only, no Sentry. Booking and replay always escalate (a live user is waiting).
+   * The venue repair job escalates ONLY its FINAL checkpoint before the cutoff, so a whole
+   * outage costs one Sentry event per meeting rather than one per attempt.
+   */
+  escalateFailure: boolean;
 }
 
 export interface ProvisionMeetingDeps {
   provisioner?: RoomProvisioner;
+  /** Defaults to the live `dailyRoomTeardown`; tests substitute their own. */
+  teardown?: RoomTeardown;
 }
 
 export interface BookAndProvisionInput {
@@ -219,9 +250,10 @@ function minutesBetween(from: Date, to: Date): number {
 }
 
 /**
- * Emit `meeting_provisioned`. Lives HERE rather than in the route so a future second caller
- * (BAL-400's repair path) emits without duplicating the call. `trackServer` is a no-op
- * without `POSTHOG_API_KEY`, so dev and CI are unaffected.
+ * Emit `meeting_provisioned`. Lives HERE rather than in the route so every caller — booking,
+ * the lost-201 replay, and the venue repair job (`jobs/meeting-venue-repair.ts`) — emits
+ * without duplicating the call. `trackServer` is a no-op without `POSTHOG_API_KEY`, so dev and
+ * CI are unaffected.
  */
 function trackProvisioned(
   meeting: Meeting,
@@ -236,16 +268,21 @@ function trackProvisioned(
     duration_minutes: minutesBetween(meeting.scheduledStart, meeting.scheduledEnd),
     lead_time_minutes: minutesBetween(now, meeting.scheduledStart),
     idempotent_replay: replayed,
-    distinct_id: context.userId,
+    trigger: context.trigger,
+    distinct_id: context.distinctId,
   });
 }
 
 /**
  * PROVISION (or re-provision) one meeting's Daily room, idempotently.
  *
- * Reads first: a meeting whose venue is ALREADY stamped short-circuits with `replayed: true`
- * — zero vendor calls, zero writes. The guard requires BOTH columns to be non-null, and
- * treating one as unprovisioned is the fail-safe reading (re-provisioning is harmless).
+ * Reads first: a meeting whose venue is ALREADY READY short-circuits with `replayed: true` —
+ * zero vendor calls, zero writes. The guard is `isMeetingVenueReady` (`@balo/shared/meetings`)
+ * — BOTH columns non-null AND the stamped name equals `dailyRoomNameForMeeting(id)` (BAL-581)
+ * — so a MISMATCHED stamp (a corrupt or foreign name) falls through to a real provision
+ * rather than being trusted, and `setVenue` re-stamps it with the correct name. Treating a
+ * not-yet-ready meeting as unprovisioned is the fail-safe reading either way: re-provisioning
+ * is harmless (the vendor call is idempotent by name).
  *
  * ⚠ "A HALF-STAMPED ROW IS NOT PRODUCIBLE" IS TRUE ONLY BECAUSE `createRoom` VALIDATES THE
  * VENDOR RESPONSE — do not restate it as a property of `setVenue`, which is where an earlier
@@ -273,14 +310,112 @@ export async function provisionMeeting(
     return undefined;
   }
 
-  const { dailyRoomName, joinUrl } = existing;
-  if (dailyRoomName !== null && joinUrl !== null) {
+  if (isMeetingVenueReady(existing)) {
     trackProvisioned(existing, context, new Date(), true);
-    return { meetingId, provisioned: true, dailyRoomName, joinUrl, replayed: true };
+    return {
+      meetingId,
+      provisioned: true,
+      dailyRoomName: existing.dailyRoomName,
+      joinUrl: existing.joinUrl,
+      replayed: true,
+    };
   }
 
   const venue = await provisionVenue(existing, context, log, deps);
   return { meetingId, ...venue, replayed: false };
+}
+
+/**
+ * BAL-581 — best-effort delete of a room `createRoom` refused for coming back public.
+ * Its OWN try/catch: a delete failure must never mask the ORIGINAL provisioning failure this
+ * runs inside, and must never throw out of `provisionVenue`'s catch. The next repair
+ * checkpoint retries the delete for free (it re-derives the same name).
+ */
+async function deleteStrandedRoomBestEffort(
+  roomName: string,
+  meetingId: string,
+  deps: ProvisionMeetingDeps,
+  log: FastifyBaseLogger
+): Promise<void> {
+  const teardown = deps.teardown ?? dailyRoomTeardown;
+  try {
+    await teardown.deleteRoom(roomName);
+  } catch (error) {
+    log.warn(
+      {
+        meetingId,
+        roomName,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Stranded public Daily room could not be deleted — the next repair checkpoint retries'
+    );
+  }
+}
+
+/**
+ * Log, escalate and emit analytics for a failed venue provision. Extracted from `provisionVenue`
+ * purely to keep that function under SonarCloud's cognitive-complexity limit — every line here
+ * was inline there before.
+ *
+ * ⚠ THE `meetingId` IS WHAT MAKES THE REPAIR ACTIONABLE — without it the log names a
+ * failure nobody can act on. The booking itself STANDS; see the module docblock.
+ *
+ * ⚠ AND `vendorBody` IS WHY `DailyApiError` CARRIES ONE. Its docblock says the raw
+ * response text is "FOR THE SERVER LOG ONLY" — this is that log, and it is the only place
+ * the body is ever read. `error.message` is `Daily API error: POST /rooms responded 503`
+ * and deliberately EXCLUDES the body, so without this field the vendor's own explanation
+ * ("room name already taken", "invalid domain", a quota message) was captured NOWHERE and
+ * the repair path had a status and nothing else to go on.
+ *   · It stays OUT of the analytics `reason`, which correctly carries the error CLASS.
+ *   · It stays OUT of every response body (the no-echo rule for vendor error text).
+ *   · It stays OUT of Sentry's `extra` — see the `escalateFailure` branch below.
+ *
+ * BAL-581 — booking and replay always escalate (a live user is waiting on this meeting); the
+ * venue repair job escalates ONLY its final checkpoint before the cutoff, so a whole outage
+ * costs one Sentry event per meeting rather than one per attempt.
+ */
+function reportProvisionFailure(
+  meeting: Meeting,
+  context: MeetingProvisionContext,
+  error: unknown,
+  log: FastifyBaseLogger
+): void {
+  const errorName = error instanceof Error ? error.name : 'unknown';
+  const fields = {
+    meetingId: meeting.id,
+    contextType: context.contextType,
+    trigger: context.trigger,
+    errorName,
+    error: error instanceof Error ? error.message : String(error),
+    vendorBody: error instanceof DailyApiError ? error.body : undefined,
+    stack: error instanceof Error ? error.stack : undefined,
+  };
+  const message = 'Meeting booked but Daily room provisioning failed';
+
+  if (context.escalateFailure) {
+    log.error(fields, message);
+    // `extra` carries NO `vendorBody` — the raw vendor response text never reaches Sentry,
+    // only the error's own `message` (which itself excludes the body, see above).
+    Sentry.captureException(error, {
+      extra: {
+        meetingId: meeting.id,
+        contextType: context.contextType,
+        trigger: context.trigger,
+      },
+    });
+  } else {
+    log.warn(fields, message);
+  }
+
+  trackServer(MEETING_SERVER_EVENTS.MEETING_PROVISION_FAILED, {
+    meeting_id: meeting.id,
+    context_type: context.contextType,
+    engagement_type: context.engagementType,
+    // The error CLASS, never the message — the message can carry vendor detail.
+    reason: errorName,
+    trigger: context.trigger,
+    distinct_id: context.distinctId,
+  });
 }
 
 /**
@@ -317,36 +452,14 @@ async function provisionVenue(
     trackProvisioned(meeting, context, new Date(), false);
     return { provisioned: true, dailyRoomName: room.dailyRoomName, joinUrl: room.joinUrl };
   } catch (error) {
-    // ⚠ THE `meetingId` IS WHAT MAKES THE REPAIR ACTIONABLE — without it the log names a
-    // failure nobody can act on. The booking itself STANDS; see the module docblock.
-    //
-    // ⚠ AND `vendorBody` IS WHY `DailyApiError` CARRIES ONE. Its docblock says the raw
-    // response text is "FOR THE SERVER LOG ONLY" — this is that log, and it is the only place
-    // the body is ever read. `error.message` is `Daily API error: POST /rooms responded 503`
-    // and deliberately EXCLUDES the body, so without this field the vendor's own explanation
-    // ("room name already taken", "invalid domain", a quota message) was captured NOWHERE and
-    // the repair path had a status and nothing else to go on.
-    //   · It stays OUT of the analytics `reason`, which correctly carries the error CLASS.
-    //   · It stays OUT of every response body (§6.3's no-echo rule).
-    log.error(
-      {
-        meetingId: meeting.id,
-        contextType: context.contextType,
-        errorName: error instanceof Error ? error.name : 'unknown',
-        error: error instanceof Error ? error.message : String(error),
-        vendorBody: error instanceof DailyApiError ? error.body : undefined,
-        stack: error instanceof Error ? error.stack : undefined,
-      },
-      'Meeting booked but Daily room provisioning failed'
-    );
-    trackServer(MEETING_SERVER_EVENTS.MEETING_PROVISION_FAILED, {
-      meeting_id: meeting.id,
-      context_type: context.contextType,
-      engagement_type: context.engagementType,
-      // The error CLASS, never the message — the message can carry vendor detail.
-      reason: error instanceof Error ? error.name : 'unknown',
-      distinct_id: context.userId,
-    });
+    // A public room is the one PER-MEETING permanent failure with a known remedy: delete it so
+    // the NEXT attempt creates a private one. Runs before the report below so the delete happens
+    // regardless of the `escalateFailure` branch.
+    if (error instanceof DailyRoomNotPrivateError) {
+      await deleteStrandedRoomBestEffort(roomName, meeting.id, deps, log);
+    }
+
+    reportProvisionFailure(meeting, context, error, log);
     return { provisioned: false, dailyRoomName: null, joinUrl: null };
   }
 }
@@ -449,7 +562,13 @@ async function replayByIdempotencyKey(
 
   const replayed = await provisionMeeting(
     existing.id,
-    { contextType: input.contextType, engagementType: input.engagementType, userId: input.userId },
+    {
+      contextType: input.contextType,
+      engagementType: input.engagementType,
+      distinctId: input.userId,
+      trigger: 'replay',
+      escalateFailure: true,
+    },
     log,
     deps
   );
@@ -528,7 +647,9 @@ export async function bookAndProvisionMeeting(
     {
       contextType: input.contextType,
       engagementType: input.engagementType,
-      userId: input.userId,
+      distinctId: input.userId,
+      trigger: 'booking',
+      escalateFailure: true,
     },
     log,
     deps

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
 import { cleanup } from '@testing-library/react';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
+import { VENUE_UNAVAILABLE_NOTE } from '@/lib/meetings/venue-unavailable-copy';
 import type {
   CaseConsultationRowView,
   CaseConsultationStateLabel,
@@ -56,6 +57,9 @@ function makeRow(overrides: Partial<CaseConsultationRowView> = {}): CaseConsulta
     guestCount: 0,
     scheduledMinutes: 30,
     live: false,
+    // BAL-581 — row contract: `false` on every non-upcoming row (the default `state: 'held'`
+    // here is one), matching what `mapCaseConsultations` actually emits.
+    roomReady: false,
     ...overrides,
   };
 }
@@ -99,6 +103,7 @@ const ALL_NOTES: readonly string[] = [
   `${COUNTERPARTY} wasn't able to join`,
   "The call didn't start",
   'Neither side joined this call',
+  VENUE_UNAVAILABLE_NOTE,
   'Outcome not recorded',
   // Item 13 — `pending_reschedule` (BAL-411), the 8th state; §D4 flagged it as NOT
   // compile-forced (`stateNote`'s `default: return null`), so nothing but a test catches a
@@ -244,6 +249,15 @@ const STATE_CASES: readonly StateCase[] = [
     pill: bothPills('Not recorded'),
     variant: 'secondary',
   },
+  // BAL-581 — Balo's own failure, never `warning`: there is no absent party to flag. Lens-
+  // neutral, like `nobody_joined`.
+  {
+    state: 'venue_unavailable',
+    muted: true,
+    notes: bothLenses(VENUE_UNAVAILABLE_NOTE),
+    pill: bothPills('Call room unavailable'),
+    variant: 'secondary',
+  },
   // Item 13 (BAL-411) — same icon/weight as `scheduled`; `stateNote` carries the one
   // distinguishing fact, and it is LENS-AWARE (the proposal card above the list is where
   // either side actually acts — this note only says WHY the badge differs from `scheduled`).
@@ -309,6 +323,7 @@ describe('ConsultationList — relative days, on appointments only', () => {
     'missed_call',
     'nobody_joined',
     'no_show_client',
+    'venue_unavailable',
     'cancelled',
     'outcome_pending',
   ] as const)('never says Today/Tomorrow for the terminal %s row', async (state) => {
@@ -389,12 +404,12 @@ describe("ConsultationList — the status pill's three standing rules", () => {
 });
 
 describe('ConsultationList — every state renders, on every lens', () => {
-  it('sweeps all nine states across both lenses', () => {
-    // A guard on the table itself: 9 states × 2 lenses. If a state is added to
+  it('sweeps all ten states across both lenses', () => {
+    // A guard on the table itself: 10 states × 2 lenses. If a state is added to
     // `CaseConsultationStateLabel` without landing here, `STATE_PRESENTATION` would throw at
     // render time in production — this keeps the sweep honest about its own breadth.
-    expect(SWEEP).toHaveLength(18);
-    expect(new Set(STATE_CASES.map((c) => c.state)).size).toBe(9);
+    expect(SWEEP).toHaveLength(20);
+    expect(new Set(STATE_CASES.map((c) => c.state)).size).toBe(10);
   });
 
   it.each(SWEEP)(
@@ -516,16 +531,19 @@ describe('ConsultationList — the recap link follows recapHref, NOT state', () 
     expect(screen.queryByRole('link', { name: 'View recap' })).not.toBeInTheDocument();
   });
 
-  it.each(['no_show_client', 'missed_call', 'nobody_joined', 'outcome_pending'] as const)(
-    'links a %s row that has a recap href',
-    (state) => {
-      renderList([makeRow({ state, recapHref: '/meetings/m-4?from=case_surface' })]);
-      expect(screen.getByRole('link', { name: 'View recap' })).toHaveAttribute(
-        'href',
-        '/meetings/m-4?from=case_surface'
-      );
-    }
-  );
+  it.each([
+    'no_show_client',
+    'missed_call',
+    'nobody_joined',
+    'venue_unavailable',
+    'outcome_pending',
+  ] as const)('links a %s row that has a recap href', (state) => {
+    renderList([makeRow({ state, recapHref: '/meetings/m-4?from=case_surface' })]);
+    expect(screen.getByRole('link', { name: 'View recap' })).toHaveAttribute(
+      'href',
+      '/meetings/m-4?from=case_surface'
+    );
+  });
 
   it('renders NO link on a HELD row with a null href — an absent action beats a dead one', () => {
     renderList([makeRow({ state: 'held', recapHref: null, hasTranscript: true, fileCount: 2 })]);
@@ -777,10 +795,16 @@ describe('ConsultationList — the per-row kebab', () => {
 
   // Pins that the row renders correctly given the shape the loader already produces inside
   // the join window (move flags refused, Cancel survives) — not re-deriving it here.
-  it('shows Cancel only, no move item, for a row inside the join window (live)', async () => {
+  it('shows Cancel only, no move item, for a row inside the join window (live), room ready', async () => {
     const user = userEvent.setup();
     renderList([
-      makeRow({ state: 'scheduled', live: true, canCancel: true, canReschedule: false }),
+      makeRow({
+        state: 'scheduled',
+        live: true,
+        roomReady: true,
+        canCancel: true,
+        canReschedule: false,
+      }),
     ]);
     await user.click(screen.getByRole('button'));
     expect(screen.getByRole('menuitem', { name: 'Cancel consultation' })).toBeInTheDocument();
@@ -788,10 +812,24 @@ describe('ConsultationList — the per-row kebab', () => {
     expect(screen.getByText('Starting soon')).toBeInTheDocument();
   });
 
-  it('shows "Starting soon" instead of "Upcoming" once inside the join window', () => {
-    renderList([makeRow({ state: 'scheduled', live: true })]);
+  it('shows "Starting soon" instead of "Upcoming" once inside the join window, room ready', () => {
+    renderList([makeRow({ state: 'scheduled', live: true, roomReady: true })]);
     expect(screen.getByText('Starting soon')).toBeInTheDocument();
     expect(screen.queryByText('Upcoming')).not.toBeInTheDocument();
+  });
+
+  /** BAL-581 — a live row whose call room isn't ready yet never promises "Starting soon". */
+  it('shows "Setting up call room" instead of "Starting soon" when live but the room is not ready', () => {
+    renderList([makeRow({ state: 'scheduled', live: true, roomReady: false })]);
+    expect(screen.getByText('Setting up call room')).toBeInTheDocument();
+    expect(screen.queryByText('Starting soon')).not.toBeInTheDocument();
+    expect(screen.queryByText('Upcoming')).not.toBeInTheDocument();
+  });
+
+  it('outside the join window still shows "Upcoming" regardless of roomReady', () => {
+    renderList([makeRow({ state: 'scheduled', live: false, roomReady: false })]);
+    expect(screen.getByText('Upcoming')).toBeInTheDocument();
+    expect(screen.queryByText('Setting up call room')).not.toBeInTheDocument();
   });
 
   it('a colleague (no capability, every flag false) sees no trigger on any row', () => {

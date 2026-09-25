@@ -16,7 +16,12 @@ vi.mock('./authorize-meeting-participation.js', () => ({
 // ⚠ `@balo/shared/meetings` is NOT mocked — `resolveWaitingPhase` and `computeMeetingClocks` are
 // exactly what this read is a thin wrapper over, and mocking them would assert nothing.
 
-import { DEFAULT_MEETING_TIMERS, type MeetingTimers } from '@balo/shared/meetings';
+import {
+  DEFAULT_MEETING_TIMERS,
+  dailyRoomNameForMeeting,
+  isMeetingVenueReady,
+  type MeetingTimers,
+} from '@balo/shared/meetings';
 import { getMeetingState } from './meeting-state.js';
 
 const MEETING_ID = '22222222-2222-4222-8222-222222222222';
@@ -28,12 +33,24 @@ function at(minutes: number): Date {
   return new Date(START.getTime() + minutes * MINUTE);
 }
 
+const ROOM = dailyRoomNameForMeeting(MEETING_ID);
+
+/**
+ * ⚠⚠ BAL-581 — VENUE-COMPLETE BY DEFAULT, AND THAT IS THE CANARY. `meetingVenueReadyAt` needs
+ * `dailyRoomName`/`joinUrl` (matching `dailyRoomNameForMeeting(id)`) AND `venueProvisionedAt`.
+ * Without them this fixture reads as NOT READY and `resolveWaitingPhase`'s expert-missing arm
+ * would fall to its defensive `?? scheduledStart` fallback instead of exercising the real anchor.
+ */
 function meeting(overrides: Record<string, unknown> = {}) {
   return {
     id: MEETING_ID,
     status: 'waiting_for_participants',
     scheduledStart: START,
     scheduledEnd: at(60),
+    dailyRoomName: ROOM,
+    joinUrl: `https://balo.daily.co/${ROOM}`,
+    createdAt: at(-1440),
+    venueProvisionedAt: at(-1440),
     endedAt: null,
     endedBy: null,
     outcome: null,
@@ -84,6 +101,28 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
     await expect(stateAt(4)).resolves.toMatchObject({ state: { phase: 'running' } });
     // 5 minutes in — at it.
     await expect(stateAt(5)).resolves.toMatchObject({ state: { phase: 'near' } });
+  });
+
+  /** ⚠⚠ THE CANARY — if this ever goes red every "phase" assertion below it is silently
+   * exercising `resolveWaitingPhase`'s defensive `?? scheduledStart` fallback. */
+  it('⚠⚠ the default fixture is venue-READY — the canary for every other row in this file', () => {
+    expect(isMeetingVenueReady(meeting())).toBe(true);
+  });
+
+  /**
+   * BAL-581 — the expert-missing arm is anchored on `venueAbsenceAnchor`, the SAME instant the
+   * ops alert fires from, so `near`'s "we've flagged this to the Balo team" renders exactly when
+   * that alert fires — even for a room repaired AFTER the scheduled start.
+   */
+  it('⚠ BAL-581 — a LATE-ready venue anchors the expert-missing phase on ITS OWN readiness, not the start', async () => {
+    mockFindById.mockResolvedValue(meeting({ venueProvisionedAt: at(3) }));
+
+    // Before the room existed: still running — nobody could have joined yet.
+    await expect(stateAt(2)).resolves.toMatchObject({ state: { phase: 'running' } });
+    // 5 minutes AFTER the room became ready is inside the alert window still.
+    await expect(stateAt(5)).resolves.toMatchObject({ state: { phase: 'running' } });
+    // anchor (start+3) + the 5-minute alert window = start+8.
+    await expect(stateAt(8)).resolves.toMatchObject({ state: { phase: 'near' } });
   });
 
   it('a terminal meeting is `settled`', async () => {

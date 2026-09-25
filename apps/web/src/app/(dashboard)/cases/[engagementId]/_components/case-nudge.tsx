@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
 import { JoinCountdown } from '@/components/balo/meetings/join-countdown';
+import { RoomSettingUpSlot } from '@/components/balo/meetings/room-setting-up-slot';
+import { roomSettingUpNudgeBody } from '@/lib/meetings/room-setting-up-copy';
 import {
   joinAffordanceAriaLabel,
   joinAffordanceTimingLabel,
@@ -19,6 +21,7 @@ import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { resolutionAskPendingTitle } from '@/lib/cases/actor-attribution';
 import { useServerAnchoredClock } from '@/hooks/use-server-anchored-clock';
 import type { CaseNudgeView } from '@/lib/cases/case-view-types';
+import { useRoomReadyRefresh } from './use-room-ready-refresh';
 
 /**
  * BAL-421 — EXACTLY ONE nudge, chosen server-side by `selectCaseNudge`. This component only
@@ -213,32 +216,49 @@ function UpcomingNudge({
   // `nudge.live` is passed through as the crossing baseline only — see the hook's own docblock.
   const clock = useUpcomingJoinClock(nudge.scheduledStartIso, nudge.serverNowIso, nudge.live);
 
+  // BAL-581 — the call room's own readiness, a SEPARATE field from `live` (never folded in —
+  // see `CaseNudgeView`'s docblock). Bounded refresh while the window is open and the room isn't
+  // ready yet; the hook is itself time-bounded, so it stops on its own once the window's salvage
+  // period ends, on top of stopping the instant `roomReady` flips.
+  const roomReady = nudge.roomReady;
+  useRoomReadyRefresh(clock.live && !roomReady, nudge.scheduledStartIso);
+  // A refresh that flips the room to ready while the window is open announces it (sr-only, the
+  // SAME words as the crossing announcement; not a visible notice).
+  const roomReadyAnnouncement = useRoomReadyAnnouncement(roomReady, clock.live, nudge.meetingId);
+
   // ⚠ BAL-567 — JOIN IS FIRST AND PRIMARY INSIDE THE WINDOW, on BOTH sides. It is the action
   // that opens the credit session (`apps/api`'s `joinMeetingAsMember`); a calendar entry is not.
   const handleJoin = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'join', lens });
   }, [lens]);
 
-  // THE SLOT NEVER EMPTIES: `JoinCountdown` before the window, `JoinMeetingButton` inside it,
-  // same place, same size. `JoinCountdown` is its own element, never `JoinMeetingButton` plus a
-  // `disabled` prop (that component's "rendered ONLY inside the join window" invariant stays).
-  const joinAction = clock.live ? (
-    <JoinMeetingButton
-      joinUrl={nudge.joinPath}
-      size="sm"
-      className="min-h-11 px-4"
-      ariaLabel={joinAffordanceAriaLabel(counterpartyLabel, clock.timingLabel)}
-      onJoin={handleJoin}
-    >
-      <span className="size-[7px] rounded-full bg-emerald-400" aria-hidden="true" />
-      {clock.joinLabel}
-    </JoinMeetingButton>
-  ) : (
-    <JoinCountdown label={clock.joinLabel} />
-  );
+  // THE SLOT NEVER EMPTIES: `RoomSettingUpSlot` while the room is not ready, `JoinCountdown`
+  // before the window, `JoinMeetingButton` inside it — same place, same size. `JoinCountdown` is
+  // its own element, never `JoinMeetingButton` plus a `disabled` prop (that component's "rendered
+  // ONLY inside the join window" invariant stays).
+  let joinAction: React.ReactNode;
+  if (!roomReady) {
+    joinAction = <RoomSettingUpSlot variant="button" className="min-h-11 px-4" />;
+  } else if (clock.live) {
+    joinAction = (
+      <JoinMeetingButton
+        joinUrl={nudge.joinPath}
+        size="sm"
+        className="min-h-11 px-4"
+        ariaLabel={joinAffordanceAriaLabel(counterpartyLabel, clock.timingLabel)}
+        onJoin={handleJoin}
+      >
+        <span className="size-[7px] rounded-full bg-emerald-400" aria-hidden="true" />
+        {clock.joinLabel}
+      </JoinMeetingButton>
+    );
+  } else {
+    joinAction = <JoinCountdown label={clock.joinLabel} />;
+  }
 
   // Both drop the instant the clock crosses into the window — not on the next server refresh —
-  // so the nudge's own move affordance can never linger beside a live Join.
+  // so the nudge's own move affordance can never linger beside a live Join. UNCHANGED by
+  // `roomReady`: Reschedule/Propose visibility is a join-window question, not a venue one.
   const showReschedule = !clock.live && canReschedule;
   const canPropose = !clock.live && canProposeReschedule;
   // Text-link treatment, matching the row's "View recap" — a demoted, secondary affordance next
@@ -260,19 +280,32 @@ function UpcomingNudge({
     );
   }
 
+  // `joinable` — the only sense in which the nudge is "live" for the shell's dot/icon: the
+  // window is open AND the room is actually ready to receive someone.
+  const joinable = clock.live && roomReady;
+
   return (
     <>
       <NudgeShell
-        icon={clock.live ? Video : CalendarClock}
-        live={clock.live}
+        icon={joinable ? Video : CalendarClock}
+        live={joinable}
         title={
-          clock.live ? (
+          // The title never claims the consultation is starting or happening while the room
+          // isn't ready. Before the start, the plain countdown ("starts in N minutes") is still
+          // allowed even with a not-yet-ready room — it is a true statement about the clock, not
+          // a liveness claim. At or after the start with `roomReady` false, fall back to the
+          // neutral absolute-time title so it never contradicts the not-ready body below it.
+          clock.live && (roomReady || clock.minutes > 0) ? (
             <UpcomingTitle live minutes={clock.minutes} />
           ) : (
             <UpcomingTitle live={false} iso={nudge.scheduledStartIso} />
           )
         }
-        body={upcomingBody(lens, counterpartyLabel, clock.live)}
+        body={
+          roomReady
+            ? upcomingBody(lens, counterpartyLabel, clock.live)
+            : roomSettingUpNudgeBody(lens, counterpartyLabel)
+        }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {joinAction}
@@ -280,12 +313,45 @@ function UpcomingNudge({
           </div>
         }
       />
-      {/* Exactly one polite announcement, on the crossing — never the ticking label itself. */}
+      {/* Exactly one polite announcement, on the crossing — never the ticking label itself. The
+          crossing announcement is suppressed while the room isn't ready: Join has not actually
+          appeared, so there is nothing true to announce yet. */}
       <span role="status" className="sr-only">
-        {clock.announcement}
+        {roomReady ? clock.announcement || roomReadyAnnouncement : ''}
       </span>
     </>
   );
+}
+
+/**
+ * BAL-581 — a screen reader is told when the room becomes ready WHILE the window is already
+ * open, a case `useUpcomingJoinClock`'s own crossing announcement cannot cover:
+ * that hook only fires on the join-WINDOW crossing (false → true liveness), so a viewer who
+ * mounted already inside the window never sees one, and a viewer whose window opened before the
+ * room did has already had that announcement suppressed (see the sr-only span above). Tracks the
+ * room-readiness crossing (false → true) independently, only while `live`, and resets on a
+ * meeting swap so a stale "You can join now." cannot linger about a meeting the viewer never
+ * watched become ready.
+ */
+function useRoomReadyAnnouncement(roomReady: boolean, live: boolean, meetingId: string): string {
+  const [announcement, setAnnouncement] = useState('');
+  const prevRoomReadyRef = useRef(roomReady);
+  const meetingIdRef = useRef(meetingId);
+
+  useEffect(() => {
+    if (meetingIdRef.current !== meetingId) {
+      meetingIdRef.current = meetingId;
+      prevRoomReadyRef.current = roomReady;
+      setAnnouncement('');
+      return;
+    }
+    if (live && roomReady && !prevRoomReadyRef.current) {
+      setAnnouncement('You can join now.');
+    }
+    prevRoomReadyRef.current = roomReady;
+  }, [roomReady, live, meetingId]);
+
+  return announcement;
 }
 
 interface UpcomingJoinClockBase {

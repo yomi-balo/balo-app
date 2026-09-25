@@ -108,6 +108,7 @@ function consultation(n: number): CaseConsultationRowView {
     guestCount: 0,
     scheduledMinutes: 30,
     live: false,
+    roomReady: false,
   };
 }
 

@@ -123,8 +123,9 @@ function introCallBodyLines(props: Readonly<IntroCallBookedEmailProps>): string[
     );
   }
 
-  // ⚠ SAME NON-PROMISE AS `booking-confirmed.tsx` — no repair sweep, no retry job. Say only
-  // what actually happened.
+  // Same promise as `booking-confirmed.tsx`, and it holds: a provisioning failure is captured
+  // to Sentry at booking time and raises the `meeting.unprovisioned` admin alert, and the venue
+  // repair job provisions the room automatically.
   lines.push(
     props.provisioned
       ? `Join link: ${props.joinUrl}`

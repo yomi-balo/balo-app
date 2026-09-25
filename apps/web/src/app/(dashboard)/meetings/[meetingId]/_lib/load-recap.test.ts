@@ -566,6 +566,21 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     expect(view?.notHeld?.body).toBe('Amara Okafor @ CloudPeak joined and waited.');
   });
 
+  it('renders the not-held panel and a Not held chip for venue_unavailable — never Completed', async () => {
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      meeting: { ...MEETING, outcome: 'venue_unavailable' },
+    });
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.state).toBe('not_held');
+    expect(view?.header.status.label).toBe('Not held');
+    expect(view?.header.status.label).not.toBe('Completed');
+    expect(view?.header.status.label).not.toBe('Wrapping up');
+    expect(view?.notHeld?.reason).toBe('venue_unavailable');
+    // Presence is read only on `missed_call` — a `venue_unavailable` meeting reads no presence.
+    expect(m.presenceFacts).not.toHaveBeenCalled();
+  });
+
   it('renders the cancelled arm', async () => {
     mockResolveAccess.mockResolvedValue({
       ...CASE_ACCESS,

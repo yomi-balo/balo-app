@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { jsonResponse, useDailyApiKey } from '../../test/mocks/daily.js';
 import { DAILY_API_BASE } from './client.js';
-import { DailyApiError } from './errors.js';
+import { DailyApiError, DailyRoomNotPrivateError } from './errors.js';
 import {
   createRoom,
   dailyParticipantEjector,
@@ -173,8 +173,15 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
 
     const error = await createRoom(ROOM).catch((caught: unknown) => caught);
 
+    // A DailyRoomNotPrivateError IS a DailyApiError (the subclass keeps every existing
+    // `instanceof DailyApiError` check holding).
+    expect(error).toBeInstanceOf(DailyRoomNotPrivateError);
     expect(error).toBeInstanceOf(DailyApiError);
-    expect(error).toMatchObject({ method: 'POST', path: '/rooms' });
+    expect(error).toMatchObject({
+      name: 'DailyRoomNotPrivateError',
+      method: 'POST',
+      path: '/rooms',
+    });
   });
 
   it('REJECTS an already-EXISTING room that is public — reconciled but never adopted', async () => {
@@ -190,7 +197,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
 
     const error = await createRoom(ROOM).catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(DailyApiError);
+    expect(error).toBeInstanceOf(DailyRoomNotPrivateError);
     // Attributed to the reconcile POST — that is where the offending room was seen.
     expect(error).toMatchObject({ method: 'POST', path: `/rooms/${ROOM}` });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -208,7 +215,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
 
     const error = await createRoom(ROOM).catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(DailyApiError);
+    expect(error).toBeInstanceOf(DailyRoomNotPrivateError);
     expect(error).toMatchObject({ method: 'GET', path: `/rooms/${ROOM}` });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -218,7 +225,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
     async (privacy) => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, room(ROOM, privacy))));
 
-      await expect(createRoom(ROOM)).rejects.toBeInstanceOf(DailyApiError);
+      await expect(createRoom(ROOM)).rejects.toBeInstanceOf(DailyRoomNotPrivateError);
     }
   );
 
@@ -228,7 +235,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, room(ROOM, 'public')));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(createRoom(ROOM)).rejects.toBeInstanceOf(DailyApiError);
+    await expect(createRoom(ROOM)).rejects.toBeInstanceOf(DailyRoomNotPrivateError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -237,7 +244,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
 
     const error = await createRoom(ROOM).catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(DailyApiError);
+    expect(error).toBeInstanceOf(DailyRoomNotPrivateError);
     expect((error as DailyApiError).body).toContain('public');
   });
 });
@@ -248,10 +255,11 @@ describe('createRoom — the response must actually CARRY a venue (no half-stamp
    * so a 2xx body of `{ name, privacy: 'private' }` with NO `url` type-checks and produces
    * `joinUrl: undefined`. `updateLiveMeeting` patches with `{ ...set, updatedAt }` and Drizzle
    * OMITS undefined keys — so `daily_room_name` gets stamped, `join_url` stays NULL, and
-   * `provisionMeeting`'s replay guard (BOTH columns non-null) reads that meeting as
-   * unprovisioned FOREVER: every repair re-GETs the room, re-stamps the same one column, and
-   * never converges. `provision-meeting.ts` claims a half-stamped row is not producible through
-   * the seam; THESE tests are what make that claim true rather than aspirational.
+   * `provisionMeeting`'s replay guard (venue-ready per `isMeetingVenueReady` — both columns AND
+   * `daily_room_name === dailyRoomNameForMeeting(id)`) reads that meeting as unprovisioned
+   * FOREVER: every repair re-GETs the room, re-stamps the same one column, and never converges.
+   * `provision-meeting.ts` claims a half-stamped row is not producible through the seam; THESE
+   * tests are what make that claim true rather than aspirational.
    */
   /** The vendor's room payload with one field ABSENT — the shape `as T` cannot catch. */
   function roomWithout(field: 'url' | 'name', privacy = 'private'): Record<string, string> {

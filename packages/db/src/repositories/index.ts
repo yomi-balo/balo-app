@@ -623,6 +623,9 @@ export {
   type ContextMeetingSummary,
   // BAL-134 / ADR-1049 — the lifecycle transitions (§4.3).
   type ListLifecycleCandidatesInput,
+  // BAL-581 — the venue repair producer's / `meeting.unprovisioned` finder's read.
+  type ListUnprovisionedScheduledInput,
+  type UnprovisionedScheduledMeeting,
   type EndMeetingInput,
   type EndMeetingResult,
   // BAL-498 — the expert calendar's read row shape.

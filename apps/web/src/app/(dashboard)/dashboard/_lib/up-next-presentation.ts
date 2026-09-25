@@ -55,6 +55,9 @@ export interface UpNextRowTiming {
   readonly statusLine: string | null;
   /** `calendarMeetingTiming`'s aria suffix. */
   readonly joinTimingLabel: string | null;
+  /** BAL-581 — inside the join window with no ready call room; render `RoomSettingUpSlot`
+   *  instead of Join. `false` on the `joinVisible` arm — never both true. */
+  readonly roomSettingUp: boolean;
 }
 
 /**
@@ -63,12 +66,18 @@ export interface UpNextRowTiming {
  * relative status line outside the join window (ORCHESTRATOR RULING 3 — approved as planned).
  */
 export function resolveUpNextRowTiming(
-  row: Pick<UpNextRowView, 'scheduledStart' | 'scheduledEnd' | 'status'>,
+  row: Pick<UpNextRowView, 'scheduledStart' | 'scheduledEnd' | 'status' | 'roomReady'>,
   now: Date
 ): UpNextRowTiming {
   const scheduledStart = new Date(row.scheduledStart);
   const scheduledEnd = new Date(row.scheduledEnd);
-  const timing = calendarMeetingTiming(now, scheduledStart, scheduledEnd, row.status);
+  const timing = calendarMeetingTiming(
+    now,
+    scheduledStart,
+    scheduledEnd,
+    row.status,
+    row.roomReady
+  );
   const signedMinutes = signedMinutesUntilCalendarStart(now, scheduledStart);
 
   if (!timing.joinVisible) {
@@ -78,6 +87,7 @@ export function resolveUpNextRowTiming(
       rowState: 'upcoming',
       statusLine: null,
       joinTimingLabel: null,
+      roomSettingUp: timing.roomSettingUp,
     };
   }
 
@@ -88,6 +98,7 @@ export function resolveUpNextRowTiming(
     rowState: happeningNow ? 'happening_now' : 'starting_soon',
     statusLine: happeningNow ? UP_NEXT_HAPPENING_NOW : upNextStartsIn(signedMinutes),
     joinTimingLabel: timing.joinTimingLabel,
+    roomSettingUp: false,
   };
 }
 

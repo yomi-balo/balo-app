@@ -61,6 +61,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     href: '/cases/e1',
     joinUrl: '/meetings/m-1/call',
     counterpartyCompanyName: 'Northwind',
+    roomReady: true,
     ...overrides,
   };
 }
@@ -78,6 +79,7 @@ const BLOCK_DEFAULTS = {
   widthPercent: 100,
   isPast: false,
   joinVisible: false,
+  roomSettingUp: false,
   joinTimingLabel: null,
   onJoinClick: NOOP,
 } as const;
@@ -226,6 +228,37 @@ describe('MeetingBlock — full mode', () => {
     const { container } = renderBlock();
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('MeetingBlock — room not ready (BAL-581)', () => {
+  it('full mode: shows the setting-up chip instead of Join, and renders no Join button', () => {
+    renderBlock({ roomSettingUp: true });
+
+    expect(screen.queryByRole('button', { name: /Join/i })).not.toBeInTheDocument();
+    expect(screen.getByTitle('Setting up your call room')).toBeInTheDocument();
+  });
+
+  it('compact mode: the popover shows the setting-up slot instead of Join', () => {
+    const imminent = meeting({
+      scheduledStart: '2026-08-24T08:05:00.000Z',
+      scheduledEnd: '2026-08-24T08:20:00.000Z',
+    });
+    renderBlock({ meeting: imminent, height: 16, roomSettingUp: true });
+
+    fireEvent.click(screen.getByRole('button', { name: /Details for Northwind's case/i }));
+
+    expect(
+      screen.queryByRole('button', { name: /^Join Northwind's meeting/i })
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('Setting up room')).toBeInTheDocument();
+  });
+
+  it('the chip never renders while joinVisible is true — roomSettingUp does not co-occur with a live Join', () => {
+    renderBlock({ joinVisible: true, roomSettingUp: false, joinTimingLabel: 'starting now' });
+
+    expect(screen.queryByTitle('Setting up your call room')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Join Northwind's meeting/i })).toBeInTheDocument();
   });
 });
 

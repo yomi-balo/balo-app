@@ -26,6 +26,7 @@ import {
   Building2,
   Wallet,
   Video,
+  VideoOff,
   Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -62,6 +63,8 @@ const KIND_ICONS: Readonly<Record<string, LucideIcon>> = {
   'transcript_capture.withheld_source': Clock,
   'calendar.subscription_lapse': CalendarClock,
   'calendar.amend_failed': CalendarX,
+  // BAL-581 — a call room that never got a Daily room to join.
+  'meeting.unprovisioned': VideoOff,
   'sweep.failed': AlertOctagon,
 };
 

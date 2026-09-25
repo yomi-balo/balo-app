@@ -6,8 +6,8 @@
  *   1. {@link MEETING_TRANSITIONS} — the legal-edge map (§4.1), plus
  *      {@link assertMeetingTransition}. Total, pure, and asserted by all three
  *      `meetingsRepository` status mutators against their own compare-and-set FROM sets.
- *   2. {@link resolveTerminalRule} — which of the four SYSTEM termination rules (§4.2)
- *      applies to a meeting, or `null`. The fifth path — the human End — is user-initiated
+ *   2. {@link resolveTerminalRule} — which of the five SYSTEM termination rules (§4.2)
+ *      applies to a meeting, or `null`. The sixth path — the human End — is user-initiated
  *      and therefore not resolvable from facts; see that function's docblock.
  *   3. {@link resolveWaitingPhase} — the server-computed waiting-stage label.
  *
@@ -62,8 +62,8 @@ export type MeetingLifecycleStatus =
  * happens to the presence rows from the pre-reschedule attempt — a BILLING question that is
  * BAL-412's, on a route BAL-409/BAL-411 own. What makes the omission SAFE is that every rule
  * in {@link resolveTerminalRule} carries an explicit wall-clock precondition anchored on
- * `scheduledStart`, so a meeting rescheduled into the future matches NO rule and its stale
- * status is inert.
+ * `scheduledStart` (or on {@link venueAbsenceAnchor}, never earlier than it), so a meeting
+ * rescheduled into the future matches NO rule and its stale status is inert.
  *
  * ⚠ `scheduled → in_progress` IS REAL, NOT A SHORTCUT. A same-instant double-join takes a
  * meeting straight there without ever being OBSERVED as `waiting_for_participants`. Requiring
@@ -278,13 +278,22 @@ export function expertClockStart(
     : scheduledStart;
 }
 
-// ── THE FOUR SYSTEM TERMINAL RULES (§4.2) ─────────────────────────────────────────────────
+// ── THE FIVE SYSTEM TERMINAL RULES (§4.2) ─────────────────────────────────────────────────
 
 /** Which system rule fired. The human End is not one of these — see {@link resolveTerminalRule}. */
-export type MeetingTerminalRuleName = 'idle_end' | 'no_show' | 'missed_call' | 'abandoned_wait';
+export type MeetingTerminalRuleName =
+  | 'idle_end'
+  | 'no_show'
+  | 'missed_call'
+  | 'venue_unavailable'
+  | 'abandoned_wait';
 
-/** The three `meeting_outcome` labels this feature writes. `null` = "BAL-412 resolves it". */
-export type MeetingTerminalOutcome = 'completed' | 'no_show_client' | 'missed_call';
+/** The four `meeting_outcome` labels this feature writes. `null` = "BAL-412 resolves it". */
+export type MeetingTerminalOutcome =
+  | 'completed'
+  | 'no_show_client'
+  | 'missed_call'
+  | 'venue_unavailable';
 
 /** What a fired rule instructs the sweep to write. */
 export interface MeetingTerminalDecision {
@@ -292,7 +301,7 @@ export interface MeetingTerminalDecision {
   /**
    * ⚠ `null` IS A REAL, CORRECT VALUE — NOT "unknown" (D5). The ABANDONED-WAIT path leaves it
    * unset for exactly the reason the human End does: "the ender never sets the outcome"
-   * (ADR-1049), and BAL-412 resolves it from `meeting_presence`. The other three system paths
+   * (ADR-1049), and BAL-412 resolves it from `meeting_presence`. The other four system paths
    * are DEFINED by their outcome in the ADR's own table, so they carry one.
    */
   readonly outcome: MeetingTerminalOutcome | null;
@@ -316,6 +325,33 @@ export interface TerminalRuleInput {
   readonly presence: PresenceFacts;
   readonly timers: MeetingTimers;
   readonly now: Date;
+  /**
+   * BAL-581 — when this meeting's call room BECAME READY (`meetingVenueReadyAt`, which applies
+   * the one venue predicate `isMeetingVenueReady`), or `null` while it is not ready. An INSTANT,
+   * never the row: this module stays clock-, env- and DB-free.
+   */
+  readonly venueReadyAt: Date | null;
+}
+
+/**
+ * BAL-581 — THE VENUE ABSENCE ANCHOR: the instant "nobody delivering turned up" is measured
+ * from. `max(scheduledStart, venueReadyAt)` — an expert cannot be absent from a room that did
+ * not exist. `null` when the venue is not ready: there is nothing to be absent FROM, and the
+ * venue-unavailable rule (not the missed call) owns that meeting.
+ *
+ * ⚠ The `max` keeps this anchor from ever landing before `scheduledStart`, exactly as
+ * `expertClockStart` does: a meeting rescheduled into the future still matches no absence
+ * rule. Consumed by rule 3, the expert-absent alert (arm site AND fire-time recheck) and
+ * `resolveWaitingPhase` — ONE definition, so the three can never disagree.
+ */
+export function venueAbsenceAnchor(scheduledStart: Date, venueReadyAt: Date | null): Date | null {
+  if (venueReadyAt === null) return null;
+  return venueReadyAt.getTime() > scheduledStart.getTime() ? venueReadyAt : scheduledStart;
+}
+
+/** `true` for the two PRE-`in_progress` statuses rules 3, 4 and 5 all require. */
+function isPreInProgress(status: MeetingLifecycleStatus): boolean {
+  return status === 'scheduled' || status === 'waiting_for_participants';
 }
 
 /**
@@ -350,7 +386,17 @@ function idleEndApplies(input: TerminalRuleInput): boolean {
   return input.status === 'in_progress' && roomEmptyPastWindow(input);
 }
 
-/** Rule 2 — NO-SHOW. The expert is STILL HOLDING the room and no client ever came. */
+/**
+ * Rule 2 — NO-SHOW. The expert is STILL HOLDING the room and no client ever came.
+ *
+ * ⚠ VENUE-SAFE BY CONSTRUCTION (BAL-581) — measured from the expert's first join,
+ * which cannot precede a ready room (a presence interval can only exist in a room that exists).
+ * A room repaired late still settles this rule from the expert's actual join, never from the
+ * scheduled start. This says nothing about WHAT the rule charges — see
+ * `meeting-settlement.ts:209-218` (BAL-474): a floor is billed only when a credit session
+ * exists, and one opens only at a CLIENT member's admission, so a client who never joins is
+ * never charged by this rule.
+ */
 function noShowApplies(input: TerminalRuleInput): boolean {
   const { presence, timers, now, scheduledStart } = input;
   if (
@@ -377,19 +423,55 @@ function noShowApplies(input: TerminalRuleInput): boolean {
   return now.getTime() >= floorFromClock && now.getTime() >= floorFromSchedule;
 }
 
-/** Rule 3 — MISSED CALL. Nobody delivering ever turned up. */
+/**
+ * Rule 3 — MISSED CALL. The room EXISTED for the full salvage window and no expert ever came.
+ *
+ * ⚠ "NEVER JOINED", NOT "IS NOT HERE NOW". An expert who joins at 10:09 against a 10:10
+ * threshold disarms this rule PERMANENTLY (edge case 13) — the salvage window worked, and
+ * whatever happens next is rule 2's or rule 4's, never this one's.
+ *
+ * ⚠ BAL-581 — NARROWED TO A READY VENUE. Anchored on {@link venueAbsenceAnchor}, never bare
+ * `scheduledStart`: an expert cannot be recorded absent from a room that was never provisioned.
+ * A `null` anchor is rule 5's meeting, never this one's — see the guard below.
+ */
 function missedCallApplies(input: TerminalRuleInput): boolean {
-  const { presence, timers, now, scheduledStart } = input;
-  if (input.status !== 'scheduled' && input.status !== 'waiting_for_participants') {
+  const { presence, timers, now } = input;
+  if (!isPreInProgress(input.status) || presence.expertEverPresent) {
     return false;
   }
-  // ⚠ "NEVER JOINED", NOT "IS NOT HERE NOW". An expert who joins at 10:09 against a 10:10
-  // threshold disarms this rule PERMANENTLY (edge case 13) — the salvage window worked, and
-  // whatever happens next is rule 2's or rule 4's, never this one's.
-  if (presence.expertEverPresent) {
+  const anchor = venueAbsenceAnchor(input.scheduledStart, input.venueReadyAt);
+  if (anchor === null) {
+    // No room yet — rule 5's meeting, never this one's. THIS is the guard that stops Balo's
+    // provisioning failure being recorded as the expert's no-show.
     return false;
   }
-  return now.getTime() >= scheduledStart.getTime() + timers.missedCallTerminationMs;
+  return now.getTime() >= anchor.getTime() + timers.missedCallTerminationMs;
+}
+
+/**
+ * Rule 5 — VENUE UNAVAILABLE (BAL-581). The call room was never ready, so nobody COULD join.
+ *
+ * ⚠ Its three guards are exactly the three that keep it disjoint:
+ *   · pre-`in_progress` — disjoint from rule 1 by status;
+ *   · `!expertEverPresent` — disjoint from rules 2 and 4 by presence (both require the expert
+ *     DID join). Physically implied by "no room", stated so disjointness does not rest on
+ *     physics;
+ *   · `venueReadyAt === null` — disjoint from rule 3, which requires a ready venue.
+ * Anchored on `scheduledStart` (there is no venue instant to anchor on), at the SAME threshold
+ * rule 3 uses, so a never-provisioned meeting still ends at the missed-call window — but with
+ * the TRUE outcome, not a mislabelled `missed_call`. Money: no room ⇒ no admission ⇒ no credit
+ * session ⇒ nothing to settle.
+ */
+function venueUnavailableApplies(input: TerminalRuleInput): boolean {
+  if (!isPreInProgress(input.status) || input.presence.expertEverPresent) {
+    return false;
+  }
+  if (input.venueReadyAt !== null) {
+    return false;
+  }
+  return (
+    input.now.getTime() >= input.scheduledStart.getTime() + input.timers.missedCallTerminationMs
+  );
 }
 
 /**
@@ -400,9 +482,10 @@ function missedCallApplies(input: TerminalRuleInput): boolean {
  * GUARDS ARE EXACTLY THE THREE THAT KEEP IT DISJOINT — no more:
  *
  *   · a PRE-`in_progress` status, so rule 1 (which owns `in_progress`) cannot also fire;
- *   · `expertEverPresent`, so rule 3 (which requires the expert NEVER joined) cannot also fire.
- *     Without it a client-only no-show would terminate at `lastLeftAt + 5min` instead of at the
- *     `MISSED_CALL_TERMINATION_MS` threshold, silently re-labelling a `missed_call`;
+ *   · `expertEverPresent`, so rules 3 and 5 (which both require the expert NEVER joined)
+ *     cannot also fire. Without it a client-only no-show would terminate at `lastLeftAt +
+ *     5min` instead of at the `MISSED_CALL_TERMINATION_MS` threshold, silently re-labelling a
+ *     `missed_call`, or with no room ever provisioned, a `venue_unavailable`;
  *   · an EMPTY room, so rule 2 (which requires an OPEN expert interval) cannot also fire.
  *
  * ⚠ THE TWO GUARDS THAT WERE REMOVED, AND WHY EACH WAS A STRANDING HOLE — do not put them back:
@@ -423,7 +506,7 @@ function missedCallApplies(input: TerminalRuleInput): boolean {
  * widens WHICH meetings reach a terminal state — never what any of them is charged.
  */
 function abandonedWaitApplies(input: TerminalRuleInput): boolean {
-  if (input.status !== 'scheduled' && input.status !== 'waiting_for_participants') {
+  if (!isPreInProgress(input.status)) {
     return false;
   }
   if (!input.presence.expertEverPresent) {
@@ -435,16 +518,19 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
 /**
  * ⚠⚠ THE PRECEDENCE TABLE, AND WHY THE ORDER IS ALMOST DECORATION.
  *
- * ADR-1049 names ordering as a build risk. **The four rules are not merely ordered — they are
+ * ADR-1049 names ordering as a build risk. **The five rules are not merely ordered — they are
  * MUTUALLY EXCLUSIVE BY PRECONDITION**, which is a stronger property than an order:
  *
- *   · #1 vs everything — #1 is the ONLY rule that requires `in_progress`; #2/#3/#4 all require
- *     a pre-`in_progress` status. *Disjoint by status.* This is exactly ADR-1049's "idle end is
- *     scoped to reached-`in_progress`-then-empty, never 'is empty'".
+ *   · #1 vs everything — #1 is the ONLY rule that requires `in_progress`; #2/#3/#4/#5 all
+ *     require a pre-`in_progress` status. *Disjoint by status.* This is exactly ADR-1049's "idle
+ *     end is scoped to reached-`in_progress`-then-empty, never 'is empty'".
  *   · #3 vs #2 and #4 — #3 requires the expert NEVER joined; both others require they DID.
  *     *Disjoint by presence.*
  *   · #2 vs #4 — #2 requires an OPEN expert interval, #4 requires an EMPTY ROOM.
  *     *Disjoint by presence.*
+ *   · #5 vs everything (BAL-581) — #5 by status, exactly like #3 (both require pre-`in_progress`
+ *     and the expert NEVER joined); #5 vs #3 is disjoint by VENUE — #3 requires a READY venue,
+ *     #5 requires its ABSENCE. #5 vs #2/#4 is disjoint by presence, same as #3.
  *
  * The fixed order below exists so the sweep stays DETERMINISTIC if a future change ever breaks
  * that disjointness, and `lifecycle.test.ts` asserts disjointness directly rather than trusting
@@ -463,8 +549,9 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  * status, once the ROOM IS EMPTY and every window has elapsed, SOME rule fires.
  *
  *   · `in_progress` + empty ⇒ #1, always (its only other condition is the window).
- *   · `scheduled` / `waiting_for_participants` + empty ⇒ #3 when the expert never came, #4 when
- *     they did. Those two are exhaustive over a boolean, so the pair is total.
+ *   · `scheduled` / `waiting_for_participants` + empty ⇒ #3 when the expert never came and the
+ *     room was ready, #5 when it never was, #4 when the expert came — exhaustive over
+ *     `(expertEverPresent × venue ready)`.
  *
  * ⚠ AND THE ONE CARVE-OUT, NAMED RATHER THAN LEFT AS A GAP: a room somebody is STILL IN matches
  * nothing but #2, and that is correct — an occupied meeting is not stranded, it is happening.
@@ -473,7 +560,7 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  * becomes empty (and therefore terminable) shortly after everyone really leaves.
  * `lifecycle.test.ts` executes the invariant over a status × presence-shape matrix.
  *
- * ⚠ THE FIFTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
+ * ⚠ THE SIXTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
  * presence gate and no wall-clock gate; its only precondition is that a `canEndMeeting` holder
  * pressed a button, which is a fact about a REQUEST, not about a meeting. It lives in
  * `apps/api`'s end service, is CAS-guarded, and if it lands first the meeting is terminal and
@@ -491,6 +578,9 @@ export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDe
   if (missedCallApplies(input)) {
     return { rule: 'missed_call', outcome: 'missed_call' };
   }
+  if (venueUnavailableApplies(input)) {
+    return { rule: 'venue_unavailable', outcome: 'venue_unavailable' };
+  }
   if (abandonedWaitApplies(input)) {
     // ⚠ NO OUTCOME (D5/D9). BAL-412 resolves it from the presence rows, exactly as for a human
     // end. `meeting_outcome_requires_ended` is one-directional, so `ended` with a NULL outcome
@@ -503,7 +593,7 @@ export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDe
 /**
  * ⚠ EVERY RULE, AS DATA — for the disjointness proof and for nothing else.
  *
- * `lifecycle.test.ts` evaluates all four predicates against one scenario and asserts AT MOST
+ * `lifecycle.test.ts` evaluates all five predicates against one scenario and asserts AT MOST
  * ONE holds. Exporting the predicate list is what makes that a real proof rather than a
  * restatement of {@link resolveTerminalRule}'s if-chain.
  */
@@ -514,6 +604,7 @@ export const MEETING_TERMINAL_PREDICATES: ReadonlyArray<{
   { rule: 'idle_end', applies: idleEndApplies },
   { rule: 'no_show', applies: noShowApplies },
   { rule: 'missed_call', applies: missedCallApplies },
+  { rule: 'venue_unavailable', applies: venueUnavailableApplies },
   { rule: 'abandoned_wait', applies: abandonedWaitApplies },
 ];
 
@@ -540,6 +631,8 @@ export interface WaitingPhaseInput {
   readonly presence: PresenceFacts;
   readonly timers: MeetingTimers;
   readonly now: Date;
+  /** BAL-581 — same field, same semantics as {@link TerminalRuleInput.venueReadyAt}. */
+  readonly venueReadyAt: Date | null;
 }
 
 /**
@@ -548,8 +641,9 @@ export interface WaitingPhaseInput {
  * The progression is ANCHORED ON WHOEVER IS MISSING, which is why it is a 2×4 matrix rather
  * than one timeline:
  *
- *   · THE EXPERT IS MISSING → anchor `scheduled_start`, alert at `expertAbsentAlertMs`. This
- *     is the progression whose end is a MISSED CALL.
+ *   · THE EXPERT IS MISSING → anchor {@link venueAbsenceAnchor} (BAL-581), alert at
+ *     `expertAbsentAlertMs` past it. This is the progression whose end is a MISSED CALL (or,
+ *     while the venue is never ready, a VENUE UNAVAILABLE).
  *   · THE EXPERT IS PRESENT AND THE CLIENT IS MISSING → anchor the EXPERT-PRESENT CLOCK START,
  *     alert at `clientAbsentNudgeMs`. This is the progression whose end is a NO-SHOW.
  *
@@ -581,9 +675,10 @@ export function resolveWaitingPhase(input: WaitingPhaseInput): MeetingWaitingPha
     // THE EXPERT IS HERE, THE CLIENT IS NOT — anchored on the expert-present clock start.
     return now.getTime() >= clockStart.getTime() + timers.clientAbsentNudgeMs ? 'near' : 'running';
   }
-  // THE EXPERT IS MISSING — anchored on the wall clock, because the thing being measured is
-  // that nobody turned up.
-  return now.getTime() >= scheduledStart.getTime() + timers.expertAbsentAlertMs
-    ? 'near'
-    : 'running';
+  // THE EXPERT IS MISSING — measured from the venue absence anchor (the instant the room
+  // existed, never before the start), the SAME instant the ops alert fires from, so `near`'s
+  // "we've flagged this to the Balo team" is true when it renders. `?? scheduledStart` is
+  // defensive only: a member cannot be admitted to a room that is not ready.
+  const anchor = venueAbsenceAnchor(scheduledStart, input.venueReadyAt) ?? scheduledStart;
+  return now.getTime() >= anchor.getTime() + timers.expertAbsentAlertMs ? 'near' : 'running';
 }

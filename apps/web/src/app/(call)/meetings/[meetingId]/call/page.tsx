@@ -30,8 +30,10 @@ import { CallClient } from './_components/call-client';
  * `(dashboard)/layout.tsx` runs `checkSessionDrift()` before anything renders, and this route
  * group exists precisely so the call does NOT inherit that layout. But the gate is not
  * decoration: `postMemberJoin` forwards `session.accessToken` as a Bearer to `apps/api`, so a
- * drifted session carries a STALE token, the member join 401s, and a valid participant is shown
- * "This meeting isn't available to join" at the moment they are trying to enter a paid call.
+ * drifted session carries a STALE token. This page's own `checkSessionDrift()` call below is what
+ * normally catches that BEFORE the join ever fires and sends the drifted session to session-sync;
+ * if it does not (a race), the member join 401s and the member sees `MemberJoinNotice` for
+ * whatever reason the api's response maps to (BAL-581) — never the guest dead-link card.
  *
  * The layout copied the eight lines verbatim — INCLUDING `headers().get('x-invoke-path')`, which
  * **DOES NOT EXIST IN NEXT 16**. That read always returned `null`, so `returnTo` was always

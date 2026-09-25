@@ -369,7 +369,8 @@ export function WeekGrid({
                     now,
                     new Date(entry.meeting.scheduledStart),
                     new Date(entry.meeting.scheduledEnd),
-                    entry.meeting.status
+                    entry.meeting.status,
+                    entry.meeting.roomReady
                   );
                   return (
                     <MeetingBlock
@@ -382,6 +383,7 @@ export function WeekGrid({
                       widthPercent={entry.widthPercent}
                       isPast={timing.isPast}
                       joinVisible={timing.joinVisible}
+                      roomSettingUp={timing.roomSettingUp}
                       joinTimingLabel={timing.joinTimingLabel}
                       onJoinClick={onJoinClick}
                       isContinuationFragment={entry.isContinuationFragment}

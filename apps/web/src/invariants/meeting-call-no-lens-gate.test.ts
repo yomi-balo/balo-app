@@ -108,6 +108,7 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   'meeting-breakpoints.ts',
   'meeting-route-context.tsx',
   'member-join-envelope.ts',
+  'member-join-failure.ts',
   'member-join-retry.ts',
   'order-tiles.ts',
   'resolve-stage.ts',
@@ -362,6 +363,14 @@ const PINNED_FILES: readonly string[] = [
   // same reasoning as every block above: a missing name fails nothing, so an unpinned new
   // module is silently unscanned.
   'lib/meetings/resolve-guest-recap-access.ts',
+  // ── BAL-581 — the member join's typed refusal reasons and the (WP5) "setting up" join slot.
+  // ⚠ PINNED **AND** ALLOW-LISTED (`member-join-failure.ts` is on `CALL_LIB_FILES` above), same
+  // reasoning as every block above: a missing name fails nothing, so an unpinned new module is
+  // silently unscanned. `room-setting-up-copy.ts` is DELIBERATELY absent from both lists — its
+  // `lens` parameter would fail the scan, and it is not a call-surface module.
+  'lib/meetings/member-join-failure.ts',
+  'components/member-join-notice.tsx',
+  'components/room-setting-up-slot.tsx',
 ];
 
 /**

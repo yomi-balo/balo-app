@@ -14,7 +14,8 @@ export type UpNextWorkspaceType = 'company' | 'expert';
 
 /**
  * ONE row, crossing the RSC→client boundary. NO money, rates, fees, emails, Daily room names or
- * Daily join URLs — pinned by the key-set test in `build-up-next-rows.test.ts`.
+ * Daily join URLs (`roomReady` is a readiness boolean, not a room locator) — pinned by the key-set
+ * test in `build-up-next-rows.test.ts`.
  */
 export interface UpNextRowView {
   readonly meetingId: string;
@@ -44,6 +45,11 @@ export interface UpNextRowView {
   readonly joinPath: string;
   /** Case rows only: the live pending proposal's `expiresAt` (ISO). Liveness re-derived on the tick. */
   readonly rescheduleProposalExpiresAt: string | null;
+  /**
+   * BAL-581 — `isMeetingVenueReady`, computed server-side. A boolean only, never the room name or
+   * join URL.
+   */
+  readonly roomReady: boolean;
 }
 
 export const UP_NEXT_ROW_VIEW_KEYS = [
@@ -58,6 +64,7 @@ export const UP_NEXT_ROW_VIEW_KEYS = [
   'href',
   'joinPath',
   'rescheduleProposalExpiresAt',
+  'roomReady',
 ] as const satisfies readonly (keyof UpNextRowView)[];
 
 /**

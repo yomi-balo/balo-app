@@ -40,11 +40,12 @@
  *
  *   · `client_principal` — a human on the CLIENT side pressed End.
  *   · `expert_host`      — the delivering expert (or their agency owner/admin) pressed End.
- *   · `system_idle`      — ALL FOUR system paths (idle end, no-show, missed call, abandoned
- *                          wait). ⚠ ONE label for four rules, deliberately: `ended_by` answers
- *                          "was this a person or the system?", and WHICH system rule fired is
- *                          answered by `outcome` plus the `meeting.ended` audit row. A fourth
- *                          label per rule would duplicate `outcome` and then disagree with it.
+ *   · `system_idle`      — ALL FIVE system paths (idle end, no-show, missed call,
+ *                          venue-unavailable, abandoned wait). ⚠ ONE label for five rules,
+ *                          deliberately: `ended_by` answers "was this a person or the system?",
+ *                          and WHICH system rule fired is answered by `outcome` plus the
+ *                          `meeting.ended` audit row. A fifth label per rule would duplicate
+ *                          `outcome` and then disagree with it.
  */
 export type MeetingEndedBy = 'client_principal' | 'expert_host' | 'system_idle';
 

@@ -77,8 +77,10 @@ describe('getEmailTemplate — booking-confirmed-client', () => {
     const out = getEmailTemplate('booking-confirmed-client', { ...BASE_DATA, provisioned: false });
     const text = textOf(await render(out.component));
     expect(text).not.toContain('/meetings/meeting-456/call');
-    // M6 — no repair sweep, no retry job and no provision-on-join exists, so this branch may
-    // state only what is TRUE: the time is held and the failure was recorded.
+    // The venue repair job and the admin alert now exist, so "our team has been alerted" is
+    // literally true. There is still no retry job or provision-on-join on this surface, so the
+    // copy must not promise the room will become ready — only that the time is held and the
+    // failure was recorded.
     expect(text).toContain('our team has been alerted');
     expect(text).not.toMatch(/will be ready|on its way|by email/i);
   });

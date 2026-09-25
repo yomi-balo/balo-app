@@ -13,8 +13,10 @@
  * Every date is derived from `Date.now()` at CALL time — never a hardcoded calendar date.
  */
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { resolveCompanyParticipation, type CompanyRoleLookup } from '@balo/shared/authz';
+import { dailyRoomNameForMeeting, isMeetingVenueReady } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   caseEngagements,
@@ -635,6 +637,38 @@ describe('upcomingMeetingsRepository.listForCompany — fold and tenancy', () =>
       projectRequestId: null,
       expertProfileId: expert.id,
     });
+  });
+
+  it('roomReady agrees with isMeetingVenueReady for a ready, a null and a mismatched room, and no credential key rides along', async () => {
+    const { companyId, expertProfileId } = await seedCompanyAndExpert();
+    const fixture = await CASE_SPEC.seedParent(companyId, expertProfileId);
+
+    const readyId = randomUUID();
+    const readyRoom = dailyRoomNameForMeeting(readyId);
+    const mismatchedRoom = `balo-${randomUUID().replaceAll('-', '')}`;
+    const venues: Array<{ id?: string; dailyRoomName: string | null; joinUrl: string | null }> = [
+      { id: readyId, dailyRoomName: readyRoom, joinUrl: `https://balo.daily.co/${readyRoom}` },
+      { dailyRoomName: null, joinUrl: null },
+      { dailyRoomName: mismatchedRoom, joinUrl: `https://balo.daily.co/${mismatchedRoom}` },
+    ];
+    const expected: Array<[string, boolean]> = [];
+    for (const [index, venue] of venues.entries()) {
+      const { meeting } = await meetingFactory({
+        contexts: [{ contextType: 'case', contextId: fixture.contextId }],
+        values: { ...venue, ...inWindow(index + 1) },
+      });
+      expected.push([meeting.id, isMeetingVenueReady(meeting)]);
+    }
+    expect(expected.map(([, ready]) => ready)).toEqual([true, false, false]);
+
+    const rows = await listForCompany(companyId);
+
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => [row.meetingId, row.roomReady])).toEqual(expected);
+    for (const row of rows) {
+      expect(Object.keys(row)).not.toContain('dailyRoomName');
+      expect(Object.keys(row)).not.toContain('joinUrl');
+    }
   });
 
   it('lists a call already running inside the 2h lookback, and every non-terminal status', async () => {

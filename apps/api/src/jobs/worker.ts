@@ -37,6 +37,11 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startTranscriptCaptureWorker },
     { startAdminAlertSweepWorker, registerAdminAlertSweepCron },
     { startProjectBriefParseWorker },
+    {
+      startMeetingVenueRepairSweepWorker,
+      registerMeetingVenueRepairSweepCron,
+      startMeetingVenueProvisionWorker,
+    },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -65,6 +70,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./transcript-capture.js'),
     import('./admin-alert-sweep.js'),
     import('./project-brief-parse.js'),
+    import('./meeting-venue-repair.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -111,11 +117,17 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   startReviewNudgeSweepWorker();
   await registerReviewNudgeSweepCron();
   // BAL-134 (ADR-1049): the per-minute meeting lifecycle sweep — Daily presence reconciliation,
-  // the four system terminal rules, and the two absence promises.
+  // the five system terminal rules, and the two absence promises.
   // ⚠ PER-MINUTE IS NOT A FREE KNOB: it is what bounds the dropped-`participant.left` over-bill
   // to ONE TICK. Slowing this cadence widens a MONEY error. See the job's docblock.
   startMeetingLifecycleSweepWorker();
   await registerMeetingLifecycleSweepCron();
+  // BAL-581: the venue repair — a per-minute producer that enqueues provision jobs for live
+  // scheduled meetings whose call room is not ready, onto its own Daily-rate-limited queue.
+  // ⚠ Its `vi.mock` in `worker.test.ts` must land in THIS commit.
+  startMeetingVenueProvisionWorker();
+  startMeetingVenueRepairSweepWorker();
+  await registerMeetingVenueRepairSweepCron();
   // BAL-396 (§9, ADR-1021 amendment 18 Aug 2026): the 15-minute Apiroc calendar credential
   // health probe — the platform's only PROACTIVE breakage signal (a dead credential is
   // detected here, before any booking attempt touches it).

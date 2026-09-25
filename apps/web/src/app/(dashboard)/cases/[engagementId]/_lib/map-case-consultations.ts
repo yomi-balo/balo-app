@@ -7,7 +7,11 @@ import {
   type MeetingOutcomeLabel,
   type MeetingStatusLabel,
 } from '@balo/shared/engagements';
-import { resolveCancelRefusal, resolveRescheduleRefusal } from '@balo/shared/meetings';
+import {
+  isMeetingVenueReady,
+  resolveCancelRefusal,
+  resolveRescheduleRefusal,
+} from '@balo/shared/meetings';
 import { log } from '@/lib/logging';
 import { deriveConsultationOrdinal } from '@/lib/meetings/derive-consultation-ordinal';
 import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
@@ -38,7 +42,7 @@ import type { CaseConsultationRowView } from '@/lib/cases/case-view-types';
  * ⚠⚠ TWO-WAY DRIFT GUARD between `@balo/db`'s enum-derived `MeetingStatus`/`MeetingOutcome`
  * and the hand-restated labels in `@balo/shared/engagements` (which CANNOT import a pgEnum —
  * that would invert the dependency graph). THIS module is one of the few that can see both.
- * A sixth `meeting_status` or a fourth `meeting_outcome` added on either side fails `tsc`
+ * A sixth `meeting_status` or a fifth `meeting_outcome` added on either side fails `tsc`
  * HERE until it is added on the other. Mirrors `AssertEngagementStatusLabelsMatch` in
  * `lib/conversations/authorize-conversation-context.ts`.
  */
@@ -192,6 +196,9 @@ export function mapCaseConsultations(
         (meeting.scheduledEnd.getTime() - meeting.scheduledStart.getTime()) / 60_000
       ),
       live,
+      // BAL-581 — Balo's own venue predicate; reduced here, at the projection boundary, like
+      // `status`. `false` on every non-upcoming row — never read beside anything but `live`.
+      roomReady: upcoming && isMeetingVenueReady(meeting),
     };
   });
 

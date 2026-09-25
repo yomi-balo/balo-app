@@ -40,6 +40,7 @@ function row(overrides: Partial<UpNextEnrichableRow> = {}): UpNextEnrichableRow 
     owningRowFound: true,
     expertProfileId: 'profile-1',
     counterpartyCompanyName: null,
+    roomReady: true,
     ...overrides,
   };
 }
@@ -285,6 +286,10 @@ describe('buildUpNextRowViews — reschedule proposals', () => {
 describe('toUpNextRowView — view-model key set (BAL-566 §11)', () => {
   const NO_MONEY_PATTERN =
     /cents|rate|fee|price|amount|balance|email|joinurl|room|token|workos|phone/i;
+  // BAL-581 — `roomReady` matches `/room/i` but is a readiness boolean, not a room locator.
+  // Exempt it BY NAME rather than weakening the pattern, which must keep rejecting roomName,
+  // roomUrl and dailyRoomName.
+  const READINESS_BOOLEAN_KEYS: readonly string[] = ['roomReady'];
   const lookups = {
     titles: EMPTY_TITLES,
     partyNamesByProfileId: new Map(),
@@ -307,9 +312,19 @@ describe('toUpNextRowView — view-model key set (BAL-566 §11)', () => {
     const view = toUpNextRowView(smuggled, lookups, 'company');
     const keys = Object.keys(view).sort((a, b) => a.localeCompare(b));
     expect(keys).toEqual([...UP_NEXT_ROW_VIEW_KEYS].sort((a, b) => a.localeCompare(b)));
-    for (const key of keys) {
+    for (const key of keys.filter((k) => !READINESS_BOOLEAN_KEYS.includes(k))) {
       expect(key).not.toMatch(NO_MONEY_PATTERN);
     }
+    expect(typeof view.roomReady).toBe('boolean');
+    expect(view).not.toHaveProperty('dailyRoomName');
+    expect(view).not.toHaveProperty('joinUrl');
+    expect(JSON.stringify(view)).not.toContain('room-xyz');
+    expect(JSON.stringify(view)).not.toContain('daily.example');
+  });
+
+  it('BAL-581 — roomReady is COPIED THROUGH, not recomputed', () => {
+    expect(toUpNextRowView(row({ roomReady: false }), lookups, 'company').roomReady).toBe(false);
+    expect(toUpNextRowView(row({ roomReady: true }), lookups, 'company').roomReady).toBe(true);
   });
 
   it('the same holds through buildUpNextRowViews with mocked repositories returning smuggled fields', async () => {

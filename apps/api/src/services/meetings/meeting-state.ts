@@ -25,6 +25,7 @@ import {
 } from '@balo/db';
 import {
   computeMeetingClocks,
+  meetingVenueReadyAt,
   resolveWaitingPhase,
   summarisePresence,
   type MeetingClocks,
@@ -194,6 +195,9 @@ export async function getMeetingState(input: GetMeetingStateInput): Promise<GetM
         presence,
         timers,
         now,
+        // BAL-581 — the same anchor the terminal rules and the ops alert use, so `near`'s
+        // "flagged to the Balo team" renders exactly when that alert fires.
+        venueReadyAt: meetingVenueReadyAt(meeting),
       }),
       clocks: computeMeetingClocks(intervals, ceiling),
       asOf: now.toISOString(),

@@ -47,6 +47,7 @@ function card(overrides: Partial<CasesIndexCardView> = {}): CasesIndexCardView {
     actorLabel: null,
     bookAgainHref: '/experts/marcus',
     joinPath: null,
+    nextBookingRoomReady: true,
     ...overrides,
   };
 }

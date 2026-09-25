@@ -30,6 +30,7 @@ export function companyRowToEnrichable(row: CompanyUpcomingMeeting): EnrichableC
     owningRowFound: row.owningRowFound,
     expertProfileId: row.expertProfileId,
     counterpartyCompanyName: null,
+    roomReady: row.roomReady,
   };
 }
 
@@ -50,6 +51,7 @@ export function expertRowToEnrichable(
     owningRowFound: row.owningRowFound,
     expertProfileId,
     counterpartyCompanyName: row.counterpartyCompanyName,
+    roomReady: row.roomReady,
   };
 }
 

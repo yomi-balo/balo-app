@@ -47,8 +47,9 @@ describe('the card view’s key tuple', () => {
       'actorLabel',
       'bookAgainHref',
       'joinPath',
+      'nextBookingRoomReady',
     ]);
-    expect(CASES_INDEX_CARD_VIEW_KEYS).toHaveLength(22);
+    expect(CASES_INDEX_CARD_VIEW_KEYS).toHaveLength(23);
   });
 
   it('pins the resolved row’s keys exactly too', () => {
