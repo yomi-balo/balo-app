@@ -86,10 +86,11 @@ export function enqueueMeetingCalendarAmend(
  * enqueue docblock above.
  * ⚠ USES THE STORED `calendar_id`, NEVER THE EXPERT'S CURRENT `target_calendar_id` — the
  * expert may have changed their target calendar since the event was originally written.
- * ⚠ THERE IS DELIBERATELY NO "get connection by id" READ in `calendarRepository` — every
- * sanctioned read is keyed by (expert, provider) or by End User Account. So the End User
- * Account is resolved by listing the expert's connections and matching the STORED
- * `connectionId`.
+ * ⚠ `calendarRepository.findConnectionById` EXISTS (BAL-468), but this job deliberately keeps
+ * the expert-scoped `listConnectionsByExpertProfileId` + stored-id match instead: that is what
+ * proves the resolved connection belongs to THIS job's `expertProfileId`, a scoping
+ * `findConnectionById` drops. So the End User Account is resolved by listing the expert's
+ * connections and matching the STORED `connectionId`.
  */
 export async function processMeetingCalendarAmend(
   job: Job<MeetingCalendarAmendJobData>,

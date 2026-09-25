@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { calendarRepository } from '@balo/db';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import {
   trackServer,
@@ -210,7 +211,7 @@ function handleInvalidState(
 }
 
 /**
- * THE SINGLE OPAQUE REJECTION PATH for every pre-persistence SHAPE 2 failure — today the CSRF
+ * THE SINGLE OPAQUE REJECTION PATH for every pre-OWNERSHIP SHAPE 2 failure — today the CSRF
  * nonce mismatch (BAL-396 Finding 1) and the vendor-account ownership mismatch (BAL-397 fix
  * round). Both deliberately emit the SAME wire code, `state_csrf_mismatch`.
  *
@@ -221,6 +222,12 @@ function handleInvalidState(
  * the ownership check exists to make useless. The two causes are distinguished in the SERVER
  * LOG only (`apiroc_callback_csrf_nonce_mismatch` vs `apiroc_callback_account_binding_rejected`),
  * which no attacker can read.
+ *
+ * ⚠ BAL-575's `account_mismatch` is a DELIBERATELY DISTINCT code, not a third case of this
+ * function. It is only ever emitted AFTER ownership has already passed — by then the account is
+ * proven to carry this expert's own `externalId`, so naming the reconnect refusal costs an
+ * attacker nothing. Moving that refusal earlier, or folding it into this opaque path, would
+ * reopen exactly the existence oracle this function exists to close.
  */
 function rejectShape2(
   reply: FastifyReply,
@@ -262,16 +269,19 @@ function handleCsrfMismatch(
  * predates this ticket, from BAL-396).
  *
  * ⚠ WHY THIS EXISTS. `endUserAccountId` arrives **entirely from the browser-controlled query
- * string**, and nothing downstream re-derives it: `upsertApirocConnection` OVERWRITES the
- * pointer on the `(expertProfileId, provider)` conflict arbiter, and
- * `calendar_connections.end_user_account_id` is deliberately NON-unique, so two rows may name
- * one vendor account. Without this check an authenticated expert who learns another expert's
- * `endUserAccountId` can mint a legitimate `state` + nonce cookie for their OWN profile,
- * skip the vendor entirely, and hit the callback with the VICTIM's account id — repointing
- * their own connection at the victim's calendar. That reads the victim's free/busy into the
- * attacker's availability engine AND writes Balo's consultation events into the victim's
- * calendar. The CSRF nonce cannot catch it: it proves the browser started *a* flow, never that
- * this account came out of *that* flow.
+ * string**, and nothing downstream re-derives it. Without this check an authenticated expert
+ * who learns another expert's `endUserAccountId` can mint a legitimate `state` + nonce cookie
+ * for their OWN profile, skip the vendor entirely, and hit the callback with the VICTIM's
+ * account id — repointing their own connection at the victim's calendar. That reads the
+ * victim's free/busy into the attacker's availability engine AND writes Balo's consultation
+ * events into the victim's calendar. The CSRF nonce cannot catch it: it proves the browser
+ * started *a* flow, never that this account came out of *that* flow.
+ *
+ * ⚠ `upsertApirocConnection` REFUSES a different End User Account against a live row (see that
+ * method's docblock) — it no longer overwrites the pointer. This check still has to run first
+ * regardless: it guards the INSERT arm (a brand-new row would otherwise happily persist a
+ * victim's account) and the same-EUA UPDATE arm (an attacker replaying their own
+ * already-connected EUA still needs to fail here, not rely on the repository refusing it).
  *
  * ⚠ THE BINDING BALO ALREADY SENDS. `buildApirocAuthorizeUrl` passes
  * `externalId: expertProfileId` on every authorize URL (`lib/apiroc/oauth.ts`), and the vendor
@@ -287,18 +297,32 @@ function handleCsrfMismatch(
  *
  * Wrapped in `callApiroc` per the apiroc skill's one-fallible-call rule, so the failure arrives
  * as a Balo-shaped `ApirocError` rather than the SDK's mangled one.
+ *
+ * BAL-575 — this stays the SINGLE `endUserAccounts.get` call on the happy path; no second
+ * lookup is added anywhere downstream. On a match, the returned `email` (trimmed; empty, `null`,
+ * or absent all become `null` — the SDK's `string` type is not trusted blindly, see the read
+ * below) rides along so the caller can persist it and pass it on as `loginHint` on a future
+ * connect — the ownership check already paid for this vendor round trip.
  */
-async function endUserAccountBelongsToExpert(
+async function resolveOwnedEndUserAccount(
   request: FastifyRequest,
   endUserAccountId: string,
   expertProfileId: string
-): Promise<boolean> {
+): Promise<{ owned: false } | { owned: true; email: string | null }> {
   try {
     const client = getApirocClient();
     const account = await callApiroc('endUserAccounts.get', () =>
       client.endUserAccounts.get(endUserAccountId)
     );
-    return account.externalId === expertProfileId;
+    if (account.externalId !== expertProfileId) {
+      return { owned: false };
+    }
+    // BAL-575 — the SDK types `email` as `string`, but that is a type claim about the wire
+    // shape, not a guarantee; an absent or `null` value here must not throw inside this try
+    // and get mistaken for a lookup failure (which the catch below reports as `owned: false`
+    // and logs misleadingly). Guard the read instead of trusting the type.
+    const raw = typeof account.email === 'string' ? account.email.trim() : '';
+    return { owned: true, email: raw.length > 0 ? raw : null };
   } catch (err: unknown) {
     request.log.warn(
       {
@@ -307,7 +331,7 @@ async function endUserAccountBelongsToExpert(
       },
       'apiroc_callback_account_lookup_failed'
     );
-    return false;
+    return { owned: false };
   }
 }
 
@@ -346,23 +370,137 @@ async function reconcileAfterConnect(
 }
 
 /**
- * SHAPE 2 happy path — persist, provision, rebuild availability, redirect connected. A
- * post-persistence failure still redirects (never a 500): the connection row already exists,
- * so a retry from this same response would fail the CSRF check instead of proceeding cleanly.
+ * BAL-575 — best-effort vendor cleanup of an End User Account the callback JUST refused
+ * to persist. NEVER THROWS: it runs after the refusal is already final and redirect-worthy, so
+ * a cleanup failure must not turn a clean `account_mismatch` redirect into `callback_failed`
+ * and fire a second `OAUTH_FAILED` (apiroc skill, `connect-and-credentials.md` §3.2, step 5).
+ *
+ * ⚠ ONLY THE CALLBACK'S OWNERSHIP-VERIFIED, JUST-REFUSED id is ever passed in — never the
+ * stored/live pointer a connection already points at, and never an id that failed the
+ * ownership check (that arm never reaches this function at all). `findConnectionsByEndUserAccountId`
+ * is the live-reference guard: `cal_conn_end_user_account_idx` is deliberately non-unique, so
+ * another expert's connection may legitimately share this vendor account, and deleting it out
+ * from under that row would be worse than leaving an orphaned one. No subscription cleanup is
+ * needed here — a refused account never got a Balo `calendar_connections` row, so it never got
+ * Balo-created subscriptions either. Mirrors `disconnectProvider`'s best-effort vendor delete.
  */
-async function persistAndRedirectConnected(
+async function discardRefusedEndUserAccount(
+  request: FastifyRequest,
+  endUserAccountId: string,
+  expertProfileId: string,
+  provider: string
+): Promise<void> {
+  try {
+    const referencing =
+      await calendarRepository.findConnectionsByEndUserAccountId(endUserAccountId);
+    if (referencing.length > 0) {
+      request.log.info(
+        { expertProfileId, provider, referencingConnections: referencing.length },
+        'apiroc_callback_refused_account_retained'
+      );
+      return;
+    }
+
+    const client = getApirocClient();
+    await callApiroc('endUserAccounts.delete', () =>
+      client.endUserAccounts.delete(endUserAccountId)
+    );
+  } catch (err: unknown) {
+    request.log.warn(
+      {
+        expertProfileId,
+        provider,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'apiroc_callback_refused_account_delete_failed'
+    );
+  }
+}
+
+/**
+ * BAL-575 — the reconnect-with-a-different-account refusal redirect. Kept as its own
+ * module-level helper (not inlined into `persistAndRedirectConnected`) purely to keep that
+ * function's cognitive complexity under the SonarCloud gate.
+ *
+ * No email in this log line, by design — only ids and the provider, matching every other warn
+ * on this file's SHAPE 2 path.
+ */
+async function rejectAccountMismatch(
   request: FastifyRequest,
   reply: FastifyReply,
   ctx: CallbackRedirectContext,
   payload: { expertProfileId: string; provider: string; endUserAccountId: string }
 ): Promise<FastifyReply> {
   const { expertProfileId, provider, endUserAccountId } = payload;
+  request.log.warn({ expertProfileId, provider }, 'apiroc_callback_reconnect_account_mismatch');
+
+  const eventProvider = toCalendarEventProvider(provider);
+  trackServer(CALENDAR_SERVER_EVENTS.OAUTH_FAILED, {
+    error_code: 'account_mismatch',
+    ...(eventProvider ? { provider: eventProvider } : {}),
+    distinct_id: expertProfileId,
+  });
+
+  await discardRefusedEndUserAccount(request, endUserAccountId, expertProfileId, provider);
+
+  return redirectWithError(reply, ctx, 'account_mismatch', eventProvider);
+}
+
+/**
+ * SHAPE 2 happy path — persist, provision, rebuild availability, redirect connected. A
+ * post-persistence failure still redirects (never a 500): the connection row already exists,
+ * so a retry from this same response would fail the CSRF check instead of proceeding cleanly.
+ *
+ * BAL-575 — `persistApirocConnection` can also come back `refused_account_mismatch` (a live row
+ * already points this (expert, provider) at a DIFFERENT End User Account). That arm returns
+ * immediately via `rejectAccountMismatch`, before `provisionConnection` or anything else below
+ * runs — nothing downstream may act on a connection the repository just refused to touch.
+ * Everything from here down reads `result.connection`, the persisted row.
+ */
+async function persistAndRedirectConnected(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  ctx: CallbackRedirectContext,
+  payload: {
+    expertProfileId: string;
+    provider: string;
+    endUserAccountId: string;
+    providerEmail: string | null;
+  }
+): Promise<FastifyReply> {
+  const { expertProfileId, provider, endUserAccountId, providerEmail } = payload;
   try {
-    const connection = await persistApirocConnection({
+    const result = await persistApirocConnection({
       expertProfileId,
       provider,
       endUserAccountId,
+      providerEmail,
     });
+
+    if (result.outcome === 'refused_account_mismatch') {
+      return await rejectAccountMismatch(request, reply, ctx, {
+        expertProfileId,
+        provider,
+        endUserAccountId,
+      });
+    }
+
+    if (result.providerEmailChanged) {
+      // BAL-575 — same End User Account, a different email than Balo last stored. A DB
+      // refusal cannot restore an account swap the vendor already made behind this id; this is
+      // a signal for BAL-577, not an error to act on here. No email in the log line.
+      request.log.warn(
+        {
+          expertProfileId,
+          provider,
+          connectionId: result.connection.id,
+          providerEmailChanged: true,
+        },
+        'apiroc_callback_provider_email_changed'
+      );
+    }
+
+    const connection = result.connection;
     const status = await provisionConnection(connection);
     await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
     // BAL-468 §8.4/§8.6 — covers both first connect (force is a no-op — nothing to renew) and
@@ -472,8 +610,9 @@ async function handleEndUserAccountIdShape(
   // BAL-397 fix round — THE VENDOR-ACCOUNT OWNERSHIP BINDING. ⚠ MUST stay between the CSRF
   // check and `persistAndRedirectConnected`: it is the only thing that resolves the SUBJECT
   // (`endUserAccountId`, browser-supplied) against the ACTOR (`expertProfileId`, HMAC-trusted).
-  // See `endUserAccountBelongsToExpert` for the full threat model.
-  if (!(await endUserAccountBelongsToExpert(request, endUserAccountId, expertProfileId))) {
+  // See `resolveOwnedEndUserAccount` for the full threat model.
+  const ownership = await resolveOwnedEndUserAccount(request, endUserAccountId, expertProfileId);
+  if (!ownership.owned) {
     request.log.warn({ expertProfileId, provider }, 'apiroc_callback_account_binding_rejected');
     return rejectShape2(reply, ctx, expertProfileId, eventProvider);
   }
@@ -482,6 +621,7 @@ async function handleEndUserAccountIdShape(
     expertProfileId,
     provider,
     endUserAccountId,
+    providerEmail: ownership.email,
   });
 }
 
@@ -509,13 +649,28 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
       const { expertProfileId, provider } = parsed.data;
 
       try {
+        // BAL-575 — prefill the vendor's login/account-chooser with the email this
+        // (expert, provider) is already connected under, when one is known. A read failure here
+        // is not a distinct case: it falls straight into the existing catch below and returns
+        // the same 500 a `signConnectState`/`buildApirocAuthorizeUrl` failure would.
+        const existingConnection = await calendarRepository.findConnectionByExpertAndProvider(
+          expertProfileId,
+          provider
+        );
         const state = signConnectState(expertProfileId, provider);
         // BAL-396 fix round, Finding 1 — hand the nonce back so apps/web (which owns the
         // browser-facing request/response cycle) can bind it to a short-lived cookie. Cheap:
         // `verifyConnectState` on a state we just signed ourselves, never expired, never
         // tampered — just an extraction, not a trust boundary.
         const { nonce } = verifyConnectState(state);
-        const authUrl = buildApirocAuthorizeUrl({ provider, state, externalId: expertProfileId });
+        const authUrl = buildApirocAuthorizeUrl({
+          provider,
+          state,
+          externalId: expertProfileId,
+          ...(existingConnection?.providerEmail
+            ? { loginHint: existingConnection.providerEmail }
+            : {}),
+        });
         return reply.send({ authUrl, nonce });
       } catch (err: unknown) {
         request.log.error(

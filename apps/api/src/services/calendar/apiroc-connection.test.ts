@@ -106,21 +106,154 @@ function buildConnection(overrides: Partial<CalendarConnection> = {}): CalendarC
 }
 
 describe('persistApirocConnection', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(undefined);
+    mockUpsertApirocConnection.mockResolvedValue({
+      outcome: 'persisted',
+      connection: buildConnection(),
+    });
+  });
 
-  it('delegates to calendarRepository.upsertApirocConnection with no token fields', async () => {
-    mockUpsertApirocConnection.mockResolvedValue(buildConnection());
-    const result = await persistApirocConnection({
+  it('delegates to calendarRepository.upsertApirocConnection, including providerEmail', async () => {
+    await persistApirocConnection({
       expertProfileId: 'expert-1',
       provider: 'exp-provider-a',
       endUserAccountId: 'eua-1',
+      providerEmail: 'dana@example.com',
     });
     expect(mockUpsertApirocConnection).toHaveBeenCalledWith({
       expertProfileId: 'expert-1',
       provider: 'exp-provider-a',
       endUserAccountId: 'eua-1',
+      providerEmail: 'dana@example.com',
     });
-    expect(result.id).toBe('conn-1');
+  });
+
+  it('returns the persisted connection with providerEmailChanged when there was no prior row', async () => {
+    const result = await persistApirocConnection({
+      expertProfileId: 'expert-1',
+      provider: 'exp-provider-a',
+      endUserAccountId: 'eua-1',
+      providerEmail: 'dana@example.com',
+    });
+
+    expect(result).toEqual({
+      outcome: 'persisted',
+      connection: buildConnection(),
+      providerEmailChanged: false,
+    });
+  });
+
+  it('passes a refused result straight through, without throwing or writing a second time', async () => {
+    mockUpsertApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+
+    const result = await persistApirocConnection({
+      expertProfileId: 'expert-1',
+      provider: 'exp-provider-a',
+      endUserAccountId: 'eua-1',
+      providerEmail: 'dana@example.com',
+    });
+
+    expect(result).toEqual({ outcome: 'refused_account_mismatch' });
+    expect(mockUpsertApirocConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it('the pre-read never gates: a pre-read showing a DIFFERENT stored EUA still calls the upsert with the incoming one', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(
+      buildConnection({ endUserAccountId: 'eua-OLD', providerEmail: 'old@example.com' })
+    );
+
+    await persistApirocConnection({
+      expertProfileId: 'expert-1',
+      provider: 'exp-provider-a',
+      endUserAccountId: 'eua-NEW',
+      providerEmail: 'new@example.com',
+    });
+
+    expect(mockUpsertApirocConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ endUserAccountId: 'eua-NEW', providerEmail: 'new@example.com' })
+    );
+  });
+
+  describe('providerEmailChanged', () => {
+    const cases: Array<{
+      label: string;
+      stored: Partial<CalendarConnection>;
+      incoming: string | null;
+      expected: boolean;
+    }> = [
+      {
+        label: 'true — same EUA, differing emails',
+        stored: { endUserAccountId: 'eua-1', providerEmail: 'dana@example.com' },
+        incoming: 'nova@example.com',
+        expected: true,
+      },
+      {
+        label: 'false — same EUA, a case-only difference',
+        stored: { endUserAccountId: 'eua-1', providerEmail: 'dana@example.com' },
+        incoming: 'DANA@EXAMPLE.COM',
+        expected: false,
+      },
+      {
+        label: 'false — same EUA, null stored email',
+        stored: { endUserAccountId: 'eua-1', providerEmail: null },
+        incoming: 'dana@example.com',
+        expected: false,
+      },
+      {
+        label: 'false — same EUA, null incoming email',
+        stored: { endUserAccountId: 'eua-1', providerEmail: 'dana@example.com' },
+        incoming: null,
+        expected: false,
+      },
+      {
+        label: 'false — a different stored EUA',
+        stored: { endUserAccountId: 'eua-OLD', providerEmail: 'dana@example.com' },
+        incoming: 'nova@example.com',
+        expected: false,
+      },
+    ];
+
+    it.each(cases)('$label', async ({ stored, incoming, expected }) => {
+      mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection(stored));
+      mockUpsertApirocConnection.mockResolvedValue({
+        outcome: 'persisted',
+        connection: buildConnection({ endUserAccountId: 'eua-1', providerEmail: incoming }),
+      });
+
+      const result = await persistApirocConnection({
+        expertProfileId: 'expert-1',
+        provider: 'exp-provider-a',
+        endUserAccountId: 'eua-1',
+        providerEmail: incoming,
+      });
+
+      expect(result.outcome).toBe('persisted');
+      if (result.outcome === 'persisted') {
+        expect(result.providerEmailChanged).toBe(expected);
+      }
+    });
+
+    it('false — no prior row', async () => {
+      mockFindConnectionByExpertAndProvider.mockResolvedValue(undefined);
+      mockUpsertApirocConnection.mockResolvedValue({
+        outcome: 'persisted',
+        connection: buildConnection({ providerEmail: 'dana@example.com' }),
+      });
+
+      const result = await persistApirocConnection({
+        expertProfileId: 'expert-1',
+        provider: 'exp-provider-a',
+        endUserAccountId: 'eua-1',
+        providerEmail: 'dana@example.com',
+      });
+
+      expect(result.outcome).toBe('persisted');
+      if (result.outcome === 'persisted') {
+        expect(result.providerEmailChanged).toBe(false);
+      }
+    });
   });
 });
 

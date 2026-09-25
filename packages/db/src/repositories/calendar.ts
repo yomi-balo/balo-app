@@ -89,6 +89,17 @@ export interface UpsertApirocConnectionInput {
 }
 
 /**
+ * What {@link calendarRepository.upsertApirocConnection} did, decided by its ONE statement.
+ *
+ * `refused_account_mismatch` means a live row for this (expert, provider) holds a DIFFERENT
+ * End User Account, and that row was left exactly as it was (BAL-575). It carries no row on
+ * purpose: nothing was written, so there is nothing to hand back.
+ */
+export type UpsertApirocConnectionResult =
+  | { outcome: 'persisted'; connection: CalendarConnection }
+  | { outcome: 'refused_account_mismatch' };
+
+/**
  * One expert connection the free/busy read can act on, with the calendar ids that read
  * requires. Compound because `GetFreeBusyInput.calendarIds` is REQUIRED by the vendor SDK:
  * a connection without conflict-checked sub-calendars is not a readable target, and the
@@ -168,7 +179,10 @@ export const calendarRepository = {
    * unique over exactly this pair among live rows, so the answer is unambiguous by
    * construction, not by ordering convention.
    *
-   * ⚠ INERT — no caller until BAL-396 wires the Apiroc connect flow.
+   * Live callers: `routes/calendar/api.ts` (`set-target-calendar` with an explicit `provider`),
+   * `services/calendar/apiroc-connection.ts` (`disconnectProvider`), `routes/calendar/auth.ts`
+   * (the connect route's `loginHint` read), and `apiroc-connection.ts`'s `persistApirocConnection`
+   * (a diagnostic pre-read on the OAuth callback — BAL-575).
    */
   async findConnectionByExpertAndProvider(
     expertProfileId: string,
@@ -241,7 +255,12 @@ export const calendarRepository = {
    * and hand BAL-468's webhook handler an arbitrary row. If BAL-396 confirms the vendor
    * guarantees one-to-one, tighten the INDEX first, then narrow this.
    *
-   * ⚠ INERT — no caller until BAL-468 handles webhooks.
+   * BAL-468 did not become its caller: the webhook path resolves identity by primary key
+   * through `findConnectionById` instead (see there). Its first caller is BAL-575's refusal
+   * cleanup in the OAuth callback. Before deleting a just-refused End User Account at the
+   * vendor, the callback asks whether ANY live row, for ANY expert, still references it. That
+   * is a question only the array answers: a singular read would say "no" for a shared account
+   * and delete a pointer another expert's connection still depends on.
    */
   async findConnectionsByEndUserAccountId(endUserAccountId: string): Promise<CalendarConnection[]> {
     return db.query.calendarConnections.findMany({
@@ -276,14 +295,45 @@ export const calendarRepository = {
    * the partial index, so it cannot be the conflict target; the soft-deleted row stays
    * behind as history. Matches `company_members` / `agency_members`. The `deletedAt: null`
    * in `set` is therefore only reached when a LIVE row is re-upserted — a no-op safety
-   * belt, not the reconnect mechanism.
+   * belt, not the reconnect mechanism. It is also the sanctioned way to SWITCH accounts:
+   * Disconnect, then Add calendar, which inserts beside the old row (see the refusal below).
    *
    * ⚠ RECONNECT CLEARS THE NOTIFICATION MARKER. `reconnectNotifiedAt: null` in `set` is not
    * decoration: it is what lets a SECOND breakage notify the expert again. Leave it out and
    * an expert who reconnects, then breaks again, is never told.
+   *
+   * ⚠⚠ RECONNECT WITH A DIFFERENT END USER ACCOUNT IS REFUSED (BAL-575). `setWhere` lets the
+   * DO UPDATE arm fire only when the live row's stored `end_user_account_id` equals the
+   * incoming one. Without it, a Reconnect or Fix permissions that came back signed in to a
+   * DIFFERENT provider account silently repointed the live row: Balo stopped reading the
+   * calendar the expert had connected, so its busy time dropped out of availability
+   * (double-booking risk), and the old End User Account was orphaned at the vendor. Now the
+   * conflicting row is left exactly as it was, every column including `updated_at`, and the
+   * method answers `{ outcome: 'refused_account_mismatch' }`.
+   *
+   * THE STATEMENT DECIDES, NOT A READ BEFORE IT. ON CONFLICT DO UPDATE locks the conflicting
+   * row and evaluates `setWhere` against its LATEST version, so two concurrent callbacks have
+   * no read-then-write window: the second one sees whatever the first committed. An empty
+   * RETURNING can therefore mean only refusal, because the INSERT arm always returns its row
+   * and an update that passes `setWhere` returns the updated one. A caller may pre-read for
+   * diagnostics, but it must never decide on that read.
+   *
+   * `setWhere` binds its value as a `$n` parameter through `eq()`, and that is fine here. The
+   * 42P10 parameter hazard above is about the ARBITER's `targetWhere`, which Postgres must
+   * match against the index predicate at plan time. `setWhere` is an ordinary filter on the
+   * conflicting row, evaluated after the arbiter is chosen. Precedent:
+   * `meetingCalendarEventsRepository.recordIcsDelivery`.
+   *
+   * ⚠ A KNOWN EMAIL IS NEVER NULLED. `providerEmail` enters the UPDATE arm only when the caller
+   * passes a string. A `null` or omitted email leaves the stored one alone, because a vendor
+   * account that comes back without an email must not erase the address the connection card
+   * shows and the connect route sends as `loginHint`. The INSERT arm stores what it is given,
+   * `null` when omitted.
    */
-  async upsertApirocConnection(data: UpsertApirocConnectionInput): Promise<CalendarConnection> {
-    const [result] = await db
+  async upsertApirocConnection(
+    data: UpsertApirocConnectionInput
+  ): Promise<UpsertApirocConnectionResult> {
+    const [connection] = await db
       .insert(calendarConnections)
       .values({
         expertProfileId: data.expertProfileId,
@@ -300,18 +350,27 @@ export const calendarRepository = {
         set: {
           // `provider` is INTENTIONALLY absent: it is half the arbiter, so the conflicting
           // row necessarily already holds this exact value.
+          // `endUserAccountId` writes the value `setWhere` already requires, so today it
+          // changes nothing. It stays so that any future widening of `setWhere` still
+          // repoints the row instead of leaving the old pointer behind.
           endUserAccountId: data.endUserAccountId,
-          providerEmail: data.providerEmail ?? null,
+          ...(typeof data.providerEmail === 'string' ? { providerEmail: data.providerEmail } : {}),
           credentialStatus: data.credentialStatus ?? 'ACTIVE',
           reconnectNotifiedAt: null,
           credentialCheckedAt: new Date(),
           updatedAt: new Date(),
           deletedAt: null,
         },
+        // ⚠⚠ THE BAL-575 REFUSAL. Removing this line restores the silent repoint of a live
+        // row to a different End User Account. See the docblock above.
+        setWhere: eq(calendarConnections.endUserAccountId, data.endUserAccountId),
       })
       .returning();
 
-    return result!;
+    if (connection === undefined) {
+      return { outcome: 'refused_account_mismatch' };
+    }
+    return { outcome: 'persisted', connection };
   },
 
   /**

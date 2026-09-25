@@ -116,6 +116,14 @@ describe('calendarRepository', () => {
      * proof lives in `calendar.integration.test.ts`. What IS worth pinning here is the
      * SHAPE of the argument, cheaply and with no Docker.
      */
+    /** The single `onConflictDoUpdate` config the call under test captured. */
+    function upsertConflictConfig(): { setWhere?: unknown; set: Record<string, unknown> } {
+      const [config] = mockOnConflictDoUpdate.mock.calls[0] as [
+        { setWhere?: unknown; set: Record<string, unknown> },
+      ];
+      return config;
+    }
+
     it('inserts or upserts and returns the connection', async () => {
       const mockConn = { id: 'conn-1', expertProfileId: 'ep-1' };
       mockReturning.mockReturnValue([mockConn]);
@@ -126,7 +134,7 @@ describe('calendarRepository', () => {
         endUserAccountId: 'eua-1',
       });
 
-      expect(result).toEqual(mockConn);
+      expect(result).toEqual({ outcome: 'persisted', connection: mockConn });
       expect(mockValues).toHaveBeenCalledWith(
         expect.objectContaining({
           expertProfileId: 'ep-1',
@@ -212,6 +220,88 @@ describe('calendarRepository', () => {
       expect(config.set.credentialCheckedAt).toBeInstanceOf(Date);
       // Reconnecting a LIVE row must not leave it soft-deleted.
       expect(config.set.deletedAt).toBeNull();
+    });
+
+    /**
+     * ⚠⚠ BAL-575 — THE REFUSAL, AS A SHAPE. A reconnect that came back signed in to a
+     * DIFFERENT provider account must not repoint the live row. `setWhere` gates the DO
+     * UPDATE arm on the stored pointer already being the incoming one; the real-Postgres
+     * proof that the row is left untouched is in `calendar.integration.test.ts`.
+     */
+    it('gates the DO UPDATE arm on the stored end_user_account_id equalling the incoming one', async () => {
+      mockReturning.mockReturnValue([{ id: 'conn-1' }]);
+
+      await calendarRepository.upsertApirocConnection({
+        expertProfileId: 'ep-1',
+        provider: 'google',
+        endUserAccountId: 'eua-incoming',
+      });
+
+      const { setWhere } = upsertConflictConfig();
+      expect(setWhere).toBeDefined();
+      const { sql, params } = DIALECT.sqlToQuery(
+        setWhere as Parameters<PgDialect['sqlToQuery']>[0]
+      );
+      expect(sql).toMatch(/"end_user_account_id" = \$\d+$/);
+      // The EXISTING row's column, never the proposed one — `excluded.end_user_account_id`
+      // always equals the incoming id, so a predicate on it would refuse nothing.
+      expect(sql).not.toContain('excluded');
+      expect(params).toEqual(['eua-incoming']);
+    });
+
+    /**
+     * Zero returned rows has exactly ONE cause once `setWhere` is in place: the insert
+     * conflicted and the update was refused. The INSERT arm always returns its row.
+     */
+    it('answers refused_account_mismatch, with no row, when RETURNING is empty', async () => {
+      mockReturning.mockReturnValue([]);
+
+      const result = await calendarRepository.upsertApirocConnection({
+        expertProfileId: 'ep-1',
+        provider: 'google',
+        endUserAccountId: 'eua-other',
+      });
+
+      expect(result).toEqual({ outcome: 'refused_account_mismatch' });
+    });
+
+    /**
+     * ⚠ A KNOWN EMAIL IS NEVER NULLED (BAL-575). A `null` or omitted email must leave the
+     * UPDATE arm's `set` WITHOUT the key, so Postgres keeps the stored value. `providerEmail:
+     * null` in `set` would erase it.
+     */
+    it.each([
+      ['null', { providerEmail: null }],
+      ['omitted', {}],
+    ])('leaves providerEmail out of the update arm when the email is %s', async (_label, email) => {
+      mockReturning.mockReturnValue([{ id: 'conn-1' }]);
+
+      await calendarRepository.upsertApirocConnection({
+        expertProfileId: 'ep-1',
+        provider: 'google',
+        endUserAccountId: 'eua-1',
+        ...email,
+      });
+
+      expect(upsertConflictConfig().set).not.toHaveProperty('providerEmail');
+      // The INSERT arm has no stored value to protect: a fresh row stores null.
+      expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({ providerEmail: null }));
+    });
+
+    it('writes a given providerEmail on both arms', async () => {
+      mockReturning.mockReturnValue([{ id: 'conn-1' }]);
+
+      await calendarRepository.upsertApirocConnection({
+        expertProfileId: 'ep-1',
+        provider: 'google',
+        endUserAccountId: 'eua-1',
+        providerEmail: 'dana@example.com',
+      });
+
+      expect(upsertConflictConfig().set.providerEmail).toBe('dana@example.com');
+      expect(mockValues).toHaveBeenCalledWith(
+        expect.objectContaining({ providerEmail: 'dana@example.com' })
+      );
     });
   });
 

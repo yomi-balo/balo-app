@@ -2,6 +2,7 @@ import {
   calendarRepository,
   calendarSubscriptionsRepository,
   type CalendarConnection,
+  type UpsertApirocConnectionResult,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { getApirocClient, callApiroc, paginateApiroc } from '../../lib/apiroc/index.js';
@@ -21,17 +22,60 @@ export interface PersistApirocConnectionArgs {
   readonly expertProfileId: string;
   readonly provider: string;
   readonly endUserAccountId: string;
+  /** BAL-575 — required, not optional, so a caller cannot forget to pass the email the
+   *  ownership check already fetched. `null` when the vendor account carries no email. */
+  readonly providerEmail: string | null;
 }
 
-/** §1 — persist the pointer. No tokens, ever (apiroc skill, Constraint 1). */
+/**
+ * BAL-575 — the outcome of {@link persistApirocConnection}, mirroring
+ * `calendarRepository.upsertApirocConnection`'s discriminated result one layer up.
+ * `providerEmailChanged` is diagnostic only — see the function docblock for why it can never
+ * gate the write. The refused arm is `Extract`ed from the repository's own
+ * `UpsertApirocConnectionResult` rather than redeclared, so the discriminant has one source.
+ */
+export type PersistApirocConnectionResult =
+  | { outcome: 'persisted'; connection: CalendarConnection; providerEmailChanged: boolean }
+  | Extract<UpsertApirocConnectionResult, { outcome: 'refused_account_mismatch' }>;
+
+/**
+ * §1 — persist the pointer. No tokens, ever (apiroc skill, Constraint 1).
+ *
+ * BAL-575 — the pre-read (`findConnectionByExpertAndProvider`) is DIAGNOSTIC ONLY. It never
+ * gates or short-circuits the write: `upsertApirocConnection`'s single statement is the sole
+ * arbiter of refusal, because only that statement holds the conflicting row's lock and reads
+ * its latest committed value — a pre-read taken a moment earlier can already be stale under
+ * concurrency. The worst a stale pre-read can do is under-report `providerEmailChanged`; it can
+ * never turn a refusal into a persist or vice versa. Never log an email out of this function —
+ * the pre-read result and its comparison stay in-process only.
+ */
 export async function persistApirocConnection(
   args: PersistApirocConnectionArgs
-): Promise<CalendarConnection> {
-  return calendarRepository.upsertApirocConnection({
+): Promise<PersistApirocConnectionResult> {
+  const existing = await calendarRepository.findConnectionByExpertAndProvider(
+    args.expertProfileId,
+    args.provider
+  );
+
+  const result = await calendarRepository.upsertApirocConnection({
     expertProfileId: args.expertProfileId,
     provider: args.provider,
     endUserAccountId: args.endUserAccountId,
+    providerEmail: args.providerEmail,
   });
+
+  if (result.outcome === 'refused_account_mismatch') {
+    return result;
+  }
+
+  const providerEmailChanged =
+    existing !== undefined &&
+    existing.endUserAccountId === args.endUserAccountId &&
+    existing.providerEmail !== null &&
+    args.providerEmail !== null &&
+    existing.providerEmail.toLowerCase() !== args.providerEmail.toLowerCase();
+
+  return { outcome: 'persisted', connection: result.connection, providerEmailChanged };
 }
 
 // ── §4 — provisioning (list writable calendars, default the target) ────────
