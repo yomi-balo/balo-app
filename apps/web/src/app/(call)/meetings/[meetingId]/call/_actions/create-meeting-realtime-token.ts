@@ -5,7 +5,12 @@ import 'server-only';
 import { z } from 'zod';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { callActionErrorFields, enterCallAction } from '@/lib/meetings/call-action-entry';
+import { checkSharedRateLimit } from '@/lib/rate-limit/shared-counter';
+import {
+  CALL_ACTION_THROTTLED_ERROR,
+  callActionErrorFields,
+  enterCallAction,
+} from '@/lib/meetings/call-action-entry';
 import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
 import { mintSubscribeOnlyToken } from '@/lib/realtime/mint-subscribe-token';
 import {
@@ -32,8 +37,18 @@ const inputSchema = z.object({ meetingId: z.uuid() }).strict();
  *
  * ⚠⚠ THE FULL TENANCY GATE RE-RUNS ON EVERY TOKEN REFRESH. ably-js re-invokes `authCallback`
  * on expiry, so a membership revoked mid-call is bounded by `TOKEN_TTL_MS` (15 min): the next
- * refresh is denied and the connection fails to *"Live updates are unavailable"*. Sends are
- * refused independently by the write actions, which do not wait for a token to expire.
+ * refresh is denied. ably-js wraps a plain-string refusal as ErrorInfo 40170/401, which
+ * `actOnErrorFromAuthorize` treats as retryable — only a 403, 40171 or 40102 moves the
+ * connection to `failed`. So the connection instead stays `disconnected`, then `suspended`
+ * ("Reconnecting…"), and RE-RUNS THIS GATE on its own retry schedule — every 15s, then every 30s
+ * after 2 minutes. Sends are refused independently by the write actions, which do not wait for a
+ * token to expire.
+ *
+ * ⚠ BAL-461 — EACH RETRY ALSO COUNTS AGAINST THE SHARED `meeting-realtime-token` BUCKET, checked
+ * right after the session read and before this gate (SESSION → RATE → GATE). ably-js's own
+ * back-off caps honest retries at ~4/min, well under the bucket's ceiling of 30. A throttled
+ * refusal is the SAME status-less string as a denied gate (so it wraps as 40170/401 too) — see
+ * the note above — so it must never carry a `statusCode`.
  *
  * ⚠ `clientId = user.id`, so Ably itself attributes every connection to a real user.
  *
@@ -49,6 +64,13 @@ export async function createMeetingRealtimeTokenAction(
   if (!entry.ok) return { success: false, error: entry.error };
   const { user } = entry;
   const { meetingId } = entry.data;
+
+  const rateLimit = await checkSharedRateLimit('meeting-realtime-token', user);
+  if (!rateLimit.allowed) {
+    // ⚠ A PLAIN, NON-403 STRING — see the docblock's "BAL-461" note on why that is non-fatal
+    // to ably-js and lets the connection retry rather than fail outright.
+    return { success: false, error: CALL_ACTION_THROTTLED_ERROR };
+  }
 
   try {
     // ⚠ `withWritability: false` — THIS ACTION WANTS THE CHANNEL NAME, NEVER THE COMPOSER

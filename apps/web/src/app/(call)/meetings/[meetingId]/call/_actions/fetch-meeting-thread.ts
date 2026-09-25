@@ -6,7 +6,12 @@ import { z } from 'zod';
 import { conversationsRepository } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { callActionErrorFields, enterCallAction } from '@/lib/meetings/call-action-entry';
+import { checkSharedRateLimit } from '@/lib/rate-limit/shared-counter';
+import {
+  CALL_ACTION_THROTTLED_ERROR,
+  callActionErrorFields,
+  enterCallAction,
+} from '@/lib/meetings/call-action-entry';
 import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
 import { mapMessageRowToView } from '@/lib/conversations/conversation-view';
 import type { FetchMeetingThreadResult } from '@/lib/meetings/meeting-panels';
@@ -30,7 +35,7 @@ const inputSchema = z
  * BAL-437 — the in-call chat panel's thread read. Keyset pagination is strict
  * `(created_at, id) <`, so repeated "Show earlier" calls never duplicate or skip a row.
  *
- * ⚠⚠ THE SCOPE IS `{ kind: 'full' }`, AND THAT IS HALF OF RULING R3. A **member** in the call
+ * ⚠⚠ THE SCOPE IS `{ kind: 'full' }`. A **member** in the call
  * reads the whole engagement thread — *"a participant opening the panel sees the engagement's
  * thread, not an empty room"*. The `{ kind: 'meeting'/'full', meetingId }` narrowing for GUESTS
  * now has its own SIBLING action — **`fetchGuestMeetingThreadAction`**
@@ -56,6 +61,11 @@ const inputSchema = z
  * ⚠ A MEETING WITH NO ANCHOR NEVER REACHES HERE IN PRODUCTION — the RSC leaves the Chat slot
  * unregistered, so no component can call this. It is still handled, with the same literal as a
  * denial, because a Server Action is a public endpoint and must never assume its own UI.
+ *
+ * ⚠ RATE-LIMITED (BAL-461) via the shared `meeting-chat-read` bucket, checked right after
+ * `requireUser()` and before the gate below — SESSION → RATE → GATE. The bucket keys on the
+ * session's user id regardless of onboarding status, so a pre-onboarding reader is rate-checked
+ * exactly like anyone else; the refusal reuses `CALL_ACTION_THROTTLED_ERROR` and is quiet.
  */
 export async function fetchMeetingThreadAction(
   input: z.infer<typeof inputSchema>
@@ -68,6 +78,11 @@ export async function fetchMeetingThreadAction(
   if (!entry.ok) return { success: false, error: entry.error };
   const { user } = entry;
   const { meetingId, before } = entry.data;
+
+  const rateLimit = await checkSharedRateLimit('meeting-chat-read', user);
+  if (!rateLimit.allowed) {
+    return { success: false, error: CALL_ACTION_THROTTLED_ERROR };
+  }
 
   try {
     const access = await resolveMeetingChatAccess({

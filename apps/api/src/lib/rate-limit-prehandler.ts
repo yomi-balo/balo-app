@@ -6,6 +6,13 @@ import { withDeadline } from './with-deadline.js';
 
 const log = createLogger('rate-limit-prehandler');
 
+/**
+ * The verbatim `msg` of the 429 hit log below. Exported (BAL-461) so the standalone
+ * `POST /rate-limit/check` route (`routes/rate-limit/index.ts`) logs the identical string for
+ * ITS OWN refusals rather than a second hand-typed copy that could drift from this one.
+ */
+export const RATE_LIMIT_EXCEEDED_LOG_MESSAGE = 'Rate limit exceeded';
+
 export interface RateLimitPreHandlerOptions {
   config: RateLimitConfig;
   /** `true` → a Redis error lets the request through; `false` → 503. */
@@ -80,6 +87,12 @@ export interface RateLimitPreHandlerOptions {
  * BAL-519 added the `identifier` selector and the 429 hit log. The selector's DEFAULT
  * (`request.ip`) is load-bearing for the public availability route; the hit log's `identifier`
  * field is opt-in because the default identifier is a raw client IP.
+ *
+ * BAL-461 extracted this file's refusal-log gate (`shouldLogRateLimitRefusal`) and its 429 wire
+ * reply (`sendRateLimitedReply`) into named exports below. Both now have a second caller — the
+ * standalone `POST /rate-limit/check` route (`routes/rate-limit/index.ts`) — so the modulo
+ * re-arm and the `Retry-After` + `{error:'rate_limited', cooldownSeconds}` shape have exactly
+ * one definition instead of a second hand-copy that could silently drift from this one.
  */
 export function createRateLimitPreHandler(
   options: RateLimitPreHandlerOptions
@@ -132,7 +145,7 @@ export function createRateLimitPreHandler(
         // further refusals while keeping the amplification cap at ~1/`maxRequests`. `current` is
         // monotonic per window (Redis serializes the MULTIs), so each re-arm value is observed by
         // at most one request.
-        if ((result.current - options.config.maxRequests - 1) % options.config.maxRequests === 0) {
+        if (shouldLogRateLimitRefusal(result.current, options.config.maxRequests)) {
           log.warn(
             {
               label: options.label,
@@ -141,13 +154,10 @@ export function createRateLimitPreHandler(
               ttlSeconds: result.ttlSeconds,
               ...(options.logIdentifier === true ? { identifier } : {}),
             },
-            'Rate limit exceeded'
+            RATE_LIMIT_EXCEEDED_LOG_MESSAGE
           );
         }
-        reply
-          .header('Retry-After', String(result.ttlSeconds))
-          .status(429)
-          .send({ error: 'rate_limited', cooldownSeconds: result.ttlSeconds });
+        sendRateLimitedReply(reply, result.ttlSeconds, options.config.windowSeconds);
         return true;
       }
       return false;
@@ -168,4 +178,48 @@ export function createRateLimitPreHandler(
       return true;
     }
   };
+}
+
+/**
+ * BAL-519's log-gate predicate, pulled out to a standalone export so a second call site —
+ * `routes/rate-limit/index.ts` — can gate its own refusal log the same way, without a second
+ * hand-copy of the modulo re-arm to keep in sync.
+ *
+ * Safe to call on its own, outside the `!result.allowed` branch above: `current > maxRequests`
+ * is the same condition as `!result.allowed` (`rate-limiter.ts`'s `allowed: current <=
+ * config.maxRequests`), so this function re-asserts it rather than assuming a caller already
+ * checked. Returns `true` on the FIRST refusal past the limit, then again every `maxRequests`
+ * refusals after that (the 61st, 121st, … at `maxRequests` 60) — see the modulo-re-arm
+ * rationale at the call site above.
+ */
+export function shouldLogRateLimitRefusal(current: number, maxRequests: number): boolean {
+  return current > maxRequests && (current - maxRequests - 1) % maxRequests === 0;
+}
+
+/**
+ * The house 429 wire reply (BAL-461): a `Retry-After` header plus
+ * `{ error: 'rate_limited', cooldownSeconds }`, shared by this file's own preHandler and the
+ * standalone `POST /rate-limit/check` route so the two 429 paths cannot drift into two subtly
+ * different shapes.
+ *
+ * `cooldownSeconds` passes `ttlSeconds` through UNCHANGED whenever it is `0` or positive, and
+ * falls back to `windowSeconds` only when it is negative. Redis's `TTL` rounds to the nearest
+ * second, so `0` is an ordinary value in the last <500 ms of any window — on every Redis
+ * version — and every existing caller of this file's preHandler (expert search, availability,
+ * session statements, brief-parse) has always sent `Retry-After: 0` in that moment; treating `0`
+ * as "no expiry" would silently turn that into a full-window wait. `-1` is the actual "no
+ * expiry" signal — `checkRateLimit` never checks the `EXPIRE NX` result (`rate-limiter.ts`,
+ * tracked separately) — and it exists only so neither caller ever tells a refused caller to
+ * retry a negative number of seconds from now.
+ */
+export function sendRateLimitedReply(
+  reply: FastifyReply,
+  ttlSeconds: number,
+  windowSeconds: number
+): void {
+  const cooldownSeconds = ttlSeconds >= 0 ? ttlSeconds : windowSeconds;
+  reply
+    .header('Retry-After', String(cooldownSeconds))
+    .status(429)
+    .send({ error: 'rate_limited', cooldownSeconds });
 }

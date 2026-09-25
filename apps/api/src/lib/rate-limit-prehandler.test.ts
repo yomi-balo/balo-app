@@ -23,7 +23,12 @@ vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockWarn, error: vi.fn() }),
 }));
 
-import { createRateLimitPreHandler } from './rate-limit-prehandler.js';
+import {
+  createRateLimitPreHandler,
+  shouldLogRateLimitRefusal,
+  sendRateLimitedReply,
+  RATE_LIMIT_EXCEEDED_LOG_MESSAGE,
+} from './rate-limit-prehandler.js';
 
 const CONFIG = { keyPrefix: 'ratelimit:probe', maxRequests: 60, windowSeconds: 60 };
 
@@ -167,7 +172,7 @@ describe('createRateLimitPreHandler (BAL-519)', () => {
     expect(mockCheckRateLimit).not.toHaveBeenCalled();
   });
 
-  it('the default request.ip path has NO emptiness guard — still reaches checkRateLimit (R7)', async () => {
+  it('the default request.ip path has NO emptiness guard — still reaches checkRateLimit', async () => {
     const handler = createRateLimitPreHandler({ config: CONFIG, failOpen: true, label: 'probe' });
     const reply = fakeReply();
 
@@ -314,5 +319,52 @@ describe('createRateLimitPreHandler (BAL-519)', () => {
     expect(reply.statusCode).toBe(503);
     expect(reply.body).toEqual({ error: 'rate_limit_unavailable' });
     expect(rejected).toBe(true);
+  });
+});
+
+// ── BAL-461 — the extracted predicate, called directly ──────────────────────
+//
+// `shouldLogRateLimitRefusal` now has a second caller (`routes/rate-limit/index.ts`), so it is
+// tested standalone here, not only through `createRateLimitPreHandler` above. These cases pin
+// the predicate itself: the boundary values (61/121 → true, 62 → false at maxRequests 60) plus
+// the two values right AT the limit (1 and 60, at maxRequests 60), which must both stay `false`
+// — `current > maxRequests` is the same condition `rate-limiter.ts` uses for `allowed`, so a
+// value at or below the limit must never be treated as a refusal to log.
+describe('shouldLogRateLimitRefusal', () => {
+  it('is the verbatim pin — RATE_LIMIT_EXCEEDED_LOG_MESSAGE is exactly "Rate limit exceeded"', () => {
+    expect(RATE_LIMIT_EXCEEDED_LOG_MESSAGE).toBe('Rate limit exceeded');
+  });
+
+  it.each([
+    [61, 60, true],
+    [121, 60, true],
+    [62, 60, false],
+    [1, 60, false],
+    [60, 60, false],
+  ])('shouldLogRateLimitRefusal(%i, %i) → %s', (current, maxRequests, expected) => {
+    expect(shouldLogRateLimitRefusal(current, maxRequests)).toBe(expected);
+  });
+});
+
+// ── BAL-461 — sendRateLimitedReply's ttl fallback ────────────────────────────
+//
+// Redis's TTL rounds to the nearest second, so `0` is an ordinary value in the last <500 ms of
+// any window, on every Redis version, and every existing preHandler caller has always sent
+// `Retry-After: 0` in that moment. Only `-1` (no expiry set) must fall back to the window.
+describe('sendRateLimitedReply', () => {
+  it('passes ttlSeconds 0 through unchanged — NOT the window fallback', () => {
+    const reply = fakeReply();
+    sendRateLimitedReply(asReply(reply), 0, 60);
+    expect(reply.statusCode).toBe(429);
+    expect(reply.headers['Retry-After']).toBe('0');
+    expect(reply.body).toEqual({ error: 'rate_limited', cooldownSeconds: 0 });
+  });
+
+  it('falls back to windowSeconds only when ttlSeconds is negative (no expiry set)', () => {
+    const reply = fakeReply();
+    sendRateLimitedReply(asReply(reply), -1, 60);
+    expect(reply.statusCode).toBe(429);
+    expect(reply.headers['Retry-After']).toBe('60');
+    expect(reply.body).toEqual({ error: 'rate_limited', cooldownSeconds: 60 });
   });
 });

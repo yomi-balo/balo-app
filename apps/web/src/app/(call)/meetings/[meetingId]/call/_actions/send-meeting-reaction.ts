@@ -5,8 +5,13 @@ import 'server-only';
 import { z } from 'zod';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
+import { checkSharedRateLimit } from '@/lib/rate-limit/shared-counter';
 import { authorizeMeetingFileAccess } from '@/lib/meetings/authorize-meeting-file-access';
-import { callActionErrorFields, enterCallAction } from '@/lib/meetings/call-action-entry';
+import {
+  CALL_ACTION_THROTTLED_ERROR,
+  callActionErrorFields,
+  enterCallAction,
+} from '@/lib/meetings/call-action-entry';
 import { MEETING_REACTIONS } from '@/lib/meetings/meeting-reactions';
 import { publishMeetingEvent } from '@/lib/realtime/ably-server';
 import { MEETING_EVENT_REACTION } from '@/lib/realtime/channels';
@@ -55,8 +60,8 @@ const inputSchema = z
  * A reaction is MEETING-grain: it needs participation and nothing else — no conversation anchor,
  * no thread lifecycle. `resolveMeetingChatAccess` composes the same gate and then does up to two
  * further reads (`conversationsRepository.findByContext`, plus the arm's lifecycle read) whose
- * results this action would discard. Calling it here cost ~6 database round trips where ~4 do,
- * on the one endpoint in this family with **no throttle at all**. Same decision, fewer reads.
+ * results this action would discard. Calling it here would cost 6–10 reads where this gate
+ * costs 4–8. Same decision, fewer reads.
  * ⚠ `authorizeMeetingFileAccess` IS THE MEETING-PARTICIPATION GATE ON THE WEB TIER — the "file"
  * in its name is historical, not a scope limit (see `meeting-chat-anchor.ts`'s docblock).
  *
@@ -65,7 +70,7 @@ const inputSchema = z
  * a call has NO reactions, NO chat and NO realtime token. The one shape that really is
  * "reactions, no chat" is `project_discovery`: the gate grants, and the anchor is null.
  *
- * ── ⚠⚠ WHY THE CLIENT DOES NOT PUBLISH THIS ITSELF (ruling R2) ──────────────────────────
+ * ── ⚠⚠ WHY THE CLIENT DOES NOT PUBLISH THIS ITSELF ──────────────────────────────────────
  *
  * A client publish would need the `publish` capability on the meeting channel, reversing
  * `ably-server.ts`'s shipped invariant that only the server publishes after validation. It
@@ -74,29 +79,37 @@ const inputSchema = z
  * that the UI does not wait for: the float renders OPTIMISTICALLY the instant the emoji is
  * tapped, and the sender drops the server's echo by `nonce`.
  *
- * ── ⚠⚠ STATED LIMITATION: **THERE IS NO SERVER-SIDE THROTTLE. BAL-461 OWNS IT.** ────────
+ * ── ⚠⚠ THE SERVER-SIDE THROTTLE (BAL-461) ───────────────────────────────────────────────
  *
- * Mitigation today is CLIENT-SIDE ONLY — a 600ms per-sender cooldown on the NETWORK call plus
- * the picker closing on selection. Neither binds a scripted client, which can drive **one
- * serverless invocation per request** against this endpoint. `apps/web` has no shared counter
- * (no Redis in the web tier) and an in-memory bucket is meaningless on serverless, so a real
- * throttle needs a shared store — that is **BAL-461**. Do not read the cooldown in
- * `use-meeting-realtime.ts` as coverage; it is a UX affordance that happens to reduce volume.
+ * Order is SESSION → RATE → GATE → ACT, the same order every one of the eight BAL-461 consumers
+ * uses: `checkSharedRateLimit` runs immediately after `enterCallAction` resolves the actor, and
+ * strictly BEFORE `authorizeMeetingFileAccess` below. Placed any later, a refused request would
+ * still cost the platform the gate's own reads — the reaction gate alone is 4–8 indexed reads by
+ * grain and actor, and the chat gate the other in-call actions call is 6–10, on top of the one
+ * read every action already pays at the session step (`requireOnboardedUser` →
+ * `assertAccountLive` → a `users` SELECT). The limiter would be spending exactly the resource it
+ * exists to protect if it ran any later.
  *
- * ⚠⚠ **THE SAME GAP BINDS THE OTHER IN-CALL ACTIONS, AND BAL-461 MUST COVER THEM TOO.**
- * `postMeetingMessageAction` is an UNBOUNDED WRITE path — every accepted call INSERTs a
- * `conversation_messages` row and publishes — and `fetchMeetingThreadAction` is an unbounded
- * READ that pages 30 rows per call behind a bare `requireUser()`. Neither has any rate limit
- * either. Reactions are merely the cheapest to abuse, not the only one exposed. The three typing
- * relays — `sendMeetingTypingAction` here, and `sendCaseTypingAction` /
- * `sendConversationTypingAction` on the dashboard — share the gap too: each runs its surface's
- * full post gate and one Ably publish per call (see `relay-typing-signal.ts`).
+ * The `meeting-reaction` bucket is 120 per 60s — above one tab's own cooldown ceiling
+ * (60 000 / `REACTION_SEND_COOLDOWN_MS` 600 = 100, `use-meeting-realtime.ts`), so one tab tapping
+ * flat out is not refused. The key is per user, so several tabs or devices tapping at the
+ * ceiling, or queued arrivals, can still be refused. The refusal is QUIET: the float stays up,
+ * exactly as it does for a tap the 600ms cooldown itself already coalesced (see
+ * `use-meeting-realtime.ts`'s `sendReaction`).
  *
- * ⚠⚠ **BAL-461 MUST CHECK THE RATE *BEFORE* THE TENANCY GATE.** Every action in this family
- * authenticates, then authorizes, then acts — and the authorization is ~4–6 indexed reads. A
- * limiter placed after it makes an attacker's refused request cost the platform those reads;
- * the limiter would be spending exactly the resource it exists to protect. Order must be:
- * session → rate → gate.
+ * ⚠ FAIL OPEN. `checkSharedRateLimit` never throws and never blocks longer than 150ms — a Redis
+ * outage or a secret mismatch means no limiting, never a broken call. See
+ * `apps/web/src/lib/rate-limit/shared-counter.ts` for the full policy and its own gated log.
+ *
+ * ⚠⚠ THE SAME SHAPE COVERS THE OTHER SEVEN CONSUMERS. `postMeetingMessageAction` (the
+ * `meeting-chat-post` bucket) and `fetchMeetingThreadAction` (`meeting-chat-read`) are the other
+ * two unbounded write/read paths in this family; `createMeetingRealtimeTokenAction`
+ * (`meeting-realtime-token`), the three typing relays — `sendMeetingTypingAction` here, plus
+ * `sendCaseTypingAction` / `sendConversationTypingAction` on the dashboard, all through
+ * `relayTypingSignal` (`typing-signal`) — and the proposal PDF route (`proposal-pdf`) round out
+ * the eight. Bucket NAMES are the closed tuple in `@balo/shared/rate-limit`; bucket NUMBERS
+ * (max/window) live only on `apps/api`, which is the one place they can change without a web
+ * deploy.
  *
  * ⚠⚠ `{ success: true }` MEANS "ACCEPTED", NOT "DELIVERED". `publishMeetingEvent` never throws
  * and is deferred through `runAfterResponse`, so this returns before the publish is attempted
@@ -112,6 +125,12 @@ export async function sendMeetingReactionAction(
   const { user } = entry;
   const { meetingId, emoji, nonce } = entry.data;
 
+  // ⚠⚠ SESSION → RATE → GATE. See the docblock. Fails open, and a refusal is quiet.
+  const rateLimit = await checkSharedRateLimit('meeting-reaction', user);
+  if (!rateLimit.allowed) {
+    return { success: false, error: CALL_ACTION_THROTTLED_ERROR };
+  }
+
   try {
     // ⚠ THE PARTICIPATION GATE, IN FULL — and nothing beyond it. See the docblock.
     const access = await authorizeMeetingFileAccess({
@@ -125,16 +144,14 @@ export async function sendMeetingReactionAction(
     // ⚠ NO REPOSITORY CALL. NOT ONE. See the docblock.
     void publishMeetingEvent(meetingId, MEETING_EVENT_REACTION, { emoji, nonce });
 
-    // ⚠⚠ THE SUCCESS LINE EXISTS SO SPAM IS **ATTRIBUTABLE** WHILE BAL-461 IS OPEN. Without it
-    // the only trace of a flood is Ably's own dashboard, which names no Balo user. ⚠ NEVER THE
-    // EMOJI AND NEVER THE NONCE: the first is content, the second correlates one person's taps
-    // across a call. The anonymity property this feature ships is about the WIRE PAYLOAD — what
-    // other participants receive — not about server-side observability of who called an endpoint.
-    log.info('Meeting reaction sent', { meetingId, userId: user.id });
-
     return { success: true };
   } catch (error) {
-    // ⚠ NEVER LOG THE EMOJI OR THE NONCE — see the success line above.
+    // ⚠ NEVER LOG THE EMOJI (content) OR THE NONCE (correlates one person's taps across a
+    // call) — the anonymity property this feature ships is about the WIRE PAYLOAD, not about
+    // server-side observability of who called this action. Attribution for a flood now comes
+    // from the api's gated `Rate limit exceeded` refusal log on the `meeting-reaction` bucket,
+    // keyed by user (see `checkSharedRateLimit` above) — the success line this comment used to
+    // sit under existed only "while BAL-461 is open", and is gone now that it is.
     log.error('Failed to send meeting reaction', {
       meetingId,
       userId: user.id,

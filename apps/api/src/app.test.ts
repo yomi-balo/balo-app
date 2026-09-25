@@ -18,6 +18,7 @@ vi.mock('@balo/shared/logging', () => {
 });
 
 import { ACCOUNT_REFUSAL_HEADER } from '@balo/shared/authz';
+import { RATE_LIMIT_CHECK_PATH } from '@balo/shared/rate-limit';
 import { buildApp } from './app.js';
 
 /**
@@ -77,6 +78,54 @@ describe('buildApp', () => {
     const exposed = response.headers['access-control-expose-headers'];
     expect(exposed, 'the CORS registration must set exposedHeaders').toBeDefined();
     expect(String(exposed)).toContain(ACCOUNT_REFUSAL_HEADER);
+    await app.close();
+  });
+
+  /**
+   * BAL-461 — `POST /rate-limit/check` registers `{ logLevel: 'warn' }`, which drops Fastify's
+   * own per-request "incoming request"/"request completed" info lines for this route only. This
+   * route can see up to ~120 calls a minute from one active typist; without the suppression,
+   * ordinary traffic would double Axiom's request-log volume for no operational question a
+   * `warn`/`error` line doesn't already answer.
+   *
+   * `buildApp()` bare (no options) is used deliberately — the same production logging path
+   * `app.log` pins above — with `INTERNAL_API_SECRET` deleted so `requireInternalAuth` writes a
+   * real `request.log.error` line (`internal-auth.ts:16`) through the same shared-logger
+   * pipeline, proving `logLevel: 'warn'` still lets an `error` line through while dropping the
+   * two `info` ones.
+   */
+  it('BAL-461 — suppresses per-request info lines on POST /rate-limit/check (logLevel: warn)', async () => {
+    const previousSecret = process.env.INTERNAL_API_SECRET;
+    delete process.env.INTERNAL_API_SECRET;
+    try {
+      const app = await buildApp();
+      sharedWrites.length = 0;
+      const response = await app.inject({ method: 'POST', url: RATE_LIMIT_CHECK_PATH });
+      expect(response.statusCode).toBe(500);
+      const messages = sharedWrites.map((line) => (JSON.parse(line) as { msg?: string }).msg);
+      expect(messages).toContain('INTERNAL_API_SECRET env var is not configured');
+      expect(messages).not.toContain('incoming request');
+      expect(messages).not.toContain('request completed');
+      await app.close();
+    } finally {
+      if (previousSecret !== undefined) {
+        process.env.INTERNAL_API_SECRET = previousSecret;
+      }
+    }
+  });
+
+  /**
+   * Control for the case above: a route with NO `logLevel` override still writes Fastify's
+   * default per-request info lines — proving the suppression above comes from
+   * `POST /rate-limit/check`'s own route option, not from some global logger change.
+   */
+  it('control: GET /health (default logLevel) still writes the per-request info lines', async () => {
+    const app = await buildApp();
+    sharedWrites.length = 0;
+    const response = await app.inject({ method: 'GET', url: '/health' });
+    expect(response.statusCode).toBe(200);
+    const messages = sharedWrites.map((line) => (JSON.parse(line) as { msg?: string }).msg);
+    expect(messages).toContain('incoming request');
     await app.close();
   });
 });
