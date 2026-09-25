@@ -31,7 +31,7 @@ vi.mock('@balo/db', () => ({
 // `resolveContextOwner`, the real predicates the `request_interaction` declined-relationship
 // tests below exercise.
 
-import { authorizeMeetingBooking } from './authorize-meeting-booking.js';
+import { authorizeMeetingBooking, engagementTypeForContext } from './authorize-meeting-booking.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const COMPANY_ID = '22222222-2222-4222-8222-222222222222';
@@ -571,4 +571,21 @@ describe('BAL-283 — the request_interaction arm (the loadSubject trap)', () =>
       expertProfileId: EXPERT_PROFILE_ID,
     });
   });
+});
+
+describe('engagementTypeForContext (BAL-581)', () => {
+  it.each([
+    ['case', 'case'],
+    ['project_kickoff', 'project'],
+    ['package_session', 'package'],
+  ] as const)('%s → %s', (contextType, expected) => {
+    expect(engagementTypeForContext(contextType)).toBe(expected);
+  });
+
+  it.each(['project_discovery', 'request_interaction'] as const)(
+    '%s → null (request-grain, no engagement)',
+    (contextType) => {
+      expect(engagementTypeForContext(contextType)).toBeNull();
+    }
+  );
 });

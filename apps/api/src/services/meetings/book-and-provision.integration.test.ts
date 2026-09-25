@@ -103,7 +103,7 @@ const failingProvisioner: RoomProvisioner = {
 };
 
 /**
- * The actor for `provisionMeeting`'s ANALYTICS context ONLY — `MeetingProvisionContext.userId`
+ * The actor for `provisionMeeting`'s ANALYTICS context ONLY — `MeetingProvisionContext.distinctId`
  * is PostHog's `distinct_id` and reaches no table, so an opaque marker is honest here.
  *
  * ⚠ EVERY `bookAndProvisionMeeting` CALL BELOW USES `parties.memberUserId` INSTEAD, and must
@@ -274,7 +274,13 @@ describe('BAL-129 — book and provision, against a real database', () => {
   it('AC #6 (D2) — provisionMeeting twice makes exactly ONE createRoom call', async () => {
     const parties = await seedBookingParties();
     const provisioner = recordingProvisioner();
-    const context = { contextType: 'case', engagementType: 'case', userId: USER_ID } as const;
+    const context = {
+      contextType: 'case',
+      engagementType: 'case',
+      distinctId: USER_ID,
+      trigger: 'replay',
+      escalateFailure: true,
+    } as const;
 
     const booked = await bookAndProvisionMeeting(
       {
@@ -398,11 +404,17 @@ describe('BAL-129 — book and provision, against a real database', () => {
     // An unprovisioned booking is NOT drift — the projection and the meeting still agree.
     expect(await findProjectionDrift({ meetingIds: [failed.meeting.id] })).toEqual([]);
 
-    // ── THE REPAIR PATH (BAL-400's, exercised here) ──
+    // ── THE REPAIR PATH (the venue repair job's, exercised here) ──
     const provisioner = recordingProvisioner();
     const healed = await provisionMeeting(
       failed.meeting.id,
-      { contextType: 'case', engagementType: 'case', userId: USER_ID },
+      {
+        contextType: 'case',
+        engagementType: 'case',
+        distinctId: USER_ID,
+        trigger: 'repair',
+        escalateFailure: true,
+      },
       log,
       { provisioner }
     );
@@ -425,7 +437,13 @@ describe('BAL-129 — book and provision, against a real database', () => {
     await expect(
       provisionMeeting(
         '00000000-0000-4000-8000-000000000000',
-        { contextType: 'case', engagementType: 'case', userId: USER_ID },
+        {
+          contextType: 'case',
+          engagementType: 'case',
+          distinctId: USER_ID,
+          trigger: 'replay',
+          escalateFailure: true,
+        },
         log,
         { provisioner: recordingProvisioner() }
       )

@@ -13,10 +13,11 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(Object.keys(MEETING_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       // BAL-433 (1) — the expert-party calendar-delivery outcome. `C` < `E`, so it leads.
       'MEETING_CALENDAR_PROJECTED',
-      // BAL-134 (5). ⚠ THE ORDER BELOW IS `localeCompare`'s, NOT a code-unit sort's — see the
-      // note above. `MEETING_ENDED` < `MEETING_EXPERT_…` because `N` < `X`; `MEETING_MISSED_…`
-      // < `MEETING_PROVISION_FAILED` because `M` < `P`; and `MEETING_STARTED` <
-      // `MEETING_WAITING_…` because `S` < `W`.
+      // BAL-134 / BAL-581 (6). ⚠ THE ORDER BELOW IS `localeCompare`'s, NOT a code-unit sort's —
+      // see the note above. `MEETING_ENDED` < `MEETING_EXPERT_…` because `N` < `X`;
+      // `MEETING_MISSED_…` < `MEETING_PROVISION_FAILED` because `M` < `P`; `MEETING_STARTED` <
+      // `MEETING_VENUE_…` because `S` < `V`; and `MEETING_VENUE_…` < `MEETING_WAITING_…`
+      // because `V` < `W`.
       'MEETING_ENDED',
       'MEETING_EXPERT_ABSENT_ALERT',
       // BAL-132. `J` < `M`, so this sorts before the missed call.
@@ -25,6 +26,7 @@ describe('MEETING_SERVER_EVENTS', () => {
       'MEETING_PROVISION_FAILED',
       'MEETING_PROVISIONED',
       'MEETING_STARTED',
+      'MEETING_VENUE_UNAVAILABLE',
       'MEETING_WAITING_ABANDONED',
     ]);
   });
@@ -37,6 +39,7 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(MEETING_SERVER_EVENTS.MEETING_WAITING_ABANDONED).toBe('meeting_waiting_abandoned');
     expect(MEETING_SERVER_EVENTS.MEETING_EXPERT_ABSENT_ALERT).toBe('meeting_expert_absent_alert');
     expect(MEETING_SERVER_EVENTS.MEETING_MISSED_CALL).toBe('meeting_missed_call');
+    expect(MEETING_SERVER_EVENTS.MEETING_VENUE_UNAVAILABLE).toBe('meeting_venue_unavailable');
     expect(MEETING_SERVER_EVENTS.MEETING_ENDED).toBe('meeting_ended');
     expect(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED).toBe('meeting_calendar_projected');
   });
@@ -100,12 +103,19 @@ describe('MEETING_SERVER_EVENTS', () => {
       ...humanEnd,
       outcome: 'no_show_client',
       ended_by: 'system_idle',
-      // ⚠ THE MEETING ID — the four system paths have no acting user.
+      // ⚠ THE MEETING ID — the five system paths have no acting user.
       distinct_id: 'meeting-1',
+    };
+    // BAL-581 — the fourth system-written outcome. `venue_unavailable` also reports
+    // `ended_by: 'system_idle'` and the meeting id, exactly like the other three.
+    const venueUnavailableEnd: MeetingServerEventMap['meeting_ended'] = {
+      ...systemEnd,
+      outcome: 'venue_unavailable',
     };
 
     expect(humanEnd.outcome).toBeNull();
     expect(systemEnd.ended_by).toBe('system_idle');
+    expect(venueUnavailableEnd.outcome).toBe('venue_unavailable');
   });
 
   it('uses snake_case event values', () => {

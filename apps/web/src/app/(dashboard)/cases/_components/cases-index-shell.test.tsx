@@ -78,6 +78,7 @@ function card(overrides: Partial<CasesIndexCardView> = {}): CasesIndexCardView {
     actorLabel: null,
     bookAgainHref: '/experts/marcus',
     joinPath: null,
+    nextBookingRoomReady: true,
     ...overrides,
   };
 }
@@ -413,6 +414,32 @@ describe('CasesIndexShell — analytics', () => {
     expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASES_INDEX_CLICKED, {
       target: 'case',
       card_state: 'live',
+    });
+  });
+
+  /** BAL-581 — a featured card whose call room is not ready never reports `live`, even inside
+   *  the join window: `resolveFeaturedTiming` keeps the server's own state. */
+  it('reports the featured card as `booked`, never `live`, when its room is not ready inside the join window', async () => {
+    const user = userEvent.setup();
+    const featured = card({
+      joinPath: '/meetings/m-1/call',
+      nextBookingStartIso: new Date(Date.now() + 5 * MIN).toISOString(),
+      nextBookingEndIso: new Date(Date.now() + 35 * MIN).toISOString(),
+      nextBookingRoomReady: false,
+    });
+    render(
+      <CasesIndexShell
+        data={ready({ featured, open: [] })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+
+    await user.click(screen.getByRole('link', { name: /Open case/ }));
+
+    expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASES_INDEX_CLICKED, {
+      target: 'case',
+      card_state: 'booked',
     });
   });
 

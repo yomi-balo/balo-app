@@ -143,7 +143,11 @@ function resolveStatus(
   if (meeting.status === 'cancelled') {
     return { label: 'Cancelled', tone: 'neutral', icon: 'ban' };
   }
-  if (meeting.outcome === 'no_show_client' || meeting.outcome === 'missed_call') {
+  if (
+    meeting.outcome === 'no_show_client' ||
+    meeting.outcome === 'missed_call' ||
+    meeting.outcome === 'venue_unavailable'
+  ) {
     return { label: 'Not held', tone: 'neutral', icon: 'ban' };
   }
   if (artifactsProcessing) {

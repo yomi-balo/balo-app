@@ -24,6 +24,7 @@ import {
 } from '@balo/db';
 import { CAPABILITIES, ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import {
+  isMeetingVenueReady,
   MIN_MEETING_MINUTES,
   rescheduleProposalIsLive,
   resolveCancelRefusal,
@@ -223,6 +224,16 @@ async function resolveRescheduleProposalForNudge(
 }
 
 /**
+ * BAL-581 — `isMeetingVenueReady` for the meeting `id`, or `false` when the loader's own read
+ * carries no such meeting. `undefined` → `false` is FAIL CLOSED: a meeting the loader cannot see
+ * gets no Join, never a guess.
+ */
+function isVenueReadyById(meetings: readonly Meeting[], id: string): boolean {
+  const meeting = meetings.find((candidate) => candidate.id === id);
+  return meeting !== undefined && isMeetingVenueReady(meeting);
+}
+
+/**
  * `CaseNudge` (Dates, from the pure core) → `CaseNudgeView` (ISO strings, serialisable).
  *
  * BAL-409 — `nextScheduled` is passed through SEPARATELY (rather than widening `CaseNudge`
@@ -242,7 +253,11 @@ function toNudgeView(
   /** BAL-574 — the SAME `now` `selectCaseNudge` used to decide `nudge.live`, projected onto
    *  the `'upcoming'` arm as `serverNowIso`. One `now`, read once, feeding both fields off the
    *  same object literal — see `CaseNudgeView`'s docblock. */
-  now: Date
+  now: Date,
+  /** BAL-581 — `isMeetingVenueReady`, resolved by the caller against the full rows this loader
+   *  already read (`isVenueReadyById`); `false` when `nudge.kind !== 'upcoming'`, since the
+   *  field only exists on that arm. */
+  roomReady: boolean
 ): CaseNudgeView {
   if (nudge === null) return null;
   if (nudge.kind === 'upcoming') {
@@ -262,6 +277,7 @@ function toNudgeView(
       // BAL-567 — the member call route, built SERVER-SIDE from an id this arm already carries.
       // `memberCallPath` is the ONE builder (`memberJoinPath`, the anonymous lobby, is deleted).
       joinPath: memberCallPath(nudge.meetingId),
+      roomReady,
     };
   }
   if (nudge.kind === 'reschedule_proposal') {
@@ -653,7 +669,8 @@ export const loadCase = cache(
     const clientCompanyName = company?.name ?? 'the client';
 
     // Ordinals drive both the consultation rows and the file card's "Consultation 3" labels.
-    // ⚠ NARROWED HERE: `dailyRoomName` and `joinUrl` never reach the derivation.
+    // ⚠ NARROWED HERE: `dailyRoomName` and `joinUrl` never reach the derivation — they are
+    // reduced to `roomReady` by `isMeetingVenueReady` and nothing else.
     const ordinalInputs = meetings.map((meeting) => ({
       id: meeting.id,
       scheduledStart: meeting.scheduledStart,
@@ -948,7 +965,13 @@ export const loadCase = cache(
       expertProfileId,
       viewerUserId: userId,
       header,
-      nudge: toNudgeView(nudge, nextScheduled, actorLabel, now),
+      nudge: toNudgeView(
+        nudge,
+        nextScheduled,
+        actorLabel,
+        now,
+        nudge?.kind === 'upcoming' ? isVenueReadyById(meetings, nudge.meetingId) : false
+      ),
       consultations,
       rescheduleProposals,
       conversation: await buildConversation(access, labels, messagePage, conversationFileRows),

@@ -3,10 +3,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import {
-  MEMBER_JOIN_OUTAGE_ERROR,
-  MEMBER_JOIN_UNAVAILABLE_ERROR,
   JOIN_UNAVAILABLE_TITLE,
   JOIN_TEMPORARILY_UNAVAILABLE_TITLE,
+  MEMBER_JOIN_NOT_OPEN_TITLE,
+  MEMBER_JOIN_SETTING_UP_TITLE,
+  MEMBER_JOIN_UNAVAILABLE_TITLE,
 } from '@/lib/meetings/lobby';
 import { MEMBER_JOIN_EXHAUSTED_LINE } from '@/lib/meetings/member-join-retry';
 import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
@@ -227,24 +228,69 @@ describe('CallClient — the grant', () => {
   });
 });
 
-describe('CallClient — ⚠ the uniform refusal vs a genuine outage', () => {
-  it('a NON-outage refusal is terminal and says nothing about the meeting', async () => {
-    mockJoinAsMemberAction.mockResolvedValue({
-      success: false,
-      error: MEMBER_JOIN_UNAVAILABLE_ERROR,
-    });
+describe('CallClient — ⚠⚠ BAL-581, the typed reason renders its own member card', () => {
+  it('unavailable → the member-worded unavailable card, and NEVER the guest "whoever shared" copy', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'unavailable' });
+    const container = renderClient();
+
+    expect(
+      await screen.findByRole('heading', { name: MEMBER_JOIN_UNAVAILABLE_TITLE })
+    ).toBeInTheDocument();
+    // ⚠ NO retry, and NOT the guest card's title/copy — the api reached this refusal only
+    // AFTER authorization, so the member notice may name the state; the old guest dead-link
+    // card is a different string entirely.
+    expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
+    expect(screen.queryByRole('heading', { name: JOIN_UNAVAILABLE_TITLE })).toBeNull();
+    expect(container.textContent ?? '').not.toMatch(/shared it with you/i);
+  });
+
+  it('not_open → the distinct "not open to join" member card, no retry', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'not_open' });
     renderClient();
 
     expect(
-      await screen.findByRole('heading', { name: JOIN_UNAVAILABLE_TITLE })
+      await screen.findByRole('heading', { name: MEMBER_JOIN_NOT_OPEN_TITLE })
     ).toBeInTheDocument();
-    // ⚠ NO retry: the api collapsed "no such meeting", "not your party" and "no capability" into
-    // one literal, so there is nothing here to try again for.
     expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
   });
 
+  it('not_provisioned → the "setting up" member card, WITH a retry affordance', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'not_provisioned' });
+    renderClient();
+
+    expect(
+      await screen.findByRole('heading', { name: MEMBER_JOIN_SETTING_UP_TITLE })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('not_provisioned retries automatically on the shipped cadence, same as outage', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'not_provisioned' });
+    renderClient();
+
+    await screen.findByRole('heading', { name: MEMBER_JOIN_SETTING_UP_TITLE });
+    expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('not_provisioned also gives up on the SCHEDULE, never on the person: the setting-up card gains the exhausted line and keeps its retry button', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'not_provisioned' });
+    renderClient();
+
+    await screen.findByRole('heading', { name: MEMBER_JOIN_SETTING_UP_TITLE });
+    // Eight consecutive failures is the shipped budget (`LOBBY_MAX_CONSECUTIVE_POLL_FAILURES`).
+    await vi.advanceTimersByTimeAsync(8 * 15_000);
+
+    expect(screen.getByRole('heading', { name: MEMBER_JOIN_SETTING_UP_TITLE })).toBeInTheDocument();
+    expect(await screen.findByText(MEMBER_JOIN_EXHAUSTED_LINE)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
   it('an OUTAGE gets the retry card, which is the honest one', async () => {
-    mockJoinAsMemberAction.mockResolvedValue({ success: false, error: MEMBER_JOIN_OUTAGE_ERROR });
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'outage' });
     renderClient();
 
     expect(
@@ -263,9 +309,46 @@ describe('CallClient — ⚠ the uniform refusal vs a genuine outage', () => {
   });
 });
 
+describe('CallClient — ⚠⚠ BAL-568, account_refused routes to session-sync, never a card', () => {
+  let assignSpy: ReturnType<typeof vi.fn>;
+  let originalLocation: Location;
+
+  beforeEach(() => {
+    assignSpy = vi.fn();
+    originalLocation = globalThis.location;
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      writable: true,
+      value: { ...originalLocation, assign: assignSpy },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      writable: true,
+      value: originalLocation,
+    });
+  });
+
+  it('navigates to the sync route, once, and renders no failure card', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'account_refused' });
+    renderClient();
+
+    await waitFor(() => {
+      expect(assignSpy).toHaveBeenCalledTimes(1);
+    });
+    expect(assignSpy).toHaveBeenCalledWith('/api/auth/session-sync?returnTo=/login');
+    // ⚠ Never `logoutAction()` — it loses BAL-197's copy. And no card renders: the connecting
+    // state stays on screen while the browser navigates away.
+    expect(screen.queryByRole('heading', { name: MEMBER_JOIN_UNAVAILABLE_TITLE })).toBeNull();
+    expect(screen.queryByRole('heading', { name: JOIN_TEMPORARILY_UNAVAILABLE_TITLE })).toBeNull();
+  });
+});
+
 describe('CallClient — ⚠⚠ the retry schedule is ONE chain', () => {
   it('retries automatically on the shipped cadence', async () => {
-    mockJoinAsMemberAction.mockResolvedValue({ success: false, error: MEMBER_JOIN_OUTAGE_ERROR });
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'outage' });
     renderClient();
 
     await screen.findByRole('heading', { name: JOIN_TEMPORARILY_UNAVAILABLE_TITLE });
@@ -281,7 +364,7 @@ describe('CallClient — ⚠⚠ the retry schedule is ONE chain', () => {
     // window, so clicking it started a SECOND chain while the scheduled one was still armed.
     // Every extra attempt mints another Daily token valid until scheduled end + 24h, and they
     // are not revocable.
-    mockJoinAsMemberAction.mockResolvedValue({ success: false, error: MEMBER_JOIN_OUTAGE_ERROR });
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'outage' });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderClient();
 
@@ -297,7 +380,7 @@ describe('CallClient — ⚠⚠ the retry schedule is ONE chain', () => {
   });
 
   it('⚠ gives up on the SCHEDULE, never on the person', async () => {
-    mockJoinAsMemberAction.mockResolvedValue({ success: false, error: MEMBER_JOIN_OUTAGE_ERROR });
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'outage' });
     renderClient();
 
     await screen.findByRole('heading', { name: JOIN_TEMPORARILY_UNAVAILABLE_TITLE });
@@ -310,7 +393,7 @@ describe('CallClient — ⚠⚠ the retry schedule is ONE chain', () => {
   });
 
   it('⚠ clears its timer on unmount', async () => {
-    mockJoinAsMemberAction.mockResolvedValue({ success: false, error: MEMBER_JOIN_OUTAGE_ERROR });
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'outage' });
     const { unmount } = render(
       <CallClient
         meetingId={MEETING_ID}
@@ -764,21 +847,37 @@ describe('CallClient — BAL-466, the post-join re-resolve probe', () => {
 
 describe('CallClient — accessibility', () => {
   it('has no violations on the retry card', async () => {
-    mockJoinAsMemberAction.mockResolvedValue({ success: false, error: MEMBER_JOIN_OUTAGE_ERROR });
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'outage' });
     const container = renderClient();
 
     await screen.findByRole('heading', { name: JOIN_TEMPORARILY_UNAVAILABLE_TITLE });
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('has no violations on the unavailable card', async () => {
+  it('has no violations on the member unavailable card', async () => {
     mockJoinAsMemberAction.mockResolvedValue({
       success: false,
-      error: MEMBER_JOIN_UNAVAILABLE_ERROR,
+      reason: 'unavailable',
     });
     const container = renderClient();
 
-    await screen.findByRole('heading', { name: JOIN_UNAVAILABLE_TITLE });
+    await screen.findByRole('heading', { name: MEMBER_JOIN_UNAVAILABLE_TITLE });
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('has no violations on the not_open card', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'not_open' });
+    const container = renderClient();
+
+    await screen.findByRole('heading', { name: MEMBER_JOIN_NOT_OPEN_TITLE });
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('has no violations on the setting-up card', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'not_provisioned' });
+    const container = renderClient();
+
+    await screen.findByRole('heading', { name: MEMBER_JOIN_SETTING_UP_TITLE });
     expect(await axe(container)).toHaveNoViolations();
   });
 });

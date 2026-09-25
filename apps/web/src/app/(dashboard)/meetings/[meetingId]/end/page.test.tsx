@@ -281,9 +281,10 @@ describe('EndOfCallPage — what actually renders', () => {
   });
 
   it('renders NO Rejoin affordance — the owner decision, and a routing fact', async () => {
-    // Every arm dead-ends today: `/join/m/{id}` is the ANONYMOUS lobby, `joinAsMemberAction` has
-    // no entry point by design, and both terminate at `MeetingCallSurface`'s "Connecting…".
-    // BAL-435 adds the button, the destination and the analytics value together.
+    // `/join/m/{id}` is the ANONYMOUS lobby — the wrong arm for a signed-in member — and BAL-435's
+    // member call route (`call-client.tsx`, `joinAsMemberAction`'s only caller) has no Rejoin
+    // link back to this screen: an owner decision this screen has no destination or analytics
+    // value for.
     const { container } = await renderPage(CLIENT_VIEW);
     expect(container.textContent).not.toMatch(/rejoin/i);
     expect(container.innerHTML).not.toContain('/join/m/');

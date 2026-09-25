@@ -66,11 +66,11 @@ export function StepBooked({
           {when} · {durationMinutes}-minute consultation with {name}. {caseVerb} — &ldquo;
           {caseTitle}&rdquo;.
         </p>
-        {/* ⚠ M6 — THE UNPROVISIONED BRANCH PROMISES NOTHING. No repair sweep, no retry job and
-            no provision-on-join exists (`join-meeting.ts` refuses an unprovisioned meeting), so
-            "the join link is on its way to your email" was an undertaking the platform cannot
-            keep. What IS true is that the booking committed and the failure was logged and
-            tracked. The follow-up ticket that adds the repair path re-earns the promise. */}
+        {/* The unprovisioned branch's promise holds: a provisioning failure is captured to
+            Sentry at booking time and raises the `meeting.unprovisioned` admin alert, the venue
+            repair job provisions the room automatically, and the case page shows "Setting up
+            your call room" until it does — so "check the case for the latest" is literally
+            true. */}
         <p className="text-muted-foreground text-sm leading-relaxed">
           {provisioned
             ? 'The join link is on its way to your email.'

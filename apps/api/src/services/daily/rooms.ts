@@ -55,11 +55,12 @@
  * ⚠⚠ FIX ROUND 2 (R1) — `reconcileRoomRecording` DOES NOT CLOSE THE PRE-DEPLOY GAP, AND AN
  * EARLIER VERSION OF THIS COMMENT CLAIMED IT DID. `provisionMeeting`
  * (`services/meetings/provision-meeting.ts`) short-circuits with ZERO VENDOR CALLS the moment
- * a meeting's venue is already stamped (`dailyRoomName`/`joinUrl` both non-null) — true of
- * every meeting booked before this shipped. So `createOrFindRoom`, and therefore
- * `reconcileRoomRecording`, is NEVER REACHED for that population; the already-exists fallback
- * below only runs when `provisionMeeting` is called for a meeting NOT yet stamped and the room
- * name is already taken at Daily — a concurrent duplicate provision, or BAL-400's repair path
+ * a meeting's venue is READY per `isMeetingVenueReady` (both columns AND
+ * `daily_room_name === dailyRoomNameForMeeting(id)`) — true of every meeting booked before this
+ * shipped. So `createOrFindRoom`, and therefore `reconcileRoomRecording`, is NEVER REACHED for
+ * that population; the already-exists fallback below only runs when `provisionMeeting` is
+ * called for a meeting whose venue is NOT yet ready and the room name is already taken at
+ * Daily — a concurrent duplicate provision, or the venue repair job (BAL-581)
  * re-provisioning a meeting whose earlier venue write failed. What actually covers the
  * pre-deploy population is `enable_recording` set at the DAILY DOMAIN LEVEL (Daily supports an
  * always-on default at that scope) — the right home for an always-on platform guarantee (D5),
@@ -69,7 +70,7 @@
 import { z } from 'zod';
 import { createLogger } from '@balo/shared/logging';
 import { dailyRequest } from './client.js';
-import { DailyApiError } from './errors.js';
+import { DailyApiError, DailyRoomNotPrivateError } from './errors.js';
 
 const log = createLogger('daily-rooms');
 
@@ -149,14 +150,15 @@ interface VendorRoom {
  * ⚠⚠ FIX ROUND 2 (R1) — THIS DOES NOT REACH EVERY ROOM PROVISIONED BEFORE BAL-473 SHIPPED, AND
  * SAYING SO HERE WOULD BE A LIE. `provisionMeeting`'s replay guard
  * (`services/meetings/provision-meeting.ts`) short-circuits with zero vendor calls whenever a
- * meeting's venue is already stamped — true of every meeting booked before this shipped — so
- * `createOrFindRoom` is never called for that meeting and this function never runs for it. It
- * only runs when `provisionMeeting` is called for a meeting whose venue is NOT yet stamped and
- * the room name is already taken at Daily: a concurrent duplicate provision, or BAL-400's
- * repair path re-provisioning a meeting whose earlier venue write failed. Domain-level
- * `enable_recording` (set once, at the Daily domain, outside this codebase) is what actually
- * covers the pre-deploy population — a platform-wide always-on default is what D5 asks for,
- * and a per-room property can only ever be a per-room preference.
+ * meeting's venue is READY per `isMeetingVenueReady` (both columns AND
+ * `daily_room_name === dailyRoomNameForMeeting(id)`) — true of every meeting booked before this
+ * shipped — so `createOrFindRoom` is never called for that meeting and this function never
+ * runs for it. It only runs when `provisionMeeting` is called for a meeting whose venue is NOT
+ * yet ready and the room name is already taken at Daily: a concurrent duplicate provision, or
+ * the venue repair job (BAL-581) re-provisioning a meeting whose earlier venue write failed.
+ * Domain-level `enable_recording` (set once, at the Daily domain, outside this codebase) is
+ * what actually covers the pre-deploy population — a platform-wide always-on default is what
+ * D5 asks for, and a per-room property can only ever be a per-room preference.
  *
  * `POST /rooms/:name` OVERRIDES an existing room's config without recreating it — the
  * daily-co skill's "Update room config" scenario.
@@ -261,17 +263,22 @@ async function createOrFindRoom(name: string): Promise<VendorRoom> {
  * cast, so a 2xx body of `{ name, privacy: 'private' }` with NO `url` type-checks and yields
  * `joinUrl: undefined`. `updateLiveMeeting` builds its patch as `{ ...set, updatedAt }` and
  * Drizzle OMITS undefined keys — so `daily_room_name` would be stamped while `join_url` stayed
- * NULL, and `provisionMeeting`'s replay guard (which requires BOTH columns non-null) would then
- * read that meeting as unprovisioned FOREVER: every repair attempt re-GETs the room, re-stamps
- * the same one column, and never converges. Validating the response here is the only place that
- * can be closed, because it is the last point at which the missing field is still visible as a
- * missing field rather than as an absent SQL assignment.
+ * NULL, and `provisionMeeting`'s replay guard (venue-ready per `isMeetingVenueReady` — both
+ * columns AND the derived-name match) would then read that meeting as unprovisioned FOREVER:
+ * every repair attempt re-GETs the room, re-stamps the same one column, and never converges.
+ * Validating the response here is the only place that can be closed, because it is the last
+ * point at which the missing field is still visible as a missing field rather than as an
+ * absent SQL assignment.
  */
 export async function createRoom(name: string): Promise<ProvisionedRoom> {
   const { room, method, path } = await createOrFindRoom(name);
 
   if (room.privacy !== REQUIRED_PRIVACY) {
-    throw new DailyApiError(
+    // A distinct subclass, not a plain `DailyApiError`: `provisionVenue`'s
+    // catch reacts to this class by best-effort deleting the stranded public room, so the
+    // venue repair job's next checkpoint creates a private one instead of adopting the same
+    // refused room forever. See `DailyRoomNotPrivateError`'s own docblock.
+    throw new DailyRoomNotPrivateError(
       method,
       path,
       RESPONSE_CONTRACT_VIOLATION_STATUS,

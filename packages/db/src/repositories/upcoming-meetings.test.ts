@@ -58,6 +58,7 @@ function folded(overrides: Partial<FoldedCalendarMeeting> = {}): FoldedCalendarM
     status: 'scheduled',
     contextType: 'case',
     contextId: 'engagement-1',
+    roomReady: true,
     ...overrides,
   };
 }
@@ -187,9 +188,37 @@ describe('assembleCompanyUpcomingMeetings — step 3, the ownership check', () =
         projectRequestId: 'request-9',
         expertProfileId: 'expert-3',
         owningRowFound: true,
+        roomReady: true,
       },
     ]);
     expect(mockLoggerWarn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * BAL-581 — `roomReady` comes from the FOLDED row (the SQL twin over the meeting's own
+   * columns), never from the visible context. Both values appear so a copy hard-wired to either
+   * literal fails.
+   */
+  it('copies each kept meeting’s roomReady from the folded row, true and false alike', () => {
+    const { visibleByKey } = indexVisibleContexts([
+      visible({ meetingId: 'm1', contextId: 'engagement-1' }),
+      visible({ meetingId: 'm2', contextId: 'engagement-2' }),
+    ]);
+
+    const result = assembleCompanyUpcomingMeetings(
+      [
+        folded({ meetingId: 'm1', contextId: 'engagement-1', roomReady: false }),
+        folded({ meetingId: 'm2', contextId: 'engagement-2', roomReady: true }),
+      ],
+      visibleByKey,
+      'company-a'
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result.map((row) => [row.meetingId, row.roomReady])).toEqual([
+      ['m1', false],
+      ['m2', true],
+    ]);
   });
 
   /**

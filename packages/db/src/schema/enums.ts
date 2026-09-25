@@ -796,18 +796,22 @@ export const meetingStatusEnum = pgEnum('meeting_status', [
  * WHY a meeting ended. NULL unless `status = 'ended'` (CHECK `meeting_outcome_requires_ended`).
  * `completed` = it happened. `no_show_client` = expert present, no client-side participant ever
  * arrived (BAL-412 settles this). `missed_call` = the expert never joined (BAL-134, 2026-07-31).
+ * `venue_unavailable` = the meeting's call room was never ready, so nobody could join (BAL-581's
+ * fifth system rule). ⚠ Added by `ALTER TYPE … ADD VALUE` in 0101 — never name it in a CHECK,
+ * DEFAULT or index predicate in the same migrate batch.
  */
 export const meetingOutcomeEnum = pgEnum('meeting_outcome', [
   'completed',
   'no_show_client',
   'missed_call',
+  'venue_unavailable',
 ]);
 
 /**
  * BAL-134 / ADR-1049 — WHO ended the meeting. NULL unless `status = 'ended'` (CHECK
  * `meeting_ended_by_requires_ended`). ORTHOGONAL to `meeting_outcome`, which says WHY:
- * ADR-1049's four-path taxonomy (plus the fifth, "abandoned wait") crosses the two axes,
- * and neither derives from the other.
+ * ADR-1049's four-path taxonomy (plus the fifth, "abandoned wait", and the sixth, "venue
+ * unavailable") crosses the two axes, and neither derives from the other.
  *
  *   `client_principal` — a client-side holder pressed End (D6: the membership arm of
  *                        `canEndMeeting`, resolved through `CONSUME_CREDITS` on the booking
@@ -815,18 +819,19 @@ export const meetingOutcomeEnum = pgEnum('meeting_outcome', [
  *   `expert_host`      — the delivering expert (or their agency owner/admin) pressed End
  *                        (D7: `hasEngagementCapability(HOST_MEETINGS)`, ADR-1046).
  *   `system_idle`      — NOBODY pressed anything. The lifecycle sweep terminated the meeting
- *                        under one of the four SYSTEM rules (idle end, no-show, missed call,
- *                        abandoned wait). ⚠ ONE LABEL FOR ALL FOUR, deliberately: which
- *                        system rule fired is carried by `outcome` (`completed` /
- *                        `no_show_client` / `missed_call` / NULL for an abandoned wait) and
- *                        by the analytics event, so splitting this axis would encode the
- *                        same fact twice and let the two disagree.
+ *                        under one of the five SYSTEM rules (idle end, no-show, missed call,
+ *                        abandoned wait, venue unavailable). ⚠ ONE LABEL FOR ALL FIVE,
+ *                        deliberately: which system rule fired is carried by `outcome`
+ *                        (`completed` / `no_show_client` / `missed_call` / `venue_unavailable`
+ *                        / NULL for an abandoned wait) and by the analytics event, so splitting
+ *                        this axis would encode the same fact twice and let the two disagree.
  *
  * ⚠ WHY THE HUMAN PATHS CARRY NO `outcome` (D5). ADR-1049: "the ender never sets the
  * outcome" — BAL-412 resolves it from `meeting_presence`. `meeting_outcome_requires_ended`
  * is ONE-DIRECTIONAL (`outcome ⇒ ended`), so `ended` + `outcome IS NULL` is legal and is
- * exactly what a human end writes. The three system-terminated paths ARE DEFINED BY their
- * outcome in ADR-1049's own table, so the sweep writes it.
+ * exactly what a human end writes. The four system-terminated paths ARE DEFINED BY their
+ * outcome (`completed` / `no_show_client` / `missed_call` / `venue_unavailable`) in ADR-1049's
+ * own table, so the sweep writes it.
  *
  * ⚠ NULLABLE, AND THAT IS NOT A GAP. Every meeting that has NOT ended has no ender, and a
  * meeting that ends is stamped in the SAME statement that sets `status='ended'`

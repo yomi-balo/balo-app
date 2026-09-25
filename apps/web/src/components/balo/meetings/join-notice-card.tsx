@@ -81,6 +81,15 @@ export function JoinNoticeCard({
  * guessed uuids again. It accepts no `title`, no `body` and no `children` — there is nothing
  * to vary and no recovery to offer, because the only real recovery is a human one: ask the
  * person who shared the link.
+ *
+ * ⚠⚠ THE GUEST SURFACES' CARD FOR A REFUSED JOIN, WITH ONE MEMBER-ROUTE EXCEPTION. For a join
+ * refusal, the member route renders `MemberJoinNotice` instead, which may name the state because
+ * every member refusal it shows is post-authorization (`join-meeting.ts:31-42`) — there is no
+ * anonymous link here whose existence must stay unconfirmed. But `MeetingCallSurface` mounts on
+ * BOTH routes and falls back to this same collapsed card when `validateGrant` rejects an
+ * already-issued grant (a malformed room URL or token): at that point the grant itself is
+ * unusable, so there is nothing member-specific left to say and the guest card's silence is the
+ * honest answer there too.
  */
 export function JoinUnavailableNotice({
   headingRef,
@@ -96,15 +105,38 @@ export function JoinUnavailableNotice({
 }
 
 /**
- * ⚠ THE **ONE** UN-COLLAPSED FAILURE, AND IT MAY HAVE A RETRY BECAUSE IT LEAKS NOTHING.
+ * BAL-581 — the shared "Try again" button. Both `JoinRetryNotice` and `MemberJoinNotice` (the
+ * member route's `not_provisioned` card) render it, so the control has one definition instead of
+ * two copies of the markup (Sonar duplication).
+ */
+export function JoinNoticeRetryButton({
+  onRetry,
+}: Readonly<{ onRetry: () => void }>): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onRetry}
+      className="border-border text-foreground hover:bg-muted/60 focus-visible:ring-ring mt-5 inline-flex min-h-11 items-center justify-center rounded-lg border px-4 text-base font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none sm:text-[13.5px]"
+    >
+      Try again
+    </button>
+  );
+}
+
+/**
+ * ⚠ THE **ONE** GUEST FAILURE THAT IS UN-COLLAPSED, AND IT MAY HAVE A RETRY BECAUSE IT LEAKS
+ * NOTHING.
  *
- * Reachable only from a `503` on the guest poll — i.e. only after a ≥256-bit token has already
- * resolved AND the bearer was already ADMITTED. "Our own call-room provider did not answer"
- * tells that holder nothing they did not already know about a meeting that is demonstrably
- * theirs, and showing them the dead-link card instead is a lie that costs them the call.
+ * Reachable from a `503` on the guest poll — i.e. only after a ≥256-bit token has already
+ * resolved AND the bearer was already ADMITTED — from a member join's transport/5xx failure
+ * (BAL-581, `MemberJoinFailureReason = 'outage'`), and from the frame's fatal card. "Our own
+ * call-room provider did not answer" tells that holder nothing they did not already know about a
+ * meeting that is demonstrably theirs, and showing them the dead-link card instead is a lie that
+ * costs them the call.
  *
- * ⚠⚠ DO NOT ADD A SECOND VARIANT OF THIS FOR `429`. That one fires PRE-authorization; a
- * distinct message there tells an anonymous scanner they are being counted.
+ * ⚠⚠ DO NOT ADD A SECOND VARIANT OF THIS FOR `429`. That one fires PRE-authorization on the
+ * guest poll; a distinct message there tells an anonymous scanner they are being counted. The
+ * member route carries no rate limit at all.
  */
 export function JoinRetryNotice({
   onRetry,
@@ -120,15 +152,7 @@ export function JoinRetryNotice({
       body={JOIN_TEMPORARILY_UNAVAILABLE_BODY}
       headingRef={headingRef}
     >
-      {onRetry === undefined ? null : (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="border-border text-foreground hover:bg-muted/60 focus-visible:ring-ring mt-5 inline-flex min-h-11 items-center justify-center rounded-lg border px-4 text-base font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none sm:text-[13.5px]"
-        >
-          Try again
-        </button>
-      )}
+      {onRetry === undefined ? null : <JoinNoticeRetryButton onRetry={onRetry} />}
     </JoinNoticeCard>
   );
 }

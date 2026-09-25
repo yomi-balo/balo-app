@@ -115,10 +115,10 @@ describe('BAL-389 declares no value without a producer', () => {
     expect(actionValues).toContain('back_to_case');
   });
 
-  it('does not declare rejoin (no live destination on any arm — BAL-435 owns it)', () => {
-    // `/join/m/{id}` is the ANONYMOUS lobby, `joinAsMemberAction` has no entry point by
-    // design, and both terminate at MeetingCallSurface's "Connecting…". BAL-435 adds the
-    // button, its destination and this value together.
+  it('does not declare rejoin (no live destination back to THIS screen)', () => {
+    // `/join/m/{id}` is the ANONYMOUS lobby. `joinAsMemberAction` IS called, by BAL-435's
+    // `call-client.tsx` (the in-meeting route) — but that route has no Rejoin link back to the
+    // end-of-call screen, which is the owner decision this value stays undeclared for.
     expect(actionValues).not.toContain('rejoin');
   });
 

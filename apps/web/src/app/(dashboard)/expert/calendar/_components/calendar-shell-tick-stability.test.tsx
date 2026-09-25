@@ -84,6 +84,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     href: '/cases/e1',
     joinUrl: '/meetings/m-1/call',
     counterpartyCompanyName: 'Northwind',
+    roomReady: true,
     ...overrides,
   };
 }
@@ -205,6 +206,42 @@ describe('CalendarShell + WeekGrid — a tick crossing the Join boundary changes
     }
     expect(changedProps(beforeSoon, afterSoon)).toEqual(['joinTimingLabel', 'joinVisible']);
     expect(changedProps(beforeFar, afterFar)).toEqual([]);
+  });
+});
+
+describe('CalendarShell + WeekGrid — a tick crossing the Join boundary with a not-ready room changes only roomSettingUp (BAL-581)', () => {
+  it('roomSettingUp flips true while joinVisible stays false and joinTimingLabel stays null', () => {
+    const soonNotReady = meeting({
+      meetingId: 'soon-not-ready',
+      scheduledStart: new Date(FIXED_NOW.getTime() + 20 * 60_000).toISOString(),
+      scheduledEnd: new Date(FIXED_NOW.getTime() + 50 * 60_000).toISOString(),
+      roomReady: false,
+    });
+    render(
+      <CalendarShell
+        view={pageView({ meetings: [soonNotReady] })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+
+    const before = propsFor('soon-not-ready').at(-1);
+    expect(before).toBeDefined();
+    recorded.length = 0;
+
+    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 6 * 60_000));
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    const after = propsFor('soon-not-ready').at(-1);
+    if (before === undefined || after === undefined) throw new Error('unreachable');
+    expect(before.roomSettingUp).toBe(false);
+    expect(after.roomSettingUp).toBe(true);
+    expect(before.joinVisible).toBe(false);
+    expect(after.joinVisible).toBe(false);
+    expect(before.joinTimingLabel).toBeNull();
+    expect(after.joinTimingLabel).toBeNull();
+    expect(changedProps(before, after)).toEqual(['roomSettingUp']);
   });
 });
 

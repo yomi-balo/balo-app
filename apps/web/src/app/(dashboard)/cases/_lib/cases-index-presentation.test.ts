@@ -51,6 +51,7 @@ function card(overrides: Partial<CasesIndexCardView> = {}): CasesIndexCardView {
     actorLabel: null,
     bookAgainHref: '/experts/marcus',
     joinPath: null,
+    nextBookingRoomReady: true,
     ...overrides,
   };
 }
@@ -74,6 +75,12 @@ describe('caseTrailMark', () => {
   it('draws nobody_joined as missed — the same mark as missed_call', () => {
     expect(caseTrailMark('nobody_joined')).toBe('missed');
     expect(caseTrailMark('nobody_joined')).toBe(caseTrailMark('missed_call'));
+  });
+
+  /** BAL-581 — a room that never provisioned names nobody either. */
+  it('draws venue_unavailable as missed — the same reasoning as nobody_joined', () => {
+    expect(caseTrailMark('venue_unavailable')).toBe('missed');
+    expect(caseTrailMark('venue_unavailable')).toBe(caseTrailMark('nobody_joined'));
   });
 
   it('maps held and cancelled to their own marks', () => {
@@ -149,6 +156,7 @@ describe('resolveFeaturedTiming', () => {
       statusText: null,
       timingLabel: null,
       effectiveState: 'booked',
+      roomSettingUp: false,
     });
   });
 
@@ -215,6 +223,48 @@ describe('resolveFeaturedTiming', () => {
     );
     expect(timing.joinVisible).toBe(true);
     expect(timing.effectiveState).toBe('proposal');
+  });
+
+  /** BAL-581 — the room-not-ready branch. */
+  describe('room not ready', () => {
+    it('opens the room-setting-up state instead of Join, inside the window — server state stands', () => {
+      const timing = resolveFeaturedTiming(
+        featured({
+          nextBookingStartIso: new Date(NOW.getTime() + 9 * MIN).toISOString(),
+          nextBookingEndIso: new Date(NOW.getTime() + 39 * MIN).toISOString(),
+          nextBookingRoomReady: false,
+        }),
+        NOW
+      );
+      expect(timing).toEqual({
+        joinVisible: false,
+        statusText: null,
+        timingLabel: null,
+        effectiveState: 'booked',
+        roomSettingUp: true,
+      });
+    });
+
+    it('stays roomSettingUp: false outside the window, even when the room is not ready', () => {
+      const timing = resolveFeaturedTiming(featured({ nextBookingRoomReady: false }), NOW);
+      expect(timing.roomSettingUp).toBe(false);
+      expect(timing.joinVisible).toBe(false);
+    });
+
+    it('a proposal state is never promoted, but the room-setting-up slot still wins over Join', () => {
+      const timing = resolveFeaturedTiming(
+        featured({
+          cardState: 'proposal',
+          nextBookingStartIso: new Date(NOW.getTime() + 5 * MIN).toISOString(),
+          nextBookingEndIso: new Date(NOW.getTime() + 35 * MIN).toISOString(),
+          nextBookingRoomReady: false,
+        }),
+        NOW
+      );
+      expect(timing.joinVisible).toBe(false);
+      expect(timing.roomSettingUp).toBe(true);
+      expect(timing.effectiveState).toBe('proposal');
+    });
   });
 });
 

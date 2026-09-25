@@ -36,6 +36,7 @@ import {
 import { caseHasLiveThread } from './_shared/case-thread';
 import type { ActionItemAssigneeParty } from './action-items';
 import type { CaseCloseReason } from './case-engagements';
+import { meetingVenueReadySql } from './meetings';
 
 /**
  * BAL-567 — THE READ MODEL BEHIND `/cases`, THE WORKSPACE'S CASE INDEX.
@@ -91,7 +92,8 @@ import type { CaseCloseReason } from './case-engagements';
  * rate_cents` / `stripe_connect_id` / `decline_note`, `engagements.balo_fee_bps`,
  * `case_engagements.booking_idempotency_key`, `meetings.join_url` / `daily_room_name`, or any
  * `users.email`. The allow-lists are the enforcement; `cases-index.integration.test.ts` pins
- * every returned key set exactly.
+ * every returned key set exactly. The trail row carries `roomReady` instead — a boolean computed
+ * in SQL by the pinned twin `meetingVenueReadySql`, never the venue columns themselves.
  *
  * ⚠ READ-ONLY, AND IT NEVER NOTIFIES — no writer lives here and nothing here publishes, queues
  * or emails (pinned by `invariants/repositories-never-notify.test.ts`).
@@ -272,7 +274,10 @@ export interface CasesIndexResolvedRow extends CasesIndexCounterparty {
   readonly closedAtEpoch: number;
 }
 
-/** One mark on a case's consultation trail. NEVER `join_url` / `daily_room_name`. */
+/**
+ * One mark on a case's consultation trail. NEVER `join_url` / `daily_room_name` — it carries
+ * `roomReady`, a boolean from the pinned SQL twin, instead.
+ */
 export interface CasesIndexTrailMeeting {
   readonly meetingId: string;
   readonly scheduledStart: Date;
@@ -280,6 +285,9 @@ export interface CasesIndexTrailMeeting {
   readonly startedAt: Date | null;
   readonly status: MeetingStatus;
   readonly outcome: MeetingOutcome | null;
+  /** BAL-581 — the meeting's call room exists and is ours: `meetingVenueReadySql`, the pinned
+   *  SQL twin of `isMeetingVenueReady`. A readiness BOOLEAN, not a credential. */
+  readonly roomReady: boolean;
 }
 
 export interface CasesIndexProductTag {
@@ -337,8 +345,9 @@ function countDistinctInt(column: SQLWrapper, filter: SQL): SQL<number> {
 }
 
 /**
- * A HELD consultation: the meeting ran and completed. `cancelled`, `no_show_client` and
- * `missed_call` are all excluded, and so is an `ended` meeting whose `outcome` is still NULL.
+ * A HELD consultation: the meeting ran and completed. `cancelled`, `no_show_client`,
+ * `missed_call` and `venue_unavailable` are all excluded, and so is an `ended` meeting whose
+ * `outcome` is still NULL.
  */
 function heldMeetingFilter(): SQL {
   return sql`${eq(meetings.status, 'ended')} and ${eq(meetings.outcome, 'completed')}`;
@@ -822,6 +831,7 @@ export const casesIndexRepository = {
         startedAt: meetings.startedAt,
         status: meetings.status,
         outcome: meetings.outcome,
+        roomReady: sql<boolean>`${meetingVenueReadySql}`,
       })
       .from(meetingContexts)
       .innerJoin(
@@ -857,6 +867,7 @@ export const casesIndexRepository = {
         startedAt: row.startedAt,
         status: row.status,
         outcome: row.outcome,
+        roomReady: row.roomReady,
       })
     );
   },

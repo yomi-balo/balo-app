@@ -22,6 +22,11 @@ import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { NOBODY_JOINED_LABEL, NOBODY_JOINED_NOTE } from '@/lib/meetings/nobody-joined-copy';
+import { ROOM_SETTING_UP_ROW_LABEL } from '@/lib/meetings/room-setting-up-copy';
+import {
+  VENUE_UNAVAILABLE_LABEL,
+  VENUE_UNAVAILABLE_NOTE,
+} from '@/lib/meetings/venue-unavailable-copy';
 import type {
   CaseConsultationRowView,
   CaseConsultationStateLabel,
@@ -142,13 +147,21 @@ const TONE_VARIANT: Readonly<
  * the wronged party that the call failed without saying who failed to show, which is the
  * single most load-bearing fact in the row.
  *
- * ⚠ `nobody_joined` IS THE ONE NOT-HELD STATE WITH NO WRONGED PARTY — the expert never joined
- * AND nobody client-side did. It takes the `muted` tone `cancelled` and `outcome_pending` use,
- * never `warning`: there is no absence to flag to either reader.
+ * ⚠ `nobody_joined` IS A NOT-HELD STATE WITH NO WRONGED PARTY — the expert never joined AND
+ * nobody client-side did either, so there is no one to blame for an absence. It takes the
+ * `muted` tone `cancelled` and `outcome_pending` use, never `warning`: there is no absence to
+ * flag to either reader. (`venue_unavailable`, below, is the other no-wronged-party state — for
+ * the opposite reason: BOTH sides tried, and Balo's own room wasn't ready for either of them.)
  *
  * ⚠ `outcome_pending` IS REPRESENTABLE, NOT IMPOSSIBLE. `meeting_outcome_requires_ended` is
  * one-directional, so `ended` with a NULL outcome is legal. It renders neutrally rather than
  * being silently folded into `held`, which would misreport an unrecorded call as delivered.
+ *
+ * ⚠ `venue_unavailable` (BAL-581) is BALO'S FAILURE, never a party's — the call room was never
+ * ready, so nobody could join. Lens-neutral (both lenses read the identical presentation), and
+ * `muted`/`nobody_joined`'s tone — never `warning` — because there is no absent PARTY to flag.
+ * No money prose belongs here either: what a `venue_unavailable` consultation settles to (always
+ * nothing) is the recap's not-held panel's to state, never this row's.
  */
 const STATE_PRESENTATION: Readonly<
   Record<CaseConsultationStateLabel, { icon: LucideIcon; muted: boolean; tone: StateTone }>
@@ -162,6 +175,7 @@ const STATE_PRESENTATION: Readonly<
   no_show_client: { icon: CircleSlash, muted: true, tone: 'warning' },
   missed_call: { icon: CircleSlash, muted: true, tone: 'warning' },
   nobody_joined: { icon: CircleSlash, muted: true, tone: 'muted' },
+  venue_unavailable: { icon: CircleSlash, muted: true, tone: 'muted' },
   cancelled: { icon: CircleSlash, muted: true, tone: 'muted' },
   outcome_pending: { icon: CircleSlash, muted: true, tone: 'muted' },
 };
@@ -192,17 +206,23 @@ const FORWARD_LOOKING: ReadonlySet<CaseConsultationStateLabel> = new Set([
  *
  * ⚠ `nobody_joined` is NOT lens-aware: neither side joined, so there is no "other party" to
  * name, and both lenses read the same words the recap's not-held panel uses.
+ *
+ * ⚠ `venue_unavailable` (BAL-581) is likewise lens-neutral and names nobody — Balo's own
+ * failure, not a party's absence. And a `scheduled` row INSIDE the join window (`live`) no
+ * longer promises "Starting soon" when the call room itself isn't ready yet — it says so.
  */
 /** `pending_reschedule` deliberately keeps its own pill inside the join window too — its
  *  Cancel-only state there is a different reason than the join window. */
 function stateLabel(
   state: CaseConsultationStateLabel,
   lens: 'client' | 'expert',
-  live: boolean
+  live: boolean,
+  roomReady: boolean
 ): string {
   switch (state) {
     case 'scheduled':
-      return live ? 'Starting soon' : 'Upcoming';
+      if (!live) return 'Upcoming';
+      return roomReady ? 'Starting soon' : ROOM_SETTING_UP_ROW_LABEL;
     case 'pending_reschedule':
       return 'New times proposed';
     case 'in_progress':
@@ -217,6 +237,8 @@ function stateLabel(
       return lens === 'expert' ? "Didn't start" : "Expert didn't join";
     case 'nobody_joined':
       return NOBODY_JOINED_LABEL;
+    case 'venue_unavailable':
+      return VENUE_UNAVAILABLE_LABEL;
     case 'cancelled':
       return 'Cancelled';
     case 'outcome_pending':
@@ -224,7 +246,12 @@ function stateLabel(
   }
 }
 
-/** The one line under the date. `null` ⇒ the row's indicators speak for it (the `held` case). */
+/**
+ * The one line under the date. `null` ⇒ the row's indicators speak for it (the `held` case).
+ *
+ * ⚠ `venue_unavailable` (BAL-581) reads identically on both lenses — Balo's own failure, lens-
+ * neutral, and no money prose (the recap's money block states the settlement, never this note).
+ */
 function stateNote(
   state: CaseConsultationStateLabel,
   lens: 'client' | 'expert',
@@ -268,6 +295,8 @@ function stateNote(
       // Neither side joined: one neutral sentence for both lenses that names nobody — no
       // counterparty, no second person — and, like `missed_call`, no money prose.
       return NOBODY_JOINED_NOTE;
+    case 'venue_unavailable':
+      return VENUE_UNAVAILABLE_NOTE;
     case 'outcome_pending':
       return 'Outcome not recorded';
     default:
@@ -348,16 +377,17 @@ function ConsultationRow({
           {/* ⚠ Colour on the pill, not the row: shading whole rows turns the card into a stripe
               of tinted blocks and makes the row needing attention compete with its background. */}
           <Badge variant={TONE_VARIANT[tone]} className="text-[11px]">
-            {stateLabel(row.state, lens, row.live)}
+            {stateLabel(row.state, lens, row.live, row.roomReady)}
           </Badge>
         </div>
 
         {/* ⚠ THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'`. `recapHrefOf` emits a
             href for every terminal OUTCOME (no_show_client, missed_call, nobody_joined,
-            outcome_pending), so the not-held panel it lands on (`resolveNotHeld`) is
-            reachable — but not for `cancelled`, whose recap has no money block or artifacts
-            to show. CONTENT INDICATORS below still gate on `held`: a transcript or file count
-            on a call that never happened would promise artefacts that cannot exist. */}
+            venue_unavailable, outcome_pending), so the not-held panel it lands on
+            (`resolveNotHeld`) is reachable — but not for `cancelled`, whose recap has no money
+            block or artifacts to show. CONTENT INDICATORS below still gate on `held`: a
+            transcript or file count on a call that never happened would promise artefacts that
+            cannot exist. */}
         {(row.recapHref !== null || row.state === 'held') && (
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             {row.recapHref !== null && (

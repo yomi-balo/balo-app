@@ -321,6 +321,40 @@ describe('resolveNotHeld', () => {
     }
   );
 
+  // ── venue_unavailable — a STORED outcome that must win over the DERIVED nobody_joined on
+  // BOTH lenses and for every clientSideEverPresent value (BAL-581). ─────────────────────────
+  it.each(['client', 'expert'] as const)(
+    'venue_unavailable on the %s lens names nobody and carries the shared copy',
+    (lens) => {
+      const out = resolveNotHeld({
+        status: 'ended',
+        outcome: 'venue_unavailable',
+        lens,
+        ...base,
+      });
+      expect(out).toEqual({
+        reason: 'venue_unavailable',
+        headline: "This one didn't go ahead",
+        body: "Our call room wasn't ready in time, so this call couldn't go ahead. That's on us, not on anyone who was booked — sorry.",
+      });
+    }
+  );
+
+  it.each([true, false, null] as const)(
+    'venue_unavailable wins over the derived nobody_joined regardless of clientSideEverPresent=%s',
+    (clientSideEverPresent) => {
+      const out = resolveNotHeld({
+        status: 'ended',
+        outcome: 'venue_unavailable',
+        lens: 'client',
+        ...base,
+        clientSideEverPresent,
+      });
+      expect(out?.reason).toBe('venue_unavailable');
+      expect(out?.reason).not.toBe('nobody_joined');
+    }
+  );
+
   it('presence is consulted on missed_call ONLY — a no-show body ignores it', () => {
     const out = resolveNotHeld({
       status: 'ended',
@@ -361,7 +395,9 @@ describe('resolveNotHeld', () => {
 });
 
 describe('resolveRecapState — all six values', () => {
-  const notHeld = (reason: 'no_show_client' | 'nobody_joined' | 'cancelled') => ({
+  const notHeld = (
+    reason: 'no_show_client' | 'nobody_joined' | 'cancelled' | 'venue_unavailable'
+  ) => ({
     reason,
     headline: 'h',
     body: 'b',
@@ -382,6 +418,12 @@ describe('resolveRecapState — all six values', () => {
   it('not_held for a nobody-joined meeting too — the reason is its own dimension', () => {
     expect(
       resolveRecapState({ notHeld: notHeld('nobody_joined'), artifacts: READY_ARTIFACTS })
+    ).toBe('not_held');
+  });
+
+  it('not_held for a venue_unavailable meeting too — the reason is its own dimension', () => {
+    expect(
+      resolveRecapState({ notHeld: notHeld('venue_unavailable'), artifacts: READY_ARTIFACTS })
     ).toBe('not_held');
   });
 

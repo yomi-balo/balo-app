@@ -49,6 +49,7 @@ function meeting(overrides: Partial<CalendarMeetingView>): CalendarMeetingView {
     href: '/cases/e1',
     joinUrl: '/meetings/m-1/call',
     counterpartyCompanyName: 'Northwind',
+    roomReady: true,
     ...overrides,
   };
 }
@@ -279,6 +280,28 @@ describe('AgendaList — the overrun grace and terminal-status gate (BAL-513 C2)
     );
 
     expect(screen.queryByTestId('calendar-join')).not.toBeInTheDocument();
+  });
+
+  it('BAL-581 — shows the setting-up slot instead of Join or the chevron when the room is not ready', () => {
+    render(
+      <AgendaList
+        meetings={[
+          meeting({
+            meetingId: 'not-ready-1',
+            scheduledStart: '2026-08-24T00:10:00.000Z',
+            scheduledEnd: '2026-08-24T00:40:00.000Z',
+            counterpartyCompanyName: 'Pending Co',
+            roomReady: false,
+          }),
+        ]}
+        timezone="Australia/Sydney"
+        now={AL_NOW}
+        onJoinClick={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId('calendar-join')).not.toBeInTheDocument();
+    expect(screen.getByText('Setting up room')).toBeInTheDocument();
   });
 
   it('hides Join for a terminal status and falls back to the chevron (AC4)', () => {

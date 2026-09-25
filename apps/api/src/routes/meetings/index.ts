@@ -41,14 +41,16 @@
  *
  * ⚠ It does NOT follow that a match makes no outbound vendor call — an earlier version of this
  * docblock claimed "no room" and that was FALSE. `replayByIdempotencyKey` calls
- * `provisionMeeting`, which short-circuits only when BOTH venue columns are already stamped
- * (`provision-meeting.ts:279-285`); otherwise it runs `provisionVenue` and issues a live
- * `createRoom` to Daily. So a match against a meeting that committed with `provisioned: false`
- * — a state this feature ships a UI branch for — DOES hit the vendor, with the per-pair limit
- * deliberately skipped. That is still bounded and safe: the tenancy gate ran first so it is
- * never cross-tenant, the room name is deterministic so rooms cannot proliferate, and the
- * per-USER limit (30/h) still applies. It is the idempotent venue REPAIR, not a new booking.
- * Do not extend this skip to anything that is not provably repair-only.
+ * `provisionMeeting`, which short-circuits only when the venue is READY per `isMeetingVenueReady`
+ * (both columns non-null AND the stamped name matches the derived one); otherwise it runs
+ * `provisionVenue` and issues a live `createRoom` to Daily. So a match against a meeting that
+ * committed with `provisioned: false` — a state this feature ships a UI branch for — DOES hit
+ * the vendor, with the per-pair limit deliberately skipped. That is still bounded and safe: the
+ * tenancy gate ran first so it is never cross-tenant, the room name is deterministic so rooms
+ * cannot proliferate, and the per-USER limit (30/h) still applies. It is the idempotent venue
+ * REPAIR, not a new booking. Do not extend this skip to anything that is not provably
+ * repair-only. A missing room is otherwise healed by the venue repair job
+ * (`jobs/meeting-venue-repair.ts`, BAL-581), not by extending this replay skip further.
  *
  * The cheap, leak-free checks run first on purpose: a malformed window must not cost a
  * database round-trip, and a 400 that leaks nothing is a better answer to a probe than a 404
@@ -315,10 +317,12 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
       const result = await bookAndProvisionMeeting(input, request.log);
 
       // ⚠ 201 EVEN WHEN `provisioned` IS FALSE. The booking committed and the slot is
-      // blocked; the join url is a MISSING ARTEFACT, not a failure. BAL-400's UI must branch
-      // on `provisioned` and render "we're setting up your call room" rather than a dead
-      // join button. Returning `joinUrl` to the gated actor who just booked is safe precisely
-      // because rooms are `privacy: 'private'` — the URL alone admits nobody (D8).
+      // blocked; the join url is a MISSING ARTEFACT, not a failure. `provisioned: false` renders
+      // StepBooked's "isn't ready yet" copy; every Join surface reads venue readiness
+      // (`isMeetingVenueReady`, or its pinned SQL twin on list reads) and shows "Setting up your
+      // call room" until the venue repair job (BAL-581) lands the venue. Returning `joinUrl` to
+      // the gated actor who just booked is safe precisely because rooms are `privacy: 'private'`
+      // — the URL alone admits nobody (D8).
       reply.code(201).send({
         meetingId: result.meeting.id,
         scheduledStart: result.meeting.scheduledStart.toISOString(),

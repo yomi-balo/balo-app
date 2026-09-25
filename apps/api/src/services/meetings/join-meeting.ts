@@ -77,6 +77,7 @@ import {
   canonicalGuestEmail,
   dailyParticipantIdFor,
   dailyRoomNameForMeeting,
+  isMeetingVenueReady,
   selectPrimaryMeetingContext,
   type JoinGrant,
   type MemberJoinContext,
@@ -232,11 +233,13 @@ function deny(
 }
 
 /**
- * The meeting's VENUE, or a failure. ⚠ REQUIRES **BOTH** COLUMNS.
+ * The meeting's VENUE, or a failure.
  *
- * `rooms.ts` argues a half-stamped row is unproducible through its seam, and it is right —
- * but this route must not assume it, because a `provisioned: false` meeting (a real `201`
- * outcome of `POST /meetings` when Daily was down) has BOTH columns null and is
+ * BAL-581 (D1) — adopts `isMeetingVenueReady` (`@balo/shared/meetings`) as the ready check:
+ * both columns non-null AND the stamped name equals `dailyRoomNameForMeeting(id)`. `rooms.ts`
+ * argues a half-stamped row (one column null) is unproducible through its seam, and it is
+ * right — but this route must not assume it, because a `provisioned: false` meeting (a real
+ * `201` outcome of `POST /meetings` when Daily was down) has BOTH columns null and is
  * indistinguishable here from a hypothetical half-stamped one.
  *
  * ⚠ AND IT VERIFIES THE STAMPED NAME AGAINST THE DERIVED ONE. The name is a pure function of
@@ -252,6 +255,10 @@ function resolveVenue(meeting: {
 }):
   | { readonly ok: true; readonly roomUrl: string; readonly roomName: string }
   | { readonly ok: false } {
+  if (isMeetingVenueReady(meeting)) {
+    return { ok: true, roomUrl: meeting.joinUrl, roomName: meeting.dailyRoomName };
+  }
+
   const { joinUrl, dailyRoomName } = meeting;
   if (joinUrl === null || dailyRoomName === null) {
     log.warn(
@@ -261,18 +268,17 @@ function resolveVenue(meeting: {
     return { ok: false };
   }
 
-  const expected = dailyRoomNameForMeeting(meeting.id);
-  if (dailyRoomName !== expected) {
-    // ⚠ `error`, not `warn`: this is a data anomaly, not a user mistake. Both values are
-    // meeting-derived and neither is a secret.
-    log.error(
-      { meetingId: meeting.id, expected, stamped: dailyRoomName },
-      'Stamped Daily room name disagrees with the derived one — refusing to mint'
-    );
-    return { ok: false };
-  }
-
-  return { ok: true, roomUrl: joinUrl, roomName: dailyRoomName };
+  // ⚠ `error`, not `warn`: this is a data anomaly, not a user mistake. Both values are
+  // meeting-derived and neither is a secret.
+  log.error(
+    {
+      meetingId: meeting.id,
+      expected: dailyRoomNameForMeeting(meeting.id),
+      stamped: dailyRoomName,
+    },
+    'Stamped Daily room name disagrees with the derived one — refusing to mint'
+  );
+  return { ok: false };
 }
 
 /**
@@ -407,8 +413,8 @@ const SESSION_OPEN_REFUSED_MESSAGES: Record<SessionOpenRefusedReason, string> = 
  * happened by the time this runs. A lookup failure degrades to `null` rather than throwing,
  * because an alarm about a refusal must never itself risk failing the join.
  *
- * ⚠ SENTRY: mirrors this repo's one existing direct `Sentry.captureException` call
- * (`apps/api/src/app.ts`'s global Fastify error handler) — a plain SDK import and call, no new
+ * ⚠ SENTRY: one of several direct `Sentry.captureException` calls (see also
+ * `provision-meeting.ts`, `publish-calendar-invites.ts`) — a plain SDK import and call, no new
  * wrapper. This is a caught, non-throwing condition, so the error is constructed here solely to
  * carry a message and stack into Sentry's grouping.
  */
@@ -733,8 +739,9 @@ export async function joinMeetingAsMember(
   }
 
   // 3. THE VENUE. A `provisioned: false` meeting is a real `201` outcome of `POST /meetings`.
-  //    ⚠ THIS ROUTE DOES NOT PROVISION ON DEMAND — `provisionMeeting` is BAL-129's
-  //    booking-time writer, and a second writer on `setVenue` here would be scope creep.
+  //    ⚠ THIS ROUTE DOES NOT PROVISION ON DEMAND — a missing room is healed by
+  //    `jobs/meeting-venue-repair.ts` (BAL-581), never by the join path: a polled route must
+  //    not become a Daily writer.
   const venue = resolveVenue(meeting);
   if (!venue.ok) {
     return deny('meeting_not_provisioned', 'no_venue', { meetingId, userId });

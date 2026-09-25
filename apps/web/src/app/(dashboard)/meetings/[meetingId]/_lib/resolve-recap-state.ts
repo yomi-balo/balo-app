@@ -8,6 +8,7 @@ import type {
   SessionMoneyBlock,
 } from '@/lib/meetings/recap-view-types';
 import { NOBODY_JOINED_NOTE } from '@/lib/meetings/nobody-joined-copy';
+import { VENUE_UNAVAILABLE_RECAP_BODY } from '@/lib/meetings/venue-unavailable-copy';
 
 /**
  * BAL-388 — the recap's PURE state machine: outcome (§R11), artefacts (§R5 / §R7), Rule M
@@ -170,6 +171,10 @@ const NOT_HELD_HEADLINE = "This one didn't go ahead";
  * delivering expert never joined; when presence shows no client side either, nobody waited and
  * nobody was let down, so both lenses read the same neutral {@link NOBODY_JOINED_NOTE}.
  *
+ * ⚠ `venue_unavailable` NAMES NOBODY EITHER, on both lenses — the call room was never ready, so
+ * nobody could join, and that is Balo's failure rather than either party's. It is a STORED
+ * outcome checked ahead of `missed_call`, so it always wins over the derived `nobody_joined`.
+ *
  * ⚠ NO MONEY PROSE HERE. The design reference's "you were not charged. The no-show policy
  * applied." is DELETED, not reworded — Rule M's one line replaces it, and there is no
  * no-show-policy page to link to.
@@ -197,6 +202,18 @@ export function resolveNotHeld(input: NotHeldInput): RecapNotHeldView | null {
         lens === 'client'
           ? expertPersonLabel + ' joined and waited.'
           : 'No one from ' + clientCompanyName + ' joined.',
+    };
+  }
+
+  if (outcome === 'venue_unavailable') {
+    // BAL-581 — the call room was never ready: Balo's failure, so the body names nobody on
+    // either lens and carries no money prose (the money block states the zero). Checked BEFORE
+    // `missed_call` so a STORED `venue_unavailable` always wins over PR #335's `nobody_joined`,
+    // which is only ever derived from `missed_call`.
+    return {
+      reason: 'venue_unavailable',
+      headline: NOT_HELD_HEADLINE,
+      body: VENUE_UNAVAILABLE_RECAP_BODY,
     };
   }
 

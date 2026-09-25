@@ -109,7 +109,7 @@ export const meetings = pgTable(
      * BAL-134 / ADR-1049 — WHO ended it, on the axis ORTHOGONAL to `outcome`'s WHY. NULL
      * unless `status='ended'` (CHECK `meeting_ended_by_requires_ended`, one-directional for
      * the same reason `meeting_outcome_requires_ended` is). See `meetingEndedByEnum` for the
-     * three labels and why all four SYSTEM paths share `system_idle`.
+     * three labels and why all five SYSTEM paths share `system_idle`.
      *
      * ⚠ NO DEFAULT, DELIBERATELY. A default would have to name a `meeting_ended_by` label in
      * the same migration that creates the type — safe here (a standalone `CREATE TYPE`
@@ -128,6 +128,21 @@ export const meetings = pgTable(
     // BAL-129 provisions these (via `meetingsRepository.setVenue`).
     dailyRoomName: text('daily_room_name'),
     joinUrl: text('join_url'),
+    /**
+     * BAL-581 — WHEN the call room became usable: written by `setVenue` on EVERY stamp (last write
+     * wins — a re-stamp after a mismatch heal moves it, because that is when the correct room became
+     * available). NULL while no venue has been stamped THROUGH `setVenue` — ⚠ `create()`'s inline
+     * `dailyRoomName`/`joinUrl` path (seeder/tests) is a second venue writer that leaves it NULL.
+     *
+     * ⚠ The lifecycle rules read it through `meetingVenueReadyAt` (`@balo/shared/meetings`), which
+     * returns it ONLY while the venue is ready and falls back to `created_at` for a ready row whose
+     * stamp is NULL (an older build's `setVenue` during a rolling deploy, or `create()`'s inline venue —
+     * a creation-time stamp either way). That fallback is why there is deliberately NO CHECK tying this
+     * column to `daily_room_name`.
+     * ⚠ It passes `invariants/meetings-no-context-column.test.ts`: a timestamp, no `_id` suffix, no FK.
+     * No index: it is only ever read off a row already selected by id or by the status/start index.
+     */
+    venueProvisionedAt: timestamp('venue_provisioned_at', { withTimezone: true }),
 
     /**
      * BAL-400 — the BOOKING-LEVEL idempotency key, spanning BOTH hops of a client booking

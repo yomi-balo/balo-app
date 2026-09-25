@@ -24,6 +24,7 @@ function makeRow(over: Partial<CaseConsultationRowView> = {}): CaseConsultationR
     guestCount: 0,
     scheduledMinutes: 30,
     live: false,
+    roomReady: false,
     ...over,
   };
 }

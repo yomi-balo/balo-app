@@ -21,6 +21,7 @@
  * (memory `reference_hardcoded_date_fixtures_are_time_bombs`).
  */
 import { describe, it, expect, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import {
   actorHasExpertSideVisibility,
@@ -30,7 +31,11 @@ import {
   type AgencyRoleLookup,
   type CompanyRoleLookup,
 } from '@balo/shared/authz';
-import { MEETING_CLOSED_TO_JOIN } from '@balo/shared/meetings';
+import {
+  dailyRoomNameForMeeting,
+  isMeetingVenueReady,
+  MEETING_CLOSED_TO_JOIN,
+} from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   caseEngagementProducts,
@@ -45,6 +50,7 @@ import {
   meetingStatusEnum,
   products,
   users,
+  type MeetingOutcome,
 } from '../schema';
 import {
   actionItemFactory,
@@ -126,7 +132,7 @@ async function seedCaseMeeting(
     scheduledStart: Date;
     scheduledEnd?: Date;
     status?: 'scheduled' | 'waiting_for_participants' | 'in_progress' | 'ended' | 'cancelled';
-    outcome?: 'completed' | 'no_show_client' | 'missed_call';
+    outcome?: MeetingOutcome;
     startedAt?: Date;
   }
 ): Promise<string> {
@@ -874,6 +880,12 @@ describe('casesIndexRepository.listResolvedCases', () => {
       status: 'ended',
       outcome: 'missed_call',
     });
+    // The call room was never ready — nothing was held.
+    await seedCaseMeeting(id, {
+      scheduledStart: new Date(now - 5 * DAY_MS),
+      status: 'ended',
+      outcome: 'venue_unavailable',
+    });
     // `ended` with a NULL outcome, and a `cancelled` one — neither is held.
     await seedCaseMeeting(id, { scheduledStart: new Date(now - 6 * DAY_MS), status: 'ended' });
     await seedCaseMeeting(id, { scheduledStart: new Date(now + DAY_MS), status: 'cancelled' });
@@ -945,10 +957,61 @@ describe('casesIndexRepository.listCaseTrailMeetings', () => {
 
     const [firstRow] = trail.get(a) ?? [];
     if (firstRow === undefined) throw new Error('expected a trail row');
-    expect(Object.keys(firstRow).sort()).toEqual(
-      ['meetingId', 'scheduledStart', 'scheduledEnd', 'startedAt', 'status', 'outcome'].sort()
+    // `roomReady` is the SQL twin's readiness BOOLEAN, not a credential: the trail still selects
+    // neither `join_url` nor `daily_room_name`.
+    expect(Object.keys(firstRow).sort((a, b) => a.localeCompare(b))).toEqual(
+      [
+        'meetingId',
+        'scheduledStart',
+        'scheduledEnd',
+        'startedAt',
+        'status',
+        'outcome',
+        'roomReady',
+      ].sort((a, b) => a.localeCompare(b))
     );
-    expect(Object.keys(firstRow)).toHaveLength(6);
+    expect(Object.keys(firstRow)).toHaveLength(7);
+  });
+
+  it('roomReady agrees with isMeetingVenueReady for a ready, a null and a mismatched room, and no credential key rides along', async () => {
+    const company = await companyFactory();
+    const expert = await expertFactory();
+    const now = Date.now();
+    const engagementId = await seedCase({ companyId: company.id, expertProfileId: expert.id });
+
+    const readyId = randomUUID();
+    const readyRoom = dailyRoomNameForMeeting(readyId);
+    const mismatchedRoom = `balo-${randomUUID().replaceAll('-', '')}`;
+    const venues: Array<{ id?: string; dailyRoomName: string | null; joinUrl: string | null }> = [
+      { id: readyId, dailyRoomName: readyRoom, joinUrl: `https://balo.daily.co/${readyRoom}` },
+      { dailyRoomName: null, joinUrl: null },
+      { dailyRoomName: mismatchedRoom, joinUrl: `https://balo.daily.co/${mismatchedRoom}` },
+    ];
+    const expected: Array<[string, boolean]> = [];
+    for (const [index, venue] of venues.entries()) {
+      const scheduledStart = new Date(now + (index + 1) * DAY_MS);
+      const { meeting } = await meetingFactory({
+        contexts: [{ contextType: 'case', contextId: engagementId }],
+        values: {
+          ...venue,
+          scheduledStart,
+          scheduledEnd: new Date(scheduledStart.getTime() + HOUR_MS),
+        },
+      });
+      expected.push([meeting.id, isMeetingVenueReady(meeting)]);
+    }
+    expect(expected.map(([, ready]) => ready)).toEqual([true, false, false]);
+
+    const trail = (await casesIndexRepository.listCaseTrailMeetings([engagementId])).get(
+      engagementId
+    );
+
+    expect(trail).toHaveLength(3);
+    expect(trail?.map((row) => [row.meetingId, row.roomReady])).toEqual(expected);
+    for (const row of trail ?? []) {
+      expect(Object.keys(row)).not.toContain('dailyRoomName');
+      expect(Object.keys(row)).not.toContain('joinUrl');
+    }
   });
 
   it('[] in ⇒ empty Map with NO QUERY', async () => {

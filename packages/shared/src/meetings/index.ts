@@ -63,6 +63,11 @@
 export * from './bookable-contexts';
 export * from './bounds';
 export * from './room-name';
+// BAL-581 — venue readiness's ONE definition (`isMeetingVenueReady`, `meetingVenueReadyAt`) and
+// the provisioning `trigger` tuple, beside `room-name` for the same reason: the repair job, the
+// lifecycle sweep and the absence recheck (apps/api), `load-case.ts` (apps/web) and
+// `@balo/analytics` must all reach ONE predicate without value-importing `@balo/db`.
+export * from './venue';
 // BAL-132 — the Daily `user_id` claim's encoding, beside `room-name` and for the SAME
 // reason: this ticket's token minter WRITES it, BAL-131's webhook resolver READS it, and
 // BAL-134's presence writer ROUTES on it (`user_id` vs `meeting_guest_id`). Two apps, three
@@ -88,7 +93,7 @@ export * from './self-declared-name';
 // BAL-134 — the five lifecycle timers as typed defaults. ⚠ NO `process.env` in there: this
 // subpath is client-reachable, and the env-override reader lives in `apps/api` alone (D8).
 export * from './timers';
-// BAL-134 / ADR-1049 — the lifecycle's pure core: the legal-edge map, the four SYSTEM terminal
+// BAL-134 / ADR-1049 — the lifecycle's pure core: the legal-edge map, the five SYSTEM terminal
 // rules and their disjointness, and the SERVER-computed waiting phase. Reads no clock.
 export * from './lifecycle';
 // BAL-134 (D3) — `canEndMeeting`, the SIXTH `JoinGrant` field. ⚠ Read that module's first

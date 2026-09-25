@@ -172,7 +172,7 @@ export function joinCountdownLabel(
   return days === 1 ? 'Join tomorrow' : `Join in ${days} days`;
 }
 
-/** The three `now`-derived inputs a rendered meeting needs, as ONE composition of the primitives
+/** The four `now`-derived inputs a rendered meeting needs, as ONE composition of the primitives
  *  above — computed by the PARENT so `MeetingBlock` can take primitives and be `React.memo`'d
  *  (BAL-511 D1).
  *
@@ -192,22 +192,35 @@ export function joinCountdownLabel(
  *  at `scheduledEnd`; with Join now living 30 minutes past it, the naive change would have produced a
  *  60%-opacity "past" card carrying a live, ping-ringing Join button. Instead a meeting greys the
  *  moment its STATUS says it is over, or when the grace elapses — never while it is still joinable.
- *  The two are exactly complementary after the window opens and are never both `true`; a test pins it.
+ *
+ *  ⚠⚠ BAL-581 — `roomReady` IS A REQUIRED 5th PARAMETER, so every call site decides rather
+ *  than silently defaulting. The invariant it amends: AFTER THE WINDOW OPENS, EXACTLY ONE OF
+ *  `isPast`, `joinVisible`, `roomSettingUp` IS TRUE — a meeting is never greyed while its
+ *  "setting up" slot shows, and `JoinMeetingButton` still renders only inside the join window with
+ *  a ready room. `roomSettingUp` is true only while the window is open and the room is not ready;
+ *  it is never true alongside `joinVisible`, and it is always false once the window has closed
+ *  (that instant belongs to `isPast`, not to "still setting up"). A test pins it.
  */
 export function calendarMeetingTiming(
   now: Date,
   scheduledStart: Date,
   scheduledEnd: Date,
-  status: MeetingLifecycleStatus
+  status: MeetingLifecycleStatus,
+  /** `isMeetingVenueReady`, computed server-side. REQUIRED so every call site decides. */
+  roomReady: boolean
 ): {
   readonly isPast: boolean;
   readonly joinVisible: boolean;
+  /** Inside the join window with no ready call room — render `RoomSettingUpSlot`, never Join. */
+  readonly roomSettingUp: boolean;
   readonly joinTimingLabel: string | null;
 } {
-  const joinVisible = calendarJoinAffordanceVisible(now, scheduledStart, scheduledEnd, status);
+  const windowOpen = calendarJoinAffordanceVisible(now, scheduledStart, scheduledEnd, status);
+  const joinVisible = windowOpen && roomReady;
   return {
     isPast: meetingIsClosedToJoin(status) || now.getTime() >= joinWindowClosesAtMs(scheduledEnd),
     joinVisible,
+    roomSettingUp: windowOpen && !roomReady,
     joinTimingLabel: joinVisible ? joinAffordanceTimingLabel(now, scheduledStart) : null,
   };
 }

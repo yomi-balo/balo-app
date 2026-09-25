@@ -141,6 +141,10 @@ export interface CasesIndexCardView {
    * scans this route for the `href={…joinPath…}` shape.
    */
   readonly joinPath: string | null;
+  /** BAL-581 — whether `nextBooking`'s call room is ready (the repository's SQL twin of
+   *  `isMeetingVenueReady`), `null` when there is none. Only the featured card reads it. A boolean
+   *  only — never the room name or join url. */
+  readonly nextBookingRoomReady: boolean | null;
 }
 
 export const CASES_INDEX_CARD_VIEW_KEYS = [
@@ -166,6 +170,7 @@ export const CASES_INDEX_CARD_VIEW_KEYS = [
   'actorLabel',
   'bookAgainHref',
   'joinPath',
+  'nextBookingRoomReady',
 ] as const satisfies readonly (keyof CasesIndexCardView)[];
 
 /** `resolved` (a client closed it) or `auto_inactive` (the sweep did). */

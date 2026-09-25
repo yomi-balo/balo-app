@@ -238,9 +238,15 @@ describe('calendarMeetingTiming', () => {
       minutesBeforeStart(20),
       SCHEDULED_START,
       SCHEDULED_END,
-      'scheduled'
+      'scheduled',
+      true
     );
-    expect(result).toEqual({ isPast: false, joinVisible: false, joinTimingLabel: null });
+    expect(result).toEqual({
+      isPast: false,
+      joinVisible: false,
+      roomSettingUp: false,
+      joinTimingLabel: null,
+    });
   });
 
   it('inside the window (5 min out): joinVisible true, labelled', () => {
@@ -248,7 +254,8 @@ describe('calendarMeetingTiming', () => {
       minutesBeforeStart(5),
       SCHEDULED_START,
       SCHEDULED_END,
-      'scheduled'
+      'scheduled',
+      true
     );
     expect(result.joinVisible).toBe(true);
     expect(result.joinTimingLabel).toBe('starting in 5 minutes');
@@ -257,7 +264,13 @@ describe('calendarMeetingTiming', () => {
 
   it('in progress (past start, before end): joinVisible true, "in progress", not past', () => {
     const midMeeting = new Date(SCHEDULED_START.getTime() + 10 * 60_000);
-    const result = calendarMeetingTiming(midMeeting, SCHEDULED_START, SCHEDULED_END, 'in_progress');
+    const result = calendarMeetingTiming(
+      midMeeting,
+      SCHEDULED_START,
+      SCHEDULED_END,
+      'in_progress',
+      true
+    );
     expect(result.joinVisible).toBe(true);
     expect(result.joinTimingLabel).toBe('in progress');
     expect(result.isPast).toBe(false);
@@ -268,9 +281,15 @@ describe('calendarMeetingTiming', () => {
       minutesAfterEnd(10),
       SCHEDULED_START,
       SCHEDULED_END,
-      'scheduled'
+      'scheduled',
+      true
     );
-    expect(result).toEqual({ isPast: false, joinVisible: true, joinTimingLabel: 'in progress' });
+    expect(result).toEqual({
+      isPast: false,
+      joinVisible: true,
+      roomSettingUp: false,
+      joinTimingLabel: 'in progress',
+    });
   });
 
   it('end + grace − 1 min: still joinable, not past (AC4)', () => {
@@ -278,7 +297,8 @@ describe('calendarMeetingTiming', () => {
       minutesAfterEnd(MEETING_OVERRUN_GRACE_MINUTES - 1),
       SCHEDULED_START,
       SCHEDULED_END,
-      'in_progress'
+      'in_progress',
+      true
     );
     expect(result.isPast).toBe(false);
     expect(result.joinVisible).toBe(true);
@@ -289,34 +309,111 @@ describe('calendarMeetingTiming', () => {
       minutesAfterEnd(MEETING_OVERRUN_GRACE_MINUTES),
       SCHEDULED_START,
       SCHEDULED_END,
-      'in_progress'
+      'in_progress',
+      true
     );
-    expect(result).toEqual({ isPast: true, joinVisible: false, joinTimingLabel: null });
+    expect(result).toEqual({
+      isPast: true,
+      joinVisible: false,
+      roomSettingUp: false,
+      joinTimingLabel: null,
+    });
   });
 
   it('end + 1h: past, not joinable', () => {
     const longAfter = minutesAfterEnd(60);
-    const result = calendarMeetingTiming(longAfter, SCHEDULED_START, SCHEDULED_END, 'in_progress');
-    expect(result).toEqual({ isPast: true, joinVisible: false, joinTimingLabel: null });
+    const result = calendarMeetingTiming(
+      longAfter,
+      SCHEDULED_START,
+      SCHEDULED_END,
+      'in_progress',
+      true
+    );
+    expect(result).toEqual({
+      isPast: true,
+      joinVisible: false,
+      roomSettingUp: false,
+      joinTimingLabel: null,
+    });
   });
 
   it("mid-meeting but 'ended': terminal status wins over the clock", () => {
     const midMeeting = new Date(SCHEDULED_START.getTime() + 10 * 60_000);
-    const result = calendarMeetingTiming(midMeeting, SCHEDULED_START, SCHEDULED_END, 'ended');
-    expect(result).toEqual({ isPast: true, joinVisible: false, joinTimingLabel: null });
+    const result = calendarMeetingTiming(midMeeting, SCHEDULED_START, SCHEDULED_END, 'ended', true);
+    expect(result).toEqual({
+      isPast: true,
+      joinVisible: false,
+      roomSettingUp: false,
+      joinTimingLabel: null,
+    });
   });
 
   it('the non-tick pin: a meeting 3 hours out carries a null label at now AND at now + 60s', () => {
     const threeHoursOut = new Date(SCHEDULED_START.getTime() - 3 * 60 * 60_000);
     const oneTickLater = new Date(threeHoursOut.getTime() + 60_000);
     expect(
-      calendarMeetingTiming(threeHoursOut, SCHEDULED_START, SCHEDULED_END, 'scheduled')
+      calendarMeetingTiming(threeHoursOut, SCHEDULED_START, SCHEDULED_END, 'scheduled', true)
         .joinTimingLabel
     ).toBe(null);
     expect(
-      calendarMeetingTiming(oneTickLater, SCHEDULED_START, SCHEDULED_END, 'scheduled')
+      calendarMeetingTiming(oneTickLater, SCHEDULED_START, SCHEDULED_END, 'scheduled', true)
         .joinTimingLabel
     ).toBe(null);
+  });
+
+  /**
+   * BAL-581 — `roomReady: false` inside the window renders `RoomSettingUpSlot`, never Join, and
+   * never a label (which is meaningless with no Join to time).
+   */
+  describe('roomReady: false (BAL-581)', () => {
+    it('inside the window: no Join, roomSettingUp true, no label', () => {
+      const result = calendarMeetingTiming(
+        minutesBeforeStart(5),
+        SCHEDULED_START,
+        SCHEDULED_END,
+        'scheduled',
+        false
+      );
+      expect(result).toEqual({
+        isPast: false,
+        joinVisible: false,
+        roomSettingUp: true,
+        joinTimingLabel: null,
+      });
+    });
+
+    it('before the window: everything stays false, exactly as with a ready room', () => {
+      const result = calendarMeetingTiming(
+        minutesBeforeStart(20),
+        SCHEDULED_START,
+        SCHEDULED_END,
+        'scheduled',
+        false
+      );
+      expect(result).toEqual({
+        isPast: false,
+        joinVisible: false,
+        roomSettingUp: false,
+        joinTimingLabel: null,
+      });
+    });
+
+    it('a terminal status: isPast true, roomSettingUp false — the terminal state wins', () => {
+      const midMeeting = new Date(SCHEDULED_START.getTime() + 10 * 60_000);
+      const result = calendarMeetingTiming(
+        midMeeting,
+        SCHEDULED_START,
+        SCHEDULED_END,
+        'ended',
+        false
+      );
+      expect(result).toEqual({
+        isPast: true,
+        joinVisible: false,
+        roomSettingUp: false,
+        joinTimingLabel: null,
+      });
+    });
   });
 
   const INSTANTS: readonly { readonly label: string; readonly now: Date }[] = [
@@ -330,12 +427,53 @@ describe('calendarMeetingTiming', () => {
     { label: 'end+1h', now: minutesAfterEnd(60) },
   ];
 
+  /**
+   * BAL-581 — AFTER THE WINDOW OPENS, EXACTLY ONE of `isPast`, `joinVisible`, `roomSettingUp` is
+   * true. Instants strictly before the window opens (`T-20`) are excluded for a NON-terminal
+   * status — there every flag is legitimately false, which is not "exactly one". A terminal
+   * status is asserted on `isPast` alone, at every instant, since the window's own openness is
+   * irrelevant once the status is closed.
+   */
   it.each(
-    INSTANTS.flatMap(({ label, now }) => ALL_STATUSES.map((status) => ({ label, now, status })))
-  )('isPast and joinVisible are never both true — $label / $status', ({ now, status }) => {
-    const result = calendarMeetingTiming(now, SCHEDULED_START, SCHEDULED_END, status);
-    expect(result.isPast && result.joinVisible).toBe(false);
-  });
+    INSTANTS.flatMap(({ label, now }) =>
+      ALL_STATUSES.flatMap((status) => [
+        { label, now, status, roomReady: true },
+        { label, now, status, roomReady: false },
+      ])
+    )
+  )(
+    'the amended invariant holds — $label / $status / roomReady=$roomReady',
+    ({ now, status, roomReady }) => {
+      const result = calendarMeetingTiming(now, SCHEDULED_START, SCHEDULED_END, status, roomReady);
+
+      if (CLOSED_STATUSES.includes(status)) {
+        expect(result.isPast).toBe(true);
+        expect(result.joinVisible).toBe(false);
+        expect(result.roomSettingUp).toBe(false);
+        expect(result.joinTimingLabel).toBeNull();
+        return;
+      }
+
+      const windowOpen = calendarJoinAffordanceVisible(now, SCHEDULED_START, SCHEDULED_END, status);
+      if (!windowOpen && !result.isPast) {
+        // Pre-window: every flag is legitimately false — not the "exactly one" instant.
+        expect([result.isPast, result.joinVisible, result.roomSettingUp]).toEqual([
+          false,
+          false,
+          false,
+        ]);
+        expect(result.joinTimingLabel).toBeNull();
+        return;
+      }
+
+      expect(
+        [result.isPast, result.joinVisible, result.roomSettingUp].filter(Boolean)
+      ).toHaveLength(1);
+      if (!result.joinVisible) {
+        expect(result.joinTimingLabel).toBeNull();
+      }
+    }
+  );
 });
 
 describe('joinCountdownLabel', () => {

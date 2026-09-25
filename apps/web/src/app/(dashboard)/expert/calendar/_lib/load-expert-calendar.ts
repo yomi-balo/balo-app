@@ -133,6 +133,9 @@ export const loadExpertCalendar = cache(async function loadExpertCalendar(
     href: hrefForMeeting(meeting),
     joinUrl: memberCallPath(meeting.meetingId),
     counterpartyCompanyName: meeting.counterpartyCompanyName,
+    // BAL-581 — copied through from the repository's SQL-twin boolean; this read carries
+    // no join credential.
+    roomReady: meeting.roomReady,
   }));
 
   return {

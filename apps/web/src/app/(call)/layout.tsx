@@ -9,8 +9,10 @@
  * (no `TopNav`, no `Sidebar`, no checklist fetch, no `companiesRepository` read — a call surface
  * with app chrome around it looks like a widget, not a call). The gate itself is NOT optional:
  * `postMemberJoin` forwards `session.accessToken` as a Bearer to `apps/api`, so a DRIFTED session
- * carries a STALE access token, the member join 401s, and a perfectly valid participant is shown
- * "This meeting isn't available to join" at the moment they are trying to get into a paid call.
+ * carries a STALE access token. `checkSessionDrift()` in the page below normally catches this
+ * BEFORE the call ever renders and sends the drifted session to session-sync; if it does not (a
+ * race), the member join 401s and the member sees `MemberJoinNotice` for whatever reason the
+ * api's response maps to (BAL-581) — never the guest dead-link card.
  *
  * ⚠⚠ IT MOVED TO `meetings/[meetingId]/call/page.tsx` BECAUSE `returnTo` NEEDS THE `meetingId`,
  * AND A LAYOUT CANNOT SEE A CHILD SEGMENT'S PARAMS. The version that lived here read

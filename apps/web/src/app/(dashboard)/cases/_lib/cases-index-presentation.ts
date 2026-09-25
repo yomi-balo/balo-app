@@ -69,6 +69,10 @@ export const CASE_TAGS_SHOWN = { comfortable: 2, dense: 1 } as const;
  * stands until an option is accepted, so the consultation is still expected to happen — the
  * same reasoning `caseConsultationIsUpcoming` applies. The PROPOSAL is reported by the card's
  * state and band, which is where it can be read.
+ *
+ * `venue_unavailable` (BAL-581) draws as `missed`, for the same reason as `nobody_joined`:
+ * the word names nobody, so it is as true of a call whose room never provisioned as of one only
+ * the expert missed.
  */
 const TRAIL_MARK_BY_STATE: Readonly<Record<CaseConsultationStateLabel, CaseTrailMark>> = {
   held: 'held',
@@ -79,6 +83,7 @@ const TRAIL_MARK_BY_STATE: Readonly<Record<CaseConsultationStateLabel, CaseTrail
   no_show_client: 'missed',
   missed_call: 'missed',
   nobody_joined: 'missed',
+  venue_unavailable: 'missed',
   outcome_pending: 'unrecorded',
 };
 
@@ -141,14 +146,23 @@ export function resolveCaseCardState(
 // ── The featured ticket's timing ──────────────────────────────────────────────────────────────
 
 export interface FeaturedTiming {
-  /** `calendarJoinAffordanceVisible` — −15 min inclusive .. end + 30 min exclusive, non-terminal. */
+  /** `calendarJoinAffordanceVisible` (−15 min inclusive .. end + 30 min exclusive, non-terminal)
+   *  AND the call room is actually ready (`nextBookingRoomReady === true`). A window that is open
+   *  with a not-yet-ready room reports `roomSettingUp: true` instead, never `joinVisible`. */
   readonly joinVisible: boolean;
-  /** The pill's sentence: "Happening now" / "Starts in 9 mins" / `null` outside the window. */
+  /** The pill's sentence: "Happening now" / "Starts in 9 mins" / `null` outside the window, or
+   *  while the window is open but the room is not ready. */
   readonly statusText: string | null;
-  /** `joinAffordanceTimingLabel`'s aria suffix, or `null` outside the window. */
+  /** `joinAffordanceTimingLabel`'s aria suffix, or `null` outside the window, or while the window
+   *  is open but the room is not ready. */
   readonly timingLabel: string | null;
-  /** `'live'` inside the window, the card's own server-derived state outside it. */
+  /** `'live'` inside the window with a ready room, the card's own server-derived state everywhere
+   *  else — including a window that is open but whose room is still not ready. */
   readonly effectiveState: CasesIndexCardState;
+  /** The window is open but the call room is not ready. Render `RoomSettingUpSlot` instead of
+   *  Join; `false` outside the window even when the room is not ready — the featured card renders
+   *  nothing there, never the hint. Never `true` alongside `joinVisible`. */
+  readonly roomSettingUp: boolean;
 }
 
 /**
@@ -167,7 +181,12 @@ export interface FeaturedTiming {
 export function resolveFeaturedTiming(
   card: Pick<
     CasesIndexCardView,
-    'cardState' | 'nextBookingStartIso' | 'nextBookingEndIso' | 'nextBookingStatus' | 'joinPath'
+    | 'cardState'
+    | 'nextBookingStartIso'
+    | 'nextBookingEndIso'
+    | 'nextBookingStatus'
+    | 'joinPath'
+    | 'nextBookingRoomReady'
   >,
   now: Date
 ): FeaturedTiming {
@@ -180,23 +199,36 @@ export function resolveFeaturedTiming(
       statusText: null,
       timingLabel: null,
       effectiveState: card.cardState,
+      roomSettingUp: false,
     };
   }
 
   const scheduledStart = new Date(nextBookingStartIso);
   const scheduledEnd = new Date(nextBookingEndIso);
-  const joinVisible = calendarJoinAffordanceVisible(
+  const windowOpen = calendarJoinAffordanceVisible(
     now,
     scheduledStart,
     scheduledEnd,
     nextBookingStatus
   );
-  if (!joinVisible) {
+  if (!windowOpen) {
     return {
       joinVisible: false,
       statusText: null,
       timingLabel: null,
       effectiveState: card.cardState,
+      roomSettingUp: false,
+    };
+  }
+  // BAL-581 — the window is open but the call room is not ready: no Join, no green
+  // pill, and the server's own state stands (never promoted to `live`).
+  if (card.nextBookingRoomReady !== true) {
+    return {
+      joinVisible: false,
+      statusText: null,
+      timingLabel: null,
+      effectiveState: card.cardState,
+      roomSettingUp: true,
     };
   }
 
@@ -210,6 +242,7 @@ export function resolveFeaturedTiming(
     // ⚠ `live` REPLACES the server's `booked`, and ONLY that: a card whose server state is
     // `proposal` keeps it, because a live proposal is the more urgent thing to say.
     effectiveState: card.cardState === 'booked' ? 'live' : card.cardState,
+    roomSettingUp: false,
   };
 }
 

@@ -235,8 +235,10 @@ const CLIENT_ABSENT: Record<WaitingPhase, CopyBuilder> = {
 /**
  * THE CLIENT IS WAITING; the EXPERT is the absent party (BAL-412 / BAL-418's `missed_call`).
  *
- * ⚠ THE 5-MINUTE BALO ALERT IS OPERATIONAL AND HAS NO CUSTOMER-FACING UI beyond the `near`
- * sentence below. Do not surface "we've alerted the team" as a toast or a banner.
+ * The `near` phase and the ops alert are both measured from the venue absence anchor
+ * (`venueAbsenceAnchor`), so "We've flagged this to the Balo team" renders exactly when the
+ * alert fires — this remains operational, with no customer-facing UI beyond the `near` sentence
+ * below. Do not surface "we've alerted the team" as a toast or a banner.
  */
 const EXPERT_ABSENT: Record<WaitingPhase, CopyBuilder> = {
   // ⚠ R3 — VERBATIM. Do not reword, do not swap in the patch's "once you're both in" variant.

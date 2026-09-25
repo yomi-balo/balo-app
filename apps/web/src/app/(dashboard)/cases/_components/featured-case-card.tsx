@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowRight, Clock, ListChecks, MessageSquare, Video } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
+import { RoomSettingUpSlot } from '@/components/balo/meetings/room-setting-up-slot';
 import { joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
 import {
   formatCaseBooking,
@@ -210,6 +211,8 @@ export function FeaturedCaseCard({
 
         <JoinSlot
           joinPath={live ? card.joinPath : null}
+          roomSettingUp={timing?.roomSettingUp ?? false}
+          roomReady={card.nextBookingRoomReady}
           hasReadableBooking={booking !== null}
           ariaLabel={joinAffordanceAriaLabel(card.counterpartyName, timing?.timingLabel ?? null)}
           onJoin={handleJoin}
@@ -220,7 +223,7 @@ export function FeaturedCaseCard({
 }
 
 /**
- * The stub's action row: Join, the "when it opens" hint, or NOTHING.
+ * The stub's action row: Join, the "setting up" slot, the "when it opens" hint, or NOTHING.
  *
  * ⚠⚠ THE HINT REQUIRES A READABLE BOOKING (fix round X5). It used to be the unconditional `else`,
  * so the card promised "Join opens 15 min before" even when it could not read the time it was
@@ -229,15 +232,29 @@ export function FeaturedCaseCard({
  * when they can join a call whose time you do not have is a CONFIDENT WRONG ANSWER, which is
  * worse on this surface than saying nothing: the stub is already showing a skeleton there, which
  * reads honestly as "still loading".
+ *
+ * ⚠⚠ BAL-581 — `roomReady === false` ALSO SUPPRESSES THE HINT, OUTSIDE THE WINDOW. The
+ * hint promises Join will appear at a stated time; a call whose room never provisioned may not
+ * appear there at all, so "absent beats wrong" rules it out — the slot renders nothing rather
+ * than a promise the room's own state cannot back. Order: a live Join path wins first; then the
+ * "setting up" slot, inside the window only (`resolveFeaturedTiming`'s `roomSettingUp` is never
+ * `true` outside it); then the not-ready fail-closed `null`; then the readable-booking check;
+ * only then the hint.
  */
 function JoinSlot({
   joinPath,
+  roomSettingUp,
+  roomReady,
   hasReadableBooking,
   ariaLabel,
   onJoin,
 }: Readonly<{
   /** Non-null ONLY when the viewer's clock puts this card inside the join window. */
   joinPath: string | null;
+  /** The window is open but the call room is not ready — from `resolveFeaturedTiming`. */
+  roomSettingUp: boolean;
+  /** `card.nextBookingRoomReady` — `null` when there is no booking to be ready or not. */
+  roomReady: boolean | null;
   hasReadableBooking: boolean;
   ariaLabel: string;
   onJoin: () => void;
@@ -257,6 +274,14 @@ function JoinSlot({
       </div>
     );
   }
+  if (roomSettingUp) {
+    return (
+      <div className="mt-3.5 w-full">
+        <RoomSettingUpSlot variant="button" className="min-h-11 w-full" />
+      </div>
+    );
+  }
+  if (roomReady === false) return null;
   if (!hasReadableBooking) return null;
   return (
     <div className="mt-3.5 w-full">

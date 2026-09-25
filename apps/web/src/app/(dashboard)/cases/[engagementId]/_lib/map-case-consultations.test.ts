@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Meeting } from '@balo/db';
+import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import {
   mapCaseConsultations,
   type CaseConsultationActionContext,
@@ -66,6 +67,9 @@ function meeting(over: Partial<Meeting> & { id: string }): Meeting {
     createdAt: new Date('2026-06-01T00:00:00Z'),
     updatedAt: new Date('2026-06-01T00:00:00Z'),
     deletedAt: null,
+    // BAL-581 — present on every fixture; `mapCaseConsultations` itself only reads
+    // `isMeetingVenueReady` (never the stamp), but the typed `Meeting` shape now carries it.
+    venueProvisionedAt: null,
     ...over,
   } as unknown as Meeting;
 }
@@ -100,9 +104,12 @@ describe('mapCaseConsultations — the SECRET-LEAK boundary', () => {
     expect(serialized).not.toContain(JOIN_URL);
     expect(serialized).not.toContain(ROOM_NAME);
     expect(serialized).not.toContain('SUPERSECRETJOINTOKEN');
+    // BAL-581 — `roomReady` IS the one venue fact that crosses, and it is a boolean only.
+    expect(serialized).toContain('roomReady');
     for (const row of rows) {
       expect(row).not.toHaveProperty('joinUrl');
       expect(row).not.toHaveProperty('dailyRoomName');
+      expect(typeof row.roomReady).toBe('boolean');
     }
   });
 
@@ -127,6 +134,7 @@ describe('mapCaseConsultations — the SECRET-LEAK boundary', () => {
       'meetingId',
       'ordinal',
       'recapHref',
+      'roomReady',
       'scheduledMinutes',
       'scheduledStartIso',
       'startedAtIso',
@@ -154,6 +162,11 @@ describe('mapCaseConsultations — state derivation', () => {
     ['ended+completed', { status: 'ended', outcome: 'completed' }, 'held'],
     ['ended+no_show_client', { status: 'ended', outcome: 'no_show_client' }, 'no_show_client'],
     ['ended+missed_call', { status: 'ended', outcome: 'missed_call' }, 'missed_call'],
+    [
+      'ended+venue_unavailable',
+      { status: 'ended', outcome: 'venue_unavailable' },
+      'venue_unavailable',
+    ],
     ['cancelled', { status: 'cancelled', outcome: null }, 'cancelled'],
     ['ended+NULL outcome', { status: 'ended', outcome: null }, 'outcome_pending'],
   ])('maps %s → %s', (_label, row, expected) => {
@@ -310,6 +323,77 @@ describe('mapCaseConsultations — state derivation', () => {
       'Case consultation ended with no outcome recorded',
       expect.objectContaining({ meetingId: 'm1', status: 'ended' })
     );
+  });
+
+  /** BAL-581 — `venue_unavailable` is a REAL, RECORDED outcome (a stored fifth `meeting_outcome`,
+   *  never derived like `nobody_joined`), so it must NOT trip the "ended with no outcome" warn —
+   *  unlike `outcome_pending`, this state has an explanation. */
+  it('does NOT warn for ended+venue_unavailable — it is a recorded outcome, not a missing one', () => {
+    vi.mocked(log.warn).mockClear();
+    mapCaseConsultations(
+      [meeting({ id: 'm1', status: 'ended', outcome: 'venue_unavailable' })],
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-581 — `roomReady`: `upcoming && isMeetingVenueReady(meeting)`, reduced at THIS projection
+ * boundary like `status`/`outcome`. Never the room name or join url — see the secret-leak tests
+ * above.
+ */
+describe('mapCaseConsultations — roomReady', () => {
+  function upcomingMeeting(over: Partial<Meeting> = {}): Meeting {
+    return meeting({ id: 'm1', status: 'scheduled', outcome: null, ...over });
+  }
+
+  it('is TRUE on an upcoming row whose venue is stamped with the derived name', () => {
+    const readyName = dailyRoomNameForMeeting('m1');
+    const [row] = mapCaseConsultations(
+      [
+        upcomingMeeting({
+          dailyRoomName: readyName,
+          joinUrl: `https://balo.daily.co/${readyName}`,
+        }),
+      ],
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
+    );
+    expect(row?.state).toBe('scheduled');
+    expect(row?.roomReady).toBe(true);
+  });
+
+  it('is FALSE on an upcoming row with no venue stamped at all', () => {
+    const [row] = mapCaseConsultations(
+      [upcomingMeeting({ dailyRoomName: null, joinUrl: null })],
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
+    );
+    expect(row?.roomReady).toBe(false);
+  });
+
+  it('is FALSE on an upcoming row whose stamped name does not match the derived one', () => {
+    // The fixture's default `ROOM_NAME` ('case-room-7f3a') never equals `dailyRoomNameForMeeting`
+    // of any real id — a mismatched stamp on purpose.
+    const [row] = mapCaseConsultations([upcomingMeeting()], EMPTY_COUNTS, NOW, NO_ACTION);
+    expect(row?.roomReady).toBe(false);
+  });
+
+  it('is FALSE on every non-upcoming row, even when the venue itself IS ready', () => {
+    const readyName = dailyRoomNameForMeeting('m1');
+    const [row] = mapCaseConsultations(
+      [held('m1', { dailyRoomName: readyName, joinUrl: `https://balo.daily.co/${readyName}` })],
+      EMPTY_COUNTS,
+      NOW,
+      NO_ACTION
+    );
+    expect(row?.state).toBe('held');
+    expect(row?.roomReady).toBe(false);
   });
 });
 

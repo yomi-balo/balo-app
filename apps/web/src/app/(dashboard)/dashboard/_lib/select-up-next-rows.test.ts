@@ -24,6 +24,7 @@ function candidate(overrides: Partial<UpNextCandidate> = {}): UpNextCandidate {
     contextId: 'ctx-1',
     projectRequestId: null,
     owningRowFound: true,
+    roomReady: true,
     ...overrides,
   };
 }

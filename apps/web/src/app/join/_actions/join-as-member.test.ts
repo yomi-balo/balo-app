@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { vi } from 'vitest';
 
 const mockRequireOnboardedUser = vi.fn();
 const mockPostMemberJoin = vi.fn();
@@ -11,6 +12,7 @@ vi.mock('@/lib/meetings/join-api-client', () => ({
 }));
 
 import { joinAsMemberAction } from './join-as-member';
+import { AccountNotLiveError, ACCOUNT_UNREADABLE } from '@/lib/auth/account-liveness';
 
 const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 
@@ -42,7 +44,7 @@ describe('joinAsMemberAction — the onboarding gate', () => {
 
     await expect(joinAsMemberAction({ meetingId: MEETING_ID })).resolves.toEqual({
       success: false,
-      error: 'Please sign in and try again.',
+      reason: 'unavailable',
     });
     expect(mockPostMemberJoin).not.toHaveBeenCalled();
   });
@@ -52,7 +54,7 @@ describe('joinAsMemberAction — the onboarding gate', () => {
 
     const result = await joinAsMemberAction({ meetingId: MEETING_ID });
 
-    expect(result.success).toBe(false);
+    expect(result).toEqual({ success: false, reason: 'unavailable' });
     expect(mockPostMemberJoin).not.toHaveBeenCalled();
   });
 
@@ -61,7 +63,24 @@ describe('joinAsMemberAction — the onboarding gate', () => {
 
     const result = await joinAsMemberAction({ meetingId: 'not-a-uuid' });
 
-    expect(result).toEqual({ success: false, error: 'Please sign in and try again.' });
+    expect(result).toEqual({ success: false, reason: 'unavailable' });
+  });
+
+  it('⚠⚠ BAL-568 — a suspended/deleted account refuses as account_refused', async () => {
+    mockRequireOnboardedUser.mockRejectedValue(new AccountNotLiveError('account_suspended'));
+
+    const result = await joinAsMemberAction({ meetingId: MEETING_ID });
+
+    expect(result).toEqual({ success: false, reason: 'account_refused' });
+    expect(mockPostMemberJoin).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ an UNREADABLE account row is `outage`, NEVER `account_refused` — it must not sign anyone out', async () => {
+    mockRequireOnboardedUser.mockRejectedValue(new AccountNotLiveError(ACCOUNT_UNREADABLE));
+
+    const result = await joinAsMemberAction({ meetingId: MEETING_ID });
+
+    expect(result).toEqual({ success: false, reason: 'outage' });
   });
 });
 
@@ -86,37 +105,30 @@ describe('joinAsMemberAction — the grant', () => {
   it('refuses a non-uuid meeting id', async () => {
     const result = await joinAsMemberAction({ meetingId: 'not-a-uuid' });
 
-    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(result).toEqual({ success: false, reason: 'unavailable' });
     expect(mockPostMemberJoin).not.toHaveBeenCalled();
   });
 });
 
-describe('joinAsMemberAction — failures', () => {
+describe('joinAsMemberAction — the allowlisted failures (BAL-581)', () => {
   it.each([
-    ['meeting_not_found', 404],
-    ['meeting_not_open_for_join', 409],
-    ['meeting_not_provisioned', 409],
-  ])('collapses `%s` into the uniform refusal', async (code, status) => {
+    [404, 'meeting_not_found', 'unavailable'],
+    [409, 'meeting_not_open_for_join', 'not_open'],
+    [409, 'meeting_not_provisioned', 'not_provisioned'],
+    [503, 'meeting_token_unavailable', 'outage'],
+    [500, 'Internal Server Error', 'outage'],
+    [0, 'request_failed', 'outage'],
+    [401, 'account_suspended', 'account_refused'],
+    [401, 'unauthenticated', 'unavailable'],
+    [401, 'Unauthorized', 'unavailable'],
+    [429, 'rate_limited', 'unavailable'],
+    [409, 'something_else', 'unavailable'],
+  ] as const)('(%i, %s) → reason %s', async (status, code, reason) => {
     mockPostMemberJoin.mockResolvedValue({ ok: false, status, code });
 
     await expect(joinAsMemberAction({ meetingId: MEETING_ID })).resolves.toEqual({
       success: false,
-      error: "This meeting isn't available to join.",
-    });
-  });
-
-  it('⚠ distinguishes a 503 as RETRYABLE — an outage is a fact about us, not about the meeting', async () => {
-    mockPostMemberJoin.mockResolvedValue({
-      ok: false,
-      status: 503,
-      code: 'meeting_token_unavailable',
-    });
-
-    const result = await joinAsMemberAction({ meetingId: MEETING_ID });
-
-    expect(result).toEqual({
-      success: false,
-      error: "We couldn't set up your call room just now. Please try again in a moment.",
+      reason,
     });
   });
 

@@ -244,8 +244,14 @@ const POST_DECISION_REQUEST_STATUSES: ReadonlySet<string> = new Set([
  * never fired — the constant silently agreed to know nothing about it. Non-partial makes a
  * sixth ENGAGEMENT-grain label a compile error in this object, and a sixth NON-engagement
  * label a compile error in the tuple above.
+ *
+ * ⚠ EXPORTED (BAL-581) so `jobs/meeting-venue-repair.ts` reads the SAME map
+ * rather than restating it — see {@link engagementTypeForContext}, the narrowing accessor built
+ * on it. The authorizer's own use below (`:510`) stays a DIRECT INDEX: routing it through the
+ * accessor would widen its `BookableEngagementType` result to `| null`, and at that call site
+ * `contextType` is already narrowed to the engagement-grain labels by the early return above.
  */
-const ENGAGEMENT_TYPE_FOR_CONTEXT = {
+export const ENGAGEMENT_TYPE_FOR_CONTEXT = {
   case: 'case',
   project_kickoff: 'project',
   package_session: 'package',
@@ -266,6 +272,27 @@ const ENGAGEMENT_TYPE_FOR_CONTEXT = {
  */
 export type BookableEngagementType =
   (typeof ENGAGEMENT_TYPE_FOR_CONTEXT)[keyof typeof ENGAGEMENT_TYPE_FOR_CONTEXT];
+
+/** A type predicate over {@link ENGAGEMENT_TYPE_FOR_CONTEXT}'s own keys — never a bare index. */
+function isEngagementGrainBookable(
+  contextType: MeetingBookingContextType
+): contextType is keyof typeof ENGAGEMENT_TYPE_FOR_CONTEXT {
+  return Object.hasOwn(ENGAGEMENT_TYPE_FOR_CONTEXT, contextType);
+}
+
+/**
+ * BAL-581 — the engagement kind a bookable context names, or `null` for the two
+ * request-grain labels (`project_discovery`, `request_interaction`) that anchor on something
+ * other than an `engagements.id`. The venue repair handler (`jobs/meeting-venue-repair.ts`)
+ * calls this to build the `MeetingProvisionContext` it hands to `provisionMeeting`, since it
+ * only has a bare `contextType` off the meeting's primary context row — never a loaded
+ * `engagements` row to read the type from directly.
+ */
+export function engagementTypeForContext(
+  contextType: MeetingBookingContextType
+): BookableEngagementType | null {
+  return isEngagementGrainBookable(contextType) ? ENGAGEMENT_TYPE_FOR_CONTEXT[contextType] : null;
+}
 
 /** The subject row's facts, RAW — no coherence judgement, which happens after the gate. */
 interface LoadedSubject {

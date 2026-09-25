@@ -20,11 +20,11 @@ import type { RecapContextType, RecapLens } from './recap';
  *     with ONE event name, `RECAP_SERVER_EVENTS.CASE_RESOLVED`, whose required `source`
  *     property was built for exactly this ticket. A parallel client event would make
  *     `count(case_resolved)` wrong and force every funnel to union two names forever.
- *   · `rejoin` — there is no live destination for a Rejoin affordance. `/join/m/[meetingId]`
- *     is the ANONYMOUS lobby (the wrong arm for a signed-in member), the member arm
- *     `joinAsMemberAction` has no entry point by design, and both terminate at
- *     `MeetingCallSurface`'s "Connecting…" because no Daily SDK ships in `apps/web`. BAL-435
- *     adds the button, the destination and this value together.
+ *   · `rejoin` — there is no live destination for a Rejoin affordance BACK TO THIS SCREEN.
+ *     `/join/m/[meetingId]` is the ANONYMOUS lobby (the wrong arm for a signed-in member); the
+ *     member arm, `joinAsMemberAction`, IS called (by BAL-435's `call-client.tsx`, the in-meeting
+ *     route), but that route has no link back to the end-of-call screen, which is the owner
+ *     decision this value stays undeclared for.
  *
  * ⚠⚠ `back_to_case` WAS ABSENT AND IS NOW DECLARED — THE NO-PRODUCER RULE WORKING FORWARDS,
  * NOT A REVERSAL OF IT. It was withheld because the onward CTA was unconditionally "View recap"

@@ -83,6 +83,7 @@ function trailMeeting(overrides: Partial<CasesIndexTrailMeeting> = {}): CasesInd
     startedAt: null,
     status: 'scheduled',
     outcome: null,
+    roomReady: true,
     ...overrides,
   };
 }
@@ -457,6 +458,30 @@ describe('the featured case', () => {
       context({ featuredEngagementId: 'eng-1', trailByEngagement: new Map() })
     );
     expect(card.joinPath).toBeNull();
+  });
+});
+
+describe('nextBookingRoomReady (BAL-581)', () => {
+  it('copies roomReady through from the next booking, true and false — never recomputed', () => {
+    const readyCard = firstCard(
+      [caseRow()],
+      context({ trailByEngagement: new Map([['eng-1', [trailMeeting({ roomReady: true })]]]) })
+    );
+    expect(readyCard.nextBookingRoomReady).toBe(true);
+
+    const notReadyCard = firstCard(
+      [caseRow()],
+      context({ trailByEngagement: new Map([['eng-1', [trailMeeting({ roomReady: false })]]]) })
+    );
+    expect(notReadyCard.nextBookingRoomReady).toBe(false);
+  });
+
+  it('is null when the case has no next booking', () => {
+    const card = firstCard(
+      [caseRow({ nextBookingAt: null })],
+      context({ trailByEngagement: new Map() })
+    );
+    expect(card.nextBookingRoomReady).toBeNull();
   });
 });
 

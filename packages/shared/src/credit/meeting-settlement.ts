@@ -34,11 +34,14 @@
  * ever present. ADR-1044 §7 makes the FULL 15 minutes the earning condition ("the expert may
  * end the call at that point but must remain present for the full 15 minutes to earn the
  * block") — an expert who leaves at minute 8 has not met it, so this settles at ZERO. It
- * writes `outcome: 'completed'` because BAL-412 mints NO fourth `meeting_outcome` value
- * (`meetingOutcomeEnum` stays `['completed','no_show_client','missed_call']`) — `shape` is
- * what keeps the two zero cases (`missed_call` vs `abandoned_wait`) distinguishable
- * afterwards on `credit_sessions.settlement_shape`, since `meetings.outcome` structurally
- * cannot. This is NOT a bug on read.
+ * writes `outcome: 'completed'` because BAL-412 mints NO NEW `meeting_outcome` value of its
+ * own here — `meetingOutcomeEnum` now carries a FOURTH label, `venue_unavailable` (BAL-581),
+ * but that one is a SYSTEM-TERMINAL-ONLY value this module never writes: a meeting without a
+ * venue never opens a credit session, so it never reaches settlement (see
+ * {@link MeetingSettlementOutcome} below). `shape` is what keeps the two zero cases
+ * (`missed_call` vs `abandoned_wait`) distinguishable afterwards on
+ * `credit_sessions.settlement_shape`, since `meetings.outcome` structurally cannot. This is NOT
+ * a bug on read.
  *
  * Row 1 is BAL-134's `missed_call`, already written by the lifecycle sweep
  * (`resolveTerminalRule`). Settlement re-derives the identical label and the repository writes
@@ -74,10 +77,19 @@
 import type { MeetingClocks } from '../meetings';
 import { expertClockStart } from '../meetings/lifecycle';
 
-/** How the presence settlement resolved. Four shapes; only THREE `meeting_outcome` labels (D2/D3). */
+/**
+ * How the presence settlement resolved. Four shapes; only THREE of the (now four) shipped
+ * `meeting_outcome` labels (D2/D3). BAL-581's fourth label, `venue_unavailable`, is written
+ * only by the lifecycle sweep's rule 5 — a meeting without a venue never opens a credit
+ * session, so it never reaches this module.
+ */
 export type MeetingSettlementShape = 'held' | 'no_show_client' | 'missed_call' | 'abandoned_wait';
 
-/** The three SHIPPED `meeting_outcome` labels (`enums.ts`). No new value is minted (D2). */
+/**
+ * The THREE of the four SHIPPED `meeting_outcome` labels (`enums.ts`) this module can write.
+ * Settlement mints none of these new; `venue_unavailable` is structurally unreachable here
+ * (see this file's header and {@link MeetingSettlementShape}).
+ */
 export type MeetingSettlementOutcome = 'completed' | 'no_show_client' | 'missed_call';
 
 export interface MeetingSettlementInput {
@@ -265,8 +277,8 @@ function outcomeForShape(shape: MeetingSettlementShape): MeetingSettlementOutcom
       return 'no_show_client';
     case 'held':
     case 'abandoned_wait':
-      // ⚠ `abandoned_wait` → `completed` IS DELIBERATE (D2/D3), NOT A BUG. No fourth
-      // `meeting_outcome` value is minted; `shape` (persisted separately on
+      // ⚠ `abandoned_wait` → `completed` IS DELIBERATE (D2/D3), NOT A BUG. Settlement mints
+      // no outcome of its own for `abandoned_wait`; `shape` (persisted separately on
       // `credit_sessions.settlement_shape`) is what keeps this distinguishable from a
       // genuinely-held call past settlement.
       return 'completed';

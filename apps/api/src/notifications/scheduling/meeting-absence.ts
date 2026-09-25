@@ -43,7 +43,14 @@ import {
 } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { createLogger } from '@balo/shared/logging';
-import { summarisePresence, type MeetingTimers, type PresenceFacts } from '@balo/shared/meetings';
+import {
+  meetingVenueReadyAt,
+  summarisePresence,
+  venueAbsenceAnchor,
+  type MeetingTimers,
+  type PresenceFacts,
+} from '@balo/shared/meetings';
+import { resolveMeetingTimers } from '../../config/meeting-timers.js';
 import { scheduleNotification } from './schedule.js';
 import type { ScheduledRecheck } from './rechecks.js';
 
@@ -111,6 +118,13 @@ function meetingIdFrom(payload: Record<string, unknown>): string | null {
 /**
  * THE EXPERT-ABSENT GUARD. Publishes only if the expert STILL has not joined.
  *
+ * ⚠⚠ BAL-581 — TWO VENUE SKIP REASONS, BOTH READING THE SAME ANCHOR THE ARM SITE USED
+ * (`venueAbsenceAnchor`): `venue_unavailable` when the room is still not ready at fire time —
+ * that meeting is the `meeting.unprovisioned` admin alert's, not a missing expert's — and
+ * `venue_ready_late` when the room IS ready but fire time is still inside the alert window
+ * measured from the anchor (a promise armed before the room existed: an older build's arm, or
+ * clock skew). Both free the pending slot; the next sweep tick re-arms at the anchored instant.
+ *
  * ⚠ "EVER JOINED", NOT "IS HERE NOW". An expert who joined and dropped out again has been
  * reached — Balo's operational commitment ("someone will contact them") has already been
  * discharged by their arrival, and paging ops for a network blip is how a load-bearing alert
@@ -129,6 +143,27 @@ export const meetingExpertAbsentRecheck: ScheduledRecheck = async (row) => {
   if (isTerminal(state.meeting)) {
     return { publish: false, reason: 'meeting_terminal' };
   }
+
+  // ⚠⚠ BAL-581 — THE ALERT BLAMES THE EXPERT; IT MAY ONLY FIRE WHEN A ROOM EXISTED FOR THE
+  // WHOLE ALERT WINDOW. Both checks read the SAME anchor the arm site used
+  // (`venueAbsenceAnchor`), so the two can never disagree about when "the expert is absent"
+  // starts being measured from.
+  const venueReadyAt = meetingVenueReadyAt(state.meeting);
+  if (venueReadyAt === null) {
+    // The venue is still not ready — this meeting is the `meeting.unprovisioned` admin alert's,
+    // not a missing expert's.
+    return { publish: false, reason: 'venue_unavailable' };
+  }
+  const anchor = venueAbsenceAnchor(state.meeting.scheduledStart, venueReadyAt);
+  // ⚠ A promise armed before the room existed (an older build's arm, or clock skew): skip — the
+  // pending slot is now free and the next sweep tick re-arms it at the anchored instant.
+  if (
+    anchor !== null &&
+    Date.now() < anchor.getTime() + resolveMeetingTimers().expertAbsentAlertMs
+  ) {
+    return { publish: false, reason: 'venue_ready_late' };
+  }
+
   if (state.facts.expertEverPresent) {
     return { publish: false, reason: 'expert_joined_before_alert' };
   }
@@ -257,12 +292,18 @@ async function resolveClientRecipients(companyId: string): Promise<string[]> {
 export interface ScheduleExpertAbsentAlertInput {
   readonly meetingId: string;
   readonly scheduledStart: Date;
+  /**
+   * BAL-581 — `venueAbsenceAnchor(scheduledStart, venueReadyAt)`: the instant the expert's
+   * absence is measured from. Equals `scheduledStart` for every meeting whose room existed
+   * before its start (every pre-BAL-581 meeting, unchanged behaviour).
+   */
+  readonly absenceAnchor: Date;
   readonly contextType: string;
   readonly timers: MeetingTimers;
 }
 
 /**
- * ARM the ops salvage alert for `scheduled_start + EXPERT_ABSENT_ALERT_MS`.
+ * ARM the ops salvage alert for `absenceAnchor + EXPERT_ABSENT_ALERT_MS`.
  *
  * ⚠ IDEMPOTENT PER MEETING BY THE DEDUPE KEY, which is what lets the per-minute sweep call it
  * on every tick: the second call answers `already_pending` and writes nothing.
@@ -270,14 +311,17 @@ export interface ScheduleExpertAbsentAlertInput {
 export async function scheduleExpertAbsentAlert(
   input: ScheduleExpertAbsentAlertInput
 ): Promise<void> {
-  const fireAt = new Date(input.scheduledStart.getTime() + input.timers.expertAbsentAlertMs);
+  const fireAt = new Date(input.absenceAnchor.getTime() + input.timers.expertAbsentAlertMs);
   const { outcome } = await scheduleNotification(
     'meeting.expert_absent',
     {
       correlationId: randomUUID(),
       meetingId: input.meetingId,
       scheduledStartIso: input.scheduledStart.toISOString(),
-      minutesPastStart: Math.round(input.timers.expertAbsentAlertMs / 60_000),
+      // ⚠ BAL-581 — measured from `fireAt` back to `scheduledStart`, NOT from the alert window
+      // alone: for a late-anchored meeting this is bigger than `expertAbsentAlertMs`, and the
+      // ops email's "has not joined N minutes after the scheduled start" stays literally true.
+      minutesPastStart: Math.round((fireAt.getTime() - input.scheduledStart.getTime()) / 60_000),
       contextType: input.contextType,
     },
     {

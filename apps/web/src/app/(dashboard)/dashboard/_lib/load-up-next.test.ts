@@ -60,6 +60,7 @@ function companyMeeting(overrides: Record<string, unknown> = {}) {
     projectRequestId: null,
     expertProfileId: 'profile-1',
     owningRowFound: true,
+    roomReady: true,
     ...overrides,
   };
 }
@@ -76,6 +77,7 @@ function expertMeeting(overrides: Record<string, unknown> = {}) {
     projectRequestId: null,
     counterpartyCompanyName: 'Northwind Industrial',
     owningRowFound: true,
+    roomReady: true,
     ...overrides,
   };
 }
@@ -183,6 +185,23 @@ describe('companyRowToEnrichable / expertRowToEnrichable — explicit projection
     const enrichable = expertRowToEnrichable(expertMeeting() as never, 'session-profile');
     expect(enrichable.expertProfileId).toBe('session-profile');
     expect(enrichable.counterpartyCompanyName).toBe('Northwind Industrial');
+  });
+
+  it('BAL-581 — both projections copy roomReady through, true and false', () => {
+    expect(companyRowToEnrichable(companyMeeting({ roomReady: true }) as never).roomReady).toBe(
+      true
+    );
+    expect(companyRowToEnrichable(companyMeeting({ roomReady: false }) as never).roomReady).toBe(
+      false
+    );
+    expect(
+      expertRowToEnrichable(expertMeeting({ roomReady: true }) as never, 'session-profile')
+        .roomReady
+    ).toBe(true);
+    expect(
+      expertRowToEnrichable(expertMeeting({ roomReady: false }) as never, 'session-profile')
+        .roomReady
+    ).toBe(false);
   });
 });
 

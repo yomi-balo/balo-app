@@ -44,6 +44,9 @@ const mockStartTranscriptCapture = vi.fn();
 const mockStartAdminAlertSweep = vi.fn();
 const mockRegisterAdminAlertSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartProjectBriefParse = vi.fn();
+const mockStartMeetingVenueRepairSweep = vi.fn();
+const mockRegisterMeetingVenueRepairSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartMeetingVenueProvision = vi.fn();
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -188,6 +191,16 @@ vi.mock('./admin-alert-sweep.js', () => ({
 vi.mock('./project-brief-parse.js', () => ({
   startProjectBriefParseWorker: () => mockStartProjectBriefParse(),
 }));
+// BAL-581: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
+// which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
+// GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
+// through in every ticket named above. Must land in the SAME COMMIT as the `worker.ts`
+// registration.
+vi.mock('./meeting-venue-repair.js', () => ({
+  startMeetingVenueRepairSweepWorker: () => mockStartMeetingVenueRepairSweep(),
+  registerMeetingVenueRepairSweepCron: () => mockRegisterMeetingVenueRepairSweepCron(),
+  startMeetingVenueProvisionWorker: () => mockStartMeetingVenueProvision(),
+}));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
 }));
@@ -236,6 +249,9 @@ describe('startWorkers', () => {
     expect(mockStartAdminAlertSweep).not.toHaveBeenCalled();
     expect(mockRegisterAdminAlertSweepCron).not.toHaveBeenCalled();
     expect(mockStartProjectBriefParse).not.toHaveBeenCalled();
+    expect(mockStartMeetingVenueRepairSweep).not.toHaveBeenCalled();
+    expect(mockRegisterMeetingVenueRepairSweepCron).not.toHaveBeenCalled();
+    expect(mockStartMeetingVenueProvision).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
@@ -287,6 +303,9 @@ describe('startWorkers', () => {
     expect(mockStartAdminAlertSweep).toHaveBeenCalled();
     expect(mockRegisterAdminAlertSweepCron).toHaveBeenCalled();
     expect(mockStartProjectBriefParse).toHaveBeenCalled();
+    expect(mockStartMeetingVenueRepairSweep).toHaveBeenCalled();
+    expect(mockRegisterMeetingVenueRepairSweepCron).toHaveBeenCalled();
+    expect(mockStartMeetingVenueProvision).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;

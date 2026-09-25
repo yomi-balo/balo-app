@@ -17,6 +17,7 @@ const {
   mockListUnconfirmedBefore,
   mockListActiveConnectionsWithoutSubscription,
   mockListConnectionAlertLabels,
+  mockListUnprovisionedScheduled,
 } = vi.hoisted(() => ({
   mockListPendingApplicationsForAlerts: vi.fn(),
   mockListOpen: vi.fn(),
@@ -28,6 +29,7 @@ const {
   mockListUnconfirmedBefore: vi.fn(),
   mockListActiveConnectionsWithoutSubscription: vi.fn(),
   mockListConnectionAlertLabels: vi.fn(),
+  mockListUnprovisionedScheduled: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -38,6 +40,7 @@ vi.mock('@balo/db', () => ({
     listFailedSince: mockListFailedSinceRecordings,
     listWithheldTranscriptSourceSince: mockListWithheldTranscriptSourceSince,
   },
+  meetingsRepository: { listUnprovisionedScheduled: mockListUnprovisionedScheduled },
   transcriptsRepository: { listFailedSince: mockListFailedSinceTranscripts },
   calendarRepository: { listConnectionAlertLabels: mockListConnectionAlertLabels },
   calendarSubscriptionsRepository: {
@@ -56,6 +59,18 @@ vi.mock('./calendar-subscription-monitor.js', () => ({
   SUBSCRIPTION_UNCONFIRMED_GRACE_MS: 2 * 60 * 60 * 1000,
 }));
 
+// BAL-581 — a fixed timer set, so this suite's cutoff maths does not depend on env/default
+// drift; `resolveMeetingTimers` itself is covered by `meeting-timers.test.ts`.
+vi.mock('../config/meeting-timers.js', () => ({
+  resolveMeetingTimers: () => ({
+    expertAbsentAlertMs: 5 * 60_000,
+    missedCallTerminationMs: 10 * 60_000,
+    clientAbsentNudgeMs: 5 * 60_000,
+    noShowFloorMs: 15 * 60_000,
+    idleEndEmptyMs: 5 * 60_000,
+  }),
+}));
+
 import {
   ADMIN_ALERT_FINDERS,
   EXPERT_APPLICATION_PENDING_CUTOFF_MS,
@@ -64,6 +79,7 @@ import {
   RECORDING_FAILED_CUTOFF_MS,
   TRANSCRIPT_FAILED_CUTOFF_MS,
   TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS,
+  MEETING_UNPROVISIONED_GRACE_MS,
 } from './admin-alert-finders.js';
 
 const NOW = new Date('2026-09-08T12:00:00.000Z');
@@ -81,6 +97,7 @@ beforeEach(() => {
   mockListUnconfirmedBefore.mockResolvedValue([]);
   mockListActiveConnectionsWithoutSubscription.mockResolvedValue([]);
   mockListConnectionAlertLabels.mockResolvedValue(new Map());
+  mockListUnprovisionedScheduled.mockResolvedValue([]);
   delete process.env.APIROC_WEBHOOK_BASE_URL;
 });
 
@@ -451,5 +468,77 @@ describe('calendarSubscriptionLapse', () => {
     );
     const outcome = await ADMIN_ALERT_FINDERS.calendarSubscriptionLapse({ now: NOW, limit: LIMIT });
     expect(outcome.batchFilled).toBe(true);
+  });
+});
+
+/**
+ * BAL-581 — the SAME bounded read the venue repair producer uses, called INDEPENDENTLY (a
+ * finder never enqueues, ADR-1055 — the `calendarSubscriptionLapse` precedent above).
+ */
+describe('meetingUnprovisioned', () => {
+  it('passes scheduledStartAfter = now − missedCallTerminationMs, createdBefore = now − the grace, and the limit', async () => {
+    await ADMIN_ALERT_FINDERS.meetingUnprovisioned({ now: NOW, limit: LIMIT });
+
+    expect(mockListUnprovisionedScheduled).toHaveBeenCalledWith({
+      scheduledStartAfter: new Date(NOW.getTime() - 10 * 60_000),
+      createdBefore: new Date(NOW.getTime() - MEETING_UNPROVISIONED_GRACE_MS),
+      limit: LIMIT,
+    });
+  });
+
+  it('maps a room that was never created', async () => {
+    mockListUnprovisionedScheduled.mockResolvedValue([
+      { meetingId: 'meeting_1', scheduledStart: NOW, createdAt: NOW, roomNameStamped: false },
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.meetingUnprovisioned({ now: NOW, limit: LIMIT });
+
+    expect(outcome.findings).toHaveLength(1);
+    const [finding] = outcome.findings;
+    expect(finding?.entityType).toBe('meeting');
+    expect(finding?.entityId).toBe('meeting_1');
+    expect(finding?.detail.evidence).toContain('never created');
+    expect(finding?.detail.facts).toHaveLength(4);
+    expect(finding?.detail.facts.find(([label]) => label === 'Room')?.[1]).toBe('never created');
+  });
+
+  it('maps a stamped-but-MISMATCHED room name distinctly from a never-created one', async () => {
+    mockListUnprovisionedScheduled.mockResolvedValue([
+      { meetingId: 'meeting_2', scheduledStart: NOW, createdAt: NOW, roomNameStamped: true },
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.meetingUnprovisioned({ now: NOW, limit: LIMIT });
+
+    const [finding] = outcome.findings;
+    expect(finding?.detail.evidence).toContain('name does not match');
+    expect(finding?.detail.facts.find(([label]) => label === 'Room')?.[1]).toBe('name mismatch');
+  });
+
+  it('reports batchFilled at the limit', async () => {
+    mockListUnprovisionedScheduled.mockResolvedValue(
+      Array.from({ length: LIMIT }, (_, i) => ({
+        meetingId: `meeting_${i}`,
+        scheduledStart: NOW,
+        createdAt: NOW,
+        roomNameStamped: false,
+      }))
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.meetingUnprovisioned({ now: NOW, limit: LIMIT });
+
+    expect(outcome.batchFilled).toBe(true);
+  });
+
+  it('carries no join URL and no room name — not in the row by construction', async () => {
+    mockListUnprovisionedScheduled.mockResolvedValue([
+      { meetingId: 'meeting_1', scheduledStart: NOW, createdAt: NOW, roomNameStamped: false },
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.meetingUnprovisioned({ now: NOW, limit: LIMIT });
+
+    const [finding] = outcome.findings;
+    const values = finding?.detail.facts.map(([, value]) => value).join(' ') ?? '';
+    expect(values).not.toContain('daily.co');
+    expect(values).not.toContain('balo-');
   });
 });

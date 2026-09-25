@@ -47,10 +47,11 @@ describe('StepBooked', () => {
     expect(text.toLowerCase()).not.toContain('added to your calendar');
   });
 
-  // ⚠ M6 — the unprovisioned branch may state only what the platform can honour. There is no
-  // repair sweep, no retry job and no provision-on-join, so it must not promise an email or a
-  // link "before your call".
-  it('promises nothing deliverable when provisioned is false (M6)', () => {
+  // ⚠ the unprovisioned branch's promise holds because a provisioning failure is captured to
+  // Sentry, raises the `meeting.unprovisioned` admin alert, and the venue repair job provisions
+  // the room automatically — so it must not ALSO promise an email or a link "before your call",
+  // which nothing here delivers.
+  it('promises nothing deliverable when provisioned is false', () => {
     const { container } = renderStep({ provisioned: false });
     const text = container.textContent ?? '';
     expect(text).toMatch(/our team has been alerted/);

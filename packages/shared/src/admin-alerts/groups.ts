@@ -13,7 +13,7 @@ export const ADMIN_ALERT_GROUPS = {
   marketplace: { label: 'Marketplace', hint: 'Applications, reviews, project triage' },
   money: { label: 'Money', hint: 'Receivables, reloads, disputes, payouts, unbilled sessions' },
   capture: { label: 'Capture', hint: 'Recording, transcription, recap' },
-  meetings: { label: 'Meetings & calendar', hint: 'Calendar sync, amends, cancellations' },
+  meetings: { label: 'Meetings & calendar', hint: 'Calendar sync, amends, call rooms' },
 } as const;
 
 /** Tile order, left to right. The grid is data-driven off this. */

@@ -25,6 +25,10 @@ export interface CalendarMeetingView {
   readonly joinUrl: string;
   /** The CLIENT COMPANY. `null` when the owning row is absent/soft-deleted. */
   readonly counterpartyCompanyName: string | null;
+  /** BAL-581 — server-computed (`isMeetingVenueReady`'s SQL twin). A readiness BOOLEAN, never the
+   *  room name or join URL — `joinUrl` above is the MEMBER CALL PATH, not a room, which is the
+   *  naming trap this field exists beside. */
+  readonly roomReady: boolean;
 }
 
 export interface CalendarPageView {

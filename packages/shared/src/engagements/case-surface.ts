@@ -229,7 +229,11 @@ export type MeetingStatusLabel =
   | 'cancelled';
 
 /** Hand-restated `meeting_outcome` labels — see {@link MeetingStatusLabel}. */
-export type MeetingOutcomeLabel = 'completed' | 'no_show_client' | 'missed_call';
+export type MeetingOutcomeLabel =
+  | 'completed'
+  | 'no_show_client'
+  | 'missed_call'
+  | 'venue_unavailable';
 
 /**
  * What a consultation row renders as.
@@ -247,6 +251,12 @@ export type MeetingOutcomeLabel = 'completed' | 'no_show_client' | 'missed_call'
  * presence rows at read time, never stored. There is no wronged party, so a surface must
  * name nobody for it.
  *
+ * ⚠ `venue_unavailable` (BAL-581) — the call room was never ready, so nobody could join. It is
+ * a STORED `meeting_outcome`, not derived like `nobody_joined` above, so it can never collide
+ * with it: rule 5 (venue-unavailable) and rule 3 (missed call, which `nobody_joined` refines)
+ * are disjoint by construction — see `lifecycle.ts`'s rule 5 docblock. No party is at fault;
+ * surfaces name nobody and Balo owns it.
+ *
  * ⚠ `pending_reschedule` (BAL-411) — a `scheduled` / `waiting_for_participants` consultation
  * that ALSO carries a LIVE reschedule proposal. It is nested INSIDE the `scheduled` branch of
  * {@link deriveCaseConsultationState}, never a sibling check above it — see that function's
@@ -260,6 +270,7 @@ export type CaseConsultationStateLabel =
   | 'no_show_client'
   | 'missed_call'
   | 'nobody_joined'
+  | 'venue_unavailable'
   | 'cancelled'
   | 'outcome_pending';
 
@@ -312,6 +323,7 @@ export function deriveCaseConsultationState(
   // `status === 'ended'` — the outcome decides, and a NULL one is its own honest state.
   if (outcome === 'completed') return 'held';
   if (outcome === 'no_show_client') return 'no_show_client';
+  if (outcome === 'venue_unavailable') return 'venue_unavailable';
   if (outcome === 'missed_call') {
     return clientSideEverPresent === false ? 'nobody_joined' : 'missed_call';
   }

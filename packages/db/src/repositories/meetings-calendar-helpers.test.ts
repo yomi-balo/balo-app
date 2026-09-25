@@ -57,6 +57,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'case',
           contextId: 'engagement-1',
+          roomReady: true,
         },
       ],
       'expert-1'
@@ -70,6 +71,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
         status: 'scheduled',
         contextType: 'case',
         contextId: 'engagement-1',
+        roomReady: true,
       },
     ]);
   });
@@ -84,6 +86,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'project_discovery',
           contextId: 'request-1',
+          roomReady: true,
         },
         {
           meetingId: 'm1',
@@ -92,6 +95,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'project_kickoff',
           contextId: 'engagement-1',
+          roomReady: true,
         },
       ],
       'expert-1'
@@ -111,6 +115,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'admin',
           contextId: null,
+          roomReady: true,
         },
       ],
       'expert-1'
@@ -136,6 +141,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'admin',
           contextId: null,
+          roomReady: true,
         },
       ],
       'expert-1'
@@ -162,6 +168,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'case',
           contextId: 'engagement-1',
+          roomReady: true,
         },
         {
           meetingId: 'm1',
@@ -170,6 +177,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'project_kickoff',
           contextId: 'engagement-2',
+          roomReady: true,
         },
       ],
       'expert-1'
@@ -194,6 +202,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'case',
           contextId: 'engagement-1',
+          roomReady: true,
         },
         {
           meetingId: 'm2',
@@ -202,6 +211,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'request_interaction',
           contextId: 'relationship-1',
+          roomReady: true,
         },
       ],
       'expert-1'
@@ -226,6 +236,7 @@ describe('foldMeetingContextRowsToPrimary', () => {
           status: 'scheduled',
           contextType: 'admin',
           contextId: null,
+          roomReady: true,
         },
       ],
       'expert-9'
@@ -257,6 +268,7 @@ describe('foldMeetingContextRows', () => {
           status: 'in_progress',
           contextType: 'project_discovery',
           contextId: 'request-1',
+          roomReady: true,
         },
         {
           meetingId: 'm1',
@@ -265,6 +277,7 @@ describe('foldMeetingContextRows', () => {
           status: 'in_progress',
           contextType: 'project_kickoff',
           contextId: 'engagement-1',
+          roomReady: true,
         },
       ],
       onOmitted
@@ -279,6 +292,7 @@ describe('foldMeetingContextRows', () => {
         status: 'in_progress',
         contextType: 'project_kickoff',
         contextId: 'engagement-1',
+        roomReady: true,
       },
     ]);
     expect(onOmitted).not.toHaveBeenCalled();
@@ -296,6 +310,7 @@ describe('foldMeetingContextRows', () => {
           status: 'scheduled',
           contextType: 'admin',
           contextId: null,
+          roomReady: true,
         },
         {
           meetingId: 'm-kept',
@@ -304,6 +319,7 @@ describe('foldMeetingContextRows', () => {
           status: 'scheduled',
           contextType: 'case',
           contextId: 'engagement-1',
+          roomReady: true,
         },
       ],
       onOmitted
@@ -328,6 +344,7 @@ describe('foldMeetingContextRows', () => {
           status: 'scheduled',
           contextType: 'project_discovery',
           contextId: 'request-1',
+          roomReady: true,
         },
         {
           meetingId: 'm-ambiguous',
@@ -336,6 +353,7 @@ describe('foldMeetingContextRows', () => {
           status: 'scheduled',
           contextType: 'request_interaction',
           contextId: 'relationship-1',
+          roomReady: true,
         },
       ],
       onOmitted
@@ -345,6 +363,52 @@ describe('foldMeetingContextRows', () => {
     expect(onOmitted).toHaveBeenCalledTimes(1);
     expect(onOmitted).toHaveBeenCalledWith('m-ambiguous', 'ambiguous');
     expect(mockLoggerWarn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * BAL-581 — `roomReady` is per-MEETING (the SQL twin over the meeting's own columns), so the
+   * fold copies it from the meeting's rows onto the folded row. Both values appear here so a
+   * copy hard-wired to either literal fails.
+   */
+  it("copies each meeting's roomReady onto its folded row, true and false alike", () => {
+    const folded = foldMeetingContextRows(
+      [
+        {
+          meetingId: 'm-ready',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'project_discovery',
+          contextId: 'request-1',
+          roomReady: true,
+        },
+        {
+          meetingId: 'm-ready',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'project_kickoff',
+          contextId: 'engagement-1',
+          roomReady: true,
+        },
+        {
+          meetingId: 'm-not-ready',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'case',
+          contextId: 'engagement-2',
+          roomReady: false,
+        },
+      ],
+      vi.fn()
+    );
+
+    expect(folded).toHaveLength(2);
+    expect(folded.map((row) => [row.meetingId, row.roomReady])).toEqual([
+      ['m-ready', true],
+      ['m-not-ready', false],
+    ]);
   });
 });
 
@@ -359,6 +423,7 @@ describe('classifyCalendarContextIds', () => {
       status: 'scheduled' as const,
       contextType,
       contextId: `engagement-${index}`,
+      roomReady: true,
     }));
 
     const buckets = classifyCalendarContextIds(folded);
@@ -379,6 +444,7 @@ describe('classifyCalendarContextIds', () => {
         status: 'scheduled',
         contextType: 'project_discovery',
         contextId: 'request-1',
+        roomReady: true,
       },
       {
         meetingId: 'm2',
@@ -387,6 +453,7 @@ describe('classifyCalendarContextIds', () => {
         status: 'scheduled',
         contextType: 'request_interaction',
         contextId: 'relationship-1',
+        roomReady: true,
       },
     ]);
 
@@ -404,6 +471,7 @@ describe('classifyCalendarContextIds', () => {
         status: 'scheduled',
         contextType: 'case',
         contextId: 'engagement-1',
+        roomReady: true,
       },
       {
         meetingId: 'm2',
@@ -412,6 +480,7 @@ describe('classifyCalendarContextIds', () => {
         status: 'scheduled',
         contextType: 'case',
         contextId: 'engagement-1',
+        roomReady: true,
       },
     ]);
 
@@ -436,6 +505,7 @@ describe('assembleCalendarMeetings', () => {
           status: 'scheduled',
           contextType: 'case',
           contextId: 'engagement-1',
+          roomReady: true,
         },
       ],
       {
@@ -455,6 +525,7 @@ describe('assembleCalendarMeetings', () => {
         status: 'scheduled',
         contextType: 'case',
         contextId: 'engagement-1',
+        roomReady: true,
         engagementType: 'case',
         projectRequestId: null,
         counterpartyCompanyName: 'Acme Co',
@@ -473,6 +544,7 @@ describe('assembleCalendarMeetings', () => {
           status: 'scheduled',
           contextType: 'project_discovery',
           contextId: 'request-1',
+          roomReady: true,
         },
       ],
       {
@@ -500,6 +572,7 @@ describe('assembleCalendarMeetings', () => {
           status: 'scheduled',
           contextType: 'request_interaction',
           contextId: 'relationship-1',
+          roomReady: true,
         },
       ],
       {
@@ -531,6 +604,7 @@ describe('assembleCalendarMeetings', () => {
           status: 'scheduled',
           contextType: 'case',
           contextId: 'engagement-does-not-resolve',
+          roomReady: true,
         },
       ],
       EMPTY_OWNERS,
@@ -560,6 +634,7 @@ describe('assembleCalendarMeetings', () => {
           status: 'scheduled',
           contextType: 'case',
           contextId: 'engagement-1',
+          roomReady: true,
         },
       ],
       {
@@ -585,6 +660,7 @@ describe('assembleCalendarMeetings', () => {
           status: 'scheduled',
           contextType: 'package_session',
           contextId: 'engagement-1',
+          roomReady: true,
         },
         {
           meetingId: 'm2',
@@ -593,6 +669,7 @@ describe('assembleCalendarMeetings', () => {
           status: 'scheduled',
           contextType: 'retainer_checkin',
           contextId: 'engagement-1',
+          roomReady: true,
         },
       ],
       {
@@ -610,6 +687,59 @@ describe('assembleCalendarMeetings', () => {
     expect(result).toHaveLength(2);
     expect(result[0]?.owningRowFound).toBe(true);
     expect(result[1]?.owningRowFound).toBe(true);
+  });
+
+  /**
+   * BAL-581 — `roomReady` is copied through per meeting, and is NOT an identity field: an
+   * unresolved owner nulls `contextId` and its siblings (R8) but leaves the readiness boolean as
+   * read, because it describes the meeting's own columns, not the polymorphic seam.
+   */
+  it('copies roomReady through per meeting, resolved owner or not', () => {
+    const result = assembleCalendarMeetings(
+      [
+        {
+          meetingId: 'm-ready',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'case',
+          contextId: 'engagement-1',
+          roomReady: true,
+        },
+        {
+          meetingId: 'm-not-ready',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'case',
+          contextId: 'engagement-1',
+          roomReady: false,
+        },
+        {
+          meetingId: 'm-unresolved-not-ready',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'case',
+          contextId: 'engagement-does-not-resolve',
+          roomReady: false,
+        },
+      ],
+      {
+        ...EMPTY_OWNERS,
+        engagementById: new Map([
+          ['engagement-1', { id: 'engagement-1', engagementType: 'case', companyName: 'Acme Co' }],
+        ]),
+      },
+      'expert-1'
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result.map((row) => [row.meetingId, row.roomReady, row.owningRowFound])).toEqual([
+      ['m-ready', true, true],
+      ['m-not-ready', false, true],
+      ['m-unresolved-not-ready', false, false],
+    ]);
   });
 });
 

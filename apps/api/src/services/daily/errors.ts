@@ -34,3 +34,20 @@ export class DailyApiError extends Error {
     this.name = 'DailyApiError';
   }
 }
+
+/**
+ * BAL-581 — the vendor returned a room that is not `privacy: 'private'`, on either the
+ * create path or the already-exists adoption path. A SUBCLASS of `DailyApiError`, not a new
+ * error family, so every existing `instanceof DailyApiError` check (the 4xx-retry rule, the
+ * repository catch in `rooms.test.ts`) keeps holding unchanged; only `name` differs, which is
+ * what lets `meeting_provision_failed`'s `reason` (the error CLASS) distinguish this case from
+ * an ordinary vendor failure. `provisionVenue`'s catch reacts to this class specifically: it
+ * best-effort deletes the stranded public room by its derived name, so the NEXT provisioning
+ * attempt creates a private one instead of adopting the same refused room forever.
+ */
+export class DailyRoomNotPrivateError extends DailyApiError {
+  constructor(method: string, path: string, status: number, body: string) {
+    super(method, path, status, body);
+    this.name = 'DailyRoomNotPrivateError';
+  }
+}

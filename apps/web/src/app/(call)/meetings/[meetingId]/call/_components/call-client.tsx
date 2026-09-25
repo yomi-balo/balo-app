@@ -5,10 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
 import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
-import {
-  JoinRetryNotice,
-  JoinUnavailableNotice,
-} from '@/components/balo/meetings/join-notice-card';
+import { JoinRetryNotice } from '@/components/balo/meetings/join-notice-card';
+import { MemberJoinNotice } from '@/components/balo/meetings/member-join-notice';
 import { MeetingConnectingCard } from '@/components/balo/meetings/meeting-connecting-card';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
@@ -19,12 +17,12 @@ import {
 } from '@/lib/meetings/back-to-context';
 import {
   MEMBER_JOIN_EXHAUSTED_LINE,
+  isRetryableMemberJoinFailure,
   memberJoinRetryDelayMs,
 } from '@/lib/meetings/member-join-retry';
 import { parseMemberJoinEnvelope } from '@/lib/meetings/member-join-envelope';
 import { formatScheduledStartLabel } from '@/lib/meetings/format-scheduled-start';
 import { resolveWaitingSubject } from '@/lib/meetings/waiting-subject';
-import { MEMBER_JOIN_OUTAGE_ERROR } from '@/lib/meetings/lobby';
 import { useMeetingStatePoll } from '@/lib/meetings/use-meeting-state-poll';
 import { pollIntervalFor } from '@/lib/meetings/use-admission-poll';
 import { resolveTopBarClock } from '@/lib/meetings/top-bar-clock';
@@ -65,8 +63,9 @@ import { getMeetingDrawdownStateAction } from '../_actions/get-meeting-drawdown-
  * both are kicked off in the same effect. `preloadMeetingFrame` uses the SAME module specifier as
  * the `dynamic()` inside `MeetingFrame`, so the bundler dedupes them to one chunk.
  *
- * ⚠ THE RETRY CADENCE IS THE **SHIPPED** ONE. A `503` means the meeting is not provisioned yet
- * (`join_url` is null), which is a real `201` outcome of `POST /meetings` when Daily was down.
+ * ⚠ THE RETRY CADENCE IS THE **SHIPPED** ONE. A `409 meeting_not_provisioned` means the call room
+ * is still being set up (the BAL-581 venue repair job heals it automatically) and is retried on
+ * the shipped cadence, as is a transport failure or any 5xx (`MemberJoinFailureReason = 'outage'`).
  * `member-join-retry.ts` composes `pollIntervalFor` and `LOBBY_MAX_CONSECUTIVE_POLL_FAILURES`
  * rather than writing a second schedule.
  *
@@ -74,7 +73,7 @@ import { getMeetingDrawdownStateAction } from '../_actions/get-meeting-drawdown-
  * it is never stored, logged or put in a URL.
  */
 
-type Phase = 'connecting' | 'joined' | 'retrying' | 'unavailable';
+type Phase = 'connecting' | 'joined' | 'retrying' | 'setting_up' | 'not_open' | 'unavailable';
 
 export interface CallClientProps {
   readonly meetingId: string;
@@ -181,16 +180,23 @@ export function CallClient({
           setPhase('joined');
           return;
         }
-        // ⚠ THE **OUTAGE** COPY IS THE ONLY ONE THE ACTION DISTINGUISHES — the api collapses "no
-        // such meeting", "not your party" and "no capability" into ONE literal, so this layer
-        // cannot and must not try to say more.
-        const isOutage = result.error === MEMBER_JOIN_OUTAGE_ERROR;
-        if (!isOutage) {
-          setPhase('unavailable');
+        const { reason } = result;
+        if (reason === 'account_refused') {
+          // BAL-568 — the session-sync route re-reads the live row, destroys the cookie and
+          // lands on /login?error=… with BAL-197's copy. ⚠ Never `logoutAction()` (it loses the
+          // message).
+          globalThis.location.assign('/api/auth/session-sync?returnTo=/login');
+          return;
+        }
+        if (!isRetryableMemberJoinFailure(reason)) {
+          // ⚠ THE TYPED REASON, NOT A COARSE COLLAPSE (BAL-581) — `memberJoinFailureReasonFor`'s
+          // allowlist decides what may be distinguished; `not_open` renders a distinct member
+          // notice, and every other non-retryable reason collapses to `unavailable`.
+          setPhase(reason === 'not_open' ? 'not_open' : 'unavailable');
           return;
         }
         failureCountRef.current += 1;
-        setPhase('retrying');
+        setPhase(reason === 'not_provisioned' ? 'setting_up' : 'retrying');
         const delay = memberJoinRetryDelayMs(
           failureCountRef.current,
           Date.now() - startedAtRef.current
@@ -602,7 +608,30 @@ export function CallClient({
   if (phase === 'unavailable') {
     return (
       <CallShell>
-        <JoinUnavailableNotice headingRef={headingRef} />
+        <MemberJoinNotice reason="unavailable" headingRef={headingRef} />
+        <DashboardLink />
+      </CallShell>
+    );
+  }
+
+  if (phase === 'not_open') {
+    return (
+      <CallShell>
+        <MemberJoinNotice reason="not_open" headingRef={headingRef} />
+        <DashboardLink />
+      </CallShell>
+    );
+  }
+
+  if (phase === 'setting_up') {
+    return (
+      <CallShell>
+        <MemberJoinNotice reason="not_provisioned" headingRef={headingRef} onRetry={handleRetry} />
+        {isExhausted ? (
+          <p className="text-muted-foreground mt-4 max-w-md text-center text-[12.5px] leading-relaxed">
+            {MEMBER_JOIN_EXHAUSTED_LINE}
+          </p>
+        ) : null}
         <DashboardLink />
       </CallShell>
     );

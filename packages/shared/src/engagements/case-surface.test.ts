@@ -276,6 +276,7 @@ describe('deriveCaseConsultationState', () => {
     'completed',
     'no_show_client',
     'missed_call',
+    'venue_unavailable',
   ];
 
   it('is TOTAL — every (status, outcome, proposal, client presence) combination yields a label', () => {
@@ -304,6 +305,7 @@ describe('deriveCaseConsultationState', () => {
     { status: 'ended', outcome: 'completed', expected: 'held' },
     { status: 'ended', outcome: 'no_show_client', expected: 'no_show_client' },
     { status: 'ended', outcome: 'missed_call', expected: 'missed_call' },
+    { status: 'ended', outcome: 'venue_unavailable', expected: 'venue_unavailable' },
     { status: 'ended', outcome: null, expected: 'outcome_pending' },
     { status: 'cancelled', outcome: null, expected: 'cancelled' },
   ] as ReadonlyArray<{
@@ -347,6 +349,7 @@ describe('deriveCaseConsultationState', () => {
     { status: 'ended', outcome: 'completed' },
     { status: 'ended', outcome: 'no_show_client' },
     { status: 'ended', outcome: 'missed_call' },
+    { status: 'ended', outcome: 'venue_unavailable' },
     { status: 'ended', outcome: null },
     { status: 'cancelled', outcome: null },
   ] as ReadonlyArray<{ status: MeetingStatusLabel; outcome: MeetingOutcomeLabel | null }>)(
@@ -440,6 +443,37 @@ describe('deriveCaseConsultationState', () => {
     }
   });
 
+  /**
+   * ⚠ BAL-581 — `venue_unavailable` is a STORED outcome, never derived like `nobody_joined`.
+   * It must win regardless of presence (which it does not even read) and regardless of a live
+   * reschedule proposal (impossible in practice on an ended meeting, but this function is
+   * TOTAL and must answer honestly if handed one).
+   */
+  it.each([null, false, true] as const)(
+    'ended + venue_unavailable with clientSideEverPresent=%s → venue_unavailable',
+    (clientSideEverPresent) => {
+      expect(
+        deriveCaseConsultationState({
+          status: 'ended',
+          outcome: 'venue_unavailable',
+          hasLiveRescheduleProposal: false,
+          clientSideEverPresent,
+        })
+      ).toBe('venue_unavailable');
+    }
+  );
+
+  it('⚠ ended + venue_unavailable wins even with hasLiveRescheduleProposal: true', () => {
+    expect(
+      deriveCaseConsultationState({
+        status: 'ended',
+        outcome: 'venue_unavailable',
+        hasLiveRescheduleProposal: true,
+        clientSideEverPresent: null,
+      })
+    ).toBe('venue_unavailable');
+  });
+
   /** A cancelled meeting is cancelled whatever else the row happens to carry. */
   it('lets cancelled win over any outcome', () => {
     for (const outcome of OUTCOMES) {
@@ -464,6 +498,7 @@ describe('caseConsultationIsUpcoming', () => {
     { state: 'no_show_client', upcoming: false },
     { state: 'missed_call', upcoming: false },
     { state: 'nobody_joined', upcoming: false },
+    { state: 'venue_unavailable', upcoming: false },
     { state: 'cancelled', upcoming: false },
     { state: 'outcome_pending', upcoming: false },
   ] as ReadonlyArray<{ state: CaseConsultationStateLabel; upcoming: boolean }>)(

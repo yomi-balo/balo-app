@@ -16,6 +16,7 @@
 import type {
   MeetingBookingContextType,
   MeetingContextTypeWithHolder,
+  MeetingProvisionTrigger,
 } from '@balo/shared/meetings';
 
 export const MEETING_SERVER_EVENTS = {
@@ -35,7 +36,12 @@ export const MEETING_SERVER_EVENTS = {
   MEETING_EXPERT_ABSENT_ALERT: 'meeting_expert_absent_alert',
   /** Nobody delivering ever turned up and the meeting was terminated as a missed call. */
   MEETING_MISSED_CALL: 'meeting_missed_call',
-  /** EVERY terminal path — the four system rules and the human End alike. */
+  /**
+   * BAL-581 — the venue-unavailable rule fired: the call room was never ready by
+   * `scheduled_start + MISSED_CALL_TERMINATION_MS`. Balo's failure, never an expert no-show.
+   */
+  MEETING_VENUE_UNAVAILABLE: 'meeting_venue_unavailable',
+  /** EVERY terminal path — the five system rules and the human End alike. */
   MEETING_ENDED: 'meeting_ended',
   /**
    * BAL-433 Slice 1 (ADR-1044 amendment 2026-08-25) — one booking's EXPERT-party calendar
@@ -76,10 +82,20 @@ export interface MeetingServerEventMap {
      */
     engagement_type: 'case' | 'project' | 'package' | null;
     duration_minutes: number;
-    /** Minutes from the provisioning instant to `scheduled_start` — booking lead time. */
+    /**
+     * Minutes from the provisioning instant to `scheduled_start` — booking lead time.
+     *
+     * ⚠ SEGMENT BY {@link trigger}. A `repair`'s lead time is not a booking lead time — it
+     * measures how late the venue was salvaged, not how far ahead the client booked.
+     */
     lead_time_minutes: number;
     /** `true` when this was an idempotent replay: no Daily call, no write (D2). */
     idempotent_replay: boolean;
+    /**
+     * BAL-581 — `booking` = inside `POST /meetings`; `replay` = a lost-201 retry; `repair` =
+     * the venue repair job.
+     */
+    trigger: MeetingProvisionTrigger;
     distinct_id: string;
   };
   /**
@@ -91,8 +107,17 @@ export interface MeetingServerEventMap {
     meeting_id: string;
     context_type: MeetingBookingContextType;
     engagement_type: 'case' | 'project' | 'package' | null;
-    /** `DailyConfigError` | `DailyApiError` | other — the error CLASS, never the message. */
+    /**
+     * `DailyConfigError` | `DailyApiError` | `DailyRoomNotPrivateError` | other — the error
+     * CLASS, never the message.
+     */
     reason: string;
+    /**
+     * BAL-581 — `booking` = inside `POST /meetings`; `replay` = a lost-201 retry; `repair` =
+     * the venue repair job.
+     */
+    trigger: MeetingProvisionTrigger;
+    /** The booking actor, or the meeting id on `repair`. */
     distinct_id: string;
   };
   /**
@@ -138,12 +163,13 @@ export interface MeetingServerEventMap {
 
   // ── BAL-134 / ADR-1049 — the lifecycle. ──────────────────────────────────────────────────
   //
-  // ⚠⚠ `distinct_id` IS REQUIRED ON EVERY SERVER EVENT, AND FOUR OF THESE FIVE HAVE NO ACTING
+  // ⚠⚠ `distinct_id` IS REQUIRED ON EVERY SERVER EVENT, AND FIVE OF THESE SIX HAVE NO ACTING
   // HUMAN. `trackServer` destructures it and promotes it to PostHog's `distinctId`, and the
   // cast means a MISSING property silently becomes `undefined` — i.e. an event attributed to
-  // nobody, invisible in every funnel. So the four SYSTEM paths carry the **`meetingId`**,
-  // which is the same non-user shape `guest_joined` already uses with `meeting_guests.id`. Only
-  // `meeting_ended` on the HUMAN path carries a real user id.
+  // nobody, invisible in every funnel. So the five SYSTEM paths (including BAL-581's
+  // `meeting_venue_unavailable`) carry the **`meetingId`**, which is the same non-user shape
+  // `guest_joined` already uses with `meeting_guests.id`. Only `meeting_ended` on the HUMAN
+  // path carries a real user id.
 
   /**
    * The consultation actually began: expert ∧ ≥1 client-side participant both in the room.
@@ -186,6 +212,11 @@ export interface MeetingServerEventMap {
    */
   [MEETING_SERVER_EVENTS.MEETING_EXPERT_ABSENT_ALERT]: {
     meeting_id: string;
+    /**
+     * Minutes from `scheduled_start` to the alert's fire instant — larger than
+     * `EXPERT_ABSENT_ALERT_MS` when the call room became ready after the start (BAL-581: the
+     * alert is anchored on `venueAbsenceAnchor`, not the bare start).
+     */
     minutes_past_start: number;
     distinct_id: string;
   };
@@ -202,7 +233,19 @@ export interface MeetingServerEventMap {
   };
 
   /**
-   * EVERY terminal path — the four system rules and the human End alike. The one event a
+   * BAL-581 — the venue-unavailable rule fired: the call room was never ready by
+   * `scheduled_start + MISSED_CALL_TERMINATION_MS`. Balo's failure, never an expert no-show.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_VENUE_UNAVAILABLE]: {
+    meeting_id: string;
+    /** `true` = a room name was stamped but is not this meeting's; `false` = never created. */
+    room_name_stamped: boolean;
+    /** The meeting id — no acting human on a system path. */
+    distinct_id: string;
+  };
+
+  /**
+   * EVERY terminal path — the five system rules and the human End alike. The one event a
    * funnel can count meetings by.
    */
   [MEETING_SERVER_EVENTS.MEETING_ENDED]: {
@@ -216,10 +259,10 @@ export interface MeetingServerEventMap {
      * ⚠ `null` IS A REAL VALUE, NOT "unknown" (D5). The two HUMAN paths and the abandoned wait
      * deliberately leave it unset — the ender never sets the outcome.
      */
-    outcome: 'completed' | 'no_show_client' | 'missed_call' | null;
-    /** `meetings.ended_by`. ⚠ ALL FOUR system rules report `system_idle`; `outcome` separates them. */
+    outcome: 'completed' | 'no_show_client' | 'missed_call' | 'venue_unavailable' | null;
+    /** `meetings.ended_by`. ⚠ ALL FIVE system rules report `system_idle`; `outcome` separates them. */
     ended_by: 'client_principal' | 'expert_host' | 'system_idle';
-    /** The acting user on a human End; the MEETING id on all four system paths. */
+    /** The acting user on a human End; the MEETING id on all five system paths. */
     distinct_id: string;
   };
 

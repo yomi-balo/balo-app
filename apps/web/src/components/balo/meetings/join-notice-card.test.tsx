@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 
-import { JoinRetryNotice, JoinUnavailableNotice } from './join-notice-card';
+import { JoinNoticeRetryButton, JoinRetryNotice, JoinUnavailableNotice } from './join-notice-card';
 import {
   JOIN_TEMPORARILY_UNAVAILABLE_BODY,
   JOIN_TEMPORARILY_UNAVAILABLE_TITLE,
@@ -130,6 +130,18 @@ describe('JoinRetryNotice — the ONE un-collapsed failure', () => {
     const { container } = render(<JoinRetryNotice onRetry={vi.fn()} />);
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('JoinNoticeRetryButton — BAL-581, extracted so MemberJoinNotice can reuse it', () => {
+  it('calls onRetry when pressed', async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    render(<JoinNoticeRetryButton onRetry={onRetry} />);
+
+    await user.click(screen.getByRole('button', { name: /try again/i }));
+
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });
 

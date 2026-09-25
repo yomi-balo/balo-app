@@ -226,6 +226,8 @@ export function toUpNextRowView(
     // anonymous guest lobby (`meetingJoinLinkUrl`). See `member-call-path.ts` for why.
     joinPath: memberCallPath(row.meetingId),
     rescheduleProposalExpiresAt: rescheduleExpiryIso(row, lookups),
+    // BAL-581 — copied through from the repository's SQL-twin boolean, never recomputed.
+    roomReady: row.roomReady,
   };
 }
 

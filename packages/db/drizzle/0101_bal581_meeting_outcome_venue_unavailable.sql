@@ -1,0 +1,1 @@
+ALTER TYPE "public"."meeting_outcome" ADD VALUE 'venue_unavailable';

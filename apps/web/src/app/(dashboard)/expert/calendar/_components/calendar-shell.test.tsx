@@ -83,6 +83,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     href: '/cases/e1',
     joinUrl: '/meetings/m-1/call',
     counterpartyCompanyName: 'Northwind',
+    roomReady: true,
     ...overrides,
   };
 }

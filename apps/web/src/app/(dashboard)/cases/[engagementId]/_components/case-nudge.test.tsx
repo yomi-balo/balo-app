@@ -94,6 +94,9 @@ function upcomingWithSkew(
     live: false,
     durationMinutes: 60,
     joinPath: JOIN_PATH,
+    // BAL-581 — the fixture default is "ready", so every EXISTING assertion below keeps
+    // exercising Join/countdown behaviour unchanged; only the new not-ready cases override it.
+    roomReady: true,
     ...over,
   };
 }
@@ -753,6 +756,7 @@ describe('CaseNudge — render 0 countdown label is TZ-independent', () => {
     serverNowIso: '2026-09-21T23:30:00.000Z',
     durationMinutes: 60,
     joinPath: JOIN_PATH,
+    roomReady: true,
   };
 
   /** Renders under the given ambient `TZ`, captures render 0's countdown text, unmounts, and
@@ -931,6 +935,230 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
     // The visible label must agree with liveness too — not just the accessible name — or a
     // device clock running behind the server's shows an active button reading a countdown.
     expect(join).toHaveTextContent('Join now');
+  });
+});
+
+/**
+ * BAL-581 — `roomReady` is a SEPARATE field from `live` (never folded in). The slot never empties:
+ * `RoomSettingUpSlot` replaces Join whenever the room isn't ready, in or out of the window.
+ */
+describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('renders the setting-up slot instead of Join, INSIDE the window, and no crossing announcement', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        lens="client"
+      />
+    );
+    expect(screen.queryByRole('button', { name: /^Join .*meeting/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Setting up your call room')).toBeInTheDocument();
+    expect(screen.getByText(/isn't ready yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
+
+  it('renders the setting-up slot, never the countdown, OUTSIDE the window too', () => {
+    render(
+      <CaseNudge {...BASE} nudge={upcomingAt(THREE_DAYS_MS, { roomReady: false })} lens="client" />
+    );
+    expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
+    expect(screen.getByText('Setting up your call room')).toBeInTheDocument();
+  });
+
+  it('still hides Reschedule INSIDE the window, even though the room is not ready', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        lens="client"
+      />
+    );
+    expect(screen.queryByRole('button', { name: /reschedule/i })).not.toBeInTheDocument();
+  });
+
+  it('calls router.refresh() after 30 s while live and the room is not ready', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        lens="client"
+      />
+    );
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT refresh on a timer once the room IS ready', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true })}
+        lens="client"
+      />
+    );
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A screen reader is not told when Join appears through the readiness refresh alone:
+   * `useUpcomingJoinClock`'s own crossing announcement only fires on the join-
+   * WINDOW crossing, and a viewer already inside the window at mount never sees one. This pins
+   * the SEPARATE room-readiness announcement that covers exactly that gap.
+   */
+  it('announces "You can join now." when a refresh flips the room ready while already inside the window', () => {
+    const { rerender } = render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        lens="client"
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('');
+
+    rerender(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true })}
+        lens="client"
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('You can join now.');
+  });
+
+  it('resets the "You can join now." announcement when the nudge swaps to a different meeting', () => {
+    const { rerender } = render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false, meetingId: 'm1' })}
+        lens="client"
+      />
+    );
+
+    rerender(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true, meetingId: 'm1' })}
+        lens="client"
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('You can join now.');
+
+    // A different meeting swaps in, ALREADY ready from its very first render — no crossing for
+    // this hook to observe. The stale announcement about the PREVIOUS meeting's room must not
+    // linger and read out as though it were about this one: the viewer never watched IT become
+    // ready. (Using `roomReady: false` here would pass even with the reset removed, because the
+    // outer span already blanks unready rooms regardless of the hook's returned string — the
+    // reset only matters once the new meeting's `roomReady` is also true.)
+    rerender(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true, meetingId: 'm2' })}
+        lens="client"
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
+
+  it('never announces when the room becomes ready while the window is still closed', () => {
+    const { rerender } = render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(THREE_DAYS_MS, { live: false, roomReady: false })}
+        lens="client"
+      />
+    );
+    rerender(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(THREE_DAYS_MS, { live: false, roomReady: true })}
+        lens="client"
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
+
+  /** MUTATION PROOF: `roomReady` alone gates the slot — a regression that folded it into `live`
+   *  (or dropped the check) would render Join regardless. */
+  it('MUTATION PROOF — roomReady gates the slot independently of live', () => {
+    const { rerender } = render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true })}
+        lens="client"
+      />
+    );
+    expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
+    expect(screen.queryByText('Setting up your call room')).not.toBeInTheDocument();
+
+    rerender(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        lens="client"
+      />
+    );
+    expect(screen.queryByRole('button', { name: /^Join .*meeting/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Setting up your call room')).toBeInTheDocument();
+  });
+
+  /**
+   * The heading never claims the consultation is starting or happening while the room isn't
+   * ready — that would contradict the "isn't ready yet" body directly beneath it, for the whole
+   * salvage window between the scheduled start and the point the sweep gives up on the venue.
+   * A plain countdown before the start ("starts in N minutes") is still allowed even with a
+   * not-yet-ready room: it is a true statement about the clock, not a liveness claim.
+   */
+  it.each(LENSES)(
+    'falls back to the neutral title just past the scheduled start, %s lens',
+    (lens) => {
+      render(
+        <CaseNudge
+          {...BASE}
+          nudge={upcomingAt(-2 * 60_000, { live: true, roomReady: false })}
+          lens={lens}
+        />
+      );
+      expect(screen.queryByText(/starting now/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/Next consultation/i)).toBeInTheDocument();
+    }
+  );
+
+  it.each(LENSES)(
+    'falls back to the neutral title exactly at the scheduled start (the zero-minute boundary), %s lens',
+    (lens) => {
+      render(
+        <CaseNudge {...BASE} nudge={upcomingAt(0, { live: true, roomReady: false })} lens={lens} />
+      );
+      expect(screen.queryByText(/starting now/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/Next consultation/i)).toBeInTheDocument();
+    }
+  );
+
+  it('still counts down before the start even though the room is not ready yet', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        lens="client"
+      />
+    );
+    expect(screen.getByText('Your consultation starts in 5 minutes')).toBeInTheDocument();
   });
 });
 

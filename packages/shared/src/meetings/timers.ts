@@ -39,8 +39,10 @@ import { MIN_MEETING_MINUTES } from './bounds';
 const MS_PER_MINUTE = 60_000;
 
 /**
- * The expert has not joined by `scheduled_start + this` ⇒ alert Balo ops so a human can chase
- * them. Anchored on `meetings.scheduled_start`.
+ * The expert has not joined by `anchor + this` ⇒ alert Balo ops so a human can chase them.
+ * Anchored on the venue absence anchor — `max(scheduled_start, when the call room became
+ * ready)` (`venueAbsenceAnchor`); a meeting whose room never became ready is ended by the
+ * venue-unavailable rule at `scheduled_start + MISSED_CALL_TERMINATION_MS` instead.
  *
  * ⚠ AN ALERT, NOT A TERMINATION. The salvage window runs until
  * {@link MISSED_CALL_TERMINATION_MS}, and an expert joining at 10:09 on a 10:10 threshold
@@ -51,8 +53,11 @@ const MS_PER_MINUTE = 60_000;
 export const EXPERT_ABSENT_ALERT_MS = 5 * MS_PER_MINUTE;
 
 /**
- * The expert has STILL not joined by `scheduled_start + this` ⇒ the meeting is a MISSED CALL:
- * terminated, `outcome = 'missed_call'`, nothing owed. Anchored on `scheduled_start`.
+ * The expert has STILL not joined by `anchor + this` ⇒ the meeting is a MISSED CALL:
+ * terminated, `outcome = 'missed_call'`, nothing owed. Anchored on the venue absence anchor —
+ * `max(scheduled_start, when the call room became ready)` (`venueAbsenceAnchor`); a meeting
+ * whose room never became ready is ended by the venue-unavailable rule at
+ * `scheduled_start + MISSED_CALL_TERMINATION_MS` instead.
  *
  * Env override: `MEETING_MISSED_CALL_MINUTES`.
  */
@@ -92,7 +97,7 @@ export const NO_SHOW_FLOOR_MS = MIN_MEETING_MINUTES * MS_PER_MINUTE;
  * empty (the latest `meeting_presence.left_at`).
  *
  * ⚠ IT IS SCOPED, ON BOTH OF ITS USES, TO A MEETING SOMEBODY ACTUALLY REACHED — never to
- * "is empty" (ADR-1049 forbids widening it, and the four terminal rules are disjoint by
+ * "is empty" (ADR-1049 forbids widening it, and the five terminal rules are disjoint by
  * status/presence precisely because of that scoping). Widening it would pre-empt the no-show
  * and missed-call rules on a room nobody ever entered.
  *

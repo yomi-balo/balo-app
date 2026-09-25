@@ -94,6 +94,7 @@ function baseMeeting(overrides: Record<string, unknown> = {}): Record<string, un
     projectRequestId: null,
     counterpartyCompanyName: 'Northwind',
     owningRowFound: true,
+    roomReady: true,
     ...overrides,
   };
 }
@@ -304,6 +305,63 @@ describe('loadExpertCalendar — href fails closed with owningRowFound (B7)', ()
     });
 
     expect(view.meetings[0]?.href).toBe('/projects/request-9');
+  });
+});
+
+describe('loadExpertCalendar — roomReady copy-through (BAL-581)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.findTimezone.mockResolvedValue('Australia/Sydney');
+    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true } });
+  });
+
+  it('copies roomReady through unchanged, both true and false — never recomputed', async () => {
+    m.listCalendarForExpert
+      .mockResolvedValueOnce([
+        baseMeeting({ meetingId: 'ready', roomReady: true }),
+        baseMeeting({ meetingId: 'not-ready', roomReady: false }),
+      ])
+      .mockResolvedValueOnce([]);
+    const { loadExpertCalendar } = await import('./load-expert-calendar');
+
+    const view = await loadExpertCalendar({
+      expertProfileId: EXPERT_PROFILE_ID,
+      userId: USER_ID,
+      weekStartDayKey: '2026-08-24',
+    });
+
+    const ready = view.meetings.find((meeting) => meeting.meetingId === 'ready');
+    const notReady = view.meetings.find((meeting) => meeting.meetingId === 'not-ready');
+    expect(ready?.roomReady).toBe(true);
+    expect(notReady?.roomReady).toBe(false);
+  });
+
+  it('the serialised page view carries no Daily room name or join-url value', async () => {
+    // Smuggle a raw vendor room name/join-url onto the repository row (as a naive spread of the
+    // row into the view would carry them through) and prove neither survives the projection: the
+    // view's own `joinUrl` is the derived member-call path, never a copy of anything the
+    // repository returned.
+    m.listCalendarForExpert
+      .mockResolvedValueOnce([
+        baseMeeting({
+          dailyRoomName: 'room-xyz',
+          joinUrl: 'https://balo-x.daily.co/room-xyz',
+        }) as never,
+      ])
+      .mockResolvedValueOnce([]);
+    const { loadExpertCalendar } = await import('./load-expert-calendar');
+
+    const view = await loadExpertCalendar({
+      expertProfileId: EXPERT_PROFILE_ID,
+      userId: USER_ID,
+      weekStartDayKey: '2026-08-24',
+    });
+
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain('daily.co');
+    expect(serialized).not.toContain('room-xyz');
+    expect(serialized).not.toContain('/join/m/');
+    expect(view.meetings[0]?.joinUrl).toBe('/meetings/m1/call');
   });
 });
 
@@ -622,6 +680,7 @@ describe('mergeCalendarWindows — the exported merge/dedupe/sort primitive (D7)
         projectRequestId: null,
         counterpartyCompanyName: 'Northwind',
         owningRowFound: true,
+        roomReady: true,
       };
     }
     const zMeeting = calendarMeeting('z');

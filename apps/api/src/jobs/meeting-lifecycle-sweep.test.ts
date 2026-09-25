@@ -83,6 +83,8 @@ vi.mock('@balo/analytics/server', () => ({
   MEETING_SERVER_EVENTS: {
     MEETING_WAITING_ABANDONED: 'meeting_waiting_abandoned',
     MEETING_MISSED_CALL: 'meeting_missed_call',
+    // BAL-581 — MANDATORY: without this the venue arm calls `trackServer(undefined, …)`.
+    MEETING_VENUE_UNAVAILABLE: 'meeting_venue_unavailable',
   },
 }));
 // ⚠⚠ THE FULL MODULE SURFACE, NOT JUST THE TWO FUNCTIONS THIS FILE HAPPENS TO ASSERT ON.
@@ -137,7 +139,12 @@ vi.mock('./recording-capture.js', () => ({
 // is imported, and the Worker/cron constructors are never called. ⚠ `@balo/shared/meetings` is
 // NOT mocked — `resolveTerminalRule` and `dailyParticipantIdFor` are what these rows assert.
 
-import { dailyParticipantIdFor, DEFAULT_MEETING_TIMERS } from '@balo/shared/meetings';
+import {
+  dailyParticipantIdFor,
+  dailyRoomNameForMeeting,
+  isMeetingVenueReady,
+  DEFAULT_MEETING_TIMERS,
+} from '@balo/shared/meetings';
 import {
   MAX_RECORDING_ENSURES_PER_SWEEP_TICK,
   MEETING_LIFECYCLE_BATCH_LIMIT,
@@ -158,6 +165,15 @@ function at(minutes: number): Date {
   return new Date(START.getTime() + minutes * MINUTE);
 }
 
+/**
+ * ⚠⚠ BAL-581 — VENUE-COMPLETE BY DEFAULT, AND THAT IS THE CANARY. `isMeetingVenueReady` needs
+ * `dailyRoomName` AND `joinUrl` AND a name that matches `dailyRoomNameForMeeting(id)`;
+ * `meetingVenueReadyAt` also reads `createdAt`/`venueProvisionedAt`. Without `joinUrl` this
+ * fixture reads as NOT READY and every existing missed-call/no-show/idle-end row in this file
+ * would silently flip to `venue_unavailable` the moment the sweep started passing `venueReadyAt`
+ * through. `createdAt`/`venueProvisionedAt` are both 24h BEFORE `START` — "ready at booking",
+ * the ordinary case every pre-BAL-581 row means.
+ */
 function meeting(overrides: Record<string, unknown> = {}) {
   return {
     id: MEETING_ID,
@@ -165,6 +181,9 @@ function meeting(overrides: Record<string, unknown> = {}) {
     scheduledStart: START,
     scheduledEnd: at(60),
     dailyRoomName: ROOM,
+    joinUrl: `https://balo.daily.co/${ROOM}`,
+    createdAt: at(-1440),
+    venueProvisionedAt: at(-1440),
     endedAt: null,
     outcome: null,
     ...overrides,
@@ -205,6 +224,12 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockFindCapturingForMeeting.mockResolvedValue(undefined);
     // BAL-480 fix round 1 — well under the per-meeting Daily failure cap by default.
     mockCountFailedByStage.mockResolvedValue(0);
+  });
+
+  /** ⚠⚠ THE CANARY — if this ever goes red, every missed-call/no-show/idle-end row below it is
+   * silently exercising `venue_unavailable` instead of the rule it claims to. */
+  it('⚠⚠ the default fixture is venue-READY — the canary for every other row in this file', () => {
+    expect(isMeetingVenueReady(meeting())).toBe(true);
   });
 
   it('scans nothing and does nothing on an empty batch — no vendor call', async () => {
@@ -759,7 +784,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     expect(result.intervalsClosed).toBe(0);
   });
 
-  // ── PASS 2 — THE FOUR TERMINAL RULES ────────────────────────────────────────────────────
+  // ── PASS 2 — THE FIVE TERMINAL RULES ────────────────────────────────────────────────────
 
   const TERMINAL_ROWS: ReadonlyArray<{
     label: string;
@@ -768,6 +793,10 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     nowMinutes: number;
     outcome: string | null;
     event?: string;
+    /** BAL-581 — venue-field overrides merged onto the venue-complete default. */
+    meeting?: Record<string, unknown>;
+    /** BAL-581 — when set, the event assertion is EXACT rather than `expect.anything()`. */
+    eventPayload?: Record<string, unknown>;
   }> = [
     {
       label: 'IDLE END — completed',
@@ -802,11 +831,46 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       outcome: null,
       event: 'meeting_waiting_abandoned',
     },
+    {
+      label: 'VENUE UNAVAILABLE (BAL-581) — venue_unavailable + its own event',
+      status: 'scheduled',
+      intervals: [],
+      nowMinutes: 10,
+      outcome: 'venue_unavailable',
+      event: 'meeting_venue_unavailable',
+      meeting: { dailyRoomName: null, joinUrl: null, venueProvisionedAt: null },
+      eventPayload: { meeting_id: MEETING_ID, room_name_stamped: false, distinct_id: MEETING_ID },
+    },
+    {
+      label: 'VENUE UNAVAILABLE (BAL-581) — a MISMATCHED stamped name still counts as stamped',
+      status: 'scheduled',
+      intervals: [],
+      nowMinutes: 10,
+      outcome: 'venue_unavailable',
+      event: 'meeting_venue_unavailable',
+      meeting: {
+        dailyRoomName: 'balo-ffffffffffffffffffffffffffffffff',
+        joinUrl: 'https://balo.daily.co/balo-ffffffffffffffffffffffffffffffff',
+        venueProvisionedAt: at(-1440),
+      },
+      eventPayload: { meeting_id: MEETING_ID, room_name_stamped: true, distinct_id: MEETING_ID },
+    },
   ];
 
   it.each(TERMINAL_ROWS)('$label', async (rowSpec) => {
-    mockListCandidates.mockResolvedValue([meeting({ status: rowSpec.status })]);
+    const candidate = meeting({ status: rowSpec.status, ...rowSpec.meeting });
+    mockListCandidates.mockResolvedValue([candidate]);
     mockListByMeeting.mockResolvedValue(rowSpec.intervals);
+    if (rowSpec.meeting !== undefined) {
+      // ⚠ BAL-581 — the stale-snapshot re-read (`findById`) and the CAS RETURNING row
+      // must agree with the CANDIDATE's own venue facts, or the `venue_unavailable` guard sees
+      // the default (venue-ready) fixture on its re-check and the termination never confirms.
+      mockFindMeetingById.mockResolvedValue(candidate);
+      mockEndMeeting.mockResolvedValue({
+        meeting: { ...candidate, status: 'ended' },
+        closedIntervals: 0,
+      });
+    }
 
     const result = await runMeetingLifecycleSweep(at(rowSpec.nowMinutes), () => {}, EMPTY_READER);
 
@@ -814,16 +878,87 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     expect(mockEndMeeting).toHaveBeenCalledWith({
       id: MEETING_ID,
       outcome: rowSpec.outcome,
-      // ⚠ ALL FOUR SYSTEM RULES REPORT `system_idle`. `ended_by` answers "person or system?";
+      // ⚠ ALL FIVE SYSTEM RULES REPORT `system_idle`. `ended_by` answers "person or system?";
       // WHICH rule fired is answered by `outcome` plus the audit row.
       endedBy: 'system_idle',
       endedAt: at(rowSpec.nowMinutes),
       // ⚠ NULL ACTOR — the ADR-1030 system-actor exemption. Never a fabricated actor.
       actorUserId: null,
     });
-    if (rowSpec.event !== undefined) {
+    if (rowSpec.eventPayload !== undefined && rowSpec.event !== undefined) {
+      expect(mockTrackServer).toHaveBeenCalledWith(rowSpec.event, rowSpec.eventPayload);
+    } else if (rowSpec.event !== undefined) {
       expect(mockTrackServer).toHaveBeenCalledWith(rowSpec.event, expect.anything());
     }
+  });
+
+  /**
+   * BAL-581 — a late-repaired venue is NOT `venue_unavailable`, even past the missed-call
+   * threshold measured from `scheduledStart`: the anchor moves to when the room became ready.
+   */
+  it('⚠ a room ready AFTER the start is not terminated until the missed-call window from ITS OWN anchor', async () => {
+    mockListCandidates.mockResolvedValue([
+      meeting({ status: 'scheduled', venueProvisionedAt: at(8) }),
+    ]);
+
+    const notYet = await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+    expect(notYet.terminated).toBe(0);
+
+    mockListCandidates.mockResolvedValue([
+      meeting({ status: 'scheduled', venueProvisionedAt: at(8) }),
+    ]);
+    const now = await runMeetingLifecycleSweep(at(18), () => {}, EMPTY_READER);
+    expect(now.terminated).toBe(1);
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'missed_call' })
+    );
+  });
+
+  // ── BAL-581 — STALE-SNAPSHOT RE-READ BEFORE A `venue_unavailable` END ───────────────────
+
+  it('a repair that lands after the batch read aborts the venue_unavailable termination', async () => {
+    mockListCandidates.mockResolvedValue([
+      meeting({
+        status: 'scheduled',
+        dailyRoomName: null,
+        joinUrl: null,
+        venueProvisionedAt: null,
+      }),
+    ]);
+    // The repair's `setVenue` landed between the batch read and this candidate's processing.
+    mockFindMeetingById.mockResolvedValue(
+      meeting({ status: 'scheduled', venueProvisionedAt: at(9) })
+    );
+
+    const result = await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(0);
+    expect(mockEndMeeting).not.toHaveBeenCalled();
+  });
+
+  it('tears down the room from the CAS RETURNING row, never the stale null snapshot', async () => {
+    mockListCandidates.mockResolvedValue([
+      meeting({
+        status: 'scheduled',
+        dailyRoomName: null,
+        joinUrl: null,
+        venueProvisionedAt: null,
+      }),
+    ]);
+    // The re-read still confirms venue_unavailable…
+    mockFindMeetingById.mockResolvedValue(
+      meeting({ status: 'scheduled', dailyRoomName: null, joinUrl: null, venueProvisionedAt: null })
+    );
+    // …but the RETURNING row the CAS write actually produced carries a real room.
+    mockEndMeeting.mockResolvedValue({
+      meeting: meeting({ status: 'ended', dailyRoomName: ROOM }),
+      closedIntervals: 0,
+    });
+
+    const result = await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(1);
+    expect(mockDeleteRoom).toHaveBeenCalledWith(ROOM);
   });
 
   it('emits the universal `meeting_ended` on every terminal path', async () => {
@@ -886,9 +1021,18 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
    * ROOM and deleting it would drop a call that is running.
    */
   it('⚠⚠ REFUSES to delete a room whose stamped name disagrees with the derived one', async () => {
-    mockListCandidates.mockResolvedValue([
-      meeting({ status: 'scheduled', dailyRoomName: 'balo-ffffffffffffffffffffffffffffffff' }),
-    ]);
+    mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+    // ⚠ Teardown reads the CAS RETURNING row, so THIS is the row whose name must disagree to
+    // exercise the guard; the candidate itself stays venue-ready so the decision is still
+    // `missed_call` (a mismatched CANDIDATE name would instead read as venue-not-ready and fire
+    // `venue_unavailable`, which is a different test below).
+    mockEndMeeting.mockResolvedValue({
+      meeting: meeting({
+        status: 'ended',
+        dailyRoomName: 'balo-ffffffffffffffffffffffffffffffff',
+      }),
+      closedIntervals: 0,
+    });
 
     const result = await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
 
@@ -960,10 +1104,56 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     expect(mockScheduleExpertAbsent).toHaveBeenCalledWith({
       meetingId: MEETING_ID,
       scheduledStart: START,
+      // ⚠ BAL-581 — the venue is ready before the start on this (default) fixture, so the
+      // anchor equals `scheduledStart` and old behaviour is exactly preserved.
+      absenceAnchor: START,
       contextType: 'case',
       timers: DEFAULT_MEETING_TIMERS,
     });
     expect(mockScheduleClientAbsent).not.toHaveBeenCalled();
+  });
+
+  /**
+   * BAL-581 — the ops alert says "the EXPERT has not joined". With no room nobody COULD join,
+   * so arming here would page ops to chase an expert who was locked out too; that meeting is
+   * the `meeting.unprovisioned` admin alert's.
+   */
+  it('⚠ BAL-581 — arms NOTHING for a meeting whose venue was never provisioned', async () => {
+    mockListCandidates.mockResolvedValue([
+      meeting({
+        status: 'scheduled',
+        dailyRoomName: null,
+        joinUrl: null,
+        venueProvisionedAt: null,
+      }),
+    ]);
+
+    await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+    expect(mockScheduleExpertAbsent).not.toHaveBeenCalled();
+  });
+
+  /** BAL-581 — the anchor is `venueAbsenceAnchor`, never bare `scheduledStart`. */
+  it('⚠ BAL-581 — arms NOTHING before a LATE-ready venue existed', async () => {
+    mockListCandidates.mockResolvedValue([
+      meeting({ status: 'scheduled', venueProvisionedAt: at(3) }),
+    ]);
+
+    await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+    expect(mockScheduleExpertAbsent).not.toHaveBeenCalled();
+  });
+
+  it('⚠ BAL-581 — arms the ops alert the instant a LATE venue becomes ready, anchored there', async () => {
+    mockListCandidates.mockResolvedValue([
+      meeting({ status: 'scheduled', venueProvisionedAt: at(3) }),
+    ]);
+
+    await runMeetingLifecycleSweep(at(3), () => {}, EMPTY_READER);
+
+    expect(mockScheduleExpertAbsent).toHaveBeenCalledWith(
+      expect.objectContaining({ absenceAnchor: at(3) })
+    );
   });
 
   it('arms the CLIENT nudge when the expert is holding the room alone', async () => {
@@ -1048,9 +1238,23 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
    * failure would leave every later meeting unmetered for as long as the bad row persists.
    */
   it('⚠ one failing candidate does NOT abort the batch', async () => {
+    // ⚠ BAL-581 — `dailyRoomName`/`joinUrl` MUST be re-derived per id: the shared `ROOM` constant
+    // is `dailyRoomNameForMeeting(MEETING_ID)` only, so overriding just `id` would make BOTH rows
+    // read as venue-NOT-READY (a name mismatch) and fire `venue_unavailable` instead of the
+    // `missed_call` this test means to isolate.
     mockListCandidates.mockResolvedValue([
-      meeting({ id: 'bad', status: 'scheduled' }),
-      meeting({ id: 'good', status: 'scheduled' }),
+      meeting({
+        id: 'bad',
+        status: 'scheduled',
+        dailyRoomName: dailyRoomNameForMeeting('bad'),
+        joinUrl: `https://balo.daily.co/${dailyRoomNameForMeeting('bad')}`,
+      }),
+      meeting({
+        id: 'good',
+        status: 'scheduled',
+        dailyRoomName: dailyRoomNameForMeeting('good'),
+        joinUrl: `https://balo.daily.co/${dailyRoomNameForMeeting('good')}`,
+      }),
     ]);
     mockListByMeeting.mockImplementation(async (id: string) => {
       if (id === 'bad') throw new Error('read failed');

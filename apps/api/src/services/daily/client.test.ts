@@ -13,6 +13,7 @@ import {
   DAILY_REQUEST_TIMEOUT_MS,
   dailyRequest,
   getDailyApiKey,
+  isDailyApiKeyConfigured,
 } from './client.js';
 import { DailyApiError, DailyConfigError } from './errors.js';
 
@@ -110,6 +111,23 @@ describe('dailyRequest', () => {
 
     await expect(dailyRequest('POST', '/rooms', {})).rejects.toBeInstanceOf(DailyConfigError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('isDailyApiKeyConfigured', () => {
+  it('is false when DAILY_API_KEY is unset', () => {
+    delete process.env.DAILY_API_KEY;
+    expect(isDailyApiKeyConfigured()).toBe(false);
+  });
+
+  it('is false when DAILY_API_KEY is an empty string', () => {
+    process.env.DAILY_API_KEY = '';
+    expect(isDailyApiKeyConfigured()).toBe(false);
+  });
+
+  it('is true when DAILY_API_KEY is set to a value', () => {
+    process.env.DAILY_API_KEY = 'sk_test_daily_key';
+    expect(isDailyApiKeyConfigured()).toBe(true);
   });
 });
 

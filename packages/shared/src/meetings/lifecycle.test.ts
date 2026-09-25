@@ -9,6 +9,7 @@ import {
   resolveTerminalRule,
   resolveWaitingPhase,
   summarisePresence,
+  venueAbsenceAnchor,
   type LifecyclePresenceInterval,
   type MeetingLifecycleStatus,
   type MeetingTerminalRuleName,
@@ -196,7 +197,33 @@ describe('expertClockStart', () => {
   });
 });
 
+describe('venueAbsenceAnchor (BAL-581)', () => {
+  it('is null when the venue is not ready — nothing to be absent FROM', () => {
+    expect(venueAbsenceAnchor(START, null)).toBeNull();
+  });
+
+  it('⚠ ready BEFORE the start anchors on the start — no credit for an early room', () => {
+    expect(venueAbsenceAnchor(START, at(-30))).toEqual(START);
+  });
+
+  it('⚠ ready AFTER the start anchors on the ready instant', () => {
+    expect(venueAbsenceAnchor(START, at(8))).toEqual(at(8));
+  });
+
+  it('ready EXACTLY at the start anchors on the start', () => {
+    expect(venueAbsenceAnchor(START, START)).toEqual(START);
+  });
+});
+
 // ── ⚠⚠ THE PRECEDENCE TABLE (§4.2) ────────────────────────────────────────────────────────
+
+/**
+ * BAL-581 — the same booking-time stamp the backfill and `meetingVenueReadyAt`'s null-stamp
+ * fallback both use, so a row that leaves {@link TerminalRow.venueReadyMinutes} undefined keeps
+ * its PRE-BAL-581 meaning: a normally-provisioned meeting, ready well before anything in this
+ * file's windows.
+ */
+const VENUE_READY_AT_BOOKING = at(-24 * 60);
 
 /** The scenario shape every row below states. `null` expectation ⇒ NO rule may fire. */
 interface TerminalRow {
@@ -207,7 +234,18 @@ interface TerminalRow {
   /** Defaults to `START` — overridden only by the D12 reschedule rows. */
   readonly scheduledStart?: Date;
   readonly expected: MeetingTerminalRuleName | null;
-  readonly outcome?: 'completed' | 'no_show_client' | 'missed_call' | null;
+  readonly outcome?: 'completed' | 'no_show_client' | 'missed_call' | 'venue_unavailable' | null;
+  /**
+   * BAL-581 — `undefined` ⇒ {@link VENUE_READY_AT_BOOKING} (every existing row's PRE-BAL-581
+   * meaning, unchanged); `null` ⇒ never ready; a number ⇒ `at(n)`.
+   */
+  readonly venueReadyMinutes?: number | null;
+}
+
+function venueReadyAtFor(row: TerminalRow): Date | null {
+  if (row.venueReadyMinutes === undefined) return VENUE_READY_AT_BOOKING;
+  if (row.venueReadyMinutes === null) return null;
+  return at(row.venueReadyMinutes);
 }
 
 function inputFor(row: TerminalRow): TerminalRuleInput {
@@ -217,6 +255,7 @@ function inputFor(row: TerminalRow): TerminalRuleInput {
     presence: summarisePresence(row.intervals),
     timers: DEFAULT_MEETING_TIMERS,
     now: at(row.nowMinutes),
+    venueReadyAt: venueReadyAtFor(row),
   };
 }
 
@@ -448,6 +487,104 @@ const TERMINAL_ROWS: readonly TerminalRow[] = [
     outcome: null,
   },
 
+  // ── RULE 5 — VENUE UNAVAILABLE (BAL-581). The room was never ready. ────────────────────
+  {
+    label: 'RULE 5 venue unavailable — never ready, start+10',
+    status: 'scheduled',
+    intervals: [],
+    venueReadyMinutes: null,
+    nowMinutes: 10,
+    expected: 'venue_unavailable',
+    outcome: 'venue_unavailable',
+  },
+  {
+    label: 'near-miss: never ready, start+9',
+    status: 'scheduled',
+    intervals: [],
+    venueReadyMinutes: null,
+    nowMinutes: 9,
+    expected: null,
+  },
+  {
+    label: '⚠ RULE 3 is NOT the fallback for a missing room — never ready, start+60',
+    status: 'scheduled',
+    intervals: [],
+    venueReadyMinutes: null,
+    nowMinutes: 60,
+    expected: 'venue_unavailable',
+    outcome: 'venue_unavailable',
+  },
+  {
+    label: 'RULE 3 anchored — ready at start+8, nobody, start+10',
+    status: 'scheduled',
+    intervals: [],
+    venueReadyMinutes: 8,
+    nowMinutes: 10,
+    expected: null,
+  },
+  {
+    label: 'RULE 3 anchored — ready at start+8, nobody, start+18',
+    status: 'scheduled',
+    intervals: [],
+    venueReadyMinutes: 8,
+    nowMinutes: 18,
+    expected: 'missed_call',
+    outcome: 'missed_call',
+  },
+  {
+    label: 'RULE 3 unchanged — ready before start, nobody, start+10',
+    status: 'scheduled',
+    intervals: [],
+    venueReadyMinutes: -30,
+    nowMinutes: 10,
+    expected: 'missed_call',
+    outcome: 'missed_call',
+  },
+  {
+    label: 'RULE 3 anchored — client waited in a room ready at start+3, start+12',
+    status: 'waiting_for_participants',
+    intervals: [{ party: 'client', joinedAt: at(3), leftAt: null }],
+    venueReadyMinutes: 3,
+    nowMinutes: 12,
+    expected: null,
+  },
+  {
+    label: 'RULE 3 anchored — same, start+13',
+    status: 'waiting_for_participants',
+    intervals: [{ party: 'client', joinedAt: at(3), leftAt: null }],
+    venueReadyMinutes: 3,
+    nowMinutes: 13,
+    expected: 'missed_call',
+    outcome: 'missed_call',
+  },
+  {
+    label: 'RULE 2 no-show anchored on the expert — ready start+9, expert open from 9.5, start+10',
+    status: 'waiting_for_participants',
+    intervals: [{ party: 'expert', joinedAt: at(9.5), leftAt: null }],
+    venueReadyMinutes: 9,
+    nowMinutes: 10,
+    expected: null,
+  },
+  {
+    label: 'RULE 2 — same, start+24.5',
+    status: 'waiting_for_participants',
+    intervals: [{ party: 'expert', joinedAt: at(9.5), leftAt: null }],
+    venueReadyMinutes: 9,
+    nowMinutes: 24.5,
+    expected: 'no_show',
+    outcome: 'no_show_client',
+  },
+  {
+    label:
+      '⚠ RULE 4 unaffected by the venue — expert came and went, never-ready venue (impossible, total)',
+    status: 'scheduled',
+    intervals: [{ party: 'expert', joinedAt: at(0), leftAt: at(8) }],
+    venueReadyMinutes: null,
+    nowMinutes: 20,
+    expected: 'abandoned_wait',
+    outcome: null,
+  },
+
   // ── D12 — the stale status a reschedule leaves behind must be INERT ────────────────────
   {
     label:
@@ -480,7 +617,7 @@ const TERMINAL_ROWS: readonly TerminalRow[] = [
   // ── THE HUMAN END IS NOT A SWEEP RULE ─────────────────────────────────────────────────
   {
     label:
-      '⚠ a healthy live meeting matches NOTHING — the human End (path 5) is a fact about a REQUEST, not about a meeting',
+      '⚠ a healthy live meeting matches NOTHING — the human End (path 6) is a fact about a REQUEST, not about a meeting',
     status: 'in_progress',
     intervals: [
       { party: 'expert', joinedAt: at(0), leftAt: null },
@@ -517,8 +654,8 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
   });
 
   /**
-   * ⚠⚠ THE DISJOINTNESS PROOF. The four rules are mutually exclusive BY PRECONDITION, which is
-   * stronger than an evaluation order — so this evaluates all four PREDICATES independently and
+   * ⚠⚠ THE DISJOINTNESS PROOF. The five rules are mutually exclusive BY PRECONDITION, which is
+   * stronger than an evaluation order — so this evaluates all five PREDICATES independently and
    * asserts at most one holds. Written against `MEETING_TERMINAL_PREDICATES` rather than
    * against `resolveTerminalRule`'s if-chain, so it is a real proof and not a restatement.
    */
@@ -529,18 +666,19 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
     expect(firing[0]?.rule ?? null).toBe(row.expected);
   });
 
-  it('the predicate list names all four rules, once each', () => {
+  it('the predicate list names all five rules, once each', () => {
     expect(MEETING_TERMINAL_PREDICATES.map((entry) => entry.rule)).toEqual([
       'idle_end',
       'no_show',
       'missed_call',
+      'venue_unavailable',
       'abandoned_wait',
     ]);
   });
 
   /**
-   * ⚠ THE THREE SYSTEM PATHS DEFINED BY THEIR OUTCOME CARRY ONE; THE ABANDONED WAIT DOES NOT
-   * (D5/D9). `null` is a real, correct value — BAL-412 resolves it from `meeting_presence`.
+   * ⚠ THE FOUR SYSTEM PATHS DEFINED BY THEIR OUTCOME CARRY ONE; THE ABANDONED WAIT DOES NOT.
+   * `null` is a real, correct value — BAL-412 resolves it from `meeting_presence`.
    */
   it('⚠ only the abandoned wait leaves `outcome` unset', () => {
     const fired = TERMINAL_ROWS.filter((row) => row.expected !== null);
@@ -612,22 +750,35 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
     },
   ];
 
+  /**
+   * BAL-581 — every venue shape totality must hold over, ADDED as a third matrix axis. The key
+   * is `venueLabel`, NOT `label` — spreading it must not clobber the presence shape's `label`.
+   */
+  const VENUE_SHAPES: ReadonlyArray<{ venueLabel: string; venueReadyAt: Date | null }> = [
+    { venueLabel: 'ready at booking', venueReadyAt: at(-1440) },
+    { venueLabel: 'ready late (start+8)', venueReadyAt: at(8) },
+    { venueLabel: 'never ready', venueReadyAt: null },
+  ];
+
   const MATRIX = NON_TERMINAL.flatMap((status) =>
-    EMPTY_ROOM_SHAPES.map((shape) => ({ status, ...shape }))
+    EMPTY_ROOM_SHAPES.flatMap((shape) =>
+      VENUE_SHAPES.map((venue) => ({ status, ...shape, ...venue }))
+    )
   );
 
   /** A day past the scheduled start — past every window in `DEFAULT_MEETING_TIMERS`. */
   const LONG_AFTER = 24 * 60;
 
   it.each(MATRIX)(
-    '⚠⚠ $status + $label past every window MUST terminate — a rule-less non-terminal meeting is unrecoverable',
-    ({ status, intervals }) => {
+    '⚠⚠ $status + $label + $venueLabel past every window MUST terminate — a rule-less non-terminal meeting is unrecoverable',
+    ({ status, intervals, venueReadyAt }) => {
       const input: TerminalRuleInput = {
         status,
         scheduledStart: START,
         presence: summarisePresence(intervals),
         timers: DEFAULT_MEETING_TIMERS,
         now: at(LONG_AFTER),
+        venueReadyAt,
       };
 
       expect(summarisePresence(intervals).anyOpen).toBe(false);
@@ -654,6 +805,7 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
       presence: summarisePresence(occupied),
       timers: DEFAULT_MEETING_TIMERS,
       now: at(LONG_AFTER),
+      venueReadyAt: at(-1440),
     };
 
     expect(resolveTerminalRule({ ...base, status: 'in_progress' })).toBeNull();
@@ -671,10 +823,15 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
 // ── THE SERVER-COMPUTED WAITING PHASE (§7.1) ──────────────────────────────────────────────
 
 describe('resolveWaitingPhase — the 2×4 matrix', () => {
+  /**
+   * BAL-581 — `venueReadyMinutes` defaults to `-1440` (ready well before booking), keeping
+   * every EXISTING row's pre-BAL-581 meaning; `null` means never ready.
+   */
   function phaseFor(
     status: MeetingLifecycleStatus,
     intervals: readonly LifecyclePresenceInterval[],
-    nowMinutes: number
+    nowMinutes: number,
+    venueReadyMinutes: number | null = -1440
   ): MeetingWaitingPhase {
     return resolveWaitingPhase({
       status,
@@ -682,6 +839,7 @@ describe('resolveWaitingPhase — the 2×4 matrix', () => {
       presence: summarisePresence(intervals),
       timers: DEFAULT_MEETING_TIMERS,
       now: at(nowMinutes),
+      venueReadyAt: venueReadyMinutes === null ? null : at(venueReadyMinutes),
     });
   }
 
@@ -809,6 +967,21 @@ describe('resolveWaitingPhase — the 2×4 matrix', () => {
     // Anchored on the wall clock again, so the 5-minute expert alert governs.
     expect(phaseFor('waiting_for_participants', left, 4)).toBe('running');
     expect(phaseFor('waiting_for_participants', left, 5)).toBe('near');
+  });
+
+  /**
+   * ⚠⚠ BAL-581 — THE EXPERT-MISSING PROGRESSION IS ANCHORED ON {@link venueAbsenceAnchor}, NOT
+   * THE BARE SCHEDULED START. A room repaired at start+3 pushes `near` to start+8, the SAME
+   * instant the ops alert fires from — so `near`'s "we've flagged this to the Balo team" stays
+   * true. Ready-before-start is unchanged (the anchor is still the scheduled start). Never
+   * ready falls back to the scheduled start too — the `?? scheduledStart` DEFENSIVE branch (a
+   * member cannot be admitted to a room that does not exist), pinned so it stays visible.
+   */
+  it('⚠ the expert-missing progression is anchored on the venue absence anchor', () => {
+    expect(phaseFor('scheduled', EXPERT_MISSING, 5, 3)).toBe('running');
+    expect(phaseFor('scheduled', EXPERT_MISSING, 8, 3)).toBe('near');
+    expect(phaseFor('scheduled', EXPERT_MISSING, 5, -30)).toBe('near');
+    expect(phaseFor('scheduled', EXPERT_MISSING, 5, null)).toBe('near');
   });
 });
 

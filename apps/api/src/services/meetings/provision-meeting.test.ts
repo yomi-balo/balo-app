@@ -12,6 +12,7 @@ const {
   mockProjectBookingCalendarEvent,
   mockRecordClientCalendarEntry,
   mockPublishBookingCalendarInvites,
+  mockCaptureException,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockSetVenue: vi.fn(),
@@ -22,7 +23,10 @@ const {
   mockProjectBookingCalendarEvent: vi.fn(),
   mockRecordClientCalendarEntry: vi.fn(),
   mockPublishBookingCalendarInvites: vi.fn(),
+  mockCaptureException: vi.fn(),
 }));
+
+vi.mock('@sentry/node', () => ({ captureException: mockCaptureException }));
 
 /**
  * ⚠ BAL-433 MOVED FIVE REPOSITORY MOCKS OUT OF THIS FILE. `caseEngagementsRepository`,
@@ -66,7 +70,8 @@ vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
 
 // The REAL error class — `instanceof` is what decides whether the vendor's response body
 // reaches the log, so a local stand-in would make that assertion vacuous.
-import { DailyApiError } from '../daily/errors.js';
+import { DailyApiError, DailyRoomNotPrivateError } from '../daily/errors.js';
+import type { RoomTeardown, RoomTeardownOutcome } from '../daily/rooms.js';
 // ⚠ THE REAL TUPLE, NEVER A LOCAL LIST. A sixth bookable label must show up in the
 // no-context-is-skipped sweep below rather than being quietly absent from a hand-copied array.
 import { BOOKABLE_CONTEXT_TYPES } from '@balo/shared/meetings';
@@ -127,10 +132,19 @@ function throwingProvisioner(error: Error): RoomProvisioner & { createRoom: Mock
   return { createRoom: vi.fn<CreateRoomFn>().mockRejectedValue(error) };
 }
 
+type DeleteRoomFn = (name: string) => Promise<RoomTeardownOutcome>;
+
+/** A teardown that records its calls and succeeds. */
+function fakeTeardown(): RoomTeardown & { deleteRoom: Mock<DeleteRoomFn> } {
+  return { deleteRoom: vi.fn<DeleteRoomFn>().mockResolvedValue('deleted') };
+}
+
 const CASE_CONTEXT = {
   contextType: 'case',
   engagementType: 'case',
-  userId: USER_ID,
+  distinctId: USER_ID,
+  trigger: 'booking',
+  escalateFailure: true,
 } as const;
 
 beforeEach(() => {
@@ -426,6 +440,7 @@ describe('bookAndProvisionMeeting — a vendor failure COMMITS the booking', () 
       context_type: 'case',
       engagement_type: 'case',
       reason: 'DailyApiError',
+      trigger: 'booking',
       distinct_id: USER_ID,
     });
     expect(mockTrackServer).not.toHaveBeenCalledWith('meeting_provisioned', expect.anything());
@@ -454,6 +469,7 @@ describe('bookAndProvisionMeeting — the meeting_provisioned event (D4)', () =>
       duration_minutes: 60,
       lead_time_minutes: 540, // NOW 00:00 → start 09:00
       idempotent_replay: false,
+      trigger: 'booking',
       distinct_id: USER_ID,
     });
   });
@@ -527,6 +543,32 @@ describe('provisionMeeting — idempotency (D2, AC #6)', () => {
     expect(mockSetVenue).not.toHaveBeenCalled();
   });
 
+  it('a MISMATCHED stamped name is NOT a replay — re-provisions and re-stamps', async () => {
+    // `isMeetingVenueReady` requires the stamped name to equal `dailyRoomNameForMeeting(id)`,
+    // not merely be non-null — a corrupt or foreign name must not short-circuit forever.
+    mockFindById.mockResolvedValue({
+      ...unstampedMeeting(),
+      dailyRoomName: 'balo-some-other-room-entirely',
+      joinUrl: 'https://balo.daily.co/balo-some-other-room-entirely',
+    });
+    const provisioner = fakeProvisioner();
+
+    const result = await provisionMeeting(MEETING_ID, CASE_CONTEXT, log, { provisioner });
+
+    expect(provisioner.createRoom).toHaveBeenCalledWith(ROOM_NAME);
+    expect(mockSetVenue).toHaveBeenCalledWith(MEETING_ID, {
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+    expect(result).toEqual({
+      meetingId: MEETING_ID,
+      provisioned: true,
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+      replayed: false,
+    });
+  });
+
   it('reports idempotent_replay: true on a replay', async () => {
     mockFindById.mockResolvedValue({
       ...unstampedMeeting(),
@@ -593,6 +635,152 @@ describe('provisionMeeting — idempotency (D2, AC #6)', () => {
         replayed: false,
       }
     );
+  });
+});
+
+describe('provisionMeeting — trigger (BAL-581)', () => {
+  it.each(['booking', 'replay', 'repair'] as const)(
+    'meeting_provisioned carries trigger "%s" verbatim',
+    async (trigger) => {
+      mockFindById.mockResolvedValue(unstampedMeeting());
+
+      await provisionMeeting(MEETING_ID, { ...CASE_CONTEXT, trigger, escalateFailure: true }, log, {
+        provisioner: fakeProvisioner(),
+      });
+
+      expect(mockTrackServer).toHaveBeenCalledWith(
+        'meeting_provisioned',
+        expect.objectContaining({ trigger })
+      );
+    }
+  );
+
+  it.each(['booking', 'replay', 'repair'] as const)(
+    'meeting_provision_failed carries trigger "%s" verbatim',
+    async (trigger) => {
+      mockFindById.mockResolvedValue(unstampedMeeting());
+      const provisioner = throwingProvisioner(new Error('Daily is down'));
+
+      await provisionMeeting(
+        MEETING_ID,
+        { ...CASE_CONTEXT, trigger, escalateFailure: false },
+        log,
+        { provisioner }
+      );
+
+      expect(mockTrackServer).toHaveBeenCalledWith(
+        'meeting_provision_failed',
+        expect.objectContaining({ trigger })
+      );
+    }
+  );
+});
+
+describe('provisionMeeting — escalateFailure (BAL-581)', () => {
+  it('escalateFailure:true logs an error AND calls Sentry.captureException with extra {meetingId, contextType, trigger} — no vendorBody', async () => {
+    mockFindById.mockResolvedValue(unstampedMeeting());
+    const vendorError = new DailyApiError('POST', '/rooms', 503, '{"error":"quota-exceeded"}');
+    const provisioner = throwingProvisioner(vendorError);
+
+    await provisionMeeting(
+      MEETING_ID,
+      { ...CASE_CONTEXT, trigger: 'repair', escalateFailure: true },
+      log,
+      { provisioner }
+    );
+
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, trigger: 'repair' }),
+      'Meeting booked but Daily room provisioning failed'
+    );
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    const [capturedError, captureOptions] = mockCaptureException.mock.calls[0] as [
+      unknown,
+      { extra: Record<string, unknown> },
+    ];
+    expect(capturedError).toBe(vendorError);
+    expect(captureOptions.extra).toEqual({
+      meetingId: MEETING_ID,
+      contextType: 'case',
+      trigger: 'repair',
+    });
+    expect(captureOptions.extra).not.toHaveProperty('vendorBody');
+    expect(JSON.stringify(captureOptions.extra)).not.toContain('quota-exceeded');
+  });
+
+  it('escalateFailure:false logs a WARNING, never calls Sentry, and still emits meeting_provision_failed', async () => {
+    mockFindById.mockResolvedValue(unstampedMeeting());
+    const provisioner = throwingProvisioner(new Error('Daily is down'));
+
+    await provisionMeeting(
+      MEETING_ID,
+      { ...CASE_CONTEXT, trigger: 'repair', escalateFailure: false },
+      log,
+      { provisioner }
+    );
+
+    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, trigger: 'repair' }),
+      'Meeting booked but Daily room provisioning failed'
+    );
+    expect(vi.mocked(log.error)).not.toHaveBeenCalled();
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_provision_failed',
+      expect.objectContaining({ trigger: 'repair' })
+    );
+  });
+});
+
+describe('provisionMeeting — DailyRoomNotPrivateError (BAL-581)', () => {
+  it('best-effort deletes the stranded public room by its DERIVED name', async () => {
+    mockFindById.mockResolvedValue(unstampedMeeting());
+    const provisioner = throwingProvisioner(
+      new DailyRoomNotPrivateError('POST', '/rooms', 0, "room has privacy 'public'")
+    );
+    const teardown = fakeTeardown();
+
+    await provisionMeeting(MEETING_ID, { ...CASE_CONTEXT, escalateFailure: false }, log, {
+      provisioner,
+      teardown,
+    });
+
+    expect(teardown.deleteRoom).toHaveBeenCalledWith(ROOM_NAME);
+  });
+
+  it('a delete failure is swallowed and logged as a warning — never rethrown', async () => {
+    mockFindById.mockResolvedValue(unstampedMeeting());
+    const provisioner = throwingProvisioner(
+      new DailyRoomNotPrivateError('POST', '/rooms', 0, "room has privacy 'public'")
+    );
+    const teardown: RoomTeardown & { deleteRoom: Mock<DeleteRoomFn> } = {
+      deleteRoom: vi.fn<DeleteRoomFn>().mockRejectedValue(new Error('vendor unreachable')),
+    };
+
+    await expect(
+      provisionMeeting(MEETING_ID, { ...CASE_CONTEXT, escalateFailure: false }, log, {
+        provisioner,
+        teardown,
+      })
+    ).resolves.toMatchObject({ provisioned: false });
+
+    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, roomName: ROOM_NAME }),
+      'Stranded public Daily room could not be deleted — the next repair checkpoint retries'
+    );
+  });
+
+  it('any OTHER error does NOT call deleteRoom', async () => {
+    mockFindById.mockResolvedValue(unstampedMeeting());
+    const provisioner = throwingProvisioner(new Error('Daily is down'));
+    const teardown = fakeTeardown();
+
+    await provisionMeeting(MEETING_ID, { ...CASE_CONTEXT, escalateFailure: false }, log, {
+      provisioner,
+      teardown,
+    });
+
+    expect(teardown.deleteRoom).not.toHaveBeenCalled();
   });
 });
 

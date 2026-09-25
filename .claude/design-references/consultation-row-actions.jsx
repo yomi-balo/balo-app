@@ -350,6 +350,15 @@ const HISTORY = [
     at: 1711,
     recap: true,
   },
+  // BAL-581 — the call room was never ready — Balo's failure; nobody is named, on either lens.
+  {
+    id: 'mV',
+    state: 'venue_unavailable',
+    label: '19 Sept',
+    abs: 'Sat, 19 Sept, 9:00 am',
+    at: 1909,
+    recap: true,
+  },
 ];
 
 const SEED_GUESTS = [
@@ -448,7 +457,10 @@ const EIGHT = ['m6', 21, 20 * 60];
 const SCENARIOS = {
   one: () => [up(...SIX)],
   three: () => [up(...SIX, { guests: SEED_GUESTS }), up(...SEVEN), up(...EIGHT)],
-  live: () => [up('m4', 20, 12 * 60 + 25), up(...SEVEN)],
+  // BAL-581 — `m4` carries `roomReady: false` so the live scenario also demonstrates the
+  // "Setting up call room" pill (the venue repair job's own salvage window), not only a bare
+  // "Starting soon".
+  live: () => [up('m4', 20, 12 * 60 + 25, { roomReady: false }), up(...SEVEN)],
   proposed: () => [up(...SIX, { state: 'pending_reschedule' }), up(...SEVEN)],
   none: () => [],
 };
@@ -548,12 +560,20 @@ function pillFor(row, who) {
     case 'nobody_joined':
       // Same words on every lens, and never `warn`: there is no absent party to flag.
       return { text: 'Nobody joined', tone: 'muted' };
+    case 'venue_unavailable':
+      // BAL-581 — Balo's own failure, never `warn`: there is no absent party to flag.
+      return { text: 'Call room unavailable', tone: 'muted' };
     case 'pending_reschedule':
       return { text: 'New time suggested', tone: 'brand' };
     case 'cancelled':
       return { text: 'Cancelled', tone: 'muted' };
     default:
       // Inside the join window the pill says so — a menu with no Reschedule explains itself.
+      // BAL-581 — a live row whose call room isn't ready yet says so, instead of promising a
+      // Join that isn't there.
+      if (row.live && row.roomReady === false) {
+        return { text: 'Setting up call room', tone: 'plain' };
+      }
       return row.live
         ? { text: 'Starting soon', tone: 'brand' }
         : { text: 'Upcoming', tone: 'plain' };
@@ -576,6 +596,8 @@ function noteFor(row, who) {
         : 'The call didn’t start';
     case 'nobody_joined':
       return 'Neither side joined this call';
+    case 'venue_unavailable':
+      return "Our call room wasn't ready in time — this one's on us";
     default:
       return null;
   }
@@ -742,7 +764,10 @@ function ConsultationRow({
   registerTrigger,
 }) {
   const muted =
-    row.state === 'cancelled' || row.state === 'missed_call' || row.state === 'nobody_joined';
+    row.state === 'cancelled' ||
+    row.state === 'missed_call' ||
+    row.state === 'nobody_joined' ||
+    row.state === 'venue_unavailable';
   const upcoming = isUpcoming(row);
   const Icon = muted ? CircleSlash : upcoming ? CalendarClock : Video;
   const items = menuItems(flags);

@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray } from 'drizzle-orm';
+import { dailyRoomNameForMeeting, isMeetingVenueReady } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   auditEvents,
@@ -12,6 +13,8 @@ import {
   meetings,
   rescheduleProposals,
   type AuditEvent,
+  type Meeting,
+  type NewMeeting,
 } from '../schema';
 import {
   caseEngagementFactory,
@@ -44,6 +47,13 @@ import {
 const SYSTEM_CANCEL_AUDIT = { actorUserId: null, actorRole: 'system' } as const;
 
 const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
+/** Code-unit order — for lowercase-hex uuid strings, the byte order Postgres sorts `uuid` by. */
+function compareStrings(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
 
 function schedule(offsetHours = 1): { scheduledStart: Date; scheduledEnd: Date } {
   const start = Date.now() + offsetHours * HOUR_MS;
@@ -392,6 +402,56 @@ describe('meetingsRepository.findByDailyRoomName / setVenue', () => {
     expect(updated.dailyRoomName).toBe(roomName);
     expect(updated.joinUrl).toBe(`https://balo.daily.co/${roomName}`);
     expect((await meetingsRepository.findByDailyRoomName(roomName))?.id).toBe(meeting.id);
+  });
+
+  /**
+   * BAL-581 — every stamp moves `venue_provisioned_at` to the write instant (last write wins).
+   * Fake `Date` only: two real consecutive writes can land in the same millisecond, so "moved
+   * forward" is asserted as two EXACT instants rather than a flaky `>`.
+   */
+  it('setVenue stamps venue_provisioned_at at the write instant, and a re-stamp moves it', async () => {
+    const { meeting } = await meetingFactory({ contexts: [] });
+    expect(meeting.venueProvisionedAt).toBeNull();
+    const roomName = dailyRoomNameForMeeting(meeting.id);
+    const venue = { dailyRoomName: roomName, joinUrl: `https://balo.daily.co/${roomName}` };
+    const t0 = Date.now();
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(t0);
+      const first = await meetingsRepository.setVenue(meeting.id, venue);
+      expect(first.venueProvisionedAt).toEqual(new Date(t0));
+
+      vi.setSystemTime(t0 + 60_000);
+      const second = await meetingsRepository.setVenue(meeting.id, venue);
+      expect(second.venueProvisionedAt).toEqual(new Date(t0 + 60_000));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const persisted = await meetingsRepository.findById(meeting.id);
+    expect(persisted?.venueProvisionedAt).toEqual(new Date(t0 + 60_000));
+  });
+
+  it('setVenue on a soft-deleted meeting throws "Meeting not found" and stamps nothing', async () => {
+    const { meeting } = await meetingFactory({ contexts: [], values: { deletedAt: new Date() } });
+    const roomName = dailyRoomNameForMeeting(meeting.id);
+
+    await expect(
+      meetingsRepository.setVenue(meeting.id, {
+        dailyRoomName: roomName,
+        joinUrl: `https://balo.daily.co/${roomName}`,
+      })
+    ).rejects.toThrow(`Meeting not found: ${meeting.id}`);
+
+    const [row] = await db
+      .select({
+        dailyRoomName: meetings.dailyRoomName,
+        venueProvisionedAt: meetings.venueProvisionedAt,
+      })
+      .from(meetings)
+      .where(eq(meetings.id, meeting.id));
+    expect(row).toEqual({ dailyRoomName: null, venueProvisionedAt: null });
   });
 
   it('TWO live meetings cannot share a daily_room_name (23505)', async () => {
@@ -802,6 +862,215 @@ describe('meetingsRepository.listLifecycleCandidates', () => {
         limit: 0,
       })
     ).resolves.toEqual([]);
+  });
+});
+
+/**
+ * BAL-581 — the one read behind the venue repair producer and the `meeting.unprovisioned` finder.
+ *
+ * Every case seeds in a FAR-FUTURE window no other fixture reaches and passes that window's start
+ * as `scheduledStartAfter`, so each assertion is an EXACT array plus a length. Every case except
+ * the `createdBefore` boundary passes a `createdBefore` a day ahead: factory rows take
+ * `created_at` from the CONTAINER clock, which may skew from this host's.
+ */
+describe('meetingsRepository.listUnprovisionedScheduled (BAL-581)', () => {
+  const MINUTE_MS = 60_000;
+
+  function farFutureStart(): number {
+    return Date.now() + 400 * DAY_MS;
+  }
+
+  function createdBeforeAnything(): Date {
+    return new Date(Date.now() + DAY_MS);
+  }
+
+  function joinUrlFor(roomName: string): string {
+    return `https://balo.daily.co/${roomName}`;
+  }
+
+  function foreignRoomName(): string {
+    return `balo-${randomUUID().replaceAll('-', '')}`;
+  }
+
+  async function seedAt(startMs: number, values: Partial<NewMeeting> = {}): Promise<Meeting> {
+    const { meeting } = await meetingFactory({
+      contexts: [],
+      values: {
+        scheduledStart: new Date(startMs),
+        scheduledEnd: new Date(startMs + HOUR_MS),
+        ...values,
+      },
+    });
+    return meeting;
+  }
+
+  /** The `venue.test.ts` matrix, each "derived" name built from the row's OWN pre-generated id. */
+  const VENUE_MATRIX: ReadonlyArray<
+    (id: string) => { dailyRoomName: string | null; joinUrl: string | null }
+  > = [
+    () => ({ dailyRoomName: null, joinUrl: null }),
+    (id) => ({ dailyRoomName: dailyRoomNameForMeeting(id), joinUrl: null }),
+    (id) => ({ dailyRoomName: null, joinUrl: joinUrlFor(dailyRoomNameForMeeting(id)) }),
+    (id) => ({
+      dailyRoomName: dailyRoomNameForMeeting(id),
+      joinUrl: joinUrlFor(dailyRoomNameForMeeting(id)),
+    }),
+    () => {
+      const foreign = foreignRoomName();
+      return { dailyRoomName: foreign, joinUrl: joinUrlFor(foreign) };
+    },
+    (id) => ({
+      dailyRoomName: dailyRoomNameForMeeting(id).toUpperCase(),
+      joinUrl: joinUrlFor(dailyRoomNameForMeeting(id)),
+    }),
+  ];
+
+  async function seedVenueMatrix(start: number): Promise<Meeting[]> {
+    const seeded: Meeting[] = [];
+    for (const [index, venueFor] of VENUE_MATRIX.entries()) {
+      const id = randomUUID();
+      seeded.push(await seedAt(start + index * MINUTE_MS, { id, ...venueFor(id) }));
+    }
+    return seeded;
+  }
+
+  it('SQL twin agrees with isMeetingVenueReady: returns exactly the rows the TS predicate calls not ready', async () => {
+    const start = farFutureStart();
+    const seeded = await seedVenueMatrix(start);
+    const expectedIds = seeded
+      .filter((meeting) => !isMeetingVenueReady(meeting))
+      .map((meeting) => meeting.id);
+    // The matrix has exactly one ready row: the derived name with a join url.
+    expect(expectedIds).toHaveLength(VENUE_MATRIX.length - 1);
+
+    const rows = await meetingsRepository.listUnprovisionedScheduled({
+      scheduledStartAfter: new Date(start),
+      createdBefore: createdBeforeAnything(),
+      limit: 50,
+    });
+
+    expect(rows.map((row) => row.meetingId)).toEqual(expectedIds);
+    expect(rows).toHaveLength(expectedIds.length);
+  });
+
+  it('roomNameStamped is true exactly for rows with a non-null room name, and no venue column is returned', async () => {
+    const start = farFutureStart();
+    const seeded = await seedVenueMatrix(start);
+    const expected = seeded
+      .filter((meeting) => !isMeetingVenueReady(meeting))
+      .map((meeting) => [meeting.id, meeting.dailyRoomName !== null]);
+    expect(expected.map(([, stamped]) => stamped)).toEqual([false, true, false, true, true]);
+
+    const rows = await meetingsRepository.listUnprovisionedScheduled({
+      scheduledStartAfter: new Date(start),
+      createdBefore: createdBeforeAnything(),
+      limit: 50,
+    });
+
+    expect(rows.map((row) => [row.meetingId, row.roomNameStamped])).toEqual(expected);
+    for (const row of rows) {
+      expect(Object.keys(row).sort(compareStrings)).toEqual([
+        'createdAt',
+        'meetingId',
+        'roomNameStamped',
+        'scheduledStart',
+      ]);
+    }
+  });
+
+  it('EXCLUDES waiting_for_participants, in_progress, ended, cancelled and soft-deleted meetings', async () => {
+    const start = farFutureStart();
+    const kept = await seedAt(start);
+    await seedAt(start + MINUTE_MS, { status: 'waiting_for_participants' });
+    await seedAt(start + 2 * MINUTE_MS, { status: 'in_progress' });
+    await seedAt(start + 3 * MINUTE_MS, { status: 'ended' });
+    await seedAt(start + 4 * MINUTE_MS, { status: 'cancelled' });
+    await seedAt(start + 5 * MINUTE_MS, { deletedAt: new Date() });
+
+    const rows = await meetingsRepository.listUnprovisionedScheduled({
+      scheduledStartAfter: new Date(start),
+      createdBefore: createdBeforeAnything(),
+      limit: 50,
+    });
+
+    expect(rows.map((row) => row.meetingId)).toEqual([kept.id]);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('scheduledStartAfter is an INCLUSIVE floor', async () => {
+    const start = farFutureStart();
+    await seedAt(start - MINUTE_MS);
+    const atFloor = await seedAt(start);
+
+    const rows = await meetingsRepository.listUnprovisionedScheduled({
+      scheduledStartAfter: new Date(start),
+      createdBefore: createdBeforeAnything(),
+      limit: 50,
+    });
+
+    expect(rows.map((row) => row.meetingId)).toEqual([atFloor.id]);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('createdBefore is an INCLUSIVE ceiling (explicit created_at, no clock skew in play)', async () => {
+    const start = farFutureStart();
+    const createdAt = Date.now() - HOUR_MS;
+    const atCeiling = await seedAt(start, { createdAt: new Date(createdAt) });
+    await seedAt(start + MINUTE_MS, { createdAt: new Date(createdAt + 1) });
+
+    const rows = await meetingsRepository.listUnprovisionedScheduled({
+      scheduledStartAfter: new Date(start),
+      createdBefore: new Date(createdAt),
+      limit: 50,
+    });
+
+    expect(rows.map((row) => row.meetingId)).toEqual([atCeiling.id]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.createdAt).toEqual(new Date(createdAt));
+  });
+
+  it('orders scheduled_start ASC, then id ASC', async () => {
+    const start = farFutureStart();
+    const [lowId, highId] = [randomUUID(), randomUUID()].sort(compareStrings);
+    if (lowId === undefined || highId === undefined) throw new Error('expected two ids');
+    const later = await seedAt(start + MINUTE_MS);
+    await seedAt(start + 2 * MINUTE_MS, { id: highId });
+    await seedAt(start + 2 * MINUTE_MS, { id: lowId });
+    const earliest = await seedAt(start);
+
+    const rows = await meetingsRepository.listUnprovisionedScheduled({
+      scheduledStartAfter: new Date(start),
+      createdBefore: createdBeforeAnything(),
+      limit: 50,
+    });
+
+    expect(rows.map((row) => row.meetingId)).toEqual([earliest.id, later.id, lowId, highId]);
+    expect(rows[0]?.scheduledStart).toEqual(new Date(start));
+  });
+
+  it('honours the limit, keeping the soonest; a non-positive limit returns [] without querying', async () => {
+    const start = farFutureStart();
+    const first = await seedAt(start);
+    const second = await seedAt(start + MINUTE_MS);
+    await seedAt(start + 2 * MINUTE_MS);
+    const input = { scheduledStartAfter: new Date(start), createdBefore: createdBeforeAnything() };
+
+    const rows = await meetingsRepository.listUnprovisionedScheduled({ ...input, limit: 2 });
+    expect(rows.map((row) => row.meetingId)).toEqual([first.id, second.id]);
+    expect(rows).toHaveLength(2);
+
+    const spy = vi.spyOn(db, 'select');
+    try {
+      await expect(
+        meetingsRepository.listUnprovisionedScheduled({ ...input, limit: 0 })
+      ).resolves.toEqual([]);
+      await expect(
+        meetingsRepository.listUnprovisionedScheduled({ ...input, limit: -1 })
+      ).resolves.toEqual([]);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -2308,5 +2577,45 @@ describe('meetingsRepository.listCalendarForExpert', () => {
     expect(ids).not.toContain(endsAtStart.meeting.id);
     expect(ids).not.toContain(startsAtEnd.meeting.id);
     expect(ids).toContain(straddling.meeting.id);
+  });
+
+  /**
+   * BAL-581 — `roomReady` is the SQL twin's boolean, computed in the read; the read still selects
+   * NO join credential (`dailyRoomName`/`joinUrl`). A ready, a never-stamped and a mismatched
+   * room each agree with the TS predicate evaluated on the FULL row.
+   */
+  it('roomReady agrees with isMeetingVenueReady for a ready, a null and a mismatched room, and no credential key is selected', async () => {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const contexts = [{ contextType: 'case' as const, contextId: engagement.id }];
+    const ready = await meetingsRepository.create({ ...schedule(1), contexts });
+    const neverStamped = await meetingsRepository.create({ ...schedule(3), contexts });
+    const mismatched = await meetingsRepository.create({ ...schedule(5), contexts });
+    const readyRoom = dailyRoomNameForMeeting(ready.meeting.id);
+    await meetingsRepository.setVenue(ready.meeting.id, {
+      dailyRoomName: readyRoom,
+      joinUrl: `https://balo.daily.co/${readyRoom}`,
+    });
+    const foreignRoom = `balo-${randomUUID().replaceAll('-', '')}`;
+    await meetingsRepository.setVenue(mismatched.meeting.id, {
+      dailyRoomName: foreignRoom,
+      joinUrl: `https://balo.daily.co/${foreignRoom}`,
+    });
+
+    const expected: Array<[string, boolean]> = [];
+    for (const { meeting } of [ready, neverStamped, mismatched]) {
+      const full = await meetingsRepository.findById(meeting.id);
+      if (full === undefined) throw new Error('expected the seeded meeting');
+      expected.push([full.id, isMeetingVenueReady(full)]);
+    }
+    expect(expected.map(([, roomReady]) => roomReady)).toEqual([true, false, false]);
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result).toHaveLength(3);
+    expect(result.map((row) => [row.meetingId, row.roomReady])).toEqual(expected);
+    for (const row of result) {
+      expect(Object.keys(row)).not.toContain('dailyRoomName');
+      expect(Object.keys(row)).not.toContain('joinUrl');
+    }
   });
 });

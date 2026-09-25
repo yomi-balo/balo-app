@@ -158,9 +158,10 @@ export function CaseSurface({
   // `SectionHead` only becomes a focus target when this ref is supplied.
   const consultationsHeadingRef = useRef<HTMLHeadingElement>(null);
 
-  // Refresh-on-focus, not periodic polling: `router.refresh()` already runs from four existing
-  // handlers here, and the conversation composer's draft is local `useState`, so a focus
-  // refresh can't clobber a half-typed message.
+  // Refresh-on-focus, plus a bounded room-readiness refresh owned by `CaseNudge`
+  // (`use-room-ready-refresh.ts`) while the nudge's call room is still being set up:
+  // `router.refresh()` already runs from four existing handlers here, and the conversation
+  // composer's draft is local `useState`, so a focus refresh can't clobber a half-typed message.
   useRefreshOnFocus();
 
   const counterpartyFirstName = view.conversation.counterpartyFirstName;

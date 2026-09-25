@@ -23,6 +23,7 @@ function row(overrides: Partial<UpNextRowView> = {}): UpNextRowView {
     href: '/cases/1',
     joinPath: '/meetings/m-1/call',
     rescheduleProposalExpiresAt: null,
+    roomReady: true,
     ...overrides,
   };
 }
@@ -188,6 +189,42 @@ describe('resolveUpNextRowTiming', () => {
     );
     expect(timing.rowState).toBe('happening_now');
     expect(timing.statusLine).toBe(UP_NEXT_HAPPENING_NOW);
+  });
+
+  /** BAL-581 — a not-ready room inside the window stays `'upcoming'`: never featured, never
+   *  a status line, and never Join. */
+  it('in-window, roomReady:false → no Join, roomSettingUp true, rowState stays upcoming', () => {
+    const start = new Date(NOW.getTime() + 5 * MIN);
+    const timing = resolveUpNextRowTiming(
+      row({
+        scheduledStart: start.toISOString(),
+        scheduledEnd: new Date(start.getTime() + 30 * MIN).toISOString(),
+        roomReady: false,
+      }),
+      NOW
+    );
+    expect(timing).toEqual({
+      visible: true,
+      joinVisible: false,
+      rowState: 'upcoming',
+      statusLine: null,
+      joinTimingLabel: null,
+      roomSettingUp: true,
+    });
+  });
+
+  it('the joinVisible arm always returns roomSettingUp: false', () => {
+    const start = new Date(NOW.getTime() + 5 * MIN);
+    const timing = resolveUpNextRowTiming(
+      row({
+        scheduledStart: start.toISOString(),
+        scheduledEnd: new Date(start.getTime() + 30 * MIN).toISOString(),
+        roomReady: true,
+      }),
+      NOW
+    );
+    expect(timing.joinVisible).toBe(true);
+    expect(timing.roomSettingUp).toBe(false);
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOOKABLE_CONTEXT_TYPES } from './bookable-contexts';
+import { BOOKABLE_CONTEXT_TYPES, isBookableContextType } from './bookable-contexts';
 
 /**
  * BAL-129 / BAL-283 — the pin for the list `apps/api`'s Zod enum, its tenancy gate and
@@ -29,5 +29,19 @@ describe('BOOKABLE_CONTEXT_TYPES', () => {
 
   it('holds no duplicates — the tuple is the source of a union type', () => {
     expect(new Set(BOOKABLE_CONTEXT_TYPES).size).toBe(BOOKABLE_CONTEXT_TYPES.length);
+  });
+});
+
+describe('isBookableContextType', () => {
+  it.each(BOOKABLE_CONTEXT_TYPES)('is true for the bookable label %s', (label) => {
+    expect(isBookableContextType(label)).toBe(true);
+  });
+
+  it.each(['admin', 'retainer_checkin'])('is false for the excluded label %s', (label) => {
+    expect(isBookableContextType(label)).toBe(false);
+  });
+
+  it('is false for an arbitrary string', () => {
+    expect(isBookableContextType('not_a_real_context_type')).toBe(false);
   });
 });
