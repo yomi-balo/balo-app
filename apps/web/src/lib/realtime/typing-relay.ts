@@ -28,7 +28,8 @@ export interface TypingRelay {
 const ignore = (): undefined => undefined;
 
 /**
- * A call that took at least this long, failed, or was refused puts the relay into
+ * A call that took at least this long, failed, or was refused (including THROTTLED by the
+ * shared rate limit — `relay-typing-signal.ts`'s `typing-signal` bucket) puts the relay into
  * {@link TYPING_RELAY_BACKOFF_MS} of silence.
  *
  * ⚠ WHY A TYPING CALL MUST BE CHEAP OR ABSENT: every signal is a Server Action, and Next runs a

@@ -23,14 +23,20 @@ const {
   mockResolveChatAccess,
   mockIsRealtimeConfigured,
   mockCreateTokenRequest,
+  mockCheckSharedRateLimit,
 } = vi.hoisted(() => ({
   mockRequireOnboardedUser: vi.fn(),
   mockResolveChatAccess: vi.fn(),
   mockIsRealtimeConfigured: vi.fn(),
   mockCreateTokenRequest: vi.fn(),
+  mockCheckSharedRateLimit: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/session', () => ({ requireOnboardedUser: mockRequireOnboardedUser }));
+/** BAL-461 — defaults to `{ allowed: true }` in `beforeEach`, re-armed per test. */
+vi.mock('@/lib/rate-limit/shared-counter', () => ({
+  checkSharedRateLimit: mockCheckSharedRateLimit,
+}));
 vi.mock('@/lib/meetings/meeting-chat-anchor', () => ({
   resolveMeetingChatAccess: mockResolveChatAccess,
 }));
@@ -39,6 +45,7 @@ vi.mock('@/lib/realtime/ably-server', () => ({
   getAblyRest: () => ({ auth: { createTokenRequest: mockCreateTokenRequest } }),
 }));
 
+import { CALL_ACTION_THROTTLED_ERROR } from '@/lib/meetings/call-action-entry';
 import { createMeetingRealtimeTokenAction } from './create-meeting-realtime-token';
 
 function capabilityKeys(): string[] {
@@ -60,6 +67,7 @@ beforeEach(() => {
     meetingId: MEETING_ID,
     anchor: { conversationId: CONVERSATION_ID, subject: {}, writable: true },
   });
+  mockCheckSharedRateLimit.mockResolvedValue({ allowed: true });
 });
 
 describe('createMeetingRealtimeTokenAction — ⚠⚠ the channel list', () => {
@@ -192,5 +200,40 @@ describe('createMeetingRealtimeTokenAction — refusals', () => {
     const result = await createMeetingRealtimeTokenAction({ meetingId: MEETING_ID });
 
     expect(result).toEqual({ success: false, error: 'Could not connect live updates.' });
+  });
+});
+
+describe('createMeetingRealtimeTokenAction — ⚠⚠ the shared rate limit (BAL-461), SESSION → RATE → GATE', () => {
+  it('throttled ⇒ the shipped literal (never a statusCode), the gate is never called, and the limiter ran once', async () => {
+    mockCheckSharedRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 8 });
+
+    const result = await createMeetingRealtimeTokenAction({ meetingId: MEETING_ID });
+
+    expect(result).toEqual({ success: false, error: CALL_ACTION_THROTTLED_ERROR });
+    expect(result).not.toHaveProperty('statusCode');
+    expect(mockResolveChatAccess).not.toHaveBeenCalled();
+    expect(mockCreateTokenRequest).not.toHaveBeenCalled();
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('meeting-realtime-token', {
+      id: USER_ID,
+    });
+  });
+
+  it('allowed ⇒ the limiter runs with the meeting-realtime-token bucket and the session user, then the gate', async () => {
+    await createMeetingRealtimeTokenAction({ meetingId: MEETING_ID });
+
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('meeting-realtime-token', {
+      id: USER_ID,
+    });
+    expect(mockResolveChatAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('unauthenticated ⇒ the limiter is never consulted', async () => {
+    mockRequireOnboardedUser.mockRejectedValue(new Error('no session'));
+
+    await createMeetingRealtimeTokenAction({ meetingId: MEETING_ID });
+
+    expect(mockCheckSharedRateLimit).not.toHaveBeenCalled();
   });
 });

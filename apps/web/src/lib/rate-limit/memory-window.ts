@@ -7,6 +7,16 @@
  *
  * No Redis / apps/api hop in v1 (OQ-2). A fixed window (not a sliding log) keeps
  * the bookkeeping O(1) per key and the memory bounded by the live-window key set.
+ *
+ * ⚠ NOT A SUBSTITUTE FOR A SHARED COUNTER. `checkMemoryLimit` remains per-instance —
+ * it was never upgraded to count across instances. BAL-461 added the first ACTUALLY
+ * shared counter, `../rate-limit/shared-counter.ts`'s `checkSharedRateLimit`, which
+ * counts on `apps/api`'s Redis instead of process memory. That module's eight
+ * consumers are all authenticated Server Actions/routes; this one stays as-is for
+ * per-instance, best-effort limits on the public token/guest surfaces and on the
+ * engagement-review submit action. Moving those callers — including
+ * `submit-engagement-review.ts`, the one authenticated caller in the mix — onto the
+ * shared counter is BAL-461's own follow-up list, not done here.
  */
 
 interface WindowState {

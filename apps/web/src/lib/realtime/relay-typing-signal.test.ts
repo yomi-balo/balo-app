@@ -2,17 +2,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionUser } from '@/lib/auth/session';
 
 /**
- * The shared tail of the three typing Server Actions: impersonation → gate → publish.
+ * The shared tail of the three typing Server Actions: impersonation → rate limit → gate → publish.
  *
- * ⚠ `publishTypingSignal` is the only thing mocked — the impersonation predicate is the real one,
- * so "an impersonated session publishes nothing" is asserted against the platform's one
+ * ⚠ `publishTypingSignal` and `checkSharedRateLimit` (`@/lib/rate-limit/shared-counter`) are the
+ * only collaborators mocked. The impersonation predicate is the real one, so "an impersonated
+ * session publishes nothing" and "is never rate-checked" are asserted against the platform's one
  * definition of impersonation, not a stub of it.
  */
 
 vi.mock('server-only', () => ({}));
 
-const { mockPublishTypingSignal } = vi.hoisted(() => ({ mockPublishTypingSignal: vi.fn() }));
+const { mockPublishTypingSignal, mockCheckSharedRateLimit } = vi.hoisted(() => ({
+  mockPublishTypingSignal: vi.fn(),
+  mockCheckSharedRateLimit: vi.fn(),
+}));
 vi.mock('./ably-server', () => ({ publishTypingSignal: mockPublishTypingSignal }));
+vi.mock('@/lib/rate-limit/shared-counter', () => ({
+  checkSharedRateLimit: mockCheckSharedRateLimit,
+}));
 
 import { log } from '@/lib/logging';
 import { relayTypingSignal, TYPING_DENIED } from './relay-typing-signal';
@@ -23,6 +30,7 @@ const GATE_CONVERSATION_ID = 'c0000000-0000-4000-8000-00000000c0de';
 beforeEach(() => {
   vi.clearAllMocks();
   mockPublishTypingSignal.mockResolvedValue(undefined);
+  mockCheckSharedRateLimit.mockResolvedValue({ allowed: true });
 });
 
 describe('relayTypingSignal', () => {
@@ -64,6 +72,40 @@ describe('relayTypingSignal', () => {
     expect(result).toEqual({ success: false, error: TYPING_DENIED });
     expect(gate).not.toHaveBeenCalled();
     expect(mockPublishTypingSignal).not.toHaveBeenCalled();
+  });
+
+  it('⚠ an IMPERSONATED session is never rate-checked', async () => {
+    const result = await relayTypingSignal({
+      user: { ...USER, isImpersonating: true },
+      signal: 'started',
+      logContext: {},
+      resolvePostableConversationId: () => Promise.resolve(GATE_CONVERSATION_ID),
+    });
+
+    expect(result).toEqual({ success: false, error: TYPING_DENIED });
+    expect(mockCheckSharedRateLimit).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ throttled ⇒ TYPING_DENIED, no gate, no publish and no log', async () => {
+    mockCheckSharedRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+    const gate = vi.fn(() => Promise.resolve(GATE_CONVERSATION_ID));
+    const logWarn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const logError = vi.spyOn(log, 'error').mockImplementation(() => undefined);
+
+    const result = await relayTypingSignal({
+      user: USER,
+      signal: 'started',
+      logContext: {},
+      resolvePostableConversationId: gate,
+    });
+
+    expect(result).toEqual({ success: false, error: TYPING_DENIED });
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('typing-signal', USER);
+    expect(gate).not.toHaveBeenCalled();
+    expect(mockPublishTypingSignal).not.toHaveBeenCalled();
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(logError).not.toHaveBeenCalled();
   });
 
   it('a failed PUBLISH is a transport event: a WARNING with the action’s context, no stack', async () => {

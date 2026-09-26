@@ -31,7 +31,9 @@ const inputSchema = z
  * for one call per MESSAGE, and paid here at typing frequency (10–15 calls per message). It is
  * the price of one definition of "may post"; a narrower read with the same decision would need a
  * parity test against `authorizeThread` to stay honest. The client's relay backs off after a slow
- * call, so a struggling database sheds typing first.
+ * call, so a struggling database sheds typing first. The shared rate limit (BAL-461,
+ * `relay-typing-signal.ts`'s `typing-signal` bucket) now bounds the call rate BEFORE this heavy
+ * gate runs, so a throttled caller never pays this cost at all.
  */
 export async function sendConversationTypingAction(
   input: z.infer<typeof inputSchema>

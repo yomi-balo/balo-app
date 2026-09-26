@@ -22,6 +22,7 @@ import {
   type MeetingReactionPayload,
 } from '@/lib/meetings/meeting-reactions';
 import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';
+import { CALL_ACTION_THROTTLED_ERROR, NOT_SIGNED_IN_ERROR } from '@/lib/meetings/call-action-entry';
 import type { MeetingRealtimeRegistration } from '@/lib/meetings/meeting-panels';
 import type { ConversationMessageView } from '@/lib/conversations/conversation-view-types';
 // ⚠ BAL-437 — FROM `lib/realtime`, NOT from the conversation feature's hook. These are
@@ -354,9 +355,6 @@ const REACTION_FAILED_LINE = 'That reaction did not reach the call.';
 const REACTION_SIGNED_OUT_LINE =
   'Your session ended, so that reaction did not reach the call. Reload this page before you send anything else.';
 
-/** ⚠ THE ACTION'S OWN LITERAL, matched exactly — see `call-action-entry.ts`. */
-const NOT_SIGNED_IN_ERROR = 'You are not signed in.';
-
 export interface MeetingCallRealtime {
   readonly status: MeetingRealtimeStatus;
   /**
@@ -459,7 +457,12 @@ export function useMeetingCallRealtime(input: {
 
   /** Nonces this client minted, pruned after {@link OWN_NONCE_TTL_MS}. */
   const ownNoncesRef = useRef<Set<string>>(new Set());
-  /** ⚠ THE COOLDOWN IS A UX AFFORDANCE, NOT A THROTTLE. BAL-461 owns the real one. */
+  /**
+   * ⚠ THE COOLDOWN IS A UX AFFORDANCE, NOT THE THROTTLE. The real one is server-side:
+   * `sendMeetingReactionAction` checks the shared `meeting-reaction` bucket (BAL-461), sized
+   * above this SAME 600ms ceiling so one tab tapping flat out is not refused — several tabs or
+   * devices at the ceiling can still be, quietly. See `send-meeting-reaction.ts`'s docblock.
+   */
   const lastSentAtRef = useRef(0);
   /** Read inside the message handler without making the handler a resubscribe trigger. */
   const isChatOpenRef = useRef(isChatOpen);
@@ -571,8 +574,10 @@ export function useMeetingCallRealtime(input: {
        * coalescing the fan-out is deliberate — but it does mean the sender briefly sees one
        * more glyph than the room does. That is the lesser of the two dishonesties (the other
        * being a control that appears dead), and it is bounded to the sender's own screen for
-       * 2.2s. ⚠⚠ IT IS STILL NOT A THROTTLE — `send-meeting-reaction.ts` states the missing
-       * server-side limit and names **BAL-461**.
+       * 2.2s. ⚠⚠ IT IS STILL NOT THE THROTTLE — the real one is server-side (BAL-461): see
+       * `send-meeting-reaction.ts`'s `meeting-reaction` bucket, sized above this same 600ms
+       * ceiling so one tab flat out is not refused, and the quiet early return below when a
+       * send comes back throttled.
        */
       const now = Date.now();
       if (now - lastSentAtRef.current < REACTION_SEND_COOLDOWN_MS) return;
@@ -581,6 +586,11 @@ export function useMeetingCallRealtime(input: {
       registration
         .sendReaction({ emoji, nonce })
         .then((result) => {
+          // ⚠⚠ A THROTTLED REFUSAL IS QUIET, MATCHING A TAP THE 600ms COOLDOWN ITSELF WOULD
+          // HAVE COALESCED (see that comment above): no analytics event, no toast, and the
+          // optimistic float stays up exactly as it does for a coalesced second tap. See
+          // `send-meeting-reaction.ts`'s `meeting-reaction` bucket (BAL-461).
+          if (!result.success && result.error === CALL_ACTION_THROTTLED_ERROR) return;
           onReactionSent(emoji, result.success ? 'ok' : 'failed');
           if (!result.success) reportFailedReaction(nonce, result.error);
         })

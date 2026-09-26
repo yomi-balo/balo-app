@@ -30,7 +30,8 @@
     "./testing": "./src/testing/index.ts",
     "./marketing": "./src/marketing/index.ts",
     "./admin-alerts": "./src/admin-alerts/index.ts",
-    "./capture-health": "./src/capture-health/index.ts"
+    "./capture-health": "./src/capture-health/index.ts",
+    "./rate-limit": "./src/rate-limit/index.ts"
   },
   "dependencies": {
     "pino": "^9.0.0",

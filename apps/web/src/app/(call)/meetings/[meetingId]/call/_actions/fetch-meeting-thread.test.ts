@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * BAL-437 — the in-call thread read.
  *
- * ⚠⚠ THE SCOPE ASSERTION IS THE POINT OF THIS FILE. `{ kind: 'full' }` is half of ruling R3: a
- * MEMBER in the call reads the whole engagement thread, not just what was said in this meeting.
+ * ⚠⚠ THE SCOPE ASSERTION IS THE POINT OF THIS FILE. A MEMBER in the call reads the whole
+ * engagement thread, not just what was said in this meeting.
  * The `{ kind: 'meeting' }` narrowing exists for GUESTS and belongs to BAL-445 — and because
  * `listMessagesPage`'s `scope` is a required parameter, the only way it could go wrong is a
  * caller passing the wrong one. So the argument is asserted, not the behaviour behind it.
@@ -18,13 +18,19 @@ const CONVERSATION_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const MESSAGE_ID = '9d4e2f10-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
 const CREATED_AT = new Date('2026-08-14T09:00:00.000Z');
 
-const { mockRequireUser, mockResolveChatAccess, mockListMessagesPage } = vi.hoisted(() => ({
-  mockRequireUser: vi.fn(),
-  mockResolveChatAccess: vi.fn(),
-  mockListMessagesPage: vi.fn(),
-}));
+const { mockRequireUser, mockResolveChatAccess, mockListMessagesPage, mockCheckSharedRateLimit } =
+  vi.hoisted(() => ({
+    mockRequireUser: vi.fn(),
+    mockResolveChatAccess: vi.fn(),
+    mockListMessagesPage: vi.fn(),
+    mockCheckSharedRateLimit: vi.fn(),
+  }));
 
 vi.mock('@/lib/auth/session', () => ({ requireUser: mockRequireUser }));
+/** BAL-461 — defaults to `{ allowed: true }` in `beforeEach`, re-armed per test. */
+vi.mock('@/lib/rate-limit/shared-counter', () => ({
+  checkSharedRateLimit: mockCheckSharedRateLimit,
+}));
 vi.mock('@/lib/meetings/meeting-chat-anchor', () => ({
   resolveMeetingChatAccess: mockResolveChatAccess,
 }));
@@ -32,6 +38,7 @@ vi.mock('@balo/db', () => ({
   conversationsRepository: { listMessagesPage: mockListMessagesPage },
 }));
 
+import { CALL_ACTION_THROTTLED_ERROR } from '@/lib/meetings/call-action-entry';
 import { fetchMeetingThreadAction } from './fetch-meeting-thread';
 
 function row(id = MESSAGE_ID): Record<string, unknown> {
@@ -56,6 +63,7 @@ beforeEach(() => {
     anchor: { conversationId: CONVERSATION_ID, subject: {}, writable: true },
   });
   mockListMessagesPage.mockResolvedValue({ messages: [row()], hasEarlier: false });
+  mockCheckSharedRateLimit.mockResolvedValue({ allowed: true });
 });
 
 describe('fetchMeetingThreadAction — ⚠⚠ the read scope', () => {
@@ -165,5 +173,35 @@ describe('fetchMeetingThreadAction — refusals', () => {
       success: false,
       error: 'Could not load this conversation. Please try again.',
     });
+  });
+});
+
+describe('fetchMeetingThreadAction — ⚠⚠ the shared rate limit (BAL-461), SESSION → RATE → GATE', () => {
+  it('throttled ⇒ the shipped literal, the gate is never called, and the limiter ran once', async () => {
+    mockCheckSharedRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 5 });
+
+    const result = await fetchMeetingThreadAction({ meetingId: MEETING_ID });
+
+    expect(result).toEqual({ success: false, error: CALL_ACTION_THROTTLED_ERROR });
+    expect(mockResolveChatAccess).not.toHaveBeenCalled();
+    expect(mockListMessagesPage).not.toHaveBeenCalled();
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('meeting-chat-read', { id: USER_ID });
+  });
+
+  it('allowed ⇒ the limiter runs with the meeting-chat-read bucket and the session user, then the gate', async () => {
+    await fetchMeetingThreadAction({ meetingId: MEETING_ID });
+
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('meeting-chat-read', { id: USER_ID });
+    expect(mockResolveChatAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('unauthenticated ⇒ the limiter is never consulted', async () => {
+    mockRequireUser.mockRejectedValue(new Error('no session'));
+
+    await fetchMeetingThreadAction({ meetingId: MEETING_ID });
+
+    expect(mockCheckSharedRateLimit).not.toHaveBeenCalled();
   });
 });

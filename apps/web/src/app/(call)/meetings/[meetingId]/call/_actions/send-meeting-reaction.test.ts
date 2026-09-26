@@ -44,22 +44,32 @@ const {
   mockAuthorizeMeetingFileAccess,
   mockPublishMeetingEvent,
   mockLog,
+  mockCheckSharedRateLimit,
 } = vi.hoisted(() => ({
   mockRequireOnboardedUser: vi.fn(),
   mockAuthorizeMeetingFileAccess: vi.fn(),
   mockPublishMeetingEvent: vi.fn(),
   mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  mockCheckSharedRateLimit: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/session', () => ({ requireOnboardedUser: mockRequireOnboardedUser }));
+/**
+ * BAL-461 — the shared rate limit. Defaults to `{ allowed: true }` in `beforeEach`, re-armed
+ * per test, so every existing test in this file exercises the "allowed" path unless it
+ * overrides the mock — matching the SESSION → RATE → GATE order the action now runs.
+ */
+vi.mock('@/lib/rate-limit/shared-counter', () => ({
+  checkSharedRateLimit: mockCheckSharedRateLimit,
+}));
 /**
  * ⚠⚠ THE GATE IS MOCKED **AT `authorizeMeetingFileAccess`**, NOT AT `resolveMeetingChatAccess`.
  *
  * The action used to call the chat resolver, which composes this gate and then performs up to
  * two further reads — a `conversationsRepository.findByContext` and the arm's lifecycle read —
  * whose results a reaction discards. Reactions are MEETING-grain: participation is the whole
- * question. Same decision, ~4 round trips instead of ~6, on the one endpoint in this family
- * with no throttle at all.
+ * question. Same decision, 4–8 round trips instead of 6–10. Like every in-call action, it is
+ * rate-checked on its `meeting-reaction` shared-counter bucket before the gate runs.
  */
 vi.mock('@/lib/meetings/authorize-meeting-file-access', () => ({
   authorizeMeetingFileAccess: mockAuthorizeMeetingFileAccess,
@@ -74,6 +84,7 @@ vi.mock('@/lib/realtime/ably-server', () => ({
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
+import { CALL_ACTION_THROTTLED_ERROR } from '@/lib/meetings/call-action-entry';
 import { sendMeetingReactionAction } from './send-meeting-reaction';
 
 beforeEach(() => {
@@ -85,6 +96,7 @@ beforeEach(() => {
     meeting: { id: MEETING_ID },
     subject: { contextType: 'case', contextId: 'e1' },
   });
+  mockCheckSharedRateLimit.mockResolvedValue({ allowed: true });
 });
 
 describe('sendMeetingReactionAction — ⚠⚠ it persists NOTHING', () => {
@@ -175,6 +187,9 @@ describe('sendMeetingReactionAction — ⚠⚠ it persists NOTHING', () => {
 
     expect(result).toEqual({ success: true });
     expect(mockPublishMeetingEvent).toHaveBeenCalledTimes(1);
+    // ⚠ There is no success log on this path — a per-tap info line at reaction volume would
+    // flood the logs. Re-adding one must fail this assertion.
+    expect(mockLog.info).not.toHaveBeenCalled();
   });
 });
 
@@ -198,7 +213,10 @@ describe('sendMeetingReactionAction — the publish', () => {
     await sendMeetingReactionAction({ meetingId: MEETING_ID, emoji: '👍', nonce: NONCE });
 
     const [, , payload] = mockPublishMeetingEvent.mock.calls[0] ?? [];
-    expect(Object.keys(payload as object).sort()).toEqual(['emoji', 'nonce']);
+    expect(Object.keys(payload as object).sort((a, b) => a.localeCompare(b))).toEqual([
+      'emoji',
+      'nonce',
+    ]);
   });
 
   it('⚠ works on a meeting with NO conversation anchor — reactions are meeting-grain', async () => {
@@ -303,5 +321,44 @@ describe('sendMeetingReactionAction — refusals', () => {
     });
 
     expect(result).toEqual({ success: false, error: 'Could not send that reaction.' });
+    expect(mockLog.error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sendMeetingReactionAction — ⚠⚠ the shared rate limit (BAL-461), SESSION → RATE → GATE', () => {
+  it('throttled ⇒ the shipped literal, the gate is never called, and the limiter ran once', async () => {
+    mockCheckSharedRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 12 });
+
+    const result = await sendMeetingReactionAction({
+      meetingId: MEETING_ID,
+      emoji: '👍',
+      nonce: NONCE,
+    });
+
+    expect(result).toEqual({ success: false, error: CALL_ACTION_THROTTLED_ERROR });
+    expect(mockAuthorizeMeetingFileAccess).not.toHaveBeenCalled();
+    expect(mockPublishMeetingEvent).not.toHaveBeenCalled();
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('meeting-reaction', { id: USER_ID });
+  });
+
+  it('allowed ⇒ the limiter runs with the meeting-reaction bucket and the session user, then the gate', async () => {
+    await sendMeetingReactionAction({ meetingId: MEETING_ID, emoji: '👍', nonce: NONCE });
+
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('meeting-reaction', { id: USER_ID });
+    expect(mockAuthorizeMeetingFileAccess).toHaveBeenCalledTimes(1);
+    expect(mockPublishMeetingEvent).toHaveBeenCalledTimes(1);
+    // ⚠ Paired with the two positive call counts above, so this negative sits on a path that
+    // actually published — re-adding the removed success log line must fail it.
+    expect(mockLog.info).not.toHaveBeenCalled();
+  });
+
+  it('unauthenticated ⇒ the limiter is never consulted', async () => {
+    mockRequireOnboardedUser.mockRejectedValue(new Error('no session'));
+
+    await sendMeetingReactionAction({ meetingId: MEETING_ID, emoji: '👍', nonce: NONCE });
+
+    expect(mockCheckSharedRateLimit).not.toHaveBeenCalled();
   });
 });

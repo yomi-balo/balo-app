@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
+  CALL_ACTION_THROTTLED_ERROR,
+  CHAT_POST_THROTTLED_ERROR,
   INVALID_REQUEST_ERROR,
   NOT_SIGNED_IN_ERROR,
   callActionErrorFields,
@@ -71,6 +73,23 @@ describe('enterCallAction — authenticate, then validate', () => {
     await enterCallAction(authenticate, schema, { meetingId: 'meeting_1' });
 
     expect(authenticate).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * BAL-461 — the shared rate limit's refusal literals, pinned verbatim. `use-meeting-realtime.ts`
+ * imports {@link CALL_ACTION_THROTTLED_ERROR} directly rather than re-declaring it, so a change
+ * here must be a deliberate, visible break to that consumer too.
+ */
+describe('BAL-461 throttle literals', () => {
+  it('CALL_ACTION_THROTTLED_ERROR is the shipped, never-shown literal', () => {
+    expect(CALL_ACTION_THROTTLED_ERROR).toBe('Too many requests. Try again in a moment.');
+  });
+
+  it('CHAT_POST_THROTTLED_ERROR is the shipped, user-facing literal', () => {
+    expect(CHAT_POST_THROTTLED_ERROR).toBe(
+      "You're sending messages quickly — give it a minute and try again."
+    );
   });
 });
 

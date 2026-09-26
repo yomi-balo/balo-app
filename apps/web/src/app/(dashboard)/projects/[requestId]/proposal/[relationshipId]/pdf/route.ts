@@ -7,6 +7,7 @@ import {
 } from '@balo/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
+import { checkSharedRateLimit } from '@/lib/rate-limit/shared-counter';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
 import {
   getProposalPdfFromR2,
@@ -146,11 +147,18 @@ function pdfResponse(body: Uint8Array, title: string, version: number): Response
 }
 
 /**
- * GET the Balo-branded, client-facing proposal PDF. Auth → lens/status gate →
- * read-through R2 cache → stream. Emits `project_proposal_pdf_downloaded` on a
- * successful response (hit or miss). The `audience` property records WHO
- * downloaded (client|admin); the serializer that builds the PDF always uses the
- * `client` audience.
+ * GET the Balo-branded, client-facing proposal PDF. Auth → shared rate limit →
+ * lens/status gate → read-through R2 cache → stream. Emits
+ * `project_proposal_pdf_downloaded` on a successful response (hit or miss). The
+ * `audience` property records WHO downloaded (client|admin); the serializer that
+ * builds the PDF always uses the `client` audience.
+ *
+ * ⚠ THE RATE CHECK (`checkSharedRateLimit('proposal-pdf', user)`, BAL-461) RUNS
+ * AFTER AUTH AND BEFORE THE GATE — never after, or a refused request would still
+ * pay the gate's reads. A throttled request answers 429 with a `Retry-After`
+ * header and a null body; this is a plain `<a download>` anchor with no fetch and
+ * no toast, so the browser shows its own failed-download chrome, exactly as it
+ * already does for a 401/403/404/500.
  */
 export async function GET(
   _request: Request,
@@ -169,6 +177,14 @@ export async function GET(
   if (!user) {
     // A fetch/anchor endpoint, not a page — 401 rather than redirect to /login.
     return new Response(null, { status: 401 });
+  }
+
+  const verdict = await checkSharedRateLimit('proposal-pdf', user);
+  if (!verdict.allowed) {
+    return new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': String(verdict.retryAfterSeconds) },
+    });
   }
 
   let target: DownloadTarget;

@@ -2,15 +2,17 @@ import 'server-only';
 
 import { errorMessage, log } from '@/lib/logging';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
+import { checkSharedRateLimit } from '@/lib/rate-limit/shared-counter';
 import type { SessionUser } from '@/lib/auth/session';
 import { publishTypingSignal } from './ably-server';
 import type { TypingSignal } from './channels';
 import type { SendTypingSignalResult } from './typing-relay';
 
 /**
- * ⚠ ONE LITERAL FOR EVERY REFUSAL — impersonated, gate denied, thread read-only, no thread.
- * Distinct answers would tell a caller which conversations exist and which are closed. The UI
- * never shows it: a typing signal that does not go out is a non-event.
+ * ⚠ ONE LITERAL FOR EVERY REFUSAL — impersonated, throttled, gate denied, thread read-only, no
+ * thread. Distinct answers would tell a caller which conversations exist and which are closed.
+ * The rate check runs BEFORE the gate, so a throttled answer reveals nothing about the thread
+ * either. The UI never shows it: a typing signal that does not go out is a non-event.
  */
 export const TYPING_DENIED = 'Typing is not available here.';
 
@@ -33,30 +35,33 @@ export interface RelayTypingSignalInput {
 
 /**
  * The shared tail of the three typing Server Actions (case, project request, in-call): refuse an
- * impersonated session, run the surface's post gate, publish.
+ * impersonated session, check the shared rate limit, run the surface's post gate, publish.
  *
- * ── ⚠⚠ NO SERVER-SIDE RATE LIMIT YET ───────────────────────────────────────────────────────
+ * ── ORDER: IMPERSONATION → RATE → GATE → PUBLISH ───────────────────────────────────────────
  *
- * Order is SESSION → GATE → PUBLISH, and a rate check belongs between the first two (see
- * `send-meeting-reaction.ts`: a limiter placed after the gate makes a refused request cost the
- * reads it exists to protect). The web tier has no shared counter; **BAL-461** is the ticket for
- * one, and its 2026-09-25 addendum names these three typing actions, their per-call gate cost and
- * what limiting them requires (they are also listed with the in-call actions in
- * `send-meeting-reaction.ts`). A throttled typing call must answer quietly: the relay already
- * treats any refusal as "back off", never as an error.
+ * The rate check (`checkSharedRateLimit`, bucket `typing-signal`) sits between the impersonation
+ * refusal and the gate — never after it (see `send-meeting-reaction.ts`: a limiter placed after
+ * the gate makes a refused request cost the reads it exists to protect). A throttled call
+ * answers `{ success: false, error: TYPING_DENIED }` and calls neither the gate nor the publish.
+ * The refusal is quiet: the relay already treats any refusal as "back off" (30 s), never as an
+ * error, and there is no log on this path — attribution lives entirely in the api's gated
+ * refusal log for the `typing-signal` bucket (see below).
  *
  * The bound on an HONEST client is structural: per tab and per surface, `typing-relay.ts` keeps
- * one call in flight with the latest signal winning, and backs off after a slow or refused call.
- * A burst costs a `started` and a `stopped` (a burst ends on a 1.5 s pause, a blur, a send or an
- * emptied box) plus a heartbeat every 10 s — typically 10–15 calls per message sent.
+ * one call in flight with the latest signal winning, and backs off after a slow, refused or
+ * failed call. A burst costs a `started` and a `stopped` (a burst ends on a 1.5 s pause, a blur,
+ * a send or an emptied box) plus a heartbeat every 10 s — typically 10–15 calls per message sent.
+ * One bucket covers all three surfaces: a person types in one composer at a time, and N tabs
+ * cost about what one does.
  *
- * ⚠ NO SUCCESS LOG LINE, unlike `sendMeetingReactionAction`. At 10–15 calls per message it would
- * multiply log volume for no operational question; attribution of abuse belongs to the BAL-461
- * limiter's refusal log, keyed by user.
+ * ⚠ NO SUCCESS LOG LINE. At 10–15 calls per message it would multiply log volume for no
+ * operational question; abuse is attributed by the api's gated `Rate limit exceeded` refusal
+ * log for the `typing-signal` bucket, keyed by user.
  *
- * ⚠ IMPERSONATION IS REFUSED. An admin observing a user's thread must not make that user appear
- * to be typing to the other party; a keystroke that is never sent is too low a bar for an
- * attribution the real user never made.
+ * ⚠ IMPERSONATION IS REFUSED, BEFORE THE RATE CHECK. An admin observing a user's thread must not
+ * make that user appear to be typing to the other party; a keystroke that is never sent is too
+ * low a bar for an attribution the real user never made. This also means typing never reaches
+ * the shared-counter hop under impersonation, so the limiter is never called for that session.
  *
  * ⚠ `{ success: true }` MEANS PUBLISHED: `publishTypingSignal` is awaited, which is what keeps a
  * sender's `started` / `stopped` in order on the channel. A failed PUBLISH is a transport event
@@ -68,6 +73,11 @@ export async function relayTypingSignal(
 ): Promise<SendTypingSignalResult> {
   const { user, signal, resolvePostableConversationId, logContext } = input;
   if (isImpersonatedSession(user)) {
+    return { success: false, error: TYPING_DENIED };
+  }
+
+  const verdict = await checkSharedRateLimit('typing-signal', user);
+  if (!verdict.allowed) {
     return { success: false, error: TYPING_DENIED };
   }
 

@@ -28,15 +28,21 @@ const {
   mockPostMessage,
   mockMarkThreadRead,
   mockPublishConversationEvent,
+  mockCheckSharedRateLimit,
 } = vi.hoisted(() => ({
   mockRequireOnboardedUser: vi.fn(),
   mockResolveChatAccess: vi.fn(),
   mockPostMessage: vi.fn(),
   mockMarkThreadRead: vi.fn(),
   mockPublishConversationEvent: vi.fn(),
+  mockCheckSharedRateLimit: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/session', () => ({ requireOnboardedUser: mockRequireOnboardedUser }));
+/** BAL-461 — defaults to `{ allowed: true }` in `beforeEach`, re-armed per test. */
+vi.mock('@/lib/rate-limit/shared-counter', () => ({
+  checkSharedRateLimit: mockCheckSharedRateLimit,
+}));
 vi.mock('@/lib/meetings/meeting-chat-anchor', () => ({
   resolveMeetingChatAccess: mockResolveChatAccess,
 }));
@@ -53,6 +59,7 @@ vi.mock('@/lib/realtime/ably-server', () => ({
   },
 }));
 
+import { CHAT_POST_THROTTLED_ERROR } from '@/lib/meetings/call-action-entry';
 import { postMeetingMessageAction } from './post-meeting-message';
 
 beforeEach(() => {
@@ -74,6 +81,7 @@ beforeEach(() => {
     createdAt: CREATED_AT,
   });
   mockMarkThreadRead.mockResolvedValue({});
+  mockCheckSharedRateLimit.mockResolvedValue({ allowed: true });
 });
 
 describe('postMeetingMessageAction — ⚠⚠ the meeting stamp (acceptance criterion #1)', () => {
@@ -219,5 +227,41 @@ describe('postMeetingMessageAction — refusals', () => {
       error: 'Could not send your message. Please try again.',
     });
     expect(mockPublishConversationEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('postMeetingMessageAction — ⚠⚠ the shared rate limit (BAL-461), SESSION → RATE → GATE', () => {
+  it('throttled ⇒ the shipped literal, the gate is never called, and the limiter ran once', async () => {
+    mockCheckSharedRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+
+    const result = await postMeetingMessageAction({ meetingId: MEETING_ID, body: 'Hello' });
+
+    expect(result).toEqual({ success: false, error: CHAT_POST_THROTTLED_ERROR });
+    expect(mockResolveChatAccess).not.toHaveBeenCalled();
+    expect(mockPostMessage).not.toHaveBeenCalled();
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith(
+      'meeting-chat-post',
+      expect.objectContaining({ id: USER_ID })
+    );
+  });
+
+  it('allowed ⇒ the limiter runs with the meeting-chat-post bucket and the session user, then the gate', async () => {
+    await postMeetingMessageAction({ meetingId: MEETING_ID, body: 'Hello' });
+
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith(
+      'meeting-chat-post',
+      expect.objectContaining({ id: USER_ID })
+    );
+    expect(mockResolveChatAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('unauthenticated ⇒ the limiter is never consulted', async () => {
+    mockRequireOnboardedUser.mockRejectedValue(new Error('no session'));
+
+    await postMeetingMessageAction({ meetingId: MEETING_ID, body: 'Hello' });
+
+    expect(mockCheckSharedRateLimit).not.toHaveBeenCalled();
   });
 });

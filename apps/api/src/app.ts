@@ -16,6 +16,7 @@ import { dailyRoutes } from './routes/daily/index.js';
 import { muxRoutes } from './routes/mux/index.js';
 import { adminRoutes } from './routes/admin/index.js';
 import { projectBriefRoutes } from './routes/project-briefs/index.js';
+import { rateLimitRoutes } from './routes/rate-limit/index.js';
 
 export async function buildApp(opts?: { logger?: boolean }) {
   // `trustProxy: 1` trusts exactly one proxy hop (the Railway edge), so
@@ -92,6 +93,8 @@ export async function buildApp(opts?: { logger?: boolean }) {
   await fastify.register(adminRoutes);
   // BAL-254 — the AI-assisted project-brief parse enqueue route.
   await fastify.register(projectBriefRoutes);
+  // BAL-461 — the shared web rate-limit counter (secret-gated, requireInternalAuth).
+  await fastify.register(rateLimitRoutes);
 
   // Dev-only seed routes (BAL-239). Guarded dynamic import so the seed service
   // and @faker-js/faker never load in production.

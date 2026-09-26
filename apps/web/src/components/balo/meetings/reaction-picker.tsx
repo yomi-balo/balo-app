@@ -21,8 +21,10 @@ import { MeetingToolbarButton } from './meeting-toolbar-button';
  * of a rule that has exactly one implementation on purpose.
  *
  * ⚠ THE PICKER **CLOSES ON SELECTION**, and that is a rate mitigation as well as prototype
- * behaviour: one tap, one invocation, no held-open machine-gun. ⚠⚠ IT IS NOT A THROTTLE — see
- * `send-meeting-reaction.ts`, which states the missing server-side limit and names **BAL-461**.
+ * behaviour: one tap, one invocation, no held-open machine-gun. ⚠⚠ IT IS NOT THE THROTTLE — the
+ * real one is server-side (BAL-461): see `send-meeting-reaction.ts`'s `meeting-reaction` bucket,
+ * sized above one tab's own cooldown ceiling, so one tab tapping flat out is not refused;
+ * several tabs or devices at the ceiling can still be, quietly.
  *
  * ── ⚠⚠ FOCUS RESTORE IS **NOT** THE DEFAULT HERE, AND THE DOCBLOCK USED TO CLAIM IT WAS ───
  *

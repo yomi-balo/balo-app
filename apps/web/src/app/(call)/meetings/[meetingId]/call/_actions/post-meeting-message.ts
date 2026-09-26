@@ -6,7 +6,12 @@ import { z } from 'zod';
 import { conversationsRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { errorMessage, log } from '@/lib/logging';
-import { callActionErrorFields, enterCallAction } from '@/lib/meetings/call-action-entry';
+import { checkSharedRateLimit } from '@/lib/rate-limit/shared-counter';
+import {
+  CHAT_POST_THROTTLED_ERROR,
+  callActionErrorFields,
+  enterCallAction,
+} from '@/lib/meetings/call-action-entry';
 import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
 import { publishConversationEvent } from '@/lib/realtime/ably-server';
 import { CONVERSATION_EVENT_MESSAGE } from '@/lib/realtime/channels';
@@ -67,6 +72,11 @@ const inputSchema = z
  * thread. Accepted — notifying somebody about *"dropping it in the Files tab now"* is noise,
  * and the recap plus the thread remain the record. If product disagrees, the hook is the
  * post-commit block below, which already has `post-case-message.ts`'s shape.
+ *
+ * ⚠ RATE-LIMITED (BAL-461): a `meeting-chat-post` shared-counter check runs right after the
+ * session read and before the gate above — SESSION → RATE → GATE — refusing with
+ * `CHAT_POST_THROTTLED_ERROR` ("You're sending messages quickly — give it a minute and try
+ * again."), shown to the sender exactly like any other post refusal; the draft survives.
  */
 export async function postMeetingMessageAction(
   input: z.infer<typeof inputSchema>
@@ -75,6 +85,11 @@ export async function postMeetingMessageAction(
   if (!entry.ok) return { success: false, error: entry.error };
   const { user } = entry;
   const { meetingId, body } = entry.data;
+
+  const rateLimit = await checkSharedRateLimit('meeting-chat-post', user);
+  if (!rateLimit.allowed) {
+    return { success: false, error: CHAT_POST_THROTTLED_ERROR };
+  }
 
   try {
     const access = await resolveMeetingChatAccess({

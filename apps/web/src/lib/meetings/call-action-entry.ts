@@ -16,8 +16,18 @@ import type { z } from 'zod';
  *
  * A `'use server'` file may export ONLY async functions — `export const NOT_SIGNED_IN = '…'`
  * in one fails `next build` (and only once the module is in the client graph), while `tsc`,
- * ESLint and vitest all stay green (`reference_use_server_no_value_exports`). This is a plain
- * server module, so it may export the literals too.
+ * ESLint and vitest all stay green (`reference_use_server_no_value_exports`). This is a plain,
+ * client-safe module (imported by the actions and by the `'use client'` hook), so it may export
+ * the literals too.
+ *
+ * ⚠⚠ BAL-461 — ALSO IMPORTED FROM THE `'use client'` HOOK `use-meeting-realtime.ts`, which reads
+ * `CALL_ACTION_THROTTLED_ERROR` off this module to recognise a throttled reaction refusal
+ * without re-declaring the literal. That import puts this file in the CLIENT BUNDLE, so it must
+ * stay free of `@balo/db`, `@/lib/logging` and `server-only` — any of those would either fail
+ * `next build` or leak a server-only module into client code
+ * (`reference_balo_db_client_bundle_footgun`, `reference_client_components_cannot_import_web_logger`).
+ * `callActionErrorFields` below narrows errors ITSELF rather than importing `errorMessage` from
+ * `@/lib/logging`, for exactly this reason.
  *
  * ── ⚠⚠ THE AUTH HELPER IS PASSED AS A **CALLED THUNK**, ON PURPOSE ──────────────────────
  *
@@ -38,9 +48,38 @@ import type { z } from 'zod';
 export const NOT_SIGNED_IN_ERROR = 'You are not signed in.';
 export const INVALID_REQUEST_ERROR = 'Invalid request.';
 
+/**
+ * BAL-461 — the shared rate limit's refusal literal, shared by every in-call consumer that
+ * treats a throttle as a QUIET refusal: `sendMeetingReactionAction`, `fetchMeetingThreadAction`
+ * and `createMeetingRealtimeTokenAction`. `postMeetingMessageAction` uses its OWN literal,
+ * {@link CHAT_POST_THROTTLED_ERROR}, because chat shows the refusal to the person.
+ *
+ * ⚠ NEVER SHOWN TO ANYONE. `use-meeting-realtime.ts` — a `'use client'` module — imports this
+ * constant directly rather than re-declaring it, matching a throttled reaction to the SAME quiet
+ * handling as a tap its own 600ms cooldown would have coalesced (see `sendReaction`). That is
+ * also why this literal has to live in a plain module rather than inside a `'use server'` action,
+ * which may export only async functions.
+ */
+export const CALL_ACTION_THROTTLED_ERROR = 'Too many requests. Try again in a moment.';
+
+/**
+ * BAL-461 — `postMeetingMessageAction`'s own throttle refusal, shown to the sender exactly like
+ * any other post refusal (`toast.error` plus the panel's live-region announce); the draft
+ * survives, and analytics records the same `outcome: 'rejected'` a fixable refusal already gets.
+ * A fixed one-minute wording rather than a dynamic countdown, matching the bucket's 60s window.
+ */
+export const CHAT_POST_THROTTLED_ERROR =
+  "You're sending messages quickly — give it a minute and try again.";
+
 export type CallActionEntry<U, T> =
   | { readonly ok: true; readonly user: U; readonly data: T }
-  /** ⚠ ONE OF THE TWO LITERALS ABOVE, ready to be spread into the action's own result shape. */
+  /**
+   * ⚠ ONE OF `NOT_SIGNED_IN_ERROR` OR `INVALID_REQUEST_ERROR` — the only two refusals
+   * `enterCallAction` itself can produce, ready to be spread into the action's own result shape.
+   * A throttle refusal (`CALL_ACTION_THROTTLED_ERROR` / `CHAT_POST_THROTTLED_ERROR`) is a
+   * DIFFERENT, later step: each action checks it itself, AFTER this call succeeds and BEFORE its
+   * own tenancy gate — it is never folded into this type.
+   */
   | { readonly ok: false; readonly error: string };
 
 /**
@@ -78,9 +117,14 @@ export async function enterCallAction<U, S extends z.ZodType>(
  * A shared logger call would flatten four distinct operational events into one.
  *
  * ⚠ `errorMessage` IS NOT IMPORTED HERE, deliberately: it lives in `@/lib/logging`, which is
- * bare `pino` + `AsyncLocalStorage` and carries no `server-only` marker, and this module sits
- * in `lib/meetings` — a directory `meeting-call-no-lens-gate.test.ts` scans for exactly that
- * import. The narrowing below is the same one `errorMessage` performs for these two cases.
+ * bare `pino` + `AsyncLocalStorage` and carries no `server-only` marker. ⚠⚠ THIS FILE CARRIES NO
+ * `'use client'` DIRECTIVE ITSELF, so `meeting-call-no-lens-gate.test.ts`'s "no client module
+ * imports @/lib/logging" check — which pattern-matches that literal directive — does not scan it
+ * directly. The real protection is BAL-461's own fact: `use-meeting-realtime.ts` (a genuine
+ * `'use client'` module) imports `CALL_ACTION_THROTTLED_ERROR` from this file, pulling it into
+ * the client bundle transitively. A `@/lib/logging` import here would not be CAUGHT by that
+ * invariant — it would fail `next build` silently past every local gate. The narrowing below is
+ * the same one `errorMessage` performs for these two cases.
  */
 export function callActionErrorFields(error: unknown): {
   readonly error: string;

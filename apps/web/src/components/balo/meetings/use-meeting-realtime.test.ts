@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { MeetingRealtimeRegistration } from '@/lib/meetings/meeting-panels';
 import type { RealtimeTokenResult } from '@/lib/realtime/ably-auth';
+import { CALL_ACTION_THROTTLED_ERROR } from '@/lib/meetings/call-action-entry';
 import {
   isMeetingFilePayload,
   MAX_FLOATERS,
@@ -19,8 +20,8 @@ import {
  *      would re-float every reaction from the last N minutes at once. `channels.get` must be
  *      called with the channel name and NOTHING ELSE. The absence of an argument is exactly the
  *      kind of thing nobody notices in review, so it is asserted.
- *   2. **OWN-NONCE ECHO SUPPRESSION.** Because the SERVER publishes (R2), the sender receives
- *      their own reaction back. Without the dedupe they would see two floats for one tap.
+ *   2. **OWN-NONCE ECHO SUPPRESSION.** Because the SERVER publishes, the sender receives their
+ *      own reaction back. Without the dedupe they would see two floats for one tap.
  *   3. **THE `authCallback` ITSELF**, both arms — including the REF-FRESHNESS property that is
  *      the entire justification for holding `fetchToken` in a ref rather than in the effect's
  *      dependency list. That deviation was documented and untested; it is now both.
@@ -720,6 +721,46 @@ describe('useMeetingCallRealtime — ⚠⚠ the send outcome reaches BOTH the an
     // about the expensive one.
     expect(message).toContain('Reload this page');
     expect(result.current.floaters).toHaveLength(0);
+  });
+
+  /**
+   * ⚠⚠ A THROTTLED REFUSAL IS QUIET: no analytics event, no toast, and the optimistic
+   * float STAYS UP, matching a tap the client's own 600ms cooldown would have coalesced anyway.
+   * `sendMeetingReactionAction` returns `CALL_ACTION_THROTTLED_ERROR` (imported from
+   * `call-action-entry.ts`, never re-declared here) when the shared `meeting-reaction` bucket
+   * refuses (BAL-461).
+   *
+   * ⚠ ASYNC `act`, AND THE MOCK'S OWN RESOLUTION IS AWAITED INSIDE IT — never a sync `act`, and
+   * never a `waitFor` around a negative (a negative can never be observed to "become true", so
+   * `waitFor` would only pass by outlasting its own polling, which is indistinguishable from a
+   * bug that just hasn't fired yet).
+   */
+  it('⚠⚠ a THROTTLED refusal is QUIET — no analytics, no toast, and the float stays', async () => {
+    const onReactionSent = vi.fn();
+    const onReactionError = vi.fn();
+    const sendReaction = vi
+      .fn()
+      .mockResolvedValue({ success: false, error: CALL_ACTION_THROTTLED_ERROR });
+    const { result } = renderHook(() =>
+      useMeetingCallRealtime(
+        callRealtimeInput({
+          registration: registration({ sendReaction }),
+          onReactionSent,
+          onReactionError,
+        })
+      )
+    );
+
+    await waitFor(() => expect(channels.has(MEETING_CHANNEL)).toBe(true));
+    await act(async () => {
+      result.current.sendReaction('👍');
+      await sendReaction.mock.results[0]?.value;
+    });
+
+    expect(sendReaction).toHaveBeenCalledTimes(1);
+    expect(onReactionSent).not.toHaveBeenCalled();
+    expect(onReactionError).not.toHaveBeenCalled();
+    expect(result.current.floaters).toHaveLength(1);
   });
 
   it('a THROWN send is treated exactly like a refused one', async () => {

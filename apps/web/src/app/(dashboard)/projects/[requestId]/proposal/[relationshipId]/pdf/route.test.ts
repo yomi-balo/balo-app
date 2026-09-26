@@ -15,6 +15,7 @@ const {
   mockRenderPdf,
   mockTrackServerAndFlush,
   mockLog,
+  mockCheckSharedRateLimit,
 } = vi.hoisted(() => ({
   mockGetCurrentUser: vi.fn(),
   mockFindByIdWithRelations: vi.fn(),
@@ -30,6 +31,7 @@ const {
   mockRenderPdf: vi.fn(),
   mockTrackServerAndFlush: vi.fn(),
   mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  mockCheckSharedRateLimit: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -69,6 +71,10 @@ vi.mock('@/lib/analytics/server', () => ({
 }));
 
 vi.mock('@/lib/logging', () => ({ log: mockLog }));
+
+vi.mock('@/lib/rate-limit/shared-counter', () => ({
+  checkSharedRateLimit: (...args: unknown[]) => mockCheckSharedRateLimit(...args),
+}));
 
 import { GET } from './route';
 
@@ -111,6 +117,7 @@ beforeEach(() => {
   mockGetPdfFromR2.mockResolvedValue(null); // cache miss by default
   mockPutPdfToR2.mockResolvedValue(undefined);
   mockRenderPdf.mockResolvedValue(Buffer.from('%PDF-generated'));
+  mockCheckSharedRateLimit.mockResolvedValue({ allowed: true });
 });
 
 describe('GET proposal PDF — param validation (UUID guard)', () => {
@@ -132,12 +139,30 @@ describe('GET proposal PDF — param validation (UUID guard)', () => {
   });
 });
 
+describe('GET proposal PDF — shared rate limit', () => {
+  it('⚠⚠ throttled ⇒ 429 with Retry-After and a null body, and the gate is not called', async () => {
+    mockCheckSharedRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 42 });
+
+    const res = await callGet();
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBe('42');
+    expect(await res.text()).toBe('');
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('proposal-pdf', USER);
+    expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
+    expect(mockRenderPdf).not.toHaveBeenCalled();
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET proposal PDF — auth & status gates', () => {
-  it('returns 401 with no session (and touches no data)', async () => {
+  it('returns 401 with no session (and touches no data, and the limiter is not called)', async () => {
     mockGetCurrentUser.mockResolvedValue(null);
     const res = await callGet();
     expect(res.status).toBe(401);
     expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
+    expect(mockCheckSharedRateLimit).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the request is missing', async () => {

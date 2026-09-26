@@ -7,18 +7,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-const { mockRequireOnboardedUser, mockResolveChatAccess, mockPublishTypingSignal } = vi.hoisted(
-  () => ({
-    mockRequireOnboardedUser: vi.fn(),
-    mockResolveChatAccess: vi.fn(),
-    mockPublishTypingSignal: vi.fn(),
-  })
-);
+const {
+  mockRequireOnboardedUser,
+  mockResolveChatAccess,
+  mockPublishTypingSignal,
+  mockCheckSharedRateLimit,
+} = vi.hoisted(() => ({
+  mockRequireOnboardedUser: vi.fn(),
+  mockResolveChatAccess: vi.fn(),
+  mockPublishTypingSignal: vi.fn(),
+  mockCheckSharedRateLimit: vi.fn(),
+}));
 vi.mock('@/lib/auth/session', () => ({ requireOnboardedUser: mockRequireOnboardedUser }));
 vi.mock('@/lib/meetings/meeting-chat-anchor', () => ({
   resolveMeetingChatAccess: mockResolveChatAccess,
 }));
 vi.mock('@/lib/realtime/ably-server', () => ({ publishTypingSignal: mockPublishTypingSignal }));
+vi.mock('@/lib/rate-limit/shared-counter', () => ({
+  checkSharedRateLimit: mockCheckSharedRateLimit,
+}));
 
 import { sendMeetingTypingAction } from './send-meeting-typing';
 import { TYPING_DENIED } from '@/lib/realtime/relay-typing-signal';
@@ -36,6 +43,7 @@ beforeEach(() => {
   mockRequireOnboardedUser.mockResolvedValue({ id: USER_ID });
   mockResolveChatAccess.mockResolvedValue(anchored(true));
   mockPublishTypingSignal.mockResolvedValue(undefined);
+  mockCheckSharedRateLimit.mockResolvedValue({ allowed: true });
 });
 
 describe('sendMeetingTypingAction', () => {
@@ -84,6 +92,18 @@ describe('sendMeetingTypingAction', () => {
     const result = await sendMeetingTypingAction({ meetingId: MEETING_ID, signal: 'started' });
 
     expect(result).toEqual({ success: false, error: TYPING_DENIED });
+    expect(mockResolveChatAccess).not.toHaveBeenCalled();
+    expect(mockPublishTypingSignal).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ throttled ⇒ TYPING_DENIED, and the chat-access gate is not called', async () => {
+    mockCheckSharedRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+
+    const result = await sendMeetingTypingAction({ meetingId: MEETING_ID, signal: 'started' });
+
+    expect(result).toEqual({ success: false, error: TYPING_DENIED });
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledTimes(1);
+    expect(mockCheckSharedRateLimit).toHaveBeenCalledWith('typing-signal', { id: USER_ID });
     expect(mockResolveChatAccess).not.toHaveBeenCalled();
     expect(mockPublishTypingSignal).not.toHaveBeenCalled();
   });
