@@ -4,7 +4,12 @@ import { db } from '../client';
 import { calendarConnections, expertProfiles, type CalendarConnection } from '../schema';
 import { agencyFactory, expertDraftFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
-import { calendarRepository, type UpsertApirocConnectionInput } from './calendar';
+import { seedApirocConnection } from '../test/helpers/seed-apiroc-connection';
+import {
+  calendarRepository,
+  type UpsertApirocConnectionInput,
+  type UpsertApirocConnectionResult,
+} from './calendar';
 
 /**
  * BAL-467 + BAL-396 — `calendar_connections` against REAL Postgres.
@@ -97,12 +102,8 @@ async function stampCheckedAt(connectionId: string, checkedAt: Date | null): Pro
 async function seedGoogleThenMicrosoft(
   expertProfileId: string
 ): Promise<{ google: CalendarConnection; microsoft: CalendarConnection }> {
-  const google = await calendarRepository.upsertApirocConnection(
-    apirocInput(expertProfileId, 'google')
-  );
-  const microsoft = await calendarRepository.upsertApirocConnection(
-    apirocInput(expertProfileId, 'microsoft')
-  );
+  const google = await seedApirocConnection(apirocInput(expertProfileId, 'google'));
+  const microsoft = await seedApirocConnection(apirocInput(expertProfileId, 'microsoft'));
   await stampCreatedAt(google.id, '2026-01-01T00:00:00.000Z');
   await stampCreatedAt(microsoft.id, '2026-02-01T00:00:00.000Z');
   return { google, microsoft };
@@ -139,18 +140,25 @@ async function readRow(connectionId: string): Promise<CalendarConnection> {
   return row;
 }
 
+/**
+ * For tests whose SUBJECT is the upsert: assert the outcome, then hand back the row. The
+ * `expect` comes first so a refusal fails as a readable diff; the throw after it only
+ * narrows the type. Fixture sites use `seedApirocConnection` instead.
+ */
+function expectPersisted(result: UpsertApirocConnectionResult): CalendarConnection {
+  expect(result.outcome).toBe('persisted');
+  if (result.outcome !== 'persisted') throw new Error(`expected persisted, got ${result.outcome}`);
+  return result.connection;
+}
+
 // ── The cardinality ruling, positively ───────────────────────────
 
 describe('calendar_connections — per (expert, provider) cardinality [ADR-1021 §1, 18 Aug 2026]', () => {
   it('lets ONE expert hold a live google AND a live microsoft connection at once', async () => {
     const expert = await expertDraftFactory();
 
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
-    const microsoft = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
+    const microsoft = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
 
     expect(google.id).not.toBe(microsoft.id);
     const live = await liveRows(expert.id);
@@ -182,23 +190,73 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
    * `targetWhere`, Postgres cannot infer the arbiter and this raises 42P10 on the FIRST
    * statement below — not the second. Nothing else in CI catches it.
    */
-  it('INSERTS on first call and UPDATES IN PLACE on the second — one row, same id, no 42P10', async () => {
+  it('INSERTS on first call and UPDATES IN PLACE on a same-account reconnect — one row, same id, no 42P10', async () => {
     const expert = await expertDraftFactory();
 
-    const first = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_one' })
+    const first = expectPersisted(
+      await calendarRepository.upsertApirocConnection(
+        apirocInput(expert.id, 'google', {
+          endUserAccountId: 'eua_one',
+          providerEmail: 'first@google.example',
+        })
+      )
     );
-    const second = await calendarRepository.upsertApirocConnection(
+    // The SAME End User Account — the only reconnect the DO UPDATE arm accepts (BAL-575).
+    const second = expectPersisted(
+      await calendarRepository.upsertApirocConnection(
+        apirocInput(expert.id, 'google', {
+          endUserAccountId: 'eua_one',
+          providerEmail: 'second@google.example',
+          credentialStatus: 'SYNC_PENDING',
+        })
+      )
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(second.endUserAccountId).toBe('eua_one');
+    // A known email is replaced by a newer known one; only null/absent is kept out.
+    expect(second.providerEmail).toBe('second@google.example');
+    expect(second.credentialStatus).toBe('SYNC_PENDING');
+    expect(await readRow(first.id)).toEqual(second);
+    expect(await liveRows(expert.id)).toHaveLength(1);
+  });
+
+  /**
+   * ⚠⚠ BAL-575 — THE REFUSAL, ON REAL POSTGRES. A Reconnect (or Fix permissions) that comes
+   * back signed in to a DIFFERENT provider account used to repoint the live row, dropping the
+   * calendar Balo had been reading and orphaning the old End User Account. `setWhere` now
+   * makes the DO UPDATE arm match nothing, so the row must come back column-for-column as it
+   * was. The fixture first moves every column the arm's `set` writes OFF the value that arm
+   * would write, so a leak through any one of them shows up in the comparison.
+   */
+  it('a DIFFERENT End User Account on a live row is REFUSED and changes nothing — not one column', async () => {
+    const expert = await expertDraftFactory();
+    const stored = await seedApirocConnection(
       apirocInput(expert.id, 'google', {
-        endUserAccountId: 'eua_two',
+        endUserAccountId: 'eua_stored',
+        providerEmail: 'stored@google.example',
+      })
+    );
+    await calendarRepository.setCredentialStatus(stored.id, 'EXPIRED');
+    await calendarRepository.markReconnectNotified(stored.id, new Date('2026-08-17T00:00:00.000Z'));
+    await calendarRepository.markCredentialChecked(stored.id, new Date('2026-08-16T00:00:00.000Z'));
+    const before = await readRow(stored.id);
+
+    const result = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google', {
+        endUserAccountId: 'eua_different',
+        providerEmail: 'different@google.example',
         credentialStatus: 'SYNC_PENDING',
       })
     );
 
-    expect(second.id).toBe(first.id);
-    expect(second.endUserAccountId).toBe('eua_two');
-    expect(second.credentialStatus).toBe('SYNC_PENDING');
+    expect(result).toEqual({ outcome: 'refused_account_mismatch' });
+    // Every column, `updatedAt`, `credentialCheckedAt`, `reconnectNotifiedAt` and `deletedAt`
+    // included.
+    expect(await readRow(stored.id)).toEqual(before);
     expect(await liveRows(expert.id)).toHaveLength(1);
+    // Nor did the refusal slip a second row in beside it.
+    expect(await allRows(expert.id)).toHaveLength(1);
   });
 
   /**
@@ -210,8 +268,10 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
   it('writes a row with ONLY the pointer set, on the new vocabulary default', async () => {
     const expert = await expertDraftFactory();
 
-    const row = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_apiroc_1' })
+    const row = expectPersisted(
+      await calendarRepository.upsertApirocConnection(
+        apirocInput(expert.id, 'google', { endUserAccountId: 'eua_apiroc_1' })
+      )
     );
 
     expect(row.endUserAccountId).toBe('eua_apiroc_1');
@@ -228,13 +288,16 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
   it('upserting a SECOND provider takes the INSERT arm, leaving the first untouched', async () => {
     const expert = await expertDraftFactory();
 
-    const google = await calendarRepository.upsertApirocConnection(
+    const google = await seedApirocConnection(
       apirocInput(expert.id, 'google', { endUserAccountId: 'eua_google' })
     );
-    await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft', { endUserAccountId: 'eua_microsoft' })
+    const microsoft = expectPersisted(
+      await calendarRepository.upsertApirocConnection(
+        apirocInput(expert.id, 'microsoft', { endUserAccountId: 'eua_microsoft' })
+      )
     );
 
+    expect(microsoft.id).not.toBe(google.id);
     // A `provider`-less arbiter would have UPDATED the google row's pointer here, silently
     // destroying the google connection.
     const reread = await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google');
@@ -246,15 +309,21 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
   it('reconnect AFTER disconnect INSERTS a fresh row beside the soft-deleted one — the partial-predicate proof', async () => {
     const expert = await expertDraftFactory();
 
-    const first = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    const first = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
     // A NON-partial unique index would still be INFERABLE as the arbiter here (predicate
     // implication is only required when the arbiter index IS partial), so the upsert would
     // take the DO UPDATE arm and RESURRECT the soft-deleted row via `deletedAt: null` — same
     // id, not a fresh one. Both assertions below catch that.
-    const reconnected = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_reconnected' })
+    //
+    // BAL-575: this is also the sanctioned way to SWITCH accounts. The End User Account below
+    // differs from the soft-deleted row's, and the refusal must not fire — a soft-deleted row
+    // is no conflict target, so `setWhere` is never consulted.
+    const reconnected = expectPersisted(
+      await calendarRepository.upsertApirocConnection(
+        apirocInput(expert.id, 'google', { endUserAccountId: 'eua_reconnected' })
+      )
     );
 
     expect(reconnected.id).not.toBe(first.id);
@@ -272,9 +341,7 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
    */
   it('re-upserting a LIVE row clears reconnectNotifiedAt and stamps credentialCheckedAt', async () => {
     const expert = await expertDraftFactory();
-    const created = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const created = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.setCredentialStatus(created.id, 'EXPIRED');
     await calendarRepository.markReconnectNotified(
       created.id,
@@ -282,14 +349,58 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
     );
     expect((await readRow(created.id)).reconnectNotifiedAt).toBeInstanceOf(Date);
 
-    const reconnected = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
+    const reconnected = expectPersisted(
+      await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'))
     );
 
     expect(reconnected.id).toBe(created.id);
     expect(reconnected.credentialStatus).toBe('ACTIVE');
     expect(reconnected.reconnectNotifiedAt).toBeNull();
     expect(reconnected.credentialCheckedAt).toBeInstanceOf(Date);
+  });
+
+  /**
+   * ⚠ BAL-575 — A KNOWN EMAIL IS NEVER NULLED. The vendor account can come back without an
+   * email; that must not erase the address the connection card shows and the connect route
+   * sends as `loginHint`. Both "no email" spellings are pinned: an explicit `null` (what the
+   * callback passes for a blank vendor email) and an absent key.
+   */
+  it('a same-account reconnect with a null or absent email keeps the KNOWN email', async () => {
+    const expert = await expertDraftFactory();
+    const created = await seedApirocConnection(
+      apirocInput(expert.id, 'google', { providerEmail: 'known@google.example' })
+    );
+
+    const withNull = expectPersisted(
+      await calendarRepository.upsertApirocConnection(
+        apirocInput(expert.id, 'google', { providerEmail: null })
+      )
+    );
+    expect(withNull.id).toBe(created.id);
+    expect((await readRow(created.id)).providerEmail).toBe('known@google.example');
+
+    const withoutEmailKey: UpsertApirocConnectionInput = {
+      expertProfileId: expert.id,
+      provider: 'google',
+      endUserAccountId: created.endUserAccountId,
+    };
+    const omitted = expectPersisted(
+      await calendarRepository.upsertApirocConnection(withoutEmailKey)
+    );
+    expect(omitted.id).toBe(created.id);
+    expect((await readRow(created.id)).providerEmail).toBe('known@google.example');
+  });
+
+  it('a FRESH insert with a null email stores null — there is no known email to keep', async () => {
+    const expert = await expertDraftFactory();
+
+    const row = expectPersisted(
+      await calendarRepository.upsertApirocConnection(
+        apirocInput(expert.id, 'google', { providerEmail: null })
+      )
+    );
+
+    expect((await readRow(row.id)).providerEmail).toBeNull();
   });
 });
 
@@ -298,7 +409,7 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
 describe('calendar_connections.credential_status — the CHECK is the backstop', () => {
   it('accepts every value in the new vocabulary', async () => {
     const expert = await expertDraftFactory();
-    const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    const row = await seedApirocConnection(apirocInput(expert.id, 'google'));
 
     for (const status of ['ACTIVE', 'SYNC_PENDING', 'EXPIRED', 'REVOKED'] as const) {
       await calendarRepository.setCredentialStatus(row.id, status);
@@ -369,7 +480,7 @@ describe('calendarRepository.setCredentialStatusForProvider', () => {
 
   it('clears the notification marker when the provider goes back to ACTIVE, and not otherwise', async () => {
     const expert = await expertDraftFactory();
-    const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    const row = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.markReconnectNotified(row.id, new Date('2026-08-17T00:00:00.000Z'));
 
     await calendarRepository.setCredentialStatusForProvider(expert.id, 'google', 'REVOKED');
@@ -381,7 +492,7 @@ describe('calendarRepository.setCredentialStatusForProvider', () => {
 
   it('leaves a soft-deleted connection alone', async () => {
     const expert = await expertDraftFactory();
-    const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    const row = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
     await calendarRepository.setCredentialStatusForProvider(expert.id, 'google', 'EXPIRED');
@@ -393,12 +504,8 @@ describe('calendarRepository.setCredentialStatusForProvider', () => {
 describe('calendarRepository — connection-keyed credential writes', () => {
   it('setCredentialStatus writes one row and clears the marker only on the heal', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
-    const microsoft = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
+    const microsoft = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
     await calendarRepository.markReconnectNotified(google.id, new Date('2026-08-17T00:00:00.000Z'));
 
     await calendarRepository.setCredentialStatus(google.id, 'EXPIRED');
@@ -419,9 +526,7 @@ describe('calendarRepository — connection-keyed credential writes', () => {
    */
   it('setCredentialStatus rolls back with the caller transaction when an executor is passed', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
 
     await expect(
       db.transaction(async (tx) => {
@@ -442,12 +547,8 @@ describe('calendarRepository — connection-keyed credential writes', () => {
 
   it('setCredentialStatus commits through a caller transaction with identical semantics', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
-    const microsoft = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
+    const microsoft = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
     await calendarRepository.markReconnectNotified(google.id, new Date('2026-08-17T00:00:00.000Z'));
 
     await db.transaction(async (tx) => {
@@ -474,9 +575,7 @@ describe('calendarRepository — connection-keyed credential writes', () => {
 
   it('setCredentialStatus leaves a soft-deleted connection alone on the executor arm', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
     await db.transaction(async (tx) => {
@@ -488,7 +587,7 @@ describe('calendarRepository — connection-keyed credential writes', () => {
 
   it('markCredentialChecked stamps the caller-supplied instant', async () => {
     const expert = await expertDraftFactory();
-    const row = await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
+    const row = await seedApirocConnection(apirocInput(expert.id, 'google'));
     const checkedAt = new Date('2026-08-18T09:30:00.000Z');
 
     await calendarRepository.markCredentialChecked(row.id, checkedAt);
@@ -500,12 +599,8 @@ describe('calendarRepository — connection-keyed credential writes', () => {
 
   it('markReconnectNotified stamps the marker for that connection only', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
-    const microsoft = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
+    const microsoft = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
     const notifiedAt = new Date('2026-08-18T09:45:00.000Z');
 
     await calendarRepository.markReconnectNotified(google.id, notifiedAt);
@@ -529,9 +624,7 @@ describe('calendarRepository.findStaleConnections', () => {
    */
   it('returns a freshly-seeded ACTIVE connection whose credential was last checked before the threshold', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await stampCheckedAt(google.id, new Date('2000-01-01T00:00:00.000Z'));
 
     const stale = await calendarRepository.findStaleConnections(
@@ -554,9 +647,7 @@ describe('calendarRepository.findStaleConnections', () => {
    */
   it('returns a NEVER-CHECKED connection — a never-synced connection must not be a permanent no-op', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     // A fresh connect already leaves credential_checked_at NULL (see the `upsertApirocConnection`
     // "writes a row with ONLY the pointer set" test above) — no extra stamp needed.
 
@@ -569,9 +660,7 @@ describe('calendarRepository.findStaleConnections', () => {
 
   it('EXCLUDES a connection whose credential was proven inside the threshold window', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await stampCheckedAt(google.id, new Date('2026-08-18T11:50:00.000Z'));
 
     const stale = await calendarRepository.findStaleConnections(
@@ -583,12 +672,8 @@ describe('calendarRepository.findStaleConnections', () => {
 
   it('returns ONE ROW PER PROVIDER — what the availability job wants', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
-    const microsoft = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
+    const microsoft = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
     await stampCheckedAt(google.id, new Date('2000-01-01T00:00:00.000Z'));
     await stampCheckedAt(microsoft.id, new Date('2000-01-01T00:00:00.000Z'));
 
@@ -601,9 +686,7 @@ describe('calendarRepository.findStaleConnections', () => {
 
   it('EXCLUDES a broken connection — a dead credential is not a resync candidate', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await stampCheckedAt(google.id, new Date('2000-01-01T00:00:00.000Z'));
     await calendarRepository.setCredentialStatus(google.id, 'EXPIRED');
 
@@ -620,12 +703,8 @@ describe('calendarRepository.findStaleConnections', () => {
 describe('calendarRepository.listConnectionsDueForHealthCheck', () => {
   it('puts NEVER-CHECKED connections first, then the oldest check', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
-    const microsoft = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
+    const microsoft = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
     await stampCheckedAt(microsoft.id, new Date('2026-08-18T08:00:00.000Z'));
     await stampCheckedAt(google.id, null);
 
@@ -642,9 +721,7 @@ describe('calendarRepository.listConnectionsDueForHealthCheck', () => {
 
   it('EXCLUDES a connection already proven inside the interval', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await stampCheckedAt(google.id, new Date('2026-08-18T08:59:00.000Z'));
 
     const due = await calendarRepository.listConnectionsDueForHealthCheck(
@@ -657,10 +734,10 @@ describe('calendarRepository.listConnectionsDueForHealthCheck', () => {
 
   it('returns NON-ACTIVE connections too — the probe is also the healer', async () => {
     const expert = await expertDraftFactory();
-    const pending = await calendarRepository.upsertApirocConnection(
+    const pending = await seedApirocConnection(
       apirocInput(expert.id, 'google', { credentialStatus: 'SYNC_PENDING' })
     );
-    const expired = await calendarRepository.upsertApirocConnection(
+    const expired = await seedApirocConnection(
       apirocInput(expert.id, 'microsoft', { credentialStatus: 'EXPIRED' })
     );
 
@@ -677,9 +754,7 @@ describe('calendarRepository.listConnectionsDueForHealthCheck', () => {
 
   it('EXCLUDES a soft-deleted connection', async () => {
     const expert = await expertDraftFactory();
-    const disconnected = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const disconnected = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'microsoft');
 
     const due = await calendarRepository.listConnectionsDueForHealthCheck(
@@ -711,7 +786,7 @@ describe('calendarRepository.listConnectionsDueForHealthCheck', () => {
 describe('calendarRepository.listBusyReadTargets', () => {
   it('returns only conflict-checked calendar ids, with the pointer the vendor call needs', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
+    const google = await seedApirocConnection(
       apirocInput(expert.id, 'google', { endUserAccountId: 'eua_busy' })
     );
     await calendarRepository.replaceSubCalendars(google.id, [
@@ -769,9 +844,7 @@ describe('calendarRepository.listBusyReadTargets', () => {
 
   it('reports provisioned: true with an EMPTY id list when the expert conflict-checks nothing', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.replaceSubCalendars(google.id, [
       {
         calendarId: 'cal_personal',
@@ -789,9 +862,7 @@ describe('calendarRepository.listBusyReadTargets', () => {
 
   it('returns a BROKEN connection too, so the caller can fail closed rather than open', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.replaceSubCalendars(google.id, [
       {
         calendarId: 'cal_work',
@@ -863,9 +934,7 @@ describe('calendarRepository.listBusyReadTargets', () => {
 describe('calendarRepository — findConnectionById (BAL-468)', () => {
   it('returns the one live connection for a bare row id', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
 
     const found = await calendarRepository.findConnectionById(google.id);
@@ -880,9 +949,7 @@ describe('calendarRepository — findConnectionById (BAL-468)', () => {
     // connection the expert has since unhooked. Answering the row would resurrect a calendar
     // they deliberately removed; answering `undefined` makes both callers reconcile to "gone".
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
     expect(await calendarRepository.findConnectionById(google.id)).toBeUndefined();
@@ -898,12 +965,8 @@ describe('calendarRepository — findConnectionById (BAL-468)', () => {
 describe('calendarRepository — provider-scoped reads', () => {
   it('findConnectionByExpertAndProvider returns the matching provider and nothing else', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
-    const microsoft = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
+    const microsoft = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
 
     expect(
       (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google'))?.id
@@ -969,12 +1032,22 @@ describe('calendarRepository — provider-scoped reads', () => {
     // the vendor keys End User Accounts by provider account, not by Balo's `externalId`, so
     // two experts connecting the same Google account very likely receive the SAME id. A
     // unique index would surface that as a bare 23505 at connect time.
-    const shared = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared');
+    const shared = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared', {
+      excludingConnectionId: null,
+    });
     expect(shared).toHaveLength(2);
     expect(shared.map((row) => row.expertProfileId).sort()).toEqual([alex.id, dana.id].sort());
 
-    expect(await calendarRepository.findConnectionsByEndUserAccountId('eua_other')).toHaveLength(1);
-    expect(await calendarRepository.findConnectionsByEndUserAccountId('eua_absent')).toEqual([]);
+    expect(
+      await calendarRepository.findConnectionsByEndUserAccountId('eua_other', {
+        excludingConnectionId: null,
+      })
+    ).toHaveLength(1);
+    expect(
+      await calendarRepository.findConnectionsByEndUserAccountId('eua_absent', {
+        excludingConnectionId: null,
+      })
+    ).toEqual([]);
   });
 
   it('findConnectionsByEndUserAccountId excludes soft-deleted rows', async () => {
@@ -984,7 +1057,89 @@ describe('calendarRepository — provider-scoped reads', () => {
     );
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
-    expect(await calendarRepository.findConnectionsByEndUserAccountId('eua_gone')).toEqual([]);
+    expect(
+      await calendarRepository.findConnectionsByEndUserAccountId('eua_gone', {
+        excludingConnectionId: null,
+      })
+    ).toEqual([]);
+  });
+
+  /**
+   * The disconnect shape: the disconnecting row is still live when the check runs, so it
+   * leaves itself out and asks whether ANY OTHER live row still depends on the vendor account.
+   */
+  it('findConnectionsByEndUserAccountId leaves the excluded row out and returns the other expert on a shared account', async () => {
+    const alex = await expertDraftFactory();
+    const dana = await expertDraftFactory();
+    const alexRow = await seedApirocConnection(
+      apirocInput(alex.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    const danaRow = await seedApirocConnection(
+      apirocInput(dana.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+
+    const others = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared', {
+      excludingConnectionId: alexRow.id,
+    });
+
+    expect(others).toHaveLength(1);
+    expect(others.map((row) => row.id)).toEqual([danaRow.id]);
+    expect(others.map((row) => row.expertProfileId)).toEqual([dana.id]);
+  });
+
+  it('findConnectionsByEndUserAccountId returns [] when the only live row is the excluded one', async () => {
+    const expert = await expertDraftFactory();
+    const row = await seedApirocConnection(
+      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_sole' })
+    );
+
+    const others = await calendarRepository.findConnectionsByEndUserAccountId('eua_sole', {
+      excludingConnectionId: row.id,
+    });
+
+    expect(others).toHaveLength(0);
+    expect(others).toEqual([]);
+  });
+
+  it('findConnectionsByEndUserAccountId returns [] when the only other row on the account is soft-deleted', async () => {
+    const alex = await expertDraftFactory();
+    const dana = await expertDraftFactory();
+    const alexRow = await seedApirocConnection(
+      apirocInput(alex.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    await seedApirocConnection(apirocInput(dana.id, 'google', { endUserAccountId: 'eua_shared' }));
+    await calendarRepository.softDeleteConnectionForProvider(dana.id, 'google');
+
+    const others = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared', {
+      excludingConnectionId: alexRow.id,
+    });
+
+    // A disconnected connection depends on nothing, so the vendor account is free to delete.
+    expect(others).toHaveLength(0);
+    expect(others).toEqual([]);
+  });
+
+  it('findConnectionsByEndUserAccountId returns the full match set, oldest first, when the excluded row is on a different account', async () => {
+    const alex = await expertDraftFactory();
+    const dana = await expertDraftFactory();
+    const alexGoogle = await seedApirocConnection(
+      apirocInput(alex.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    const danaGoogle = await seedApirocConnection(
+      apirocInput(dana.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    const alexMicrosoft = await seedApirocConnection(
+      apirocInput(alex.id, 'microsoft', { endUserAccountId: 'eua_other' })
+    );
+    await stampCreatedAt(alexGoogle.id, '2026-01-01T00:00:00.000Z');
+    await stampCreatedAt(danaGoogle.id, '2026-02-01T00:00:00.000Z');
+
+    const matches = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared', {
+      excludingConnectionId: alexMicrosoft.id,
+    });
+
+    expect(matches).toHaveLength(2);
+    expect(matches.map((row) => row.id)).toEqual([alexGoogle.id, danaGoogle.id]);
   });
 });
 
@@ -1047,9 +1202,7 @@ describe('calendarRepository — per-provider writes', () => {
   it('softDeleteConnectionForProvider disconnects ONE provider and leaves the other live', async () => {
     const expert = await expertDraftFactory();
     await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
-    const microsoft = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'microsoft')
-    );
+    const microsoft = await seedApirocConnection(apirocInput(expert.id, 'microsoft'));
 
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
@@ -1074,9 +1227,7 @@ describe('calendarRepository — per-provider writes', () => {
 
   it('updateLastSyncedAt is keyed by connectionId, so it touches only that provider', async () => {
     const expert = await expertDraftFactory();
-    const google = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
 
     await calendarRepository.updateLastSyncedAt(google.id);
@@ -1107,12 +1258,10 @@ describe('calendarRepository.listConnectionAlertLabels', () => {
       .set({ agencyId: agency.id })
       .where(eq(expertProfiles.id, agencyExpert.id));
 
-    const independentConnection = await calendarRepository.upsertApirocConnection(
+    const independentConnection = await seedApirocConnection(
       apirocInput(independentExpert.id, 'google')
     );
-    const agencyConnection = await calendarRepository.upsertApirocConnection(
-      apirocInput(agencyExpert.id, 'microsoft')
-    );
+    const agencyConnection = await seedApirocConnection(apirocInput(agencyExpert.id, 'microsoft'));
 
     const labels = await calendarRepository.listConnectionAlertLabels([
       independentConnection.id,
@@ -1131,9 +1280,7 @@ describe('calendarRepository.listConnectionAlertLabels', () => {
 
   it('omits a soft-deleted connection rather than throwing — a disconnect can race the sweep', async () => {
     const expert = await expertDraftFactory();
-    const connection = await calendarRepository.upsertApirocConnection(
-      apirocInput(expert.id, 'google')
-    );
+    const connection = await seedApirocConnection(apirocInput(expert.id, 'google'));
     await db
       .update(calendarConnections)
       .set({ deletedAt: new Date() })

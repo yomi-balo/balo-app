@@ -145,9 +145,9 @@ export const calendarConnections = pgTable(
      * ⚠ NON-UNIQUE, and that is a decision. The amendment rules cardinality on
      * `(expertProfileId, provider)` and on nothing else. Nothing in ADR-1021 or the
      * vendor docs establishes that one End User Account maps to at most one Balo
-     * expert — two experts connecting the same Google account (routine in dev and seed
-     * data) would collide on a unique index and surface as a confusing 23505 at connect
-     * time.
+     * expert — two experts connecting the same Google account is possible (inferred,
+     * not captured — BAL-577 checks it) and would collide on a unique index and
+     * surface as a confusing 23505 at connect time.
      *
      * ⚠ BAL-396 LOOKED AND RULED IT STAYS NON-UNIQUE (ADR-1021 amendment 18 Aug 2026 §5).
      * The vendor keys End User Accounts by provider account, not by our `externalId`

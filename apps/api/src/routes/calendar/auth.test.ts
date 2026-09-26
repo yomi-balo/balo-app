@@ -11,8 +11,11 @@ const {
   mockProvisionConnection,
   mockEnqueueAvailabilityCacheRebuild,
   mockEndUserAccountsGet,
+  mockEndUserAccountsDelete,
   mockEnqueueSubscriptionReconcile,
   mockReconcileExpertSearchability,
+  mockFindConnectionByExpertAndProvider,
+  mockFindConnectionsByEndUserAccountId,
 } = vi.hoisted(() => ({
   mockBuildApirocAuthorizeUrl: vi.fn(),
   mockSignConnectState: vi.fn(),
@@ -22,17 +25,23 @@ const {
   mockProvisionConnection: vi.fn(),
   mockEnqueueAvailabilityCacheRebuild: vi.fn(),
   mockEndUserAccountsGet: vi.fn(),
+  mockEndUserAccountsDelete: vi.fn(),
   mockEnqueueSubscriptionReconcile: vi.fn(),
   mockReconcileExpertSearchability: vi.fn(),
+  mockFindConnectionByExpertAndProvider: vi.fn(),
+  mockFindConnectionsByEndUserAccountId: vi.fn(),
 }));
 
 // BAL-397 fix round — the callback now resolves the browser-supplied `endUserAccountId`
 // against the HMAC-trusted `expertProfileId` via `endUserAccounts.get`, so the SDK boundary is
 // a live collaborator of this route (it was inert before). `callApiroc` is passed through
 // verbatim: its normalisation is `lib/apiroc/errors.test.ts`'s subject, not this file's.
+// BAL-575 — `endUserAccounts.delete` joins the mock: the refusal-cleanup path calls it.
 vi.mock('../../lib/apiroc/index.js', () => ({
   buildApirocAuthorizeUrl: mockBuildApirocAuthorizeUrl,
-  getApirocClient: () => ({ endUserAccounts: { get: mockEndUserAccountsGet } }),
+  getApirocClient: () => ({
+    endUserAccounts: { get: mockEndUserAccountsGet, delete: mockEndUserAccountsDelete },
+  }),
   callApiroc: <T>(_operation: string, fn: () => Promise<T>): Promise<T> => fn(),
 }));
 
@@ -85,8 +94,14 @@ vi.mock('@balo/shared/logging', () => ({
   }),
 }));
 
+// BAL-575 — the connect route reads `findConnectionByExpertAndProvider` for `loginHint`, and
+// the refusal-cleanup path reads `findConnectionsByEndUserAccountId` (excluding nothing — the
+// refused account never got a Balo row of its own) before deleting a vendor account.
 vi.mock('@balo/db', () => ({
-  calendarRepository: {},
+  calendarRepository: {
+    findConnectionByExpertAndProvider: mockFindConnectionByExpertAndProvider,
+    findConnectionsByEndUserAccountId: mockFindConnectionsByEndUserAccountId,
+  },
 }));
 
 vi.mock('@sentry/node', () => ({
@@ -115,11 +130,20 @@ const VALID_NONCE = 'nonce-abc-123';
 
 describe('calendar auth routes (BAL-396)', () => {
   let app: FastifyInstance;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let infoSpy: ReturnType<typeof vi.spyOn>;
 
   beforeAll(async () => {
     process.env.INTERNAL_API_SECRET = TEST_SECRET;
     process.env.APP_URL = 'https://app.balo.test';
     app = await buildApp({ logger: false });
+    // BAL-575 — `logger: false` makes Fastify build its abstract-logging null logger for
+    // `app.log`, whose `child()` returns itself (`fastify/lib/logger-factory.js`), so
+    // `request.log === app.log` for every request this app handles. Spying once here observes
+    // every `request.log.warn` / `.info` call the route makes for the life of the suite;
+    // `vi.clearAllMocks()` in `beforeEach` clears call history without un-spying.
+    warnSpy = vi.spyOn(app.log, 'warn');
+    infoSpy = vi.spyOn(app.log, 'info');
   });
 
   afterAll(async () => {
@@ -135,7 +159,19 @@ describe('calendar auth routes (BAL-396)', () => {
     // account really does carry this expert's id as its `externalId`), so every pre-existing
     // SHAPE 2 fixture below still exercises what it was written to exercise. The binding's own
     // failure modes are driven explicitly in the `vendor-account ownership binding` block.
-    mockEndUserAccountsGet.mockResolvedValue({ id: 'eua-1', externalId: EXPERT_UUID });
+    // BAL-575 — the account also carries an email now, since `resolveOwnedEndUserAccount`
+    // reads one off it.
+    mockEndUserAccountsGet.mockResolvedValue({
+      id: 'eua-1',
+      externalId: EXPERT_UUID,
+      email: 'dana@example.com',
+    });
+    // BAL-575 — no prior connection for the connect route's `loginHint` read, no live row
+    // referencing a just-refused End User Account, and the vendor delete succeeds; individual
+    // tests override whichever of these their scenario needs.
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(undefined);
+    mockFindConnectionsByEndUserAccountId.mockResolvedValue([]);
+    mockEndUserAccountsDelete.mockResolvedValue({ success: true });
   });
 
   function injectConnect(body?: Record<string, unknown>, headers?: Record<string, string>) {
@@ -184,6 +220,16 @@ describe('calendar auth routes (BAL-396)', () => {
     const raw = res.headers['set-cookie'];
     if (!raw) return [];
     return Array.isArray(raw) ? (raw as string[]) : [raw as string];
+  }
+
+  /** BAL-575 — every SHAPE 2 happy-path fixture persists successfully with no email drift, by
+   *  default; the same-account-email-drift tests override `providerEmailChanged` explicitly. */
+  function mockPersistedConnection(providerEmailChanged = false): void {
+    mockPersistApirocConnection.mockResolvedValue({
+      outcome: 'persisted',
+      connection: { id: 'conn-1' },
+      providerEmailChanged,
+    });
   }
 
   // ── POST /api/calendar/connect ────────────────────────────────
@@ -238,6 +284,94 @@ describe('calendar auth routes (BAL-396)', () => {
       });
     });
 
+    // BAL-575 — the login/account-chooser prefill hint.
+    it('passes loginHint when the stored connection has a known providerEmail', async () => {
+      mockSignConnectState.mockReturnValue('signed-state');
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'google',
+        nonce: VALID_NONCE,
+      });
+      mockBuildApirocAuthorizeUrl.mockReturnValue('https://api.apiroc.com/oauth/authorize?test=1');
+      mockFindConnectionByExpertAndProvider.mockResolvedValue({
+        providerEmail: 'dana@example.com',
+      });
+
+      await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'google' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+
+      expect(mockBuildApirocAuthorizeUrl).toHaveBeenCalledWith({
+        provider: 'google',
+        state: 'signed-state',
+        externalId: EXPERT_UUID,
+        loginHint: 'dana@example.com',
+      });
+    });
+
+    it('sends no loginHint when there is no stored connection or its providerEmail is null', async () => {
+      mockSignConnectState.mockReturnValue('signed-state');
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'google',
+        nonce: VALID_NONCE,
+      });
+      mockBuildApirocAuthorizeUrl.mockReturnValue('https://api.apiroc.com/oauth/authorize?test=1');
+
+      // No row — the `beforeEach` default.
+      await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'google' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+      expect(mockBuildApirocAuthorizeUrl).toHaveBeenCalledWith({
+        provider: 'google',
+        state: 'signed-state',
+        externalId: EXPERT_UUID,
+      });
+      expect(mockBuildApirocAuthorizeUrl.mock.calls[0]?.[0]).not.toHaveProperty('loginHint');
+
+      // A row that has never carried a provider email (pre-BAL-575, or a blank vendor email).
+      mockFindConnectionByExpertAndProvider.mockResolvedValue({ providerEmail: null });
+      await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'google' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+      expect(mockBuildApirocAuthorizeUrl.mock.calls[1]?.[0]).not.toHaveProperty('loginHint');
+    });
+
+    it('still returns the authUrl with no loginHint when the stored-connection read fails', async () => {
+      mockSignConnectState.mockReturnValue('signed-state');
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'google',
+        nonce: VALID_NONCE,
+      });
+      mockBuildApirocAuthorizeUrl.mockReturnValue('https://api.apiroc.com/oauth/authorize?test=1');
+      mockFindConnectionByExpertAndProvider.mockRejectedValue(new Error('connection terminated'));
+
+      const res = await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'google' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        authUrl: 'https://api.apiroc.com/oauth/authorize?test=1',
+        nonce: VALID_NONCE,
+      });
+      expect(mockBuildApirocAuthorizeUrl).toHaveBeenCalledWith({
+        provider: 'google',
+        state: 'signed-state',
+        externalId: EXPERT_UUID,
+      });
+      expect(mockBuildApirocAuthorizeUrl.mock.calls[0]?.[0]).not.toHaveProperty('loginHint');
+      expect(warnSpy).toHaveBeenCalledWith(
+        { expertProfileId: EXPERT_UUID, provider: 'google', error: 'connection terminated' },
+        'apiroc_connect_login_hint_lookup_failed'
+      );
+    });
+
     it('returns 500 when buildApirocAuthorizeUrl throws', async () => {
       mockSignConnectState.mockReturnValue('signed-state');
       mockVerifyConnectState.mockReturnValue({
@@ -256,6 +390,21 @@ describe('calendar auth routes (BAL-396)', () => {
 
       expect(res.statusCode).toBe(500);
       expect(res.json().error).toBe('Failed to initiate calendar connection');
+    });
+
+    it('returns 500 when signConnectState throws, before buildApirocAuthorizeUrl runs', async () => {
+      mockSignConnectState.mockImplementationOnce(() => {
+        throw new Error('secret unset');
+      });
+
+      const res = await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'google' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe('Failed to initiate calendar connection');
+      expect(mockBuildApirocAuthorizeUrl).not.toHaveBeenCalled();
     });
   });
 
@@ -406,7 +555,7 @@ describe('calendar auth routes (BAL-396)', () => {
         provider: 'google',
         nonce: VALID_NONCE,
       });
-      mockPersistApirocConnection.mockResolvedValue({ id: 'conn-1' });
+      mockPersistedConnection();
       mockProvisionConnection.mockResolvedValue('ACTIVE');
 
       const res = await injectCallback(
@@ -430,6 +579,7 @@ describe('calendar auth routes (BAL-396)', () => {
         expertProfileId: EXPERT_UUID,
         provider: 'google',
         endUserAccountId: 'eua-1',
+        providerEmail: 'dana@example.com',
       });
       expect(mockEnqueueAvailabilityCacheRebuild).toHaveBeenCalledWith(
         EXPERT_UUID,
@@ -458,7 +608,7 @@ describe('calendar auth routes (BAL-396)', () => {
         provider: 'google',
         nonce: VALID_NONCE,
       });
-      mockPersistApirocConnection.mockResolvedValue({ id: 'conn-1' });
+      mockPersistedConnection();
       mockProvisionConnection.mockResolvedValue('ACTIVE');
 
       const res = await injectCallback(
@@ -480,7 +630,7 @@ describe('calendar auth routes (BAL-396)', () => {
         provider: 'google',
         nonce: VALID_NONCE,
       });
-      mockPersistApirocConnection.mockResolvedValue({ id: 'conn-1' });
+      mockPersistedConnection();
       mockProvisionConnection.mockResolvedValue('SYNC_PENDING');
 
       const res = await injectCallback(
@@ -502,7 +652,7 @@ describe('calendar auth routes (BAL-396)', () => {
         provider: 'google',
         nonce: VALID_NONCE,
       });
-      mockPersistApirocConnection.mockResolvedValue({ id: 'conn-1' });
+      mockPersistedConnection();
       mockProvisionConnection.mockResolvedValue('ACTIVE');
       mockReconcileExpertSearchability.mockRejectedValue(new Error('queue unavailable'));
 
@@ -602,7 +752,7 @@ describe('calendar auth routes (BAL-396)', () => {
           provider: 'google',
           nonce: VALID_NONCE,
         });
-        mockPersistApirocConnection.mockResolvedValue({ id: 'conn-1' });
+        mockPersistedConnection();
         mockProvisionConnection.mockResolvedValue('ACTIVE');
 
         const first = await injectCallback(
@@ -644,7 +794,7 @@ describe('calendar auth routes (BAL-396)', () => {
           provider: 'google',
           nonce: VALID_NONCE,
         });
-        mockPersistApirocConnection.mockResolvedValue({ id: 'conn-1' });
+        mockPersistedConnection();
         mockProvisionConnection.mockResolvedValue('ACTIVE');
       });
 
@@ -665,6 +815,12 @@ describe('calendar auth routes (BAL-396)', () => {
         expect(mockPersistApirocConnection).not.toHaveBeenCalled();
         expect(mockProvisionConnection).not.toHaveBeenCalled();
         expect(mockEnqueueAvailabilityCacheRebuild).not.toHaveBeenCalled();
+        // BAL-575 — a foreign or unknown account never reaches the refused-account
+        // live-reference lookup or the vendor delete: those only run for an account THIS
+        // callback's ownership check already proved belongs to this expert, and only after
+        // the repository has refused it.
+        expect(mockFindConnectionsByEndUserAccountId).not.toHaveBeenCalled();
+        expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
       });
 
       it('reuses state_csrf_mismatch rather than minting a distinct code — no existence oracle for account ids', async () => {
@@ -720,7 +876,7 @@ describe('calendar auth routes (BAL-396)', () => {
         expect(mockEndUserAccountsGet).toHaveBeenCalledWith('eua-from-query');
       });
 
-      it('lets the matching account through to persistence', async () => {
+      it('lets the matching account through to persistence, with the fetched providerEmail — and touches the vendor exactly once', async () => {
         const res = await injectCallback(
           { endUserAccountId: 'eua-1', state: 'valid-state' },
           nonceCookieHeader()
@@ -731,6 +887,54 @@ describe('calendar auth routes (BAL-396)', () => {
           expertProfileId: EXPERT_UUID,
           provider: 'google',
           endUserAccountId: 'eua-1',
+          providerEmail: 'dana@example.com',
+        });
+        expect(mockProvisionConnection).toHaveBeenCalled();
+        // BAL-575 — the same-account path never touches the refused-account cleanup
+        // machinery: it has nothing to refuse or clean up.
+        expect(mockEndUserAccountsGet).toHaveBeenCalledTimes(1);
+        expect(mockFindConnectionsByEndUserAccountId).not.toHaveBeenCalled();
+        expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+      });
+
+      // BAL-575 — the SDK types `email` as `string`, but a vendor response can still omit it
+      // or send `null`. An owned account must still connect, with `providerEmail: null`, not
+      // fail closed on a thrown read.
+      it('still owns and connects when the vendor account has no email field at all', async () => {
+        mockEndUserAccountsGet.mockResolvedValue({ id: 'eua-1', externalId: EXPERT_UUID });
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.headers.location).toContain('calendar_connected=true');
+        expect(mockPersistApirocConnection).toHaveBeenCalledWith({
+          expertProfileId: EXPERT_UUID,
+          provider: 'google',
+          endUserAccountId: 'eua-1',
+          providerEmail: null,
+        });
+      });
+
+      it('still owns and connects when the vendor account carries a null email', async () => {
+        mockEndUserAccountsGet.mockResolvedValue({
+          id: 'eua-1',
+          externalId: EXPERT_UUID,
+          email: null,
+        });
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.headers.location).toContain('calendar_connected=true');
+        expect(mockPersistApirocConnection).toHaveBeenCalledWith({
+          expertProfileId: EXPERT_UUID,
+          provider: 'google',
+          endUserAccountId: 'eua-1',
+          providerEmail: null,
         });
       });
 
@@ -741,6 +945,181 @@ describe('calendar auth routes (BAL-396)', () => {
 
         expect(res.headers.location).toContain('calendar_error=state_csrf_mismatch');
         expect(mockEndUserAccountsGet).not.toHaveBeenCalled();
+      });
+    });
+
+    // ── BAL-575 — reconnect with a DIFFERENT account is REFUSED, not silently repointed ────
+    //
+    // Every test here has already PASSED the CSRF check and the vendor-account ownership
+    // binding above (the account really does carry this expert's `externalId`) — the refusal
+    // under test is the repository's, decided by `upsertApirocConnection`'s `setWhere` against
+    // a LIVE row already pointing this (expert, provider) at a different End User Account.
+    describe('reconnect with a different account (refusal)', () => {
+      beforeEach(() => {
+        mockVerifyConnectState.mockReturnValue({
+          expertProfileId: EXPERT_UUID,
+          provider: 'google',
+          nonce: VALID_NONCE,
+        });
+      });
+
+      it('redirects account_mismatch and runs nothing downstream of persistence', async () => {
+        mockPersistApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toContain('calendar_error=account_mismatch');
+        expect(res.headers.location).toContain('calendar_provider=google');
+        expect(res.headers.location).not.toContain('calendar_connected=true');
+        expect(mockProvisionConnection).not.toHaveBeenCalled();
+        expect(mockEnqueueAvailabilityCacheRebuild).not.toHaveBeenCalled();
+        expect(mockEnqueueSubscriptionReconcile).not.toHaveBeenCalled();
+        expect(mockReconcileExpertSearchability).not.toHaveBeenCalled();
+        expect(trackServer).toHaveBeenCalledTimes(1);
+        expect(trackServer).toHaveBeenCalledWith('calendar_oauth_failed', {
+          error_code: 'account_mismatch',
+          provider: 'google',
+          distinct_id: EXPERT_UUID,
+        });
+        // BAL-575 — the Axiom signal the manual verification plan and ops rely on. Exact
+        // object so a field added later (an email, say) fails this test instead of Axiom.
+        expect(warnSpy).toHaveBeenCalledWith(
+          { expertProfileId: EXPERT_UUID, provider: 'google' },
+          'apiroc_callback_reconnect_account_mismatch'
+        );
+      });
+
+      it('no live row references the refused account: deletes it at the vendor', async () => {
+        mockPersistApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+        mockFindConnectionsByEndUserAccountId.mockResolvedValue([]);
+
+        await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(mockFindConnectionsByEndUserAccountId).toHaveBeenCalledWith('eua-1', {
+          excludingConnectionId: null,
+        });
+        expect(mockEndUserAccountsDelete).toHaveBeenCalledWith('eua-1');
+      });
+
+      it('a live row (any expert) still references the refused account: retained, not deleted', async () => {
+        mockPersistApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+        mockFindConnectionsByEndUserAccountId.mockResolvedValue([{ id: 'some-other-connection' }]);
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+        expect(infoSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ referencingConnections: 1 }),
+          'apiroc_callback_refused_account_retained'
+        );
+        // Retention is invisible to the browser — still the same refusal redirect.
+        expect(res.headers.location).toContain('calendar_error=account_mismatch');
+      });
+
+      it('a failed vendor delete is best-effort: warns, but the redirect and the single OAUTH_FAILED are unaffected', async () => {
+        mockPersistApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+        mockFindConnectionsByEndUserAccountId.mockResolvedValue([]);
+        mockEndUserAccountsDelete.mockRejectedValue(new Error('vendor 500'));
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toContain('calendar_error=account_mismatch');
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ expertProfileId: EXPERT_UUID, provider: 'google' }),
+          'apiroc_callback_refused_account_delete_failed'
+        );
+        // ⚠ Exactly once, not twice: a cleanup failure must not fall through to the outer
+        // catch and fire a SECOND `OAUTH_FAILED` under `callback_failed`.
+        expect(trackServer).toHaveBeenCalledTimes(1);
+      });
+
+      it('a failed reference read is best-effort: warns, deletes nothing at the vendor, and the refusal redirect is unaffected', async () => {
+        mockPersistApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+        mockFindConnectionsByEndUserAccountId.mockRejectedValue(new Error('connection terminated'));
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledWith(
+          { expertProfileId: EXPERT_UUID, provider: 'google', error: 'connection terminated' },
+          'apiroc_callback_refused_account_delete_failed'
+        );
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toContain('calendar_error=account_mismatch');
+        // ⚠ Exactly once, not twice: a cleanup failure must not fall through to the outer
+        // catch and fire a SECOND `OAUTH_FAILED` under `callback_failed`.
+        expect(trackServer).toHaveBeenCalledTimes(1);
+      });
+
+      // BAL-575 — same End User Account, a different email than Balo last stored.
+      describe('same-account email drift', () => {
+        it('warns with the flag and no email address, and still connects', async () => {
+          mockPersistApirocConnection.mockResolvedValue({
+            outcome: 'persisted',
+            connection: { id: 'conn-1' },
+            providerEmailChanged: true,
+          });
+          mockProvisionConnection.mockResolvedValue('ACTIVE');
+
+          const res = await injectCallback(
+            { endUserAccountId: 'eua-1', state: 'valid-state' },
+            nonceCookieHeader()
+          );
+
+          expect(res.headers.location).toContain('calendar_connected=true');
+          expect(mockProvisionConnection).toHaveBeenCalled();
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+              expertProfileId: EXPERT_UUID,
+              provider: 'google',
+              connectionId: 'conn-1',
+              providerEmailChanged: true,
+            }),
+            'apiroc_callback_provider_email_changed'
+          );
+          // BAL-575 — every `warn`/`info` call this request made, not just the last one: an
+          // order-dependent check would silently stop covering an earlier call once a later
+          // warn is added to this path.
+          for (const call of [...warnSpy.mock.calls, ...infoSpy.mock.calls]) {
+            expect(JSON.stringify(call)).not.toContain('@');
+          }
+        });
+
+        it('a blank vendor email resolves to providerEmail: null', async () => {
+          mockEndUserAccountsGet.mockResolvedValue({
+            id: 'eua-1',
+            externalId: EXPERT_UUID,
+            email: '   ',
+          });
+          mockPersistedConnection();
+          mockProvisionConnection.mockResolvedValue('ACTIVE');
+
+          await injectCallback(
+            { endUserAccountId: 'eua-1', state: 'valid-state' },
+            nonceCookieHeader()
+          );
+
+          expect(mockPersistApirocConnection).toHaveBeenCalledWith(
+            expect.objectContaining({ providerEmail: null })
+          );
+        });
       });
     });
   });

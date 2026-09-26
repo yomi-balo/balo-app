@@ -100,6 +100,7 @@ export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
 export type {
   UpsertApirocConnectionInput,
+  UpsertApirocConnectionResult,
   BusyReadTarget,
   // BAL-548 — the batch identity hydration behind the `calendar.subscription_lapse` alert.
   ConnectionAlertLabel,

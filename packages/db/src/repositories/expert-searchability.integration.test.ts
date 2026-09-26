@@ -11,6 +11,7 @@ import {
 } from '../schema';
 import { hasLiveCalendarConnection, deriveExpertChecklist } from '@balo/shared/experts';
 import { expertDraftFactory, userFactory } from '../test/factories';
+import { seedApirocConnection } from '../test/helpers/seed-apiroc-connection';
 import { availabilityRulesRepository } from './availability-rules';
 import { calendarRepository } from './calendar';
 import { payoutsRepository } from './payouts';
@@ -70,7 +71,7 @@ async function connect(
   provider: string,
   credentialStatus: CalendarCredentialStatus = 'ACTIVE'
 ): Promise<{ id: string }> {
-  const row = await calendarRepository.upsertApirocConnection({
+  const row = await seedApirocConnection({
     expertProfileId,
     provider,
     endUserAccountId: `eua_${provider}_${expertProfileId}`,

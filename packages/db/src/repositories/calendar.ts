@@ -1,4 +1,4 @@
-import { eq, and, asc, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { eq, and, asc, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   calendarConnections,
@@ -89,6 +89,17 @@ export interface UpsertApirocConnectionInput {
 }
 
 /**
+ * What {@link calendarRepository.upsertApirocConnection} did, decided by its ONE statement.
+ *
+ * `refused_account_mismatch` means a live row for this (expert, provider) holds a DIFFERENT
+ * End User Account, and that row was left exactly as it was (BAL-575). It carries no row on
+ * purpose: nothing was written, so there is nothing to hand back.
+ */
+export type UpsertApirocConnectionResult =
+  | { outcome: 'persisted'; connection: CalendarConnection }
+  | { outcome: 'refused_account_mismatch' };
+
+/**
  * One expert connection the free/busy read can act on, with the calendar ids that read
  * requires. Compound because `GetFreeBusyInput.calendarIds` is REQUIRED by the vendor SDK:
  * a connection without conflict-checked sub-calendars is not a readable target, and the
@@ -168,7 +179,10 @@ export const calendarRepository = {
    * unique over exactly this pair among live rows, so the answer is unambiguous by
    * construction, not by ordering convention.
    *
-   * ⚠ INERT — no caller until BAL-396 wires the Apiroc connect flow.
+   * Live callers: `routes/calendar/api.ts` (`set-target-calendar` with an explicit `provider`),
+   * `services/calendar/apiroc-connection.ts` (`disconnectProvider`), `routes/calendar/auth.ts`
+   * (the connect route's `loginHint` read), and `apiroc-connection.ts`'s `persistApirocConnection`
+   * (a diagnostic pre-read on the OAuth callback — BAL-575).
    */
   async findConnectionByExpertAndProvider(
     expertProfileId: string,
@@ -194,10 +208,9 @@ export const calendarRepository = {
    * ⚠⚠ THIS EXISTS SPECIFICALLY SO NEITHER CALLER RESOLVES IDENTITY THROUGH
    * `findConnectionsByEndUserAccountId`. That method returns an ARRAY on purpose —
    * `cal_conn_end_user_account_idx` is deliberately non-unique, because nothing establishes
-   * that one End User Account maps to at most one Balo expert (two experts on one Google
-   * account is routine in dev and seed data). Taking `[0]` from it would rebuild an ARBITRARY
-   * expert's availability. Keyed on the primary key, this answer is unambiguous by
-   * construction.
+   * that one End User Account maps to at most one Balo expert (two experts' rows sharing one
+   * is possible). Taking `[0]` from it would rebuild an ARBITRARY expert's availability. Keyed
+   * on the primary key, this answer is unambiguous by construction.
    *
    * ⚠ FILTERS `deleted_at IS NULL` like every other read here: a disconnected connection must
    * look absent, so a still-live subscription pointing at it reconciles to "gone" rather than
@@ -217,7 +230,11 @@ export const calendarRepository = {
    * that reaches for `findConnectionByExpertProfileId` instead would silently ignore the
    * expert's second calendar and double-book them.
    *
-   * ⚠ INERT — no caller until BAL-396 wires free/busy.
+   * Live callers: `routes/calendar/api.ts` (`GET /connection`'s `connections` array,
+   * `disconnect`'s whole-account loop, `findConnectionOwningCalendar`),
+   * `jobs/meeting-calendar-amend.ts`, `services/consultation-events/project-booking-to-calendar.ts`,
+   * `services/meetings/withdraw-meeting-calendar.ts`, and `apps/web`'s `share-availability`
+   * Server Action.
    */
   async listConnectionsByExpertProfileId(expertProfileId: string): Promise<CalendarConnection[]> {
     return db.query.calendarConnections.findMany({
@@ -230,24 +247,65 @@ export const calendarRepository = {
   },
 
   /**
-   * Resolve live connections from an Apiroc End User Account id — the pointer model's
-   * reverse lookup, and the reader that makes `cal_conn_end_user_account_idx` non-speculative.
+   * Live connections that reference an Apiroc End User Account, oldest first, optionally
+   * leaving one row out. The pointer model's reverse lookup, and the ONE definition of "does
+   * another live row still depend on this vendor account?". A non-empty answer means RETAIN
+   * the vendor account; only an empty one lets the caller delete it.
    *
    * ⚠ RETURNS AN ARRAY, and that is deliberate. `cal_conn_end_user_account_idx` is
    * NON-unique on purpose (see the schema): nothing in ADR-1021 or the vendor docs
-   * establishes that one End User Account maps to at most one Balo expert, and two
-   * experts connecting the same Google account is routine in dev and seed data. A
-   * singular signature here would encode that unevidenced cardinality at the read layer
-   * and hand BAL-468's webhook handler an arbitrary row. If BAL-396 confirms the vendor
-   * guarantees one-to-one, tighten the INDEX first, then narrow this.
+   * establishes that one End User Account maps to at most one Balo expert, so two experts'
+   * live rows sharing one is possible. A singular signature here would encode that
+   * unevidenced cardinality at the read layer and hand a caller an arbitrary row, or answer
+   * "no other reference" for a shared account. If the vendor is ever shown to guarantee
+   * one-to-one, tighten the INDEX first, then narrow this.
    *
-   * ⚠ INERT — no caller until BAL-468 handles webhooks.
+   * ⚠⚠ `excludingConnectionId` IS REQUIRED, WITH NO DEFAULT, so no caller can skip the
+   * decision. Both callers ask the question just before deleting an End User Account at the
+   * vendor, and differ only in which row they leave out:
+   *
+   *   · the OAuth callback's refusal cleanup (`routes/calendar/auth.ts`,
+   *     `discardRefusedEndUserAccount`) passes `null`. The refused account never got a Balo
+   *     row of its own, so every match is somebody else's.
+   *   · `disconnectProvider` (`services/calendar/apiroc-connection.ts`) passes its OWN row id.
+   *     That row is still live when the check runs, because the vendor delete must precede the
+   *     soft-delete. Without the exclusion the check would always find the disconnecting row
+   *     and never delete anything.
+   *
+   * The exclusion is evaluated in SQL (`id <> $n`), not filtered by the caller afterwards, so
+   * the rule has exactly one home. `deleted_at IS NULL` still applies: a soft-deleted row
+   * depends on nothing.
+   *
+   * ⚠ THE GUARD IS DEFENSIVE. For two experts' rows to share one End User Account through the
+   * OAuth callback, the vendor would have to overwrite the account's `externalId` on the second
+   * expert's OAuth (the callback's ownership check requires it to name the connecting expert),
+   * and that has never been captured. It is cheap and it retains on doubt: an orphaned vendor
+   * account is billed but harmless, while deleting a shared one breaks another expert's
+   * calendar.
+   *
+   * ⚠ ACCEPTED RACE. Another expert's callback can commit a row on the same End User Account
+   * between this read and the caller's vendor delete. No database lock can span a vendor call,
+   * so the window is narrow but not closed.
+   *
+   * BAL-468 did not become a caller: the webhook path resolves identity by primary key through
+   * `findConnectionById` instead (see there).
    */
-  async findConnectionsByEndUserAccountId(endUserAccountId: string): Promise<CalendarConnection[]> {
+  async findConnectionsByEndUserAccountId(
+    endUserAccountId: string,
+    options: {
+      /** The row to leave out, or `null` to leave nothing out. See the docblock above. */
+      excludingConnectionId: string | null;
+    }
+  ): Promise<CalendarConnection[]> {
+    const { excludingConnectionId } = options;
     return db.query.calendarConnections.findMany({
       where: and(
         eq(calendarConnections.endUserAccountId, endUserAccountId),
-        isNull(calendarConnections.deletedAt)
+        isNull(calendarConnections.deletedAt),
+        // `and()` drops an undefined operand, so a null exclusion adds no predicate at all.
+        excludingConnectionId === null
+          ? undefined
+          : ne(calendarConnections.id, excludingConnectionId)
       ),
       orderBy: OLDEST_LIVE_FIRST,
     });
@@ -276,14 +334,56 @@ export const calendarRepository = {
    * the partial index, so it cannot be the conflict target; the soft-deleted row stays
    * behind as history. Matches `company_members` / `agency_members`. The `deletedAt: null`
    * in `set` is therefore only reached when a LIVE row is re-upserted — a no-op safety
-   * belt, not the reconnect mechanism.
+   * belt, not the reconnect mechanism. It is also the sanctioned way to SWITCH accounts:
+   * Disconnect, then Add calendar, which inserts beside the old row (see the refusal below).
    *
    * ⚠ RECONNECT CLEARS THE NOTIFICATION MARKER. `reconnectNotifiedAt: null` in `set` is not
    * decoration: it is what lets a SECOND breakage notify the expert again. Leave it out and
    * an expert who reconnects, then breaks again, is never told.
+   *
+   * ⚠⚠ RECONNECT WITH A DIFFERENT END USER ACCOUNT IS REFUSED (BAL-575). `setWhere` lets the
+   * DO UPDATE arm fire only when the live row's stored `end_user_account_id` equals the
+   * incoming one. Without it, a Reconnect or Fix permissions that came back signed in to a
+   * DIFFERENT provider account silently repointed the live row: Balo stopped reading the
+   * calendar the expert had connected, so its busy time dropped out of availability
+   * (double-booking risk), and the old End User Account was orphaned at the vendor. Now the
+   * conflicting row is left exactly as it was, every column including `updated_at`, and the
+   * method answers `{ outcome: 'refused_account_mismatch' }`.
+   *
+   * THE STATEMENT DECIDES, NOT A READ BEFORE IT. ON CONFLICT DO UPDATE locks the conflicting
+   * row and evaluates `setWhere` against its LATEST version, so two concurrent callbacks have
+   * no read-then-write window: the second one sees whatever the first committed. An empty
+   * RETURNING can therefore mean only refusal, because the INSERT arm always returns its row
+   * and an update that passes `setWhere` returns the updated one. A caller may pre-read for
+   * diagnostics, but it must never decide on that read.
+   *
+   * `setWhere` binds its value as a `$n` parameter through `eq()`, and that is fine here. The
+   * 42P10 parameter hazard above is about the ARBITER's `targetWhere`, which Postgres must
+   * match against the index predicate at plan time. `setWhere` is an ordinary filter on the
+   * conflicting row, evaluated after the arbiter is chosen. Precedent:
+   * `meetingCalendarEventsRepository.recordIcsDelivery`.
+   *
+   * ⚠⚠ DO NOT WIDEN `setWhere` ON EMAIL EQUALITY. A matching `provider_email` is not a
+   * matching account. The only vendor behaviour observed live is "the same provider account
+   * comes back with the same End User Account id"; whether the vendor keys an End User Account
+   * on the email address or on the provider's own account id is unverified. Under the latter,
+   * two accounts that share one address (a Microsoft personal and a work account, or a recycled
+   * Workspace address) get DISTINCT ids with EQUAL emails, and an email arm would silently
+   * repoint a live row from one mailbox to the other: the exact bug this refusal stops. Rows
+   * connected before emails were stored also carry a null `provider_email`, so an email arm
+   * could not reach them anyway. Any future widening must key on the STORED pointer being
+   * proven gone at the vendor, never on an email.
+   *
+   * ⚠ A KNOWN EMAIL IS NEVER NULLED. `providerEmail` enters the UPDATE arm only when the caller
+   * passes a string. A `null` or omitted email leaves the stored one alone, because a vendor
+   * account that comes back without an email must not erase the address the connection card
+   * shows and the connect route sends as `loginHint`. The INSERT arm stores what it is given,
+   * `null` when omitted.
    */
-  async upsertApirocConnection(data: UpsertApirocConnectionInput): Promise<CalendarConnection> {
-    const [result] = await db
+  async upsertApirocConnection(
+    data: UpsertApirocConnectionInput
+  ): Promise<UpsertApirocConnectionResult> {
+    const [connection] = await db
       .insert(calendarConnections)
       .values({
         expertProfileId: data.expertProfileId,
@@ -300,18 +400,27 @@ export const calendarRepository = {
         set: {
           // `provider` is INTENTIONALLY absent: it is half the arbiter, so the conflicting
           // row necessarily already holds this exact value.
+          // `endUserAccountId` writes the value `setWhere` already requires, so today it
+          // changes nothing. It stays so that any future widening of `setWhere` still
+          // repoints the row instead of leaving the old pointer behind.
           endUserAccountId: data.endUserAccountId,
-          providerEmail: data.providerEmail ?? null,
+          ...(typeof data.providerEmail === 'string' ? { providerEmail: data.providerEmail } : {}),
           credentialStatus: data.credentialStatus ?? 'ACTIVE',
           reconnectNotifiedAt: null,
           credentialCheckedAt: new Date(),
           updatedAt: new Date(),
           deletedAt: null,
         },
+        // ⚠⚠ THE BAL-575 REFUSAL. Removing this line restores the silent repoint of a live
+        // row to a different End User Account. See the docblock above.
+        setWhere: eq(calendarConnections.endUserAccountId, data.endUserAccountId),
       })
       .returning();
 
-    return result!;
+    if (connection === undefined) {
+      return { outcome: 'refused_account_mismatch' };
+    }
+    return { outcome: 'persisted', connection };
   },
 
   /**
@@ -496,7 +605,7 @@ export const calendarRepository = {
    * same provider afterwards INSERTs a fresh row rather than failing 23505. That is the
    * whole reason the index is partial.
    *
-   * ⚠ INERT — no caller until BAL-396 wires per-provider disconnect.
+   * Live caller: `services/calendar/apiroc-connection.ts` (`disconnectProvider`).
    */
   async softDeleteConnectionForProvider(expertProfileId: string, provider: string): Promise<void> {
     await db
