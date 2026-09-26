@@ -268,6 +268,9 @@ export async function provisionConnection(
  * Never throws — a failure here is logged and the teardown continues; a stale vendor
  * subscription keeps delivering for up to 7 days to a URL that will 404 after step 4 below,
  * and Svix disables that endpoint after ~5 days. Blast radius is one calendar's trigger.
+ *
+ * Needs no shared-account guard: each subscription id belongs to exactly one Balo row (FK
+ * `connection_id`, vendor-minted id per row), unlike the End User Account it points at.
  */
 async function deleteVendorSubscriptionsBestEffort(connection: CalendarConnection): Promise<void> {
   const liveRows = await calendarSubscriptionsRepository.listLiveByConnectionId(connection.id);
@@ -294,6 +297,55 @@ async function deleteVendorSubscriptionsBestEffort(connection: CalendarConnectio
 }
 
 /**
+ * BAL-575 — the shared-account guard on `disconnectProvider`'s vendor delete. Reuses the ONE
+ * definition of "does another live row still depend on this vendor account?" —
+ * `calendarRepository.findConnectionsByEndUserAccountId`, excluding THIS row's own id: the
+ * disconnecting row is still live when this check runs, because the vendor delete must precede
+ * the soft-delete, so without the exclusion the check would always find it and never delete
+ * anything. A non-empty answer means retain — log and return without touching the vendor.
+ *
+ * Never throws. One try wraps the reference read AND the vendor delete, so a failed READ lands
+ * in the same catch as a failed DELETE: nothing is deleted on doubt, and the teardown below
+ * still runs either way.
+ */
+async function deleteEndUserAccountBestEffort(connection: CalendarConnection): Promise<void> {
+  let stage: 'reference_read' | 'vendor_delete' = 'reference_read';
+  try {
+    const referencing = await calendarRepository.findConnectionsByEndUserAccountId(
+      connection.endUserAccountId,
+      { excludingConnectionId: connection.id }
+    );
+    if (referencing.length > 0) {
+      log.info(
+        {
+          connectionId: connection.id,
+          expertProfileId: connection.expertProfileId,
+          referencingConnections: referencing.length,
+        },
+        'apiroc_disconnect_shared_account_retained'
+      );
+      return;
+    }
+
+    stage = 'vendor_delete';
+    const client = getApirocClient();
+    await callApiroc('endUserAccounts.delete', () =>
+      client.endUserAccounts.delete(connection.endUserAccountId)
+    );
+  } catch (err: unknown) {
+    log.warn(
+      {
+        connectionId: connection.id,
+        expertProfileId: connection.expertProfileId,
+        stage,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'apiroc_disconnect_vendor_delete_failed'
+    );
+  }
+}
+
+/**
  * §6 — per-provider teardown (see `routes/calendar/api.ts`'s disconnect handler for the full
  * sequence, including the availability-cache rebuild and analytics, which are that route's
  * job, not this service's).
@@ -301,15 +353,16 @@ async function deleteVendorSubscriptionsBestEffort(connection: CalendarConnectio
  * Vendor deletion is BEST EFFORT and ORDERED FIRST: if the vendor call fails, Balo's side is
  * still removed — leaving a row the expert asked to disconnect is the worse failure.
  *
- * ⚠ NO NULL GUARD ON `endUserAccountId` — removed in the BAL-396 fix round. Migration 0069
- * made the column `NOT NULL`, so every live row (the only kind `findConnectionByExpertAndProvider`
- * can return) already carries a pointer; the vendor call always runs.
+ * ⚠ NO NULL GUARD ON `endUserAccountId`: migration 0069 made it NOT NULL, so the shared-account
+ * check always has a pointer to look up. The vendor account delete runs only when that check
+ * finds no other live row and the read succeeded.
  *
- * BAL-468 §10 — new ordering: (1) best-effort per-subscription vendor deletes, (2) best-effort
- * End User Account delete (unchanged), (3) `softDeleteByConnectionId` — NOT OPTIONAL, without it
- * the monitor alerts forever on rows for a disconnected connection and the webhook route would
- * keep resolving and processing deliveries for an expert who unhooked their calendar — (4)/(5)
- * the existing sub-calendar and connection teardown (unchanged).
+ * BAL-468 §10 / BAL-575 — the ordering: (1) best-effort per-subscription vendor deletes, (2) the
+ * shared-account check (excluding this row's own id) followed by a best-effort End User Account
+ * delete, only when nothing else references it, (3) `softDeleteByConnectionId` — NOT OPTIONAL,
+ * without it the monitor alerts forever on rows for a disconnected connection and the webhook
+ * route would keep resolving and processing deliveries for an expert who unhooked their
+ * calendar — (4)/(5) the existing sub-calendar and connection teardown (unchanged).
  */
 export async function disconnectProvider(expertProfileId: string, provider: string): Promise<void> {
   const connection = await calendarRepository.findConnectionByExpertAndProvider(
@@ -319,22 +372,7 @@ export async function disconnectProvider(expertProfileId: string, provider: stri
   if (!connection) return;
 
   await deleteVendorSubscriptionsBestEffort(connection);
-
-  try {
-    const client = getApirocClient();
-    await callApiroc('endUserAccounts.delete', () =>
-      client.endUserAccounts.delete(connection.endUserAccountId)
-    );
-  } catch (err: unknown) {
-    log.warn(
-      {
-        connectionId: connection.id,
-        expertProfileId,
-        error: err instanceof Error ? err.message : String(err),
-      },
-      'apiroc_disconnect_vendor_delete_failed'
-    );
-  }
+  await deleteEndUserAccountBestEffort(connection);
 
   await calendarSubscriptionsRepository.softDeleteByConnectionId(connection.id);
   await calendarRepository.deleteSubCalendarsByConnectionId(connection.id);

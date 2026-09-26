@@ -1,4 +1,4 @@
-import { eq, and, asc, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { eq, and, asc, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   calendarConnections,
@@ -208,10 +208,9 @@ export const calendarRepository = {
    * ⚠⚠ THIS EXISTS SPECIFICALLY SO NEITHER CALLER RESOLVES IDENTITY THROUGH
    * `findConnectionsByEndUserAccountId`. That method returns an ARRAY on purpose —
    * `cal_conn_end_user_account_idx` is deliberately non-unique, because nothing establishes
-   * that one End User Account maps to at most one Balo expert (two experts on one Google
-   * account is routine in dev and seed data). Taking `[0]` from it would rebuild an ARBITRARY
-   * expert's availability. Keyed on the primary key, this answer is unambiguous by
-   * construction.
+   * that one End User Account maps to at most one Balo expert (two experts' rows sharing one
+   * is possible). Taking `[0]` from it would rebuild an ARBITRARY expert's availability. Keyed
+   * on the primary key, this answer is unambiguous by construction.
    *
    * ⚠ FILTERS `deleted_at IS NULL` like every other read here: a disconnected connection must
    * look absent, so a still-live subscription pointing at it reconciles to "gone" rather than
@@ -231,7 +230,11 @@ export const calendarRepository = {
    * that reaches for `findConnectionByExpertProfileId` instead would silently ignore the
    * expert's second calendar and double-book them.
    *
-   * ⚠ INERT — no caller until BAL-396 wires free/busy.
+   * Live callers: `routes/calendar/api.ts` (`GET /connection`'s `connections` array,
+   * `disconnect`'s whole-account loop, `findConnectionOwningCalendar`),
+   * `jobs/meeting-calendar-amend.ts`, `services/consultation-events/project-booking-to-calendar.ts`,
+   * `services/meetings/withdraw-meeting-calendar.ts`, and `apps/web`'s `share-availability`
+   * Server Action.
    */
   async listConnectionsByExpertProfileId(expertProfileId: string): Promise<CalendarConnection[]> {
     return db.query.calendarConnections.findMany({
@@ -244,29 +247,65 @@ export const calendarRepository = {
   },
 
   /**
-   * Resolve live connections from an Apiroc End User Account id — the pointer model's
-   * reverse lookup, and the reader that makes `cal_conn_end_user_account_idx` non-speculative.
+   * Live connections that reference an Apiroc End User Account, oldest first, optionally
+   * leaving one row out. The pointer model's reverse lookup, and the ONE definition of "does
+   * another live row still depend on this vendor account?". A non-empty answer means RETAIN
+   * the vendor account; only an empty one lets the caller delete it.
    *
    * ⚠ RETURNS AN ARRAY, and that is deliberate. `cal_conn_end_user_account_idx` is
    * NON-unique on purpose (see the schema): nothing in ADR-1021 or the vendor docs
-   * establishes that one End User Account maps to at most one Balo expert, and two
-   * experts connecting the same Google account is routine in dev and seed data. A
-   * singular signature here would encode that unevidenced cardinality at the read layer
-   * and hand BAL-468's webhook handler an arbitrary row. If BAL-396 confirms the vendor
-   * guarantees one-to-one, tighten the INDEX first, then narrow this.
+   * establishes that one End User Account maps to at most one Balo expert, so two experts'
+   * live rows sharing one is possible. A singular signature here would encode that
+   * unevidenced cardinality at the read layer and hand a caller an arbitrary row, or answer
+   * "no other reference" for a shared account. If the vendor is ever shown to guarantee
+   * one-to-one, tighten the INDEX first, then narrow this.
    *
-   * BAL-468 did not become its caller: the webhook path resolves identity by primary key
-   * through `findConnectionById` instead (see there). Its first caller is BAL-575's refusal
-   * cleanup in the OAuth callback. Before deleting a just-refused End User Account at the
-   * vendor, the callback asks whether ANY live row, for ANY expert, still references it. That
-   * is a question only the array answers: a singular read would say "no" for a shared account
-   * and delete a pointer another expert's connection still depends on.
+   * ⚠⚠ `excludingConnectionId` IS REQUIRED, WITH NO DEFAULT, so no caller can skip the
+   * decision. Both callers ask the question just before deleting an End User Account at the
+   * vendor, and differ only in which row they leave out:
+   *
+   *   · the OAuth callback's refusal cleanup (`routes/calendar/auth.ts`,
+   *     `discardRefusedEndUserAccount`) passes `null`. The refused account never got a Balo
+   *     row of its own, so every match is somebody else's.
+   *   · `disconnectProvider` (`services/calendar/apiroc-connection.ts`) passes its OWN row id.
+   *     That row is still live when the check runs, because the vendor delete must precede the
+   *     soft-delete. Without the exclusion the check would always find the disconnecting row
+   *     and never delete anything.
+   *
+   * The exclusion is evaluated in SQL (`id <> $n`), not filtered by the caller afterwards, so
+   * the rule has exactly one home. `deleted_at IS NULL` still applies: a soft-deleted row
+   * depends on nothing.
+   *
+   * ⚠ THE GUARD IS DEFENSIVE. For two experts' rows to share one End User Account through the
+   * OAuth callback, the vendor would have to overwrite the account's `externalId` on the second
+   * expert's OAuth (the callback's ownership check requires it to name the connecting expert),
+   * and that has never been captured. It is cheap and it retains on doubt: an orphaned vendor
+   * account is billed but harmless, while deleting a shared one breaks another expert's
+   * calendar.
+   *
+   * ⚠ ACCEPTED RACE. Another expert's callback can commit a row on the same End User Account
+   * between this read and the caller's vendor delete. No database lock can span a vendor call,
+   * so the window is narrow but not closed.
+   *
+   * BAL-468 did not become a caller: the webhook path resolves identity by primary key through
+   * `findConnectionById` instead (see there).
    */
-  async findConnectionsByEndUserAccountId(endUserAccountId: string): Promise<CalendarConnection[]> {
+  async findConnectionsByEndUserAccountId(
+    endUserAccountId: string,
+    options: {
+      /** The row to leave out, or `null` to leave nothing out. See the docblock above. */
+      excludingConnectionId: string | null;
+    }
+  ): Promise<CalendarConnection[]> {
+    const { excludingConnectionId } = options;
     return db.query.calendarConnections.findMany({
       where: and(
         eq(calendarConnections.endUserAccountId, endUserAccountId),
-        isNull(calendarConnections.deletedAt)
+        isNull(calendarConnections.deletedAt),
+        // `and()` drops an undefined operand, so a null exclusion adds no predicate at all.
+        excludingConnectionId === null
+          ? undefined
+          : ne(calendarConnections.id, excludingConnectionId)
       ),
       orderBy: OLDEST_LIVE_FIRST,
     });
@@ -323,6 +362,17 @@ export const calendarRepository = {
    * match against the index predicate at plan time. `setWhere` is an ordinary filter on the
    * conflicting row, evaluated after the arbiter is chosen. Precedent:
    * `meetingCalendarEventsRepository.recordIcsDelivery`.
+   *
+   * ⚠⚠ DO NOT WIDEN `setWhere` ON EMAIL EQUALITY. A matching `provider_email` is not a
+   * matching account. The only vendor behaviour observed live is "the same provider account
+   * comes back with the same End User Account id"; whether the vendor keys an End User Account
+   * on the email address or on the provider's own account id is unverified. Under the latter,
+   * two accounts that share one address (a Microsoft personal and a work account, or a recycled
+   * Workspace address) get DISTINCT ids with EQUAL emails, and an email arm would silently
+   * repoint a live row from one mailbox to the other: the exact bug this refusal stops. Rows
+   * connected before emails were stored also carry a null `provider_email`, so an email arm
+   * could not reach them anyway. Any future widening must key on the STORED pointer being
+   * proven gone at the vendor, never on an email.
    *
    * ⚠ A KNOWN EMAIL IS NEVER NULLED. `providerEmail` enters the UPDATE arm only when the caller
    * passes a string. A `null` or omitted email leaves the stored one alone, because a vendor
@@ -555,7 +605,7 @@ export const calendarRepository = {
    * same provider afterwards INSERTs a fresh row rather than failing 23505. That is the
    * whole reason the index is partial.
    *
-   * ⚠ INERT — no caller until BAL-396 wires per-provider disconnect.
+   * Live caller: `services/calendar/apiroc-connection.ts` (`disconnectProvider`).
    */
   async softDeleteConnectionForProvider(expertProfileId: string, provider: string): Promise<void> {
     await db

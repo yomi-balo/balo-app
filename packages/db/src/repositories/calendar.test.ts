@@ -340,12 +340,57 @@ describe('calendarRepository', () => {
   });
 
   describe('findConnectionsByEndUserAccountId', () => {
+    /**
+     * The `where` the call under test handed to `findMany`, rendered as Postgres receives it.
+     * Shape only: the behavioural proof that the exclusion and the soft-delete filter select
+     * the right rows is in `calendar.integration.test.ts`.
+     */
+    function renderedWhere(): { sql: string; params: unknown[] } {
+      const [config] = mockFindMany.mock.calls[0] as [
+        { where: Parameters<PgDialect['sqlToQuery']>[0] },
+      ];
+      return DIALECT.sqlToQuery(config.where);
+    }
+
     it('returns EVERY connection on that Apiroc End User Account', async () => {
       // Plural by design: cal_conn_end_user_account_idx is deliberately non-unique.
       const conns = [{ expertProfileId: 'ep-1' }, { expertProfileId: 'ep-2' }];
       mockFindMany.mockResolvedValue(conns);
 
-      expect(await calendarRepository.findConnectionsByEndUserAccountId('eua-1')).toEqual(conns);
+      expect(
+        await calendarRepository.findConnectionsByEndUserAccountId('eua-1', {
+          excludingConnectionId: null,
+        })
+      ).toEqual(conns);
+    });
+
+    it('leaves the given connection out in SQL, as id <> the excluded id', async () => {
+      mockFindMany.mockResolvedValue([]);
+
+      await calendarRepository.findConnectionsByEndUserAccountId('eua-1', {
+        excludingConnectionId: 'conn-self',
+      });
+
+      const { sql, params } = renderedWhere();
+      const exclusion = /"calendar_connections"\."id" <> \$(\d+)/.exec(sql);
+      expect(exclusion).not.toBeNull();
+      // The placeholder must bind the excluded id, not the End User Account id.
+      expect(params[Number(exclusion?.[1]) - 1]).toBe('conn-self');
+      expect(params).toEqual(['eua-1', 'conn-self']);
+      expect(sql).toContain('"calendar_connections"."deleted_at" is null');
+    });
+
+    it('adds no exclusion when excludingConnectionId is null', async () => {
+      mockFindMany.mockResolvedValue([]);
+
+      await calendarRepository.findConnectionsByEndUserAccountId('eua-1', {
+        excludingConnectionId: null,
+      });
+
+      const { sql, params } = renderedWhere();
+      expect(sql).not.toContain('<>');
+      expect(params).toEqual(['eua-1']);
+      expect(sql).toContain('"calendar_connections"."deleted_at" is null');
     });
   });
 

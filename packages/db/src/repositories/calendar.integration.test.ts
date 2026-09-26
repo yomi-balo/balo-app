@@ -1032,12 +1032,22 @@ describe('calendarRepository — provider-scoped reads', () => {
     // the vendor keys End User Accounts by provider account, not by Balo's `externalId`, so
     // two experts connecting the same Google account very likely receive the SAME id. A
     // unique index would surface that as a bare 23505 at connect time.
-    const shared = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared');
+    const shared = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared', {
+      excludingConnectionId: null,
+    });
     expect(shared).toHaveLength(2);
     expect(shared.map((row) => row.expertProfileId).sort()).toEqual([alex.id, dana.id].sort());
 
-    expect(await calendarRepository.findConnectionsByEndUserAccountId('eua_other')).toHaveLength(1);
-    expect(await calendarRepository.findConnectionsByEndUserAccountId('eua_absent')).toEqual([]);
+    expect(
+      await calendarRepository.findConnectionsByEndUserAccountId('eua_other', {
+        excludingConnectionId: null,
+      })
+    ).toHaveLength(1);
+    expect(
+      await calendarRepository.findConnectionsByEndUserAccountId('eua_absent', {
+        excludingConnectionId: null,
+      })
+    ).toEqual([]);
   });
 
   it('findConnectionsByEndUserAccountId excludes soft-deleted rows', async () => {
@@ -1047,7 +1057,89 @@ describe('calendarRepository — provider-scoped reads', () => {
     );
     await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
 
-    expect(await calendarRepository.findConnectionsByEndUserAccountId('eua_gone')).toEqual([]);
+    expect(
+      await calendarRepository.findConnectionsByEndUserAccountId('eua_gone', {
+        excludingConnectionId: null,
+      })
+    ).toEqual([]);
+  });
+
+  /**
+   * The disconnect shape: the disconnecting row is still live when the check runs, so it
+   * leaves itself out and asks whether ANY OTHER live row still depends on the vendor account.
+   */
+  it('findConnectionsByEndUserAccountId leaves the excluded row out and returns the other expert on a shared account', async () => {
+    const alex = await expertDraftFactory();
+    const dana = await expertDraftFactory();
+    const alexRow = await seedApirocConnection(
+      apirocInput(alex.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    const danaRow = await seedApirocConnection(
+      apirocInput(dana.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+
+    const others = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared', {
+      excludingConnectionId: alexRow.id,
+    });
+
+    expect(others).toHaveLength(1);
+    expect(others.map((row) => row.id)).toEqual([danaRow.id]);
+    expect(others.map((row) => row.expertProfileId)).toEqual([dana.id]);
+  });
+
+  it('findConnectionsByEndUserAccountId returns [] when the only live row is the excluded one', async () => {
+    const expert = await expertDraftFactory();
+    const row = await seedApirocConnection(
+      apirocInput(expert.id, 'google', { endUserAccountId: 'eua_sole' })
+    );
+
+    const others = await calendarRepository.findConnectionsByEndUserAccountId('eua_sole', {
+      excludingConnectionId: row.id,
+    });
+
+    expect(others).toHaveLength(0);
+    expect(others).toEqual([]);
+  });
+
+  it('findConnectionsByEndUserAccountId returns [] when the only other row on the account is soft-deleted', async () => {
+    const alex = await expertDraftFactory();
+    const dana = await expertDraftFactory();
+    const alexRow = await seedApirocConnection(
+      apirocInput(alex.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    await seedApirocConnection(apirocInput(dana.id, 'google', { endUserAccountId: 'eua_shared' }));
+    await calendarRepository.softDeleteConnectionForProvider(dana.id, 'google');
+
+    const others = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared', {
+      excludingConnectionId: alexRow.id,
+    });
+
+    // A disconnected connection depends on nothing, so the vendor account is free to delete.
+    expect(others).toHaveLength(0);
+    expect(others).toEqual([]);
+  });
+
+  it('findConnectionsByEndUserAccountId returns the full match set, oldest first, when the excluded row is on a different account', async () => {
+    const alex = await expertDraftFactory();
+    const dana = await expertDraftFactory();
+    const alexGoogle = await seedApirocConnection(
+      apirocInput(alex.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    const danaGoogle = await seedApirocConnection(
+      apirocInput(dana.id, 'google', { endUserAccountId: 'eua_shared' })
+    );
+    const alexMicrosoft = await seedApirocConnection(
+      apirocInput(alex.id, 'microsoft', { endUserAccountId: 'eua_other' })
+    );
+    await stampCreatedAt(alexGoogle.id, '2026-01-01T00:00:00.000Z');
+    await stampCreatedAt(danaGoogle.id, '2026-02-01T00:00:00.000Z');
+
+    const matches = await calendarRepository.findConnectionsByEndUserAccountId('eua_shared', {
+      excludingConnectionId: alexMicrosoft.id,
+    });
+
+    expect(matches).toHaveLength(2);
+    expect(matches.map((row) => row.id)).toEqual([alexGoogle.id, danaGoogle.id]);
   });
 });
 

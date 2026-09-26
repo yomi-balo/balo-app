@@ -95,8 +95,8 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 
 // BAL-575 — the connect route reads `findConnectionByExpertAndProvider` for `loginHint`, and
-// the refusal-cleanup path reads `findConnectionsByEndUserAccountId` before deleting a vendor
-// account.
+// the refusal-cleanup path reads `findConnectionsByEndUserAccountId` (excluding nothing — the
+// refused account never got a Balo row of its own) before deleting a vendor account.
 vi.mock('@balo/db', () => ({
   calendarRepository: {
     findConnectionByExpertAndProvider: mockFindConnectionByExpertAndProvider,
@@ -340,6 +340,38 @@ describe('calendar auth routes (BAL-396)', () => {
       expect(mockBuildApirocAuthorizeUrl.mock.calls[1]?.[0]).not.toHaveProperty('loginHint');
     });
 
+    it('still returns the authUrl with no loginHint when the stored-connection read fails', async () => {
+      mockSignConnectState.mockReturnValue('signed-state');
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'google',
+        nonce: VALID_NONCE,
+      });
+      mockBuildApirocAuthorizeUrl.mockReturnValue('https://api.apiroc.com/oauth/authorize?test=1');
+      mockFindConnectionByExpertAndProvider.mockRejectedValue(new Error('connection terminated'));
+
+      const res = await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'google' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        authUrl: 'https://api.apiroc.com/oauth/authorize?test=1',
+        nonce: VALID_NONCE,
+      });
+      expect(mockBuildApirocAuthorizeUrl).toHaveBeenCalledWith({
+        provider: 'google',
+        state: 'signed-state',
+        externalId: EXPERT_UUID,
+      });
+      expect(mockBuildApirocAuthorizeUrl.mock.calls[0]?.[0]).not.toHaveProperty('loginHint');
+      expect(warnSpy).toHaveBeenCalledWith(
+        { expertProfileId: EXPERT_UUID, provider: 'google', error: 'connection terminated' },
+        'apiroc_connect_login_hint_lookup_failed'
+      );
+    });
+
     it('returns 500 when buildApirocAuthorizeUrl throws', async () => {
       mockSignConnectState.mockReturnValue('signed-state');
       mockVerifyConnectState.mockReturnValue({
@@ -358,6 +390,21 @@ describe('calendar auth routes (BAL-396)', () => {
 
       expect(res.statusCode).toBe(500);
       expect(res.json().error).toBe('Failed to initiate calendar connection');
+    });
+
+    it('returns 500 when signConnectState throws, before buildApirocAuthorizeUrl runs', async () => {
+      mockSignConnectState.mockImplementationOnce(() => {
+        throw new Error('secret unset');
+      });
+
+      const res = await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'google' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe('Failed to initiate calendar connection');
+      expect(mockBuildApirocAuthorizeUrl).not.toHaveBeenCalled();
     });
   });
 
@@ -955,7 +1002,9 @@ describe('calendar auth routes (BAL-396)', () => {
           nonceCookieHeader()
         );
 
-        expect(mockFindConnectionsByEndUserAccountId).toHaveBeenCalledWith('eua-1');
+        expect(mockFindConnectionsByEndUserAccountId).toHaveBeenCalledWith('eua-1', {
+          excludingConnectionId: null,
+        });
         expect(mockEndUserAccountsDelete).toHaveBeenCalledWith('eua-1');
       });
 
@@ -993,6 +1042,27 @@ describe('calendar auth routes (BAL-396)', () => {
           expect.objectContaining({ expertProfileId: EXPERT_UUID, provider: 'google' }),
           'apiroc_callback_refused_account_delete_failed'
         );
+        // ⚠ Exactly once, not twice: a cleanup failure must not fall through to the outer
+        // catch and fire a SECOND `OAUTH_FAILED` under `callback_failed`.
+        expect(trackServer).toHaveBeenCalledTimes(1);
+      });
+
+      it('a failed reference read is best-effort: warns, deletes nothing at the vendor, and the refusal redirect is unaffected', async () => {
+        mockPersistApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+        mockFindConnectionsByEndUserAccountId.mockRejectedValue(new Error('connection terminated'));
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledWith(
+          { expertProfileId: EXPERT_UUID, provider: 'google', error: 'connection terminated' },
+          'apiroc_callback_refused_account_delete_failed'
+        );
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toContain('calendar_error=account_mismatch');
         // ⚠ Exactly once, not twice: a cleanup failure must not fall through to the outer
         // catch and fire a SECOND `OAUTH_FAILED` under `callback_failed`.
         expect(trackServer).toHaveBeenCalledTimes(1);

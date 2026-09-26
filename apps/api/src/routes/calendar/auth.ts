@@ -370,6 +370,35 @@ async function reconcileAfterConnect(
 }
 
 /**
+ * BAL-575 — the connect route's stored-connection read, extracted so a rejection can
+ * degrade to no hint instead of sharing the route's try with state signing and the URL build. A
+ * prefill, never a guard: on a rejection the connect proceeds with no hint rather than failing.
+ */
+async function resolveConnectLoginHint(
+  request: FastifyRequest,
+  expertProfileId: string,
+  provider: string
+): Promise<string | undefined> {
+  try {
+    const existingConnection = await calendarRepository.findConnectionByExpertAndProvider(
+      expertProfileId,
+      provider
+    );
+    return existingConnection?.providerEmail ?? undefined;
+  } catch (err: unknown) {
+    request.log.warn(
+      {
+        expertProfileId,
+        provider,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'apiroc_connect_login_hint_lookup_failed'
+    );
+    return undefined;
+  }
+}
+
+/**
  * BAL-575 — best-effort vendor cleanup of an End User Account the callback JUST refused
  * to persist. NEVER THROWS: it runs after the refusal is already final and redirect-worthy, so
  * a cleanup failure must not turn a clean `account_mismatch` redirect into `callback_failed`
@@ -382,7 +411,9 @@ async function reconcileAfterConnect(
  * another expert's connection may legitimately share this vendor account, and deleting it out
  * from under that row would be worse than leaving an orphaned one. No subscription cleanup is
  * needed here — a refused account never got a Balo `calendar_connections` row, so it never got
- * Balo-created subscriptions either. Mirrors `disconnectProvider`'s best-effort vendor delete.
+ * Balo-created subscriptions either. The live-reference rule is shared with `disconnectProvider`
+ * through that one repository read; nothing is excluded here because the refused account never
+ * got a Balo row of its own.
  */
 async function discardRefusedEndUserAccount(
   request: FastifyRequest,
@@ -391,8 +422,10 @@ async function discardRefusedEndUserAccount(
   provider: string
 ): Promise<void> {
   try {
-    const referencing =
-      await calendarRepository.findConnectionsByEndUserAccountId(endUserAccountId);
+    const referencing = await calendarRepository.findConnectionsByEndUserAccountId(
+      endUserAccountId,
+      { excludingConnectionId: null }
+    );
     if (referencing.length > 0) {
       request.log.info(
         { expertProfileId, provider, referencingConnections: referencing.length },
@@ -648,15 +681,13 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
 
       const { expertProfileId, provider } = parsed.data;
 
+      // BAL-575 — prefill the vendor's login/account-chooser with the email this (expert,
+      // provider) is already connected under, when one is known. A SEPARATE, non-fatal read,
+      // kept OUTSIDE the try below: a failed lookup degrades to no hint instead of producing a
+      // 500 that would block Add calendar, Reconnect and Fix permissions alike.
+      const loginHint = await resolveConnectLoginHint(request, expertProfileId, provider);
+
       try {
-        // BAL-575 — prefill the vendor's login/account-chooser with the email this
-        // (expert, provider) is already connected under, when one is known. A read failure here
-        // is not a distinct case: it falls straight into the existing catch below and returns
-        // the same 500 a `signConnectState`/`buildApirocAuthorizeUrl` failure would.
-        const existingConnection = await calendarRepository.findConnectionByExpertAndProvider(
-          expertProfileId,
-          provider
-        );
         const state = signConnectState(expertProfileId, provider);
         // BAL-396 fix round, Finding 1 — hand the nonce back so apps/web (which owns the
         // browser-facing request/response cycle) can bind it to a short-lived cookie. Cheap:
@@ -667,9 +698,7 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
           provider,
           state,
           externalId: expertProfileId,
-          ...(existingConnection?.providerEmail
-            ? { loginHint: existingConnection.providerEmail }
-            : {}),
+          ...(loginHint ? { loginHint } : {}),
         });
         return reply.send({ authUrl, nonce });
       } catch (err: unknown) {

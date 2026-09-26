@@ -6,6 +6,7 @@ const {
   mockReplaceSubCalendars,
   mockUpdateTargetCalendarIdForProvider,
   mockFindConnectionByExpertAndProvider,
+  mockFindConnectionsByEndUserAccountId,
   mockFindSubCalendarsByConnectionId,
   mockDeleteSubCalendarsByConnectionId,
   mockSoftDeleteConnectionForProvider,
@@ -22,6 +23,7 @@ const {
   mockReplaceSubCalendars: vi.fn(),
   mockUpdateTargetCalendarIdForProvider: vi.fn(),
   mockFindConnectionByExpertAndProvider: vi.fn(),
+  mockFindConnectionsByEndUserAccountId: vi.fn(),
   mockFindSubCalendarsByConnectionId: vi.fn(),
   mockDeleteSubCalendarsByConnectionId: vi.fn(),
   mockSoftDeleteConnectionForProvider: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock('@balo/db', () => ({
     replaceSubCalendars: mockReplaceSubCalendars,
     updateTargetCalendarIdForProvider: mockUpdateTargetCalendarIdForProvider,
     findConnectionByExpertAndProvider: mockFindConnectionByExpertAndProvider,
+    findConnectionsByEndUserAccountId: mockFindConnectionsByEndUserAccountId,
     findSubCalendarsByConnectionId: mockFindSubCalendarsByConnectionId,
     deleteSubCalendarsByConnectionId: mockDeleteSubCalendarsByConnectionId,
     softDeleteConnectionForProvider: mockSoftDeleteConnectionForProvider,
@@ -519,6 +522,7 @@ describe('disconnectProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListLiveByConnectionId.mockResolvedValue([]);
+    mockFindConnectionsByEndUserAccountId.mockResolvedValue([]);
   });
 
   it('returns silently when no connection exists for this (expert, provider)', async () => {
@@ -528,14 +532,18 @@ describe('disconnectProvider', () => {
     expect(mockDeleteSubCalendarsByConnectionId).not.toHaveBeenCalled();
     expect(mockSoftDeleteConnectionForProvider).not.toHaveBeenCalled();
     expect(mockListLiveByConnectionId).not.toHaveBeenCalled();
+    expect(mockFindConnectionsByEndUserAccountId).not.toHaveBeenCalled();
   });
 
-  it('deletes the vendor account, sub-calendars, then soft-deletes, in order', async () => {
+  it('unshared: checks the reference read excluding its own row id, then deletes the vendor account, sub-calendars, and soft-deletes, in order', async () => {
     mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
     mockEndUserAccountsDelete.mockResolvedValue({ success: true });
 
     await disconnectProvider('expert-1', 'exp-provider-a');
 
+    expect(mockFindConnectionsByEndUserAccountId).toHaveBeenCalledWith('eua-1', {
+      excludingConnectionId: 'conn-1',
+    });
     expect(mockEndUserAccountsDelete).toHaveBeenCalledWith('eua-1');
     expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
     expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
@@ -549,12 +557,62 @@ describe('disconnectProvider', () => {
 
     expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
     expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
-    expect(mockLog.warn).toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      {
+        connectionId: 'conn-1',
+        expertProfileId: 'expert-1',
+        stage: 'vendor_delete',
+        error: 'vendor 500',
+      },
+      'apiroc_disconnect_vendor_delete_failed'
+    );
+  });
+
+  it('shared: a live row on another connection still referencing the account is retained, not deleted, and Balo-side teardown still runs', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockFindConnectionsByEndUserAccountId.mockResolvedValue([{ id: 'other-conn' }]);
+    mockListLiveByConnectionId.mockResolvedValue([
+      { id: 'row-1', webhookSubscriptionId: 'wsub-1' },
+    ]);
+    mockCalendarSubscriptionsDelete.mockResolvedValue({ success: true });
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+    expect(mockLog.info).toHaveBeenCalledWith(
+      { connectionId: 'conn-1', expertProfileId: 'expert-1', referencingConnections: 1 },
+      'apiroc_disconnect_shared_account_retained'
+    );
+    expect(mockCalendarSubscriptionsDelete).toHaveBeenCalledWith('eua-1', 'wsub-1');
+    expect(mockSoftDeleteByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
+  });
+
+  it('a failed reference read is best-effort: warns, deletes nothing at the vendor, and Balo-side teardown still runs', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockFindConnectionsByEndUserAccountId.mockRejectedValue(new Error('connection terminated'));
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      {
+        connectionId: 'conn-1',
+        expertProfileId: 'expert-1',
+        stage: 'reference_read',
+        error: 'connection terminated',
+      },
+      'apiroc_disconnect_vendor_delete_failed'
+    );
+    expect(mockSoftDeleteByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
   });
 
   // ── BAL-468 §10 — subscription teardown ──────────────────────────────────────────────────
 
-  it('⚠ deletes every live subscription at the vendor BEFORE the End User Account delete', async () => {
+  it('⚠ orders subscription deletes, the shared-account reference read, the vendor account delete, then the Balo-side soft-deletes', async () => {
     const order: string[] = [];
     mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
     mockListLiveByConnectionId.mockResolvedValue([
@@ -565,16 +623,33 @@ describe('disconnectProvider', () => {
       order.push('subscription-delete');
       return { success: true };
     });
+    mockFindConnectionsByEndUserAccountId.mockImplementation(async () => {
+      order.push('reference-read');
+      return [];
+    });
     mockEndUserAccountsDelete.mockImplementation(async () => {
       order.push('account-delete');
       return { success: true };
+    });
+    mockSoftDeleteByConnectionId.mockImplementation(async () => {
+      order.push('subscription-soft-delete');
+    });
+    mockSoftDeleteConnectionForProvider.mockImplementation(async () => {
+      order.push('connection-soft-delete');
     });
 
     await disconnectProvider('expert-1', 'exp-provider-a');
 
     expect(mockCalendarSubscriptionsDelete).toHaveBeenCalledWith('eua-1', 'wsub-1');
     expect(mockCalendarSubscriptionsDelete).toHaveBeenCalledWith('eua-1', 'wsub-2');
-    expect(order).toEqual(['subscription-delete', 'subscription-delete', 'account-delete']);
+    expect(order).toEqual([
+      'subscription-delete',
+      'subscription-delete',
+      'reference-read',
+      'account-delete',
+      'subscription-soft-delete',
+      'connection-soft-delete',
+    ]);
   });
 
   it('a failed per-subscription vendor delete is best-effort and does not abort teardown', async () => {
