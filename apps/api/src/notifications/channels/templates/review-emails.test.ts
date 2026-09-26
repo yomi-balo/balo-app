@@ -352,6 +352,24 @@ describe('review-nudge — two cadence steps and no third', () => {
     expect(projectHtml).toContain('How was working with CloudPeak Consulting?');
   });
 
+  /**
+   * BAL-572 — `/engagements/{id}` 404s for a CASE by construction (the route's loader
+   * filters engagement_type = project). The nudge footer link must not repeat that dead link.
+   */
+  describe('the footer link matches the engagement kind', () => {
+    it('a CASE nudge links /cases/{id}, never /engagements/{id}', async () => {
+      const html = await renderTemplate('review-nudge', nudgeData({ engagementKind: 'case' }));
+      expect(html).toContain('/cases/eng-1');
+      expect(html).not.toContain('/engagements/eng-1');
+    });
+
+    it('a PROJECT nudge keeps its unchanged /engagements/{id} link', async () => {
+      const html = await renderTemplate('review-nudge', nudgeData({ engagementKind: 'project' }));
+      expect(html).toContain('/engagements/eng-1');
+      expect(html).not.toContain('/cases/eng-1');
+    });
+  });
+
   it('runs a user-authored title through sanitizeSubjectTitle', () => {
     const out = getEmailTemplate(
       'review-nudge',
@@ -408,6 +426,110 @@ describe('engagement-case-closed-client — the fused close email', () => {
     const html = await renderCopy('engagement-case-closed-client', caseClosedData());
     expect(html.indexOf('What happens now')).toBeGreaterThan(-1);
     expect(html.indexOf('What happens now')).toBeLessThan(html.indexOf(`${TOKEN}?r=1`));
+  });
+
+  /**
+   * BAL-572 — a NO-TOKEN `auto_inactive` close (the sweep never mints one) renders NO
+   * rating content at all: not the stars (already covered by the already-rated-branch suite
+   * above, since this fixture carries no token) and not the "thanks for rating" line either —
+   * there was never a rating occasion to thank for. The +24h nudge (BAL-390) asks instead.
+   */
+  it('a tokenless auto_inactive close shows neither the stars nor "already rated"', async () => {
+    const html = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'auto_inactive', reviewToken: undefined })
+    );
+    expect(html).not.toContain('/review/');
+    expect(html).not.toContain(STAR);
+    expect(html).not.toContain('Thanks for rating this one already');
+  });
+
+  it('"Thanks for rating this one already" stays RESOLVED-only, never auto_inactive', async () => {
+    const resolvedHtml = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'resolved', reviewToken: undefined })
+    );
+    expect(resolvedHtml).toContain('Thanks for rating this one already');
+  });
+
+  /**
+   * BAL-572 — at consultationCount 0 (or absent, the never-consulted case), the
+   * "You worked through it with {expertParty}…" clause is dropped entirely; the rest of the
+   * quiet-close sentence stays.
+   */
+  it('drops "worked through it" at consultationCount 0 on an auto_inactive close', async () => {
+    const html = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'auto_inactive', consultationCount: 0 })
+    );
+    expect(html).not.toContain('worked through it');
+    expect(html).toContain('had been quiet for a while');
+    expect(html).toContain('rather than leave it hanging');
+    expect(html).toContain('Everything from it stays exactly where it is');
+  });
+
+  it('keeps "worked through it" on an auto_inactive close with a real count', async () => {
+    const html = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'auto_inactive', consultationCount: 3 })
+    );
+    expect(html).toContain('worked through it with CloudPeak Consulting');
+    expect(html).toContain('across 3 consultations');
+  });
+});
+
+describe('engagement-case-closed-expert — the RECORD-only expert half (BAL-572)', () => {
+  const caseClosedExpertData = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    recipientName: 'Priya',
+    clientCompanyName: 'Northwind Industrial',
+    caseTitle: 'Flow interview stuck on a loop',
+    closedDate: '3 Aug',
+    engagementId: 'eng-1',
+    ...over,
+  });
+
+  it('names the client company and reads as Balo tidying up, no reprimand', async () => {
+    const out = getEmailTemplate('engagement-case-closed-expert', caseClosedExpertData());
+    const html = readable(await render(out.component));
+    expect(out.subject).toBe("We've closed Flow interview stuck on a loop");
+    expect(html).toContain('Northwind Industrial');
+    expect(html).toContain('rather than leave it hanging');
+  });
+
+  it('links /cases/{id}, never the recap or the engagements route', async () => {
+    const out = getEmailTemplate('engagement-case-closed-expert', caseClosedExpertData());
+    const html = await render(out.component);
+    expect(html).toContain('/cases/eng-1');
+    expect(html).not.toContain('/meetings/');
+    expect(html).not.toContain('/engagements/');
+  });
+
+  it('carries NO review block — no stars, no token, no "thanks for rating"', async () => {
+    const html = await renderCopy('engagement-case-closed-expert', caseClosedExpertData());
+    expect(html).not.toContain('/review/');
+    expect(html).not.toContain(STAR);
+    expect(html).not.toContain('Thanks for rating');
+  });
+
+  it('drops the consultation sentence at count 0, keeps it at count 1+', async () => {
+    const zero = await renderCopy(
+      'engagement-case-closed-expert',
+      caseClosedExpertData({ consultationCount: 0 })
+    );
+    expect(zero).not.toContain('You worked on it');
+
+    const some = await renderCopy(
+      'engagement-case-closed-expert',
+      caseClosedExpertData({ consultationCount: 3 })
+    );
+    expect(some).toContain('You worked on it across 3 consultations');
+  });
+
+  it('uses no gendered pronoun anywhere in the rendered copy', async () => {
+    const html = await renderCopy('engagement-case-closed-expert', caseClosedExpertData());
+    for (const pronoun of [' he ', ' she ', ' him ', ' her ', ' his ', ' hers ']) {
+      expect(html.toLowerCase()).not.toContain(pronoun);
+    }
   });
 });
 

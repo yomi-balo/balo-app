@@ -81,6 +81,15 @@ Nothing here yet? If your expert setup is still incomplete, the page points you 
 setup** — clients can book you once it's finished. If setup is done, new bookings will show up
 here and in Calendar as they arrive.
 
+## When does a case close on its own?
+
+When nothing is booked and there's been no completed consultation for 30 days (or, if it never
+had one, 30 days after it opened), Balo closes the case to keep your list tidy. It moves to
+**Resolved** as "Closed automatically", and everything in it stays readable. Booking a
+consultation keeps a case open, and a case never closes while a call on it can still be joined.
+Experts are told when this happens. Want to pick things up again? **Book again** starts a fresh
+case with the same expert.
+
 ## Questions?
 
 Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

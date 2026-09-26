@@ -1,6 +1,7 @@
-import { and, asc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import {
   findPrimaryMeetingContextRepoint,
+  MEETING_CLOSED_TO_JOIN,
   type PrimaryMeetingContext,
 } from '@balo/shared/meetings';
 import { db } from '../client';
@@ -527,28 +528,30 @@ export const meetingContextsRepository = {
    *    timestamp, `waiting_for_participants` → the timestamp, `in_progress` → NULL,
    *    `ended` → NULL, `cancelled` → NULL.
    *
-   * ⚠ THE BOUNDARY THAT FALLS OUT OF THAT — RE-ASSIGNED BY BAL-425. An `in_progress`
-   * meeting contributes to NEITHER anchor: not to `nextScheduledConsultationAt` (it is
-   * not upcoming) and not to `lastCompletedConsultationAt` (it is not `ended`). So a case
-   * whose only activity is a consultation running RIGHT NOW reads as having none,
-   * `isCaseInactive` falls back to `engagements.created_at`, and a case created ≥
-   * `CASE_INACTIVITY_DAYS` ago whose FIRST consultation is in progress is eligible for
-   * auto-close MID-CALL.
-   *
-   * ⚠ OWNERSHIP, STATED AS A CONDITION BECAUSE THE PREVIOUS TICKET-ID ASSIGNMENT FAILED.
-   * This was assigned to "BAL-425/BAL-420". BAL-420 is CLOSED (it shipped the delayed-
-   * dispatch primitive, not this sweep) and BAL-425 was documentation-and-tests only, so
-   * the hazard was owned by nobody. It now belongs to WHICHEVER TICKET FIRST GIVES
-   * `consultationTimestampsForEngagements` A PRODUCTION CALLER — a condition that cannot
-   * go stale, and that is checkable today: this method has ZERO production callers.
+   * ⚠ THE BOUNDARY THAT FALLS OUT OF THAT. An `in_progress` meeting contributes to NEITHER
+   * anchor: not to `nextScheduledConsultationAt` (it is not upcoming) and not to
+   * `lastCompletedConsultationAt` (it is not `ended`). Neither does a `scheduled` or
+   * `waiting_for_participants` call whose start has already passed. So a case whose only
+   * activity is a consultation running RIGHT NOW reads as having none, `isCaseInactive`
+   * falls back to `engagements.created_at`, and ON THE ANCHORS ALONE a case created ≥
+   * `CASE_INACTIVITY_DAYS` ago whose first consultation is in progress would be eligible
+   * for auto-close MID-CALL.
    *
    * THE REMEDY IS NOT IN THIS SEAM, and that is deliberate — the anchor's meaning is
    * "upcoming", and a running meeting is not upcoming. Widening the filter would be the
-   * wrong fix. The sweep must instead EXCLUDE FROM ITS CANDIDATE LIST any engagement with
-   * a live `meetings` row in `status='in_progress'` carrying a live `case`
-   * `meeting_contexts` row — i.e. filter the candidates, not the anchors — or decide
-   * explicitly, in writing, that the mid-call exposure is acceptable. Stated here so it is
-   * not rediscovered as a case that closed itself while two people were talking.
+   * wrong fix. The remedy is {@link engagementIdsWithLiveCaseMeeting}, which filters the
+   * CANDIDATES, not the anchors: it holds a case open while ANY live `case` meeting on it
+   * can still be joined. That is every status outside `MEETING_CLOSED_TO_JOIN`, not
+   * `in_progress` alone — an `in_progress`-only filter would still close a case under a
+   * joinable call whose start has passed while its status is still `scheduled` or
+   * `waiting_for_participants`.
+   *
+   * PRODUCTION CALLERS, both in `apps/api/src/jobs/`: the case-inactivity sweep (seam →
+   * `isCaseInactive` → the live-meeting exclusion, per batch and again per case just before
+   * `close()`), and the review-nudge sweep (it reads `lastCompletedConsultationAt` to skip
+   * an `auto_inactive` close that never had a consultation). Both pass only ids from a
+   * system-scoped `caseEngagementsRepository` read (`listOpenCreatedBefore` /
+   * `listClosedBetween`), never a request-supplied id.
    *
    * Enum literals at QUERY time are always safe — the house restriction is on index
    * predicates and CHECKs only.
@@ -617,5 +620,75 @@ export const meetingContextsRepository = {
       });
     }
     return result;
+  },
+
+  /**
+   * The case-inactivity sweep's CANDIDATE EXCLUSION — the subset of `engagementIds` that
+   * carry at least one live `case` meeting which can STILL BE JOINED. Such a case must not
+   * auto-close, whatever its anchors say (see the boundary paragraph on
+   * {@link consultationTimestampsForEngagements}: those anchors ignore a call that is
+   * running now or whose start has passed).
+   *
+   * "Can still be joined" is `assertMeetingJoinable`'s window (`apps/api`
+   * `services/meetings/meeting-liveness.ts`), restated as SQL:
+   *  - `status NOT IN MEETING_CLOSED_TO_JOIN` — the SHARED terminal set, never a hand-list.
+   *    It is a terminal complement, so a sixth `meeting_status` label defaults to HOLDING
+   *    the case open, which is the safe direction for a close.
+   *  - `scheduled_end > scheduledEndAfter`, STRICT. The caller passes
+   *    `now − MEETING_TOKEN_TTL_AFTER_END_MS`; the repo stays policy-free. The api's token
+   *    window truncates to whole seconds, which only ever closes it EARLIER, so this read
+   *    never releases a case whose meeting the api would still admit.
+   *  - NO `scheduled_start` bound. The server has no early-join bound, so a meeting whose
+   *    start is still in the future can already be `in_progress`. A future `scheduled` /
+   *    `waiting_for_participants` meeting is also counted by the seam's upcoming anchor;
+   *    the overlap is harmless.
+   *
+   * THE FLOOR IS WHAT STOPS A STRANDED MEETING HOLDING A CASE FOREVER. A meeting whose
+   * `scheduled_end` is at or before the floor cannot be joined and, because the TTL is at
+   * least `LIFECYCLE_LOOKBACK_MS` (pinned in the inactivity sweep's test), is already outside
+   * the lifecycle sweep's lookback. It holds nothing, and the case closes on its other
+   * anchors.
+   *
+   * Both `deleted_at`s are filtered, and only `context_type = 'case'` rows count. Rides
+   * `meeting_context_reverse_idx`, then the `meetings` primary key.
+   *
+   * TENANCY: the module-level obligation applies unchanged. The answer discloses only
+   * whether each given id has a joinable case meeting, never a meeting row, and the one
+   * caller passes ids from `caseEngagementsRepository.listOpenCreatedBefore`.
+   *
+   * An empty input returns an empty Set WITHOUT touching the DB.
+   */
+  async engagementIdsWithLiveCaseMeeting(
+    engagementIds: readonly string[],
+    scheduledEndAfter: Date
+  ): Promise<Set<string>> {
+    const held = new Set<string>();
+    if (engagementIds.length === 0) {
+      return held;
+    }
+
+    const rows = await db
+      .selectDistinct({ contextId: meetingContexts.contextId })
+      .from(meetingContexts)
+      .innerJoin(meetings, eq(meetings.id, meetingContexts.meetingId))
+      .where(
+        and(
+          eq(meetingContexts.contextType, 'case'),
+          inArray(meetingContexts.contextId, [...engagementIds]),
+          isNull(meetingContexts.deletedAt),
+          isNull(meetings.deletedAt),
+          notInArray(meetings.status, [...MEETING_CLOSED_TO_JOIN]),
+          gt(meetings.scheduledEnd, scheduledEndAfter)
+        )
+      );
+
+    for (const row of rows) {
+      // `context_id` is NULL only for `admin` (the biconditional CHECK), which the
+      // `context_type = 'case'` predicate excludes. Narrowed for the type, never to filter.
+      if (row.contextId !== null) {
+        held.add(row.contextId);
+      }
+    }
+    return held;
   },
 };

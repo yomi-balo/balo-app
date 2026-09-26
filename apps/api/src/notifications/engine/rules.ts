@@ -123,6 +123,22 @@ const availabilityReshareWindowElapsed: NonNullable<NotificationRule['condition'
 const hasPreviousAddress: NonNullable<NotificationRule['condition']> = (ctx) =>
   typeof ctx.payload.recipientEmail === 'string' && ctx.payload.recipientEmail.length > 0;
 
+/**
+ * `engagement.case_closed`'s CLIENT gate: skip a no-reviewer close rather than dead-lettering.
+ * An owner-miss (BAL-572) publishes with `recipientId` absent, so this stays false and the
+ * expert arm below is unaffected.
+ */
+const hasRecipientId: NonNullable<NotificationRule['condition']> = (ctx) =>
+  typeof ctx.payload.recipientId === 'string';
+
+/**
+ * BAL-572 — `engagement.case_closed`'s EXPERT gate: the +30d inactivity sweep only, never a
+ * client's deliberate `resolved` close. The expert already knows when they mark a case
+ * resolved; a quiet close is the one they were not part of deciding.
+ */
+const closeReasonIsAutoInactive: NonNullable<NotificationRule['condition']> = (ctx) =>
+  ctx.payload.closeReason === 'auto_inactive';
+
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [
     {
@@ -853,18 +869,19 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // BAL-390 (D4): a CASE was closed — ONE fused email: close confirmation → case
   // summary → the star-rating ask. Targets the client-side reviewer (recipient:'client'
   // via payload.recipientId; email + in-app), conditioned on recipientId so a
-  // no-reviewer close skips rather than dead-lettering. NO admin fan-out — the client
-  // is the sole target, exactly like engagement.review_reminder.
+  // no-reviewer close skips rather than dead-lettering. NO admin fan-out.
   //
-  // ⚠ LIVE AS OF BAL-388: `resolveCaseAction` (the recap's client-side close) is the FIRST
-  // and today ONLY publisher, so this rule delivers a real email to a real client. The
-  // `auto_inactive` arm is still unpublished — the inactivity sweep owns it — and it reuses this
-  // same rule and template with a different `closeReason`.
-  'engagement.case_closed': emailAndInApp(
-    'client',
-    'engagement-case-closed-client',
-    (ctx) => typeof ctx.payload.recipientId === 'string'
-  ),
+  // BAL-572 adds the delivering EXPERT (recipient:'expert'; email + in-app), gated to
+  // `closeReason === 'auto_inactive'` — a client's deliberate resolve never reaches this arm.
+  // No agency owner/admin fan-out: the delivering expert only.
+  //
+  // ⚠ TWO PUBLISHERS. `resolveCaseAction` (the recap's client-side close) publishes
+  // `closeReason: 'resolved'`; the api's hourly `case-inactivity-sweep` publishes
+  // `closeReason: 'auto_inactive'`, which is the only arm that ever reaches the expert.
+  'engagement.case_closed': [
+    ...emailAndInApp('client', 'engagement-case-closed-client', hasRecipientId),
+    ...emailAndInApp('expert', 'engagement-case-closed-expert', closeReasonIsAutoInactive),
+  ],
   // BAL-390: the star-rating nudge at +24h / +7d off the terminal anchor
   // (server-published by the hourly review-nudge sweep). EMAIL ONLY to the reviewer
   // (recipient:'self' via payload.userId — the onboarding.reminder shape): the ask IS

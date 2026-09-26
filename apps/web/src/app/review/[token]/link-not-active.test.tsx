@@ -52,11 +52,12 @@ describe('LinkNotActive', () => {
   });
 
   /**
-   * ⚠ AND IT NAMES NO ENGAGEMENT KIND. `listClosedBetween` returns `[]` until BAL-420/421
-   * give `close()` a caller (D4/D5), so every live review link in production today is a
-   * PROJECT link — "rate from the case" named the one kind that cannot yet produce one.
-   * The generic noun is also what keeps the card oracle-free: `page.test.tsx` asserts it
-   * renders byte-identically for six different outcomes, so it must not vary by kind.
+   * ⚠ AND IT NAMES NO ENGAGEMENT KIND, EVEN THOUGH BOTH KINDS NOW PRODUCE LIVE REVIEW
+   * LINKS. `close()` has production callers on both anchors (web's `resolved` publisher
+   * and BAL-572's `auto_inactive` sweep), so a project link and a case link can both land
+   * on this terminal state. The generic noun is what keeps the card oracle-free:
+   * `page.test.tsx` asserts it renders byte-identically for six different outcomes, so it
+   * must not vary by kind.
    */
   it('names no engagement kind — not "case", not "project"', () => {
     const { container } = render(<LinkNotActive />);

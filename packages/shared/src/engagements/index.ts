@@ -1,7 +1,7 @@
 /**
- * Case inactivity rule (BAL-417; the SWEEP that applies it belongs to WHICHEVER TICKET
- * FIRST GIVES `consultationTimestampsForEngagements` A PRODUCTION CALLER — not BAL-420,
- * which shipped only the delayed-dispatch primitive and is Done. See BAL-425's ruling in
+ * Case inactivity rule (BAL-417; the SWEEP that applies it is BAL-572's hourly
+ * `case-inactivity-sweep` in `apps/api` — not BAL-420, which shipped only the
+ * delayed-dispatch primitive and is Done. See BAL-425's ruling in
  * `repositories/meeting-contexts.ts`).
  *
  * A case is inactive when BOTH hold:
@@ -30,8 +30,8 @@
  * entry for EVERY requested id, so "absent" never has to be distinguished from
  * "none".)
  *
- * ⚠ THE SWEEP MUST CALL THAT READ, whichever ticket ships it (see the note above — it is
- * not BAL-420). `caseEngagementsRepository.listOpenCreatedBefore`
+ * ⚠ THE SWEEP MUST CALL THAT READ — and now does: BAL-572's hourly `case-inactivity-sweep`
+ * (`apps/api`) is that ticket, per the note above. `caseEngagementsRepository.listOpenCreatedBefore`
  * returns only the SQL-expressible SUPERSET (creation-anchored, consultation-blind);
  * this function refines it, and it can only refine what it is given. Passing
  * `null, null` is now a BUG, not a gap — it collapses the rule to "created ≥ 30 days
@@ -49,6 +49,13 @@
  * already points at this file. Same barrel posture as `../meetings/index.ts`.
  */
 export * from './case-surface';
+
+/**
+ * BAL-572 — the case-close notification payload assembly (`CASE_TITLE_MAX`, `capCaseTitle`,
+ * `summariseCaseCloseAnchors`, `buildCaseClosedPayload`), re-exported for the same
+ * one-subpath reason as `./case-surface` above.
+ */
+export * from './case-closed';
 
 /** The default inactivity window, in days. */
 export const CASE_INACTIVITY_DAYS = 30;

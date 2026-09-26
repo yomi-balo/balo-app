@@ -6,7 +6,9 @@ import {
 import { buildBillingEmailChangedCopy } from './billing-email-changed.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
+import { consultationClause } from './review-email-shared.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
+import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import { REASON_LABEL, readCloseReason } from './close-reason-label.js';
 
@@ -913,6 +915,30 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       title: 'Case closed',
       body,
       actionUrl: meetingId ? `/meetings/${meetingId}?from=notification` : undefined,
+    };
+  },
+
+  // BAL-572 case closed — EXPERT. `auto_inactive` ONLY (the rule gates delivery to that
+  // arm) — a client's deliberate `resolved` close never reaches an expert here. Links
+  // `/cases/{id}`, which always resolves — unlike the client's `/meetings/{meetingId}` recap
+  // link above, there is no reviewer-side meeting anchor here. Copy is DRAFT pending MJ
+  // sign-off. Uses `consultationClause` (shared with the expert EMAIL) rather than
+  // `pluralize`, so the two channels read identically — "one consultation", never "1
+  // consultation" on one channel and "one" on the other. Dropped entirely at 0 — a
+  // never-consulted case reads naturally without it.
+  'engagement-case-closed-expert': (data) => {
+    const title = (data.caseTitle as string) ?? 'A case';
+    const clientCompany = (data.clientCompanyName as string) ?? 'The client';
+    const closedDate = (data.closedDate as string) ?? 'today';
+    const engagementId = (data.engagementId as string) ?? '';
+    const consultations = consultationClause(numberOrZero(data.consultationCount));
+    const worked = consultations === '' ? '' : ` You worked on it${consultations}.`;
+    return {
+      title: "We've closed this case",
+      body:
+        `'${title}' with ${clientCompany} had been quiet for ${CASE_INACTIVITY_DAYS} days with ` +
+        `nothing booked, so we closed it out on ${closedDate} rather than leave it hanging.${worked}`,
+      actionUrl: `/cases/${engagementId}`,
     };
   },
 

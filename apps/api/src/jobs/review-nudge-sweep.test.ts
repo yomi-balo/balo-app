@@ -14,6 +14,7 @@ const {
   mockCreateToken,
   mockPublish,
   mockTrackServer,
+  mockConsultationTimestamps,
 } = vi.hoisted(() => ({
   mockListAccepted: vi.fn(),
   mockListClosed: vi.fn(),
@@ -27,12 +28,16 @@ const {
   mockCreateToken: vi.fn(),
   mockPublish: vi.fn(),
   mockTrackServer: vi.fn(),
+  mockConsultationTimestamps: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   projectEngagementsRepository: { listAcceptedBetween: mockListAccepted },
   caseEngagementsRepository: { listClosedBetween: mockListClosed },
   meetingPresenceRepository: { listClientUserIdsForEngagement: mockListClientUserIds },
+  meetingContextsRepository: {
+    consultationTimestampsForEngagements: mockConsultationTimestamps,
+  },
   companiesRepository: {
     findOwnerUserIdByCompanyId: mockFindOwnerUserId,
     findById: mockFindCompany,
@@ -142,6 +147,21 @@ beforeEach(() => {
     async (input: { candidateUserIds: string[] }) => input.candidateUserIds
   );
   mockCreateToken.mockResolvedValue({ id: 'tok-1' });
+  // Default: every requested id HAS a completed consultation, so dropNeverConsultedAutoCloses
+  // is a no-op unless a test explicitly overrides this to simulate a never-consulted case.
+  mockConsultationTimestamps.mockImplementation(async (ids: string[]) => {
+    const map = new Map<
+      string,
+      { lastCompletedConsultationAt: Date | null; nextScheduledConsultationAt: Date | null }
+    >();
+    for (const id of ids) {
+      map.set(id, {
+        lastCompletedConsultationAt: new Date(NOW.getTime() - HOUR_MS),
+        nextScheduledConsultationAt: null,
+      });
+    }
+    return map;
+  });
 });
 
 describe('review-nudge sweep — the band-width == cron-period invariant', () => {
@@ -177,12 +197,13 @@ describe('review-nudge sweep — the band-width == cron-period invariant', () =>
   });
 });
 
-describe('review-nudge sweep — D5: both anchors, every tick', () => {
+describe('review-nudge sweep — both anchors, every tick', () => {
   /**
-   * ⚠ THE CASE READER RETURNS `[]` TODAY — `caseEngagementsRepository.close()` has zero
-   * production callers, so nothing stamps `closed_at` yet. This test exists so a future
-   * "it always returns empty, let's drop the call" cannot land: the case anchor
-   * self-activates with ZERO code change the moment BAL-420/BAL-421 ship.
+   * ⚠ BOTH ANCHORS ARE LIVE: `caseEngagementsRepository.close()` is called from web's
+   * `resolved` publisher and from BAL-572's hourly inactivity sweep (`auto_inactive`).
+   * This test pins that `listClosedBetween` is queried on every tick, alongside
+   * `listAcceptedBetween`, so a future "one of them always returns empty, drop the call"
+   * cannot land silently.
    */
   it('queries listAcceptedBetween AND listClosedBetween for BOTH steps with identical bounds', async () => {
     await runReviewNudgeSweep(NOW);
@@ -274,6 +295,140 @@ describe('review-nudge sweep — D5: both anchors, every tick', () => {
 
     expect(result).toEqual({ sent: 1 });
     expect(mockPublish).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('review-nudge sweep — never nudge about a consultation that never happened', () => {
+  it('a never-consulted auto_inactive case is dropped — no nudge, no seam-Map entry needed twice', async () => {
+    mockListClosed.mockImplementation(
+      bandFiltered([
+        candidate({ engagementId: 'case-1', engagementKind: 'case', closeReason: 'auto_inactive' }),
+      ])
+    );
+    mockConsultationTimestamps.mockResolvedValue(
+      new Map([
+        ['case-1', { lastCompletedConsultationAt: null, nextScheduledConsultationAt: null }],
+      ])
+    );
+
+    expectNoNudge(await runReviewNudgeSweep(NOW));
+    expect(mockConsultationTimestamps).toHaveBeenCalledWith(['case-1'], NOW);
+  });
+
+  it('a CONSULTED auto_inactive case is nudged normally', async () => {
+    mockListClosed.mockImplementation(
+      bandFiltered([
+        candidate({ engagementId: 'case-1', engagementKind: 'case', closeReason: 'auto_inactive' }),
+      ])
+    );
+    // Default mock already answers with a completed consultation; assert explicitly.
+    mockConsultationTimestamps.mockResolvedValue(
+      new Map([
+        [
+          'case-1',
+          {
+            lastCompletedConsultationAt: new Date(NOW.getTime() - HOUR_MS),
+            nextScheduledConsultationAt: null,
+          },
+        ],
+      ])
+    );
+
+    const result = await runReviewNudgeSweep(NOW);
+
+    expect(result).toEqual({ sent: 1 });
+    expect(mockPublish).toHaveBeenCalledWith(
+      'review.reminder',
+      expect.objectContaining({ engagementId: 'case-1', closeReason: 'auto_inactive' })
+    );
+  });
+
+  it('a never-consulted RESOLVED case is still nudged — the drop is auto_inactive-only', async () => {
+    mockListClosed.mockImplementation(
+      bandFiltered([
+        candidate({ engagementId: 'case-1', engagementKind: 'case', closeReason: 'resolved' }),
+      ])
+    );
+
+    const result = await runReviewNudgeSweep(NOW);
+
+    expect(result).toEqual({ sent: 1 });
+    // resolved never reaches the seam filter's id list — it is untouched by construction.
+    expect(mockPublish).toHaveBeenCalledWith(
+      'review.reminder',
+      expect.objectContaining({ engagementId: 'case-1', closeReason: 'resolved' })
+    );
+  });
+
+  it('no seam call happens without an auto_inactive candidate in the band', async () => {
+    mockListAccepted.mockImplementation(bandFiltered([candidate()]));
+    mockListClosed.mockImplementation(
+      bandFiltered([
+        candidate({ engagementId: 'case-1', engagementKind: 'case', closeReason: 'resolved' }),
+      ])
+    );
+
+    await runReviewNudgeSweep(NOW);
+
+    expect(mockConsultationTimestamps).not.toHaveBeenCalled();
+  });
+
+  it('a mixed band (resolved + never-consulted auto_inactive + consulted auto_inactive) nudges the resolved and consulted cases only, with one seam call over just the two auto_inactive ids', async () => {
+    mockListClosed.mockImplementation(
+      bandFiltered([
+        candidate({
+          engagementId: 'case-resolved',
+          engagementKind: 'case',
+          closeReason: 'resolved',
+        }),
+        candidate({
+          engagementId: 'case-auto-never',
+          engagementKind: 'case',
+          closeReason: 'auto_inactive',
+        }),
+        candidate({
+          engagementId: 'case-auto-consulted',
+          engagementKind: 'case',
+          closeReason: 'auto_inactive',
+        }),
+      ])
+    );
+    mockConsultationTimestamps.mockImplementation(async (ids: string[]) => {
+      const map = new Map<
+        string,
+        { lastCompletedConsultationAt: Date | null; nextScheduledConsultationAt: Date | null }
+      >();
+      for (const id of ids) {
+        map.set(
+          id,
+          id === 'case-auto-never'
+            ? { lastCompletedConsultationAt: null, nextScheduledConsultationAt: null }
+            : {
+                lastCompletedConsultationAt: new Date(NOW.getTime() - HOUR_MS),
+                nextScheduledConsultationAt: null,
+              }
+        );
+      }
+      return map;
+    });
+
+    const result = await runReviewNudgeSweep(NOW);
+
+    expect(mockConsultationTimestamps).toHaveBeenCalledTimes(1);
+    expect(mockConsultationTimestamps).toHaveBeenCalledWith(
+      ['case-auto-never', 'case-auto-consulted'],
+      NOW
+    );
+    expect(result).toEqual({ sent: 2 });
+    expect(mockPublish).toHaveBeenCalledTimes(2);
+    const publishedIds = (mockPublish.mock.calls as [string, { engagementId: string }][]).map(
+      ([, payload]) => payload.engagementId
+    );
+    expect(publishedIds.sort((a, b) => a.localeCompare(b))).toEqual([
+      'case-auto-consulted',
+      'case-resolved',
+    ]);
+    expect(publishedIds).not.toContain('case-auto-never');
   });
 });
 

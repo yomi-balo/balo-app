@@ -114,6 +114,7 @@ const CASE_RESOLVE_SOURCES: Record<CaseResolveSource, true> = {
   recap: true,
   end_of_call: true,
   case_surface: true,
+  sweep: true,
 };
 const CONTEXT_TYPES: Record<RecapContextType, true> = {
   case: true,
@@ -182,14 +183,14 @@ describe('BAL-388 enum values', () => {
   it('declares only CASE RESOLVE SOURCES with a live closing surface', () => {
     // ONE business fact, ONE event name (`case_resolved`), ONE widening union. BAL-389's
     // end-of-call screen and BAL-421's case surface are the second and third ENTRY POINTS to
-    // the same close — never separate events. The 30-day inactivity sweep adds its own value
-    // when it starts emitting.
+    // the same close; BAL-572's `case-inactivity-sweep` is the fourth, and the only
+    // server-published one — never separate events.
     expect(Object.keys(CASE_RESOLVE_SOURCES).sort((a, b) => a.localeCompare(b))).toEqual([
       'case_surface',
       'end_of_call',
       'recap',
+      'sweep',
     ]);
-    expect(CASE_RESOLVE_SOURCES).not.toHaveProperty('sweep');
   });
 
   it('ALIASES the shared context union rather than restating it', () => {

@@ -1,9 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { CASE_INACTIVITY_DAYS, isCaseInactive } from '@balo/shared/engagements';
 import { db } from '../client';
-import { creditSessions, engagements, meetingContexts, meetings } from '../schema';
+import {
+  creditSessions,
+  engagements,
+  meetingContexts,
+  meetings,
+  type MeetingStatus,
+  type NewMeeting,
+} from '../schema';
 import {
   caseEngagementFactory,
   creditWalletFactory,
@@ -24,6 +31,56 @@ import {
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+
+/**
+ * Stands in for `apps/api`'s `MEETING_TOKEN_TTL_AFTER_END_MS`, which `@balo/db` cannot
+ * import. `engagementIdsWithLiveCaseMeeting` takes the floor as a parameter, so these tests
+ * only need the value to be self-consistent.
+ */
+const JOIN_WINDOW_AFTER_END_MS = DAY_MS;
+
+/**
+ * Every joinable shape the live-meeting exclusion must hold a case open for. Each one
+ * contributes to NEITHER seam anchor: the first three because their start has passed, the
+ * last because `in_progress` is never "upcoming" — and the server has no early-join bound,
+ * so a future-start call can already be running.
+ */
+const JOINABLE_CALLS: ReadonlyArray<{
+  label: string;
+  status: MeetingStatus;
+  startOffsetMs: number;
+}> = [
+  { label: '`scheduled` with its start passed', status: 'scheduled', startOffsetMs: -HOUR_MS },
+  {
+    label: '`waiting_for_participants` with its start passed',
+    status: 'waiting_for_participants',
+    startOffsetMs: -HOUR_MS,
+  },
+  { label: '`in_progress`', status: 'in_progress', startOffsetMs: -HOUR_MS },
+  {
+    label: '`in_progress` with a FUTURE start',
+    status: 'in_progress',
+    startOffsetMs: 2 * HOUR_MS,
+  },
+];
+
+/** A two-hour meeting window starting `startOffsetMs` from `now`. */
+function windowFrom(
+  now: Date,
+  startOffsetMs: number
+): Pick<NewMeeting, 'scheduledStart' | 'scheduledEnd'> {
+  const scheduledStart = new Date(now.getTime() + startOffsetMs);
+  return { scheduledStart, scheduledEnd: new Date(scheduledStart.getTime() + 2 * HOUR_MS) };
+}
+
+/** Seeds one meeting carrying a single live `case` context on `engagementId`. */
+async function seedCaseMeeting(engagementId: string, values: Partial<NewMeeting>): Promise<string> {
+  const { meeting } = await meetingFactory({
+    contexts: [{ contextType: 'case', contextId: engagementId }],
+    values,
+  });
+  return meeting.id;
+}
 
 /**
  * Seeds a `credit_sessions` row directly against a meeting — the money side of the
@@ -81,7 +138,10 @@ describe('meetingContextsRepository.attach / listByMeeting', () => {
     // that must carry both grains from the start is CREATED that way —
     // `meetingsRepository.create({ contexts: [discovery, kickoff] })`, pinned in
     // `_shared/consultation-projection.integration.test.ts`.
-    expect(rows.map((r) => r.contextType).sort()).toEqual(['project_discovery', 'project_kickoff']);
+    expect(rows.map((r) => r.contextType).sort((a, b) => a.localeCompare(b))).toEqual([
+      'project_discovery',
+      'project_kickoff',
+    ]);
   });
 
   it('REFUSES an attach that REPOINTS the primary — a tier-100 case over a tier-50 project_discovery (BAL-469)', async () => {
@@ -366,7 +426,9 @@ describe('meetingContextsRepository.listMeetingsForContexts (BAL-540 — the bat
       }))
     );
     expect(found).toHaveLength(3);
-    expect(found.map((row) => row.contextId).sort()).toEqual([...relationships].sort());
+    expect(found.map((row) => row.contextId).sort((a, b) => a.localeCompare(b))).toEqual(
+      [...relationships].sort((a, b) => a.localeCompare(b))
+    );
   });
 
   it('reads inside a caller-supplied transaction (the DbExecutor seam the cascade needs)', async () => {
@@ -784,26 +846,174 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
   });
 });
 
+describe('meetingContextsRepository.engagementIdsWithLiveCaseMeeting (the live-meeting exclusion)', () => {
+  const floorFor = (now: Date): Date => new Date(now.getTime() - JOIN_WINDOW_AFTER_END_MS);
+
+  it('an EMPTY id list returns an empty Set without querying', async () => {
+    const select = vi.spyOn(db, 'select');
+    const selectDistinct = vi.spyOn(db, 'selectDistinct');
+    try {
+      const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting([], new Date());
+
+      expect(held.size).toBe(0);
+      expect(select).not.toHaveBeenCalled();
+      expect(selectDistinct).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+      selectDistinct.mockRestore();
+    }
+  });
+
+  it.each(JOINABLE_CALLS)(
+    'HOLDS a case whose meeting is $label',
+    async ({ status, startOffsetMs }) => {
+      const now = new Date();
+      const { engagement } = await caseEngagementFactory();
+      await seedCaseMeeting(engagement.id, { status, ...windowFrom(now, startOffsetMs) });
+
+      const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting(
+        [engagement.id],
+        floorFor(now)
+      );
+      expect([...held]).toEqual([engagement.id]);
+    }
+  );
+
+  // Each negative case below seeds a HELD control alongside it and asserts the exact result,
+  // so an empty answer from a broken join or context filter cannot pass as an exclusion.
+
+  it.each(['ended', 'cancelled'] as const)(
+    'does NOT hold a case whose only meeting is `%s`, even with its end still ahead',
+    async (status) => {
+      const now = new Date();
+      const { engagement: closed } = await caseEngagementFactory();
+      const { engagement: control } = await caseEngagementFactory();
+      await seedCaseMeeting(closed.id, { status, ...windowFrom(now, -HOUR_MS) });
+      await seedCaseMeeting(control.id, { status: 'in_progress', ...windowFrom(now, -HOUR_MS) });
+
+      const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting(
+        [closed.id, control.id],
+        floorFor(now)
+      );
+      expect([...held]).toEqual([control.id]);
+    }
+  );
+
+  it('does NOT count a SOFT-DELETED meeting', async () => {
+    const now = new Date();
+    const { engagement: deleted } = await caseEngagementFactory();
+    const { engagement: control } = await caseEngagementFactory();
+    // The factory leaves the context row LIVE, so only the meeting's own `deleted_at` can
+    // exclude this one.
+    await seedCaseMeeting(deleted.id, {
+      status: 'in_progress',
+      deletedAt: now,
+      ...windowFrom(now, -HOUR_MS),
+    });
+    await seedCaseMeeting(control.id, { status: 'in_progress', ...windowFrom(now, -HOUR_MS) });
+
+    const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting(
+      [deleted.id, control.id],
+      floorFor(now)
+    );
+    expect([...held]).toEqual([control.id]);
+  });
+
+  it('does NOT count a meeting whose `case` context row is SOFT-DELETED', async () => {
+    const now = new Date();
+    const { engagement: detached } = await caseEngagementFactory();
+    const { engagement: control } = await caseEngagementFactory();
+    const meetingId = await seedCaseMeeting(detached.id, {
+      status: 'in_progress',
+      ...windowFrom(now, -HOUR_MS),
+    });
+    await seedCaseMeeting(control.id, { status: 'in_progress', ...windowFrom(now, -HOUR_MS) });
+    await meetingContextsRepository.detach(meetingId, 'case', detached.id);
+
+    const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting(
+      [detached.id, control.id],
+      floorFor(now)
+    );
+    expect([...held]).toEqual([control.id]);
+  });
+
+  it('does NOT count a NON-case context (project_kickoff) on the same id', async () => {
+    const now = new Date();
+    const { engagement: kickoff } = await caseEngagementFactory();
+    const { engagement: control } = await caseEngagementFactory();
+    await meetingFactory({
+      contexts: [{ contextType: 'project_kickoff', contextId: kickoff.id }],
+      values: { status: 'in_progress', ...windowFrom(now, -HOUR_MS) },
+    });
+    await seedCaseMeeting(control.id, { status: 'in_progress', ...windowFrom(now, -HOUR_MS) });
+
+    const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting(
+      [kickoff.id, control.id],
+      floorFor(now)
+    );
+    expect([...held]).toEqual([control.id]);
+  });
+
+  it('the floor is STRICT — an end 1ms inside it holds, an end EXACTLY at it does not, nor one far past it', async () => {
+    const now = new Date();
+    const floor = floorFor(now);
+    const endingAt = (end: Date): Partial<NewMeeting> => ({
+      status: 'in_progress',
+      scheduledStart: new Date(end.getTime() - HOUR_MS),
+      scheduledEnd: end,
+    });
+    const { engagement: inside } = await caseEngagementFactory();
+    const { engagement: atFloor } = await caseEngagementFactory();
+    const { engagement: stranded } = await caseEngagementFactory();
+    await seedCaseMeeting(inside.id, endingAt(new Date(floor.getTime() + 1)));
+    await seedCaseMeeting(atFloor.id, endingAt(floor));
+    await seedCaseMeeting(stranded.id, endingAt(new Date(floor.getTime() - 30 * DAY_MS)));
+
+    const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting(
+      [inside.id, atFloor.id, stranded.id],
+      floor
+    );
+    expect([...held]).toEqual([inside.id]);
+  });
+
+  it('BATCHES — one entry per held id however many meetings it has; unheld and unrequested ids are absent', async () => {
+    const now = new Date();
+    const { engagement: twoCalls } = await caseEngagementFactory();
+    const { engagement: onlyEnded } = await caseEngagementFactory();
+    const { engagement: noMeetings } = await caseEngagementFactory();
+    const { engagement: notRequested } = await caseEngagementFactory();
+    await seedCaseMeeting(twoCalls.id, { status: 'in_progress', ...windowFrom(now, -HOUR_MS) });
+    await seedCaseMeeting(twoCalls.id, { status: 'scheduled', ...windowFrom(now, DAY_MS) });
+    await seedCaseMeeting(onlyEnded.id, { status: 'ended', ...windowFrom(now, -HOUR_MS) });
+    await seedCaseMeeting(notRequested.id, { status: 'in_progress', ...windowFrom(now, -HOUR_MS) });
+
+    const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting(
+      [twoCalls.id, onlyEnded.id, noMeetings.id],
+      floorFor(now)
+    );
+    expect([...held]).toEqual([twoCalls.id]);
+  });
+});
+
 /**
- * CASE INACTIVITY COMPOSITION (BAL-417 × BAL-418), on behalf of BAL-425.
+ * CASE INACTIVITY COMPOSITION (BAL-417 × BAL-418) — the repository reads and the pure rule the
+ * case-inactivity sweep (`apps/api/src/jobs/case-inactivity-sweep.ts`) stands on, composed
+ * against a real database:
  *
- * ⚠ THIS IS A COMPOSITION TEST, NOT A SWEEP. BAL-417's auto-close is a WINDOW-MATH sweep
- * and is NOT a consumer of BAL-420's `schedule()` primitive — there is no per-instance
- * promise to cancel, because a candidate simply stops matching the query when the case
- * gets activity. BAL-425 SHIPPED DOCUMENTATION AND TESTS ONLY: still no sweep file, no cron
- * registration and no feature flag. Its mid-call `in_progress` hazard is now RE-ASSIGNED BY
- * CONDITION — to whichever ticket first gives `consultationTimestampsForEngagements` a
- * production caller, rather than to a ticket id that can close without discharging it (the
- * previous "BAL-425/BAL-420" pairing did exactly that). See the seam's docblock. What this
- * proves is only that the two SHIPPED pieces the sweep will stand on compose to the right
- * answer:
+ *     meetingContextsRepository.consultationTimestampsForEngagements(ids, now)
+ *       ──feeds──▶  isCaseInactive({ caseCreatedAt, ...anchors, now })
+ *       ──minus──▶  meetingContextsRepository.engagementIdsWithLiveCaseMeeting(ids, floor)
  *
- *     meetingContextsRepository.consultationTimestampsForEngagements(ids, now)   [BAL-418]
- *       ──feeds──▶  isCaseInactive({ caseCreatedAt, ...anchors, now })           [BAL-417]
+ * ⚠ THIS IS A COMPOSITION TEST, NOT A SWEEP. Auto-close is WINDOW MATH, not a consumer of
+ * BAL-420's `schedule()` primitive — there is no per-instance promise to cancel, because a
+ * candidate simply stops matching when the case gets activity. The sweep's orchestration is
+ * unit-tested beside it.
  *
  * `caseEngagementsRepository.listOpenCreatedBefore` returns only the SQL-expressible,
- * creation-anchored, consultation-BLIND superset; this pair is the refinement, and it can
- * only refine what it is handed.
+ * creation-anchored, consultation-BLIND superset; the seam and the rule refine it, and they
+ * can only refine what they are handed. The live-meeting exclusion is the last filter (cases
+ * 8 and 9): the anchors ignore a call that is running now or whose start has passed, so on
+ * the anchors alone a case could close mid-call.
  */
 describe('case inactivity composition (BAL-417 × BAL-418)', () => {
   /** Resolve both anchors for one case and apply the rule, exactly as the sweep will. */
@@ -827,6 +1037,16 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
   const NOW = new Date('2026-08-05T12:00:00.000Z');
   const daysAgo = (days: number): Date => new Date(NOW.getTime() - days * DAY_MS);
   const daysAhead = (days: number): Date => new Date(NOW.getTime() + days * DAY_MS);
+  const FLOOR = new Date(NOW.getTime() - JOIN_WINDOW_AFTER_END_MS);
+
+  /** The sweep's last filter: does a still-joinable case meeting hold this case open? */
+  async function heldOpen(engagementId: string): Promise<boolean> {
+    const held = await meetingContextsRepository.engagementIdsWithLiveCaseMeeting(
+      [engagementId],
+      FLOOR
+    );
+    return held.has(engagementId);
+  }
 
   it('1 — created 31d ago with NO meeting contexts at all ⇒ INACTIVE', async () => {
     const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(31) } });
@@ -968,6 +1188,32 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
       .from(meetingContexts)
       .where(eq(meetingContexts.meetingId, meeting.id));
     expect(contextRow?.deletedAt).toBeNull();
+  });
+
+  it.each(JOINABLE_CALLS)(
+    '8 — created 31d ago, its only call $label ⇒ the anchors say INACTIVE, the exclusion HOLDS it',
+    async ({ status, startOffsetMs }) => {
+      const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(31) } });
+      await seedCaseMeeting(engagement.id, { status, ...windowFrom(NOW, startOffsetMs) });
+
+      // Both halves on the same row: the seam alone would close this case mid-call, and the
+      // exclusion is what keeps it open.
+      expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+      expect(await heldOpen(engagement.id)).toBe(true);
+    }
+  );
+
+  it('9 — a STRANDED `in_progress` call that ended far past the floor ⇒ INACTIVE and NOT held, so the case stays eligible', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(45) } });
+    const end = daysAgo(40);
+    await seedCaseMeeting(engagement.id, {
+      status: 'in_progress',
+      scheduledStart: new Date(end.getTime() - HOUR_MS),
+      scheduledEnd: end,
+    });
+
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+    expect(await heldOpen(engagement.id)).toBe(false);
   });
 
   it('THE CLOCK IS SHARED — `caseCreatedAt` is the PARENT engagements.created_at', async () => {
