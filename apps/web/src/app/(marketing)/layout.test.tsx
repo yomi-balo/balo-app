@@ -7,7 +7,10 @@ import { toMarketingViewer } from '@/components/marketing/marketing-viewer';
 import MarketingLayout from './layout';
 import MarketingError from './error';
 
-const { mockGetCurrentUser } = vi.hoisted(() => ({ mockGetCurrentUser: vi.fn() }));
+const { mockGetCurrentUser, mockAnalyticsIdentify } = vi.hoisted(() => ({
+  mockGetCurrentUser: vi.fn(),
+  mockAnalyticsIdentify: vi.fn(),
+}));
 
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 
@@ -23,6 +26,17 @@ vi.mock('@/components/marketing/marketing-header', () => ({
   MarketingHeader: ({ viewer }: { viewer: ReturnType<typeof toMarketingViewer> }) => (
     <div data-testid="marketing-header">{viewer ? JSON.stringify(viewer) : 'null'}</div>
   ),
+}));
+
+// BAL-504 — a SPY, not a DOM marker: `<AnalyticsIdentify>`'s props carry the real email inside
+// `userTraitsJson`, and the anti-PII-leak guard below asserts on `container.innerHTML` — a
+// marker div would leak that email into the DOM and make that guard fail for the wrong reason.
+// Renders nothing, same as the real (separately tested) component's contract.
+vi.mock('@/components/providers/analytics-identify', () => ({
+  AnalyticsIdentify: (props: Record<string, unknown>) => {
+    mockAnalyticsIdentify(props);
+    return null;
+  },
 }));
 
 function makeSessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
@@ -68,6 +82,23 @@ describe('MarketingLayout — signed in', () => {
     const passed = JSON.parse(screen.getByTestId('marketing-header').textContent ?? 'null');
     expect(passed).toEqual({ displayName: 'Dana Okafor', initials: 'DO', avatarUrl: null });
   });
+
+  // BAL-504 — this layout is where `user` is already resolved, so it is the placement for
+  // `<AnalyticsIdentify>`.
+  it('passes the projected analytics identify props for a normal user', async () => {
+    mockGetCurrentUser.mockResolvedValue(makeSessionUser({ id: 'user-secret-id' }));
+    const ui = await MarketingLayout({ children: <p>Body</p> });
+    render(ui);
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({
+      userId: 'user-secret-id',
+      userTraitsJson: JSON.stringify({
+        email: 'dana@northwind.example',
+        active_mode: 'client',
+        platform_role: 'user',
+      }),
+    });
+  });
 });
 
 describe('MarketingLayout — session read failure', () => {
@@ -82,6 +113,17 @@ describe('MarketingLayout — session read failure', () => {
       'Marketing layout session read failed; rendering the signed-out header',
       expect.objectContaining({ error: expect.any(String) })
     );
+  });
+
+  // BAL-553's impersonation suppression must still apply when the session read itself rejects.
+  // The root layout never calls `getCurrentUser()`, so this is the only place a rejecting read
+  // can be exercised.
+  it('passes {} to AnalyticsIdentify when the session read rejects', async () => {
+    mockGetCurrentUser.mockRejectedValue(new Error('WORKOS_COOKIE_PASSWORD missing'));
+    const ui = await MarketingLayout({ children: <p>Body</p> });
+    render(ui);
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({});
   });
 });
 

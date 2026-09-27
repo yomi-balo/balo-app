@@ -565,6 +565,92 @@ describe('middleware — fail-closed onboarding gate (BAL-361)', () => {
   });
 });
 
+// ── BAL-504: the anon-home rewrite and its direct-hit redirect ──
+
+describe('middleware — anon home rewrite (BAL-504)', () => {
+  it('rewrites an anonymous / to /anon internally', async () => {
+    const res = await middleware(createRequest('/'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-middleware-rewrite')).toBe(`${BASE_URL}/anon`);
+    expect(res.headers.get('x-request-id')).toBeTruthy();
+  });
+
+  it('keeps the query string on the rewrite', async () => {
+    const res = await middleware(createRequest('/?intent=project'));
+    expect(res.headers.get('x-middleware-rewrite')).toBe(`${BASE_URL}/anon?intent=project`);
+  });
+
+  it('does not rewrite / when a session cookie is present', async () => {
+    setupAuthenticatedSession();
+    const res = await middleware(createRequestWithCookie('/'));
+    expect(res.headers.get('x-middleware-rewrite')).toBeNull();
+  });
+
+  it('redirects a direct /anon hit to / with 308, without a cookie', async () => {
+    const res = await middleware(createRequest('/anon'));
+    expect(res.status).toBe(308);
+    expect(getRedirectUrl(res).pathname).toBe('/');
+    expect(res.headers.get('x-request-id')).toBeTruthy();
+  });
+
+  it('redirects a direct /anon hit to / with 308, WITH a cookie', async () => {
+    setupAuthenticatedSession();
+    const res = await middleware(createRequestWithCookie('/anon'));
+    expect(res.status).toBe(308);
+    expect(getRedirectUrl(res).pathname).toBe('/');
+    // The redirect fires before session decode — an authenticated visitor is never trapped
+    // into decoding the session just to bounce off an internal path.
+    expect(mockGetMiddlewareSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps the query string on the /anon redirect', async () => {
+    const res = await middleware(createRequest('/anon?x=1'));
+    expect(res.status).toBe(308);
+    const location = getRedirectUrl(res);
+    expect(location.pathname).toBe('/');
+    expect(location.searchParams.get('x')).toBe('1');
+  });
+
+  it.each(['/anonymous', '/anon/x'])('does not redirect a lookalike path %s', async (path) => {
+    setupUnauthenticatedSession();
+    const res = await middleware(createRequest(path));
+    expect(res.status).not.toBe(308);
+  });
+
+  // No X-Robots-Tag anywhere on the anon path, on either the rewrite or the redirect: neither
+  // route is noindexed (see `_home/marketing-home-metadata.ts`).
+  it('carries no X-Robots-Tag header on the anonymous rewrite', async () => {
+    const res = await middleware(createRequest('/'));
+    expect(res.headers.get('x-robots-tag')).toBeNull();
+  });
+
+  it('carries no X-Robots-Tag header on the /anon redirect', async () => {
+    const res = await middleware(createRequest('/anon'));
+    expect(res.headers.get('x-robots-tag')).toBeNull();
+  });
+});
+
+// BAL-504 — the generated OG image has no extension, so the matcher's extension exemption
+// doesn't cover it either; `/opengraph-image-` is in PUBLIC_PREFIXES to keep it reachable by an
+// anonymous social-media crawler.
+describe('middleware — the generated OG image is public (BAL-504)', () => {
+  it.each(['/opengraph-image-pwu6ef', '/opengraph-image-iixmu8'])(
+    'passes through %s without auth, anonymously',
+    async (path) => {
+      const res = await middleware(createRequest(path));
+      expect(res.status).toBe(200);
+      expect(mockGetMiddlewareSession).not.toHaveBeenCalled();
+    }
+  );
+
+  // A top-level route that merely STARTS WITH the same string must stay protected — the
+  // trailing `-` on the PUBLIC_PREFIXES entry is what keeps this out.
+  it('does not treat a lookalike path as public', async () => {
+    setupUnauthenticatedSession();
+    await expectLoginRedirect('/opengraph-imagefoo', '/opengraph-imagefoo');
+  });
+});
+
 describe('middleware — public-route gate for authenticated users (BAL-361)', () => {
   it.each(['/experts', '/pricing', '/'])(
     'redirects an un-onboarded user with a cookie from public %s to /onboarding',

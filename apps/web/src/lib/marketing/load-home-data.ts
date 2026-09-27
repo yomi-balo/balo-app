@@ -1,5 +1,6 @@
 import 'server-only';
 import { cache } from 'react';
+import { unstable_cache } from 'next/cache';
 import { expertsRepository } from '@balo/db';
 import { FEATURED_EXPERT_LIMIT, FEATURED_EXPERT_USERNAMES } from '@balo/shared/marketing';
 import { log } from '@/lib/logging';
@@ -15,10 +16,13 @@ import { resolvePopularChips, type PopularChip } from './popular-chips';
 import { mapPublicProfileToCardData } from './spotlight-mapper';
 
 /**
- * BAL-493 §6 — the marketing home's ONE server fetch, and what happens when it fails.
+ * BAL-493 §6 / BAL-504 Phase 1 — the marketing home's ONE server fetch, and what happens when it
+ * fails.
  *
  * ⚠ NOTHING IN THIS PAGE MAY THROW. A marketing front door that shows an error boundary is a
  * worse outcome than one missing its counts — every branch below degrades and logs instead.
+ * `buildHomeData()` itself can never reject; only the strict loader further down does, and only
+ * so a degraded result never enters the cross-request `unstable_cache` entry.
  */
 export interface MarketingHomeData {
   taxonomy: ProductTaxonomy;
@@ -83,19 +87,37 @@ const loadFeaturedExpert = cache((username: string) =>
   expertsRepository.findPublicProfileByUsername(username)
 );
 
+interface SpotlightResult {
+  cards: ExpertCardData[];
+  /**
+   * True only for a rejected lookup or a synchronous mapper throw. A `null` row (profile not
+   * public) is a quiet, logged omission and never sets this — an expected, steady-state outcome
+   * of the visibility gate, not a failure the cache should treat as degraded.
+   */
+  hadFailure: boolean;
+}
+
+const EMPTY_SPOTLIGHT: SpotlightResult = { cards: [], hadFailure: false };
+
 /**
  * §8.2 — curated usernames → publicly-visible `ExpertCardData[]`, in parallel, in declared
  * order, never throwing. A username that 404s, or whose profile has since gone
- * unsearchable/unapproved, is silently omitted from the result (and logged) — D2's consent
- * list is re-checked against the canonical visibility gate at every read, not bypassed.
+ * unsearchable/unapproved, is silently omitted from the result (and logged).
+ *
+ * ⚠ THE VISIBILITY GATE IS RE-CHECKED ON EVERY CACHE FILL, NOT EVERY READ. `getCachedHomeData`
+ * below serves this result from `unstable_cache` for up to 300s, and the `/anon` route layers a
+ * further 300s of ISR on top, with no `revalidateTag`/`revalidatePath` wired to expert-
+ * visibility changes — a revoked expert can stay on the public home for up to that combined
+ * window.
  */
-async function loadSpotlight(): Promise<ExpertCardData[]> {
+async function loadSpotlight(): Promise<SpotlightResult> {
   const usernames = FEATURED_EXPERT_USERNAMES.slice(0, FEATURED_EXPERT_LIMIT);
   const settled = await Promise.allSettled(
     usernames.map((username) => loadFeaturedExpert(username))
   );
 
   const cards: ExpertCardData[] = [];
+  let hadFailure = false;
   for (let i = 0; i < settled.length; i++) {
     const username = usernames[i];
     const outcome = settled[i];
@@ -103,6 +125,7 @@ async function loadSpotlight(): Promise<ExpertCardData[]> {
 
     if (outcome.status === 'rejected') {
       logError(`Featured expert lookup failed for "${username}"`, outcome.reason);
+      hadFailure = true;
       continue;
     }
 
@@ -127,9 +150,10 @@ async function loadSpotlight(): Promise<ExpertCardData[]> {
         username,
         error: error instanceof Error ? error.message : String(error),
       });
+      hadFailure = true;
     }
   }
-  return cards;
+  return { cards, hadFailure };
 }
 
 /**
@@ -143,7 +167,18 @@ function settledOr<T>(outcome: PromiseSettledResult<T>, fallback: T, message: st
   return fallback;
 }
 
-export async function loadHomeData(): Promise<MarketingHomeData> {
+interface HomeDataBuildResult {
+  data: MarketingHomeData;
+  /**
+   * BAL-504 Phase 1 — true when the page rendered on incomplete or fallback data: the search
+   * fetch failed, the taxonomy came back empty, a spotlight lookup/mapper failed, or one of the
+   * three loaders below rejected unexpectedly. The strict loader (further down) refuses to let
+   * a degraded result enter the cross-request cache.
+   */
+  degraded: boolean;
+}
+
+async function buildHomeData(): Promise<HomeDataBuildResult> {
   /*
    * ⚠ `allSettled`, NOT `all` — this is the structural half of the "NOTHING MAY THROW"
    * contract at the top of this file. Each of the three loaders already catches its own
@@ -167,21 +202,100 @@ export async function loadHomeData(): Promise<MarketingHomeData> {
     // so a future change to its contract can't turn into an uncaught page 500.
     'Marketing home taxonomy load threw unexpectedly'
   );
-  const spotlight = settledOr(
+  const spotlightResult = settledOr(
     spotlightOutcome,
-    [] as ExpertCardData[],
+    EMPTY_SPOTLIGHT,
     'Marketing home spotlight load threw unexpectedly'
   );
 
   const { chips, benchTiles } = resolveChipsAndTiles(taxonomy, searchResult);
 
-  return {
+  const anyLoaderRejected = [searchOutcome, taxonomyOutcome, spotlightOutcome].some(
+    (outcome) => outcome.status === 'rejected'
+  );
+
+  const data: MarketingHomeData = {
     taxonomy,
     productNameMap: buildProductNameMap(taxonomy),
     chips,
     benchTiles,
     expertTotal: searchResult?.total ?? null,
     wasAvailabilityGated: searchResult?.wasAvailabilityGated ?? false,
-    spotlight,
+    spotlight: spotlightResult.cards,
   };
+
+  const degraded =
+    searchResult === null ||
+    taxonomy.groups.length === 0 ||
+    spotlightResult.hadFailure ||
+    anyLoaderRejected;
+
+  return { data, degraded };
+}
+
+/**
+ * BAL-504 Phase 1 — thrown by the strict loader so a degraded result can never be written into
+ * `unstable_cache`'s cross-request entry (a rejection can't be stored there). Carries the
+ * degraded `data` so `loadHomeDataResult()` can serve it immediately instead of re-fetching —
+ * re-running the degrading path after a strict throw would double the API calls during an
+ * outage.
+ */
+export class DegradedHomeDataError extends Error {
+  readonly data: MarketingHomeData;
+
+  constructor(data: MarketingHomeData) {
+    super('Marketing home data degraded');
+    this.name = 'DegradedHomeDataError';
+    this.data = data;
+  }
+}
+
+async function loadStrictHomeData(): Promise<MarketingHomeData> {
+  const { data, degraded } = await buildHomeData();
+  if (degraded) {
+    throw new DegradedHomeDataError(data);
+  }
+  return data;
+}
+
+/**
+ * The loader takes no arguments and reads no session — it's public data, so one cache entry is
+ * correct for every visitor. If a future wrapper (a custom cache handler) ever loses the
+ * `DegradedHomeDataError` identity across the boundary, the `instanceof` check below misses and
+ * `loadHomeDataResult()` falls into its generic-rejection branch instead: a double fetch, never
+ * a correctness break.
+ */
+const getCachedHomeData = unstable_cache(loadStrictHomeData, ['marketing-home-v1'], {
+  revalidate: 300,
+  tags: ['marketing-home'],
+});
+
+/**
+ * BAL-504 Phase 1 — the one seam callers use to read the marketing home data. `await` stays
+ * inside the `try` (S4822) so a rejection from `getCachedHomeData()` itself is caught, not just
+ * a bad projection of it.
+ */
+export async function loadHomeDataResult(): Promise<{
+  data: MarketingHomeData;
+  degraded: boolean;
+}> {
+  try {
+    const data = await getCachedHomeData();
+    return { data, degraded: false };
+  } catch (error) {
+    if (error instanceof DegradedHomeDataError) {
+      log.warn('Marketing home data degraded; serving uncached', {
+        error: error.message,
+      });
+      return { data: error.data, degraded: true };
+    }
+    log.warn('unstable_cache unavailable for marketing home data; reading uncached', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return buildHomeData();
+  }
+}
+
+export async function loadHomeData(): Promise<MarketingHomeData> {
+  return (await loadHomeDataResult()).data;
 }

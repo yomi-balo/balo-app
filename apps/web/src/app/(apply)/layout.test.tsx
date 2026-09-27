@@ -5,9 +5,21 @@ import { log } from '@/lib/logging';
 import { toMarketingViewer } from '@/components/marketing/marketing-viewer';
 import ApplyLayout from './layout';
 
-const { mockGetCurrentUser } = vi.hoisted(() => ({ mockGetCurrentUser: vi.fn() }));
+const { mockGetCurrentUser, mockAnalyticsIdentify } = vi.hoisted(() => ({
+  mockGetCurrentUser: vi.fn(),
+  mockAnalyticsIdentify: vi.fn(),
+}));
 
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
+
+// BAL-504 — a spy, not a DOM marker: real props carry the session email, and the anti-PII-leak
+// guard below asserts on `container.innerHTML`, the same reasoning as `(marketing)/layout.test.tsx`.
+vi.mock('@/components/providers/analytics-identify', () => ({
+  AnalyticsIdentify: (props: Record<string, unknown>) => {
+    mockAnalyticsIdentify(props);
+    return null;
+  },
+}));
 
 // BAL-502 FIX round — `ApplyHeaderActions` is stubbed so this file tests what the LAYOUT
 // actually PASSES DOWN, not what the (separately tested) real component renders. Same rationale
@@ -64,6 +76,23 @@ describe('ApplyLayout — signed in', () => {
     expect(screen.getByText('Wizard')).toBeInTheDocument();
     const passed = JSON.parse(screen.getByTestId('apply-header-actions').textContent ?? 'null');
     expect(passed).toEqual({ displayName: 'Dana Okafor', initials: 'DO', avatarUrl: null });
+  });
+
+  // BAL-504 — this layout is where `user` is already resolved, so it is the placement for
+  // `<AnalyticsIdentify>`.
+  it('passes the projected analytics identify props for a normal user', async () => {
+    mockGetCurrentUser.mockResolvedValue(makeSessionUser({ id: 'user-secret-id' }));
+    const ui = await ApplyLayout({ children: <p>Wizard</p> });
+    render(ui);
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({
+      userId: 'user-secret-id',
+      userTraitsJson: JSON.stringify({
+        email: 'dana@northwind.example',
+        active_mode: 'client',
+        platform_role: 'user',
+      }),
+    });
   });
 });
 

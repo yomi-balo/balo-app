@@ -11,7 +11,7 @@ const { mockSearchExperts, mockLoadTaxonomy } = vi.hoisted(() => ({
 vi.mock('@/lib/search/search-data', () => ({ searchExperts: mockSearchExperts }));
 // `load-taxonomy` is a `server-only` repo-direct module — stub it so page tests
 // stay DB-free (mirrors the search-data seam).
-vi.mock('@/lib/search/load-taxonomy', () => ({ loadSearchTaxonomy: mockLoadTaxonomy }));
+vi.mock('@/lib/search/load-taxonomy', () => ({ loadSearchTaxonomyCached: mockLoadTaxonomy }));
 
 // Client children use next/navigation hooks.
 vi.mock('next/navigation', () => ({

@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation';
 import { classifyEmailDomain } from '@balo/shared/domains';
 import { getCurrentUser } from '@/lib/auth/session';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
+import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
+import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 import { OnboardingWizard } from './_components/onboarding-wizard';
 import { OnboardingReminderClickTracker } from './_components/onboarding-reminder-click-tracker';
 
@@ -57,6 +59,7 @@ export default async function OnboardingPage({
 
   return (
     <>
+      <AnalyticsIdentify {...analyticsIdentifyPropsFor(user)} />
       {reminderClick && (
         <OnboardingReminderClickTracker
           cadenceStep={reminderClick.cadenceStep}

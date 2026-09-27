@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { log } from '@/lib/logging';
 import { parseSearchParams, serializeSearchFilters, DEFAULT_PAGE_SIZE } from '@/lib/search/filters';
 import { searchExperts, type FacetCountDTO } from '@/lib/search/search-data';
-import { loadSearchTaxonomy } from '@/lib/search/load-taxonomy';
+import { loadSearchTaxonomyCached } from '@/lib/search/load-taxonomy';
 import { buildProductNameMap } from '@/lib/search/taxonomy';
 import { mapSearchResultToCardData } from '@/lib/search/expert-card-mapper';
 import {
@@ -57,7 +57,7 @@ export default async function ExpertsPage({
   let response;
   let taxonomy;
   try {
-    [response, taxonomy] = await Promise.all([searchExperts(filters), loadSearchTaxonomy()]);
+    [response, taxonomy] = await Promise.all([searchExperts(filters), loadSearchTaxonomyCached()]);
   } catch (error) {
     log.error('Expert search results fetch failed', {
       filters: serializeSearchFilters(filters).toString(),

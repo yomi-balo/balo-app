@@ -6,6 +6,8 @@ import {
 } from '@balo/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
+import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
+import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 import { JoinResultView } from '../_components/join-result-view';
 import { OnboardingFrame } from '../_components/onboarding-frame';
 
@@ -126,12 +128,15 @@ export default async function JoinResultPage({
   }
 
   return (
-    <OnboardingFrame>
-      <JoinResultView
-        status={phase}
-        companyName={companyName}
-        alreadyOnboarded={user.onboardingCompleted}
-      />
-    </OnboardingFrame>
+    <>
+      <AnalyticsIdentify {...analyticsIdentifyPropsFor(user)} />
+      <OnboardingFrame>
+        <JoinResultView
+          status={phase}
+          companyName={companyName}
+          alreadyOnboarded={user.onboardingCompleted}
+        />
+      </OnboardingFrame>
+    </>
   );
 }

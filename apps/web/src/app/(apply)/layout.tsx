@@ -2,6 +2,8 @@ import { Logo } from '@/components/layout/logo';
 import { getCurrentUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { toMarketingViewer, type MarketingViewer } from '@/components/marketing/marketing-viewer';
+import { analyticsIdentifyPropsFor, type AnalyticsIdentifyProps } from '@/lib/auth/impersonation';
+import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 import { ApplyHeaderActions } from './_components/apply-header-actions';
 
 /**
@@ -26,9 +28,11 @@ export default async function ApplyLayout({
   // `(marketing)/layout.tsx`: the "fails open" contract should cover the whole derivation, not
   // just the cookie read.
   let viewer: MarketingViewer | null = null;
+  let identifyProps: AnalyticsIdentifyProps = {};
   try {
     const user = await getCurrentUser();
     viewer = toMarketingViewer(user);
+    identifyProps = analyticsIdentifyPropsFor(user);
   } catch (error) {
     log.warn('Apply layout session read failed; rendering the signed-out header', {
       error: error instanceof Error ? error.message : String(error),
@@ -37,6 +41,7 @@ export default async function ApplyLayout({
 
   return (
     <div className="min-h-screen bg-[#F8FAFB] dark:bg-[#0f1117]">
+      <AnalyticsIdentify {...identifyProps} />
       <header className="border-border bg-background/95 supports-[backdrop-filter]:bg-background/60 sticky top-0 z-40 w-full border-b backdrop-blur">
         <div className="flex h-14 items-center justify-between px-4 sm:px-6 lg:px-8">
           <Logo />

@@ -199,7 +199,7 @@ export async function getSession() {
  * issues zero extra queries. Pinned by `session.test.ts`.
  *
  * ⚠ ON A PAGE RENDER inside `(dashboard)` the read is free — it shares `checkSessionDrift`'s
- * `React.cache()` entry via `readLiveUserRow`. Outside it (the root and marketing layouts) it is
+ * `React.cache()` entry via `readLiveUserRow`. Outside it (session-reading layouts/pages) it is
  * one indexed read per authenticated render: an accepted cost, because showing "signed in" chrome
  * to an account whose every action is refused is worse than the read.
  *

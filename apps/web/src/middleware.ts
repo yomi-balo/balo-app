@@ -13,6 +13,7 @@ import {
   isOnboardingRoute,
   isValidReturnTo,
   ONBOARDING_PATH,
+  ANON_HOME_PATH,
 } from '@/lib/auth/route-config';
 import { COOKIE_NAME } from '@/lib/auth/session-config';
 import { redactSensitivePath } from '@balo/shared/redaction';
@@ -48,12 +49,38 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     return res;
   };
 
+  // ── BAL-504 — direct hit on the internal anon rewrite target ──
+  // `/anon` is never a real destination: it exists only so the rewrite below can hand an
+  // anonymous `/` request to a static, session-free tree. A direct hit (bookmarked, crawled,
+  // or guessed) is bounced back to `/` with a PERMANENT redirect — 308, not 307, because this
+  // internal path should never be treated as a distinct, revisitable resource — with or
+  // without a session cookie. This runs BEFORE public/fast-path classification, so `/anon`
+  // stays out of `PUBLIC_PATHS` without going dead: adding it there would never fire, because
+  // this check always wins first.
+  if (pathname === ANON_HOME_PATH) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/';
+    return addRequestId(NextResponse.redirect(url, 308));
+  }
+
   const publicRoute = isPublicRoute(pathname);
   const hasSessionCookie = request.cookies.has(COOKIE_NAME);
 
   // ── Anonymous visitor on a public route → fast path, no session decode ──
   // Preserves the zero-iron-session-work path for logged-out marketing/SEO traffic.
   if (publicRoute && !hasSessionCookie) {
+    // BAL-504 — the anonymous marketing home is served by the static, session-free
+    // `(marketing-anon)` tree at `/anon`, rewritten in transparently: the browser URL and
+    // `PUBLIC_PATHS`/nav classification all stay `/`. Cloning (not
+    // `new URL('/anon', request.url)`) preserves the query string and any `_rsc` param a
+    // client-side prefetch attaches. THIS FAST PATH IS LOAD-BEARING — it's the only place
+    // the rewrite fires, so a stale/invalid cookie (which skips this branch) still gets the
+    // dynamic `/` (an accepted gap), never the static one.
+    if (pathname === '/') {
+      const url = request.nextUrl.clone();
+      url.pathname = ANON_HOME_PATH;
+      return addRequestId(NextResponse.rewrite(url));
+    }
     return addRequestId(NextResponse.next());
   }
 

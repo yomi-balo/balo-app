@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
 import * as Sentry from '@sentry/nextjs';
-import { initAnalytics, analytics, setAnalyticsErrorReporter } from '@/lib/analytics';
+import { initAnalytics, setAnalyticsErrorReporter } from '@/lib/analytics';
 
 /**
  * ⚠⚠ FIX ROUND 1 F3 (security S3) — MODULE SCOPE, DELIBERATELY NOT a `useEffect`.
@@ -63,21 +62,14 @@ initAnalytics();
 
 interface PostHogProviderProps {
   children: React.ReactNode;
-  userId?: string;
-  /** JSON-serialized traits string for stable useEffect dependency comparison. */
-  userTraitsJson?: string;
 }
 
-export function PostHogProvider({
-  children,
-  userId,
-  userTraitsJson,
-}: Readonly<PostHogProviderProps>): React.JSX.Element {
-  useEffect(() => {
-    if (userId && userTraitsJson) {
-      analytics.identify(userId, JSON.parse(userTraitsJson) as Record<string, unknown>);
-    }
-  }, [userId, userTraitsJson]);
-
+/**
+ * BAL-504 — the identify effect this used to run moved to `<AnalyticsIdentify>`
+ * (`@/components/providers/analytics-identify`), placed wherever a caller already has `user` in
+ * hand. This provider is now init-only: the module-scope statements above it are the whole
+ * point, and stay exactly as they were.
+ */
+export function PostHogProvider({ children }: Readonly<PostHogProviderProps>): React.JSX.Element {
   return <>{children}</>;
 }

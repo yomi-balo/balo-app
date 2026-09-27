@@ -34,6 +34,7 @@ const {
   mockFindIdByMeetingId,
   mockGetSessionDrawdownState,
   mockAuthorizeMeetingParticipation,
+  mockAnalyticsIdentify,
   dbSpies,
 } = vi.hoisted(() => ({
   mockCheckSessionDrift: vi.fn(),
@@ -42,6 +43,8 @@ const {
   mockLogWarn: vi.fn(),
   mockResolveChatAccess: vi.fn(),
   mockIsRealtimeConfigured: vi.fn(),
+  /** BAL-504 — a spy on `<AnalyticsIdentify>`'s projected props. */
+  mockAnalyticsIdentify: vi.fn(),
   /** BAL-403 — the Balance slot's ONE repository read. */
   mockFindIdByMeetingId: vi.fn(),
   /** BAL-403 fix round 1 (C1) — the SAME membership gate the panel body reads through. */
@@ -77,6 +80,12 @@ vi.mock('@/lib/meetings/meeting-chat-anchor', () => ({
 }));
 vi.mock('@/lib/realtime/ably-server', () => ({
   isRealtimeConfigured: mockIsRealtimeConfigured,
+}));
+vi.mock('@/components/providers/analytics-identify', () => ({
+  AnalyticsIdentify: (props: Record<string, unknown>) => {
+    mockAnalyticsIdentify(props);
+    return null;
+  },
 }));
 
 vi.mock('@balo/db', () => ({
@@ -230,6 +239,38 @@ describe('MeetingCallPage — the viewer name', () => {
     const [, fields] = mockLogWarn.mock.calls[0] ?? [];
     expect(fields).toMatchObject({ meetingId: MEETING_ID });
     expect((fields as { stack?: string }).stack).toBeDefined();
+  });
+});
+
+describe('MeetingCallPage — analytics identify placement (BAL-504)', () => {
+  it('passes the projected identify props for a normal session', async () => {
+    mockGetCurrentUser.mockResolvedValue({
+      id: USER_ID,
+      firstName: 'Dana',
+      lastName: 'Okoro',
+      email: 'dana@northwind.example',
+      activeMode: 'client',
+      platformRole: 'user',
+    });
+
+    await renderPage();
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({
+      userId: USER_ID,
+      userTraitsJson: JSON.stringify({
+        email: 'dana@northwind.example',
+        active_mode: 'client',
+        platform_role: 'user',
+      }),
+    });
+  });
+
+  it('passes {} when the session read rejects', async () => {
+    mockGetCurrentUser.mockRejectedValue(new Error('session store unavailable'));
+
+    await renderPage();
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({});
   });
 });
 

@@ -294,10 +294,10 @@ describe('BAL-568 — the seams re-read the LIVE row, and the cookie stops grant
   });
 
   /**
-   * ⚠⚠ THE BINDING PERFORMANCE CONSTRAINT (ruling A2). `getCurrentUser()` runs on the root and
-   * marketing layouts, i.e. on EVERY render including a logged-out marketing page. An anonymous
-   * visitor must pay NOTHING: the live read happens only once a session user has been resolved.
-   * Asserted here rather than left to inspection.
+   * ⚠⚠ THE BINDING PERFORMANCE CONSTRAINT (ruling A2). `getCurrentUser()` runs on
+   * session-reading layouts/pages, i.e. on EVERY render including a logged-out marketing page.
+   * An anonymous visitor must pay NOTHING: the live read happens only once a session user has
+   * been resolved. Asserted here rather than left to inspection.
    */
   it('⚠ an ANONYMOUS visitor pays ZERO database reads', async () => {
     mockSession = {};
