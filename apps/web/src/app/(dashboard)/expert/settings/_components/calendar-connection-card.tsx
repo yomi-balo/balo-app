@@ -161,7 +161,13 @@ export function CalendarConnectionCard({
       case 'reconnect_needed':
         return (
           <>
-            <CalendarReconnectNotice onReconnect={() => onReconnect(provider)} />
+            <CalendarReconnectNotice
+              onReconnect={() => onReconnect(provider)}
+              // `deriveSlotState` never reaches `reconnect_needed` without a `connection`
+              // (calendar-slot-state.ts); `?? true` is a defensive fallback for that
+              // unreachable case, and defaults to the pause claim — the fail-safe direction.
+              checkedForBusyTime={connection?.checkedForBusyTime ?? true}
+            />
             {connection && (
               <div aria-disabled="true" className={DIMMED_WRAPPER_CLASS}>
                 {renderPanels(connection, true)}

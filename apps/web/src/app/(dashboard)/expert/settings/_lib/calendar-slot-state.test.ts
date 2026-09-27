@@ -11,6 +11,7 @@ function buildConnection(overrides: Partial<CalendarConnection> = {}): CalendarC
     targetCalendarId: null,
     subCalendars: [],
     isBookingTarget: false,
+    checkedForBusyTime: true,
     ...overrides,
   };
 }

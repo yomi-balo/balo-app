@@ -119,6 +119,18 @@ function withTargetCalendar(
   return connections.map((c) => (c.provider === provider ? { ...c, targetCalendarId } : c));
 }
 
+/** The success toast after a target-calendar pick: the TARGET wording when `isTarget`, else the
+ *  STANDBY wording naming the account that is. Shared by both `handleChangeTarget` branches. */
+function bookingTargetToastMessage(
+  name: string,
+  isTarget: boolean,
+  standbyProvider: CalendarProvider
+): string {
+  return isTarget
+    ? `Bookings will go to ${name}`
+    : `Saved — bookings will go to ${name} if ${PROVIDER_META[standbyProvider].label} is disconnected`;
+}
+
 /** One row of the Calendars card: a connection, or an in-flight attempt, with its slot state. */
 export interface CalendarRowModel {
   readonly key: string;
@@ -565,25 +577,29 @@ export function CalendarConnectionsSection(): React.JSX.Element {
       const result = await setTargetCalendarAction({ targetCalendarId: calendarId, provider });
 
       if (result.success) {
-        let isTarget = connection?.isBookingTarget ?? false;
-        let refetched: CalendarConnection[] | null = null;
         if (becomesWritable) {
-          refetched = await fetchConnections({ silent: true });
-          const refetchedRow = refetched?.find((c) => c.provider === provider);
-          isTarget =
-            refetchedRow?.isBookingTarget ??
-            ((connection?.isBookingTarget ?? false) || bookingTarget === undefined);
-        }
-        if (isTarget) {
-          toast.success(`Bookings will go to ${name}`);
+          const refetched = await fetchConnections({ silent: true });
+          if (refetched === null) {
+            // No server answer after a pick that could have changed WHO the target is — we
+            // don't know which account gets bookings, so neither the target nor the standby
+            // wording (which also names an account) would be trustworthy. Same reasoning as
+            // panel branch 3a: no claim beats a false one.
+            toast.success('Saved');
+          } else {
+            const refetchedRow = refetched.find((c) => c.provider === provider);
+            const standbyProvider = refetched.find((c) => c.isBookingTarget)?.provider ?? provider;
+            toast.success(
+              bookingTargetToastMessage(
+                name,
+                refetchedRow?.isBookingTarget ?? false,
+                standbyProvider
+              )
+            );
+          }
         } else {
-          // Names the account bookings actually go to: the refetch's own answer when this pick
-          // triggered one (a null→set pick can promote a DIFFERENT connection), else the
-          // pre-pick `bookingTarget`; `?? provider` is a last-resort fallback, never expected to fire.
-          const standbyProvider =
-            (refetched?.find((c) => c.isBookingTarget) ?? bookingTarget)?.provider ?? provider;
+          const standbyProvider = bookingTarget?.provider ?? provider;
           toast.success(
-            `Saved — bookings will go to ${name} if ${PROVIDER_META[standbyProvider].label} is disconnected`
+            bookingTargetToastMessage(name, connection?.isBookingTarget ?? false, standbyProvider)
           );
         }
       } else {

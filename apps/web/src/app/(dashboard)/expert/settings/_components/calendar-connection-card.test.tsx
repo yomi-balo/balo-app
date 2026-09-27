@@ -30,6 +30,7 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
   targetCalendarId: 'cal-1',
   subCalendars: [makeSubCalendar()],
   isBookingTarget: true,
+  checkedForBusyTime: true,
   ...overrides,
 });
 
@@ -368,6 +369,17 @@ describe('CalendarConnectionCard', () => {
     expect(screen.getByText(/lost access to this calendar/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Reconnect' }));
     expect(handlers.onReconnect).toHaveBeenCalledWith('google');
+  });
+
+  // BAL-576 round 2 — threads the connection's own `checkedForBusyTime` to the notice, so a
+  // broken connection that never blocked bookings doesn't claim otherwise.
+  it('threads checkedForBusyTime to the reconnect notice', () => {
+    renderRow(
+      'reconnect_needed',
+      makeConnection({ credentialStatus: 'EXPIRED', checkedForBusyTime: false })
+    );
+    expect(screen.getByText(/won't sync until you reconnect/)).toBeInTheDocument();
+    expect(screen.queryByText(/bookings with you are paused/)).not.toBeInTheDocument();
   });
 
   it('renders the connecting body, wiring Re-open window and Cancel to its provider', async () => {

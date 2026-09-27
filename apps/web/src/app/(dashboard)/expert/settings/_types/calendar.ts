@@ -45,4 +45,10 @@ export interface CalendarConnection {
    * — the client must never re-derive it. Only one connection can be `true` at a time.
    */
   isBookingTarget: boolean;
+  /**
+   * BAL-576 round 2 — would BREAKING this connection actually block bookings? The SERVER
+   * computes this (`isConsideredForBusyRead`, the same rule the vendor busy read applies) — the
+   * client must never re-derive it from `credentialStatus` or `subCalendars` here.
+   */
+  checkedForBusyTime: boolean;
 }

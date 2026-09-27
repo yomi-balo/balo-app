@@ -21,6 +21,7 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
   targetCalendarId: null,
   subCalendars: [makeSubCalendar()],
   isBookingTarget: false,
+  checkedForBusyTime: true,
   ...overrides,
 });
 

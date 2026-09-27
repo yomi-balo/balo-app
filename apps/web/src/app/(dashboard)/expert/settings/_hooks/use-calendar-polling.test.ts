@@ -36,6 +36,7 @@ const googleActive: CalendarConnection = {
     { id: 'c1', name: 'Work', provider: 'google', primary: true, conflictChecking: true },
   ],
   isBookingTarget: false,
+  checkedForBusyTime: true,
 };
 
 const googleSyncPending: CalendarConnection = { ...googleActive, credentialStatus: 'SYNC_PENDING' };

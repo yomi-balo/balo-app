@@ -54,7 +54,7 @@
  * (`invariants/sync-token-parity.test.ts`) — the parity table (apiroc skill) is handled by
  * PARSING every wire shape tolerantly (`toBusyBlocks`), never by branching on `provider`.
  */
-import { calendarRepository, type CalendarCredentialStatus } from '@balo/db';
+import { calendarRepository, type BusyReadTarget, type CalendarCredentialStatus } from '@balo/db';
 import type { FreeBusySlot } from '@apiroc/unified-calendar-api-node-sdk';
 import { createLogger } from '@balo/shared/logging';
 import { fromZonedTime } from 'date-fns-tz';
@@ -113,6 +113,24 @@ function isUnreadable(target: {
   provisioned: boolean;
 }): boolean {
   return target.credentialStatus !== READABLE_STATUS || !target.provisioned;
+}
+
+/**
+ * round-2 fix #5 — a PROVISIONED connection with no conflict-checked calendar is the expert's
+ * explicit choice (§9.4) and its data is irrelevant regardless of whether its credential later
+ * expires — an expert with one healthy connection and a second they deliberately opted every
+ * calendar out of must not go entirely unbookable the moment that second credential expires.
+ * An UNPROVISIONED connection is never excluded here even though its `calendarIds` is also
+ * `[]` structurally — Balo has never listed its calendars, so we don't know what
+ * conflict-checked calendars might be hidden there, and it must still be checked (`isUnreadable`).
+ *
+ * Exported so GET `/api/calendar/connection` can answer "would breaking THIS connection block
+ * bookings?" with the same rule `listBusyBlocks` applies, instead of re-deriving it.
+ */
+export function isConsideredForBusyRead(
+  target: Pick<BusyReadTarget, 'provisioned' | 'calendarIds'>
+): boolean {
+  return !target.provisioned || target.calendarIds.length > 0;
 }
 
 /**
@@ -311,15 +329,8 @@ export const vendorBusyProvider: VendorBusyProvider = {
     }
 
     // ⚠ round-2 fix #5 — apply the "contributes nothing" filter FIRST, before computing
-    // `unreadable`, not after. A PROVISIONED connection with no conflict-checked calendar is
-    // the expert's explicit choice (§9.4) and its data is irrelevant regardless of whether its
-    // credential later expires — an expert with one healthy connection and a second they
-    // deliberately opted every calendar out of must not go entirely unbookable the moment
-    // that second credential expires. An UNPROVISIONED connection is never excluded here even
-    // though its `calendarIds` is also `[]` structurally — Balo has never listed its
-    // calendars, so we don't know what conflict-checked calendars might be hidden there, and
-    // it must still be checked below.
-    const consideredTargets = targets.filter((t) => !t.provisioned || t.calendarIds.length > 0);
+    // `unreadable`, not after. See `isConsideredForBusyRead`'s docblock for why.
+    const consideredTargets = targets.filter(isConsideredForBusyRead);
 
     const unreadable = consideredTargets.filter(isUnreadable);
     if (unreadable.length > 0) {

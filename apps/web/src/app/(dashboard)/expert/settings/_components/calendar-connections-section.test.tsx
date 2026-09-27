@@ -140,6 +140,7 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
     { id: 'cal-1', name: 'Work', provider: 'google', primary: true, conflictChecking: true },
   ],
   isBookingTarget: true,
+  checkedForBusyTime: true,
   ...overrides,
 });
 
@@ -980,6 +981,44 @@ describe('CalendarConnectionsSection', () => {
 
       await waitFor(() => expect(mockGetConnections).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Bookings will go to Team'));
+    });
+
+    // BAL-576 round 2 — a null→set pick is the one case that can change WHO the target is; with
+    // no server answer we don't know which account gets bookings, so the toast must claim
+    // neither the target NOR the standby wording (both name an account).
+    it('toasts a neutral "Saved" when the null-target refetch fails', async () => {
+      const google = makeConnection({ isBookingTarget: true });
+      const microsoftNullTarget = makeConnection({
+        provider: 'microsoft',
+        providerEmail: 'yomi@outlook.com',
+        targetCalendarId: null,
+        isBookingTarget: false,
+        subCalendars: [
+          {
+            id: 'cal-2',
+            name: 'Team',
+            provider: 'microsoft',
+            primary: true,
+            conflictChecking: true,
+          },
+        ],
+      });
+      mockGetConnections.mockResolvedValueOnce({
+        ok: true,
+        connections: [google, microsoftNullTarget],
+      });
+      mockGetConnections.mockResolvedValueOnce({ ok: false, error: 'boom' });
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+
+      await screen.findByText('yomi@outlook.com');
+      await user.click(screen.getByRole('button', { name: 'Book into Team' }));
+
+      await waitFor(() => expect(mockGetConnections).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved'));
+      expect(toast.success).not.toHaveBeenCalledWith(
+        expect.stringContaining('Bookings will go to')
+      );
     });
   });
 
