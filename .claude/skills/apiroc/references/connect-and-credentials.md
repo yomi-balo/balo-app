@@ -34,19 +34,19 @@ explainer).
 `status` → `credential_status` rename and vocabulary swap), `0069_bal396_cronofy_removal.sql` (the
 Cronofy column drop + `NOT NULL`).
 
-| Column                  | Type                            | As-built truth                                                                                                                                                                                                                                                                                              |
-| ----------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                    | uuid pk                         | Balo row id. Churns on reconnect-after-disconnect — see §5.4.                                                                                                                                                                                                                                               |
-| `expert_profile_id`     | uuid not null                   | FK to expert_profiles.id, ON DELETE cascade                                                                                                                                                                                                                                                                 |
-| `end_user_account_id`   | text not null (since 0069)      | The only vendor identity Balo stores. Non-unique — see the index table below.                                                                                                                                                                                                                               |
-| `provider`              | text not null                   | 'google' \| 'microsoft' lowercase, no CHECK on it                                                                                                                                                                                                                                                           |
-| `provider_email`        | text nullable                   | display only                                                                                                                                                                                                                                                                                                |
-| `credential_status`     | text not null, default 'ACTIVE' | Renamed from status by migration 0068. Vocabulary: ACTIVE \| SYNC_PENDING \| EXPIRED \| REVOKED — see §5.1                                                                                                                                                                                                  |
-| `credential_checked_at` | timestamptz, nullable           | Last time a real data call proved this credential works. Stamped by the health probe (§5.3) and by upsertApirocConnection on connect/reconnect                                                                                                                                                              |
-| `reconnect_notified_at` | timestamptz, nullable           | "Already notified about the current breakage" marker — see §5.2/§5.3                                                                                                                                                                                                                                        |
-| `last_synced_at`        | timestamptz, nullable           | Effectively dead. Its only production writer was the Cronofy webhook route BAL-396 deleted; nothing writes it any more, so every row's value is permanently NULL. findStaleConnections (§1.4) was repointed to credential_checked_at for exactly this reason — do not resurrect a query against this column |
-| `target_calendar_id`    | text nullable                   | Event-write target, per connection (ADR-1021 amendment §1)                                                                                                                                                                                                                                                  |
-| timestamps / softDelete |                                 | created_at, updated_at, deleted_at                                                                                                                                                                                                                                                                          |
+| Column                  | Type                            | As-built truth                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                    | uuid pk                         | Balo row id. Churns on reconnect-after-disconnect — see §5.4.                                                                                                                                                                                                                                                                                                                               |
+| `expert_profile_id`     | uuid not null                   | FK to expert_profiles.id, ON DELETE cascade                                                                                                                                                                                                                                                                                                                                                 |
+| `end_user_account_id`   | text not null (since 0069)      | The only vendor identity Balo stores. Non-unique — see the index table below.                                                                                                                                                                                                                                                                                                               |
+| `provider`              | text not null                   | 'google' \| 'microsoft' lowercase, no CHECK on it                                                                                                                                                                                                                                                                                                                                           |
+| `provider_email`        | text nullable                   | BAL-575 — written on every connect/reconnect from the account `endUserAccounts.get` already fetched (§3.2); never nulled once known — a blank or absent vendor email leaves the stored value alone (§1.3). Rows connected before BAL-575 stay null until they next reconnect — no backfill is planned. Feeds `loginHint` on a future connect (§2.1), and the settings card's `accountLabel` |
+| `credential_status`     | text not null, default 'ACTIVE' | Renamed from status by migration 0068. Vocabulary: ACTIVE \| SYNC_PENDING \| EXPIRED \| REVOKED — see §5.1                                                                                                                                                                                                                                                                                  |
+| `credential_checked_at` | timestamptz, nullable           | Last time a real data call proved this credential works. Stamped by the health probe (§5.3) and by upsertApirocConnection on connect/reconnect                                                                                                                                                                                                                                              |
+| `reconnect_notified_at` | timestamptz, nullable           | "Already notified about the current breakage" marker — see §5.2/§5.3                                                                                                                                                                                                                                                                                                                        |
+| `last_synced_at`        | timestamptz, nullable           | Effectively dead. Its only production writer was the Cronofy webhook route BAL-396 deleted; nothing writes it any more, so every row's value is permanently NULL. findStaleConnections (§1.4) was repointed to credential_checked_at for exactly this reason — do not resurrect a query against this column                                                                                 |
+| `target_calendar_id`    | text nullable                   | Event-write target, per connection (ADR-1021 amendment §1)                                                                                                                                                                                                                                                                                                                                  |
+| timestamps / softDelete |                                 | created_at, updated_at, deleted_at                                                                                                                                                                                                                                                                                                                                                          |
 
 Indexes and constraints — the Cronofy-era ones (cal_conn_cronofy_sub_idx, cal_conn_channel_id_idx)
 are gone, dropped by migration 0069 alongside their columns:
@@ -66,13 +66,15 @@ connections. Connect, disconnect, and reconnect are **per provider** (ADR-1021, 
 
 ⚠ `cal_conn_end_user_account_idx` is **non-unique on purpose, and this was re-examined and
 confirmed, not merely carried over, in BAL-396** (ADR-1021 amendment 18 Aug 2026 §5). Nothing in
-the vendor docs establishes that one Apiroc End User Account maps to at most one Balo expert —
-the vendor keys an account on (app, provider, email), not on Balo's `externalId`, and two Balo
-experts connecting the same Google account is routine in dev and seed data. The index's docblock
-in `schema/calendar.ts` and `invariants/calendar-connection-cardinality.test.ts` both assert this
-table declares **exactly one** unique index, so a future attempt to tighten this to unique needs
-vendor evidence first, not just a hunch. See §7's disconnect section for a place this cardinality
-still bites.
+the vendor docs establishes that one Apiroc End User Account maps to at most one Balo expert.
+Keying an account on (app, provider, email) is **inferred**, not **[live]** — the only captured
+fact is that reconnecting the same account returns the same id (§2.3, §5.4); BAL-577 is the spike
+that tests the (app, provider, email) claim directly. Two experts' live rows sharing one End User
+Account is **possible**, not routine: it needs the vendor to overwrite `externalId` on the second
+OAuth, which has never been captured. The index's docblock in `schema/calendar.ts` and
+`invariants/calendar-connection-cardinality.test.ts` both assert this table declares **exactly
+one** unique index, so a future attempt to tighten this to unique needs vendor evidence first, not
+just a hunch. See §7.1's shared-account guard for where this cardinality is handled on disconnect.
 
 ⚠ **SKILL.md's "DB Schema (Drizzle)" section is now the accurate summary, and this section is its
 detail.** Both should agree that the table has no token columns, `end_user_account_id` is
@@ -106,13 +108,13 @@ own docblock names this as its design bar, set by `sync-token-parity.test.ts`. B
 
 ```typescript
 // packages/db/src/repositories/calendar.ts — calendarRepository.upsertApirocConnection
-await db
+const [connection] = await db
   .insert(calendarConnections)
   .values({
     expertProfileId,
     provider,
     endUserAccountId,
-    providerEmail,
+    providerEmail: providerEmail ?? null,
     credentialStatus,
     deletedAt: null,
   })
@@ -124,15 +126,26 @@ await db
     set: {
       // `provider` is INTENTIONALLY absent — it is half the arbiter.
       endUserAccountId,
-      providerEmail,
+      // BAL-575 — a KNOWN email only. `providerEmail` enters the SET only when it is a
+      // non-null string; omitted or `null` leaves the stored value alone (§1.1's "never
+      // nulled" rule). The INSERT arm above stores whatever it is given, `null` included.
+      ...(typeof providerEmail === 'string' ? { providerEmail } : {}),
       credentialStatus,
       reconnectNotifiedAt: null, // clears the notify-once marker so a SECOND breakage notifies again
       credentialCheckedAt: new Date(),
       updatedAt: new Date(),
       deletedAt: null,
     },
+    // BAL-575 — THE RECONNECT REFUSAL. The DO UPDATE arm fires only when the conflicting row's
+    // STORED `end_user_account_id` already equals the incoming one; a different one is refused.
+    setWhere: eq(calendarConnections.endUserAccountId, endUserAccountId),
   })
   .returning();
+
+if (connection === undefined) {
+  return { outcome: 'refused_account_mismatch' };
+}
+return { outcome: 'persisted', connection };
 ```
 
 This is the real, shipped `calendarRepository.upsertApirocConnection` — the **only** writer that
@@ -145,31 +158,69 @@ test mocks Drizzle and only records the argument object). Only the integration s
 `isNull()` renders `"deleted_at" is null` with **no bound parameter**, so this is not the
 `reference_pg_partial_index_arbiter_param_42p10` hazard — do not "fix" it into raw `sql`.
 
+⚠⚠ **BAL-575 — RECONNECT WITH A DIFFERENT END USER ACCOUNT IS REFUSED, NOT SILENTLY REPOINTED.**
+Without `setWhere`, `onConflictDoUpdate` would repoint a live row at whatever provider account a
+reconnect or "Fix permissions" came back signed in to — Balo would stop reading the calendar the
+expert thought was still connected (a double-booking risk) and orphan the old End User Account
+at the vendor. `setWhere` closes that: the DO UPDATE arm only fires when the conflicting row's
+stored pointer already matches the incoming one, so a different account leaves the row
+untouched — every column, `updated_at` included.
+
+**The statement decides, not a read before it.** `ON CONFLICT DO UPDATE` locks the conflicting
+row and evaluates `setWhere` against its LATEST committed version, so two concurrent callbacks
+have no read-then-write window: the second one sees whatever the first just committed. An empty
+`.returning()` can therefore only mean refusal — the INSERT arm always returns its row, and an
+UPDATE that passes `setWhere` always returns the row it just updated. `setWhere`'s value is bound
+as an ordinary `$n` parameter through `eq()`; that is fine here (precedent:
+`meetingCalendarEventsRepository.recordIcsDelivery`) — the 42P10 hazard above is specifically
+about the ARBITER's `targetWhere`, which Postgres must match against the index predicate at plan
+time, not about an ordinary post-arbiter filter like this one.
+
+**The return type carries the outcome.** `upsertApirocConnection` returns the exported
+discriminated `UpsertApirocConnectionResult` —
+`{ outcome: 'persisted'; connection } | { outcome: 'refused_account_mismatch' }` — never a bare
+`CalendarConnection`. A caller may run a diagnostic pre-read alongside the write (`apps/api/src/
+services/calendar/apiroc-connection.ts`'s `persistApirocConnection` does, to detect a
+same-End-User-Account email change), but that pre-read must never gate or short-circuit the
+write; only the statement's own `setWhere` decides refusal.
+
+⚠⚠ **Do not widen `setWhere` on email equality.** The only **[live]** fact is same account ⇒ same
+id (§2.3, §5.4); whether the vendor keys an End User Account on email or on the provider's own
+account id (`providerAccountId` [stat] on the SDK's `EndUserAccount` type) is unverified. Under the
+latter, two accounts that share one address — a Microsoft personal account and a Microsoft work
+account, or a recycled Workspace address — get distinct End User Account ids with equal emails,
+and an email-equality arm would silently repoint a live row between two different mailboxes: the
+exact failure BAL-575 exists to close. Rows connected before `provider_email` was stored (§1.1)
+carry `null` and get no help from an email arm either way. The only acceptable future widening is
+a compare-and-swap on the STORED pointer, proven gone at the vendor (e.g. `endUserAccounts.get`
+answering not_found; the response for a deleted id is uncaptured — BAL-577 must establish it) —
+never on a matching email.
+
 ### 1.4 Repository surface, by class
 
 `calendarRepository` methods are classified in-file. Pick by class, never by convenience. Every
 method below is now checked against its **actual live callers** on this branch, not projected —
 "INERT" means what it says: zero callers outside tests, today.
 
-| Method                              | Class            | Live callers today                                                                                                                                                                           |
-| ----------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `findConnectionByExpertProfileId`   | legacy-single    | `routes/calendar/api.ts` (`GET /api/calendar/connection`'s single-connection `connection` shape, BAL-397 replaces it)                                                                        |
-| `findConnectionByExpertAndProvider` | provider-scoped  | `routes/calendar/api.ts` (`set-target-calendar` with an explicit `provider`), `services/calendar/apiroc-connection.ts` (`disconnectProvider`)                                                |
-| `listConnectionsByExpertProfileId`  | fan-out          | `routes/calendar/api.ts` (`GET /connection`'s `connections` array, `disconnect`'s whole-account loop, `findConnectionOwningCalendar`)                                                        |
-| `findConnectionsByEndUserAccountId` | pointer          | Still INERT — no caller until BAL-468's webhook handler resolves an inbound End User Account. Returns an array — the index is non-unique on purpose (§1.1)                                   |
-| `upsertApirocConnection`            | provider-scoped  | `services/calendar/apiroc-connection.ts` (`persistApirocConnection`, called from the OAuth callback — §3.2). The only connection writer                                                      |
-| `setCredentialStatusForProvider`    | provider-scoped  | `services/calendar/apiroc-connection.ts` (`provisionConnection`) — replaces the deleted expert-wide `updateConnectionStatus` fan-out                                                         |
-| `setCredentialStatus`               | connection-keyed | `services/calendar/credential-status.ts` (`flipToReconnectRequired`), `jobs/calendar-health-probe.ts` (recovery path)                                                                        |
-| `markCredentialChecked`             | connection-keyed | `jobs/calendar-health-probe.ts` — the probe's scan-key stamp, on EVERY attempt including a classified failure                                                                                |
-| `markReconnectNotified`             | connection-keyed | `services/calendar/credential-status.ts` — stamped after the notification publish, never before                                                                                              |
-| `updateLastSyncedAt`                | connection-keyed | No live caller. Its only production writer was the Cronofy webhook route BAL-396 deleted — see `lastSyncedAt`'s note in §1.1                                                                 |
-| `updateTargetCalendarIdForProvider` | provider-scoped  | `routes/calendar/api.ts` (`set-target-calendar`), `services/calendar/apiroc-connection.ts` (`provisionConnection`'s first-connect default)                                                   |
-| `findConnectionWithSubCalendars`    | legacy-single    | `routes/calendar/api.ts` — backs `GET /connection`'s legacy `connection` shape                                                                                                               |
-| `softDeleteConnection`              | fan-out          | `routes/calendar/api.ts` (`disconnect` with `provider` absent — the whole-account backstop, run after the per-provider loop)                                                                 |
-| `softDeleteConnectionForProvider`   | provider-scoped  | `services/calendar/apiroc-connection.ts` (`disconnectProvider`) — per-provider disconnect is now real, see §7                                                                                |
-| `findStaleConnections`              | unaffected       | `jobs/availability-cache.ts` — the 15-minute staleness cron. Repointed from `last_synced_at` to `credential_checked_at` by BAL-396's fix round (see §1.1); the old column had no writer left |
-| `listConnectionsDueForHealthCheck`  | unaffected       | `jobs/calendar-health-probe.ts` — the probe's candidate scan (§5.3)                                                                                                                          |
-| `listBusyReadTargets`               | unaffected       | `services/availability/vendor-busy.ts` — the free/busy read's connection list. Returns non-ACTIVE and unprovisioned connections too, deliberately, so the booking gate can fail closed       |
+| Method                              | Class            | Live callers today                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `findConnectionByExpertProfileId`   | legacy-single    | `routes/calendar/api.ts` (`GET /api/calendar/connection`'s single-connection `connection` shape, BAL-397 replaces it)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `findConnectionByExpertAndProvider` | provider-scoped  | `routes/calendar/api.ts` (`set-target-calendar` with an explicit `provider`), `services/calendar/apiroc-connection.ts` (`disconnectProvider`). BAL-575 added two more: `routes/calendar/auth.ts` (the connect route's `loginHint` read) and `persistApirocConnection`'s diagnostic pre-read on the OAuth callback                                                                                                                                                                                                                                                                                         |
+| `listConnectionsByExpertProfileId`  | fan-out          | `routes/calendar/api.ts` (`GET /connection`'s `connections` array, `disconnect`'s whole-account loop, `findConnectionOwningCalendar`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `findConnectionsByEndUserAccountId` | pointer          | BAL-575 — takes a required `{ excludingConnectionId }` option (a connection id or `null`), so no caller can forget the exclusion. Two callers: the OAuth callback's refusal-cleanup (`discardRefusedEndUserAccount`, §3.2) passes `null` — the just-refused account never got a row of its own to exclude — to check whether ANY live row, for ANY expert, still references it before deleting it at the vendor; `disconnectProvider`'s shared-account guard (§7.1) passes its own row id, since that row is still live when the check runs. Returns an array — the index is non-unique on purpose (§1.1) |
+| `upsertApirocConnection`            | provider-scoped  | `services/calendar/apiroc-connection.ts` (`persistApirocConnection`, called from the OAuth callback — §3.2). The only connection writer. BAL-575 — refuses a different EUA on a live row rather than repointing it (§1.3)                                                                                                                                                                                                                                                                                                                                                                                 |
+| `setCredentialStatusForProvider`    | provider-scoped  | `services/calendar/apiroc-connection.ts` (`provisionConnection`) — replaces the deleted expert-wide `updateConnectionStatus` fan-out                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `setCredentialStatus`               | connection-keyed | `services/calendar/credential-status.ts` (`flipToReconnectRequired`), `jobs/calendar-health-probe.ts` (recovery path)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `markCredentialChecked`             | connection-keyed | `jobs/calendar-health-probe.ts` — the probe's scan-key stamp, on EVERY attempt including a classified failure                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `markReconnectNotified`             | connection-keyed | `services/calendar/credential-status.ts` — stamped after the notification publish, never before                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `updateLastSyncedAt`                | connection-keyed | No live caller. Its only production writer was the Cronofy webhook route BAL-396 deleted — see `lastSyncedAt`'s note in §1.1                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `updateTargetCalendarIdForProvider` | provider-scoped  | `routes/calendar/api.ts` (`set-target-calendar`), `services/calendar/apiroc-connection.ts` (`provisionConnection`'s first-connect default)                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `findConnectionWithSubCalendars`    | legacy-single    | `routes/calendar/api.ts` — backs `GET /connection`'s legacy `connection` shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `softDeleteConnection`              | fan-out          | `routes/calendar/api.ts` (`disconnect` with `provider` absent — the whole-account backstop, run after the per-provider loop)                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `softDeleteConnectionForProvider`   | provider-scoped  | `services/calendar/apiroc-connection.ts` (`disconnectProvider`) — per-provider disconnect is now real, see §7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `findStaleConnections`              | unaffected       | `jobs/availability-cache.ts` — the 15-minute staleness cron. Repointed from `last_synced_at` to `credential_checked_at` by BAL-396's fix round (see §1.1); the old column had no writer left                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `listConnectionsDueForHealthCheck`  | unaffected       | `jobs/calendar-health-probe.ts` — the probe's candidate scan (§5.3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `listBusyReadTargets`               | unaffected       | `services/availability/vendor-busy.ts` — the free/busy read's connection list. Returns non-ACTIVE and unprovisioned connections too, deliberately, so the booking gate can fail closed                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ⚠ **The Cronofy-era fan-outs `updateConnectionStatus` (expert-wide status) and
 `updateTargetCalendarId` (expert-wide target calendar) are DELETED, not merely superseded.** They
@@ -180,7 +231,9 @@ construction.
 
 ⚠ `findConnectionsByEndUserAccountId` returning an array remains deliberate for the reason in
 §1.1: nothing establishes a vendor one-to-one guarantee, and two experts connecting the same
-Google account is routine in dev and seed data.
+Google account is possible, not routine — it would need the vendor to overwrite `externalId` on a
+second OAuth, which has never been captured. Both live callers, and the required exclusion each
+one passes, are in the table row above.
 
 ### 1.5 Tables that do NOT exist yet
 
@@ -192,6 +245,10 @@ FK `ON DELETE cascade`. Do not conflate the two: sub-calendars are the conflict-
 subscriptions are the webhook registrations. `profile_name` stores the connection's
 `providerEmail` at provisioning time (`services/calendar/apiroc-connection.ts`) — display
 metadata, not an identity field.
+
+⚠ Superseded by BAL-468: the `calendar_subscriptions` table shipped. See
+`packages/db/src/schema/calendar.ts` (FK `connection_id`; `cal_wsub_vendor_id_idx`, unique among live
+rows) and §7.1 step 2.
 
 ---
 
@@ -211,14 +268,31 @@ getOAuthUrl(process.env.APIROC_APP_ID!, toApirocProviderType(provider), {
   redirectUrl: process.env.APIROC_REDIRECT_URI!, // must be allowlisted — §2.4
   externalId: expertProfileId, // opaque to Apiroc; NOT an identity lever — §2.3
   state: signConnectState(expertProfileId, provider), // CSRF + identity — §2.2
+  // BAL-575 — forwarded ONLY when non-empty (see the truthy-guard warning below); resolved
+  // by the connect route's best-effort `resolveConnectLoginHint` helper (§2.1).
+  ...(loginHint ? { loginHint } : {}),
 });
 ```
 
-⚠ **Balo does not pass `loginHint` or `prompt` today.** Both remain valid optional SDK
-parameters **[stat]** (the account-chooser and login-prefill behaviour described below is real,
-observed vendor behaviour), but the shipped `buildApirocAuthorizeUrl` only forwards `redirectUrl`,
-`externalId`, and `state`. If a future slice wants to prefill the provider login form or force the
-account chooser, add the parameter here — it is not there today.
+⚠ **BAL-575 — Balo now passes `loginHint`; `prompt` is still never sent.**
+`POST /api/calendar/connect` (`routes/calendar/auth.ts`) resolves it through
+`resolveConnectLoginHint(request, expertProfileId, provider)`, a module-level helper that reads
+the (expert, provider)'s stored connection via `findConnectionByExpertAndProvider` and returns its
+`provider_email` (§1.1) when known, or `undefined` otherwise. The read is **best-effort and never
+throws**: it runs in its own try, separate from the `signConnectState`/`buildApirocAuthorizeUrl`
+try (§3.2), so a rejection cannot turn into a 500. On a rejection it `warn`-logs
+`apiroc_connect_login_hint_lookup_failed` (`{ expertProfileId, provider, error }` — a message
+string, no stack) and returns `undefined`, so the connect proceeds with no hint rather than
+failing. `loginHint` is forwarded to `buildApirocAuthorizeUrl` only when truthy. This is a
+**prefill, never a guard**: the signed-in party can still choose, or sign in as, a different
+account — which is
+exactly why the OAuth callback's ownership check (§3.2) and the reconnect refusal (§1.3)
+are what actually stop a reconnect from landing on the wrong account, not this parameter.
+`prompt` remains unsent — forcing the account chooser is out of scope for BAL-575, which sends
+only a prefill. Whether Google's account chooser actually pre-selects the hinted email, and
+whether Microsoft's sign-in field is actually prefilled, is **[stat]**-only until confirmed
+against the live sandbox (see BAL-575's manual-verification notes) — the SDK guarantees the
+parameter is forwarded, not that either provider visibly acts on it.
 
 The helper is pure string-building **[stat]** — it makes no network call:
 
@@ -236,16 +310,16 @@ completes. Never let `state` be derived from a possibly-empty value; `signConnec
 throws first if `INTERNAL_API_SECRET` is unset, so the shipped call site cannot reach this trap by
 accident — but a future call site building `state` some other way could.
 
-| Param               | Type [stat]                         | Balo rule                                                                                |
-| ------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------- |
-| `appId`             | positional, required                | `APIROC_APP_ID` — read (and validated) in `oauth.ts`, not `client.ts`                    |
-| `provider`          | `'GOOGLE' \| 'MICROSOFT'` uppercase | Lowercased into the path by the SDK. APPLE is not accepted here                          |
-| `redirectUrl`       | optional string                     | Always pass it; must be dashboard-allowlisted                                            |
-| `externalId`        | optional string                     | Balo's stable expert ref. Never trusted for identity — §2.3                              |
-| `loginHint`         | optional string                     | Optional email prefill — not sent by Balo's shipped call (see above)                     |
-| `prompt`            | optional string, not an enum        | `select_account` forces the account chooser **[live]** — not sent by Balo's shipped call |
-| `state`             | optional string                     | Signed, non-empty, round-trips intact on success **[live]**                              |
-| `unifiedApiBaseUrl` | optional                            | Defaults `https://api.apiroc.com`. Leave unset                                           |
+| Param               | Type [stat]                         | Balo rule                                                                                             |
+| ------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `appId`             | positional, required                | `APIROC_APP_ID` — read (and validated) in `oauth.ts`, not `client.ts`                                 |
+| `provider`          | `'GOOGLE' \| 'MICROSOFT'` uppercase | Lowercased into the path by the SDK. APPLE is not accepted here                                       |
+| `redirectUrl`       | optional string                     | Always pass it; must be dashboard-allowlisted                                                         |
+| `externalId`        | optional string                     | Balo's stable expert ref. Never trusted for identity — §2.3                                           |
+| `loginHint`         | optional string                     | BAL-575 — sent from the stored connection's `provider_email` when known; absent otherwise (see above) |
+| `prompt`            | optional string, not an enum        | `select_account` forces the account chooser **[live]** — still not sent by Balo's shipped call        |
+| `state`             | optional string                     | Signed, non-empty, round-trips intact on success **[live]**                                           |
+| `unifiedApiBaseUrl` | optional                            | Defaults `https://api.apiroc.com`. Leave unset                                                        |
 
 ⚠ **Provider casing crosses three vocabularies.** The SDK wants `'GOOGLE'`/`'MICROSOFT'`; Balo's
 DB, zod schemas, and `CALENDAR_PROVIDERS` in `services/calendar/sync-capability.ts` all use
@@ -337,9 +411,9 @@ the cookie only proves _this browser_, not _this request only_, started the flow
 as `externalId?: string | null`. Setting it to `expertProfileId` is worth doing for vendor-side
 debugging. It is **not** an identity or uniqueness lever:
 
-- Apiroc keys an End User Account on **(app, provider, email)** — reconnect returns the **same**
-  account id **[live]**, so `externalId` does not partition two Balo experts who connect the same
-  provider account.
+- Apiroc is **inferred** to key an End User Account on **(app, provider, email)** — never captured
+  directly. What IS **[live]** is that reconnect returns the **same** account id (§5.4), so
+  `externalId` does not partition two Balo experts who connect the same provider account.
 - The success callback observed in the spike carried `endUserAccountId` and `state` **[live]** —
   **`externalId` was not echoed back.** The shipped `callbackQuerySchema` in `routes/calendar/auth.ts`
   confirms this by construction: its only fields are `endUserAccountId`, `state`, `error`,
@@ -399,12 +473,15 @@ field on API responses is a `string | number | object` union and must never be r
 `apps/api/src/routes/calendar/auth.ts`. Two routes:
 
 - `POST /api/calendar/connect`, `preHandler: [requireInternalAuth]`, body
-  `{ expertProfileId: uuid, provider: 'google' | 'microsoft' }` → `{ authUrl, nonce }`. Signs
-  `state` via `signConnectState`, then **immediately re-verifies its own freshly-signed state**
-  purely to extract `nonce` — cheap, never expired, never tampered, so this is an extraction, not
-  a trust boundary. Called from the web Server Action `initiateCalendarConnectAction` (§2.2),
-  never from the browser directly. `apps/web` binds `nonce` to the per-provider CSRF cookie
-  **before** handing `authUrl` back to the browser.
+  `{ expertProfileId: uuid, provider: 'google' | 'microsoft' }` → `{ authUrl, nonce }`. Before the
+  state-signing try, `resolveConnectLoginHint` (§2.1) reads the stored connection for the
+  `loginHint` prefill — best-effort: a failed read `warn`-logs
+  `apiroc_connect_login_hint_lookup_failed` and the connect proceeds without a hint, never a 500.
+  Signs `state` via `signConnectState`, then **immediately re-verifies its own freshly-signed
+  state** purely to extract `nonce` — cheap, never expired, never tampered, so this is an
+  extraction, not a trust boundary. Called from the web Server Action
+  `initiateCalendarConnectAction` (§2.2), never from the browser directly. `apps/web` binds
+  `nonce` to the per-provider CSRF cookie **before** handing `authUrl` back to the browser.
 - `GET /auth/apiroc/callback` — **unauthenticated by necessity** (the provider redirects the
   browser here), so `state` plus the CSRF cookie carry all the trust.
 
@@ -441,17 +518,56 @@ and redirects with `calendar_error=<code>&calendar_provider=<provider>`.
    `apiroc_callback_csrf_nonce_mismatch`, `trackServer(OAUTH_FAILED, { error_code:
 'state_csrf_mismatch', ... })`, redirect with that error code. **Never a 500, and nothing is
    persisted.**
-4. Match → `persistAndRedirectConnected`: `persistApirocConnection` (the pointer upsert, §4.1) →
-   `provisionConnection` (list calendars, choose the target, set `credentialStatus`, §1.4/§5.1) →
-   `enqueueAvailabilityCacheRebuild` → `trackServer(OAUTH_COMPLETED, { provider, status:
-legacyStatus, distinct_id })` where `legacyStatus` is the plain ternary
-   `status === 'ACTIVE' ? 'connected' : 'sync_pending'` (exhaustive: `provisionConnection` only
-   ever returns those two) → redirect
-   `…&calendar_connected=true&calendar_status=<legacyStatus>&calendar_provider=<provider>`. A
-   failure **after** the connection row already exists still redirects (never a 500) with
-   `calendar_error=callback_failed&calendar_provider=<provider>` — retrying from this same
-   response would fail the now-consumed CSRF check rather than proceeding cleanly, so failing loud
-   here (with a `log.error`) matters.
+4. **The vendor-account ownership binding** (`resolveOwnedEndUserAccount`, BAL-397 + BAL-575):
+   one `endUserAccounts.get(endUserAccountId)` call, wrapped in `callApiroc`.
+   `account.externalId` must equal the HMAC-trusted `expertProfileId` — a mismatch, a missing
+   `externalId`, or a failed lookup (404/401/403/5xx/timeout) all fail CLOSED through the same
+   opaque `state_csrf_mismatch` redirect the CSRF check uses (never a distinct code, so the
+   route never becomes an existence oracle for vendor account ids — see the `rejectShape2`
+   docblock). On a match, the account's `email` is read defensively — `typeof account.email ===
+'string' ? account.email.trim() : ''`, never a bare `.trim()` — because the SDK types `email`
+   as `string` but that is a type claim, not a wire guarantee; blank, `null`, and absent all
+   become `null`. The result is carried forward as `providerEmail` — this is the **single**
+   `endUserAccounts.get` call on the happy path (§4.1); nothing downstream re-fetches it.
+5. Match → `persistAndRedirectConnected`: `persistApirocConnection({ …, providerEmail })` → a
+   diagnostic pre-read (`findConnectionByExpertAndProvider`, never gates the write — §1.3) →
+   `upsertApirocConnection` (the single statement decides, §1.3).
+   - **Refused** (`outcome: 'refused_account_mismatch'` — BAL-575): a live row already
+     points this (expert, provider) at a DIFFERENT End User Account. `rejectAccountMismatch`
+     `warn`-logs `apiroc_callback_reconnect_account_mismatch` (ids and provider only, never an
+     email), fires `trackServer(OAUTH_FAILED, { error_code: 'account_mismatch', ... })` exactly
+     once, runs the refused-account vendor cleanup (`discardRefusedEndUserAccount` —
+     best-effort and NEVER throws: it shares its live-reference rule with `disconnectProvider`
+     through the one `findConnectionsByEndUserAccountId` read (§7.1), called with
+     `{ excludingConnectionId: null }` — nothing is excluded, because the just-refused account
+     never got a `calendar_connections` row of its own to exclude. A non-empty result retains the
+     account rather than deleting it; an empty one deletes it, logging a warn on a delete failure
+     without changing the outcome), then redirects
+     `calendar_error=account_mismatch&calendar_provider=<provider>`. **Nothing downstream of the
+     refusal runs**: no `provisionConnection`, no availability rebuild, no subscription
+     reconcile, no searchability reconcile, no `OAUTH_COMPLETED`.
+   - **Persisted, same-account email drift** (`providerEmailChanged: true` — BAL-575): the
+     End User Account is unchanged, but the pre-read's stored email and the freshly-fetched
+     email are both known and differ case-insensitively. `apiroc_callback_provider_email_changed`
+     is `warn`-logged (booleans and ids only, never either email) and the connect proceeds
+     unchanged — a DB refusal cannot undo an account swap the vendor already made behind that id;
+     this is a signal for the BAL-577 spike, not an error to act on here.
+   - **Persisted, happy path**: `provisionConnection` (list calendars, choose the target, set
+     `credentialStatus`, §1.4/§5.1) → `enqueueAvailabilityCacheRebuild` → only when
+     `status === 'ACTIVE'` (a `SYNC_PENDING` connection has no sub-calendars yet, so there is
+     nothing to subscribe), `enqueueSubscriptionReconcile(connection.id, { force: true }, …)`
+     (BAL-468 §8.4/§8.6) then the searchability re-list (`reconcileAfterConnect`, its own
+     try/catch so a reconcile failure never turns a successful connect into
+     `callback_failed`) → `trackServer(OAUTH_COMPLETED, { provider, status: analyticsStatus,
+distinct_id })` where `analyticsStatus` is the plain ternary
+     `status === 'ACTIVE' ? 'connected' : 'sync_pending'` (exhaustive: `provisionConnection`
+     only ever returns those two; this legacy vocabulary is for the PostHog funnel only) →
+     redirect `…&calendar_connected=true&calendar_status=<status>&calendar_provider=<provider>`
+     — the REDIRECT carries the real `ACTIVE`/`SYNC_PENDING` value, not `analyticsStatus`; only
+     the analytics call uses the legacy words. A failure **after** the connection row already
+     exists still redirects (never a 500) with `calendar_error=callback_failed&calendar_provider=
+<provider>` — retrying from this same response would fail the now-consumed CSRF check
+     rather than proceeding cleanly, so failing loud here (with a `log.error`) matters.
 
 **Shape 3 — neither** (`request.query` fails `callbackQuerySchema`, or parses to an object with
 none of `error`/`endUserAccountId`): `warn`-log, clear every provider's cookie (no trustworthy
@@ -696,8 +812,9 @@ Test coverage: `jobs/calendar-health-probe.test.ts` drives `runCalendarHealthPro
 ### 5.4 Reconnect ORDERING — reconnect FIRST
 
 **reconnect → delete stale subscriptions → re-create.** Never delete first. This remains
-**BAL-468's** problem in practice — `calendar_subscriptions` does not exist yet (§1.5), so there is
-no subscription to delete or re-create today — but the vendor evidence and the ordering rule are
+**BAL-468's** problem in practice — `calendar_subscriptions` does not exist yet (§1.5; superseded
+by BAL-468 — the table shipped), so there is no subscription to delete or re-create today — but
+the vendor evidence and the ordering rule are
 unchanged and still the reason a future subscription-lifecycle implementation must not delete
 before reconnecting:
 
@@ -708,8 +825,9 @@ procedure is therefore **unexecutable**: at cleanup time the delete is already f
 
 Reconnect-first works because **`endUserAccountId` is stable across a revoke/reconnect cycle**
 **[live]**: the callback returned the same id, the account's `createdAt` was unchanged and
-`updatedAt` moved. Apiroc keys the account on (app, provider, email), so reconnect is an UPDATE on
-the vendor side, not an INSERT, and old subscription records would stay addressable afterwards.
+`updatedAt` moved. Apiroc is **inferred** to key the account on (app, provider, email) — never
+captured directly, only the same-account ⇒ same-id result above — so reconnect is an UPDATE on the
+vendor side, not an INSERT, and old subscription records would stay addressable afterwards.
 
 ⚠⚠ **The vendor pointer is stable; the Balo row id is not — and this is now proven, shipped
 behaviour, not a hazard to design around.** `upsertApirocConnection`'s ON CONFLICT arbiter
@@ -727,6 +845,15 @@ which exists specifically because that arm is a re-provision of an existing row,
 ⚠ Cleanup must be **verified, not best-effort**, once BAL-468 ships. A stale subscription keeps
 delivering duplicate webhooks for up to 7 days (BAL-468 §4). Whether subscriptions survive a
 reconnect at all is **still untested** — SKILL.md → "Still unverified."
+
+⚠⚠ **BAL-575 — the UPDATE arm above only fires when the incoming End User Account matches the
+STORED one.** A reconnect (or Fix permissions) that comes back signed in to a different account
+never reaches this section's UPDATE-vs-INSERT split at all: `upsertApirocConnection`'s `setWhere`
+refuses it before either arm's effects happen, and the row is left exactly as it was (§1.3). There
+is no partial reconnect-ordering concern to reason about for that case, because nothing about the
+connection changed. Switching accounts is not a reconnect — it needs **Disconnect (§7), then Add
+calendar**, which goes through the INSERT arm as a genuinely fresh connection, the same as any
+reconnect-after-disconnect above.
 
 ---
 
@@ -800,34 +927,65 @@ path).
 `disconnectProvider` (`services/calendar/apiroc-connection.ts`), in order:
 
 1. Look up the (expert, provider) connection via `findConnectionByExpertAndProvider`. No row → no-op.
-2. **Best-effort vendor deletion, ordered first**: `callApiroc('endUserAccounts.delete', () =>
-client.endUserAccounts.delete(connection.endUserAccountId))`, wrapped in try/catch — a failure
-   `log.warn`s (`apiroc_disconnect_vendor_delete_failed`) and continues. If the vendor call fails,
-   Balo's side is still removed; leaving a row the expert asked to disconnect is the worse failure.
-3. `deleteSubCalendarsByConnectionId(connection.id)` — **hard delete**, scoped to **this**
+2. **Per-subscription vendor deletes, best-effort and unguarded** —
+   `deleteVendorSubscriptionsBestEffort` loops `calendarSubscriptionsRepository.listLiveByConnectionId(connection.id)`
+   and calls `calendarSubscriptions.delete` for each row. No shared-account check here: each
+   subscription's `webhookSubscriptionId` belongs to exactly one Balo row (FK `connection_id`;
+   `cal_wsub_vendor_id_idx` makes `webhook_subscription_id` unique among live rows —
+   `schema/calendar.ts`), so nothing else can be depending on it.
+3. **The shared-account check, then best-effort vendor account deletion** —
+   `deleteEndUserAccountBestEffort` (BAL-575). One try wraps the whole step, so a failed read and
+   a failed delete land in the same `apiroc_disconnect_vendor_delete_failed` warn and either way
+   nothing more is deleted:
+   - `findConnectionsByEndUserAccountId(connection.endUserAccountId, { excludingConnectionId:
+connection.id })` — **excludes this row's own id**, because it is still live when the check
+     runs (this row soft-deletes only in step 6, below). A non-empty result means another live
+     row — another expert's, in the inferred shared-callback case (§1.1) — still references this
+     End User Account: `log.info` `apiroc_disconnect_shared_account_retained`
+     (`{ connectionId, expertProfileId, referencingConnections }`) and return without deleting.
+   - Empty → `callApiroc('endUserAccounts.delete', () =>
+client.endUserAccounts.delete(connection.endUserAccountId))`, the existing best-effort vendor
+     call. If it fails, Balo's side is still removed; leaving a row the expert asked to disconnect
+     is the worse failure.
+4. `calendarSubscriptionsRepository.softDeleteByConnectionId(connection.id)` — Balo's own
+   subscription rows, soft-deleted regardless of whether their vendor-side deletes in step 2
+   succeeded.
+5. `deleteSubCalendarsByConnectionId(connection.id)` — **hard delete**, scoped to **this**
    connection only (not the expert-wide fan-out the Cronofy path used to run).
-4. `softDeleteConnectionForProvider(expertProfileId, provider)` — soft-deletes **only** this
+6. `softDeleteConnectionForProvider(expertProfileId, provider)` — soft-deletes **only** this
    provider's row.
 
-There is no null guard on `endUserAccountId` here — migration `0069` made the column `NOT NULL`,
-so every connection this function can find already carries a pointer and the vendor call always
-runs.
+No null guard on `endUserAccountId`: migration `0069` made it `NOT NULL`, so the shared-account
+check always has a pointer to look up. The vendor account delete runs only when that check finds
+no other live row and the read succeeded.
 
-⚠⚠ **SUSPECTED GAP — see the report for escalation.** `disconnectProvider`'s vendor-side
-`endUserAccounts.delete()` call does not check `findConnectionsByEndUserAccountId` for **other**
-Balo `calendar_connections` rows sharing the same `endUserAccountId` before deleting the vendor
-account. §1.1 documents that this is a routine, expected situation (two Balo experts connecting
-the same Google account, in dev/seed data and in principle in production) precisely because
-`cal_conn_end_user_account_idx` is non-unique. If two experts ever do share one vendor account and
-one of them disconnects, the vendor-side delete would remove the account the **other** expert's
-still-live row still points to — silently, since the vendor call is best-effort and any failure
-there is merely logged, but a **success** here removes an account another live row depends on with
-no cleanup of that row at all. No test in `apiroc-connection.test.ts` exercises this scenario.
+**The shared-account guard, as built (BAL-575).** Step 3 closes the gap this section used to
+flag: `disconnectProvider`'s vendor-side `endUserAccounts.delete()` no longer runs
+unconditionally — it first asks, excluding its own row, whether any other live
+`calendar_connections` row still references this End User Account, and retains the vendor account
+rather than deleting it when one does. **Self-exclusion is mandatory**: the disconnecting row is
+itself still live at the moment the check runs, so a query that did not exclude it would always
+find at least that one row and never delete anything. The check and the vendor delete are **not
+atomic** — another expert's connect can land on this same End User Account between the read and
+the delete, and no DB lock can span a vendor HTTP call — so the guard narrows the window rather
+than closing it; this is accepted, not a residual bug. Whether the callback can actually produce
+two experts sharing one End User Account at all is itself **inferred**, not **[live]** (§1.1): it
+needs the vendor to overwrite `externalId` on a second OAuth, which has never been captured. If it
+does happen and a retained account keeps the _disconnecting_ expert's `externalId`, that is
+harmless: under the same overwrite premise, the other expert's own Reconnect rewrites
+`externalId` to their id before the ownership check (`resolveOwnedEndUserAccount`, §3.2) reads it.
 
-**Not built, and no longer an open design question — subscription cleanup**: once BAL-468 ships
-`calendar_subscriptions`, per-provider disconnect must delete that connection's webhook
-subscriptions **before** soft-deleting the row, verified rather than best-effort. There is no such
-step today because there is no such table today (§1.5).
+**The residual case this guard does not cover.** An End User Account deleted **outside** Balo —
+at the vendor dashboard, by vendor-side cleanup, or a dev-only row orphaned before this guard
+shipped — still leaves a live `calendar_connections` row whose `end_user_account_id` no longer
+exists at the vendor. A same-account Reconnect or Fix permissions against that row is **refused**
+(`upsertApirocConnection`'s `setWhere`, §1.3), because the freshly-returned account id can never
+equal a stored id that is gone. Recovery is **Disconnect, then Add calendar** — Disconnect
+soft-deletes the dead row (its vendor call no-ops or fails harmlessly, since there is nothing left
+to delete), and Add calendar goes through the INSERT arm as a genuinely fresh connection. The
+generic "different account" toast copy is inaccurate for this specific case; a dead-pointer
+self-repair that would detect and recover it automatically is deferred pending BAL-577's evidence
+(§1.3).
 
 ---
 
@@ -868,10 +1026,9 @@ step today because there is no such table today (§1.5).
 - [ ] **Every SDK call goes through `callApiroc('operation', () => …)`**, one call per wrapper.
       Never consume the SDK's thrown error directly; never branch on the wire `error` field or
       `error.constructor.name`.
-- [ ] **A per-provider disconnect that calls vendor deletion should consider whether the
-      `endUserAccountId` is shared with another live Balo connection first** — the shipped
-      `disconnectProvider` does not (§7.1); do not copy that gap into new code without at least
-      flagging it the way this file now does.
+- [ ] **A per-provider disconnect that calls vendor deletion reuses
+      `findConnectionsByEndUserAccountId` with the row's own id excluded, as `disconnectProvider`
+      does (§7.1)** — never a bare unconditional vendor delete.
 - [ ] **Reconnect copy names the provider-side revoke step** and is gender-neutral, warm, and
       never absence-framed.
 - [ ] **Tests:** any new file in `packages/db/src/repositories/` needs an

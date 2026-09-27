@@ -6,6 +6,7 @@ const {
   mockReplaceSubCalendars,
   mockUpdateTargetCalendarIdForProvider,
   mockFindConnectionByExpertAndProvider,
+  mockFindConnectionsByEndUserAccountId,
   mockFindSubCalendarsByConnectionId,
   mockDeleteSubCalendarsByConnectionId,
   mockSoftDeleteConnectionForProvider,
@@ -22,6 +23,7 @@ const {
   mockReplaceSubCalendars: vi.fn(),
   mockUpdateTargetCalendarIdForProvider: vi.fn(),
   mockFindConnectionByExpertAndProvider: vi.fn(),
+  mockFindConnectionsByEndUserAccountId: vi.fn(),
   mockFindSubCalendarsByConnectionId: vi.fn(),
   mockDeleteSubCalendarsByConnectionId: vi.fn(),
   mockSoftDeleteConnectionForProvider: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock('@balo/db', () => ({
     replaceSubCalendars: mockReplaceSubCalendars,
     updateTargetCalendarIdForProvider: mockUpdateTargetCalendarIdForProvider,
     findConnectionByExpertAndProvider: mockFindConnectionByExpertAndProvider,
+    findConnectionsByEndUserAccountId: mockFindConnectionsByEndUserAccountId,
     findSubCalendarsByConnectionId: mockFindSubCalendarsByConnectionId,
     deleteSubCalendarsByConnectionId: mockDeleteSubCalendarsByConnectionId,
     softDeleteConnectionForProvider: mockSoftDeleteConnectionForProvider,
@@ -106,21 +109,154 @@ function buildConnection(overrides: Partial<CalendarConnection> = {}): CalendarC
 }
 
 describe('persistApirocConnection', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(undefined);
+    mockUpsertApirocConnection.mockResolvedValue({
+      outcome: 'persisted',
+      connection: buildConnection(),
+    });
+  });
 
-  it('delegates to calendarRepository.upsertApirocConnection with no token fields', async () => {
-    mockUpsertApirocConnection.mockResolvedValue(buildConnection());
-    const result = await persistApirocConnection({
+  it('delegates to calendarRepository.upsertApirocConnection, including providerEmail', async () => {
+    await persistApirocConnection({
       expertProfileId: 'expert-1',
       provider: 'exp-provider-a',
       endUserAccountId: 'eua-1',
+      providerEmail: 'dana@example.com',
     });
     expect(mockUpsertApirocConnection).toHaveBeenCalledWith({
       expertProfileId: 'expert-1',
       provider: 'exp-provider-a',
       endUserAccountId: 'eua-1',
+      providerEmail: 'dana@example.com',
     });
-    expect(result.id).toBe('conn-1');
+  });
+
+  it('returns the persisted connection with providerEmailChanged when there was no prior row', async () => {
+    const result = await persistApirocConnection({
+      expertProfileId: 'expert-1',
+      provider: 'exp-provider-a',
+      endUserAccountId: 'eua-1',
+      providerEmail: 'dana@example.com',
+    });
+
+    expect(result).toEqual({
+      outcome: 'persisted',
+      connection: buildConnection(),
+      providerEmailChanged: false,
+    });
+  });
+
+  it('passes a refused result straight through, without throwing or writing a second time', async () => {
+    mockUpsertApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+
+    const result = await persistApirocConnection({
+      expertProfileId: 'expert-1',
+      provider: 'exp-provider-a',
+      endUserAccountId: 'eua-1',
+      providerEmail: 'dana@example.com',
+    });
+
+    expect(result).toEqual({ outcome: 'refused_account_mismatch' });
+    expect(mockUpsertApirocConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it('the pre-read never gates: a pre-read showing a DIFFERENT stored EUA still calls the upsert with the incoming one', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(
+      buildConnection({ endUserAccountId: 'eua-OLD', providerEmail: 'old@example.com' })
+    );
+
+    await persistApirocConnection({
+      expertProfileId: 'expert-1',
+      provider: 'exp-provider-a',
+      endUserAccountId: 'eua-NEW',
+      providerEmail: 'new@example.com',
+    });
+
+    expect(mockUpsertApirocConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ endUserAccountId: 'eua-NEW', providerEmail: 'new@example.com' })
+    );
+  });
+
+  describe('providerEmailChanged', () => {
+    const cases: Array<{
+      label: string;
+      stored: Partial<CalendarConnection>;
+      incoming: string | null;
+      expected: boolean;
+    }> = [
+      {
+        label: 'true — same EUA, differing emails',
+        stored: { endUserAccountId: 'eua-1', providerEmail: 'dana@example.com' },
+        incoming: 'nova@example.com',
+        expected: true,
+      },
+      {
+        label: 'false — same EUA, a case-only difference',
+        stored: { endUserAccountId: 'eua-1', providerEmail: 'dana@example.com' },
+        incoming: 'DANA@EXAMPLE.COM',
+        expected: false,
+      },
+      {
+        label: 'false — same EUA, null stored email',
+        stored: { endUserAccountId: 'eua-1', providerEmail: null },
+        incoming: 'dana@example.com',
+        expected: false,
+      },
+      {
+        label: 'false — same EUA, null incoming email',
+        stored: { endUserAccountId: 'eua-1', providerEmail: 'dana@example.com' },
+        incoming: null,
+        expected: false,
+      },
+      {
+        label: 'false — a different stored EUA',
+        stored: { endUserAccountId: 'eua-OLD', providerEmail: 'dana@example.com' },
+        incoming: 'nova@example.com',
+        expected: false,
+      },
+    ];
+
+    it.each(cases)('$label', async ({ stored, incoming, expected }) => {
+      mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection(stored));
+      mockUpsertApirocConnection.mockResolvedValue({
+        outcome: 'persisted',
+        connection: buildConnection({ endUserAccountId: 'eua-1', providerEmail: incoming }),
+      });
+
+      const result = await persistApirocConnection({
+        expertProfileId: 'expert-1',
+        provider: 'exp-provider-a',
+        endUserAccountId: 'eua-1',
+        providerEmail: incoming,
+      });
+
+      expect(result.outcome).toBe('persisted');
+      if (result.outcome === 'persisted') {
+        expect(result.providerEmailChanged).toBe(expected);
+      }
+    });
+
+    it('false — no prior row', async () => {
+      mockFindConnectionByExpertAndProvider.mockResolvedValue(undefined);
+      mockUpsertApirocConnection.mockResolvedValue({
+        outcome: 'persisted',
+        connection: buildConnection({ providerEmail: 'dana@example.com' }),
+      });
+
+      const result = await persistApirocConnection({
+        expertProfileId: 'expert-1',
+        provider: 'exp-provider-a',
+        endUserAccountId: 'eua-1',
+        providerEmail: 'dana@example.com',
+      });
+
+      expect(result.outcome).toBe('persisted');
+      if (result.outcome === 'persisted') {
+        expect(result.providerEmailChanged).toBe(false);
+      }
+    });
   });
 });
 
@@ -386,6 +522,7 @@ describe('disconnectProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListLiveByConnectionId.mockResolvedValue([]);
+    mockFindConnectionsByEndUserAccountId.mockResolvedValue([]);
   });
 
   it('returns silently when no connection exists for this (expert, provider)', async () => {
@@ -395,14 +532,18 @@ describe('disconnectProvider', () => {
     expect(mockDeleteSubCalendarsByConnectionId).not.toHaveBeenCalled();
     expect(mockSoftDeleteConnectionForProvider).not.toHaveBeenCalled();
     expect(mockListLiveByConnectionId).not.toHaveBeenCalled();
+    expect(mockFindConnectionsByEndUserAccountId).not.toHaveBeenCalled();
   });
 
-  it('deletes the vendor account, sub-calendars, then soft-deletes, in order', async () => {
+  it('unshared: checks the reference read excluding its own row id, then deletes the vendor account, sub-calendars, and soft-deletes, in order', async () => {
     mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
     mockEndUserAccountsDelete.mockResolvedValue({ success: true });
 
     await disconnectProvider('expert-1', 'exp-provider-a');
 
+    expect(mockFindConnectionsByEndUserAccountId).toHaveBeenCalledWith('eua-1', {
+      excludingConnectionId: 'conn-1',
+    });
     expect(mockEndUserAccountsDelete).toHaveBeenCalledWith('eua-1');
     expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
     expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
@@ -416,12 +557,62 @@ describe('disconnectProvider', () => {
 
     expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
     expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
-    expect(mockLog.warn).toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      {
+        connectionId: 'conn-1',
+        expertProfileId: 'expert-1',
+        stage: 'vendor_delete',
+        error: 'vendor 500',
+      },
+      'apiroc_disconnect_vendor_delete_failed'
+    );
+  });
+
+  it('shared: a live row on another connection still referencing the account is retained, not deleted, and Balo-side teardown still runs', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockFindConnectionsByEndUserAccountId.mockResolvedValue([{ id: 'other-conn' }]);
+    mockListLiveByConnectionId.mockResolvedValue([
+      { id: 'row-1', webhookSubscriptionId: 'wsub-1' },
+    ]);
+    mockCalendarSubscriptionsDelete.mockResolvedValue({ success: true });
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+    expect(mockLog.info).toHaveBeenCalledWith(
+      { connectionId: 'conn-1', expertProfileId: 'expert-1', referencingConnections: 1 },
+      'apiroc_disconnect_shared_account_retained'
+    );
+    expect(mockCalendarSubscriptionsDelete).toHaveBeenCalledWith('eua-1', 'wsub-1');
+    expect(mockSoftDeleteByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
+  });
+
+  it('a failed reference read is best-effort: warns, deletes nothing at the vendor, and Balo-side teardown still runs', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockFindConnectionsByEndUserAccountId.mockRejectedValue(new Error('connection terminated'));
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      {
+        connectionId: 'conn-1',
+        expertProfileId: 'expert-1',
+        stage: 'reference_read',
+        error: 'connection terminated',
+      },
+      'apiroc_disconnect_vendor_delete_failed'
+    );
+    expect(mockSoftDeleteByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockDeleteSubCalendarsByConnectionId).toHaveBeenCalledWith('conn-1');
+    expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
   });
 
   // ── BAL-468 §10 — subscription teardown ──────────────────────────────────────────────────
 
-  it('⚠ deletes every live subscription at the vendor BEFORE the End User Account delete', async () => {
+  it('⚠ orders subscription deletes, the shared-account reference read, the vendor account delete, then the Balo-side soft-deletes', async () => {
     const order: string[] = [];
     mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
     mockListLiveByConnectionId.mockResolvedValue([
@@ -432,16 +623,33 @@ describe('disconnectProvider', () => {
       order.push('subscription-delete');
       return { success: true };
     });
+    mockFindConnectionsByEndUserAccountId.mockImplementation(async () => {
+      order.push('reference-read');
+      return [];
+    });
     mockEndUserAccountsDelete.mockImplementation(async () => {
       order.push('account-delete');
       return { success: true };
+    });
+    mockSoftDeleteByConnectionId.mockImplementation(async () => {
+      order.push('subscription-soft-delete');
+    });
+    mockSoftDeleteConnectionForProvider.mockImplementation(async () => {
+      order.push('connection-soft-delete');
     });
 
     await disconnectProvider('expert-1', 'exp-provider-a');
 
     expect(mockCalendarSubscriptionsDelete).toHaveBeenCalledWith('eua-1', 'wsub-1');
     expect(mockCalendarSubscriptionsDelete).toHaveBeenCalledWith('eua-1', 'wsub-2');
-    expect(order).toEqual(['subscription-delete', 'subscription-delete', 'account-delete']);
+    expect(order).toEqual([
+      'subscription-delete',
+      'subscription-delete',
+      'reference-read',
+      'account-delete',
+      'subscription-soft-delete',
+      'connection-soft-delete',
+    ]);
   });
 
   it('a failed per-subscription vendor delete is best-effort and does not abort teardown', async () => {

@@ -99,8 +99,9 @@ describe('CalendarConnectionCard', () => {
     expect(screen.getByText(words, { exact: false })).toBeInTheDocument();
   });
 
-  // `providerEmail` is not persisted yet (BAL-575) and `lastSyncedAt` is never written, so this
-  // is what every connected row receives today.
+  // `providerEmail` is persisted on connect/reconnect since BAL-575, but rows connected earlier
+  // keep null until they reconnect, and `lastSyncedAt` is never written — so the null fixture
+  // still models real data.
   it('never reads as pending or as an offer under a Connected pill when email and sync are unknown', () => {
     renderRow(
       'connected',

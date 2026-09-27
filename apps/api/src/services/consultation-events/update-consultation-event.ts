@@ -3,8 +3,9 @@ import { getApirocClient, callApiroc } from '../../lib/apiroc/index.js';
 export interface UpdateConsultationEventInput {
   readonly meetingId: string;
   /**
-   * Caller-supplied, exactly as `deleteConsultationEvent` does — `calendarRepository` exposes
-   * no "get connection by id" read.
+   * Caller-supplied, exactly as `deleteConsultationEvent` does — the caller already holds the
+   * connection its own resolution read looked up, so it hands the End User Account straight
+   * through rather than this function re-deriving it.
    */
   readonly endUserAccountId: string;
   /** The STORED calendar, never the expert's current `target_calendar_id`. */

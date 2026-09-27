@@ -5,7 +5,7 @@ import { db } from '../client';
 import { apirocWebhookEvents } from '../schema';
 import { expertDraftFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
-import { calendarRepository } from './calendar';
+import { seedApirocConnection } from '../test/helpers/seed-apiroc-connection';
 import { calendarSubscriptionsRepository } from './calendar-subscriptions';
 import { apirocWebhookEventsRepository } from './apiroc-webhook-events';
 
@@ -31,7 +31,7 @@ function svixId(): string {
 /** Seed a live subscription and return its id — the FK target every marker needs. */
 async function seedSubscriptionId(): Promise<string> {
   const expert = await expertDraftFactory();
-  const connection = await calendarRepository.upsertApirocConnection({
+  const connection = await seedApirocConnection({
     expertProfileId: expert.id,
     provider: 'google',
     endUserAccountId: `eua_${randomUUID()}`,

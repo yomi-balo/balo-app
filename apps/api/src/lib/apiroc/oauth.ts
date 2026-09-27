@@ -40,6 +40,18 @@ export interface BuildApirocAuthorizeUrlParams {
    * anything other than the expert profile id here and every connect will fail closed.
    */
   readonly externalId: string;
+  /**
+   * BAL-575 — an optional email prefill, forwarded to the vendor only when non-empty. Google
+   * pre-selects the matching account in its chooser; Microsoft prefills the sign-in field — the
+   * SDK forwards the parameter when present [stat], but whether either provider visibly acts on
+   * it is unverified against the live sandbox (apiroc skill). This is a convenience, not a
+   * guard: the signed-in party can still choose or sign in as a different account. What actually
+   * stops a reconnect from landing on the wrong one is `calendarRepository.upsertApirocConnection`'s
+   * `setWhere` refusal on a live row's `end_user_account_id` — NOT the ownership check (which a
+   * different account the same expert signs into still passes, since Balo's own `externalId`
+   * travels with every account it creates) and NOT this hint.
+   */
+  readonly loginHint?: string;
 }
 
 /**
@@ -62,5 +74,8 @@ export function buildApirocAuthorizeUrl(params: BuildApirocAuthorizeUrlParams): 
     redirectUrl,
     externalId: params.externalId,
     state: params.state,
+    // BAL-575 — never `prompt`: forcing the account chooser is out of scope; only a prefill
+    // is sent.
+    ...(params.loginHint ? { loginHint: params.loginHint } : {}),
   });
 }

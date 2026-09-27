@@ -405,13 +405,16 @@ describe('BAL-396 §9.4 — the booking gate fails CLOSED on an unreadable calen
 
   it('an ACTIVE connection provisioned with every sub-calendar conflict-check OFF is READABLE and contributes nothing — the expert’s explicit choice, not a failure', async () => {
     const expert = await seedBookableExpert();
-    const connection = await calendarRepository.upsertApirocConnection({
+    const result = await calendarRepository.upsertApirocConnection({
       expertProfileId: expert.expertProfileId,
       provider: 'google',
       endUserAccountId: `eua_${randomUUID()}`,
       credentialStatus: 'ACTIVE',
     });
-    await calendarRepository.replaceSubCalendars(connection.id, [
+    if (result.outcome !== 'persisted') {
+      throw new Error('expected a fresh connection to persist, got refused_account_mismatch');
+    }
+    await calendarRepository.replaceSubCalendars(result.connection.id, [
       {
         calendarId: 'cal-primary',
         name: 'Primary',

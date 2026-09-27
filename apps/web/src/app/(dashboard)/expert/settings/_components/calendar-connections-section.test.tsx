@@ -113,6 +113,7 @@ vi.mock('./calendar-target-calendar-panel', () => ({
 
 import {
   CalendarConnectionsSection,
+  accountMismatchMessage,
   buildAddMenuOptions,
   buildCalendarRows,
   mergeConnectionsByProvider,
@@ -507,6 +508,48 @@ describe('CalendarConnectionsSection', () => {
     });
     expect(await screen.findByText('yomi@gmail.com')).toBeInTheDocument();
     expect(screen.getByText('Connected')).toBeInTheDocument();
+  });
+
+  // BAL-575 — a refused reconnect/fix-permissions leaves the live row alone and names it in the
+  // toast, rather than marking the slot attempt_failed the way a generic callback failure would.
+  it('shows the known-email toast for calendar_error=account_mismatch when the row has a providerEmail', async () => {
+    mockSearchParams = new URLSearchParams(
+      'calendar_error=account_mismatch&calendar_provider=google'
+    );
+    mockGetConnections.mockResolvedValue({
+      ok: true,
+      connections: [makeConnection({ providerEmail: 'dana@acme.com' })],
+    });
+    render(<CalendarConnectionsSection />);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        'You signed in with a different account, so Google Calendar is still connected to dana@acme.com — nothing changed. To switch accounts, disconnect Google Calendar first, then choose Add calendar.',
+        { duration: 10000 }
+      );
+    });
+    expect(toast.error).not.toHaveBeenCalledWith("That sign-in didn't finish — nothing changed.");
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+  });
+
+  it('shows the generic toast for calendar_error=account_mismatch when the row has no providerEmail', async () => {
+    mockSearchParams = new URLSearchParams(
+      'calendar_error=account_mismatch&calendar_provider=google'
+    );
+    mockGetConnections.mockResolvedValue({
+      ok: true,
+      connections: [makeConnection({ providerEmail: null })],
+    });
+    render(<CalendarConnectionsSection />);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        'You signed in with a different account from the one already connected, so nothing changed. To switch accounts, disconnect Google Calendar first, then choose Add calendar.',
+        { duration: 10000 }
+      );
+    });
+    expect(toast.error).not.toHaveBeenCalledWith("That sign-in didn't finish — nothing changed.");
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
   });
 
   // BAL-396 fix round, Finding 2 — pinned regression.
@@ -1047,6 +1090,20 @@ describe('CalendarConnectionsSection', () => {
 
     it('no transient claims nothing', () => {
       expect(occupiesSlot(undefined)).toBe(false);
+    });
+  });
+
+  describe('accountMismatchMessage', () => {
+    it('names the connected account and provider when the email is known', () => {
+      expect(accountMismatchMessage('google', 'dana@acme.com')).toBe(
+        'You signed in with a different account, so Google Calendar is still connected to dana@acme.com — nothing changed. To switch accounts, disconnect Google Calendar first, then choose Add calendar.'
+      );
+    });
+
+    it('falls back to generic wording, naming only the provider, when the email is unknown', () => {
+      expect(accountMismatchMessage('microsoft', null)).toBe(
+        'You signed in with a different account from the one already connected, so nothing changed. To switch accounts, disconnect Microsoft Outlook first, then choose Add calendar.'
+      );
     });
   });
 

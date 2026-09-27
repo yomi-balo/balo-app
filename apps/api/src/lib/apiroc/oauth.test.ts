@@ -36,6 +36,28 @@ describe('buildApirocAuthorizeUrl', () => {
     expect(url).toContain('state=signed-state-value');
   });
 
+  // BAL-575 — the connect route prefills the vendor login/chooser with the stored email.
+  it('carries loginHint=<encoded email> when one is given', () => {
+    const url = buildApirocAuthorizeUrl({
+      provider: 'google',
+      state: 'signed-state-value',
+      externalId: 'expert-profile-1',
+      loginHint: 'dana@example.com',
+    });
+
+    expect(url).toContain(`loginHint=${encodeURIComponent('dana@example.com')}`);
+  });
+
+  it('carries no loginHint param when omitted', () => {
+    const url = buildApirocAuthorizeUrl({
+      provider: 'google',
+      state: 'signed-state-value',
+      externalId: 'expert-profile-1',
+    });
+
+    expect(url).not.toContain('loginHint');
+  });
+
   it('throws ApirocConfigError when APIROC_APP_ID is missing', () => {
     delete process.env.APIROC_APP_ID;
     expect(() =>

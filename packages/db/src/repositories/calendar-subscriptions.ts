@@ -119,8 +119,8 @@ export const calendarSubscriptionsRepository = {
    *
    * ⚠⚠ USED ONLY BY THE ORPHAN RULE, AND ITS GLOBAL SCOPE IS THE WHOLE POINT.
    * `cal_conn_end_user_account_idx` is deliberately NON-unique — two Balo experts connecting
-   * the same Google account is routine in dev and seed data, and a revoke → reconnect cycle
-   * returns the SAME `endUserAccountId` — so `calendarSubscriptions.list(eua)` returns
+   * the same Google account is possible (inferred, not captured — BAL-577 checks it), and a
+   * revoke → reconnect cycle returns the SAME `endUserAccountId` — so `calendarSubscriptions.list(eua)` returns
    * subscriptions belonging to OTHER Balo connections. A per-connection orphan check would
    * therefore delete a healthy sibling expert's subscription on every sweep, silently killing
    * their change push. Scoping this read to one connection re-introduces exactly that bug.

@@ -5,7 +5,7 @@ import { db } from '../client';
 import { calendarConnections, meetingCalendarEvents, meetings } from '../schema';
 import { expertDraftFactory, meetingFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
-import { calendarRepository } from './calendar';
+import { seedApirocConnection } from '../test/helpers/seed-apiroc-connection';
 import {
   meetingCalendarEventsRepository,
   type RecordProviderEventInput,
@@ -57,7 +57,7 @@ interface Seeded {
 async function seedMeetingAndConnection(provider = 'google'): Promise<Seeded> {
   const { meeting } = await meetingFactory();
   const expert = await expertDraftFactory();
-  const connection = await calendarRepository.upsertApirocConnection({
+  const connection = await seedApirocConnection({
     expertProfileId: expert.id,
     provider,
     endUserAccountId: `eua_${provider}_${expert.id.slice(0, 8)}`,

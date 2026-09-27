@@ -150,7 +150,10 @@ async function deleteVendorEventBestEffort(
   let endUserAccountId: string;
   try {
     // ⚠ THE SAME RESOLUTION `jobs/meeting-calendar-amend.ts` uses, and for the reason its comment
-    // gives: `calendarRepository` exposes NO "get connection by id" read.
+    // gives: `calendarRepository.findConnectionById` exists (BAL-468), but this path deliberately
+    // keeps the expert-scoped `listConnectionsByExpertProfileId` + stored-id match instead —
+    // that is what proves the connection belongs to THIS meeting's expert, a scoping
+    // `findConnectionById` drops.
     const connections = await calendarRepository.listConnectionsByExpertProfileId(expertProfileId);
     const connection = connections.find((candidate) => candidate.id === row.connectionId);
     if (connection === undefined) {

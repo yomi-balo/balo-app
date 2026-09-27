@@ -7,9 +7,7 @@ export interface DeleteConsultationEventInput {
    * The Apiroc End User Account that owns the stored event. Caller-supplied rather than
    * re-derived from `meeting_calendar_events.connection_id`: the caller (BAL-400's cancel
    * flow) already holds the `CalendarConnection` it used to resolve the calendar in the
-   * first place, and `calendarRepository` exposes no "get connection by id" read — every
-   * sanctioned read is keyed by (expert, provider) or by End User Account, never by the bare
-   * connection id (`packages/db/src/repositories/calendar.ts`).
+   * first place, so this function has no reason to look it up a second time.
    */
   readonly endUserAccountId: string;
 }

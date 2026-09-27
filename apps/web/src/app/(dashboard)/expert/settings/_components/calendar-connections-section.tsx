@@ -187,6 +187,24 @@ export function buildAddMenuOptions(rows: readonly CalendarRowModel[]): Calendar
 }
 
 /**
+ * BAL-575 copy for `calendar_error=account_mismatch` — the callback refused to repoint a
+ * live connection at a different vendor account, so nothing changed. Names the connected
+ * account when its email is known (every row persisted since BAL-575); falls back to generic
+ * wording for a row that has never reconnected since (`providerEmail` is never backfilled).
+ * Names the way out: Disconnect, then Add calendar.
+ */
+export function accountMismatchMessage(
+  provider: CalendarProvider,
+  providerEmail: string | null
+): string {
+  const label = PROVIDER_META[provider].label;
+  if (providerEmail) {
+    return `You signed in with a different account, so ${label} is still connected to ${providerEmail} — nothing changed. To switch accounts, disconnect ${label} first, then choose Add calendar.`;
+  }
+  return `You signed in with a different account from the one already connected, so nothing changed. To switch accounts, disconnect ${label} first, then choose Add calendar.`;
+}
+
+/**
  * BAL-397 — replaces `CalendarTab`. Container: owns the fetch, callback-param consumption,
  * transient per-provider state, and every mutation handler. See plan §3–§6 for the full design.
  */
@@ -573,12 +591,32 @@ export function CalendarConnectionsSection(): React.JSX.Element {
       await fetchConnections();
     }
 
+    // BAL-575 — `?calendar_error=account_mismatch`. The callback refused to repoint a live
+    // connection at a different vendor account, so the row on screen is already the truth; no
+    // transient slot is set here, only a toast naming it (`accountMismatchMessage`'s copy).
+    async function handleAccountMismatch(provider: CalendarProvider): Promise<void> {
+      const fetched = await fetchConnections();
+      if (cancelled) return;
+      const row = fetched?.find((c) => c.provider === provider);
+      toast.error(accountMismatchMessage(provider, row?.providerEmail ?? null), {
+        duration: 10000,
+      });
+    }
+
     // T15/T16 — `?calendar_error=…`.
     async function handleErrorParam(errorCode: string): Promise<void> {
       if (errorCode === 'o365_admin_approval') {
         // T15 — the array still loads underneath.
         setTransientFor('microsoft', 'o365_waiting');
         await fetchConnections();
+        return;
+      }
+
+      // BAL-575 — checked before the T16 generic logic so the refused row's own state stays on
+      // screen instead of being marked attempt_failed. A callback naming no provider (should not
+      // happen alongside this code) falls through to the generic toast below.
+      if (errorCode === 'account_mismatch' && provider) {
+        await handleAccountMismatch(provider);
         return;
       }
 

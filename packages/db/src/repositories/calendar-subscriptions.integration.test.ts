@@ -5,6 +5,7 @@ import { db } from '../client';
 import { calendarSubscriptions, type CalendarSubscription } from '../schema';
 import { expertDraftFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
+import { seedApirocConnection } from '../test/helpers/seed-apiroc-connection';
 import { calendarRepository } from './calendar';
 import {
   calendarSubscriptionsRepository,
@@ -46,7 +47,7 @@ async function seedConnection(
   options: { conflictCheckCalendars?: number } = {}
 ): Promise<{ connectionId: string; expertProfileId: string }> {
   const expert = await expertDraftFactory();
-  const connection = await calendarRepository.upsertApirocConnection({
+  const connection = await seedApirocConnection({
     expertProfileId: expert.id,
     provider,
     endUserAccountId: `eua_${randomUUID()}`,
