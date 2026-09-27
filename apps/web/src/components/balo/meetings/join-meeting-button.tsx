@@ -109,16 +109,18 @@ export function JoinMeetingButton({
         // all and only the static ring below remains ("accessibility — everything off under
         // prefers-reduced-motion").
         // ⚠ COLOUR: this button is the DEFAULT `Button` variant (`bg-primary
-        // text-primary-foreground`), so a ring layered ON it reads as nothing. `-inset-1` starts
-        // the ring 4px OUTSIDE the silhouette and `scale(2)` only ever moves it further out, so
-        // it is always read against the page — `bg-card` in the week grid, `bg-popover` in the
-        // compact popover, `bg-background` in Agenda. `ring-primary` is legible on all three in
-        // both themes and keeps the same token family as the reduced-motion fallback (BAL-511 D8).
-        // ⚠ `pointer-events-none`: without it the 2x-scaled ring would swallow clicks meant for
-        // the card behind it and silently widen the tap target past the intended 44px.
-        // ⚠ `rounded-[inherit]`: the chip is `rounded-full`, the other two are `rounded-md`.
-        'motion-safe:before:pointer-events-none motion-safe:before:absolute motion-safe:before:-inset-1',
-        "motion-safe:before:ring-primary motion-safe:before:rounded-[inherit] motion-safe:before:ring-2 motion-safe:before:content-['']",
+        // text-primary-foreground`), so anything layered ON it reads as nothing. The keyframes
+        // paint an OUTER `box-shadow` halo in `currentColor` — outside the silhouette only, so it
+        // is always read against the page (`bg-card` in the week grid, `bg-popover` in the
+        // compact popover, `bg-background` in Agenda). `text-primary` sets that `currentColor`
+        // on the pseudo-element alone and keeps the same token family as the reduced-motion
+        // fallback (BAL-511 D8). The halo's size and strength live in `globals.css`'s `pingSlow`.
+        // ⚠ `inset-0` + `rounded-[inherit]`: the halo hugs the button's own silhouette — the
+        // chip is `rounded-full`, the others `rounded-md`.
+        // ⚠ `pointer-events-none`: the layer is decoration and must never join hit-testing — the
+        // ≥44px tap target is `after:`'s job alone.
+        'motion-safe:before:pointer-events-none motion-safe:before:absolute motion-safe:before:inset-0',
+        "motion-safe:before:text-primary motion-safe:before:rounded-[inherit] motion-safe:before:content-['']",
         'motion-safe:before:animate-ping-slow',
         // The static "this is live" affordance under reduced motion. Moved here from two of the
         // three call sites so the third (the compact popover) gains it too — it had neither the

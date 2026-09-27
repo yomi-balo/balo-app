@@ -85,8 +85,8 @@ export type MarketingHomeHeroModeSource = 'phrase' | 'tail' | 'nudge' | 'url';
 
 /**
  * BAL-582 — the hero's INTENDED seed target, computed from the typed query's length alone. Not
- * applied provenance: the panel skips a field the draft already holds, so this records what the
- * hero meant to seed, not what actually landed.
+ * applied provenance: a search that continues the draft (the same search reopened) skips a field
+ * the draft already holds, so this records what the hero meant to seed, not what actually landed.
  */
 export type MarketingHomeProjectSeedTarget = 'title' | 'description' | 'none';
 

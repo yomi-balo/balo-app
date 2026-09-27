@@ -34,6 +34,18 @@ export interface ProjectDraft {
    * draft — they live in `ProjectRequestPanel` component state only (never persisted).
    */
   source: 'manual' | 'ai';
+  /**
+   * The home hero search this draft was started from (`useProjectSeed`) — `null` for a draft no
+   * search started. Persisted, so the SAME search on a later visit continues this draft even after
+   * its title was edited in the panel, while a different search starts a fresh one.
+   */
+  seededFrom: DraftSeedOrigin | null;
+}
+
+/** What a hero search seeded into a draft: its text (if any) and its product chips. */
+export interface DraftSeedOrigin {
+  text: string | null;
+  productIds: string[];
 }
 
 /** Draft shape minus its routing — routing is computed from the bound expert. */
@@ -49,6 +61,7 @@ const EMPTY_DRAFT_WITHOUT_ROUTING: DraftWithoutRouting = {
   budgetMaxCents: null,
   timeline: null,
   source: 'manual',
+  seededFrom: null,
 };
 
 const DEBOUNCE_MS = 400;
@@ -100,6 +113,14 @@ function readNullableCents(value: unknown): number | null {
  */
 function readSource(value: unknown): 'manual' | 'ai' {
   return value === 'ai' ? 'ai' : 'manual';
+}
+
+/** Narrow a persisted `seededFrom` — anything malformed reads as "no search started this draft". */
+function readSeededFrom(value: unknown): DraftSeedOrigin | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const text = typeof record.text === 'string' ? record.text : null;
+  return { text, productIds: readStringArray(record.productIds) };
 }
 
 /** Narrow an unknown to a non-empty trimmed string, else null. */
@@ -208,6 +229,7 @@ function readDraft(
       budgetMaxCents: readNullableCents(record.budgetMaxCents),
       timeline: readNullableTimeline(record.timeline),
       source: readSource(record.source),
+      seededFrom: readSeededFrom(record.seededFrom),
     };
   } catch {
     // Corrupt or inaccessible storage — start fresh.
@@ -234,10 +256,27 @@ export function clearEntryPointDraft(entryPoint: ProjectRequestEntryPoint): void
   }
 }
 
+/** The fields a fresh request can be started with. */
+export type FreshDraftFields = Partial<
+  Pick<ProjectDraft, 'title' | 'descriptionHtml' | 'seededFrom'>
+>;
+
 interface UseProjectDraftResult {
   draft: ProjectDraft;
   setField: <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => void;
   clearDraft: () => void;
+  /** Replaces the whole draft with an empty one (default routing) carrying only `fields`. Unlike
+   *  `clearDraft`, the result is autosaved like any edit. */
+  resetDraft: (fields: FreshDraftFields) => void;
+  /** Replaces the whole draft with `next` — an earlier snapshot, e.g. an Undo. Autosaved. */
+  replaceDraft: (next: ProjectDraft) => void;
+  /**
+   * Bumps each time `resetDraft` / `replaceDraft` replaces the draft wholesale while the form may
+   * be on screen (`clearDraft` runs on submit, when it no longer is). ⚠ `DocumentUploader` reads
+   * `initialDocuments` ONCE, on mount, so a mounted uploader would keep showing the replaced
+   * draft's files — key it on this to remount it.
+   */
+  revision: number;
 }
 
 /**
@@ -255,6 +294,7 @@ export function useProjectDraft(
   const [draft, setDraft] = useState<ProjectDraft>(() =>
     readDraft(expertProfileId, entryPoint, defaultRouting)
   );
+  const [revision, setRevision] = useState(0);
   const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearedRef = useRef(false);
 
@@ -277,6 +317,21 @@ export function useProjectDraft(
       // Ignore — nothing actionable if storage is unavailable.
     }
   }, [expertProfileId, entryPoint, defaultRouting]);
+
+  const resetDraft = useCallback(
+    (fields: FreshDraftFields) => {
+      clearedRef.current = false;
+      setDraft({ routing: defaultRouting, ...EMPTY_DRAFT_WITHOUT_ROUTING, ...fields });
+      setRevision((r) => r + 1);
+    },
+    [defaultRouting]
+  );
+
+  const replaceDraft = useCallback((next: ProjectDraft) => {
+    clearedRef.current = false;
+    setDraft(next);
+    setRevision((r) => r + 1);
+  }, []);
 
   // Debounced persist on change. Skipped immediately after a clear so we don't
   // re-write an empty draft over the removed key.
@@ -304,5 +359,5 @@ export function useProjectDraft(
     };
   }, [draft, expertProfileId, entryPoint]);
 
-  return { draft, setField, clearDraft };
+  return { draft, setField, clearDraft, resetDraft, replaceDraft, revision };
 }

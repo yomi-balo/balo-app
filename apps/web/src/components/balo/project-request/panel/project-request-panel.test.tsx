@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@/test/utils';
+import { act, render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
@@ -59,49 +59,62 @@ interface MockDoc {
   contentType: string;
   sizeBytes: number;
 }
-vi.mock('@/components/balo/document-uploader', () => ({
-  DocumentUploader: ({
-    initialDocuments,
-    onDocumentsChange,
-    onRequireAuth,
-  }: {
-    initialDocuments?: readonly MockDoc[];
-    onDocumentsChange: (docs: MockDoc[]) => void;
-    onRequireAuth?: () => void;
-  }) => {
-    const seeded = initialDocuments ?? [];
-    return (
-      <div>
-        <p>{`seeded: ${seeded.length}`}</p>
-        {seeded.map((doc) => (
-          <p key={doc.r2Key}>{doc.fileName}</p>
-        ))}
-        <button
-          type="button"
-          onClick={() => {
-            // BAL-582 (D1) — the mock honours `onRequireAuth` exactly as the real uploader does:
-            // signed out, an attach calls it instead of publishing a document.
-            if (onRequireAuth) {
-              onRequireAuth();
-              return;
-            }
-            onDocumentsChange([
-              ...seeded,
-              {
-                r2Key: `project-documents/c/u/k${seeded.length}`,
-                fileName: `rfp-${seeded.length}.pdf`,
-                contentType: 'application/pdf',
-                sizeBytes: 1024,
-              },
-            ]);
-          }}
-        >
-          Attach test file
-        </button>
-      </div>
-    );
-  },
+// Every `onDocumentsChange` the stand-in was rendered with, in order — so a test can play the part
+// of an upload that finishes AFTER its uploader was replaced (it keeps its last-rendered props).
+const { mockUploaderHandlers } = vi.hoisted(() => ({
+  mockUploaderHandlers: [] as Array<(docs: MockDoc[]) => void>,
 }));
+vi.mock('@/components/balo/document-uploader', async () => {
+  const { useState } = await import('react');
+  return {
+    DocumentUploader: function MockDocumentUploader({
+      initialDocuments,
+      onDocumentsChange,
+      onRequireAuth,
+    }: {
+      initialDocuments?: readonly MockDoc[];
+      onDocumentsChange: (docs: MockDoc[]) => void;
+      onRequireAuth?: () => void;
+    }) {
+      // ⚠ LAZY, like the real uploader: `initialDocuments` is read ONCE, on mount. So a test only
+      // sees a replaced draft's files here if the panel actually REMOUNTED the uploader.
+      const [rows, setRows] = useState<MockDoc[]>(() => [...(initialDocuments ?? [])]);
+      mockUploaderHandlers.push(onDocumentsChange);
+      return (
+        <div>
+          <p>{`seeded: ${rows.length}`}</p>
+          {rows.map((doc) => (
+            <p key={doc.r2Key}>{doc.fileName}</p>
+          ))}
+          <button
+            type="button"
+            onClick={() => {
+              // BAL-582 (D1) — the mock honours `onRequireAuth` exactly as the real uploader does:
+              // signed out, an attach calls it instead of publishing a document.
+              if (onRequireAuth) {
+                onRequireAuth();
+                return;
+              }
+              const next = [
+                ...rows,
+                {
+                  r2Key: `project-documents/c/u/k${rows.length}`,
+                  fileName: `rfp-${rows.length}.pdf`,
+                  contentType: 'application/pdf',
+                  sizeBytes: 1024,
+                },
+              ];
+              setRows(next);
+              onDocumentsChange(next);
+            }}
+          >
+            Attach test file
+          </button>
+        </div>
+      );
+    },
+  };
+});
 
 // The real RichTextEditor is a code-split TipTap (ProseMirror) component that
 // can't mount in jsdom. Mock the public module with a controlled textarea that
@@ -137,6 +150,8 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
 }));
 
 import { ProjectRequestPanel } from './project-request-panel';
+import type { ProjectRequestSeed } from './project-seed';
+import { NEW_REQUEST_NOTICE_COPY } from './new-request-notice';
 
 const mockTrack = vi.mocked(track);
 const mockToast = vi.mocked(toast);
@@ -1042,6 +1057,14 @@ describe('ProjectRequestPanel', () => {
       },
     };
     const HOME_KEY = 'balo:project-draft:entry:home';
+    const AI_BRIEF_WITH_UNMATCHED = {
+      title: 'AI-drafted title',
+      descriptionHtml: '<p>AI-drafted description</p>',
+      tagIds: [],
+      productIds: [],
+      unmatchedTagLabels: ['sandbox refresh'],
+      unmatchedProductLabels: [],
+    };
 
     function renderHome(overrides: Partial<React.ComponentProps<typeof ProjectRequestPanel>> = {}) {
       return render(
@@ -1101,31 +1124,255 @@ describe('ProjectRequestPanel', () => {
         ).toBeGreaterThan(0);
       });
 
-      it('never overwrites an existing localStorage draft', () => {
+      // ── A NEW search starts a fresh request; an in-drawer notice offers Undo ──────────────
+      const STALE_HOME_DRAFT = {
+        title: 'Old project title',
+        descriptionHtml: '<p>An older, unrelated brief.</p>',
+        productIds: [SALES_CLOUD_ID],
+        documents: [
+          {
+            r2Key: 'project-documents/c/u/old',
+            fileName: 'old-rfp.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 2048,
+          },
+        ],
+        timeline: '6 weeks',
+      };
+
+      function storeDraft(draft: Record<string, unknown>): void {
         globalThis.localStorage.setItem(
           HOME_KEY,
-          JSON.stringify({ title: 'Already typed', descriptionHtml: '', savedAt: Date.now() })
+          JSON.stringify({ ...draft, savedAt: Date.now() })
         );
-        renderHome({ seed: { title: 'Seeded title' } });
-        expect(screen.getByLabelText(/project title/i)).toHaveValue('Already typed');
+      }
+
+      /** The home mount, for a `rerender` close → reopen with a (possibly different) seed. */
+      function homePanel(open: boolean, seed?: ProjectRequestSeed): React.JSX.Element {
+        return (
+          <ProjectRequestPanel
+            open={open}
+            onClose={vi.fn()}
+            entryPoint="home"
+            projectTaxonomies={HOME_TAXONOMIES}
+            seed={seed}
+          />
+        );
+      }
+
+      const titleField = (): HTMLElement => screen.getByLabelText(/project title/i);
+      const briefField = (): HTMLElement => screen.getByLabelText(/project description/i);
+      const notice = (): HTMLElement | null => screen.queryByText(NEW_REQUEST_NOTICE_COPY.message);
+      const undoButton = (): HTMLElement =>
+        screen.getByRole('button', { name: NEW_REQUEST_NOTICE_COPY.undoLabel });
+
+      it('a NEW search starts a fresh request — nothing from the earlier draft carries over', () => {
+        storeDraft(STALE_HOME_DRAFT);
+        renderHome({ seed: { title: 'Migrate from Tableau' } });
+
+        expect(titleField()).toHaveValue('Migrate from Tableau');
+        expect(briefField()).toHaveValue('');
+        expect(screen.getByLabelText(/timeline/i)).toHaveValue('');
+        expect(screen.getByText('seeded: 0')).toBeInTheDocument();
+        expect(screen.queryByText('old-rfp.pdf')).not.toBeInTheDocument();
+        expect(screen.queryByText('Sales Cloud')).not.toBeInTheDocument();
+        expect(notice()).toBeInTheDocument();
+        expect(toast).not.toHaveBeenCalled();
+        // ⚠ `role="status"` — a screen-reader user gets no other cue this happened.
+        expect(notice()?.closest('[role="status"]')).not.toBeNull();
+        // Evidence for whether "a new search takes precedence" is the right call: fires once,
+        // for THIS appearance, never on every render while shown.
+        expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_NEW_REQUEST_NOTICE_SHOWN, {
+          entry_point: 'home',
+        });
+        expect(
+          mockTrack.mock.calls.filter(
+            ([event]) => event === PROJECT_EVENTS.PROJECT_NEW_REQUEST_NOTICE_SHOWN
+          )
+        ).toHaveLength(1);
       });
 
-      it('seeds a description into a draft whose editor was cleared to "<p></p>"', () => {
-        globalThis.localStorage.setItem(
-          HOME_KEY,
-          JSON.stringify({ title: '', descriptionHtml: '<p></p>', savedAt: Date.now() })
-        );
-        renderHome({ seed: { descriptionText: 'Seeded brief text.' } });
-        expect(screen.getByLabelText(/project description/i)).toHaveValue('Seeded brief text.');
+      it('Undo in the drawer restores the earlier draft whole — its files in a remounted uploader too, refocuses the title, and fires UNDO_CLICKED', async () => {
+        const user = userEvent.setup();
+        storeDraft(STALE_HOME_DRAFT);
+        renderHome({ seed: { title: 'Migrate from Tableau' } });
+        mockTrack.mockClear();
+
+        await user.click(undoButton());
+
+        expect(titleField()).toHaveValue('Old project title');
+        expect(briefField()).toHaveValue('An older, unrelated brief.');
+        expect(screen.getByLabelText(/timeline/i)).toHaveValue('6 weeks');
+        expect(screen.getByText('seeded: 1')).toBeInTheDocument();
+        expect(screen.getByText('old-rfp.pdf')).toBeInTheDocument();
+        expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
+        expect(notice()).not.toBeInTheDocument();
+        // ⚠ `ProjectRequestDrawerBody` is `key={revision}`, so Undo remounts the WHOLE body —
+        // unmounting the Undo button focus had just landed on. Without the title-focus effect
+        // also keying on `revision`, focus fell to the drawer container and stayed there; it must
+        // land back on the (now brand new) title field instead.
+        expect(titleField()).toHaveFocus();
+        expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_NEW_REQUEST_UNDO_CLICKED, {
+          entry_point: 'home',
+        });
       });
 
-      it('unions seeded product ids with the draft, filtered to live ids', () => {
-        globalThis.localStorage.setItem(
-          HOME_KEY,
-          JSON.stringify({ productIds: [SALES_CLOUD_ID], savedAt: Date.now() })
-        );
-        renderHome({ seed: { title: 'x', productIds: [SERVICE_CLOUD_ID, 'stale-id'] } });
+      it('after an Undo, reopening with the same search continues the restored draft', async () => {
+        const user = userEvent.setup();
+        storeDraft(STALE_HOME_DRAFT);
+        const { rerender } = renderHome({ seed: { title: 'Migrate from Tableau' } });
+        await user.click(undoButton());
 
+        rerender(homePanel(false, { title: 'Migrate from Tableau' }));
+        rerender(homePanel(true, { title: 'Migrate from Tableau' }));
+
+        expect(titleField()).toHaveValue('Old project title');
+        expect(notice()).not.toBeInTheDocument();
+      });
+
+      it('Dismiss hides the notice, keeps the fresh request, and fires DISMISSED', async () => {
+        const user = userEvent.setup();
+        storeDraft(STALE_HOME_DRAFT);
+        renderHome({ seed: { title: 'Migrate from Tableau' } });
+        mockTrack.mockClear();
+
+        await user.click(
+          screen.getByRole('button', { name: NEW_REQUEST_NOTICE_COPY.dismissLabel })
+        );
+
+        expect(notice()).not.toBeInTheDocument();
+        expect(titleField()).toHaveValue('Migrate from Tableau');
+        expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_NEW_REQUEST_DISMISSED, {
+          entry_point: 'home',
+        });
+        expect(mockTrack).not.toHaveBeenCalledWith(
+          PROJECT_EVENTS.PROJECT_NEW_REQUEST_UNDO_CLICKED,
+          expect.anything()
+        );
+      });
+
+      it('the Undo offer lapses once the visitor adds to the fresh request', async () => {
+        const user = userEvent.setup();
+        storeDraft(STALE_HOME_DRAFT);
+        renderHome({ seed: { title: 'Migrate from Tableau' } });
+
+        await user.type(briefField(), 'Dashboards first.');
+
+        expect(notice()).not.toBeInTheDocument();
+      });
+
+      it('the Undo offer lapses when the drawer closes', () => {
+        storeDraft(STALE_HOME_DRAFT);
+        const { rerender } = renderHome({ seed: { title: 'Migrate from Tableau' } });
+        expect(notice()).toBeInTheDocument();
+
+        rerender(homePanel(false, { title: 'Migrate from Tableau' }));
+        rerender(homePanel(true, { title: 'Migrate from Tableau' }));
+
+        expect(notice()).not.toBeInTheDocument();
+        expect(titleField()).toHaveValue('Migrate from Tableau');
+      });
+
+      it('a LONG new search (description seed) leaves no stale title behind', () => {
+        storeDraft(STALE_HOME_DRAFT);
+        const brief = `We need to move every Tableau dashboard to CRM Analytics ${'x'.repeat(80)}`;
+        renderHome({ seed: { descriptionText: brief } });
+
+        expect(titleField()).toHaveValue('');
+        expect(briefField()).toHaveValue(brief);
+      });
+
+      it('the search that started a draft continues it on a later visit, even after its title was edited', () => {
+        storeDraft({
+          ...STALE_HOME_DRAFT,
+          title: 'Edited in the panel',
+          seededFrom: { text: 'Migrate CPQ', productIds: [] },
+        });
+        renderHome({ seed: { title: 'Migrate CPQ' } });
+
+        expect(titleField()).toHaveValue('Edited in the panel');
+        expect(briefField()).toHaveValue('An older, unrelated brief.');
+        expect(screen.getByText('old-rfp.pdf')).toBeInTheDocument();
+        expect(notice()).not.toBeInTheDocument();
+      });
+
+      it('a draft no search started, already titled with this search, continues', () => {
+        storeDraft(STALE_HOME_DRAFT);
+        renderHome({ seed: { title: 'Old project title' } });
+
+        expect(briefField()).toHaveValue('An older, unrelated brief.');
+        expect(notice()).not.toBeInTheDocument();
+      });
+
+      it('continuing a draft no search started ADOPTS the search — a later title edit then survives', async () => {
+        const user = userEvent.setup();
+        storeDraft(STALE_HOME_DRAFT);
+        const { rerender } = renderHome({ seed: { title: 'Old project title' } });
+        await user.clear(titleField());
+        await user.type(titleField(), 'Renamed in the panel');
+
+        rerender(homePanel(false, { title: 'Old project title' }));
+        rerender(homePanel(true, { title: 'Old project title' }));
+
+        expect(titleField()).toHaveValue('Renamed in the panel');
+        expect(briefField()).toHaveValue('An older, unrelated brief.');
+      });
+
+      it('a new search over an EMPTY draft shows no notice — there is nothing to undo', () => {
+        renderHome({ seed: { title: 'First ever search' } });
+        expect(titleField()).toHaveValue('First ever search');
+        expect(notice()).not.toBeInTheDocument();
+      });
+
+      it('refining a search whose draft the visitor never touched shows no notice', () => {
+        storeDraft({ title: 'Migrate CPQ', seededFrom: { text: 'Migrate CPQ', productIds: [] } });
+        renderHome({ seed: { title: 'Migrate CPQ to Revenue Cloud' } });
+
+        expect(titleField()).toHaveValue('Migrate CPQ to Revenue Cloud');
+        expect(notice()).not.toBeInTheDocument();
+      });
+
+      it("a new search's products are the chips' alone, never the earlier draft's", () => {
+        storeDraft(STALE_HOME_DRAFT);
+        renderHome({ seed: { title: 'New', productIds: [SERVICE_CLOUD_ID, 'stale-id'] } });
+
+        expect(screen.getByText('Service Cloud')).toBeInTheDocument();
+        expect(screen.queryByText('Sales Cloud')).not.toBeInTheDocument();
+        expect(screen.getByText('1 selected')).toBeInTheDocument();
+      });
+
+      it('the same search with the SAME chips never re-adds a product removed in the panel', () => {
+        storeDraft({
+          title: 'Migrate CPQ',
+          productIds: [],
+          seededFrom: { text: 'Migrate CPQ', productIds: [SERVICE_CLOUD_ID] },
+        });
+        renderHome({ seed: { title: 'Migrate CPQ', productIds: [SERVICE_CLOUD_ID] } });
+
+        expect(screen.queryByText('Service Cloud')).not.toBeInTheDocument();
+      });
+
+      it('the same search with CHANGED chips unions the new chips in', () => {
+        storeDraft({
+          title: 'Migrate CPQ',
+          productIds: [SALES_CLOUD_ID],
+          seededFrom: { text: 'Migrate CPQ', productIds: [SALES_CLOUD_ID] },
+        });
+        renderHome({
+          seed: { title: 'Migrate CPQ', productIds: [SALES_CLOUD_ID, SERVICE_CLOUD_ID] },
+        });
+
+        expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
+        expect(screen.getByText('Service Cloud')).toBeInTheDocument();
+        expect(screen.getByText('2 selected')).toBeInTheDocument();
+      });
+
+      it('chips with an EMPTY search continue the draft: union, filtered to live ids', () => {
+        storeDraft({ title: 'Kept', productIds: [SALES_CLOUD_ID] });
+        renderHome({ seed: { productIds: [SERVICE_CLOUD_ID, 'stale-id'] } });
+
+        expect(titleField()).toHaveValue('Kept');
+        expect(notice()).not.toBeInTheDocument();
         expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
         expect(screen.getByText('Service Cloud')).toBeInTheDocument();
         expect(screen.getByText('2 selected')).toBeInTheDocument();
@@ -1146,32 +1393,186 @@ describe('ProjectRequestPanel', () => {
         expect(await screen.findByText('Service Cloud')).toBeInTheDocument();
       });
 
-      it('reopening with a new seed fills only empty fields, once per open', () => {
+      it('a reopen with the SAME search keeps panel edits; a CHANGED search starts fresh', async () => {
+        const user = userEvent.setup();
         const { rerender } = renderHome({ seed: { title: 'First title' } });
-        expect(screen.getByLabelText(/project title/i)).toHaveValue('First title');
+        expect(titleField()).toHaveValue('First title');
 
-        rerender(
-          <ProjectRequestPanel
-            open={false}
-            onClose={vi.fn()}
-            entryPoint="home"
-            projectTaxonomies={HOME_TAXONOMIES}
-            seed={{ title: 'First title' }}
-          />
+        await user.clear(titleField());
+        await user.type(titleField(), 'Edited in the panel');
+
+        rerender(homePanel(false, { title: 'First title' }));
+        rerender(homePanel(true, { title: 'First title' }));
+        expect(titleField()).toHaveValue('Edited in the panel');
+        expect(notice()).not.toBeInTheDocument();
+
+        rerender(homePanel(false, { title: 'First title' }));
+        rerender(homePanel(true, { title: 'Second title' }));
+        expect(titleField()).toHaveValue('Second title');
+        expect(notice()).toBeInTheDocument();
+      });
+
+      it('a same-search reopen refills a brief the visitor cleared (a cleared editor reads empty)', async () => {
+        const user = userEvent.setup();
+        const long = `Move every Tableau dashboard to CRM Analytics ${'y'.repeat(90)}`;
+        const { rerender } = renderHome({ seed: { descriptionText: long } });
+        await user.clear(briefField());
+        expect(briefField()).toHaveValue('');
+
+        rerender(homePanel(false, { descriptionText: long }));
+        rerender(homePanel(true, { descriptionText: long }));
+
+        expect(briefField()).toHaveValue(long);
+      });
+
+      it('picking chips with an EMPTY search is not a new search — the same search still continues', async () => {
+        const user = userEvent.setup();
+        const { rerender } = renderHome({ seed: { title: 'Same search' } });
+        await user.clear(titleField());
+        await user.type(titleField(), 'Edited in the panel');
+
+        rerender(homePanel(false, { title: 'Same search' }));
+        rerender(homePanel(true, { productIds: [SERVICE_CLOUD_ID] }));
+        rerender(homePanel(false, { productIds: [SERVICE_CLOUD_ID] }));
+        rerender(homePanel(true, { title: 'Same search' }));
+
+        expect(titleField()).toHaveValue('Edited in the panel');
+        expect(notice()).not.toBeInTheDocument();
+      });
+
+      it("an Undo before the taxonomy self-loads keeps the earlier draft's products", async () => {
+        const user = userEvent.setup();
+        storeDraft(STALE_HOME_DRAFT);
+        let resolveTaxonomies: (value: ProjectRequestTaxonomies) => void = () => {};
+        mockRefetch.mockReturnValue(
+          new Promise<ProjectRequestTaxonomies>((resolve) => {
+            resolveTaxonomies = resolve;
+          })
         );
-        rerender(
+        render(
           <ProjectRequestPanel
             open
             onClose={vi.fn()}
             entryPoint="home"
-            projectTaxonomies={HOME_TAXONOMIES}
-            seed={{ title: 'Second title', descriptionText: 'Second description' }}
+            seed={{ title: 'New', productIds: [SERVICE_CLOUD_ID] }}
           />
         );
 
-        expect(screen.getByLabelText(/project title/i)).toHaveValue('First title');
-        expect(screen.getByLabelText(/project description/i)).toHaveValue('Second description');
+        await user.click(undoButton());
+        await act(async () => {
+          resolveTaxonomies(HOME_TAXONOMIES);
+        });
+
+        expect(await screen.findByText('Sales Cloud')).toBeInTheDocument();
+        expect(screen.queryByText('Service Cloud')).not.toBeInTheDocument();
       });
+
+      it("a late upload from the REPLACED draft's uploader never lands in the fresh request", async () => {
+        const stored = (): { title?: string; documents?: MockDoc[] } =>
+          JSON.parse(globalThis.localStorage.getItem(HOME_KEY) ?? '{}');
+        const late = {
+          r2Key: 'project-documents/c/u/late',
+          fileName: 'late.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 1,
+        };
+        // An upload starts on this open, and the drawer closes before it finishes: the unmounted
+        // uploader keeps its last-rendered `onDocumentsChange`.
+        const { rerender } = renderHome({ seed: { title: 'First search' } });
+        const replaced = mockUploaderHandlers.at(-1);
+        rerender(homePanel(false, { title: 'First search' }));
+
+        // A new search starts a fresh request; then the orphaned upload finishes.
+        rerender(homePanel(true, { title: 'Second search' }));
+        const current = mockUploaderHandlers.at(-1);
+        expect(current).not.toBe(replaced);
+        act(() => replaced?.([late]));
+        await waitFor(() => expect(stored().title).toBe('Second search'));
+        expect(stored().documents).toEqual([]);
+
+        // The fresh request's own uploader still publishes normally.
+        act(() => current?.([late]));
+        await waitFor(() => expect(stored().documents).toEqual([late]));
+      });
+
+      it("a fresh request never shows the earlier AI brief's unmatched-label hints or AI edit events", async () => {
+        mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+        mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_BRIEF_WITH_UNMATCHED });
+        const user = userEvent.setup();
+        const { rerender } = renderHome();
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+        await user.click(screen.getByRole('button', { name: /attach test file/i }));
+        await user.click(screen.getByRole('button', { name: /generate brief/i }));
+        expect(
+          await screen.findByText(/sandbox refresh/i, {}, { timeout: 4000 })
+        ).toBeInTheDocument();
+
+        rerender(homePanel(false));
+        rerender(homePanel(true, { title: 'Tableau migration' }));
+        expect(mockTrack).not.toHaveBeenCalledWith(
+          PROJECT_EVENTS.PROJECT_AI_FIELDS_EDITED,
+          expect.anything()
+        );
+        await user.type(briefField(), 'Rebuild our lead routing in Flow.');
+        await user.click(screen.getByRole('button', { name: /^review/i }));
+        expect(await screen.findByText('Tableau migration')).toBeInTheDocument();
+        expect(screen.queryByText(/sandbox refresh/i)).not.toBeInTheDocument();
+      }, 12000);
+
+      it('Undo brings back the earlier AI brief with its unmatched-label hints', async () => {
+        mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+        mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_BRIEF_WITH_UNMATCHED });
+        const user = userEvent.setup();
+        const { rerender } = renderHome();
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+        await user.click(screen.getByRole('button', { name: /attach test file/i }));
+        await user.click(screen.getByRole('button', { name: /generate brief/i }));
+        await screen.findByText(/sandbox refresh/i, {}, { timeout: 4000 });
+
+        rerender(homePanel(false));
+        rerender(homePanel(true, { title: 'Tableau migration' }));
+        await user.click(undoButton());
+        await user.click(screen.getByRole('button', { name: /^review/i }));
+
+        expect(await screen.findByText(/sandbox refresh/i)).toBeInTheDocument();
+      }, 12000);
+
+      // ⚠⚠ `unmatchedLabelsFor` gates on `draft.source === 'ai'` at the READ site, which is enough
+      // for a draft that STAYS manual after a fresh start — but re-selecting AI on that SAME fresh
+      // draft (no Undo) walks `source` back to `'ai'` on top of whatever `useAiBriefFlow` still
+      // had in memory. Before `clearAiState`, that resurrected the PREVIOUS generation's
+      // unmatched-label hints and fired bogus `PROJECT_AI_FIELDS_EDITED` events for a draft
+      // nothing had been generated for yet.
+      it('re-selecting AI on a fresh draft (no Undo) shows no stale unmatched-label hints and fires no bogus PROJECT_AI_FIELDS_EDITED', async () => {
+        mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+        mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_BRIEF_WITH_UNMATCHED });
+        const user = userEvent.setup();
+        const { rerender } = renderHome();
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+        await user.click(screen.getByRole('button', { name: /attach test file/i }));
+        await user.click(screen.getByRole('button', { name: /generate brief/i }));
+        await screen.findByText(/sandbox refresh/i, {}, { timeout: 4000 });
+
+        // A fresh search: lands on `manual` with the new seed, `source` reset to `'manual'`.
+        rerender(homePanel(false));
+        rerender(homePanel(true, { title: 'Tableau migration' }));
+        expect(titleField()).toHaveValue('Tableau migration');
+        mockTrack.mockClear();
+
+        // "Change entry method" (manual step) → "Upload docs" (start step) — re-selects AI on the
+        // SAME fresh draft, WITHOUT going through Undo.
+        await user.click(screen.getByRole('button', { name: /change entry method/i }));
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+
+        expect(
+          screen.getByRole('heading', { name: /upload your project docs/i })
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/sandbox refresh/i)).not.toBeInTheDocument();
+        expect(mockTrack).not.toHaveBeenCalledWith(
+          PROJECT_EVENTS.PROJECT_AI_FIELDS_EDITED,
+          expect.anything()
+        );
+      }, 12000);
 
       it('resumeDraft opens at manual for a manual-source draft', () => {
         globalThis.localStorage.setItem(

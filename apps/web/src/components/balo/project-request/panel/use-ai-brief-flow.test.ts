@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { useCallback, useState } from 'react';
 import { renderHook, act } from '@testing-library/react';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { ProjectBriefDraftPatch } from '@/lib/project-request/actions/get-project-brief-parse';
@@ -45,6 +46,7 @@ const DRAFT: ProjectDraft = {
   budgetMaxCents: null,
   timeline: null,
   source: 'ai',
+  seededFrom: null,
 };
 
 /** ⚠ DRAFT.documents is EMPTY, which is itself a reset trigger. Use this where the test is
@@ -208,6 +210,147 @@ describe('useAiBriefFlow — the regenerate clobber-guard snapshot (fix round F1
     });
 
     expect(result.current.hasEditsSinceGenerate).toBe(false);
+  });
+});
+
+/**
+ * ⚠ A REAL, STATE-BACKED `setField` — NOT `vi.fn()`. `handleGenerationSucceeded` calls `setField`
+ * for all four AI fields in the SAME event, and the "fields edited" tracking effect (this file's
+ * next describe block exists to test) compares the CURRENT draft against the snapshot on every
+ * commit. A no-op mock `setField` leaves `draft` on its stale (often empty) initial value for one
+ * commit after `onSucceeded` fires, which the tracking effect reads as every field having
+ * "diverged" — an artifact of the mock, not of the hook, and not what the real panel (whose
+ * `setField` genuinely updates `draft`) ever does. This harness closes that gap so these tests
+ * observe the same sequencing the real app does.
+ */
+function renderConnectedFlow(initialDraft: ProjectDraft) {
+  const setStep = vi.fn();
+  const view = renderHook(() => {
+    const [draft, setDraftState] = useState(initialDraft);
+    const setField = useCallback(<K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => {
+      setDraftState((prev) => ({ ...prev, [key]: value }));
+    }, []);
+    return {
+      draft,
+      setDraftState,
+      flow: useAiBriefFlow({
+        expertProfileId: undefined,
+        entryPoint: 'direct',
+        draft,
+        setField,
+        setStep,
+        isFlowActive: true,
+      }),
+    };
+  });
+  return { view, setStep };
+}
+
+// ⚠⚠ THE STALE-STATE BUG. `lastGeneratedSnapshot` / `unmatchedLabels` / `editedFieldsFiredRef`
+// used to last for the WHOLE MOUNT, gated only by `draft.source === 'ai'` at each read site — which
+// covers a draft that stays manual, but not one that goes fresh and is
+// then walked back to `source: 'ai'` on the SAME draft (e.g. "Change entry method" → "Upload
+// docs"). `clearAiState` / `capturedAiState` / `restoreAiState` are the fix; `useProjectSeed` calls
+// them at the two moments that matter (a fresh start, and its Undo) — these are the hook-level
+// unit tests for what those three do in isolation.
+describe('useAiBriefFlow — capturedAiState / clearAiState / restoreAiState (the stale-state fix)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.onSucceeded = undefined;
+  });
+
+  it('capturedAiState is null before any generate', () => {
+    const { view } = renderFlow(true);
+    expect(view.result.current.capturedAiState).toBeNull();
+  });
+
+  it('captures the generated snapshot and unmatched labels, with no fields marked edited yet', () => {
+    const { view } = renderConnectedFlow(DRAFT);
+
+    expect(view.result.current.flow.capturedAiState).toBeNull();
+
+    act(() => captured.onSucceeded?.(PATCH));
+
+    expect(view.result.current.flow.capturedAiState).toEqual({
+      snapshot: {
+        title: PATCH.title.trim(),
+        descriptionHtml: PATCH.descriptionHtml,
+        tagIds: PATCH.tagIds,
+        productIds: PATCH.productIds,
+      },
+      unmatchedLabels: { tags: [], products: [] },
+      editedFields: [],
+    });
+  });
+
+  it('clearAiState wipes the snapshot AND the unmatched labels together, so re-selecting AI on a fresh draft cannot re-arm either', () => {
+    const { view } = renderConnectedFlow(DRAFT);
+
+    act(() => captured.onSucceeded?.(PATCH));
+    expect(view.result.current.flow.capturedAiState).not.toBeNull();
+
+    act(() => view.result.current.flow.clearAiState());
+    expect(view.result.current.flow.capturedAiState).toBeNull();
+    expect(view.result.current.flow.unmatchedLabels).toEqual({ tags: [], products: [] });
+
+    // Re-selecting AI on the now-fresh draft (title/description reset) must not read as "edits
+    // since generate" — there is nothing to compare against any more.
+    act(() =>
+      view.result.current.setDraftState((prev) => ({
+        ...prev,
+        title: 'A brand new fresh title',
+        source: 'ai',
+      }))
+    );
+    expect(view.result.current.flow.hasEditsSinceGenerate).toBe(false);
+  });
+
+  it('restoreAiState brings back an EXACT prior capture, including which fields had already fired PROJECT_AI_FIELDS_EDITED', () => {
+    const { view } = renderConnectedFlow(DRAFT);
+
+    act(() => captured.onSucceeded?.(PATCH));
+    // Edit the title post-generate — fires PROJECT_AI_FIELDS_EDITED once for 'title' and records it
+    // into a REF (never state — it need not be reactive on its own; nothing renders from it except
+    // `capturedAiState`, which the real app only ever reads on a LATER, separately-triggered render
+    // — a fresh hero search). Force that same "one render later" here before reading it.
+    act(() =>
+      view.result.current.setDraftState((prev) => ({ ...prev, title: 'A hand-edited title' }))
+    );
+    act(() => view.rerender());
+
+    const captured1 = view.result.current.flow.capturedAiState;
+    if (captured1 === null) throw new Error('expected a captured state');
+    expect(captured1.editedFields).toEqual(['title']);
+
+    act(() => view.result.current.flow.clearAiState());
+    expect(view.result.current.flow.capturedAiState).toBeNull();
+
+    act(() => view.result.current.flow.restoreAiState(captured1));
+    expect(view.result.current.flow.capturedAiState).toEqual(captured1);
+
+    // The restored state's own memory of "title already fired" must survive too — editing title
+    // AGAIN after a restore must not double-fire PROJECT_AI_FIELDS_EDITED for it.
+    vi.mocked(track).mockClear();
+    act(() =>
+      view.result.current.setDraftState((prev) => ({
+        ...prev,
+        title: 'A hand-edited title, edited again',
+      }))
+    );
+    expect(track).not.toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_AI_FIELDS_EDITED, {
+      field: 'title',
+    });
+  });
+
+  it('restoreAiState(null) behaves exactly like clearAiState', () => {
+    const { view } = renderConnectedFlow(DRAFT);
+
+    act(() => captured.onSucceeded?.(PATCH));
+    expect(view.result.current.flow.capturedAiState).not.toBeNull();
+
+    act(() => view.result.current.flow.restoreAiState(null));
+    expect(view.result.current.flow.capturedAiState).toBeNull();
+    expect(view.result.current.flow.unmatchedLabels).toEqual({ tags: [], products: [] });
   });
 });
 

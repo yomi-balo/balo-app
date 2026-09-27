@@ -9,9 +9,18 @@ describe('MARKETING_NAV_ITEMS', () => {
     }
   });
 
-  it('hrefs are exactly /experts and /expert/apply', () => {
-    const hrefs = MARKETING_NAV_ITEMS.map((entry) => entry.href);
-    expect(hrefs).toEqual(['/experts', '/expert/apply']);
+  it('is the design reference’s four links, in its order, with their hrefs', () => {
+    expect(MARKETING_NAV_ITEMS.map((entry) => [entry.key, entry.label, entry.href])).toEqual([
+      ['find_experts', 'Find experts', '/experts'],
+      ['how_it_works', 'How it works', '/how-it-works'],
+      ['for_experts', 'For experts', '/for-experts'],
+      ['pricing', 'Pricing', '/pricing'],
+    ]);
+  });
+
+  it('For experts never sends a visitor to the expert application', () => {
+    const forExperts = MARKETING_NAV_ITEMS.find((entry) => entry.key === 'for_experts');
+    expect(forExperts?.href).not.toMatch(/^\/expert\/apply/);
   });
 
   it('has no duplicate keys', () => {
@@ -33,13 +42,13 @@ describe('MARKETING_NAV_ITEMS', () => {
     });
   });
 
-  describe('for_experts.isActive', () => {
-    const forExperts = MARKETING_NAV_ITEMS.find((entry) => entry.key === 'for_experts');
+  describe.each(['how_it_works', 'for_experts', 'pricing'] as const)('%s.isActive', (key) => {
+    const entry = MARKETING_NAV_ITEMS.find((item) => item.key === key);
 
-    it('is false everywhere — the design reference gives it no active state', () => {
-      expect(forExperts?.isActive('/expert/apply')).toBe(false);
-      expect(forExperts?.isActive('/experts')).toBe(false);
-      expect(forExperts?.isActive('/')).toBe(false);
+    it('is false everywhere, its own page included — only Find experts has an active state', () => {
+      expect(entry?.isActive(entry.href)).toBe(false);
+      expect(entry?.isActive('/experts')).toBe(false);
+      expect(entry?.isActive('/')).toBe(false);
     });
   });
 });

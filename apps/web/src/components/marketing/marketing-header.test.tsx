@@ -113,9 +113,16 @@ describe('MarketingHeader — nav links (both variants)', () => {
     const user = userEvent.setup();
     render(<MarketingHeader viewer={null} />);
     const findExperts = screen.getByRole('link', { name: 'Find experts' });
-    const forExperts = screen.getByRole('link', { name: 'For experts' });
     expect(findExperts).toHaveAttribute('href', '/experts');
-    expect(forExperts).toHaveAttribute('href', '/expert/apply');
+    expect(screen.getByRole('link', { name: 'How it works' })).toHaveAttribute(
+      'href',
+      '/how-it-works'
+    );
+    expect(screen.getByRole('link', { name: 'For experts' })).toHaveAttribute(
+      'href',
+      '/for-experts'
+    );
+    expect(screen.getByRole('link', { name: 'Pricing' })).toHaveAttribute('href', '/pricing');
 
     await user.click(findExperts);
     expect(track).toHaveBeenCalledWith(MARKETING_EVENTS.NAV_CLICKED, {

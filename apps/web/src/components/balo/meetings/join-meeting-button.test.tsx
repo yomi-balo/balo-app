@@ -66,7 +66,8 @@ describe('JoinMeetingButton — the DOM', () => {
       'after:absolute',
       "after:content-['']",
       'motion-safe:before:animate-ping-slow',
-      'motion-safe:before:ring-primary',
+      'motion-safe:before:text-primary',
+      'motion-safe:before:inset-0',
       'motion-safe:before:pointer-events-none',
       'motion-reduce:ring-2',
       'motion-reduce:ring-primary',
@@ -114,6 +115,17 @@ describe('JoinMeetingButton — the @theme token (guards §0.3)', () => {
     expect(css).toContain('--animate-ping-slow:');
     expect(css).toContain('pingSlow 1.8s');
     expect(css).toContain('@keyframes pingSlow');
+  });
+
+  it('keeps the halo a small FIXED-PIXEL spread — never a scale relative to the button', () => {
+    const css = readFileSync(GLOBALS_CSS, 'utf8');
+    const start = css.indexOf('@keyframes pingSlow');
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start, css.indexOf('\n  }\n', start));
+    expect(block).toContain('box-shadow: 0 0 0 0 currentColor;');
+    expect(block).toContain('box-shadow: 0 0 0 8px currentColor;');
+    expect(block).toContain('opacity: 0.5;');
+    expect(block).not.toContain('scale');
   });
 
   it('never redefines --animate-ping — expert-card.tsx:141 uses the stock class', () => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ArrowRight, ChevronLeft, Loader2, RotateCw, Send, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
@@ -35,6 +35,7 @@ import { GenerationErrorBanner } from './generation-error-banner';
 import { useAiBriefFlow } from './use-ai-brief-flow';
 import { initialStepFor, type ProjectRequestSeed } from './project-seed';
 import { useProjectSeed } from './use-project-seed';
+import { NewRequestNotice } from './new-request-notice';
 import { projectFunnelDimensions } from './funnel-dimensions';
 import {
   useProjectDraft,
@@ -83,8 +84,9 @@ export interface ProjectRequestPanelProps {
   onSubmitted?: (requestId: string) => void;
   /**
    * BAL-582 (§3b) — hero-provided text/product prefill, applied ONCE PER OPEN by
-   * `useProjectSeed`. Existing mounts pass nothing (AC8): no seed, no behaviour change. Never
-   * overwrites an existing draft or in-panel edit (AC7).
+   * `useProjectSeed`. Existing mounts pass nothing (AC8): no seed, no behaviour change. Fresh
+   * search text replaces the autosaved draft's; a reopen with the same search text keeps any edit
+   * made in the panel (`seedTextPatch`).
    */
   seed?: ProjectRequestSeed;
   /**
@@ -116,6 +118,26 @@ const GENERATING_HEADINGS = [
 ] as const;
 
 const DESCRIPTION_PLACEHOLDER_SUFFIX = ' later.';
+
+/**
+ * The unmatched-label hints belong to an AI-generated brief. `useAiBriefFlow` keeps them in its
+ * own state for the life of the mount, so once a new hero search has started a fresh (manual)
+ * draft they must not resurface on its review step.
+ */
+const NO_UNMATCHED_LABELS: { tags: string[]; products: string[] } = { tags: [], products: [] };
+
+/** The unmatched-label hints to show for a draft: its AI brief's, or none for a manual draft. */
+function unmatchedLabelsFor(
+  source: ProjectDraft['source'],
+  labels: { tags: string[]; products: string[] }
+): { tags: string[]; products: string[] } {
+  return source === 'ai' ? labels : NO_UNMATCHED_LABELS;
+}
+
+/** An upload flag only counts for the draft revision whose uploader set it. */
+function uploadingFor(state: { revision: number; value: boolean }, revision: number): boolean {
+  return state.revision === revision && state.value;
+}
 
 const EMPTY_TAXONOMIES: ProjectRequestTaxonomies = {
   tags: EMPTY_TAXONOMY,
@@ -219,7 +241,10 @@ export function ProjectRequestPanel({
 }: Readonly<ProjectRequestPanelProps>): React.JSX.Element {
   // Read before the step state: it reads only props, and the step initialiser below needs
   // `draft.source` to decide a resumed mount's opening step.
-  const { draft, setField, clearDraft } = useProjectDraft(expertProfileId, entryPoint);
+  const { draft, setField, clearDraft, resetDraft, replaceDraft, revision } = useProjectDraft(
+    expertProfileId,
+    entryPoint
+  );
   const { routing, title, descriptionHtml, tagIds, productIds, budgetMinCents, budgetMaxCents } =
     draft;
 
@@ -234,7 +259,26 @@ export function ProjectRequestPanel({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  // ⚠ UPLOAD STATE IS PER DRAFT REVISION. A new hero search's fresh start and its Undo replace the
+  // draft wholesale (bumping `revision`) while an upload begun under the replaced draft may still
+  // be in flight — `DocumentUploader` keeps publishing after it unmounts. Each update is tagged
+  // with the revision its uploader was rendered under and dropped once that revision is gone, so
+  // the replaced draft's files never land in the fresh draft (or over the restored one).
+  const [uploadingState, setUploadingState] = useState({ revision, value: false });
+  const uploading = uploadingFor(uploadingState, revision);
+  // ⚠⚠ `useLayoutEffect`, NOT `useEffect` — the ref must be current before ANY passive effect
+  // (including an unmounting `DocumentUploader`'s own cleanup) can run. Passive effects for a
+  // commit run strictly after all of that commit's layout effects, so a plain `useEffect` here left
+  // a real, if narrow, gap: a `resetDraft`/`replaceDraft` bumps `revision` and this ref updates in
+  // the SAME commit's passive-effect pass — but an orphaned uploader's own unmount cleanup (also
+  // passive) could fire in that same pass BEFORE this one does, still see the OLD `revisionRef`,
+  // and pass `uploadHandlers`' guard with a STALE closed-over `revision` that happened to still
+  // equal it — writing the replaced draft's files into the fresh one. A layout effect closes the
+  // gap entirely: it runs synchronously in the commit phase, before any passive effect at all.
+  const revisionRef = useRef(revision);
+  useLayoutEffect(() => {
+    revisionRef.current = revision;
+  }, [revision]);
   // Snapshot of the routing at submit time — the done screen + success toast read
   // this, NOT the live draft (which `clearDraft()` resets on success).
   const expertBound = expertProfileId !== undefined;
@@ -363,21 +407,6 @@ export function ProjectRequestPanel({
     });
   }, [open, step, expertProfileId, entryPoint]);
 
-  // BAL-582 (§3b) — applies the hero seed to the draft once per open (never sets `step`).
-  useProjectSeed({ open, seed, draft, setField, productsTaxonomy: taxonomies.products });
-
-  // Clear any stale submit error once the user leaves the review step.
-  useEffect(() => {
-    if (step !== 'review') setError(null);
-  }, [step]);
-
-  // Focus the title field when (and only when) the manual step becomes active.
-  useEffect(() => {
-    if (step === 'manual') titleInputRef.current?.focus();
-  }, [step]);
-
-  const handleClose = useCallback(() => onClose(), [onClose]);
-
   const {
     briefGeneration,
     isGenerating,
@@ -392,6 +421,9 @@ export function ProjectRequestPanel({
     handleWriteItMyself,
     handleRegenerateClick,
     handleConfirmRegenerate,
+    capturedAiState,
+    clearAiState,
+    restoreAiState,
   } = useAiBriefFlow({
     expertProfileId,
     entryPoint,
@@ -402,6 +434,41 @@ export function ProjectRequestPanel({
     // user has closed it, or after they have submitted, must write nothing.
     isFlowActive: open && step !== 'done',
   });
+
+  // BAL-582 (§3b) — applies the hero seed to the draft once per open (never sets `step`). Threads
+  // the AI flow's capture/clear/restore trio so a fresh start (and its Undo) carries the AI
+  // generation along with the draft fields — see `AiGeneratedState`'s docblock.
+  const newRequestUndo = useProjectSeed({
+    open,
+    seed,
+    draft,
+    setField,
+    resetDraft,
+    replaceDraft,
+    productsTaxonomy: taxonomies.products,
+    capturedAiState,
+    clearAiState,
+    restoreAiState,
+    expertProfileId,
+    entryPoint,
+  });
+
+  // Clear any stale submit error once the user leaves the review step.
+  useEffect(() => {
+    if (step !== 'review') setError(null);
+  }, [step]);
+
+  // Focus the title field when (and only when) the manual step becomes active — INCLUDING when
+  // `revision` bumps while already on it. `ProjectRequestDrawerBody` is `key={revision}`, so an
+  // Undo (or a fresh search that lands straight on `manual`) remounts it and creates a BRAND NEW
+  // title input while `step` itself never changes — an effect keyed on `[step]` alone never re-ran
+  // to claim focus on that new element, and the focus Undo's own button held fell to the drawer's
+  // dialog container instead.
+  useEffect(() => {
+    if (step === 'manual') titleInputRef.current?.focus();
+  }, [step, revision]);
+
+  const handleClose = useCallback(() => onClose(), [onClose]);
 
   const handleSelectManual = useCallback(() => {
     track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
@@ -432,9 +499,16 @@ export function ProjectRequestPanel({
     if (reviewValid) setStep('review');
   }, [reviewValid]);
 
-  const handleDocumentsChange = useCallback(
-    (docs: ProjectDraft['documents']) => setField('documents', docs),
-    [setField]
+  const uploadHandlers = useMemo(
+    () => ({
+      onDocumentsChange: (docs: ProjectDraft['documents']) => {
+        if (revision === revisionRef.current) setField('documents', docs);
+      },
+      onUploadingChange: (value: boolean) => {
+        if (revision === revisionRef.current) setUploadingState({ revision, value });
+      },
+    }),
+    [revision, setField]
   );
 
   // Budget inputs are WHOLE DOLLARS (numeric, coarse ranges). We take the part
@@ -581,6 +655,7 @@ export function ProjectRequestPanel({
 
   const manualBody = (
     <ManualStepFields
+      notice={newRequestUndo === null ? undefined : <NewRequestNotice {...newRequestUndo} />}
       onBack={() => setStep('start')}
       manualHeading={copy.manualHeading}
       formDescription={copy.formDescription}
@@ -612,8 +687,8 @@ export function ProjectRequestPanel({
       productsError={productsError}
       onRetryTaxonomies={handleRetryTaxonomies}
       documents={draft.documents}
-      onDocumentsChange={handleDocumentsChange}
-      onUploadingChange={setUploading}
+      onDocumentsChange={uploadHandlers.onDocumentsChange}
+      onUploadingChange={uploadHandlers.onUploadingChange}
       onRequireAuth={onAuthRequired}
       budgetMinCents={budgetMinCents}
       budgetMaxCents={budgetMaxCents}
@@ -658,7 +733,22 @@ export function ProjectRequestPanel({
           )}
         </DrawerHeader>
 
+        {/* ⚠ KEYED ON `revision`: a new hero search starts a fresh draft and its Undo restores
+            the earlier one, each replacing the draft wholesale. `DocumentUploader` NEEDS this: it
+            reads `initialDocuments` only on mount, so without a remount it would keep listing the
+            replaced draft's files — and, since it REPLACES on change, write them back.
+
+            ⚠ The key remounts EVERYTHING under this node, not just the uploaders — including
+            `RichTextEditor` and `TaxonomyMultiSelect`. Neither NEEDS it: `RichTextEditor` already
+            re-syncs from an externally-reset `value` prop via its own effect (the same one
+            `clearDraft` relies on), and `TaxonomyMultiSelect` is a plain controlled selection with
+            no mount-only read. Their remount only resets transient internal-only state (undo
+            history, an open dropdown) that a wholesale draft replacement should reasonably clear
+            anyway — so this stays a section-wide key rather than one scoped to just the uploaders,
+            but say so here explicitly: narrowing it is a real option if that transient-state reset
+            is ever unwanted, not an oversight that this comment used to imply didn't exist. */}
         <ProjectRequestDrawerBody
+          key={revision}
           step={step}
           startHeading={startHeading}
           startBody={startBody}
@@ -670,8 +760,8 @@ export function ProjectRequestPanel({
           isUploadFailed={isUploadFailed}
           headingIndex={briefGeneration.headingIndex}
           failureReason={briefGeneration.failureReason}
-          onDocumentsChange={handleDocumentsChange}
-          onUploadingChange={setUploading}
+          onDocumentsChange={uploadHandlers.onDocumentsChange}
+          onUploadingChange={uploadHandlers.onUploadingChange}
           onRequireAuth={onAuthRequired}
           onRetryGenerate={handleRetryGenerate}
           onWriteItMyself={handleWriteItMyself}
@@ -681,7 +771,7 @@ export function ProjectRequestPanel({
           productNameMap={productNameMap}
           onEditReview={() => setStep('manual')}
           aiBanner={aiBanner}
-          unmatchedLabels={unmatchedLabels}
+          unmatchedLabels={unmatchedLabelsFor(draft.source, unmatchedLabels)}
           isAiPath={isAiPath}
           onDismissRegenerateFailure={briefGeneration.dismissFailure}
           reviewReassurance={copy.reviewReassurance}
@@ -1118,6 +1208,8 @@ function ProjectRequestDrawerFooter({
 }
 
 interface ManualStepFieldsProps {
+  /** Shown above everything else on the step — the new-request Undo (`NewRequestNotice`). */
+  notice?: React.ReactNode;
   onBack: () => void;
   manualHeading: string | null;
   formDescription: string;
@@ -1169,6 +1261,7 @@ interface ManualStepFieldsProps {
  * pushed the panel's own cognitive complexity over the SonarCloud gate.
  */
 function ManualStepFields({
+  notice,
   onBack,
   manualHeading,
   formDescription,
@@ -1213,6 +1306,7 @@ function ManualStepFields({
 }: Readonly<ManualStepFieldsProps>): React.JSX.Element {
   return (
     <div className="space-y-6 p-6">
+      {notice}
       <button
         type="button"
         onClick={onBack}

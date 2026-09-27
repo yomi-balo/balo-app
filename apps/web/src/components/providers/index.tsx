@@ -16,7 +16,7 @@ interface ProvidersProps {
  */
 export function Providers({ children }: Readonly<ProvidersProps>): React.JSX.Element {
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
       <QueryProvider>
         <PostHogProvider>
           <AuthModalProvider>{children}</AuthModalProvider>

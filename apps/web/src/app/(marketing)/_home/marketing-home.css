@@ -444,7 +444,9 @@
   white-space: nowrap;
   font-size: clamp(16px, 1.9vw, 19px);
   color: var(--muted-foreground);
-  margin: 0 0 16px;
+  /* The top margin (with `.mk-chips`' larger top margin below the search bar) gives the
+     sentence + search pair room from the lede above and the chips below. */
+  margin: 16px 0 16px;
 }
 .mk-sent-btn {
   position: relative;
@@ -906,14 +908,39 @@
   }
 }
 
+/* ONE row, never wrapped. It spans the search bar's own width (`.mk-search-zone`), and where the
+   seven chips don't fit (narrow viewports) the row scrolls sideways with the scrollbar hidden.
+   ⚠ CENTRED BY AUTO MARGINS ON THE END CHILDREN, NOT `justify-content: center`. A centred flex
+   row that overflows its scroll container spills past the START edge too, and that half can
+   never be scrolled to. Auto margins centre the row while it fits and collapse to 0 once it
+   doesn't, so an overflowing row starts flush left and every chip stays reachable.
+   ⚠ The block padding is room for the chips' hover lift + shadow and focus ring: `overflow-x:
+   auto` forces `overflow-y` to clip too. The negative bottom margin cancels it so nothing after
+   the row moves. */
 .mk-chips {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
-  margin: 18px auto 0;
-  max-width: 720px;
+  max-width: 760px;
+  margin: 26px auto -8px;
+  padding: 8px 4px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.mk-chips::-webkit-scrollbar {
+  display: none;
+}
+.mk-chips > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.mk-chips > :first-child {
+  margin-left: auto;
+}
+.mk-chips > :last-child {
+  margin-right: auto;
 }
 .mk-chips-label {
   font-size: 12.5px;
@@ -945,6 +972,29 @@
   border-color: color-mix(in oklch, var(--primary) 50%, transparent);
   background: color-mix(in oklch, var(--primary) 8%, var(--card));
   font-weight: 600;
+}
+/* Tighter chips keep the row un-scrolled down to ~750px (tablet portrait). Below that it
+   scrolls, so it bleeds to the viewport edges through `.mk-hero-inner`'s 24px padding: chips
+   pass under the screen edge rather than being cut off at the page margin, and the padding
+   keeps the first and last chip aligned with the content column at either end of the scroll. */
+@media (max-width: 820px) {
+  .mk-chips {
+    gap: 6px;
+    max-width: none;
+    margin-left: -24px;
+    margin-right: -24px;
+    padding-left: 24px;
+    padding-right: 24px;
+    /* The scrollbar is hidden (`.mk-chips`'s base rule) and the row starts scrolled to the label,
+       so a narrow window's only affordance that chips run off the RIGHT edge is this fade — the
+       same technique as `.mk-bench`'s below, one-sided because this overflow isn't centred like
+       that one is. */
+    -webkit-mask-image: linear-gradient(to right, black 88%, transparent);
+    mask-image: linear-gradient(to right, black 88%, transparent);
+  }
+  .mk-chip {
+    padding: 7px 11px;
+  }
 }
 
 /* ── Bench (parallax expert tiles) ── */
