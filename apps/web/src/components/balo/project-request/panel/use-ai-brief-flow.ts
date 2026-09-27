@@ -210,9 +210,11 @@ export function useAiBriefFlow({
   }, [briefGeneration.phase, briefGeneration.failureReason, draft.documents.length]);
 
   // `PROJECT_AI_FIELDS_EDITED` fires once per field-key when it first diverges from the last
-  // generated snapshot (guarded by a ref so a keystroke stream fires once).
+  // generated snapshot (guarded by a ref so a keystroke stream fires once). ⚠ Only while the draft
+  // IS the AI brief: a new hero search swaps in a fresh manual draft (`useProjectSeed`), and every
+  // field "diverging" from the snapshot then is no visitor edit.
   useEffect(() => {
-    if (lastGeneratedSnapshot === null) return;
+    if (lastGeneratedSnapshot === null || draft.source !== 'ai') return;
     const checks: Array<[string, boolean]> = [
       ['title', trimmedTitle !== lastGeneratedSnapshot.title],
       ['description', descriptionHtml !== lastGeneratedSnapshot.descriptionHtml],
@@ -227,7 +229,7 @@ export function useAiBriefFlow({
         });
       }
     }
-  }, [trimmedTitle, descriptionHtml, tagIds, productIds, lastGeneratedSnapshot]);
+  }, [trimmedTitle, descriptionHtml, tagIds, productIds, lastGeneratedSnapshot, draft.source]);
 
   const handleGenerateClick = useCallback(() => {
     isRegenerateRef.current = false;

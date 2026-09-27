@@ -233,3 +233,98 @@ describe('useProjectDraft — 24h expiry on the home draft only', () => {
     expect(result.current.draft.title).toBe('Expert-bound, no savedAt');
   });
 });
+
+describe('useProjectDraft — resetDraft / replaceDraft (a new hero search and its Undo)', () => {
+  beforeEach(() => globalThis.localStorage.clear());
+
+  it('resetDraft replaces EVERYTHING with an empty draft carrying only the given text', () => {
+    seed({
+      routing: 'match',
+      title: 'Old',
+      descriptionHtml: '<p>Old brief</p>',
+      tagIds: ['t1'],
+      productIds: ['p1'],
+      budgetMinCents: 100,
+      budgetMaxCents: 200,
+      timeline: '6 weeks',
+      source: 'ai',
+    });
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    act(() => result.current.resetDraft({ title: 'New search' }));
+    expect(result.current.draft).toEqual({
+      routing: 'direct',
+      title: 'New search',
+      descriptionHtml: '',
+      tagIds: [],
+      productIds: [],
+      documents: [],
+      budgetMinCents: null,
+      budgetMaxCents: null,
+      timeline: null,
+      source: 'manual',
+      seededFrom: null,
+    });
+  });
+
+  it('resetDraft records the search that started the fresh draft, and it persists', async () => {
+    const { result, unmount } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    act(() =>
+      result.current.resetDraft({
+        title: 'Migrate CPQ',
+        seededFrom: { text: 'Migrate CPQ', productIds: ['p1'] },
+      })
+    );
+    await waitFor(() => expect(globalThis.localStorage.getItem(KEY)).toContain('seededFrom'));
+    unmount();
+
+    const { result: reloaded } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(reloaded.current.draft.seededFrom).toEqual({ text: 'Migrate CPQ', productIds: ['p1'] });
+  });
+
+  it.each<[string, unknown, unknown]>([
+    ['missing', undefined, null],
+    ['not an object', 'Migrate', null],
+    ['a non-string text', { text: 42, productIds: ['p1'] }, { text: null, productIds: ['p1'] }],
+    [
+      'non-string product ids',
+      { text: 'x', productIds: ['p1', 7] },
+      { text: 'x', productIds: ['p1'] },
+    ],
+  ])('narrows a persisted seededFrom that is %s', (_label, stored, expected) => {
+    seed({ title: 't', seededFrom: stored });
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.seededFrom).toEqual(expected);
+  });
+
+  it('replaceDraft restores a snapshot whole, and both autosave', async () => {
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    act(() => result.current.setField('title', 'Earlier draft'));
+    const snapshot = result.current.draft;
+    act(() => result.current.resetDraft({ title: 'New search' }));
+    await waitFor(() => expect(globalThis.localStorage.getItem(KEY)).toContain('New search'));
+
+    act(() => result.current.replaceDraft(snapshot));
+    expect(result.current.draft).toEqual(snapshot);
+    await waitFor(() => expect(globalThis.localStorage.getItem(KEY)).toContain('Earlier draft'));
+  });
+
+  it('revision bumps on resetDraft and replaceDraft only — never on setField or clearDraft', () => {
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.revision).toBe(0);
+    act(() => result.current.setField('title', 'x'));
+    expect(result.current.revision).toBe(0);
+    act(() => result.current.resetDraft({ title: 'y' }));
+    expect(result.current.revision).toBe(1);
+    act(() => result.current.replaceDraft(result.current.draft));
+    expect(result.current.revision).toBe(2);
+    act(() => result.current.clearDraft());
+    expect(result.current.revision).toBe(2);
+  });
+
+  it('a draft reset right after clearDraft is autosaved again (the clear latch is lifted)', async () => {
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    act(() => result.current.clearDraft());
+    act(() => result.current.resetDraft({ title: 'After submit' }));
+    await waitFor(() => expect(globalThis.localStorage.getItem(KEY)).toContain('After submit'));
+  });
+});

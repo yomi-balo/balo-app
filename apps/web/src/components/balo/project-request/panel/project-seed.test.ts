@@ -2,9 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { validateDescription } from '@/components/balo/rich-text/plain-text';
 import {
   descriptionTextToHtml,
+  freshDraftFields,
+  hasOwnContent,
   initialStepFor,
+  isNewSearch,
   isSeedEmpty,
   mergeSeedProductIds,
+  seedProductsChanged,
+  seedSearchText,
   seedTextPatch,
   type ProjectRequestSeed,
 } from './project-seed';
@@ -30,7 +35,7 @@ describe('descriptionTextToHtml', () => {
   });
 });
 
-describe('seedTextPatch', () => {
+describe('seedTextPatch (a seed that CONTINUES the draft — fills blanks only)', () => {
   it('fills an empty title', () => {
     const patch = seedTextPatch(EMPTY_TEXT_DRAFT, { title: 'Migrate to Sales Cloud' });
     expect(patch.title).toBe('Migrate to Sales Cloud');
@@ -41,9 +46,9 @@ describe('seedTextPatch', () => {
     expect(patch.title).toBe('A real title');
   });
 
-  it('does not overwrite an existing title', () => {
+  it('keeps an existing title (an edit made in the panel)', () => {
     const patch = seedTextPatch(
-      { ...EMPTY_TEXT_DRAFT, title: 'Already typed' },
+      { ...EMPTY_TEXT_DRAFT, title: 'Edited in the panel' },
       { title: 'Seeded title' }
     );
     expect(patch.title).toBeUndefined();
@@ -57,9 +62,9 @@ describe('seedTextPatch', () => {
     expect(patch.descriptionHtml).toBe('<p>We need help scoping this.</p>');
   });
 
-  it('does not overwrite an existing description', () => {
+  it('keeps an existing description', () => {
     const patch = seedTextPatch(
-      { ...EMPTY_TEXT_DRAFT, descriptionHtml: '<p>Already typed</p>' },
+      { ...EMPTY_TEXT_DRAFT, descriptionHtml: '<p>Edited in the panel</p>' },
       { descriptionText: 'Seeded description' }
     );
     expect(patch.descriptionHtml).toBeUndefined();
@@ -68,6 +73,179 @@ describe('seedTextPatch', () => {
   it('returns an empty patch for a seed with no text', () => {
     const patch = seedTextPatch(EMPTY_TEXT_DRAFT, { productIds: ['p1'] });
     expect(patch).toEqual({});
+  });
+});
+
+const EMPTY_DRAFT: ProjectDraft = {
+  routing: 'match',
+  title: '',
+  descriptionHtml: '',
+  tagIds: [],
+  productIds: [],
+  documents: [],
+  budgetMinCents: null,
+  budgetMaxCents: null,
+  timeline: null,
+  source: 'manual',
+  seededFrom: null,
+};
+
+describe('seedSearchText', () => {
+  it.each<[ProjectRequestSeed, string | null]>([
+    [{ title: 'short' }, 'short'],
+    [{ descriptionText: 'long' }, 'long'],
+    [{ productIds: ['p1'] }, null],
+    [{}, null],
+  ])('%j -> %j', (seed, expected) => {
+    expect(seedSearchText(seed)).toBe(expected);
+  });
+});
+
+describe('isNewSearch', () => {
+  const titled = { ...EMPTY_DRAFT, title: 'Old project title' };
+
+  it('a search that differs from a title saved on an earlier visit is NEW', () => {
+    expect(isNewSearch(titled, { title: 'Migrate from Tableau' })).toBe(true);
+  });
+
+  it('a LONG search (description seed) is new against a saved draft too', () => {
+    expect(isNewSearch(titled, { descriptionText: 'A long brief' })).toBe(true);
+  });
+
+  it('the search that STARTED the draft continues it — even after its title was edited', () => {
+    const edited = {
+      ...EMPTY_DRAFT,
+      title: 'Edited in the panel',
+      seededFrom: { text: 'Migrate CPQ', productIds: [] },
+    };
+    expect(isNewSearch(edited, { title: 'Migrate CPQ' })).toBe(false);
+  });
+
+  it('the long search that started the draft continues it — even after its brief was edited', () => {
+    const edited = {
+      ...EMPTY_DRAFT,
+      descriptionHtml: '<p>Edited brief</p>',
+      seededFrom: { text: 'Same long search', productIds: [] },
+    };
+    expect(isNewSearch(edited, { descriptionText: 'Same long search' })).toBe(false);
+  });
+
+  it('a different search is new even though a search started the draft', () => {
+    const seeded = {
+      ...EMPTY_DRAFT,
+      title: 'First search',
+      seededFrom: { text: 'First search', productIds: [] },
+    };
+    expect(isNewSearch(seeded, { title: 'Another search' })).toBe(true);
+  });
+
+  it('a draft no search started, already titled with this search (trimmed), continues', () => {
+    expect(isNewSearch({ ...EMPTY_DRAFT, title: '  Same  ' }, { title: 'Same' })).toBe(false);
+  });
+
+  it('a draft no search started, already holding this long search as its brief, continues', () => {
+    const draft = { ...EMPTY_DRAFT, descriptionHtml: '<p>A long brief</p>' };
+    expect(isNewSearch(draft, { descriptionText: 'A long brief' })).toBe(false);
+  });
+
+  it('a seed with no text (products from chips alone) is never new', () => {
+    expect(isNewSearch(titled, { productIds: ['p1'] })).toBe(false);
+  });
+});
+
+describe('freshDraftFields', () => {
+  it('a short search is the title, with an empty brief, and records its search + chips', () => {
+    expect(freshDraftFields({ title: 'Migrate', productIds: ['p1'] })).toEqual({
+      title: 'Migrate',
+      descriptionHtml: '',
+      seededFrom: { text: 'Migrate', productIds: ['p1'] },
+    });
+  });
+
+  it('a long search is the escaped brief, with an EMPTY title (never a stale one)', () => {
+    expect(freshDraftFields({ descriptionText: 'Move <all> reports' })).toEqual({
+      title: '',
+      descriptionHtml: '<p>Move &lt;all&gt; reports</p>',
+      seededFrom: { text: 'Move <all> reports', productIds: [] },
+    });
+  });
+});
+
+describe('seedProductsChanged', () => {
+  const seeded = { seededFrom: { text: 'x', productIds: ['a', 'b'] } };
+
+  it('the same chips, in any order, are unchanged', () => {
+    expect(seedProductsChanged(seeded, { productIds: ['b', 'a'] })).toBe(false);
+  });
+
+  it('an added or removed chip is a change', () => {
+    expect(seedProductsChanged(seeded, { productIds: ['a', 'b', 'c'] })).toBe(true);
+    expect(seedProductsChanged(seeded, { productIds: ['a'] })).toBe(true);
+  });
+
+  it('no chips against a draft no search seeded is unchanged; any chip is a change', () => {
+    expect(seedProductsChanged({ seededFrom: null }, {})).toBe(false);
+    expect(seedProductsChanged({ seededFrom: null }, { productIds: ['a'] })).toBe(true);
+  });
+});
+
+describe('hasOwnContent', () => {
+  it('an empty draft has none — routing, source and a cleared editor do not count', () => {
+    expect(hasOwnContent(EMPTY_DRAFT)).toBe(false);
+    expect(
+      hasOwnContent({
+        ...EMPTY_DRAFT,
+        routing: 'direct',
+        source: 'ai',
+        descriptionHtml: '<p></p>',
+        title: '  ',
+      })
+    ).toBe(false);
+  });
+
+  it('what the search seeded is not the visitor’s own: its title, brief and chip products', () => {
+    const origin = { text: 'Migrate CPQ', productIds: ['p1'] };
+    expect(
+      hasOwnContent({
+        ...EMPTY_DRAFT,
+        title: 'Migrate CPQ',
+        productIds: ['p1'],
+        seededFrom: origin,
+      })
+    ).toBe(false);
+    expect(
+      hasOwnContent({
+        ...EMPTY_DRAFT,
+        descriptionHtml: '<p>A long search</p>',
+        seededFrom: { text: 'A long search', productIds: [] },
+      })
+    ).toBe(false);
+  });
+
+  it.each<[string, Partial<ProjectDraft>]>([
+    ['an edited title', { title: 'Edited' }],
+    ['a written brief', { descriptionHtml: '<p>My own brief</p>' }],
+    ['a product beyond the chips', { productIds: ['p1', 'p2'] }],
+    ['tags', { tagIds: ['t1'] }],
+    [
+      'documents',
+      {
+        documents: [
+          { r2Key: 'k', fileName: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1 },
+        ],
+      },
+    ],
+    ['a budget minimum (even 0)', { budgetMinCents: 0 }],
+    ['a budget maximum', { budgetMaxCents: 100 }],
+    ['a timeline', { timeline: '6 weeks' }],
+  ])('counts %s', (_label, patch) => {
+    const seeded = {
+      ...EMPTY_DRAFT,
+      title: 'Migrate CPQ',
+      productIds: ['p1'],
+      seededFrom: { text: 'Migrate CPQ', productIds: ['p1'] },
+    };
+    expect(hasOwnContent({ ...seeded, ...patch })).toBe(true);
   });
 });
 

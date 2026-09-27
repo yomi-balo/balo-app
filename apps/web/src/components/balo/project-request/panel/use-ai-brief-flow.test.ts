@@ -45,6 +45,7 @@ const DRAFT: ProjectDraft = {
   budgetMaxCents: null,
   timeline: null,
   source: 'ai',
+  seededFrom: null,
 };
 
 /** ⚠ DRAFT.documents is EMPTY, which is itself a reset trigger. Use this where the test is

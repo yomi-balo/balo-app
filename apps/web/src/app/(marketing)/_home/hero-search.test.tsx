@@ -570,6 +570,31 @@ describe('HeroSearch — BAL-582 project submit and panel seeding', () => {
     expect(JSON.parse(stub.getAttribute('data-seed') ?? 'null')).toEqual({ title: query });
   });
 
+  it('open → close → CHANGED search → reopen hands the panel the NEW search, never the first', async () => {
+    renderHeroSearch();
+    const user = await switchToProjectMode();
+    const input = screen.getByRole('textbox', {
+      name: HERO_MODE_COPY.projectInputLabel('Salesforce'),
+    });
+    const submit = screen.getByRole('button', { name: HERO_MODE_COPY.submit.project });
+
+    await user.type(input, 'first search');
+    await user.click(submit);
+    const stub = await screen.findByTestId('home-project-panel-stub');
+    expect(JSON.parse(stub.getAttribute('data-seed') ?? 'null')).toEqual({ title: 'first search' });
+
+    await user.click(screen.getByRole('button', { name: 'close-panel-stub' }));
+    expect(stub).toHaveAttribute('data-open', 'false');
+
+    await user.clear(input);
+    await user.type(input, 'a different search');
+    await user.click(submit);
+    expect(stub).toHaveAttribute('data-open', 'true');
+    expect(JSON.parse(stub.getAttribute('data-seed') ?? 'null')).toEqual({
+      title: 'a different search',
+    });
+  });
+
   it('a query over 120 characters seeds descriptionText instead of title', async () => {
     renderHeroSearch();
     const user = await switchToProjectMode();

@@ -53,8 +53,9 @@ export function projectScore(query: string, productCount: number): number {
  * `seed: undefined` (so the panel opens at `start`, per `initialStepFor`); an empty query with
  * products still yields a non-empty `{ productIds }` seed.
  *
- * `seededInto` reflects the hero's INTENDED target computed from the query alone — the panel may
- * skip a field the draft already holds (AC7), so this is not applied provenance.
+ * `seededInto` reflects the hero's INTENDED target computed from the query alone — reopening the
+ * panel with the same search continues the draft and skips a field it already holds
+ * (`useProjectSeed`), so this is not applied provenance.
  */
 export function seedFromHeroQuery(
   query: string,

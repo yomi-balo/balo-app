@@ -35,6 +35,7 @@ import { GenerationErrorBanner } from './generation-error-banner';
 import { useAiBriefFlow } from './use-ai-brief-flow';
 import { initialStepFor, type ProjectRequestSeed } from './project-seed';
 import { useProjectSeed } from './use-project-seed';
+import { NewRequestNotice } from './new-request-notice';
 import { projectFunnelDimensions } from './funnel-dimensions';
 import {
   useProjectDraft,
@@ -83,8 +84,9 @@ export interface ProjectRequestPanelProps {
   onSubmitted?: (requestId: string) => void;
   /**
    * BAL-582 (§3b) — hero-provided text/product prefill, applied ONCE PER OPEN by
-   * `useProjectSeed`. Existing mounts pass nothing (AC8): no seed, no behaviour change. Never
-   * overwrites an existing draft or in-panel edit (AC7).
+   * `useProjectSeed`. Existing mounts pass nothing (AC8): no seed, no behaviour change. Fresh
+   * search text replaces the autosaved draft's; a reopen with the same search text keeps any edit
+   * made in the panel (`seedTextPatch`).
    */
   seed?: ProjectRequestSeed;
   /**
@@ -116,6 +118,13 @@ const GENERATING_HEADINGS = [
 ] as const;
 
 const DESCRIPTION_PLACEHOLDER_SUFFIX = ' later.';
+
+/**
+ * The unmatched-label hints belong to an AI-generated brief. `useAiBriefFlow` keeps them in its
+ * own state for the life of the mount, so once a new hero search has started a fresh (manual)
+ * draft they must not resurface on its review step.
+ */
+const NO_UNMATCHED_LABELS: { tags: string[]; products: string[] } = { tags: [], products: [] };
 
 const EMPTY_TAXONOMIES: ProjectRequestTaxonomies = {
   tags: EMPTY_TAXONOMY,
@@ -219,7 +228,10 @@ export function ProjectRequestPanel({
 }: Readonly<ProjectRequestPanelProps>): React.JSX.Element {
   // Read before the step state: it reads only props, and the step initialiser below needs
   // `draft.source` to decide a resumed mount's opening step.
-  const { draft, setField, clearDraft } = useProjectDraft(expertProfileId, entryPoint);
+  const { draft, setField, clearDraft, resetDraft, replaceDraft, revision } = useProjectDraft(
+    expertProfileId,
+    entryPoint
+  );
   const { routing, title, descriptionHtml, tagIds, productIds, budgetMinCents, budgetMaxCents } =
     draft;
 
@@ -234,7 +246,17 @@ export function ProjectRequestPanel({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  // ⚠ UPLOAD STATE IS PER DRAFT REVISION. A new hero search's fresh start and its Undo replace the
+  // draft wholesale (bumping `revision`) while an upload begun under the replaced draft may still
+  // be in flight — `DocumentUploader` keeps publishing after it unmounts. Each update is tagged
+  // with the revision its uploader was rendered under and dropped once that revision is gone, so
+  // the replaced draft's files never land in the fresh draft (or over the restored one).
+  const [uploadingState, setUploadingState] = useState({ revision, value: false });
+  const uploading = uploadingState.revision === revision && uploadingState.value;
+  const revisionRef = useRef(revision);
+  useEffect(() => {
+    revisionRef.current = revision;
+  }, [revision]);
   // Snapshot of the routing at submit time — the done screen + success toast read
   // this, NOT the live draft (which `clearDraft()` resets on success).
   const expertBound = expertProfileId !== undefined;
@@ -364,7 +386,15 @@ export function ProjectRequestPanel({
   }, [open, step, expertProfileId, entryPoint]);
 
   // BAL-582 (§3b) — applies the hero seed to the draft once per open (never sets `step`).
-  useProjectSeed({ open, seed, draft, setField, productsTaxonomy: taxonomies.products });
+  const newRequestUndo = useProjectSeed({
+    open,
+    seed,
+    draft,
+    setField,
+    resetDraft,
+    replaceDraft,
+    productsTaxonomy: taxonomies.products,
+  });
 
   // Clear any stale submit error once the user leaves the review step.
   useEffect(() => {
@@ -432,9 +462,16 @@ export function ProjectRequestPanel({
     if (reviewValid) setStep('review');
   }, [reviewValid]);
 
-  const handleDocumentsChange = useCallback(
-    (docs: ProjectDraft['documents']) => setField('documents', docs),
-    [setField]
+  const uploadHandlers = useMemo(
+    () => ({
+      onDocumentsChange: (docs: ProjectDraft['documents']) => {
+        if (revision === revisionRef.current) setField('documents', docs);
+      },
+      onUploadingChange: (value: boolean) => {
+        if (revision === revisionRef.current) setUploadingState({ revision, value });
+      },
+    }),
+    [revision, setField]
   );
 
   // Budget inputs are WHOLE DOLLARS (numeric, coarse ranges). We take the part
@@ -581,6 +618,7 @@ export function ProjectRequestPanel({
 
   const manualBody = (
     <ManualStepFields
+      notice={newRequestUndo === null ? undefined : <NewRequestNotice {...newRequestUndo} />}
       onBack={() => setStep('start')}
       manualHeading={copy.manualHeading}
       formDescription={copy.formDescription}
@@ -612,8 +650,8 @@ export function ProjectRequestPanel({
       productsError={productsError}
       onRetryTaxonomies={handleRetryTaxonomies}
       documents={draft.documents}
-      onDocumentsChange={handleDocumentsChange}
-      onUploadingChange={setUploading}
+      onDocumentsChange={uploadHandlers.onDocumentsChange}
+      onUploadingChange={uploadHandlers.onUploadingChange}
       onRequireAuth={onAuthRequired}
       budgetMinCents={budgetMinCents}
       budgetMaxCents={budgetMaxCents}
@@ -658,7 +696,12 @@ export function ProjectRequestPanel({
           )}
         </DrawerHeader>
 
+        {/* ⚠ KEYED ON `revision`: a new hero search starts a fresh draft and its Undo restores
+            the earlier one, each replacing the draft wholesale. `DocumentUploader` reads
+            `initialDocuments` only on mount, so without a remount it would keep listing the
+            replaced draft's files — and, since it REPLACES on change, write them back. */}
         <ProjectRequestDrawerBody
+          key={revision}
           step={step}
           startHeading={startHeading}
           startBody={startBody}
@@ -670,8 +713,8 @@ export function ProjectRequestPanel({
           isUploadFailed={isUploadFailed}
           headingIndex={briefGeneration.headingIndex}
           failureReason={briefGeneration.failureReason}
-          onDocumentsChange={handleDocumentsChange}
-          onUploadingChange={setUploading}
+          onDocumentsChange={uploadHandlers.onDocumentsChange}
+          onUploadingChange={uploadHandlers.onUploadingChange}
           onRequireAuth={onAuthRequired}
           onRetryGenerate={handleRetryGenerate}
           onWriteItMyself={handleWriteItMyself}
@@ -681,7 +724,7 @@ export function ProjectRequestPanel({
           productNameMap={productNameMap}
           onEditReview={() => setStep('manual')}
           aiBanner={aiBanner}
-          unmatchedLabels={unmatchedLabels}
+          unmatchedLabels={draft.source === 'ai' ? unmatchedLabels : NO_UNMATCHED_LABELS}
           isAiPath={isAiPath}
           onDismissRegenerateFailure={briefGeneration.dismissFailure}
           reviewReassurance={copy.reviewReassurance}
@@ -1118,6 +1161,8 @@ function ProjectRequestDrawerFooter({
 }
 
 interface ManualStepFieldsProps {
+  /** Shown above everything else on the step — the new-request Undo (`NewRequestNotice`). */
+  notice?: React.ReactNode;
   onBack: () => void;
   manualHeading: string | null;
   formDescription: string;
@@ -1169,6 +1214,7 @@ interface ManualStepFieldsProps {
  * pushed the panel's own cognitive complexity over the SonarCloud gate.
  */
 function ManualStepFields({
+  notice,
   onBack,
   manualHeading,
   formDescription,
@@ -1213,6 +1259,7 @@ function ManualStepFields({
 }: Readonly<ManualStepFieldsProps>): React.JSX.Element {
   return (
     <div className="space-y-6 p-6">
+      {notice}
       <button
         type="button"
         onClick={onBack}

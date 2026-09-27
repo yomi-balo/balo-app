@@ -60,13 +60,93 @@ export function descriptionTextToHtml(text: string): string {
   return `<p>${escapeText(text)}</p>`;
 }
 
+/** The search text a seed carries — its title, or a long search's description — else `null`. */
+export function seedSearchText(seed: ProjectRequestSeed): string | null {
+  return seed.title ?? seed.descriptionText ?? null;
+}
+
+/** Same ids, in any order. */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((id) => set.has(id));
+}
+
 /**
- * The patch to apply to the draft's TEXT fields (BAL-582 §3b / AC7 — "never overwrites an
- * existing draft or in-panel edit"). Title fills only when the draft's title is blank;
- * description fills only when the editor has no meaningful text yet (`isDescriptionEmpty` reads
- * plain-text length, so a cleared editor's autosaved `<p></p>` still counts as empty). A field the
- * seed doesn't carry, or that the draft already holds, is simply absent from the returned patch —
- * never an explicit `undefined` value.
+ * Is this seed a NEW search — one that starts a fresh request instead of continuing the draft?
+ * What the visitor typed in the hero search bar takes precedence over the autosaved draft, so a
+ * title saved on an earlier visit can never pin every later search to it.
+ *
+ * Only a seed carrying search text can be new (an empty search bar with product chips continues
+ * the draft). It continues the draft — is NOT new — when:
+ * - the draft was started from this very search (`seededFrom.text`, persisted), whatever has been
+ *   edited in the panel since, on this visit or an earlier one; or
+ * - the draft already holds exactly this text (a draft no search started, titled the same).
+ */
+export function isNewSearch(
+  draft: Pick<ProjectDraft, 'title' | 'descriptionHtml' | 'seededFrom'>,
+  seed: ProjectRequestSeed
+): boolean {
+  const text = seedSearchText(seed);
+  if (text === null) return false;
+  if (draft.seededFrom?.text === text) return false;
+  if (seed.title !== undefined) return seed.title !== draft.title.trim();
+  return descriptionTextToHtml(text) !== draft.descriptionHtml;
+}
+
+/** A new search's fresh draft: the seed's text, and a record of the search that started it. */
+export function freshDraftFields(
+  seed: ProjectRequestSeed
+): Pick<ProjectDraft, 'title' | 'descriptionHtml' | 'seededFrom'> {
+  return {
+    title: seed.title ?? '',
+    descriptionHtml:
+      seed.descriptionText === undefined ? '' : descriptionTextToHtml(seed.descriptionText),
+    seededFrom: { text: seedSearchText(seed), productIds: [...(seed.productIds ?? [])] },
+  };
+}
+
+/** Did the hero's product chips change since the search that seeded this draft? */
+export function seedProductsChanged(
+  draft: Pick<ProjectDraft, 'seededFrom'>,
+  seed: ProjectRequestSeed
+): boolean {
+  return !sameIds(seed.productIds ?? [], draft.seededFrom?.productIds ?? []);
+}
+
+/**
+ * Does the draft hold anything the visitor added THEMSELVES — beyond the text and product chips
+ * the search seeded (`seededFrom`)? That is what a new search would set aside, so it decides
+ * whether Undo is worth offering, and the offer lapses as soon as the fresh draft gains any.
+ * Routing and `source` never count: they are defaults or bookkeeping.
+ */
+export function hasOwnContent(draft: ProjectDraft): boolean {
+  const seededText = draft.seededFrom?.text ?? null;
+  const seededIds = new Set(draft.seededFrom?.productIds ?? []);
+  const title = draft.title.trim();
+  const ownTitle = title !== '' && title !== seededText;
+  const ownDescription =
+    !isDescriptionEmpty(draft.descriptionHtml) &&
+    (seededText === null || draft.descriptionHtml !== descriptionTextToHtml(seededText));
+  return (
+    ownTitle ||
+    ownDescription ||
+    draft.productIds.some((id) => !seededIds.has(id)) ||
+    draft.tagIds.length > 0 ||
+    draft.documents.length > 0 ||
+    draft.budgetMinCents !== null ||
+    draft.budgetMaxCents !== null ||
+    draft.timeline !== null
+  );
+}
+
+/**
+ * The patch to apply to the draft's TEXT fields when the seed CONTINUES the draft (not
+ * `isNewSearch`). It only fills a blank field, so an edit made in the panel always survives a
+ * reopen: title when the draft's is blank; description when the editor has no meaningful text
+ * (`isDescriptionEmpty` reads plain-text length, so a cleared editor's autosaved `<p></p>` still
+ * counts as empty). A field the seed doesn't carry, or that the draft already holds, is simply
+ * absent from the returned patch — never an explicit `undefined` value.
  */
 export function seedTextPatch(
   draft: Pick<ProjectDraft, 'title' | 'descriptionHtml'>,
