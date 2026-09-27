@@ -335,12 +335,22 @@
      stock `animate-ping` and would silently retime.
      ⚠ Its own keyframes on purpose. Reusing core's `ping` name would make this token's animation
      depend on some OTHER file still using `animate-ping` for the keyframes to reach the bundle —
-     a silent no-animation regression no gate can see. */
+     a silent no-animation regression no gate can see.
+     ⚠ A FIXED-PIXEL halo, never `transform: scale()`. Scale is relative to the element, so on a
+     44px-tall, full-width Join it throws the ring tens of pixels past the button — a distraction,
+     not a cue. `box-shadow` spread grows the same 8px on every side at every button size: the
+     shape of `case-surface.jsx`'s `baloPulse`, a touch tighter than its 9px but starting stronger
+     (50%, not 40%) so it still reads on the dark theme's card. The colour is the element's
+     `currentColor`, so the call site owns it. */
   --animate-ping-slow: pingSlow 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
   @keyframes pingSlow {
-    75%,
+    0% {
+      box-shadow: 0 0 0 0 currentColor;
+      opacity: 0.5;
+    }
+    70%,
     100% {
-      transform: scale(2);
+      box-shadow: 0 0 0 8px currentColor;
       opacity: 0;
     }
   }
