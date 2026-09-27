@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { completeOnboardingAction } from '@/lib/auth/actions/complete-onboarding';
 import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
+import { forgetPendingHomeProject } from '@/lib/marketing/pending-home-project';
 import { cn } from '@/lib/utils';
 import {
   FindExpertIllustration,
@@ -265,6 +266,10 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
           intent: 'expert',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
+        // BAL-582 D1 — a signed-in visit to `/` within the marker's 30-minute window would
+        // otherwise auto-reopen the home project panel. The expert path never returns to `/`,
+        // so the marker (if any) is stale from here on; drop it before navigating away.
+        forgetPendingHomeProject();
         // HIGH 3 — `pendingApplyReturnTo` wins when present; otherwise unchanged
         // (the expert intent's computed `redirectTo` is already `/expert/apply`
         // today, so this is a no-op for that branch and only matters as a

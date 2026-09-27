@@ -8,6 +8,7 @@ import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
+import { isSessionOwnedProjectDocumentKey } from '@balo/shared/project-requests';
 import { projectRequestInputSchema } from './schemas';
 
 /** Raw (pre-validation) input — `source` and arrays are optional (schema defaults them). */
@@ -36,7 +37,28 @@ export const submitProjectRequestAction = withAuth(
         return { success: false, error: 'Add a few words about what you need.' };
       }
 
-      // 2. Validate tag/product IDs against the request's vertical taxonomy.
+      // 2. Reject any document ref whose r2Key falls outside this session's scope. The
+      //    `entry:home` draft is not user-scoped (D1) and survives sign-in, so a document key
+      //    from a different session could otherwise be carried into a submit. ONE definition,
+      //    shared with confirmProjectDocumentUploadAction and startProjectBriefParseAction.
+      const ownerScope = { companyId: session.user.companyId, userId: session.user.id };
+      const foreignDocumentCount = input.documents.filter(
+        (d) => !isSessionOwnedProjectDocumentKey(d.r2Key, ownerScope)
+      ).length;
+      if (foreignDocumentCount > 0) {
+        log.warn('Project request rejected — document key outside session scope', {
+          userId: session.user.id,
+          companyId: session.user.companyId,
+          documentCount: input.documents.length,
+          foreignDocumentCount,
+        });
+        return {
+          success: false,
+          error: "One or more attached files can't be used. Remove and re-attach them.",
+        };
+      }
+
+      // 3. Validate tag/product IDs against the request's vertical taxonomy.
       //    Unknown IDs are rejected (not silently dropped) — surfaces tampering
       //    and keeps the junction `restrict` FKs from ever firing.
       const vertical = await referenceDataRepository.getSalesforceVertical();
@@ -59,11 +81,11 @@ export const submitProjectRequestAction = withAuth(
         return { success: false, error: 'Some of your selections are no longer available.' };
       }
 
-      // 3. Resolve the expert (direct only). companyId/createdByUserId are from
+      // 4. Resolve the expert (direct only). companyId/createdByUserId are from
       //    the session, never client-supplied.
       const expertProfileId = input.sendTo === 'direct' ? input.expertProfileId : null;
 
-      // 4. Persist request + tags + products + documents in one transaction.
+      // 5. Persist request + tags + products + documents in one transaction.
       const created = await projectRequestsRepository.createProjectRequest({
         request: {
           companyId: session.user.companyId,
@@ -110,7 +132,7 @@ export const submitProjectRequestAction = withAuth(
         hasTimeline: input.timeline !== null,
       });
 
-      // 5. Publish the routing-appropriate event (fire-and-forget — a
+      // 6. Publish the routing-appropriate event (fire-and-forget — a
       //    notification failure must not fail the submit).
       if (input.sendTo === 'direct' && expertProfileId) {
         publishNotificationEvent('project.request_submitted', {

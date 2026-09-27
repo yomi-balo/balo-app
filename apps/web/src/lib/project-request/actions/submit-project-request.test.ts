@@ -10,9 +10,14 @@ type RawInput = z.input<typeof projectRequestInputSchema>;
 const EXPERT_PROFILE_ID = 'a0000000-0000-4000-8000-000000000001';
 const TAG_ID = 'b0000000-0000-4000-8000-000000000002';
 const PRODUCT_ID = 'c0000000-0000-4000-8000-000000000003';
-const USER_ID = 'user-1';
-const COMPANY_ID = 'company-1';
+// 36-char uuid-shaped segments to satisfy isSessionOwnedProjectDocumentKey's shape check.
+const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const CREATED_ID = 'request-1';
+const OWNED_DOCUMENT_KEY = `project-documents/${COMPANY_ID}/${USER_ID}/cccccccc-cccc-4ccc-8ccc-cccccccccccc`;
+const FOREIGN_DOCUMENT_KEY =
+  'project-documents/dddddddd-dddd-4ddd-8ddd-dddddddddddd/' +
+  'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/ffffffff-ffff-4fff-8fff-ffffffffffff';
 
 // ── Mocks ────────────────────────────────────────────────────────
 
@@ -172,7 +177,7 @@ describe('submitProjectRequestAction', () => {
           productIds: [PRODUCT_ID],
           documents: [
             {
-              r2Key: 'project-documents/c/u/d',
+              r2Key: OWNED_DOCUMENT_KEY,
               fileName: 'brief.pdf',
               contentType: 'application/pdf',
               sizeBytes: 1024,
@@ -184,9 +189,7 @@ describe('submitProjectRequestAction', () => {
         expect.objectContaining({
           tagIds: [TAG_ID],
           productIds: [PRODUCT_ID],
-          documents: [
-            expect.objectContaining({ r2Key: 'project-documents/c/u/d', sizeBytes: 1024 }),
-          ],
+          documents: [expect.objectContaining({ r2Key: OWNED_DOCUMENT_KEY, sizeBytes: 1024 })],
         })
       );
     });
@@ -301,6 +304,54 @@ describe('submitProjectRequestAction', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('Add a few words about what you need.');
       expect(mockCreateProjectRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('document key ownership', () => {
+    it('rejects a document r2Key scoped to a different session', async () => {
+      const result = await submitProjectRequestAction(
+        directInput({
+          documents: [
+            {
+              r2Key: FOREIGN_DOCUMENT_KEY,
+              fileName: 'brief.pdf',
+              contentType: 'application/pdf',
+              sizeBytes: 1024,
+            },
+          ],
+        })
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toBe(
+        "One or more attached files can't be used. Remove and re-attach them."
+      );
+      expect(mockCreateProjectRequest).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalledWith(
+        'Project request rejected — document key outside session scope',
+        expect.objectContaining({ documentCount: 1, foreignDocumentCount: 1 })
+      );
+      // Never logs the key's content.
+      expect(log.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ r2Key: expect.anything() })
+      );
+    });
+
+    it('accepts a document r2Key scoped to the session', async () => {
+      const result = await submitProjectRequestAction(
+        directInput({
+          documents: [
+            {
+              r2Key: OWNED_DOCUMENT_KEY,
+              fileName: 'brief.pdf',
+              contentType: 'application/pdf',
+              sizeBytes: 1024,
+            },
+          ],
+        })
+      );
+      expect(result.success).toBe(true);
+      expect(mockCreateProjectRequest).toHaveBeenCalled();
     });
   });
 

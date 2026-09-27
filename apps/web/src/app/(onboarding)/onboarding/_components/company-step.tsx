@@ -27,6 +27,7 @@ import {
 import type { AuthMethodSignal } from '@/lib/auth/auth-method';
 import { companyNameSchema, type CompanyNameForm } from '@/lib/auth/company-name-schema';
 import { track, AUTH_EVENTS, ONBOARDING_EVENTS, DOMAIN_JOIN_EVENTS } from '@/lib/analytics';
+import { forgetPendingHomeProject } from '@/lib/marketing/pending-home-project';
 import { DomainJoinPending } from './domain-join-pending';
 
 type Phase = 'resolving' | 'create' | 'join' | 'pending';
@@ -38,11 +39,15 @@ interface CompanyStepProps {
   timezone?: string | null;
   stepNumber: number;
   onBack: () => void;
-  /** HIGH 3 (BAL-502 FIX round) — see `intent-step.tsx`'s prop of the same name.
-   * Overrides every terminal redirect below so a visitor who started at the
-   * anonymous /expert/apply wizard but picked "Find an Expert" here still lands
-   * back on their in-progress application, rather than losing it at `/dashboard`. */
-  pendingApplyReturnTo?: string | null;
+  /** Overrides a terminal redirect, resolved at PUSH TIME (not at mount) so a TTL-backed
+   * source can't go stale while the visitor works through the wizard. Returns an allow-listed
+   * literal, never user input: the pending apply-intent override (`/expert/apply`, so a visitor
+   * who started at the anonymous /expert/apply wizard but picked "Find an Expert" here still
+   * lands back on their in-progress application) always wins; `'/'` follows it only when
+   * `includeHome` is true AND a signed-out visitor came back from a home project panel sign-up
+   * (D6 — the "Explore Balo while you wait" terminal passes `includeHome: false` so it keeps its
+   * pre-BAL-582 destination and never returns to `/`). */
+  resolveReturnTo?: (opts: { includeHome: boolean }) => string | null;
 }
 
 /**
@@ -54,7 +59,7 @@ interface CompanyStepProps {
  * by the resolve action, never passed as a prop.
  */
 export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(function CompanyStep(
-  { authMethod, timezone, stepNumber, onBack, pendingApplyReturnTo = null },
+  { authMethod, timezone, stepNumber, onBack, resolveReturnTo },
   ref
 ) {
   const router = useRouter();
@@ -172,10 +177,12 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
           intent: 'client',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
-        router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
+        router.push(
+          resolveReturnTo?.({ includeHome: true }) ?? result.data?.redirectTo ?? '/dashboard'
+        );
       });
     },
-    [authMethod, resolvedStatus, stepNumber, timezone, router, pendingApplyReturnTo]
+    [authMethod, resolvedStatus, stepNumber, timezone, router, resolveReturnTo]
   );
 
   // Escape hatch from the JOIN branch / pending screen — "This isn't my company /
@@ -227,7 +234,9 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
           intent: 'client',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
-        router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
+        router.push(
+          resolveReturnTo?.({ includeHome: true }) ?? result.data?.redirectTo ?? '/dashboard'
+        );
         return;
       }
 
@@ -239,11 +248,14 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
       track(DOMAIN_JOIN_EVENTS.INTERSTITIAL_CONTINUED, { mode: 'request', party_type: 'company' });
       setPhase('pending');
     });
-  }, [joinCompany, authMethod, stepNumber, timezone, router, pendingApplyReturnTo]);
+  }, [joinCompany, authMethod, stepNumber, timezone, router, resolveReturnTo]);
 
   // "Explore Balo while you wait" from the pending screen — completes onboarding
   // (client mode, no rename/join) and navigates. Fails CLOSED — an inline banner
-  // keeps the user on the pending screen with the request intact.
+  // keeps the user on the pending screen with the request intact. D6: this terminal is
+  // EXCLUDED from the home return — it keeps its pre-BAL-582 destination (apply override,
+  // then `redirectTo`, then `/dashboard`) — and forgets the pending home marker on success so a
+  // later visit to `/` doesn't auto-open the panel. The `entry:home` draft itself is untouched.
   const handleExplore = useCallback((): void => {
     setActionError(null);
     startTransition(async () => {
@@ -252,6 +264,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         setActionError(result.error);
         return;
       }
+      forgetPendingHomeProject();
       track(ONBOARDING_EVENTS.STEP_COMPLETED, {
         step: 'company',
         step_number: stepNumber,
@@ -261,9 +274,11 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         intent: 'client',
         timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
-      router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
+      router.push(
+        resolveReturnTo?.({ includeHome: false }) ?? result.data?.redirectTo ?? '/dashboard'
+      );
     });
-  }, [authMethod, stepNumber, timezone, router, pendingApplyReturnTo]);
+  }, [authMethod, stepNumber, timezone, router, resolveReturnTo]);
 
   if (phase === 'resolving') {
     return (

@@ -48,7 +48,7 @@
   --destructive-strong: oklch(0.5 0.208 25.4);
 
   /* BAL-493 — marketing surfaces (D4). Light values are converted from the design
-     reference's palette (marketing-home.jsx:190-209). See the .dark block below for
+     reference's palette (marketing-home.jsx:311-328). See the .dark block below for
      why the dark values are DESIGNED, not converted — the "For experts" band inverts
      rather than reusing --night as-is (ADR precedent: this file's own .expert-hero). */
   --mist: oklch(0.973 0.006 264);

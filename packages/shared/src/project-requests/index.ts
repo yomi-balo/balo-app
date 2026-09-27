@@ -134,3 +134,16 @@ export function narrowToProjectRequestCloseReason(
   if (typeof value !== 'string') return null;
   return PROJECT_REQUEST_CLOSE_REASONS.find((candidate) => candidate === value) ?? null;
 }
+
+/**
+ * BAL-582 — THE ONE definition of where a `ProjectRequestPanel` mount was opened FROM. Moved
+ * here (BAL-540 precedent, same file) from `panel/use-project-draft.ts` because it is now needed
+ * by `@balo/analytics`'s `ProjectEventMap` (D2: every panel funnel event carries `entry_point`),
+ * which must not depend on `apps/web`. `use-project-draft.ts` re-exports this rather than
+ * declaring its own union; `panel/index.ts` and `project-request-panel.tsx` keep re-exporting it
+ * from there, so no import site outside this package needs to change.
+ *
+ * `'home'` is the context-free Match-mode mount opened from the marketing home hero (BAL-582);
+ * its draft key is `balo:project-draft:entry:home`.
+ */
+export type ProjectRequestEntryPoint = 'profile' | 'search' | 'card' | 'direct' | 'home';

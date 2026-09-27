@@ -1,3 +1,4 @@
+import type { MarketingHomeHeroMode } from '@/lib/analytics';
 import type { MarketingIconKey } from './icons';
 
 /**
@@ -21,8 +22,14 @@ import type { MarketingIconKey } from './icons';
 
 export interface MarketingVertical {
   name: string;
-  /** Hero typewriter phrases — cycles while the search field is empty. */
+  /** Hero typewriter phrases — cycles while the search field is empty, in consultation mode. */
   phrases: readonly string[];
+  /**
+   * BAL-582 — hero typewriter phrases for project mode. Production style like `phrases` above
+   * (lowercase fragments, no ellipsis) — NOT the V1.5 design reference's literal phrases, which
+   * are capitalised, end in "…" and exist there only to drive the `projectScore` test fixtures.
+   */
+  projectPhrases: readonly string[];
   /** Hero facet "Popular:" chip labels shown under the search bar (distinct from the bench). */
   chips: readonly string[];
 }
@@ -37,8 +44,55 @@ export const VERTICAL: MarketingVertical = {
     'untangle a MuleSoft integration',
     'review your org before go-live',
   ],
+  projectPhrases: [
+    'migrate us from HubSpot to Sales Cloud',
+    'implement CPQ across two business units',
+    'roll out Agentforce for our support team',
+    'rebuild quote-to-cash in Revenue Cloud',
+    'stand up Data Cloud for marketing',
+  ],
   chips: ['Agentforce', 'Data Cloud', 'CPQ', 'Sales Cloud', 'Service Cloud', 'MuleSoft', 'Tableau'],
 };
+
+/**
+ * BAL-582 §1 — the hero's sentence mode toggle and project-mode copy, keyed by
+ * `MarketingHomeHeroMode` where the copy actually varies by mode. TODO(MJ): all strings below are
+ * placeholders pending real copy, same status as `VERTICAL.phrases` above.
+ *
+ * ⚠ "Free to submit" (not "no platform fee" or similar) — this module may not contain any
+ * `GLOBAL_FORBIDDEN` term (`copy-invariants.test.ts`).
+ */
+export const HERO_MODE_COPY = {
+  /** The sentence's fixed lead-in: "I want to {modes[mode]}". */
+  sentencePrefix: 'I want to',
+  /** The toggle phrase's two states. */
+  modes: {
+    consultation: 'book a consultation',
+    project: 'start a project',
+  } satisfies Record<MarketingHomeHeroMode, string>,
+  /**
+   * The phrase toggle button's `aria-label` — STABLE across both modes. A
+   * label that changes text on every click ("Mode: X. Switch to Y") is exposed to assistive tech
+   * as the accessible DESCRIPTION, re-narrating state that `aria-pressed` already carries; a
+   * fixed name is what lets a screen-reader user recognise the same control after it flips.
+   */
+  toggleLabel: 'Project mode',
+  /** The search bar's submit-button label, per mode. */
+  submit: {
+    consultation: 'Find experts',
+    project: 'Get a scoped proposal',
+  } satisfies Record<MarketingHomeHeroMode, string>,
+  /** The search input's `aria-label` in project mode, given the active vertical's name. */
+  projectInputLabel: (vertical: string) => `Describe the ${vertical} project you want scoped`,
+  /** The hint line shown under the search bar, in project mode only. */
+  projectHint: 'Free to submit — you get a scoped proposal, not a commitment.',
+  /** The intent nudge pill's copy. */
+  nudge: {
+    label: 'Sounds like a project',
+    cta: 'Get a scoped proposal',
+    dismiss: 'Dismiss suggestion',
+  },
+} as const;
 
 export interface MarketingMetric {
   value: number;

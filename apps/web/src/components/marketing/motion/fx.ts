@@ -1,6 +1,6 @@
 /**
  * BAL-493 §11 — the marketing-home parallax transform presets, ported from the design
- * reference's `fxBench`/`fxFloat` (`marketing-home.jsx:1260-1276`). Each preset is a
+ * reference's `fxBench`/`fxFloat` (`marketing-home.jsx:1449-1463`). Each preset is a
  * {@link ParallaxCompute} — a pure `(scrollY, parentRect, viewportHeight) => transform-string`
  * function — consumed by `<Parallax compute={...}>` (`parallax.tsx`). Kept separate from
  * `parallax.tsx` so the presets stay pure and independently testable/reusable, matching the
@@ -55,7 +55,7 @@ export function fxFloat(factor: number): ParallaxCompute {
   };
 }
 
-/** The five presets the ref hardcodes at `marketing-home.jsx:1269-1273`, used by name below. */
+/** The five presets the ref hardcodes at `marketing-home.jsx:1459-1463`, used by name below. */
 export const FX_BENCH_A: ParallaxCompute = fxBenchRow(-1);
 export const FX_BENCH_B: ParallaxCompute = fxBenchRow(1);
 export const FX_RECEIPT: ParallaxCompute = fxFloat(0.08);

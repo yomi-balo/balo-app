@@ -48,6 +48,7 @@ const RHYTHM: readonly RhythmCase[] = [
         productNameMap={{}}
         chips={[]}
         benchTiles={[]}
+        isLoggedIn={false}
       />
     ),
     assert: (root) => {

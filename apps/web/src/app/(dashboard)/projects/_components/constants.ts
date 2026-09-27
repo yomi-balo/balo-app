@@ -1,10 +1,10 @@
 /**
- * Shared portfolio-inbox front-door constant (BAL-274 / D3). There is no
- * `/projects/new` route yet — the only creation surface is the per-expert
- * `ProjectRequestPanel` on marketing expert-profile pages, so the "New request" button
- * and the client empty-state CTA both point at expert discovery. When BAL-253's
- * generic "match" front door lands, repoint this single constant — a one-line
- * rewire, no component changes.
+ * Shared portfolio-inbox front-door constant (BAL-274 / D3). There is no `/projects/new`
+ * route. The per-expert `ProjectRequestPanel` on marketing expert-profile pages is not the
+ * only creation surface — `/` also opens a context-free one (BAL-582) — but the "New request"
+ * button and the client empty-state CTA here point at expert discovery. Repointing this
+ * constant to the generic front door is out of scope (R6); when it happens it stays a
+ * one-line rewire, no component changes.
  */
 export const NEW_REQUEST_HREF = '/experts';
 

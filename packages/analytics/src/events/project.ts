@@ -7,6 +7,7 @@ import type {
   DeclinableRelationshipStatus,
   ProjectRequestCloseReason,
   ProjectBriefFailureReason,
+  ProjectRequestEntryPoint,
 } from '@balo/shared/project-requests';
 
 export const PROJECT_EVENTS = {
@@ -14,11 +15,13 @@ export const PROJECT_EVENTS = {
   PROJECT_ENTRY_SELECTED: 'project_entry_selected',
   PROJECT_STEP_VIEWED: 'project_step_viewed',
   // Legacy ProjectDrawer UI event (manual path), keyed off expert_id — NOT the
-  // persisted request_id — and predating the origination spine. SUPERSEDED by
-  // PROJECT_REQUEST_CREATED: do NOT sum the two in one metric and add no new fire
-  // sites. A1 consolidates — when it wires PROJECT_REQUEST_CREATED it should drop
-  // the single PROJECT_REQUEST_SUBMITTED fire (project-drawer.tsx) so one submit
-  // never emits both (else the creation funnel ~2x double-counts).
+  // persisted request_id — and predating the origination spine. project-drawer.tsx
+  // is gone; the only fire site is now project-request-panel.tsx. BAL-582 (D2)
+  // widened it to both mount modes — expert_id is now optional and entry_point was
+  // added — but it stays SUPERSEDED by PROJECT_REQUEST_CREATED (zero fire sites
+  // today): do NOT sum the two in one metric, and drop this fire when A1 wires
+  // PROJECT_REQUEST_CREATED so one submit never emits both (else the creation
+  // funnel ~2x double-counts).
   PROJECT_REQUEST_SUBMITTED: 'project_request_submitted',
   // Request origination contract (BAL-267 / BAL-266) — DEFINED here; FIRED by the
   // A1–A7 UI slices. PROJECT_REQUEST_CREATED is the CANONICAL "a project_requests
@@ -122,11 +125,25 @@ export type ProjectRequestArchetype = 'participant' | 'observer';
 export type ProjectRequestPhase = 'phase1' | 'phase2' | 'closed';
 
 export interface ProjectEventMap {
-  [PROJECT_EVENTS.PROJECT_DRAWER_OPENED]: { expert_id: string };
-  [PROJECT_EVENTS.PROJECT_ENTRY_SELECTED]: { expert_id: string; method: ProjectEntryMethod };
-  [PROJECT_EVENTS.PROJECT_STEP_VIEWED]: { expert_id: string; step: ProjectStep };
+  // BAL-582 (D2): expert_id widened to optional and entry_point added on all four events below,
+  // so they fire for context-free mounts (no expert bound) too, not just the profile mount.
+  [PROJECT_EVENTS.PROJECT_DRAWER_OPENED]: {
+    expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
+  };
+  [PROJECT_EVENTS.PROJECT_ENTRY_SELECTED]: {
+    expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
+    method: ProjectEntryMethod;
+  };
+  [PROJECT_EVENTS.PROJECT_STEP_VIEWED]: {
+    expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
+    step: ProjectStep;
+  };
   [PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED]: {
-    expert_id: string;
+    expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
     send_to: 'direct' | 'match';
     tag_count: number;
     product_count: number;
@@ -258,7 +275,12 @@ export interface ProjectEventMap {
     /** The `@balo/db` coherence-rule discriminant (e.g. `installments_not_100`). */
     rule: string;
     pricing_method: 'fixed' | 'tm';
-    /** Hardcoded `'web'` today; the union lets future non-web callers reuse the event. */
+    /**
+     * Hardcoded `'web'` today; the union lets future non-web callers reuse the event.
+     * ⚠ A DIFFERENT `entry_point` VOCABULARY from `ProjectRequestEntryPoint` above (this one
+     * names the calling SYSTEM, not where a panel mount was opened FROM) — two different events
+     * that happen to share a property name, not one widened union.
+     */
     entry_point: 'web' | 'api' | 'slack' | 'worker';
     proposal_id: string;
     relationship_id: string;
@@ -316,8 +338,10 @@ export interface ProjectEventMap {
     entity_type: InternalNoteEntityType;
     entity_id: string;
   };
-  // BAL-254 — the AI brief path. ⚠ None of these carry `expert_id`: the AI path exists in both
-  // mount modes and the panel only fires `expert_id`-keyed events when expert-bound.
+  // BAL-254 — the AI brief path. ⚠ None of these carry `expert_id` AT ALL, in either mount mode —
+  // unlike DRAWER_OPENED / STEP_VIEWED / ENTRY_SELECTED / REQUEST_SUBMITTED above, which (as of
+  // BAL-582/D2) fire in every mount mode and conditionally include `expert_id` only when one is
+  // bound (a plain conditional spread, never an `expert_id: undefined` key).
   [PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED]: { document_count: number; is_regenerate: boolean };
   [PROJECT_EVENTS.PROJECT_AI_GENERATE_SUCCEEDED]: {
     document_count: number;

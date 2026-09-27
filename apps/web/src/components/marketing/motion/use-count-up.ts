@@ -6,7 +6,7 @@ const DEFAULT_COUNT_UP_DURATION_MS = 1400;
 
 /**
  * BAL-493 §11 — the proof-band count-up. Mirrors the design reference's `useCountUp`
- * (`marketing-home.jsx:1315-1335`) with an eased ease-out-cubic ramp, one behavioural change:
+ * (`marketing-home.jsx:1505-1525`) with an eased ease-out-cubic ramp, one behavioural change:
  * `reduced` is an explicit parameter here (not read internally via `useReducedMotion`), so
  * every caller passes the SAME `useMarketingReducedMotion()` value already computed once per
  * render for the rest of the page, rather than each hook instance re-reading the media query.

@@ -14,10 +14,10 @@ import { scanRouteSources, type ScannedFile } from './_source-scan';
  * call site today, and it sanitises. A second caller that forgets to is model-authored HTML
  * reaching a browser — so a second caller has to be a decision, taken here, in the open.
  *
- * **#3 — `isSessionOwnedProjectDocumentKey` has exactly THREE callers.** This is Ruling A's whole
+ * **#3 — `isSessionOwnedProjectDocumentKey` has exactly FOUR callers.** This is Ruling A's whole
  * boundary (plan §12.2): a draft's uploads have NO DB row until submit and BAL-431's
  * audience/grant model deliberately excludes them, so there is nothing to "read through" — this
- * prefix check IS the authorization. A fourth caller means someone re-derived the prefix, which
+ * prefix check IS the authorization. A fifth caller means someone re-derived the prefix, which
  * is a cross-tenant R2 read waiting to happen.
  *
  * ⚠ WIDENED FROM TWO TO THREE BY BAL-254 W9, AND THAT WAS A NARROWING OF THE REAL BLAST RADIUS,
@@ -26,6 +26,12 @@ import { scanRouteSources, type ScannedFile } from './_source-scan';
  * hand-rolled prefix + `startsWith` with NO shape check, in a workspace that cannot import from
  * `apps/web` — now calls the same function. Because this scan already walks `apps/api/src` and
  * `packages/`, the API side is covered by the pin for the first time.
+ *
+ * ⚠ WIDENED AGAIN FROM THREE TO FOUR BY BAL-582 — `submitProjectRequestAction` also calls
+ * `isSessionOwnedProjectDocumentKey`, re-deriving owner ids from the session and checking every
+ * `input.documents[].r2Key` against them. This closes the gap where the `entry:home` draft —
+ * opened signed out and carried across sign-in — could otherwise carry a foreign key into a
+ * submit.
  *
  * ⚠⚠ THE PINNED FILES ARE ASSERTED AGAINST THE **UNFILTERED** WALK. An invariant that checks its
  * pinned set against the same filtered list it later scans proves nothing — the filter can
@@ -100,11 +106,12 @@ const RULES: readonly SingleCallerRule[] = [
     allowedCallers: [
       'apps/web/src/lib/project-request/actions/confirm-project-document-upload.ts',
       'apps/web/src/lib/project-request/actions/start-project-brief-parse.ts',
+      'apps/web/src/lib/project-request/actions/submit-project-request.ts',
       'apps/api/src/services/project-brief/parse.ts',
     ],
     why:
       'This prefix check IS Ruling A — a draft document has no DB row and no audience/grant to ' +
-      'read through, so nothing else authorizes the R2 key. A fourth caller means the prefix ' +
+      'read through, so nothing else authorizes the R2 key. A fifth caller means the prefix ' +
       'was re-derived somewhere; make sure the owner ids come from the SESSION (web) or from ' +
       'the PERSISTED ROW (the worker), never from client input.',
   },
@@ -165,7 +172,7 @@ describe('invariant: the BAL-254 boundary helpers keep their pinned caller sets 
     expect(file?.code.includes('sanitizeProjectHtml')).toBe(true);
   });
 
-  it('isSessionOwnedProjectDocumentKey is reached from exactly three modules — both apps', () => {
+  it('isSessionOwnedProjectDocumentKey is reached from exactly four modules — both apps', () => {
     const rule = RULES[1];
     if (rule === undefined) throw new Error('RULES[1] missing');
     expect(callersOf(rule.symbol, rule.definedIn).sort()).toEqual([...rule.allowedCallers].sort());

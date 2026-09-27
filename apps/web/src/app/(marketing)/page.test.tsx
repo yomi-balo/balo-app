@@ -73,6 +73,17 @@ describe('(marketing)/ — assembled route landmarks (AC-9)', () => {
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
   });
 
+  /**
+   * BAL-582 §4 (D1) — `resolveIsLoggedIn()` fails open to the signed-out hero on ANY session-read
+   * problem, mirroring `(marketing)/layout.tsx`'s header. A rejection here must never surface as
+   * an error boundary on the marketing front door.
+   */
+  it('still renders exactly one h1 when the session read rejects', async () => {
+    mockGetCurrentUser.mockRejectedValue(new Error('session store unavailable'));
+    await renderAssembledRoute();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
   it('renders exactly one banner, one main, and one UNIQUE contentinfo landmark', async () => {
     await renderAssembledRoute();
     expect(screen.getAllByRole('banner')).toHaveLength(1);

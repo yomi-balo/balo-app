@@ -459,8 +459,8 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
    * name — so there is no person to attribute this to without widening the resolver's
    * hydration. Naming the party is the correct fallback per the copy rules.
    *
-   * ⚠ Links to the admin triage board, NOT `/admin/project-requests` — that route does not
-   * exist (the `project-match-requested` EMAIL still points at it, a separate dead link).
+   * ⚠ Links to the admin triage board — the same destination the `project-match-requested`
+   * EMAIL uses.
    */
   'project-request-submitted-admin': (data) => {
     const company = data.company as { name?: string } | undefined;

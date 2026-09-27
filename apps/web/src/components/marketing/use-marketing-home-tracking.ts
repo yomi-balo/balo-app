@@ -5,7 +5,11 @@ import { track, MARKETING_HOME_EVENTS } from '@/lib/analytics';
 import type {
   MarketingHomeBenchRow,
   MarketingHomeCtaPlacement,
+  MarketingHomeHeroMode,
+  MarketingHomeHeroModeSource,
   MarketingHomeProductSource,
+  MarketingHomeProjectCtaSource,
+  MarketingHomeProjectSeedTarget,
   MarketingHomeSection,
   MarketingHomeSpotlightAction,
 } from '@/lib/analytics';
@@ -32,10 +36,30 @@ export interface MarketingHomeTracking {
   ) => void;
   ctaClicked: (placement: MarketingHomeCtaPlacement, label: string) => void;
   sectionViewed: (section: MarketingHomeSection) => void;
+  /** BAL-582 — the hero's sentence-toggle mode changed. */
+  heroModeChanged: (mode: MarketingHomeHeroMode, source: MarketingHomeHeroModeSource) => void;
+  /** BAL-582 — the project intent nudge became visible. */
+  projectNudgeShown: (score: number) => void;
+  /** BAL-582 — the project intent nudge's CTA was activated. */
+  projectNudgeClicked: (score: number) => void;
+  /** BAL-582 — the project intent nudge was dismissed. */
+  projectNudgeDismissed: (score: number) => void;
+  /**
+   * BAL-582 — `query` is used ONLY for its length — the text itself is never emitted.
+   * `source` records which hero surface fired this: the project-mode search
+   * form's own submit, or the intent nudge's CTA.
+   */
+  heroProjectCtaClicked: (
+    query: string,
+    productCount: number,
+    signedIn: boolean,
+    seededInto: MarketingHomeProjectSeedTarget,
+    source: MarketingHomeProjectCtaSource
+  ) => void;
 }
 
 /**
- * BAL-493 — THE ONE DISPATCH POINT for the marketing home page's seven events (mirrors
+ * BAL-493 — THE ONE DISPATCH POINT for the marketing home page's twelve events (mirrors
  * `useMarketingTracking`, the chrome's equivalent). **No island calls `track()` directly.**
  *
  * ⚠ It takes NO `surface` argument: the surface IS the home page. That is the whole reason
@@ -99,6 +123,33 @@ export function useMarketingHomeTracking(): MarketingHomeTracking {
       },
       sectionViewed: (section: MarketingHomeSection) => {
         track(MARKETING_HOME_EVENTS.SECTION_VIEWED, { section });
+      },
+      heroModeChanged: (mode: MarketingHomeHeroMode, source: MarketingHomeHeroModeSource) => {
+        track(MARKETING_HOME_EVENTS.HERO_MODE_CHANGED, { mode, source });
+      },
+      projectNudgeShown: (score: number) => {
+        track(MARKETING_HOME_EVENTS.PROJECT_NUDGE_SHOWN, { score });
+      },
+      projectNudgeClicked: (score: number) => {
+        track(MARKETING_HOME_EVENTS.PROJECT_NUDGE_CLICKED, { score });
+      },
+      projectNudgeDismissed: (score: number) => {
+        track(MARKETING_HOME_EVENTS.PROJECT_NUDGE_DISMISSED, { score });
+      },
+      heroProjectCtaClicked: (
+        query: string,
+        productCount: number,
+        signedIn: boolean,
+        seededInto: MarketingHomeProjectSeedTarget,
+        source: MarketingHomeProjectCtaSource
+      ) => {
+        track(MARKETING_HOME_EVENTS.HERO_PROJECT_CTA_CLICKED, {
+          query_length: query.length,
+          product_count: productCount,
+          signed_in: signedIn,
+          seeded_into: seededInto,
+          source,
+        });
       },
     }),
     []

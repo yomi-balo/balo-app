@@ -5,7 +5,7 @@
  * CHROME's family. `MARKETING_SURFACES = ['header','mobile_menu']` is the chrome's vocabulary,
  * types all three of its events and is pinned by an exact-tuple test; widening it with page
  * sections would retroactively change what a historical `marketing_nav_clicked{surface}` means.
- * The seven events below are page-CONTENT events with entirely different property shapes — they
+ * The twelve events below are page-CONTENT events with entirely different property shapes — they
  * share nothing with the chrome family but a word. `marketing.ts:2-8` sets this precedent
  * explicitly for its own split from `nav.ts`, for exactly this "do not widen a pinned tuple"
  * reason.
@@ -49,8 +49,9 @@ export type MarketingHomeSection = (typeof MARKETING_HOME_SECTIONS)[number];
  *   A nav-placement `cta_clicked` would be a SECOND event for ONE click.
  *   `MARKETING_EVENTS.NAV_CLICKED` already answers "which nav link drove the click".
  *   Pinned by a `not.toContain('nav')` assertion in this file's guard test.
- * - `'hero'` — the hero's only CTA is the search submit, which has its own richer event
- *   (`HERO_SEARCH_SUBMITTED`). No emitter exists.
+ * - `'hero'` — the hero's two CTAs (consultation search submit, project mode submit) each have
+ *   their own richer event (`HERO_SEARCH_SUBMITTED`, `HERO_PROJECT_CTA_CLICKED`). No emitter
+ *   uses this placement.
  * - `'pricing'` — the pricing section has no CTA at all, and this ticket does not invent one.
  *
  * Shipping a declared-never-emitted value is only justified when a DESTINATION is coming (as
@@ -72,6 +73,27 @@ export type MarketingHomeProductSource = (typeof MARKETING_HOME_PRODUCT_SOURCES)
 export const MARKETING_HOME_SPOTLIGHT_ACTIONS = ['profile', 'book'] as const;
 export type MarketingHomeSpotlightAction = (typeof MARKETING_HOME_SPOTLIGHT_ACTIONS)[number];
 
+/**
+ * BAL-582 — the hero's sentence-toggle state. The server always renders `'consultation'`;
+ * `'project'` is a client-only hydration state. Type-only (no value tuple): nothing needs to
+ * iterate this union, so it stays out of `setup.ts`'s value mock.
+ */
+export type MarketingHomeHeroMode = 'consultation' | 'project';
+
+/** BAL-582 — what caused a hero mode change: the two toggle controls, the nudge CTA, or `?intent=project` on load. */
+export type MarketingHomeHeroModeSource = 'phrase' | 'tail' | 'nudge' | 'url';
+
+/**
+ * BAL-582 — the hero's INTENDED seed target, computed from the typed query's length alone. Not
+ * applied provenance: the panel skips a field the draft already holds, so this records what the
+ * hero meant to seed, not what actually landed.
+ */
+export type MarketingHomeProjectSeedTarget = 'title' | 'description' | 'none';
+
+/** BAL-582 — which hero surface fired `HERO_PROJECT_CTA_CLICKED`: the
+ * project-mode search form's own submit, or the intent nudge's CTA. */
+export type MarketingHomeProjectCtaSource = 'submit' | 'nudge';
+
 export const MARKETING_HOME_EVENTS = {
   /** The hero search form was submitted (the page's primary client funnel entry). */
   HERO_SEARCH_SUBMITTED: 'marketing_home_hero_search_submitted',
@@ -87,6 +109,16 @@ export const MARKETING_HOME_EVENTS = {
   CTA_CLICKED: 'marketing_home_cta_clicked',
   /** A section scrolled into view (one-shot per section, per page view). */
   SECTION_VIEWED: 'marketing_home_section_viewed',
+  /** BAL-582 — the hero's mode toggle changed: phrase, tail, nudge CTA, or `?intent=project`. */
+  HERO_MODE_CHANGED: 'marketing_home_hero_mode_changed',
+  /** BAL-582 — the project intent nudge became visible (debounced; false→true only). */
+  PROJECT_NUDGE_SHOWN: 'marketing_home_project_nudge_shown',
+  /** BAL-582 — the project intent nudge's CTA was activated. */
+  PROJECT_NUDGE_CLICKED: 'marketing_home_project_nudge_clicked',
+  /** BAL-582 — the project intent nudge was dismissed. */
+  PROJECT_NUDGE_DISMISSED: 'marketing_home_project_nudge_dismissed',
+  /** BAL-582 — the hero's project-mode submit or the nudge CTA opened the context-free panel. */
+  HERO_PROJECT_CTA_CLICKED: 'marketing_home_hero_project_cta_clicked',
 } as const;
 
 export interface MarketingHomeEventMap {
@@ -129,4 +161,19 @@ export interface MarketingHomeEventMap {
   };
   /** Named `section` (not the ticket's `section_id`) to match `expert_profile_section_viewed`. */
   [MARKETING_HOME_EVENTS.SECTION_VIEWED]: { section: MarketingHomeSection };
+  [MARKETING_HOME_EVENTS.HERO_MODE_CHANGED]: {
+    mode: MarketingHomeHeroMode;
+    source: MarketingHomeHeroModeSource;
+  };
+  [MARKETING_HOME_EVENTS.PROJECT_NUDGE_SHOWN]: { score: number };
+  [MARKETING_HOME_EVENTS.PROJECT_NUDGE_CLICKED]: { score: number };
+  [MARKETING_HOME_EVENTS.PROJECT_NUDGE_DISMISSED]: { score: number };
+  /** `query_length`, NEVER the query text — same discipline as `HERO_SEARCH_SUBMITTED` above. */
+  [MARKETING_HOME_EVENTS.HERO_PROJECT_CTA_CLICKED]: {
+    query_length: number;
+    product_count: number;
+    signed_in: boolean;
+    seeded_into: MarketingHomeProjectSeedTarget;
+    source: MarketingHomeProjectCtaSource;
+  };
 }

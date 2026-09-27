@@ -223,6 +223,11 @@ export type {
   MarketingHomeBenchRow,
   MarketingHomeProductSource,
   MarketingHomeSpotlightAction,
+  // BAL-582 — the dual-intent hero's mode/source/seed-target vocabularies.
+  MarketingHomeHeroMode,
+  MarketingHomeHeroModeSource,
+  MarketingHomeProjectSeedTarget,
+  MarketingHomeProjectCtaSource,
   // BAL-503 — the client Settings surface's event payload and section vocabulary.
   SettingsEventMap,
   SettingsSection,

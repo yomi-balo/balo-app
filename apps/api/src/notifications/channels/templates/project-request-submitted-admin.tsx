@@ -22,7 +22,7 @@ interface ProjectRequestSubmittedAdminEmailProps {
  * widening the resolver's hydration (which is serialized into every per-channel BullMQ job).
  *
  * ⚠ The CTA points at `/projects?lens=admin`, the real triage board. `project-match-requested`
- * still links to `/admin/project-requests`, which 404s — do not copy that href.
+ * points at the same board — the two emails share the destination, not the copy.
  */
 export function ProjectRequestSubmittedAdminEmail({
   projectTitle = 'a new project',

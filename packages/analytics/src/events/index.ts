@@ -369,6 +369,12 @@ export {
   type MarketingHomeProductSource,
   MARKETING_HOME_SPOTLIGHT_ACTIONS,
   type MarketingHomeSpotlightAction,
+  // BAL-582 — the dual-intent hero's mode/source/seed-target vocabularies. Type-only: no value
+  // tuple exists for these (see marketing-home.ts's docblock), so nothing to re-export as a value.
+  type MarketingHomeHeroMode,
+  type MarketingHomeHeroModeSource,
+  type MarketingHomeProjectSeedTarget,
+  type MarketingHomeProjectCtaSource,
 } from './marketing-home';
 // BAL-503 — the client Settings surface's CLIENT event family + canonical section tuple.
 // Deliberately separate from `NAV_EVENTS` (see `./settings.ts`'s header comment).

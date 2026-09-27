@@ -39,7 +39,7 @@ export function ProjectMatchRequestedEmail({
       calloutHeading="Action needed"
       calloutText="Open the ops queue to read the full brief, then match it with an expert. The faster we route it, the better the client experience."
       ctaLabel="Review brief →"
-      ctaHref={`${baseUrl}/admin/project-requests`}
+      ctaHref={`${baseUrl}/projects?lens=admin`}
       supportPrefix="Questions about this brief?"
     />
   );

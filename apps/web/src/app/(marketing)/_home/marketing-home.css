@@ -1,6 +1,6 @@
 /**
  * BAL-493 (D4/§2) — the marketing home's `mk-*` stylesheet, ported from
- * `.claude/design-references/marketing-home.jsx:211-660`. Imported once, from
+ * `.claude/design-references/marketing-home.jsx:331-844`. Imported once, from
  * `(marketing)/page.tsx`. Every rule is scoped under `.mk-page`.
  *
  * ⚠⚠ `.mk-page` DECLARES NO COLOUR CUSTOM PROPERTY — ONLY `--wrap`. The ref's
@@ -50,6 +50,32 @@
  * `#000`/`transparent` mask stops (pure alpha, not colour) use the `black` keyword
  * instead of `#000` so the file is honestly hex-free, not hex-free-by-technicality.
  * Enforced by `marketing-home-css.test.ts`.
+ *
+ * V1.5 additions (BAL-582 — dual-intent hero, ref L455, 468-490, 834-835):
+ *   - `.mk-hero-inner > :nth-child(6)` — the sentence toggle adds a fourth
+ *     `.mk-hero-inner` child, `p.mk-sent`, between the lede and the search zone.
+ *   - `.mk-sent*` (the sentence mode toggle), `.mk-search-zone`, `.mk-mode-hint`
+ *     and `.mk-nudge*` (the intent nudge pill) — see the token deviations below.
+ *   - The `mk-fade` and `mk-roll` keyframes — the tail fade and phrase roll.
+ *   - `.mk-sent-btn { min-height: 44px }` in a new `@media (max-width: 520px)`
+ *     query (the tap target for the only mobile switch, once the tail hides);
+ *     `.mk-nudge-x { padding: 6px }` (WCAG 2.5.8, ≥24px); `.mk-sent { display:
+ *     none }` added to the existing `@media (scripting: none)` block, so there
+ *     is no dead toggle with JS off; new entries in the existing FIRST
+ *     `@media (prefers-reduced-motion: reduce)` block.
+ *   - Skipped from the ref: the V1.3 project-request panel rules (`.mk-scrim`,
+ *     `.mk-panel*`, `.mk-flabel`, `.mk-f{text,in}put`, `.mk-frow`) — production
+ *     mounts the existing `ProjectRequestPanel`, not a forked drawer — and
+ *     every `.mk-page.deep .mk-sent*`/`.mk-mode-hint` rule (the deleted "deep
+ *     hero" prototype variant).
+ *   - Four deliberate token deviations from the literal ref→token map, for
+ *     contrast on the 10% violet tint over `--card` (flagged for /ux-review):
+ *     `--text3` on the tail/hint/✕ → `var(--muted-foreground)`, not
+ *     `--subtle-foreground` (~2.5:1 in light); `.mk-sent-alt button:hover`
+ *     stays `var(--foreground)` (a literal map would show no hover change);
+ *     `.mk-nudge-go`'s `--violet-deep` → `color-mix(in oklch, var(--violet)
+ *     80%, var(--foreground))`; `.mk-nudge-go:hover`'s `--violet`/`#fff` →
+ *     `var(--violet-deep)`/`var(--primary-foreground)`.
  */
 
 /* ── Page root + the ONE token this file is allowed to declare ── */
@@ -350,6 +376,9 @@
 .mk-hero-inner > :nth-child(5) {
   animation-delay: 0.44s;
 }
+.mk-hero-inner > :nth-child(6) {
+  animation-delay: 0.54s;
+}
 
 .mk-live {
   display: inline-flex;
@@ -404,6 +433,181 @@
   max-width: 600px;
   margin: 0 auto 30px;
   line-height: 1.55;
+}
+
+/* Sentence mode toggle (V1.5 — dual-intent hero, BAL-582) */
+.mk-sent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  white-space: nowrap;
+  font-size: clamp(16px, 1.9vw, 19px);
+  color: var(--muted-foreground);
+  margin: 0 0 16px;
+}
+.mk-sent-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: 650 1em var(--font-geist-sans);
+  color: var(--foreground);
+  padding: 2px 4px;
+  margin-left: 2px;
+  border-radius: 8px;
+}
+.mk-sent-btn::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 30px;
+  bottom: -2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--grad);
+}
+.mk-sent-word {
+  display: inline-block;
+  animation: mk-roll 0.34s var(--ease) both;
+}
+.mk-sent-flip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--foreground) 5%, transparent);
+  color: var(--muted-foreground);
+  transition:
+    transform 0.35s cubic-bezier(0.34, 1.3, 0.64, 1),
+    background 0.2s,
+    box-shadow 0.2s,
+    color 0.2s;
+}
+.mk-sent-btn:hover .mk-sent-flip {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow:
+    0 1px 2px rgba(17, 24, 39, 0.08),
+    0 2px 8px -2px rgba(17, 24, 39, 0.1);
+}
+.mk-sent-btn[aria-pressed='true'] .mk-sent-flip {
+  transform: rotate(180deg);
+}
+.mk-sent-alt {
+  margin-left: 12px;
+  font-size: 0.72em;
+  color: var(--muted-foreground);
+}
+.mk-sent-alt button {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition:
+    color 0.2s,
+    text-decoration-color 0.2s;
+}
+.mk-sent-alt button:hover {
+  color: var(--foreground);
+  text-decoration-color: currentColor;
+}
+.mk-sent-alt-word {
+  display: inline-block;
+  animation: mk-fade 0.3s var(--ease) both;
+}
+@media (max-width: 520px) {
+  .mk-sent-alt {
+    display: none;
+  }
+  .mk-sent-btn {
+    min-height: 44px;
+  }
+  /* Below ~430px the pill's full phrase ("Sounds like a project" + the CTA) no longer fits on
+     one line. Wrapping the pill itself (rather than letting the browser break mid-phrase inside
+     the label/CTA text) keeps every label whole, on its own line. */
+  .mk-nudge {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 6px;
+    border-radius: 16px;
+    white-space: nowrap;
+  }
+  .mk-nudge-go {
+    white-space: nowrap;
+  }
+}
+.mk-search-zone {
+  position: relative;
+  max-width: 760px;
+  margin: 0 auto;
+}
+.mk-mode-hint {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  margin: 10px 0 0;
+}
+.mk-nudge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 6px 6px 12px;
+  background: var(--card);
+  border: 1px solid color-mix(in oklch, var(--violet) 35%, transparent);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px -10px color-mix(in oklch, var(--violet) 35%, transparent);
+  font: 550 13px var(--font-geist-sans);
+  color: var(--foreground);
+  animation: mk-drop 0.25s var(--ease) both;
+}
+.mk-nudge-ic {
+  color: var(--violet);
+  display: flex;
+}
+.mk-nudge-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  cursor: pointer;
+  background: color-mix(in oklch, var(--violet) 10%, transparent);
+  color: color-mix(in oklch, var(--violet) 80%, var(--foreground));
+  font: 600 12.5px var(--font-geist-sans);
+  padding: 7px 11px;
+  border-radius: 999px;
+  transition: all 0.18s var(--ease);
+}
+.mk-nudge-go:hover {
+  background: var(--violet-deep);
+  color: var(--primary-foreground);
+}
+.mk-nudge-go svg {
+  transition: transform 0.2s var(--ease);
+}
+.mk-nudge-go:hover svg {
+  transform: translateX(2px);
+}
+.mk-nudge-x {
+  display: flex;
+  border: none;
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  padding: 6px;
+}
+.mk-nudge-x:hover {
+  color: var(--foreground);
 }
 
 /* ── Search ── */
@@ -1023,6 +1227,11 @@
   .mk-reveal {
     opacity: 1;
     transform: none;
+  }
+  /* No JS means the toggle can never change mode, so it must not render as a
+     dead control (BAL-582). */
+  .mk-sent {
+    display: none;
   }
 }
 /* Hover-transform cards sit INSIDE a .mk-reveal wrapper so the reveal's
@@ -1973,6 +2182,11 @@
   .mk-page .mk-facet-pop {
     animation: none;
   }
+  .mk-page .mk-nudge,
+  .mk-page .mk-sent-word,
+  .mk-page .mk-sent-alt-word {
+    animation: none;
+  }
   .mk-page .mk-steps-progress {
     transition: none;
     transform: scaleX(1);
@@ -1985,7 +2199,11 @@
   .mk-page .mk-tile,
   .mk-page .mk-chip,
   .mk-page .mk-pchip,
-  .mk-page .mk-facet {
+  .mk-page .mk-facet,
+  .mk-page .mk-sent-flip,
+  .mk-page .mk-sent-alt button,
+  .mk-page .mk-nudge-go,
+  .mk-page .mk-nudge-go svg {
     transition-duration: 0.01s;
   }
   /* The gradient CTA's hover crossfade lives on a PSEUDO-ELEMENT with its own
@@ -2013,6 +2231,24 @@
   from {
     opacity: 0;
     transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes mk-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes mk-roll {
+  from {
+    opacity: 0;
+    transform: translateY(55%);
   }
   to {
     opacity: 1;

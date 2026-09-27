@@ -48,10 +48,12 @@ export interface ProjectDocumentKeyOwner {
  * Callers (pinned by `apps/web/src/invariants/project-brief-boundaries-single-caller.test.ts`):
  *  1. `confirmProjectDocumentUploadAction` — owner ids from the SESSION.
  *  2. `startProjectBriefParseAction` — owner ids from the SESSION.
- *  3. `apps/api`'s `runProjectBriefParse` (Gate 3) — owner ids from the PERSISTED ROW, because a
+ *  3. `submitProjectRequestAction` — owner ids from the SESSION; rejects any submitted document
+ *     whose key is not owned by that session.
+ *  4. `apps/api`'s `runProjectBriefParse` (Gate 3) — owner ids from the PERSISTED ROW, because a
  *     BullMQ processor has no session and the job payload is `{ parseId }` alone.
  *
- * A fourth caller means someone re-derived the prefix; make sure its ids come from one of those
+ * A fifth caller means someone re-derived the prefix; make sure its ids come from one of those
  * two trusted places and add it to the pin deliberately.
  */
 export function isSessionOwnedProjectDocumentKey(
