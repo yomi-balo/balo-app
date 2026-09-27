@@ -6,6 +6,9 @@ import {
   caseConsultationIsUpcoming,
   deriveCaseConsultationState,
   selectCaseNudge,
+  withinJoinWindow,
+  joinWindowOpensAt,
+  MEETING_NOT_OPEN_YET_CODE,
   type CaseConsultationStateLabel,
   type CaseNudgeInput,
   type CaseNudgeRescheduleProposal,
@@ -507,4 +510,36 @@ describe('caseConsultationIsUpcoming', () => {
       expect(caseConsultationIsUpcoming(state)).toBe(upcoming);
     }
   );
+});
+
+describe('D16 — the join window is 3 minutes, and the server reports when it opens', () => {
+  it('⚠ CASE_JOIN_WINDOW_MINUTES is the owner-ruled 3', () => {
+    expect(CASE_JOIN_WINDOW_MINUTES).toBe(3);
+  });
+
+  it('joinWindowOpensAt is the start minus the window, and is the exact instant withinJoinWindow flips', () => {
+    const start = new Date('2026-09-25T12:00:00.000Z');
+    const opensAt = joinWindowOpensAt(start);
+    expect(opensAt.toISOString()).toBe('2026-09-25T11:57:00.000Z');
+    expect(withinJoinWindow(new Date(opensAt.getTime() - 1), start)).toBe(false);
+    expect(withinJoinWindow(opensAt, start)).toBe(true);
+  });
+
+  it('the wire literal is distinct from the terminal one the web maps to "ended/cancelled/closed"', () => {
+    expect(MEETING_NOT_OPEN_YET_CODE).toBe('meeting_not_open_yet');
+    expect(MEETING_NOT_OPEN_YET_CODE).not.toBe('meeting_not_open_for_join');
+  });
+});
+
+describe('withinJoinWindow (exported for the API admission-time open — BAL-474 D10.4)', () => {
+  it.each([
+    ['a week before the start', 7 * 24 * 60, false],
+    ['one millisecond outside the window', CASE_JOIN_WINDOW_MINUTES + 1 / MS_PER_MINUTE, false],
+    ['exactly at the window boundary (inclusive)', CASE_JOIN_WINDOW_MINUTES, true],
+    ['well inside the window', 1, true],
+    ['at the start', 0, true],
+    ['after the start (a late join)', -10, true],
+  ])('%s', (_label, minutesUntilStart, expected) => {
+    expect(withinJoinWindow(NOW, at(minutesUntilStart))).toBe(expected);
+  });
 });

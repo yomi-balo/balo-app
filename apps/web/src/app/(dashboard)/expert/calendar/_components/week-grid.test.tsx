@@ -387,8 +387,8 @@ describe('WeekGrid — the now-derived MeetingBlock inputs are computed HERE (BA
         meetings={[
           meeting({
             meetingId: 'soon',
-            scheduledStart: '2026-08-25T09:05:00.000Z',
-            scheduledEnd: '2026-08-25T09:35:00.000Z',
+            scheduledStart: '2026-08-25T09:02:00.000Z',
+            scheduledEnd: '2026-08-25T09:32:00.000Z',
             counterpartyCompanyName: 'Soon Co',
           }),
           meeting({
@@ -405,7 +405,7 @@ describe('WeekGrid — the now-derived MeetingBlock inputs are computed HERE (BA
     );
 
     expect(
-      screen.getByRole('button', { name: "Join Soon Co's meeting, starting in 5 minutes" })
+      screen.getByRole('button', { name: "Join Soon Co's meeting, starting in 2 minutes" })
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Join Later Co/i })).not.toBeInTheDocument();
   });
@@ -542,8 +542,8 @@ describe('WeekGrid — the now-derived MeetingBlock inputs are computed HERE (BA
         meetings={[
           meeting({
             meetingId: 'not-ready',
-            scheduledStart: '2026-08-25T09:05:00.000Z',
-            scheduledEnd: '2026-08-25T09:35:00.000Z',
+            scheduledStart: '2026-08-25T09:02:00.000Z',
+            scheduledEnd: '2026-08-25T09:32:00.000Z',
             counterpartyCompanyName: 'Pending Co',
             roomReady: false,
           }),

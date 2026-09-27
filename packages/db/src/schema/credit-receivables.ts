@@ -21,8 +21,10 @@ import { timestamps, softDelete } from './helpers';
  * per failed session (partial-unique on `session_id`, idempotent `open`).
  *
  * The "soft account hold" is DERIVED, not a column: a company is soft-held iff it has ANY
- * open receivable (`hasOpenReceivable`), which gates `openSession` (and the future
- * Case-create). No new `companies` column (avoids drift; `companies` has no `deleted_at`
+ * open receivable (`hasOpenReceivable`). The hold gates the GATED session open, auto-top-up,
+ * card removal AND — since BAL-474 (ADR-1040 Amendment 7 §H) — new Case BOOKINGS; the presence
+ * seam's overdraft-tolerant open passes through it (a consultation already booked still runs and
+ * bills its own share). No new `companies` column (avoids drift; `companies` has no `deleted_at`
  * anyway — memory `reference_companies_table_no_deleted_at`). Clearing the receivable
  * (status → `cleared`) releases the soft hold.
  *

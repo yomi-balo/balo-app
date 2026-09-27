@@ -493,11 +493,22 @@ export const creditWalletsRepository = {
       .limit(2);
   },
 
-  /** The one wallet for a company (rides `credit_wallets_company_idx`). */
-  async findByCompanyId(companyId: string): Promise<CreditWallet | undefined> {
-    return db.query.creditWallets.findFirst({
-      where: eq(creditWallets.companyId, companyId),
-    });
+  /**
+   * The one wallet for a company (rides `credit_wallets_company_idx`). TX-COMPOSABLE (BAL-474):
+   * pass `exec` to read inside a caller's transaction — the booking funding snapshot reads it in
+   * its one repeatable-read transaction; omit it to read standalone on the base `db` (every
+   * existing caller).
+   */
+  async findByCompanyId(
+    companyId: string,
+    exec: DbExecutor = db
+  ): Promise<CreditWallet | undefined> {
+    const [row] = await exec
+      .select()
+      .from(creditWallets)
+      .where(eq(creditWallets.companyId, companyId))
+      .limit(1);
+    return row;
   },
 
   /**

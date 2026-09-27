@@ -7,9 +7,17 @@ const mockPostMemberJoin = vi.fn();
 vi.mock('@/lib/auth/session', () => ({
   requireOnboardedUser: (...args: unknown[]) => mockRequireOnboardedUser(...args),
 }));
-vi.mock('@/lib/meetings/join-api-client', () => ({
-  postMemberJoin: (...args: unknown[]) => mockPostMemberJoin(...args),
-}));
+// ⚠ `notOpenYetFrom` (D17.5) is the REAL, pure implementation — importActual'd rather than
+// re-stubbed, so this suite exercises the same extraction the three action call sites share.
+vi.mock('@/lib/meetings/join-api-client', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/meetings/join-api-client')>(
+    '@/lib/meetings/join-api-client'
+  );
+  return {
+    ...actual,
+    postMemberJoin: (...args: unknown[]) => mockPostMemberJoin(...args),
+  };
+});
 
 import { joinAsMemberAction } from './join-as-member';
 import { AccountNotLiveError, ACCOUNT_UNREADABLE } from '@/lib/auth/account-liveness';
@@ -129,6 +137,32 @@ describe('joinAsMemberAction — the allowlisted failures (BAL-581)', () => {
     await expect(joinAsMemberAction({ meetingId: MEETING_ID })).resolves.toEqual({
       success: false,
       reason,
+    });
+  });
+
+  it('⚠⚠ D16 — a `meeting_not_open_yet` refusal is the NON-terminal `not_open_yet` and carries `opensAt` through, and only then', async () => {
+    mockPostMemberJoin.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'meeting_not_open_yet',
+      opensAt: '2026-09-25T11:57:00.000Z',
+    });
+    await expect(joinAsMemberAction({ meetingId: MEETING_ID })).resolves.toEqual({
+      success: false,
+      reason: 'not_open_yet',
+      opensAt: '2026-09-25T11:57:00.000Z',
+    });
+
+    // A terminal refusal never carries one, even if the client somehow had a value.
+    mockPostMemberJoin.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'meeting_not_open_for_join',
+      opensAt: '2026-09-25T11:57:00.000Z',
+    });
+    await expect(joinAsMemberAction({ meetingId: MEETING_ID })).resolves.toEqual({
+      success: false,
+      reason: 'not_open',
     });
   });
 

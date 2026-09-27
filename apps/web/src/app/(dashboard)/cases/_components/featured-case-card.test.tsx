@@ -64,7 +64,7 @@ function card(overrides: Partial<CasesIndexCardView> = {}): CasesIndexCardView {
   };
 }
 
-/** A card whose booking starts in `minutes` — inside the window when `minutes <= 15`. */
+/** A card whose booking starts in `minutes` — inside the window when `minutes <= 3` (CASE_JOIN_WINDOW_MINUTES, D16). */
 function startingIn(minutes: number, overrides: Partial<CasesIndexCardView> = {}) {
   return card({
     nextBookingStartIso: new Date(NOW.getTime() + minutes * MIN).toISOString(),
@@ -77,21 +77,21 @@ describe('FeaturedCaseCard — the Join window', () => {
   it('offers NO Join outside the window, and states when it opens instead', () => {
     render(<FeaturedCaseCard card={card()} now={NOW} timeZone="UTC" onTrack={vi.fn()} />);
     expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
-    expect(screen.getByText('Join opens 15 min before')).toBeInTheDocument();
+    expect(screen.getByText('Join opens 3 min before')).toBeInTheDocument();
   });
 
   it('offers Join inside the window, as a <button> — never a link', () => {
-    render(<FeaturedCaseCard card={startingIn(9)} now={NOW} timeZone="UTC" onTrack={vi.fn()} />);
+    render(<FeaturedCaseCard card={startingIn(2)} now={NOW} timeZone="UTC" onTrack={vi.fn()} />);
     const join = screen.getByRole('button', { name: /^Join .*meeting/i });
     expect(join.tagName).toBe('BUTTON');
     expect(screen.queryByRole('link', { name: /join/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('Join opens 15 min before')).not.toBeInTheDocument();
-    expect(screen.getByText('Starts in 9 mins')).toBeInTheDocument();
+    expect(screen.queryByText('Join opens 3 min before')).not.toBeInTheDocument();
+    expect(screen.getByText('Starts in 2 mins')).toBeInTheDocument();
   });
 
   it('NEVER renders the join path as an attribute anywhere in the markup', () => {
     const { container } = render(
-      <FeaturedCaseCard card={startingIn(9)} now={NOW} timeZone="UTC" onTrack={vi.fn()} />
+      <FeaturedCaseCard card={startingIn(2)} now={NOW} timeZone="UTC" onTrack={vi.fn()} />
     );
     expect(container.innerHTML).not.toContain(JOIN_PATH);
   });
@@ -126,7 +126,7 @@ describe('FeaturedCaseCard — the Join window', () => {
   it('offers no Join on a TERMINAL meeting, even inside the clock window', () => {
     render(
       <FeaturedCaseCard
-        card={startingIn(5, { nextBookingStatus: 'cancelled' })}
+        card={startingIn(2, { nextBookingStatus: 'cancelled' })}
         now={NOW}
         timeZone="UTC"
         onTrack={vi.fn()}
@@ -138,7 +138,7 @@ describe('FeaturedCaseCard — the Join window', () => {
   it('offers no Join with no join path — an absent action beats a dead one', () => {
     render(
       <FeaturedCaseCard
-        card={startingIn(5, { joinPath: null })}
+        card={startingIn(2, { joinPath: null })}
         now={NOW}
         timeZone="UTC"
         onTrack={vi.fn()}
@@ -152,7 +152,7 @@ describe('FeaturedCaseCard — room not ready (BAL-581)', () => {
   it('shows the setting-up slot instead of Join inside the window, with no green pill', () => {
     render(
       <FeaturedCaseCard
-        card={startingIn(9, { nextBookingRoomReady: false })}
+        card={startingIn(2, { nextBookingRoomReady: false })}
         now={NOW}
         timeZone="UTC"
         onTrack={vi.fn()}
@@ -160,7 +160,7 @@ describe('FeaturedCaseCard — room not ready (BAL-581)', () => {
     );
     expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
     expect(screen.getByText('Setting up your call room')).toBeInTheDocument();
-    expect(screen.queryByText('Starts in 9 mins')).not.toBeInTheDocument();
+    expect(screen.queryByText('Starts in 2 mins')).not.toBeInTheDocument();
   });
 
   it('shows NOTHING — never the hint — outside the window when the room is not ready', () => {
@@ -173,7 +173,7 @@ describe('FeaturedCaseCard — room not ready (BAL-581)', () => {
       />
     );
     expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('Join opens 15 min before')).not.toBeInTheDocument();
+    expect(screen.queryByText('Join opens 3 min before')).not.toBeInTheDocument();
     expect(screen.queryByText('Setting up your call room')).not.toBeInTheDocument();
   });
 
@@ -221,7 +221,7 @@ describe('FeaturedCaseCard — the ticket stub', () => {
   });
 
   /**
-   * ⚠⚠ FIX ROUND X5 — NO "Join opens 15 min before" WITHOUT A TIME TO COUNT BACK FROM. The hint
+   * ⚠⚠ FIX ROUND X5 — NO "Join opens 3 min before" WITHOUT A TIME TO COUNT BACK FROM. The hint
    * used to be the unconditional `else` of the Join branch, so it appeared during the pre-clock
    * paint and on a card whose booking the trail could not resolve. Promising when somebody can
    * join a call whose time you do not have is a confident wrong answer; the skeleton beside it
@@ -230,7 +230,7 @@ describe('FeaturedCaseCard — the ticket stub', () => {
   it('renders NEITHER Join NOR the hint before the viewer’s clock lands', () => {
     render(<FeaturedCaseCard card={card()} now={null} timeZone={null} onTrack={vi.fn()} />);
     expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('Join opens 15 min before')).not.toBeInTheDocument();
+    expect(screen.queryByText('Join opens 3 min before')).not.toBeInTheDocument();
   });
 
   it('renders NEITHER Join NOR the hint when the booking itself is unreadable', () => {
@@ -249,14 +249,14 @@ describe('FeaturedCaseCard — the ticket stub', () => {
       />
     );
     expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('Join opens 15 min before')).not.toBeInTheDocument();
+    expect(screen.queryByText('Join opens 3 min before')).not.toBeInTheDocument();
     // The card still opens — the identity half needs no clock and no booking.
     expect(screen.getByRole('link', { name: /Open case/ })).toHaveAttribute('href', '/cases/eng-1');
   });
 
   it('still shows the hint on a readable booking OUTSIDE the window — the honest case', () => {
     render(<FeaturedCaseCard card={card()} now={NOW} timeZone="UTC" onTrack={vi.fn()} />);
-    expect(screen.getByText('Join opens 15 min before')).toBeInTheDocument();
+    expect(screen.getByText('Join opens 3 min before')).toBeInTheDocument();
   });
 });
 
@@ -288,7 +288,7 @@ describe('FeaturedCaseCard — the identity half', () => {
     quiet.unmount();
 
     const live = render(
-      <FeaturedCaseCard card={startingIn(4)} now={NOW} timeZone="UTC" onTrack={vi.fn()} />
+      <FeaturedCaseCard card={startingIn(2)} now={NOW} timeZone="UTC" onTrack={vi.fn()} />
     );
     expect(await axe(live.container)).toHaveNoViolations();
   });

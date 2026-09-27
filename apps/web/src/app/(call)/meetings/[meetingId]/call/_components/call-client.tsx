@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
 import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
-import { JoinRetryNotice } from '@/components/balo/meetings/join-notice-card';
+import { JoinNotOpenYetNotice, JoinRetryNotice } from '@/components/balo/meetings/join-notice-card';
 import { MemberJoinNotice } from '@/components/balo/meetings/member-join-notice';
 import { MeetingConnectingCard } from '@/components/balo/meetings/meeting-connecting-card';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
@@ -73,7 +73,30 @@ import { getMeetingDrawdownStateAction } from '../_actions/get-meeting-drawdown-
  * it is never stored, logged or put in a URL.
  */
 
-type Phase = 'connecting' | 'joined' | 'retrying' | 'setting_up' | 'not_open' | 'unavailable';
+type Phase =
+  | 'connecting'
+  | 'joined'
+  | 'retrying'
+  | 'setting_up'
+  | 'not_open'
+  | 'not_open_yet'
+  | 'unavailable';
+
+/**
+ * D16 — the longest wait the call page will sit through on its own before re-trying at `opensAt`. Past this the
+ * card stays put and "Try again" is the person's move (a timer for a call days away helps nobody).
+ */
+const NOT_OPEN_YET_AUTO_RETRY_MAX_MS = 60 * 60_000;
+/** A beat past `opensAt`, so the server's clock has certainly crossed the boundary too. */
+const NOT_OPEN_YET_AUTO_RETRY_SLACK_MS = 1_000;
+/**
+ * A FLOOR ON THE DELAY, AND A CAP ON THE COUNT. A device clock running ahead of the server's reads `opensAt` as
+ * already past while the server still refuses, which would otherwise re-try in a hot loop. The delay never drops
+ * below this, and the call page gives up on its own after {@link NOT_OPEN_YET_AUTO_RETRY_MAX_ATTEMPTS} tries
+ * ("Try again" resets the count).
+ */
+const NOT_OPEN_YET_AUTO_RETRY_MIN_MS = 5_000;
+const NOT_OPEN_YET_AUTO_RETRY_MAX_ATTEMPTS = 5;
 
 export interface CallClientProps {
   readonly meetingId: string;
@@ -148,10 +171,19 @@ export function CallClient({
 }: Readonly<CallClientProps>): React.JSX.Element {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('connecting');
+  /** D16 — ISO instant the join window opens, from the api's `409 meeting_not_open_yet`. */
+  const [opensAt, setOpensAt] = useState<string | null>(null);
+  /**
+   * D16 — bumped on EVERY `not_open_yet` answer, so the auto-retry effect re-arms even when an attempt lands back
+   * on the same phase with the same `opensAt` (React batches `connecting` → `not_open_yet` into one render).
+   */
+  const [notOpenYetSeq, setNotOpenYetSeq] = useState(0);
   const [response, setResponse] = useState<MemberJoinResponse | null>(null);
   const [balanceAppeared, setBalanceAppeared] = useState(false);
   const [isExhausted, setIsExhausted] = useState(false);
   const failureCountRef = useRef(0);
+  /** D16 — automatic re-tries spent on the current `not_open_yet` card. */
+  const notOpenYetRetriesRef = useRef(0);
   const startedAtRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** F4 (BAL-466 fix round) — the post-join balance probe's ONE bounded retry timer. */
@@ -186,6 +218,14 @@ export function CallClient({
           // lands on /login?error=… with BAL-197's copy. ⚠ Never `logoutAction()` (it loses the
           // message).
           globalThis.location.assign('/api/auth/session-sync?returnTo=/login');
+          return;
+        }
+        if (reason === 'not_open_yet') {
+          // D16 — NON-terminal: the call exists and this person may join, just not yet. The card names the time
+          // (`opensAt`, in the viewer's zone) and the effect below re-tries once it has passed.
+          setOpensAt(result.opensAt ?? null);
+          setNotOpenYetSeq((seq) => seq + 1);
+          setPhase('not_open_yet');
           return;
         }
         if (!isRetryableMemberJoinFailure(reason)) {
@@ -245,11 +285,33 @@ export function CallClient({
       timerRef.current = null;
     }
     failureCountRef.current = 0;
+    notOpenYetRetriesRef.current = 0;
     setIsExhausted(false);
     startedAtRef.current = Date.now();
     setPhase('connecting');
     attempt();
   }, [attempt]);
+
+  /*
+    D16 — WHEN THE WINDOW OPENS WHILE THE CARD IS UP, JOIN FOR THE PERSON. A bounded, single timer: it fires a beat
+    after `opensAt` (at most an hour out) and re-runs the join exactly as "Try again" does. Nothing polls.
+  */
+  useEffect(() => {
+    if (phase !== 'not_open_yet' || opensAt === null) return;
+    if (notOpenYetRetriesRef.current >= NOT_OPEN_YET_AUTO_RETRY_MAX_ATTEMPTS) return;
+    const waitMs = Date.parse(opensAt) - Date.now() + NOT_OPEN_YET_AUTO_RETRY_SLACK_MS;
+    if (!Number.isFinite(waitMs) || waitMs > NOT_OPEN_YET_AUTO_RETRY_MAX_MS) return;
+    const timer = setTimeout(
+      () => {
+        const spent = notOpenYetRetriesRef.current + 1;
+        handleRetry();
+        // `handleRetry` is "Try again" and resets the count; an AUTOMATIC re-try must keep spending it.
+        notOpenYetRetriesRef.current = spent;
+      },
+      Math.max(waitMs, NOT_OPEN_YET_AUTO_RETRY_MIN_MS)
+    );
+    return () => clearTimeout(timer);
+  }, [phase, opensAt, notOpenYetSeq, handleRetry]);
 
   /*
     ⚠⚠ THE ENVELOPE IS **PARSED**, NOT READ. `join-api-client.ts` returns `parsed as T` — an
@@ -575,6 +637,8 @@ export function CallClient({
       outcome: snapshot.outcome,
       expertPresenceObserved:
         snapshot.expertPresenceOpen ?? snapshot.clocks.expertFirstJoinedAt !== null,
+      // BAL-474 (R6-C3) — the server sends it only to the delivering expert, only in the voided-no-show state.
+      caseClosure: snapshot.caseClosure,
     };
   }, [snapshot]);
 
@@ -609,6 +673,15 @@ export function CallClient({
     return (
       <CallShell>
         <MemberJoinNotice reason="unavailable" headingRef={headingRef} />
+        <DashboardLink />
+      </CallShell>
+    );
+  }
+
+  if (phase === 'not_open_yet') {
+    return (
+      <CallShell>
+        <JoinNotOpenYetNotice opensAt={opensAt} headingRef={headingRef} onRetry={handleRetry} />
         <DashboardLink />
       </CallShell>
     );

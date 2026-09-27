@@ -340,6 +340,89 @@ describe('caseEngagementsRepository.findByEngagementId', () => {
   });
 });
 
+describe('caseEngagementsRepository.findClosureSubject (D17.5, BAL-474)', () => {
+  it('an ACTIVE case answers `isActive: true` with no close instant, under either `requireActive`', async () => {
+    const { engagement, companyId, expertProfileId } = await caseEngagementFactory();
+
+    await expect(
+      caseEngagementsRepository.findClosureSubject(engagement.id, { requireActive: true })
+    ).resolves.toEqual({
+      companyId,
+      expertProfileId,
+      isActive: true,
+      closedAt: null,
+      closedByUserId: null,
+    });
+    await expect(
+      caseEngagementsRepository.findClosureSubject(engagement.id, { requireActive: false })
+    ).resolves.toEqual({
+      companyId,
+      expertProfileId,
+      isActive: true,
+      closedAt: null,
+      closedByUserId: null,
+    });
+  });
+
+  it('a case closed via `auto_inactive` (no human closer) answers `closedByUserId: null`', async () => {
+    const { engagement, companyId, expertProfileId } = await caseEngagementFactory();
+    await caseEngagementsRepository.close({ engagementId: engagement.id, reason: 'auto_inactive' });
+
+    const subject = await caseEngagementsRepository.findClosureSubject(engagement.id, {
+      requireActive: false,
+    });
+    expect(subject).toMatchObject({ companyId, expertProfileId, isActive: false });
+    expect(subject?.closedAt).toBeInstanceOf(Date);
+    expect(subject?.closedByUserId).toBeNull();
+  });
+
+  it('a case closed via `resolved` by a live company member answers that member as `closedByUserId`', async () => {
+    const { engagement, clientMemberUserId } = await caseEngagementFactory({
+      withClientMember: true,
+    });
+    if (clientMemberUserId === undefined) throw new Error('expected a seeded client member');
+    await caseEngagementsRepository.close({
+      engagementId: engagement.id,
+      reason: 'resolved',
+      userId: clientMemberUserId,
+    });
+
+    const subject = await caseEngagementsRepository.findClosureSubject(engagement.id, {
+      requireActive: false,
+    });
+    expect(subject?.closedByUserId).toBe(clientMemberUserId);
+    expect(subject?.isActive).toBe(false);
+  });
+
+  it('`requireActive: true` refuses a closed case WITHOUT reading the case child row', async () => {
+    const { engagement } = await caseEngagementFactory();
+    await caseEngagementsRepository.close({ engagementId: engagement.id, reason: 'auto_inactive' });
+
+    await expect(
+      caseEngagementsRepository.findClosureSubject(engagement.id, { requireActive: true })
+    ).resolves.toBeUndefined();
+  });
+
+  it('a Project engagement (not a Case) resolves nothing', async () => {
+    const { engagement: project } = await engagementFactory();
+    await expect(
+      caseEngagementsRepository.findClosureSubject(project.id, { requireActive: false })
+    ).resolves.toBeUndefined();
+  });
+
+  it('an unknown or soft-deleted id resolves nothing', async () => {
+    const { engagement } = await caseEngagementFactory();
+    await expect(
+      caseEngagementsRepository.findClosureSubject(randomUUID(), { requireActive: false })
+    ).resolves.toBeUndefined();
+
+    await softDeleteEngagementFixture(engagement.id);
+    await expect(
+      caseEngagementsRepository.findClosureSubject(engagement.id, { requireActive: false })
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('caseEngagementsRepository.close — the closed_by_user_id MEMBERSHIP INVARIANT', () => {
   // ⚠ THIS BLOCK PROVES A DATA-INTEGRITY INVARIANT, NOT AN AUTHORIZATION GATE.
   // `close()` resolves no capability and compares no role — it asserts only that

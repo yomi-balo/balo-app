@@ -1110,7 +1110,7 @@ function FeaturedCard({ c, lens, clock, go, mobile }) {
   );
   const hint = (
     <span style={{ display: 'block', fontSize: 12, color: T.text3, marginTop: mobile ? 2 : 12 }}>
-      Join opens 15 min before
+      Join opens 3 min before
     </span>
   );
 

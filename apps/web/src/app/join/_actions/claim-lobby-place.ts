@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { log } from '@/lib/logging';
-import { postLobbyClaim } from '@/lib/meetings/join-api-client';
+import { notOpenYetFrom, postLobbyClaim } from '@/lib/meetings/join-api-client';
 import { JOIN_UNAVAILABLE_TITLE } from '@/lib/meetings/lobby';
 
 /**
@@ -63,7 +63,13 @@ const claimSchema = z.object({
  */
 export type ClaimLobbyPlaceResult =
   | { success: true; lobbyToken: string }
-  | { success: false; kind: 'invalid_input' | 'unavailable'; error: string };
+  | { success: false; kind: 'invalid_input' | 'unavailable'; error: string }
+  /**
+   * D16 — the join window has not opened (`409 meeting_not_open_yet`). NON-terminal, like `invalid_input`: the
+   * form stays on screen with the typed values, and the message names `opensAt` (ISO; the browser formats it in
+   * the viewer's zone).
+   */
+  | { success: false; kind: 'not_open_yet'; opensAt: string };
 
 /**
  * ⚠⚠ EVERY **SERVER** FAILURE RETURNS THE SAME STRING. Not "that meeting was cancelled", not
@@ -101,6 +107,10 @@ export async function claimLobbyPlaceAction(input: {
       status: result.status,
       code: result.code,
     });
+    const notOpenYet = notOpenYetFrom(result);
+    if (notOpenYet !== undefined) {
+      return { success: false, kind: 'not_open_yet', opensAt: notOpenYet.opensAt };
+    }
     return { success: false, kind: 'unavailable', error: JOIN_UNAVAILABLE_TITLE };
   }
 

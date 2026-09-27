@@ -15,9 +15,14 @@ export function BillingLine(): React.JSX.Element {
   );
 }
 
-/** Footer cancellation line, verbatim per D4/plan Copy Reference — no countdown, no fee schedule. */
+/**
+ * BAL-474 (R6-C4, owner-approved) — the footer cancellation line: no countdown, no fee schedule. It used to
+ * read "Free until scheduled start time.", which is false once anyone joins early: cancelling needs the
+ * meeting to be `scheduled`, and the first presence flips it. Cancelling is accepted exactly while nobody has
+ * joined, and nothing is ever charged for a call nobody joined.
+ */
+export const CANCELLATION_LINE_COPY = 'Free to cancel until anyone joins the call.';
+
 export function CancellationLine(): React.JSX.Element {
-  return (
-    <p className="text-muted-foreground text-center text-xs">Free until scheduled start time.</p>
-  );
+  return <p className="text-muted-foreground text-center text-xs">{CANCELLATION_LINE_COPY}</p>;
 }

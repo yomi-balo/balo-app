@@ -23,8 +23,10 @@ describe('STATEMENT_COPY', () => {
         expect(value.toLowerCase()).not.toContain('overdraft');
       }
     }
-    for (const value of Object.values(SETTLEMENT_STATUS_COPY)) {
-      expect(value.toLowerCase()).not.toContain('overdraft');
+    for (const shape of Object.values(SETTLEMENT_STATUS_COPY)) {
+      for (const value of Object.values(shape)) {
+        expect(value.toLowerCase()).not.toContain('overdraft');
+      }
     }
   });
 
@@ -45,10 +47,39 @@ describe('STATEMENT_SHARED_COPY', () => {
 });
 
 describe('SETTLEMENT_STATUS_COPY / PAYOUT_STATUS_COPY', () => {
-  it('covers exactly the three non-ordinary settlement statuses', () => {
-    expect(Object.keys(SETTLEMENT_STATUS_COPY).sort()).toEqual(
-      ['failed', 'processing', 'requires_action'].sort()
-    );
+  it('is keyed by exactly the two receipt shapes', () => {
+    expect(Object.keys(SETTLEMENT_STATUS_COPY).sort((a, b) => a.localeCompare(b))).toEqual([
+      'held',
+      'no_show_client',
+    ]);
+  });
+
+  it('each shape covers exactly the three non-ordinary settlement statuses', () => {
+    for (const shape of Object.values(SETTLEMENT_STATUS_COPY)) {
+      expect(Object.keys(shape).sort((a, b) => a.localeCompare(b))).toEqual([
+        'failed',
+        'processing',
+        'requires_action',
+      ]);
+    }
+  });
+
+  it('never says "extra time" or "the card on file" (a no-show has no extra time; a card may have been swapped)', () => {
+    for (const shape of Object.values(SETTLEMENT_STATUS_COPY)) {
+      for (const value of Object.values(shape)) {
+        expect(value.toLowerCase()).not.toContain('extra time');
+        expect(value.toLowerCase()).not.toContain('card on file');
+      }
+    }
+  });
+
+  it('every no_show_client string says the booking was billed at its minimum; no held string does', () => {
+    for (const value of Object.values(SETTLEMENT_STATUS_COPY.no_show_client)) {
+      expect(value).toContain('billed at its minimum charge');
+    }
+    for (const value of Object.values(SETTLEMENT_STATUS_COPY.held)) {
+      expect(value).not.toContain('minimum');
+    }
   });
 
   it('covers exactly the four payout statuses', () => {

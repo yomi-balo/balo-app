@@ -4,6 +4,7 @@ const {
   mockAuthorizeMeetingBooking,
   mockBookAndProvisionMeeting,
   mockLookupBookingReplay,
+  mockCheckCaseBookingFunding,
   mockCheckRateLimit,
   mockIsWindowAvailableForExpert,
   MatchModeDiscoveryNotBookableError,
@@ -62,6 +63,7 @@ const {
     mockAuthorizeMeetingBooking: vi.fn(),
     mockBookAndProvisionMeeting: vi.fn(),
     mockLookupBookingReplay: vi.fn(),
+    mockCheckCaseBookingFunding: vi.fn(),
     mockCheckRateLimit: vi.fn(),
     mockIsWindowAvailableForExpert: vi.fn(),
     MatchModeDiscoveryNotBookableError,
@@ -91,6 +93,10 @@ vi.mock('../../lib/require-auth.js', () => ({
 }));
 vi.mock('../../services/meetings/authorize-meeting-booking.js', () => ({
   authorizeMeetingBooking: mockAuthorizeMeetingBooking,
+}));
+// BAL-474 — the Case funding guard; its own verdict/heal behaviour is `case-booking-funding.test.ts`.
+vi.mock('../../services/meetings/case-booking-funding.js', () => ({
+  checkCaseBookingFunding: mockCheckCaseBookingFunding,
 }));
 vi.mock('../../services/meetings/provision-meeting.js', () => ({
   bookAndProvisionMeeting: mockBookAndProvisionMeeting,
@@ -196,6 +202,8 @@ describe('POST /meetings', () => {
     mockIsWindowAvailableForExpert.mockResolvedValue(true);
     // Default: this key names nothing yet, so every guard runs exactly as before.
     mockLookupBookingReplay.mockResolvedValue({ kind: 'none' });
+    // BAL-474 — the Case funding guard passes by default; the guard's own cases override it.
+    mockCheckCaseBookingFunding.mockResolvedValue({ ok: true });
     mockAuthorizeMeetingBooking.mockResolvedValue({
       ok: true,
       companyId: 'company_1',
@@ -417,14 +425,39 @@ describe('POST /meetings', () => {
       expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
     });
 
-    it('a key naming a DIFFERENT booking keeps every guard — no skip on a conflict', async () => {
+    // ⚠ BAL-474 (D8.6) — THIS CASE WAS RE-WRITTEN ON THE RECORD. It used to read "keeps every guard —
+    // no skip on a conflict" and let the availability gate answer. A key naming a DIFFERENT window or
+    // case is now answered `409 idempotency_key_conflict` at once — BEFORE the funding guard, the
+    // per-pair limit and the availability read — so a mismatched key never earns a funding refusal
+    // (and the web gate, which classifies the same way, never notifies a billing admin over it).
+    it('⚠ a key naming a DIFFERENT booking is answered 409 idempotency_key_conflict BEFORE any funding check, limit or availability read', async () => {
       mockLookupBookingReplay.mockResolvedValue({ kind: 'conflict', meetingId: MEETING_ID });
       mockIsWindowAvailableForExpert.mockResolvedValue(false);
+      // A funding refusal that WOULD have answered, had the guard run first.
+      mockCheckCaseBookingFunding.mockResolvedValue({ ok: false, code: 'account_on_hold' });
 
       const res = await post(body({ bookingIdempotencyKey: KEY }));
 
       expect(res.statusCode).toBe(409);
-      expect(mockIsWindowAvailableForExpert).toHaveBeenCalled();
+      expect(res.json()).toEqual({ error: 'idempotency_key_conflict' });
+      expect(mockCheckCaseBookingFunding).not.toHaveBeenCalled();
+      expect(mockIsWindowAvailableForExpert).not.toHaveBeenCalled();
+      expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
+      expect(mockCheckRateLimit).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ keyPrefix: 'ratelimit:meetings:user-expert' }),
+        expect.anything()
+      );
+    });
+
+    it('a lost-201 REPLAY is booked even when the funding guard would now refuse — it is already booked, and never re-checked', async () => {
+      mockLookupBookingReplay.mockResolvedValue({ kind: 'match', meeting: bookedMeeting() });
+      mockCheckCaseBookingFunding.mockResolvedValue({ ok: false, code: 'booking_reserved' });
+
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(201);
+      expect(mockCheckCaseBookingFunding).not.toHaveBeenCalled();
     });
 
     it('NEVER skips the tenancy gate for a replay — the key proves only who minted it', async () => {
@@ -443,6 +476,88 @@ describe('POST /meetings', () => {
     it('never probes at all when no key is supplied', async () => {
       await post(body());
       expect(mockLookupBookingReplay).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── BAL-474 (ADR-1040 Amendment 7 §H, D6.1 / D6.5) — the Case funding guard ────────────────────────
+
+  describe('the Case funding guard (defence in depth)', () => {
+    it('runs the guard for a CASE with the gate-resolved company and expert and the submitted window', async () => {
+      const res = await post(body());
+
+      expect(res.statusCode).toBe(201);
+      expect(mockCheckCaseBookingFunding).toHaveBeenCalledTimes(1);
+      expect(mockCheckCaseBookingFunding).toHaveBeenCalledWith({
+        companyId: 'company_1',
+        expertProfileId: EXPERT_PROFILE_ID,
+        scheduledStart: new Date(START),
+        scheduledEnd: new Date(END),
+        now: expect.any(Date),
+      });
+    });
+
+    it.each([
+      { code: 'account_on_hold', status: 409 },
+      { code: 'booking_unfunded', status: 409 },
+      { code: 'booking_reserved', status: 409 },
+      // An unreadable snapshot FAILS CLOSED.
+      { code: 'booking_funding_unavailable', status: 503 },
+    ] as const)('answers $status $code and books NOTHING', async ({ code, status }) => {
+      mockCheckCaseBookingFunding.mockResolvedValue({ ok: false, code });
+
+      const res = await post(body());
+
+      expect(res.statusCode).toBe(status);
+      expect(res.json()).toEqual({ error: code });
+      expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
+    });
+
+    it('⚠ a refusal spends NO per-(USER, EXPERT) limit and reads no availability — the guard runs BEFORE them', async () => {
+      mockCheckCaseBookingFunding.mockResolvedValue({ ok: false, code: 'booking_reserved' });
+
+      await post(body());
+
+      expect(mockCheckRateLimit).toHaveBeenCalledTimes(1); // the per-USER window only
+      expect(mockCheckRateLimit).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ keyPrefix: 'ratelimit:meetings:user-expert' }),
+        expect.anything()
+      );
+      expect(mockIsWindowAvailableForExpert).not.toHaveBeenCalled();
+    });
+
+    it.each(['project_kickoff', 'project_discovery', 'package_session'] as const)(
+      'a `%s` booking is NEVER funding-checked — only a Case books against credit',
+      async (contextType) => {
+        mockCheckCaseBookingFunding.mockResolvedValue({ ok: false, code: 'account_on_hold' });
+
+        const res = await post(body({ contextType }));
+
+        expect(res.statusCode).toBe(201);
+        expect(mockCheckCaseBookingFunding).not.toHaveBeenCalled();
+      }
+    );
+
+    it('a Case whose gate resolved NO expert skips the guard (no calendar, no estimate to size)', async () => {
+      mockAuthorizeMeetingBooking.mockResolvedValue({
+        ok: true,
+        companyId: 'company_1',
+        engagementType: 'case',
+        expertProfileId: null,
+      });
+
+      await post(body());
+
+      expect(mockCheckCaseBookingFunding).not.toHaveBeenCalled();
+    });
+
+    it('never runs before the tenancy gate has answered', async () => {
+      mockAuthorizeMeetingBooking.mockResolvedValue({ ok: false, code: 'context_not_found' });
+
+      const res = await post(body());
+
+      expect(res.statusCode).toBe(404);
+      expect(mockCheckCaseBookingFunding).not.toHaveBeenCalled();
     });
   });
 

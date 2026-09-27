@@ -1,15 +1,22 @@
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray } from 'drizzle-orm';
-import { dailyRoomNameForMeeting, isMeetingVenueReady } from '@balo/shared/meetings';
+import {
+  dailyRoomNameForMeeting,
+  isMeetingVenueReady,
+  type MeetingClocks,
+} from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   auditEvents,
   consultations,
+  creditSessions,
   engagements,
+  expertProfiles,
   meetingCalendarEvents,
   meetingContexts,
   meetingGuests,
+  meetingPresence,
   meetings,
   rescheduleProposals,
   type AuditEvent,
@@ -18,8 +25,10 @@ import {
 } from '../schema';
 import {
   caseEngagementFactory,
+  creditWalletFactory,
   engagementFactory,
   expertDraftFactory,
+  expertFactory,
   meetingFactory,
   meetingGuestFactory,
   projectRequestFactory,
@@ -29,6 +38,7 @@ import {
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { findProjectionForMeeting } from './_shared/consultation-projection';
+import { creditSessionsRepository } from './credit-sessions';
 import { meetingCalendarEventsRepository } from './meeting-calendar-events';
 import { InvalidPresenceTimestampError, meetingPresenceRepository } from './meeting-presence';
 import {
@@ -762,6 +772,19 @@ describe('meetingsRepository.softDelete', () => {
 
 // ── BAL-134 / ADR-1049 — THE LIFECYCLE TRANSITIONS (§4.3) ──────────────────────────────────
 
+/**
+ * A meeting's RAW clocks (no start clamp, no together term) through the one production read of them:
+ * `settlementFacts` with a scheduled start before every fixture row, so the clamp is a no-op. `now` omitted
+ * resolves the ceiling exactly as settlement does (`ended_at` for a terminal meeting, else the wall clock).
+ */
+async function clocksOf(meetingId: string, now?: Date): Promise<MeetingClocks> {
+  const { clocks } = await meetingPresenceRepository.settlementFacts(meetingId, {
+    scheduledStart: new Date(0),
+    ...(now === undefined ? {} : { now }),
+  });
+  return clocks;
+}
+
 /** A meeting scheduled `offsetMinutes` from now, in whatever status the test needs. */
 async function lifecycleMeeting(
   status: 'scheduled' | 'waiting_for_participants' | 'in_progress',
@@ -775,10 +798,11 @@ async function lifecycleMeeting(
 }
 
 describe('meetingsRepository.listLifecycleCandidates', () => {
-  it('returns live, in-status meetings at or after the lookback floor, OLDEST FIRST', async () => {
+  it('returns live, in-status meetings at or after the lookback floor: in_progress, then waiting, then scheduled, OLDEST FIRST within each (R6F-15)', async () => {
     const older = await lifecycleMeeting('waiting_for_participants', -50);
     const newer = await lifecycleMeeting('scheduled', -10);
     const inProgress = await lifecycleMeeting('in_progress', -30);
+    const olderScheduled = await lifecycleMeeting('scheduled', -45);
 
     const rows = await meetingsRepository.listLifecycleCandidates({
       statuses: ['scheduled', 'waiting_for_participants', 'in_progress'],
@@ -790,10 +814,29 @@ describe('meetingsRepository.listLifecycleCandidates', () => {
     expect(ids).toContain(older);
     expect(ids).toContain(newer);
     expect(ids).toContain(inProgress);
-    // Ascending, so a caller that fills its batch can name the OLDEST scheduled_start it
-    // reached in the no-silent-caps warning.
-    expect(ids.indexOf(older)).toBeLessThan(ids.indexOf(inProgress));
-    expect(ids.indexOf(inProgress)).toBeLessThan(ids.indexOf(newer));
+    // ⚠ THE STATUS RANK, THEN AGE: a call in progress is reconciled ahead of every meeting nobody has
+    // joined, however much older those are…
+    expect(ids.indexOf(inProgress)).toBeLessThan(ids.indexOf(older));
+    expect(ids.indexOf(older)).toBeLessThan(ids.indexOf(olderScheduled));
+    // …and within a status, oldest first (stable, so a capped meeting cannot occupy a slot at random).
+    expect(ids.indexOf(olderScheduled)).toBeLessThan(ids.indexOf(newer));
+  });
+
+  it('⚠ R6F-15 — a full batch of older `scheduled` meetings does NOT crowd out an in_progress call (an early check-in)', async () => {
+    await lifecycleMeeting('scheduled', -30);
+    await lifecycleMeeting('scheduled', -29);
+    await lifecycleMeeting('scheduled', -28);
+    // Its start is still AHEAD: newer than every scheduled row above, so an oldest-first scan would drop it.
+    const early = await lifecycleMeeting('in_progress', 10);
+
+    const rows = await meetingsRepository.listLifecycleCandidates({
+      statuses: ['scheduled', 'waiting_for_participants', 'in_progress'],
+      scheduledStartAfter: new Date(Date.now() - 24 * HOUR_MS),
+      limit: 2,
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.id).toBe(early);
   });
 
   it('EXCLUDES terminal statuses, soft-deleted meetings, and anything before the floor', async () => {
@@ -1414,7 +1457,7 @@ describe('meetingsRepository.endMeeting', () => {
     // No explicit `now` — exactly how a settlement job (BAL-412) would call it. Both intervals
     // were open when the meeting ended; both are now closed AT `ended_at`, and `ended_at` is
     // additionally the resolved ceiling. 30 minutes, not "however long ago that was".
-    const clocks = await meetingPresenceRepository.clocks(id);
+    const clocks = await clocksOf(id);
     expect(clocks.billableMs).toBe(30 * 60_000);
     expect(clocks.expertPresentMs).toBe(30 * 60_000);
   });
@@ -2617,5 +2660,593 @@ describe('meetingsRepository.listCalendarForExpert', () => {
       expect(Object.keys(row)).not.toContain('dailyRoomName');
       expect(Object.keys(row)).not.toContain('joinUrl');
     }
+  });
+});
+
+// ── BAL-474 (ADR-1040 Amendment 7 §H, owner ruling D6.5) — the soft reservation's read ────────
+
+describe('meetingsRepository.listReservableCaseBookings (BAL-474, plan §I.2)', () => {
+  const MINUTE_MS = 60_000;
+  /** Client 700 / minute at the default fee. */
+  const RATE = 33_600;
+
+  function window(startOffsetMinutes: number, minutes: number): { start: Date; end: Date } {
+    const base = Math.ceil(Date.now() / MINUTE_MS) * MINUTE_MS;
+    const start = new Date(base + startOffsetMinutes * MINUTE_MS);
+    return { start, end: new Date(start.getTime() + minutes * MINUTE_MS) };
+  }
+
+  async function reservableCompany(): Promise<{
+    companyId: string;
+    walletId: string;
+    memberId: string;
+    expertProfileId: string;
+  }> {
+    const { wallet, companyId } = await creditWalletFactory({ values: { balanceMinor: 100_000 } });
+    const member = await userFactory();
+    const expert = await expertFactory();
+    await db
+      .update(expertProfiles)
+      .set({ rateCents: RATE })
+      .where(eq(expertProfiles.id, expert.id));
+    return { companyId, walletId: wallet.id, memberId: member.id, expertProfileId: expert.id };
+  }
+
+  async function book(
+    owner: { companyId: string; expertProfileId: string },
+    opts: {
+      startOffsetMinutes?: number;
+      minutes?: number;
+      meeting?: Partial<typeof meetings.$inferInsert>;
+      engagement?: { status?: 'active' | 'completed' | 'cancelled'; deletedAt?: Date };
+    } = {}
+  ): Promise<{ meetingId: string; engagementId: string }> {
+    const { engagement } = await caseEngagementFactory({
+      companyId: owner.companyId,
+      expertProfileId: owner.expertProfileId,
+      values: opts.engagement,
+    });
+    const { start, end } = window(opts.startOffsetMinutes ?? 120, opts.minutes ?? 30);
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { status: 'scheduled', scheduledStart: start, scheduledEnd: end, ...opts.meeting },
+    });
+    return { meetingId: meeting.id, engagementId: engagement.id };
+  }
+
+  async function reservableIds(companyId: string): Promise<string[]> {
+    const rows = await meetingsRepository.listReservableCaseBookings({
+      companyId,
+      now: new Date(),
+    });
+    return rows.map((row) => row.meetingId);
+  }
+
+  it('counts upcoming `scheduled` and `waiting_for_participants` bookings, soonest first, with the booked expert and rate', async () => {
+    const owner = await reservableCompany();
+    const later = await book(owner, { startOffsetMinutes: 240 });
+    const sooner = await book(owner, {
+      startOffsetMinutes: 60,
+      meeting: { status: 'waiting_for_participants' },
+    });
+
+    const rows = await meetingsRepository.listReservableCaseBookings({
+      companyId: owner.companyId,
+      now: new Date(),
+    });
+    expect(rows.map((row) => row.meetingId)).toEqual([sooner.meetingId, later.meetingId]);
+    expect(rows[0]).toMatchObject({
+      expertProfileId: owner.expertProfileId,
+      expertRateCents: RATE,
+    });
+  });
+
+  it('excludes a started or terminal meeting — in_progress, ended, cancelled', async () => {
+    const owner = await reservableCompany();
+    await book(owner, { meeting: { status: 'in_progress' } });
+    await book(owner, {
+      meeting: { status: 'ended', endedBy: 'expert_host', endedAt: new Date() },
+    });
+    await book(owner, { meeting: { status: 'cancelled' } });
+    expect(await reservableIds(owner.companyId)).toEqual([]);
+  });
+
+  it('excludes a booking whose window has already ended', async () => {
+    const owner = await reservableCompany();
+    await book(owner, { startOffsetMinutes: -90, minutes: 30 });
+    expect(await reservableIds(owner.companyId)).toEqual([]);
+  });
+
+  it('excludes a booking with a live session, and COUNTS one whose only session was cancelled', async () => {
+    const owner = await reservableCompany();
+    const withSession = await book(owner);
+    const opened = await creditSessionsRepository.open({
+      walletId: owner.walletId,
+      companyId: owner.companyId,
+      expertProfileId: owner.expertProfileId,
+      initiatingMemberId: owner.memberId,
+      estimatedMinutes: 30,
+      meetingId: withSession.meetingId,
+      engagementId: withSession.engagementId,
+      durationSource: 'presence',
+    });
+    if (!opened.ok) throw new Error(`open failed: ${opened.code}`);
+    expect(await reservableIds(owner.companyId)).toEqual([]);
+
+    await creditSessionsRepository.cancel(opened.session.id);
+    expect(await reservableIds(owner.companyId)).toEqual([withSession.meetingId]);
+  });
+
+  it('excludes an inactive engagement, another company’s booking, and soft-deleted rows', async () => {
+    const owner = await reservableCompany();
+    const other = await reservableCompany();
+    await book(owner, { engagement: { status: 'completed' } });
+    await book(owner, { engagement: { deletedAt: new Date() } });
+    await book(owner, { meeting: { deletedAt: new Date() } });
+    const contextGone = await book(owner);
+    await db
+      .update(meetingContexts)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingContexts.meetingId, contextGone.meetingId));
+    const others = await book(other);
+
+    expect(await reservableIds(owner.companyId)).toEqual([]);
+    expect(await reservableIds(other.companyId)).toEqual([others.meetingId]);
+  });
+
+  it('reports the expert’s CURRENT rate — a change since booking is reflected', async () => {
+    const owner = await reservableCompany();
+    await book(owner);
+    await db
+      .update(expertProfiles)
+      .set({ rateCents: RATE * 2 })
+      .where(eq(expertProfiles.id, owner.expertProfileId));
+    const [row] = await meetingsRepository.listReservableCaseBookings({
+      companyId: owner.companyId,
+      now: new Date(),
+    });
+    expect(row?.expertRateCents).toBe(RATE * 2);
+  });
+});
+
+// ── BAL-474 (Rule A, D11.1 / D13) — the two reads billing start and card removal stand on ─────────
+
+/** Shared seeding for the two describes below: a Case call, its presence rows and its sessions. */
+const MINUTE_MS = 60_000;
+type CallStatus = NonNullable<Partial<typeof meetings.$inferInsert>['status']>;
+
+interface SeededCall {
+  companyId: string;
+  engagementId: string;
+  meetingId: string;
+}
+
+/** A Case call for `companyId` (a fresh company when omitted) that started `startedMinutesAgo` ago. */
+async function seedCaseCall(
+  opts: {
+    companyId?: string;
+    status?: CallStatus;
+    startedMinutesAgo?: number;
+    engagement?: { status?: 'active' | 'completed' | 'cancelled'; deletedAt?: Date };
+    meeting?: Partial<typeof meetings.$inferInsert>;
+  } = {}
+): Promise<SeededCall> {
+  const { engagement, companyId } = await caseEngagementFactory({
+    companyId: opts.companyId,
+    values: opts.engagement,
+  });
+  const start = new Date(Date.now() - (opts.startedMinutesAgo ?? 10) * MINUTE_MS);
+  const { meeting } = await meetingFactory({
+    contexts: [{ contextType: 'case', contextId: engagement.id }],
+    values: {
+      status: opts.status ?? 'in_progress',
+      scheduledStart: start,
+      scheduledEnd: new Date(start.getTime() + 30 * MINUTE_MS),
+      ...(opts.status === 'ended' ? { endedBy: 'expert_host', endedAt: new Date() } : {}),
+      ...opts.meeting,
+    },
+  });
+  return { companyId, engagementId: engagement.id, meetingId: meeting.id };
+}
+
+/** One presence row on `meetingId`; `closed` gives it a `left_at`, `softDeleted` a `deleted_at`. */
+async function presentOn(
+  meetingId: string,
+  party: 'expert' | 'client' | 'observer',
+  opts: { closed?: boolean; softDeleted?: boolean } = {}
+): Promise<void> {
+  const user = await userFactory();
+  const joinedAt = new Date(Date.now() - 5 * MINUTE_MS);
+  const row = await meetingPresenceRepository.open({
+    meetingId,
+    userId: user.id,
+    meetingGuestId: null,
+    party,
+    joinedAt,
+  });
+  if (opts.closed === true) {
+    await meetingPresenceRepository.close({
+      meetingId,
+      userId: user.id,
+      meetingGuestId: null,
+      leftAt: new Date(joinedAt.getTime() + MINUTE_MS),
+    });
+  }
+  if (opts.softDeleted === true) {
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, row.id));
+  }
+}
+
+/** Open a REAL `presence` session on the call (own wallet), then move it to `status`. */
+async function sessionOn(
+  call: { meetingId: string; engagementId: string },
+  status: 'pending' | 'active' | 'grace' | 'wrapped' | 'ended' | 'cancelled',
+  opts: { softDeleted?: boolean } = {}
+): Promise<string> {
+  const { wallet, companyId } = await creditWalletFactory({ values: { balanceMinor: 100_000 } });
+  const member = await userFactory();
+  const expert = await expertFactory();
+  await db
+    .update(expertProfiles)
+    .set({ rateCents: 12_000 })
+    .where(eq(expertProfiles.id, expert.id));
+  const opened = await creditSessionsRepository.open({
+    walletId: wallet.id,
+    companyId,
+    expertProfileId: expert.id,
+    initiatingMemberId: member.id,
+    estimatedMinutes: 15,
+    meetingId: call.meetingId,
+    engagementId: call.engagementId,
+    durationSource: 'presence',
+  });
+  if (!opened.ok) throw new Error(`open failed: ${opened.code}`);
+  if (status === 'cancelled') {
+    await creditSessionsRepository.cancel(opened.session.id);
+  } else if (status !== 'pending') {
+    await db.update(creditSessions).set({ status }).where(eq(creditSessions.id, opened.session.id));
+  }
+  if (opts.softDeleted === true) {
+    await db
+      .update(creditSessions)
+      .set({ deletedAt: new Date() })
+      .where(eq(creditSessions.id, opened.session.id));
+  }
+  return opened.session.id;
+}
+
+describe('meetingsRepository.listCaseMeetingsDueToStartBilling (BAL-474, Rule A / D13)', () => {
+  async function dueIds(limit = 500): Promise<string[]> {
+    const rows = await meetingsRepository.listCaseMeetingsDueToStartBilling({
+      now: new Date(),
+      limit,
+    });
+    return rows.map((row) => row.meetingId);
+  }
+
+  /** A call that IS due: `in_progress`, started, an expert row and a client row open, no session. */
+  async function dueCall(startedMinutesAgo = 10): Promise<SeededCall> {
+    const call = await seedCaseCall({ startedMinutesAgo });
+    await presentOn(call.meetingId, 'expert');
+    await presentOn(call.meetingId, 'client');
+    return call;
+  }
+
+  it('SELECTS an in_progress case meeting with both parties open and no session, and one whose only session is pending', async () => {
+    const sessionless = await dueCall(20);
+    const pendingOnly = await dueCall(10);
+    await sessionOn(pendingOnly, 'pending');
+
+    const rows = await meetingsRepository.listCaseMeetingsDueToStartBilling({
+      now: new Date(),
+      limit: 500,
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.meetingId)).toEqual([
+      sessionless.meetingId,
+      pendingOnly.meetingId,
+    ]);
+    const [first, second] = rows;
+    expect(first?.scheduledStart).toBeInstanceOf(Date);
+    expect(first?.scheduledStart.getTime()).toBeLessThan(second?.scheduledStart.getTime() ?? 0);
+  });
+
+  it('a meeting whose only session was CANCELLED still selects, and a soft-deleted live session does not exclude it', async () => {
+    const cancelledOnly = await dueCall();
+    await sessionOn(cancelledOnly, 'cancelled');
+    const deletedActive = await dueCall();
+    await sessionOn(deletedActive, 'active', { softDeleted: true });
+
+    const ids = await dueIds();
+
+    expect(ids).toHaveLength(2);
+    expect(ids).toEqual(expect.arrayContaining([cancelledOnly.meetingId, deletedActive.meetingId]));
+  });
+
+  it.each(['active', 'grace', 'wrapped', 'ended'] as const)(
+    'EXCLUDES a meeting with a %s session — anything but pending / cancelled is metering or settled',
+    async (status) => {
+      const control = await dueCall();
+      const excluded = await dueCall();
+      await sessionOn(excluded, status);
+
+      expect(await dueIds()).toEqual([control.meetingId]);
+    }
+  );
+
+  it('EXCLUDES a meeting whose earlier session was cancelled but whose LATER session is active', async () => {
+    const control = await dueCall();
+    const excluded = await dueCall();
+    await sessionOn(excluded, 'cancelled');
+    await sessionOn(excluded, 'active');
+
+    expect(await dueIds()).toEqual([control.meetingId]);
+  });
+
+  it('EXCLUDES a start still in the future, and includes one exactly at now', async () => {
+    const control = await dueCall();
+    const future = await seedCaseCall({ startedMinutesAgo: -30 });
+    await presentOn(future.meetingId, 'expert');
+    await presentOn(future.meetingId, 'client');
+    const now = new Date();
+    const atNow = await seedCaseCall({ meeting: { scheduledStart: now } });
+    await presentOn(atNow.meetingId, 'expert');
+    await presentOn(atNow.meetingId, 'client');
+
+    const rows = await meetingsRepository.listCaseMeetingsDueToStartBilling({ now, limit: 500 });
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.meetingId)).toEqual([control.meetingId, atNow.meetingId]);
+  });
+
+  it('EXCLUDES a non-case meeting (a project_kickoff-only call, and a case context that was soft-deleted)', async () => {
+    const control = await dueCall();
+
+    const { meeting: kickoff } = await meetingFactory({
+      contexts: [{ contextType: 'project_kickoff', contextId: randomUUID() }],
+      values: {
+        status: 'in_progress',
+        scheduledStart: new Date(Date.now() - 10 * MINUTE_MS),
+        scheduledEnd: new Date(Date.now() + 20 * MINUTE_MS),
+      },
+    });
+    await presentOn(kickoff.id, 'expert');
+    await presentOn(kickoff.id, 'client');
+
+    const contextGone = await dueCall();
+    await db
+      .update(meetingContexts)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingContexts.meetingId, contextGone.meetingId));
+
+    expect(await dueIds()).toEqual([control.meetingId]);
+  });
+
+  it('EXCLUDES a call where only ONE party is open — expert alone, client alone, expert + observer, nobody', async () => {
+    const control = await dueCall();
+
+    const expertOnly = await seedCaseCall();
+    await presentOn(expertOnly.meetingId, 'expert');
+    const clientOnly = await seedCaseCall();
+    await presentOn(clientOnly.meetingId, 'client');
+    const observed = await seedCaseCall();
+    await presentOn(observed.meetingId, 'expert');
+    await presentOn(observed.meetingId, 'observer');
+    await seedCaseCall();
+
+    expect(await dueIds()).toEqual([control.meetingId]);
+  });
+
+  it('EXCLUDES a call whose client row is CLOSED, whose expert row is closed, or whose open row is soft-deleted', async () => {
+    const control = await dueCall();
+
+    const clientLeft = await seedCaseCall();
+    await presentOn(clientLeft.meetingId, 'expert');
+    await presentOn(clientLeft.meetingId, 'client', { closed: true });
+    const expertLeft = await seedCaseCall();
+    await presentOn(expertLeft.meetingId, 'expert', { closed: true });
+    await presentOn(expertLeft.meetingId, 'client');
+    const clientDeleted = await seedCaseCall();
+    await presentOn(clientDeleted.meetingId, 'expert');
+    await presentOn(clientDeleted.meetingId, 'client', { softDeleted: true });
+
+    expect(await dueIds()).toEqual([control.meetingId]);
+  });
+
+  it('a client who left and REJOINED (one closed row, one open row) is present', async () => {
+    const rejoined = await seedCaseCall();
+    await presentOn(rejoined.meetingId, 'expert');
+    await presentOn(rejoined.meetingId, 'client', { closed: true });
+    await presentOn(rejoined.meetingId, 'client');
+
+    expect(await dueIds()).toEqual([rejoined.meetingId]);
+  });
+
+  it('EXCLUDES a soft-deleted meeting', async () => {
+    const control = await dueCall();
+    const deleted = await dueCall();
+    await db
+      .update(meetings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetings.id, deleted.meetingId));
+
+    expect(await dueIds()).toEqual([control.meetingId]);
+  });
+
+  it.each(['scheduled', 'waiting_for_participants', 'ended', 'cancelled'] as const)(
+    'EXCLUDES a %s meeting even with both parties open — only in_progress is due',
+    async (status) => {
+      const control = await dueCall();
+      const excluded = await seedCaseCall({ status });
+      await presentOn(excluded.meetingId, 'expert');
+      await presentOn(excluded.meetingId, 'client');
+
+      expect(await dueIds()).toEqual([control.meetingId]);
+    }
+  );
+
+  it('orders by scheduled_start, then id — a shared start falls back to the id', async () => {
+    const sharedStart = new Date(Date.now() - 10 * MINUTE_MS);
+    const first = await seedCaseCall({ meeting: { scheduledStart: sharedStart } });
+    const second = await seedCaseCall({ meeting: { scheduledStart: sharedStart } });
+    const earlier = await seedCaseCall({ startedMinutesAgo: 40 });
+    for (const call of [first, second, earlier]) {
+      await presentOn(call.meetingId, 'expert');
+      await presentOn(call.meetingId, 'client');
+    }
+    const tied = [first.meetingId, second.meetingId].sort(compareStrings);
+
+    const ids = await dueIds();
+
+    expect(ids).toHaveLength(3);
+    expect(ids).toEqual([earlier.meetingId, ...tied]);
+  });
+
+  it('honours the limit — the OLDEST starts come first', async () => {
+    const oldest = await dueCall(60);
+    const middle = await dueCall(30);
+    await dueCall(10);
+
+    const ids = await dueIds(2);
+
+    expect(ids).toHaveLength(2);
+    expect(ids).toEqual([oldest.meetingId, middle.meetingId]);
+    expect(await dueIds()).toHaveLength(3);
+  });
+});
+
+describe('meetingsRepository.hasLiveSessionlessCaseMeeting (BAL-474, D11.1)', () => {
+  function hasLive(companyId: string): Promise<boolean> {
+    return meetingsRepository.hasLiveSessionlessCaseMeeting({ companyId });
+  }
+
+  it('is TRUE for an in_progress case meeting of the company with no session — and FALSE for another company', async () => {
+    const call = await seedCaseCall({ status: 'in_progress' });
+    const other = await seedCaseCall({ status: 'ended' });
+
+    expect(await hasLive(call.companyId)).toBe(true);
+    expect(await hasLive(other.companyId)).toBe(false);
+  });
+
+  it('is TRUE for waiting_for_participants with an OPEN client-party row', async () => {
+    const call = await seedCaseCall({ status: 'waiting_for_participants' });
+    await presentOn(call.meetingId, 'expert');
+    await presentOn(call.meetingId, 'client');
+
+    expect(await hasLive(call.companyId)).toBe(true);
+  });
+
+  it.each([
+    { label: 'nobody present', rows: [] },
+    { label: 'only an expert row', rows: [{ party: 'expert' as const }] },
+    { label: 'only an observer row', rows: [{ party: 'observer' as const }] },
+    { label: 'a client who already left', rows: [{ party: 'client' as const, closed: true }] },
+    { label: 'a soft-deleted client row', rows: [{ party: 'client' as const, softDeleted: true }] },
+  ])(
+    'is FALSE for waiting_for_participants with $label — and TRUE once a client row is open',
+    async ({ rows }) => {
+      const call = await seedCaseCall({ status: 'waiting_for_participants' });
+      for (const row of rows) {
+        await presentOn(call.meetingId, row.party, row);
+      }
+
+      expect(await hasLive(call.companyId)).toBe(false);
+
+      await presentOn(call.meetingId, 'client');
+      expect(await hasLive(call.companyId)).toBe(true);
+    }
+  );
+
+  it.each(['scheduled', 'ended', 'cancelled'] as const)(
+    'is FALSE for a %s meeting, even with an open client row',
+    async (status) => {
+      const call = await seedCaseCall({ status });
+      await presentOn(call.meetingId, 'client');
+
+      expect(await hasLive(call.companyId)).toBe(false);
+
+      await db
+        .update(meetings)
+        .set({ status: 'in_progress', endedBy: null, endedAt: null })
+        .where(eq(meetings.id, call.meetingId));
+      expect(await hasLive(call.companyId)).toBe(true);
+    }
+  );
+
+  it.each(['pending', 'active', 'grace', 'wrapped', 'ended'] as const)(
+    'is FALSE while a %s session exists — ANY non-cancelled session means the card is not the only guard',
+    async (status) => {
+      const call = await seedCaseCall({ status: 'in_progress' });
+      expect(await hasLive(call.companyId)).toBe(true);
+
+      await sessionOn(call, status);
+      expect(await hasLive(call.companyId)).toBe(false);
+    }
+  );
+
+  it('is TRUE again once the only session is CANCELLED, and a soft-deleted live session does not hide the call', async () => {
+    const call = await seedCaseCall({ status: 'in_progress' });
+    await sessionOn(call, 'cancelled');
+    expect(await hasLive(call.companyId)).toBe(true);
+
+    const other = await seedCaseCall({ status: 'in_progress' });
+    await sessionOn(other, 'active', { softDeleted: true });
+    expect(await hasLive(other.companyId)).toBe(true);
+  });
+
+  it('never counts ANOTHER company’s live call', async () => {
+    const live = await seedCaseCall({ status: 'in_progress' });
+    const { companyId: bystander } = await caseEngagementFactory();
+
+    expect(await hasLive(bystander)).toBe(false);
+    expect(await hasLive(live.companyId)).toBe(true);
+  });
+
+  it('a call of a CLOSED (completed) engagement still counts — a closed case can have a call running', async () => {
+    const call = await seedCaseCall({ status: 'in_progress', engagement: { status: 'completed' } });
+
+    expect(await hasLive(call.companyId)).toBe(true);
+  });
+
+  it('is FALSE for a soft-deleted meeting, engagement or case context', async () => {
+    const meetingGone = await seedCaseCall({ meeting: { deletedAt: new Date() } });
+    const engagementGone = await seedCaseCall({ engagement: { deletedAt: new Date() } });
+    const contextGone = await seedCaseCall();
+    await db
+      .update(meetingContexts)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingContexts.meetingId, contextGone.meetingId));
+    const control = await seedCaseCall();
+
+    for (const gone of [meetingGone, engagementGone, contextGone]) {
+      expect(await hasLive(gone.companyId)).toBe(false);
+    }
+    expect(await hasLive(control.companyId)).toBe(true);
+  });
+
+  it('runs on a caller’s executor, so a transaction sees its own writes', async () => {
+    const call = await seedCaseCall({ status: 'in_progress' });
+
+    let seenInside: boolean | undefined;
+    await expect(
+      db.transaction(async (tx) => {
+        await tx
+          .update(meetings)
+          .set({ status: 'ended', endedBy: 'expert_host', endedAt: new Date() })
+          .where(eq(meetings.id, call.meetingId));
+        seenInside = await meetingsRepository.hasLiveSessionlessCaseMeeting(
+          { companyId: call.companyId },
+          tx
+        );
+        throw new Error('force rollback');
+      })
+    ).rejects.toThrow('force rollback');
+
+    expect(seenInside).toBe(false);
+    expect(await hasLive(call.companyId)).toBe(true);
   });
 });

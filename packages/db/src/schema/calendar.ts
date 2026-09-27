@@ -101,9 +101,9 @@ export const calendarConnections = pgTable(
     /**
      * The sweep-over-sweep "already notified" marker. NULL = not notified since this
      * connection was last healthy, so the reconnect email fires at most once per breakage.
-     * House precedent: `credit_receivables.last_dunning_at` + `markDunned()`, stamped
-     * AFTER the publish. Cleared by `upsertApirocConnection` (reconnect) and by the health
-     * probe when a credential heals — which is what lets a SECOND breakage notify again.
+     * Stamped AFTER the publish (`markReconnectNotified` — stamping first would turn a failed
+     * publish into permanent silence). Cleared by `upsertApirocConnection` (reconnect) and by the
+     * health probe when a credential heals — which is what lets a SECOND breakage notify again.
      */
     reconnectNotifiedAt: timestamp('reconnect_notified_at', { withTimezone: true }),
 

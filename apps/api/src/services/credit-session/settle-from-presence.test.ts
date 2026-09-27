@@ -8,9 +8,14 @@ const {
   mockSettlementFacts,
   mockFinalizeAndSettle,
   mockFinalizeBilling,
+  mockCancel,
+  mockMarkSessionless,
+  mockResolveSubject,
   mockError,
   mockWarn,
   mockInfo,
+  mockOnlyGuests,
+  InvalidSessionTransitionErrorStub,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindIdByMeetingId: vi.fn(),
@@ -19,19 +24,28 @@ const {
   mockSettlementFacts: vi.fn(),
   mockFinalizeAndSettle: vi.fn(),
   mockFinalizeBilling: vi.fn(),
+  mockCancel: vi.fn(),
+  mockMarkSessionless: vi.fn(),
+  mockResolveSubject: vi.fn(),
   mockError: vi.fn(),
   mockWarn: vi.fn(),
   mockInfo: vi.fn(),
+  mockOnlyGuests: vi.fn(),
+  // The real class is what `settle-from-presence.ts` tests with `instanceof` (R6F-10b).
+  InvalidSessionTransitionErrorStub: class InvalidSessionTransitionError extends Error {},
 }));
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: mockInfo, warn: mockWarn, error: mockError }),
 }));
 vi.mock('@balo/db', () => ({
+  InvalidSessionTransitionError: InvalidSessionTransitionErrorStub,
   creditSessionsRepository: {
     findById: mockFindById,
     findIdByMeetingId: mockFindIdByMeetingId,
     settleFromPresence: mockSettleFromPresence,
+    cancel: mockCancel,
+    markSessionlessCaseMeeting: mockMarkSessionless,
   },
   meetingsRepository: { findById: mockFindMeetingById },
   meetingPresenceRepository: { settlementFacts: mockSettlementFacts },
@@ -44,7 +58,13 @@ vi.mock('../../config/billing-floor.js', () => ({
   resolveMaxBillableMinutes: () => 240,
 }));
 vi.mock('./end-session.js', () => ({ finalizeAndSettle: mockFinalizeAndSettle }));
+// BAL-474 (D12.1c) — the closed-case release reads the billing subject.
+vi.mock('./case-billing-subject.js', () => ({ resolveCaseBillingSubject: mockResolveSubject }));
 vi.mock('./finalize-billing.js', () => ({ finalizeBilling: mockFinalizeBilling }));
+// BAL-474 (R6F-4c) — the existing-session release reads the expert-invited-guest guard.
+vi.mock('./expert-invited-guest-guard.js', () => ({
+  onlyExpertInvitedGuestsAttended: mockOnlyGuests,
+}));
 
 import { settleSessionFromPresence, settleMeetingIfBillable } from './settle-from-presence.js';
 
@@ -59,6 +79,7 @@ function session(overrides: Record<string, unknown> = {}) {
     id: SESSION_ID,
     status: 'active',
     meetingId: MEETING_ID,
+    expertProfileId: 'expert-1',
     durationSource: 'presence',
     billingFinalizedAt: null,
     lastTickSeq: 0,
@@ -94,8 +115,14 @@ describe('settleSessionFromPresence', () => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue(session());
     mockFindMeetingById.mockResolvedValue(meeting());
+    mockOnlyGuests.mockResolvedValue(false);
+    mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
+    mockCancel.mockResolvedValue({ id: SESSION_ID, status: 'cancelled' });
+    mockMarkSessionless.mockResolvedValue({ markerId: 'marker-1', outcomeWritten: true });
     mockSettlementFacts.mockResolvedValue({
       clocks: HELD_CLOCKS,
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: HELD_CLOCKS.expertPresentMs,
       facts: { clientSideEverPresent: true },
     });
     mockSettleFromPresence.mockResolvedValue({
@@ -213,6 +240,8 @@ describe('settleSessionFromPresence', () => {
         expertFirstJoinedAt: null,
         billableStartedAt: null,
       },
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: 0,
       facts: { clientSideEverPresent: false },
     });
     const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
@@ -238,6 +267,8 @@ describe('settleSessionFromPresence', () => {
         expertFirstJoinedAt: START,
         billableStartedAt: START,
       },
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: 5 * 60_000,
       facts: { clientSideEverPresent: true },
     });
 
@@ -271,6 +302,8 @@ describe('settleSessionFromPresence', () => {
         expertFirstJoinedAt: START,
         billableStartedAt: null,
       },
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: 40 * 60_000,
       facts: { clientSideEverPresent: false },
     });
 
@@ -305,6 +338,8 @@ describe('settleSessionFromPresence', () => {
         expertFirstJoinedAt: START,
         billableStartedAt: null,
       },
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: 8 * 60_000,
       facts: { clientSideEverPresent: false },
     });
 
@@ -330,6 +365,8 @@ describe('settleSessionFromPresence', () => {
         expertFirstJoinedAt: START,
         billableStartedAt: START,
       },
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: 480 * 60_000,
       facts: { clientSideEverPresent: true },
     });
 
@@ -448,6 +485,8 @@ describe('settleMeetingIfBillable', () => {
     mockFindMeetingById.mockResolvedValue(meeting());
     mockSettlementFacts.mockResolvedValue({
       clocks: HELD_CLOCKS,
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: HELD_CLOCKS.expertPresentMs,
       facts: { clientSideEverPresent: true },
     });
     mockSettleFromPresence.mockResolvedValue({
@@ -477,5 +516,387 @@ describe('settleMeetingIfBillable', () => {
     const result = await settleMeetingIfBillable({ meetingId: MEETING_ID, actorUserId: 'user-1' });
     expect(result.ok).toBe(true);
     expect(mockFindById).toHaveBeenCalledWith(SESSION_ID);
+  });
+});
+
+describe('settleSessionFromPresence — Rule A: the pre-start time together, and the closed-case release (BAL-474)', () => {
+  /** Both present 09:50–10:20 against a 10:00 start: 10 minutes together before it, 20 from it. */
+  const NO_SHOW_CLOCKS = {
+    expertPresentMs: 20 * 60_000,
+    billableMs: 0,
+    expertFirstJoinedAt: START,
+    billableStartedAt: null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindById.mockResolvedValue(session({ status: 'pending' }));
+    mockFindMeetingById.mockResolvedValue(meeting());
+    mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
+    mockCancel.mockResolvedValue({ id: SESSION_ID, status: 'cancelled' });
+    mockMarkSessionless.mockResolvedValue({ markerId: 'marker-1', outcomeWritten: true });
+    mockSettleFromPresence.mockResolvedValue({
+      session: session({ status: 'ended', billingFinalizedAt: NOW }),
+      overdraftMinor: 0,
+      expertAccruedMinor: 10_000,
+      mandateActive: true,
+      alreadySettled: false,
+      ticksPosted: 30,
+      outcomeWritten: true,
+    });
+    mockFinalizeAndSettle.mockResolvedValue({
+      settlementStatus: 'not_required',
+      overdraftSettledMinor: 0,
+    });
+  });
+
+  it('⚠ reads the facts with the meeting’s scheduledStart and the SAME ceiling, and settles on the together term (10 + 20 = 30)', async () => {
+    mockSettlementFacts.mockResolvedValue({
+      clocks: HELD_CLOCKS,
+      togetherBeforeStartMs: 10 * 60_000,
+      expertPresentFromStartMs: HELD_CLOCKS.expertPresentMs,
+      facts: { clientSideEverPresent: true },
+    });
+
+    const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+    expect(mockSettlementFacts).toHaveBeenCalledWith(MEETING_ID, {
+      scheduledStart: START,
+      now: ENDED_AT,
+      resolveExpertProfileId: expect.any(Function),
+    });
+    // R6F-4a — the lazy resolver answers with the SESSION's expert, so the repository can drop the guests that
+    // expert invited from the together term.
+    const [, facts] = mockSettlementFacts.mock.calls[0] as [
+      string,
+      { resolveExpertProfileId: () => Promise<string | null> },
+    ];
+    await expect(facts.resolveExpertProfileId()).resolves.toBe('expert-1');
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.settlement.togetherBeforeStartMs).toBe(10 * 60_000);
+    expect(result.settlement.actualMinutes).toBe(30);
+    expect(result.settlement.billableMinutes).toBe(30);
+  });
+
+  it('⚠ D15.3 — bills together + the repository’s from-start figure, not the clamped clock: 30 + 50 = 80', async () => {
+    mockSettlementFacts.mockResolvedValue({
+      // The clamped clock anchors at the start and reads 60; the repository reports 50 from the return.
+      clocks: { ...HELD_CLOCKS, expertPresentMs: 60 * 60_000, billableMs: 60 * 60_000 },
+      togetherBeforeStartMs: 30 * 60_000,
+      expertPresentFromStartMs: 50 * 60_000,
+      facts: { clientSideEverPresent: true },
+    });
+
+    const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.settlement.effectiveExpertPresentMs).toBe(50 * 60_000);
+    expect(result.settlement.actualMinutes).toBe(80);
+    expect(result.settlement.billableMinutes).toBe(80);
+  });
+
+  describe('a NO-SHOW on a case the client closed BEFORE the start owes nothing', () => {
+    beforeEach(() => {
+      mockSettlementFacts.mockResolvedValue({
+        clocks: NO_SHOW_CLOCKS,
+        togetherBeforeStartMs: 0,
+        expertPresentFromStartMs: NO_SHOW_CLOCKS.expertPresentMs,
+        facts: { clientSideEverPresent: false },
+      });
+    });
+
+    it.each([
+      ['a day before the start', new Date(START.getTime() - 86_400_000)],
+      ['one millisecond before the start', new Date(START.getTime() - 1)],
+      ['with no close instant recorded', null],
+    ])(
+      'closed %s ⇒ the session is released (cancel), the meeting marked not_billable, nothing settled',
+      async (_label, closedAt) => {
+        mockResolveSubject.mockResolvedValue({ isActive: false, closedAt });
+
+        const result = await settleSessionFromPresence({
+          sessionId: SESSION_ID,
+          actorUserId: null,
+          trigger: 'lifecycle_sweep',
+        });
+
+        expect(result).toEqual({ ok: false, code: 'released_closed_case_no_show' });
+        expect(mockCancel).toHaveBeenCalledTimes(1);
+        expect(mockCancel).toHaveBeenCalledWith(SESSION_ID, { memberId: undefined });
+        expect(mockMarkSessionless).toHaveBeenCalledTimes(1);
+        expect(mockMarkSessionless).toHaveBeenCalledWith({
+          meetingId: MEETING_ID,
+          disposition: 'not_billable',
+          reason: 'case_closed_before_start',
+          trigger: 'lifecycle_sweep',
+          shape: 'no_show_client',
+          outcome: 'no_show_client',
+        });
+        expect(mockSettleFromPresence).not.toHaveBeenCalled();
+        expect(mockFinalizeAndSettle).not.toHaveBeenCalled();
+        expect(mockInfo).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: SESSION_ID, meetingId: MEETING_ID }),
+          expect.stringContaining('released')
+        );
+      }
+    );
+
+    it('the release is ordered: cancel FIRST, then the marker', async () => {
+      mockResolveSubject.mockResolvedValue({ isActive: false, closedAt: null });
+      await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+      expect(mockCancel.mock.invocationCallOrder[0]).toBeLessThan(
+        mockMarkSessionless.mock.invocationCallOrder[0] ?? 0
+      );
+    });
+
+    it('closed EXACTLY at the start, or AFTER it ⇒ the floor is still owed (a client who resolves it while the expert waits)', async () => {
+      for (const closedAt of [START, new Date(START.getTime() + 5 * 60_000)]) {
+        vi.clearAllMocks();
+        mockFindById.mockResolvedValue(session({ status: 'pending' }));
+        mockFindMeetingById.mockResolvedValue(meeting());
+        mockResolveSubject.mockResolvedValue({ isActive: false, closedAt });
+        mockSettlementFacts.mockResolvedValue({
+          clocks: NO_SHOW_CLOCKS,
+          togetherBeforeStartMs: 0,
+          expertPresentFromStartMs: NO_SHOW_CLOCKS.expertPresentMs,
+          facts: { clientSideEverPresent: false },
+        });
+        mockSettleFromPresence.mockResolvedValue({
+          session: session({ status: 'ended', billingFinalizedAt: NOW }),
+          overdraftMinor: 0,
+          expertAccruedMinor: 1,
+          mandateActive: true,
+          alreadySettled: false,
+          ticksPosted: 15,
+          outcomeWritten: true,
+        });
+        mockFinalizeAndSettle.mockResolvedValue({
+          settlementStatus: 'not_required',
+          overdraftSettledMinor: 0,
+        });
+
+        const result = await settleSessionFromPresence({
+          sessionId: SESSION_ID,
+          actorUserId: null,
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockCancel).not.toHaveBeenCalled();
+        expect(mockSettleFromPresence).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it('an ACTIVE case is never released — a no-show owes the floor', async () => {
+      mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
+      mockSettleFromPresence.mockResolvedValue({
+        session: session({ status: 'ended', billingFinalizedAt: NOW }),
+        overdraftMinor: 0,
+        expertAccruedMinor: 1,
+        mandateActive: true,
+        alreadySettled: false,
+        ticksPosted: 15,
+        outcomeWritten: true,
+      });
+      const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+      expect(result.ok).toBe(true);
+      expect(mockCancel).not.toHaveBeenCalled();
+    });
+
+    it('a subject that cannot be resolved (not a Case) settles normally', async () => {
+      mockResolveSubject.mockResolvedValue(undefined);
+      await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+      expect(mockCancel).not.toHaveBeenCalled();
+      expect(mockSettleFromPresence).toHaveBeenCalledTimes(1);
+    });
+
+    it('⚠ if the session is NOT pending (cancel throws InvalidSessionTransitionError) it logs at error and settles normally — never a silent release', async () => {
+      mockResolveSubject.mockResolvedValue({ isActive: false, closedAt: null });
+      mockCancel.mockRejectedValue(
+        new InvalidSessionTransitionErrorStub('cannot cancel an active session')
+      );
+      mockSettleFromPresence.mockResolvedValue({
+        session: session({ status: 'ended', billingFinalizedAt: NOW }),
+        overdraftMinor: 0,
+        expertAccruedMinor: 1,
+        mandateActive: true,
+        alreadySettled: false,
+        ticksPosted: 15,
+        outcomeWritten: true,
+      });
+
+      const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+      expect(result.ok).toBe(true);
+      expect(mockError).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: SESSION_ID }),
+        expect.stringContaining('could not be released')
+      );
+      expect(mockMarkSessionless).not.toHaveBeenCalled();
+      expect(mockSettleFromPresence).toHaveBeenCalledTimes(1);
+    });
+
+    it('any OTHER cancel failure propagates (the backstop retries) — and no marker is written', async () => {
+      mockResolveSubject.mockResolvedValue({ isActive: false, closedAt: null });
+      mockCancel.mockRejectedValue(new Error('db down'));
+      await expect(
+        settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null })
+      ).rejects.toThrow('db down');
+      expect(mockMarkSessionless).not.toHaveBeenCalled();
+    });
+  });
+
+  it('⚠ D12.1(c) — an ATTENDED call (`held`) on a case closed before the start settles normally: a closure never voids it', async () => {
+    mockResolveSubject.mockResolvedValue({ isActive: false, closedAt: null });
+    mockSettlementFacts.mockResolvedValue({
+      clocks: HELD_CLOCKS,
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: HELD_CLOCKS.expertPresentMs,
+      facts: { clientSideEverPresent: true },
+    });
+
+    const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+    expect(result.ok).toBe(true);
+    expect(mockCancel).not.toHaveBeenCalled();
+    expect(mockResolveSubject).not.toHaveBeenCalled();
+    expect(mockSettleFromPresence).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * BAL-474 (R6F-4c, ADR-1040 Amendment 7 §E) — "not after the call": a `held` call whose ONLY client-side
+   * attendees were guests the delivering expert invited is released and marked `not_billable`, with the same
+   * reason the sessionless path writes — even though a session already existed.
+   */
+  describe('a HELD call attended only by guests the delivering expert invited (R6F-4c)', () => {
+    beforeEach(() => {
+      mockFindById.mockResolvedValue(session({ status: 'pending' }));
+      mockSettlementFacts.mockResolvedValue({
+        clocks: HELD_CLOCKS,
+        togetherBeforeStartMs: 0,
+        expertPresentFromStartMs: HELD_CLOCKS.expertPresentMs,
+        facts: { clientSideEverPresent: true },
+      });
+      mockOnlyGuests.mockResolvedValue(true);
+    });
+
+    it('⚠⚠ releases the session, writes the not_billable marker with the sessionless reason, and settles nothing', async () => {
+      const result = await settleSessionFromPresence({
+        sessionId: SESSION_ID,
+        actorUserId: null,
+        trigger: 'lifecycle_sweep',
+      });
+
+      expect(result).toEqual({ ok: false, code: 'released_expert_invited_guest_only' });
+      expect(mockOnlyGuests).toHaveBeenCalledWith(MEETING_ID, 'expert-1');
+      expect(mockCancel).toHaveBeenCalledTimes(1);
+      expect(mockMarkSessionless).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        disposition: 'not_billable',
+        reason: 'expert_invited_guest_only',
+        trigger: 'lifecycle_sweep',
+        shape: 'held',
+        outcome: 'completed',
+      });
+      expect(mockSettleFromPresence).not.toHaveBeenCalled();
+      expect(mockFinalizeAndSettle).not.toHaveBeenCalled();
+      // The sessionless path logs this case at `warn`; the release mirrors it.
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: SESSION_ID, meetingId: MEETING_ID }),
+        expect.stringContaining('guests the delivering expert invited')
+      );
+    });
+
+    it('the release is ordered: cancel FIRST, then the marker', async () => {
+      await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+      expect(mockCancel.mock.invocationCallOrder[0]).toBeLessThan(
+        mockMarkSessionless.mock.invocationCallOrder[0] ?? 0
+      );
+    });
+
+    it('a call with a client MEMBER (or any non-guest attendee) is not released — the guard says no, it settles normally', async () => {
+      mockOnlyGuests.mockResolvedValue(false);
+      mockSettleFromPresence.mockResolvedValue({
+        session: session({ status: 'ended', billingFinalizedAt: NOW }),
+        overdraftMinor: 0,
+        expertAccruedMinor: 1,
+        mandateActive: true,
+        alreadySettled: false,
+        ticksPosted: 20,
+        outcomeWritten: true,
+      });
+
+      const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+      expect(result.ok).toBe(true);
+      expect(mockCancel).not.toHaveBeenCalled();
+      expect(mockMarkSessionless).not.toHaveBeenCalled();
+      expect(mockSettleFromPresence).toHaveBeenCalledTimes(1);
+    });
+
+    it('the guard is consulted ONLY on the `held` shape — a no-show never reads it', async () => {
+      mockSettlementFacts.mockResolvedValue({
+        clocks: NO_SHOW_CLOCKS,
+        togetherBeforeStartMs: 0,
+        expertPresentFromStartMs: NO_SHOW_CLOCKS.expertPresentMs,
+        facts: { clientSideEverPresent: false },
+      });
+      mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
+      mockSettleFromPresence.mockResolvedValue({
+        session: session({ status: 'ended', billingFinalizedAt: NOW }),
+        overdraftMinor: 0,
+        expertAccruedMinor: 1,
+        mandateActive: true,
+        alreadySettled: false,
+        ticksPosted: 15,
+        outcomeWritten: true,
+      });
+
+      await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+      expect(mockOnlyGuests).not.toHaveBeenCalled();
+    });
+
+    it('⚠ a session that already CONNECTED cannot be cancelled: it logs at error and settles normally — never a silent release', async () => {
+      mockCancel.mockRejectedValue(new InvalidSessionTransitionErrorStub('active → cancelled'));
+      mockSettleFromPresence.mockResolvedValue({
+        session: session({ status: 'ended', billingFinalizedAt: NOW }),
+        overdraftMinor: 0,
+        expertAccruedMinor: 1,
+        mandateActive: true,
+        alreadySettled: false,
+        ticksPosted: 20,
+        outcomeWritten: true,
+      });
+
+      const result = await settleSessionFromPresence({ sessionId: SESSION_ID, actorUserId: null });
+
+      expect(result.ok).toBe(true);
+      expect(mockError).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: SESSION_ID }),
+        expect.stringContaining('could not be released')
+      );
+      expect(mockMarkSessionless).not.toHaveBeenCalled();
+    });
+  });
+
+  it('settleMeetingIfBillable threads the trigger through to the release marker', async () => {
+    mockFindIdByMeetingId.mockResolvedValue({ id: SESSION_ID });
+    mockResolveSubject.mockResolvedValue({ isActive: false, closedAt: null });
+    mockSettlementFacts.mockResolvedValue({
+      clocks: NO_SHOW_CLOCKS,
+      togetherBeforeStartMs: 0,
+      expertPresentFromStartMs: NO_SHOW_CLOCKS.expertPresentMs,
+      facts: { clientSideEverPresent: false },
+    });
+
+    await settleMeetingIfBillable({
+      meetingId: MEETING_ID,
+      actorUserId: null,
+      trigger: 'human_end',
+    });
+
+    expect(mockMarkSessionless).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: 'human_end' })
+    );
   });
 });

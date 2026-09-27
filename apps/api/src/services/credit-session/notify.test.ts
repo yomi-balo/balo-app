@@ -9,27 +9,67 @@ const {
   mockPublish,
   mockTrackServer,
   mockLogError,
-} = vi.hoisted(() => ({
-  mockFindProfileById: vi.fn(),
-  mockFindUser: vi.fn(),
-  mockFindMeeting: vi.fn(),
-  mockFactsByMeetingIds: vi.fn(),
-  mockPublish: vi.fn(),
-  mockTrackServer: vi.fn(),
-  mockLogError: vi.fn(),
-}));
+  mockLogInfo,
+  mockLogWarn,
+  mockGetMemberRole,
+  mockAcquireWalletLock,
+  mockReadHoldStatus,
+  mockLastDailyDunningAt,
+  mockStampDailyDunning,
+  mockClearCoveredHold,
+  mockCaptureException,
+  mockTransaction,
+  TX,
+} = vi.hoisted(() => {
+  const tx = { __tx: true };
+  return {
+    mockFindProfileById: vi.fn(),
+    mockFindUser: vi.fn(),
+    mockFindMeeting: vi.fn(),
+    mockFactsByMeetingIds: vi.fn(),
+    mockPublish: vi.fn(),
+    mockTrackServer: vi.fn(),
+    mockLogError: vi.fn(),
+    mockLogInfo: vi.fn(),
+    mockLogWarn: vi.fn(),
+    mockGetMemberRole: vi.fn(),
+    mockAcquireWalletLock: vi.fn(),
+    mockReadHoldStatus: vi.fn(),
+    mockLastDailyDunningAt: vi.fn(),
+    mockStampDailyDunning: vi.fn(),
+    mockClearCoveredHold: vi.fn(),
+    mockCaptureException: vi.fn(),
+    mockTransaction: vi.fn(async (fn: (t: unknown) => unknown) => fn(tx)),
+    TX: tx,
+  };
+});
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLogError }),
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: mockLogInfo,
+    warn: mockLogWarn,
+    error: mockLogError,
+  }),
 }));
+vi.mock('@sentry/node', () => ({ captureException: mockCaptureException }));
 vi.mock('@balo/db', () => ({
+  acquireWalletLock: mockAcquireWalletLock,
+  db: { transaction: mockTransaction },
+  creditReceivablesRepository: {
+    readHoldStatus: mockReadHoldStatus,
+    lastDailyDunningAt: mockLastDailyDunningAt,
+    stampDailyDunning: mockStampDailyDunning,
+  },
   expertsRepository: { findProfileById: mockFindProfileById },
   usersRepository: { findById: mockFindUser },
   meetingsRepository: { findById: mockFindMeeting },
   meetingPresenceRepository: { factsByMeetingIds: mockFactsByMeetingIds },
+  partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
   deriveIdempotencyKey: (input: { sessionId?: string }) =>
     `overdraft_settlement:${input.sessionId}`,
 }));
+vi.mock('../credit/receivable-coverage.js', () => ({ clearCoveredHold: mockClearCoveredHold }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
   SESSION_SERVER_EVENTS: {
@@ -50,7 +90,11 @@ vi.mock('../../config/billing-floor.js', () => ({
 }));
 
 import {
+  DUNNING_CADENCE_HOURS,
+  claimHoldDunningNotice,
+  healCoveredHoldNow,
   publishGraceEntered,
+  publishHoldDunningNotice,
   publishLowBalance,
   publishNearWrap,
   publishPaymentCharged,
@@ -70,6 +114,7 @@ const SESSION = {
   companyId: 'company_1',
   initiatingMemberId: 'user_1',
   expertProfileId: 'expert_1',
+  openedBy: 'client',
   clientRateMinorPerMinute: 100,
   expertRateMinorPerMinute: 80,
   // BAL-412 (D6) — 42 min already drawn is past the 15-min floor, so the corrected runway
@@ -82,13 +127,48 @@ const SESSION = {
   overdraftSettledMinor: 1_200,
 } as unknown as Parameters<typeof publishLowBalance>[0];
 
-describe('notify helpers', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindProfileById.mockResolvedValue({ userId: 'expert_user_1' });
-    mockFindUser.mockResolvedValue({ firstName: 'Jordan', lastName: 'Ellis' });
-  });
+/** The same session, opened ON BEHALF of the booker (a guest admission or a terminal path). */
+function onBehalf(
+  overrides: Record<string, unknown> = {}
+): Parameters<typeof publishLowBalance>[0] {
+  return { ...SESSION, openedBy: 'system', ...overrides } as unknown as Parameters<
+    typeof publishLowBalance
+  >[0];
+}
 
+const SETTLEABLE = {
+  id: 'session_1',
+  companyId: 'company_1',
+  walletId: 'wallet_1',
+  expertProfileId: 'expert_1',
+  overdraftSettledMinor: 1_200,
+  openedBy: 'client',
+} as const;
+
+/** A hold status whose top-up figure is `amountToClearMinor`. */
+function holdStatus(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    onHold: true,
+    openReceivableCount: 1,
+    confirmationWasRequested: false,
+    balanceMinor: -10_000,
+    promoGrantedSinceDebtMinor: 0,
+    amountToClearMinor: 10_000,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockTransaction.mockImplementation(async (fn: (t: unknown) => unknown) => fn(TX));
+  mockFindProfileById.mockResolvedValue({ userId: 'expert_user_1' });
+  mockFindUser.mockResolvedValue({ firstName: 'Jordan', lastName: 'Ellis' });
+  mockGetMemberRole.mockResolvedValue('member');
+  mockLastDailyDunningAt.mockResolvedValue(undefined);
+  mockStampDailyDunning.mockResolvedValue(['receivable_1']);
+});
+
+describe('notify helpers', () => {
   it('publishLowBalance carries the runway + rate', async () => {
     await publishLowBalance(SESSION, 500);
     expect(mockPublish).toHaveBeenCalledWith('session.low_balance', {
@@ -119,6 +199,7 @@ describe('notify helpers', () => {
       'session.grace_entered',
       expect.objectContaining({
         correlationId: 'session_1:grace_entered',
+        userId: 'user_1',
         graceRemainingMinutes: 25,
         ceilingRoomMinor: 13_000,
       })
@@ -149,17 +230,8 @@ describe('notify helpers', () => {
     );
   });
 
-  it('publishSessionSettled resolves the expert name + tracks success', async () => {
-    await publishSessionSettled(
-      {
-        id: 'session_1',
-        companyId: 'company_1',
-        walletId: 'wallet_1',
-        expertProfileId: 'expert_1',
-        overdraftSettledMinor: 1_200,
-      },
-      NOW
-    );
+  it('publishSessionSettled resolves the expert name + tracks success, with opened_by', async () => {
+    await publishSessionSettled(SETTLEABLE, NOW);
     expect(mockPublish).toHaveBeenCalledWith(
       'session.settled',
       expect.objectContaining({
@@ -170,22 +242,24 @@ describe('notify helpers', () => {
     );
     expect(mockTrackServer).toHaveBeenCalledWith(
       'session_settled',
-      expect.objectContaining({ outcome: 'success', overdraft_settled_minor: 1_200 })
+      expect.objectContaining({
+        outcome: 'success',
+        overdraft_settled_minor: 1_200,
+        opened_by: 'client',
+      })
+    );
+  });
+
+  it('publishSessionSettled carries opened_by for an on-behalf session (BAL-474)', async () => {
+    await publishSessionSettled({ ...SETTLEABLE, openedBy: 'guest' }, NOW);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'session_settled',
+      expect.objectContaining({ opened_by: 'guest' })
     );
   });
 
   it('publishSessionSettled (BAL-412, D7) threads settlementShape into analytics ONLY, under its own key', async () => {
-    await publishSessionSettled(
-      {
-        id: 'session_1',
-        companyId: 'company_1',
-        walletId: 'wallet_1',
-        expertProfileId: 'expert_1',
-        overdraftSettledMinor: 0,
-      },
-      NOW,
-      'no_show_client'
-    );
+    await publishSessionSettled({ ...SETTLEABLE, overdraftSettledMinor: 0 }, NOW, 'no_show_client');
     // The NOTIFICATION payload is unaffected — `settlementShape` is analytics-only.
     const notifyPayload = mockPublish.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(notifyPayload).not.toHaveProperty('settlementShape');
@@ -196,16 +270,7 @@ describe('notify helpers', () => {
   });
 
   it('publishSessionSettled omits settlement_outcome when no shape is supplied (live_capture)', async () => {
-    await publishSessionSettled(
-      {
-        id: 'session_1',
-        companyId: 'company_1',
-        walletId: 'wallet_1',
-        expertProfileId: 'expert_1',
-        overdraftSettledMinor: 0,
-      },
-      NOW
-    );
+    await publishSessionSettled({ ...SETTLEABLE, overdraftSettledMinor: 0 }, NOW);
     const analyticsCall = mockTrackServer.mock.calls.find((c) => c[0] === 'session_settled');
     expect(analyticsCall?.[1]).not.toHaveProperty('settlement_outcome');
   });
@@ -213,60 +278,12 @@ describe('notify helpers', () => {
   it('publishSessionSettled degrades to "your expert" when the profile is missing', async () => {
     mockFindProfileById.mockResolvedValue(undefined);
     await publishSessionSettled(
-      {
-        id: 'session_1',
-        companyId: 'company_1',
-        walletId: 'wallet_1',
-        expertProfileId: 'gone',
-        overdraftSettledMinor: 0,
-      },
+      { ...SETTLEABLE, expertProfileId: 'gone', overdraftSettledMinor: 0 },
       NOW
     );
     expect(mockPublish).toHaveBeenCalledWith(
       'session.settled',
       expect.objectContaining({ expertName: 'your expert', overdraftSettledMinor: 0 })
-    );
-  });
-
-  it('publishSettlementFailure publishes + tracks SESSION_SETTLED{fail} + RECEIVABLE_OPENED', async () => {
-    await publishSettlementFailure({
-      session: { id: 'session_1', companyId: 'company_1', walletId: 'wallet_1' },
-      reason: 'declined',
-      amountMinor: 900,
-      attemptEpochMs: 1_700_000_000_000,
-    });
-    expect(mockPublish).toHaveBeenCalledWith(
-      'session.settlement_failed',
-      expect.objectContaining({
-        correlationId: 'session_1:settlement_failed:1700000000000',
-        reason: 'declined',
-        amountMinor: 900,
-      })
-    );
-    expect(mockTrackServer).toHaveBeenCalledWith(
-      'session_settled',
-      expect.objectContaining({ outcome: 'fail' })
-    );
-    expect(mockTrackServer).toHaveBeenCalledWith(
-      'receivable_opened',
-      expect.objectContaining({ reason: 'settlement_declined', amount_minor: 900 })
-    );
-  });
-
-  it('publishSettlementFailure maps requires_action outcome + receivable reason', async () => {
-    await publishSettlementFailure({
-      session: { id: 'session_1', companyId: 'company_1', walletId: 'wallet_1' },
-      reason: 'requires_action',
-      amountMinor: 900,
-      attemptEpochMs: 1,
-    });
-    expect(mockTrackServer).toHaveBeenCalledWith(
-      'session_settled',
-      expect.objectContaining({ outcome: 'requires_action' })
-    );
-    expect(mockTrackServer).toHaveBeenCalledWith(
-      'receivable_opened',
-      expect.objectContaining({ reason: 'settlement_requires_action' })
     );
   });
 
@@ -281,9 +298,9 @@ describe('notify helpers', () => {
     });
   });
 
-  it('publishReceivableCleared (BAL-535) publishes ONE notice per clear operation, keyed on the ledger entry', async () => {
+  it('publishReceivableCleared (BAL-535) publishes ONE notice per clear operation, keyed on the operation id', async () => {
     await publishReceivableCleared({
-      ledgerEntryId: 'ledger_1',
+      operationId: 'ledger_1',
       companyId: 'company_1',
       walletId: 'wallet_1',
       receivableCount: 3,
@@ -291,8 +308,9 @@ describe('notify helpers', () => {
       balanceAfterMinor: 300,
       clearedBy: 'manual_purchase',
     });
-    // ⚠ N4 — the correlationId is the LEDGER ENTRY, not a receivable id. Keying it per row sent
-    // three identical "your account is clear" emails for a wallet holding three receivables.
+    // ⚠ N4 — the correlationId is the OPERATION (the ledger entry on a credit arm), not a receivable
+    // id. Keying it per row sent three identical "your account is clear" emails for a wallet
+    // holding three receivables.
     expect(mockPublish).toHaveBeenCalledTimes(1);
     expect(mockPublish).toHaveBeenCalledWith('credit.receivable.cleared', {
       correlationId: 'receivable_cleared:ledger_1',
@@ -315,11 +333,30 @@ describe('notify helpers', () => {
     expect(mockLogError).not.toHaveBeenCalled();
   });
 
+  it('publishReceivableCleared takes the heal and the settlement arms as `clearedBy` (BAL-474, D8.4)', async () => {
+    await publishReceivableCleared({
+      operationId: 'receivable_9',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      receivableCount: 1,
+      clearedMinor: 500,
+      balanceAfterMinor: 0,
+      clearedBy: 'coverage_heal',
+    });
+    expect(mockPublish).toHaveBeenCalledWith(
+      'credit.receivable.cleared',
+      expect.objectContaining({
+        correlationId: 'receivable_cleared:receivable_9',
+        clearedBy: 'coverage_heal',
+      })
+    );
+  });
+
   it('publishReceivableCleared self-catches a publish failure and NEVER re-throws (money already committed)', async () => {
     mockPublish.mockRejectedValueOnce(new Error('queue unavailable'));
     await expect(
       publishReceivableCleared({
-        ledgerEntryId: 'ledger_2',
+        operationId: 'ledger_2',
         companyId: 'company_1',
         walletId: 'wallet_1',
         receivableCount: 1,
@@ -332,7 +369,7 @@ describe('notify helpers', () => {
     const [fields] = mockLogError.mock.calls[0] ?? [];
     expect(fields).toMatchObject({
       op: 'publishReceivableCleared',
-      ledgerEntryId: 'ledger_2',
+      operationId: 'ledger_2',
       companyId: 'company_1',
       walletId: 'wallet_1',
       receivableCount: 1,
@@ -347,7 +384,7 @@ describe('notify helpers', () => {
   it('⚠ L1 — the RECEIVABLE_CLEARED metric still fires when the notification publish throws', async () => {
     mockPublish.mockRejectedValueOnce(new Error('queue unavailable'));
     await publishReceivableCleared({
-      ledgerEntryId: 'ledger_3',
+      operationId: 'ledger_3',
       companyId: 'company_1',
       walletId: 'wallet_1',
       receivableCount: 1,
@@ -370,7 +407,7 @@ describe('notify helpers', () => {
     });
     await expect(
       publishReceivableCleared({
-        ledgerEntryId: 'ledger_4',
+        operationId: 'ledger_4',
         companyId: 'company_1',
         walletId: 'wallet_1',
         receivableCount: 1,
@@ -516,9 +553,6 @@ describe('publishSessionMissedCall (BAL-412, ADR-1044 §7, D8)', () => {
   } as unknown as Parameters<typeof publishSessionMissedCall>[0];
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindProfileById.mockResolvedValue({ userId: 'expert_user_1' });
-    mockFindUser.mockResolvedValue({ firstName: 'Jordan', lastName: 'Ellis' });
     mockFindMeeting.mockResolvedValue({
       id: 'meeting_1',
       scheduledStart: new Date('2026-07-16T10:00:00.000Z'),
@@ -602,5 +636,468 @@ describe('publishSessionMissedCall (BAL-412, ADR-1044 §7, D8)', () => {
     await publishSessionMissedCall(MISSED_CALL_SESSION, NOW);
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockFactsByMeetingIds).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-474 (ADR-1040 Amendment 7 §C.3, D5.7) — a departed booker is never addressed ─────────
+
+describe('booker-addressed notices for an on-behalf session (BAL-474, D5.7)', () => {
+  it('a member-opened session never looks the membership up — the actor is the person in the call', async () => {
+    await publishLowBalance(SESSION, 500);
+    await publishNearWrap(SESSION, NOW);
+    await publishPaymentCharged(SESSION, NOW);
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+    expect(mockPublish).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ['publishLowBalance', (s: ReturnType<typeof onBehalf>) => publishLowBalance(s, 500)],
+    ['publishNearWrap', (s: ReturnType<typeof onBehalf>) => publishNearWrap(s, NOW)],
+    ['publishPaymentCharged', (s: ReturnType<typeof onBehalf>) => publishPaymentCharged(s, NOW)],
+  ])('%s is SKIPPED (info log) for a booker who has left the company', async (_name, publish) => {
+    mockGetMemberRole.mockResolvedValue(undefined);
+    await publish(onBehalf());
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockGetMemberRole).toHaveBeenCalledWith('company', 'company_1', 'user_1');
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session_1', openedBy: 'system' }),
+      expect.stringContaining('no longer a member')
+    );
+  });
+
+  it.each([
+    ['publishLowBalance', (s: ReturnType<typeof onBehalf>) => publishLowBalance(s, 500)],
+    ['publishNearWrap', (s: ReturnType<typeof onBehalf>) => publishNearWrap(s, NOW)],
+    ['publishPaymentCharged', (s: ReturnType<typeof onBehalf>) => publishPaymentCharged(s, NOW)],
+  ])('%s still publishes to a booker who is STILL a member', async (_name, publish) => {
+    mockGetMemberRole.mockResolvedValue('member');
+    await publish(onBehalf({ openedBy: 'guest' }));
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({ userId: 'user_1' });
+  });
+
+  it('publishGraceEntered omits userId for a departed booker — the billing-admin ping still goes out, and the analytics still fire', async () => {
+    mockGetMemberRole.mockResolvedValue(undefined);
+    await publishGraceEntered(onBehalf(), -2_000, NOW);
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('userId');
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({ companyId: 'company_1' });
+    expect(mockTrackServer).toHaveBeenCalledWith('grace_entered', expect.anything());
+  });
+
+  it('publishGraceEntered keeps userId for a booker who is still a member', async () => {
+    await publishGraceEntered(onBehalf(), -2_000, NOW);
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({ userId: 'user_1' });
+  });
+
+  it('publishSessionMissedCall omits userId for a departed booker — the expert is still told', async () => {
+    mockGetMemberRole.mockResolvedValue(undefined);
+    mockFindMeeting.mockResolvedValue({
+      id: 'meeting_1',
+      scheduledStart: new Date('2026-07-16T10:00:00.000Z'),
+    });
+    mockFactsByMeetingIds.mockResolvedValue(presenceFacts(true));
+    await publishSessionMissedCall(onBehalf({ meetingId: 'meeting_1' }), NOW);
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    const payload = mockPublish.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('userId');
+    expect(payload).toMatchObject({ expertProfileId: 'expert_1', clientSideEverPresent: true });
+  });
+
+  it('a role with no PARTICIPATE capability counts as departed (defensive — an unknown role fails closed)', async () => {
+    mockGetMemberRole.mockResolvedValue('not_a_company_role');
+    await publishLowBalance(onBehalf(), 500);
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-474 (ADR-1040 Amendment 7 §G, D6.2, D7.1, D7.2) — wallet-grain hold dunning ─────────
+
+describe('claimHoldDunningNotice (BAL-474)', () => {
+  it('takes the wallet advisory lock FIRST, then reads the hold status on the SAME transaction', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    await claimHoldDunningNotice({ walletId: 'wallet_1', trigger: 'receivable_opened', now: NOW });
+    expect(mockAcquireWalletLock).toHaveBeenCalledWith(TX, 'wallet_1');
+    expect(mockReadHoldStatus).toHaveBeenCalledWith({ walletId: 'wallet_1' }, TX);
+    expect(mockAcquireWalletLock.mock.invocationCallOrder[0]).toBeLessThan(
+      mockReadHoldStatus.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it('not_on_hold: the hold cleared since the sweep listed the wallet — nothing to say, nothing stamped', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ onHold: false, amountToClearMinor: 0 }));
+    const claim = await claimHoldDunningNotice({
+      walletId: 'wallet_1',
+      trigger: 'daily_reminder',
+      now: NOW,
+    });
+    expect(claim).toEqual({ kind: 'not_on_hold' });
+    expect(mockStampDailyDunning).not.toHaveBeenCalled();
+    expect(mockClearCoveredHold).not.toHaveBeenCalled();
+  });
+
+  it('healed: a covered-but-held wallet (figure 0) is HEALED through the coverage module, never claimed', async () => {
+    const status = holdStatus({ balanceMinor: 0, amountToClearMinor: 0 });
+    mockReadHoldStatus.mockResolvedValue(status);
+    const healed = {
+      clearedIds: ['receivable_1'],
+      clearedMinor: 10_000,
+      companyId: 'company_1',
+      balanceMinor: 0,
+    };
+    mockClearCoveredHold.mockResolvedValue(healed);
+    const claim = await claimHoldDunningNotice({
+      walletId: 'wallet_1',
+      trigger: 'daily_reminder',
+      now: NOW,
+    });
+    expect(claim).toEqual({ kind: 'healed', healed });
+    expect(mockClearCoveredHold).toHaveBeenCalledTimes(1);
+    expect(mockClearCoveredHold).toHaveBeenCalledWith(TX, {
+      walletId: 'wallet_1',
+      balanceMinor: 0,
+      trigger: 'dunning_claim',
+      now: NOW,
+    });
+    expect(mockStampDailyDunning).not.toHaveBeenCalled();
+  });
+
+  it('daily_reminder: stamps the cadence in the SAME transaction and claims the figure', async () => {
+    const status = holdStatus();
+    mockReadHoldStatus.mockResolvedValue(status);
+    const claim = await claimHoldDunningNotice({
+      walletId: 'wallet_1',
+      trigger: 'daily_reminder',
+      now: NOW,
+    });
+    expect(claim).toEqual({ kind: 'claimed', status });
+    expect(mockLastDailyDunningAt).toHaveBeenCalledWith('wallet_1', TX);
+    expect(mockStampDailyDunning).toHaveBeenCalledWith('wallet_1', NOW, TX);
+  });
+
+  it('already_reminded: another sweep stamped this wallet inside the cadence — no second stamp, no second notice', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    mockLastDailyDunningAt.mockResolvedValue(
+      new Date(NOW.getTime() - (DUNNING_CADENCE_HOURS - 1) * 60 * 60 * 1000)
+    );
+    const claim = await claimHoldDunningNotice({
+      walletId: 'wallet_1',
+      trigger: 'daily_reminder',
+      now: NOW,
+    });
+    expect(claim).toEqual({ kind: 'already_reminded' });
+    expect(mockStampDailyDunning).not.toHaveBeenCalled();
+  });
+
+  it('a stamp OLDER than the cadence does not block the daily reminder', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    mockLastDailyDunningAt.mockResolvedValue(
+      new Date(NOW.getTime() - (DUNNING_CADENCE_HOURS + 1) * 60 * 60 * 1000)
+    );
+    const claim = await claimHoldDunningNotice({
+      walletId: 'wallet_1',
+      trigger: 'daily_reminder',
+      now: NOW,
+    });
+    expect(claim.kind).toBe('claimed');
+    expect(mockStampDailyDunning).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ D7.1 — a receivable_opened notice is NEVER throttled and NEVER stamps, even inside the cadence', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    mockLastDailyDunningAt.mockResolvedValue(new Date(NOW.getTime() - 60_000));
+    const claim = await claimHoldDunningNotice({
+      walletId: 'wallet_1',
+      trigger: 'receivable_opened',
+      now: NOW,
+    });
+    expect(claim.kind).toBe('claimed');
+    expect(mockLastDailyDunningAt).not.toHaveBeenCalled();
+    expect(mockStampDailyDunning).not.toHaveBeenCalled();
+  });
+});
+
+describe('healCoveredHoldNow (BAL-474, D8.1)', () => {
+  it('heals a covered hold under the wallet lock and publishes ONE account-clear keyed on the first cleared receivable id', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ balanceMinor: 0, amountToClearMinor: 0 }));
+    mockClearCoveredHold.mockResolvedValue({
+      clearedIds: ['receivable_1', 'receivable_2'],
+      clearedMinor: 24_000,
+      companyId: 'company_1',
+      balanceMinor: 0,
+    });
+    await expect(
+      healCoveredHoldNow({ walletId: 'wallet_1', trigger: 'booking_guard', now: NOW })
+    ).resolves.toEqual({ healed: true });
+    expect(mockAcquireWalletLock).toHaveBeenCalledWith(TX, 'wallet_1');
+    expect(mockClearCoveredHold).toHaveBeenCalledWith(TX, {
+      walletId: 'wallet_1',
+      balanceMinor: 0,
+      trigger: 'booking_guard',
+      now: NOW,
+    });
+    expect(mockPublish).toHaveBeenCalledWith('credit.receivable.cleared', {
+      correlationId: 'receivable_cleared:receivable_1',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      receivableCount: 2,
+      clearedMinor: 24_000,
+      balanceAfterMinor: 0,
+      clearedBy: 'coverage_heal',
+    });
+  });
+
+  it('is a no-op when the wallet is not on hold', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ onHold: false, amountToClearMinor: 0 }));
+    await expect(
+      healCoveredHoldNow({ walletId: 'wallet_1', trigger: 'booking_guard', now: NOW })
+    ).resolves.toEqual({ healed: false });
+    expect(mockClearCoveredHold).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the hold is NOT covered (a real figure > 0) — it never clears a live debt', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    await expect(
+      healCoveredHoldNow({ walletId: 'wallet_1', trigger: 'booking_guard', now: NOW })
+    ).resolves.toEqual({ healed: false });
+    expect(mockClearCoveredHold).not.toHaveBeenCalled();
+  });
+
+  it('reports healed: false — and publishes nothing — when the coverage module cleared nothing', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ balanceMinor: 0, amountToClearMinor: 0 }));
+    mockClearCoveredHold.mockResolvedValue({
+      clearedIds: [],
+      clearedMinor: 0,
+      companyId: undefined,
+      balanceMinor: 0,
+    });
+    await expect(
+      healCoveredHoldNow({ walletId: 'wallet_1', trigger: 'booking_guard', now: NOW })
+    ).resolves.toEqual({ healed: false });
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failure of the heal — the booking guard treats a throw as a failed heal', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ balanceMinor: 0, amountToClearMinor: 0 }));
+    mockClearCoveredHold.mockRejectedValue(new Error('db down'));
+    await expect(
+      healCoveredHoldNow({ walletId: 'wallet_1', trigger: 'booking_guard', now: NOW })
+    ).rejects.toThrow('db down');
+  });
+
+  it('⚠ D8.4 — two heals on one wallet get two DISTINCT correlationIds', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ balanceMinor: 0, amountToClearMinor: 0 }));
+    mockClearCoveredHold
+      .mockResolvedValueOnce({
+        clearedIds: ['receivable_a'],
+        clearedMinor: 10_000,
+        companyId: 'company_1',
+        balanceMinor: 0,
+      })
+      .mockResolvedValueOnce({
+        clearedIds: ['receivable_b'],
+        clearedMinor: 14_000,
+        companyId: 'company_1',
+        balanceMinor: 0,
+      });
+    await healCoveredHoldNow({ walletId: 'wallet_1', trigger: 'booking_guard', now: NOW });
+    await healCoveredHoldNow({ walletId: 'wallet_1', trigger: 'booking_guard', now: NOW });
+    const ids = mockPublish.mock.calls.map(
+      (call) => (call[1] as { correlationId: string }).correlationId
+    );
+    expect(ids).toEqual(['receivable_cleared:receivable_a', 'receivable_cleared:receivable_b']);
+  });
+});
+
+describe('publishHoldDunningNotice (BAL-474)', () => {
+  const base = {
+    walletId: 'wallet_1',
+    companyId: 'company_1',
+    trigger: 'receivable_opened',
+    correlationKey: 'receivable_1',
+    now: NOW,
+  } as const;
+
+  it('publishes ONE wallet-grain notice quoting the top-up figure from the claim, dated', async () => {
+    mockReadHoldStatus.mockResolvedValue(
+      holdStatus({
+        amountToClearMinor: 29_000,
+        promoGrantedSinceDebtMinor: 5_000,
+        confirmationWasRequested: true,
+      })
+    );
+    await expect(publishHoldDunningNotice(base)).resolves.toBe('published');
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish).toHaveBeenCalledWith('session.settlement_failed', {
+      correlationId: 'hold_dunning:receivable_1',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      topUpNeededMinor: 29_000,
+      promoGrantedSinceDebtMinor: 5_000,
+      confirmationWasRequested: true,
+      asOfIso: NOW.toISOString(),
+      trigger: 'receivable_opened',
+    });
+  });
+
+  it('the daily arm keys the notice per write: hold_dunning:{key} carries the trigger', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    await publishHoldDunningNotice({
+      ...base,
+      trigger: 'daily_reminder',
+      correlationKey: 'wallet_1:1700000000000',
+    });
+    expect(mockPublish).toHaveBeenCalledWith(
+      'session.settlement_failed',
+      expect.objectContaining({
+        correlationId: 'hold_dunning:wallet_1:1700000000000',
+        trigger: 'daily_reminder',
+      })
+    );
+  });
+
+  it('publishes nothing when the wallet is no longer on hold', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ onHold: false, amountToClearMinor: 0 }));
+    await expect(publishHoldDunningNotice(base)).resolves.toBe('not_on_hold');
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ walletId: 'wallet_1' }),
+      expect.stringContaining('no longer on hold')
+    );
+  });
+
+  it('publishes nothing when another sweep already reminded the wallet inside the cadence', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    mockLastDailyDunningAt.mockResolvedValue(new Date(NOW.getTime() - 60_000));
+    await expect(publishHoldDunningNotice({ ...base, trigger: 'daily_reminder' })).resolves.toBe(
+      'already_reminded'
+    );
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('a covered hold is healed and announced as an account clear — never dunned for A$0.00', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ balanceMinor: 0, amountToClearMinor: 0 }));
+    mockClearCoveredHold.mockResolvedValue({
+      clearedIds: ['receivable_1'],
+      clearedMinor: 10_000,
+      companyId: 'company_1',
+      balanceMinor: 0,
+    });
+    await expect(publishHoldDunningNotice(base)).resolves.toBe('healed');
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish).toHaveBeenCalledWith(
+      'credit.receivable.cleared',
+      expect.objectContaining({
+        correlationId: 'receivable_cleared:receivable_1',
+        clearedBy: 'coverage_heal',
+      })
+    );
+    expect(mockPublish).not.toHaveBeenCalledWith('session.settlement_failed', expect.anything());
+  });
+
+  it('a publish failure is logged (error + Sentry) and NOT thrown — the claim stands', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    const failure = new Error('queue unavailable');
+    mockPublish.mockRejectedValueOnce(failure);
+    await expect(publishHoldDunningNotice({ ...base, trigger: 'daily_reminder' })).resolves.toBe(
+      'publish_failed'
+    );
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({ walletId: 'wallet_1', error: 'queue unavailable' }),
+      expect.stringContaining('Failed to publish the hold dunning notice')
+    );
+    expect(mockCaptureException).toHaveBeenCalledWith(failure, expect.anything());
+    // The daily stamp was written inside the claim and is not rolled back by the lost publish.
+    expect(mockStampDailyDunning).toHaveBeenCalledTimes(1);
+  });
+
+  it('a database fault in the claim itself propagates to the caller (the sweep isolates it per wallet)', async () => {
+    mockAcquireWalletLock.mockRejectedValueOnce(new Error('lock timeout'));
+    await expect(publishHoldDunningNotice(base)).rejects.toThrow('lock timeout');
+  });
+});
+
+describe('publishSettlementFailure (BAL-474 — never throttled, wallet grain)', () => {
+  it('tracks the PER-SESSION analytics (with opened_by), then publishes the wallet-grain notice for THIS receivable', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ amountToClearMinor: 900 }));
+    await publishSettlementFailure({
+      session: {
+        id: 'session_1',
+        companyId: 'company_1',
+        walletId: 'wallet_1',
+        openedBy: 'system',
+      },
+      reason: 'declined',
+      amountMinor: 900,
+      receivableId: 'receivable_1',
+      now: NOW,
+    });
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'session_settled',
+      expect.objectContaining({
+        outcome: 'fail',
+        opened_by: 'system',
+        overdraft_settled_minor: 900,
+      })
+    );
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'receivable_opened',
+      expect.objectContaining({ reason: 'settlement_declined', amount_minor: 900 })
+    );
+    expect(mockPublish).toHaveBeenCalledWith(
+      'session.settlement_failed',
+      expect.objectContaining({
+        correlationId: 'hold_dunning:receivable_1',
+        trigger: 'receivable_opened',
+        topUpNeededMinor: 900,
+      })
+    );
+    // Never throttled: a new debt does not consult the daily cadence at all.
+    expect(mockLastDailyDunningAt).not.toHaveBeenCalled();
+    expect(mockStampDailyDunning).not.toHaveBeenCalled();
+  });
+
+  it('maps a requires_action outcome + receivable reason', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    await publishSettlementFailure({
+      session: {
+        id: 'session_1',
+        companyId: 'company_1',
+        walletId: 'wallet_1',
+        openedBy: 'client',
+      },
+      reason: 'requires_action',
+      amountMinor: 900,
+      receivableId: 'receivable_1',
+      now: NOW,
+    });
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'session_settled',
+      expect.objectContaining({ outcome: 'requires_action', opened_by: 'client' })
+    );
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'receivable_opened',
+      expect.objectContaining({ reason: 'settlement_requires_action' })
+    );
+  });
+
+  it('the analytics fire even when the notice claim throws — a database fault cannot lose the metric', async () => {
+    mockAcquireWalletLock.mockRejectedValueOnce(new Error('lock timeout'));
+    await expect(
+      publishSettlementFailure({
+        session: {
+          id: 'session_1',
+          companyId: 'company_1',
+          walletId: 'wallet_1',
+          openedBy: 'client',
+        },
+        reason: 'declined',
+        amountMinor: 900,
+        receivableId: 'receivable_1',
+        now: NOW,
+      })
+    ).rejects.toThrow('lock timeout');
+    expect(mockTrackServer).toHaveBeenCalledWith('receivable_opened', expect.anything());
   });
 });

@@ -10,7 +10,11 @@ import {
   memberJoinFailureReasonFor,
   type MemberJoinFailureReason,
 } from '@/lib/meetings/member-join-failure';
-import { postMemberJoin, type MemberJoinResponse } from '@/lib/meetings/join-api-client';
+import {
+  notOpenYetFrom,
+  postMemberJoin,
+  type MemberJoinResponse,
+} from '@/lib/meetings/join-api-client';
 
 /**
  * BAL-132 / BAL-581 — an AUTHENTICATED Balo member joins a meeting.
@@ -48,7 +52,12 @@ const joinSchema = z.object({ meetingId: z.string().uuid() });
  */
 export type JoinAsMemberResult =
   | { success: true; grant: MemberJoinResponse }
-  | { success: false; reason: MemberJoinFailureReason };
+  | {
+      success: false;
+      reason: MemberJoinFailureReason;
+      /** D16 — ISO instant the join window opens. Present ONLY with `reason: 'not_open_yet'`. */
+      opensAt?: string;
+    };
 
 /**
  * ⚠⚠ THE ALLOWLIST RULE, NOT COARSENESS. `memberJoinFailureReasonFor` distinguishes exactly the
@@ -117,7 +126,12 @@ export async function joinAsMemberAction(input: {
       code: result.code,
       reason,
     });
-    return { success: false, reason };
+    const notOpenYet = notOpenYetFrom(result);
+    return {
+      success: false,
+      reason,
+      ...(notOpenYet === undefined ? {} : { opensAt: notOpenYet.opensAt }),
+    };
   }
 
   log.info('Member joined meeting', {

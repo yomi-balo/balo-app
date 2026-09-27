@@ -98,3 +98,35 @@ export function endedByForActor(input: EndAuthorityInput): MeetingEndedBy | null
   }
   return null;
 }
+
+/**
+ * BAL-474 (D6.4, ADR-1040 Amendment 7 §C step 7, ADR-1049 end-authority note) — the typed refusal
+ * `endMeeting` returns when a CLIENT principal presses End without ever having been present in the
+ * meeting (no `party = 'client'` presence row of their own). ONE literal for both apps: `apps/api`
+ * maps it to HTTP 409, `apps/web`'s End action maps it to its own toast copy.
+ *
+ * ⚠ It closes the "free cancellation after the start" escape in END AUTHORISATION, not in
+ * settlement: a client who never joined cannot turn the expert's wait into a zero-shape
+ * settlement, so the `no_show` rule fires at the floor as normal. It is reachable only AFTER
+ * tenancy and end authority are proven (so it is not an existence oracle), and it is never shown
+ * for an already-ended meeting — that is the idempotent success (D8.7). Expert-side End is
+ * unchanged: the expert arm wins a tie ({@link endedByForActor}), so a `HOST_MEETINGS` holder is
+ * never presence-checked.
+ */
+export const MEETING_END_NOT_JOINED_CODE = 'meeting_not_joined' as const;
+
+/**
+ * BAL-474 (R6-C6) — the refusal for an End pressed BEFORE the meeting's scheduled start (`409
+ * meeting_not_started`, `end-meeting.ts`). Under billing Rule A an early call is billed, so people will try to end
+ * it; the web End action gives this refusal its own copy (`END_MEETING_NOT_STARTED_COPY`).
+ */
+export const MEETING_END_NOT_STARTED_CODE = 'meeting_not_started' as const;
+
+/**
+ * The two `endMeeting` refusals that are a FRICTION signal rather than a denial — the `reason` of the
+ * `meeting_end_refused` server event. Derived from the two code constants so a new friction refusal is added
+ * once, here, and every consumer follows.
+ */
+export type MeetingEndRefusalReason =
+  | typeof MEETING_END_NOT_JOINED_CODE
+  | typeof MEETING_END_NOT_STARTED_CODE;

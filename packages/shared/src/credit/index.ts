@@ -38,13 +38,48 @@ export {
 } from './settlement-instrument';
 export {
   creditCoversOutstandingDebt,
-  isCashCreditReason,
   CASH_CREDIT_REASONS,
   type CashCreditReason,
+  // BAL-474 (ADR-1040 Amendment 7 §F/§G) — the debt-covering reason set that arms the coverage
+  // clear, the ONE "top-up that clears the hold" figure, and the hold status it is read into.
+  DEBT_COVERING_CREDIT_REASONS,
+  isDebtCoveringCreditReason,
+  amountNeededToClearHold,
+  type DebtCoveringCreditReason,
+  type HoldStatus,
 } from './receivable-coverage';
+// BAL-474 (ADR-1040 Amendment 7 §A) — THE ONE DEFINITION of a session's settled figure: its own
+// share of the wallet's negative balance, never debt it did not incur.
+export {
+  resolveSessionOverdraftShare,
+  type SessionOverdraftShareInput,
+  type SessionOverdraftShare,
+  type SessionOverdraftBasis,
+} from './session-overdraft-share';
+// BAL-474 (plan AD-5) — `credit_sessions.opened_by`'s vocabulary, pinned to the pgEnum.
+export { CREDIT_SESSION_OPENED_BY, type CreditSessionOpenedByLabel } from './session-opened-by';
+// BAL-474 (plan §I.3) — the ONE window estimator shared by admission, the terminal-path open and
+// both booking funding checks (moved from `apps/api`'s `join-meeting.ts`).
+export { estimatedMinutesForWindow } from './estimate-window';
+// BAL-474 (ADR-1040 Amendment 7 §H) — the ONE booking funding verdict over ONE snapshot.
+export {
+  assessCaseBookingFunding,
+  assessCardRemovalCoverage,
+  estimateCaseBookingMinor,
+  type BookingFundingSnapshot,
+  type CardRemovalSnapshot,
+  type CardRemovalCoverageVerdict,
+  type ReservableCaseBooking,
+  type CaseBookingFundingVerdict,
+} from './booking-funding';
+// BAL-474 (plan AD-16) — the ONE definition of a single top-up's limits.
+export { TOP_UP_LIMITS_MINOR } from './top-up-limits';
+// BAL-474 (D12.1c) — the ONE closed-case predicate (a closure voids a no-show, never an attended call).
+export { caseClosedBeforeStart, caseClosureNames, type CaseClosureNames } from './case-closure';
 export {
   resolveMeetingSettlement,
   clampedExpertPresentMs,
+  billingBasisMs,
   type MeetingSettlementShape,
   type MeetingSettlementOutcome,
   type MeetingSettlementInput,

@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockPostLobbyClaim = vi.fn();
-vi.mock('@/lib/meetings/join-api-client', () => ({
-  postLobbyClaim: (...args: unknown[]) => mockPostLobbyClaim(...args),
-}));
+// ⚠ `notOpenYetFrom` (D17.5) is the REAL, pure implementation — importActual'd rather than
+// re-stubbed, so this suite exercises the same extraction the three action call sites share.
+vi.mock('@/lib/meetings/join-api-client', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/meetings/join-api-client')>(
+    '@/lib/meetings/join-api-client'
+  );
+  return {
+    ...actual,
+    postLobbyClaim: (...args: unknown[]) => mockPostLobbyClaim(...args),
+  };
+});
 
 import { claimLobbyPlaceAction } from './claim-lobby-place';
 import { JOIN_UNAVAILABLE_TITLE } from '@/lib/meetings/lobby';
@@ -75,6 +83,33 @@ describe('claimLobbyPlaceAction — validation', () => {
 
     expect(whitespaceName).toMatchObject({ success: false, kind: 'invalid_input' });
     expect(browserAcceptedEmail).toMatchObject({ success: false, kind: 'invalid_input' });
+  });
+});
+
+describe('claimLobbyPlaceAction — D16, the join window has not opened', () => {
+  it('⚠⚠ a `meeting_not_open_yet` refusal is the NON-terminal `not_open_yet` kind, carrying `opensAt` and NO error string', async () => {
+    mockPostLobbyClaim.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'meeting_not_open_yet',
+      opensAt: '2026-09-25T11:57:00.000Z',
+    });
+
+    await expect(claimLobbyPlaceAction(VALID)).resolves.toEqual({
+      success: false,
+      kind: 'not_open_yet',
+      opensAt: '2026-09-25T11:57:00.000Z',
+    });
+  });
+
+  it('with no `opensAt` (it should never happen) it collapses like every other failure — never a half-formed state', async () => {
+    mockPostLobbyClaim.mockResolvedValue({ ok: false, status: 409, code: 'meeting_not_open_yet' });
+
+    await expect(claimLobbyPlaceAction(VALID)).resolves.toEqual({
+      success: false,
+      kind: 'unavailable',
+      error: JOIN_UNAVAILABLE_TITLE,
+    });
   });
 });
 

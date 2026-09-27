@@ -18,8 +18,13 @@ vi.mock('@/lib/meetings/meeting-lifecycle-client', () => ({
   endMeeting: mockEndMeeting,
 }));
 
+import { MEETING_END_NOT_JOINED_CODE, MEETING_END_NOT_STARTED_CODE } from '@balo/shared/meetings';
 import { log } from '@/lib/logging';
-import { END_MEETING_FAILED_COPY } from '@/lib/meetings/meeting-state';
+import {
+  END_MEETING_FAILED_COPY,
+  END_MEETING_NOT_JOINED_COPY,
+  END_MEETING_NOT_STARTED_COPY,
+} from '@/lib/meetings/meeting-state';
 import { getMeetingStateAction } from './get-meeting-state';
 import { endMeetingAction } from './end-meeting';
 
@@ -203,15 +208,96 @@ describe('endMeetingAction — the mutation', () => {
     });
   });
 
-  it('maps EVERY refusal onto the one fixed literal — never prose from the wire', async () => {
-    for (const status of [400, 401, 404, 429, 500, 0]) {
-      mockEndMeeting.mockResolvedValue({ ok: false, status, code: 'meeting_not_found' });
+  // BAL-474 (D6.4, R6-C6) — renamed on the record. It was "maps EVERY refusal onto the one fixed
+  // literal"; `meeting_not_joined` and `meeting_not_started` are now the two refusals with their own
+  // copy (pinned in the cases below), so this table covers every OTHER code the api can answer.
+  it('maps every refusal except meeting_not_joined and meeting_not_started onto the one fixed literal — never prose from the wire', async () => {
+    const codes = ['meeting_not_found', 'invalid_request', 'rate_limited', 'request_failed'];
+    for (const status of [400, 401, 404, 409, 429, 500, 0]) {
+      for (const code of codes) {
+        mockEndMeeting.mockResolvedValue({ ok: false, status, code });
 
-      await expect(endMeetingAction({ meetingId: MEETING_ID })).resolves.toEqual({
-        success: false,
-        error: END_MEETING_FAILED_COPY,
-      });
+        await expect(endMeetingAction({ meetingId: MEETING_ID })).resolves.toEqual({
+          success: false,
+          error: END_MEETING_FAILED_COPY,
+        });
+      }
     }
+  });
+
+  it('⚠ R6-C6 — meeting_not_started maps onto ITS OWN copy, pinned against the FULL approved literal', async () => {
+    mockEndMeeting.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: MEETING_END_NOT_STARTED_CODE,
+    });
+
+    const result = await endMeetingAction({ meetingId: MEETING_ID });
+
+    expect(result).toEqual({ success: false, error: END_MEETING_NOT_STARTED_COPY });
+    expect(END_MEETING_NOT_STARTED_COPY).toBe(
+      "This call can't be ended before its start time. You can leave — it stays open, so you can come back to it."
+    );
+    expect(END_MEETING_NOT_STARTED_COPY).not.toBe(END_MEETING_FAILED_COPY);
+    expect(END_MEETING_NOT_STARTED_COPY).not.toBe(END_MEETING_NOT_JOINED_COPY);
+  });
+
+  it('⚠ the R6-C6 mapping applies ONLY to meeting_not_started — the neighbouring 409s keep their own copy', async () => {
+    mockEndMeeting.mockResolvedValue({ ok: false, status: 409, code: 'meeting_not_found' });
+    await expect(endMeetingAction({ meetingId: MEETING_ID })).resolves.toEqual({
+      success: false,
+      error: END_MEETING_FAILED_COPY,
+    });
+    mockEndMeeting.mockResolvedValue({ ok: false, status: 409, code: MEETING_END_NOT_JOINED_CODE });
+    await expect(endMeetingAction({ meetingId: MEETING_ID })).resolves.toEqual({
+      success: false,
+      error: END_MEETING_NOT_JOINED_COPY,
+    });
+  });
+
+  it('meeting_not_started is an EXPECTED refusal — logged at `info`, never `error`', async () => {
+    mockEndMeeting.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: MEETING_END_NOT_STARTED_CODE,
+    });
+
+    await endMeetingAction({ meetingId: MEETING_ID });
+
+    expect(log.info).toHaveBeenCalledWith(
+      'Meeting end refused — the meeting has not reached its scheduled start',
+      expect.objectContaining({ meetingId: MEETING_ID, status: 409, code: 'meeting_not_started' })
+    );
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('⚠ meeting_not_joined maps onto ITS OWN copy — the call is still running, try again shortly', async () => {
+    mockEndMeeting.mockResolvedValue({ ok: false, status: 409, code: MEETING_END_NOT_JOINED_CODE });
+
+    const result = await endMeetingAction({ meetingId: MEETING_ID });
+
+    expect(result).toEqual({ success: false, error: END_MEETING_NOT_JOINED_COPY });
+    expect(END_MEETING_NOT_JOINED_COPY).toBe(
+      "We couldn't end the call just yet — it can take a moment after you join. Try again shortly; everyone is still connected."
+    );
+    // Positive control: it really is a DIFFERENT string from the generic one.
+    expect(END_MEETING_NOT_JOINED_COPY).not.toBe(END_MEETING_FAILED_COPY);
+  });
+
+  it('⚠ meeting_not_joined is an EXPECTED race — logged at `info`, never `error`', async () => {
+    mockEndMeeting.mockResolvedValue({ ok: false, status: 409, code: MEETING_END_NOT_JOINED_CODE });
+
+    await endMeetingAction({ meetingId: MEETING_ID });
+
+    expect(log.info).toHaveBeenCalledWith(
+      'Meeting end refused — the client member has not joined this meeting yet',
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        status: 409,
+        code: 'meeting_not_joined',
+      })
+    );
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('fails closed with no hop when the session is not onboarded', async () => {

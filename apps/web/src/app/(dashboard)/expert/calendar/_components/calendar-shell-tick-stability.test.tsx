@@ -164,7 +164,7 @@ describe('CalendarShell + WeekGrid — a tick crossing no boundary changes nothi
 
 describe('CalendarShell + WeekGrid — a tick crossing the Join boundary changes exactly that block', () => {
   it('only the boundary-crossing meeting changes props; the distant one does not', () => {
-    // 20 minutes out is OUTSIDE the 15-minute window; 20 - 15 = 5, so minute 6 is inside it — the
+    // 20 minutes out is OUTSIDE the 3-minute window (D16); 20 - 3 = 17, so minute 18 is inside it — the
     // same arithmetic `calendar-shell.test.tsx`'s own fake-timer Join test uses.
     const soon = meeting({
       meetingId: 'soon',
@@ -189,7 +189,7 @@ describe('CalendarShell + WeekGrid — a tick crossing the Join boundary changes
     expect(beforeFar).toBeDefined();
     recorded.length = 0;
 
-    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 6 * 60_000));
+    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 17 * 60_000));
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
@@ -228,7 +228,7 @@ describe('CalendarShell + WeekGrid — a tick crossing the Join boundary with a 
     expect(before).toBeDefined();
     recorded.length = 0;
 
-    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 6 * 60_000));
+    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 17 * 60_000));
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
@@ -273,7 +273,8 @@ describe('CalendarShell + WeekGrid — onJoinClick identity survives a tick', ()
 
 describe('CalendarShell — calendar_join_clicked stays byte-identical and reads the TICKED now', () => {
   it('emits the same payload it always did, from the ticked now (not wall-clock)', () => {
-    // meeting starts FIXED_NOW + 10 minutes → inside the 15-minute window immediately.
+    // meeting starts FIXED_NOW + 10 minutes. The stub block fires `onJoinClick` regardless of the join
+    // window, and the payload asserted below depends only on the ticked `now`, not on the window.
     const soon = meeting({
       meetingId: 'soon',
       scheduledStart: new Date(FIXED_NOW.getTime() + 10 * 60_000).toISOString(),

@@ -8,16 +8,11 @@
  * (capability-gated) `companyId`, auto-selects the single eligible company, or returns
  * `company_selection_required` when more than one is eligible and none was chosen.
  */
-import {
-  creditSessionsRepository,
-  creditWalletsRepository,
-  engagementsRepository,
-  meetingsRepository,
-  usersRepository,
-} from '@balo/db';
+import { creditSessionsRepository, creditWalletsRepository, usersRepository } from '@balo/db';
 import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
 import type { EligibleCompany } from '@balo/shared/credit';
+import { resolveCaseBillingSubject } from './case-billing-subject.js';
 import type { OpenSessionServiceInput, OpenSessionServiceResult } from './types.js';
 
 const log = createLogger('credit-session');
@@ -58,47 +53,32 @@ async function resolveEligibleCompanies(userId: string): Promise<EligibleCompany
  * failure `OpenSessionInput`'s docblock warns about: a divergent pair bills one engagement
  * while the inactivity sweep, which resolves through the seam, ages out another.
  *
- * ⚠ MEETING STATUS IS NOT CHECKED. `findWithContexts` filters soft-deleted rows; that is the
- * only liveness requirement. A session may legitimately be opened for a meeting in
- * `scheduled` OR `waiting_for_participants`, and adding a status guard here would import
- * BAL-134's lifecycle (which has not landed) into the money path.
+ * BAL-474 — the meeting → engagement → parties resolution itself now lives in
+ * `resolveCaseBillingSubject`, shared with the guest-admission and terminal-path opens. This member
+ * path passes `requireActive: true` (a closed case is not a billing handle — it mirrors the
+ * identical guard in `services/meetings/authorize-meeting-booking.ts`, so what may be BOOKED and
+ * what may be BILLED cannot disagree about a closed engagement) and keeps the two equality checks
+ * here, unchanged. The on-behalf opens pass `requireActive: false` and take the parties from the
+ * subject (ADR-1040 Amendment 7 §C.2, D5.6).
  *
- * ⚠ ENGAGEMENT STATUS **IS** CHECKED, AND THAT IS NOT A CONTRADICTION OF THE LINE ABOVE. The
- * MEETING lifecycle is BAL-134's and unbuilt; the ENGAGEMENT lifecycle is shipped and its enum
- * is exactly `active | completed | cancelled` (`schema/enums.ts`), so there is no legitimate
- * non-`active` billable state. Without this, a `completed` case — written by
- * `caseEngagementsRepository.close()` and never cleared — would remain a permanent handle for
- * drawing down credits and blocking that expert's calendar. Mirrors the identical guard in
- * `services/meetings/authorize-meeting-booking.ts`, so what may be BOOKED and what may be
- * BILLED cannot disagree about a closed engagement.
+ * ⚠ MEETING STATUS IS NOT CHECKED. A session may legitimately be opened for a meeting in
+ * `scheduled` OR `waiting_for_participants`, and adding a status guard here would import
+ * BAL-134's lifecycle into the money path.
  */
 async function resolveEngagementForMeeting(
   meetingId: string,
   chosenCompanyId: string,
   expertProfileId: string
 ): Promise<string | undefined> {
-  const found = await meetingsRepository.findWithContexts(meetingId); // live rows only
-  if (found === undefined) {
-    return undefined;
-  }
-
-  const caseContexts = found.contexts.filter((c) => c.contextType === 'case');
-  const [caseContext] = caseContexts; // destructure + guard, never `!`
-  if (caseContext === undefined || caseContexts.length !== 1 || caseContext.contextId === null) {
-    return undefined;
-  }
-
-  const engagement = await engagementsRepository.findById(caseContext.contextId);
+  const subject = await resolveCaseBillingSubject(meetingId, { requireActive: true });
   if (
-    engagement === undefined ||
-    engagement.engagementType !== 'case' ||
-    engagement.status !== 'active' || // ← a closed case is not a billing handle
-    engagement.companyId !== chosenCompanyId || // ← IDOR gate
-    engagement.expertProfileId !== expertProfileId // ← IDOR gate
+    subject === undefined ||
+    subject.companyId !== chosenCompanyId || // ← IDOR gate
+    subject.expertProfileId !== expertProfileId // ← IDOR gate
   ) {
     return undefined;
   }
-  return engagement.id;
+  return subject.engagementId;
 }
 
 /**
@@ -146,6 +126,18 @@ export async function openSession(
   input: OpenSessionServiceInput
 ): Promise<OpenSessionServiceResult> {
   const { initiatingMemberId, expertProfileId, estimatedMinutes, companyId, meetingId } = input;
+
+  // BAL-474 (ADR-1040 Amendment 7 §B) — TOLERANCE IS SAFE ONLY ON THE PRESENCE-SETTLED,
+  // SESSION-SCOPED PATH. A tolerant open that is not `durationSource: 'presence'` would carry an
+  // unfunded estimate onto a settlement engine that does not settle its own share only. This is a
+  // PROGRAMMING error (no route passes `fundingPolicy`), so it fails closed and loudly.
+  if (input.fundingPolicy === 'overdraft_tolerant' && input.durationSource !== 'presence') {
+    log.error(
+      { userId: initiatingMemberId, expertProfileId, durationSource: input.durationSource },
+      'openSession refused — the overdraft-tolerant policy requires presence provenance'
+    );
+    return { ok: false, code: 'meeting_not_bookable' };
+  }
 
   // BAL-466 (D4) — COHERENCE. A `'presence'` session settles from `meeting_presence`, which is
   // meeting-grained; `findPresenceUnsettled` requires `meeting_id IS NOT NULL`. Opening one
@@ -243,6 +235,10 @@ export async function openSession(
     // BAL-466 (D4) — omitted ⇒ the repository's `'live_capture'` default, so every
     // pre-BAL-466 call site is byte-identical.
     ...(input.durationSource === undefined ? {} : { durationSource: input.durationSource }),
+    // BAL-474 — omitted ⇒ the repository's `'gated'` default (byte-identical to every shipped
+    // caller, `POST /sessions` included). Only the presence seam's admission passes the tolerant
+    // policy, and it is a SERVICE input, never a wire field.
+    ...(input.fundingPolicy === undefined ? {} : { fundingPolicy: input.fundingPolicy }),
   });
 
   if (!result.ok) {
@@ -259,6 +255,7 @@ export async function openSession(
       companyId: chosenCompanyId,
       walletId: wallet.id,
       estimatedMinutes,
+      toleratedGates: result.toleratedGates,
     },
     'Session opened (pending)'
   );
@@ -267,5 +264,6 @@ export async function openSession(
     sessionId: result.session.id,
     status: 'pending',
     holdId: result.session.holdId,
+    toleratedGates: result.toleratedGates,
   };
 }

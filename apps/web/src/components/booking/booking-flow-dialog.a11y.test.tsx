@@ -33,7 +33,7 @@ vi.mock('@/lib/booking/actions/refetch-booking-context', () => ({
 
 import { BookingFlowDialog } from './booking-flow-dialog';
 import { StepBooked } from './step-booked';
-import { FundingSetupPanel } from './booking-error-panels';
+import { BookingBalancePanel, FundingSetupPanel } from './booking-error-panels';
 
 const EXPERT: BookingFlowExpert = {
   expertProfileId: 'expert-1',
@@ -152,6 +152,59 @@ describe('FundingSetupPanel — accessibility', () => {
   it('has no violations on the billing-admins-notified arm', async () => {
     const { container } = render(
       <FundingSetupPanel canManageBilling={false} onManageBilling={vi.fn()} onClose={vi.fn()} />
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+/** BAL-474 — the booking balance panel (hold + reserved), both capability arms, mid-switch too. */
+describe('BookingBalancePanel — accessibility', () => {
+  const COMMON = {
+    companyName: 'Northwind Industrial',
+    companyIsActive: false,
+    amountExceedsSingleTopUp: false,
+    caseSaved: { caseTitle: 'Migration planning', expertLabel: 'CloudPeak' },
+    isSwitching: false,
+    onTopUp: vi.fn(),
+    onClose: vi.fn(),
+  } as const;
+
+  it.each([
+    ['hold, self-serve', { variant: 'hold', topUpNeededMinor: 27_500, canManageBilling: true }],
+    ['hold, member', { variant: 'hold', topUpNeededMinor: 27_500, canManageBilling: false }],
+    ['hold, fallback', { variant: 'hold', topUpNeededMinor: null, canManageBilling: true }],
+    [
+      'reserved, self-serve',
+      {
+        variant: 'reserved',
+        topUpNeededMinor: 7_500,
+        reservedBookingCount: 2,
+        canManageBilling: true,
+      },
+    ],
+    [
+      'reserved, member',
+      {
+        variant: 'reserved',
+        topUpNeededMinor: 7_500,
+        reservedBookingCount: 2,
+        canManageBilling: false,
+      },
+    ],
+  ] as const)('has no violations: %s', async (_label, variant) => {
+    const { container } = render(<BookingBalancePanel {...COMMON} {...variant} />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('has no violations while the workspace switch is in flight', async () => {
+    const { container } = render(
+      <BookingBalancePanel
+        {...COMMON}
+        variant="hold"
+        topUpNeededMinor={27_500}
+        canManageBilling
+        isSwitching
+      />
     );
     expect(await axe(container)).toHaveNoViolations();
   });

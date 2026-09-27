@@ -16,6 +16,7 @@ import {
   LOBBY_LONG_WAIT_AFTER_MS,
   LOBBY_TOKEN_STORAGE_KEY,
   LOBBY_WAIT_STARTED_STORAGE_KEY,
+  joinNotOpenYetMessage,
 } from '@/lib/meetings/lobby';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
 import { useAdmissionPoll } from '@/lib/meetings/use-admission-poll';
@@ -114,6 +115,8 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
+  /** D16 — the approved "not open yet" sentence after an early knock. NOT an input error: it marks no field invalid. */
+  const [notOpenYetMessage, setNotOpenYetMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [grant, setGrant] = useState<JoinGrant | null>(null);
   /** Drives the long-wait acknowledgement. ⚠ A fact about the WAIT, never about the meeting. */
@@ -271,6 +274,7 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
 
       setIsSubmitting(true);
       setFormError(null);
+      setNotOpenYetMessage(null);
       // ⚠ DELIBERATELY NOT AWAITED — a React event handler must stay synchronous, and every
       // outcome (including the transport arm) is handled in the chain below.
       //
@@ -290,6 +294,19 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
             // stranded them on a dead-end card for a mistake they could have fixed in a second.
             if (result.kind === 'invalid_input') {
               setFormError(result.error);
+              return;
+            }
+            // D16 — NOT terminal either: the call exists, the window just has not opened. Same treatment as a
+            // validation failure — the form and the typed values stay, with the approved sentence above them.
+            if (result.kind === 'not_open_yet') {
+              const message = joinNotOpenYetMessage(result.opensAt);
+              // D17.3 — a missing or unparseable `opensAt` falls back to the EXISTING retryable
+              // failure card, never a new string.
+              if (message === null) {
+                fail('retry_later');
+                return;
+              }
+              setNotOpenYetMessage(message);
               return;
             }
             // ⚠ TOAST HERE — this IS a user-initiated mutation.
@@ -436,6 +453,7 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
         name={name}
         email={email}
         formError={formError}
+        notOpenYetMessage={notOpenYetMessage}
         isSubmitting={isSubmitting}
         headingRef={headingRef}
         reduceMotion={isReduced}
@@ -484,6 +502,7 @@ interface LobbyIdentifyProps {
   readonly name: string;
   readonly email: string;
   readonly formError: string | null;
+  readonly notOpenYetMessage: string | null;
   readonly isSubmitting: boolean;
   readonly headingRef: React.Ref<HTMLHeadingElement>;
   readonly reduceMotion: boolean;
@@ -497,6 +516,7 @@ function LobbyIdentify({
   name,
   email,
   formError,
+  notOpenYetMessage,
   isSubmitting,
   headingRef,
   reduceMotion,
@@ -599,6 +619,15 @@ function LobbyIdentify({
             {formError}
           </p>
         )}
+
+        {/* D16 — the early-knock refusal. ⚠ A STATUS, NOT AN ALERT, and no field is marked invalid: nothing the
+            visitor typed is wrong, the call simply has not opened. Their name and email stay in place.
+            ⚠ ALWAYS MOUNTED, INITIALLY EMPTY (CL-6) — some screen readers do not announce a live region
+            that appears already populated; this one is present from the first render and only its text
+            changes. */}
+        <p role="status" className="text-foreground text-[13px] leading-relaxed empty:hidden">
+          {notOpenYetMessage}
+        </p>
 
         <motion.button
           type="submit"

@@ -160,18 +160,18 @@ describe('resolveFeaturedTiming', () => {
     });
   });
 
-  it('opens Join 15 minutes before the start and promotes the state to `live`', () => {
+  it('opens Join 3 minutes before the start (D16) and promotes the state to `live`', () => {
     const timing = resolveFeaturedTiming(
       featured({
-        nextBookingStartIso: new Date(NOW.getTime() + 9 * MIN).toISOString(),
-        nextBookingEndIso: new Date(NOW.getTime() + 39 * MIN).toISOString(),
+        nextBookingStartIso: new Date(NOW.getTime() + 2 * MIN).toISOString(),
+        nextBookingEndIso: new Date(NOW.getTime() + 32 * MIN).toISOString(),
       }),
       NOW
     );
     expect(timing.joinVisible).toBe(true);
     expect(timing.effectiveState).toBe('live');
-    expect(timing.statusText).toBe('Starts in 9 mins');
-    expect(timing.timingLabel).toBe('starting in 9 minutes');
+    expect(timing.statusText).toBe('Starts in 2 mins');
+    expect(timing.timingLabel).toBe('starting in 2 minutes');
   });
 
   it('says "Happening now" once the call has begun', () => {
@@ -190,8 +190,8 @@ describe('resolveFeaturedTiming', () => {
   it('refuses outright on a TERMINAL status, even inside the clock window', () => {
     const timing = resolveFeaturedTiming(
       featured({
-        nextBookingStartIso: new Date(NOW.getTime() + 5 * MIN).toISOString(),
-        nextBookingEndIso: new Date(NOW.getTime() + 35 * MIN).toISOString(),
+        nextBookingStartIso: new Date(NOW.getTime() + 2 * MIN).toISOString(),
+        nextBookingEndIso: new Date(NOW.getTime() + 32 * MIN).toISOString(),
         nextBookingStatus: 'cancelled',
       }),
       NOW
@@ -203,8 +203,8 @@ describe('resolveFeaturedTiming', () => {
     const timing = resolveFeaturedTiming(
       card({
         joinPath: null,
-        nextBookingStartIso: new Date(NOW.getTime() + 5 * MIN).toISOString(),
-        nextBookingEndIso: new Date(NOW.getTime() + 35 * MIN).toISOString(),
+        nextBookingStartIso: new Date(NOW.getTime() + 2 * MIN).toISOString(),
+        nextBookingEndIso: new Date(NOW.getTime() + 32 * MIN).toISOString(),
       }),
       NOW
     );
@@ -216,8 +216,8 @@ describe('resolveFeaturedTiming', () => {
     const timing = resolveFeaturedTiming(
       featured({
         cardState: 'proposal',
-        nextBookingStartIso: new Date(NOW.getTime() + 5 * MIN).toISOString(),
-        nextBookingEndIso: new Date(NOW.getTime() + 35 * MIN).toISOString(),
+        nextBookingStartIso: new Date(NOW.getTime() + 2 * MIN).toISOString(),
+        nextBookingEndIso: new Date(NOW.getTime() + 32 * MIN).toISOString(),
       }),
       NOW
     );
@@ -230,8 +230,8 @@ describe('resolveFeaturedTiming', () => {
     it('opens the room-setting-up state instead of Join, inside the window — server state stands', () => {
       const timing = resolveFeaturedTiming(
         featured({
-          nextBookingStartIso: new Date(NOW.getTime() + 9 * MIN).toISOString(),
-          nextBookingEndIso: new Date(NOW.getTime() + 39 * MIN).toISOString(),
+          nextBookingStartIso: new Date(NOW.getTime() + 2 * MIN).toISOString(),
+          nextBookingEndIso: new Date(NOW.getTime() + 32 * MIN).toISOString(),
           nextBookingRoomReady: false,
         }),
         NOW
@@ -255,8 +255,8 @@ describe('resolveFeaturedTiming', () => {
       const timing = resolveFeaturedTiming(
         featured({
           cardState: 'proposal',
-          nextBookingStartIso: new Date(NOW.getTime() + 5 * MIN).toISOString(),
-          nextBookingEndIso: new Date(NOW.getTime() + 35 * MIN).toISOString(),
+          nextBookingStartIso: new Date(NOW.getTime() + 2 * MIN).toISOString(),
+          nextBookingEndIso: new Date(NOW.getTime() + 32 * MIN).toISOString(),
           nextBookingRoomReady: false,
         }),
         NOW

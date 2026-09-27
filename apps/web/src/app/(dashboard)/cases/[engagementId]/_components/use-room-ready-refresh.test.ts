@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
+import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import {
   useRoomReadyRefresh,
   ROOM_READY_REFRESH_MS,
@@ -20,8 +21,8 @@ vi.mock('next/navigation', () => ({
 }));
 
 const NOW = new Date('2026-01-06T12:00:00.000Z');
-/** The nudge mounts at `start − 15` — the case join window's own opening offset. */
-const START = new Date(NOW.getTime() + 15 * 60_000);
+/** The nudge mounts at `start − CASE_JOIN_WINDOW_MINUTES` — the case join window's own opening offset. */
+const START = new Date(NOW.getTime() + CASE_JOIN_WINDOW_MINUTES * 60_000);
 
 beforeEach(() => {
   mockRefresh.mockClear();
@@ -49,17 +50,17 @@ describe('useRoomReadyRefresh', () => {
     expect(ROOM_READY_REFRESH_AFTER_START_MS).toBe(11 * 60_000);
   });
 
-  it('mounted at start−15, still refreshes at start+10:30 — inside the salvage period', () => {
+  it('mounted at the window opening, still refreshes at start+10:30 — inside the salvage period', () => {
     renderHook(() => useRoomReadyRefresh(true, START.toISOString()));
-    // 15 min (mount → start) + 10.5 min = 25.5 min of elapsed device time.
-    vi.advanceTimersByTime(25.5 * 60_000);
+    // The join window (mount → start) + 10.5 min of elapsed device time.
+    vi.advanceTimersByTime((CASE_JOIN_WINDOW_MINUTES + 10.5) * 60_000);
     expect(mockRefresh).toHaveBeenCalled();
   });
 
   it('stops by start+11 — the deadline — and never refreshes again after it', () => {
     renderHook(() => useRoomReadyRefresh(true, START.toISOString()));
-    // 15 + 11 = 26 min: past the deadline.
-    vi.advanceTimersByTime(26 * 60_000);
+    // The join window + 11 min: past the deadline.
+    vi.advanceTimersByTime((CASE_JOIN_WINDOW_MINUTES + 11) * 60_000);
     const countAtDeadline = mockRefresh.mock.calls.length;
     expect(countAtDeadline).toBeGreaterThan(0);
 

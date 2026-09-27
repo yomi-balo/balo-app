@@ -418,10 +418,9 @@ export function InSessionPanel(props: Readonly<InSessionPanelProps>): React.JSX.
 
   const lowTracked = useRef(false);
 
-  // ⚠ BAL-466 (D7) — `session_started` NO LONGER FIRES HERE. It never fired in production (this
-  // component's only render is `variant="embedded"`, whose `expertProfileId` is typed `never`,
-  // so the effect always early-returned) and now fires SERVER-SIDE, at the real connect seam
-  // (`services/meetings/presence-writer.ts`'s co-presence transition). See `connect-session.ts`.
+  // ⚠ `session_started` DOES NOT FIRE HERE. This component's only render is `variant="embedded"`, whose
+  // `expertProfileId` is typed `never`; the event fires SERVER-SIDE at the real connect seam
+  // (`services/credit-session/start-billing.ts`). See `connect-session.ts`.
 
   // `low_balance_warning_shown` — a once-per-mount impression the first time the low card shows.
   // ⚠ SUPPRESSED IN `'embedded'`: superseded there by `in_session_panel_viewed { state: 'low' }`,

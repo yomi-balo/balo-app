@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { creditWalletsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import { isWalletCardReusableOnSession } from '@balo/shared/credit';
+import { isWalletCardReusableOnSession, TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { resolveAppUrl } from '../../lib/app-url.js';
 import {
@@ -39,8 +39,8 @@ const log = createLogger('credit');
  * arbitrary charge. Bounds mirror the web slider (A$300 … A$10,000) and the currency is
  * restricted to the supported allowlist (the charge itself is always AUD at face value).
  */
-const MIN_PRESENTMENT_MINOR = 30_000; // A$300 — matches the web MIN_AMOUNT_MINOR
-const MAX_PRESENTMENT_MINOR = 1_000_000; // A$10,000 — matches the web MAX_AMOUNT_MINOR
+const MIN_PRESENTMENT_MINOR = TOP_UP_LIMITS_MINOR.min; // A$300 — the same limits the web top-up page reads
+const MAX_PRESENTMENT_MINOR = TOP_UP_LIMITS_MINOR.max; // A$10,000 — the same limits the web top-up page reads
 const SUPPORTED_PRESENTMENT_CURRENCIES = ['aud', 'usd', 'gbp', 'eur'] as const;
 
 const purchaseIntentBodySchema = z.object({

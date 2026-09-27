@@ -1,8 +1,9 @@
 /**
  * BAL-441 — every user-facing string for the session receipt/payout pages, in one place, so a
  * copy pass never has to hunt across nine component files. Every string here joins the
- * `pending-MJ` sign-off queue (flagged in the PR body). Gender-neutral throughout; "extra time"
- * is used for a client-side card-settlement hiccup, never "overdraft" (CLAUDE.md).
+ * `pending-MJ` sign-off queue (flagged in the PR body). Gender-neutral throughout; "the part your
+ * balance didn't cover" is used for a client-side card-settlement hiccup, never "overdraft" or
+ * "extra time" (a no-show has no extra time; CLAUDE.md).
  *
  * Strings already owned by `@balo/shared/credit`'s `durationLine()` (the settlement-shape /
  * floor / no-show duration line, and the `missed_call` / `abandoned_wait` statement line) are
@@ -118,15 +119,46 @@ export const PAYOUT_STATUS_LABELS: Readonly<Record<MoneyBlockPayoutStatus, strin
 };
 
 /**
- * Settlement-status sub-states — client receipt only. Never `not_required` / `settled`. The
- * `failed` / `requires_action` bodies deliberately stop short of the call-to-action clause — the
- * component appends a real `<Link href="/billing">Manage billing</Link>`, so "Manage billing"
- * is never duplicated as plain text next to the link that already says it.
+ * The two receipt shapes {@link SETTLEMENT_STATUS_COPY} distinguishes. `no_show_client` bills the
+ * minimum flat, so its note says so; every other shape (`held`, and a pre-BAL-412 row with no
+ * shape at all) reads as an ordinary consultation.
  */
-export const SETTLEMENT_STATUS_COPY: Readonly<Record<string, string>> = {
-  processing: 'A small amount of extra time on this session is still settling.', // pending-MJ
-  failed: "A little extra time couldn't settle to the card on file.", // pending-MJ
-  requires_action: 'A little extra time needs a quick card confirmation.', // pending-MJ
+export type SettlementCopyShape = 'held' | 'no_show_client';
+
+/**
+ * Settlement-status sub-states — client receipt only, keyed by settlement SHAPE then status.
+ * Never `not_required` / `settled`. The `failed` / `requires_action` bodies deliberately stop
+ * short of the call-to-action clause — the component appends a real
+ * `<Link href="/settings/billing">Manage billing</Link>`, so "Manage billing" is never
+ * duplicated as plain text next to the link that already says it.
+ *
+ * ⚠ EVERY STRING IS A RETROSPECTIVE STATEMENT about the settlement attempt, so it stays true
+ * after a top-up, a card swap or a later clear, and none implies money was collected when it was
+ * not (`requires_action` says "when we tried to charge it": nothing was collected). Copy v2.1 §7
+ * (owner-approved). The phrase is "the part your balance didn't cover" — never "extra time" (a
+ * no-show has none) and never "overdraft" (CLAUDE.md).
+ *
+ * `no_show_client` mirrors the approved `money-block-display.ts` wording ("billed at the …
+ * minimum") and makes no claim about who attended.
+ */
+export const SETTLEMENT_STATUS_COPY: Readonly<
+  Record<SettlementCopyShape, Readonly<Record<string, string>>>
+> = {
+  held: {
+    processing: "The part of this consultation your balance didn't cover is still settling.", // pending-MJ
+    failed:
+      "The part of this consultation your balance didn't cover couldn't be charged to a card.", // pending-MJ
+    requires_action:
+      "The part of this consultation your balance didn't cover needed an extra card confirmation when we tried to charge it.", // pending-MJ
+  },
+  no_show_client: {
+    processing:
+      "This booking was billed at its minimum charge, and the part your balance didn't cover is still settling.", // pending-MJ
+    failed:
+      "This booking was billed at its minimum charge, and the part your balance didn't cover couldn't be charged to a card.", // pending-MJ
+    requires_action:
+      "This booking was billed at its minimum charge, and the part your balance didn't cover needed an extra card confirmation when we tried to charge it.", // pending-MJ
+  },
 };
 
 /** Payout-status sub-states — expert payout only. */

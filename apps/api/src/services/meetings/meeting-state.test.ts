@@ -1,15 +1,43 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockAuthorizeParticipation, mockFindById, mockListByMeeting } = vi.hoisted(() => ({
+const {
+  mockAuthorizeParticipation,
+  mockFindById,
+  mockListByMeeting,
+  mockResolveSubject,
+  mockDeliveringUserId,
+  mockFindNamesByIds,
+  mockFindCompanyName,
+  mockWarn,
+  mockOmitGuestRows,
+} = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
+  mockResolveSubject: vi.fn(),
+  mockDeliveringUserId: vi.fn(),
+  mockFindNamesByIds: vi.fn(),
+  mockFindCompanyName: vi.fn(),
+  mockWarn: vi.fn(),
+  mockOmitGuestRows: vi.fn(),
 }));
 
+vi.mock('@balo/shared/logging', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockWarn, error: vi.fn() }),
+}));
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockFindById },
-  meetingPresenceRepository: { listByMeeting: mockListByMeeting },
+  meetingPresenceRepository: {
+    listByMeeting: mockListByMeeting,
+    omitExpertInvitedGuestRows: mockOmitGuestRows,
+  },
+  usersRepository: { findNamesByIds: mockFindNamesByIds },
+  companiesRepository: { findNameById: mockFindCompanyName },
 }));
+vi.mock('../credit-session/case-billing-subject.js', () => ({
+  resolveCaseBillingSubject: mockResolveSubject,
+}));
+vi.mock('./delivering-party.js', () => ({ deliveringExpertUserId: mockDeliveringUserId }));
 vi.mock('./authorize-meeting-participation.js', () => ({
   authorizeMeetingParticipation: mockAuthorizeParticipation,
 }));
@@ -73,6 +101,20 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
     mockAuthorizeParticipation.mockResolvedValue({ ok: true, side: 'expert', meeting: meeting() });
     mockFindById.mockResolvedValue(meeting());
     mockListByMeeting.mockResolvedValue([]);
+    // BAL-474 (R6-C3) — an ACTIVE case by default: nothing was closed.
+    mockResolveSubject.mockResolvedValue({
+      engagementId: 'engagement-1',
+      companyId: 'company-1',
+      expertProfileId: 'expert-1',
+      isActive: true,
+      closedAt: null,
+      closedByUserId: null,
+    });
+    mockDeliveringUserId.mockResolvedValue(USER_ID);
+    // R6F-4a — by default nothing is dropped from the together term.
+    mockOmitGuestRows.mockImplementation(async (rows: readonly unknown[]) => [...rows]);
+    mockFindNamesByIds.mockResolvedValue([{ id: 'closer-1', firstName: 'Dana', lastName: 'Lee' }]);
+    mockFindCompanyName.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
   });
 
   it('collapses every denial to `meeting_not_found` — no 403 on this family', async () => {
@@ -177,6 +219,10 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
 
     expect(result.ok && Object.keys(result.state).sort((a, b) => a.localeCompare(b))).toEqual([
       'asOf',
+      // BAL-474 (Rule A) — the billing chip's figure: no money, no token.
+      'billingClock',
+      // BAL-474 (R6-C3) — the closed-case read: two first names, no id.
+      'caseClosure',
       'clocks',
       'endedBy',
       'noShowFloorMinutes',
@@ -186,6 +232,315 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
       'status',
       'viewerRole',
     ]);
+  });
+
+  /**
+   * BAL-474 (Rule A, D13) — `clocks` stays over presence CLAMPED to the start (an older web build shows
+   * exactly today's values), while `billingClock.soFarMs` is the figure the bill will use, pre-floor:
+   * the time TOGETHER before the start plus the from-start figure. `running` freezes the chip when the
+   * room is not producing time.
+   */
+  describe('billingClock (Rule A)', () => {
+    const together = (from: number, to: number | null) => [
+      { party: 'expert', joinedAt: at(from), leftAt: to === null ? null : at(to) },
+      { party: 'client', joinedAt: at(from), leftAt: to === null ? null : at(to) },
+    ];
+
+    it('example 1 — together from 09:50, at 10:20 the chip reads 30 (10 before the start + 20 from it), running', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'in_progress' }));
+      mockListByMeeting.mockResolvedValue(together(-10, null));
+
+      const result = await stateAt(20);
+
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 30 * MINUTE,
+        running: true,
+      });
+      // The clocks are the CLAMPED, unchanged figures: 20 minutes from the start.
+      expect(result.ok && result.state.clocks.billableMs).toBe(20 * MINUTE);
+      expect(result.ok && result.state.clocks.expertPresentMs).toBe(20 * MINUTE);
+    });
+
+    it('before the start, together for 6 minutes: soFarMs is the 6 (pre-start time only), running while both are here', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'in_progress' }));
+      mockListByMeeting.mockResolvedValue(together(-10, null));
+
+      const result = await stateAt(-4);
+
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 6 * MINUTE,
+        running: true,
+      });
+    });
+
+    it('example 2 — together 09:00–09:01, the expert waits alone, the client is back at 10:00: at 10:30, 1 + 30 = 31', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'in_progress' }));
+      mockListByMeeting.mockResolvedValue([
+        { party: 'expert', joinedAt: at(-60), leftAt: null },
+        { party: 'client', joinedAt: at(-60), leftAt: at(-59) },
+        { party: 'client', joinedAt: at(0), leftAt: null },
+      ]);
+
+      const result = await stateAt(30);
+
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 31 * MINUTE,
+        running: true,
+      });
+    });
+
+    it('example 2, while the expert waits ALONE before the client returns (09:30): 1 minute, and NOT running (no client here, before the start)', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'waiting_for_participants' }));
+      mockListByMeeting.mockResolvedValue([
+        { party: 'expert', joinedAt: at(-60), leftAt: null },
+        { party: 'client', joinedAt: at(-60), leftAt: at(-59) },
+      ]);
+
+      const result = await stateAt(-30);
+
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 1 * MINUTE,
+        running: false,
+      });
+    });
+
+    it('example 5 — together 09:30–09:31, the client never returns, the expert waits until 10:10: 1 + 10 = 11, running (the expert is open past the start)', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'waiting_for_participants' }));
+      mockListByMeeting.mockResolvedValue([
+        { party: 'expert', joinedAt: at(-30), leftAt: at(-29) },
+        { party: 'client', joinedAt: at(-30), leftAt: at(-29) },
+        { party: 'expert', joinedAt: at(0), leftAt: null },
+      ]);
+
+      const result = await stateAt(10);
+
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 11 * MINUTE,
+        running: true,
+      });
+    });
+
+    it('a lone expert who has NEVER had a client: the chip is the expert’s own wait FROM the start (the amber counted figure), with nothing together before it', async () => {
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(-5), leftAt: null }]);
+
+      const result = await stateAt(8);
+
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 8 * MINUTE,
+        running: true,
+      });
+    });
+
+    it('a solo early client is not together: soFarMs is 0 and the chip is not running before the start', async () => {
+      mockListByMeeting.mockResolvedValue([{ party: 'client', joinedAt: at(-30), leftAt: null }]);
+
+      const result = await stateAt(-10);
+
+      expect(result.ok && result.state.billingClock).toEqual({ soFarMs: 0, running: false });
+    });
+
+    it('⚠⚠ D15.3 — together 09:00–09:30, both back 10:10: at 11:00 the chip reads 30 + 50 = 80, while `clocks` keep the clamped figure (60)', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'in_progress' }));
+      mockListByMeeting.mockResolvedValue([
+        { party: 'expert', joinedAt: at(-60), leftAt: at(-30) },
+        { party: 'client', joinedAt: at(-60), leftAt: at(-30) },
+        { party: 'expert', joinedAt: at(10), leftAt: null },
+        { party: 'client', joinedAt: at(10), leftAt: null },
+      ]);
+
+      const result = await stateAt(60);
+
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 80 * MINUTE,
+        running: true,
+      });
+      expect(result.ok && result.state.clocks.expertPresentMs).toBe(60 * MINUTE);
+    });
+
+    it('⚠ R6F-4a — the together term is read AFTER dropping the delivering expert’s own invited guests (the chip agrees with the bill)', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'in_progress' }));
+      const member = { party: 'client', joinedAt: at(0), leftAt: null, meetingGuestId: null };
+      const ownGuest = { party: 'client', joinedAt: at(-10), leftAt: null, meetingGuestId: 'g-1' };
+      const expertRow = { party: 'expert', joinedAt: at(-10), leftAt: null, meetingGuestId: null };
+      mockListByMeeting.mockResolvedValue([expertRow, ownGuest, member]);
+      mockOmitGuestRows.mockResolvedValue([expertRow, member]);
+
+      const result = await stateAt(20);
+
+      // Without the exclusion the guest would add 10 minutes before the start: 10 + 20 = 30.
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 20 * MINUTE,
+        running: true,
+      });
+      const [rowsArg, resolver] = mockOmitGuestRows.mock.calls[0] as [
+        unknown[],
+        () => Promise<string | null>,
+      ];
+      expect(rowsArg).toHaveLength(3);
+      // The resolver is lazy and answers with the case's expert.
+      await expect(resolver()).resolves.toBe('expert-1');
+    });
+
+    it('a TERMINAL meeting is measured to `ended_at` and is not running', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'ended', endedAt: at(40) }));
+      mockListByMeeting.mockResolvedValue(together(-10, 40));
+
+      const result = await stateAt(600);
+
+      expect(result.ok && result.state.billingClock).toEqual({
+        soFarMs: 50 * MINUTE,
+        running: false,
+      });
+    });
+  });
+
+  /**
+   * BAL-474 (R6-C3, owner-approved) — the expert's "this case was closed" read. It is sent ONLY when the case was
+   * closed BEFORE the start AND nobody from the client side was ever present, to the DELIVERING expert, in a
+   * pre-in_progress state or after the voided no-show — and it is never read on a live `in_progress` poll.
+   */
+  describe('caseClosure (R6-C3)', () => {
+    const CLOSED_BEFORE = {
+      engagementId: 'engagement-1',
+      companyId: 'company-1',
+      expertProfileId: 'expert-1',
+      isActive: false,
+      closedAt: at(-30),
+      closedByUserId: 'closer-1',
+    };
+    const closure = async (minutes = 5) => {
+      const result = await stateAt(minutes);
+      return result.ok ? result.state.caseClosure : 'denied';
+    };
+
+    beforeEach(() => {
+      mockResolveSubject.mockResolvedValue(CLOSED_BEFORE);
+    });
+
+    it('⚠ BOTH conditions hold (closed before the start, no client side ever present): the closer’s FIRST name and the company', async () => {
+      await expect(closure()).resolves.toEqual({
+        closedByFirstName: 'Dana',
+        companyName: 'Northwind Industrial',
+      });
+      expect(mockFindNamesByIds).toHaveBeenCalledWith(['closer-1']);
+      expect(mockFindCompanyName).toHaveBeenCalledWith('company-1');
+    });
+
+    it('a case closed AFTER the start is not shown (the no-show is still owed)', async () => {
+      mockResolveSubject.mockResolvedValue({ ...CLOSED_BEFORE, closedAt: at(3) });
+      await expect(closure()).resolves.toBeNull();
+      expect(mockFindNamesByIds).not.toHaveBeenCalled();
+    });
+
+    it('a case closed EXACTLY at the start is not shown either (the boundary is not "before")', async () => {
+      mockResolveSubject.mockResolvedValue({ ...CLOSED_BEFORE, closedAt: at(0) });
+      await expect(closure()).resolves.toBeNull();
+    });
+
+    it.each([
+      [
+        'a client MEMBER who joined and left',
+        { party: 'client', joinedAt: at(-20), leftAt: at(-19) },
+      ],
+      ['a client who is still in the room', { party: 'client', joinedAt: at(-2), leftAt: null }],
+    ])(
+      '⚠ after ANY client-side presence (%s) it is not shown — that call is billed',
+      async (_label, row) => {
+        mockListByMeeting.mockResolvedValue([
+          { party: 'expert', joinedAt: at(-5), leftAt: null },
+          row,
+        ]);
+        await expect(closure()).resolves.toBeNull();
+        expect(mockResolveSubject).not.toHaveBeenCalled();
+      }
+    );
+
+    it('an OBSERVER is not client-side presence: it is still shown', async () => {
+      mockListByMeeting.mockResolvedValue([{ party: 'observer', joinedAt: at(-5), leftAt: null }]);
+      await expect(closure()).resolves.toMatchObject({ closedByFirstName: 'Dana' });
+    });
+
+    it('⚠ NEVER read on an in_progress poll — zero reads', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'in_progress' }));
+      await expect(closure()).resolves.toBeNull();
+      expect(mockResolveSubject).not.toHaveBeenCalled();
+    });
+
+    it('a `scheduled` meeting (nobody in yet) is shown; the server gate does not require the expert to be in the room', async () => {
+      mockFindById.mockResolvedValue(meeting({ status: 'scheduled' }));
+      await expect(closure(-10)).resolves.toMatchObject({ closedByFirstName: 'Dana' });
+    });
+
+    it.each([
+      ['no_show_client', true],
+      ['completed', false],
+      ['missed_call', false],
+      [null, false],
+    ])('an ENDED meeting with outcome %s ⇒ shown: %s', async (outcome, shown) => {
+      mockFindById.mockResolvedValue(meeting({ status: 'ended', endedAt: at(15), outcome }));
+      const result = await closure(30);
+      expect(result !== null).toBe(shown);
+    });
+
+    it('⚠ the CLIENT lens never gets it, and nothing is read for them', async () => {
+      mockAuthorizeParticipation.mockResolvedValue({
+        ok: true,
+        side: 'client',
+        meeting: meeting(),
+      });
+      await expect(closure()).resolves.toBeNull();
+      expect(mockResolveSubject).not.toHaveBeenCalled();
+    });
+
+    it('an expert-side viewer who is NOT the delivering expert (an agency admin) does not get it', async () => {
+      mockDeliveringUserId.mockResolvedValue('someone-else');
+      await expect(closure()).resolves.toBeNull();
+    });
+
+    it('an ACTIVE case is not shown', async () => {
+      mockResolveSubject.mockResolvedValue({ ...CLOSED_BEFORE, isActive: true, closedAt: null });
+      await expect(closure()).resolves.toBeNull();
+    });
+
+    it('no human closer (the inactivity sweep) ⇒ `closedByFirstName: null`, no user read', async () => {
+      mockResolveSubject.mockResolvedValue({ ...CLOSED_BEFORE, closedByUserId: null });
+      await expect(closure()).resolves.toEqual({
+        closedByFirstName: null,
+        companyName: 'Northwind Industrial',
+      });
+      expect(mockFindNamesByIds).not.toHaveBeenCalled();
+    });
+
+    it('a blank first name, or a company that cannot be read, degrade each to null on its own', async () => {
+      mockFindNamesByIds.mockResolvedValue([{ id: 'closer-1', firstName: '  ', lastName: 'Lee' }]);
+      mockFindCompanyName.mockResolvedValue(undefined);
+      await expect(closure()).resolves.toEqual({ closedByFirstName: null, companyName: null });
+    });
+
+    it('a failing read degrades to null — it never fails the poll — and is LOGGED (R6F-3)', async () => {
+      mockResolveSubject.mockRejectedValue(new Error('db down'));
+      await expect(closure()).resolves.toBeNull();
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meetingId: MEETING_ID,
+          userId: expect.any(String),
+          error: 'db down',
+          stack: expect.any(String),
+        }),
+        'Case-closure read failed — rendering the ordinary waiting copy'
+      );
+    });
+
+    it('a successful read logs nothing', async () => {
+      await closure();
+      expect(mockWarn).not.toHaveBeenCalled();
+    });
+
+    it('never carries an id, a last name or an email', async () => {
+      const value = await closure();
+      expect(JSON.stringify(value)).not.toMatch(/closer-1|Lee|company-1|@/);
+    });
   });
 
   /**

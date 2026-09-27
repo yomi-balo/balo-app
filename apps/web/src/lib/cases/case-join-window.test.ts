@@ -46,9 +46,9 @@ describe('insideCaseJoinWindow', () => {
 });
 
 /**
- * `insideCaseJoinWindow` and the private `withinJoinWindow` (`@balo/shared/engagements`) are two
+ * `insideCaseJoinWindow` and the shared `withinJoinWindow` (`@balo/shared/engagements`) are two
  * hand-duplicated formulas that MUST agree (see both functions' docblocks). `selectCaseNudge` is
- * the private predicate's ONE public door, so this table drives it straight through and asserts
+ * the predicate's public door, so this table drives it straight through and asserts
  * agreement at exactly the offsets where the two could diverge without either module's own tests
  * noticing.
  */

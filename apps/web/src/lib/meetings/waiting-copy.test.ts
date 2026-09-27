@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CASE_CLOSED_ENDED_TITLE,
+  CASE_CLOSED_WAITING_TITLE,
   CLIENT_WAITING_BODY,
   NEUTRAL_WAITING_COPY,
   UNKNOWN_WAITING_FACTS,
   resolveWaitingCopy,
   waitingCopyFor,
   waitingIconKindFor,
+  type CaseClosureFacts,
   type WaitingAbsentParty,
   type WaitingFacts,
   type WaitingPhase,
@@ -40,6 +43,7 @@ const FACTS: WaitingFacts = {
   noShowFloorMinutes: 15,
   outcome: null,
   expertPresenceObserved: true,
+  caseClosure: null,
 };
 
 /** ⚠ The outcome that earns each side's settled sentence — `no_show_client` for the expert. */
@@ -123,7 +127,7 @@ describe('waitingCopyFor — the expert waits (R2, Option A whole)', () => {
   it('⚠⚠ running is anchored on THE JOIN, not on the scheduled start', () => {
     expect(copy('client', 'running')).toEqual({
       title: 'Waiting for Dana to join',
-      body: 'Your time is counted from when you joined. Nothing for you to do.',
+      body: 'Your time is being counted. Nothing for you to do.',
     });
   });
 
@@ -137,7 +141,7 @@ describe('waitingCopyFor — the expert waits (R2, Option A whole)', () => {
   it('⚠ pre-start is join-anchored too — the truth is max(scheduled, join)', () => {
     expect(copy('client', 'pre-start')).toEqual({
       title: 'Waiting for Dana to join',
-      body: "Due to start at 10:00. Your time starts counting the moment you join — there's no waiting room, so Dana will come straight in.",
+      body: "Due to start at 10:00. Your time counts from then, or from when you joined if that was later — plus any time you and Dana spend together before the start. There's no waiting room, so Dana will come straight in.",
     });
   });
 
@@ -248,7 +252,7 @@ describe('waitingCopyFor — the expert has not been OBSERVED yet (BAL-134)', ()
 
   it('⚠⚠ running claims NO counted time while no expert interval is open', () => {
     const { body } = copy('client', 'running', UNSEEN);
-    expect(body).not.toContain('is counted');
+    expect(body).not.toContain('is being counted');
     expect(body).toBe(copy('client', 'pre-start', UNSEEN).body);
   });
 
@@ -260,7 +264,7 @@ describe('waitingCopyFor — the expert has not been OBSERVED yet (BAL-134)', ()
 
   it('⚠ the guard lifts the instant presence is observed', () => {
     expect(copy('client', 'running', { ...UNSEEN, expertPresenceObserved: true }).body).toBe(
-      'Your time is counted from when you joined. Nothing for you to do.'
+      'Your time is being counted. Nothing for you to do.'
     );
   });
 
@@ -322,6 +326,80 @@ describe('waitingIconKindFor', () => {
   it('distinguishes a no-show from a missed call at settlement', () => {
     expect(waitingIconKindFor('client', 'settled')).toBe('no_show');
     expect(waitingIconKindFor('expert', 'settled')).toBe('missed_call');
+  });
+
+  it('keeps every ordinary glyph when the facts are passed with no closure', () => {
+    for (const absentParty of PARTIES) {
+      for (const phase of PHASES) {
+        expect(waitingIconKindFor(absentParty, phase, factsFor(absentParty))).toBe(
+          waitingIconKindFor(absentParty, phase)
+        );
+      }
+    }
+  });
+});
+
+/**
+ * BAL-474 (R6F-12) — the `caseClosed` glyph is chosen EXACTLY when `waitingCopyFor` renders the case-closed copy,
+ * on every party × phase × outcome, and never otherwise.
+ */
+describe('waitingIconKindFor — the case-closed glyph (R6F-12)', () => {
+  const CLOSURE: CaseClosureFacts = { closedByFirstName: 'Maya', companyName: 'Northwind' };
+  const CLOSED_TITLES: readonly string[] = [CASE_CLOSED_WAITING_TITLE, CASE_CLOSED_ENDED_TITLE];
+  const OUTCOMES = [null, 'no_show_client', 'missed_call', 'completed'] as const;
+
+  it('⚠⚠ is caseClosed on every unsettled phase and on a settled no_show_client, for the client-absent party', () => {
+    for (const phase of ['pre-start', 'running', 'near'] as const) {
+      expect(waitingIconKindFor('client', phase, { caseClosure: CLOSURE, outcome: null })).toBe(
+        'caseClosed'
+      );
+    }
+    expect(
+      waitingIconKindFor('client', 'settled', { caseClosure: CLOSURE, outcome: 'no_show_client' })
+    ).toBe('caseClosed');
+  });
+
+  it('⚠⚠ agrees with the copy on EVERY party, phase and outcome — never a closed glyph over the ordinary copy', () => {
+    for (const absentParty of PARTIES) {
+      for (const phase of PHASES) {
+        for (const outcome of OUTCOMES) {
+          const facts = { ...FACTS, caseClosure: CLOSURE, outcome };
+          const closedCopy = CLOSED_TITLES.includes(copy(absentParty, phase, facts).title);
+          expect(
+            waitingIconKindFor(absentParty, phase, facts) === 'caseClosed',
+            `${absentParty} / ${phase} / ${String(outcome)}`
+          ).toBe(closedCopy);
+        }
+      }
+    }
+  });
+
+  it('⚠ a settled outcome other than no_show_client keeps the ordinary glyph', () => {
+    for (const outcome of [null, 'missed_call', 'completed'] as const) {
+      expect(waitingIconKindFor('client', 'settled', { caseClosure: CLOSURE, outcome })).toBe(
+        'no_show'
+      );
+    }
+  });
+
+  it('⚠ no closure keeps the ordinary glyphs', () => {
+    expect(waitingIconKindFor('client', 'running', { caseClosure: null, outcome: null })).toBe(
+      'spinner'
+    );
+    expect(
+      waitingIconKindFor('client', 'settled', { caseClosure: null, outcome: 'no_show_client' })
+    ).toBe('no_show');
+  });
+
+  it('⚠ the expert-absent party and an unnamed party never get it', () => {
+    for (const phase of PHASES) {
+      expect(waitingIconKindFor('expert', phase, { caseClosure: CLOSURE, outcome: null })).not.toBe(
+        'caseClosed'
+      );
+      expect(waitingIconKindFor(null, phase, { caseClosure: CLOSURE, outcome: null })).not.toBe(
+        'caseClosed'
+      );
+    }
   });
 });
 
@@ -405,6 +483,93 @@ describe('UNKNOWN_WAITING_FACTS', () => {
       noShowFloorMinutes: null,
       outcome: null,
       expertPresenceObserved: false,
+      caseClosure: null,
     });
+  });
+});
+
+/**
+ * BAL-474 (R6-C3, owner-approved) — the expert's copy when the case was closed before the start and nobody from
+ * the client side ever came. Every string is pinned by equality against its FULL literal, fallbacks included.
+ */
+describe('waitingCopyFor — the case was closed before the start (R6-C3)', () => {
+  const CLOSURE: CaseClosureFacts = { closedByFirstName: 'Maya', companyName: 'Northwind' };
+  const withClosure = (caseClosure: CaseClosureFacts | null): WaitingFacts => ({
+    ...FACTS,
+    caseClosure,
+  });
+
+  it('⚠⚠ the waiting title and body are pinned against the FULL approved literals, on every unsettled phase', () => {
+    for (const phase of ['pre-start', 'running', 'near'] as const) {
+      expect(copy('client', phase, withClosure(CLOSURE))).toEqual({
+        title: 'This case has been closed',
+        body: "Maya @ Northwind closed this case before the start time, so nobody from Northwind can join this call, and it won't be billed. You're free to leave.",
+      });
+    }
+    expect(CASE_CLOSED_WAITING_TITLE).toBe('This case has been closed');
+  });
+
+  it('⚠⚠ the ended title and body are pinned against the FULL approved literals', () => {
+    expect(
+      copy('client', 'settled', { ...withClosure(CLOSURE), outcome: 'no_show_client' })
+    ).toEqual({
+      title: 'This case was closed',
+      body: "Maya @ Northwind closed this case before the start time, so this call isn't billed and no payout is recorded. You're free to leave.",
+    });
+    expect(CASE_CLOSED_ENDED_TITLE).toBe('This case was closed');
+  });
+
+  it('⚠ no closer (the inactivity sweep closed it): the first clause drops the attribution', () => {
+    const facts = withClosure({ closedByFirstName: null, companyName: 'Northwind' });
+    expect(copy('client', 'running', facts).body).toBe(
+      "This case was closed before the start time, so nobody from Northwind can join this call, and it won't be billed. You're free to leave."
+    );
+    expect(copy('client', 'settled', { ...facts, outcome: 'no_show_client' }).body).toBe(
+      "This case was closed before the start time, so this call isn't billed and no payout is recorded. You're free to leave."
+    );
+  });
+
+  it('⚠ no company: "their team" in the attribution and "their side" in "nobody from …"', () => {
+    const facts = withClosure({ closedByFirstName: 'Maya', companyName: null });
+    expect(copy('client', 'pre-start', facts).body).toBe(
+      "Maya @ their team closed this case before the start time, so nobody from their side can join this call, and it won't be billed. You're free to leave."
+    );
+    expect(copy('client', 'settled', { ...facts, outcome: 'no_show_client' }).body).toBe(
+      "Maya @ their team closed this case before the start time, so this call isn't billed and no payout is recorded. You're free to leave."
+    );
+  });
+
+  it('⚠ neither name: both fallbacks at once', () => {
+    const facts = withClosure({ closedByFirstName: null, companyName: null });
+    expect(copy('client', 'near', facts).body).toBe(
+      "This case was closed before the start time, so nobody from their side can join this call, and it won't be billed. You're free to leave."
+    );
+  });
+
+  it('⚠ the ended arm applies ONLY to a no_show_client outcome — any other settled outcome keeps its own copy', () => {
+    for (const outcome of ['missed_call', 'completed', null]) {
+      expect(copy('client', 'settled', { ...withClosure(CLOSURE), outcome })).toEqual(
+        copy('client', 'settled', { ...FACTS, outcome })
+      );
+    }
+  });
+
+  it('⚠ no closure (null) leaves every ordinary arm untouched — the arm never shows by default', () => {
+    for (const phase of PHASES) {
+      expect(copy('client', phase, withClosure(null))).toEqual(copy('client', phase, FACTS));
+    }
+    expect(copy('client', 'running', FACTS).title).toBe('Waiting for Dana to join');
+  });
+
+  it('⚠ it is expert-only: the client-side waiting copy ignores a closure', () => {
+    for (const phase of PHASES) {
+      expect(copy('expert', phase, withClosure(CLOSURE))).toEqual(copy('expert', phase, FACTS));
+    }
+  });
+
+  it('⚠ it promises no payout and never says "Still counting"', () => {
+    const { body } = copy('client', 'near', withClosure(CLOSURE));
+    expect(body).not.toContain('Still counting');
+    expect(body.toLowerCase()).not.toContain('paid');
   });
 });

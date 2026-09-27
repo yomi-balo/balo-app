@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockEngagementFindById } = vi.hoisted(() => ({ mockEngagementFindById: vi.fn() }));
+const { mockEngagementFindById, mockInfo, mockWarn } = vi.hoisted(() => ({
+  mockEngagementFindById: vi.fn(),
+  mockInfo: vi.fn(),
+  mockWarn: vi.fn(),
+}));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: mockInfo, warn: mockWarn, error: vi.fn() }),
 }));
 vi.mock('@balo/db', () => ({
   engagementsRepository: { findById: mockEngagementFindById },
@@ -11,6 +15,7 @@ vi.mock('@balo/db', () => ({
 // ⚠ `@balo/shared/meetings` is deliberately NOT mocked — `PrimaryMeetingContext` is a type
 // and the real module carries no behaviour this file needs to stub.
 
+import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import {
   assertMeetingJoinable,
   expiresAtUnixFor,
@@ -191,6 +196,80 @@ describe('assertMeetingJoinable — the token window', () => {
     // and issues a dead token — a confusing failure two layers from its cause.
     const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, AFTER_WINDOW);
     expect(result).toEqual({ ok: false, reason: 'token_window_elapsed' });
+  });
+});
+
+describe("assertMeetingJoinable — ⚠⚠ D16: the join window's SERVER-SIDE lower bound", () => {
+  const START = new Date('2026-09-01T10:00:00.000Z');
+  const WINDOW_MS = CASE_JOIN_WINDOW_MINUTES * 60_000;
+  const OPENS_AT = new Date(START.getTime() - WINDOW_MS);
+
+  it('the window is the D16 ruling: 3 minutes', () => {
+    expect(CASE_JOIN_WINDOW_MINUTES).toBe(3);
+  });
+
+  it.each([
+    ['1 ms before it opens', new Date(OPENS_AT.getTime() - 1)],
+    ['ten minutes early', new Date(START.getTime() - 10 * 60_000)],
+    ['a day early', new Date(START.getTime() - 24 * 60 * 60_000)],
+  ])('REFUSES %s with `join_window_not_open` and `opensAt`', async (_label, now) => {
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, now);
+    expect(result).toEqual({ ok: false, reason: 'join_window_not_open', opensAt: OPENS_AT });
+  });
+
+  it.each([
+    ['exactly when it opens (inclusive)', OPENS_AT],
+    ['inside the window', new Date(START.getTime() - 60_000)],
+    ['exactly at the start', START],
+    ['after the start', new Date(START.getTime() + 10 * 60_000)],
+  ])('ADMITS %s', async (_label, now) => {
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, now);
+    expect(result.ok).toBe(true);
+  });
+
+  it('applies to a request-grain (non-case) context too — the web join window is context-agnostic', async () => {
+    const result = await assertMeetingJoinable(
+      meeting(),
+      REQUEST_SUBJECT,
+      new Date(START.getTime() - 60 * 60_000)
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'join_window_not_open' });
+    expect(mockEngagementFindById).not.toHaveBeenCalled();
+  });
+
+  it('is logged at INFO, not WARN — an expected early click, not a denial', async () => {
+    await assertMeetingJoinable(
+      meeting(),
+      ENGAGEMENT_SUBJECT,
+      new Date(START.getTime() - 60 * 60_000)
+    );
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'join_window_not_open', opensAt: OPENS_AT.toISOString() }),
+      expect.stringContaining('join window has not opened')
+    );
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  it('a terminal meeting, or an inactive engagement, wins over the window — never "opens later"', async () => {
+    const early = new Date(START.getTime() - 60 * 60_000);
+    await expect(
+      assertMeetingJoinable(meeting({ status: 'cancelled' }), ENGAGEMENT_SUBJECT, early)
+    ).resolves.toMatchObject({ reason: 'meeting_terminal' });
+    mockEngagementFindById.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'completed' });
+    await expect(
+      assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, early)
+    ).resolves.toMatchObject({
+      reason: 'engagement_not_active',
+    });
+  });
+
+  it('the window is checked BEFORE the token window: an early join never reaches it', async () => {
+    const result = await assertMeetingJoinable(
+      meeting(),
+      ENGAGEMENT_SUBJECT,
+      new Date(START.getTime() - 60_000)
+    );
+    expect(result.ok).toBe(true);
   });
 });
 

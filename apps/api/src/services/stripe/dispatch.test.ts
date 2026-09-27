@@ -72,7 +72,13 @@ const {
   mockPaymentIntentsRetrieve: vi.fn(),
   mockChargesRetrieve: vi.fn(),
   mockSessionFindById: vi.fn(),
-  mockMarkSettlementResult: vi.fn(),
+  // BAL-474 (D5.2 / D7.4, V4-F6) — `markSettlementResult` is compare-and-set and RETURNS the row it
+  // found; `handleOverdraftChargeFailed` reads `settlementStatus` off it. A bare `vi.fn()` resolves
+  // `undefined` and every async-failure case below would throw. The default is a row still in
+  // flight — the stamp APPLIED; individual cases override it with `{ settlementStatus: 'settled' }`.
+  mockMarkSettlementResult: vi.fn(
+    async (): Promise<{ settlementStatus: string }> => ({ settlementStatus: 'failed' })
+  ),
   mockReceivableOpen: vi.fn(),
   mockReceivableClear: vi.fn(),
   // BAL-535 — default: nothing open on the wallet, so `clearReceivablesCoveredByCredit` is a
@@ -1239,8 +1245,40 @@ describe('applyStripeEffect', () => {
     expect(postCommit).toHaveLength(1);
     await postCommit[0]?.();
     expect(mockPublishSettlementFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: 'declined', amountMinor: 5000 })
+      expect.objectContaining({
+        reason: 'declined',
+        amountMinor: 5000,
+        // BAL-474 (D7.1) — the notice's per-write identity is the receivable this path opened.
+        receivableId: expect.any(String),
+        now: expect.any(Date),
+      })
     );
+  });
+
+  it('⚠ BAL-474 (D5.2 / D7.4) — a failure that arrives AFTER the success webhook settled the session records NO receivable and duns nobody', async () => {
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_2',
+      companyId: 'company_2',
+      walletId: 'wallet_2',
+      expertProfileId: 'expert_2',
+      overdraftSettledMinor: 5000,
+    });
+    // The compare-and-set found the row already `settled`: the charge in fact succeeded.
+    mockMarkSettlementResult.mockResolvedValueOnce({ settlementStatus: 'settled' });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_2',
+      paymentIntentId: 'pi_8',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'overdraft_settlement',
+      sessionId: 'session_2',
+      triggeringEntryId: null,
+      amountMinor: null,
+    });
+    expect(postCommit).toHaveLength(0);
+    expect(mockReceivableOpen).not.toHaveBeenCalled();
+    expect(mockPublishSettlementFailure).not.toHaveBeenCalled();
   });
 
   it('R3b (BAL-535, ADR-1040 Amendment 6 §F residual) — self-clears the just-opened receivable and suppresses dunning when a covering CASH credit already landed', async () => {
@@ -1472,7 +1510,12 @@ describe('applyStripeEffect — credit clears a covering receivable (BAL-535)', 
     // impossible, and a `…Once` there would starve the second internal call some arms make.
   });
 
-  it('a non-cash reason (overdraft_settlement) never even asks — the clear is skipped by reason', async () => {
+  // ⚠ BAL-474 (ADR-1040 Amendment 7 §F) INVERTED THIS CASE ON THE RECORD. It used to read "a non-cash
+  // reason (overdraft_settlement) never even asks — the clear is skipped by reason" and asserted the
+  // anchor read was NEVER made. A session's own settlement charge is the company's own money on its
+  // own card, so the reason set that arms the clear is now the DEBT-COVERING set, and this arm asks —
+  // but only AFTER `markSettlementSettled` has cleared the session's own receivable (R3-F6a / R4-F5).
+  it('overdraft_settlement asks, AFTER markSettlementSettled clears the session’s own receivable', async () => {
     mockApplyLedgerEntry.mockResolvedValue({
       deduped: false,
       entry: { id: 'ledger_1' },
@@ -1490,9 +1533,232 @@ describe('applyStripeEffect — credit clears a covering receivable (BAL-535)', 
       cardOnFile: null,
       settlement: SETTLEMENT,
     });
-    // Not even the anchor read — the reason gate short-circuits first.
-    expect(mockEarliestOpenDebtAnchor).not.toHaveBeenCalled();
+    expect(mockReceivableClear).toHaveBeenCalledWith({ sessionId: 'session_1' }, tx);
+    expect(mockEarliestOpenDebtAnchor).toHaveBeenCalledWith('wallet_1', tx);
+    // The ordered assertion: the session settles (its own receivable clears) BEFORE the wallet-grain
+    // coverage question is asked, so the anchor is judged from the debts that REMAIN.
+    expect(mockMarkSettlementResult.mock.invocationCallOrder[0]).toBeLessThan(
+      mockEarliestOpenDebtAnchor.mock.invocationCallOrder[0] ?? 0
+    );
+    expect(mockReceivableClear.mock.invocationCallOrder[0]).toBeLessThan(
+      mockEarliestOpenDebtAnchor.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it('⚠ D5.8 — the settlement arm’s wallet-grain clear is a SYSTEM act: actor NULL, the session and its initiating member in the metadata', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 0, expiresAt: new Date('2027-01-01') },
+    });
+    mockSessionFindById.mockResolvedValue({ id: 'session_2', settlementShape: null });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    mockReceivableClearOpenForWallet.mockResolvedValueOnce([
+      {
+        id: 'rcv_older',
+        companyId: 'company_1',
+        sessionId: 'session_1',
+        amountMinor: 5000,
+        status: 'cleared',
+      },
+    ]);
+    await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'overdraft_settlement',
+      walletId: 'wallet_1',
+      memberId: 'member_2',
+      sessionId: 'session_2',
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    expect(mockAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: null,
+        action: 'credit_receivable.cleared_by_credit',
+        entityId: 'rcv_older',
+        metadata: expect.objectContaining({
+          creditReason: 'overdraft_settlement',
+          settlementSessionId: 'session_2',
+          settlementInitiatingMemberId: 'member_2',
+        }),
+      }),
+      tx
+    );
+  });
+
+  it('a CASH arm keeps the purchaser as the audit actor and carries no settlement metadata', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    mockReceivableClearOpenForWallet.mockResolvedValueOnce([
+      {
+        id: 'rcv_1',
+        companyId: 'company_1',
+        sessionId: 'session_1',
+        amountMinor: 1200,
+        status: 'cleared',
+      },
+    ]);
+    await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    const audit = mockAuditRecord.mock.calls[0]?.[0] as {
+      actorUserId: string | null;
+      metadata: Record<string, unknown>;
+    };
+    expect(audit.actorUserId).toBe('member_1');
+    expect(audit.metadata).not.toHaveProperty('settlementSessionId');
+    expect(audit.metadata).not.toHaveProperty('settlementInitiatingMemberId');
+  });
+
+  // ── D8.3 (V4-F1) — "account clear" for a session's own late success ───────────────────────────────
+
+  /** The settlement effect for `session_1` on a wallet returned to `balanceMinor`. */
+  function settlementEffect(): Extract<
+    Parameters<typeof applyStripeEffect>[1],
+    { kind: 'credit' }
+  > {
+    return {
+      kind: 'credit',
+      reason: 'overdraft_settlement',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: 'session_1',
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    };
+  }
+
+  it('D8.3 — own receivable only, then the PaymentIntent succeeds ⇒ exactly ONE account-clear notice, keyed on the ledger entry', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_9' },
+      wallet: { companyId: 'company_1', balanceMinor: 0, expiresAt: new Date('2027-01-01') },
+    });
+    mockSessionFindById.mockResolvedValue({ id: 'session_1', settlementShape: null });
+    // `markSettlementSettled` clears the session's OWN receivable …
+    mockReceivableClear.mockResolvedValueOnce({
+      id: 'rcv_own',
+      companyId: 'company_1',
+      sessionId: 'session_1',
+      amountMinor: 900,
+      status: 'cleared',
+    });
+    // … and nothing else is open, so the wallet-grain clear has nothing left to announce.
+    const postCommit = await applyStripeEffect(tx, settlementEffect());
+    for (const thunk of postCommit) {
+      await thunk();
+    }
     expect(mockReceivableClearOpenForWallet).not.toHaveBeenCalled();
+    expect(mockPublishReceivableCleared).toHaveBeenCalledTimes(1);
+    expect(mockPublishReceivableCleared).toHaveBeenCalledWith({
+      operationId: 'ledger_9',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      receivableCount: 1,
+      clearedMinor: 900,
+      balanceAfterMinor: 0,
+      clearedBy: 'overdraft_settlement',
+    });
+  });
+
+  it('D8.3 — own receivable plus ANOTHER still open and uncovered ⇒ no account-clear notice (the hold is still on)', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_9' },
+      wallet: { companyId: 'company_1', balanceMinor: -4000, expiresAt: new Date('2027-01-01') },
+    });
+    mockSessionFindById.mockResolvedValue({ id: 'session_1', settlementShape: null });
+    mockReceivableClear.mockResolvedValueOnce({
+      id: 'rcv_own',
+      companyId: 'company_1',
+      sessionId: 'session_1',
+      amountMinor: 900,
+      status: 'cleared',
+    });
+    // An OLDER receivable remains open, and −4,000 does not cover it.
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    const postCommit = await applyStripeEffect(tx, settlementEffect());
+    for (const thunk of postCommit) {
+      await thunk();
+    }
+    expect(mockReceivableClearOpenForWallet).not.toHaveBeenCalled();
+    expect(mockPublishReceivableCleared).not.toHaveBeenCalled();
+  });
+
+  it('D8.3 — when the wallet-grain clear itself clears rows it is the ONE notice; the own-receivable arm adds none', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_9' },
+      wallet: { companyId: 'company_1', balanceMinor: 0, expiresAt: new Date('2027-01-01') },
+    });
+    mockSessionFindById.mockResolvedValue({ id: 'session_2', settlementShape: null });
+    mockReceivableClear.mockResolvedValueOnce({
+      id: 'rcv_own',
+      companyId: 'company_1',
+      sessionId: 'session_2',
+      amountMinor: 900,
+      status: 'cleared',
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    mockReceivableClearOpenForWallet.mockResolvedValueOnce([
+      {
+        id: 'rcv_older',
+        companyId: 'company_1',
+        sessionId: 'session_1',
+        amountMinor: 5000,
+        status: 'cleared',
+      },
+    ]);
+    const postCommit = await applyStripeEffect(tx, {
+      ...settlementEffect(),
+      sessionId: 'session_2',
+    });
+    for (const thunk of postCommit) {
+      await thunk();
+    }
+    expect(mockPublishReceivableCleared).toHaveBeenCalledTimes(1);
+    expect(mockPublishReceivableCleared).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationId: 'ledger_9',
+        receivableCount: 1,
+        clearedMinor: 5000,
+        clearedBy: 'overdraft_settlement',
+      })
+    );
+  });
+
+  it('D8.3 — a webhook REPLAY (deduped) publishes nothing for the session: it was already cleared and announced', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: true,
+      entry: { id: 'ledger_9' },
+      wallet: { companyId: 'company_1', balanceMinor: 0, expiresAt: new Date('2027-01-01') },
+    });
+    mockSessionFindById.mockResolvedValue({ id: 'session_1', settlementShape: null });
+    // Already cleared by the first delivery — the idempotent clear returns nothing.
+    mockReceivableClear.mockResolvedValueOnce(undefined);
+    const postCommit = await applyStripeEffect(tx, settlementEffect());
+    expect(postCommit).toHaveLength(0);
+    expect(mockPublishReceivableCleared).not.toHaveBeenCalled();
   });
 
   it('a wallet with nothing open short-circuits on the anchor read — no promo query, no clear', async () => {
@@ -1661,7 +1927,7 @@ describe('applyStripeEffect — credit clears a covering receivable (BAL-535)', 
     expect(postCommit).toHaveLength(2);
     await postCommit[0]?.();
     expect(mockPublishReceivableCleared).toHaveBeenCalledWith({
-      ledgerEntryId: 'ledger_1',
+      operationId: 'ledger_1',
       companyId: 'company_1',
       walletId: 'wallet_1',
       receivableCount: 1,
@@ -1706,7 +1972,7 @@ describe('applyStripeEffect — credit clears a covering receivable (BAL-535)', 
     expect(mockPublishReceivableCleared).toHaveBeenCalledTimes(1);
     expect(mockPublishReceivableCleared).toHaveBeenCalledWith(
       expect.objectContaining({
-        ledgerEntryId: 'ledger_7',
+        operationId: 'ledger_7',
         receivableCount: 3,
         clearedMinor: 750,
       })

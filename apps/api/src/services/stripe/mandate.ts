@@ -1,13 +1,16 @@
 import {
+  bookingFundingRepository,
   companiesRepository,
   creditReceivablesRepository,
   creditSessionsRepository,
   creditWalletsRepository,
+  meetingsRepository,
   usersRepository,
   db,
   type CreditWallet,
   type CompanyBillingIdentity,
 } from '@balo/db';
+import { assessCardRemovalCoverage } from '@balo/shared/credit';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, BILLING_SERVER_EVENTS } from '@balo/analytics/server';
 import type Stripe from 'stripe';
@@ -857,6 +860,18 @@ export type DetachSavedCardResult =
    * receivable. Refused BEFORE any Stripe call so the card stays attached and chargeable.
    */
   | { status: 'settlement_outstanding' }
+  /**
+   * BAL-474 owner ruling D10.6 — the wallet HAS an active mandate and its upcoming Case bookings
+   * are not covered by its credit (`available − Σ upcoming estimates < 0`), so removing the card
+   * would leave them running with nothing behind them. Refused BEFORE any Stripe call. The figures
+   * are the shared verdict's own: `topUpNeededMinor = reserved − available`, and how many
+   * upcoming consultations the card is backing.
+   */
+  | {
+      status: 'upcoming_bookings_uncovered';
+      topUpNeededMinor: number;
+      reservedBookingCount: number;
+    }
   | { status: 'stripe_error' };
 
 /** True for a Stripe `resource_missing` failure — the payment method genuinely no longer exists
@@ -1041,6 +1056,23 @@ async function clearLocallyAndReconcile(input: {
  * `auto-topup.ts`'s between-session safe-to-charge gate already reads
  * (`hasActiveSessionForWallet`, `hasOpenReceivable`); reused here, not reinvented.
  *
+ * BAL-474 owner ruling D10.6 — ALSO refuses (`upcoming_bookings_uncovered`) while the wallet has
+ * an active mandate and its upcoming Case bookings are not covered by its credit. D6.5 exempts a
+ * mandate company from the booking balance arm and the reservation because "the card funds
+ * anything above the credit"; pulling the card would make that false for every booking already
+ * made. The check is `assessCardRemovalCoverage` (`@balo/shared/credit`) over
+ * `bookingFundingRepository.readCardRemovalSnapshot` — the booking verdict's own netted balance
+ * and reservation arithmetic, run as if the mandate were already gone. It sits AFTER the
+ * settlement guards (the more specific refusal wins) and BEFORE any Stripe call. Like the booking
+ * check it is a check-time guarantee: unlocked, so a booking that commits between this check and the
+ * local clear — a window that includes the Stripe detach round trip — can slip past it, and anything
+ * that does is billed session-scoped into a receivable (§I.5).
+ *
+ * BAL-474 (D11.1, Rule A) — `settlement_outstanding` ALSO covers a LIVE Case call that has no session
+ * yet (`meetingsRepository.hasLiveSessionlessCaseMeeting`): an `in_progress` call, or a waiting room with a
+ * client-side participant in it. Under Rule A an early call has no session until billing starts at the
+ * scheduled start, so the saved card is the only thing standing behind a call that is already running.
+ *
  * FIX ROUND 3 (N2) — `actorUserId` is the WEB Server Action's already-session-resolved actor,
  * threaded across the internal hop (never client-supplied — see `payment-method.ts`'s route
  * docblock). It still rides straight through to `clearSavedCardAndReconcileMode` (AMEND-10 — the
@@ -1058,12 +1090,42 @@ export async function detachSavedCard(
     return { status: 'no_wallet' };
   }
 
-  const [activeSession, openReceivable] = await Promise.all([
+  const [activeSession, openReceivable, liveSessionlessCall] = await Promise.all([
     creditSessionsRepository.hasActiveSessionForWallet(walletId),
     creditReceivablesRepository.hasOpenReceivable(wallet.companyId),
+    meetingsRepository.hasLiveSessionlessCaseMeeting({ companyId: wallet.companyId }),
   ]);
-  if (activeSession || openReceivable) {
+  if (activeSession || openReceivable || liveSessionlessCall) {
     return { status: 'settlement_outstanding' };
+  }
+
+  // D10.6 — AFTER the settlement guards (an already-incurred debt is the more specific refusal)
+  // and BEFORE any Stripe call. The card exempted this company from the booking balance arm and
+  // the D6.5 reservation, so it may not leave while its upcoming bookings are uncovered.
+  const coverage = assessCardRemovalCoverage(
+    await bookingFundingRepository.readCardRemovalSnapshot({
+      companyId: wallet.companyId,
+      now: new Date(),
+    })
+  );
+  if (!coverage.ok) {
+    log.info(
+      {
+        op: 'detachSavedCard',
+        walletId,
+        companyId: wallet.companyId,
+        availableMinor: coverage.availableMinor,
+        reservedMinor: coverage.reservedMinor,
+        reservedBookingCount: coverage.reservedBookingCount,
+        topUpNeededMinor: coverage.topUpNeededMinor,
+      },
+      'Saved card removal refused — upcoming bookings are not covered by the balance'
+    );
+    return {
+      status: 'upcoming_bookings_uncovered',
+      topUpNeededMinor: coverage.topUpNeededMinor,
+      reservedBookingCount: coverage.reservedBookingCount,
+    };
   }
 
   const { stripePaymentMethodId } = wallet;

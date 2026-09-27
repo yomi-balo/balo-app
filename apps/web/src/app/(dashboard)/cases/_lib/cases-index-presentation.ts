@@ -146,7 +146,7 @@ export function resolveCaseCardState(
 // ── The featured ticket's timing ──────────────────────────────────────────────────────────────
 
 export interface FeaturedTiming {
-  /** `calendarJoinAffordanceVisible` (−15 min inclusive .. end + 30 min exclusive, non-terminal)
+  /** `calendarJoinAffordanceVisible` (−`CASE_JOIN_WINDOW_MINUTES` (3) min inclusive .. end + 30 min exclusive, non-terminal)
    *  AND the call room is actually ready (`nextBookingRoomReady === true`). A window that is open
    *  with a not-yet-ready room reports `roomSettingUp: true` instead, never `joinVisible`. */
   readonly joinVisible: boolean;
@@ -175,7 +175,7 @@ export interface FeaturedTiming {
  * ⚠ IT REUSES `calendarJoinAffordanceVisible` RATHER THAN COMPARING MINUTES. That predicate is
  * the product's one Join window (BAL-498/BAL-513): it opens at `CASE_JOIN_WINDOW_MINUTES` before
  * the start, closes at `scheduledEnd + MEETING_OVERRUN_GRACE_MINUTES`, and refuses outright on a
- * terminal status. A hand-rolled "within 15 minutes" here would disagree with the case page, the
+ * terminal status. A hand-rolled "within N minutes" here would disagree with the case page, the
  * calendar and the dashboard the moment any of those three moved.
  */
 export function resolveFeaturedTiming(

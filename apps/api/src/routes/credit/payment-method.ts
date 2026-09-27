@@ -51,6 +51,16 @@ export async function paymentMethodRoute(fastify: FastifyInstance): Promise<void
       if (result.status === 'settlement_outstanding') {
         return reply.status(409).send({ error: 'settlement_outstanding' });
       }
+      // BAL-474 owner ruling D10.6 — the wallet has an active mandate and its upcoming Case
+      // bookings are not covered by its credit. The figures ride on the body so the web dialog can
+      // say how much to top up and how many consultations the card is backing.
+      if (result.status === 'upcoming_bookings_uncovered') {
+        return reply.status(409).send({
+          error: 'upcoming_bookings_uncovered',
+          topUpNeededMinor: result.topUpNeededMinor,
+          reservedBookingCount: result.reservedBookingCount,
+        });
+      }
       if (result.status === 'stripe_error') {
         return reply.status(502).send({ error: 'stripe_detach_failed' });
       }

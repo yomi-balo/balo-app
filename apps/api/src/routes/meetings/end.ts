@@ -8,8 +8,11 @@
  *
  * ⚠ EVERY DENIAL IS `404 meeting_not_found`. There is NO `403` anywhere on `/meetings/*` and
  * this surface must not become the exception — the shape goes to `log.warn` inside the service.
- * The one non-404 refusal, `409 meeting_not_started`, is reachable only AFTER tenancy and end
- * authority are both proven, so it is not an existence oracle; see `end-meeting.ts` step 3b.
+ * The two non-404 refusals — `409 meeting_not_started` and, since BAL-474 (D6.4), `409
+ * meeting_not_joined` (a client principal who was never present in the meeting) — are reachable only
+ * AFTER tenancy and end authority are both proven, so neither is an existence oracle; see
+ * `end-meeting.ts` steps 3b and 3c. `meeting_not_joined` is never answered for an already-ended
+ * meeting: that is the idempotent `200` below (D8.7).
  *
  * ⚠ A SECOND END IS `200`, NOT `409` (D10). Two `canEndMeeting` holders can press the button
  * at the same instant, and the transition is a compare-and-set; the loser gets
@@ -39,6 +42,7 @@
  * ioredis mechanism.
  */
 import { createLogger } from '@balo/shared/logging';
+import { MEETING_END_NOT_JOINED_CODE } from '@balo/shared/meetings';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import {
   checkRateLimit,
@@ -76,6 +80,7 @@ const END_USER_RATE_LIMIT: RateLimitConfig = {
 const END_ERROR_STATUS: Record<EndMeetingErrorCode, number> = {
   meeting_not_found: 404,
   meeting_not_started: 409,
+  [MEETING_END_NOT_JOINED_CODE]: 409,
 };
 
 /**

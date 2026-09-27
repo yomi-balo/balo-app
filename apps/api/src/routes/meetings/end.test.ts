@@ -178,6 +178,21 @@ describe('POST /meetings/:meetingId/end (BAL-134)', () => {
     expect(res.json()).toEqual({ error: 'meeting_not_started' });
   });
 
+  /**
+   * ⚠ BAL-474 (D6.4) — A CLIENT PRINCIPAL WHO NEVER JOINED. Like `meeting_not_started` it is
+   * reachable only AFTER tenancy and end authority are both proven, so it is a typed `409`, never a
+   * thrown 500 and never an existence oracle. Exhaustive by type (`END_ERROR_STATUS`), so this case
+   * would also fail to compile if the literal lost its status.
+   */
+  it('409 meeting_not_joined when a client member who never joined presses End', async () => {
+    mockEndMeeting.mockResolvedValue({ ok: false, code: 'meeting_not_joined' });
+
+    const res = await call({ method: 'POST', url: URL, headers: AUTH });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'meeting_not_joined' });
+  });
+
   // ── ⚠⚠ S6 — THE RATE LIMIT, WHICH FAILS **CLOSED** ─────────────────────────────────────
 
   it('⚠ consumes a PER-USER window before any service work', async () => {

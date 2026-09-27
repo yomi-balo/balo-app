@@ -205,7 +205,7 @@ describe('CalendarShell — week navigation (plan §12.2)', () => {
 });
 
 describe('CalendarShell — Join appears/disappears with the 60-second tick (fake-timer)', () => {
-  it('a meeting 20 minutes out has no Join button; once inside the 15-minute window (after two ticks) Join appears', () => {
+  it('a meeting 20 minutes out has no Join button; once inside the 3-minute window (after two ticks) Join appears', () => {
     const upcoming = meeting({
       meetingId: 'soon-1',
       scheduledStart: new Date(FIXED_NOW.getTime() + 20 * 60_000).toISOString(),
@@ -223,8 +223,8 @@ describe('CalendarShell — Join appears/disappears with the 60-second tick (fak
     // as a rendered attribute, un-redacted, before any click).
     expect(screen.queryByRole('button', { name: /Join/i })).not.toBeInTheDocument();
 
-    // Advance past the 15-minute join-window boundary (20 - 15 = 5 minutes -> tick past minute 6).
-    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 6 * 60_000));
+    // Advance past the 3-minute join-window boundary (D16: 20 - 3 = 17 minutes -> tick past minute 18).
+    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 17 * 60_000));
     act(() => {
       vi.advanceTimersByTime(60_000);
     });

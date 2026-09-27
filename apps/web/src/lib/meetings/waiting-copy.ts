@@ -1,5 +1,5 @@
 /**
- * BAL-435 — THE WAITING-STAGE COPY, AS DATA. **One module, twelve strings, zero JSX literals.**
+ * BAL-435 — THE WAITING-STAGE COPY, AS DATA. **One module, a handful of strings, zero JSX literals.**
  *
  * ⚠ IT IS DATA RATHER THAN INLINE JSX so the component tests import THE SAME CONSTANTS the
  * component renders — a test cannot pass against copy that drifted. CLAUDE.md's data-driven
@@ -8,9 +8,14 @@
  * ── ⚠⚠ THE CLOCK RULE THESE STRINGS ARE WRITTEN TO (BAL-134, amended 2026-07-31) ───────────
  *
  * The expert-present clock starts at **the LATER of the scheduled start and the expert's actual
- * join**. Arriving at 09:55 for a 10:00 call earns nothing extra; joining at 10:05 means the
- * no-show settles at 10:20, not 10:15. **If the expert has not joined, nothing is counted at
+ * join**. Arriving at 09:55 for a 10:00 call earns nothing extra ON THIS CLOCK; joining at 10:05 means
+ * the no-show settles at 10:20, not 10:15. **If the expert has not joined, nothing is counted at
  * all.**
+ *
+ * ⚠⚠ BAL-474 (billing Rule A, owner ruling D13) ADDS ONE TERM, AND THE STRINGS SAY SO. Before the
+ * scheduled start, the minutes the expert and a client-side participant spend TOGETHER are billed too.
+ * Every expert-side sentence below is therefore written to be true whether the expert joined early, on
+ * time or late (R6-C1, R6-C2), and a case the client CLOSED before the start has its own arm (R6-C3).
  *
  * ⚠⚠ BAL-435's OWN FINDING TEXT ("counted from the scheduled start") IS STALE AND WAS EXPLICITLY
  * REJECTED (ruling R2). Do not "correct" any string below back toward it.
@@ -99,6 +104,22 @@ export interface WaitingFacts {
    * expert interval is open. Nothing is counted in that window, and the copy must not say it is.
    */
   readonly expertPresenceObserved: boolean;
+  /**
+   * BAL-474 (R6-C3) — the case-closed-before-the-start read, or `null`.
+   *
+   * ⚠ `null` IS THE COMMON ANSWER AND MEANS "NOT THAT STATE" (or "the server did not say"). The server sends
+   * it ONLY to the delivering expert, when the meeting's case was closed before the start and no client-side
+   * participant was ever present — exactly the no-show that owes nothing. Both names are nullable on their
+   * own: `closedByFirstName` is `null` when the inactivity sweep closed the case (no human actor), and
+   * `companyName` when it could not be read; each has its own approved fallback.
+   */
+  readonly caseClosure: CaseClosureFacts | null;
+}
+
+/** The two names R6-C3's sentences interpolate. Either may be absent — see {@link WaitingFacts.caseClosure}. */
+export interface CaseClosureFacts {
+  readonly closedByFirstName: string | null;
+  readonly companyName: string | null;
 }
 
 /**
@@ -109,6 +130,7 @@ export const UNKNOWN_WAITING_FACTS: WaitingFacts = {
   noShowFloorMinutes: null,
   outcome: null,
   expertPresenceObserved: false,
+  caseClosure: null,
 };
 
 /** ⚠ The two outcome labels the copy branches on. Every other label takes the neutral arm. */
@@ -179,6 +201,44 @@ function floorPhrase(minutes: number | null, kind: keyof typeof FLOOR_PHRASES): 
 }
 
 /**
+ * BAL-474 (R6-C3, owner-approved) — THE EXPERT'S COPY WHEN THE CASE WAS CLOSED BEFORE THE START AND
+ * NOBODY FROM THE CLIENT SIDE EVER CAME. Retrospective, so it names the PERSON with "@ company" (CLAUDE.md).
+ *
+ * The first clause is "{Closer} @ {Company} closed this case before the start time"; with no closer (the
+ * inactivity sweep closed it) it reads "This case was closed before the start time". `{Company}` falls back
+ * to "their team" in the attribution and to "their side" in "nobody from … can join".
+ */
+export const CASE_CLOSED_WAITING_TITLE = 'This case has been closed';
+export const CASE_CLOSED_ENDED_TITLE = 'This case was closed';
+const CASE_CLOSED_COMPANY_ATTRIBUTION_FALLBACK = 'their team';
+const CASE_CLOSED_COMPANY_SIDE_FALLBACK = 'their side';
+
+export function caseClosedFirstClause(closure: CaseClosureFacts): string {
+  const { closedByFirstName, companyName } = closure;
+  if (closedByFirstName === null) {
+    return 'This case was closed before the start time';
+  }
+  return `${closedByFirstName} @ ${companyName ?? CASE_CLOSED_COMPANY_ATTRIBUTION_FALLBACK} closed this case before the start time`;
+}
+
+/** While waiting: nobody from the client's side can join, and it won't be billed. */
+export function caseClosedWaitingCopy(closure: CaseClosureFacts): WaitingCopy {
+  const side = closure.companyName ?? CASE_CLOSED_COMPANY_SIDE_FALLBACK;
+  return {
+    title: CASE_CLOSED_WAITING_TITLE,
+    body: `${caseClosedFirstClause(closure)}, so nobody from ${side} can join this call, and it won't be billed. You're free to leave.`,
+  };
+}
+
+/** After the call ended as the voided no-show: not billed, no payout. */
+export function caseClosedEndedCopy(closure: CaseClosureFacts): WaitingCopy {
+  return {
+    title: CASE_CLOSED_ENDED_TITLE,
+    body: `${caseClosedFirstClause(closure)}, so this call isn't billed and no payout is recorded. You're free to leave.`,
+  };
+}
+
+/**
  * THE EXPERT IS WAITING; the CLIENT is the absent party. R2 — Option A, whole.
  *
  * ── ⚠⚠ THE ANCHOR IS **THE JOIN**, NOT THE SCHEDULED START (BAL-134) ────────────────────────
@@ -200,11 +260,11 @@ function floorPhrase(minutes: number | null, kind: keyof typeof FLOOR_PHRASES): 
 const CLIENT_ABSENT: Record<WaitingPhase, CopyBuilder> = {
   'pre-start': ({ counterpartyFirstName, scheduledStartLabel }) => ({
     title: `Waiting for ${counterpartyFirstName} to join`,
-    body: `Due to start at ${scheduledStartLabel}. Your time starts counting the moment you join — there's no waiting room, so ${counterpartyFirstName} will come straight in.`,
+    body: `Due to start at ${scheduledStartLabel}. Your time counts from then, or from when you joined if that was later — plus any time you and ${counterpartyFirstName} spend together before the start. There's no waiting room, so ${counterpartyFirstName} will come straight in.`,
   }),
   running: ({ counterpartyFirstName }) => ({
     title: `Waiting for ${counterpartyFirstName} to join`,
-    body: `Your time is counted from when you joined. Nothing for you to do.`,
+    body: `Your time is being counted. Nothing for you to do.`,
   }),
   near: ({ counterpartyFirstName, noShowFloorMinutes }) => ({
     title: `Waiting for ${counterpartyFirstName} to join`,
@@ -308,12 +368,38 @@ function effectivePhase(
   return phase === 'running' || phase === 'near' ? 'pre-start' : phase;
 }
 
-/** ⚠ TOTAL over both parties × all four phases — the `Record` types are the proof. */
+/**
+ * BAL-474 (R6-C3 / R6F-12) — THE ONE GATE ON THE CASE-CLOSED ARM, shared by the copy and the glyph so the two
+ * cannot disagree. It applies to the client being the absent party, while waiting (any non-settled phase) or once
+ * settled as the `no_show_client` outcome; every other settled outcome keeps its ordinary arm. Returns the closure
+ * to render, or `null` when the arm does not apply.
+ */
+function applicableCaseClosure(
+  absentParty: WaitingAbsentParty | null,
+  phase: WaitingPhase,
+  { caseClosure, outcome }: Pick<WaitingFacts, 'caseClosure' | 'outcome'>
+): CaseClosureFacts | null {
+  if (absentParty !== 'client' || caseClosure === null) return null;
+  return phase !== 'settled' || outcome === OUTCOME_NO_SHOW_CLIENT ? caseClosure : null;
+}
+
+/**
+ * ⚠ TOTAL over both parties × all four phases — the `Record` types are the proof.
+ *
+ * ⚠ BAL-474 (R6-C3) — when the server reports the case was closed before the start (and nobody from the
+ * client side ever came), the expert's `pre-start`, `running` and `near` arms, and the `no_show_client`
+ * branch of `settled`, are REPLACED by the case-closed copy: none of them is true of a voided no-show. It
+ * is expert-only by construction — only the client is ever the absent party on the expert's screen.
+ */
 export function waitingCopyFor(
   absentParty: WaitingAbsentParty,
   phase: WaitingPhase,
   input: WaitingCopyInput
 ): WaitingCopy {
+  const closure = applicableCaseClosure(absentParty, phase, input);
+  if (closure !== null) {
+    return phase === 'settled' ? caseClosedEndedCopy(closure) : caseClosedWaitingCopy(closure);
+  }
   const resolved = effectivePhase(absentParty, phase, input.expertPresenceObserved);
   return WAITING_COPY[absentParty][resolved](input);
 }
@@ -360,16 +446,23 @@ export function resolveWaitingCopy(
 }
 
 /** Which glyph the waiting avatar wears. ⚠ Never colour alone — the copy carries the meaning. */
-export type WaitingIconKind = 'spinner' | 'no_show' | 'missed_call';
+export type WaitingIconKind = 'spinner' | 'no_show' | 'missed_call' | 'caseClosed';
 
 /**
  * ⚠ `null` (nobody named) ALWAYS SPINS: a settled glyph asserts an outcome, and an outcome is
  * precisely what a viewer with no subject has no basis to be told.
+ *
+ * ⚠ BAL-474 (R6F-12) — `caseClosed` is chosen EXACTLY when {@link waitingCopyFor} renders the case-closed copy
+ * (both go through `applicableCaseClosure`): a spinner or the amber no-show check beside "This case has been
+ * closed" would contradict the sentence. `facts` defaults to the unknown facts, so a caller that has none keeps
+ * the ordinary glyphs.
  */
 export function waitingIconKindFor(
   absentParty: WaitingAbsentParty | null,
-  phase: WaitingPhase
+  phase: WaitingPhase,
+  facts: Pick<WaitingFacts, 'caseClosure' | 'outcome'> = UNKNOWN_WAITING_FACTS
 ): WaitingIconKind {
+  if (applicableCaseClosure(absentParty, phase, facts) !== null) return 'caseClosed';
   if (absentParty === null || phase !== 'settled') return 'spinner';
   return absentParty === 'expert' ? 'missed_call' : 'no_show';
 }

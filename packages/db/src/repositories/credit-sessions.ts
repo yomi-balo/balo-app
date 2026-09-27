@@ -3,16 +3,20 @@ import {
   asc,
   desc,
   eq,
+  exists,
   gt,
+  gte,
   inArray,
   isNotNull,
   isNull,
   lte,
   ne,
+  notExists,
   notInArray,
   or,
   sql,
 } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 // BAL-525 — the two pin helpers return partial column assignments containing raw `sql` fragments
 // (`now()`, `COALESCE(...)`), which `Partial<NewCreditSession>` cannot express: `$inferInsert`
 // types the columns as `Date`/`string`, and only Drizzle's own insert/update value types admit an
@@ -29,19 +33,27 @@ import {
   deriveSessionEstimate,
   isWalletMandateActive,
   minutesOfRunway,
+  resolveSessionOverdraftShare,
   walletAllowsOverdraftGrace,
+  type CreditSessionOpenedByLabel,
+  type SessionOverdraftBasis,
+  type SessionOverdraftShare,
 } from '@balo/shared/credit';
+import { MEETING_CONTEXT_PRECEDENCE, type MeetingContextTypeLabel } from '@balo/shared/meetings';
 import { db, type Database } from '../client';
 import {
   agencies,
+  auditEvents,
   caseEngagements,
   companies,
   creditHolds,
   creditLedger,
+  creditReceivables,
   creditSessions,
   creditWallets,
   expertPayoutRecords,
   expertProfiles,
+  meetingContexts,
   meetings,
   users,
   type CreditDurationSource,
@@ -85,6 +97,47 @@ export const SESSION_AUDIT_ENTITY_TYPE = 'credit_session' as const;
  * record of WHY a 6-minute call was charged for 15.
  */
 export const SESSION_PRESENCE_SETTLED_ACTION = 'credit_session.presence_settled' as const;
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §C.3) — the provenance row for a session opened ON BEHALF of the
+ * booker (`opened_by` `guest` or `system`). Written by `open()` in the SAME transaction as the
+ * session INSERT, `actor_user_id` NULL (a system act — the ADR-1030 exemption), with the booker as
+ * `metadata.onBehalfOfUserId`. It is what the ledger ticks' `member_id = booker` attribution rests
+ * on: `applyLedgerEntry`'s guard requires a member, and this row records that the member did not act.
+ */
+export const SESSION_OPENED_ON_BEHALF_ACTION = 'credit_session.opened_on_behalf' as const;
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §D.3) — the terminal marker that takes an ended, sessionless Case
+ * meeting out of the durability backstop's finder FOREVER: `entity_type 'meeting'`,
+ * `actor_user_id` NULL, `metadata { disposition, reason, shape?, trigger }`. Written by
+ * {@link creditSessionsRepository.markSessionlessCaseMeeting} only.
+ */
+export const SESSIONLESS_CASE_MEETING_MARKED_ACTION =
+  'credit_session.sessionless_meeting_marked' as const;
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §B) — how `open()` treats the funding gates.
+ *
+ *   `gated`              — the shipped behaviour, byte-identical: an open receivable, an in-flight
+ *                          settlement, a negative balance or an unfunded estimate with no mandate
+ *                          each REFUSE. `POST /sessions` (`live_capture`) and every caller that
+ *                          passes no policy get this.
+ *   `overdraft_tolerant` — every PRESENCE-SEAM open (member admission, guest admission, the
+ *                          sessionless terminal-path open): those four gates are recorded as
+ *                          {@link OpenToleratedGate}s and the session OPENS, because settlement is
+ *                          session-scoped (a session only ever settles its own share) and a refused
+ *                          open there means an unbilled consultation. `session_in_progress` and
+ *                          `expert_rate_missing` still refuse under both policies.
+ */
+export type OpenFundingPolicy = 'gated' | 'overdraft_tolerant';
+
+/** A funding gate the overdraft-tolerant open passed THROUGH (logged; audited on on-behalf opens). */
+export type OpenToleratedGate =
+  | 'account_hold'
+  | 'settlement_processing'
+  | 'negative_balance'
+  | 'insufficient_no_mandate';
 
 /** Thrown when a session lookup targets a missing (or soft-deleted) row. */
 export class SessionNotFoundError extends Error {
@@ -250,8 +303,14 @@ export interface OpenSessionInput {
    * ⚠ SUPERSEDED. BAL-400 (booking) was the recorded intent and is NOT the seam. **BAL-466**
    * opens the session at ADMISSION — `joinMeetingAsMember`, first CLIENT-side member, `case`
    * contexts only — and passes `meetingId` + `engagementId` + `durationSource: 'presence'`
-   * from there. `book-consultation.ts`'s "THE MONEY IS OUT OF SCOPE" stays true. **BAL-412**
-   * and reporting consume `engagement_id` as given.
+   * from there. **BAL-474** adds two more presence-seam openers that pass the same three: a
+   * client-side email-invited GUEST's admission, and the SESSIONLESS terminal-path open
+   * (`openAndSettleFromPresence`), both on behalf of the booker. `book-consultation.ts`'s "THE
+   * MONEY IS OUT OF SCOPE" stays true. **BAL-412** and reporting consume `engagement_id` as given.
+   *
+   * ⚠ BAL-474 (AD-4) — `meetingId` IS ALSO THE KEY OF THE IN-LOCK "never two sessions per
+   * meeting" check (`open()` step 1b): a second open for a meeting that already has a live
+   * (non-cancelled, ENDED OR NOT) session is refused `meeting_session_exists`.
    */
   meetingId?: string | null;
   engagementId?: string | null;
@@ -278,29 +337,57 @@ export interface OpenSessionInput {
    * `meeting_id IS NOT NULL` by construction, so a meeting-less `presence` session is simply
    * never settled by the backstop — it would sit unsettled and visible, rather than settle
    * wrongly. The obligation was BAL-466's, and BAL-466 discharges it: `joinMeetingAsMember`
-   * passes `durationSource: 'presence'` alongside `meetingId`/`engagementId`.
+   * passes `durationSource: 'presence'` alongside `meetingId`/`engagementId`. BAL-474's two new
+   * openers (guest admission, the sessionless terminal-path open) pass it too — and for an
+   * `overdraft_tolerant` open the coherence IS asserted, in-process (`assertOpenPolicyCoherent`),
+   * because tolerance is only safe on the presence-settled, session-scoped path.
    */
   durationSource?: CreditDurationSource;
+  /**
+   * BAL-474 (ADR-1040 Amendment 7 §B) — how the funding gates are treated. Omitted ⇒ `'gated'`,
+   * byte-identical to every shipped caller. See {@link OpenFundingPolicy}.
+   */
+  fundingPolicy?: OpenFundingPolicy;
+  /**
+   * BAL-474 (AD-5) — who opened the session; write-once into `credit_sessions.opened_by`.
+   * Omitted ⇒ `'client'`. `'guest'` / `'system'` mean ON BEHALF of the booker: then
+   * `initiatingMemberId` IS the booker (attribution only — D4), and `open()` writes a
+   * `credit_session.opened_on_behalf` audit row in the same transaction.
+   */
+  openedBy?: CreditSessionOpenedByLabel;
+  /** BAL-474 — the admitted client-side guest whose admission opened the session (`openedBy: 'guest'` only). */
+  meetingGuestId?: string | null;
+  /** BAL-474 — AUDIT ONLY: which path opened an on-behalf session (e.g. the terminal path's trigger). */
+  trigger?: string;
 }
 
 /**
  * `open` outcome. Money-gate rejections (`account_hold` / `settlement_pending` /
- * `insufficient_no_mandate`), the one-live-session-per-wallet stop (`session_in_progress`), and
- * the rate-less-expert stop (`expert_rate_missing`, Decision Q9) are EXPECTED control flow
- * returned as a discriminated union — the service maps them to 409, not caught exceptions.
+ * `insufficient_no_mandate`), the one-live-session-per-wallet stop (`session_in_progress`), the
+ * rate-less-expert stop (`expert_rate_missing`, Decision Q9) and the one-session-per-meeting stop
+ * (`meeting_session_exists`, BAL-474 AD-4) are EXPECTED control flow returned as a discriminated
+ * union — the service maps them, never catches them.
  *
- * `settlement_pending` blocks a NEW session while a PRIOR session's overdraft settlement has not
- * yet landed (`settlementStatus='processing'`, the webhook is the sole crediting authority) — or,
- * defensively, while the wallet balance is still negative. Opening now would let that prior
- * overdraft be folded into the next session's terminal `end` and charged a SECOND time (the
- * sequential co-charge).
+ * ⚠ BAL-474 — THE THREE MONEY-GATE CODES ARE THE GATED OPEN'S ONLY. The overdraft-tolerant open
+ * (every presence-seam open) passes through them and reports them in `toleratedGates` instead.
+ *
+ * `settlement_pending` (gated) blocks a NEW session while a PRIOR session's overdraft settlement
+ * has not yet landed (`settlementStatus='processing'`) or while the wallet balance is negative. The
+ * original reason — a prior overdraft folded into the next session's terminal figure and charged a
+ * SECOND time (the sequential co-charge) — is now closed by the arithmetic itself: every terminal
+ * settles only its OWN share (`resolveSessionOverdraftShare`, ADR-1040 Amendment 7 §A), which is
+ * what makes tolerating it safe. The gated open keeps it for `POST /sessions`, unchanged.
  *
  * `insufficient_no_mandate` means exactly what it says — the estimate is unfunded and the wallet
  * carries no active mandate. BAL-523 deliberately did NOT widen it to cover `low_balance_mode`
  * (see the ⚠ note on `open` itself).
+ *
+ * `meeting_session_exists` names the meeting's existing live session (non-cancelled, ENDED OR
+ * NOT), so a terminal path that lost the race settles THAT session instead of opening a second.
  */
 export type OpenSessionResult =
-  | { ok: true; session: CreditSession }
+  | { ok: true; session: CreditSession; toleratedGates: readonly OpenToleratedGate[] }
+  | { ok: false; code: 'meeting_session_exists'; existingSessionId: string }
   | {
       ok: false;
       code:
@@ -334,8 +421,18 @@ export interface MeterSessionResult {
 
 export interface EndSessionResult {
   session: CreditSession;
-  /** Terminal negative-balance magnitude (the settlement basis; 0 when in credit). */
+  /**
+   * THIS session's share of the wallet's negative balance at its terminal — the settlement basis;
+   * 0 when in credit. NEVER debt older than the session (ADR-1040 Amendment 7 §A:
+   * `min(ownConsumed, max(0, −balance))`); identical to the whole negative balance on every state
+   * the gated open can reach.
+   */
   overdraftMinor: number;
+  /**
+   * BAL-474 (D7.3) — how {@link overdraftMinor} was reached, plus the ownerless-debt reading taken
+   * INSIDE the terminal transaction. `null` on the idempotent re-end — nothing was computed.
+   */
+  overdraftBasis: SessionOverdraftBasis | null;
   /** Finalized expert accrual (recorded independent of settlement). */
   expertAccruedMinor: number;
   /** Whether an active mandate exists (the service decides charge vs immediate receivable). */
@@ -479,8 +576,16 @@ export interface SettleFromPresenceRepoInput {
 
 export interface SettleFromPresenceRepoResult {
   session: CreditSession;
-  /** Terminal negative-balance magnitude (the settlement basis; 0 when in credit). */
+  /**
+   * THIS session's share of the wallet's negative balance at its terminal — the settlement basis;
+   * 0 when in credit. NEVER debt older than the session (ADR-1040 Amendment 7 §A).
+   */
   overdraftMinor: number;
+  /**
+   * BAL-474 (D7.3) — the share's figures plus the ownerless-debt reading taken INSIDE the terminal
+   * transaction, after the terminal UPDATE. `null` on the idempotent `alreadySettled` arm.
+   */
+  overdraftBasis: SessionOverdraftBasis | null;
   /** Finalized expert accrual = the SETTLED billable minutes × the raw expert rate. */
   expertAccruedMinor: number;
   /** Whether an active mandate exists (the service decides charge vs immediate receivable). */
@@ -508,6 +613,130 @@ const SETTLE_FROM_PRESENCE_FROM: readonly CreditSessionStatus[] = [
   'wrapped',
 ];
 
+// ── BAL-474 (ADR-1040 Amendment 7 §C/§D) — the sessionless Case meeting IO ───────────────────
+
+/**
+ * {@link creditSessionsRepository.openAndSettleFromPresence}'s input: the ON-BEHALF open of a
+ * sessionless ended Case meeting and its presence settlement, in ONE transaction (AD-3). The type
+ * pins what only a terminal path may pass — the tolerant policy, `openedBy: 'system'`, the presence
+ * provenance, and the meeting + engagement the session bills.
+ */
+export interface OpenAndSettleFromPresenceInput {
+  readonly open: OpenSessionInput & {
+    readonly meetingId: string;
+    readonly engagementId: string;
+    readonly durationSource: 'presence';
+    readonly fundingPolicy: 'overdraft_tolerant';
+    readonly openedBy: 'system';
+  };
+  /** Every settlement figure, PRE-COMPUTED by the pure core — exactly as `settleFromPresence`. */
+  readonly settlement: Omit<SettleFromPresenceRepoInput, 'sessionId' | 'meetingId'>;
+}
+
+export type OpenAndSettleFromPresenceResult =
+  | {
+      ok: true;
+      toleratedGates: readonly OpenToleratedGate[];
+      settled: SettleFromPresenceRepoResult;
+    }
+  | Extract<OpenSessionResult, { ok: false }>;
+
+/** One row of {@link creditSessionsRepository.findSessionlessEndedCaseMeetings}. */
+export interface SessionlessCaseMeetingCandidate {
+  readonly meetingId: string;
+  readonly scheduledStart: Date;
+  readonly endedAt: Date;
+}
+
+/**
+ * The terminal marker's disposition and reason (ADR-1040 Amendment 7 §D.3). A discriminated union
+ * so a reason can only ever be written under its own disposition.
+ *
+ *   `not_billable`    — nothing is owed: a zero presence shape, the D5.9 skip (the only
+ *                       client-party attendee was a guest the delivering expert invited), or a
+ *                       case the client closed BEFORE the meeting's scheduled start (D10.5).
+ *   `refused`         — a billable shape the terminal path cannot open: no coherent Case
+ *                       engagement, no attributable booker, or no expert rate. Alarmed.
+ *   `retry_exhausted` — still sessionless on the first attempt past the retry window. Alarmed.
+ */
+export type SessionlessCaseMeetingMark =
+  | {
+      readonly disposition: 'not_billable';
+      readonly reason:
+        | 'missed_call'
+        | 'abandoned_wait'
+        | 'expert_invited_guest_only'
+        | 'case_closed_before_start';
+    }
+  | {
+      readonly disposition: 'refused';
+      readonly reason: 'meeting_not_bookable' | 'booker_unattributable' | 'expert_rate_missing';
+    }
+  | {
+      readonly disposition: 'retry_exhausted';
+      readonly reason: 'session_in_progress' | 'error';
+    };
+
+export type MarkSessionlessCaseMeetingInput = SessionlessCaseMeetingMark & {
+  readonly meetingId: string;
+  /** Which terminal path wrote the marker (the service's trigger label). */
+  readonly trigger: string;
+  /** The presence settlement shape, when it was computed (always, on the service's path). */
+  readonly shape?: CreditSettlementShape;
+  /**
+   * The `meetings.outcome` a settlement would have resolved, written FIRST-WRITE-WINS in the SAME
+   * transaction as the marker (D5.4) — never outside it.
+   */
+  readonly outcome?: MeetingOutcome;
+};
+
+export interface MarkSessionlessCaseMeetingResult {
+  readonly markerId: string;
+  /** `true` ⇒ this call resolved `meetings.outcome`; `false` ⇒ not given, or already resolved. */
+  readonly outcomeWritten: boolean;
+}
+
+/**
+ * The context labels in the TOP precedence tier — DERIVED from `MEETING_CONTEXT_PRECEDENCE`,
+ * never restated, so the backstop finder's SQL mirror of `selectPrimaryMeetingContext` moves with
+ * the pure rule. `case` is in this tier (engagement grain, score 100).
+ */
+const TOP_TIER_CONTEXT_TYPES: readonly MeetingContextTypeLabel[] = (() => {
+  const labels = Object.keys(MEETING_CONTEXT_PRECEDENCE) as MeetingContextTypeLabel[];
+  const topScore = Math.max(...labels.map((label) => MEETING_CONTEXT_PRECEDENCE[label]));
+  return labels.filter((label) => MEETING_CONTEXT_PRECEDENCE[label] === topScore);
+})();
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §B) — reject an incoherent open BEFORE any transaction opens. A
+ * PROGRAMMING error, never a runtime condition, so it throws:
+ *
+ *   · tolerant ⇒ `durationSource: 'presence'` with a `meetingId` — tolerance is safe only on the
+ *     presence-settled, session-scoped path (`POST /sessions` must stay gated);
+ *   · on behalf (`openedBy` ≠ `client`) ⇒ tolerant, with a `meetingId` and an `engagementId` —
+ *     an on-behalf open only ever bills a Case meeting's presence;
+ *   · a `meetingGuestId` ⇒ `openedBy: 'guest'`.
+ */
+function assertOpenPolicyCoherent(input: OpenSessionInput): void {
+  const tolerant = input.fundingPolicy === 'overdraft_tolerant';
+  const hasMeeting = input.meetingId !== undefined && input.meetingId !== null;
+  const hasEngagement = input.engagementId !== undefined && input.engagementId !== null;
+  if (tolerant && (input.durationSource !== 'presence' || !hasMeeting)) {
+    throw new Error(
+      'creditSessionsRepository.open: an overdraft_tolerant open must be a presence session bound to a meeting'
+    );
+  }
+  const openedBy = input.openedBy ?? 'client';
+  if (openedBy !== 'client' && (!tolerant || !hasMeeting || !hasEngagement)) {
+    throw new Error(
+      `creditSessionsRepository.open: an on-behalf open (openedBy '${openedBy}') must be overdraft_tolerant with a meetingId and an engagementId`
+    );
+  }
+  if (input.meetingGuestId !== undefined && input.meetingGuestId !== null && openedBy !== 'guest') {
+    throw new Error("creditSessionsRepository.open: a meetingGuestId requires openedBy 'guest'");
+  }
+}
+
 /**
  * Reject a settlement input that is not whole, finite and non-negative BEFORE anything is
  * written. Not arithmetic — a domain guard on the ONE seam where a bad number becomes a
@@ -530,7 +759,9 @@ const SETTLE_FROM_PRESENCE_FROM: readonly CreditSessionStatus[] = [
  * no-show settle at 900 minutes. `apps/api`'s `resolveBillingFloorMs` discards such an override
  * at the config seam; this refuses it even from a caller that does not.
  */
-function assertSettlementFigures(input: SettleFromPresenceRepoInput): void {
+function assertSettlementFigures(
+  input: Omit<SettleFromPresenceRepoInput, 'sessionId' | 'meetingId'>
+): void {
   const figures: ReadonlyArray<readonly [string, number]> = [
     ['billableMinutes', input.billableMinutes],
     ['actualMinutes', input.actualMinutes],
@@ -611,6 +842,103 @@ async function activeHoldsSum(exec: DbExecutor, walletId: string): Promise<numbe
       )
     );
   return Number(row?.sum ?? 0);
+}
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §A) — THE ONE READ behind a terminal's settled figure: THIS
+ * session's gross `session_consume` on its wallet (rides `credit_ledger_session_idx`), handed with
+ * the wallet balance read under the lock to the pure `resolveSessionOverdraftShare`. Exactly two
+ * callers — `end()` and `settleFromPresenceInTx` — pinned by
+ * `invariants/a-session-never-settles-debt-it-did-not-incur.test.ts`.
+ *
+ * Only `session_consume` counts: there is no reversal of it (the ledger is append-only, no refund
+ * primitive), and the session's own `overdraft_settlement` credit — which also carries its
+ * `session_id` — is excluded by the reason filter. Written with `eq(…reason…)`, never the
+ * object-key form the BAL-525 drift alarm counts.
+ */
+async function readSessionOverdraftShare(
+  tx: DbExecutor,
+  session: CreditSession,
+  wallet: CreditWallet
+): Promise<SessionOverdraftShare> {
+  const [row] = await tx
+    .select({ sum: sql<string>`coalesce(sum(${creditLedger.amountMinor}), 0)` })
+    .from(creditLedger)
+    .where(
+      and(
+        eq(creditLedger.sessionId, session.id),
+        eq(creditLedger.walletId, wallet.id),
+        eq(creditLedger.reason, 'session_consume')
+      )
+    );
+  const consumedSum = Number(row?.sum ?? 0);
+  return resolveSessionOverdraftShare({
+    walletBalanceMinor: wallet.balanceMinor,
+    ownConsumedMinor: Math.max(0, -consumedSum),
+  });
+}
+
+/**
+ * BAL-474 (D7.3, ADR-1040 Amendment 7 §A property 4) — NO DEBT WITHOUT AN OWNER. The older debt a
+ * terminal leaves unsettled (`priorDebtLeftMinor`) must be accounted for by ANOTHER session: an
+ * open receivable, or an in-flight (`processing`) settlement whose credit has not yet landed. This
+ * returns the part of it nobody owns — `max(0, priorDebtLeft − Σ those owners' amounts)`.
+ *
+ * ⚠ RUNS INSIDE THE TERMINAL TRANSACTION, UNDER THE WALLET LOCK, AFTER THE SESSION'S OWN TERMINAL
+ * UPDATE — so the settling session's own row is already `processing`, and the two `<> S`
+ * exclusions below carry real weight (without them S's own charge would "own" the older debt).
+ * Plain SELECTs: it row-locks nothing (see `openAndSettleFromPresence`'s lock-order note).
+ *
+ * ⚠ AMOUNTS, NOT COUNTS: partial top-ups pay debt down without closing receivables, so recorded
+ * owners only ever meet or exceed the older debt they own — a shortfall is real. The known limit:
+ * an ownerless slice hidden behind a larger, partly-paid open receivable is invisible to an amount
+ * comparison; the coverage clears themselves are guarded by their own invariants.
+ *
+ * Short-circuits to 0 — no query — when there is no older debt at all (the overwhelmingly common
+ * case).
+ */
+async function readOwnerlessPriorDebt(
+  tx: DbExecutor,
+  input: { walletId: string; sessionId: string; priorDebtLeftMinor: number }
+): Promise<number> {
+  if (input.priorDebtLeftMinor === 0) {
+    return 0;
+  }
+  const [receivables] = await tx
+    .select({ sum: sql<string>`coalesce(sum(${creditReceivables.amountMinor}), 0)` })
+    .from(creditReceivables)
+    .where(
+      and(
+        eq(creditReceivables.walletId, input.walletId),
+        eq(creditReceivables.status, 'open'),
+        isNull(creditReceivables.deletedAt),
+        ne(creditReceivables.sessionId, input.sessionId)
+      )
+    );
+  const [inFlight] = await tx
+    .select({ sum: sql<string>`coalesce(sum(${creditSessions.overdraftSettledMinor}), 0)` })
+    .from(creditSessions)
+    .where(
+      and(
+        eq(creditSessions.walletId, input.walletId),
+        eq(creditSessions.settlementStatus, 'processing'),
+        isNull(creditSessions.deletedAt),
+        ne(creditSessions.id, input.sessionId),
+        notExists(
+          tx
+            .select({ one: sql`1` })
+            .from(creditLedger)
+            .where(
+              and(
+                eq(creditLedger.sessionId, creditSessions.id),
+                eq(creditLedger.reason, 'overdraft_settlement')
+              )
+            )
+        )
+      )
+    );
+  const ownedMinor = Number(receivables?.sum ?? 0) + Number(inFlight?.sum ?? 0);
+  return Math.max(0, input.priorDebtLeftMinor - ownedMinor);
 }
 
 // ── Metering state machine (§5) — pure-ish helpers extracted from `meterSessionToNow` ─────
@@ -900,8 +1228,11 @@ interface PinnableWallet {
 /**
  * BAL-525 (ADR-1040 Amendment 5) — the BASE pin: the Stripe instrument on file BEFORE this
  * session's debt could exist, taken at `open()` from the wallet already read under the advisory
- * lock. `open()` refuses to open onto a negative balance or a `processing` settlement, so the pin
- * is bound to a clean baseline.
+ * lock. The pin is taken before any of THIS session's share can exist — and since BAL-474
+ * (ADR-1040 Amendment 7 §A) a session only ever settles its OWN share, that is the baseline that
+ * matters, even when the wallet already carries OTHER debt. (Amendment 5 §A's premise that
+ * `open()` "refuses to open onto a negative balance" is withdrawn for the overdraft-tolerant open;
+ * the gated open still refuses, so its sessions keep the clean baseline as before.)
  *
  * Empty when the wallet holds no card — the pair CHECK requires both-or-neither, so a half-set
  * write is structurally impossible from here, and NULL is a legitimate answer (see the schema
@@ -961,183 +1292,633 @@ function settlementInstrumentTopUpPin(
   };
 }
 
+/**
+ * Step 1b (BAL-474 AD-4) — the id of the meeting's live session (non-cancelled, non-deleted,
+ * ENDED OR NOT), or `undefined` — always `undefined` for an open that names no meeting.
+ */
+async function findLiveMeetingSessionId(
+  tx: DbExecutor,
+  meetingId: string | null | undefined
+): Promise<string | undefined> {
+  if (meetingId === undefined || meetingId === null) {
+    return undefined;
+  }
+  const [existing] = await tx
+    .select({ id: creditSessions.id })
+    .from(creditSessions)
+    .where(
+      and(
+        eq(creditSessions.meetingId, meetingId),
+        ne(creditSessions.status, 'cancelled'),
+        isNull(creditSessions.deletedAt)
+      )
+    )
+    .orderBy(desc(creditSessions.createdAt), desc(creditSessions.id))
+    .limit(1);
+  return existing?.id;
+}
+
+/** Step 2b — does the wallet already carry a NON-TERMINAL session? */
+async function hasNonTerminalSessionOnWallet(tx: DbExecutor, walletId: string): Promise<boolean> {
+  const [inProgress] = await tx
+    .select({ id: creditSessions.id })
+    .from(creditSessions)
+    .where(
+      and(
+        eq(creditSessions.walletId, walletId),
+        inArray(creditSessions.status, ['pending', 'active', 'grace', 'wrapped']),
+        isNull(creditSessions.deletedAt)
+      )
+    )
+    .limit(1);
+  return inProgress !== undefined;
+}
+
+/**
+ * Step 2c — the settlement-pending gate: a PRIOR session's overdraft settlement still IN FLIGHT
+ * (`settlementStatus='processing'`; the webhook is the sole crediting authority), or a negative
+ * balance. Returns `true` when the open must REFUSE (`settlement_pending`) — only ever under the
+ * gated policy. GATED reads the REAL in-flight predicate directly (a balance-only check is defeated
+ * by an independent top-up landing during the processing window), with the balance sign retained
+ * as defence in depth. TOLERANT (AD-2) records both and passes — `share ≤ ownConsumed` means no
+ * ordering of the prior charge can ever collect the same money twice (ADR-1040 Amendment 7 §A.4
+ * WE2). The `processing` lookup rides `credit_sessions_settling_idx`.
+ */
+async function settlementPendingRefuses(
+  tx: DbExecutor,
+  input: { walletId: string; balanceMinor: number; tolerant: boolean },
+  toleratedGates: OpenToleratedGate[]
+): Promise<boolean> {
+  const [settling] = await tx
+    .select({ id: creditSessions.id })
+    .from(creditSessions)
+    .where(
+      and(
+        eq(creditSessions.walletId, input.walletId),
+        eq(creditSessions.settlementStatus, 'processing'),
+        isNull(creditSessions.deletedAt)
+      )
+    )
+    .limit(1);
+  const negative = input.balanceMinor < 0;
+  if (settling === undefined && !negative) {
+    return false;
+  }
+  if (!input.tolerant) {
+    return true;
+  }
+  if (settling !== undefined) {
+    toleratedGates.push('settlement_processing');
+  }
+  if (negative) {
+    toleratedGates.push('negative_balance');
+  }
+  return false;
+}
+
+/** Step 3 — the expert's hourly rate snapshot (`null` ⇒ no rate set); throws on a missing profile. */
+async function readExpertHourlyRate(
+  tx: DbExecutor,
+  expertProfileId: string
+): Promise<number | null> {
+  const [expert] = await tx
+    .select({ rateCents: expertProfiles.rateCents })
+    .from(expertProfiles)
+    .where(eq(expertProfiles.id, expertProfileId))
+    .limit(1);
+  if (expert === undefined) {
+    throw new ExpertProfileNotFoundError(expertProfileId);
+  }
+  return expert.rateCents;
+}
+
+/** Step 7 — insert the pending session with the full rate/ceiling snapshot. */
+async function insertPendingSession(
+  tx: DbExecutor,
+  input: OpenSessionInput,
+  snapshot: {
+    wallet: CreditWallet;
+    holdId: string;
+    expertHourly: number;
+    baloFeeBps: number;
+    clientRateMinorPerMinute: number;
+    expertRateMinorPerMinute: number;
+  }
+): Promise<CreditSession> {
+  const { wallet } = snapshot;
+  const [session] = await tx
+    .insert(creditSessions)
+    .values({
+      walletId: input.walletId,
+      companyId: input.companyId,
+      expertProfileId: input.expertProfileId,
+      initiatingMemberId: input.initiatingMemberId,
+      holdId: snapshot.holdId,
+      estimatedMinutes: input.estimatedMinutes,
+      expertRateMinorPerHour: snapshot.expertHourly,
+      baloFeeBps: snapshot.baloFeeBps,
+      clientRateMinorPerMinute: snapshot.clientRateMinorPerMinute,
+      expertRateMinorPerMinute: snapshot.expertRateMinorPerMinute,
+      effectiveCeilingMinor: wallet.overdraftCeilingMinor ?? DEFAULT_OVERDRAFT_CEILING_MINOR,
+      graceBoundMinutes: OVERDRAFT_GRACE_MINUTES,
+      // BAL-418 seam — both nullable, both optional; existing callers are unchanged.
+      meetingId: input.meetingId ?? null,
+      engagementId: input.engagementId ?? null,
+      // BAL-412 seam — write-once provenance. Omitted ⇒ `'live_capture'`, i.e. exactly
+      // what every shipped caller gets. ⚠⚠ G4 (second review round) — CORRECTING A
+      // NOW-FALSE CLAIM: this used to say "NOTHING on main passes `'presence'` (D10)". As
+      // of BAL-466, `openSession` passes it for every session `joinMeetingAsMember` opens
+      // at admission — see the coherence guard's docblock (`open-session.ts`, D4/G1).
+      durationSource: input.durationSource ?? 'live_capture',
+      // BAL-474 (AD-5) — write-once: who opened it. Omitted ⇒ `'client'` (every shipped caller).
+      openedBy: input.openedBy ?? 'client',
+      // BAL-525 — the base pin, from the wallet read under the SAME advisory lock, so no card
+      // write can land between that read and this INSERT. Absent (all three NULL) when the
+      // wallet holds no card. See `settlementInstrumentBasePin`.
+      ...settlementInstrumentBasePin(wallet),
+    })
+    .returning();
+  if (session === undefined) {
+    throw new Error('Failed to insert credit session');
+  }
+  return session;
+}
+
+/**
+ * Step 9 (BAL-474 §C.3) — an ON-BEHALF open records its provenance in the SAME transaction: the
+ * booker did not act, so the row is a system act (actor NULL) naming them as `onBehalfOfUserId`.
+ * It is what the ledger ticks' `member_id = booker` attribution rests on.
+ */
+async function recordOnBehalfOpen(
+  tx: DbExecutor,
+  input: OpenSessionInput,
+  facts: {
+    sessionId: string;
+    toleratedGates: readonly OpenToleratedGate[];
+    walletBalanceMinorAtOpen: number;
+    availableMinorAtOpen: number;
+  }
+): Promise<void> {
+  await auditEventsRepository.record(
+    {
+      actorUserId: null,
+      action: SESSION_OPENED_ON_BEHALF_ACTION,
+      entityType: SESSION_AUDIT_ENTITY_TYPE,
+      entityId: facts.sessionId,
+      metadata: {
+        openedBy: input.openedBy,
+        onBehalfOfUserId: input.initiatingMemberId,
+        meetingId: input.meetingId ?? null,
+        engagementId: input.engagementId ?? null,
+        meetingGuestId: input.meetingGuestId ?? null,
+        fundingPolicy: input.fundingPolicy ?? 'gated',
+        toleratedGates: facts.toleratedGates,
+        walletBalanceMinorAtOpen: facts.walletBalanceMinorAtOpen,
+        availableMinorAtOpen: facts.availableMinorAtOpen,
+        trigger: input.trigger ?? null,
+      },
+    },
+    tx
+  );
+}
+
+/**
+ * THE OPEN, on the caller's transaction — `open()`'s body, and the first half of
+ * `openAndSettleFromPresence` (BAL-474 AD-3). See {@link creditSessionsRepository.open} for the
+ * gates and why each one is kept or tolerated.
+ */
+async function openInTx(tx: DbExecutor, input: OpenSessionInput): Promise<OpenSessionResult> {
+  const tolerant = input.fundingPolicy === 'overdraft_tolerant';
+  const toleratedGates: OpenToleratedGate[] = [];
+
+  // 1. Serialise against every other writer on this wallet. Every session of a meeting sits on the
+  //    engagement company's ONE wallet, so every open for a meeting serialises HERE too (AD-4).
+  await acquireWalletLock(tx, input.walletId);
+
+  // 1b. BAL-474 (AD-4) — NEVER TWO SESSIONS PER MEETING. Any live session for this meeting —
+  //     non-cancelled and non-deleted, ENDED OR NOT — refuses a second one, under both policies.
+  //     Deliberately NOT "one live session per wallet" (step 2b), which means non-TERMINAL: a
+  //     meeting whose session has already ended must still never be billed twice. A meeting whose
+  //     only session was `cancelled` reads as sessionless. No unique index (BAL-466's ruling — and
+  //     a caught 23505 would abort the caller's transaction); the lock-plus-check is the guarantee.
+  const existingSessionId = await findLiveMeetingSessionId(tx, input.meetingId);
+  if (existingSessionId !== undefined) {
+    return { ok: false, code: 'meeting_session_exists', existingSessionId };
+  }
+
+  // 2. Soft-hold gate — an open receivable. GATED: no new sessions while one is open. TOLERANT:
+  //    recorded and passed — the hold now brakes new Case BOOKINGS, never a consultation already
+  //    booked (ADR-1040 Amendment 7 §H), and the session settles only its own share (§A).
+  if (await creditReceivablesRepository.hasOpenReceivable(input.companyId, tx)) {
+    if (!tolerant) {
+      return { ok: false, code: 'account_hold' };
+    }
+    toleratedGates.push('account_hold');
+  }
+
+  // 2b. One live consultation per wallet — kept under BOTH policies. The double-settle reason it
+  //     was written for (a second non-terminal session folding the first one's debt into its own
+  //     terminal figure) is now closed by the share cap (`resolveSessionOverdraftShare`). It stays
+  //     because the share's "the settling session is the NEWEST debt" premise rests on it: BAL-477
+  //     (concurrent sessions per wallet) must keep the `ownConsumed` cap AND decide attribution
+  //     between concurrent sessions before lifting it. The wallet advisory lock (step 1) serialises
+  //     concurrent opens, so this read-then-reject is race-safe.
+  if (await hasNonTerminalSessionOnWallet(tx, input.walletId)) {
+    return { ok: false, code: 'session_in_progress' };
+  }
+
+  const wallet = await readWalletOrThrow(tx, input.walletId);
+
+  // 2c. Settlement-pending gate (see `settlementPendingRefuses`).
+  if (
+    await settlementPendingRefuses(
+      tx,
+      { walletId: input.walletId, balanceMinor: wallet.balanceMinor, tolerant },
+      toleratedGates
+    )
+  ) {
+    return { ok: false, code: 'settlement_pending' };
+  }
+
+  // 3. Snapshot the expert rate (Q9 hard-stop on a rate-less expert — both policies).
+  const expertHourly = await readExpertHourlyRate(tx, input.expertProfileId);
+  if (expertHourly === null) {
+    return { ok: false, code: 'expert_rate_missing' };
+  }
+
+  // BAL-478 — ONE estimator. This block used to inline the arithmetic; it now calls the
+  // shared pure helper the booking pre-check also calls, so the advisory gate and this
+  // authoritative one can never drift. Figures are byte-identical (see
+  // `packages/shared/src/credit/session-estimate.test.ts`).
+  const { baloFeeBps, clientRateMinorPerMinute, expertRateMinorPerMinute, estimateMinor } =
+    deriveSessionEstimate({
+      expertHourlyMinor: expertHourly,
+      estimatedMinutes: input.estimatedMinutes,
+      baloFeeBps: input.baloFeeBps,
+    });
+
+  // 4. Re-derive available UNDER the lock (the money gate must not trust the advisory read).
+  const available = wallet.balanceMinor - (await activeHoldsSum(tx, input.walletId));
+  const mandateActive = isWalletMandateActive(wallet);
+
+  // 5. Connect gate — fund the estimate OR present a mandate. GATED: the Model C hard-stop.
+  //    TOLERANT (D1 — the moved AC): recorded and passed; with no mandate the meter wraps at zero
+  //    with NO grace (`walletAllowsOverdraftGrace` is false), the floor still bills at settlement,
+  //    and a shortfall goes to a receivable + dunning. The hold below is still the full estimate.
+  if (available < estimateMinor && !mandateActive) {
+    if (!tolerant) {
+      return { ok: false, code: 'insufficient_no_mandate' };
+    }
+    toleratedGates.push('insufficient_no_mandate');
+  }
+
+  // 6. Place the hold (in-txn, under the lock) — reserves available so a concurrent
+  //    session cannot over-commit the same balance. Linked to the session after insert.
+  const hold = await creditHoldsRepository.place(
+    {
+      walletId: input.walletId,
+      sessionId: null,
+      memberId: input.initiatingMemberId,
+      amountMinor: estimateMinor,
+    },
+    tx
+  );
+
+  // 7. Insert the pending session (write-once `opened_by`, the base pin).
+  const session = await insertPendingSession(tx, input, {
+    wallet,
+    holdId: hold.id,
+    expertHourly,
+    baloFeeBps,
+    clientRateMinorPerMinute,
+    expertRateMinorPerMinute,
+  });
+
+  // 8. Link the hold back to the session (full two-way linkage).
+  await tx.update(creditHolds).set({ sessionId: session.id }).where(eq(creditHolds.id, hold.id));
+
+  // 9. BAL-474 (§C.3) — an ON-BEHALF open records its provenance in the same transaction.
+  if (session.openedBy !== 'client') {
+    await recordOnBehalfOpen(tx, input, {
+      sessionId: session.id,
+      toleratedGates,
+      walletBalanceMinorAtOpen: wallet.balanceMinor,
+      availableMinorAtOpen: available,
+    });
+  }
+
+  return { ok: true, session, toleratedGates };
+}
+
+/**
+ * THE PRESENCE SETTLEMENT, on the caller's transaction — `settleFromPresence`'s body, and the
+ * second half of `openAndSettleFromPresence` (BAL-474 AD-3). Every step, comment and ordering of
+ * the shipped transaction body is kept; see {@link creditSessionsRepository.settleFromPresence}.
+ */
+async function settleFromPresenceInTx(
+  tx: MeterTx,
+  input: SettleFromPresenceRepoInput
+): Promise<SettleFromPresenceRepoResult> {
+  // 1. Row lock. Two concurrent settlements on this session serialize here.
+  const session = await readSessionForUpdate(tx, input.sessionId);
+  if (session === undefined) {
+    throw new SessionNotFoundError(input.sessionId);
+  }
+
+  // 2. In-lock exactly-once guard (TOCTOU). `billing_finalized_at` is the marker, and on
+  //    the two ZERO shapes it is the ONLY guard available — they write no ledger row, so
+  //    there is no idempotency key to dedup on. A legacy `ended` row with a NULL marker
+  //    reads as settled too: it was finalized by `end()` under the old semantics.
+  if (session.billingFinalizedAt !== null || session.status === 'ended') {
+    const settledWallet = await readWalletOrThrow(tx, session.walletId);
+    return {
+      session,
+      overdraftMinor: session.overdraftSettledMinor ?? 0,
+      overdraftBasis: null,
+      expertAccruedMinor: session.expertAccruedMinor,
+      mandateActive: isWalletMandateActive(settledWallet),
+      alreadySettled: true,
+      ticksPosted: 0,
+      outcomeWritten: false,
+    };
+  }
+  if (!SETTLE_FROM_PRESENCE_FROM.includes(session.status)) {
+    throw new InvalidSessionTransitionError(session.status, 'ended');
+  }
+
+  // ⚠ THE MEETING IS ASSERTED, NOT RE-DERIVED. The caller computed every figure below
+  //   from THIS meeting's presence rows, so a mismatch means the settlement was computed
+  //   against one meeting and is about to be written against another — the outcome would
+  //   land on the wrong `meetings` row. Re-reading `session.meetingId` here instead of
+  //   comparing would make a divergent pair silently AGREE (the BAL-421 rule); comparing
+  //   catches it. Loud, before any write.
+  if (session.meetingId !== input.meetingId) {
+    throw new Error(
+      `settleFromPresence: session ${session.id} belongs to meeting ${String(session.meetingId)}, ` +
+        `but settlement was computed for meeting ${input.meetingId}`
+    );
+  }
+
+  // ⚠⚠ 2b (F2). THE DRAW IS ASSERTED UNDER THE LOCK, NOT RE-READ. Exactly the treatment the
+  //   `meetingId` assertion above gets, for exactly the same class of divergence — and here
+  //   the concurrent writer is DESIGNED, not hypothetical: `findMeterable` includes
+  //   `'presence'` (D11), so the meter sweep advances `last_tick_seq` on this very row while
+  //   the caller's pre-read is in flight.
+  //
+  //   Silently using the fresh value (a "re-read") is what the BAL-421 rule forbids: it would
+  //   make a divergent pair AGREE, writing `connected_minutes` from a stale
+  //   `billableMinutes`/`expertAccruedMinor` pair while the ledger holds MORE
+  //   `session_consume` entries than the row admits. The ledger is the source of truth
+  //   (ADR-1040), so that row is simply WRONG — expert under-accrued, client receipt
+  //   understated, delta silently retained — and the caller's Q1 `log.error` would fire with
+  //   the stale figure and misreport it as the benign known-limitation case.
+  //
+  //   Re-deriving here is not an option either: this method does no minute maths (see
+  //   `SettleFromPresenceRepoInput`). So it REFUSES, before any write, and the durability
+  //   backstop (`findPresenceUnsettled`, §4.3) re-runs the whole computation against fresh
+  //   state — nothing is committed, `billing_finalized_at` stays NULL, the status stays
+  //   non-terminal, and the retry's pre-read sees the meter's figure.
+  if (session.lastTickSeq !== input.minutesAlreadyDrawn) {
+    throw new SettlementDrawDivergedError(
+      session.id,
+      input.minutesAlreadyDrawn,
+      session.lastTickSeq
+    );
+  }
+
+  // 3. Serialise against every other writer on this wallet, to COMMIT.
+  await acquireWalletLock(tx, session.walletId);
+
+  // 4. Release the reservation. Only an ACTIVE hold — so a replay that somehow got past
+  //    step 2 still cannot re-release, and a `cancelled`/`settled` hold is left alone.
+  if (session.holdId !== null) {
+    const [hold] = await tx
+      .select({ status: creditHolds.status })
+      .from(creditHolds)
+      .where(eq(creditHolds.id, session.holdId))
+      .limit(1);
+    if (hold?.status === 'active') {
+      await creditHoldsRepository.release(session.holdId, { exec: tx });
+    }
+  }
+
+  // 5. Top up the ticks over the SAME idempotency scheme the live meter used. Empty on
+  //    both zero shapes and on any figure at or below what was already drawn.
+  let ticksPosted = 0;
+  for (let seq = input.topUpFromTickSeq; seq <= input.topUpToTickSeq; seq++) {
+    const posted = await applyLedgerEntry(tx, {
+      walletId: session.walletId,
+      entryType: 'consume',
+      reason: 'session_consume',
+      amountMinor: -session.clientRateMinorPerMinute,
+      idempotencyKey: deriveIdempotencyKey({
+        reason: 'session_consume',
+        sessionId: session.id,
+        tickSeq: seq,
+      }),
+      memberId: session.initiatingMemberId,
+      sessionId: session.id,
+    });
+    if (!posted.deduped) {
+      ticksPosted += 1;
+    }
+  }
+
+  // 6. Terminal balance, under the lock — and THIS session's share of it (BAL-474, ADR-1040
+  //    Amendment 7 §A): never debt older than the session, even when the overdraft-tolerant open
+  //    let it start onto a negative wallet.
+  const wallet = await readWalletOrThrow(tx, session.walletId);
+  const share = await readSessionOverdraftShare(tx, session, wallet);
+  const overdraftMinor = share.overdraftMinor;
+
+  // ONE number, TWO rates — the client charge (the ticks above) and the expert accrual
+  // both derive from `billableMinutes`. That is the AC "client charge and expert accrual
+  // use the identical floored figure", enforced structurally rather than by convention.
+  const expertAccruedMinor = input.billableMinutes * session.expertRateMinorPerMinute;
+
+  // 7a. Expert-always-paid: the accrual record, BEFORE any settlement decision. Written on
+  //     the ZERO shapes too, at zero — "the expert accrued nothing here" is a fact worth
+  //     recording, and its ABSENCE would read as a missing write.
+  await auditEventsRepository.record(
+    {
+      actorUserId: input.actorUserId,
+      action: SESSION_EXPERT_ACCRUED_ACTION,
+      entityType: SESSION_AUDIT_ENTITY_TYPE,
+      entityId: session.id,
+      metadata: {
+        expertProfileId: session.expertProfileId,
+        connectedMinutes: input.billableMinutes,
+        expertAccruedMinor,
+      },
+    },
+    tx
+  );
+
+  // 8. `meetings.outcome` — FIRST WRITE WINS. The sweep may already have written
+  //    `missed_call`; settlement re-derives the same label and must not overwrite it.
+  //    Runs on `tx`, so a rolled-back settlement takes the outcome with it.
+  const outcomeWritten = await meetingsRepository.setOutcomeIfUnset(tx, {
+    meetingId: input.meetingId,
+    outcome: input.outcome,
+    actorUserId: input.actorUserId,
+  });
+
+  // 7b. The settlement's own reasoning record — the ONLY durable answer to "why was a
+  //     6-minute call charged for 15?". ⚠ `shape: 'abandoned_wait'` beside
+  //     `outcome: 'completed'` and a zero charge is CORRECT, not a bug on read (D2/D3).
+  await auditEventsRepository.record(
+    {
+      actorUserId: input.actorUserId,
+      action: SESSION_PRESENCE_SETTLED_ACTION,
+      entityType: SESSION_AUDIT_ENTITY_TYPE,
+      entityId: session.id,
+      metadata: {
+        meetingId: input.meetingId,
+        shape: input.shape,
+        outcome: input.outcome,
+        outcomeWritten,
+        actualMinutes: input.actualMinutes,
+        billableMinutes: input.billableMinutes,
+        // ⚠ F14 — AS GIVEN BY THE CALLER, never re-derived as
+        // `billableMinutes > actualMinutes`. That derivation labels a Q1 NO-REFUND CLAMP
+        // (rule 6, drawn 10, actual 6) as a floor application, and this row is the ONLY
+        // durable forensic record of that overcharge. See `SettleFromPresenceRepoInput`.
+        floorApplied: input.floorApplied,
+        floorMinutes: input.billingFloorMinutes,
+        ticksPosted,
+        expertAccruedMinor,
+        // F2 — the ASSERTED value (identical to `topUpFromTickSeq - 1`, but sourced from
+        // the field the row lock verified rather than back-computed from a derived one).
+        minutesAlreadyDrawn: input.minutesAlreadyDrawn,
+        // BAL-474 — who opened the session, and how its settled figure was reached: THIS
+        // session's share of the wallet's negative balance (ADR-1040 Amendment 7 §A). The
+        // ownerless-debt reading is taken AFTER the terminal UPDATE below (it must see this
+        // session's own row as `processing`), so it travels in the returned `overdraftBasis`
+        // and the service's post-commit log line, not in this row.
+        openedBy: session.openedBy,
+        overdraftShare: share,
+      },
+    },
+    tx
+  );
+
+  // 9. The terminal UPDATE. `connectedAt` stays NULL on a never-connected no-show.
+  const [updated] = await tx
+    .update(creditSessions)
+    .set({
+      status: 'ended',
+      endedAt: session.endedAt ?? input.now,
+      // ⚠ THE FLOORED FIGURE. `actual_minutes` below is what keeps the delivered one.
+      connectedMinutes: input.billableMinutes,
+      lastTickSeq: Math.max(session.lastTickSeq, input.billableMinutes),
+      expertAccruedMinor,
+      actualMinutes: input.actualMinutes,
+      billingFloorMinutes: input.billingFloorMinutes,
+      settlementShape: input.shape,
+      // F14 — SNAPSHOTTED, because `floorApplied` is not recoverable from the other three
+      // columns once the Q1 clamp has raised `connected_minutes`. `finalizeBilling`'s
+      // `floored:` analytics reads THIS, not a re-derivation.
+      floorApplied: input.floorApplied,
+      overdraftSettledMinor: overdraftMinor,
+      settlementStatus: overdraftMinor === 0 ? 'not_required' : 'processing',
+      billingFinalizedAt: input.now,
+      finalizationPath: 'presence',
+      // BAL-525 — write-once top-up, from the terminal wallet read at step 6 (the same read
+      // whose `balanceMinor` produced `overdraftMinor`). The ticks at step 5 and this pin are
+      // one transaction under one wallet lock, so no card write can interleave between the
+      // debt and the pin. NO-OP when already pinned — the COALESCE is in SQL.
+      ...settlementInstrumentTopUpPin(wallet),
+    })
+    .where(eq(creditSessions.id, session.id))
+    .returning();
+  if (updated === undefined) {
+    throw new SessionNotFoundError(input.sessionId);
+  }
+
+  // 10. BAL-474 (D7.3) — the older debt this terminal leaves must have an owner. Read AFTER the
+  //     terminal UPDATE (this session's own row is now `processing`), still under the wallet lock.
+  const ownerlessPriorDebtMinor = await readOwnerlessPriorDebt(tx, {
+    walletId: session.walletId,
+    sessionId: session.id,
+    priorDebtLeftMinor: share.priorDebtLeftMinor,
+  });
+
+  return {
+    session: updated,
+    overdraftMinor,
+    overdraftBasis: { ...share, ownerlessPriorDebtMinor },
+    expertAccruedMinor,
+    mandateActive: isWalletMandateActive(wallet),
+    alreadySettled: false,
+    ticksPosted,
+    outcomeWritten,
+  };
+}
+
 export const creditSessionsRepository = {
   /**
-   * The pre-connect funds-or-mandate gate + hold + create-pending, in ONE wallet-locked
-   * txn (§6). Steps: advisory-lock → soft-hold gate (open receivable) → one-live-session gate
-   * → settlement-pending gate (reject while a prior session's settlement is `processing`, or the
-   * balance is still negative — a prior overdraft is unsettled)
-   * → snapshot the expert rate (reject if null, Q9) + derive marked-up/raw per-minute rates →
-   * RE-DERIVE available `= balance − Σ active holds` UNDER the lock (never the advisory
-   * `getAvailableBalance`) → connect gate (`available ≥ estimate OR mandate active`) → place the
-   * hold in-txn → insert the pending session → link the hold back to it. Rejections are
-   * returned, not thrown.
+   * The pre-connect gates + hold + create-pending, in ONE wallet-locked txn (§6). Steps, all on
+   * the transaction and under the wallet advisory lock taken FIRST:
+   *
+   *   1. advisory-lock the wallet;
+   *   1b. BAL-474 (AD-4) — refuse `meeting_session_exists` when the meeting already has a live
+   *       (non-cancelled, ENDED OR NOT) session, under BOTH policies;
+   *   2. the soft-hold gate (an open receivable);
+   *   2b. one live session per wallet (`session_in_progress`, BOTH policies);
+   *   2c. the settlement-pending gate (a `processing` settlement, or a negative balance);
+   *   3. snapshot the expert rate (refuse `expert_rate_missing`, Q9 — BOTH policies) and derive the
+   *      marked-up/raw per-minute rates;
+   *   4. RE-DERIVE available `= balance − Σ active holds` UNDER the lock (never the advisory
+   *      `getAvailableBalance`);
+   *   5. the connect gate (`available ≥ estimate OR mandate active`);
+   *   6. place the hold in-txn; 7. insert the pending session (write-once `opened_by`, the base
+   *      pin); 8. link the hold back to it;
+   *   9. BAL-474 — on an ON-BEHALF open (`openedBy` `guest`/`system`), the
+   *      `credit_session.opened_on_behalf` audit row, in the same transaction.
+   *
+   * ⚠⚠ BAL-474 (ADR-1040 Amendment 7 §B) — TWO FUNDING POLICIES. `gated` (the default; `POST
+   * /sessions` and every caller that passes none) REFUSES at 2, 2c and 5, byte-identical to before.
+   * `overdraft_tolerant` (every presence-seam open: member admission, guest admission, the
+   * sessionless terminal-path open) passes THROUGH them and reports each as an
+   * {@link OpenToleratedGate}: settlement is session-scoped (a session only ever settles its own
+   * share — `resolveSessionOverdraftShare`), so a presence session may open onto an open
+   * receivable, an in-flight settlement or a negative wallet without re-billing anyone else's debt,
+   * and a refused open there would mean an unbilled consultation. With no mandate the tolerant
+   * open meters to zero and warm-wraps with NO grace; the floor still bills at settlement.
    *
    * ⚠ BAL-523 — THE CONNECT GATE IS DELIBERATELY MANDATE-ONLY, and stays that way. An earlier
    * revision of BAL-523 additionally required a card-backed `low_balance_mode` here; that was
-   * REVERTED (Yomi, 2026-09-04) after the security audit disproved its premise. On the BAL-466
-   * admission seam `openCaseSessionBestEffort` MAY NEVER FAIL A JOIN, so a refusal here does not
-   * refuse the client at the door — it creates NO session row at all, the consultation happens,
-   * nothing meters, and the expert is unpaid. Tightening this gate would have widened that
-   * free-consultation population from "card-less" to "any client who picks Just notify me while
-   * underfunded". BAL-523's promise lives entirely in GRACE ENTRY (`applyActiveTick` →
-   * `walletAllowsOverdraftGrace`): a `notify_only` client opens and meters normally, and is
-   * simply not carried PAST zero.
+   * REVERTED (Yomi, 2026-09-04) after the security audit disproved its premise: on the presence
+   * seam a refusal here would not refuse the client at the door — it would create NO session row,
+   * the consultation would happen and nothing would meter. BAL-474 goes further on that same seam
+   * (the tolerant policy), and the gated open keeps the mandate-only rule. BAL-523's promise lives
+   * entirely in GRACE ENTRY (`applyActiveTick` reads the snapshotted grace flag): a `notify_only`
+   * client opens and meters normally, and is simply not carried PAST zero.
+   *
+   * `exec` defaults to the base client. A caller may pass another `Database` — the two-connection
+   * concurrency suite does, to race two real backends (`credit-sessions.sessionless-open.
+   * concurrency.integration.test.ts`). Rejections are returned, never thrown; an incoherent policy
+   * (`assertOpenPolicyCoherent`) is a programming error and throws before any transaction opens.
    */
-  async open(input: OpenSessionInput): Promise<OpenSessionResult> {
-    return db.transaction(async (tx) => {
-      // 1. Serialise against every other writer on this wallet.
-      await acquireWalletLock(tx, input.walletId);
-
-      // 2. Soft-hold gate — no new sessions while a receivable is open.
-      if (await creditReceivablesRepository.hasOpenReceivable(input.companyId, tx)) {
-        return { ok: false, code: 'account_hold' };
-      }
-
-      // 2b. One live consultation per wallet. `end` settles the ENTIRE wallet terminal negative,
-      //     so a SECOND non-terminal session on the same wallet would double-settle → the card is
-      //     charged ~2×. The wallet advisory lock (step 1) serialises concurrent opens, so this
-      //     read-then-reject is race-safe.
-      const [inProgress] = await tx
-        .select({ id: creditSessions.id })
-        .from(creditSessions)
-        .where(
-          and(
-            eq(creditSessions.walletId, input.walletId),
-            inArray(creditSessions.status, ['pending', 'active', 'grace', 'wrapped']),
-            isNull(creditSessions.deletedAt)
-          )
-        )
-        .limit(1);
-      if (inProgress !== undefined) {
-        return { ok: false, code: 'session_in_progress' };
-      }
-
-      const wallet = await readWalletOrThrow(tx, input.walletId);
-
-      // 2c. Settlement-pending gate — reject a new open while a PRIOR session's overdraft
-      //     settlement is still IN FLIGHT (`settlementStatus='processing'`, the webhook is the
-      //     sole crediting authority). Gate on that REAL predicate directly: a negative balance
-      //     is only a PROXY, and it is defeated by any independent positive credit
-      //     (`manual_purchase` / `auto_topup`) landing during the processing window — the credit
-      //     masks the still-negative session balance, the balance-only check passes, and the new
-      //     session's terminal `end` folds the prior uncredited overdraft into its own negative →
-      //     the prior overdraft is charged a SECOND time (the sequential co-charge). The indexed
-      //     `settlementStatus='processing'` lookup rides `credit_sessions_settling_idx`; the
-      //     balance-sign check is retained as defense-in-depth.
-      const [settling] = await tx
-        .select({ id: creditSessions.id })
-        .from(creditSessions)
-        .where(
-          and(
-            eq(creditSessions.walletId, input.walletId),
-            eq(creditSessions.settlementStatus, 'processing'),
-            isNull(creditSessions.deletedAt)
-          )
-        )
-        .limit(1);
-      if (settling !== undefined || wallet.balanceMinor < 0) {
-        return { ok: false, code: 'settlement_pending' };
-      }
-
-      // 3. Snapshot the expert rate (Q9 hard-stop on a rate-less expert).
-      const [expert] = await tx
-        .select({ rateCents: expertProfiles.rateCents })
-        .from(expertProfiles)
-        .where(eq(expertProfiles.id, input.expertProfileId))
-        .limit(1);
-      if (expert === undefined) {
-        throw new ExpertProfileNotFoundError(input.expertProfileId);
-      }
-      if (expert.rateCents === null) {
-        return { ok: false, code: 'expert_rate_missing' };
-      }
-
-      const expertHourly = expert.rateCents;
-      // BAL-478 — ONE estimator. This block used to inline the arithmetic; it now calls the
-      // shared pure helper the booking pre-check also calls, so the advisory gate and this
-      // authoritative one can never drift. Figures are byte-identical (see
-      // `packages/shared/src/credit/session-estimate.test.ts`).
-      const { baloFeeBps, clientRateMinorPerMinute, expertRateMinorPerMinute, estimateMinor } =
-        deriveSessionEstimate({
-          expertHourlyMinor: expertHourly,
-          estimatedMinutes: input.estimatedMinutes,
-          baloFeeBps: input.baloFeeBps,
-        });
-
-      // 4. Re-derive available UNDER the lock (the money gate must not trust the advisory read).
-      const available = wallet.balanceMinor - (await activeHoldsSum(tx, input.walletId));
-      const mandateActive = isWalletMandateActive(wallet);
-
-      // 5. Connect gate — fund the estimate OR present a mandate (Model C hard-stop otherwise).
-      if (available < estimateMinor && !mandateActive) {
-        return { ok: false, code: 'insufficient_no_mandate' };
-      }
-
-      // 6. Place the hold (in-txn, under the lock) — reserves available so a concurrent
-      //    session cannot over-commit the same balance. Linked to the session after insert.
-      const hold = await creditHoldsRepository.place(
-        {
-          walletId: input.walletId,
-          sessionId: null,
-          memberId: input.initiatingMemberId,
-          amountMinor: estimateMinor,
-        },
-        tx
-      );
-
-      // 7. Insert the pending session with the full rate/ceiling snapshot.
-      const effectiveCeilingMinor = wallet.overdraftCeilingMinor ?? DEFAULT_OVERDRAFT_CEILING_MINOR;
-      const [session] = await tx
-        .insert(creditSessions)
-        .values({
-          walletId: input.walletId,
-          companyId: input.companyId,
-          expertProfileId: input.expertProfileId,
-          initiatingMemberId: input.initiatingMemberId,
-          holdId: hold.id,
-          estimatedMinutes: input.estimatedMinutes,
-          expertRateMinorPerHour: expertHourly,
-          baloFeeBps,
-          clientRateMinorPerMinute,
-          expertRateMinorPerMinute,
-          effectiveCeilingMinor,
-          graceBoundMinutes: OVERDRAFT_GRACE_MINUTES,
-          // BAL-418 seam — both nullable, both optional; existing callers are unchanged.
-          meetingId: input.meetingId ?? null,
-          engagementId: input.engagementId ?? null,
-          // BAL-412 seam — write-once provenance. Omitted ⇒ `'live_capture'`, i.e. exactly
-          // what every shipped caller gets. ⚠⚠ G4 (second review round) — CORRECTING A
-          // NOW-FALSE CLAIM: this used to say "NOTHING on main passes `'presence'` (D10)". As
-          // of BAL-466, `openSession` passes it for every session `joinMeetingAsMember` opens
-          // at admission — see the coherence guard's docblock (`open-session.ts`, D4/G1).
-          durationSource: input.durationSource ?? 'live_capture',
-          // BAL-525 — the base pin, from the wallet read at step 2 under the SAME advisory lock,
-          // so no card write can land between that read and this INSERT. Absent (all three NULL)
-          // when the wallet holds no card. See `settlementInstrumentBasePin`.
-          ...settlementInstrumentBasePin(wallet),
-        })
-        .returning();
-      if (session === undefined) {
-        throw new Error('Failed to insert credit session');
-      }
-
-      // 8. Link the hold back to the session (full two-way linkage).
-      await tx
-        .update(creditHolds)
-        .set({ sessionId: session.id })
-        .where(eq(creditHolds.id, hold.id));
-
-      return { ok: true, session };
-    });
+  async open(input: OpenSessionInput, exec: Database = db): Promise<OpenSessionResult> {
+    assertOpenPolicyCoherent(input);
+    return exec.transaction((tx) => openInTx(tx, input));
   },
 
   /**
-   * pending → active, stamping `connectedAt` (the metering anchor). Idempotent on an
-   * already-`active` session (returns it unchanged, never re-anchoring the clock). No money,
-   * no wallet lock. Any other current status is an illegal transition.
+   * pending → active, stamping `connectedAt` (the metering anchor), reporting WHETHER THIS CALL
+   * performed the transition (BAL-474, R6F-6). Idempotent on an already-`active` session (returns
+   * it unchanged, `transitioned: false`, never re-anchoring the clock). No money, no wallet lock.
+   * Any other current status is an illegal transition. `transitioned` is `true` for the one caller
+   * that wrote the transition and `false` for a caller that found the session already `active`. Two
+   * callers can race to connect a presence session (the presence writer and the meter sweep's
+   * billing-start pass, each level-triggered), and only the winner may emit `session_started`, so
+   * the fact is read under the same row lock that decides it.
    */
-  async connect(sessionId: string, opts: { now?: Date } = {}): Promise<CreditSession> {
+  async connectWithTransition(
+    sessionId: string,
+    opts: { now?: Date } = {}
+  ): Promise<{ session: CreditSession; transitioned: boolean }> {
     const now = opts.now ?? new Date();
     return db.transaction(async (tx) => {
       const session = await readSessionForUpdate(tx, sessionId);
@@ -1145,7 +1926,7 @@ export const creditSessionsRepository = {
         throw new SessionNotFoundError(sessionId);
       }
       if (session.status === 'active') {
-        return session; // idempotent — do not re-anchor connectedAt
+        return { session, transitioned: false }; // idempotent — do not re-anchor connectedAt
       }
       if (session.status !== 'pending') {
         throw new InvalidSessionTransitionError(session.status, 'active');
@@ -1158,7 +1939,7 @@ export const creditSessionsRepository = {
       if (updated === undefined) {
         throw new SessionNotFoundError(sessionId);
       }
-      return updated;
+      return { session: updated, transitioned: true };
     });
   },
 
@@ -1226,9 +2007,9 @@ export const creditSessionsRepository = {
    * never fires a between-session reload DURING a live consultation or while a prior
    * settlement is pending.
    *
-   * The reusable extraction of the two inline gates in `open()` — but DELIBERATELY NOT used
-   * to refactor `open()`, which needs the granular `session_in_progress` vs
-   * `settlement_pending` rejection codes. Threads the caller's `exec` so it runs UNDER the
+   * The reusable union of `open()`'s steps 2b and 2c — but DELIBERATELY NOT used by `open()`,
+   * which needs the granular `session_in_progress` vs `settlement_pending` rejection codes (and,
+   * since BAL-474, tolerates step 2c under the overdraft-tolerant policy). Threads the caller's `exec` so it runs UNDER the
    * engine's advisory lock (the same consistent snapshot as the balance it decides on).
    */
   async hasActiveSessionForWallet(walletId: string, exec: DbExecutor = db): Promise<boolean> {
@@ -1585,6 +2366,13 @@ export const creditSessionsRepository = {
    * A NULL `meeting_id` on a `presence` session is excluded too (the LEFT JOIN yields no row) —
    * it has no presence to settle from, so metering it could only ever draw money nothing can
    * reconcile. `live_capture` is unaffected: it never joins, exactly as before.
+   *
+   * ⚠ BAL-474 RULE A — A PRESENCE SESSION IS CONNECTED ONLY WHEN BILLING STARTS, which is never before
+   * the meeting's scheduled start (`start-billing.ts`). So a session this finder selects has a
+   * `connected_at >= scheduled_start`, every tick it draws lies in `[start, now)`, and the minutes the
+   * expert and a client-side participant were together BEFORE the start come only from settlement's
+   * `togetherBeforeStartMs` term — the two never overlap, and the Q1 no-refund clamp can never keep a
+   * charge for an empty pre-start room.
    */
   async findMeterable(): Promise<CreditSession[]> {
     const rows = await db
@@ -1732,7 +2520,10 @@ export const creditSessionsRepository = {
 
   /**
    * Terminate a session (§7) in ONE wallet-locked txn: release the hold → read the terminal
-   * balance (`overdraftMinor = −balance` if negative) → FINALIZE the expert accrual + write
+   * balance and THIS session's share of it (`overdraftMinor = min(own session_consume,
+   * max(0, −balance))` — BAL-474, ADR-1040 Amendment 7 §A: never debt older than the session;
+   * identical to the whole negative balance on every state the gated open can reach) → FINALIZE
+   * the expert accrual + write
    * the `credit_session.expert_accrued` audit row (the expert-always-paid record, committed
    * BEFORE any charge) → set `status='ended'`, `endedAt`, `overdraftSettledMinor`, and
    * `settlementStatus` (`not_required` when in credit, else `processing`). This method is
@@ -1765,6 +2556,7 @@ export const creditSessionsRepository = {
         return {
           session,
           overdraftMinor: session.overdraftSettledMinor ?? 0,
+          overdraftBasis: null,
           expertAccruedMinor: session.expertAccruedMinor,
           mandateActive: isWalletMandateActive(wallet),
           alreadyEnded: true,
@@ -1793,7 +2585,9 @@ export const creditSessionsRepository = {
       }
 
       const wallet = await readWalletOrThrow(tx, session.walletId);
-      const overdraftMinor = wallet.balanceMinor < 0 ? -wallet.balanceMinor : 0;
+      // BAL-474 (ADR-1040 Amendment 7 §A) — THIS session's share of the negative balance.
+      const share = await readSessionOverdraftShare(tx, session, wallet);
+      const overdraftMinor = share.overdraftMinor;
       const expertAccruedMinor = session.connectedMinutes * session.expertRateMinorPerMinute;
 
       // Expert-always-paid: record the accrual audit row BEFORE any settlement decision.
@@ -1840,9 +2634,18 @@ export const creditSessionsRepository = {
         throw new SessionNotFoundError(sessionId);
       }
 
+      // BAL-474 (D7.3) — the older debt this terminal leaves must have an owner. Read AFTER the
+      // terminal UPDATE (this session's own row is now `processing`), still under the wallet lock.
+      const ownerlessPriorDebtMinor = await readOwnerlessPriorDebt(tx, {
+        walletId: session.walletId,
+        sessionId: session.id,
+        priorDebtLeftMinor: share.priorDebtLeftMinor,
+      });
+
       return {
         session: updated,
         overdraftMinor,
+        overdraftBasis: { ...share, ownerlessPriorDebtMinor },
         expertAccruedMinor,
         mandateActive: isWalletMandateActive(wallet),
         alreadyEnded: false,
@@ -1875,13 +2678,17 @@ export const creditSessionsRepository = {
    *      the remainder up to the floored figure is added. `from > to` ⇒ NOTHING is posted,
    *      which is both zero shapes and a no-op replay. **No ceiling clamp** — Owner Decision 3:
    *      the live ceiling is a UX pause, never a billing cap.
-   *   6. Terminal balance read UNDER the lock (never `getAvailableBalance`, which is advisory).
+   *   6. Terminal balance read UNDER the lock (never `getAvailableBalance`, which is advisory),
+   *      and THIS session's share of it (`readSessionOverdraftShare` — BAL-474, ADR-1040
+   *      Amendment 7 §A: never debt older than the session).
    *   7. TWO audit rows — `credit_session.expert_accrued` (parity with `end()`, the
    *      expert-always-paid record) and `credit_session.presence_settled` (this ticket's
    *      reasoning record).
    *   8. `meetings.outcome`, via `setOutcomeIfUnset` on the same `tx` — first write wins, so
    *      the sweep's `missed_call` is never overwritten.
    *   9. The terminal session UPDATE.
+   *  10. BAL-474 (D7.3) — the ownerless-debt check (`readOwnerlessPriorDebt`), AFTER that UPDATE,
+   *      returned as `overdraftBasis` for the service to alarm post-commit.
    *
    * ⚠⚠ **LEGAL FROM `pending | active | grace | wrapped` — A WIDER SET THAN `end()`'s, AND
    * DELIBERATELY SO.** On a client no-show NOTHING ever calls `connect`, so the session is
@@ -1922,222 +2729,71 @@ export const creditSessionsRepository = {
   ): Promise<SettleFromPresenceRepoResult> {
     // OUTSIDE the transaction — a caller-arithmetic bug must not open one.
     assertSettlementFigures(input);
+    // BAL-474 (AD-3) — the transaction body is `settleFromPresenceInTx`, shared verbatim with
+    // `openAndSettleFromPresence`, so a sessionless meeting settles through the SAME path.
+    return exec.transaction((tx) => settleFromPresenceInTx(tx, input));
+  },
+
+  /**
+   * BAL-474 (ADR-1040 Amendment 7 §C.4, plan AD-3) — OPEN AND SETTLE A SESSIONLESS ENDED CASE
+   * MEETING IN ONE TRANSACTION, on behalf of its booker. Reached from every terminal path (the
+   * lifecycle sweep's rules, a human End, the durability backstop) via the service
+   * `settleSessionlessCaseMeeting`, whenever the meeting's presence settles as `no_show_client` or
+   * `held` and no session exists (a client no-show; an admission-time open that was refused or
+   * threw; a guest-only call).
+   *
+   * THE SAME SETTLEMENT PATH (pinned by `invariants/expert-paid-for-time-made-available.test.ts`):
+   * the SAME transaction body as `settleFromPresence` (`settleFromPresenceInTx`), the same pure core
+   * upstream, the same post-commit tail downstream. Only the open differs — and it is the SAME open
+   * (`openInTx`), overdraft-tolerant and `openedBy: 'system'`, so its gates, its in-lock
+   * one-session-per-meeting check (AD-4) and its on-behalf audit row are exactly `open()`'s. A
+   * refusal (`meeting_session_exists`, `session_in_progress`, `expert_rate_missing`) returns before
+   * anything is written; an open never commits without its settlement, or the reverse.
+   *
+   * ⚠⚠ THE LOCKS THIS TRANSACTION TAKES, PRECISELY:
+   *   (i)   the wallet advisory lock, FIRST (in `openInTx`);
+   *   (ii)  row locks only on rows invisible to every other transaction until commit — its OWN
+   *         new session (`settleFromPresenceInTx`'s `FOR UPDATE`) and its own new hold;
+   *   (iii) the `credit_wallets` row, after the advisory lock, as every ledger writer does;
+   *   (iv)  the `meetings` row, only when `outcome IS NULL` (`setOutcomeIfUnset`), again after the
+   *         advisory lock — exactly as `settleFromPresence` does.
+   * It NEVER row-locks a pre-existing `credit_sessions` row: steps 1b / 2b / 2c and the ownerless
+   * check are plain SELECTs under the advisory lock. A future step that row-locked ANOTHER session
+   * here would create a cycle with `settleFromPresence`, `meterSessionToNow` and `cancel`, which
+   * lock a session row BEFORE the wallet lock.
+   *
+   * The settlement figures must be a FROM-ZERO settlement (`minutesAlreadyDrawn === 0`,
+   * `topUpFromTickSeq === 1`) — a session opened in this transaction has drawn nothing. Asserted
+   * outside the transaction with the other figure guards.
+   *
+   * `exec` defaults to the base client (the concurrency suite races two real backends through it).
+   */
+  async openAndSettleFromPresence(
+    input: OpenAndSettleFromPresenceInput,
+    exec: Database = db
+  ): Promise<OpenAndSettleFromPresenceResult> {
+    // OUTSIDE the transaction — a caller bug must not open one.
+    assertOpenPolicyCoherent(input.open);
+    assertSettlementFigures(input.settlement);
+    if (input.settlement.minutesAlreadyDrawn !== 0 || input.settlement.topUpFromTickSeq !== 1) {
+      throw new Error(
+        'openAndSettleFromPresence: a session opened in this transaction has drawn nothing — ' +
+          `minutesAlreadyDrawn must be 0 and topUpFromTickSeq 1 (received ` +
+          `${String(input.settlement.minutesAlreadyDrawn)} / ${String(input.settlement.topUpFromTickSeq)})`
+      );
+    }
 
     return exec.transaction(async (tx) => {
-      // 1. Row lock. Two concurrent settlements on this session serialize here.
-      const session = await readSessionForUpdate(tx, input.sessionId);
-      if (session === undefined) {
-        throw new SessionNotFoundError(input.sessionId);
+      const opened = await openInTx(tx, input.open);
+      if (!opened.ok) {
+        return opened;
       }
-
-      // 2. In-lock exactly-once guard (TOCTOU). `billing_finalized_at` is the marker, and on
-      //    the two ZERO shapes it is the ONLY guard available — they write no ledger row, so
-      //    there is no idempotency key to dedup on. A legacy `ended` row with a NULL marker
-      //    reads as settled too: it was finalized by `end()` under the old semantics.
-      if (session.billingFinalizedAt !== null || session.status === 'ended') {
-        const settledWallet = await readWalletOrThrow(tx, session.walletId);
-        return {
-          session,
-          overdraftMinor: session.overdraftSettledMinor ?? 0,
-          expertAccruedMinor: session.expertAccruedMinor,
-          mandateActive: isWalletMandateActive(settledWallet),
-          alreadySettled: true,
-          ticksPosted: 0,
-          outcomeWritten: false,
-        };
-      }
-      if (!SETTLE_FROM_PRESENCE_FROM.includes(session.status)) {
-        throw new InvalidSessionTransitionError(session.status, 'ended');
-      }
-
-      // ⚠ THE MEETING IS ASSERTED, NOT RE-DERIVED. The caller computed every figure below
-      //   from THIS meeting's presence rows, so a mismatch means the settlement was computed
-      //   against one meeting and is about to be written against another — the outcome would
-      //   land on the wrong `meetings` row. Re-reading `session.meetingId` here instead of
-      //   comparing would make a divergent pair silently AGREE (the BAL-421 rule); comparing
-      //   catches it. Loud, before any write.
-      if (session.meetingId !== input.meetingId) {
-        throw new Error(
-          `settleFromPresence: session ${session.id} belongs to meeting ${String(session.meetingId)}, ` +
-            `but settlement was computed for meeting ${input.meetingId}`
-        );
-      }
-
-      // ⚠⚠ 2b (F2). THE DRAW IS ASSERTED UNDER THE LOCK, NOT RE-READ. Exactly the treatment the
-      //   `meetingId` assertion above gets, for exactly the same class of divergence — and here
-      //   the concurrent writer is DESIGNED, not hypothetical: `findMeterable` includes
-      //   `'presence'` (D11), so the meter sweep advances `last_tick_seq` on this very row while
-      //   the caller's pre-read is in flight.
-      //
-      //   Silently using the fresh value (a "re-read") is what the BAL-421 rule forbids: it would
-      //   make a divergent pair AGREE, writing `connected_minutes` from a stale
-      //   `billableMinutes`/`expertAccruedMinor` pair while the ledger holds MORE
-      //   `session_consume` entries than the row admits. The ledger is the source of truth
-      //   (ADR-1040), so that row is simply WRONG — expert under-accrued, client receipt
-      //   understated, delta silently retained — and the caller's Q1 `log.error` would fire with
-      //   the stale figure and misreport it as the benign known-limitation case.
-      //
-      //   Re-deriving here is not an option either: this method does no minute maths (see
-      //   `SettleFromPresenceRepoInput`). So it REFUSES, before any write, and the durability
-      //   backstop (`findPresenceUnsettled`, §4.3) re-runs the whole computation against fresh
-      //   state — nothing is committed, `billing_finalized_at` stays NULL, the status stays
-      //   non-terminal, and the retry's pre-read sees the meter's figure.
-      if (session.lastTickSeq !== input.minutesAlreadyDrawn) {
-        throw new SettlementDrawDivergedError(
-          session.id,
-          input.minutesAlreadyDrawn,
-          session.lastTickSeq
-        );
-      }
-
-      // 3. Serialise against every other writer on this wallet, to COMMIT.
-      await acquireWalletLock(tx, session.walletId);
-
-      // 4. Release the reservation. Only an ACTIVE hold — so a replay that somehow got past
-      //    step 2 still cannot re-release, and a `cancelled`/`settled` hold is left alone.
-      if (session.holdId !== null) {
-        const [hold] = await tx
-          .select({ status: creditHolds.status })
-          .from(creditHolds)
-          .where(eq(creditHolds.id, session.holdId))
-          .limit(1);
-        if (hold?.status === 'active') {
-          await creditHoldsRepository.release(session.holdId, { exec: tx });
-        }
-      }
-
-      // 5. Top up the ticks over the SAME idempotency scheme the live meter used. Empty on
-      //    both zero shapes and on any figure at or below what was already drawn.
-      let ticksPosted = 0;
-      for (let seq = input.topUpFromTickSeq; seq <= input.topUpToTickSeq; seq++) {
-        const posted = await applyLedgerEntry(tx, {
-          walletId: session.walletId,
-          entryType: 'consume',
-          reason: 'session_consume',
-          amountMinor: -session.clientRateMinorPerMinute,
-          idempotencyKey: deriveIdempotencyKey({
-            reason: 'session_consume',
-            sessionId: session.id,
-            tickSeq: seq,
-          }),
-          memberId: session.initiatingMemberId,
-          sessionId: session.id,
-        });
-        if (!posted.deduped) {
-          ticksPosted += 1;
-        }
-      }
-
-      // 6. Terminal balance, under the lock.
-      const wallet = await readWalletOrThrow(tx, session.walletId);
-      const overdraftMinor = wallet.balanceMinor < 0 ? -wallet.balanceMinor : 0;
-
-      // ONE number, TWO rates — the client charge (the ticks above) and the expert accrual
-      // both derive from `billableMinutes`. That is the AC "client charge and expert accrual
-      // use the identical floored figure", enforced structurally rather than by convention.
-      const expertAccruedMinor = input.billableMinutes * session.expertRateMinorPerMinute;
-
-      // 7a. Expert-always-paid: the accrual record, BEFORE any settlement decision. Written on
-      //     the ZERO shapes too, at zero — "the expert accrued nothing here" is a fact worth
-      //     recording, and its ABSENCE would read as a missing write.
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.actorUserId,
-          action: SESSION_EXPERT_ACCRUED_ACTION,
-          entityType: SESSION_AUDIT_ENTITY_TYPE,
-          entityId: session.id,
-          metadata: {
-            expertProfileId: session.expertProfileId,
-            connectedMinutes: input.billableMinutes,
-            expertAccruedMinor,
-          },
-        },
-        tx
-      );
-
-      // 8. `meetings.outcome` — FIRST WRITE WINS. The sweep may already have written
-      //    `missed_call`; settlement re-derives the same label and must not overwrite it.
-      //    Runs on `tx`, so a rolled-back settlement takes the outcome with it.
-      const outcomeWritten = await meetingsRepository.setOutcomeIfUnset(tx, {
-        meetingId: input.meetingId,
-        outcome: input.outcome,
-        actorUserId: input.actorUserId,
+      const settled = await settleFromPresenceInTx(tx, {
+        ...input.settlement,
+        sessionId: opened.session.id,
+        meetingId: input.open.meetingId,
       });
-
-      // 7b. The settlement's own reasoning record — the ONLY durable answer to "why was a
-      //     6-minute call charged for 15?". ⚠ `shape: 'abandoned_wait'` beside
-      //     `outcome: 'completed'` and a zero charge is CORRECT, not a bug on read (D2/D3).
-      await auditEventsRepository.record(
-        {
-          actorUserId: input.actorUserId,
-          action: SESSION_PRESENCE_SETTLED_ACTION,
-          entityType: SESSION_AUDIT_ENTITY_TYPE,
-          entityId: session.id,
-          metadata: {
-            meetingId: input.meetingId,
-            shape: input.shape,
-            outcome: input.outcome,
-            outcomeWritten,
-            actualMinutes: input.actualMinutes,
-            billableMinutes: input.billableMinutes,
-            // ⚠ F14 — AS GIVEN BY THE CALLER, never re-derived as
-            // `billableMinutes > actualMinutes`. That derivation labels a Q1 NO-REFUND CLAMP
-            // (rule 6, drawn 10, actual 6) as a floor application, and this row is the ONLY
-            // durable forensic record of that overcharge. See `SettleFromPresenceRepoInput`.
-            floorApplied: input.floorApplied,
-            floorMinutes: input.billingFloorMinutes,
-            ticksPosted,
-            expertAccruedMinor,
-            // F2 — the ASSERTED value (identical to `topUpFromTickSeq - 1`, but sourced from
-            // the field the row lock verified rather than back-computed from a derived one).
-            minutesAlreadyDrawn: input.minutesAlreadyDrawn,
-          },
-        },
-        tx
-      );
-
-      // 9. The terminal UPDATE. `connectedAt` stays NULL on a never-connected no-show.
-      const [updated] = await tx
-        .update(creditSessions)
-        .set({
-          status: 'ended',
-          endedAt: session.endedAt ?? input.now,
-          // ⚠ THE FLOORED FIGURE. `actual_minutes` below is what keeps the delivered one.
-          connectedMinutes: input.billableMinutes,
-          lastTickSeq: Math.max(session.lastTickSeq, input.billableMinutes),
-          expertAccruedMinor,
-          actualMinutes: input.actualMinutes,
-          billingFloorMinutes: input.billingFloorMinutes,
-          settlementShape: input.shape,
-          // F14 — SNAPSHOTTED, because `floorApplied` is not recoverable from the other three
-          // columns once the Q1 clamp has raised `connected_minutes`. `finalizeBilling`'s
-          // `floored:` analytics reads THIS, not a re-derivation.
-          floorApplied: input.floorApplied,
-          overdraftSettledMinor: overdraftMinor,
-          settlementStatus: overdraftMinor === 0 ? 'not_required' : 'processing',
-          billingFinalizedAt: input.now,
-          finalizationPath: 'presence',
-          // BAL-525 — write-once top-up, from the terminal wallet read at step 6 (the same read
-          // whose `balanceMinor` produced `overdraftMinor`). The ticks at step 5 and this pin are
-          // one transaction under one wallet lock, so no card write can interleave between the
-          // debt and the pin. NO-OP when already pinned — the COALESCE is in SQL.
-          ...settlementInstrumentTopUpPin(wallet),
-        })
-        .where(eq(creditSessions.id, session.id))
-        .returning();
-      if (updated === undefined) {
-        throw new SessionNotFoundError(input.sessionId);
-      }
-
-      return {
-        session: updated,
-        overdraftMinor,
-        expertAccruedMinor,
-        mandateActive: isWalletMandateActive(wallet),
-        alreadySettled: false,
-        ticksPosted,
-        outcomeWritten,
-      };
+      return { ok: true, toleratedGates: opened.toleratedGates, settled };
     });
   },
 
@@ -2268,6 +2924,20 @@ export const creditSessionsRepository = {
    * (§3b dispatch.ts.c / §14 Q2). Stamps `settledAt` on `settled`, and stamps
    * `stripePaymentIntentId` whenever supplied — the `processing` call stamps the in-flight
    * settlement PI so the reaper can retrieve its real status before ever re-charging (FIX 6).
+   *
+   * ⚠⚠ BAL-474 (D5.2 / D7.4, ADR-1040 Amendment 7 §B.5) — COMPARE-AND-SET ON EVERY NON-TERMINAL
+   * STAMP. `processing`, `failed` and `requires_action` are written only WHERE the row is still
+   * `processing`:
+   *   · the post-charge `processing` stamp can land AFTER the `payment_intent.succeeded` webhook
+   *     already wrote `settled` (a synchronously-succeeded PI) — an unconditional write flipped it
+   *     back, and the row then claimed an in-flight charge that had already been credited;
+   *   · a failure stamp after a client-side error must never overwrite the webhook's `settled` for
+   *     a charge Stripe did in fact confirm (R4-F4).
+   * `settled` stays UNCONDITIONAL — the webhook is the single source of truth for success.
+   *
+   * On a compare-and-set that matched nothing, the row is re-read and returned UNCHANGED (never a
+   * throw): the caller reads `settlementStatus` to learn whether its write applied. Only a missing
+   * row throws {@link SessionNotFoundError}.
    */
   async markSettlementResult(
     exec: DbExecutor,
@@ -2280,15 +2950,27 @@ export const creditSessionsRepository = {
     if (input.stripePaymentIntentId !== undefined) {
       set.stripePaymentIntentId = input.stripePaymentIntentId;
     }
-    const [row] = await exec
-      .update(creditSessions)
-      .set(set)
+    const where =
+      input.status === 'settled'
+        ? eq(creditSessions.id, input.sessionId)
+        : and(
+            eq(creditSessions.id, input.sessionId),
+            eq(creditSessions.settlementStatus, 'processing')
+          );
+    const [row] = await exec.update(creditSessions).set(set).where(where).returning();
+    if (row !== undefined) {
+      return row;
+    }
+    // The compare-and-set matched nothing: the row already moved on (or never existed).
+    const [current] = await exec
+      .select()
+      .from(creditSessions)
       .where(eq(creditSessions.id, input.sessionId))
-      .returning();
-    if (row === undefined) {
+      .limit(1);
+    if (current === undefined) {
       throw new SessionNotFoundError(input.sessionId);
     }
-    return row;
+    return current;
   },
 
   /**
@@ -2641,5 +3323,202 @@ export const creditSessionsRepository = {
       .orderBy(asc(creditSessions.createdAt), asc(creditSessions.id))
       .limit(limit);
     return rows.map((row) => row.session);
+  },
+
+  /**
+   * BAL-474 (D11.2, security N2) — `pending` PRESENCE sessions whose meeting is still `scheduled` but
+   * now starts BEYOND the join window: the backstop for a reschedule that moved a call out after its
+   * in-window admission opened a session and a hold. The reschedule itself releases the session
+   * (`rescheduleMeeting` → `releaseCreditHoldBestEffort`); this finder is the second chance if that
+   * best-effort release failed, and the arm that catches a session opened before this shipped.
+   *
+   * ⚠ `meetings.status = 'scheduled'` IS THE POINT: a session on a `waiting_for_participants` /
+   * `in_progress` meeting is a live call, and a billing-start session is always `in_progress`, so this
+   * can never select one. `scheduled_start > now + window` rides `meeting_status_scheduled_start_idx`.
+   * Both `deleted_at` guards; an INNER join, so a session with no meeting is structurally absent; no
+   * `duration_source` filter needs asserting beyond `presence` — a `live_capture` session opened by an
+   * actor is not this finder's to cancel. Oldest-created first, batch-bounded via `limit`.
+   */
+  async findPendingBeyondJoinWindow(input: {
+    now: Date;
+    windowMs: number;
+    limit?: number;
+  }): Promise<CreditSession[]> {
+    const rows = await db
+      .select({ session: creditSessions })
+      .from(creditSessions)
+      .innerJoin(meetings, eq(meetings.id, creditSessions.meetingId))
+      .where(
+        and(
+          eq(creditSessions.status, 'pending'),
+          eq(creditSessions.durationSource, 'presence'),
+          isNull(creditSessions.deletedAt),
+          eq(meetings.status, 'scheduled'),
+          isNull(meetings.deletedAt),
+          gt(meetings.scheduledStart, new Date(input.now.getTime() + input.windowMs))
+        )
+      )
+      .orderBy(asc(creditSessions.createdAt), asc(creditSessions.id))
+      .limit(input.limit ?? 100);
+    return rows.map((row) => row.session);
+  },
+
+  /**
+   * BAL-474 (ADR-1040 Amendment 7 §D.1, D5.4 / D7.5) — THE SESSIONLESS DURABILITY BACKSTOP'S
+   * FINDER: ended Case meetings that have NO session and NO terminal marker. `findPresenceUnsettled`
+   * can only retry sessions that already exist; a client no-show, an admission-time open that was
+   * refused or threw, and a guest-only call all leave NO session — and a terminal-path attempt that
+   * threw after `endMeeting` committed would otherwise have no retry path at all.
+   *
+   * The predicate, term by term:
+   *   · `status = 'ended'`, not soft-deleted — REGARDLESS of `outcome` (a human End and the
+   *     `abandoned_wait` rule both write `outcome` NULL);
+   *   · `scheduled_start >= windowStart` AND `ended_at >= windowStart` — bounded on BOTH columns
+   *     (D7.5); the first rides `meeting_status_scheduled_start_idx`. `ended_at <= endedBefore`
+   *     leaves the inline terminal path its grace;
+   *   · the PRIMARY context is a `case` — the SQL mirror of `selectPrimaryMeetingContext`: a live
+   *     `case` context with an id, and NO live context of the TOP precedence tier that is a
+   *     DIFFERENT `(type, id)` (an exact duplicate row is not ambiguity). The tier is DERIVED from
+   *     `MEETING_CONTEXT_PRECEDENCE` (`TOP_TIER_CONTEXT_TYPES`), never restated; `admin` scores 0
+   *     and can never tie `case`, so it needs no branch. A parity test runs one table of context
+   *     sets through both the pure rule and this finder;
+   *   · no NON-cancelled, non-deleted session (`credit_sessions_meeting_idx`) — a meeting whose
+   *     only session was cancelled IS selected;
+   *   · no `credit_session.sessionless_meeting_marked` row (`audit_events_entity_idx`) — a marked
+   *     meeting leaves the finder forever.
+   *
+   * Ordered oldest-ended first and batch-bounded via `limit`. ⚠ The CALLER must `log.warn` when the
+   * batch FILLS. No new index (plan §5).
+   */
+  async findSessionlessEndedCaseMeetings(input: {
+    endedBefore: Date;
+    windowStart: Date;
+    limit?: number;
+  }): Promise<SessionlessCaseMeetingCandidate[]> {
+    const tied = alias(meetingContexts, 'tied_context');
+    const rows = await db
+      .select({
+        meetingId: meetings.id,
+        scheduledStart: meetings.scheduledStart,
+        endedAt: meetings.endedAt,
+      })
+      .from(meetings)
+      .where(
+        and(
+          eq(meetings.status, 'ended'),
+          isNull(meetings.deletedAt),
+          gte(meetings.scheduledStart, input.windowStart),
+          gte(meetings.endedAt, input.windowStart),
+          lte(meetings.endedAt, input.endedBefore),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(meetingContexts)
+              .where(
+                and(
+                  eq(meetingContexts.meetingId, meetings.id),
+                  eq(meetingContexts.contextType, 'case'),
+                  isNotNull(meetingContexts.contextId),
+                  isNull(meetingContexts.deletedAt),
+                  notExists(
+                    db
+                      .select({ one: sql`1` })
+                      .from(tied)
+                      .where(
+                        and(
+                          eq(tied.meetingId, meetings.id),
+                          isNull(tied.deletedAt),
+                          isNotNull(tied.contextId),
+                          inArray(tied.contextType, [...TOP_TIER_CONTEXT_TYPES]),
+                          or(
+                            ne(tied.contextType, meetingContexts.contextType),
+                            ne(tied.contextId, meetingContexts.contextId)
+                          )
+                        )
+                      )
+                  )
+                )
+              )
+          ),
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(creditSessions)
+              .where(
+                and(
+                  eq(creditSessions.meetingId, meetings.id),
+                  ne(creditSessions.status, 'cancelled'),
+                  isNull(creditSessions.deletedAt)
+                )
+              )
+          ),
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(auditEvents)
+              .where(
+                and(
+                  eq(auditEvents.entityType, 'meeting'),
+                  eq(auditEvents.entityId, meetings.id),
+                  eq(auditEvents.action, SESSIONLESS_CASE_MEETING_MARKED_ACTION)
+                )
+              )
+          )
+        )
+      )
+      // The row leaves the finder at the EARLIER of `scheduled_start + window` and `ended_at + window`
+      // (both are bounded above), so the one nearest to dropping is tried first.
+      .orderBy(asc(sql`LEAST(${meetings.scheduledStart}, ${meetings.endedAt})`), asc(meetings.id))
+      .limit(input.limit ?? 100);
+    // `ended_at` is NOT NULL on every selected row (the range predicate excludes NULL); the
+    // narrowing only restates that for the type system.
+    return rows.flatMap((row) =>
+      row.endedAt === null
+        ? []
+        : [{ meetingId: row.meetingId, scheduledStart: row.scheduledStart, endedAt: row.endedAt }]
+    );
+  },
+
+  /**
+   * BAL-474 (ADR-1040 Amendment 7 §D.3, D5.4) — write the TERMINAL MARKER that takes an ended,
+   * sessionless Case meeting out of {@link findSessionlessEndedCaseMeetings} forever, and — when
+   * `outcome` is given — resolve `meetings.outcome` FIRST-WRITE-WINS, in ONE transaction. For a zero
+   * shape that is the outcome the settlement transaction would have written had a session existed;
+   * an outcome write never happens outside this transaction (never `setOutcomeIfUnset(db)`).
+   *
+   * The marker is an `audit_events` row: `entity_type 'meeting'`, `actor_user_id` NULL (a system
+   * act), `metadata { disposition, reason, shape?, trigger }`. Append-only — a duplicate marker is
+   * harmless; the finder needs only one.
+   */
+  async markSessionlessCaseMeeting(
+    input: MarkSessionlessCaseMeetingInput,
+    exec: Database = db
+  ): Promise<MarkSessionlessCaseMeetingResult> {
+    return exec.transaction(async (tx) => {
+      const marker = await auditEventsRepository.record(
+        {
+          actorUserId: null,
+          action: SESSIONLESS_CASE_MEETING_MARKED_ACTION,
+          entityType: 'meeting',
+          entityId: input.meetingId,
+          metadata: {
+            disposition: input.disposition,
+            reason: input.reason,
+            trigger: input.trigger,
+            ...(input.shape === undefined ? {} : { shape: input.shape }),
+          },
+        },
+        tx
+      );
+      const outcomeWritten =
+        input.outcome === undefined
+          ? false
+          : await meetingsRepository.setOutcomeIfUnset(tx, {
+              meetingId: input.meetingId,
+              outcome: input.outcome,
+              actorUserId: null,
+            });
+      return { markerId: marker.id, outcomeWritten };
+    });
   },
 };

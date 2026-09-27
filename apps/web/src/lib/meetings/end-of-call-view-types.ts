@@ -1,5 +1,6 @@
 import type { EndOfCallRecapState, RecapContextType, RecapLens } from '@balo/analytics/events';
 import type { EndOfCallReviewState } from '@balo/shared/reviews';
+import type { CaseClosureNames } from '@balo/shared/credit';
 
 /**
  * BAL-389 — the end-of-call screen's single serializable contract. PLAIN TYPES ONLY: no values,
@@ -130,6 +131,25 @@ interface EndOfCallBase {
    * every enforcement of the underlying rule stays server-side in `resolveCaseAction`.
    */
   meetingHeld: boolean;
+  /**
+   * BAL-474 (R6-C5) — the call is `in_progress` and its scheduled start has not arrived: the person left an
+   * EARLY call (both sides were together, and that time is billed) that is still open until the start.
+   * `meetingHeld` is `false` in this state, so the rating and the case close stay hidden — this flag ONLY picks
+   * the third headline/body arm over the neutral "nothing to wrap up yet" one. Both lenses, never a lens.
+   */
+  beganEarly: boolean;
+  /**
+   * BAL-474 (R6F-2) — the two names of a closed-case sentence, or `null`. Non-null ONLY for the voided no-show:
+   * the meeting ended with outcome `no_show_client` on a CASE that was closed before its scheduled start
+   * (`caseClosedBeforeStart`, the predicate settlement uses). It picks the "This case was closed" arm on both
+   * lenses — no recap, receipt, payout, rating or resolve promise — and the loader nulls `rating` and `resolve`
+   * on the client arm whenever it is set.
+   *
+   * ⚠ `null` IS ALSO WHAT A FAILED READ DEGRADES TO, so the ordinary arms render. Either name may be `null`
+   * inside a non-null value: no closer (the inactivity sweep closed the case) and no company each carry an
+   * approved fallback in `end-of-call-copy.ts`.
+   */
+  caseClosure: CaseClosureNames | null;
 }
 
 export type EndOfCallView =

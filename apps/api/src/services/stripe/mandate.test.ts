@@ -11,10 +11,13 @@ const {
   mockTransaction,
   mockHasActiveSessionForWallet,
   mockHasOpenReceivable,
+  mockHasLiveSessionlessCall,
   mockNotificationPublish,
   mockTrackServer,
+  mockLogInfo,
   mockLogWarn,
   mockLogError,
+  mockReadCardRemovalSnapshot,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockApplyMandateStatus: vi.fn(),
@@ -25,6 +28,7 @@ const {
   mockTransaction: vi.fn((cb: (tx: unknown) => unknown) => cb({ __brand: 'mock-tx' })),
   mockHasActiveSessionForWallet: vi.fn(),
   mockHasOpenReceivable: vi.fn(),
+  mockHasLiveSessionlessCall: vi.fn(),
   // BAL-521 §3 — `publishSavedCardDetached` (services/credit/saved-card-notify.ts) is NOT
   // mocked directly; it is a thin real wrapper over `notificationEvents.publish`, so mocking
   // THAT (the same module dispatch.test.ts mocks) exercises the real correlationId/mapping
@@ -34,13 +38,22 @@ const {
   // FIX ROUND 2 — hoisted so the REPLAY-VERIFICATION fail-soft path can be asserted (a `log.warn`
   // and NOT a throw is the whole point of that branch; without a handle on the logger, "warns and
   // proceeds" is unprovable).
+  mockLogInfo: vi.fn(),
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
+  // BAL-474 D10.6 — `bookingFundingRepository.readCardRemovalSnapshot`. The verdict over it
+  // (`assessCardRemovalCoverage`) is the REAL shared function: only the read is mocked.
+  mockReadCardRemovalSnapshot: vi.fn(),
 }));
 
 vi.mock('stripe', async () => (await import('../../test/mocks/stripe.js')).stripeMockModule());
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockLogWarn, error: mockLogError }),
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: mockLogInfo,
+    warn: mockLogWarn,
+    error: mockLogError,
+  }),
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
@@ -58,6 +71,9 @@ vi.mock('@balo/db', () => ({
   // FIX ROUND (security MEDIUM) — the two `detachSavedCard` settlement-outstanding guards.
   creditSessionsRepository: { hasActiveSessionForWallet: mockHasActiveSessionForWallet },
   creditReceivablesRepository: { hasOpenReceivable: mockHasOpenReceivable },
+  // BAL-474 (D11.1, Rule A) — a live Case call that has no session yet.
+  meetingsRepository: { hasLiveSessionlessCaseMeeting: mockHasLiveSessionlessCall },
+  bookingFundingRepository: { readCardRemovalSnapshot: mockReadCardRemovalSnapshot },
   // BAL-522 — the billing-identity projection (step 1) + the seed attempt (step 2), never
   // `findNameById`/`findById`.
   companiesRepository: {
@@ -223,8 +239,12 @@ describe('mandate', () => {
     mockFindEmailById.mockReset();
     mockFindEmailById.mockResolvedValue({ id: 'user_1', email: 'dana@northwind.test' });
     mockClearSavedCardAndReconcileMode.mockReset();
+    mockLogInfo.mockReset();
     mockLogWarn.mockReset();
     mockLogError.mockReset();
+    mockReadCardRemovalSnapshot.mockReset();
+    // The default: no active mandate, so nothing is protected and every pre-D10.6 case is unchanged.
+    mockReadCardRemovalSnapshot.mockResolvedValue({ kind: 'no_mandate', walletId: 'wallet_1' });
     mockTransaction.mockReset();
     mockTransaction.mockImplementation((cb: (tx: unknown) => unknown) =>
       cb({ __brand: 'mock-tx' })
@@ -233,6 +253,8 @@ describe('mandate', () => {
     mockHasActiveSessionForWallet.mockResolvedValue(false);
     mockHasOpenReceivable.mockReset();
     mockHasOpenReceivable.mockResolvedValue(false);
+    mockHasLiveSessionlessCall.mockReset();
+    mockHasLiveSessionlessCall.mockResolvedValue(false);
     mockNotificationPublish.mockReset();
     mockTrackServer.mockReset();
   });
@@ -1040,6 +1062,158 @@ describe('mandate', () => {
       expect(mockStripe.paymentMethods.detach).not.toHaveBeenCalled();
       expect(mockClearSavedCardAndReconcileMode).not.toHaveBeenCalled();
       expect(mockHasOpenReceivable).toHaveBeenCalledWith(cardWallet.companyId);
+    });
+
+    it('⚠ D11.1 (Rule A) — a LIVE Case call with no session yet refuses with settlement_outstanding, scoped to the wallet’s OWN company, never touching Stripe', async () => {
+      mockFindById.mockResolvedValue(cardWallet);
+      mockHasLiveSessionlessCall.mockResolvedValue(true);
+
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
+        status: 'settlement_outstanding',
+      });
+      expect(mockHasLiveSessionlessCall).toHaveBeenCalledWith({ companyId: cardWallet.companyId });
+      expect(mockStripe.paymentMethods.detach).not.toHaveBeenCalled();
+      expect(mockClearSavedCardAndReconcileMode).not.toHaveBeenCalled();
+      // The more specific settlement refusal wins: the booking snapshot is never read.
+      expect(mockReadCardRemovalSnapshot).not.toHaveBeenCalled();
+    });
+
+    describe('D10.6 — upcoming bookings the card is backing', () => {
+      /** One 30-minute Case booking at 700 / minute — reserves 21,000. */
+      function upcomingBooking(offsetMinutes: number): Record<string, unknown> {
+        const start = new Date(Date.now() + offsetMinutes * 60_000);
+        return {
+          meetingId: `meeting_${offsetMinutes}`,
+          scheduledStart: start,
+          scheduledEnd: new Date(start.getTime() + 30 * 60_000),
+          expertProfileId: 'expert_1',
+          expertRateCents: 33_600,
+        };
+      }
+      function mandateSnapshot(
+        availableMinor: number,
+        reservable: readonly Record<string, unknown>[]
+      ): Record<string, unknown> {
+        return { kind: 'mandate', walletId: 'wallet_1', availableMinor, reservable };
+      }
+      function stubRemoval(): void {
+        mockStripe.paymentMethods.detach.mockResolvedValue({ id: 'pm_1', customer: null });
+        mockClearSavedCardAndReconcileMode.mockResolvedValue({
+          wallet: { ...cardWallet, lowBalanceMode: 'notify_only' },
+          modeReconciled: false,
+          auditEventId: 'audit_1',
+          previousLowBalanceMode: 'notify_only',
+        });
+      }
+
+      it('⚠ refuses with upcoming_bookings_uncovered — the figures carried, Stripe and the DB never touched, the figures logged', async () => {
+        mockFindById.mockResolvedValue(cardWallet);
+        mockReadCardRemovalSnapshot.mockResolvedValue(
+          mandateSnapshot(10_000, [upcomingBooking(60), upcomingBooking(120)])
+        );
+
+        await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
+          status: 'upcoming_bookings_uncovered',
+          // 2 × 21,000 reserved against 10,000 available.
+          topUpNeededMinor: 32_000,
+          reservedBookingCount: 2,
+        });
+        expect(mockStripe.paymentMethods.detach).not.toHaveBeenCalled();
+        expect(mockTransaction).not.toHaveBeenCalled();
+        expect(mockClearSavedCardAndReconcileMode).not.toHaveBeenCalled();
+        expect(mockNotificationPublish).not.toHaveBeenCalled();
+        expect(mockLogInfo).toHaveBeenCalledWith(
+          expect.objectContaining({
+            op: 'detachSavedCard',
+            walletId: 'wallet_1',
+            companyId: 'company_1',
+            availableMinor: 10_000,
+            reservedMinor: 42_000,
+            reservedBookingCount: 2,
+            topUpNeededMinor: 32_000,
+          }),
+          'Saved card removal refused — upcoming bookings are not covered by the balance'
+        );
+      });
+
+      it('reads the snapshot for the wallet’s OWN company — never anything the caller supplied', async () => {
+        mockFindById.mockResolvedValue(cardWallet);
+        mockReadCardRemovalSnapshot.mockResolvedValue(
+          mandateSnapshot(10_000, [upcomingBooking(60)])
+        );
+
+        await detachSavedCard('wallet_1', ACTOR_USER_ID);
+
+        expect(mockReadCardRemovalSnapshot).toHaveBeenCalledWith({
+          companyId: 'company_1',
+          now: expect.any(Date),
+        });
+      });
+
+      it('boundary: available === reserved is covered — the removal proceeds', async () => {
+        mockFindById.mockResolvedValue(cardWallet);
+        mockReadCardRemovalSnapshot.mockResolvedValue(
+          mandateSnapshot(21_000, [upcomingBooking(60)])
+        );
+        stubRemoval();
+
+        await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toMatchObject({
+          status: 'removed',
+        });
+        expect(mockStripe.paymentMethods.detach).toHaveBeenCalledWith('pm_1');
+      });
+
+      it('boundary: one minor unit short refuses', async () => {
+        mockFindById.mockResolvedValue(cardWallet);
+        mockReadCardRemovalSnapshot.mockResolvedValue(
+          mandateSnapshot(20_999, [upcomingBooking(60)])
+        );
+
+        await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
+          status: 'upcoming_bookings_uncovered',
+          topUpNeededMinor: 1,
+          reservedBookingCount: 1,
+        });
+      });
+
+      it('no upcoming bookings ⇒ the removal proceeds, however low the balance', async () => {
+        mockFindById.mockResolvedValue(cardWallet);
+        mockReadCardRemovalSnapshot.mockResolvedValue(mandateSnapshot(0, []));
+        stubRemoval();
+
+        await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toMatchObject({
+          status: 'removed',
+        });
+      });
+
+      it('no active mandate ⇒ nothing to protect — the removal proceeds (existing behaviour)', async () => {
+        mockFindById.mockResolvedValue(cardWallet);
+        mockReadCardRemovalSnapshot.mockResolvedValue({ kind: 'no_mandate', walletId: 'wallet_1' });
+        stubRemoval();
+
+        await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toMatchObject({
+          status: 'removed',
+        });
+      });
+
+      it('the settlement guards keep precedence — a live grace session refuses as settlement_outstanding and the snapshot is never read', async () => {
+        mockFindById.mockResolvedValue(cardWallet);
+        mockHasActiveSessionForWallet.mockResolvedValue(true);
+        mockReadCardRemovalSnapshot.mockResolvedValue(mandateSnapshot(0, [upcomingBooking(60)]));
+
+        await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
+          status: 'settlement_outstanding',
+        });
+        expect(mockReadCardRemovalSnapshot).not.toHaveBeenCalled();
+      });
+
+      it('a failed snapshot read fails CLOSED — the error propagates and Stripe is never touched', async () => {
+        mockFindById.mockResolvedValue(cardWallet);
+        mockReadCardRemovalSnapshot.mockRejectedValue(new Error('snapshot down'));
+
+        await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).rejects.toThrow(/snapshot down/);
+        expect(mockStripe.paymentMethods.detach).not.toHaveBeenCalled();
+      });
     });
 
     it('treats a resource_missing probe failure as already-detached — the PM genuinely no longer exists at Stripe (review MINOR)', async () => {

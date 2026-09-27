@@ -148,3 +148,68 @@ describe('the fixed copy this module owns', () => {
     expect(MEETING_STATE_RETRY_LABEL.length).toBeGreaterThan(0);
   });
 });
+
+describe('parseMeetingState — BAL-474 Rule A: the billing clock is OPTIONAL (deploy skew is safe in either order)', () => {
+  it('⚠ an api that has not sent `billingClock` parses to `null` — the chip falls back to today’s clocks', () => {
+    expect(parseMeetingState(WIRE)?.billingClock).toBeNull();
+  });
+
+  it('parses `billingClock` when sent', () => {
+    expect(
+      parseMeetingState({ ...WIRE, billingClock: { soFarMs: 1_860_000, running: true } })
+        ?.billingClock
+    ).toEqual({ soFarMs: 1_860_000, running: true });
+    expect(
+      parseMeetingState({ ...WIRE, billingClock: { soFarMs: 0, running: false } })?.billingClock
+    ).toEqual({ soFarMs: 0, running: false });
+  });
+
+  it.each([
+    ['a negative figure', { soFarMs: -1, running: true }],
+    ['a non-numeric figure', { soFarMs: 'x', running: true }],
+    ['a missing `running`', { soFarMs: 1 }],
+    ['a non-boolean `running`', { soFarMs: 1, running: 'yes' }],
+  ])(
+    '⚠ a malformed billingClock (%s) degrades to NO MIRROR rather than to a NaN chip',
+    (_label, billingClock) => {
+      expect(parseMeetingState({ ...WIRE, billingClock })).toBeNull();
+    }
+  );
+
+  it('never leaks the billing clock onto the snapshot’s other fields (the clocks stay the start-clamped wire values)', () => {
+    const parsed = parseMeetingState({ ...WIRE, billingClock: { soFarMs: 99, running: true } });
+    expect(parsed?.clocks.expertPresentMs).toBe(720_000);
+    expect(Object.keys(parsed ?? {})).toContain('billingClock');
+  });
+});
+
+describe('parseMeetingState — BAL-474 R6-C3: `caseClosure` is OPTIONAL (deploy skew is safe in either order)', () => {
+  it('⚠ an api that has not sent `caseClosure` parses to `null` — every ordinary arm renders', () => {
+    expect(parseMeetingState(WIRE)?.caseClosure).toBeNull();
+  });
+
+  it('an explicit `null` is the same "not that state"', () => {
+    expect(parseMeetingState({ ...WIRE, caseClosure: null })?.caseClosure).toBeNull();
+  });
+
+  it('parses the closure with both names, and with either absent', () => {
+    for (const caseClosure of [
+      { closedByFirstName: 'Maya', companyName: 'Northwind' },
+      { closedByFirstName: null, companyName: 'Northwind' },
+      { closedByFirstName: 'Maya', companyName: null },
+      { closedByFirstName: null, companyName: null },
+    ]) {
+      expect(parseMeetingState({ ...WIRE, caseClosure })?.caseClosure).toEqual(caseClosure);
+    }
+  });
+
+  it.each([
+    ['a missing name key', { closedByFirstName: 'Maya' }],
+    ['a non-string name', { closedByFirstName: 7, companyName: 'Northwind' }],
+  ])(
+    '⚠ a malformed closure (%s) degrades to NO MIRROR rather than to a wrong sentence',
+    (_label, caseClosure) => {
+      expect(parseMeetingState({ ...WIRE, caseClosure })).toBeNull();
+    }
+  );
+});

@@ -83,6 +83,20 @@ export const MEETING_TRANSITIONS: Readonly<
   cancelled: [],
 };
 
+/**
+ * BAL-474 (D8.7, plan §H.2) — `true` for a TERMINAL meeting status: a label with NO outgoing edge
+ * in {@link MEETING_TRANSITIONS} (today `ended` and `cancelled`).
+ *
+ * ⚠ DERIVED, NEVER A RESTATED LABEL LIST. A new terminal label added to the map (with an empty
+ * edge list, as the map's docblock requires) is terminal here automatically — the same exclusion
+ * `meetingsRepository.endMeeting`'s compare-and-set applies. `endMeeting`'s D6.4 presence check
+ * reads it so an already-terminal meeting answers the idempotent "already ended" success, never
+ * the "not joined" refusal.
+ */
+export function isTerminalMeetingStatus(status: MeetingLifecycleStatus): boolean {
+  return MEETING_TRANSITIONS[status].length === 0;
+}
+
 /** `true` when `from → to` is an edge of {@link MEETING_TRANSITIONS}. Total and pure. */
 export function isLegalMeetingTransition(
   from: MeetingLifecycleStatus,
@@ -260,9 +274,11 @@ export function summarisePresence(intervals: readonly LifecyclePresenceInterval[
  * The instant the EXPERT-PRESENT CLOCK starts: `max(scheduled_start, expert first join)`.
  *
  * ⚠ THIS IS THE TICKET'S RULE VERBATIM, and it cuts both ways. An expert arriving at 09:55
- * for a 10:00 call is not credited for arriving early (the write-side R10 clamp already
- * raises their `joined_at`, so the `max` is belt-and-braces there); an expert joining at 10:05
- * starts their own clock at 10:05, so their no-show settles at 10:20, not 10:15.
+ * for a 10:00 call is not credited for arriving early ON THIS CLOCK (the readers apply
+ * `clampIntervalsToStart`, which raises a pre-start `joined_at`, so the `max` is belt-and-braces
+ * there; the minutes an early expert spends WITH a client-side participant are a separate term of the
+ * settlement — BAL-474 Rule A); an expert joining at 10:05 starts their own clock at 10:05, so their
+ * no-show settles at 10:20, not 10:15.
  *
  * `null` when no expert has joined — there is no clock to start.
  */
@@ -392,10 +408,10 @@ function idleEndApplies(input: TerminalRuleInput): boolean {
  * ⚠ VENUE-SAFE BY CONSTRUCTION (BAL-581) — measured from the expert's first join,
  * which cannot precede a ready room (a presence interval can only exist in a room that exists).
  * A room repaired late still settles this rule from the expert's actual join, never from the
- * scheduled start. This says nothing about WHAT the rule charges — see
- * `meeting-settlement.ts:209-218` (BAL-474): a floor is billed only when a credit session
- * exists, and one opens only at a CLIENT member's admission, so a client who never joins is
- * never charged by this rule.
+ * scheduled start. This says nothing about WHAT the rule charges — see `resolveShape` in
+ * `meeting-settlement.ts` (BAL-474): the meeting's terminal path opens a session on behalf of the
+ * booker when none exists, so a client who never joins IS charged the flat floor this rule's
+ * shape (`no_show_client`) carries, and the expert who waited is paid it.
  */
 function noShowApplies(input: TerminalRuleInput): boolean {
   const { presence, timers, now, scheduledStart } = input;

@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { creditHolds } from '../schema';
-import { creditWalletFactory, userFactory } from '../test/factories';
+import { creditHolds, expertProfiles } from '../schema';
+import { creditWalletFactory, expertFactory, userFactory } from '../test/factories';
 import { creditHoldsRepository, InvalidHoldTransitionError } from './credit-holds';
+import { creditSessionsRepository } from './credit-sessions';
 import { creditWalletsRepository } from './credit-wallets';
 
 /**
@@ -160,5 +161,97 @@ describe('creditHoldsRepository.settle / release — guarded transitions', () =>
     await expect(
       creditHoldsRepository.settle('00000000-0000-0000-0000-000000000000')
     ).rejects.toThrow(/not found/i);
+  });
+});
+
+// ── BAL-474 (ADR-1040 Amendment 7 §H, D8.5) — the booking figure ─────────────────────────────
+
+/** Client 250 / minute at the default fee (expert A$120/h). */
+const EXPERT_HOURLY_250 = 12_000;
+const MINUTE_MS = 60_000;
+
+/** A wallet at `balanceMinor` with ONE session opened on it (hold = estimate × 250). */
+async function walletWithSession(
+  balanceMinor: number,
+  estimatedMinutes: number
+): Promise<{ walletId: string; sessionId: string }> {
+  const { wallet, companyId } = await creditWalletFactory({ values: { balanceMinor } });
+  const member = await userFactory();
+  const expert = await expertFactory();
+  await db
+    .update(expertProfiles)
+    .set({ rateCents: EXPERT_HOURLY_250 })
+    .where(eq(expertProfiles.id, expert.id));
+  const opened = await creditSessionsRepository.open({
+    walletId: wallet.id,
+    companyId,
+    expertProfileId: expert.id,
+    initiatingMemberId: member.id,
+    estimatedMinutes,
+  });
+  if (!opened.ok) throw new Error(`open failed: ${opened.code}`);
+  return { walletId: wallet.id, sessionId: opened.session.id };
+}
+
+/** Connect the session and meter exactly `ticks` minutes. */
+async function meter(sessionId: string, ticks: number): Promise<void> {
+  const connectedAt = new Date(Date.now() - (ticks + 5) * MINUTE_MS);
+  await creditSessionsRepository.connectWithTransition(sessionId, { now: connectedAt });
+  const metered = await creditSessionsRepository.meterSessionToNow(
+    sessionId,
+    new Date(connectedAt.getTime() + ticks * MINUTE_MS + 30_000),
+    { floorMinutes: 15 }
+  );
+  expect(metered.ticksPosted).toBe(ticks);
+}
+
+describe('creditHoldsRepository.getAvailableForBooking — holds netted by posted consumption (BAL-474)', () => {
+  it('⚠ a LIVE session’s drawn minutes are subtracted ONCE, not twice', async () => {
+    // Hold 30 × 250 = 7,500; 20 minutes drawn (5,000) ⇒ balance 45,000.
+    const { walletId, sessionId } = await walletWithSession(50_000, 30);
+    await meter(sessionId, 20);
+
+    expect(await creditHoldsRepository.getAvailableBalance(walletId)).toBe(45_000 - 7_500);
+    expect(await creditHoldsRepository.getAvailableForBooking(walletId, db)).toBe(
+      45_000 - (7_500 - 5_000)
+    );
+  });
+
+  it('a hold whose session has posted nothing yet counts in FULL', async () => {
+    const { walletId } = await walletWithSession(50_000, 30);
+    expect(await creditHoldsRepository.getAvailableForBooking(walletId, db)).toBe(50_000 - 7_500);
+  });
+
+  it('a hold whose consumption already EXCEEDS it counts 0 — never negative', async () => {
+    // Hold 5 × 250 = 1,250; 8 minutes drawn (2,000) ⇒ balance 48,000; the hold nets to 0.
+    const { walletId, sessionId } = await walletWithSession(50_000, 5);
+    await meter(sessionId, 8);
+    expect(await creditHoldsRepository.getAvailableForBooking(walletId, db)).toBe(48_000);
+  });
+
+  it('a released hold no longer subtracts, whatever its session drew', async () => {
+    const { walletId, sessionId } = await walletWithSession(50_000, 30);
+    await meter(sessionId, 4);
+    await creditSessionsRepository.end(sessionId, { now: new Date() });
+    expect(await creditHoldsRepository.getAvailableForBooking(walletId, db)).toBe(49_000);
+  });
+
+  it('an unknown wallet reads 0', async () => {
+    expect(
+      await creditHoldsRepository.getAvailableForBooking('00000000-0000-4000-8000-000000000000', db)
+    ).toBe(0);
+  });
+});
+
+describe('creditHoldsRepository.getAvailableBalance — on a caller-supplied executor (BAL-474)', () => {
+  it('reads the balance AND the holds on the given executor', async () => {
+    // Executor IDENTITY is proven where it can be observed (`booking-funding.test.ts` and the
+    // two-connection `booking-funding.concurrency.integration.test.ts`); this pins the behaviour.
+    const { wallet } = await creditWalletFactory({ values: { balanceMinor: 20_000 } });
+    const available = await db.transaction(async (tx) => {
+      await creditHoldsRepository.place({ walletId: wallet.id, amountMinor: 3_000 }, tx);
+      return creditHoldsRepository.getAvailableBalance(wallet.id, tx);
+    });
+    expect(available).toBe(17_000);
   });
 });

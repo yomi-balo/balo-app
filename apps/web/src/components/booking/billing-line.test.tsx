@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/test/utils';
 import { MIN_MEETING_MINUTES } from '@balo/shared/meetings';
-import { BillingLine, CancellationLine } from './billing-line';
+import { BillingLine, CancellationLine, CANCELLATION_LINE_COPY } from './billing-line';
 
 describe('BillingLine', () => {
   it('interpolates the minimum from MIN_MEETING_MINUTES, never a hardcoded literal', () => {
@@ -26,6 +26,9 @@ describe('BillingLine', () => {
 describe('CancellationLine', () => {
   it('renders the exact verbatim copy — no countdown, no fee schedule', () => {
     render(<CancellationLine />);
-    expect(screen.getByText('Free until scheduled start time.')).toBeInTheDocument();
+    // R6-C4 — pinned against the FULL approved literal, and the retired sentence must be gone.
+    expect(CANCELLATION_LINE_COPY).toBe('Free to cancel until anyone joins the call.');
+    expect(screen.getByText('Free to cancel until anyone joins the call.')).toBeInTheDocument();
+    expect(screen.queryByText(/scheduled start time/)).not.toBeInTheDocument();
   });
 });

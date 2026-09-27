@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockRequireOnboardedUser = vi.fn();
 const mockFindByBookingIdempotencyKey = vi.fn();
+const mockMeetingFindByKey = vi.fn();
+const mockMeetingFindWithContexts = vi.fn();
 const mockCreate = vi.fn();
 const mockListOpenForCompanyAndExpert = vi.fn();
 const mockListCapabilityEligibleCompanies = vi.fn();
@@ -43,6 +45,10 @@ vi.mock('@balo/db', () => ({
   companiesRepository: {
     findNameById: (...args: unknown[]) => mockFindNameById(...args),
   },
+  meetingsRepository: {
+    findByBookingIdempotencyKey: (...args: unknown[]) => mockMeetingFindByKey(...args),
+    findWithContexts: (...args: unknown[]) => mockMeetingFindWithContexts(...args),
+  },
   partyMembershipsRepository: {
     listCapabilityEligibleCompanies: (...args: unknown[]) =>
       mockListCapabilityEligibleCompanies(...args),
@@ -77,7 +83,13 @@ vi.mock('../booking-funding-gate', () => ({
 vi.mock('../load-booking-context', () => ({
   resolveBookingExpertDisplay: (...args: unknown[]) => mockResolveBookingExpertDisplay(...args),
 }));
-vi.mock('../booking-api-client', () => ({
+/**
+ * ⚠ PARTIAL BY `importActual`: only the two network calls are replaced. The api's funding-refusal
+ * literals and their guard (`isBookingFundingRefusalCode`) stay REAL, so the action's routing of
+ * a hop-2 `409` is tested against the shipped list, not a copy of it.
+ */
+vi.mock('../booking-api-client', async (importActual) => ({
+  ...(await importActual<typeof import('../booking-api-client')>()),
   postBookMeeting: (...args: unknown[]) => mockPostBookMeeting(...args),
   postInviteGuests: (...args: unknown[]) => mockPostInviteGuests(...args),
 }));
@@ -95,7 +107,8 @@ vi.mock('@/lib/api/balo-api-client', async (importActual) => ({
 import { bookConsultationAction } from './book-consultation';
 import type { BookConsultationInput } from './types';
 
-const USER = { id: 'user-1', onboardingCompleted: true };
+const ACTIVE_COMPANY_ID = '55555555-5555-4555-8555-555555555555';
+const USER = { id: 'user-1', onboardingCompleted: true, companyId: ACTIVE_COMPANY_ID };
 const KEY = 'a'.repeat(64);
 const EXPERT_PROFILE_ID = '11111111-1111-4111-8111-111111111111';
 const MEETING_ID = '22222222-2222-4222-8222-222222222222';
@@ -136,6 +149,8 @@ beforeEach(() => {
   mockDeriveBookingIdempotencyKey.mockReturnValue(KEY);
   mockSanitizeCaseDescription.mockReturnValue({ ok: true, html: '<p>sanitised</p>' });
   mockFindByBookingIdempotencyKey.mockResolvedValue(undefined);
+  mockMeetingFindByKey.mockResolvedValue(undefined);
+  mockMeetingFindWithContexts.mockResolvedValue(undefined);
   mockListCapabilityEligibleCompanies.mockResolvedValue([
     { id: COMPANY_ID, name: 'Northwind', logoUrl: null },
   ]);
@@ -814,17 +829,404 @@ describe('bookConsultationAction', () => {
     });
 
     /**
-     * R3 — the gate must use the SLOT'S DECLARED DURATION, never the server window. This is the
-     * one assertion that would catch someone "fixing" the gate to use `windowMinutes` instead —
-     * `NEW_CASE_INPUT.slot.durationMinutes` is 30, but its mocked server window
-     * (`SERVER_START`..`SERVER_END`) is deliberately 45 minutes.
+     * The gate is handed the slot WINDOW — the one input its estimate is derived from
+     * (`estimatedMinutesForWindow`, the figure the API and admission compute too) — and NEVER a
+     * duration. `NEW_CASE_INPUT.slot` is 30 minutes; the mocked SERVER window
+     * (`SERVER_START`..`SERVER_END`) is deliberately 45, so a "fix" that fed the gate the
+     * server's window would fail here. Replaces the pre-BAL-474 pin "uses the slot's declared
+     * duration (30), never the server's window (45)" — the same property, restated over the
+     * window.
      */
-    it("uses the slot's declared duration (30), never the server's window (45)", async () => {
+    it("hands the gate the slot's own window and the active workspace company, deferring a covered hold", async () => {
       await bookConsultationAction(NEW_CASE_INPUT);
 
-      expect(mockEnforceBookingFunding).toHaveBeenCalledWith(
-        expect.objectContaining({ estimatedMinutes: 30 })
+      expect(mockEnforceBookingFunding).toHaveBeenCalledTimes(1);
+      const input = mockEnforceBookingFunding.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(input).toEqual({
+        actorUserId: USER.id,
+        companyId: COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        slot: { startIso: NEW_CASE_INPUT.slot.startIso, endIso: NEW_CASE_INPUT.slot.endIso },
+        activeCompanyId: ACTIVE_COMPANY_ID,
+        onCoveredHold: 'defer',
+      });
+      expect(Object.keys(input)).not.toContain('estimatedMinutes');
+    });
+
+    describe('the balance refusals — D6.1 hold and D6.5 reservation', () => {
+      const BILLING_COMPANY = { id: COMPANY_ID, name: 'Northwind', isActive: true };
+
+      it.each([
+        [true, 'hold_top_up_required'],
+        [false, 'hold_admins_notified'],
+      ] as const)(
+        'on_hold (canManageBilling %s) ⇒ %s, with the figure and the company, and writes NOTHING',
+        async (canManageBilling, code) => {
+          mockEnforceBookingFunding.mockResolvedValue({
+            ok: false,
+            reason: 'on_hold',
+            canManageBilling,
+            billingCompany: BILLING_COMPANY,
+            topUpNeededMinor: 27_500,
+          });
+
+          const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+          expect(result).toEqual({
+            ok: false,
+            stage: 'funding',
+            code,
+            balance: {
+              variant: 'hold',
+              topUpNeededMinor: 27_500,
+              reservedBookingCount: null,
+              company: BILLING_COMPANY,
+            },
+          });
+          expect(mockCreate).not.toHaveBeenCalled();
+          expect(mockPostBookMeeting).not.toHaveBeenCalled();
+        }
       );
+
+      it('on_hold with NO figure (the failed-heal fallback) carries topUpNeededMinor: null, never 0', async () => {
+        mockEnforceBookingFunding.mockResolvedValue({
+          ok: false,
+          reason: 'on_hold',
+          canManageBilling: false,
+          billingCompany: BILLING_COMPANY,
+          topUpNeededMinor: null,
+        });
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(result).toMatchObject({ balance: { variant: 'hold', topUpNeededMinor: null } });
+      });
+
+      it.each([
+        [true, 'reserved_top_up_required'],
+        [false, 'reserved_admins_notified'],
+      ] as const)(
+        'reserved (canManageBilling %s) ⇒ %s, with the figure and the COUNT',
+        async (canManageBilling, code) => {
+          mockEnforceBookingFunding.mockResolvedValue({
+            ok: false,
+            reason: 'reserved',
+            canManageBilling,
+            billingCompany: { ...BILLING_COMPANY, isActive: false },
+            topUpNeededMinor: 7_500,
+            reservedBookingCount: 2,
+          });
+
+          const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+          expect(result).toEqual({
+            ok: false,
+            stage: 'funding',
+            code,
+            balance: {
+              variant: 'reserved',
+              topUpNeededMinor: 7_500,
+              reservedBookingCount: 2,
+              company: { ...BILLING_COMPANY, isActive: false },
+            },
+          });
+          expect(mockCreate).not.toHaveBeenCalled();
+        }
+      );
+    });
+
+    describe('a key that already names a meeting skips every web funding gate (D7.7, D8.6)', () => {
+      const SAME_WINDOW = {
+        scheduledStart: new Date(NEW_CASE_INPUT.slot.startIso),
+        scheduledEnd: new Date(NEW_CASE_INPUT.slot.endIso),
+      };
+      const RESOLVED_CASE_ROW = {
+        id: ENGAGEMENT_ID,
+        companyId: COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        title: 'Already created case',
+      };
+      const HOLD_REFUSAL = {
+        ok: false,
+        reason: 'on_hold',
+        canManageBilling: false,
+        billingCompany: { id: COMPANY_ID, name: 'Northwind', isActive: true },
+        topUpNeededMinor: 27_500,
+      };
+
+      function namesAMeeting(
+        overrides: {
+          window?: { scheduledStart: Date; scheduledEnd: Date };
+          contextId?: string;
+        } = {}
+      ): void {
+        // The lost-201 retry: hop 1 finds its own case by key…
+        mockFindByBookingIdempotencyKey.mockResolvedValue(RESOLVED_CASE_ROW);
+        // …and the API's probe already finds the meeting under the same key.
+        mockMeetingFindByKey.mockResolvedValue({
+          id: MEETING_ID,
+          ...(overrides.window ?? SAME_WINDOW),
+        });
+        mockMeetingFindWithContexts.mockResolvedValue({
+          meeting: { id: MEETING_ID },
+          contexts: [{ contextType: 'case', contextId: overrides.contextId ?? ENGAGEMENT_ID }],
+        });
+      }
+
+      it('a MATCH (same key, window and case) never reads a hold or a reservation — even one that would refuse', async () => {
+        namesAMeeting();
+        mockEnforceBookingFunding.mockResolvedValue(HOLD_REFUSAL);
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(result).toMatchObject({ ok: true, meetingId: MEETING_ID });
+        expect(mockEnforceBookingFunding).not.toHaveBeenCalled();
+        expect(mockPostBookMeeting).toHaveBeenCalledTimes(1);
+        expect(mockLogInfo).toHaveBeenCalledWith(
+          'Booking key already names a meeting — web funding gates skipped; the API replays or refuses it',
+          expect.objectContaining({ engagementId: ENGAGEMENT_ID, replay: 'match' })
+        );
+      });
+
+      it('positive control: the SAME retry with NO meeting under the key DOES run the gate and is refused', async () => {
+        mockFindByBookingIdempotencyKey.mockResolvedValue(RESOLVED_CASE_ROW);
+        mockEnforceBookingFunding.mockResolvedValue(HOLD_REFUSAL);
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(mockEnforceBookingFunding).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({ ok: false, code: 'hold_admins_notified' });
+        expect(mockPostBookMeeting).not.toHaveBeenCalled();
+      });
+
+      it('a CONFLICT (same key, a different window) also skips the gates — no panel, no fan-out — and the API answers idempotency_key_conflict', async () => {
+        namesAMeeting({
+          window: {
+            scheduledStart: new Date('2026-09-01T05:00:00.000Z'),
+            scheduledEnd: new Date('2026-09-01T05:30:00.000Z'),
+          },
+        });
+        mockEnforceBookingFunding.mockResolvedValue(HOLD_REFUSAL);
+        mockPostBookMeeting.mockResolvedValue({
+          ok: false,
+          status: 409,
+          code: 'idempotency_key_conflict',
+        });
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(mockEnforceBookingFunding).not.toHaveBeenCalled();
+        expect(result).toEqual({
+          ok: false,
+          stage: 'meeting',
+          code: 'idempotency_key_conflict',
+          engagementId: ENGAGEMENT_ID,
+          caseTitle: 'Existing case',
+        });
+        expect(mockLogInfo).toHaveBeenCalledWith(
+          expect.stringContaining('web funding gates skipped'),
+          expect.objectContaining({ replay: 'conflict' })
+        );
+      });
+
+      it('a CONFLICT on the case (same key and window, a different context) skips the gates too', async () => {
+        namesAMeeting({ contextId: OTHER_COMPANY_ID });
+        mockEnforceBookingFunding.mockResolvedValue(HOLD_REFUSAL);
+
+        await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(mockEnforceBookingFunding).not.toHaveBeenCalled();
+        expect(mockLogInfo).toHaveBeenCalledWith(
+          expect.stringContaining('web funding gates skipped'),
+          expect.objectContaining({ replay: 'conflict' })
+        );
+      });
+
+      it('a probe read failure is NONE — fail-closed: the gates run and the failure is logged at warn', async () => {
+        mockFindByBookingIdempotencyKey.mockResolvedValue(RESOLVED_CASE_ROW);
+        mockMeetingFindByKey.mockRejectedValue(new Error('connection reset'));
+        mockEnforceBookingFunding.mockResolvedValue(HOLD_REFUSAL);
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(mockEnforceBookingFunding).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({ ok: false, code: 'hold_admins_notified' });
+        expect(mockLogWarn).toHaveBeenCalledWith(
+          'Booking key classification read failed — running the funding gates',
+          expect.objectContaining({ error: 'connection reset' })
+        );
+      });
+
+      it('the attach arm probes the key too (an existing case can carry a used key)', async () => {
+        mockMeetingFindByKey.mockResolvedValue({ id: MEETING_ID, ...SAME_WINDOW });
+        mockMeetingFindWithContexts.mockResolvedValue({
+          meeting: { id: MEETING_ID },
+          contexts: [{ contextType: 'case', contextId: ENGAGEMENT_ID }],
+        });
+        mockEnforceBookingFunding.mockResolvedValue(HOLD_REFUSAL);
+
+        const result = await bookConsultationAction(EXISTING_CASE_INPUT);
+
+        expect(result).toMatchObject({ ok: true });
+        expect(mockEnforceBookingFunding).not.toHaveBeenCalled();
+      });
+
+      it('a NEW case has no case row yet, so its key is never probed (only the existing plan can carry a used key)', async () => {
+        await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(mockMeetingFindByKey).not.toHaveBeenCalled();
+        expect(mockEnforceBookingFunding).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('hop 2 — the API answers a funding refusal after the case row was written (plan §F.3)', () => {
+      const BILLING_COMPANY = { id: COMPANY_ID, name: 'Northwind', isActive: false };
+
+      function apiRefuses(code: string, status = 409): void {
+        mockPostBookMeeting.mockResolvedValue({ ok: false, status, code });
+      }
+
+      /** The FIRST gate call (hop 1) passes; the RE-RUN (hop 2) answers `second`. */
+      function gateThen(second: unknown): void {
+        mockEnforceBookingFunding.mockResolvedValueOnce({ ok: true });
+        mockEnforceBookingFunding.mockResolvedValueOnce(second);
+      }
+
+      it('booking_reserved ⇒ the gate is re-run FRESH ⇒ stage:meeting + reserved_* + the case title and figures', async () => {
+        apiRefuses('booking_reserved');
+        gateThen({
+          ok: false,
+          reason: 'reserved',
+          canManageBilling: true,
+          billingCompany: BILLING_COMPANY,
+          topUpNeededMinor: 7_500,
+          reservedBookingCount: 1,
+        });
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(result).toEqual({
+          ok: false,
+          stage: 'meeting',
+          code: 'reserved_top_up_required',
+          engagementId: ENGAGEMENT_ID,
+          caseTitle: 'Need help with a flow',
+          balance: {
+            variant: 'reserved',
+            topUpNeededMinor: 7_500,
+            reservedBookingCount: 1,
+            company: BILLING_COMPANY,
+          },
+        });
+        expect(mockEnforceBookingFunding).toHaveBeenCalledTimes(2);
+        expect(mockEnforceBookingFunding.mock.calls[1]?.[0]).toEqual({
+          actorUserId: USER.id,
+          companyId: COMPANY_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          slot: { startIso: NEW_CASE_INPUT.slot.startIso, endIso: NEW_CASE_INPUT.slot.endIso },
+          activeCompanyId: ACTIVE_COMPANY_ID,
+          onCoveredHold: 'defer',
+        });
+        // No meeting exists, so nothing is announced.
+        expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+      });
+
+      it("account_on_hold re-runs the gate with onCoveredHold 'refuse' (a still-covered hold means the API's heal failed)", async () => {
+        apiRefuses('account_on_hold');
+        gateThen({
+          ok: false,
+          reason: 'on_hold',
+          canManageBilling: false,
+          billingCompany: BILLING_COMPANY,
+          topUpNeededMinor: null,
+        });
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(mockEnforceBookingFunding.mock.calls[1]?.[0]).toMatchObject({
+          onCoveredHold: 'refuse',
+        });
+        expect(result).toEqual({
+          ok: false,
+          stage: 'meeting',
+          code: 'hold_admins_notified',
+          engagementId: ENGAGEMENT_ID,
+          caseTitle: 'Need help with a flow',
+          balance: {
+            variant: 'hold',
+            topUpNeededMinor: null,
+            reservedBookingCount: null,
+            company: BILLING_COMPANY,
+          },
+        });
+      });
+
+      it('booking_unfunded ⇒ the re-run unfunded ⇒ the BAL-478 code at stage:meeting, naming the saved case', async () => {
+        apiRefuses('booking_unfunded');
+        gateThen({ ok: false, reason: 'unfunded', canManageBilling: true });
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(result).toEqual({
+          ok: false,
+          stage: 'meeting',
+          code: 'funding_setup_required',
+          engagementId: ENGAGEMENT_ID,
+          caseTitle: 'Need help with a flow',
+        });
+      });
+
+      it.each([
+        ['passes', { ok: true }],
+        ['is unavailable', { ok: false, reason: 'unavailable' }],
+      ])(
+        'a refusal that does NOT reproduce at the web gate (re-run %s) ⇒ generic booking_failed, warned, no figure invented',
+        async (_label, second) => {
+          apiRefuses('booking_reserved');
+          gateThen(second);
+
+          const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+          expect(result).toEqual({
+            ok: false,
+            stage: 'meeting',
+            code: 'booking_failed',
+            engagementId: ENGAGEMENT_ID,
+            caseTitle: 'Need help with a flow',
+          });
+          expect(mockLogWarn).toHaveBeenCalledWith(
+            'Hop-2 funding refusal did not reproduce at the web gate — generic retry',
+            expect.objectContaining({ code: 'booking_reserved', engagementId: ENGAGEMENT_ID })
+          );
+        }
+      );
+
+      it('503 booking_funding_unavailable ⇒ generic booking_failed at stage:meeting, the gate is NOT re-run, nothing notified', async () => {
+        apiRefuses('booking_funding_unavailable', 503);
+
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(result).toEqual({
+          ok: false,
+          stage: 'meeting',
+          code: 'booking_failed',
+          engagementId: ENGAGEMENT_ID,
+          caseTitle: 'Need help with a flow',
+        });
+        expect(mockEnforceBookingFunding).toHaveBeenCalledTimes(1);
+        expect(mockLogError).toHaveBeenCalledWith(
+          'Booking meeting hop failed after case create',
+          expect.objectContaining({ code: 'booking_funding_unavailable' })
+        );
+      });
+
+      it('an ordinary 409 is not treated as a funding refusal (positive control: the gate is not re-run)', async () => {
+        apiRefuses('something_else');
+
+        await bookConsultationAction(NEW_CASE_INPUT);
+
+        expect(mockEnforceBookingFunding).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

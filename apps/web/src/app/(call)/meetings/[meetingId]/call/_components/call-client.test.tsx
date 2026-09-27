@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import {
@@ -34,6 +34,7 @@ const {
   mockReplace,
   mockGetMeetingDrawdownStateAction,
   mockSendMeetingTypingAction,
+  mockGetMeetingStateAction,
 } = vi.hoisted(() => ({
   mockJoinAsMemberAction: vi.fn(),
   mockPush: vi.fn(),
@@ -41,6 +42,8 @@ const {
   /** BAL-466 — the post-join re-resolve probe. */
   mockGetMeetingDrawdownStateAction: vi.fn(),
   mockSendMeetingTypingAction: vi.fn(),
+  /** BAL-474 (R6-C3) — the polled mirror, so the `caseClosure` wiring can be driven. */
+  mockGetMeetingStateAction: vi.fn(),
 }));
 
 /**
@@ -59,6 +62,9 @@ vi.mock('../_actions/send-meeting-typing', () => ({
   sendMeetingTypingAction: mockSendMeetingTypingAction,
 }));
 vi.mock('@/components/balo/meetings/meeting-frame', () => ({ preloadMeetingFrame: vi.fn() }));
+vi.mock('../_actions/get-meeting-state', () => ({
+  getMeetingStateAction: mockGetMeetingStateAction,
+}));
 vi.mock('../_actions/get-meeting-drawdown-state', () => ({
   getMeetingDrawdownStateAction: mockGetMeetingDrawdownStateAction,
 }));
@@ -93,6 +99,7 @@ vi.mock('@/components/balo/meetings/meeting-call-surface', () => ({
         data-absent-party={route.waiting?.absentParty ?? ''}
         data-counterparty={route.waiting?.counterpartyFirstName ?? ''}
         data-start-label={route.waiting?.scheduledStartLabel ?? ''}
+        data-case-closure={JSON.stringify(route.waitingFacts.caseClosure)}
         data-has-panels={String(route.panels !== null)}
         data-join-link={route.panels?.audience === 'member' ? route.panels.joinLinkUrl : ''}
         // ⚠ BAL-403 — whether the BALANCE arm is registered.
@@ -199,6 +206,8 @@ beforeEach(() => {
   // BAL-466 — the probe defaults to "no balance slot" so pre-existing tests that never opt in
   // exercise exactly what they did before this effect joined the component.
   mockGetMeetingDrawdownStateAction.mockResolvedValue({ success: true, state: null });
+  // The mirror answers "not reachable" unless a test opts in — the poll stops and every fact stays unknown.
+  mockGetMeetingStateAction.mockResolvedValue({ success: false, retryable: false });
 });
 
 afterEach(() => {
@@ -252,6 +261,137 @@ describe('CallClient — ⚠⚠ BAL-581, the typed reason renders its own member
       await screen.findByRole('heading', { name: MEMBER_JOIN_NOT_OPEN_TITLE })
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
+  });
+
+  describe('D16 — not_open_yet: the join window has not opened (NON-terminal)', () => {
+    // ⚠ PINNED, NOT LEFT TO WHATEVER DAY THE SUITE RUNS ON. `joinNotOpenYetMessage` (D17.4) now
+    // date-qualifies its `{time}` unless `opensAt` falls on the viewer's LOCAL TODAY — and every
+    // absolute-literal `opensAt` below is `2026-09-25T11:57`. Without pinning the fake clock to
+    // that same calendar day, these assertions would silently start failing (or start passing for
+    // the wrong reason) on whatever real date the suite happens to run. Pinned to 12:00, AFTER
+    // that literal — the "device clock ahead" test below needs `now` already past `opensAt`.
+    beforeEach(() => {
+      vi.setSystemTime(new Date('2026-09-25T12:00:00.000Z'));
+    });
+
+    const opensInMs = (ms: number): string => new Date(Date.now() + ms).toISOString();
+
+    it('⚠⚠ renders the approved sentence with the time in the viewer’s zone, WITH a retry — never the terminal "not open to join" card', async () => {
+      mockJoinAsMemberAction.mockResolvedValue({
+        success: false,
+        reason: 'not_open_yet',
+        opensAt: '2026-09-25T11:57:00.000Z',
+      });
+      renderClient();
+
+      expect(
+        await screen.findByRole('heading', {
+          name: "This call isn't open yet — you can join from 11:57 AM.",
+        })
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: MEMBER_JOIN_NOT_OPEN_TITLE })).toBeNull();
+    });
+
+    it('"Try again" re-runs the join, and a join that now succeeds leaves the card', async () => {
+      mockJoinAsMemberAction.mockResolvedValueOnce({
+        success: false,
+        reason: 'not_open_yet',
+        // Far enough out that no automatic timer is armed.
+        opensAt: opensInMs(3 * 60 * 60_000),
+      });
+      renderClient();
+      await screen.findByRole('heading', { name: /isn't open yet/ });
+
+      mockJoinAsMemberAction.mockResolvedValue({ success: true, grant: grantWith() });
+      await userEvent
+        .setup({ advanceTimers: vi.advanceTimersByTime })
+        .click(screen.getByRole('button', { name: /try again/i }));
+
+      expect(await surface()).toBeInTheDocument();
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(2);
+    });
+
+    it('⚠ re-tries by ITSELF once the window opens — a single timer at opensAt, no polling', async () => {
+      mockJoinAsMemberAction.mockResolvedValueOnce({
+        success: false,
+        reason: 'not_open_yet',
+        opensAt: opensInMs(30_000),
+      });
+      renderClient();
+      await screen.findByRole('heading', { name: /isn't open yet/ });
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(1);
+
+      // Nothing happens before the boundary.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(1);
+
+      mockJoinAsMemberAction.mockResolvedValue({ success: true, grant: grantWith() });
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(2);
+      expect(await surface()).toBeInTheDocument();
+    });
+
+    it('⚠ a device clock AHEAD of the server (opensAt already past locally, still refused) is retried at a FLOOR delay and a CAP — never a hot loop', async () => {
+      mockJoinAsMemberAction.mockResolvedValue({
+        success: false,
+        reason: 'not_open_yet',
+        opensAt: '2026-09-25T11:57:00.000Z',
+      });
+      renderClient();
+      await screen.findByRole('heading', { name: /isn't open yet/ });
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(1);
+
+      // Nothing inside the floor…
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(1);
+      // …then one try per floor interval, and it stops after the cap (1 + 5).
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_500);
+        });
+      }
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(6);
+      expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    });
+
+    it('a call more than an hour away arms NO timer — the card and "Try again" are all there is', async () => {
+      mockJoinAsMemberAction.mockResolvedValue({
+        success: false,
+        reason: 'not_open_yet',
+        opensAt: opensInMs(3 * 60 * 60_000),
+      });
+      renderClient();
+      await screen.findByRole('heading', { name: /isn't open yet/ });
+
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
+
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(1);
+    });
+
+    it('⚠ D17.3 — with no usable `opensAt` it falls back to the EXISTING retryable card and never auto-retries', async () => {
+      mockJoinAsMemberAction.mockResolvedValue({ success: false, reason: 'not_open_yet' });
+      renderClient();
+
+      expect(
+        await screen.findByRole('heading', { name: JOIN_TEMPORARILY_UNAVAILABLE_TITLE })
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(1);
+    });
+
+    it('has no accessibility violations', async () => {
+      mockJoinAsMemberAction.mockResolvedValue({
+        success: false,
+        reason: 'not_open_yet',
+        opensAt: '2026-09-25T11:57:00.000Z',
+      });
+      const container = renderClient();
+      await screen.findByRole('heading', { name: /isn't open yet/ });
+      expect(await axe(container)).toHaveNoViolations();
+    });
   });
 
   it('not_provisioned → the "setting up" member card, WITH a retry affordance', async () => {
@@ -519,6 +659,55 @@ describe('CallClient — ⚠ the context envelope becomes the chrome', () => {
     const node = await surface();
     expect(node).toHaveAttribute('data-back-label', 'Back to your dashboard');
     expect(node).toHaveAttribute('data-context-noun', 'call');
+  });
+});
+
+describe('CallClient — R6-C3, the case-closed facts reach the waiting copy', () => {
+  const WIRE_STATE = {
+    status: 'waiting_for_participants',
+    outcome: null,
+    endedBy: null,
+    viewerRole: 'expert',
+    phase: 'running',
+    clocks: {
+      expertPresentMs: 60_000,
+      billableMs: 0,
+      expertFirstJoinedAt: '2026-09-02T10:00:00.000Z',
+      billableStartedAt: null,
+    },
+    asOf: '2026-09-02T10:01:00.000Z',
+  };
+
+  async function renderWithPolledState(state: Record<string, unknown>): Promise<HTMLElement> {
+    mockGetMeetingStateAction.mockResolvedValue({ success: true, state });
+    mockJoinAsMemberAction.mockResolvedValue({
+      success: true,
+      grant: grantWith({
+        viewerRole: 'expert',
+        counterpartyFirstName: 'Northwind',
+        scheduledStart: '2026-09-02T10:00:00.000Z',
+      }),
+    });
+    renderClient();
+    const node = await surface();
+    await waitFor(() => expect(mockGetMeetingStateAction).toHaveBeenCalled());
+    return node;
+  }
+
+  it('⚠⚠ hands the snapshot’s closure to the frame, names intact', async () => {
+    const closure = { closedByFirstName: 'Maya', companyName: 'Northwind' };
+    const node = await renderWithPolledState({ ...WIRE_STATE, caseClosure: closure });
+    await waitFor(() => expect(node).toHaveAttribute('data-case-closure', JSON.stringify(closure)));
+  });
+
+  it('⚠ an api that does not send it leaves the facts at `null` once the poll has landed', async () => {
+    const node = await renderWithPolledState({
+      ...WIRE_STATE,
+      noShowFloorMinutes: 15,
+    });
+    // The poll landed (the floor reached the same facts object) and the closure stayed null.
+    await waitFor(() => expect(mockGetMeetingStateAction).toHaveBeenCalledTimes(1));
+    expect(node).toHaveAttribute('data-case-closure', 'null');
   });
 });
 

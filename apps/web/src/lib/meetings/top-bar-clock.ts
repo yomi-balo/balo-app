@@ -87,7 +87,7 @@ export function resolveTopBarClock({ snapshot }: TopBarClockInput): MeetingClock
     return null;
   }
 
-  const { status, viewerRole, clocks, asOf } = snapshot;
+  const { status, viewerRole, clocks, asOf, billingClock, phase } = snapshot;
 
   // ⚠ TERMINAL FIRST. An ended or cancelled meeting has no running clock for anybody, and the
   // frame is on its way to the end-of-call screen; a frozen duration on the way out reads as a
@@ -98,8 +98,19 @@ export function resolveTopBarClock({ snapshot }: TopBarClockInput): MeetingClock
 
   // ⚠ BOTH PARTIES PRESENT ⇒ THE BILLABLE SPAN IS RUNNING, and it is the same number for both
   // of them. This is the one arm where the two lenses agree.
+  //
+  // ⚠ BAL-474 (Rule A, R6-C8) — the figure is `billingClock.soFarMs` (the time together before the start plus
+  // the from-start time: what the bill will use, pre-floor), and it ticks only while `running`. Without the
+  // server's `billingClock` (a deploy skew) it is today's clamped `billableMs`, ticking as it always did.
   if (status === 'in_progress') {
-    return { kind: 'billable', clocks, asOf };
+    return billingClock === null
+      ? { kind: 'billable', clocks, asOf, running: true }
+      : {
+          kind: 'billable',
+          clocks: { ...clocks, billableMs: billingClock.soFarMs },
+          asOf,
+          running: billingClock.running,
+        };
   }
 
   // `scheduled` — nobody has opened an interval yet, so there is nothing counted for anyone.
@@ -112,12 +123,25 @@ export function resolveTopBarClock({ snapshot }: TopBarClockInput): MeetingClock
   // ⚠ WRITTEN POSITIVE-FIRST (S7735: a negated condition with an `else` is the harder of the
   // two to read).
   if (viewerRole === 'expert' && isExpertPresent(snapshot)) {
+    // ⚠ BAL-474 (Rule A) — BEFORE THE START nothing is counted for a lone expert: only time TOGETHER bills
+    // before it, and their own wait counts from the start. So `pre-start` is `Not started`, exactly as it is
+    // for the client.
+    if (phase === 'pre-start') {
+      return { kind: 'not_started' };
+    }
     // THE EXPERT IS HERE AND THEIR CLOCK IS RUNNING. Amber, and it says "counted".
     //
     // ⚠ THE GATE IS NEVER A LOCAL "am I joined" FLAG, AND NEVER THE DURATION. `expertPresentMs`
     // is a SPAN from the first expert join, so it is `0` on the tick the expert arrives and
     // would be indistinguishable from "no expert yet" if this branched on the number.
-    return { kind: 'counted', clocks, asOf };
+    return billingClock === null
+      ? { kind: 'counted', clocks, asOf, running: true }
+      : {
+          kind: 'counted',
+          clocks: { ...clocks, expertPresentMs: billingClock.soFarMs },
+          asOf,
+          running: billingClock.running,
+        };
   }
 
   // Either the viewer is the CLIENT — nothing is being charged, so `Not started` is the

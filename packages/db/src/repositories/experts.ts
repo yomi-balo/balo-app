@@ -636,14 +636,20 @@ export const expertsRepository = {
    *
    * `undefined` ⇒ no such profile. `{ rateCents: null }` ⇒ the expert has set no rate; the
    * caller decides (BAL-478's gate treats it as unevaluable, never as unfunded).
+   *
+   * TX-COMPOSABLE (BAL-474): `executor` lets the booking funding snapshot read the rate inside its
+   * one repeatable-read transaction; omitted ⇒ the base `db` (every existing caller).
    */
   async findRateCentsById(
-    expertProfileId: string
+    expertProfileId: string,
+    executor: DbExecutor = db
   ): Promise<{ rateCents: number | null } | undefined> {
-    return db.query.expertProfiles.findFirst({
-      where: eq(expertProfiles.id, expertProfileId),
-      columns: { rateCents: true },
-    });
+    const [row] = await executor
+      .select({ rateCents: expertProfiles.rateCents })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, expertProfileId))
+      .limit(1);
+    return row;
   },
 
   /**

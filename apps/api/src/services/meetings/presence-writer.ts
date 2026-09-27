@@ -48,7 +48,6 @@
  * directions.
  */
 import {
-  creditSessionsRepository,
   meetingGuestsRepository,
   meetingPresenceRepository,
   meetingsRepository,
@@ -56,7 +55,7 @@ import {
   type MeetingParticipantParty,
   type PresenceWindow,
 } from '@balo/db';
-import { MEETING_SERVER_EVENTS, SESSION_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
+import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { createLogger } from '@balo/shared/logging';
 import {
   parseDailyParticipantId,
@@ -66,7 +65,7 @@ import {
 import { MEETING_TOKEN_TTL_AFTER_END_MS } from './meeting-liveness.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
 import { deliveringExpertProfileIdForMeeting, deliveringExpertUserId } from './delivering-party.js';
-import { connectSessionAsSystem } from '../credit-session/connect-session.js';
+import { startBillingIfDue } from '../credit-session/start-billing.js';
 import {
   clientAbsentKey,
   expertAbsentKey,
@@ -97,31 +96,33 @@ export interface PresenceEffect {
   readonly party: MeetingParticipantParty;
   /** The observed instant. ⚠ MAY BE AN INVALID DATE — the write seam rejects it, loudly. */
   readonly at: Date;
-  /** BAL-134's R10 clamp, derived from the meeting row. */
+  /** BAL-134's R10 upper bound, derived from the meeting row. */
   readonly window: PresenceWindow;
   /** For logging only — `'unknown'` is the fail-closed answer, not an error. */
   readonly identityKind: DailyParticipantKind | 'unknown';
 }
 
 /**
- * ⚠ THE R10 CLAMP, DERIVED FROM THE MEETING ROW AND SUPPLIED ON EVERY WRITE.
+ * ⚠ THE UPPER BOUND OF THE R10 CLAMP, DERIVED FROM THE MEETING ROW AND SUPPLIED ON EVERY WRITE.
  *
  * `meetingPresenceRepository`'s `PresenceWindow` is OPT-IN by design — the repository resolves
  * no policy, because the upper bound is an `apps/api` constant and a repository that read it
  * would make every fixture subject to a number that can change. This function is the policy,
  * and the production path passes it on every single call.
  *
- *   · LOWER — `scheduled_start`. The ticket's rule verbatim: an expert arriving at 09:55 for a
- *     10:00 call is not credited for arriving early.
  *   · UPPER — `scheduled_end + MEETING_TOKEN_TTL_AFTER_END_MS`. **GENEROUS ON PURPOSE.** It
  *     exists to stop a nonsense timestamp (a `left_at` a day late), NOT to cap a long call: a
  *     legitimately over-running consultation must not be truncated into an UNDER-bill, and
  *     nothing terminates on `scheduled_end` (edge case 20). The settlement-side policy cap
  *     stays BAL-412's `effectiveCeilingMinor`.
+ *
+ * ⚠⚠ THERE IS NO LOWER BOUND (BAL-474, Rule A, D13). Presence is stored at its TRUE instants — the pre-start
+ * intersection needs them — and the READERS apply `clampIntervalsToStart` (so an expert arriving at 09:55 for a
+ * 10:00 call is not credited on the start-clamped clocks). Only settlement also reads how long the expert and a
+ * client-side participant were TOGETHER before the start.
  */
 export function presenceWindowFor(meeting: Meeting): PresenceWindow {
   return {
-    notBefore: meeting.scheduledStart,
     notAfter: new Date(meeting.scheduledEnd.getTime() + MEETING_TOKEN_TTL_AFTER_END_MS),
   };
 }
@@ -437,6 +438,10 @@ export type MeetingStatusTransition = 'waiting_for_participants' | 'in_progress'
  *   · {expert present} ∧ {≥1 client-side present} → `in_progress`, stamping `started_at` and
  *     emitting `meeting_started`.
  *
+ * ⚠ BAL-474 (Rule A) — WHENEVER an expert and a client side are both open (whatever the `in_progress`
+ * compare-and-set returned), it also asks `startBillingIfDue` whether the METER should start: never before the
+ * scheduled start, and at `max(start, co-presence)` — the minutes together before the start bill at settlement.
+ *
  * ⚠ `observer` COUNTS TOWARDS NEITHER SIDE OF THE `in_progress` TEST. A Balo staffer joining a
  * room the expert is already in must not start the consultation clock.
  *
@@ -458,45 +463,34 @@ export async function reconcileMeetingStatus(
 
   if (expertPresent && clientPresent) {
     const started = await meetingsRepository.markInProgress(meeting.id, now);
-    if (started === undefined) {
-      return null;
+    if (started !== undefined) {
+      log.info(
+        { meetingId: meeting.id, from: meeting.status, to: 'in_progress', trigger: 'presence' },
+        'Meeting status transition'
+      );
+      trackServer(MEETING_SERVER_EVENTS.MEETING_STARTED, {
+        meeting_id: meeting.id,
+        seconds_from_scheduled_start: Math.round(
+          (now.getTime() - meeting.scheduledStart.getTime()) / 1000
+        ),
+        participant_count: open.length,
+        // ⚠ THE MEETING ID, NOT A USER ID. There is no acting human on a system-observed
+        // transition, and `trackServer` promotes `distinct_id` to PostHog's `distinctId` — the
+        // same non-user shape `guest_joined` already uses with `meeting_guests.id`.
+        distinct_id: meeting.id,
+      });
     }
-    log.info(
-      { meetingId: meeting.id, from: meeting.status, to: 'in_progress', trigger: 'presence' },
-      'Meeting status transition'
-    );
-    trackServer(MEETING_SERVER_EVENTS.MEETING_STARTED, {
-      meeting_id: meeting.id,
-      seconds_from_scheduled_start: Math.round(
-        (now.getTime() - meeting.scheduledStart.getTime()) / 1000
-      ),
-      participant_count: open.length,
-      // ⚠ THE MEETING ID, NOT A USER ID. There is no acting human on a system-observed
-      // transition, and `trackServer` promotes `distinct_id` to PostHog's `distinctId` — the
-      // same non-user shape `guest_joined` already uses with `meeting_guests.id`.
-      distinct_id: meeting.id,
-    });
 
-    // ⚠⚠ BAL-466 (D6) — CONNECT THE CREDIT SESSION. This is the ORDINARY connect seam: the
-    //    moment an expert and a client side are both in the room. `markInProgress` is a
-    //    compare-and-set, so exactly ONE racing caller reaches this line per meeting.
-    //
-    //    ⚠ BEST-EFFORT AND NON-FATAL, the same posture as `cancelAbsenceReminders` above and
-    //    `settleBestEffort` in `end-meeting.ts`: the meeting is already `in_progress` in
-    //    Postgres, so a connect fault must never fail the Daily webhook (Daily would retry the
-    //    delivery and re-drive a transition that has already happened). The meter sweep cannot
-    //    recover this one, so it is an `error`, not a `warn`.
-    //
-    //    ⚠⚠ G3 (second review round) — NOT THE ONLY CONNECT SITE. When a CLIENT-invited GUEST
-    //    (counted in `clientPresent` above) is co-present with the expert BEFORE any client
-    //    MEMBER exists, this CAS fires here and finds no session to connect — the session does
-    //    not exist until a client member later joins and opens it. `join-meeting.ts`'s
-    //    `openCaseSessionBestEffort` covers exactly that ordering via
-    //    `connectIfMeetingAlreadyInProgress`, checking the meeting's status at that later
-    //    admission. The two never race each other: this CAS only ever fires ONCE per meeting.
-    await connectSessionBestEffort(meeting.id, now);
+    // ⚠⚠ BAL-474 (Rule A, D13) — START BILLING, LEVEL-TRIGGERED. Whenever an expert and a client side are
+    //    both in the room — WHATEVER the `markInProgress` compare-and-set returned — ask whether billing is
+    //    due. It is due only at or after the scheduled start (before it nothing meters: the pre-start
+    //    minutes together bill at settlement), and it opens the session first when none exists. It is called
+    //    on every co-present reconcile, and by the meter sweep's first pass, so a lost compare-and-set or a
+    //    failed attempt is retried. It NEVER THROWS (a webhook must not fail on a metering fault — the
+    //    meeting is already `in_progress`).
+    await startBillingIfDue({ meeting, openRows: open, now });
 
-    return 'in_progress';
+    return started === undefined ? null : 'in_progress';
   }
 
   if (open.length > 0) {
@@ -517,46 +511,6 @@ export async function reconcileMeetingStatus(
   }
 
   return null;
-}
-
-/**
- * BAL-466 (D6) — connect this meeting's credit session, if it has one.
- *
- * ⚠ INERT FOR EVERY MEETING WITHOUT ONE — `findIdByMeetingId` answers `undefined` for every
- * intro call, discovery call and unfunded Case, and this returns after ONE indexed read.
- *
- * ⚠ A SESSION THAT NEVER CONNECTS IS NOT BROKEN. `SETTLE_FROM_PRESENCE_FROM` includes
- * `pending` precisely so a client no-show settles correctly, and `findStalePending` excludes
- * `duration_source='presence'` so nothing cancels it. A failure here costs the LIVE meter and
- * the in-call ladder for that call, never the settlement.
- */
-async function connectSessionBestEffort(meetingId: string, now: Date): Promise<void> {
-  try {
-    const found = await creditSessionsRepository.findIdByMeetingId(meetingId);
-    if (found === undefined) return;
-
-    const session = await connectSessionAsSystem(found.id, { now });
-
-    // BAL-466 (D7) — `session_started` fires HERE, server-side, at the real connect seam.
-    trackServer(SESSION_SERVER_EVENTS.SESSION_STARTED, {
-      session_id: session.id,
-      meeting_id: meetingId,
-      expert_profile_id: session.expertProfileId,
-      // ⚠ THE MARKED-UP CLIENT RATE — never `expertRateMinorPerMinute` and never `baloFeeBps`.
-      rate_per_minute_minor: session.clientRateMinorPerMinute,
-      // ⚠ = company_id. There is no acting human on a system-observed transition.
-      distinct_id: session.companyId,
-    });
-  } catch (error) {
-    log.error(
-      {
-        meetingId,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      },
-      'Credit session could not be connected at co-presence — the call is not metering'
-    );
-  }
 }
 
 /**

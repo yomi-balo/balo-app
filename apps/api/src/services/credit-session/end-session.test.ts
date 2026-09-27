@@ -23,6 +23,7 @@ const {
   mockTriggerAutoTopup,
   mockWarn,
   mockInfo,
+  mockReportOwnerlessPriorDebt,
 } = vi.hoisted(() => ({
   mockEnd: vi.fn(),
   mockMarkSettlementResult: vi.fn(),
@@ -58,6 +59,9 @@ const {
   // un-alerted (expected-correct outcome — no Axiom monitor keys on it); BAL-545 pins its exact
   // wording in the drift-guard describe at the bottom of this file.
   mockInfo: vi.fn(),
+  // BAL-474 (D7.3) — the ownerless-debt reporter is a pure, DB-free module; mocked so the call is
+  // assertable without its Sentry/log side effects.
+  mockReportOwnerlessPriorDebt: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -91,6 +95,9 @@ vi.mock('../stripe/index.js', () => ({
   applyOverdraftSettlementFromStripe: mockApplyOverdraftSettlementFromStripe,
 }));
 vi.mock('./meter-driver.js', () => ({ driveSession: mockDriveSession }));
+vi.mock('./debt-owner-alarm.js', () => ({
+  reportOwnerlessPriorDebt: mockReportOwnerlessPriorDebt,
+}));
 vi.mock('./authorize-session-actor.js', () => ({ authorizeSessionActor: mockAuthorize }));
 vi.mock('./finalize-billing.js', () => ({ finalizeBilling: mockFinalizeBilling }));
 vi.mock('./notify.js', () => ({
@@ -157,6 +164,10 @@ describe('endSession', () => {
     mockFindWallet.mockResolvedValue(MANDATE_WALLET);
     // Default: this path opened the receivable — the caller duns once (FIX 5).
     mockReceivableOpen.mockResolvedValue({ receivable: { id: 'rcv_1' }, created: true });
+    // BAL-474 (D5.2 / D7.4, R4-F3) — `markSettlementResult` is compare-and-set and RETURNS the row it
+    // found; both stamps now read `settlementStatus` off it. The default is a row still in flight,
+    // i.e. the stamp APPLIED. (`vi.clearAllMocks` keeps implementations, so this is set per test.)
+    mockMarkSettlementResult.mockResolvedValue({ settlementStatus: 'processing' });
   });
 
   it('authorizes the actor with CONSUME_CREDITS before doing any work', async () => {
@@ -981,5 +992,178 @@ describe('BAL-545 — Axiom monitor strings are pinned verbatim', () => {
     expect(SETTLEMENT_PIN_DISAGREES_MSG).toBe(
       'Settlement instrument pin disagrees with the wallet — charging the live instrument (BAL-525: the pin is evidence and preference, never authority)'
     );
+  });
+});
+
+// ── BAL-474 (ADR-1040 Amendment 7 §B.5, D5.2 / D7.4, R4-F3 / R4-F4) — compare-and-set stamps ────────────
+
+describe('settlement stamps are compare-and-set, and only the Stripe call sits inside the charge try (BAL-474)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuthorize.mockResolvedValue({ ok: true, session: SESSION, role: 'member' });
+    mockDriveSession.mockResolvedValue({ session: SESSION, transitions: {}, ticksPosted: 0 });
+    mockFindWallet.mockResolvedValue(MANDATE_WALLET);
+    mockReceivableOpen.mockResolvedValue({ receivable: { id: 'rcv_1' }, created: true });
+    mockMarkSettlementResult.mockResolvedValue({ settlementStatus: 'processing' });
+  });
+
+  it('processing stamp skipped when the webhook already settled — info log, no receivable, no second write', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 1200, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({ status: 'processing', paymentIntentId: 'pi_1' });
+    // The synchronous-success webhook won the race: the compare-and-set found the row already settled.
+    mockMarkSettlementResult.mockResolvedValue({ settlementStatus: 'settled' });
+    const result = await endSession('session_1', 'user_1');
+    // D11.3 (N4) — the webhook won, so the service reports THAT (`settled`), not the `processing` it meant to stamp.
+    expect(result).toEqual({
+      ok: true,
+      result: { settlementStatus: 'settled', overdraftSettledMinor: 1200 },
+    });
+    expect(mockMarkSettlementResult).toHaveBeenCalledTimes(1);
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session_1', settlementStatus: 'settled' }),
+      'Settlement processing stamp skipped — the settlement webhook already resolved this session'
+    );
+    expect(mockInfo).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'Overdraft settlement processing — awaiting webhook'
+    );
+    expect(mockReceivableOpen).not.toHaveBeenCalled();
+    expect(mockPublishSettlementFailure).not.toHaveBeenCalled();
+  });
+
+  it('a DB fault in the processing stamp propagates — never misread as a decline, never opens a receivable', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 1200, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({ status: 'processing', paymentIntentId: 'pi_1' });
+    mockMarkSettlementResult.mockRejectedValue(new Error('db down'));
+    await expect(endSession('session_1', 'user_1')).rejects.toThrow('db down');
+    expect(mockReceivableOpen).not.toHaveBeenCalled();
+    expect(mockPublishSettlementFailure).not.toHaveBeenCalled();
+    // One charge attempt, never a second: the throw is NOT the card declining.
+    expect(mockCreateOffSessionCharge).toHaveBeenCalledTimes(1);
+  });
+
+  it('a DB fault while opening the SCA receivable propagates too — it is not caught as a hard decline', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 1200, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({
+      status: 'requires_action',
+      paymentIntentId: 'pi_2',
+      clientSecret: 'cs',
+    });
+    mockReceivableOpen.mockRejectedValue(new Error('db down'));
+    await expect(endSession('session_1', 'user_1')).rejects.toThrow('db down');
+    // Exactly one attempt to open — the catch arm did not run a second, "declined" one.
+    expect(mockReceivableOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('failure stamp skipped when already settled — no receivable, no dunning (R4-F4)', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 900, mandateActive: true }));
+    // A throw AFTER Stripe confirmed the charge: the webhook already wrote `settled`.
+    mockCreateOffSessionCharge.mockRejectedValue(new Error('network reset after confirm'));
+    mockMarkSettlementResult.mockResolvedValue({ settlementStatus: 'settled' });
+    const result = await endSession('session_1', 'user_1');
+    // The row IS settled, so that is what the service reports — never the failure it was about to record.
+    expect(result).toEqual({
+      ok: true,
+      result: { settlementStatus: 'settled', overdraftSettledMinor: 900 },
+    });
+    expect(mockMarkSettlementResult).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ sessionId: 'session_1', status: 'failed' })
+    );
+    expect(mockReceivableOpen).not.toHaveBeenCalled();
+    expect(mockPublishSettlementFailure).not.toHaveBeenCalled();
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session_1', attemptedStatus: 'failed' }),
+      expect.stringContaining('Settlement failure stamp skipped')
+    );
+  });
+
+  it('the SCA stamp finding the row already settled reports `settled` too — no receivable, no dunning', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 900, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({
+      status: 'requires_action',
+      paymentIntentId: 'pi_sca',
+      clientSecret: 'cs',
+    });
+    mockMarkSettlementResult.mockResolvedValue({ settlementStatus: 'settled' });
+    await expect(endSession('session_1', 'user_1')).resolves.toEqual({
+      ok: true,
+      result: { settlementStatus: 'settled', overdraftSettledMinor: 900 },
+    });
+    expect(mockReceivableOpen).not.toHaveBeenCalled();
+    expect(mockPublishSettlementFailure).not.toHaveBeenCalled();
+  });
+
+  it('a decline that DOES open the receivable still reports `failed` (the positive control)', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 900, mandateActive: true }));
+    mockCreateOffSessionCharge.mockRejectedValue(new Error('card_declined'));
+    mockMarkSettlementResult.mockResolvedValue({ settlementStatus: 'failed' });
+    await expect(endSession('session_1', 'user_1')).resolves.toEqual({
+      ok: true,
+      result: { settlementStatus: 'failed', overdraftSettledMinor: 900 },
+    });
+    expect(mockReceivableOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands publishSettlementFailure the receivable it just opened (the notice identity) and a timestamp', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 900, mandateActive: true }));
+    mockCreateOffSessionCharge.mockRejectedValue(new Error('card_declined'));
+    await endSession('session_1', 'user_1');
+    expect(mockPublishSettlementFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'declined',
+        amountMinor: 900,
+        receivableId: 'rcv_1',
+        now: expect.any(Date),
+      })
+    );
+  });
+});
+
+describe('the terminal basis and the ownerless-debt alarm (BAL-474, D7.3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuthorize.mockResolvedValue({ ok: true, session: SESSION, role: 'member' });
+    mockDriveSession.mockResolvedValue({ session: SESSION, transitions: {}, ticksPosted: 0 });
+    mockFindWallet.mockResolvedValue(MANDATE_WALLET);
+    mockMarkSettlementResult.mockResolvedValue({ settlementStatus: 'processing' });
+  });
+
+  it('logs the share basis on its OWN line and reports it to the alarm module, post-commit', async () => {
+    const basis = {
+      overdraftMinor: 700,
+      walletNegativeMinor: 1700,
+      ownConsumedMinor: 700,
+      priorDebtLeftMinor: 1000,
+      ownerlessPriorDebtMinor: 400,
+    };
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 0, overdraftBasis: basis }));
+    await endSession('session_1', 'user_1');
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session_1', overdraftBasis: basis }),
+      'Session end settlement basis'
+    );
+    expect(mockReportOwnerlessPriorDebt).toHaveBeenCalledWith({
+      sessionId: 'session_1',
+      walletId: 'wallet_1',
+      companyId: 'company_1',
+      basis,
+    });
+  });
+
+  it('the alarm fires BEFORE the settlement tail, so a tail fault cannot swallow it', async () => {
+    mockEnd.mockResolvedValue(
+      endResult({ overdraftMinor: 900, mandateActive: true, overdraftBasis: null })
+    );
+    mockCreateOffSessionCharge.mockRejectedValue(new Error('boom'));
+    mockReceivableOpen.mockRejectedValue(new Error('db down'));
+    await expect(endSession('session_1', 'user_1')).rejects.toThrow('db down');
+    expect(mockReportOwnerlessPriorDebt).toHaveBeenCalledTimes(1);
+  });
+
+  it('the idempotent re-end computed nothing, so it reports nothing', async () => {
+    mockEnd.mockResolvedValue(endResult({ alreadyEnded: true, overdraftBasis: null }));
+    await endSession('session_1', 'user_1');
+    expect(mockReportOwnerlessPriorDebt).not.toHaveBeenCalled();
   });
 });

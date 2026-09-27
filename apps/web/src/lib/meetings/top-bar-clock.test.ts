@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { MeetingLifecycleStatus, MeetingViewerRole } from '@balo/shared/meetings';
+import type {
+  MeetingLifecycleStatus,
+  MeetingViewerRole,
+  MeetingWaitingPhase,
+} from '@balo/shared/meetings';
 import { resolveTopBarClock } from './top-bar-clock';
 import type { MeetingStateSnapshot } from './meeting-state';
 
@@ -27,6 +31,9 @@ interface SnapshotOverrides {
   readonly expertPresenceOpen?: boolean | null;
   readonly expertPresentMs?: number;
   readonly billableMs?: number;
+  readonly phase?: MeetingWaitingPhase;
+  /** BAL-474 (Rule A) — `undefined` ⇒ an api that has not sent it (the deploy-skew arm). */
+  readonly billingClock?: { soFarMs: number; running: boolean } | null;
 }
 
 function snapshotOf(overrides: SnapshotOverrides = {}): MeetingStateSnapshot {
@@ -35,7 +42,7 @@ function snapshotOf(overrides: SnapshotOverrides = {}): MeetingStateSnapshot {
     outcome: null,
     endedBy: null,
     viewerRole: overrides.viewerRole ?? 'expert',
-    phase: 'running',
+    phase: overrides.phase ?? 'running',
     clocks: {
       expertPresentMs: overrides.expertPresentMs ?? 720_000,
       billableMs: overrides.billableMs ?? 0,
@@ -47,6 +54,8 @@ function snapshotOf(overrides: SnapshotOverrides = {}): MeetingStateSnapshot {
     noShowFloorMinutes: 15,
     expertPresenceOpen:
       overrides.expertPresenceOpen === undefined ? true : overrides.expertPresenceOpen,
+    billingClock: overrides.billingClock === undefined ? null : overrides.billingClock,
+    caseClosure: null,
   };
 }
 
@@ -127,10 +136,12 @@ describe('resolveTopBarClock — the §7.3 matrix', () => {
       const result = resolveTopBarClock({ snapshot });
 
       if (typeof testCase.expected === 'string') {
+        // No `billingClock` from the api (the deploy-skew arm) ⇒ today's clamped clocks, ticking.
         expect(result).toEqual({
           kind: testCase.expected,
           clocks: snapshot.clocks,
           asOf: snapshot.asOf,
+          running: true,
         });
         return;
       }
@@ -239,5 +250,102 @@ describe('resolveTopBarClock — purity', () => {
   it('never produces a money figure — only durations and the instant they were taken', () => {
     const result = resolveTopBarClock({ snapshot: snapshotOf({ status: 'in_progress' }) });
     expect(JSON.stringify(result)).not.toMatch(/amount|price|cost|minor|currency/i);
+  });
+});
+
+/**
+ * BAL-474 (Rule A, D13, R6-C8) — THE CHIP SHOWS WHAT THE BILL WILL USE, AND TICKS ONLY WHILE THE ROOM IS
+ * PRODUCING TIME. No new text: only the figure and whether it moves.
+ */
+describe('resolveTopBarClock — Rule A: the chip reads `billingClock`', () => {
+  const MINUTE = 60_000;
+
+  it('⚠ the BILLABLE arm shows `billingClock.soFarMs` (time together before the start + time since), not the clamped billableMs', () => {
+    const snapshot = snapshotOf({
+      status: 'in_progress',
+      billableMs: 20 * MINUTE,
+      billingClock: { soFarMs: 30 * MINUTE, running: true },
+    });
+
+    const result = resolveTopBarClock({ snapshot });
+
+    expect(result).toMatchObject({ kind: 'billable', running: true, asOf: ASOF });
+    expect(result?.kind === 'billable' && result.clocks.billableMs).toBe(30 * MINUTE);
+    // Nothing else on the clocks is disturbed.
+    expect(result?.kind === 'billable' && result.clocks.expertPresentMs).toBe(
+      snapshot.clocks.expertPresentMs
+    );
+  });
+
+  it('⚠ a billable chip whose room is not producing time is FROZEN (`running: false`) at the measured figure', () => {
+    const result = resolveTopBarClock({
+      snapshot: snapshotOf({
+        status: 'in_progress',
+        billingClock: { soFarMs: 4 * MINUTE, running: false },
+      }),
+    });
+    expect(result).toMatchObject({ kind: 'billable', running: false });
+    expect(result?.kind === 'billable' && result.clocks.billableMs).toBe(4 * MINUTE);
+  });
+
+  it('⚠ the COUNTED arm (the expert’s amber chip) shows `billingClock.soFarMs` as the counted figure, and freezes when not running', () => {
+    const result = resolveTopBarClock({
+      snapshot: snapshotOf({
+        status: 'waiting_for_participants',
+        viewerRole: 'expert',
+        expertPresentMs: 3 * MINUTE,
+        billingClock: { soFarMs: 11 * MINUTE, running: false },
+      }),
+    });
+    expect(result).toMatchObject({ kind: 'counted', running: false });
+    expect(result?.kind === 'counted' && result.clocks.expertPresentMs).toBe(11 * MINUTE);
+  });
+
+  it('⚠ BEFORE THE START a lone expert has nothing counted: `pre-start` is `not_started`, exactly as for the client', () => {
+    expect(
+      resolveTopBarClock({
+        snapshot: snapshotOf({
+          status: 'waiting_for_participants',
+          viewerRole: 'expert',
+          phase: 'pre-start',
+          billingClock: { soFarMs: 0, running: false },
+        }),
+      })
+    ).toEqual({ kind: 'not_started' });
+  });
+
+  it('after the start the same expert IS counted again (the phase moved on)', () => {
+    expect(
+      resolveTopBarClock({
+        snapshot: snapshotOf({
+          status: 'waiting_for_participants',
+          viewerRole: 'expert',
+          phase: 'running',
+          billingClock: { soFarMs: 2 * MINUTE, running: true },
+        }),
+      })
+    ).toMatchObject({ kind: 'counted', running: true });
+  });
+
+  it('an api that has not sent `billingClock` (deploy skew) keeps today’s behaviour on BOTH arms, ticking', () => {
+    expect(resolveTopBarClock({ snapshot: snapshotOf({ status: 'in_progress' }) })).toMatchObject({
+      kind: 'billable',
+      running: true,
+    });
+    expect(resolveTopBarClock({ snapshot: snapshotOf({}) })).toMatchObject({
+      kind: 'counted',
+      running: true,
+    });
+  });
+
+  it('a `scheduled` meeting stays not_started whatever the billing clock says', () => {
+    expect(
+      resolveTopBarClock({
+        snapshot: snapshotOf({
+          status: 'scheduled',
+          billingClock: { soFarMs: 5 * MINUTE, running: true },
+        }),
+      })
+    ).toEqual({ kind: 'not_started' });
   });
 });

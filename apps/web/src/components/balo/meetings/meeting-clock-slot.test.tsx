@@ -29,8 +29,8 @@ const AS_OF = new Date('2026-09-02T10:20:00.000Z');
 const ALL_STATES: ReadonlyArray<{ label: string; state: MeetingClockState }> = [
   { label: 'not_started', state: { kind: 'not_started' } },
   { label: 'live', state: { kind: 'live' } },
-  { label: 'billable', state: { kind: 'billable', clocks: CLOCKS, asOf: AS_OF } },
-  { label: 'counted', state: { kind: 'counted', clocks: CLOCKS, asOf: AS_OF } },
+  { label: 'billable', state: { kind: 'billable', clocks: CLOCKS, asOf: AS_OF, running: true } },
+  { label: 'counted', state: { kind: 'counted', clocks: CLOCKS, asOf: AS_OF, running: true } },
 ];
 
 beforeEach(() => {
@@ -60,20 +60,26 @@ describe('MeetingClockSlot — all four arms', () => {
   });
 
   it('renders the BAL-134 billable snapshot as mm:ss', () => {
-    render(<MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: AS_OF }} />);
+    render(
+      <MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: AS_OF, running: true }} />
+    );
 
     expect(screen.getByText('12:34')).toBeInTheDocument();
   });
 
   it('renders the BAL-134 counted snapshot, labelled — the waiting-state-patch top-bar fix', () => {
-    render(<MeetingClockSlot state={{ kind: 'counted', clocks: CLOCKS, asOf: AS_OF }} />);
+    render(
+      <MeetingClockSlot state={{ kind: 'counted', clocks: CLOCKS, asOf: AS_OF, running: true }} />
+    );
 
     // While the expert waits their time IS counting, and the bar used to say "Not started".
     expect(screen.getByText(/03:12 counted/)).toBeInTheDocument();
   });
 
   it('⚠ ticks from `asOf`, so it never accumulates its own drift', () => {
-    render(<MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: AS_OF }} />);
+    render(
+      <MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: AS_OF, running: true }} />
+    );
 
     act(() => {
       vi.advanceTimersByTime(5_000);
@@ -85,7 +91,9 @@ describe('MeetingClockSlot — all four arms', () => {
   it('⚠ never runs backwards — a clock that does reads as a bug', () => {
     // `asOf` in the future (a clock-skewed client) must clamp to the base, not go negative.
     const future = new Date(AS_OF.getTime() + 60_000);
-    render(<MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: future }} />);
+    render(
+      <MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: future, running: true }} />
+    );
 
     expect(screen.getByText('12:34')).toBeInTheDocument();
   });
@@ -136,14 +144,14 @@ describe('MeetingClockSlot — ⚠⚠ responsive visibility (BAL-134)', () => {
   }
 
   it('⚠⚠ the COUNTED chip renders at every width — it is the money-adjacent one', () => {
-    const classes = classesOf({ kind: 'counted', clocks: CLOCKS, asOf: AS_OF });
+    const classes = classesOf({ kind: 'counted', clocks: CLOCKS, asOf: AS_OF, running: true });
 
     expect(classes).not.toContain('hidden');
     expect(classes.split(/\s+/)).toContain('flex');
   });
 
   it('the BILLABLE chip renders at every width too — same class of claim', () => {
-    const classes = classesOf({ kind: 'billable', clocks: CLOCKS, asOf: AS_OF });
+    const classes = classesOf({ kind: 'billable', clocks: CLOCKS, asOf: AS_OF, running: true });
 
     expect(classes).not.toContain('hidden');
     expect(classes.split(/\s+/)).toContain('flex');
@@ -163,5 +171,60 @@ describe('MeetingClockSlot — ⚠⚠ responsive visibility (BAL-134)', () => {
     for (const { state } of ALL_STATES) {
       expect(classesOf(state).split(/\s+/)).toContain('shrink-0');
     }
+  });
+});
+
+/**
+ * BAL-474 (Rule A, R6-C8) — `running` FREEZES THE CHIP. A figure the room is not producing (an early check-in
+ * that emptied, a solo early wait) is shown as the server measured it and never interpolated forward.
+ */
+describe('MeetingClockSlot — ⚠ `running: false` freezes the figure (Rule A)', () => {
+  it.each(['billable', 'counted'] as const)(
+    '⚠ the %s chip does NOT tick when it is not running — five seconds later it reads the same',
+    (kind) => {
+      render(<MeetingClockSlot state={{ kind, clocks: CLOCKS, asOf: AS_OF, running: false }} />);
+      const before = kind === 'billable' ? '12:34' : /03:12 counted/;
+      expect(screen.getByText(before)).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+
+      expect(screen.getByText(before)).toBeInTheDocument();
+    }
+  );
+
+  it('arms NO interval while frozen', () => {
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    render(
+      <MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: AS_OF, running: false }} />
+    );
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('a chip that STARTS running after being frozen begins to tick', () => {
+    const { rerender } = render(
+      <MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: AS_OF, running: false }} />
+    );
+    rerender(
+      <MeetingClockSlot state={{ kind: 'billable', clocks: CLOCKS, asOf: AS_OF, running: true }} />
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+
+    expect(screen.getByText('12:37')).toBeInTheDocument();
+  });
+
+  it('a frozen chip is still accessible: aria-live off, static label carries the figure', async () => {
+    const { container } = render(
+      <MeetingClockSlot state={{ kind: 'counted', clocks: CLOCKS, asOf: AS_OF, running: false }} />
+    );
+    const chip = container.firstElementChild;
+    expect(chip).toHaveAttribute('aria-live', 'off');
+    expect(chip).toHaveAttribute('aria-label', '03:12 counted');
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

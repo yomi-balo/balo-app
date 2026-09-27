@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockPostGuestJoin = vi.fn();
-vi.mock('@/lib/meetings/join-api-client', () => ({
-  postGuestJoin: (...args: unknown[]) => mockPostGuestJoin(...args),
-}));
+// ⚠ `notOpenYetFrom` (D17.5) is the REAL, pure implementation — importActual'd rather than
+// re-stubbed, so this suite exercises the same extraction the three action call sites share.
+vi.mock('@/lib/meetings/join-api-client', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/meetings/join-api-client')>(
+    '@/lib/meetings/join-api-client'
+  );
+  return {
+    ...actual,
+    postGuestJoin: (...args: unknown[]) => mockPostGuestJoin(...args),
+  };
+});
 
 import { pollGuestAdmissionAction } from './poll-guest-admission';
 import { JOIN_TEMPORARILY_UNAVAILABLE_TITLE, JOIN_UNAVAILABLE_TITLE } from '@/lib/meetings/lobby';
@@ -57,6 +65,43 @@ describe('pollGuestAdmissionAction — the two success states', () => {
     await pollGuestAdmissionAction(VALID);
 
     expect(mockPostGuestJoin).toHaveBeenCalledWith(MEETING_ID, GUEST_TOKEN);
+  });
+});
+
+describe('pollGuestAdmissionAction — D16, the join window has not opened', () => {
+  it('⚠⚠ a `meeting_not_open_yet` refusal carries `notOpenYet.opensAt` and stays non-retryable for the POLL', async () => {
+    mockPostGuestJoin.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'meeting_not_open_yet',
+      opensAt: '2026-09-25T11:57:00.000Z',
+    });
+
+    const result = await pollGuestAdmissionAction(VALID);
+
+    expect(result).toMatchObject({
+      success: false,
+      retryable: false,
+      status: 409,
+      notOpenYet: { opensAt: '2026-09-25T11:57:00.000Z' },
+    });
+  });
+
+  it('every OTHER failure — including the terminal `meeting_not_open_for_join` — carries no `notOpenYet`', async () => {
+    for (const [status, code] of [
+      [409, 'meeting_not_open_for_join'],
+      [404, 'meeting_not_found'],
+      [503, 'meeting_token_unavailable'],
+    ] as const) {
+      mockPostGuestJoin.mockResolvedValue({
+        ok: false,
+        status,
+        code,
+        opensAt: '2026-09-25T11:57:00.000Z',
+      });
+      const result = await pollGuestAdmissionAction(VALID);
+      expect('notOpenYet' in result).toBe(false);
+    }
   });
 });
 

@@ -35,9 +35,26 @@ export type MeetingClockState =
   | { readonly kind: 'not_started' }
   /** ⚠ THE ONLY VALUE BAL-435 PRODUCES. Presence, not duration. */
   | { readonly kind: 'live' }
-  /** BAL-134 wires these two: a snapshot plus the instant it was taken. */
-  | { readonly kind: 'billable'; readonly clocks: MeetingClocks; readonly asOf: Date }
-  | { readonly kind: 'counted'; readonly clocks: MeetingClocks; readonly asOf: Date };
+  /**
+   * BAL-134 wires these two: a snapshot plus the instant it was taken.
+   *
+   * ⚠ BAL-474 (Rule A, R6-C8) — `running` is whether the figure is still GROWING. The chip ticks from `asOf`
+   * only while it is; when it is `false` (an early check-in that has emptied, a solo early wait) the figure is
+   * shown exactly as the server measured it and never interpolated forward — a frozen number that the room is
+   * not producing must not creep up.
+   */
+  | {
+      readonly kind: 'billable';
+      readonly clocks: MeetingClocks;
+      readonly asOf: Date;
+      readonly running: boolean;
+    }
+  | {
+      readonly kind: 'counted';
+      readonly clocks: MeetingClocks;
+      readonly asOf: Date;
+      readonly running: boolean;
+    };
 
 /** `mm:ss`, clamped at zero. ⚠ Never negative — a clock that runs backwards reads as a bug. */
 function formatElapsed(ms: number): string {
@@ -72,23 +89,24 @@ const CHIP_ALWAYS_VISIBLE = 'flex';
 
 /**
  * ⚠ THE SNAPSHOT TICKS FROM `asOf`, so the chip stays honest across a slow render or a
- * backgrounded tab — it never accumulates its own drift.
+ * backgrounded tab — it never accumulates its own drift. When `running` is `false` no interval is
+ * armed and the base figure is returned as measured (BAL-474 Rule A).
  */
-function useTickedElapsed(baseMs: number | null, asOf: Date | null): number {
+function useTickedElapsed(baseMs: number | null, asOf: Date | null, running: boolean): number {
   const [nowMs, setNowMs] = useState<number | null>(null);
 
   useEffect(() => {
-    if (asOf === null) {
+    if (asOf === null || !running) {
       setNowMs(null);
       return;
     }
     setNowMs(Date.now());
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [asOf]);
+  }, [asOf, running]);
 
   if (baseMs === null || asOf === null) return 0;
-  if (nowMs === null) return baseMs;
+  if (!running || nowMs === null) return baseMs;
   return baseMs + Math.max(0, nowMs - asOf.getTime());
 }
 
@@ -101,7 +119,11 @@ export function MeetingClockSlot({
     if (state.kind === 'counted') return state.clocks.expertPresentMs;
     return null;
   })();
-  const elapsedMs = useTickedElapsed(baseMs, isSnapshot ? state.asOf : null);
+  const elapsedMs = useTickedElapsed(
+    baseMs,
+    isSnapshot ? state.asOf : null,
+    isSnapshot && state.running
+  );
 
   if (state.kind === 'not_started') {
     return (

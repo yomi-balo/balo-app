@@ -1,5 +1,6 @@
 import { Check, CircleDashed, Clock, ShieldCheck } from 'lucide-react';
 import { Reveal } from '@/components/balo/engagement/reveal';
+import { CaseClosedGlyph } from '@/components/balo/meetings/case-closed-glyph';
 import type { EndOfCallRecapState } from '@/lib/meetings/end-of-call-view-types';
 import { EndOfCallShell } from './end-of-call-shell';
 
@@ -56,6 +57,7 @@ export function EndOfCallLayout({
   reassurance,
   recapState,
   sessionHeld,
+  caseClosed = false,
   onward,
   postCallActions,
 }: Readonly<{
@@ -69,6 +71,13 @@ export function EndOfCallLayout({
    * the card to its neutral variant — see the module docblock. Never a lens, never a role.
    */
   sessionHeld: boolean;
+  /**
+   * BAL-474 (R6F-2) — the meeting ended as a voided no-show on a case closed before its start. The card then
+   * carries the static neutral case-closed glyph in place of the success tick, states no "You spoke for" line
+   * and no recap-is-being-prepared line: nothing happened that either would describe. Same rule as `sessionHeld`
+   * — a fact about the meeting, never a lens.
+   */
+  caseClosed?: boolean;
   /** The onward CTA, supplied by the composition so the shell never sees a lens. */
   onward: React.ReactNode;
   /** The client lens's rating + resolve island. `undefined` on the expert lens, and whenever
@@ -80,22 +89,7 @@ export function EndOfCallLayout({
     <EndOfCallShell>
       <div className="bg-card border-border w-full rounded-xl border p-8 text-center shadow-sm">
         <Reveal>
-          {sessionHeld ? (
-            <span
-              aria-hidden="true"
-              className="bg-success/10 text-success animate-in fade-in zoom-in-75 mb-4 inline-grid h-14 w-14 place-items-center rounded-full duration-500 motion-reduce:animate-none"
-            >
-              <Check className="h-6 w-6" strokeWidth={2.5} />
-            </span>
-          ) : (
-            /* ⚠ NEUTRAL, NOT A MUTED SUCCESS TICK. A greyed check still reads "done". */
-            <span
-              aria-hidden="true"
-              className="bg-muted text-muted-foreground mb-4 inline-grid h-14 w-14 place-items-center rounded-full"
-            >
-              <CircleDashed className="h-6 w-6" strokeWidth={2} />
-            </span>
-          )}
+          <EndOfCallMark sessionHeld={sessionHeld} caseClosed={caseClosed} />
         </Reveal>
 
         <Reveal delay={0.05}>
@@ -106,7 +100,7 @@ export function EndOfCallLayout({
               bare "0 min". `>= 1` rather than `!== null` is that rule applied literally: a
               sub-30-second call rounds to 0 and still says nothing. This is 100% of sessions
               today, because BAL-134 owns the stamps and is Backlog. */}
-          {durationMinutes !== null && durationMinutes >= 1 && (
+          {!caseClosed && durationMinutes !== null && durationMinutes >= 1 && (
             <p className="text-muted-foreground mt-1.5 flex items-center justify-center gap-1.5 text-sm">
               <Clock className="h-3.5 w-3.5 flex-none" aria-hidden="true" />
               {'You spoke for ' + durationMinutes + ' min with ' + counterpartyName}
@@ -131,11 +125,47 @@ export function EndOfCallLayout({
 
         <Reveal delay={0.2} className="mt-6 flex w-full flex-col gap-2">
           {onward}
-          {sessionHeld && recapState === 'processing' && (
+          {sessionHeld && !caseClosed && recapState === 'processing' && (
             <p className="text-muted-foreground text-xs">Your recap is being prepared.</p>
           )}
         </Reveal>
       </div>
     </EndOfCallShell>
+  );
+}
+
+/**
+ * The card's mark, in three arms rather than a nested ternary (SonarCloud S3358). The case-closed glyph is the
+ * SAME `CaseClosedGlyph` the waiting stage wears, so the two surfaces show one glyph for one state.
+ */
+function EndOfCallMark({
+  sessionHeld,
+  caseClosed,
+}: Readonly<{ sessionHeld: boolean; caseClosed: boolean }>): React.JSX.Element {
+  if (caseClosed) {
+    return (
+      <span className="bg-muted mb-4 inline-grid h-14 w-14 place-items-center rounded-full">
+        <CaseClosedGlyph className="h-6 w-6" />
+      </span>
+    );
+  }
+  if (sessionHeld) {
+    return (
+      <span
+        aria-hidden="true"
+        className="bg-success/10 text-success animate-in fade-in zoom-in-75 mb-4 inline-grid h-14 w-14 place-items-center rounded-full duration-500 motion-reduce:animate-none"
+      >
+        <Check className="h-6 w-6" strokeWidth={2.5} />
+      </span>
+    );
+  }
+  return (
+    /* ⚠ NEUTRAL, NOT A MUTED SUCCESS TICK. A greyed check still reads "done". */
+    <span
+      aria-hidden="true"
+      className="bg-muted text-muted-foreground mb-4 inline-grid h-14 w-14 place-items-center rounded-full"
+    >
+      <CircleDashed className="h-6 w-6" strokeWidth={2} />
+    </span>
   );
 }

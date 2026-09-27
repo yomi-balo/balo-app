@@ -13,7 +13,7 @@ function errorMessage(error: unknown): string {
  * ⚠ IT SWALLOWS ITS OWN FAILURE, DELIBERATELY. Every call site is an ALARM PATH: a refused
  * consultation admission, a failed enqueue, a stuck reload. An alert about a failure must
  * never itself turn that failure into a second, worse one —
- * `apps/api/src/services/meetings/join-meeting.ts`'s `reportSessionOpenRefused` docblock
+ * `apps/api/src/services/credit-session/report-session-open-refused.ts`'s module docblock
  * states the same rule for its own diagnostic wallet read ("an alarm about a refusal must
  * never itself risk failing the join").
  *

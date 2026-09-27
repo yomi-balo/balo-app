@@ -55,19 +55,26 @@ export function OnwardCta({
   lens,
   recapState,
   caseHref,
+  caseClosed = false,
 }: Readonly<{
   meetingId: string;
   lens: RecapLens;
   recapState: EndOfCallRecapState;
   /** `/cases/{id}`, or `null` when this context has no case destination. See the docblock. */
   caseHref: string | null;
+  /**
+   * BAL-474 (R6F-2) — the voided no-show arm: there is no recap to promise or offer, so the CTA takes the
+   * case-page arm whatever `recapState` says. The recap arm would send the viewer to a page that only says
+   * nothing was held.
+   */
+  caseClosed?: boolean;
 }>): React.JSX.Element {
   // ⚠ ONE DERIVED VALUE, NOT THREE PARALLEL CONDITIONALS. `caseArm` is the case href when that
   // arm applies and `null` otherwise, so the destination, the label and the tracked action are
   // all read off the SAME narrowing and cannot disagree about which button was pressed. Both
   // reasons to fall back — a ready recap, and a context with no case destination — collapse into
   // this one `null`.
-  const caseArm = recapState === 'processing' ? caseHref : null;
+  const caseArm = recapState === 'processing' || caseClosed ? caseHref : null;
   const action = caseArm === null ? 'view_recap' : 'back_to_case';
 
   const onClick = useCallback(() => {

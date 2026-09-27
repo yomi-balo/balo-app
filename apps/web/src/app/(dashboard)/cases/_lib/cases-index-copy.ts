@@ -114,7 +114,7 @@ export const CASES_INDEX_RETRY = 'Try again';
 export const CASES_INDEX_FEATURED_EYEBROW = 'Your next consultation';
 export const CASES_INDEX_JOIN = 'Join call';
 /** Outside the window, the ticket states WHEN Join appears rather than showing a dead button. */
-export const CASES_INDEX_JOIN_HINT = 'Join opens 15 min before';
+export const CASES_INDEX_JOIN_HINT = 'Join opens 3 min before';
 export const CASES_INDEX_HAPPENING_NOW = 'Happening now';
 export const casesIndexStartsIn = (minutes: number): string =>
   `Starts in ${minutes} min${minutes === 1 ? '' : 's'}`;

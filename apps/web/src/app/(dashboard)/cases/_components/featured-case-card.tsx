@@ -226,7 +226,7 @@ export function FeaturedCaseCard({
  * The stub's action row: Join, the "setting up" slot, the "when it opens" hint, or NOTHING.
  *
  * ⚠⚠ THE HINT REQUIRES A READABLE BOOKING (fix round X5). It used to be the unconditional `else`,
- * so the card promised "Join opens 15 min before" even when it could not read the time it was
+ * so the card promised "Join opens 3 min before" even when it could not read the time it was
  * counting back FROM — during the pre-clock first paint, and in the (rare) case where the
  * repository says a case is booked but its trail carries no matching meeting. Telling somebody
  * when they can join a call whose time you do not have is a CONFIDENT WRONG ANSWER, which is

@@ -8,8 +8,12 @@ const mockUpdateConfig = vi.fn();
 const mockValidate = vi.fn();
 const mockFindByIdempotencyKey = vi.fn();
 const mockHasActiveSessionForWallet = vi.fn();
+const mockFindNameById = vi.fn();
 vi.mock('@balo/db', () => ({
   db: {},
+  companiesRepository: {
+    findNameById: (...a: unknown[]) => mockFindNameById(...a),
+  },
   creditWalletsRepository: {
     ensureForCompany: (...a: unknown[]) => mockEnsureForCompany(...a),
     findByCompanyId: (...a: unknown[]) => mockFindByCompanyId(...a),
@@ -84,7 +88,13 @@ const { TestCreditApiError } = vi.hoisted(() => ({
     constructor(
       message: string,
       public readonly status?: number,
-      public readonly body?: { outcome?: string; error?: string; code?: string | null }
+      public readonly body?: {
+        outcome?: string;
+        error?: string;
+        code?: string | null;
+        topUpNeededMinor?: number;
+        reservedBookingCount?: number;
+      }
     ) {
       super(message);
       this.name = 'CreditApiError';
@@ -1254,6 +1264,75 @@ describe('credit actions', () => {
         { walletId: 'wallet-1', companyId: 'company-1' }
       );
       expect(mockLogError).not.toHaveBeenCalled();
+    });
+
+    describe('D10.6 — the 409 upcoming_bookings_uncovered refusal', () => {
+      function refuse(body: Record<string, unknown>): void {
+        mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1' });
+        mockDetachSavedCardPaymentMethod.mockRejectedValue(
+          new TestCreditApiError('conflict', 409, {
+            error: 'upcoming_bookings_uncovered',
+            ...body,
+          })
+        );
+      }
+
+      it('maps it to its own arm carrying the api figures and the server-read company name — never the generic error', async () => {
+        refuse({ topUpNeededMinor: 123_450, reservedBookingCount: 2 });
+        mockFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+
+        const res = await removeSavedCardAction();
+
+        expect(res).toEqual({
+          ok: false,
+          error: 'upcoming_bookings_uncovered',
+          topUpNeededMinor: 123_450,
+          reservedBookingCount: 2,
+          companyName: 'Northwind Industrial',
+        });
+        // The name is read for the SESSION's company — never anything client-supplied.
+        expect(mockFindNameById).toHaveBeenCalledWith('company-1');
+        // Expected and user-actionable: warn with the figures, not error.
+        expect(mockLogWarn).toHaveBeenCalledWith(
+          'Saved card removal refused — upcoming bookings are not covered by the balance',
+          {
+            walletId: 'wallet-1',
+            companyId: 'company-1',
+            topUpNeededMinor: 123_450,
+            reservedBookingCount: 2,
+          }
+        );
+        expect(mockLogError).not.toHaveBeenCalled();
+      });
+
+      it('a failed or empty company-name read degrades to a null name — the refusal itself is still returned', async () => {
+        refuse({ topUpNeededMinor: 30_000, reservedBookingCount: 1 });
+        mockFindNameById.mockRejectedValue(new Error('db blip'));
+        expect(await removeSavedCardAction()).toMatchObject({
+          ok: false,
+          error: 'upcoming_bookings_uncovered',
+          companyName: null,
+        });
+
+        mockFindNameById.mockResolvedValue(undefined);
+        expect(await removeSavedCardAction()).toMatchObject({ companyName: null });
+      });
+
+      it.each([
+        ['a missing top-up figure', { reservedBookingCount: 2 }],
+        ['a missing count', { topUpNeededMinor: 30_000 }],
+        ['a zero figure', { topUpNeededMinor: 0, reservedBookingCount: 2 }],
+        ['a fractional figure', { topUpNeededMinor: 30_000.5, reservedBookingCount: 2 }],
+        ['a zero count', { topUpNeededMinor: 30_000, reservedBookingCount: 0 }],
+      ])(
+        '%s is a contract break — the generic error, never a made-up figure',
+        async (_name, body) => {
+          refuse(body);
+
+          expect(await removeSavedCardAction()).toEqual({ ok: false, error: 'error' });
+          expect(mockLogError).toHaveBeenCalledTimes(1);
+        }
+      );
     });
   });
 

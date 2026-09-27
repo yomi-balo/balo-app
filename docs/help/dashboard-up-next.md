@@ -11,7 +11,7 @@ projects and project requests, not just meetings you were personally invited to.
 
 Selecting a row opens the case or project it belongs to.
 
-**Join** appears 15 minutes before a meeting starts and takes you straight into the call — you're
+**Join** appears 3 minutes before a meeting starts and takes you straight into the call — you're
 already signed in, so there's no name or email step. It stays available until 30 minutes after
 the meeting's scheduled end, or until the meeting itself ends, whichever comes first.
 

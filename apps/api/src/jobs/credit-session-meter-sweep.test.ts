@@ -18,6 +18,17 @@ const {
   mockSettleSessionFromPresence,
   mockLoggerWarn,
   mockLoggerError,
+  mockLoggerInfo,
+  mockFindSessionlessEndedCaseMeetings,
+  mockFindIdByMeetingId,
+  mockSettleSessionlessCaseMeeting,
+  mockExhaustSessionlessCaseMeeting,
+  mockCaptureException,
+  mockListDueToStartBilling,
+  mockMeetingFindById,
+  mockListOpen,
+  mockStartBillingIfDue,
+  mockFindPendingBeyondJoinWindow,
 } = vi.hoisted(() => ({
   mockFindMeterable: vi.fn(),
   mockFindWrappedIdle: vi.fn(),
@@ -38,12 +49,25 @@ const {
   mockLoggerWarn: vi.fn(),
   /** ⚠ HOISTED for the same reason as `mockLoggerWarn` — pass 7's per-row alarm is an `error`. */
   mockLoggerError: vi.fn(),
+  mockLoggerInfo: vi.fn(),
+  // BAL-474 — the sessionless-meeting backstop pass.
+  mockFindSessionlessEndedCaseMeetings: vi.fn(),
+  mockFindIdByMeetingId: vi.fn(),
+  mockSettleSessionlessCaseMeeting: vi.fn(),
+  mockExhaustSessionlessCaseMeeting: vi.fn(),
+  mockCaptureException: vi.fn(),
+  // BAL-474 (Rule A) — the billing-start pass and (D11.2) the beyond-window release pass.
+  mockListDueToStartBilling: vi.fn(),
+  mockMeetingFindById: vi.fn(),
+  mockListOpen: vi.fn(),
+  mockStartBillingIfDue: vi.fn(),
+  mockFindPendingBeyondJoinWindow: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({
     debug: vi.fn(),
-    info: vi.fn(),
+    info: mockLoggerInfo,
     warn: mockLoggerWarn,
     error: mockLoggerError,
   }),
@@ -58,9 +82,39 @@ vi.mock('@balo/db', () => ({
     findPresenceUnsettled: mockFindPresenceUnsettled,
     findPendingForCancelledMeetings: mockFindPendingForCancelledMeetings,
     findSettledMissingLedgerCredit: mockFindSettledMissingLedgerCredit,
+    findSessionlessEndedCaseMeetings: mockFindSessionlessEndedCaseMeetings,
+    findIdByMeetingId: mockFindIdByMeetingId,
+    findPendingBeyondJoinWindow: mockFindPendingBeyondJoinWindow,
     cancel: mockCancel,
   },
+  meetingsRepository: {
+    listCaseMeetingsDueToStartBilling: mockListDueToStartBilling,
+    findById: mockMeetingFindById,
+  },
+  meetingPresenceRepository: { listOpen: mockListOpen },
 }));
+vi.mock('../services/credit-session/start-billing.js', () => ({
+  startBillingIfDue: mockStartBillingIfDue,
+}));
+vi.mock('@sentry/node', () => ({ captureException: mockCaptureException }));
+// BAL-474 — the service is mocked; its constants are restated here (its own test pins them).
+vi.mock(
+  '../services/credit-session/settle-sessionless-case-meeting.js',
+  async (importOriginal) => ({
+    // The window arithmetic is PURE and pinned by its own test; the sweep must use the real one.
+    backstopWindowClosing: (
+      await importOriginal<
+        typeof import('../services/credit-session/settle-sessionless-case-meeting.js')
+      >()
+    ).backstopWindowClosing,
+    SESSIONLESS_BACKSTOP_GRACE_MINUTES: 2,
+    SESSIONLESS_BACKSTOP_WINDOW_HOURS: 72,
+    SESSIONLESS_BACKSTOP_RETRY_HOURS: 25,
+    SESSIONLESS_BACKSTOP_BATCH_LIMIT: 100,
+    settleSessionlessCaseMeeting: mockSettleSessionlessCaseMeeting,
+    exhaustSessionlessCaseMeeting: mockExhaustSessionlessCaseMeeting,
+  })
+);
 vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn() }));
 vi.mock('../lib/queue.js', () => ({ getQueue: vi.fn() }));
 vi.mock('../services/credit-session/index.js', () => ({
@@ -96,6 +150,15 @@ describe('runSessionMeterSweep', () => {
     mockFindPresenceUnsettled.mockResolvedValue([]);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
+    mockFindIdByMeetingId.mockResolvedValue(undefined);
+    mockListDueToStartBilling.mockResolvedValue([]);
+    mockFindPendingBeyondJoinWindow.mockResolvedValue([]);
+    mockStartBillingIfDue.mockResolvedValue({ kind: 'not_due' });
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'zero_shape',
+    });
     mockDriveSession.mockImplementation(async (id: string) => ({
       session: activeSession({ id }),
       transitions: {},
@@ -486,5 +549,505 @@ describe('runSessionMeterSweep', () => {
         expect.stringContaining('FILLED')
       );
     });
+  });
+});
+
+// ── BAL-474 (ADR-1040 Amendment 7 §D, D5.4, D5.5, D7.5, V4-F3, V4-F4) ────────────────────────────────
+
+describe('runSessionMeterSweep — the sessionless-meeting backstop (pass 5b, BAL-474)', () => {
+  const HOUR = 60 * 60_000;
+
+  function candidate(id: string, endedHoursAgo: number) {
+    return {
+      meetingId: id,
+      scheduledStart: new Date(NOW.getTime() - (endedHoursAgo + 1) * HOUR),
+      endedAt: new Date(NOW.getTime() - endedHoursAgo * HOUR),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindMeterable.mockResolvedValue([]);
+    mockFindWrappedIdle.mockResolvedValue([]);
+    mockFindStalePending.mockResolvedValue([]);
+    mockFindStuckSettling.mockResolvedValue([]);
+    mockFindFinalizedMissingPayout.mockResolvedValue([]);
+    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPendingForCancelledMeetings.mockResolvedValue([]);
+    mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
+    mockFindIdByMeetingId.mockResolvedValue(undefined);
+    mockListDueToStartBilling.mockResolvedValue([]);
+    mockFindPendingBeyondJoinWindow.mockResolvedValue([]);
+    mockStartBillingIfDue.mockResolvedValue({ kind: 'not_due' });
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'zero_shape',
+    });
+    mockExhaustSessionlessCaseMeeting.mockResolvedValue(undefined);
+  });
+
+  it('asks the finder for meetings ended ≥ 2 minutes ago, inside the 72h window on BOTH columns, with an EXPLICIT limit of 100', async () => {
+    await runSessionMeterSweep(NOW);
+    expect(mockFindSessionlessEndedCaseMeetings).toHaveBeenCalledWith({
+      endedBefore: new Date(NOW.getTime() - 2 * 60_000),
+      windowStart: new Date(NOW.getTime() - 72 * HOUR),
+      limit: 100,
+    });
+  });
+
+  it('runs the backstop with the `backstop` trigger and the system actor, and counts only opened_and_settled', async () => {
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([
+      candidate('m1', 1),
+      candidate('m2', 1),
+      candidate('m3', 1),
+    ]);
+    mockSettleSessionlessCaseMeeting
+      .mockResolvedValueOnce({
+        kind: 'opened_and_settled',
+        sessionId: 's1',
+        toleratedGates: [],
+        outcome: { ok: true },
+      })
+      .mockResolvedValueOnce({ kind: 'not_billable', reason: 'zero_shape' })
+      .mockResolvedValueOnce({ kind: 'settled_existing_session', outcome: { ok: false } });
+
+    const result = await runSessionMeterSweep(NOW);
+
+    expect(result.sessionlessMeetingsSettled).toBe(1);
+    expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalledWith({
+      meetingId: 'm1',
+      trigger: 'backstop',
+      actorUserId: null,
+      now: NOW,
+    });
+    expect(mockExhaustSessionlessCaseMeeting).not.toHaveBeenCalled();
+  });
+
+  it('a deferral inside the 25h retry window is left for the next tick — no marker, no alert', async () => {
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([candidate('m1', 24)]);
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'deferred',
+      reason: 'session_in_progress',
+      outcome: 'no_show_client',
+    });
+    await runSessionMeterSweep(NOW);
+    expect(mockExhaustSessionlessCaseMeeting).not.toHaveBeenCalled();
+  });
+
+  it('⚠ D7.5 — the FIRST attempt past 25h exhausts a deferral, whenever that attempt runs (a missed-tick gap changes nothing)', async () => {
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([candidate('m1', 30)]);
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'deferred',
+      reason: 'session_in_progress',
+      outcome: 'no_show_client',
+    });
+    await runSessionMeterSweep(NOW);
+    expect(mockExhaustSessionlessCaseMeeting).toHaveBeenCalledTimes(1);
+    expect(mockExhaustSessionlessCaseMeeting).toHaveBeenCalledWith({
+      meetingId: 'm1',
+      reason: 'session_in_progress',
+      trigger: 'backstop',
+      outcome: 'no_show_client',
+    });
+  });
+
+  describe('⚠ D10.2 — exhaustion ALSO fires when the finder is about to drop the row', () => {
+    const deferred = {
+      kind: 'deferred',
+      reason: 'session_in_progress',
+      outcome: 'no_show_client',
+    } as const;
+    /** A meeting that started `startedHoursAgo` ago but only ENDED `endedHoursAgo` ago (a late End). */
+    function lateEnded(id: string, startedHoursAgo: number, endedHoursAgo: number) {
+      return {
+        meetingId: id,
+        scheduledStart: new Date(NOW.getTime() - startedHoursAgo * HOUR),
+        endedAt: new Date(NOW.getTime() - endedHoursAgo * HOUR),
+      };
+    }
+
+    it('a late-ended meeting (ended 2h ago, started 71.5h ago) is exhausted on a deferral — it has no further tick', async () => {
+      mockFindSessionlessEndedCaseMeetings.mockResolvedValue([lateEnded('m1', 71.5, 2)]);
+      mockSettleSessionlessCaseMeeting.mockResolvedValue(deferred);
+      await runSessionMeterSweep(NOW);
+      expect(mockExhaustSessionlessCaseMeeting).toHaveBeenCalledWith({
+        meetingId: 'm1',
+        reason: 'session_in_progress',
+        trigger: 'backstop',
+        outcome: 'no_show_client',
+      });
+    });
+
+    it('the boundary: started 71h ago exhausts; started just under 71h ago is left for the next tick', async () => {
+      mockFindSessionlessEndedCaseMeetings.mockResolvedValue([
+        lateEnded('edge', 71, 2),
+        lateEnded('inside', 70.99, 2),
+      ]);
+      mockSettleSessionlessCaseMeeting.mockResolvedValue(deferred);
+      await runSessionMeterSweep(NOW);
+      expect(mockExhaustSessionlessCaseMeeting).toHaveBeenCalledTimes(1);
+      expect(mockExhaustSessionlessCaseMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: 'edge' })
+      );
+    });
+
+    it('a THROWN attempt in the last hour that billed nothing is exhausted with reason `error`', async () => {
+      mockFindSessionlessEndedCaseMeetings.mockResolvedValue([lateEnded('m1', 71.5, 2)]);
+      mockSettleSessionlessCaseMeeting.mockRejectedValue(new Error('db down'));
+      await runSessionMeterSweep(NOW);
+      expect(mockExhaustSessionlessCaseMeeting).toHaveBeenCalledWith({
+        meetingId: 'm1',
+        reason: 'error',
+        trigger: 'backstop',
+      });
+    });
+  });
+
+  it('warns when the batch FILLS — no silent cap on a money backstop', async () => {
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue(
+      Array.from({ length: 100 }, (_, index) => candidate(`m${String(index)}`, 1))
+    );
+    await runSessionMeterSweep(NOW);
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100, oldestMeetingId: 'm0' }),
+      expect.stringContaining('Sessionless-meeting batch FILLED')
+    );
+  });
+
+  it('a THROWN attempt inside the retry window is logged and retried next tick — one bad row never stops the batch', async () => {
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([
+      candidate('bad', 1),
+      candidate('good', 1),
+    ]);
+    mockSettleSessionlessCaseMeeting
+      .mockRejectedValueOnce(new Error('db blip'))
+      .mockResolvedValueOnce({
+        kind: 'opened_and_settled',
+        sessionId: 's2',
+        toleratedGates: [],
+        outcome: { ok: true },
+      });
+
+    const result = await runSessionMeterSweep(NOW);
+
+    expect(result.sessionlessMeetingsSettled).toBe(1);
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: 'bad', error: 'db blip' }),
+      'Sessionless-meeting backstop attempt failed'
+    );
+    expect(mockExhaustSessionlessCaseMeeting).not.toHaveBeenCalled();
+  });
+
+  it('⚠ a THROWN attempt past 25h that billed NOTHING is exhausted (reason `error`)', async () => {
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([candidate('m1', 30)]);
+    mockSettleSessionlessCaseMeeting.mockRejectedValue(new Error('db down'));
+    mockFindIdByMeetingId.mockResolvedValue(undefined);
+
+    await runSessionMeterSweep(NOW);
+
+    expect(mockFindIdByMeetingId).toHaveBeenCalledWith('m1');
+    expect(mockExhaustSessionlessCaseMeeting).toHaveBeenCalledWith({
+      meetingId: 'm1',
+      reason: 'error',
+      trigger: 'backstop',
+    });
+  });
+
+  it('⚠ V4-F3 — a tail throw AFTER a committed open-and-settle writes NO marker and raises NO alert (the consultation IS billed)', async () => {
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([candidate('m1', 30)]);
+    const failure = new Error('finalizeAndSettle failed');
+    mockSettleSessionlessCaseMeeting.mockRejectedValue(failure);
+    // The open-and-settle committed before the tail threw, so a session now exists.
+    mockFindIdByMeetingId.mockResolvedValue({ id: 'session-committed' });
+
+    await runSessionMeterSweep(NOW);
+
+    expect(mockExhaustSessionlessCaseMeeting).not.toHaveBeenCalled();
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: 'm1', error: 'finalizeAndSettle failed' }),
+      expect.stringContaining('post-commit tail failed')
+    );
+    expect(mockCaptureException).toHaveBeenCalledWith(failure, expect.anything());
+  });
+
+  it('a failure while RECORDING the failure (the re-read or the exhaustion) is logged and never escapes the tick', async () => {
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([candidate('m1', 30)]);
+    mockSettleSessionlessCaseMeeting.mockRejectedValue(new Error('db down'));
+    mockExhaustSessionlessCaseMeeting.mockRejectedValue(new Error('marker write failed'));
+
+    await expect(runSessionMeterSweep(NOW)).resolves.toBeDefined();
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: 'm1', error: 'marker write failed' }),
+      expect.stringContaining('could not record its failure')
+    );
+  });
+
+  it('runs BEFORE the presence-unsettled pass — a session it opens-and-settles is finalized in the same call', async () => {
+    await runSessionMeterSweep(NOW);
+    expect(mockFindSessionlessEndedCaseMeetings.mock.invocationCallOrder[0]).toBeLessThan(
+      mockFindPresenceUnsettled.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+});
+
+describe('runSessionMeterSweep — every pass is isolated (BAL-474, V4-F4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindMeterable.mockResolvedValue([]);
+    mockFindWrappedIdle.mockResolvedValue([]);
+    mockFindStalePending.mockResolvedValue([]);
+    mockFindStuckSettling.mockResolvedValue([]);
+    mockFindFinalizedMissingPayout.mockResolvedValue([]);
+    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPendingForCancelledMeetings.mockResolvedValue([]);
+    mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
+  });
+
+  it('⚠ an EARLIER pass throwing still runs the sessionless backstop and every pass behind it', async () => {
+    mockFindMeterable.mockRejectedValue(new Error('meter finder down'));
+    mockFindFinalizedMissingPayout.mockRejectedValue(new Error('payout finder down'));
+
+    const result = await runSessionMeterSweep(NOW);
+
+    expect(mockFindSessionlessEndedCaseMeetings).toHaveBeenCalledTimes(1);
+    expect(mockFindPresenceUnsettled).toHaveBeenCalledTimes(1);
+    expect(mockFindSettledMissingLedgerCredit).toHaveBeenCalledTimes(1);
+    // A broken pass counts 0 — never a partial figure.
+    expect(result.metered).toBe(0);
+    expect(result.recovered).toBe(0);
+  });
+
+  it('a broken pass stays LOUD — error log with the pass name AND Sentry — and the tick does not throw', async () => {
+    const failure = new Error('meter finder down');
+    mockFindMeterable.mockRejectedValue(failure);
+    const logged: string[] = [];
+
+    await expect(
+      runSessionMeterSweep(NOW, (message) => logged.push(message))
+    ).resolves.toBeDefined();
+
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ pass: 'meter', error: 'meter finder down' }),
+      expect.stringContaining('Meter sweep pass failed')
+    );
+    expect(mockCaptureException).toHaveBeenCalledWith(failure, { extra: { pass: 'meter' } });
+    expect(logged.some((line) => line.includes('meter'))).toBe(true);
+  });
+
+  it('the pass-7 finder throwing no longer fails the job — it is isolated like every other pass', async () => {
+    mockFindSettledMissingLedgerCredit.mockRejectedValue(new Error('finder down'));
+    const result = await runSessionMeterSweep(NOW);
+    expect(result.settledMissingCredit).toBe(0);
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ pass: 'settled_missing_credit' }),
+      expect.any(String)
+    );
+  });
+});
+
+describe('runSessionMeterSweep — the billing-start pass (pass 0, BAL-474 Rule A)', () => {
+  const HOUR = 3_600_000;
+  const due = (id: string) => ({ meetingId: id, scheduledStart: new Date(NOW.getTime() - HOUR) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindMeterable.mockResolvedValue([]);
+    mockFindWrappedIdle.mockResolvedValue([]);
+    mockFindStalePending.mockResolvedValue([]);
+    mockFindStuckSettling.mockResolvedValue([]);
+    mockFindFinalizedMissingPayout.mockResolvedValue([]);
+    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPendingForCancelledMeetings.mockResolvedValue([]);
+    mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
+    mockFindPendingBeyondJoinWindow.mockResolvedValue([]);
+    mockListDueToStartBilling.mockResolvedValue([]);
+    mockMeetingFindById.mockImplementation(async (id: string) => ({ id, status: 'in_progress' }));
+    mockListOpen.mockResolvedValue([{ party: 'expert' }, { party: 'client' }]);
+    mockStartBillingIfDue.mockResolvedValue({ kind: 'started', sessionId: 's', opened: false });
+  });
+
+  it('asks the finder for meetings due at `now`, with an EXPLICIT batch limit of 100', async () => {
+    await runSessionMeterSweep(NOW);
+    expect(mockListDueToStartBilling).toHaveBeenCalledWith({ now: NOW, limit: 100 });
+  });
+
+  it('hands each due meeting to the seam with ITS meeting row, ITS open rows and `now`, and counts only STARTED meters', async () => {
+    mockListDueToStartBilling.mockResolvedValue([due('m1'), due('m2'), due('m3')]);
+    mockStartBillingIfDue
+      .mockResolvedValueOnce({ kind: 'started', sessionId: 's1', opened: true })
+      .mockResolvedValueOnce({ kind: 'already_metering', sessionId: 's2' })
+      .mockResolvedValueOnce({ kind: 'deferred', reason: 'session_in_progress' });
+
+    const result = await runSessionMeterSweep(NOW);
+
+    expect(result.billingStarted).toBe(1);
+    expect(mockStartBillingIfDue).toHaveBeenCalledTimes(3);
+    expect(mockStartBillingIfDue).toHaveBeenNthCalledWith(1, {
+      meeting: { id: 'm1', status: 'in_progress' },
+      openRows: [{ party: 'expert' }, { party: 'client' }],
+      now: NOW,
+    });
+    expect(mockListOpen).toHaveBeenCalledWith('m1');
+  });
+
+  it('⚠ runs FIRST — before the meter pass, so a session it connects is metered in the same run', async () => {
+    await runSessionMeterSweep(NOW);
+    expect(mockListDueToStartBilling.mock.invocationCallOrder[0]).toBeLessThan(
+      mockFindMeterable.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it('warns when the batch FILLS — no silent cap on a money pass', async () => {
+    mockListDueToStartBilling.mockResolvedValue(
+      Array.from({ length: 100 }, (_, index) => due(`m${String(index)}`))
+    );
+    await runSessionMeterSweep(NOW);
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100, oldestMeetingId: 'm0' }),
+      expect.stringContaining('Billing-start batch FILLED')
+    );
+  });
+
+  it('a meeting that vanished between the finder and the read is skipped; a THROWING row never stops the batch', async () => {
+    mockListDueToStartBilling.mockResolvedValue([due('gone'), due('bad'), due('good')]);
+    mockMeetingFindById.mockImplementation(async (id: string) =>
+      id === 'gone' ? undefined : { id, status: 'in_progress' }
+    );
+    mockListOpen.mockImplementation(async (id: string) => {
+      if (id === 'bad') throw new Error('db blip');
+      return [];
+    });
+
+    const result = await runSessionMeterSweep(NOW);
+
+    expect(result.billingStarted).toBe(1);
+    expect(mockStartBillingIfDue).toHaveBeenCalledTimes(1);
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: 'bad', error: 'db blip' }),
+      'Billing-start pass failed for a meeting'
+    );
+  });
+
+  it('⚠ a pass that THROWS is isolated: it counts 0 and every pass behind it still runs (V4-F4)', async () => {
+    mockListDueToStartBilling.mockRejectedValue(new Error('finder down'));
+    const result = await runSessionMeterSweep(NOW);
+    expect(result.billingStarted).toBe(0);
+    expect(mockFindMeterable).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalled();
+  });
+});
+
+describe('runSessionMeterSweep — the beyond-window release pass (pass 0b, BAL-474 D11.2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindMeterable.mockResolvedValue([]);
+    mockFindWrappedIdle.mockResolvedValue([]);
+    mockFindStalePending.mockResolvedValue([]);
+    mockFindStuckSettling.mockResolvedValue([]);
+    mockFindFinalizedMissingPayout.mockResolvedValue([]);
+    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPendingForCancelledMeetings.mockResolvedValue([]);
+    mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
+    mockListDueToStartBilling.mockResolvedValue([]);
+    mockFindPendingBeyondJoinWindow.mockResolvedValue([]);
+    mockCancel.mockResolvedValue({ id: 'x', status: 'cancelled' });
+  });
+
+  it('asks for pending sessions whose meeting starts beyond the 3-minute join window (D16), batch-bounded', async () => {
+    await runSessionMeterSweep(NOW);
+    expect(mockFindPendingBeyondJoinWindow).toHaveBeenCalledWith({
+      now: NOW,
+      windowMs: 3 * 60_000,
+      limit: 100,
+    });
+  });
+
+  it('cancels each one, stamping the PLACER (the session’s initiating member), and counts what it released', async () => {
+    mockFindPendingBeyondJoinWindow.mockResolvedValue([
+      { id: 's1', meetingId: 'm1', initiatingMemberId: 'user-a' },
+      { id: 's2', meetingId: 'm2', initiatingMemberId: 'user-b' },
+    ]);
+
+    const result = await runSessionMeterSweep(NOW);
+
+    expect(result.beyondWindowReleased).toBe(2);
+    expect(mockCancel).toHaveBeenCalledWith('s1', { memberId: 'user-a' });
+    expect(mockCancel).toHaveBeenCalledWith('s2', { memberId: 'user-b' });
+  });
+
+  it('a failing cancel is logged with its stack context and never stops the batch', async () => {
+    mockFindPendingBeyondJoinWindow.mockResolvedValue([
+      { id: 's1', meetingId: 'm1', initiatingMemberId: 'user-a' },
+      { id: 's2', meetingId: 'm2', initiatingMemberId: 'user-b' },
+    ]);
+    mockCancel.mockRejectedValueOnce(new Error('lock timeout')).mockResolvedValueOnce({});
+
+    const result = await runSessionMeterSweep(NOW);
+
+    expect(result.beyondWindowReleased).toBe(1);
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 's1', error: 'lock timeout' }),
+      'Beyond-window pending session could not be released'
+    );
+  });
+
+  it('runs AFTER the billing-start pass and BEFORE the meter pass', async () => {
+    await runSessionMeterSweep(NOW);
+    const [start] = mockListDueToStartBilling.mock.invocationCallOrder;
+    const [beyond] = mockFindPendingBeyondJoinWindow.mock.invocationCallOrder;
+    const [meter] = mockFindMeterable.mock.invocationCallOrder;
+    expect(start).toBeLessThan(beyond ?? 0);
+    expect(beyond).toBeLessThan(meter ?? 0);
+  });
+});
+
+describe('runSessionMeterSweep — pass 6 treats `released_closed_case_no_show` as TERMINAL (BAL-474, D12.1c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindMeterable.mockResolvedValue([]);
+    mockFindWrappedIdle.mockResolvedValue([]);
+    mockFindStalePending.mockResolvedValue([]);
+    mockFindStuckSettling.mockResolvedValue([]);
+    mockFindFinalizedMissingPayout.mockResolvedValue([]);
+    mockFindPendingForCancelledMeetings.mockResolvedValue([]);
+    mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
+    mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
+    mockFindPendingBeyondJoinWindow.mockResolvedValue([]);
+    mockListDueToStartBilling.mockResolvedValue([]);
+    mockFindPresenceUnsettled.mockResolvedValue([{ id: 'session_9' }]);
+  });
+
+  it.each(['released_closed_case_no_show', 'released_expert_invited_guest_only'])(
+    'a released session (%s) is an info line — never the "declined" warn, never counted as settled',
+    async (code) => {
+      mockSettleSessionFromPresence.mockResolvedValue({ ok: false, code });
+
+      const result = await runSessionMeterSweep(NOW);
+
+      expect(result.presenceSettled).toBe(0);
+      expect(mockLoggerInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'session_9', code }),
+        expect.stringContaining('released by the presence-settlement backstop')
+      );
+      expect(mockLoggerWarn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Presence settlement durability backstop declined'
+      );
+    }
+  );
+
+  it('any OTHER declined code still warns (the finder and the service disagree)', async () => {
+    mockSettleSessionFromPresence.mockResolvedValue({ ok: false, code: 'meeting_not_terminal' });
+
+    await runSessionMeterSweep(NOW);
+
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session_9', code: 'meeting_not_terminal' }),
+      'Presence settlement durability backstop declined'
+    );
   });
 });

@@ -1,16 +1,19 @@
 import { describe, it, expect } from 'vitest';
+import { TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
 import {
   timeStr,
   formatAud,
   formatAudShort,
   formatIndicative,
   formatCardExpiry,
+  upcomingConsultationsLabel,
   autoTopupConfigErrors,
   isAutoTopupConfigValid,
   resolveRestingState,
   RATE_PER_MIN_MINOR,
   MIN_AMOUNT_MINOR,
   MAX_AMOUNT_MINOR,
+  STEP_MINOR,
   GOAL_AMOUNT_MINOR,
   MIN_RELOAD_MINOR,
   MAX_RELOAD_MINOR,
@@ -25,6 +28,14 @@ describe('display-constants', () => {
     expect(MIN_AMOUNT_MINOR).toBe(30_000);
     expect(MAX_AMOUNT_MINOR).toBe(1_000_000);
     expect(GOAL_AMOUNT_MINOR).toBe(500_000);
+  });
+
+  it('derives the slider bounds and snap from the ONE top-up limits definition (same names, same values)', () => {
+    expect(MIN_AMOUNT_MINOR).toBe(TOP_UP_LIMITS_MINOR.min);
+    expect(MAX_AMOUNT_MINOR).toBe(TOP_UP_LIMITS_MINOR.max);
+    expect(STEP_MINOR).toBe(TOP_UP_LIMITS_MINOR.step);
+    // The values the page has always shipped: A$300 … A$10,000 in A$100 steps.
+    expect([MIN_AMOUNT_MINOR, MAX_AMOUNT_MINOR, STEP_MINOR]).toEqual([30_000, 1_000_000, 10_000]);
   });
 
   describe('timeStr', () => {
@@ -132,6 +143,16 @@ describe('display-constants', () => {
     it('zero-pads a turn-of-century year', () => {
       expect(formatCardExpiry(6, 2100)).toBe('06/00');
       expect(formatCardExpiry(6, 2105)).toBe('06/05');
+    });
+  });
+
+  describe('upcomingConsultationsLabel', () => {
+    it.each([
+      [1, '1 upcoming consultation'],
+      [2, '2 upcoming consultations'],
+      [12, '12 upcoming consultations'],
+    ])('%i → %s', (count, expected) => {
+      expect(upcomingConsultationsLabel(count)).toBe(expected);
     });
   });
 });

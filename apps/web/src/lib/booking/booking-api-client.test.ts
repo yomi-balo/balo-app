@@ -11,7 +11,13 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: (...args: unknown[]) => mockGetSession(...args),
 }));
 
-import { postBookMeeting, postInviteGuests } from './booking-api-client';
+import {
+  BOOKING_FUNDING_REFUSAL_CODES,
+  BOOKING_FUNDING_UNAVAILABLE_CODE,
+  isBookingFundingRefusalCode,
+  postBookMeeting,
+  postInviteGuests,
+} from './booking-api-client';
 
 const CASE_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const MEETING_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -136,6 +142,35 @@ describe('postBookMeeting', () => {
     mockLoggedFetch.mockResolvedValue(response(409, { error: 'idempotency_key_conflict' }));
     const result = await postBookMeeting(INPUT);
     expect(result).toEqual({ ok: false, status: 409, code: 'idempotency_key_conflict' });
+  });
+
+  // BAL-474 — the API's pre-write funding answers, each read straight off the body.
+  it.each([...BOOKING_FUNDING_REFUSAL_CODES])(
+    'maps a 409 %s to its fixed literal, and it IS a funding refusal code',
+    async (literal) => {
+      mockLoggedFetch.mockResolvedValue(response(409, { error: literal }));
+      const result = await postBookMeeting(INPUT);
+      expect(result).toEqual({ ok: false, status: 409, code: literal });
+      expect(isBookingFundingRefusalCode(literal)).toBe(true);
+    }
+  );
+
+  it('maps a 503 booking_funding_unavailable to its fixed literal, and it is NOT a refusal code', async () => {
+    mockLoggedFetch.mockResolvedValue(response(503, { error: BOOKING_FUNDING_UNAVAILABLE_CODE }));
+    const result = await postBookMeeting(INPUT);
+    expect(result).toEqual({ ok: false, status: 503, code: 'booking_funding_unavailable' });
+    expect(isBookingFundingRefusalCode(BOOKING_FUNDING_UNAVAILABLE_CODE)).toBe(false);
+  });
+
+  it('the refusal-code list is exactly the three api literals', () => {
+    expect([...BOOKING_FUNDING_REFUSAL_CODES].sort((a, b) => a.localeCompare(b))).toEqual([
+      'account_on_hold',
+      'booking_reserved',
+      'booking_unfunded',
+    ]);
+    expect(BOOKING_FUNDING_REFUSAL_CODES).toHaveLength(3);
+    // Positive control for the `false` branch above: a slot problem is not a funding refusal.
+    expect(isBookingFundingRefusalCode('window_not_available')).toBe(false);
   });
 
   it('maps a 409 window_not_available to its fixed literal', async () => {

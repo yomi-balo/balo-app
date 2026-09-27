@@ -1,6 +1,9 @@
 import { and, asc, eq, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 import {
+  clampIntervalsToStart,
   computeMeetingClocks,
+  coPresentMsBefore,
+  expertPresentFromStartMs,
   summarisePresence,
   type LifecyclePresenceInterval,
   type MeetingClocks,
@@ -9,7 +12,9 @@ import {
 } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
+  expertProfiles,
   meetingContexts,
+  meetingGuests,
   meetingPresence,
   meetings,
   type MeetingParticipantParty,
@@ -44,30 +49,26 @@ export interface PresenceIdentity {
 }
 
 /**
- * BAL-134 (R10) — the MEETING WINDOW a presence instant is clamped into on the WRITE side.
+ * BAL-134 (R10) — the UPPER bound a presence LEAVE is clamped to on the WRITE side.
  *
- * ⚠⚠ WHY THE CLAMP IS HERE AND NOT IN `computeMeetingClocks`. That pure function anchors
- * `expertPresentMs` at the first expert join UN-CLAMPED, and its numbers are pinned by
- * executed tests — so clamping there would change shipped, asserted arithmetic. The presence
- * schema docblock assigns the window bound to the WRITE side by name ("nothing rejects… a
- * `leftAt` a day after `scheduled_end`… Clamping presence to the meeting window is
- * **BAL-134's**"), and this is that seam.
+ * ⚠⚠ THERE IS NO LOWER BOUND (BAL-474, Rule A, D13). Presence rows are stored at their TRUE instants,
+ * because the pre-start intersection ("how long were the expert and a client-side participant really
+ * together before the meeting started?") needs them. BAL-134's R10 rule (`joined_at' = max(joined_at,
+ * scheduled_start)`) is applied at READ time, by every reader that wants the start-clamped figures, through
+ * `clampIntervalsToStart` (`@balo/shared/meetings`); only settlement (and the chip and analytics fields
+ * built on it) reads the raw pre-start instants.
  *
- * ⚠ IT IS OPT-IN, AND THAT IS DELIBERATE. The repository does NOT read the meeting row to
- * derive the window itself, for the same reason `meetingsRepository.cancel()` does not read
- * the wall clock: the upper bound is a POLICY value (`scheduled_end + MEETING_TOKEN_TTL_
- * AFTER_END_MS`, an `apps/api` constant), and a repository that resolved policy would make
- * every fixture and every backfill subject to a number that can change. The caller — which
- * already holds the meeting row — supplies both halves together so it cannot pass one and
- * forget the other.
+ * ⚠⚠ WHY THE CLAMP IS NOT IN `computeMeetingClocks`. That pure function anchors `expertPresentMs` at the
+ * first expert join UN-CLAMPED, and its numbers are pinned by executed tests — so the readers clamp
+ * BEFORE calling it.
+ *
+ * ⚠ IT IS OPT-IN, AND THAT IS DELIBERATE. The repository does NOT read the meeting row to derive the
+ * bound itself, for the same reason `meetingsRepository.cancel()` does not read the wall clock: the
+ * upper bound is a POLICY value (`scheduled_end + MEETING_TOKEN_TTL_AFTER_END_MS`, an `apps/api`
+ * constant), and a repository that resolved policy would make every fixture and every backfill subject
+ * to a number that can change. The caller — which already holds the meeting row — supplies it.
  */
 export interface PresenceWindow {
-  /**
-   * `joined_at` is RAISED to this. In production it is `meetings.scheduled_start`, and the
-   * rule it encodes is the ticket's verbatim: **an expert arriving at 09:55 for a 10:00 call
-   * is not credited for arriving early.**
-   */
-  notBefore: Date;
   /**
    * `left_at` is LOWERED to this. In production it is `scheduled_end` plus the token TTL —
    * GENEROUS ON PURPOSE, because a legitimately over-running call must not be truncated into
@@ -88,7 +89,11 @@ export interface OpenPresenceInput extends PresenceIdentity {
   party: MeetingParticipantParty;
   /** Defaults to now. Rejected when non-finite (see `InvalidPresenceTimestampError`). */
   joinedAt?: Date;
-  /** BAL-134's R10 clamp. Omit to store the instant exactly as given. */
+  /**
+   * Validated (a non-finite bound is rejected) but has NO EFFECT on a join: a join is stored at its true
+   * instant (BAL-474 Rule A), never raised to the start and never lowered to `notAfter` — a join after
+   * `notAfter` is a real event, and rewriting it would fabricate attendance that did not happen.
+   */
   window?: PresenceWindow;
 }
 
@@ -150,37 +155,23 @@ function assertFiniteWindow(window: PresenceWindow | undefined): void {
   if (window === undefined) {
     return;
   }
-  assertFiniteInstant('window.notBefore', window.notBefore);
   assertFiniteInstant('window.notAfter', window.notAfter);
-}
-
-/**
- * The LOWER half of the R10 clamp. Early arrival earns nothing.
- *
- * ⚠ NO UPPER CLAMP ON A JOIN, on purpose. A join AFTER `notAfter` is a real event (someone
- * wandered into a room long after the window) and rewriting it downwards would fabricate
- * attendance that did not happen. It self-corrects instead: the matching close is clamped
- * DOWN to `notAfter`, lands below this `joined_at`, and `clampLeftAt` degrades the pair to a
- * zero-length interval — which bills nothing and is legal (`meeting_presence_left_after_joined`
- * is `>=`).
- */
-function clampJoinedAt(instant: Date, window: PresenceWindow | undefined): Date {
-  if (window === undefined) {
-    return instant;
-  }
-  return instant.getTime() < window.notBefore.getTime() ? window.notBefore : instant;
 }
 
 /**
  * The UPPER half of the R10 clamp, then the zero-length degradation.
  *
- * ⚠ THE `joinedAt` RAISE APPLIES ONLY UNDER A WINDOW, and only because the clamp itself can
- * produce the inversion (a call ended before a `joined_at` that was clamped UP to
- * `scheduled_start` — the expert who joined at 09:55 and left at 09:58 on a 10:00 call). It is
- * NOT a general "fix the caller's timestamp" rule: without a `window`, an explicit `leftAt`
- * before `joined_at` still reaches `meeting_presence_left_after_joined` and raises `23514`,
- * loudly, exactly as it does today. A repository that silently rewrote every caller's instant
- * would hide writer bugs on a money path.
+ * ⚠ NO UPPER CLAMP ON A JOIN, on purpose. A join AFTER `notAfter` is a real event (someone wandered
+ * into a room long after the window) and rewriting it downwards would fabricate attendance that did
+ * not happen. It self-corrects instead: the matching close is clamped DOWN to `notAfter`, lands below
+ * this `joined_at`, and the pair degrades to a zero-length interval — which bills nothing and is legal
+ * (`meeting_presence_left_after_joined` is `>=`).
+ *
+ * ⚠ THE `joinedAt` RAISE APPLIES ONLY UNDER A WINDOW, and only because the upper clamp itself can
+ * produce that inversion. It is NOT a general "fix the caller's timestamp" rule: without a `window`,
+ * an explicit `leftAt` before `joined_at` still reaches `meeting_presence_left_after_joined` and
+ * raises `23514`, loudly. A repository that silently rewrote every caller's instant would hide
+ * writer bugs on a money path.
  */
 function clampLeftAt(instant: Date, joinedAt: Date, window: PresenceWindow | undefined): Date {
   if (window === undefined) {
@@ -269,6 +260,63 @@ async function resolveClockCeiling(meetingId: string): Promise<Date> {
 }
 
 /**
+ * BAL-474 (R6F-4a, ADR-1040 Amendment 7 §E) — THE ONE DEFINITION OF "A CLIENT-PARTY GUEST THE DELIVERING EXPERT
+ * INVITED", as a filter over presence rows. A delivering expert who is also a client-company member resolves
+ * to the CLIENT side, so a guest they invite is `party = 'client'`; minutes the expert spends with their OWN
+ * guest are not minutes with the client. The pre-start together term (Rule A) excludes those rows.
+ *
+ * ⚠ IT FILTERS THE TOGETHER TERM ONLY. `clientSideEverPresent` and the shape still read every row — dropping
+ * these rows there would turn a call attended only by such a guest into a billed no-show, and that call is
+ * `not_billable` (`onlyExpertInvitedGuestsAttended`).
+ *
+ * Rows are returned unchanged, with NO query, unless one is a client-party guest row; the expert's profile is
+ * resolved lazily for the same reason. A guest with no recorded inviter is never excluded (fails toward
+ * billing, like the guard). The guest row's own `deleted_at` is deliberately not filtered: the presence
+ * interval is what is live, and its inviter is the fact that matters after an invitation is revoked.
+ */
+async function omitExpertInvitedGuestRows<
+  T extends { party: PresenceInterval['party']; meetingGuestId: string | null },
+>(rows: readonly T[], resolveExpertProfileId: () => Promise<string | null>): Promise<T[]> {
+  const guestIds = [
+    ...new Set(
+      rows.flatMap((row) =>
+        row.party === 'client' && row.meetingGuestId !== null ? [row.meetingGuestId] : []
+      )
+    ),
+  ];
+  if (guestIds.length === 0) {
+    return [...rows];
+  }
+  const expertProfileId = await resolveExpertProfileId();
+  if (expertProfileId === null) {
+    return [...rows];
+  }
+  const [expert] = await db
+    .select({ userId: expertProfiles.userId })
+    .from(expertProfiles)
+    .where(eq(expertProfiles.id, expertProfileId))
+    .limit(1);
+  if (expert === undefined) {
+    return [...rows];
+  }
+  const guests = await db
+    .select({ id: meetingGuests.id, invitedById: meetingGuests.invitedById })
+    .from(meetingGuests)
+    .where(inArray(meetingGuests.id, guestIds));
+  const expertInvited = new Set(
+    guests.filter((guest) => guest.invitedById === expert.userId).map((guest) => guest.id)
+  );
+  return rows.filter(
+    (row) =>
+      !(
+        row.party === 'client' &&
+        row.meetingGuestId !== null &&
+        expertInvited.has(row.meetingGuestId)
+      )
+  );
+}
+
+/**
  * `meetingPresenceRepository` (BAL-418 / ADR-1045 §6) — the per-interval presence store
  * plus BAL-412's settlement read.
  *
@@ -316,6 +364,8 @@ async function resolveClockCeiling(meetingId: string): Promise<Date> {
  * not rediscovered as a billing incident.
  */
 export const meetingPresenceRepository = {
+  omitExpertInvitedGuestRows,
+
   /**
    * BAL-134 WRITE SEAM — open a presence interval.
    *
@@ -358,7 +408,8 @@ export const meetingPresenceRepository = {
     const requestedJoinedAt = input.joinedAt ?? new Date();
     assertFiniteInstant('joined_at', requestedJoinedAt);
     assertFiniteWindow(input.window);
-    const joinedAt = clampJoinedAt(requestedJoinedAt, input.window);
+    // ⚠ Stored at its TRUE instant (BAL-474 Rule A). The readers apply `clampIntervalsToStart`.
+    const joinedAt = requestedJoinedAt;
 
     const values = {
       meetingId: input.meetingId,
@@ -559,32 +610,6 @@ export const meetingPresenceRepository = {
   },
 
   /**
-   * BOTH CLOCKS for a meeting. A thin wrapper: fetch the live intervals, then delegate to
-   * the pure `computeMeetingClocks`.
-   *
-   * `now` is the instant any still-OPEN interval is measured to. When omitted it defaults
-   * to `meetings.ended_at` for a TERMINAL meeting and to the wall clock only while the
-   * meeting is still running — see `resolveClockCeiling` for why the wall clock alone is an
-   * over-bill hazard on a dropped leave webhook. An explicit `now` always wins (BAL-403's
-   * in-session panel and the tests both pass one).
-   *
-   * ⚠ THIS IS THE SINGLE-CLOCK SEAM, AND IT IS **NOT** WHAT SETTLEMENT READS. It stays
-   * exactly as BAL-418 shipped it — BAL-403's in-session panel and `GET /meetings/:id/state`
-   * are its callers. BAL-412 HAS landed and reads through {@link settlementFacts} instead,
-   * because settlement additionally needs `clientSideEverPresent`, which is NOT derivable
-   * from these four fields; see that method for why one read rather than two.
-   */
-  async clocks(meetingId: string, now?: Date): Promise<MeetingClocks> {
-    const rows = await this.listByMeeting(meetingId);
-    const intervals: PresenceInterval[] = rows.map((row) => ({
-      party: row.party,
-      joinedAt: row.joinedAt,
-      leftAt: row.leftAt,
-    }));
-    return computeMeetingClocks(intervals, now ?? (await resolveClockCeiling(meetingId)));
-  },
-
-  /**
    * BAL-412's SETTLEMENT READ — the clocks AND the structural facts, from **ONE** query.
    *
    * ⚠⚠ ONE `listByMeeting`, REDUCED BY BOTH PURE FUNCTIONS, AND THE SINGLE READ IS THE
@@ -596,6 +621,21 @@ export const meetingPresenceRepository = {
    * would issue two queries against a table a webhook can be writing to, and the two could
    * disagree about which rows exist — on the MONEY path, where the disagreement decides
    * whether anybody is charged at all.
+   *
+   * ⚠ THIS IS THE ONE READ OF A MEETING'S CLOCKS (BAL-474 removed the single-clock `clocks()` — it had no
+   * production caller and returned unclamped figures). `GET /meetings/:id/state` and `emitMeetingEnded` read
+   * `listByMeeting` and reduce it themselves.
+   *
+   * ⚠ BAL-474 RULE A — the signature takes the meeting's `scheduledStart`, and returns FOUR things from
+   * the one read: `clocks` over the start-CLAMPED intervals (the shape and no-show clock), `facts` over
+   * the RAW rows (its booleans do not depend on instants), and over the RAW rows the two figures the
+   * clamp would destroy: `togetherBeforeStartMs` and (D15.3) `expertPresentFromStartMs`, the `held`
+   * from-start figure that counts from the expert's first presence at or after the start.
+   * `resolveExpertProfileId` (R6F-4a) names the delivering expert LAZILY, so `togetherBeforeStartMs` can drop
+   * the client-party guests they invited (see {@link omitExpertInvitedGuestRows}) and the lookup is paid only
+   * when such a guest row exists; omit it and no row is dropped.
+   * An object parameter, not a positional
+   * `Date`, so a caller cannot silently pass the start where `now` was expected.
    *
    * `now` resolves exactly as {@link clocks} resolves it (an explicit instant wins; otherwise
    * `meetings.ended_at` for a terminal meeting, else the wall clock), and the SAME instant is
@@ -612,25 +652,52 @@ export const meetingPresenceRepository = {
    */
   async settlementFacts(
     meetingId: string,
-    now?: Date
-  ): Promise<{ clocks: MeetingClocks; facts: PresenceFacts }> {
+    input: {
+      scheduledStart: Date;
+      now?: Date;
+      resolveExpertProfileId?: () => Promise<string | null>;
+    }
+  ): Promise<{
+    clocks: MeetingClocks;
+    facts: PresenceFacts;
+    /** RULE A — Σ|expert ∩ client-side| strictly before `scheduledStart`, over the RAW rows. */
+    togetherBeforeStartMs: number;
+    /** D15.3 — the expert's gap-inclusive span from their first presence at or after `scheduledStart`, over the RAW rows. */
+    expertPresentFromStartMs: number;
+  }> {
     const rows = await this.listByMeeting(meetingId);
-    const ceiling = now ?? (await resolveClockCeiling(meetingId));
+    const ceiling = input.now ?? (await resolveClockCeiling(meetingId));
 
-    const clockIntervals: PresenceInterval[] = rows.map((row) => ({
+    const rawIntervals: PresenceInterval[] = rows.map((row) => ({
       party: row.party,
       joinedAt: row.joinedAt,
       leftAt: row.leftAt,
     }));
-    const factIntervals: LifecyclePresenceInterval[] = rows.map((row) => ({
-      party: row.party,
-      joinedAt: row.joinedAt,
-      leftAt: row.leftAt,
-    }));
+    const factIntervals: LifecyclePresenceInterval[] = rawIntervals;
+    // R6F-4a — the together term drops the delivering expert's own invited guests; nothing else reads this list.
+    const togetherIntervals: PresenceInterval[] = await omitExpertInvitedGuestRows(
+      rows.map((row) => ({
+        party: row.party,
+        joinedAt: row.joinedAt,
+        leftAt: row.leftAt,
+        meetingGuestId: row.meetingGuestId,
+      })),
+      input.resolveExpertProfileId ?? (async () => null)
+    );
 
     return {
-      clocks: computeMeetingClocks(clockIntervals, ceiling),
+      // The from-start basis: clocks over intervals CLAMPED to the start — today's figures, bit for bit.
+      clocks: computeMeetingClocks(
+        clampIntervalsToStart(rawIntervals, input.scheduledStart),
+        ceiling
+      ),
       facts: summarisePresence(factIntervals),
+      togetherBeforeStartMs: coPresentMsBefore(togetherIntervals, input.scheduledStart, ceiling),
+      expertPresentFromStartMs: expertPresentFromStartMs(
+        rawIntervals,
+        input.scheduledStart,
+        ceiling
+      ),
     };
   },
 
@@ -754,5 +821,87 @@ export const meetingPresenceRepository = {
       );
 
     return rows.flatMap((row) => (row.userId === null ? [] : [row.userId]));
+  },
+
+  /**
+   * BAL-474 (ADR-1040 Amendment 7 §E, D5.9) — WHO made a meeting's client side present: the
+   * authenticated members, and — for each client-party GUEST — who invited them. The sessionless
+   * terminal path reads this for a `held` meeting: when every client-party attendee was a guest
+   * the DELIVERING EXPERT invited (a delivering expert who is also a client-company member can
+   * invite a `party='client'` guest), the call is NOT billed to the client (`not_billable`,
+   * `expert_invited_guest_only`) — the same guard the guest-admission open applies.
+   *
+   * Over LIVE `party = 'client'` intervals — exactly the rows that make
+   * `summarisePresence(...).clientSideEverPresent` true — riding `meeting_presence_meeting_party_idx`.
+   * `meeting_guests` is LEFT-joined on `meeting_guest_id` for `invited_by_id` with an explicit
+   * column projection, never `with:` (the guest row carries `token_hash` and `email` — memory
+   * `reference_drizzle_with_hydration_leaks_secrets`). The guest row's own `deleted_at` is
+   * deliberately NOT filtered: the presence interval is what is live and billable, and its inviter
+   * is the fact the guard needs even after the invitation was revoked.
+   *
+   * `memberUserIds` is distinct; `guestInviterIds` has one entry per distinct client-party guest
+   * (`null` for a guest with no recorded inviter). An interval with no identity at all contributes
+   * to neither.
+   */
+  async clientPartyIdentities(
+    meetingId: string
+  ): Promise<{ memberUserIds: string[]; guestInviterIds: Array<string | null> }> {
+    const rows = await db
+      .select({
+        userId: meetingPresence.userId,
+        meetingGuestId: meetingPresence.meetingGuestId,
+        invitedById: meetingGuests.invitedById,
+      })
+      .from(meetingPresence)
+      .leftJoin(meetingGuests, eq(meetingGuests.id, meetingPresence.meetingGuestId))
+      .where(
+        and(
+          eq(meetingPresence.meetingId, meetingId),
+          eq(meetingPresence.party, 'client'),
+          isNull(meetingPresence.deletedAt)
+        )
+      );
+
+    const memberUserIds = new Set<string>();
+    const inviterByGuest = new Map<string, string | null>();
+    for (const row of rows) {
+      if (row.userId !== null) {
+        memberUserIds.add(row.userId);
+      } else if (row.meetingGuestId !== null) {
+        inviterByGuest.set(row.meetingGuestId, row.invitedById);
+      }
+    }
+    return { memberUserIds: [...memberUserIds], guestInviterIds: [...inviterByGuest.values()] };
+  },
+
+  /**
+   * BAL-474 (owner ruling D6.4, plan §H.2) — has THIS user been in the room on the client side?
+   * `EXISTS` a live `party = 'client'` interval for `(meetingId, userId)` — open or closed, of any
+   * length (a member who joined early and left before the start DID join — the row is stored at its true
+   * instants, so its `leftAt` is before `scheduled_start`, and it still counts). Rides `meeting_presence_meeting_party_idx`.
+   *
+   * `endMeeting` reads it for a CLIENT principal: one who has never been present may not End the
+   * meeting (that would turn the expert's wait into a free cancellation after the start). Exactly
+   * the rows that make `summarisePresence(...).clientSideEverPresent` true, so a principal who
+   * passes has made the settlement's client side present.
+   *
+   * What does NOT count: another member's row; a guest-token row for the same person
+   * (`meeting_guest_id` set, `user_id` NULL); an `observer` row; a soft-deleted row. Presence rows
+   * are append-only (soft delete aside), so a `true` here cannot become false.
+   */
+  async hasOwnClientInterval(meetingId: string, userId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: meetingPresence.id })
+      .from(meetingPresence)
+      .where(
+        and(
+          eq(meetingPresence.meetingId, meetingId),
+          eq(meetingPresence.userId, userId),
+          eq(meetingPresence.party, 'client'),
+          isNull(meetingPresence.deletedAt)
+        )
+      )
+      .limit(1);
+    return row !== undefined;
   },
 };

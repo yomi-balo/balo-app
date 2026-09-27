@@ -237,6 +237,69 @@ describe('LobbyClient — the identify state', () => {
   });
 });
 
+describe('LobbyClient — D16, an early knock is NON-terminal', () => {
+  // ⚠ PINNED. `joinNotOpenYetMessage` (D17.4) date-qualifies `{time}` unless `opensAt` falls on
+  // the viewer's LOCAL TODAY, and `NOT_OPEN_YET.opensAt` below is a fixed 2026-09-25 literal.
+  // ⚠ `toFake: ['Date']` ONLY — `userEvent`'s internal delays (via `identify()`) need REAL
+  // timers; faking `setTimeout` too would need every call site's `userEvent.setup()` wired with
+  // `advanceTimers`, including the ones inside the shared `identify()` helper other describe
+  // blocks call with real timers.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-25T00:00:00.000Z'));
+  });
+
+  const NOT_OPEN_YET = {
+    success: false,
+    kind: 'not_open_yet',
+    opensAt: '2026-09-25T11:57:00.000Z',
+  };
+
+  it('⚠⚠ shows the approved sentence, keeps the form and the typed values, and is not the dead-link card', async () => {
+    mockClaim.mockResolvedValue(NOT_OPEN_YET);
+
+    renderLobby();
+    await identify();
+
+    expect(
+      await screen.findByText("This call isn't open yet — you can join from 11:57 AM.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(JOIN_UNAVAILABLE_TITLE)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/your name/i)).toHaveValue('Sam Rivera');
+    expect(screen.getByLabelText(/your email/i)).toHaveValue('sam@cloudpeak.example');
+    expect(screen.getByRole('button', { name: /ask to join/i })).toBeEnabled();
+  });
+
+  it('⚠ is a STATUS, not an input error: no field is marked invalid and no alert is raised', async () => {
+    mockClaim.mockResolvedValue(NOT_OPEN_YET);
+
+    renderLobby();
+    await identify();
+    await screen.findByText(/isn't open yet/);
+
+    expect(screen.getByRole('status')).toHaveTextContent("This call isn't open yet");
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/your name/i)).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByLabelText(/your email/i)).toHaveAttribute('aria-invalid', 'false');
+  });
+
+  it('clears when the visitor asks again, and the next answer replaces it', async () => {
+    mockClaim.mockResolvedValueOnce(NOT_OPEN_YET);
+    const user = userEvent.setup();
+    renderLobby();
+    await identify();
+    await screen.findByText(/isn't open yet/);
+
+    mockClaim.mockResolvedValue({ success: true, lobbyToken: 'z'.repeat(43) });
+    await user.click(screen.getByRole('button', { name: /ask to join/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/isn't open yet/)).not.toBeInTheDocument();
+    });
+    expect(screen.getByText(/waiting for someone to let you in/i)).toBeInTheDocument();
+  });
+});
+
 /**
  * ⚠⚠ THE VALIDATION ARM IS REACHABLE IN ORDINARY USE, AND MUST NOT BE TERMINAL. The browser's
  * own `required` accepts a whitespace-only name and `type="email"` accepts `a@b`; Zod rejects

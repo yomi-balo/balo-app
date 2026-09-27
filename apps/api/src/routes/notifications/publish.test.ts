@@ -444,4 +444,133 @@ describe('POST /notifications/publish', () => {
     );
     expect(res.statusCode).toBe(400);
   });
+  describe('booking.funding_blocked (BAL-474 block kinds)', () => {
+    const base = {
+      companyId: '550e8400-e29b-41d4-a716-446655440010',
+      requestedByUserId: '550e8400-e29b-41d4-a716-446655440011',
+      expertPartyLabel: 'CloudPeak',
+    };
+    const asOfIso = '2026-09-23T14:05:00.000Z';
+
+    it('returns 200 and every field survives for an account_on_hold payload with a figure', async () => {
+      const payload = {
+        ...base,
+        correlationId: 'booking-funding:c:u:account_on_hold:1',
+        blockKind: 'account_on_hold',
+        topUpNeededMinor: 27_500,
+        asOfIso,
+      };
+      const res = await inject(
+        { event: 'booking.funding_blocked', payload },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+      expect(res.statusCode).toBe(200);
+      expect(mockPublish).toHaveBeenCalledWith('booking.funding_blocked', payload);
+    });
+
+    it('returns 200 for an account_on_hold payload with no figure (the failed-heal fallback)', async () => {
+      const payload = {
+        ...base,
+        correlationId: 'booking-funding:c:u:account_on_hold:1',
+        blockKind: 'account_on_hold',
+      };
+      const res = await inject(
+        { event: 'booking.funding_blocked', payload },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+      expect(res.statusCode).toBe(200);
+      expect(mockPublish).toHaveBeenCalledWith('booking.funding_blocked', payload);
+    });
+
+    it('returns 200 and every field survives for a reserved_by_upcoming payload', async () => {
+      const payload = {
+        ...base,
+        correlationId: 'booking-funding:c:u:reserved_by_upcoming:1',
+        blockKind: 'reserved_by_upcoming',
+        topUpNeededMinor: 12_000,
+        reservedBookingCount: 2,
+        asOfIso,
+      };
+      const res = await inject(
+        { event: 'booking.funding_blocked', payload },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+      expect(res.statusCode).toBe(200);
+      expect(mockPublish).toHaveBeenCalledWith('booking.funding_blocked', payload);
+    });
+
+    it('returns 200 for an unfunded payload carrying no figure', async () => {
+      const payload = {
+        ...base,
+        correlationId: 'booking-funding:c:u:unfunded:1',
+        blockKind: 'unfunded',
+      };
+      const res = await inject(
+        { event: 'booking.funding_blocked', payload },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+      expect(res.statusCode).toBe(200);
+      expect(mockPublish).toHaveBeenCalledWith('booking.funding_blocked', payload);
+    });
+
+    const rejected: Array<[string, Record<string, unknown>]> = [
+      [
+        'an unfunded payload carrying a figure',
+        { blockKind: 'unfunded', topUpNeededMinor: 27_500, asOfIso },
+      ],
+      [
+        'an unfunded payload carrying a reserved count',
+        { blockKind: 'unfunded', reservedBookingCount: 1 },
+      ],
+      [
+        'an account_on_hold payload carrying a reserved count',
+        {
+          blockKind: 'account_on_hold',
+          topUpNeededMinor: 27_500,
+          asOfIso,
+          reservedBookingCount: 1,
+        },
+      ],
+      [
+        'a figure without its as-of instant',
+        { blockKind: 'account_on_hold', topUpNeededMinor: 27_500 },
+      ],
+      ['an as-of instant without its figure', { blockKind: 'account_on_hold', asOfIso }],
+      [
+        'a zero figure',
+        {
+          blockKind: 'reserved_by_upcoming',
+          topUpNeededMinor: 0,
+          reservedBookingCount: 1,
+          asOfIso,
+        },
+      ],
+      [
+        'a reserved_by_upcoming payload with no figure and no instant',
+        { blockKind: 'reserved_by_upcoming', reservedBookingCount: 2 },
+      ],
+      [
+        'a reserved_by_upcoming payload with no reserved count',
+        { blockKind: 'reserved_by_upcoming', topUpNeededMinor: 12_000, asOfIso },
+      ],
+      [
+        'a reserved_by_upcoming payload with neither figure nor count',
+        { blockKind: 'reserved_by_upcoming' },
+      ],
+      ['a payload with no blockKind', {}],
+    ];
+    for (const [label, extra] of rejected) {
+      it(`returns 400 and does not publish for ${label}`, async () => {
+        const res = await inject(
+          {
+            event: 'booking.funding_blocked',
+            payload: { ...base, correlationId: 'booking-funding:c:u:x:1', ...extra },
+          },
+          { 'x-internal-api-key': TEST_SECRET }
+        );
+        expect(res.statusCode).toBe(400);
+        expect(mockPublish).not.toHaveBeenCalled();
+      });
+    }
+  });
 });

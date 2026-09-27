@@ -1,10 +1,11 @@
 import { isAccountRefusalCode } from '@balo/shared/authz';
+import { MEETING_NOT_OPEN_YET_CODE } from '@balo/shared/engagements';
 
 /**
  * BAL-581 — why a signed-in member's join did not produce a grant.
  *
  * ⚠⚠ MAPPED BY AN ALLOWLIST ON THE API'S `(status, code)` — ANYTHING NOT LISTED COLLAPSES TO
- * `unavailable`. The authority for distinguishing these five is the API's own docblock at
+ * `unavailable`. The authority for distinguishing these six is the API's own docblock at
  * `apps/api/src/services/meetings/join-meeting.ts:31-42`: every code below `404`
  * (`meeting_not_found`, the one pre-authorization code) is reachable ONLY after
  * `authorizeMeetingParticipation` has already succeeded for this actor on this meeting, so naming
@@ -14,6 +15,7 @@ import { isAccountRefusalCode } from '@balo/shared/authz';
 export type MemberJoinFailureReason =
   | 'not_provisioned' // 409 meeting_not_provisioned — the call room is still being set up (retry)
   | 'not_open' // 409 meeting_not_open_for_join — ended/cancelled/window closed (terminal)
+  | 'not_open_yet' // 409 meeting_not_open_yet — the join window has not opened (D16, NON-terminal: try again from opensAt)
   | 'outage' // transport (0) or any 5xx, or an unreadable account row (retry)
   | 'account_refused' // suspended/deleted account (BAL-568) → session-sync
   | 'unavailable'; // 404, plain 401, synthetic `unauthenticated`, invalid request, anything else
@@ -27,6 +29,7 @@ export function memberJoinFailureReasonFor(status: number, code: string): Member
   if (status === 0 || status >= 500) return 'outage';
   if (status === 409 && code === 'meeting_not_provisioned') return 'not_provisioned';
   if (status === 409 && code === 'meeting_not_open_for_join') return 'not_open';
+  if (status === 409 && code === MEETING_NOT_OPEN_YET_CODE) return 'not_open_yet';
   if (status === 401 && isAccountRefusalCode(code)) return 'account_refused';
   return 'unavailable';
 }

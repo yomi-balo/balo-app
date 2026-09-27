@@ -9,10 +9,14 @@
  * across the meter driver, `endSession`, and the webhook (Sonar new-code duplication gate).
  */
 import {
+  acquireWalletLock,
+  creditReceivablesRepository,
+  db,
   expertsRepository,
   usersRepository,
   meetingsRepository,
   meetingPresenceRepository,
+  partyMembershipsRepository,
   type CreditSession,
   // BAL-412 (F17) — the four settlement shapes come from the pgEnum's own derived type, never
   // re-spelled inline (CLAUDE.md's repeated-string-union rule). This file already imports from
@@ -20,17 +24,37 @@ import {
   type CreditSettlementShape,
 } from '@balo/db';
 import { trackServer, SESSION_SERVER_EVENTS } from '@balo/analytics/server';
+import * as Sentry from '@sentry/node';
+import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import {
   minutesOfRunway,
-  type CashCreditReason,
+  type DebtCoveringCreditReason,
+  type HoldStatus,
   type SettleableSession,
 } from '@balo/shared/credit';
 import { createLogger } from '@balo/shared/logging';
 import { notificationEvents } from '../../notifications/publisher.js';
 import { resolveBillingFloorMinutes } from '../../config/billing-floor.js';
+import {
+  clearCoveredHold,
+  type CoverageHealResult,
+  type CoverageHealTrigger,
+} from '../credit/receivable-coverage.js';
 import { ceilingRoomMinor, graceRemainingMinutes, overdraftMagnitude } from './settlement.js';
 
 const log = createLogger('credit-session');
+
+/** Active transaction handle — the type `acquireWalletLock` and the repositories' `exec` take. */
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/**
+ * BAL-378 / BAL-474 — re-remind a wallet on hold at most once per this window (< 24h so the daily
+ * 09:00 tick always fires). It lives HERE, beside the claim that enforces it, and the daily sweep
+ * imports it — a service never imports from `jobs/`.
+ */
+export const DUNNING_CADENCE_HOURS = 20;
 
 export type { SettleableSession };
 
@@ -55,11 +79,48 @@ async function resolveExpertName(expertProfileId: string): Promise<string> {
   return name.length > 0 ? name : 'your expert';
 }
 
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §C.3, D5.7) — MAY A BOOKER-ADDRESSED NOTICE STILL GO TO THIS
+ * SESSION'S `initiatingMemberId`?
+ *
+ * A member's own admission (`openedBy === 'client'`) always may: they are the person in the call,
+ * and the open re-checked their `CONSUME_CREDITS` moments ago. A `guest` / `system` session is
+ * opened ON BEHALF of the booker, who is attribution only (D4) and may have LEFT the company since
+ * they booked — so a notice carrying company billing data (balances, receipts) is addressed to
+ * them only while they are still a live member of the billing company. `PARTICIPATE` is the base
+ * member capability every company role holds, so "still a member" is the whole test. ONE helper for
+ * every booker-addressed publisher, so the five cannot disagree.
+ */
+async function bookerMayBeAddressed(
+  session: Pick<CreditSession, 'id' | 'companyId' | 'initiatingMemberId' | 'openedBy'>,
+  notice: string
+): Promise<boolean> {
+  if (session.openedBy === 'client') {
+    return true;
+  }
+  const role = await partyMembershipsRepository.getMemberRole(
+    'company',
+    session.companyId,
+    session.initiatingMemberId
+  );
+  const may = role !== undefined && roleHasCapability(role, CAPABILITIES.PARTICIPATE);
+  if (!may) {
+    log.info(
+      { sessionId: session.id, openedBy: session.openedBy, notice },
+      'Booker-addressed notice skipped — the booker of an on-behalf session is no longer a member of the billing company'
+    );
+  }
+  return may;
+}
+
 /** Low-runway warning (self, in-app). One-shot per session. */
 export async function publishLowBalance(
   session: CreditSession,
   balanceMinor: number
 ): Promise<void> {
+  if (!(await bookerMayBeAddressed(session, 'session.low_balance'))) {
+    return;
+  }
   // BAL-412 (D6) — the CORRECTED runway formula: `resolveBillingFloorMinutes()` reads the
   // SAME env-overridable floor the settlement layer snapshots, and `connectedMinutes` is what
   // the balance has already been drawn down by (drawn, not elapsed — see `runway.ts`).
@@ -86,10 +147,13 @@ export async function publishGraceEntered(
   now: Date
 ): Promise<void> {
   const ceilingRoom = ceilingRoomMinor(session, balanceMinor);
+  // BAL-474 (D5.7) — a departed booker of an on-behalf session drops out of the SELF arm only; the
+  // billing-admin ping still goes out, so the payload simply omits `userId`.
+  const bookerMay = await bookerMayBeAddressed(session, 'session.grace_entered');
   await notificationEvents.publish('session.grace_entered', {
     correlationId: `${session.id}:grace_entered`,
     sessionId: session.id,
-    userId: session.initiatingMemberId,
+    ...(bookerMay ? { userId: session.initiatingMemberId } : {}),
     companyId: session.companyId,
     graceRemainingMinutes: graceRemainingMinutes(session, now),
     ceilingRoomMinor: ceilingRoom,
@@ -105,6 +169,9 @@ export async function publishGraceEntered(
 
 /** Approaching the wrap (self, in-app + SMS). One-shot per session. */
 export async function publishNearWrap(session: CreditSession, now: Date): Promise<void> {
+  if (!(await bookerMayBeAddressed(session, 'session.near_wrap'))) {
+    return;
+  }
   await notificationEvents.publish('session.near_wrap', {
     correlationId: `${session.id}:near_wrap`,
     sessionId: session.id,
@@ -153,38 +220,262 @@ export async function publishSessionSettled(
     company_id: session.companyId,
     outcome: 'success',
     overdraft_settled_minor: overdraft,
+    opened_by: session.openedBy,
     distinct_id: session.companyId,
     ...(settlementShape === undefined ? {} : { settlement_outcome: settlementShape }),
   });
 }
 
+/** Why a hold-dunning notice is being considered (`HoldStatus` is read fresh either way). */
+export type HoldDunningTrigger = 'receivable_opened' | 'daily_reminder';
+
 /**
- * A settlement could not complete (hard decline / SCA / async fail) — dunning notice +
- * SESSION_SETTLED{outcome} + RECEIVABLE_OPENED analytics. The receivable row itself is opened
- * by the caller (in its own txn); this only publishes + tracks (post-commit).
+ * What {@link claimHoldDunningNotice} decided, all under ONE wallet-locked snapshot.
+ *
+ *   `not_on_hold`      — no open receivable: nothing to say (the hold cleared since the sweep listed it).
+ *   `healed`           — on hold but the balance already covers it: the covered-but-held state. The
+ *                        claim HEALS it (an audited system clear) instead of warning about it.
+ *   `already_reminded` — the daily arm only: another sweep reminded this wallet inside the cadence.
+ *   `claimed`          — publish this: the figure was read and (on the daily arm) stamped together.
+ */
+export type HoldDunningClaim =
+  | { readonly kind: 'not_on_hold' }
+  | { readonly kind: 'healed'; readonly healed: CoverageHealResult }
+  | { readonly kind: 'already_reminded' }
+  | { readonly kind: 'claimed'; readonly status: HoldStatus };
+
+/**
+ * The ONE caller of {@link clearCoveredHold} in this file — the dunning claim and the booking
+ * guard's `healCoveredHoldNow` both come through it, so "heal a covered hold" has one definition
+ * and the account-hold invariant's count of hold-releasing call sites stays exact.
+ */
+async function healInTx(
+  tx: DbTx,
+  input: {
+    walletId: string;
+    status: HoldStatus;
+    trigger: CoverageHealTrigger;
+    now: Date;
+  }
+): Promise<CoverageHealResult> {
+  return clearCoveredHold(tx, {
+    walletId: input.walletId,
+    balanceMinor: input.status.balanceMinor,
+    trigger: input.trigger,
+    now: input.now,
+  });
+}
+
+/**
+ * Post-commit "account clear" notice for a heal, keyed on the FIRST cleared receivable id (D8.4).
+ * A receivable clears exactly once, so the id is unique per write; a per-wallet key would be
+ * deduplicated by BullMQ against a retained job and silence every later heal on the wallet. A
+ * heal that cleared nothing announces nothing.
+ */
+async function publishHealedNotice(walletId: string, healed: CoverageHealResult): Promise<void> {
+  const [operationId] = healed.clearedIds;
+  if (operationId === undefined || healed.companyId === undefined) {
+    return;
+  }
+  await publishReceivableCleared({
+    operationId,
+    companyId: healed.companyId,
+    walletId,
+    receivableCount: healed.clearedIds.length,
+    clearedMinor: healed.clearedMinor,
+    balanceAfterMinor: healed.balanceMinor,
+    clearedBy: 'coverage_heal',
+  });
+}
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §G.2, D7.1, D7.2) — CLAIM A HOLD-DUNNING NOTICE under the wallet
+ * advisory lock, in ONE transaction: read the top-up figure from one consistent snapshot, decide
+ * whether it may be sent, and (on the daily arm) stamp the cadence — then let the CALLER publish
+ * post-commit. Two sweeps racing on one wallet therefore cannot both quote a figure, and the figure
+ * a client is told is never torn against a top-up that committed between two reads.
+ *
+ * The wallet lock is the FIRST statement (every credit writer takes it first). The figure comes
+ * from `readHoldStatus` — the one reader — and is never re-derived here.
+ *
+ * ⚠ A covered-but-held wallet (`amountToClearMinor === 0`) is HEALED here, not warned about: a
+ * notice would have to quote A$0.00, and the hold is the thing that is wrong.
+ *
+ * ⚠ ONLY THE DAILY ARM STAMPS (D7.1). A `receivable_opened` notice is never throttled — a new debt
+ * always deserves a fresh notice with the new total — and it never writes `last_dunning_at`, so an
+ * off-cycle notice can never push the next daily reminder back.
+ */
+export async function claimHoldDunningNotice(input: {
+  walletId: string;
+  trigger: HoldDunningTrigger;
+  now: Date;
+}): Promise<HoldDunningClaim> {
+  const { walletId, trigger, now } = input;
+  return db.transaction(async (tx): Promise<HoldDunningClaim> => {
+    await acquireWalletLock(tx, walletId);
+    const status = await creditReceivablesRepository.readHoldStatus({ walletId }, tx);
+    if (!status.onHold) {
+      return { kind: 'not_on_hold' };
+    }
+    if (status.amountToClearMinor === 0) {
+      return {
+        kind: 'healed',
+        healed: await healInTx(tx, { walletId, status, trigger: 'dunning_claim', now }),
+      };
+    }
+    if (trigger === 'daily_reminder') {
+      const last = await creditReceivablesRepository.lastDailyDunningAt(walletId, tx);
+      if (
+        last !== undefined &&
+        last.getTime() > now.getTime() - DUNNING_CADENCE_HOURS * MS_PER_HOUR
+      ) {
+        return { kind: 'already_reminded' };
+      }
+      await creditReceivablesRepository.stampDailyDunning(walletId, now, tx);
+    }
+    return { kind: 'claimed', status };
+  });
+}
+
+/**
+ * BAL-474 — heal a covered-but-held wallet at BOOKING time (D8.1): the booking API guard calls this
+ * when the funding verdict is `covered_hold`, so no client ever sees a hold that owes nothing.
+ * Same lock, same snapshot reader, same `healInTx` as the dunning claim — one heal, two entry
+ * points. Returns `{ healed: true }` only when it actually cleared receivables; the cleared notice
+ * is published post-commit. A throw propagates: the guard treats it as a failed heal.
+ */
+export async function healCoveredHoldNow(input: {
+  walletId: string;
+  trigger: 'booking_guard';
+  now: Date;
+}): Promise<{ healed: boolean }> {
+  const { walletId, trigger, now } = input;
+  const healed = await db.transaction(async (tx) => {
+    await acquireWalletLock(tx, walletId);
+    const status = await creditReceivablesRepository.readHoldStatus({ walletId }, tx);
+    if (!status.onHold || status.amountToClearMinor !== 0) {
+      return undefined;
+    }
+    return healInTx(tx, { walletId, status, trigger, now });
+  });
+  if (healed === undefined || healed.clearedIds.length === 0) {
+    return { healed: false };
+  }
+  await publishHealedNotice(walletId, healed);
+  return { healed: true };
+}
+
+/** What {@link publishHoldDunningNotice} did — so a sweep counts only the notices it really sent. */
+export type HoldDunningOutcome =
+  | 'not_on_hold'
+  | 'already_reminded'
+  | 'healed'
+  | 'published'
+  | 'publish_failed';
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §G.2) — publish ONE wallet-grain dunning notice stating the top-up
+ * that clears the hold (D6.2: "neutral about number of over-runs but state the total amount
+ * needed"). The notice is CLAIMED first ({@link claimHoldDunningNotice}: figure + daily stamp under
+ * the wallet lock, one transaction) and published post-commit, so the publish never sits inside a
+ * database transaction.
+ *
+ * `correlationKey` is per WRITE — the receivable id on `receivable_opened`, `{walletId}:{epochMs}` on
+ * `daily_reminder` — so BullMQ's jobId dedup never swallows a genuinely new notice.
+ *
+ * A publish failure is logged (`error` + Sentry) and NOT thrown: the daily stamp stays, so a lost
+ * reminder is delayed by one cadence rather than retried in a loop, and a lost `receivable_opened`
+ * notice is picked up by the next daily claim (an unstamped wallet is due at once).
+ */
+export async function publishHoldDunningNotice(input: {
+  walletId: string;
+  companyId: string;
+  trigger: HoldDunningTrigger;
+  correlationKey: string;
+  now: Date;
+}): Promise<HoldDunningOutcome> {
+  const { walletId, companyId, trigger, correlationKey, now } = input;
+  const claim = await claimHoldDunningNotice({ walletId, trigger, now });
+  const fields = { walletId, companyId, trigger };
+
+  if (claim.kind === 'not_on_hold') {
+    log.info(fields, 'Hold dunning skipped — the wallet is no longer on hold');
+    return 'not_on_hold';
+  }
+  if (claim.kind === 'already_reminded') {
+    log.info(
+      fields,
+      'Hold dunning skipped — another sweep already reminded this wallet inside the cadence'
+    );
+    return 'already_reminded';
+  }
+  try {
+    if (claim.kind === 'healed') {
+      log.info(
+        { ...fields, clearedCount: claim.healed.clearedIds.length },
+        'Hold dunning replaced by a heal — the balance already covered the debt'
+      );
+      await publishHealedNotice(walletId, claim.healed);
+      return 'healed';
+    }
+    await notificationEvents.publish('session.settlement_failed', {
+      correlationId: `hold_dunning:${correlationKey}`,
+      companyId,
+      walletId,
+      topUpNeededMinor: claim.status.amountToClearMinor,
+      promoGrantedSinceDebtMinor: claim.status.promoGrantedSinceDebtMinor,
+      confirmationWasRequested: claim.status.confirmationWasRequested,
+      asOfIso: now.toISOString(),
+      trigger,
+    });
+    log.info(
+      { ...fields, topUpNeededMinor: claim.status.amountToClearMinor },
+      'Hold dunning notice published'
+    );
+    return 'published';
+  } catch (error: unknown) {
+    log.error(
+      {
+        ...fields,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Failed to publish the hold dunning notice (the claim stands; the next daily reminder retries)'
+    );
+    Sentry.captureException(error, { extra: fields });
+    return 'publish_failed';
+  }
+}
+
+/**
+ * A settlement could not complete (hard decline / SCA / async fail) and a receivable opened — the
+ * PER-SESSION analytics (`SESSION_SETTLED{outcome}` + `RECEIVABLE_OPENED`), then the wallet-grain
+ * dunning notice (post-commit; the receivable itself is opened by the caller in its own txn).
+ *
+ * ⚠ BAL-474 (D7.1) — NEVER THROTTLED. Every new receivable produces a fresh notice with the new
+ * total, at once. Its callers are the two receivable-opening paths only (`end-session.ts`'s
+ * `openReceivableAndDun` and `dispatch.ts`'s `handleOverdraftChargeFailed`); the daily reminder
+ * no longer calls it, so these two analytics now count distinct failures and opens.
+ *
+ * The analytics fire BEFORE the notice, outside its claim: a database fault in the claim must not
+ * lose the metric.
  */
 export async function publishSettlementFailure(input: {
-  /** Only id/companyId/walletId are needed (a full `SettleableSession` is structurally fine). */
-  session: { id: string; companyId: string; walletId: string };
+  /** `openedBy` labels the analytics; the rest identify the wallet the notice is about. */
+  session: Pick<SettleableSession, 'id' | 'companyId' | 'walletId' | 'openedBy'>;
   reason: 'declined' | 'requires_action';
   amountMinor: number;
-  /** Stamps the re-notifiable dunning `correlationId`. */
-  attemptEpochMs: number;
+  /** The receivable that just opened — the notice's per-write identity. */
+  receivableId: string;
+  now: Date;
 }): Promise<void> {
-  const { session, reason, amountMinor, attemptEpochMs } = input;
-  await notificationEvents.publish('session.settlement_failed', {
-    correlationId: `${session.id}:settlement_failed:${attemptEpochMs}`,
-    sessionId: session.id,
-    companyId: session.companyId,
-    walletId: session.walletId,
-    amountMinor,
-    reason,
-  });
+  const { session, reason, amountMinor, receivableId, now } = input;
   trackServer(SESSION_SERVER_EVENTS.SESSION_SETTLED, {
     session_id: session.id,
     company_id: session.companyId,
     outcome: reason === 'requires_action' ? 'requires_action' : 'fail',
     overdraft_settled_minor: amountMinor,
+    opened_by: session.openedBy,
     distinct_id: session.companyId,
   });
   trackServer(SESSION_SERVER_EVENTS.RECEIVABLE_OPENED, {
@@ -194,8 +485,14 @@ export async function publishSettlementFailure(input: {
     reason: reason === 'requires_action' ? 'settlement_requires_action' : 'settlement_declined',
     distinct_id: session.companyId,
   });
+  await publishHoldDunningNotice({
+    walletId: session.walletId,
+    companyId: session.companyId,
+    trigger: 'receivable_opened',
+    correlationKey: receivableId,
+    now,
+  });
 }
-
 /**
  * BAL-412 (F16) — the presence-settlement CONTEXT the two ordinary receipts carry, derived ONCE
  * from the already-settled session row.
@@ -242,6 +539,9 @@ function presenceContext(session: CreditSession): {
  * say WHY it is a receipt for a call the client never joined. See {@link presenceContext}.
  */
 export async function publishPaymentCharged(session: CreditSession, now: Date): Promise<void> {
+  if (!(await bookerMayBeAddressed(session, 'payment.charged'))) {
+    return;
+  }
   const expertName = await resolveExpertName(session.expertProfileId);
   await notificationEvents.publish('payment.charged', {
     correlationId: `${session.id}:payment_charged`,
@@ -311,15 +611,18 @@ export async function publishSessionMissedCall(session: CreditSession, _now: Dat
     );
     return;
   }
-  const [expertName, clientSideEverPresent] = await Promise.all([
+  // BAL-474 (D5.7) — a departed booker of an on-behalf session drops out of the client SELF arm
+  // only; the delivering expert is still told, so the payload simply omits `userId`.
+  const [expertName, clientSideEverPresent, bookerMay] = await Promise.all([
     resolveExpertName(session.expertProfileId),
     readClientSideEverPresent(session.id, meeting.id),
+    bookerMayBeAddressed(session, 'session.missed_call'),
   ]);
   await notificationEvents.publish('session.missed_call', {
     correlationId: `${session.id}:missed_call`,
     sessionId: session.id,
     meetingId: session.meetingId,
-    userId: session.initiatingMemberId,
+    ...(bookerMay ? { userId: session.initiatingMemberId } : {}),
     companyId: session.companyId,
     expertProfileId: session.expertProfileId,
     expertName,
@@ -369,9 +672,15 @@ async function readClientSideEverPresent(
  * ⚠ ONE NOTICE PER CLEAR OPERATION, NOT PER ROW (fix round N4). A wallet can hold several open
  * receivables — `credit-receivables.integration.test.ts` proves it — and the previous shape
  * returned one thunk per cleared row, so three rows sent three identical "your account is clear"
- * emails, each quoting the same balance. `correlationId` is therefore keyed on the LEDGER ENTRY
- * that covered the debt (`receivable_cleared:{ledgerEntryId}`), which is one per clear operation
- * and is itself idempotency-keyed, so a webhook replay collapses onto the same BullMQ jobId.
+ * emails, each quoting the same balance. `correlationId` is therefore keyed on the OPERATION
+ * (`receivable_cleared:{operationId}`), one per write.
+ *
+ * ⚠ BAL-474 (D8.4) — `operationId` IS A PER-WRITE IDENTITY, NEVER A PER-WALLET KEY. On a credit
+ * arm (a cash top-up, a settlement charge) it is the LEDGER ENTRY that covered the debt: one per
+ * clear operation and itself idempotency-keyed, so a webhook replay collapses onto the same BullMQ
+ * jobId. On a heal (no ledger entry) it is the FIRST cleared receivable id — a receivable clears
+ * exactly once, so two heals on one wallet get two different ids. A per-wallet key would be
+ * deduplicated by BullMQ against a retained job and silence every later heal.
  *
  * ⚠ `balanceAfterMinor` IS THE DISPLAY FIGURE, and it is the caller's job to pass the TRUE final
  * one (M3): on a `manual_purchase` the promo grant lands after the clear's predicate ran, and
@@ -393,8 +702,8 @@ async function readClientSideEverPresent(
  * only enqueues, so this cannot itself be what fails.
  */
 export async function publishReceivableCleared(input: {
-  /** The credit ledger entry that covered the debt — the operation's identity. */
-  ledgerEntryId: string;
+  /** The write's identity: the covering ledger entry, or the first cleared receivable id on a heal. */
+  operationId: string;
   companyId: string;
   walletId: string;
   /** How many open receivables this one operation cleared (`>= 1`). */
@@ -403,10 +712,10 @@ export async function publishReceivableCleared(input: {
   clearedMinor: number;
   /** The TRUE final wallet balance the client will see (AUD minor). */
   balanceAfterMinor: number;
-  clearedBy: CashCreditReason;
+  clearedBy: DebtCoveringCreditReason | 'coverage_heal';
 }): Promise<void> {
   const {
-    ledgerEntryId,
+    operationId,
     companyId,
     walletId,
     receivableCount,
@@ -432,7 +741,7 @@ export async function publishReceivableCleared(input: {
     log.warn(
       {
         op: 'publishReceivableCleared',
-        ledgerEntryId,
+        operationId,
         error: err instanceof Error ? err.message : String(err),
         // CLAUDE.md's caught-error rule is message + STACK + ids. `join-meeting.ts` states it
         // outright ("THE STACK IS REQUIRED, NOT OPTIONAL"): without it the original throw site
@@ -445,7 +754,7 @@ export async function publishReceivableCleared(input: {
   }
   try {
     await notificationEvents.publish('credit.receivable.cleared', {
-      correlationId: `receivable_cleared:${ledgerEntryId}`,
+      correlationId: `receivable_cleared:${operationId}`,
       companyId,
       walletId,
       receivableCount,
@@ -457,7 +766,7 @@ export async function publishReceivableCleared(input: {
     log.error(
       {
         op: 'publishReceivableCleared',
-        ledgerEntryId,
+        operationId,
         companyId,
         walletId,
         receivableCount,

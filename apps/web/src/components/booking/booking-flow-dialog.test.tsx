@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen } from '@/test/utils';
+import { act, render, screen } from '@/test/utils';
 import { toast } from 'sonner';
 import { track } from '@/lib/analytics';
 import type { BookConsultationResult } from '@/lib/booking/actions/types';
@@ -16,6 +16,20 @@ vi.mock('sonner', () => ({
 }));
 const { mockRouterPush } = vi.hoisted(() => ({ mockRouterPush: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockRouterPush }) }));
+
+const { mockSwitchWorkspaceAction } = vi.hoisted(() => ({ mockSwitchWorkspaceAction: vi.fn() }));
+vi.mock('@/lib/auth/actions/switch-workspace', () => ({
+  switchWorkspaceAction: (...args: unknown[]) => mockSwitchWorkspaceAction(...args),
+}));
+
+const { mockCaptureException, mockCaptureMessage } = vi.hoisted(() => ({
+  mockCaptureException: vi.fn(),
+  mockCaptureMessage: vi.fn(),
+}));
+vi.mock('@sentry/nextjs', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+  captureMessage: (...args: unknown[]) => mockCaptureMessage(...args),
+}));
 
 const { mockAuthModalOpen } = vi.hoisted(() => ({ mockAuthModalOpen: vi.fn() }));
 vi.mock('@/hooks/use-auth-modal', () => ({
@@ -127,8 +141,12 @@ beforeEach(() => {
   mockIsMobile.mockReturnValue(false);
   mockBookConsultationAction.mockReset();
   mockRouterPush.mockClear();
+  mockSwitchWorkspaceAction.mockReset();
+  mockCaptureException.mockClear();
+  mockCaptureMessage.mockClear();
   vi.mocked(track).mockClear();
   vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 afterEach(() => {
@@ -799,5 +817,445 @@ describe('BookingFlowDialog — the nonce freeze/un-freeze after a meeting-hop f
     };
     expect(secondCall.bookingNonce).not.toBe(firstNonce);
     expect(secondCall.slot.startIso).toBe('2026-06-05T10:00:00.000Z');
+  });
+});
+
+describe('BookingFlowDialog — the balance refusals (BAL-474: D6.1 hold, D6.5 reservation)', () => {
+  const HELD_COMPANY = { id: 'company-1', name: 'Northwind Industrial', isActive: true };
+
+  type FailureResult = Extract<BookConsultationResult, { ok: false }>;
+
+  function holdFailure(overrides: Partial<FailureResult> = {}): FailureResult {
+    return {
+      ok: false,
+      stage: 'funding',
+      code: 'hold_top_up_required',
+      balance: {
+        variant: 'hold',
+        topUpNeededMinor: 27_500,
+        reservedBookingCount: null,
+        company: HELD_COMPANY,
+      },
+      ...overrides,
+    };
+  }
+
+  function reservedFailure(overrides: Partial<FailureResult> = {}): FailureResult {
+    return {
+      ok: false,
+      stage: 'funding',
+      code: 'reserved_top_up_required',
+      balance: {
+        variant: 'reserved',
+        topUpNeededMinor: 7_500,
+        reservedBookingCount: 2,
+        company: HELD_COMPANY,
+      },
+      ...overrides,
+    };
+  }
+
+  /** BAL-474 (D11.3 N3) — the last dialog `submitWith` rendered: its `onClose` and a way to flip `open`. */
+  let lastDialog: { onClose: ReturnType<typeof vi.fn>; setOpen: (open: boolean) => void } | null =
+    null;
+
+  async function submitWith(result: FailureResult): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = userEvent.setup();
+    mockBookConsultationAction.mockResolvedValue(result);
+    const onClose = vi.fn();
+    const dialog = (open: boolean): React.JSX.Element => (
+      <BookingFlowDialog
+        open={open}
+        onClose={onClose}
+        expert={EXPERT}
+        source="profile"
+        entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+      />
+    );
+    const view = render(dialog(true));
+    lastDialog = { onClose, setOpen: (open) => view.rerender(dialog(open)) };
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+    await user.type(
+      screen.getByLabelText("What you'd like to discuss"),
+      'A real problem statement.'
+    );
+    await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
+    return user;
+  }
+
+  it('a hold refusal renders the balance panel with the top-up figure — and NOT the BAL-478 setup panel', async () => {
+    await submitWith(holdFailure());
+
+    expect(await screen.findByText('One thing to settle first')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Northwind Industrial's balance needs a top-up of A$275.00 or more before new consultations can be booked. Consultations already booked aren't affected."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText('One setup step first')).not.toBeInTheDocument();
+  });
+
+  it('a reservation refusal renders the reserved variant with the COUNT', async () => {
+    await submitWith(reservedFailure());
+
+    expect(
+      await screen.findByText(
+        "Part of Northwind Industrial's balance is set aside for planned consultations"
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText(/set aside for 2 upcoming consultations/)).toBeInTheDocument();
+  });
+
+  it('the failed-heal fallback (no figure) renders the fallback panel — never A$0.00', async () => {
+    await submitWith(
+      holdFailure({
+        balance: {
+          variant: 'hold',
+          topUpNeededMinor: null,
+          reservedBookingCount: null,
+          company: HELD_COMPANY,
+        },
+      })
+    );
+
+    expect(await screen.findByText('An earlier hold is still clearing')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('A$');
+  });
+
+  it.each([
+    ['at the maximum', 1_000_000, 'needs a top-up of A$10,000.00 or more'],
+    ['one minor above the maximum', 1_000_001, 'needs top-ups totalling A$10,000.01 or more'],
+  ])(
+    'the "top-ups totalling" wording flips %s (TOP_UP_LIMITS_MINOR.max)',
+    async (_label, amount, text) => {
+      await submitWith(
+        holdFailure({
+          balance: {
+            variant: 'hold',
+            topUpNeededMinor: amount,
+            reservedBookingCount: null,
+            company: HELD_COMPANY,
+          },
+        })
+      );
+
+      expect(
+        await screen.findByText(new RegExp(text.replace(/[.$]/g, '\\$&')))
+      ).toBeInTheDocument();
+    }
+  );
+
+  it('a plain member sees the figure, "Got it", and NO top-up button', async () => {
+    const user = await submitWith(holdFailure({ code: 'hold_admins_notified' }));
+
+    expect(await screen.findByText(/Your billing admins have been notified/)).toBeInTheDocument();
+    expect(screen.getByText(/A\$275\.00 or more/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /top up/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Got it' }));
+  });
+
+  it('a malformed reservation (no figure) falls to the generic hard panel, never a panel with a made-up figure', async () => {
+    await submitWith(
+      reservedFailure({
+        balance: {
+          variant: 'reserved',
+          topUpNeededMinor: null,
+          reservedBookingCount: 2,
+          company: HELD_COMPANY,
+        },
+      })
+    );
+
+    expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('A$');
+  });
+
+  it('a balance code with no balance payload falls to the generic hard panel', async () => {
+    await submitWith({ ok: false, stage: 'funding', code: 'hold_top_up_required' });
+
+    expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+  });
+
+  it('is an expected refusal: NO Sentry capture and NO client track() for it', async () => {
+    await submitWith(holdFailure());
+    await screen.findByText('One thing to settle first');
+
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockCaptureMessage).not.toHaveBeenCalled();
+    for (const [event] of vi.mocked(track).mock.calls) {
+      expect(String(event)).not.toMatch(/funding|balance|hold|reserved/i);
+    }
+  });
+
+  describe('Top up — it targets the company that refused', () => {
+    it('the held company is the ACTIVE workspace: just navigates, no switch', async () => {
+      const user = await submitWith(holdFailure());
+
+      await user.click(await screen.findByRole('button', { name: 'Top up' }));
+
+      expect(mockRouterPush).toHaveBeenCalledWith('/billing/top-up');
+      expect(mockSwitchWorkspaceAction).not.toHaveBeenCalled();
+    });
+
+    it('NOT the active workspace: switches to THAT company first, then navigates', async () => {
+      mockSwitchWorkspaceAction.mockResolvedValue({ success: true });
+      const user = await submitWith(
+        holdFailure({
+          balance: {
+            variant: 'hold',
+            topUpNeededMinor: 27_500,
+            reservedBookingCount: null,
+            company: { ...HELD_COMPANY, isActive: false },
+          },
+        })
+      );
+
+      await user.click(
+        await screen.findByRole('button', { name: 'Switch to Northwind Industrial and top up' })
+      );
+
+      expect(mockSwitchWorkspaceAction).toHaveBeenCalledWith('company:company-1');
+      expect(mockRouterPush).toHaveBeenCalledWith('/billing/top-up');
+      // Order: the switch resolved BEFORE the navigation.
+      expect(mockSwitchWorkspaceAction.mock.invocationCallOrder[0]).toBeLessThan(
+        mockRouterPush.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
+      );
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
+    describe('D11.3 (N3) — a switch in flight cannot be undone by closing the dialog', () => {
+      const NOT_ACTIVE = {
+        balance: {
+          variant: 'hold' as const,
+          topUpNeededMinor: 27_500,
+          reservedBookingCount: null,
+          company: { ...HELD_COMPANY, isActive: false },
+        },
+      };
+
+      it('⚠ Escape while the switch is pending is IGNORED — the dialog stays open and onClose never fires', async () => {
+        let finishSwitch: (value: { success: boolean }) => void = () => {};
+        mockSwitchWorkspaceAction.mockReturnValue(
+          new Promise((resolve) => {
+            finishSwitch = resolve;
+          })
+        );
+        const user = await submitWith(holdFailure(NOT_ACTIVE));
+
+        await user.click(
+          await screen.findByRole('button', { name: 'Switch to Northwind Industrial and top up' })
+        );
+        await user.keyboard('{Escape}');
+
+        expect(lastDialog?.onClose).not.toHaveBeenCalled();
+        expect(screen.getByText('One thing to settle first')).toBeInTheDocument();
+
+        await act(async () => {
+          finishSwitch({ success: true });
+        });
+        expect(mockRouterPush).toHaveBeenCalledWith('/billing/top-up');
+      });
+
+      it('once the switch has FAILED the dialog can be dismissed again', async () => {
+        mockSwitchWorkspaceAction.mockResolvedValue({ success: false, error: 'nope' });
+        const user = await submitWith(holdFailure(NOT_ACTIVE));
+
+        await user.click(
+          await screen.findByRole('button', { name: 'Switch to Northwind Industrial and top up' })
+        );
+        await screen.findByRole('button', { name: 'Switch to Northwind Industrial and top up' });
+        await user.keyboard('{Escape}');
+
+        expect(lastDialog?.onClose).toHaveBeenCalledTimes(1);
+      });
+
+      it('⚠ a switch that resolves AFTER the dialog was closed does NOT navigate', async () => {
+        let finishSwitch: (value: { success: boolean }) => void = () => {};
+        mockSwitchWorkspaceAction.mockReturnValue(
+          new Promise((resolve) => {
+            finishSwitch = resolve;
+          })
+        );
+        const user = await submitWith(holdFailure(NOT_ACTIVE));
+
+        await user.click(
+          await screen.findByRole('button', { name: 'Switch to Northwind Industrial and top up' })
+        );
+        // The parent closes the dialog while the switch is still awaiting (e.g. a route change).
+        act(() => lastDialog?.setOpen(false));
+        await act(async () => {
+          finishSwitch({ success: true });
+        });
+
+        expect(mockRouterPush).not.toHaveBeenCalled();
+      });
+    });
+
+    it('a FAILED switch toasts, does NOT navigate, and the panel stays with an enabled button', async () => {
+      mockSwitchWorkspaceAction.mockResolvedValue({ success: false, error: 'nope' });
+      const user = await submitWith(
+        holdFailure({
+          balance: {
+            variant: 'hold',
+            topUpNeededMinor: 27_500,
+            reservedBookingCount: null,
+            company: { ...HELD_COMPANY, isActive: false },
+          },
+        })
+      );
+
+      const button = await screen.findByRole('button', {
+        name: 'Switch to Northwind Industrial and top up',
+      });
+      await user.click(button);
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "We couldn't switch to Northwind Industrial. Please try again."
+      );
+      expect(mockRouterPush).not.toHaveBeenCalled();
+      expect(screen.getByText('One thing to settle first')).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Switch to Northwind Industrial and top up' })
+      ).toBeEnabled();
+    });
+
+    it('a THROWN switch is captured, toasts the same copy, and stays', async () => {
+      mockSwitchWorkspaceAction.mockRejectedValue(new Error('network down'));
+      const user = await submitWith(
+        holdFailure({
+          balance: {
+            variant: 'hold',
+            topUpNeededMinor: 27_500,
+            reservedBookingCount: null,
+            company: { ...HELD_COMPANY, isActive: false },
+          },
+        })
+      );
+
+      await user.click(
+        await screen.findByRole('button', { name: 'Switch to Northwind Industrial and top up' })
+      );
+
+      expect(mockCaptureException).toHaveBeenCalledTimes(1);
+      expect(toast.error).toHaveBeenCalledWith(
+        "We couldn't switch to Northwind Industrial. Please try again."
+      );
+      expect(mockRouterPush).not.toHaveBeenCalled();
+    });
+
+    it('a null company name uses the unnamed labels on the button and the failure toast', async () => {
+      mockSwitchWorkspaceAction.mockResolvedValue({ success: false, error: 'nope' });
+      const user = await submitWith(
+        holdFailure({
+          balance: {
+            variant: 'hold',
+            topUpNeededMinor: 27_500,
+            reservedBookingCount: null,
+            company: { id: 'company-1', name: null, isActive: false },
+          },
+        })
+      );
+
+      await user.click(await screen.findByRole('button', { name: 'Switch company and top up' }));
+
+      expect(toast.error).toHaveBeenCalledWith("We couldn't switch companies. Please try again.");
+      expect(screen.getByText(/^Your team's balance needs a top-up/)).toBeInTheDocument();
+    });
+
+    it('"I\'ll do this later" closes the dialog without navigating', async () => {
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      mockBookConsultationAction.mockResolvedValue(holdFailure());
+      render(
+        <BookingFlowDialog
+          open
+          onClose={onClose}
+          expert={EXPERT}
+          source="profile"
+          entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+          viewerEmailDomain={null}
+          onMessage={vi.fn()}
+        />
+      );
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+      await user.type(
+        screen.getByLabelText("What you'd like to discuss"),
+        'A real problem statement.'
+      );
+      await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
+
+      await user.click(await screen.findByRole('button', { name: "I'll do this later" }));
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(mockRouterPush).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('hop-2 refusals carry stage:meeting — resolved by CODE, before the partial arm', () => {
+    it('a hold refused at the meeting hop shows the balance panel and the case-saved line, NOT "we just couldn\'t lock in the time"', async () => {
+      await submitWith(
+        holdFailure({
+          stage: 'meeting',
+          engagementId: 'engagement-7',
+          caseTitle: 'Migration planning',
+        })
+      );
+
+      expect(await screen.findByText('One thing to settle first')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          '"Migration planning" is saved in your Cases — choose it when you book with CloudPeak again.'
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("Your case is saved — we just couldn't lock in the time")
+      ).not.toBeInTheDocument();
+      // These panels offer no in-dialog retry.
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    });
+
+    it('a reservation refused at the meeting hop names the saved case too', async () => {
+      await submitWith(
+        reservedFailure({ stage: 'meeting', engagementId: 'engagement-7', caseTitle: 'Q3 review' })
+      );
+
+      expect(
+        await screen.findByText(
+          '"Q3 review" is saved in your Cases — choose it when you book with CloudPeak again.'
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('a BAL-478 unfunded refusal at the meeting hop shows the setup panel with the case-saved line', async () => {
+      await submitWith({
+        ok: false,
+        stage: 'meeting',
+        code: 'funding_setup_required',
+        engagementId: 'engagement-7',
+        caseTitle: 'Migration planning',
+      });
+
+      expect(await screen.findByText('One setup step first')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          '"Migration planning" is saved in your Cases — choose it when you book with CloudPeak again.'
+        )
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("Your case is saved — we just couldn't lock in the time")
+      ).toBeNull();
+    });
+
+    it('a hop-1 refusal (before any write) shows NO case-saved line', async () => {
+      await submitWith(holdFailure());
+
+      await screen.findByText('One thing to settle first');
+      expect(document.body.textContent).not.toContain('is saved in your Cases');
+    });
   });
 });

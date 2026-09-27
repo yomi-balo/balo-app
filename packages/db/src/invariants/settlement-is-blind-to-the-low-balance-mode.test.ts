@@ -64,6 +64,31 @@ const SCANNED_FILES: ReadonlyArray<{ displayPath: string; url: URL }> = [
       import.meta.url
     ),
   },
+  // ⚠ BAL-474 (ADR-1040 Amendment 7) WIDENED THIS LIST ON THE RECORD. The sessionless-meeting
+  // open-and-settle, the on-behalf open, the session-scoped share and the booking verdict are all
+  // new money paths; the mode governs grace ENTRY only, so none of them may read it either.
+  {
+    displayPath: 'apps/api/src/services/credit-session/settle-sessionless-case-meeting.ts',
+    url: new URL(
+      '../../../../apps/api/src/services/credit-session/settle-sessionless-case-meeting.ts',
+      import.meta.url
+    ),
+  },
+  {
+    displayPath: 'apps/api/src/services/credit-session/open-on-behalf-of-booker.ts',
+    url: new URL(
+      '../../../../apps/api/src/services/credit-session/open-on-behalf-of-booker.ts',
+      import.meta.url
+    ),
+  },
+  {
+    displayPath: 'packages/shared/src/credit/session-overdraft-share.ts',
+    url: new URL('../../../shared/src/credit/session-overdraft-share.ts', import.meta.url),
+  },
+  {
+    displayPath: 'packages/shared/src/credit/booking-funding.ts',
+    url: new URL('../../../shared/src/credit/booking-funding.ts', import.meta.url),
+  },
 ];
 
 describe('INVARIANT: settlement is blind to the low-balance mode (ADR-1040 Amendment 6 §A.1/§C)', () => {

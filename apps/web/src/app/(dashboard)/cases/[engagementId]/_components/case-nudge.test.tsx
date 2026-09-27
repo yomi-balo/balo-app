@@ -6,7 +6,7 @@ import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import { render, screen } from '@/test/utils';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseNudgeView } from '@/lib/cases/case-view-types';
-import { CaseNudge } from './case-nudge';
+import { CaseNudge, upcomingBody } from './case-nudge';
 
 /**
  * `useUpcomingJoinClock` calls `useRouter()` unconditionally (it owns the once-only refresh on
@@ -114,7 +114,7 @@ function upcomingAt(offsetMs: number, over: Partial<UpcomingArm> = {}): Upcoming
 const UPCOMING: CaseNudgeView = upcomingAt(THREE_DAYS_MS);
 
 /** Inside the join window on both the server flag AND the clock — the ordinary live case. */
-const UPCOMING_LIVE: CaseNudgeView = upcomingAt(5 * 60_000, { live: true });
+const UPCOMING_LIVE: CaseNudgeView = upcomingAt(2 * 60_000, { live: true });
 
 /**
  * Each kind's ONE identifying heading, per lens. The component renders exactly one
@@ -558,8 +558,8 @@ describe('CaseNudge — a LIVE consultation counts down, and never past zero', (
   });
 
   it('pluralises more than one minute', () => {
-    render(<CaseNudge {...BASE} nudge={upcomingAt(8 * 60_000, { live: true })} lens="client" />);
-    expect(screen.getByText('Your consultation starts in 8 minutes')).toBeInTheDocument();
+    render(<CaseNudge {...BASE} nudge={upcomingAt(2 * 60_000, { live: true })} lens="client" />);
+    expect(screen.getByText('Your consultation starts in 2 minutes')).toBeInTheDocument();
   });
 
   it('says it is STARTING NOW once the start time has passed — never a negative count', () => {
@@ -585,7 +585,7 @@ describe('CaseNudge — a LIVE consultation counts down, and never past zero', (
    * open across the boundary for a page to sit in.
    */
   it('self-corrects to live when the server flag is stale — a page left open across the boundary', () => {
-    render(<CaseNudge {...BASE} nudge={upcomingAt(5 * 60_000, { live: false })} lens="client" />);
+    render(<CaseNudge {...BASE} nudge={upcomingAt(2 * 60_000, { live: false })} lens="client" />);
     expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
     expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
   });
@@ -696,7 +696,7 @@ describe('CaseNudge — never renders a Cancel affordance', () => {
  */
 describe('CaseNudge — liveness anchors to the server instant, never the device clock', () => {
   it('a device clock FAST by 30 min does not render an active Join before the server window opens', () => {
-    // Server's own view: the start is 20 minutes away — outside the 15-minute window. A device
+    // Server's own view: the start is 20 minutes away — outside the 3-minute window (D16). A device
     // clock running 30 minutes fast would, read naively, place the start 10 minutes IN THE PAST.
     const nudge = upcomingWithSkew(20 * 60_000, 30 * 60_000, { live: false });
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
@@ -867,7 +867,7 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
     const { rerender } = render(<CaseNudge {...BASE} nudge={meetingA} lens="client" />);
     expect(mockRouterRefresh).not.toHaveBeenCalled();
 
-    const meetingB = upcomingAt(5 * 60_000, { live: true, meetingId: 'm2' });
+    const meetingB = upcomingAt(2 * 60_000, { live: true, meetingId: 'm2' });
     rerender(<CaseNudge {...BASE} nudge={meetingB} lens="client" />);
 
     expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
@@ -915,7 +915,7 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
   /** Guards a MOUNT-time spurious refresh specifically under device/server skew: a device clock
    *  fast by 30 min must not make an already-live meeting look like a false→true crossing. */
   it('does not refresh at mount when a device clock 30 min fast still agrees the meeting is live', () => {
-    const nudge = upcomingWithSkew(5 * 60_000, 30 * 60_000, { live: true });
+    const nudge = upcomingWithSkew(2 * 60_000, 30 * 60_000, { live: true });
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
     expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
     expect(mockRouterRefresh).not.toHaveBeenCalled();
@@ -926,7 +926,7 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
   it('renders Join, not the countdown, when the server says live but the device clock disagrees', () => {
     // Device 30 min SLOW: the server's instant sits 30 min AHEAD of Date.now(), so a meeting the
     // server considers live can read as not-yet-open by the raw device clock alone.
-    const nudge = upcomingWithSkew(5 * 60_000, -30 * 60_000, { live: true });
+    const nudge = upcomingWithSkew(2 * 60_000, -30 * 60_000, { live: true });
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
 
     const join = screen.getByRole('button', { name: /^Join .*meeting/i });
@@ -955,7 +955,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     render(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: false })}
         lens="client"
       />
     );
@@ -977,7 +977,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     render(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: false })}
         lens="client"
       />
     );
@@ -988,7 +988,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     render(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: false })}
         lens="client"
       />
     );
@@ -1005,7 +1005,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     render(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: true })}
         lens="client"
       />
     );
@@ -1025,7 +1025,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     const { rerender } = render(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: false })}
         lens="client"
       />
     );
@@ -1034,7 +1034,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     rerender(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: true })}
         lens="client"
       />
     );
@@ -1045,7 +1045,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     const { rerender } = render(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false, meetingId: 'm1' })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: false, meetingId: 'm1' })}
         lens="client"
       />
     );
@@ -1053,7 +1053,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     rerender(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true, meetingId: 'm1' })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: true, meetingId: 'm1' })}
         lens="client"
       />
     );
@@ -1068,7 +1068,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     rerender(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true, meetingId: 'm2' })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: true, meetingId: 'm2' })}
         lens="client"
       />
     );
@@ -1099,7 +1099,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     const { rerender } = render(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: true })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: true })}
         lens="client"
       />
     );
@@ -1109,7 +1109,7 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     rerender(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: false })}
         lens="client"
       />
     );
@@ -1154,11 +1154,11 @@ describe('CaseNudge — the room is not ready yet (BAL-581)', () => {
     render(
       <CaseNudge
         {...BASE}
-        nudge={upcomingAt(5 * 60_000, { live: true, roomReady: false })}
+        nudge={upcomingAt(2 * 60_000, { live: true, roomReady: false })}
         lens="client"
       />
     );
-    expect(screen.getByText('Your consultation starts in 5 minutes')).toBeInTheDocument();
+    expect(screen.getByText('Your consultation starts in 2 minutes')).toBeInTheDocument();
   });
 });
 
@@ -1224,5 +1224,36 @@ describe('CaseNudge — exactly one moving thing', () => {
   it('the countdown carries no animation classes of its own', () => {
     render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" />);
     expect(screen.getByTestId('join-countdown').className).not.toMatch(/animate-/);
+  });
+});
+
+/**
+ * BAL-474 (R6-C7, owner-approved) — the live client nudge no longer says "the timer starts when you're both in"
+ * (false after the start for a client who arrives late while the expert waited). Pinned against the FULL literal.
+ */
+describe('CaseNudge — R6-C7: the live client body', () => {
+  const R6_C7 =
+    "Amara will join from here. Go in when you're ready — before the start time, you're only charged for time you're both in the call.";
+
+  it('the builder returns the approved sentence, byte for byte', () => {
+    expect(upcomingBody('client', 'Amara', true)).toBe(R6_C7);
+  });
+
+  it('⚠ renders it inside the join window (client lens), and the retired sentence is gone', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING_LIVE} lens="client" />);
+    expect(screen.getByText(R6_C7)).toBeInTheDocument();
+    expect(screen.queryByText(/the timer starts when you're both in/)).not.toBeInTheDocument();
+  });
+
+  it('the three sentences it does NOT replace are unchanged', () => {
+    expect(upcomingBody('client', 'Amara', false)).toBe(
+      "Your call with Amara is booked. Join from here when it's time, and we'll send a reminder — nothing to do until then."
+    );
+    expect(upcomingBody('expert', 'Amara', true)).toBe(
+      'Amara is expecting you. Their brief and the last recap are on this case.'
+    );
+    expect(upcomingBody('expert', 'Amara', false)).toBe(
+      'Amara is booked in. Their brief and the last recap are on this case.'
+    );
   });
 });

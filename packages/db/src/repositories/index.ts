@@ -467,8 +467,25 @@ export {
   SESSION_EXPERT_ACCRUED_ACTION,
   SESSION_AUDIT_ENTITY_TYPE,
   CLIENT_SESSION_VIEW_COLUMNS,
+  // BAL-474 (ADR-1040 Amendment 7 §C/§D) — the on-behalf provenance row and the sessionless
+  // Case meeting's terminal marker (both `audit_events` actions).
+  SESSION_OPENED_ON_BEHALF_ACTION,
+  SESSIONLESS_CASE_MEETING_MARKED_ACTION,
   type OpenSessionInput,
   type OpenSessionResult,
+  // BAL-474 — the two funding policies and the gates the tolerant one passes through.
+  type OpenFundingPolicy,
+  type OpenToleratedGate,
+  // BAL-474 (AD-3) — the sessionless meeting's one-transaction open-and-settle.
+  type OpenAndSettleFromPresenceInput,
+  type OpenAndSettleFromPresenceResult,
+  type SettleFromPresenceRepoInput,
+  type SettleFromPresenceRepoResult,
+  // BAL-474 (§D) — the durability backstop's finder row and the terminal marker's IO.
+  type SessionlessCaseMeetingCandidate,
+  type SessionlessCaseMeetingMark,
+  type MarkSessionlessCaseMeetingInput,
+  type MarkSessionlessCaseMeetingResult,
   type MeterTransitions,
   type MeterSessionResult,
   type EndSessionResult,
@@ -483,7 +500,14 @@ export {
   type OpenReceivableResult,
   // BAL-548 — the `receivable.open` finder's projected row (NOT the dunning read).
   type OpenReceivableAlertRow,
+  // BAL-474 (§G.2) — one wallet due its daily (wallet-grain) dunning reminder.
+  type DailyDunningDueWallet,
 } from './credit-receivables';
+// BAL-474 (ADR-1040 Amendment 7 §H) — the ONE booking funding snapshot both Case booking checks
+// read. Its transaction body (`readSnapshotInTx`) is deliberately NOT re-exported: called on a bare
+// pool it would read a torn snapshot. Only `bookingFundingRepository.readSnapshot` opens the
+// transaction; the two-connection proof imports the body from './booking-funding' directly.
+export { bookingFundingRepository, type BookingFundingSnapshotInput } from './booking-funding';
 export { fxDisplayRatesRepository } from './fx-display-rates';
 export { deriveIdempotencyKey, type IdempotencyKeyInput } from './_shared/credit-idempotency';
 export { acquireWalletLock } from './_shared/wallet-lock';

@@ -24,7 +24,7 @@
  * | 1 | false               | any                     | —                   | missed_call        | missed_call    | zero, hold released, no accrual |
  * | 2 | true                | false                   | true                | no_show_client     | no_show_client | floor (FLAT) |
  * | 3 | true                | false                   | false               | abandoned_wait     | completed ⚠    | zero, hold released, no accrual |
- * | 4 | true                | true                    | —                   | held               | completed      | ceil(max(effective, floor)) |
+ * | 4 | true                | true                    | —                   | held               | completed      | ceil(max(together + effective, floor)) |
  *
  * ⚠⚠ ROW 2 IS **FLAT**, NOT A MINIMUM (owner ruling, 2026-08-21) — see
  * {@link resolveMeetingSettlement}. An expert who waits 40 minutes on a client no-show bills the
@@ -48,12 +48,21 @@
  * it only if `meetings.outcome` is still NULL — so a human End on a never-joined meeting still
  * resolves an outcome, and the sweep's write is never overwritten.
  *
- * **Row 4 prices `expertPresentMs`, NOT `billableMs` (D1).** `billableMs` is UNTOUCHED by this
- * ticket and remains BAL-134's analytics figure on `meeting_ended` — do not repurpose it and
- * do not "align" the two clocks. Accepted and documented: a client who joins two minutes after
- * the expert pays from the expert's join. That is the literal reading of ADR-1040 §8 /
- * ADR-1044 §7 — "expert paid for time made available" — and it is what stops a no-show
- * needing a separate code branch (a no-show has `billableMs === 0`).
+ * **Row 4 prices the expert's presence FROM THE START, plus the time TOGETHER before it (D1, D13, D15.3).**
+ * `billableMs` is UNTOUCHED and remains BAL-134's analytics figure on `meeting_ended` — do not
+ * repurpose it and do not "align" the two clocks. From the scheduled start the basis is the
+ * expert's own span, so a client who joins two minutes after the expert pays from the expert's
+ * join (ADR-1040 §8 / ADR-1044 §7 — "expert paid for time made available"), which also stops a
+ * no-show needing a separate code branch.
+ *
+ * ⚠⚠ BAL-474 RULE A (owner ruling D13, 2026-09-27) ADDS ONE TERM, AND ONLY ONE. Before the scheduled
+ * start T, the minutes the delivering expert and a client-side participant were ACTUALLY TOGETHER
+ * (the sum of the real intersection of their presence before T — {@link MeetingSettlementInput.togetherBeforeStartMs})
+ * are billable, on the `held` shape only. From T onward time counts as above, except that the from-start
+ * span begins at the expert's first presence AT OR AFTER T (D15.3): a row that spans T starts at T, and a
+ * row entirely before T does not anchor it — together 09:00–09:30 and both back at 10:10 bills 30 + 50,
+ * not 30 + 60. There is no lower time bound: a solo early wait, or a click days early with nobody else
+ * there, bills nothing. The floor and the F1 cap apply to the TOTAL.
  *
  * **D1a — no GAP cap in v1.** A client who drops mid-call and returns is still billed the
  * continuous span, because the expert held the room throughout — the same principle as D1. No
@@ -93,8 +102,31 @@ export type MeetingSettlementShape = 'held' | 'no_show_client' | 'missed_call' |
 export type MeetingSettlementOutcome = 'completed' | 'no_show_client' | 'missed_call';
 
 export interface MeetingSettlementInput {
-  /** From `meetingPresenceRepository.settlementFacts` — `computeMeetingClocks` at `ended_at`. */
+  /**
+   * From `meetingPresenceRepository.settlementFacts` — `computeMeetingClocks` at `ended_at`, over
+   * intervals CLAMPED to the scheduled start (BAL-134's R10 rule, applied at read time — presence rows
+   * are stored at their true instants). It decides the SHAPE (was the expert ever present; the no-show
+   * floor test) and the no-show clock, which keep BAL-134's clamped semantics. It is NOT the `held`
+   * from-start figure: see {@link MeetingSettlementInput.expertPresentFromStartMs}.
+   */
   readonly clocks: MeetingClocks;
+  /**
+   * ⚠⚠ D15.3 — REQUIRED. The `held` from-start figure: the gap-inclusive span of the expert's presence AT OR
+   * AFTER `scheduledStart` (`expertPresentFromStartMs` over the RAW intervals). It is not derivable from
+   * {@link MeetingSettlementInput.clocks}: the clamp collapses an expert row that ended before the start into
+   * a zero-length row AT the start, which would anchor this figure there even for an expert who came back
+   * late. Used on the `held` shape only; every other shape keeps the clamped clock's figure. A non-finite or
+   * negative value is `0` (fail closed).
+   */
+  readonly expertPresentFromStartMs: number;
+  /**
+   * ⚠⚠ RULE A (D13) — REQUIRED. The milliseconds the delivering expert and a client-side participant
+   * were really TOGETHER strictly before `scheduledStart`: `coPresentMsBefore` over the RAW intervals.
+   * It is added to the from-T figure on the `held` shape only, and is ignored (treated as `0`) on every
+   * other shape. A non-finite or negative value is `0` (fail closed). Required so a caller that forgets
+   * it fails to compile rather than silently under-billing.
+   */
+  readonly togetherBeforeStartMs: number;
   /** `meetings.scheduled_start` — the D4 clock-start clamp anchor. */
   readonly scheduledStart: Date;
   /**
@@ -125,9 +157,19 @@ export interface MeetingSettlementInput {
 export interface MeetingSettlement {
   readonly shape: MeetingSettlementShape;
   readonly outcome: MeetingSettlementOutcome;
-  /** `expertPresentMs` after the D4 clamp to `max(scheduled_start, expert first join)`. */
+  /**
+   * The from-start figure this settlement used: on `held`, the expert's span from their first presence at or
+   * after the start (D15.3); on every other shape, `expertPresentMs` after the D4 clamp to
+   * `max(scheduled_start, expert first join)`.
+   */
   readonly effectiveExpertPresentMs: number;
-  /** `ceil(effectiveExpertPresentMs / 60_000)` — pre-floor. Persisted as `actual_minutes`. */
+  /**
+   * RULE A — the time together before the scheduled start that this settlement actually used: the
+   * input's value on `held`, `0` on every other shape. `effectiveExpertPresentMs + togetherBeforeStartMs`
+   * is the billing basis ({@link billingBasisMs}).
+   */
+  readonly togetherBeforeStartMs: number;
+  /** `ceil((together + effectiveExpertPresentMs) / 60_000)` — pre-floor. Persisted as `actual_minutes`. */
   readonly actualMinutes: number;
   /** THE SETTLED FIGURE. Client charge AND expert accrual both derive from this ONE number. */
   readonly billableMinutes: number;
@@ -167,7 +209,15 @@ export interface MeetingSettlement {
 const MS_PER_MINUTE = 60_000;
 
 /**
- * D4 — THE CLOCK-START CLAMP, APPLIED IN THE SETTLEMENT LAYER ONLY. `computeMeetingClocks` is
+ * D4 — THE CLOCK-START CLAMP, APPLIED IN THE SETTLEMENT LAYER ONLY. ⚠⚠ D15.3: THIS IS NO LONGER THE `held`
+ * FROM-START FIGURE. It is the SHAPE clock: it decides whether an expert with no client waited the floor
+ * (`no_show_client` vs `abandoned_wait`) and it is the figure the two zero/flat shapes report. The `held`
+ * figure is {@link MeetingSettlementInput.expertPresentFromStartMs}, which counts from the expert's first
+ * presence AT OR AFTER the start. The two differ only for an expert with a row that ended before the start
+ * and another after it: the clamp collapses the early row to a zero-length row AT the start and so anchors
+ * this clock there — the quirk the no-show clock keeps until its own follow-up (owner ruling D15.3).
+ *
+ * `computeMeetingClocks` is
  * NOT touched (it takes no `scheduledStart` and is pinned by `packages/shared/src/meetings/
  * index.test.ts`, consumed by `end-meeting.ts` analytics and BAL-403's panel). This function
  * re-derives the expert-present clock anchored at `max(scheduled_start, expert first join)` so
@@ -183,11 +233,11 @@ const MS_PER_MINUTE = 60_000;
  * `computeMeetingClocks`'s own guard and honouring `@balo/shared/meetings`' written
  * assignment to BAL-412: "must not settle on intervals it did not verify."
  *
- * ⚠ The write-side R10 clamp (`presence-writer.ts`, `notBefore: meeting.scheduledStart`)
- * already raises an early `joined_at`, so this `max` is belt-and-braces today. It stays
- * because the settlement layer must not depend on a *writer* to be arithmetically correct,
- * and because an operator-inserted or future non-Drizzle presence row would bypass that
- * clamp.
+ * ⚠ The READERS apply `clampIntervalsToStart` (BAL-134's R10 rule, moved off the write side by
+ * BAL-474 Rule A so the true instants survive for the pre-start intersection), so an early
+ * `joined_at` has already been raised to the start and this `max` is belt-and-braces. It stays
+ * because the settlement layer must not depend on a *reader* to be arithmetically correct, and
+ * because an operator-inserted or future non-Drizzle presence row would bypass that clamp.
  */
 export function clampedExpertPresentMs(clocks: MeetingClocks, scheduledStart: Date): number {
   const { expertFirstJoinedAt, expertPresentMs } = clocks;
@@ -215,18 +265,38 @@ export function clampedExpertPresentMs(clocks: MeetingClocks, scheduledStart: Da
   return Math.max(0, lastExpertPresenceMs - clockStartMs);
 }
 
+/** A non-finite or negative figure is `0` — fail closed, never a negative or NaN charge. */
+function finiteNonNegative(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * RULE A (D13) — THE ONE DEFINITION OF THE BILLING BASIS, in milliseconds: the time together before the
+ * scheduled start plus the from-start figure (`expertPresentFromStartMs`, D15.3). Shared by
+ * {@link resolveMeetingSettlement} and the state route's "billable so far" chip, so the figure a client
+ * watches and the figure it is billed are one computation. PRE-FLOOR, PRE-CAP.
+ */
+export function billingBasisMs(input: {
+  readonly expertPresentFromStartMs: number;
+  readonly togetherBeforeStartMs: number;
+}): number {
+  return (
+    finiteNonNegative(input.togetherBeforeStartMs) +
+    finiteNonNegative(input.expertPresentFromStartMs)
+  );
+}
+
 /**
  * Which of the four D3 shapes applies, from the structural facts alone.
  *
- * ⚠⚠ BAL-466 — `no_show_client` IS STRUCTURALLY UNREACHABLE UNDER THE ADMISSION SEAM. A
- * credit session now opens on the first CLIENT-side member's admission to a `case` meeting
- * (`joinMeetingAsMember`); a client who never joins therefore never opens a session, so there
- * is no row for this function to ever compute against. The expert is not paid the no-show
- * floor when the client never arrives. Accepted gap, not fixed here — tracked as **BAL-474**
- * ("Client no-show settlement under the admission seam — system-open at the no-show terminal
- * rule"), decision recorded as **ADR-1052** (amends ADR-1044). BAL-412's waiting-stage no-show
- * copy and in-app templates are UNCHANGED — nothing is live pre-BAL-80, so softening that copy
- * now would be premature.
+ * ⚠⚠ `no_show_client` IS REACHABLE (ADR-1040 Amendment 7 §D, BAL-474). BAL-466 opens a credit
+ * session at the first CLIENT-side member's admission to a `case` meeting, so a client who never
+ * joins opens none — and BAL-474 closes that gap on the TERMINAL side: every terminal path (the
+ * lifecycle sweep's five rules, a human End, the durability backstop) runs
+ * `settleSessionlessCaseMeeting`, which computes THIS shape for a Case meeting that has no session
+ * and, when it is `no_show_client` or `held`, opens one on behalf of the booker and settles it in
+ * one transaction. The expert who waited the floor is paid it, flat. The two zero shapes
+ * (`missed_call`, `abandoned_wait`) still owe nothing and open nothing.
  */
 function resolveShape(
   expertEverPresent: boolean,
@@ -254,7 +324,7 @@ function resolveShape(
  */
 function uncappedRuleMinutesForShape(
   shape: MeetingSettlementShape,
-  effectiveExpertPresentMs: number,
+  basisMs: number,
   floorMs: number
 ): number {
   switch (shape) {
@@ -264,7 +334,7 @@ function uncappedRuleMinutesForShape(
     case 'no_show_client':
       return Math.ceil(floorMs / MS_PER_MINUTE);
     case 'held':
-      return Math.ceil(Math.max(effectiveExpertPresentMs, floorMs) / MS_PER_MINUTE);
+      return Math.ceil(Math.max(basisMs, floorMs) / MS_PER_MINUTE);
   }
 }
 
@@ -289,11 +359,13 @@ function outcomeForShape(shape: MeetingSettlementShape): MeetingSettlementOutcom
  * THE FULL SETTLEMENT RESOLUTION (D2/D3/D4, §2.3's arithmetic).
  *
  * ```
+ * basisMs             = held → togetherBeforeStartMs + expertPresentFromStartMs   // ⚠ RULE A (D13), D15.3
+ *                        otherwise → effectiveExpertPresentMs (the clamped clock, D4)
  * uncappedRuleMinutes = missed_call | abandoned_wait → 0
  *                       no_show_client               → ceil(floorMs / 60_000)          // ⚠ FLAT
- *                       held                         → ceil(max(effective, floorMs) / 60_000)
- * ruleMinutes     = min(uncappedRuleMinutes, maxBillableMinutes)  // ⚠ F1 — the upper bound
- * actualMinutes   = ceil(effectiveExpertPresentMs / 60_000)
+ *                       held                         → ceil(max(basisMs, floorMs) / 60_000)
+ * ruleMinutes     = min(uncappedRuleMinutes, maxBillableMinutes)  // ⚠ F1 — caps the TOTAL
+ * actualMinutes   = ceil(basisMs / 60_000)
  * billableMinutes = max(ruleMinutes, minutesAlreadyDrawn)     // ⚠ never a refund — see below
  * floorApplied    = no_show_client || ruleMinutes > actualMinutes   // false on both zero shapes
  * topUpFromTickSeq = minutesAlreadyDrawn + 1
@@ -351,21 +423,32 @@ export function resolveMeetingSettlement(input: MeetingSettlementInput): Meeting
   } = input;
   const expertEverPresent = clocks.expertFirstJoinedAt !== null;
 
-  const effectiveExpertPresentMs = clampedExpertPresentMs(clocks, scheduledStart);
-  const shape = resolveShape(
-    expertEverPresent,
-    clientSideEverPresent,
-    effectiveExpertPresentMs,
-    floorMs
-  );
+  const clampedPresentMs = clampedExpertPresentMs(clocks, scheduledStart);
+  // ⚠ The SHAPE is decided from the CLAMPED clock alone (D4, unchanged; D15.3 leaves the no-show clock
+  // alone): neither the together term nor the from-start figure below turns an abandoned wait into a held
+  // call or moves a no-show across the floor.
+  const shape = resolveShape(expertEverPresent, clientSideEverPresent, clampedPresentMs, floorMs);
   const outcome = outcomeForShape(shape);
 
   const isZeroShape = shape === 'missed_call' || shape === 'abandoned_wait';
-  const uncappedRuleMinutes = uncappedRuleMinutesForShape(shape, effectiveExpertPresentMs, floorMs);
+  // RULE A — the pre-start time together counts on `held` only. No-show and abandoned have no client
+  // side, and a missed call has no expert, so it is 0 there by construction; the gate states the shape
+  // table rather than relying on that.
+  const togetherBeforeStartMs =
+    shape === 'held' ? finiteNonNegative(input.togetherBeforeStartMs) : 0;
+  // D15.3 — on `held` the from-start figure counts from the expert's first presence at or after the start;
+  // every other shape keeps the clamped clock's figure (there is no together term to combine it with).
+  const effectiveExpertPresentMs =
+    shape === 'held' ? finiteNonNegative(input.expertPresentFromStartMs) : clampedPresentMs;
+  const basisMs = billingBasisMs({
+    expertPresentFromStartMs: effectiveExpertPresentMs,
+    togetherBeforeStartMs,
+  });
+  const uncappedRuleMinutes = uncappedRuleMinutesForShape(shape, basisMs, floorMs);
   // ⚠ F1 — THE UPPER BOUND. `min`, never a silent default: `maxBillableMinutes` is required
   // input precisely so this line cannot be reached with an unbounded figure.
   const ruleMinutes = Math.min(uncappedRuleMinutes, maxBillableMinutes);
-  const actualMinutes = Math.ceil(effectiveExpertPresentMs / MS_PER_MINUTE);
+  const actualMinutes = Math.ceil(basisMs / MS_PER_MINUTE);
   const drawnFloor = Math.max(0, minutesAlreadyDrawn);
   const billableMinutes = Math.max(ruleMinutes, drawnFloor);
   // ⚠ "the minimum is what FIXED the billed figure" — NOT "the billed figure exceeds actual".
@@ -380,6 +463,7 @@ export function resolveMeetingSettlement(input: MeetingSettlementInput): Meeting
     shape,
     outcome,
     effectiveExpertPresentMs,
+    togetherBeforeStartMs,
     actualMinutes,
     billableMinutes,
     floorApplied,

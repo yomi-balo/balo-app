@@ -10,12 +10,13 @@ import {
   db,
   deriveIdempotencyKey,
   type ApplyLedgerEntryResult,
+  type CreditReceivable,
   type CreditSession,
   type CreditWallet,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, CREDIT_SERVER_EVENTS } from '@balo/analytics/server';
-import { toSettleableSession, isCashCreditReason } from '@balo/shared/credit';
+import { toSettleableSession, isDebtCoveringCreditReason } from '@balo/shared/credit';
 import {
   assessCashCoverage,
   clearLateOpenedReceivableIfCovered,
@@ -55,11 +56,13 @@ function isCreditReason(value: string | undefined): value is CreditReason {
   return value !== undefined && (CREDIT_REASONS as readonly string[]).includes(value);
 }
 
-// BAL-535 / ADR-1040 Amendment 6 §F — the CASH-funded credit reason gate (`CASH_CREDIT_REASONS`
-// / `isCashCreditReason`) MOVED to `@balo/shared/credit`'s `receivable-coverage.ts` in the fix
-// round, so `@balo/analytics` and `@balo/shared/notifications` can derive `CashCreditReason`
-// from the one list instead of restating the union (N9/L5). It is still the reason gate, and it
-// is still pinned by the money-invariant suite — now against its new home.
+// BAL-535 / ADR-1040 Amendment 6 §F, amended by Amendment 7 §F (BAL-474) — the reason gate that
+// arms the receivable clear is the DEBT-COVERING set (`DEBT_COVERING_CREDIT_REASONS` /
+// `isDebtCoveringCreditReason`): the two cash reasons plus a session's own `overdraft_settlement`
+// charge on the company's card. The set lives in `@balo/shared/credit`'s `receivable-coverage.ts`
+// so `@balo/analytics` and `@balo/shared/notifications` derive their unions from the one list
+// (N9/L5), and it is pinned by the money-invariant suite against that home. A promo grant is never
+// a member: marketing money cannot end a hold.
 
 /** Read `charge.outcome` (Radar-aware) for a failed PI, falling back to `last_payment_error`. */
 async function resolveFailureOutcome(pi: Stripe.PaymentIntent): Promise<unknown> {
@@ -409,50 +412,58 @@ function ledgerKeyForCredit(effect: Extract<StripeEffect, { kind: 'credit' }>): 
 
 /**
  * BAL-378 (§3b.c / §14 Q2) — an `overdraft_settlement` credit succeeded: mark the session
- * `settled` + auto-clear any open receivable (releasing the soft hold), in the SAME webhook
- * txn. The mark + clear are idempotent, so they run on a replay too; but the post-commit
+ * `settled` + auto-clear that session's OWN open receivable (releasing the soft hold), in the SAME
+ * webhook txn. The mark + clear are idempotent, so they run on a replay too; but the post-commit
  * receipt publish + analytics fire ONLY on the FIRST (non-deduped) credit application (FIX 9),
  * so a replayed `payment_intent.succeeded` never re-sends the receipt or double-counts. No-op
  * (logs) if the session is gone.
+ *
+ * BAL-474 (D8.3) — the row the clear returned is handed BACK (`ownCleared`), because the arm needs
+ * it: the wallet-grain coverage clear that runs next finds nothing left to clear when this was the
+ * wallet's last open receivable, and a client who was dunned for it must still be told it
+ * resolved. `undefined` when the session had no open receivable (or on a replay — already cleared).
  */
 async function markSettlementSettled(
   tx: DbTx,
   sessionId: string,
   paymentIntentId: string,
   deduped: boolean
-): Promise<PostCommitEffect[]> {
+): Promise<{ publishes: PostCommitEffect[]; ownCleared: CreditReceivable | undefined }> {
   const session = await creditSessionsRepository.findById(sessionId);
   if (session === undefined) {
     log.error(
       { op: 'applyStripeEffect', reason: 'overdraft_settlement', sessionId },
       'overdraft_settlement succeeded but the session is missing — cannot mark settled'
     );
-    return [];
+    return { publishes: [], ownCleared: undefined };
   }
   await creditSessionsRepository.markSettlementResult(tx, {
     sessionId,
     status: 'settled',
     stripePaymentIntentId: paymentIntentId,
   });
-  await creditReceivablesRepository.clear({ sessionId }, tx);
+  const ownCleared = await creditReceivablesRepository.clear({ sessionId }, tx);
   if (deduped) {
-    return [];
+    return { publishes: [], ownCleared };
   }
   const settleable = toSettleableSession(session);
-  return [
-    // BAL-412 (D7) — thread `settlementShape` when the settled session was presence-derived.
-    () => publishSessionSettled(settleable, new Date(), session.settlementShape ?? undefined),
-    // BAL-379: an overdraft settlement lands the wallet at ~0 (< threshold) with an active
-    // mandate ⇒ a legitimate between-session reload crossing. Best-effort, post-commit — a
-    // trigger fault must never make Stripe retry the (already-committed) settlement webhook.
-    // Gated on `!deduped` above so a webhook replay never re-evaluates (a replay is inert
-    // anyway via the stable key).
-    () =>
-      triggerAutoTopupBestEffort(session.walletId, {
-        op: 'applyStripeEffect',
-        reason: 'auto_topup_trigger',
-      }),
-  ];
+  return {
+    ownCleared,
+    publishes: [
+      // BAL-412 (D7) — thread `settlementShape` when the settled session was presence-derived.
+      () => publishSessionSettled(settleable, new Date(), session.settlementShape ?? undefined),
+      // BAL-379: an overdraft settlement lands the wallet at ~0 (< threshold) with an active
+      // mandate ⇒ a legitimate between-session reload crossing. Best-effort, post-commit — a
+      // trigger fault must never make Stripe retry the (already-committed) settlement webhook.
+      // Gated on `!deduped` above so a webhook replay never re-evaluates (a replay is inert
+      // anyway via the stable key).
+      () =>
+        triggerAutoTopupBestEffort(session.walletId, {
+          op: 'applyStripeEffect',
+          reason: 'auto_topup_trigger',
+        }),
+    ],
+  };
 }
 
 /**
@@ -612,17 +623,39 @@ async function publishTopupReceipt(receipt: CreditTopupReceipt): Promise<void> {
 interface ReceivableClearOutcome {
   /** How many open receivables this credit cleared. `0` ⇒ nothing happened. */
   clearedCount: number;
+  /**
+   * BAL-474 (D8.3) — does ANY receivable remain open on the wallet after this clear ran? The
+   * `overdraft_settlement` arm announces "account clear" for its own session's receivable only when
+   * nothing else is left open. When the coverage question was never asked (a non-covering reason)
+   * this is `true`: the safe answer is never to announce a clear that did not happen.
+   */
+  openRemains: boolean;
   /** Build the post-commit notice from the TRUE final balance the client will see. */
   publish: (displayBalanceMinor: number) => PostCommitEffect[];
 }
 
-const NO_RECEIVABLE_CLEAR: ReceivableClearOutcome = { clearedCount: 0, publish: () => [] };
+function noReceivableClear(openRemains: boolean): ReceivableClearOutcome {
+  return { clearedCount: 0, openRemains, publish: () => [] };
+}
 
 /**
- * BAL-535 / ADR-1040 Amendment 6 §F — does THIS credit cover the company's outstanding debt, and
- * if so, clear every open receivable (+ record provenance) in the SAME transaction as the ledger
- * write. Called from `applyCredit` immediately after the base ledger entry lands, BEFORE every
- * per-reason branch.
+ * BAL-535 / ADR-1040 Amendment 6 §F, amended by Amendment 7 §F (BAL-474) — does THIS credit cover
+ * the company's outstanding debt, and if so, clear every open receivable (+ record provenance) in
+ * the SAME transaction as the ledger write. Called from `applyCredit` immediately after the base
+ * ledger entry lands for the two CASH reasons, BEFORE their per-reason branches — and for a
+ * session's own `overdraft_settlement` credit AFTER `markSettlementSettled` has cleared that
+ * session's own receivable, so the coverage anchor is judged from the debts that REMAIN (R4-F5).
+ *
+ * ⚠⚠ THE SHARE-BOUND PROOF THAT MAKES THE SETTLEMENT ARM SAFE (BAL-474, Amendment 7 §F). A
+ * settlement charge is capped by its own session's consumption and by what the wallet owes, so on
+ * its own it can never pay an OLDER receivable: the settlement credit alone brings the wallet to
+ * zero or above only when other credits (cash, or other sessions' settlement charges) have already
+ * paid every older debt — and promo money is discounted by the predicate either way. The proof
+ * leans on the consumption cap, which BAL-477 must keep.
+ *
+ * ⚠ AUDIT ACTOR (D5.8). On the settlement arm the clear is a SYSTEM act — Stripe delivered the
+ * credit, no member acted — so `cleared_by_credit` carries `actor_user_id` NULL and the settling
+ * session and its initiating member ride in the metadata. Cash arms keep the purchaser.
  *
  * ⚠⚠ THE PROMO EXCLUSION IS THE DISCOUNT, NOT THE ORDERING (fix round B1). This function used to
  * lean on being upstream of `grantPromoBestEffort` and call the predicate on the raw balance.
@@ -654,12 +687,12 @@ async function clearReceivablesCoveredByCredit(
   base: ApplyLedgerEntryResult
 ): Promise<ReceivableClearOutcome> {
   const { reason } = effect;
-  if (!isCashCreditReason(reason)) {
-    return NO_RECEIVABLE_CLEAR;
+  if (!isDebtCoveringCreditReason(reason)) {
+    return noReceivableClear(true);
   }
   const coverage = await assessCashCoverage(tx, effect.walletId, base.wallet.balanceMinor);
   if (!coverage.covered) {
-    return NO_RECEIVABLE_CLEAR;
+    return noReceivableClear(coverage.hasOpenReceivable);
   }
   const cleared = await creditReceivablesRepository.clearOpenForWallet(
     { walletId: effect.walletId },
@@ -667,7 +700,7 @@ async function clearReceivablesCoveredByCredit(
   );
   const [firstCleared] = cleared;
   if (firstCleared === undefined) {
-    return NO_RECEIVABLE_CLEAR;
+    return noReceivableClear(false);
   }
 
   // ⚠ ONE ROUND TRIP PER CLEAR OPERATION, NOT ONE PER ROW (fix round 2, F4). These inserts are
@@ -681,7 +714,7 @@ async function clearReceivablesCoveredByCredit(
     cleared.map((row) =>
       auditEventsRepository.record(
         {
-          actorUserId: effect.memberId,
+          actorUserId: effect.reason === 'overdraft_settlement' ? null : effect.memberId,
           action: 'credit_receivable.cleared_by_credit',
           entityType: 'credit_receivable',
           entityId: row.id,
@@ -703,6 +736,14 @@ async function clearReceivablesCoveredByCredit(
             cashBackedBalanceMinor: coverage.cashBackedBalanceMinor,
             stripePaymentIntentId: effect.settlement.stripePaymentIntentId,
             deduped: base.deduped,
+            // BAL-474 (D5.8) — the settlement arm's clear has no acting member; the session that
+            // was charged and the member who initiated it are the provenance instead.
+            ...(effect.reason === 'overdraft_settlement'
+              ? {
+                  settlementSessionId: effect.sessionId,
+                  settlementInitiatingMemberId: effect.memberId,
+                }
+              : {}),
           },
         },
         tx
@@ -734,13 +775,15 @@ async function clearReceivablesCoveredByCredit(
 
   return {
     clearedCount: cleared.length,
+    // Every open receivable on the wallet was just cleared.
+    openRemains: false,
     publish: (displayBalanceMinor: number) => [
       () =>
         publishReceivableCleared({
           // N4 — ONE notice per clear OPERATION, keyed on the ledger entry that covered the
           // debt, not per receivable row. Three cleared rows used to send three identical
           // "your account is clear" emails quoting one balance.
-          ledgerEntryId: base.entry.id,
+          operationId: base.entry.id,
           companyId: firstCleared.companyId,
           walletId: effect.walletId,
           receivableCount: cleared.length,
@@ -750,6 +793,41 @@ async function clearReceivablesCoveredByCredit(
         }),
     ],
   };
+}
+
+/**
+ * BAL-474 (D8.3, V4-F1) — "ACCOUNT CLEAR" FOR A SESSION'S OWN LATE SUCCESS. When the settlement
+ * charge succeeds after the session's own receivable had opened (an SCA stop, or a client-side
+ * error after Stripe had in fact charged), `markSettlementSettled` clears that receivable — and the
+ * wallet-grain clear that follows then has nothing left to clear. A client who was dunned for it
+ * must still be told it resolved, so this arm publishes exactly ONE `credit.receivable.cleared`
+ * per ledger entry: from the wallet-grain clear when IT cleared rows (as on every other arm),
+ * otherwise from here — and only when nothing else remains open, because with an uncovered
+ * receivable still on the wallet the hold is still on and "you're all set" would be false.
+ * Keyed `receivable_cleared:{ledger entry id}`, so a webhook replay collapses onto one job.
+ */
+function ownAccountClearNotice(input: {
+  effect: Extract<StripeEffect, { kind: 'credit' }>;
+  base: ApplyLedgerEntryResult;
+  receivableClear: ReceivableClearOutcome;
+  ownCleared: CreditReceivable | undefined;
+}): PostCommitEffect[] {
+  const { effect, base, receivableClear, ownCleared } = input;
+  if (receivableClear.clearedCount > 0 || ownCleared === undefined || receivableClear.openRemains) {
+    return [];
+  }
+  return [
+    () =>
+      publishReceivableCleared({
+        operationId: base.entry.id,
+        companyId: ownCleared.companyId,
+        walletId: effect.walletId,
+        receivableCount: 1,
+        clearedMinor: ownCleared.amountMinor,
+        balanceAfterMinor: base.wallet.balanceMinor,
+        clearedBy: 'overdraft_settlement',
+      }),
+  ];
 }
 
 async function applyCredit(
@@ -819,6 +897,37 @@ async function applyCredit(
     );
   }
 
+  // BAL-378: an overdraft settlement credit ALSO marks the session settled + clears THAT SESSION'S
+  // receivable (single webhook source of truth). ledgerKeyForCredit guarantees a non-null
+  // sessionId for this reason. A replayed (deduped) credit still idempotently re-marks, but
+  // never re-publishes the receipt / re-counts analytics (FIX 9). No promo can ride this arm, so
+  // the display balance IS the post-credit balance.
+  //
+  // ⚠ BAL-474 (Amendment 7 §F, R3-F6a / R4-F5) — THE ORDER ON THIS ARM IS THE POINT: the session
+  // settles FIRST (its own receivable clears), THEN the wallet-grain coverage clear runs on the
+  // debts that remain. Judged the other way round, the coverage anchor is the settled session's
+  // older one, its promo discount swallows the balance, and a covered hold is left open with a
+  // top-up figure of A$0.00.
+  if (effect.reason === 'overdraft_settlement' && effect.sessionId !== null) {
+    const settled = await markSettlementSettled(
+      tx,
+      effect.sessionId,
+      effect.settlement.stripePaymentIntentId,
+      base.deduped
+    );
+    const settlementClear = await clearReceivablesCoveredByCredit(tx, effect, base);
+    return [
+      ...settlementClear.publish(base.wallet.balanceMinor),
+      ...ownAccountClearNotice({
+        effect,
+        base,
+        receivableClear: settlementClear,
+        ownCleared: settled.ownCleared,
+      }),
+      ...settled.publishes,
+    ];
+  }
+
   // BAL-535 / ADR-1040 Amendment 6 §F — a covering CASH credit clears every open receivable on
   // this wallet, BEFORE every per-reason branch below. The promo exclusion is the DISCOUNT
   // inside `assessCashCoverage`, not this ordering (fix round B1) — the ordering only ever
@@ -826,25 +935,6 @@ async function applyCredit(
   // `manual_purchase` / `auto_topup`, and no-op whenever there is no open receivable — the
   // overwhelmingly common case, and the one that costs a single indexed read.
   const receivableClear = await clearReceivablesCoveredByCredit(tx, effect, base);
-
-  // BAL-378: an overdraft settlement credit ALSO marks the session settled + clears the
-  // receivable (single webhook source of truth). ledgerKeyForCredit guarantees a non-null
-  // sessionId for this reason. A replayed (deduped) credit still idempotently re-marks, but
-  // never re-publishes the receipt / re-counts analytics (FIX 9). The clear is a no-op by
-  // construction here (`overdraft_settlement` is absent from `CASH_CREDIT_REASONS`) — spread for
-  // uniformity with every other return in this function. No promo can ride this arm, so the
-  // display balance IS the post-credit balance.
-  if (effect.reason === 'overdraft_settlement' && effect.sessionId !== null) {
-    return [
-      ...receivableClear.publish(base.wallet.balanceMinor),
-      ...(await markSettlementSettled(
-        tx,
-        effect.sessionId,
-        effect.settlement.stripePaymentIntentId,
-        base.deduped
-      )),
-    ];
-  }
 
   // BAL-379: a FRESH auto_topup credit surfaces the executed notice + AUTO_TOPUP_FIRED analytics
   // as a post-commit publish. `base.wallet.balanceMinor` is the POST-credit balance, so the
@@ -968,11 +1058,21 @@ async function handleOverdraftChargeFailed(
     return [];
   }
   await acquireWalletLock(tx, session.walletId);
-  await creditSessionsRepository.markSettlementResult(tx, {
+  // BAL-474 (D5.2 / D7.4) — compare-and-set: the failure stamp lands only while the row is still in
+  // flight. A row that is already `settled` means the charge in fact succeeded (the success webhook
+  // won the race) — record NO receivable and dun nobody.
+  const stamped = await creditSessionsRepository.markSettlementResult(tx, {
     sessionId,
     status: 'failed',
     stripePaymentIntentId: paymentIntentId,
   });
+  if (stamped.settlementStatus === 'settled') {
+    log.info(
+      { op: 'applyStripeEffect', kind: 'charge_failed', sessionId, paymentIntentId },
+      'Settlement failure stamp skipped — the session already settled (the success webhook won the race)'
+    );
+    return [];
+  }
   const amountMinor = session.overdraftSettledMinor ?? 0;
   if (amountMinor <= 0) {
     return [];
@@ -1023,7 +1123,8 @@ async function handleOverdraftChargeFailed(
         session: settleable,
         reason: 'declined',
         amountMinor,
-        attemptEpochMs: Date.now(),
+        receivableId: receivable.id,
+        now: new Date(),
       }),
   ];
 }

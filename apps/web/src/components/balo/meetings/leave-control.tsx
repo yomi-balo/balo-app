@@ -43,6 +43,15 @@ import { MeetingConfirmDialog, MeetingMenu, MeetingMenuItem } from './meeting-ov
  * AND FOR A CLIENT-COMPANY MEMBER WHO IS NOT THE BOOKER — so no copy here may say "your call",
  * "your client" or "your expert".
  *
+ * ⚠⚠ **`canEndMeeting` IS AUTHORITY, NOT A PRESENCE PROMISE (BAL-474, D6.4).** For a CLIENT
+ * principal the server also requires that they have been present in the meeting: the presence row
+ * lands only after the Daily join webhook, so it cannot be known when the grant is minted and the
+ * verdict cannot include it. This control therefore keeps rendering End for every authority
+ * holder, and the server enforces presence at press time — a client member whose presence row has
+ * not landed yet is refused with `meeting_not_joined`, which the End action turns into the
+ * `END_MEETING_NOT_JOINED_COPY` toast (the call stays up). Expert-side End is unchanged. Nothing
+ * in this file changes; the refusal arrives through the existing `toast.error(result.error)`.
+ *
  * ── ⚠⚠ THE HOST CONTROL HAS TWO SHAPES, AND THE MOBILE ONE IS A TARGET-SIZE RULE ────────────
  *
  * Desktop: a split control — "Leave" plus a 32px chevron segment. **Mobile: the whole button

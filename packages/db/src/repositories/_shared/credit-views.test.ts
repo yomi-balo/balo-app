@@ -331,6 +331,8 @@ function fullSession(overrides: Partial<CreditSession> = {}): CreditSession {
     status: 'ended',
     settlementStatus: 'not_required',
     durationSource: 'live_capture',
+    // BAL-474 — every pre-BAL-474 session is client-opened (the column default).
+    openedBy: 'client',
     estimatedMinutes: 60,
     // Off-lens economics — DELIBERATELY populated so the "never surfaces" guarantee is exercised.
     expertRateMinorPerHour: 150_000,

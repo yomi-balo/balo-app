@@ -3,15 +3,17 @@
  *
  * D2 (decisions-bal-498.md): reuse `CASE_JOIN_WINDOW_MINUTES` — the product's only imminence
  * constant — rather than a second, conflicting "~10 minutes" definition. `withinJoinWindow()`
- * (`@balo/shared/engagements/case-surface.ts`) is NOT exported and has NO end-side bound (it
- * stays true forever after start), and its contract must not be mutated under the case surface.
- * This module composes a NEW, calendar-specific predicate over the same shared constant instead.
+ * (`@balo/shared/engagements/case-surface.ts`) is now ALSO enforced server-side, by
+ * `assertMeetingJoinable`'s step 3 (D16, BAL-474) on every join path — and has NO end-side bound
+ * (it stays true forever after start), a contract this module must not mutate under the case
+ * surface. This module composes a NEW, calendar-specific BOOLEAN over the same OPENING INSTANT
+ * (D17.5 — `joinWindowOpensAt`, imported below, the one function that instant comes from) instead.
  *
  * BAL-513 extends the CLOSE boundary from the scheduled end to `scheduledEnd +
  * MEETING_OVERRUN_GRACE_MINUTES`, and adds a terminal-status gate sourced from
  * `@balo/shared/meetings` — see `calendarJoinAffordanceVisible` below.
  */
-import { CASE_JOIN_WINDOW_MINUTES, MEETING_OVERRUN_GRACE_MINUTES } from '@balo/shared/engagements';
+import { MEETING_OVERRUN_GRACE_MINUTES, joinWindowOpensAt } from '@balo/shared/engagements';
 import { meetingIsClosedToJoin, type MeetingLifecycleStatus } from '@balo/shared/meetings';
 import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
 
@@ -34,9 +36,10 @@ function joinWindowClosesAtMs(scheduledEnd: Date): number {
  *
  * ⚠ THE GRACE IS THE POINT (BAL-513 C2). Closing at the scheduled end took the Join control away from
  * an expert whose call ran over and who dropped at end + 5 min: the Daily room is still open and the
- * server's TIME gate (`assertMeetingJoinable` step 3, `MEETING_TOKEN_TTL_AFTER_END_MS`) has no early
- * bound and a 24h upper one, so on THAT axis — and ONLY that axis — the UI was strictly stricter than
- * the system for no benefit.
+ * server's TOKEN/TIME gate (`assertMeetingJoinable` step 4, `MEETING_TOKEN_TTL_AFTER_END_MS`) has no
+ * early bound of its own on this side and a 24h upper one, so on THAT axis — and ONLY that axis — the
+ * UI was strictly stricter than the system for no benefit. (Step 3, D16's `CASE_JOIN_WINDOW_MINUTES`
+ * lower bound, is the OTHER axis — the START side — and is unrelated to this end-side grace.)
  *
  * ⚠⚠ THIS DOES NOT MEAN THE SERVER ALWAYS ACCEPTS A JOIN INSIDE THE GRACE (BAL-513 fix round 2, F10
  * — an earlier draft of this comment, and the PR body, both overstated it this way).
@@ -63,9 +66,8 @@ export function calendarJoinAffordanceVisible(
   status: MeetingLifecycleStatus
 ): boolean {
   if (meetingIsClosedToJoin(status)) return false;
-  const opensAt = scheduledStart.getTime() - CASE_JOIN_WINDOW_MINUTES * MS_PER_MINUTE;
   const t = now.getTime();
-  return t >= opensAt && t < joinWindowClosesAtMs(scheduledEnd);
+  return t >= joinWindowOpensAt(scheduledStart).getTime() && t < joinWindowClosesAtMs(scheduledEnd);
 }
 
 /**

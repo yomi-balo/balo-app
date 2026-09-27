@@ -7,6 +7,16 @@ import { buildBillingEmailChangedCopy } from './billing-email-changed.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
 import { consultationClause } from './review-email-shared.js';
+import {
+  buildTopUpFigure,
+  companyLabelAtStart,
+  companyLabelFor,
+  readCompanyName,
+  resolveFundingBlockNotice,
+  topUpPhrase,
+  type FundingBlockNotice,
+  type TopUpFigure,
+} from './top-up-figure.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
 import { personWithOrgLabel } from '@balo/shared/parties';
@@ -26,6 +36,53 @@ function numberOrZero(value: unknown): number {
 /** Length of an array-valued payload field; 0 when absent or not an array. */
 function arrayLength(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
+}
+
+/**
+ * BAL-474 — the body of the balance dunning card. The dated top-up figure, what it gates, then
+ * one short suffix per optional fact: promo credit does not count towards clearing the hold, and
+ * an earlier settlement payment needed a card confirmation (a PAST fact, true after a card swap).
+ * Above the top-up page's per-top-up maximum the lead reads "top-ups totalling …" and names it.
+ */
+function dunningInAppBody(
+  figure: TopUpFigure,
+  facts: { promoWasGranted: boolean; confirmationWasRequested: boolean }
+): string {
+  const lead = figure.exceedsSingleTopUp
+    ? `As of ${figure.asOf}, top-ups totalling ${figure.amount} or more clear it (each up to ${figure.maxTopUp}).`
+    : `As of ${figure.asOf}, a top-up of ${figure.amount} or more clears it.`;
+  const sentences = [lead, "Until it's clear, new consultations can't be booked."];
+  if (facts.promoWasGranted) {
+    sentences.push("Promo credit doesn't count towards clearing it.");
+  }
+  if (facts.confirmationWasRequested) {
+    sentences.push(
+      'One earlier payment needed an extra card confirmation — worth a check in billing settings.'
+    );
+  }
+  return sentences.join(' ');
+}
+
+/**
+ * BAL-478 / BAL-474 — the body of the funding-blocked card, one arm per `FundingBlockNotice`. The
+ * `unfunded` arm quotes no figure; the balance arms quote the dated top-up, and the failed-heal
+ * `hold_fallback` arm quotes none (never `A$0.00`).
+ */
+function fundingBlockedInAppBody(
+  notice: FundingBlockNotice,
+  labels: { requestedByLabel: string; expertPartyLabel: string; companyLabel: string }
+): string {
+  const { requestedByLabel, expertPartyLabel, companyLabel } = labels;
+  switch (notice.variant) {
+    case 'hold':
+      return `${requestedByLabel} tried to book with ${expertPartyLabel}. As of ${notice.figure.asOf}, ${companyLabel}'s balance needs ${topUpPhrase(notice.figure)} before new consultations can be booked. Nothing was booked.`;
+    case 'hold_fallback':
+      return `${requestedByLabel} tried to book with ${expertPartyLabel} while an earlier hold was still on ${companyLabel}'s account, although the balance already covered it. It lifts automatically within a day, or at once with any top-up. Nothing was booked.`;
+    case 'reserved':
+      return `${requestedByLabel} tried to book with ${expertPartyLabel}. As of ${notice.figure.asOf}, part of ${companyLabel}'s balance was set aside for ${pluralize(notice.count, 'upcoming consultation')} — ${topUpPhrase(notice.figure)} would make room for it. Nothing was booked.`;
+    default:
+      return `${requestedByLabel} tried to book a consultation with ${expertPartyLabel}, but it couldn't go through. Nothing was booked, so no time was held. Add a payment method or top up, then try booking again.`;
+  }
 }
 
 /**
@@ -1072,14 +1129,16 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   },
 
   // BAL-535 (ADR-1040 Amendment 6 §F) receivable cleared — company billing admins. Warm,
-  // congratulatory: the balance now covers the extra time from a recent consultation, so the
-  // account's soft hold is released. AUD face value only. The extra time is attributed to the
-  // consultation, never to this payment (fix round N5/L2) — see the email arm's docblock.
+  // congratulatory: the balance now covers what the consultations came to, so the account's soft
+  // hold is released. AUD face value only, and the balance is the only figure — the cleared
+  // receivables' Σ is a stale snapshot and is never quoted. Sent once per write on every path
+  // that clears the hold, so no line may depend on which path it was; "no longer stops new
+  // bookings" claims only that the hold is gone.
   'credit-receivable-cleared': (data) => {
     const balanceAfter = formatAudMinor(numberOrZero(data.balanceAfterMinor));
     return {
       title: 'Account clear',
-      body: `Your balance now covers the extra time that was still to settle. Nothing's outstanding — your balance is now ${balanceAfter}.`,
+      body: `Your balance now covers what your consultations came to, so it no longer stops new bookings. Your balance is now ${balanceAfter}.`,
       actionUrl: '/settings/billing',
     };
   },
@@ -1152,19 +1211,25 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
-  // Settlement failed — billing admins (dunning).
+  // BAL-474 (ADR-1040 Amendment 7 §G, owner ruling D6.2) balance dunning — billing admins. ONE
+  // wallet-grain notice quoting the TOTAL top-up that clears the account hold
+  // (`topUpNeededMinor`, dated `asOfIso`), neutral about how many consultations ran over. The
+  // claim never publishes without a figure, so its absence is a contract break: this throws
+  // rather than render `A$0.00`. The link is always the top-up page — a covering cash credit is
+  // the only thing that clears the hold.
   'session-settlement-failed': (data) => {
-    const amount = formatAudMinor(numberOrZero(data.amountMinor));
-    if (data.reason === 'requires_action') {
-      return {
-        title: 'Confirm your card to finish up',
-        body: `Settling ${amount} of extra time from a recent session needs a quick confirmation on your card.`,
-        actionUrl: '/settings/billing',
-      };
+    const figure = buildTopUpFigure(numberOrZero(data.topUpNeededMinor), data.asOfIso);
+    if (figure === null) {
+      throw new Error(
+        'session-settlement-failed needs a positive topUpNeededMinor and an asOfIso — the dunning claim never publishes without a figure'
+      );
     }
     return {
-      title: "Let's sort the extra time",
-      body: `We couldn't settle ${amount} of extra time from a recent session — a top-up that covers it clears it right away.`,
+      title: `${companyLabelAtStart(readCompanyName(data.company))}'s balance needs a top-up`,
+      body: dunningInAppBody(figure, {
+        promoWasGranted: numberOrZero(data.promoGrantedSinceDebtMinor) > 0,
+        confirmationWasRequested: data.confirmationWasRequested === true,
+      }),
       actionUrl: '/billing/top-up',
     };
   },
@@ -1205,24 +1270,37 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
-  // BAL-478 funding-blocked — company billing admins (minus the booker, if they hold — fix
-  // round 2 B2). `requestedByLabel` arrives PRE-COMPOSED from the resolver's
+  // BAL-478 / BAL-474 funding-blocked — company billing admins (minus the booker, if they hold —
+  // fix round 2 B2). `requestedByLabel` arrives PRE-COMPOSED from the resolver's
   // `hydrateBookingFundingBlockedActor` (F4/F5 — "@ company" staple-on only when a real name
   // resolved), matching the email factory's body and its own subject; this factory does NOT
-  // recompute `personWithOrgLabel` a second time.
+  // recompute `personWithOrgLabel` a second time. The payload's `blockKind` picks the arm
+  // (`resolveFundingBlockNotice`, shared with the email factory): `unfunded` quotes no figure and
+  // links to billing settings; the two balance arms quote the dated top-up figure — or, for a
+  // hold the booking API could not clear, none — and link to the top-up page.
   //
   // ⚠⚠ FIX ROUND 3 — every sentence must stay true AT READ TIME, and promise no OUTCOME.
-  // "Nothing was booked, so no time was held" is a past fact, never a present-tense claim about
-  // the slot's live availability. "Try booking again" describes the action available, never a
-  // guaranteed result ("book right away") — a top-up covers only what it covers and the gate can
-  // refuse a second time.
+  // "Nothing was booked" is a past fact, never a present-tense claim about the slot's live
+  // availability, and a figure is dated "as of" the instant it was read. "Try booking again"
+  // describes the action available, never a guaranteed result — a top-up covers only what it
+  // covers and the gate can refuse a second time.
   'booking-funding-blocked': (data) => {
     const requestedByLabel = (data.requestedByLabel as string) ?? 'A teammate';
     const expertPartyLabel = (data.expertPartyLabel as string) ?? 'an expert';
+    const notice = resolveFundingBlockNotice(
+      data.blockKind,
+      numberOrZero(data.topUpNeededMinor),
+      data.asOfIso,
+      numberOrZero(data.reservedBookingCount)
+    );
     return {
       title: "A booking couldn't go through",
-      body: `${requestedByLabel} tried to book a consultation with ${expertPartyLabel}, but it couldn't go through. Nothing was booked, so no time was held. Add a payment method or top up, then try booking again.`,
-      actionUrl: '/settings/billing',
+      body: fundingBlockedInAppBody(notice, {
+        requestedByLabel,
+        expertPartyLabel,
+        companyLabel: companyLabelFor(readCompanyName(data.company)),
+      }),
+      actionUrl: notice.variant === 'unfunded' ? '/settings/billing' : '/billing/top-up',
     };
   },
 

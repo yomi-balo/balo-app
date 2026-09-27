@@ -3,6 +3,7 @@ import type { MeetingClocks } from '../meetings';
 import {
   resolveMeetingSettlement,
   clampedExpertPresentMs,
+  billingBasisMs,
   type MeetingSettlementInput,
 } from './meeting-settlement';
 
@@ -23,8 +24,16 @@ function clocks(overrides: Partial<MeetingClocks> = {}): MeetingClocks {
 }
 
 function input(overrides: Partial<MeetingSettlementInput> = {}): MeetingSettlementInput {
+  const resolvedClocks = overrides.clocks ?? clocks();
   return {
-    clocks: clocks(),
+    clocks: resolvedClocks,
+    togetherBeforeStartMs: 0,
+    // D15.3 — the `held` from-start figure is its own input. Defaulted to the clamped clock's figure, which is
+    // exactly right wherever the expert has no row that ended before the start; the D15.3 cases pass it explicitly.
+    expertPresentFromStartMs: clampedExpertPresentMs(
+      resolvedClocks,
+      overrides.scheduledStart ?? SCHEDULED_START
+    ),
     scheduledStart: SCHEDULED_START,
     clientSideEverPresent: false,
     floorMs: FLOOR_15_MS,
@@ -401,5 +410,229 @@ describe('resolveMeetingSettlement — topUpFrom/To sequencing', () => {
     );
     expect(result.topUpFromTickSeq).toBe(5);
     expect(result.topUpToTickSeq).toBe(15);
+  });
+});
+
+// ── BAL-474 Rule A (D13) — before the scheduled start only time TOGETHER bills ─────────────────────
+
+describe('billingBasisMs — the ONE definition of the pre-floor basis', () => {
+  it('is the time together before the start PLUS the from-start figure', () => {
+    expect(
+      billingBasisMs({
+        expertPresentFromStartMs: 45 * MINUTE,
+        togetherBeforeStartMs: 4 * MINUTE,
+      })
+    ).toBe(49 * MINUTE);
+  });
+
+  it('is exactly the from-start figure when nothing was together before it', () => {
+    expect(
+      billingBasisMs({ expertPresentFromStartMs: 45 * MINUTE, togetherBeforeStartMs: 0 })
+    ).toBe(45 * MINUTE);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -5 * MINUTE])(
+    'a non-finite or negative together term (%s) is 0 — fail closed, never a negative or NaN basis',
+    (bad) => {
+      expect(
+        billingBasisMs({ expertPresentFromStartMs: 45 * MINUTE, togetherBeforeStartMs: bad })
+      ).toBe(45 * MINUTE);
+    }
+  );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -5 * MINUTE])(
+    'a non-finite or negative from-start figure (%s) is 0 too',
+    (bad) => {
+      expect(
+        billingBasisMs({ expertPresentFromStartMs: bad, togetherBeforeStartMs: 4 * MINUTE })
+      ).toBe(4 * MINUTE);
+    }
+  );
+});
+
+describe('resolveMeetingSettlement — Rule A: time together before the start', () => {
+  const held = (togetherBeforeStartMs: number, fromStartMinutes: number, drawn = 0) =>
+    resolveMeetingSettlement(
+      input({
+        clocks: clocks({
+          expertFirstJoinedAt: SCHEDULED_START,
+          expertPresentMs: fromStartMinutes * MINUTE,
+        }),
+        clientSideEverPresent: true,
+        togetherBeforeStartMs,
+        minutesAlreadyDrawn: drawn,
+      })
+    );
+
+  it('adds the together term to the from-start figure on `held` (10 + 40 = 50)', () => {
+    const result = held(10 * MINUTE, 40);
+    expect(result.shape).toBe('held');
+    expect(result.billableMinutes).toBe(50);
+    expect(result.actualMinutes).toBe(50);
+    expect(result.effectiveExpertPresentMs).toBe(40 * MINUTE);
+    expect(result.togetherBeforeStartMs).toBe(10 * MINUTE);
+    expect(result.floorApplied).toBe(false);
+  });
+
+  it('the FLOOR applies to the total: 5 minutes together and nothing after is billed 15, actual 5', () => {
+    const result = held(5 * MINUTE, 0);
+    expect(result.actualMinutes).toBe(5);
+    expect(result.billableMinutes).toBe(15);
+    expect(result.floorApplied).toBe(true);
+  });
+
+  it('F1 caps the TOTAL, and the uncapped figure is surfaced for the caller’s log', () => {
+    const result = held(240 * MINUTE, 60);
+    expect(result.uncappedRuleMinutes).toBe(300);
+    expect(result.ruleMinutes).toBe(MAX_BILLABLE_MINUTES);
+    expect(result.billableMinutes).toBe(MAX_BILLABLE_MINUTES);
+  });
+
+  it('one ceil over the millisecond SUM (not a sum of ceils): 30s together + 30s from the start is 1 minute', () => {
+    const result = resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 30_000 }),
+        clientSideEverPresent: true,
+        togetherBeforeStartMs: 30_000,
+        floorMs: 0,
+      })
+    );
+    expect(result.actualMinutes).toBe(1);
+  });
+
+  it('agrees with a meter that drew ONLY from the start: 40 drawn, 50 owed ⇒ the rule figure is the billed figure (no Q1)', () => {
+    const result = held(10 * MINUTE, 40, 40);
+    expect(result.billableMinutes).toBe(50);
+    expect(result.ruleMinutes).toBe(50);
+    expect(result.topUpFromTickSeq).toBe(41);
+    expect(result.topUpToTickSeq).toBe(50);
+  });
+
+  it.each(['no_show_client', 'abandoned_wait', 'missed_call'] as const)(
+    'the together term is IGNORED on the %s shape (0 by construction, and gated by the shape table)',
+    (shape) => {
+      const config = {
+        no_show_client: {
+          clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 30 * MINUTE }),
+          clientSideEverPresent: false,
+        },
+        abandoned_wait: {
+          clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 10 * MINUTE }),
+          clientSideEverPresent: false,
+        },
+        missed_call: { clocks: clocks(), clientSideEverPresent: true },
+      }[shape];
+      const withTogether = resolveMeetingSettlement(
+        input({ ...config, togetherBeforeStartMs: 25 * MINUTE })
+      );
+      const without = resolveMeetingSettlement(input({ ...config, togetherBeforeStartMs: 0 }));
+      expect(withTogether.shape).toBe(shape);
+      expect(withTogether.togetherBeforeStartMs).toBe(0);
+      expect(withTogether.billableMinutes).toBe(without.billableMinutes);
+      expect(withTogether.actualMinutes).toBe(without.actualMinutes);
+    }
+  );
+
+  it('the together term never changes the SHAPE: a held call stays held, an abandoned wait stays abandoned (D4)', () => {
+    const abandoned = resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 10 * MINUTE }),
+        clientSideEverPresent: false,
+        togetherBeforeStartMs: 60 * MINUTE,
+      })
+    );
+    expect(abandoned.shape).toBe('abandoned_wait');
+    expect(abandoned.billableMinutes).toBe(0);
+  });
+
+  it.each([Number.NaN, -1, Number.NEGATIVE_INFINITY])(
+    'a non-finite or negative togetherBeforeStartMs (%s) is 0 on a held call',
+    (bad) => {
+      const result = held(bad, 40);
+      expect(result.togetherBeforeStartMs).toBe(0);
+      expect(result.billableMinutes).toBe(40);
+    }
+  );
+});
+
+// ── BAL-474 D15.3 — the from-start figure counts from the expert's first presence AT OR AFTER the start ──
+
+describe('resolveMeetingSettlement — D15.3: the held from-start figure is its own input', () => {
+  /** together 09:00–09:30 (30), both back 10:10–11:00: the clamped clock reads 60 from T; the figure is 50. */
+  const lateReturn = (overrides: Partial<MeetingSettlementInput> = {}) =>
+    resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 60 * MINUTE }),
+        clientSideEverPresent: true,
+        togetherBeforeStartMs: 30 * MINUTE,
+        expertPresentFromStartMs: 50 * MINUTE,
+        ...overrides,
+      })
+    );
+
+  it('⚠⚠ bills together + the INPUT figure on `held`, not the clamped clock: 30 + 50 = 80 (not 90)', () => {
+    const result = lateReturn();
+    expect(result.shape).toBe('held');
+    expect(result.billableMinutes).toBe(80);
+    expect(result.actualMinutes).toBe(80);
+    expect(result.effectiveExpertPresentMs).toBe(50 * MINUTE);
+  });
+
+  it('the shape is decided from the CLAMPED clock: an expert present only before the start is still `held`', () => {
+    // Example 4: together 09:30–09:55, nobody returns — the clamped clock is 0, the from-start figure is 0.
+    const result = resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 0 }),
+        clientSideEverPresent: true,
+        togetherBeforeStartMs: 25 * MINUTE,
+        expertPresentFromStartMs: 0,
+      })
+    );
+    expect(result.shape).toBe('held');
+    expect(result.billableMinutes).toBe(25);
+  });
+
+  it('the shape is decided from the CLAMPED clock: a no-show ignores the from-start input (the no-show clock is unchanged)', () => {
+    const result = resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 20 * MINUTE }),
+        clientSideEverPresent: false,
+        expertPresentFromStartMs: 3 * MINUTE,
+      })
+    );
+    expect(result.shape).toBe('no_show_client');
+    expect(result.effectiveExpertPresentMs).toBe(20 * MINUTE);
+    expect(result.actualMinutes).toBe(20);
+    expect(result.billableMinutes).toBe(15);
+  });
+
+  it('an abandoned wait ignores it too: below the floor on the clamped clock is still zero', () => {
+    const result = resolveMeetingSettlement(
+      input({
+        clocks: clocks({ expertFirstJoinedAt: SCHEDULED_START, expertPresentMs: 10 * MINUTE }),
+        clientSideEverPresent: false,
+        expertPresentFromStartMs: 40 * MINUTE,
+      })
+    );
+    expect(result.shape).toBe('abandoned_wait');
+    expect(result.billableMinutes).toBe(0);
+  });
+
+  it('a non-finite or negative input is 0 on a held call (fail closed), leaving the together term', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -10 * MINUTE]) {
+      const result = lateReturn({ expertPresentFromStartMs: bad });
+      expect(result.effectiveExpertPresentMs).toBe(0);
+      expect(result.billableMinutes).toBe(30);
+    }
+  });
+
+  it('the F1 cap and the floor apply to the total built from the input figure', () => {
+    expect(lateReturn({ togetherBeforeStartMs: 240 * MINUTE }).billableMinutes).toBe(240);
+    expect(
+      lateReturn({ togetherBeforeStartMs: 2 * MINUTE, expertPresentFromStartMs: 0 })
+    ).toMatchObject({
+      billableMinutes: 15,
+      floorApplied: true,
+    });
   });
 });

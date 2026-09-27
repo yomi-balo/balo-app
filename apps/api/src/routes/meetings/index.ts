@@ -16,7 +16,11 @@
  *     → createMeetingBodySchema.safeParse       → 400 invalid_request
  *     → validateBookingWindow(start, end, now)  → 400 <stable code>
  *     → authorizeMeetingBooking(...)            → 404 / 400
- *     → lookupBookingReplay(key, window)        → SKIPS the two guards below on a `match`
+ *     → lookupBookingReplay(key, window)        → `conflict` ⇒ 409 idempotency_key_conflict;
+ *                                                 `match` SKIPS the guards below
+ *     → checkCaseBookingFunding(...)            → 409 account_on_hold / booking_unfunded /
+ *                                                 booking_reserved, 503 booking_funding_unavailable
+ *                                                 (Case only, never on a replay — BAL-474)
  *     → per-(USER, EXPERT) rate limit           → 429 / 503 (fail-CLOSED)
  *     → isWindowAvailableForExpert(...)         → 409 window_not_available
  *     → bookAndProvisionMeeting(...)            → 201
@@ -35,8 +39,11 @@
  *     was pushed into booking a second slot.
  *
  * Only an EXACT `match` (same context AND same window — `lookupBookingReplay`) skips them; a
- * `conflict` or `none` runs every guard as before and lets the service decide. Skipping the
- * per-pair limit on a match is intentional and bounded: the per-USER limit above has already
+ * `none` runs every guard as before. BAL-474 (D8.6): a `conflict` — the key names a DIFFERENT window
+ * or case — is answered `409 idempotency_key_conflict` HERE, before any funding check, so a
+ * mismatched key never earns a funding refusal (the web gate skips its own funding gates for the same
+ * classification, and never notifies a billing admin over it). Skipping the per-pair limit on a match
+ * is intentional and bounded: the per-USER limit above has already
  * been consumed by this request, and a match creates no SECOND meeting and no calendar event.
  *
  * ⚠ It does NOT follow that a match makes no outbound vendor call — an earlier version of this
@@ -57,6 +64,16 @@
  * that confirms a uuid. The per-user limit precedes even the body parse so a flood of garbage
  * is bounded too; the per-pair limit and the availability read cannot run before the gate,
  * because both need the `expertProfileId` the gate resolves.
+ *
+ * ⚠⚠ BAL-474 (ADR-1040 Amendment 7 §H, D6.1/D6.5) — THE CASE FUNDING GUARD. A NEW Case booking is
+ * refused, BEFORE any write, when the paying company has an open receivable (D6.1's brake), lacks the
+ * credit BAL-478 requires, or has set part of its credit aside for planned consultations (D6.5's
+ * check-time soft reservation). It runs AFTER the replay probe (a lost-201 replay is already booked and
+ * must never be refused, nor reserve against its own meeting) and BEFORE the per-pair limit (a refusal
+ * spends none of it). It is DEFENCE IN DEPTH: the web booking gate runs the same verdict first and owns
+ * the billing-admin fan-out; this guard has no side effects but the heal of a covered hold
+ * (`case-booking-funding.ts`). Admission is NEVER braked — it stays overdraft-tolerant, so
+ * consultations already booked when a hold appears still run and bill session-scoped.
  *
  * ── WHY THERE ARE THREE VOLUME CONTROLS AND NOT ONE (BAL-129 §2) ────────────
  *
@@ -135,15 +152,20 @@ import {
 import { validateBookingWindow } from '@balo/shared/meetings';
 import { createLogger } from '@balo/shared/logging';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { z } from 'zod';
 import { requireAuth } from '../../lib/require-auth.js';
 import { parseBodyOr400, resolveUserId } from '../../lib/route-helpers.js';
 import { authorizeMeetingBooking } from '../../services/meetings/authorize-meeting-booking.js';
+import {
+  checkCaseBookingFunding,
+  type CaseBookingFundingCode,
+} from '../../services/meetings/case-booking-funding.js';
 import {
   bookAndProvisionMeeting,
   lookupBookingReplay,
   BookingIdempotencyKeyConflictError,
   type BookAndProvisionInput,
-  type BookingReplayProbe,
+  type BookingReplayLookup,
 } from '../../services/meetings/provision-meeting.js';
 import { createMeetingBodySchema } from './schema.js';
 import { meetingGuestRoutes } from './guests.js';
@@ -174,6 +196,18 @@ const GATE_ERROR_STATUS = {
 } as const;
 
 /**
+ * BAL-474 — the Case funding guard's outcome → HTTP status. Exhaustive over `CaseBookingFundingCode`
+ * BY TYPE (like `END_ERROR_STATUS`), so a new literal is a compile error rather than a silent 500.
+ * The three refusals are 409; an unreadable snapshot FAILS CLOSED as 503.
+ */
+const CASE_FUNDING_ERROR_STATUS: Record<CaseBookingFundingCode, number> = {
+  account_on_hold: 409,
+  booking_unfunded: 409,
+  booking_reserved: 409,
+  booking_funding_unavailable: 503,
+};
+
+/**
  * A thrown booking error → `{ status, error }`, or `null` for "unhandled, let it 500".
  * Every literal here is FIXED — none is derived from `error.message`.
  */
@@ -199,40 +233,6 @@ function bookingErrorResponse(error: unknown): { status: number; error: string }
 }
 
 /**
- * BAL-400 (S3/M1) — is this submit an EXACT idempotent replay of a booking that already
- * exists? `true` ⇒ the expert-scoped guards are skipped (see the module docblock for why that
- * is safe and why it is necessary). A missing key, an unknown key, or a key naming a different
- * case/window all answer `false`, so every non-replay keeps the guards it always had.
- *
- * ⚠ NEVER call this before `authorizeMeetingBooking`. The key proves who minted it, not what
- * the actor may book.
- */
-/**
- * ⚠ THIS LOOKUP IS DELIBERATELY REPEATED INSIDE THE SERVICE — DO NOT "OPTIMISE" IT AWAY.
- *
- * `lookupBookingReplay` runs here (to decide whether to SKIP the availability gate and the
- * per-pair limit) and again inside `replayByIdempotencyKey` (to decide WHAT to return). That
- * is one extra indexed read, on the retry path only, and it buys a property worth more than
- * the read: the service NEVER TRUSTS ITS CALLER'S VERDICT.
- *
- * Collapsing the two — threading this result down as a parameter — would make the service's
- * behaviour a function of what a caller asserts rather than of what the database says. The
- * service is also reachable as a repair entry point independent of this route, so a caller
- * asserting "this is an exact replay" must never be able to make it act on that claim alone.
- * Re-deriving is the same defence-in-depth posture as the gate ordering documented above.
- */
-async function isExactBookingReplay(
-  bookingIdempotencyKey: string | undefined,
-  probe: BookingReplayProbe
-): Promise<boolean> {
-  if (bookingIdempotencyKey === undefined) {
-    return false;
-  }
-  const lookup = await lookupBookingReplay(bookingIdempotencyKey, probe);
-  return lookup.kind === 'match';
-}
-
-/**
  * EVERY PRE-BOOKING GUARD, IN ORDER — returns the validated service input, or `null` when a
  * reply has already been sent (the caller must return immediately).
  *
@@ -242,41 +242,62 @@ async function isExactBookingReplay(
  * validation pipeline in one named function means the handler stays a two-step read (validate,
  * then book) and the ORDER of the guards — which is load-bearing, see the module docblock — is
  * legible in one place.
+ *
+ * ⚠ THE REPLAY LOOKUP IS DELIBERATELY REPEATED INSIDE THE SERVICE — DO NOT "OPTIMISE" IT AWAY.
+ * `lookupBookingReplay` runs here (to decide whether to answer a conflict, and to SKIP the funding
+ * guard, the availability gate and the per-pair limit) and again inside `replayByIdempotencyKey` (to
+ * decide WHAT to return). That is one extra indexed read, on the retry path only, and it buys a property
+ * worth more than the read: the service NEVER TRUSTS ITS CALLER'S VERDICT. The service is also reachable
+ * as a repair entry point independent of this route, so a caller asserting "this is an exact replay"
+ * must never be able to make it act on that claim alone. ⚠ NEVER run the probe before
+ * `authorizeMeetingBooking`: the key proves who minted it, not what the actor may book.
  */
 async function resolveBookingInput(
   request: FastifyRequest,
   reply: FastifyReply,
   userId: string
 ): Promise<BookAndProvisionInput | null> {
-  if (await enforceBookingRateLimit(BOOKING_USER_RATE_LIMIT, userId, reply)) return null;
-
-  // Zod messages carry no server-side uuid, so echoing `details` is house style and safe.
-  const parsed = parseBodyOr400(createMeetingBodySchema, request, reply);
-  if (parsed === null) return null;
-
+  const booking = await authorizeBookingRequest(request, reply, userId);
+  if (booking === null) return null;
+  const { parsed, scheduledStart, scheduledEnd, authorized } = booking;
   const { contextType, contextId } = parsed;
-  const scheduledStart = new Date(parsed.scheduledStart);
-  const scheduledEnd = new Date(parsed.scheduledEnd);
 
-  const violation = validateBookingWindow(scheduledStart, scheduledEnd, new Date());
-  if (violation !== null) {
-    reply.code(400).send({ error: WINDOW_VIOLATION_CODE[violation] });
+  // BAL-400 (S3/M1) — resolved HERE, after the gate and before the funding guard and the two
+  // expert-scoped guards. BAL-474 (D8.6): ONE classified probe — `none` / `match` / `conflict`.
+  const replay: BookingReplayLookup =
+    parsed.bookingIdempotencyKey === undefined
+      ? { kind: 'none' }
+      : await lookupBookingReplay(parsed.bookingIdempotencyKey, {
+          contextType,
+          contextId,
+          scheduledStart,
+          scheduledEnd,
+        });
+  if (replay.kind === 'conflict') {
+    // The key names a DIFFERENT window or case. Answered BEFORE any funding check, so a mismatched
+    // key gets the conflict answer — never a funding refusal — and the service's own mapping of the
+    // same literal (`bookingErrorResponse`) stays true for the race that slips past this probe.
+    reply.code(409).send({ error: 'idempotency_key_conflict' });
     return null;
   }
+  const replaying = replay.kind === 'match';
 
-  const authorized = await authorizeMeetingBooking({ contextType, contextId, userId });
-  if (!authorized.ok) {
-    reply.code(GATE_ERROR_STATUS[authorized.code]).send({ error: authorized.code });
-    return null;
+  // BAL-474 (D6.1 / D6.5) — a Case booking against a hold, an unfunded balance or a reservation is
+  // refused before any write. A replay is already booked and is never re-checked; only a Case books
+  // against credit.
+  if (!replaying && contextType === 'case' && authorized.expertProfileId !== null) {
+    const funding = await checkCaseBookingFunding({
+      companyId: authorized.companyId,
+      expertProfileId: authorized.expertProfileId,
+      scheduledStart,
+      scheduledEnd,
+      now: new Date(),
+    });
+    if (!funding.ok) {
+      reply.code(CASE_FUNDING_ERROR_STATUS[funding.code]).send({ error: funding.code });
+      return null;
+    }
   }
-
-  // BAL-400 (S3/M1) — resolved HERE, after the gate and before the two expert-scoped guards.
-  const replaying = await isExactBookingReplay(parsed.bookingIdempotencyKey, {
-    contextType,
-    contextId,
-    scheduledStart,
-    scheduledEnd,
-  });
 
   // A `null` expert means a `match`-routed `project_discovery`: there is no calendar to rate
   // limit against and none to check availability on. The repository throws
@@ -302,6 +323,50 @@ async function resolveBookingInput(
     userId,
     bookingIdempotencyKey: parsed.bookingIdempotencyKey,
   };
+}
+
+type CreateMeetingBody = z.infer<typeof createMeetingBodySchema>;
+type AuthorizedBooking = Extract<Awaited<ReturnType<typeof authorizeMeetingBooking>>, { ok: true }>;
+
+/**
+ * The FIRST FOUR pre-booking guards — the per-user rate limit, the body parse, the window check and the
+ * tenancy gate — returning what the rest of the pipeline needs, or `null` once a reply has been sent.
+ * Split out of `resolveBookingInput` so BAL-474's funding guard fits under SonarCloud's cognitive
+ * complexity ceiling WITHOUT hiding the ORDER of the guards that follow it, which is the contract: the
+ * replay probe, the funding guard and the expert-scoped guards stay inline in `resolveBookingInput`.
+ */
+async function authorizeBookingRequest(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  userId: string
+): Promise<{
+  parsed: CreateMeetingBody;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+  authorized: AuthorizedBooking;
+} | null> {
+  if (await enforceBookingRateLimit(BOOKING_USER_RATE_LIMIT, userId, reply)) return null;
+
+  // Zod messages carry no server-side uuid, so echoing `details` is house style and safe.
+  const parsed = parseBodyOr400(createMeetingBodySchema, request, reply);
+  if (parsed === null) return null;
+
+  const { contextType, contextId } = parsed;
+  const scheduledStart = new Date(parsed.scheduledStart);
+  const scheduledEnd = new Date(parsed.scheduledEnd);
+
+  const violation = validateBookingWindow(scheduledStart, scheduledEnd, new Date());
+  if (violation !== null) {
+    reply.code(400).send({ error: WINDOW_VIOLATION_CODE[violation] });
+    return null;
+  }
+
+  const authorized = await authorizeMeetingBooking({ contextType, contextId, userId });
+  if (!authorized.ok) {
+    reply.code(GATE_ERROR_STATUS[authorized.code]).send({ error: authorized.code });
+    return null;
+  }
+  return { parsed, scheduledStart, scheduledEnd, authorized };
 }
 
 export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {

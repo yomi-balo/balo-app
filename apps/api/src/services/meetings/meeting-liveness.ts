@@ -20,9 +20,19 @@
  *
  * ⚠ THE ANONYMOUS LOBBY ARM IS THE EXCEPTION THAT PROVES IT. `claimLobbyPlace` has no
  * authorization at all, so it maps EVERY failure here to `meeting_not_found` rather than to
- * the `meeting_not_open_for_join` a member gets. See `join-meeting.ts`.
+ * the `meeting_not_open_for_join` a member gets. See `join-meeting.ts`. The one class it does NOT collapse is
+ * `join_window_not_open` (below), which it reports as the distinct, non-terminal `meeting_not_open_yet`.
+ *
+ * ⚠⚠ D16 — THE JOIN WINDOW HAS A SERVER-SIDE LOWER BOUND. Joining opens `CASE_JOIN_WINDOW_MINUTES` before the
+ * scheduled start; an earlier attempt is refused here with `join_window_not_open` and `opensAt`. It is checked
+ * with `withinJoinWindow`, and `opensAt` is `joinWindowOpensAt(scheduledStart)` — the SAME shared instant the
+ * web's own join-window predicates (`calendarJoinAffordanceVisible`, `insideCaseJoinWindow`) derive their
+ * opening boundary from (D17.5), so the button and the server cannot disagree about WHEN it opens even though
+ * each keeps its own boolean formula (`case-join-window.ts`'s docblock states why: a deliberate duplicate, not
+ * a shared function call). It applies to every join path because every one of them calls this function.
  */
 import { engagementsRepository, type Meeting } from '@balo/db';
+import { joinWindowOpensAt, withinJoinWindow } from '@balo/shared/engagements';
 import { createLogger } from '@balo/shared/logging';
 import { MEETING_CLOSED_TO_JOIN, type PrimaryMeetingContext } from '@balo/shared/meetings';
 
@@ -47,13 +57,16 @@ const log = createLogger('meeting-liveness');
 export const MEETING_TOKEN_TTL_AFTER_END_MS = 24 * 60 * 60 * 1000;
 
 /**
- * WHY a join was refused. ⚠ A LOG FIELD, NEVER A WIRE VALUE — all four collapse into one
- * literal at the service boundary. See the module docblock.
+ * WHY a join was refused. ⚠ A LOG FIELD, NEVER A WIRE VALUE — the first four collapse into one literal at
+ * the service boundary. `join_window_not_open` is the one that is NOT collapsed: it is an expected early click,
+ * not a denial, and the service maps it to the distinct `meeting_not_open_yet` carrying `opensAt`. See the
+ * module docblock.
  */
 export type LivenessDenialReason =
   | 'meeting_terminal'
   | 'engagement_not_active'
   | 'engagement_missing'
+  | 'join_window_not_open'
   | 'token_window_elapsed';
 
 export type MeetingJoinableResult =
@@ -64,7 +77,12 @@ export type MeetingJoinableResult =
       /** The same instant as a `Date`, for the response's ISO `expiresAt`. */
       readonly expiresAt: Date;
     }
-  | { readonly ok: false; readonly reason: LivenessDenialReason };
+  | {
+      readonly ok: false;
+      readonly reason: LivenessDenialReason;
+      /** Present ONLY for `join_window_not_open`: the instant joining opens. */
+      readonly opensAt?: Date;
+    };
 
 /**
  * Does this context type anchor on an `engagements.id`, and therefore HAVE a lifecycle to
@@ -170,7 +188,26 @@ export async function assertMeetingJoinable(
     }
   }
 
-  // 3. THE TOKEN WINDOW. ⚠ REACHABLE TODAY: nothing transitions a meeting out of `scheduled`
+  // 3. THE JOIN WINDOW'S LOWER BOUND (D16). AFTER the state and engagement checks, so a cancelled or ended
+  //    meeting is never reported as "opens later", and BEFORE the token window. ⚠ AN EXPECTED EARLY CLICK
+  //    (a stale page, a link opened ahead of time), so it is logged at `info`, not `warn`. Every meeting is
+  //    subject to it — the web's join window is context-agnostic — and the probe path never reaches this
+  //    branch with a side effect: it only reads the result.
+  if (!withinJoinWindow(now, meeting.scheduledStart)) {
+    const opensAt = joinWindowOpensAt(meeting.scheduledStart);
+    log.info(
+      {
+        meetingId: meeting.id,
+        contextType: subject.contextType,
+        opensAt: opensAt.toISOString(),
+        reason: 'join_window_not_open',
+      },
+      'Meeting join refused — the join window has not opened yet'
+    );
+    return { ok: false, reason: 'join_window_not_open', opensAt };
+  }
+
+  // 4. THE TOKEN WINDOW. ⚠ REACHABLE TODAY: nothing transitions a meeting out of `scheduled`
   //    until BAL-134 ships, so a call whose end passed 25 hours ago is still `scheduled` and
   //    sails through step 1. Without this, Daily is handed an `exp` in the past and issues a
   //    DEAD token — a confusing failure two layers downstream of its cause.

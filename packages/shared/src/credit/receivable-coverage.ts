@@ -35,12 +35,13 @@
  */
 
 /**
- * The CASH-funded credit reasons (ADR-1040 Amendment 6 §F). A credit under one of these that
- * leaves the wallet's cash-backed balance non-negative releases the company's soft account hold.
- * `overdraft_settlement` is deliberately absent — it already clears its own session's receivable
- * via `markSettlementSettled`. `promo` is absent because a marketing grant is not the client's
- * money; the DISCOUNT in `creditCoversOutstandingDebt` is what makes that exclusion real, not
- * this list (a promo never arrives as a Stripe credit effect in the first place).
+ * The CASH-funded credit reasons (ADR-1040 Amendment 6 §F) — the two top-up reasons, and the
+ * derivation base of {@link DEBT_COVERING_CREDIT_REASONS}. `overdraft_settlement` is absent from
+ * THIS list (it is not cash the client chose to add); it joins the debt-covering set below, which
+ * is what arms the coverage clear since ADR-1040 Amendment 7 §F. `promo` is absent from both
+ * because a marketing grant is not the client's money; the DISCOUNT in
+ * `creditCoversOutstandingDebt` is what makes that exclusion real, not this list (a promo never
+ * arrives as a Stripe credit effect in the first place).
  *
  * Lives HERE, next to the predicate, rather than in `apps/api` — `@balo/analytics` and
  * `@balo/shared/notifications` both need the derived union and neither may import from an app.
@@ -50,9 +51,30 @@ export const CASH_CREDIT_REASONS = ['manual_purchase', 'auto_topup'] as const;
 /** How an open receivable was covered — DERIVED from `CASH_CREDIT_REASONS`, never restated. */
 export type CashCreditReason = (typeof CASH_CREDIT_REASONS)[number];
 
-/** Narrow an arbitrary credit reason to the cash set — the reason gate for the R3 clear. */
-export function isCashCreditReason(reason: string): reason is CashCreditReason {
-  return (CASH_CREDIT_REASONS as readonly string[]).includes(reason);
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §F, plan AD-8) — the credit reasons that may END a company's soft
+ * account hold: the cash set plus a session's own `overdraft_settlement` charge. DERIVED from
+ * {@link CASH_CREDIT_REASONS} by spread, so a new cash reason can never be forgotten here.
+ *
+ * ⚠ WHY A SETTLEMENT CREDIT MAY NOW CLEAR AN OLDER RECEIVABLE (the share-bound proof). A session's
+ * charge is its SHARE of the wallet's negative balance — `share ≤ ownConsumed` and
+ * `share ≤ walletNegative` at its terminal (`resolveSessionOverdraftShare`). So the settlement
+ * credit alone brings the wallet to zero or above only when OTHER credits (cash, discounted promo,
+ * other sessions' settlement credits) have already paid every older debt; the settlement charge
+ * itself never pays an older receivable. That depends on the `ownConsumed` cap — BAL-477 must keep
+ * it. The coverage predicate (with its promo discount) is unchanged and still decides.
+ */
+export const DEBT_COVERING_CREDIT_REASONS = [
+  ...CASH_CREDIT_REASONS,
+  'overdraft_settlement',
+] as const;
+
+/** A credit reason that may end a hold — DERIVED from the list, never restated. */
+export type DebtCoveringCreditReason = (typeof DEBT_COVERING_CREDIT_REASONS)[number];
+
+/** Narrow an arbitrary credit reason to the debt-covering set — the reason gate for the clear. */
+export function isDebtCoveringCreditReason(reason: string): reason is DebtCoveringCreditReason {
+  return (DEBT_COVERING_CREDIT_REASONS as readonly string[]).includes(reason);
 }
 
 /**
@@ -70,4 +92,50 @@ export function creditCoversOutstandingDebt(
   promoGrantedSinceDebtMinor: number
 ): boolean {
   return balanceMinorAfterCredit - promoGrantedSinceDebtMinor >= 0;
+}
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §G; owner ruling D6.2, plan AD-12) — THE ONE DEFINITION of "the
+ * top-up that clears the hold": the smallest cash credit after which
+ * {@link creditCoversOutstandingDebt} is true. It is what the dunning notice and the booking
+ * panels quote, so "a top-up of this or more clears it" is literally true:
+ *
+ *   covers(balance + needed, promo) is true;
+ *   needed > 0 ⇒ covers(balance + needed − 1, promo) is false;
+ *   needed === 0 ⇔ covers(balance, promo);   needed ≥ 0.
+ *
+ * (Pinned over a grid by `packages/db/src/invariants/dunning-states-the-top-up-that-clears-the-hold.test.ts`.)
+ *
+ * ⚠ A TOP-UP AMOUNT, NOT A DEBT. It is the predicate's shortfall — it includes the promo granted
+ * since the debt became outstanding (which the predicate discounts), so it can exceed what is
+ * owed; the copy says the rest stays in the balance. It does NOT net another session's in-flight
+ * settlement (D6.2 defines the figure as the predicate's shortfall).
+ */
+export function amountNeededToClearHold(
+  balanceMinor: number,
+  promoGrantedSinceDebtMinor: number
+): number {
+  return Math.max(0, promoGrantedSinceDebtMinor - balanceMinor);
+}
+
+/**
+ * BAL-474 (plan §G.1) — a wallet's soft-hold status and the top-up that clears it, from ONE
+ * consistent read (`creditReceivablesRepository.readHoldStatus`). Consumed by the dunning claim,
+ * the booking snapshot and the booking verdict.
+ */
+export interface HoldStatus {
+  /** ≥ 1 open, non-deleted receivable on the wallet — the company's soft account hold. */
+  readonly onHold: boolean;
+  readonly openReceivableCount: number;
+  /**
+   * Any open receivable's reason is `settlement_requires_action` — a PAST fact ("a card
+   * confirmation was requested when the charge was attempted"), true after any card swap.
+   */
+  readonly confirmationWasRequested: boolean;
+  /** `credit_wallets.balance_minor` in the same snapshot. */
+  readonly balanceMinor: number;
+  /** Promo granted since the oldest open debt's anchor — 0 when not on hold. */
+  readonly promoGrantedSinceDebtMinor: number;
+  /** `amountNeededToClearHold(balance, promo)` — 0 when not on hold. */
+  readonly amountToClearMinor: number;
 }

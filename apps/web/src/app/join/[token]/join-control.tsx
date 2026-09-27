@@ -15,6 +15,7 @@ import {
   JOIN_TEMPORARILY_UNAVAILABLE_TITLE,
   JOIN_UNAVAILABLE_TITLE,
   LOBBY_LONG_WAIT_AFTER_MS,
+  joinNotOpenYetMessage,
 } from '@/lib/meetings/lobby';
 import { useAdmissionPoll } from '@/lib/meetings/use-admission-poll';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
@@ -194,6 +195,8 @@ export function JoinControl({
     () => () => resolveGuestExitReasonAction({ meetingId, guestToken: token }),
     [meetingId, token]
   );
+  /** D16 — set when the join window has not opened yet: the approved sentence, shown beside a LIVE Join button. */
+  const [notOpenYetMessage, setNotOpenYetMessage] = useState<string | null>(null);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [isLongWait, setIsLongWait] = useState(false);
   /** ⚠ STARTS AS THE SERVER'S UTC STRING, so the first client render matches the server's. */
@@ -260,10 +263,25 @@ export function JoinControl({
   const handleJoin = useCallback((): void => {
     if (phase === 'joining') return;
     setPhase('joining');
+    setNotOpenYetMessage(null);
 
     // ⚠ NOT AWAITED, AND NOT `void`-PREFIXED — see the note on the lobby's `handleSubmit`.
     pollGuestAdmissionAction({ meetingId, guestToken: token })
       .then((result) => {
+        if (!result.success && result.notOpenYet !== undefined) {
+          // D16 — NON-terminal: not the dead-link card, not a toast. The invitation card stays with its Join
+          // button live, and the approved sentence names when it opens (in the viewer's zone).
+          const message = joinNotOpenYetMessage(result.notOpenYet.opensAt);
+          // D17.3 — a missing or unparseable `opensAt` falls back to the EXISTING retryable
+          // failure card, never a new string.
+          if (message === null) {
+            setPhase('retry_later');
+            return;
+          }
+          setNotOpenYetMessage(message);
+          setPhase('idle');
+          return;
+        }
         if (!result.success) {
           // ── ⚠⚠ WHICH CARD A FAILED CLICK LANDS ON, AND WHY `429` IS NOT `retryable` HERE ──
           //
@@ -338,6 +356,7 @@ export function JoinControl({
       headingRef={headingRef}
       isLongWait={isLongWait}
       windowLabel={windowLabel}
+      notOpenYetMessage={notOpenYetMessage}
       hasEnded={hasEnded}
       recapHref={recapHref}
       isReduced={isReduced}
@@ -374,6 +393,8 @@ interface JoinPhaseContentProps {
   readonly headingRef: React.Ref<HTMLHeadingElement>;
   readonly isLongWait: boolean;
   readonly windowLabel: string;
+  /** D16 — non-null after a join was refused because the window has not opened. */
+  readonly notOpenYetMessage: string | null;
   readonly hasEnded: boolean;
   readonly recapHref: string | null;
   readonly isReduced: boolean;
@@ -402,6 +423,7 @@ function JoinPhaseContent({
   headingRef,
   isLongWait,
   windowLabel,
+  notOpenYetMessage,
   hasEnded,
   recapHref,
   isReduced,
@@ -492,6 +514,19 @@ function JoinPhaseContent({
             )}
             {isJoining ? 'Joining…' : 'Join the call'}
           </motion.button>
+        )}
+
+        {/* D16 — the early-join refusal. ⚠ `role="status"`: it is the RESULT of the press, so it must be
+            announced. ⚠ ALWAYS MOUNTED, INITIALLY EMPTY (CL-6) — some screen readers do not announce a live
+            region that appears already populated; this one is present from the first render (`hasEnded`
+            permitting) and only its text changes. */}
+        {!hasEnded && (
+          <p
+            role="status"
+            className="text-foreground mt-3 text-[13px] leading-relaxed empty:hidden"
+          >
+            {notOpenYetMessage}
+          </p>
         )}
 
         {/*

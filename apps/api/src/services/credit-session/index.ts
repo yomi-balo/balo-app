@@ -14,6 +14,20 @@ export {
   type SettleFromPresenceOk,
   type SettleFromPresenceResult,
 } from './settle-from-presence.js';
+export {
+  settleSessionlessCaseMeeting,
+  exhaustSessionlessCaseMeeting,
+  withinBackstopWindow,
+  type SessionlessCaseMeetingResult,
+  type SessionlessSettleTrigger,
+} from './settle-sessionless-case-meeting.js';
+export {
+  openSessionOnBehalfOfBooker,
+  resolveOnBehalfOpenInput,
+  type OpenSessionOnBehalfResult,
+} from './open-on-behalf-of-booker.js';
+export { resolveCaseBillingSubject, type CaseBillingSubject } from './case-billing-subject.js';
+export { reportOwnerlessPriorDebt } from './debt-owner-alarm.js';
 export { driveSession } from './meter-driver.js';
 export { getSessionDrawdownState } from './drawdown.js';
 export { nudgeAdminForTopup } from './nudge.js';

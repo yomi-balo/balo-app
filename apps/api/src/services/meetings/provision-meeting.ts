@@ -141,6 +141,8 @@ import * as Sentry from '@sentry/node';
 import { meetingsRepository, type CreatedMeeting, type Meeting } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import {
+  bookingReplayWindowMatches,
+  classifyBookingReplay,
   dailyRoomNameForMeeting,
   isMeetingVenueReady,
   type MeetingBookingContextType,
@@ -485,22 +487,17 @@ export type BookingReplayLookup =
   | { readonly kind: 'conflict'; readonly meetingId: string };
 
 /**
- * BAL-400 (S3/M1) — THE ONE DEFINITION OF "this key names this booking". Exported because
- * `POST /meetings` must consult it BEFORE its availability gate, and `replayByIdempotencyKey`
- * consults it again inside the service. A second, drifting copy of this predicate is exactly
- * how a replay starts resolving to a meeting the client never asked for.
+ * BAL-400 (S3/M1) — resolve a `bookingIdempotencyKey` against a submitted booking. Exported because
+ * `POST /meetings` must consult it BEFORE its availability and funding gates, and
+ * `replayByIdempotencyKey` consults it again inside the service.
  *
- * ⚠⚠ THE WINDOW COMPARISON IS NOT OPTIONAL, and the semantics chosen here are deliberate:
- * **a key that resolves to a DIFFERENT window is a CONFLICT (409), never a silent replay.**
- * The alternative — return the existing meeting for whatever window the client last submitted
- * — was rejected: the client's own wrapper freezes the nonce after a failed meeting hop, so a
- * user who then picks a different time would be silently booked at the ORIGINAL time. Telling
- * them "that key is already spent on another booking" is the only answer that cannot lie. The
- * `scheduledStart`/`scheduledEnd` now returned to the caller (S2) mean an honest replay also
- * reports the real window rather than echoing the request back.
- *
- * ⚠ ORDER: the window is compared first because it costs no second read. `findWithContexts`
- * only runs once the window already agrees.
+ * ⚠⚠ BAL-474 (D8.6) — THE DEFINITION OF "this key names this booking" MOVED TO
+ * `classifyBookingReplay` (`@balo/shared/meetings`, `booking-replay.ts`), which the web booking
+ * action's replay skip calls as well, so the API probe and the web classify a key IDENTICALLY. That
+ * module carries the rationale (a key that resolves to a DIFFERENT window or case is a CONFLICT,
+ * never a silent replay). This function is now the READ half only: the meeting under the key, and
+ * its contexts — read ONLY when the window already agrees, so a window conflict costs no second
+ * read — handed to the shared classifier. Behaviour is unchanged.
  */
 export async function lookupBookingReplay(
   key: string,
@@ -511,25 +508,20 @@ export async function lookupBookingReplay(
     return { kind: 'none' };
   }
 
-  if (
-    existing.scheduledStart.getTime() !== probe.scheduledStart.getTime() ||
-    existing.scheduledEnd.getTime() !== probe.scheduledEnd.getTime()
-  ) {
-    return { kind: 'conflict', meetingId: existing.id };
-  }
-
-  const withContexts = await meetingsRepository.findWithContexts(existing.id);
-  const matchesContext =
-    withContexts !== undefined &&
-    withContexts.contexts.some(
-      (context) =>
-        context.contextType === probe.contextType && context.contextId === probe.contextId
-    );
-  if (!matchesContext) {
-    return { kind: 'conflict', meetingId: existing.id };
-  }
-
-  return { kind: 'match', meeting: existing };
+  const withContexts = bookingReplayWindowMatches(existing, probe)
+    ? await meetingsRepository.findWithContexts(existing.id)
+    : undefined;
+  const verdict = classifyBookingReplay(
+    {
+      scheduledStart: existing.scheduledStart,
+      scheduledEnd: existing.scheduledEnd,
+      contexts: withContexts?.contexts ?? [],
+    },
+    probe
+  );
+  return verdict === 'match'
+    ? { kind: 'match', meeting: existing }
+    : { kind: 'conflict', meetingId: existing.id };
 }
 
 /**

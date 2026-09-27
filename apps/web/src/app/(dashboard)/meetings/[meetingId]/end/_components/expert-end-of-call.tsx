@@ -1,3 +1,9 @@
+import {
+  CALL_STILL_OPEN_HEADLINE,
+  CASE_CLOSED_HEADLINE,
+  expertCallStillOpenBody,
+  expertCaseClosedBody,
+} from '@/lib/meetings/end-of-call-copy';
 import type { ExpertEndOfCallView } from '@/lib/meetings/end-of-call-view-types';
 import { EndOfCallLayout } from './end-of-call-layout';
 import { OnwardCta } from './onward-cta';
@@ -32,27 +38,44 @@ import { OnwardCta } from './onward-cta';
 export function ExpertEndOfCall({
   view,
 }: Readonly<{ view: ExpertEndOfCallView }>): React.JSX.Element {
-  const { meetingHeld } = view;
+  const { meetingHeld, beganEarly, caseClosure } = view;
+  const notHeldHeadline = beganEarly ? CALL_STILL_OPEN_HEADLINE : 'Nothing to wrap up yet';
+  const heldHeadline = meetingHeld ? 'Nice session' : notHeldHeadline;
   return (
     <EndOfCallLayout
-      headline={meetingHeld ? 'Nice session' : 'Nothing to wrap up yet'}
+      headline={caseClosure === null ? heldHeadline : CASE_CLOSED_HEADLINE}
       counterpartyName={view.counterpartyName}
       durationMinutes={view.durationMinutes}
-      reassurance={
-        meetingHeld
-          ? "Your notes and payout summary are on the way — we'll email you when your recap is ready."
-          : "This session hasn't taken place, so there's nothing to wrap up here yet."
-      }
+      reassurance={resolveBody(view)}
       recapState={view.recapState}
       sessionHeld={meetingHeld}
+      caseClosed={caseClosure !== null}
       onward={
         <OnwardCta
           meetingId={view.meetingId}
           lens="expert"
           recapState={view.recapState}
           caseHref={view.caseHref}
+          caseClosed={caseClosure !== null}
         />
       }
     />
   );
+}
+
+/**
+ * The body line, in flat branches rather than a nested ternary (SonarCloud S3358). The voided no-show's
+ * closed-case sentence promises no payout, recap or receipt; the held arm keeps the design's payout-summary line.
+ */
+function resolveBody(view: ExpertEndOfCallView): string {
+  if (view.caseClosure !== null) {
+    return expertCaseClosedBody(view.caseClosure);
+  }
+  if (view.meetingHeld) {
+    return "Your notes and payout summary are on the way — we'll email you when your recap is ready.";
+  }
+  if (view.beganEarly) {
+    return expertCallStillOpenBody(view.counterpartyName);
+  }
+  return "This session hasn't taken place, so there's nothing to wrap up here yet.";
 }
