@@ -3,6 +3,7 @@ import localFont from 'next/font/local';
 import { Providers } from '@/components/providers';
 import { AppFooter } from '@/components/layout/app-footer';
 import { Toaster } from '@/components/ui/sonner';
+import { YbugWidget } from '@/components/providers/ybug-widget';
 import { resolveSiteOrigin } from '@/lib/site-url';
 import './globals.css';
 
@@ -65,6 +66,7 @@ export default function RootLayout({
           <AppFooter />
           <Toaster richColors position="top-center" />
         </Providers>
+        <YbugWidget />
       </body>
     </html>
   );
