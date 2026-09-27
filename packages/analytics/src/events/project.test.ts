@@ -41,6 +41,24 @@ describe('PROJECT_EVENTS AI brief path (BAL-254)', () => {
   });
 });
 
+describe('PROJECT_EVENTS new-request notice (BAL-582)', () => {
+  it('maps to the feature-prefixed snake_case event names', () => {
+    expect(PROJECT_EVENTS.PROJECT_NEW_REQUEST_NOTICE_SHOWN).toBe(
+      'project_new_request_notice_shown'
+    );
+    expect(PROJECT_EVENTS.PROJECT_NEW_REQUEST_UNDO_CLICKED).toBe(
+      'project_new_request_undo_clicked'
+    );
+    expect(PROJECT_EVENTS.PROJECT_NEW_REQUEST_DISMISSED).toBe('project_new_request_dismissed');
+  });
+
+  it('follows the {feature}_{noun}_{past_tense_verb} convention', () => {
+    expect(PROJECT_EVENTS.PROJECT_NEW_REQUEST_NOTICE_SHOWN).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_EVENTS.PROJECT_NEW_REQUEST_UNDO_CLICKED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_EVENTS.PROJECT_NEW_REQUEST_DISMISSED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+  });
+});
+
 describe('PROJECT_SERVER_EVENTS', () => {
   it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([

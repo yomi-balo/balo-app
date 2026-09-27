@@ -542,4 +542,13 @@ describe('marketing-home.css — the Popular chips stay on ONE row', () => {
     expect(chipsBody).toContain('padding-left: 24px');
     expect(firstRuleBody(body ?? '', '.mk-chip') ?? '').toContain('padding: 7px 11px');
   });
+
+  it('fades the right edge in the 820px query, so a hidden scrollbar still hints more chips are off-screen', () => {
+    const body = atRuleBody(marketingHomeCss, '@media (max-width: 820px)');
+    const chipsBody = firstRuleBody(body ?? '', '.mk-chips') ?? '';
+    expect(chipsBody).toContain('mask-image: linear-gradient(to right, black 88%, transparent)');
+    expect(chipsBody).toContain(
+      '-webkit-mask-image: linear-gradient(to right, black 88%, transparent)'
+    );
+  });
 });

@@ -1178,12 +1178,25 @@ describe('ProjectRequestPanel', () => {
         expect(screen.queryByText('Sales Cloud')).not.toBeInTheDocument();
         expect(notice()).toBeInTheDocument();
         expect(toast).not.toHaveBeenCalled();
+        // ⚠ `role="status"` — a screen-reader user gets no other cue this happened.
+        expect(notice()?.closest('[role="status"]')).not.toBeNull();
+        // Evidence for whether "a new search takes precedence" is the right call: fires once,
+        // for THIS appearance, never on every render while shown.
+        expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_NEW_REQUEST_NOTICE_SHOWN, {
+          entry_point: 'home',
+        });
+        expect(
+          mockTrack.mock.calls.filter(
+            ([event]) => event === PROJECT_EVENTS.PROJECT_NEW_REQUEST_NOTICE_SHOWN
+          )
+        ).toHaveLength(1);
       });
 
-      it('Undo in the drawer restores the earlier draft whole — its files in a remounted uploader too', async () => {
+      it('Undo in the drawer restores the earlier draft whole — its files in a remounted uploader too, refocuses the title, and fires UNDO_CLICKED', async () => {
         const user = userEvent.setup();
         storeDraft(STALE_HOME_DRAFT);
         renderHome({ seed: { title: 'Migrate from Tableau' } });
+        mockTrack.mockClear();
 
         await user.click(undoButton());
 
@@ -1194,6 +1207,14 @@ describe('ProjectRequestPanel', () => {
         expect(screen.getByText('old-rfp.pdf')).toBeInTheDocument();
         expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
         expect(notice()).not.toBeInTheDocument();
+        // ⚠ `ProjectRequestDrawerBody` is `key={revision}`, so Undo remounts the WHOLE body —
+        // unmounting the Undo button focus had just landed on. Without the title-focus effect
+        // also keying on `revision`, focus fell to the drawer container and stayed there; it must
+        // land back on the (now brand new) title field instead.
+        expect(titleField()).toHaveFocus();
+        expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_NEW_REQUEST_UNDO_CLICKED, {
+          entry_point: 'home',
+        });
       });
 
       it('after an Undo, reopening with the same search continues the restored draft', async () => {
@@ -1209,10 +1230,11 @@ describe('ProjectRequestPanel', () => {
         expect(notice()).not.toBeInTheDocument();
       });
 
-      it('Dismiss hides the notice and keeps the fresh request', async () => {
+      it('Dismiss hides the notice, keeps the fresh request, and fires DISMISSED', async () => {
         const user = userEvent.setup();
         storeDraft(STALE_HOME_DRAFT);
         renderHome({ seed: { title: 'Migrate from Tableau' } });
+        mockTrack.mockClear();
 
         await user.click(
           screen.getByRole('button', { name: NEW_REQUEST_NOTICE_COPY.dismissLabel })
@@ -1220,6 +1242,13 @@ describe('ProjectRequestPanel', () => {
 
         expect(notice()).not.toBeInTheDocument();
         expect(titleField()).toHaveValue('Migrate from Tableau');
+        expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_NEW_REQUEST_DISMISSED, {
+          entry_point: 'home',
+        });
+        expect(mockTrack).not.toHaveBeenCalledWith(
+          PROJECT_EVENTS.PROJECT_NEW_REQUEST_UNDO_CLICKED,
+          expect.anything()
+        );
       });
 
       it('the Undo offer lapses once the visitor adds to the fresh request', async () => {
@@ -1506,6 +1535,43 @@ describe('ProjectRequestPanel', () => {
         await user.click(screen.getByRole('button', { name: /^review/i }));
 
         expect(await screen.findByText(/sandbox refresh/i)).toBeInTheDocument();
+      }, 12000);
+
+      // ⚠⚠ `unmatchedLabelsFor` gates on `draft.source === 'ai'` at the READ site, which is enough
+      // for a draft that STAYS manual after a fresh start — but re-selecting AI on that SAME fresh
+      // draft (no Undo) walks `source` back to `'ai'` on top of whatever `useAiBriefFlow` still
+      // had in memory. Before `clearAiState`, that resurrected the PREVIOUS generation's
+      // unmatched-label hints and fired bogus `PROJECT_AI_FIELDS_EDITED` events for a draft
+      // nothing had been generated for yet.
+      it('re-selecting AI on a fresh draft (no Undo) shows no stale unmatched-label hints and fires no bogus PROJECT_AI_FIELDS_EDITED', async () => {
+        mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+        mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_BRIEF_WITH_UNMATCHED });
+        const user = userEvent.setup();
+        const { rerender } = renderHome();
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+        await user.click(screen.getByRole('button', { name: /attach test file/i }));
+        await user.click(screen.getByRole('button', { name: /generate brief/i }));
+        await screen.findByText(/sandbox refresh/i, {}, { timeout: 4000 });
+
+        // A fresh search: lands on `manual` with the new seed, `source` reset to `'manual'`.
+        rerender(homePanel(false));
+        rerender(homePanel(true, { title: 'Tableau migration' }));
+        expect(titleField()).toHaveValue('Tableau migration');
+        mockTrack.mockClear();
+
+        // "Change entry method" (manual step) → "Upload docs" (start step) — re-selects AI on the
+        // SAME fresh draft, WITHOUT going through Undo.
+        await user.click(screen.getByRole('button', { name: /change entry method/i }));
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+
+        expect(
+          screen.getByRole('heading', { name: /upload your project docs/i })
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/sandbox refresh/i)).not.toBeInTheDocument();
+        expect(mockTrack).not.toHaveBeenCalledWith(
+          PROJECT_EVENTS.PROJECT_AI_FIELDS_EDITED,
+          expect.anything()
+        );
       }, 12000);
 
       it('resumeDraft opens at manual for a manual-source draft', () => {

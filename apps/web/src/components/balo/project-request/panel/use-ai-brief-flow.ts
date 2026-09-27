@@ -25,6 +25,21 @@ function snapshotsDiffer(a: AiFieldSnapshot, b: AiFieldSnapshot): boolean {
   );
 }
 
+const NO_UNMATCHED: { tags: string[]; products: string[] } = { tags: [], products: [] };
+
+/**
+ * Everything an AI generation leaves behind that must survive a "set aside, then Undo" cycle
+ * together: the snapshot `hasEditsSinceGenerate` compares against, the unmatched-label hints,
+ * and which fields have already fired `PROJECT_AI_FIELDS_EDITED` (so re-editing a field after an
+ * Undo doesn't double-fire it). A fresh start that ISN'T undone must clear all three together too
+ * — see `clearAiState`.
+ */
+export interface AiGeneratedState {
+  snapshot: AiFieldSnapshot;
+  unmatchedLabels: { tags: string[]; products: string[] };
+  editedFields: readonly string[];
+}
+
 export interface UseAiBriefFlowOptions {
   expertProfileId: string | undefined;
   /** BAL-582 (D2) — threaded into `PROJECT_ENTRY_SELECTED`'s `entry_point` dimension. */
@@ -65,6 +80,25 @@ export interface UseAiBriefFlowResult {
   handleWriteItMyself: () => void;
   handleRegenerateClick: () => void;
   handleConfirmRegenerate: () => void;
+  /**
+   * ⚠ The current generation's state, for a caller (`useProjectSeed`) to stash BEFORE a fresh
+   * start clears it — the moment a new hero search sets a draft aside, so its Undo can bring the
+   * AI brief back too. `null` before any successful generate.
+   */
+  capturedAiState: AiGeneratedState | null;
+  /**
+   * ⚠⚠ THE FIX FOR THE STALE-STATE BUG. `lastGeneratedSnapshot` / `unmatchedLabels` /
+   * `editedFieldsFiredRef` used to last for the whole mount, gated only by `draft.source === 'ai'`
+   * at each READ site — which covers a draft that STAYS manual, but not one that goes fresh
+   * (`source` reset to `'manual'`) and is then walked back to `'ai'` on the SAME draft
+   * (`handleSelectAi` from `start`, e.g. via "Change entry method"). That re-armed the OLD
+   * generation's snapshot and hints over a draft nothing had been generated for yet. `useProjectSeed`
+   * calls this at the exact moment it starts a fresh request (`resetDraft`), never on every render.
+   */
+  clearAiState: () => void;
+  /** Restores a `capturedAiState` snapshot verbatim — `useProjectSeed`'s Undo, alongside
+   *  `replaceDraft`. `null` clears, same as `clearAiState`. */
+  restoreAiState: (state: AiGeneratedState | null) => void;
 }
 
 /**
@@ -91,10 +125,9 @@ export function useAiBriefFlow({
 
   // The four AI-owned fields as of the LAST successful generate (null before any generate).
   const [lastGeneratedSnapshot, setLastGeneratedSnapshot] = useState<AiFieldSnapshot | null>(null);
-  const [unmatchedLabels, setUnmatchedLabels] = useState<{ tags: string[]; products: string[] }>({
-    tags: [],
-    products: [],
-  });
+  const [unmatchedLabels, setUnmatchedLabels] = useState<{ tags: string[]; products: string[] }>(
+    NO_UNMATCHED
+  );
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
   const isRegenerateRef = useRef(false);
   const generateStartedAtRef = useRef<number | null>(null);
@@ -116,6 +149,33 @@ export function useAiBriefFlow({
   );
   const hasEditsSinceGenerate =
     lastGeneratedSnapshot !== null && snapshotsDiffer(lastGeneratedSnapshot, currentAiSnapshot);
+
+  const capturedAiState: AiGeneratedState | null =
+    lastGeneratedSnapshot === null
+      ? null
+      : {
+          snapshot: lastGeneratedSnapshot,
+          unmatchedLabels,
+          editedFields: [...editedFieldsFiredRef.current],
+        };
+
+  const clearAiState = useCallback(() => {
+    setLastGeneratedSnapshot(null);
+    setUnmatchedLabels(NO_UNMATCHED);
+    editedFieldsFiredRef.current = new Set();
+  }, []);
+
+  const restoreAiState = useCallback((state: AiGeneratedState | null) => {
+    if (state === null) {
+      setLastGeneratedSnapshot(null);
+      setUnmatchedLabels(NO_UNMATCHED);
+      editedFieldsFiredRef.current = new Set();
+      return;
+    }
+    setLastGeneratedSnapshot(state.snapshot);
+    setUnmatchedLabels(state.unmatchedLabels);
+    editedFieldsFiredRef.current = new Set(state.editedFields);
+  }, []);
 
   const handleGenerationSucceeded = useCallback(
     (patch: ProjectBriefDraftPatch) => {
@@ -304,5 +364,8 @@ export function useAiBriefFlow({
     handleWriteItMyself,
     handleRegenerateClick,
     handleConfirmRegenerate,
+    capturedAiState,
+    clearAiState,
+    restoreAiState,
   };
 }

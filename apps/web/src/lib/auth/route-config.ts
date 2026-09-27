@@ -17,9 +17,14 @@ export const PUBLIC_PATHS = new Set([
   // `/pricing`), rendering static copy only — no user is dereferenced and nothing is written.
   '/how-it-works',
   '/for-experts',
-  // BAL-502 — the marketing header's supply-side "For experts" link target. EXACT PATH ONLY:
-  // `PUBLIC_PATHS` is matched with `.has(pathname)` (see `isPublicRoute` below), so
-  // `/expert/apply/success` and `/expert/apply/review` stay protected.
+  // BAL-502 — the expert-application entry point. EXACT PATH ONLY: `PUBLIC_PATHS` is matched
+  // with `.has(pathname)` (see `isPublicRoute` below), so `/expert/apply/success` and
+  // `/expert/apply/review` stay protected.
+  //
+  // ⚠ NOT the marketing header's "For experts" link anymore — that now goes to the `/for-experts`
+  // placeholder above (`marketing-nav.ts`: "For experts deliberately does NOT go to the expert
+  // application"). This stays public because the homepage's expert-band section still links here
+  // directly (`app/(marketing)/_home/expert-band-section.tsx`), and because of the reason below.
   //
   // ⚠ This one is GENUINELY reachable signed-out — it does not merely defer to a page-level
   // redirect. `(apply)/expert/apply/page.tsx` renders an anonymous preview for a null user

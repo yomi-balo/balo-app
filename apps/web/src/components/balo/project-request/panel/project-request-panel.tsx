@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ArrowRight, ChevronLeft, Loader2, RotateCw, Send, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
@@ -266,8 +266,17 @@ export function ProjectRequestPanel({
   // the replaced draft's files never land in the fresh draft (or over the restored one).
   const [uploadingState, setUploadingState] = useState({ revision, value: false });
   const uploading = uploadingFor(uploadingState, revision);
+  // ⚠⚠ `useLayoutEffect`, NOT `useEffect` — the ref must be current before ANY passive effect
+  // (including an unmounting `DocumentUploader`'s own cleanup) can run. Passive effects for a
+  // commit run strictly after all of that commit's layout effects, so a plain `useEffect` here left
+  // a real, if narrow, gap: a `resetDraft`/`replaceDraft` bumps `revision` and this ref updates in
+  // the SAME commit's passive-effect pass — but an orphaned uploader's own unmount cleanup (also
+  // passive) could fire in that same pass BEFORE this one does, still see the OLD `revisionRef`,
+  // and pass `uploadHandlers`' guard with a STALE closed-over `revision` that happened to still
+  // equal it — writing the replaced draft's files into the fresh one. A layout effect closes the
+  // gap entirely: it runs synchronously in the commit phase, before any passive effect at all.
   const revisionRef = useRef(revision);
-  useEffect(() => {
+  useLayoutEffect(() => {
     revisionRef.current = revision;
   }, [revision]);
   // Snapshot of the routing at submit time — the done screen + success toast read
@@ -398,29 +407,6 @@ export function ProjectRequestPanel({
     });
   }, [open, step, expertProfileId, entryPoint]);
 
-  // BAL-582 (§3b) — applies the hero seed to the draft once per open (never sets `step`).
-  const newRequestUndo = useProjectSeed({
-    open,
-    seed,
-    draft,
-    setField,
-    resetDraft,
-    replaceDraft,
-    productsTaxonomy: taxonomies.products,
-  });
-
-  // Clear any stale submit error once the user leaves the review step.
-  useEffect(() => {
-    if (step !== 'review') setError(null);
-  }, [step]);
-
-  // Focus the title field when (and only when) the manual step becomes active.
-  useEffect(() => {
-    if (step === 'manual') titleInputRef.current?.focus();
-  }, [step]);
-
-  const handleClose = useCallback(() => onClose(), [onClose]);
-
   const {
     briefGeneration,
     isGenerating,
@@ -435,6 +421,9 @@ export function ProjectRequestPanel({
     handleWriteItMyself,
     handleRegenerateClick,
     handleConfirmRegenerate,
+    capturedAiState,
+    clearAiState,
+    restoreAiState,
   } = useAiBriefFlow({
     expertProfileId,
     entryPoint,
@@ -445,6 +434,41 @@ export function ProjectRequestPanel({
     // user has closed it, or after they have submitted, must write nothing.
     isFlowActive: open && step !== 'done',
   });
+
+  // BAL-582 (§3b) — applies the hero seed to the draft once per open (never sets `step`). Threads
+  // the AI flow's capture/clear/restore trio so a fresh start (and its Undo) carries the AI
+  // generation along with the draft fields — see `AiGeneratedState`'s docblock.
+  const newRequestUndo = useProjectSeed({
+    open,
+    seed,
+    draft,
+    setField,
+    resetDraft,
+    replaceDraft,
+    productsTaxonomy: taxonomies.products,
+    capturedAiState,
+    clearAiState,
+    restoreAiState,
+    expertProfileId,
+    entryPoint,
+  });
+
+  // Clear any stale submit error once the user leaves the review step.
+  useEffect(() => {
+    if (step !== 'review') setError(null);
+  }, [step]);
+
+  // Focus the title field when (and only when) the manual step becomes active — INCLUDING when
+  // `revision` bumps while already on it. `ProjectRequestDrawerBody` is `key={revision}`, so an
+  // Undo (or a fresh search that lands straight on `manual`) remounts it and creates a BRAND NEW
+  // title input while `step` itself never changes — an effect keyed on `[step]` alone never re-ran
+  // to claim focus on that new element, and the focus Undo's own button held fell to the drawer's
+  // dialog container instead.
+  useEffect(() => {
+    if (step === 'manual') titleInputRef.current?.focus();
+  }, [step, revision]);
+
+  const handleClose = useCallback(() => onClose(), [onClose]);
 
   const handleSelectManual = useCallback(() => {
     track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
@@ -710,9 +734,19 @@ export function ProjectRequestPanel({
         </DrawerHeader>
 
         {/* ⚠ KEYED ON `revision`: a new hero search starts a fresh draft and its Undo restores
-            the earlier one, each replacing the draft wholesale. `DocumentUploader` reads
-            `initialDocuments` only on mount, so without a remount it would keep listing the
-            replaced draft's files — and, since it REPLACES on change, write them back. */}
+            the earlier one, each replacing the draft wholesale. `DocumentUploader` NEEDS this: it
+            reads `initialDocuments` only on mount, so without a remount it would keep listing the
+            replaced draft's files — and, since it REPLACES on change, write them back.
+
+            ⚠ The key remounts EVERYTHING under this node, not just the uploaders — including
+            `RichTextEditor` and `TaxonomyMultiSelect`. Neither NEEDS it: `RichTextEditor` already
+            re-syncs from an externally-reset `value` prop via its own effect (the same one
+            `clearDraft` relies on), and `TaxonomyMultiSelect` is a plain controlled selection with
+            no mount-only read. Their remount only resets transient internal-only state (undo
+            history, an open dropdown) that a wholesale draft replacement should reasonably clear
+            anyway — so this stays a section-wide key rather than one scoped to just the uploaders,
+            but say so here explicitly: narrowing it is a real option if that transient-state reset
+            is ever unwanted, not an oversight that this comment used to imply didn't exist. */}
         <ProjectRequestDrawerBody
           key={revision}
           step={step}

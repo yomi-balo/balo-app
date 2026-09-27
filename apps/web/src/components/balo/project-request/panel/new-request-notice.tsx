@@ -26,7 +26,13 @@ export function NewRequestNotice({
   onDismiss,
 }: Readonly<NewRequestNoticeProps>): React.JSX.Element {
   return (
-    <div className="border-primary/30 bg-primary/[0.04] flex items-center gap-3 rounded-xl border py-1.5 pr-1.5 pl-4">
+    <div
+      role="status"
+      className="border-primary/30 bg-primary/[0.04] flex items-center gap-3 rounded-xl border py-1.5 pr-1.5 pl-4"
+    >
+      {/* `role="status"` (implicit `aria-live="polite"`, `aria-atomic="true"`): a screen-reader
+          user gets no other cue that a new search silently replaced their draft — the drawer
+          doesn't reopen or refocus around this, it just appears already inside it. */}
       <RotateCcw className="text-primary h-4 w-4 shrink-0" aria-hidden="true" />
       <p className="text-foreground min-w-0 flex-1 text-sm font-medium">
         {NEW_REQUEST_NOTICE_COPY.message}

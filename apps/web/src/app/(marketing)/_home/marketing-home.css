@@ -985,6 +985,12 @@
     margin-right: -24px;
     padding-left: 24px;
     padding-right: 24px;
+    /* The scrollbar is hidden (`.mk-chips`'s base rule) and the row starts scrolled to the label,
+       so a narrow window's only affordance that chips run off the RIGHT edge is this fade — the
+       same technique as `.mk-bench`'s below, one-sided because this overflow isn't centred like
+       that one is. */
+    -webkit-mask-image: linear-gradient(to right, black 88%, transparent);
+    mask-image: linear-gradient(to right, black 88%, transparent);
   }
   .mk-chip {
     padding: 7px 11px;

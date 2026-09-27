@@ -97,6 +97,12 @@ export const PROJECT_EVENTS = {
   PROJECT_AI_GENERATE_FAILED: 'project_ai_generate_failed',
   PROJECT_AI_REGENERATE_CLICKED: 'project_ai_regenerate_clicked',
   PROJECT_AI_FIELDS_EDITED: 'project_ai_fields_edited',
+  // BAL-582 — a new hero search set an existing draft aside; the in-drawer notice's own
+  // lifecycle. Evidence for whether "a new search takes precedence" is the right call: how often
+  // visitors undo it vs. let it stand.
+  PROJECT_NEW_REQUEST_NOTICE_SHOWN: 'project_new_request_notice_shown',
+  PROJECT_NEW_REQUEST_UNDO_CLICKED: 'project_new_request_undo_clicked',
+  PROJECT_NEW_REQUEST_DISMISSED: 'project_new_request_dismissed',
 } as const;
 
 /**
@@ -360,6 +366,18 @@ export interface ProjectEventMap {
   };
   [PROJECT_EVENTS.PROJECT_AI_REGENERATE_CLICKED]: { had_edits: boolean };
   [PROJECT_EVENTS.PROJECT_AI_FIELDS_EDITED]: { field: ProjectAiField };
+  [PROJECT_EVENTS.PROJECT_NEW_REQUEST_NOTICE_SHOWN]: {
+    expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
+  };
+  [PROJECT_EVENTS.PROJECT_NEW_REQUEST_UNDO_CLICKED]: {
+    expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
+  };
+  [PROJECT_EVENTS.PROJECT_NEW_REQUEST_DISMISSED]: {
+    expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
+  };
 }
 
 /**
