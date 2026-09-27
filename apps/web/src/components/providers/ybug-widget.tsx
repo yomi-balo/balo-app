@@ -1,12 +1,17 @@
 import Script from 'next/script';
 
 /**
- * Dev-only feedback widget (https://ybug.io). Gated on `NODE_ENV` (not just the env var) so it
- * can never load in a Vercel preview/production build, which also inlines `NEXT_PUBLIC_*` vars.
+ * Feedback widget (https://ybug.io) for local dev and Vercel preview deploys — never production.
+ * Vercel sets `NODE_ENV=production` for every build, preview included, so `NODE_ENV` alone can't
+ * tell preview from production; `VERCEL_ENV` (unset locally, 'preview'/'production' on Vercel) is
+ * what distinguishes them. `NEXT_PUBLIC_YBUG_ID` is scoped to Preview+Development in Vercel project
+ * settings — unset in Production — as defense in depth alongside this gate.
  */
 export function YbugWidget(): React.JSX.Element | null {
   const ybugId = process.env.NEXT_PUBLIC_YBUG_ID;
-  if (process.env.NODE_ENV !== 'development' || !ybugId) {
+  const isDevOrPreview =
+    process.env.NODE_ENV === 'development' || process.env.VERCEL_ENV === 'preview';
+  if (!isDevOrPreview || !ybugId) {
     return null;
   }
 
