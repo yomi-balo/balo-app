@@ -4,7 +4,7 @@ import { installmentsSumTo100 } from '@balo/db';
 import { proposalDraftBaseFields } from '@/app/(dashboard)/projects/[requestId]/_actions/proposal-schema';
 import { validateProposalReadiness } from '@/app/(dashboard)/projects/[requestId]/_actions/proposal-readiness';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
-import { isDescriptionEmpty } from '@/components/balo/rich-text-editor';
+import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
 import {
   FAST_FORWARD_CLOSE_NOTE,
   FAST_FORWARD_EOI_MESSAGE,

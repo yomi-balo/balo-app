@@ -37,7 +37,7 @@ vi.mock('@/lib/sanitize/project-html', () => ({
 }));
 
 const mockIsDescriptionEmpty = vi.fn();
-vi.mock('@/components/balo/rich-text-editor', () => ({
+vi.mock('@/components/balo/rich-text/plain-text', () => ({
   isDescriptionEmpty: (html: string) => mockIsDescriptionEmpty(html),
 }));
 
