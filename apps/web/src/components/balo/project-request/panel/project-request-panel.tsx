@@ -126,6 +126,19 @@ const DESCRIPTION_PLACEHOLDER_SUFFIX = ' later.';
  */
 const NO_UNMATCHED_LABELS: { tags: string[]; products: string[] } = { tags: [], products: [] };
 
+/** The unmatched-label hints to show for a draft: its AI brief's, or none for a manual draft. */
+function unmatchedLabelsFor(
+  source: ProjectDraft['source'],
+  labels: { tags: string[]; products: string[] }
+): { tags: string[]; products: string[] } {
+  return source === 'ai' ? labels : NO_UNMATCHED_LABELS;
+}
+
+/** An upload flag only counts for the draft revision whose uploader set it. */
+function uploadingFor(state: { revision: number; value: boolean }, revision: number): boolean {
+  return state.revision === revision && state.value;
+}
+
 const EMPTY_TAXONOMIES: ProjectRequestTaxonomies = {
   tags: EMPTY_TAXONOMY,
   products: EMPTY_TAXONOMY,
@@ -252,7 +265,7 @@ export function ProjectRequestPanel({
   // with the revision its uploader was rendered under and dropped once that revision is gone, so
   // the replaced draft's files never land in the fresh draft (or over the restored one).
   const [uploadingState, setUploadingState] = useState({ revision, value: false });
-  const uploading = uploadingState.revision === revision && uploadingState.value;
+  const uploading = uploadingFor(uploadingState, revision);
   const revisionRef = useRef(revision);
   useEffect(() => {
     revisionRef.current = revision;
@@ -724,7 +737,7 @@ export function ProjectRequestPanel({
           productNameMap={productNameMap}
           onEditReview={() => setStep('manual')}
           aiBanner={aiBanner}
-          unmatchedLabels={draft.source === 'ai' ? unmatchedLabels : NO_UNMATCHED_LABELS}
+          unmatchedLabels={unmatchedLabelsFor(draft.source, unmatchedLabels)}
           isAiPath={isAiPath}
           onDismissRegenerateFailure={briefGeneration.dismissFailure}
           reviewReassurance={copy.reviewReassurance}
