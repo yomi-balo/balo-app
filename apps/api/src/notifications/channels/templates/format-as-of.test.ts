@@ -33,6 +33,24 @@ describe('formatAsOfUtc', () => {
     }
   });
 
+  // Node 22's ICU renders `hour12: true` as 12:00 am, Node 20's as 0:00 am, so the midnight case
+  // above only fails on some runtimes. Pin the option that is correct on all of them.
+  it('builds its time formatter with the h12 hour cycle, never the runtime-dependent hour12 flag', async () => {
+    const construct = vi.spyOn(Intl, 'DateTimeFormat');
+    try {
+      vi.resetModules();
+      await import('./format-as-of.js');
+      const timeOptions = construct.mock.calls
+        .map(([, options]) => options)
+        .filter((options) => options?.hour !== undefined);
+      expect(timeOptions).toHaveLength(1);
+      expect(timeOptions[0]?.hourCycle).toBe('h12');
+      expect(timeOptions[0]?.hour12).toBeUndefined();
+    } finally {
+      construct.mockRestore();
+    }
+  });
+
   it('degrades to a readable phrase, never "Invalid Date", for an unparseable input', () => {
     const label = formatAsOfUtc('not-a-date');
     expect(label).toBe('the time of this notice');

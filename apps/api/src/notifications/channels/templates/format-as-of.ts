@@ -1,7 +1,9 @@
+// `hourCycle: 'h12'`, never `hour12: true`: on Node 20's ICU, `en-GB` + `hour12: true` resolves to
+// the h11 cycle and renders midnight and noon as "0:00 am" / "0:00 pm".
 const AS_OF_TIME = new Intl.DateTimeFormat('en-GB', {
   hour: 'numeric',
   minute: '2-digit',
-  hour12: true,
+  hourCycle: 'h12',
   timeZone: 'UTC',
 });
 
