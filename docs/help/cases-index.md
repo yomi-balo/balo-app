@@ -2,10 +2,12 @@
 
 **Cases** lists every case in the workspace you're currently in. A case is one thread of work
 with an expert: it holds every consultation, every message and every file in one place, and it
-stays open until it's resolved. Times show in your device's timezone.
+stays open until it's resolved or closes automatically (see **When does a case close on its own?**
+below). Times show in your device's timezone.
 
-Open cases come first, soonest booking at the top. Cases with nothing booked follow, most
-recently active first. Resolved cases sit in a collapsed section underneath.
+Open cases come first, soonest booking at the top. Cases with nothing booked follow, most recent
+consultation first (a case that's never had one goes by when it opened). Resolved cases sit in a
+collapsed section underneath.
 
 ## For clients
 
@@ -52,8 +54,9 @@ The row of dots is the case's consultation history, oldest first:
 If you use a screen reader, the row reads as a summary — "Consultations: 2 held, 1 booked".
 
 **Resolved** holds closed cases. Each says whether it was resolved or closed automatically after
-30 days without activity, and how many consultations were held. Everything in a resolved case
-stays readable. **Book again** starts a fresh case with the same expert.
+30 days with no consultations, bookings or messages, and how many consultations were held.
+Everything in a resolved case stays readable. **Book again** starts a new case with the same
+expert — the closed one stays as it is.
 
 Nothing here yet? **Book a consultation** takes you to expert search.
 
@@ -80,6 +83,19 @@ them instead, so it's clear who's waiting on what.
 Nothing here yet? If your expert setup is still incomplete, the page points you at **Continue
 setup** — clients can book you once it's finished. If setup is done, new bookings will show up
 here and in Calendar as they arrive.
+
+## When does a case close on its own?
+
+When a case goes 30 days without a consultation, a booking, or a message or file, Balo closes it
+to keep your list tidy. Any of these restarts the 30 days: a completed consultation;
+booking, rescheduling or cancelling a consultation (even if the call is later missed); or a
+message or file shared by either side, in the case chat or during a call. A case that's had none
+of them closes 30 days after it opened. It moves to **Resolved** as "Closed automatically", and
+everything in it stays readable. A case never closes while a consultation is booked ahead or a
+call on it can still be joined. The expert delivering the case and the client company's owner
+are both told when it happens. Want to pick things up again? The client company can
+**Book again** any time — that starts a new case with the same expert, and the closed one stays
+as it is.
 
 ## Questions?
 

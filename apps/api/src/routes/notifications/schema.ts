@@ -448,28 +448,47 @@ const engagementAcceptedPayload = z.object({
   alreadyRated: z.boolean().optional(),
 });
 
-// BAL-390 (D4) a case was closed — the fused close + rating email (client only).
-// `correlationId` = `${engagementId}:case_closed` (one-shot terminal; z.string not
-// z.uuid so the suffix validates). `recipientId` gates the rule (absent ⇒ skip).
-// `reviewToken` is the RAW ≥256-bit review-invite token and appears ONLY inside the
-// emailed URL — absent ⇒ already rated ⇒ the email omits the review block entirely.
-// `meetingId` is the CTA subject on BOTH channels: the engagements route 404s for a CASE by
-// construction, so the deep link is the recap (BAL-388). OPTIONAL — absent ⇒ no CTA at all.
-// Mirrors packages/shared/src/notifications/index.ts.
-const engagementCaseClosedPayload = z.object({
-  correlationId: z.string().min(1).max(120),
-  engagementId: z.uuid(),
-  meetingId: z.uuid().optional(),
-  recipientId: z.uuid().optional(),
-  expertProfileId: z.uuid(),
-  clientCompanyName: z.string().min(1).max(200),
-  expertPartyLabel: z.string().min(1).max(200),
-  caseTitle: z.string().min(1).max(200),
-  closedDate: z.string().min(1).max(40),
-  closeReason: z.enum(['resolved', 'auto_inactive']),
-  consultationCount: z.number().int().nonnegative().optional(),
-  reviewToken: z.string().min(20).max(200).optional(),
-});
+// BAL-390 (D4) a case was closed — the fused close + rating email (client; expert on
+// `auto_inactive`, BAL-572). `correlationId` = `${engagementId}:case_closed` (one-shot
+// terminal; z.string not z.uuid so the suffix validates). `recipientId` gates the CLIENT
+// rule (absent ⇒ skip); the EXPERT rule gates on `closeReason` instead and reads
+// `expertProfileId`, already required below — no new field. `reviewToken` is the RAW
+// ≥256-bit review-invite token and appears ONLY inside the emailed URL — absent ⇒ no star
+// block; `resolved` renders a thank-you line, `auto_inactive` renders nothing. `meetingId`
+// is the CTA subject on the CLIENT channels: the engagements route 404s for a CASE by
+// construction, so the deep link is the recap (BAL-388). OPTIONAL — absent ⇒ no CTA at
+// all. Mirrors packages/shared/src/notifications/index.ts.
+//
+// ⚠ THE HTTP ARM ACCEPTS `closeReason: 'resolved'` ONLY (the `.refine` below). Web's
+// `publishCaseClosed` is the sole HTTP producer of this event and always sends `resolved`;
+// `auto_inactive` is published IN-PROCESS by `apps/api`'s hourly case-inactivity sweep
+// (`jobs/case-inactivity-sweep.ts`), which calls `notificationEvents.publish` directly and
+// never reaches this route. Accepting `auto_inactive` here would let any caller holding
+// `INTERNAL_API_SECRET` address an arbitrary expert about a case that isn't theirs or isn't
+// closed. The field keeps the full `z.enum(['resolved', 'auto_inactive'])` so
+// `z.infer` still key-for-key matches `EngagementCaseClosedPayload` — a `.refine` is used
+// instead of `z.literal('resolved')` because refinements are erased by `z.infer`
+// (`AssertPublishPayloadShapesMatch`'s documented limit L1) and a literal would break that
+// mutual assignability.
+const engagementCaseClosedPayload = z
+  .object({
+    correlationId: z.string().min(1).max(120),
+    engagementId: z.uuid(),
+    meetingId: z.uuid().optional(),
+    recipientId: z.uuid().optional(),
+    expertProfileId: z.uuid(),
+    clientCompanyName: z.string().min(1).max(200),
+    expertPartyLabel: z.string().min(1).max(200),
+    caseTitle: z.string().min(1).max(200),
+    closedDate: z.string().min(1).max(40),
+    closeReason: z.enum(['resolved', 'auto_inactive']),
+    consultationCount: z.number().int().nonnegative().optional(),
+    reviewToken: z.string().min(20).max(200).optional(),
+  })
+  .refine((payload) => payload.closeReason === 'resolved', {
+    message:
+      'engagement.case_closed over HTTP accepts closeReason "resolved" only — auto_inactive is published in-process by the case-inactivity sweep',
+  });
 
 // BAL-338 (D7) client requested changes (client → expert + admins). `correlationId`
 // = `${engagementId}:changes_requested:${changeRequestedAtMs}` (re-requestable; z.string

@@ -26,6 +26,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startTranscriptPipelineWorker },
     { startScheduledNotificationDispatchWorker, registerScheduledNotificationDispatchCron },
     { startReviewNudgeSweepWorker, registerReviewNudgeSweepCron },
+    { startCaseInactivitySweepWorker, registerCaseInactivitySweepCron },
     { startMeetingLifecycleSweepWorker, registerMeetingLifecycleSweepCron },
     { startCalendarHealthProbeWorker, registerCalendarHealthProbeCron },
     { startCalendarSubscriptionReconcileWorker },
@@ -59,6 +60,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./transcript-pipeline.js'),
     import('./scheduled-notification-dispatch.js'),
     import('./review-nudge-sweep.js'),
+    import('./case-inactivity-sweep.js'),
     import('./meeting-lifecycle-sweep.js'),
     import('./calendar-health-probe.js'),
     import('./calendar-subscription-reconcile.js'),
@@ -116,6 +118,11 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // agree. Read that constant's warning before changing either.
   startReviewNudgeSweepWorker();
   await registerReviewNudgeSweepCron();
+  // BAL-572: the hourly case-inactivity sweep — closes dormant cases (auto_inactive), fanning
+  // out to the client owner and the delivering expert. Offset to `:30` so it never coincides
+  // with the three `:00` sweeps.
+  startCaseInactivitySweepWorker();
+  await registerCaseInactivitySweepCron();
   // BAL-134 (ADR-1049): the per-minute meeting lifecycle sweep — Daily presence reconciliation,
   // the five system terminal rules, and the two absence promises.
   // ⚠ PER-MINUTE IS NOT A FREE KNOB: it is what bounds the dropped-`participant.left` over-bill

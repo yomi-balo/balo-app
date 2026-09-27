@@ -29,6 +29,8 @@ const mockStartScheduledNotificationDispatch = vi.fn();
 const mockRegisterScheduledNotificationDispatchCron = vi.fn().mockResolvedValue(undefined);
 const mockStartReviewNudgeSweep = vi.fn();
 const mockRegisterReviewNudgeSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartCaseInactivitySweep = vi.fn();
+const mockRegisterCaseInactivitySweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartMeetingLifecycleSweep = vi.fn();
 const mockRegisterMeetingLifecycleSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartCalendarHealthProbe = vi.fn();
@@ -113,6 +115,14 @@ vi.mock('./scheduled-notification-dispatch.js', () => ({
 vi.mock('./review-nudge-sweep.js', () => ({
   startReviewNudgeSweepWorker: () => mockStartReviewNudgeSweep(),
   registerReviewNudgeSweepCron: () => mockRegisterReviewNudgeSweepCron(),
+}));
+// BAL-572: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
+// which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. A dev
+// Redis happening to be running locally would mask that hang and pass green, so this mock must
+// land in the SAME COMMIT as the `worker.ts` registration.
+vi.mock('./case-inactivity-sweep.js', () => ({
+  startCaseInactivitySweepWorker: () => mockStartCaseInactivitySweep(),
+  registerCaseInactivitySweepCron: () => mockRegisterCaseInactivitySweepCron(),
 }));
 // BAL-134: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
 // which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
@@ -252,6 +262,8 @@ describe('startWorkers', () => {
     expect(mockStartMeetingVenueRepairSweep).not.toHaveBeenCalled();
     expect(mockRegisterMeetingVenueRepairSweepCron).not.toHaveBeenCalled();
     expect(mockStartMeetingVenueProvision).not.toHaveBeenCalled();
+    expect(mockStartCaseInactivitySweep).not.toHaveBeenCalled();
+    expect(mockRegisterCaseInactivitySweepCron).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
@@ -288,6 +300,8 @@ describe('startWorkers', () => {
     expect(mockRegisterScheduledNotificationDispatchCron).toHaveBeenCalled();
     expect(mockStartReviewNudgeSweep).toHaveBeenCalled();
     expect(mockRegisterReviewNudgeSweepCron).toHaveBeenCalled();
+    expect(mockStartCaseInactivitySweep).toHaveBeenCalled();
+    expect(mockRegisterCaseInactivitySweepCron).toHaveBeenCalled();
     expect(mockStartMeetingLifecycleSweep).toHaveBeenCalled();
     expect(mockRegisterMeetingLifecycleSweepCron).toHaveBeenCalled();
     expect(mockStartCalendarHealthProbe).toHaveBeenCalled();

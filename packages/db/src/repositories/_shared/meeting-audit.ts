@@ -70,6 +70,34 @@ export type MeetingAuditAction =
 export type MeetingAuditEntityType = 'meeting';
 
 /**
+ * The three SCHEDULING actions — a booking, a reschedule, a cancellation. BAL-572's
+ * case-inactivity seam (`meetingContextsRepository.consultationTimestampsForEngagements`)
+ * reads the newest of them on a case's meetings as `lastSchedulingActivityAt`, so each one
+ * holds a case open for 30 days from when it was written. Typed against
+ * `MeetingAuditAction`, so a near-miss spelling fails `tsc` here rather than matching nothing.
+ *
+ * ⚠⚠ A NEW PATH THAT BOOKS, MOVES OR CANCELS A MEETING MUST RECORD ITS ROW ON THE SAME
+ * TRANSACTION as the change, through the writers below. The seam reads ONLY these rows (never
+ * `meetings.created_at`), so an unaudited booking, reschedule or cancellation is invisible to
+ * it, and the case can close up to 30 days early. Today every writer does: `create`
+ * (`recordMeetingBooked`), `updateSchedule` (`recordMeetingRescheduled`, reached by both a
+ * direct reschedule and an accepted proposal) and `cancelMeetingTx`
+ * (`recordMeetingCancelled`, the only writer of `status = 'cancelled'`).
+ *
+ * ⚠⚠ ANY BACKFILL OR IMPORT OF THESE ACTIONS MUST STAMP `created_at` WITH THE ORIGINAL EVENT
+ * TIME (e.g. `meetings.created_at` for `meeting.booked`), never the column's `defaultNow()`.
+ * A backfill stamped "now" restarts the 30 days on every affected case at once.
+ *
+ * `meeting.ended` and `meeting.outcome_resolved` are NOT scheduling actions: a missed call
+ * holds its case from its latest booking or reschedule, never from the miss.
+ */
+export const MEETING_SCHEDULING_AUDIT_ACTIONS = [
+  'meeting.booked',
+  'meeting.rescheduled',
+  'meeting.cancelled',
+] as const satisfies ReadonlyArray<MeetingAuditAction>;
+
+/**
  * Record ONE meeting audit event inside the caller's transaction (pass the `tx` handle — it
  * satisfies `DbExecutor`), so the audit row commits or rolls back WITH the state change it
  * records (ADR-1030, reasserted by ADR-1044 §5). The entity is the `meetings` row.

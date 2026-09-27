@@ -10,6 +10,8 @@ export { requestExpertRelationshipFactory } from './request-expert-relationship.
 export type { RequestExpertRelationshipFactoryResult } from './request-expert-relationship.factory';
 export { conversationFactory } from './conversation.factory';
 export type { ConversationFactoryResult } from './conversation.factory';
+export { conversationMessageFactory } from './conversation-message.factory';
+export { conversationFileFactory } from './conversation-file.factory';
 export { proposalFactory } from './proposal.factory';
 export type { ProposalFactoryResult } from './proposal.factory';
 export { proposalShareLinkFactory } from './proposal-share-link.factory';
@@ -26,6 +28,8 @@ export { actionItemFactory } from './action-item.factory';
 export type { ActionItemFactoryResult } from './action-item.factory';
 export { meetingFactory } from './meeting.factory';
 export type { MeetingFactoryResult, MeetingFactoryContext } from './meeting.factory';
+export { meetingFileFactory } from './meeting-file.factory';
+export { meetingAuditEventFactory } from './meeting-audit-event.factory';
 export { meetingGuestFactory } from './meeting-guest.factory';
 export type { MeetingGuestFactoryResult } from './meeting-guest.factory';
 export { meetingRecordingFactory } from './meeting-recording.factory';

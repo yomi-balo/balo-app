@@ -1578,4 +1578,40 @@ describe('publishBodySchema', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  describe('engagement.case_closed — the HTTP arm accepts resolved only', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440001:case_closed',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440004',
+      clientCompanyName: 'Northwind Industrial',
+      expertPartyLabel: 'CloudPeak Consulting',
+      caseTitle: 'Flow interview loop',
+      closedDate: '9 Jul 2026',
+      closeReason: 'resolved',
+    };
+
+    it('accepts closeReason "resolved" — the only shape web ever publishes', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'engagement.case_closed', payload: valid }).success
+      ).toBe(true);
+    });
+
+    it('rejects closeReason "auto_inactive" — server-published only, by the case-inactivity sweep, in-process', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'engagement.case_closed',
+        payload: { ...valid, closeReason: 'auto_inactive' },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an unrecognised closeReason value entirely', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'engagement.case_closed',
+        payload: { ...valid, closeReason: 'withdrawn' },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
 });

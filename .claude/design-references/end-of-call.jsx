@@ -12,8 +12,9 @@ import { Check, Star, ArrowRight, RotateCcw, Clock, ShieldCheck, CircleCheck } f
  * ONE QUALIFIED EXCEPTION: the case-resolution prompt. It is consequential and,
  * per BAL-400, not reversible — booking again after resolution starts a NEW case.
  * It is here anyway because most cases would otherwise never be closed
- * deliberately: the client stops booking, 30 days pass, the sweep closes it, and
- * the review email lands a month after the last consultation with poor recall.
+ * deliberately: 30 days pass with no consultation, booking, reschedule,
+ * cancellation, message or file, the sweep closes it, and the review email lands
+ * a month after the last consultation with poor recall.
  * Asking at the moment the client actually knows the answer is the whole point.
  * Because it is consequential, it gets a confirmation step — never a bare tap.
  *

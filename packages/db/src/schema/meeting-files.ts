@@ -34,6 +34,14 @@ import { timestamps, softDelete } from './helpers';
  * here consults `meetings.status`, and no writer may start — "can I still upload after the
  * call ended" is a product rule owned by BAL-132/BAL-134, not a schema one.
  *
+ * ── A LIVE ROW HOLDS ITS CASE OPEN (BAL-572) ──────────────────────────────────────────
+ * The case-inactivity sweep counts an in-call upload as chat activity: a live row on a live
+ * meeting under a live `case` context restarts that case's 30 days, whichever `source` wrote
+ * it (`conversationsRepository.latestChatActivityAtForEngagements`). The read filters no
+ * uploader, so THE ONLY WRITER — `confirm-meeting-file-upload.ts` → `meetingFilesRepository
+ * .add`, behind the meeting-file access gate — MUST keep its party check, and any new writer
+ * (a guest upload, a system attachment) must revisit that read before it ships.
+ *
  * ── `party` IS DERIVED FROM THE GATE'S RESOLVED SIDE. IT IS NEVER A REQUEST FIELD. ─────
  * BAL-408 settled this and it is not re-litigated here. `party` is whatever the
  * participation gate RETURNS as the actor's `side`; the confirm action writes

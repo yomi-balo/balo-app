@@ -32,6 +32,7 @@ import {
 import { expertPartyDisplayName, personDisplayName } from '@balo/shared/parties';
 import { expertCounterpartyLabels } from '@/lib/meetings/expert-counterparty';
 import {
+  CASE_INACTIVITY_DAYS,
   caseConsultationIsUpcoming,
   deriveCaseConsultationState,
   selectCaseNudge,
@@ -123,7 +124,7 @@ function resolveClosedNote(caseRow: CaseEngagementRow): string | null {
   const { closedAt } = caseRow;
   if (closedAt === null) return null;
   if (caseRow.closeReason === 'auto_inactive') {
-    return 'Closed automatically after 30 days without activity. Everything stays available.';
+    return `Closed automatically after ${CASE_INACTIVITY_DAYS} days with no consultations, bookings or messages. Everything stays available.`;
   }
   return 'Marked resolved on ' + formatLongUtc(closedAt) + '. Everything here stays available.';
 }

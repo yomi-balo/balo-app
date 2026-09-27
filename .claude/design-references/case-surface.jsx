@@ -724,7 +724,7 @@ export default function App() {
               <span className="text-sm" style={{ color: C.sub }}>
                 {state === 'resolved'
                   ? 'Marked resolved on 30 Jul. Everything here stays available.'
-                  : 'Closed automatically after 30 days without activity. Everything stays available.'}
+                  : 'Closed automatically after 30 days with no consultations, bookings or messages. Everything stays available.'}
               </span>
             </div>
           )}

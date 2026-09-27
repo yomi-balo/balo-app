@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { render } from '@react-email/render';
@@ -302,27 +302,29 @@ describe('review-nudge — two cadence steps and no third', () => {
 
   /**
    * `close_reason` is a real two-value enum, and step 2's regrounding states WHY the case
-   * closed. A `resolved` case was closed by the CLIENT on purpose — telling them things
-   * "went quiet" is an assertion about an action they took themselves, seven days after
-   * the close email said "That's {case} wrapped up." Mirrors `CaseClosedEmail`.
+   * closed. A `resolved` case was closed by the CLIENT on purpose — telling them it closed
+   * after 30 days with no consultations, bookings or messages is an assertion about an
+   * action they took themselves, seven days after the close email said "That's {case}
+   * wrapped up." Mirrors `CaseClosedEmail`.
    */
   describe('step 2 states the real close reason, never a guessed one', () => {
-    it('an auto_inactive close reads as Balo tidying up', async () => {
+    it('an auto_inactive close states the rule as a fact and reads as Balo tidying up', async () => {
       const html = await renderCopy(
         'review-nudge',
         nudgeData({ cadenceStep: 2, closeReason: 'auto_inactive' })
       );
       expect(html).toContain(
-        'Things went quiet after that, so we closed the case out on 4 Jul rather than leave it hanging.'
+        'worked through it with CloudPeak Consulting. After 30 days with no consultations, bookings or messages, we closed the case out on 4 Jul rather than leave it hanging.'
       );
+      expect(html).not.toContain('quiet');
     });
 
-    it('a resolved close is NEVER described as having gone quiet', async () => {
+    it('a resolved close is NEVER described as an automatic one', async () => {
       const html = await renderCopy(
         'review-nudge',
         nudgeData({ cadenceStep: 2, closeReason: 'resolved' })
       );
-      expect(html).not.toContain('went quiet');
+      expect(html).not.toContain('no consultations, bookings or messages');
       expect(html).not.toContain('rather than leave it hanging');
       expect(html).toContain('and we closed the case out on 4 Jul.');
     });
@@ -330,7 +332,7 @@ describe('review-nudge — two cadence steps and no third', () => {
     it('an absent or unrecognised reason falls back to the neutral wording', async () => {
       for (const over of [{}, { closeReason: 'something_else' }]) {
         const html = await renderCopy('review-nudge', nudgeData({ cadenceStep: 2, ...over }));
-        expect(html).not.toContain('went quiet');
+        expect(html).not.toContain('no consultations, bookings or messages');
         expect(html).toContain('and we closed the case out on 4 Jul.');
       }
     });
@@ -340,7 +342,7 @@ describe('review-nudge — two cadence steps and no third', () => {
         'review-nudge',
         nudgeData({ cadenceStep: 2, engagementKind: 'project', closeReason: 'auto_inactive' })
       );
-      expect(html).not.toContain('went quiet');
+      expect(html).not.toContain('no consultations, bookings or messages');
       expect(html).toContain('it was accepted on 4 Jul');
     });
   });
@@ -350,6 +352,24 @@ describe('review-nudge — two cadence steps and no third', () => {
     expect(caseHtml).toContain('How was your consultation with CloudPeak Consulting?');
     const projectHtml = await renderCopy('review-nudge', nudgeData({ engagementKind: 'project' }));
     expect(projectHtml).toContain('How was working with CloudPeak Consulting?');
+  });
+
+  /**
+   * BAL-572 — `/engagements/{id}` 404s for a CASE by construction (the route's loader
+   * filters engagement_type = project). The nudge footer link must not repeat that dead link.
+   */
+  describe('the footer link matches the engagement kind', () => {
+    it('a CASE nudge links /cases/{id}, never /engagements/{id}', async () => {
+      const html = await renderTemplate('review-nudge', nudgeData({ engagementKind: 'case' }));
+      expect(html).toContain('/cases/eng-1');
+      expect(html).not.toContain('/engagements/eng-1');
+    });
+
+    it('a PROJECT nudge keeps its unchanged /engagements/{id} link', async () => {
+      const html = await renderTemplate('review-nudge', nudgeData({ engagementKind: 'project' }));
+      expect(html).toContain('/engagements/eng-1');
+      expect(html).not.toContain('/cases/eng-1');
+    });
   });
 
   it('runs a user-authored title through sanitizeSubjectTitle', () => {
@@ -394,7 +414,7 @@ describe('engagement-case-closed-client — the fused close email', () => {
     expect(html).toContain('wrapped up');
   });
 
-  it('a quiet-case close reads as tidying up, never as a reprimand', async () => {
+  it('an auto_inactive close reads as tidying up, never as a reprimand', async () => {
     const out = getEmailTemplate(
       'engagement-case-closed-client',
       caseClosedData({ closeReason: 'auto_inactive' })
@@ -404,11 +424,198 @@ describe('engagement-case-closed-client — the fused close email', () => {
     expect(html).toContain('rather than leave it hanging');
   });
 
+  /**
+   * The "What happens now" block is shared by both close reasons, so the book-again line is
+   * pinned on each: a closed case is never reopened, and booking again starts a new one.
+   */
+  it.each(['resolved', 'auto_inactive'] as const)(
+    'closeReason %s: booking again starts a new case',
+    async (closeReason) => {
+      const html = await renderCopy(
+        'engagement-case-closed-client',
+        caseClosedData({ closeReason, reviewToken: undefined })
+      );
+      expect(html).toContain(
+        "If there's more to do, book again with CloudPeak Consulting any time — that starts a new case."
+      );
+      expect(html).not.toContain('Opening a new case');
+    }
+  );
+
   it('puts the record before the ask', async () => {
     const html = await renderCopy('engagement-case-closed-client', caseClosedData());
     expect(html.indexOf('What happens now')).toBeGreaterThan(-1);
     expect(html.indexOf('What happens now')).toBeLessThan(html.indexOf(`${TOKEN}?r=1`));
   });
+
+  /**
+   * BAL-572 — a NO-TOKEN `auto_inactive` close (the sweep never mints one) renders NO
+   * rating content at all: not the stars (already covered by the already-rated-branch suite
+   * above, since this fixture carries no token) and not the "thanks for rating" line either —
+   * there was never a rating occasion to thank for. The +24h nudge (BAL-390) asks instead.
+   */
+  it('a tokenless auto_inactive close shows neither the stars nor "already rated"', async () => {
+    const html = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'auto_inactive', reviewToken: undefined })
+    );
+    expect(html).not.toContain('/review/');
+    expect(html).not.toContain(STAR);
+    expect(html).not.toContain('Thanks for rating this one already');
+  });
+
+  it('"Thanks for rating this one already" stays RESOLVED-only, never auto_inactive', async () => {
+    const resolvedHtml = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'resolved', reviewToken: undefined })
+    );
+    expect(resolvedHtml).toContain('Thanks for rating this one already');
+  });
+
+  /**
+   * BAL-572 — at consultationCount 0 (or absent, the never-consulted case), the
+   * "You worked through it with {expertParty}…" clause is dropped entirely; the rest of the
+   * automatic-close sentence stays.
+   */
+  it('drops "worked through it" at consultationCount 0 on an auto_inactive close', async () => {
+    const html = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'auto_inactive', consultationCount: 0 })
+    );
+    expect(html).not.toContain('worked through it');
+    expect(html).toContain(
+      'has had no consultations, bookings or messages for 30 days, so we closed it out on 3 Aug rather than leave it hanging. Everything from it stays exactly where it is.'
+    );
+    expect(html).not.toContain('quiet');
+  });
+
+  it('keeps "worked through it" on an auto_inactive close with a real count', async () => {
+    const html = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'auto_inactive', consultationCount: 3 })
+    );
+    expect(html).toContain(
+      'has had no consultations, bookings or messages for 30 days, so we closed it out on 3 Aug rather than leave it hanging.'
+    );
+    expect(html).toContain('worked through it with CloudPeak Consulting');
+    expect(html).toContain('across 3 consultations');
+    expect(html).not.toContain('quiet');
+  });
+});
+
+describe('engagement-case-closed-expert — the RECORD-only expert half (BAL-572)', () => {
+  const caseClosedExpertData = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    recipientName: 'Priya',
+    clientCompanyName: 'Northwind Industrial',
+    caseTitle: 'Flow interview stuck on a loop',
+    closedDate: '3 Aug',
+    engagementId: 'eng-1',
+    ...over,
+  });
+
+  it('names the client company and reads as Balo tidying up, no reprimand', async () => {
+    const out = getEmailTemplate('engagement-case-closed-expert', caseClosedExpertData());
+    const html = readable(await render(out.component));
+    expect(out.subject).toBe("We've closed Flow interview stuck on a loop");
+    expect(html).toContain(
+      'with Northwind Industrial has had no consultations, bookings or messages for 30 days, so we closed it out on 3 Aug rather than leave it hanging.'
+    );
+    expect(html).not.toContain('quiet');
+  });
+
+  it('says the client can book again, which starts a new case — never "open a new case"', async () => {
+    const html = await renderCopy('engagement-case-closed-expert', caseClosedExpertData());
+    expect(html).toContain(
+      "If there's more to do, Northwind Industrial can book again any time — that starts a new case."
+    );
+    expect(html).not.toContain('open a new case');
+  });
+
+  it('the preview points at the case page and never says "inactivity"', async () => {
+    const html = await renderCopy('engagement-case-closed-expert', caseClosedExpertData());
+    expect(html).toContain(
+      'Flow interview stuck on a loop has been closed out — everything from it is still on the case page.'
+    );
+    expect(html).not.toContain('inactivity');
+  });
+
+  it('links /cases/{id}, never the recap or the engagements route', async () => {
+    const out = getEmailTemplate('engagement-case-closed-expert', caseClosedExpertData());
+    const html = await render(out.component);
+    expect(html).toContain('/cases/eng-1');
+    expect(html).not.toContain('/meetings/');
+    expect(html).not.toContain('/engagements/');
+  });
+
+  it('carries NO review block — no stars, no token, no "thanks for rating"', async () => {
+    const html = await renderCopy('engagement-case-closed-expert', caseClosedExpertData());
+    expect(html).not.toContain('/review/');
+    expect(html).not.toContain(STAR);
+    expect(html).not.toContain('Thanks for rating');
+  });
+
+  it('drops the consultation sentence at count 0, keeps it at count 1+', async () => {
+    const zero = await renderCopy(
+      'engagement-case-closed-expert',
+      caseClosedExpertData({ consultationCount: 0 })
+    );
+    expect(zero).not.toContain('You worked on it');
+
+    const some = await renderCopy(
+      'engagement-case-closed-expert',
+      caseClosedExpertData({ consultationCount: 3 })
+    );
+    expect(some).toContain('You worked on it across 3 consultations');
+  });
+
+  it('uses no gendered pronoun anywhere in the rendered copy', async () => {
+    const html = await renderCopy('engagement-case-closed-expert', caseClosedExpertData());
+    for (const pronoun of [' he ', ' she ', ' him ', ' her ', ' his ', ' hers ']) {
+      expect(html.toLowerCase()).not.toContain(pronoun);
+    }
+  });
+});
+
+/**
+ * BAL-572 — the help doc states the same auto-close rule the notices above state, so it is
+ * pinned beside them. It is plain Markdown with no module to import, so the file itself is
+ * read: resolved from this file, never from `process.cwd()` (CI may run vitest from the repo
+ * root or from apps/api), and a miss THROWS rather than passing vacuously. Whitespace is
+ * collapsed so a re-wrapped paragraph still matches.
+ */
+function readCasesHelpDoc(): string {
+  const path = fileURLToPath(
+    new URL('../../../../../../docs/help/cases-index.md', import.meta.url)
+  );
+  if (!existsSync(path)) {
+    throw new Error(`Could not locate docs/help/cases-index.md at ${path}`);
+  }
+  return readFileSync(path, 'utf8').replaceAll(/\s+/g, ' ');
+}
+
+describe('docs/help/cases-index.md', () => {
+  it('states the auto-close rule the notices state', () => {
+    const doc = readCasesHelpDoc();
+    expect(doc).toContain('no consultations, bookings or messages');
+    expect(doc).toContain('30 days without a consultation, a booking, or a message or file');
+  });
+
+  it('names every kind of activity that restarts the 30 days', () => {
+    const doc = readCasesHelpDoc();
+    expect(doc).toContain('booking, rescheduling or cancelling a consultation');
+    expect(doc).toContain('in the case chat or during a call');
+  });
+
+  it('says booking again starts a new case', () => {
+    expect(readCasesHelpDoc()).toContain('starts a new case');
+  });
+
+  it.each(['no completed consultation for 30 days', 'fresh case', 'most recently active'])(
+    'no longer says "%s"',
+    (retired) => {
+      expect(readCasesHelpDoc()).not.toContain(retired);
+    }
+  );
 });
 
 describe('engagement-accepted-client — the actor gets their own record', () => {

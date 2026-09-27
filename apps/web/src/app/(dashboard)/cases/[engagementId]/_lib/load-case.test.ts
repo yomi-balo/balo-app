@@ -567,7 +567,7 @@ describe('loadCase — the header', () => {
     seed({ caseRow: { closedAt, closeReason: 'auto_inactive' } });
     const view = await loadOrThrow();
     expect(view.header.closedNote).toBe(
-      'Closed automatically after 30 days without activity. Everything stays available.'
+      'Closed automatically after 30 days with no consultations, bookings or messages. Everything stays available.'
     );
   });
 });

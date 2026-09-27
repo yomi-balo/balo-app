@@ -6,6 +6,7 @@ import {
   eq,
   gt,
   inArray,
+  isNotNull,
   isNull,
   lt,
   max,
@@ -25,6 +26,9 @@ import {
   conversationFiles,
   conversationReadStates,
   conversations,
+  meetingContexts,
+  meetingFiles,
+  meetings,
   users,
   type Conversation,
   type ConversationContext,
@@ -52,9 +56,12 @@ export type AssertConversationContextLabelsMatch = [
   AssertNever<StrayConversationLabel>,
 ];
 
-/** Later of two nullable instants — null only when both are null. */
-function laterOf(a: Date | null, b: Date | null): Date | null {
-  if (a === null) return b;
+/**
+ * Later of two nullable instants — null only when both are null. `a` also takes `undefined`,
+ * so a Map fold can pass `map.get(key)` straight in.
+ */
+function laterOf(a: Date | null | undefined, b: Date | null): Date | null {
+  if (a === null || a === undefined) return b;
   if (b === null) return a;
   return a.getTime() >= b.getTime() ? a : b;
 }
@@ -581,6 +588,150 @@ export const conversationsRepository = {
 
     for (const row of rows) {
       result.set(row.relationshipId, { id: row.id, createdAt: row.createdAt });
+    }
+    return result;
+  },
+
+  /**
+   * THE CASE-INACTIVITY CHAT READ (BAL-572) — for a BATCH of case engagements, the newest live
+   * chat activity from EITHER party: a case-chat message, a case-chat file, or an in-call
+   * upload on one of the case's meetings. It is `lastChatActivityAt` for `isCaseInactive`
+   * (`@balo/shared/engagements`); the case-inactivity sweep reads it beside
+   * `meetingContextsRepository.consultationTimestampsForEngagements`.
+   *
+   * THREE LEGS, TWO SELECTS, awaited in sequence:
+   *  - THE THREAD LEGS. Live `conversation_contexts` (`context_type='engagement'`, the ids)
+   *    joined to a live `conversations` row, each row carrying two correlated scalar `max()`
+   *    subqueries: live `conversation_messages.created_at` (a backward LIMIT-1 scan on
+   *    `conversation_message_thread_idx`) and live `conversation_files.created_at` (on
+   *    `conversation_file_conversation_idx`). Files count for the reason
+   *    `listThreadSummaries`' inbound leg gives: a file can arrive with no message. A message
+   *    sent from the in-call panel (`sent_during_meeting_id` set) is a thread message and
+   *    counts like any other.
+   *  - THE IN-CALL LEG. Live `meeting_contexts` (`context_type='case'`, the ids) → live
+   *    `meetings` → live `meeting_files`, `max(created_at)` per engagement (rides
+   *    `meeting_context_reverse_idx`, then `meeting_file_meeting_idx`). It never goes through
+   *    the thread rows, so a case with no live thread still gets its uploads.
+   *
+   * Every value is folded in with `laterOf`, never a bare `set`, so the newest leg wins in any
+   * row order.
+   *
+   * CONTRACT: an entry for EVERY requested id, `null` when it has no activity. A missing key is
+   * always a bug, never "none". Empty input ⇒ empty Map, NO QUERY.
+   *
+   * ⚠⚠ TENANCY. `conversation_contexts.context_id` and `meeting_contexts.context_id` both have
+   * NO FK and NO RLS, so another tenant's uuid answers silently. The only caller passes
+   * system-scoped ids from `caseEngagementsRepository.listOpenCreatedBefore`, and the answer is
+   * a timestamp, never content. A caller holding a request-sourced id MUST resolve the owning
+   * party and check a capability first (`schema/conversations.ts`, `schema/meeting-contexts.ts`).
+   *
+   * ⚠⚠ THE INVERSE: A MESSAGE, A CASE FILE OR AN IN-CALL UPLOAD NOW HOLDS A CASE OPEN. There is
+   * no sender or uploader filter, because every writer checks the case parties at write time:
+   * messages in `post-case-message.ts` and `post-meeting-message.ts`; case files in
+   * `confirm-case-file-upload.ts` (the only `addFile` caller); uploads in
+   * `confirm-meeting-file-upload.ts` (the only `meetingFilesRepository.add` caller, and
+   * `uploaded_by_user_id` is NOT NULL → `users`, so a guest can never write one). All three
+   * insert paths MUST keep their party check. A future NON-PARTY writer — guest authorship or
+   * uploads, a system auto-post, admin chat — must revisit the no-filter rule, or it will hold
+   * cases open that no party touched.
+   *
+   * ⚠ NO `now` BOUND. The sweep re-checks each case against the tick's `now` just before it
+   * closes it, so a `created_at <= now` bound would hide a message posted mid-tick. A
+   * `created_at` a few seconds ahead of the sweep's clock reads as activity, which is the safe
+   * direction for a close.
+   *
+   * ⚠ THE THREAD LEGS READ THREAD ACTIVITY, WHICH IS CASE ACTIVITY ONLY FOR A CASE. A case
+   * thread is minted fresh with the case (`caseEngagementsRepository.create`); a project's
+   * `engagement` context is attached to its relationship's EXISTING thread at kickoff, so it
+   * carries the pre-sales messages (`projectEngagementsRepository`). Reading a project through
+   * this needs its own ruling.
+   *
+   * ⚠ THE IN-CALL LEG READS BOTH `meeting_files` SOURCES — the chat paperclip (`chat`) and the
+   * Files tab (`files_tab`) — with no `source` filter: `source` carries no authorization weight,
+   * and the case Files list merges both. Recordings and transcripts live in other tables and
+   * are never read. An upload on an ended or cancelled meeting counts; whether one may be made
+   * is the meeting-file gate's rule, not this read's.
+   */
+  async latestChatActivityAtForEngagements(
+    engagementIds: readonly string[]
+  ): Promise<Map<string, Date | null>> {
+    const result = new Map<string, Date | null>();
+    for (const engagementId of engagementIds) {
+      result.set(engagementId, null);
+    }
+    if (result.size === 0) {
+      return result;
+    }
+    const ids = [...result.keys()];
+
+    // `mapWith(column)` types each subquery as the column's non-null `Date`, but a thread with
+    // no live message (or no live file) yields SQL NULL, which never reaches the decoder. The
+    // assertion restores the `| null` the query can return.
+    const threadRows = await db
+      .select({
+        engagementId: conversationContexts.contextId,
+        lastMessageAt: sql`(
+          select max(${conversationMessages.createdAt}) from ${conversationMessages}
+          where ${conversationMessages.conversationId} = ${conversations.id}
+            and ${conversationMessages.deletedAt} is null
+        )`.mapWith(conversationMessages.createdAt) as SQL<Date | null>,
+        lastFileAt: sql`(
+          select max(${conversationFiles.createdAt}) from ${conversationFiles}
+          where ${conversationFiles.conversationId} = ${conversations.id}
+            and ${conversationFiles.deletedAt} is null
+        )`.mapWith(conversationFiles.createdAt) as SQL<Date | null>,
+      })
+      .from(conversationContexts)
+      .innerJoin(
+        conversations,
+        and(
+          eq(conversations.id, conversationContexts.conversationId),
+          isNull(conversations.deletedAt)
+        )
+      )
+      .where(
+        and(
+          eq(conversationContexts.contextType, 'engagement'),
+          inArray(conversationContexts.contextId, ids),
+          isNull(conversationContexts.deletedAt)
+        )
+      );
+
+    // `context_id` is NULL only for `admin` (the biconditional CHECK); the `isNotNull` restates
+    // that for the type, so the id selects as a plain string.
+    const uploadRows = await db
+      .select({
+        engagementId: sql<string>`${meetingContexts.contextId}`,
+        // `max()` over a column maps through that column, so this is a real `Date`.
+        lastUploadAt: max(meetingFiles.createdAt),
+      })
+      .from(meetingContexts)
+      .innerJoin(
+        meetings,
+        and(eq(meetings.id, meetingContexts.meetingId), isNull(meetings.deletedAt))
+      )
+      .innerJoin(
+        meetingFiles,
+        and(eq(meetingFiles.meetingId, meetings.id), isNull(meetingFiles.deletedAt))
+      )
+      .where(
+        and(
+          eq(meetingContexts.contextType, 'case'),
+          inArray(meetingContexts.contextId, ids),
+          isNotNull(meetingContexts.contextId),
+          isNull(meetingContexts.deletedAt)
+        )
+      )
+      .groupBy(meetingContexts.contextId);
+
+    for (const row of threadRows) {
+      result.set(
+        row.engagementId,
+        laterOf(result.get(row.engagementId), laterOf(row.lastMessageAt, row.lastFileAt))
+      );
+    }
+    for (const row of uploadRows) {
+      result.set(row.engagementId, laterOf(result.get(row.engagementId), row.lastUploadAt));
     }
     return result;
   },

@@ -30,7 +30,7 @@ import type { RecapActionResult } from './_types/recap-action-types';
  * arbitrary `case_resolved.source` values and poison the one measurement this property exists
  * for. `.default('recap')` keeps every existing recap call site byte-identical.
  *
- * ⚠⚠ IT IS DELIBERATELY NARROWER THAN `CaseResolveSource`, WHICH NOW HAS THREE MEMBERS. THIS
+ * ⚠⚠ IT IS DELIBERATELY NARROWER THAN `CaseResolveSource`, WHICH NOW HAS FOUR MEMBERS. THIS
  * action serves exactly TWO surfaces — the recap and the end-of-call screen — and BAL-421's
  * case surface has its OWN action at `cases/[engagementId]/_actions/resolve-case.ts` that
  * threads `case_surface` itself. Widening this enum to the full union would let a recap caller
@@ -65,8 +65,9 @@ const NOT_YET_HELD = 'This case can only be resolved from a consultation that ha
  * ABOVE. It is anchored on an `engagementId` with NO meeting in scope, so it cannot clear this
  * action's meeting-shaped gate at all. What must never fork — the post-commit half — does not:
  * both actions call the SAME `@/lib/cases/close-case-effects` and emit the SAME `case_resolved`
- * event, differing only in `source`. The 30-day inactivity sweep widens `CaseResolveSource` the
- * same way when it starts emitting.
+ * event, differing only in `source`. BAL-572's hourly inactivity sweep (`apps/api`) is the
+ * fourth entry point onto `close()`, and it widens `CaseResolveSource` the same way, with
+ * `source: 'sweep'` and `distinct_id: 'system:case-inactivity'` (there is no acting user).
  *
  * ⚠⚠ THE FOUR AUTHORIZATION GATES LIVE IN `authorizeRecapCaseMutation`, SHARED WITH
  * `dismiss-resolution-request.ts` — signed-in wrapper, strict Zod (meetingId is the ONLY

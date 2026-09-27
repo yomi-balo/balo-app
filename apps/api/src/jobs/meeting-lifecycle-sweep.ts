@@ -98,8 +98,14 @@ export const MEETING_LIFECYCLE_SWEEP_CRON = '* * * * *'; // every minute
 /**
  * ⚠ A LOOKBACK FLOOR, NOT A WINDOW. Anything older than this is a data-repair problem, not a
  * live meeting, and scanning it every minute forever would grow without bound.
+ *
+ * ⚠ EXPORTED for `case-inactivity-sweep.test.ts` (BAL-572), which pins
+ * `MEETING_TOKEN_TTL_AFTER_END_MS >= LIFECYCLE_LOOKBACK_MS` — that sweep's live-meeting
+ * exclusion floor is derived from the join-token TTL, and it must stay at least as wide as
+ * this lookback so every meeting the lifecycle sweep still manages is covered. No other
+ * behaviour here changes.
  */
-const LIFECYCLE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+export const LIFECYCLE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 /** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
 export const MEETING_LIFECYCLE_BATCH_LIMIT = 200;

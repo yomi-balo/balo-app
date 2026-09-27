@@ -30,11 +30,12 @@ import { Link2Off } from 'lucide-react';
  * `/meetings/{meetingId}/end` reachable** — and only if the route the CTA actually points
  * at can, by then, be reached with the control on it.
  *
- * ⚠ AND IT NAMES NO ENGAGEMENT KIND. `listClosedBetween` returns `[]` until BAL-420/421
- * give `close()` a caller (D4/D5), so EVERY live review link in production today is a
- * PROJECT link — "rate from the case" named the one kind that cannot yet produce one.
- * The generic noun is also what keeps this card free of any oracle: it renders
- * byte-identically for six different outcomes and must not vary by engagement.
+ * ⚠ AND IT NAMES NO ENGAGEMENT KIND, DELIBERATELY, EVEN THOUGH `close()` NOW HAS CALLERS ON
+ * BOTH KINDS. BAL-421's case-surface resolve and BAL-572's hourly inactivity sweep both stamp
+ * `closed_at`, so "rate from the case" would no longer be a false claim on its own — but
+ * naming the kind here would still turn this card into an oracle. The generic noun is what
+ * keeps it free of one: it renders byte-identically for six different outcomes and must not
+ * vary by engagement.
  *
  * DRAFT COPY — pending MJ sign-off. Warm, blameless, and it points at a real next step.
  */

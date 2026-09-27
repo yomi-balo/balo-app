@@ -257,7 +257,7 @@ export const projectDeliveryStatusEnum = pgEnum('project_delivery_status', [
 
 /**
  * Why a case was closed (BAL-417). `resolved` = a client-side member closed it
- * deliberately (`closed_by_user_id` NOT NULL). `auto_inactive` = the BAL-420
+ * deliberately (`closed_by_user_id` NOT NULL). `auto_inactive` = the BAL-572
  * inactivity sweep closed it (`closed_by_user_id` NULL — no human actor; the
  * ADR-1030 system-actor attribution exemption, same ruling as BAL-387).
  * Enforced by CHECK `case_engagement_close_coherent`.
@@ -760,7 +760,10 @@ export const transcriptArtifactKindEnum = pgEnum('transcript_artifact_kind', [
  *     The "ZERO code change" exclusion above is PINNED as of BAL-425 by 'a CANCELLED future
  *     meeting is NOT upcoming' and composition case 7 in
  *     `repositories/meeting-contexts.integration.test.ts` — a new label that should also be
- *     excluded needs a sibling case there, not just a reading of this list.
+ *     excluded needs a sibling case there, not just a reading of this list. Its THIRD anchor,
+ *     `lastSchedulingActivityAt` (BAL-572), is STATUS-BLIND on purpose: it reads the meeting's
+ *     booked / rescheduled / cancelled audit rows whatever the status, so a new label needs no
+ *     change there.
  *   · `repositories/_shared/consultation-count.ts` — the PUBLIC "sessions" stat, gated on
  *     `ended` + `outcome='completed'`.
  *

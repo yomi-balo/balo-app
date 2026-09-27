@@ -54,7 +54,7 @@ import { timestamps, softDelete } from './helpers';
  * NO RLS (matching `meetings` / `meeting_contexts` and the credit precedents).
  *
  * ADR-1030 SYSTEM-ACTOR ATTRIBUTION EXEMPTION (owner-ruled; the same ruling as BAL-387's
- * transcript pipeline and BAL-420's `auto_inactive` case close). Presence is a MACHINE
+ * transcript pipeline and the BAL-572 sweep's `auto_inactive` case close). Presence is a MACHINE
  * OBSERVATION — BAL-134's Daily `participant-joined`/`participant-left` webhooks — so there
  * is no human actor to name, and the write is exempt from durable ATTRIBUTION because all
  * three prongs hold: (1) it changes no party's authority or capability (a presence row
