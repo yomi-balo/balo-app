@@ -20,6 +20,9 @@ interface CalendarConnectionCardProps {
   readonly slotState: CalendarSlotState;
   readonly connection: CalendarConnection | undefined;
   readonly pending: boolean;
+  /** BAL-576 — the connection bookings actually land on, across the expert's WHOLE set of
+   *  connections (not just this row's). Threaded straight to the target-calendar panel. */
+  readonly bookingTarget: CalendarConnection | undefined;
   readonly onConnect: (provider: CalendarProvider) => void;
   readonly onCancelConnect: (provider: CalendarProvider) => void;
   readonly onReconnect: (provider: CalendarProvider) => void;
@@ -98,6 +101,7 @@ export function CalendarConnectionCard({
   slotState,
   connection,
   pending,
+  bookingTarget,
   onConnect,
   onCancelConnect,
   onReconnect,
@@ -136,6 +140,7 @@ export function CalendarConnectionCard({
         provider={provider}
         pending={pending}
         disabled={disabled}
+        bookingTarget={bookingTarget}
         onChange={onChangeTarget}
       />
     </>
@@ -156,7 +161,13 @@ export function CalendarConnectionCard({
       case 'reconnect_needed':
         return (
           <>
-            <CalendarReconnectNotice onReconnect={() => onReconnect(provider)} />
+            <CalendarReconnectNotice
+              onReconnect={() => onReconnect(provider)}
+              // `deriveSlotState` never reaches `reconnect_needed` without a `connection`
+              // (calendar-slot-state.ts); `?? true` is a defensive fallback for that
+              // unreachable case, and defaults to the pause claim — the fail-safe direction.
+              checkedForBusyTime={connection?.checkedForBusyTime ?? true}
+            />
             {connection && (
               <div aria-disabled="true" className={DIMMED_WRAPPER_CLASS}>
                 {renderPanels(connection, true)}

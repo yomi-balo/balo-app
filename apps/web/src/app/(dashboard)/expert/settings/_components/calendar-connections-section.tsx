@@ -119,6 +119,18 @@ function withTargetCalendar(
   return connections.map((c) => (c.provider === provider ? { ...c, targetCalendarId } : c));
 }
 
+/** The success toast after a target-calendar pick: the TARGET wording when `isTarget`, else the
+ *  STANDBY wording naming the account that is. Shared by both `handleChangeTarget` branches. */
+function bookingTargetToastMessage(
+  name: string,
+  isTarget: boolean,
+  standbyProvider: CalendarProvider
+): string {
+  return isTarget
+    ? `Bookings will go to ${name}`
+    : `Saved — bookings will go to ${name} if ${PROVIDER_META[standbyProvider].label} is disconnected`;
+}
+
 /** One row of the Calendars card: a connection, or an in-flight attempt, with its slot state. */
 export interface CalendarRowModel {
   readonly key: string;
@@ -216,6 +228,10 @@ export function CalendarConnectionsSection(): React.JSX.Element {
 
   const [sectionState, setSectionState] = useState<CalendarSectionState>('loading');
   const [connections, setConnections] = useState<CalendarConnection[]>([]);
+  // BAL-576 — the ONE connection bookings actually land on, derived from the server-computed
+  // flag (never re-derived from `credentialStatus`/`targetCalendarId` here — see the type's
+  // docblock). Declared early: `handleChangeTarget` below needs it.
+  const bookingTarget = useMemo(() => connections.find((c) => c.isBookingTarget), [connections]);
   const [transient, setTransient] = useState<
     Partial<Record<CalendarProvider, CalendarTransientState>>
   >({});
@@ -537,10 +553,20 @@ export function CalendarConnectionsSection(): React.JSX.Element {
   );
 
   // T22 — book-into Select changed.
+  //
+  // BAL-576 — "Bookings will go to {name}" is only true when this pick landed on (or kept) the
+  // booking target; a standby card gets the conditional wording instead. Whether this connection
+  // BECOMES the target on this pick is knowable client-side only when it was already writable
+  // (`previousTargetId !== null`) — the pre-pick `isBookingTarget` flag still holds, because the
+  // pick changes which CALENDAR it writes to, not WHETHER it's the target. A null→set pick is
+  // the one case that can flip targetness (only a writable connection can be the target), and
+  // which connection wins depends on `OLDEST_LIVE_FIRST` order the client does not have — so
+  // that case alone refetches and reads the server's own flag off the returned row.
   const handleChangeTarget = useCallback(
     async (provider: CalendarProvider, calendarId: string) => {
       const connection = connections.find((c) => c.provider === provider);
       const previousTargetId = connection?.targetCalendarId ?? null;
+      const becomesWritable = previousTargetId === null;
       const name =
         connection?.subCalendars.find((s) => s.id === calendarId)?.name ?? 'this calendar';
 
@@ -551,7 +577,31 @@ export function CalendarConnectionsSection(): React.JSX.Element {
       const result = await setTargetCalendarAction({ targetCalendarId: calendarId, provider });
 
       if (result.success) {
-        toast.success(`Bookings will go to ${name}`);
+        if (becomesWritable) {
+          const refetched = await fetchConnections({ silent: true });
+          if (refetched === null) {
+            // No server answer after a pick that could have changed WHO the target is — we
+            // don't know which account gets bookings, so neither the target nor the standby
+            // wording (which also names an account) would be trustworthy. Same reasoning as
+            // panel branch 3a: no claim beats a false one.
+            toast.success('Saved');
+          } else {
+            const refetchedRow = refetched.find((c) => c.provider === provider);
+            const standbyProvider = refetched.find((c) => c.isBookingTarget)?.provider ?? provider;
+            toast.success(
+              bookingTargetToastMessage(
+                name,
+                refetchedRow?.isBookingTarget ?? false,
+                standbyProvider
+              )
+            );
+          }
+        } else {
+          const standbyProvider = bookingTarget?.provider ?? provider;
+          toast.success(
+            bookingTargetToastMessage(name, connection?.isBookingTarget ?? false, standbyProvider)
+          );
+        }
       } else {
         // Reverts to the value captured BEFORE the await, never to a hardcoded default.
         setConnections((prev) => withTargetCalendar(prev, provider, previousTargetId));
@@ -559,7 +609,7 @@ export function CalendarConnectionsSection(): React.JSX.Element {
       }
       unmarkPending(provider);
     },
-    [connections, markPending, unmarkPending]
+    [connections, bookingTarget, markPending, unmarkPending, fetchConnections]
   );
 
   // ── Mount + OAuth callback params (merged into one effect — BAL-396's race fix) ──
@@ -765,6 +815,7 @@ export function CalendarConnectionsSection(): React.JSX.Element {
                     provider={row.provider}
                     slotState={row.slotState}
                     connection={row.connection}
+                    bookingTarget={bookingTarget}
                     // ⚠ PENDING IS TRACKED PER PROVIDER, NOT PER ROW — a DELIBERATE
                     // simplification of plan §6.1, not an oversight. One in-flight toggle
                     // therefore disables every switch on that connection. It is coarser and

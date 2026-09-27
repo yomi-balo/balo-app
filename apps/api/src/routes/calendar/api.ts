@@ -7,6 +7,8 @@ import {
 } from '@balo/db';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { disconnectProvider } from '../../services/calendar/apiroc-connection.js';
+import { pickBookingWriteTarget } from '../../services/calendar/booking-write-target.js';
+import { isConsideredForBusyRead } from '../../services/availability/vendor-busy.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { enqueueSubscriptionReconcile } from '../../jobs/calendar-subscription-reconcile.js';
 import { reconcileExpertSearchability } from '../../services/experts/searchability.js';
@@ -69,7 +71,9 @@ function mapSubCalendar(sub: CalendarSubCalendar): SubCalendar {
  */
 function mapConnectionSummary(
   connection: DbCalendarConnection,
-  subCalendars: CalendarSubCalendar[]
+  subCalendars: CalendarSubCalendar[],
+  isBookingTarget: boolean,
+  checkedForBusyTime: boolean
 ): CalendarConnection {
   return {
     // BAL-396 fix round 2, Finding 6 — see the `CalendarConnection.provider` docblock (types.ts).
@@ -79,6 +83,8 @@ function mapConnectionSummary(
     lastSyncedAt: connection.lastSyncedAt?.toISOString() ?? null,
     targetCalendarId: connection.targetCalendarId,
     subCalendars: subCalendars.map(mapSubCalendar),
+    isBookingTarget,
+    checkedForBusyTime,
   };
 }
 
@@ -171,12 +177,34 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
         const allConnections =
           await calendarRepository.listConnectionsByExpertProfileId(expertProfileId);
 
+        // BAL-576 — computed ONCE, before the map, over `allConnections` in the repository's own
+        // `OLDEST_LIVE_FIRST` order (never re-sorted or filtered — see the helper's docblock).
+        // Compared by row id, never by provider, since a provider may hold more than one row.
+        const bookingTarget = pickBookingWriteTarget(allConnections);
+
+        // Would breaking THIS connection block bookings? Same rule `listBusyBlocks` applies
+        // (`isConsideredForBusyRead`), read off the same repository projection it uses — never
+        // re-derived from `credentialStatus`/sub-calendars here.
+        const busyReadTargets = await calendarRepository.listBusyReadTargets(expertProfileId);
+        const checkedForBusyTimeByConnectionId = new Map(
+          busyReadTargets.map((target) => [target.connectionId, isConsideredForBusyRead(target)])
+        );
+
         const connections = await Promise.all(
           allConnections.map(async (connection) => {
             const subCalendars = await calendarRepository.findSubCalendarsByConnectionId(
               connection.id
             );
-            return mapConnectionSummary(connection, subCalendars);
+            return mapConnectionSummary(
+              connection,
+              subCalendars,
+              connection.id === bookingTarget?.id,
+              // A missing row means a connection created between the two reads (both filter on
+              // `expertProfileId` + `deletedAt IS NULL`). Default to `true`: a spurious "bookings
+              // are paused" only prompts a reconnect, while omitting a real pause hides that the
+              // expert can't be booked.
+              checkedForBusyTimeByConnectionId.get(connection.id) ?? true
+            );
           })
         );
 

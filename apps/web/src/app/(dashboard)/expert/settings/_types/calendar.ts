@@ -39,4 +39,16 @@ export interface CalendarConnection {
   lastSyncedAt: string | null;
   targetCalendarId: string | null;
   subCalendars: SubCalendar[];
+  /**
+   * BAL-576 — is THIS the one connection bookings actually land on? The SERVER computes this
+   * (`pickBookingWriteTarget`, the same rule the consultation-event projection writes through)
+   * — the client must never re-derive it. Only one connection can be `true` at a time.
+   */
+  isBookingTarget: boolean;
+  /**
+   * BAL-576 round 2 — would BREAKING this connection actually block bookings? The SERVER
+   * computes this (`isConsideredForBusyRead`, the same rule the vendor busy read applies) — the
+   * client must never re-derive it from `credentialStatus` or `subCalendars` here.
+   */
+  checkedForBusyTime: boolean;
 }

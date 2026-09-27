@@ -90,18 +90,23 @@ describe('CalendarReconnectRequiredEmail (BAL-396 §7)', () => {
   });
 
   describe('stillSearchable === true (a second connection keeps the expert listed)', () => {
-    it('does NOT claim a search pause, and names the other calendar covering the listing', async () => {
+    it('does NOT claim a search pause or a double-booking risk, and states the busy-check gap plainly', async () => {
       const html = clean(
         await render(CalendarReconnectRequiredEmail(props({ stillSearchable: true })))
       );
       expect(html).not.toMatch(/won't appear in Balo search/i);
       expect(html).not.toMatch(/public profile link is on hold/i);
-      expect(html).toMatch(/other connected calendar is still covering/i);
+      expect(html).not.toMatch(/double-booked/i);
+      expect(html).not.toMatch(/still covering/i);
+      expect(html).toMatch(/can't check it for busy time/i);
     });
 
-    it('still drives the reconnect by naming the invisible-busy-time risk', async () => {
-      const html = await render(CalendarReconnectRequiredEmail(props({ stillSearchable: true })));
-      expect(html).toMatch(/busy time on it is no longer being checked/i);
+    it('confirms the expert is still appearing in search and that bookings are paused', async () => {
+      const html = clean(
+        await render(CalendarReconnectRequiredEmail(props({ stillSearchable: true })))
+      );
+      expect(html).toMatch(/still appearing in Balo search/i);
+      expect(html).toMatch(/paused bookings with you/i);
     });
   });
 });
@@ -128,7 +133,7 @@ describe('getEmailTemplate — calendar-reconnect-required factory', () => {
       provider: 'google',
       stillSearchable: true,
     });
-    expect(out.subject).toBe('Reconnect your calendar to keep your availability accurate');
+    expect(out.subject).toBe('Reconnect your calendar so clients can book you again');
   });
 
   it('resolves the Microsoft 365 label', async () => {
@@ -180,6 +185,6 @@ describe('getEmailTemplate — calendar-reconnect-required factory', () => {
       stillSearchable: true,
     });
     const html = clean(await render(out.component));
-    expect(html).toMatch(/other connected calendar is still covering/i);
+    expect(html).toMatch(/paused bookings with you/i);
   });
 });

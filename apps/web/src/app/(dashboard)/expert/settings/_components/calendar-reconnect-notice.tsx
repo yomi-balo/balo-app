@@ -3,6 +3,12 @@ import { Button } from '@/components/ui/button';
 
 interface CalendarReconnectNoticeProps {
   readonly onReconnect: () => void;
+  /**
+   * Whether this connection is read for busy time. A provisioned connection with no
+   * conflict-checked calendar is not (`isConsideredForBusyRead`), so breaking it leaves the
+   * expert bookable — the pause claim below only holds when `true`.
+   */
+  readonly checkedForBusyTime: boolean;
 }
 
 /**
@@ -12,6 +18,7 @@ interface CalendarReconnectNoticeProps {
  */
 export function CalendarReconnectNotice({
   onReconnect,
+  checkedForBusyTime,
 }: Readonly<CalendarReconnectNoticeProps>): React.JSX.Element {
   return (
     <div className="bg-warning/10 border-warning/30 flex flex-col gap-2.5 rounded-lg border p-3 sm:flex-row sm:items-start sm:justify-between">
@@ -22,8 +29,10 @@ export function CalendarReconnectNotice({
         />
         <p className="text-foreground text-[12.5px] leading-relaxed">
           We&apos;ve lost access to this calendar — this usually happens after a password change, or
-          when calendar access is turned off. Your current availability still shows, but new changes
-          won&apos;t sync until you reconnect.
+          when calendar access is turned off.{' '}
+          {checkedForBusyTime
+            ? "We can't check it for busy time, so bookings with you are paused until you reconnect."
+            : "It won't sync until you reconnect."}
         </p>
       </div>
       {/* Warning-toned, matching the structurally-parallel "Fix permissions" CTA in

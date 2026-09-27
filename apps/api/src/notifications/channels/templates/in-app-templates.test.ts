@@ -972,13 +972,16 @@ describe('getInAppTemplate', () => {
       expect(result.body).toMatch(/stopped appearing in search/i);
     });
 
-    it('does NOT claim a search pause when stillSearchable is true, and names the other calendar', () => {
+    it('states bookings are paused (never a search pause) and confirms search visibility when stillSearchable is true', () => {
       const result = getInAppTemplate('calendar-reconnect-required', {
         provider: 'google',
         stillSearchable: true,
       });
+      expect(result.body).toMatch(/bookings with you are paused/i);
+      expect(result.body).toMatch(/still appearing in search/i);
+      expect(result.body).not.toMatch(/still covering/i);
+      expect(result.body).not.toMatch(/isn't being checked/i);
       expect(result.body).not.toMatch(/stopped appearing in search/i);
-      expect(result.body).toMatch(/other connected calendar is still covering/i);
     });
   });
 

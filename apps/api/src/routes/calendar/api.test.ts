@@ -10,6 +10,7 @@ const {
   mockUpdateConflictCheck,
   mockUpdateTargetCalendarIdForProvider,
   mockSoftDeleteConnection,
+  mockListBusyReadTargets,
   mockDisconnectProvider,
   mockEnqueueAvailabilityCacheRebuild,
   mockEnqueueSubscriptionReconcile,
@@ -22,6 +23,7 @@ const {
   mockUpdateConflictCheck: vi.fn(),
   mockUpdateTargetCalendarIdForProvider: vi.fn(),
   mockSoftDeleteConnection: vi.fn(),
+  mockListBusyReadTargets: vi.fn(),
   mockDisconnectProvider: vi.fn(),
   mockEnqueueAvailabilityCacheRebuild: vi.fn(),
   mockEnqueueSubscriptionReconcile: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock('@balo/db', () => ({
     updateConflictCheck: mockUpdateConflictCheck,
     updateTargetCalendarIdForProvider: mockUpdateTargetCalendarIdForProvider,
     softDeleteConnection: mockSoftDeleteConnection,
+    listBusyReadTargets: mockListBusyReadTargets,
   },
 }));
 
@@ -124,6 +127,18 @@ function buildSubCalendar(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function buildBusyReadTarget(overrides: Record<string, unknown> = {}) {
+  return {
+    connectionId: 'conn-1',
+    provider: 'google',
+    endUserAccountId: 'eua-1',
+    credentialStatus: 'ACTIVE',
+    calendarIds: ['cal-primary'],
+    provisioned: true,
+    ...overrides,
+  };
+}
+
 describe('calendar API routes (BAL-396)', () => {
   let app: FastifyInstance;
 
@@ -140,6 +155,7 @@ describe('calendar API routes (BAL-396)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReconcileExpertSearchability.mockResolvedValue({ changed: false });
+    mockListBusyReadTargets.mockResolvedValue([]);
   });
 
   // ── GET /api/calendar/connection ────────────────────────────────
@@ -183,6 +199,10 @@ describe('calendar API routes (BAL-396)', () => {
         buildConnection({ id: 'conn-2', provider: 'microsoft', targetCalendarId: 'cal-ms' }),
       ]);
       mockFindSubCalendarsByConnectionId.mockResolvedValue([buildSubCalendar()]);
+      mockListBusyReadTargets.mockResolvedValue([
+        buildBusyReadTarget(),
+        buildBusyReadTarget({ connectionId: 'conn-2', provider: 'microsoft' }),
+      ]);
 
       const res = await app.inject({
         method: 'GET',
@@ -211,8 +231,113 @@ describe('calendar API routes (BAL-396)', () => {
             color: undefined,
           },
         ],
+        // BAL-576 — the FIRST (oldest-live-first-ordered) writable row is the booking target.
+        isBookingTarget: true,
+        // BAL-576 round 2 — provisioned with a conflict-checked calendar: breaking it blocks
+        // bookings.
+        checkedForBusyTime: true,
       });
       expect(body.connections[1].provider).toBe('microsoft');
+      // BAL-576 — both rows are ACTIVE with a target calendar; only the first one is the
+      // booking target. A per-row (`isWritable`-shaped) regression would make this `true`.
+      expect(body.connections[1].isBookingTarget).toBe(false);
+    });
+
+    // BAL-576 — the target follows the repository's own OLDEST_LIVE_FIRST order, never
+    // credential health alone: an EXPIRED older row cedes the target to the newer ACTIVE one.
+    it('gives the booking-target flag to the newer connection when the older one is EXPIRED', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ id: 'conn-1', credentialStatus: 'EXPIRED' }),
+        buildConnection({ id: 'conn-2', provider: 'microsoft', targetCalendarId: 'cal-ms' }),
+      ]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      const body = res.json();
+      expect(body.connections.map((c: { isBookingTarget: boolean }) => c.isBookingTarget)).toEqual([
+        false,
+        true,
+      ]);
+    });
+
+    it('gives every connection isBookingTarget: false when none is writable', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ id: 'conn-1', credentialStatus: 'EXPIRED' }),
+        buildConnection({ id: 'conn-2', provider: 'microsoft', targetCalendarId: null }),
+      ]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      const body = res.json();
+      expect(body.connections.map((c: { isBookingTarget: boolean }) => c.isBookingTarget)).toEqual([
+        false,
+        false,
+      ]);
+    });
+
+    // BAL-576 round 2 — `checkedForBusyTime` answers "would breaking THIS connection block
+    // bookings?", the same rule `listBusyBlocks` applies (`isConsideredForBusyRead`), read off
+    // `listBusyReadTargets` and matched by `connectionId`.
+    it('checkedForBusyTime is true for a connection with a conflict-checked calendar', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([buildConnection()]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([buildSubCalendar()]);
+      mockListBusyReadTargets.mockResolvedValue([
+        buildBusyReadTarget({ provisioned: true, calendarIds: ['cal-primary'] }),
+      ]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.json().connections[0].checkedForBusyTime).toBe(true);
+    });
+
+    it('checkedForBusyTime is false for a provisioned connection with no conflict-checked calendar', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([buildConnection()]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([
+        buildSubCalendar({ conflictCheck: false }),
+      ]);
+      mockListBusyReadTargets.mockResolvedValue([
+        buildBusyReadTarget({ provisioned: true, calendarIds: [] }),
+      ]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.json().connections[0].checkedForBusyTime).toBe(false);
+    });
+
+    it('checkedForBusyTime is true for an unprovisioned connection (nothing listed to check yet)', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ credentialStatus: 'SYNC_PENDING' }),
+      ]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([]);
+      mockListBusyReadTargets.mockResolvedValue([
+        buildBusyReadTarget({ provisioned: false, calendarIds: [] }),
+      ]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      expect(res.json().connections[0].checkedForBusyTime).toBe(true);
     });
 
     // BAL-397 — this is the regression the deleted `toLegacyStatus` adapter used to cause:

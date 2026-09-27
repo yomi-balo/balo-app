@@ -661,13 +661,16 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // is the delivering expert. Straight into the calendar tab — the whole point of the nudge.
   //
   // BAL-414 (D10, addendum) — branches on `stillSearchable`, the SAME derived value the DB
-  // de-list decision used (never recomputed here): a multi-provider expert whose other
-  // connection is still ACTIVE stays searchable, so the body must not claim a search pause.
+  // de-list decision used (never recomputed here). BOTH arms are unbookable: the busy check
+  // fails closed (`vendor-busy.ts`), so a broken connection pauses bookings regardless of
+  // whether the expert stays searchable. The arms differ ONLY on search visibility — a
+  // multi-provider expert whose other connection is still ACTIVE stays in search; one with no
+  // other live connection does not.
   'calendar-reconnect-required': (data) => {
     const providerLabel = calendarProviderLabel(data.provider);
     const body =
       data.stillSearchable === true
-        ? `Balo lost access to your ${providerLabel} — busy time on it isn't being checked before a booking until it's reconnected. Your other connected calendar is still covering your search listing.`
+        ? `Balo lost access to your ${providerLabel}. We can't check it for busy time, so bookings with you are paused until it's reconnected. You're still appearing in search.`
         : // UX WARNING (fix round 1) — the email version already states the public-profile
           // pause (D1's other consequence); this in-app body previously omitted it, which is
           // exactly what made the RESTORE notice ("...public profile are live again") read as
