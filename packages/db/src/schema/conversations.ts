@@ -74,6 +74,15 @@ export const conversations = pgTable('conversations', {
  * discharged for the `engagement` arm; the `relationship` arm keeps its shipped gate
  * (`apps/web/src/lib/project-request/resolve-conversation-access.ts`).
  *
+ * ONE SYSTEM-SCOPED READER IS EXEMPT, BY DESIGN: `conversationsRepository
+ * .latestChatActivityAtForEngagements` (BAL-572, the case-inactivity sweep's chat read). It
+ * resolves `engagement` contexts with no party check because its one caller passes ids from
+ * `caseEngagementsRepository.listOpenCreatedBefore`, and it returns a timestamp per id, never
+ * content. ⚠ AND THE INVERSE NOW BINDS THE WRITERS: a live message or file in a case thread
+ * holds that case open for 30 days, from either party, with no sender filter on the read. So
+ * every insert path into `conversation_messages` / `conversation_files` on a case thread MUST
+ * keep its party check — an unchecked writer could hold another tenant's case open at will.
+ *
  * ⚠⚠ LIFECYCLE OBLIGATION — THE SIBLING OF THE TENANCY ONE, AND IT ARISES FROM THE SAME
  * MISSING FK. `context_id` points at nothing the database enforces, so DELETING THE ANCHOR
  * DELETES NOTHING HERE. Before BAL-424 the three messaging tables FK'd

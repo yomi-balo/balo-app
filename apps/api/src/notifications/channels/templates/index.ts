@@ -325,7 +325,7 @@ function engagementKindOf(value: unknown): 'project' | 'case' {
  * one of the two enum values.
  *
  * ⚠ DELIBERATELY THREE-VALUED, unlike `engagement-case-closed-client`'s inline
- * `wentQuiet ? 'auto_inactive' : 'resolved'`. That template REQUIRES a reason (its whole
+ * `autoClosed ? 'auto_inactive' : 'resolved'`. That template REQUIRES a reason (its whole
  * body branches on one), so collapsing the unknown case to `resolved` is right there.
  * The nudge does not: `undefined` selects reason-blind wording that is true whichever
  * way the case closed, and silently defaulting to a reason would put a specific claim in
@@ -966,15 +966,17 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // BAL-390 (D4) case closed — CLIENT email. ONE fused email: close confirmation → the
   // green record block → the star ask when `reviewToken` is present (absent ⇒ the block
   // is gone, replaced by a short thank-you). `closeReason` switches a deliberate resolve
-  // from a quiet-case close so the notice never reads as a reprimand.
+  // from an automatic close, whose copy states the rule as a plain fact so the notice never
+  // reads as a reprimand.
   // ⚠ THE CTA IS THE RECAP, NOT THE ENGAGEMENT (BAL-388). The engagements route 404s for
-  // a CASE by construction (its loader filters engagement_type = project), and BAL-388's
-  // resolve action is this event's FIRST and only publisher — so the one navigation this
-  // email carries has to be live. `?from=notification` is what makes `recap_viewed.source`
-  // readable for the recap's primary entry point. No `meetingId` ⇒ NO button, never a dead one.
+  // a CASE by construction (its loader filters engagement_type = project). BAL-388's
+  // resolve action is this event's first publisher and BAL-572's inactivity sweep its
+  // second — so the one navigation this email carries has to be live. `?from=notification`
+  // is what makes `recap_viewed.source` readable for the recap's primary entry point. No
+  // `meetingId` ⇒ NO button, never a dead one.
   'engagement-case-closed-client': (data) => {
     const caseTitle = (data.caseTitle as string) ?? 'your case';
-    const wentQuiet = data.closeReason === 'auto_inactive';
+    const autoClosed = data.closeReason === 'auto_inactive';
     const meetingId = data.meetingId as string | undefined;
     return {
       component: React.createElement(CaseClosedEmail, {
@@ -983,13 +985,13 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         expertParty: (data.expertPartyLabel as string) ?? 'your expert',
         caseTitle,
         closedDate: (data.closedDate as string) ?? '',
-        closeReason: wentQuiet ? 'auto_inactive' : 'resolved',
+        closeReason: autoClosed ? 'auto_inactive' : 'resolved',
         consultationCount: data.consultationCount as number | undefined,
         reviewToken: data.reviewToken as string | undefined,
         recapUrl: meetingId ? `${BASE_URL}/meetings/${meetingId}?from=notification` : undefined,
         baseUrl: BASE_URL,
       }),
-      subject: wentQuiet
+      subject: autoClosed
         ? `We've closed ${sanitizeSubjectTitle(caseTitle)}`
         : `${sanitizeSubjectTitle(caseTitle)} is wrapped up`,
     };
@@ -1044,7 +1046,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         anchorDate: (data.anchorDate as string) ?? '',
         consultationCount: data.consultationCount as number | undefined,
         // CASE ONLY — step 2 states WHY the case closed, so a deliberate `resolved`
-        // close must never be described as having gone quiet. Absent ⇒ neutral wording.
+        // close must never be described as an automatic one. Absent ⇒ neutral wording.
         closeReason: closeReasonOf(data.closeReason),
         reviewToken: (data.reviewToken as string) ?? '',
         engagementUrl,

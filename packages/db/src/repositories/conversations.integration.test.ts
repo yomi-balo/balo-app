@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
@@ -8,14 +8,22 @@ import {
   conversationFiles,
   conversationReadStates,
   conversations,
+  meetingContexts,
   meetings,
+  type NewMeeting,
 } from '../schema';
 import {
   userFactory,
   requestExpertRelationshipFactory,
   caseEngagementFactory,
   conversationFactory,
+  conversationFileFactory,
+  conversationMessageFactory,
+  expertDraftFactory,
   meetingFactory,
+  meetingFileFactory,
+  meetingRecordingFactory,
+  transcriptFactory,
 } from '../test/factories';
 import { conversationsRepository, ConversationContextTakenError } from './conversations';
 
@@ -437,66 +445,13 @@ describe('conversationsRepository files', () => {
   });
 });
 
-/** Insert a message with a controlled `createdAt` (and optional fixed id / meeting). */
-async function seedMessage(input: {
-  conversationId: string;
-  senderUserId: string;
-  body: string;
-  createdAt: Date;
-  id?: string;
-  deletedAt?: Date;
-  sentDuringMeetingId?: string;
-}): Promise<{ id: string; createdAt: Date }> {
-  const [row] = await db
-    .insert(conversationMessages)
-    .values({
-      ...(input.id === undefined ? {} : { id: input.id }),
-      conversationId: input.conversationId,
-      senderUserId: input.senderUserId,
-      body: input.body,
-      createdAt: input.createdAt,
-      ...(input.deletedAt === undefined ? {} : { deletedAt: input.deletedAt }),
-      ...(input.sentDuringMeetingId === undefined
-        ? {}
-        : { sentDuringMeetingId: input.sentDuringMeetingId }),
-    })
-    .returning({ id: conversationMessages.id, createdAt: conversationMessages.createdAt });
-  if (row === undefined) throw new Error('seedMessage insert failed');
-  return row;
-}
-
-/** Insert a file with a controlled `createdAt`. */
-async function seedFile(input: {
-  conversationId: string;
-  uploadedByUserId: string;
-  createdAt: Date;
-  deletedAt?: Date;
-  fileName?: string;
-}): Promise<{ id: string; createdAt: Date }> {
-  const [row] = await db
-    .insert(conversationFiles)
-    .values({
-      conversationId: input.conversationId,
-      uploadedByUserId: input.uploadedByUserId,
-      r2Key: `conversation-files/${randomUUID()}`,
-      fileName: input.fileName ?? 'seed.pdf',
-      contentType: 'application/pdf',
-      sizeBytes: 1,
-      createdAt: input.createdAt,
-      ...(input.deletedAt === undefined ? {} : { deletedAt: input.deletedAt }),
-    })
-    .returning({ id: conversationFiles.id, createdAt: conversationFiles.createdAt });
-  if (row === undefined) throw new Error('seedFile insert failed');
-  return row;
-}
-
 describe('conversationsRepository.listMessagesPage', () => {
   it('pages newest-first via keyset, returns chronological ascending with sender names', async () => {
     const { conversationId } = await requestExpertRelationshipFactory();
     const sender = await userFactory();
     const base = Date.parse('2026-06-01T00:00:00Z');
     for (let i = 1; i <= 5; i++) {
-      await seedMessage({
+      await conversationMessageFactory({
         conversationId,
         senderUserId: sender.id,
         body: `<p>m${i}</p>`,
@@ -548,7 +503,7 @@ describe('conversationsRepository.listMessagesPage', () => {
     const idB = '00000000-0000-4000-8000-00000000000b';
     const idC = '00000000-0000-4000-8000-00000000000c';
     for (const id of [idA, idB, idC]) {
-      await seedMessage({
+      await conversationMessageFactory({
         conversationId,
         senderUserId: sender.id,
         body: `<p>${id}</p>`,
@@ -584,20 +539,20 @@ describe('conversationsRepository.listMessagesPage', () => {
     const { conversationId } = await requestExpertRelationshipFactory();
     const sender = await userFactory();
     const base = Date.parse('2026-06-03T00:00:00Z');
-    const live1 = await seedMessage({
+    const live1 = await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>live-1</p>',
       createdAt: new Date(base),
     });
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>deleted</p>',
       createdAt: new Date(base + 1000),
       deletedAt: new Date(),
     });
-    const live2 = await seedMessage({
+    const live2 = await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>live-2</p>',
@@ -624,21 +579,21 @@ describe('the meeting-level guest read filter', () => {
     const meetingB = (await meetingFactory({ contexts: [] })).meeting;
     const base = Date.parse('2026-06-10T00:00:00Z');
 
-    const duringA = await seedMessage({
+    const duringA = await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>in call A</p>',
       createdAt: new Date(base),
       sentDuringMeetingId: meetingA.id,
     });
-    const duringB = await seedMessage({
+    const duringB = await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>in call B</p>',
       createdAt: new Date(base + 1000),
       sentDuringMeetingId: meetingB.id,
     });
-    const betweenCalls = await seedMessage({
+    const betweenCalls = await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>between calls</p>',
@@ -673,7 +628,7 @@ describe('the meeting-level guest read filter', () => {
     const { conversationId } = await requestExpertRelationshipFactory();
     const uploader = await userFactory();
     const { meeting } = await meetingFactory({ contexts: [] });
-    await seedFile({
+    await conversationFileFactory({
       conversationId,
       uploadedByUserId: uploader.id,
       createdAt: new Date('2026-06-11T00:00:00Z'),
@@ -692,7 +647,7 @@ describe('the meeting-level guest read filter', () => {
     const { conversationId } = await requestExpertRelationshipFactory();
     const sender = await userFactory();
     const { meeting } = await meetingFactory({ contexts: [] });
-    const message = await seedMessage({
+    const message = await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>in call</p>',
@@ -752,19 +707,19 @@ describe('conversationsRepository.listThreadSummaries', () => {
 
     // Thread A: other m1 → viewer m2 (newest message) → other FILE (newest inbound
     // overall) — and the viewer marked read in between.
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId: a.conversationId,
       senderUserId: other.id,
       body: '<p>a-inbound</p>',
       createdAt: new Date(base),
     });
-    const aViewerMsg = await seedMessage({
+    const aViewerMsg = await conversationMessageFactory({
       conversationId: a.conversationId,
       senderUserId: viewer.id,
       body: '<p>a-own-latest</p>',
       createdAt: new Date(base + 1000),
     });
-    const aInboundFile = await seedFile({
+    const aInboundFile = await conversationFileFactory({
       conversationId: a.conversationId,
       uploadedByUserId: other.id,
       createdAt: new Date(base + 2000),
@@ -778,12 +733,12 @@ describe('conversationsRepository.listThreadSummaries', () => {
 
     // Thread B: file-only — other's file at base, viewer's NEWER file at base+1000 (own
     // activity must not count as inbound; both count for size).
-    const bInboundFile = await seedFile({
+    const bInboundFile = await conversationFileFactory({
       conversationId: b.conversationId,
       uploadedByUserId: other.id,
       createdAt: new Date(base),
     });
-    await seedFile({
+    await conversationFileFactory({
       conversationId: b.conversationId,
       uploadedByUserId: viewer.id,
       createdAt: new Date(base + 1000),
@@ -832,21 +787,21 @@ describe('conversationsRepository.listThreadSummaries', () => {
     const other = await userFactory({ firstName: 'Dana' });
     const base = Date.parse('2026-06-05T00:00:00Z');
 
-    const liveMsg = await seedMessage({
+    const liveMsg = await conversationMessageFactory({
       conversationId,
       senderUserId: other.id,
       body: '<p>live</p>',
       createdAt: new Date(base),
     });
     // Newer but soft-deleted message/file must influence NOTHING.
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: other.id,
       body: '<p>deleted</p>',
       createdAt: new Date(base + 1000),
       deletedAt: new Date(),
     });
-    await seedFile({
+    await conversationFileFactory({
       conversationId,
       uploadedByUserId: other.id,
       createdAt: new Date(base + 2000),
@@ -883,7 +838,7 @@ describe('conversationsRepository.listThreadSummaries', () => {
   it('I13 — excludes a SOFT-DELETED conversation (the behaviour change from driving off `conversations`)', async () => {
     const { conversationId } = await requestExpertRelationshipFactory();
     const sender = await userFactory();
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>hello</p>',
@@ -915,20 +870,20 @@ describe('conversationsRepository.latestMessagesForRelationships', () => {
     const sender = await userFactory();
     const base = Date.parse('2026-06-14T00:00:00Z');
 
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId: withMessages.conversationId,
       senderUserId: sender.id,
       body: '<p>older</p>',
       createdAt: new Date(base),
     });
-    const newest = await seedMessage({
+    const newest = await conversationMessageFactory({
       conversationId: withMessages.conversationId,
       senderUserId: sender.id,
       body: '<p>newest</p>',
       createdAt: new Date(base + 2000),
     });
     // A newer SOFT-DELETED message must not win.
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId: withMessages.conversationId,
       senderUserId: sender.id,
       body: '<p>deleted</p>',
@@ -963,7 +918,7 @@ describe('conversationsRepository.latestMessagesForRelationships', () => {
       contextType: 'engagement',
       contextId: engagement.id,
     });
-    const message = await seedMessage({
+    const message = await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>carried over</p>',
@@ -980,6 +935,524 @@ describe('conversationsRepository.latestMessagesForRelationships', () => {
   });
 });
 
+describe('conversationsRepository.latestChatActivityAtForEngagements (BAL-572)', () => {
+  const DAY_MS = 86_400_000;
+  const daysAgo = (days: number): Date => new Date(Date.now() - days * DAY_MS);
+
+  const read = (ids: string[]): Promise<Map<string, Date | null>> =>
+    conversationsRepository.latestChatActivityAtForEngagements(ids);
+
+  /** A live case — the factory mints its `engagement` thread — and a user to write into it. */
+  async function seedCase(): Promise<{
+    engagementId: string;
+    conversationId: string;
+    userId: string;
+  }> {
+    const { engagement, conversationId } = await caseEngagementFactory();
+    const user = await userFactory();
+    return { engagementId: engagement.id, conversationId, userId: user.id };
+  }
+
+  /** One meeting carrying one live context of `contextType` on `engagementId`. */
+  async function seedMeeting(
+    engagementId: string,
+    contextType: 'case' | 'project_kickoff' = 'case',
+    values: Partial<NewMeeting> = {}
+  ): Promise<string> {
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType, contextId: engagementId }],
+      values,
+    });
+    return meeting.id;
+  }
+
+  it('1 — empty input returns an empty Map without querying', async () => {
+    const select = vi.spyOn(db, 'select');
+    try {
+      const result = await read([]);
+
+      expect(result.size).toBe(0);
+      expect(select).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+    }
+  });
+
+  it('2 — pre-fills EVERY requested id: a messaged case, an empty thread and an unknown id', async () => {
+    const messaged = await seedCase();
+    const empty = await seedCase();
+    const unknown = randomUUID();
+    const message = await conversationMessageFactory({
+      conversationId: messaged.conversationId,
+      senderUserId: messaged.userId,
+      createdAt: daysAgo(2),
+    });
+
+    const result = await read([messaged.engagementId, empty.engagementId, unknown]);
+
+    expect(result.size).toBe(3);
+    expect(result).toEqual(
+      new Map([
+        [messaged.engagementId, message.createdAt],
+        [empty.engagementId, null],
+        [unknown, null],
+      ])
+    );
+  });
+
+  it('3 — the NEWEST of several messages wins, whatever the insert order, as a real Date', async () => {
+    const kase = await seedCase();
+    const seed = (days: number): Promise<{ id: string; createdAt: Date }> =>
+      conversationMessageFactory({
+        conversationId: kase.conversationId,
+        senderUserId: kase.userId,
+        createdAt: daysAgo(days),
+      });
+    await seed(5);
+    const newest = await seed(1);
+    await seed(3);
+
+    const value = (await read([kase.engagementId])).get(kase.engagementId);
+
+    expect(value).toBeInstanceOf(Date);
+    expect(value?.getTime()).toBe(newest.createdAt.getTime());
+  });
+
+  it('4 — a newer SOFT-DELETED message is ignored; a thread whose only message is deleted reads null', async () => {
+    const mixed = await seedCase();
+    const onlyDeleted = await seedCase();
+    const live = await conversationMessageFactory({
+      conversationId: mixed.conversationId,
+      senderUserId: mixed.userId,
+      createdAt: daysAgo(5),
+    });
+    for (const kase of [mixed, onlyDeleted]) {
+      await conversationMessageFactory({
+        conversationId: kase.conversationId,
+        senderUserId: kase.userId,
+        createdAt: daysAgo(1),
+        deletedAt: daysAgo(1),
+      });
+    }
+
+    expect(await read([mixed.engagementId, onlyDeleted.engagementId])).toEqual(
+      new Map([
+        [mixed.engagementId, live.createdAt],
+        [onlyDeleted.engagementId, null],
+      ])
+    );
+  });
+
+  it('5 — a SOFT-DELETED conversation and a SOFT-DELETED context each read null, message and file alike', async () => {
+    const deletedThread = await seedCase();
+    const deletedContext = await seedCase();
+    for (const kase of [deletedThread, deletedContext]) {
+      await conversationMessageFactory({
+        conversationId: kase.conversationId,
+        senderUserId: kase.userId,
+        createdAt: daysAgo(2),
+      });
+      await conversationFileFactory({
+        conversationId: kase.conversationId,
+        uploadedByUserId: kase.userId,
+        createdAt: daysAgo(1),
+      });
+    }
+    await db
+      .update(conversations)
+      .set({ deletedAt: new Date() })
+      .where(eq(conversations.id, deletedThread.conversationId));
+    await db
+      .update(conversationContexts)
+      .set({ deletedAt: new Date() })
+      .where(eq(conversationContexts.contextId, deletedContext.engagementId));
+
+    expect(await read([deletedThread.engagementId, deletedContext.engagementId])).toEqual(
+      new Map([
+        [deletedThread.engagementId, null],
+        [deletedContext.engagementId, null],
+      ])
+    );
+  });
+
+  it('6 — a `relationship`-labelled thread is never read, even on the same uuid as a case', async () => {
+    const author = await userFactory();
+    const bareId = randomUUID();
+    const relationshipOnly = await conversationFactory({
+      contextType: 'relationship',
+      contextId: bareId,
+    });
+    await conversationMessageFactory({
+      conversationId: relationshipOnly.conversation.id,
+      senderUserId: author.id,
+      createdAt: daysAgo(1),
+    });
+    await conversationFileFactory({
+      conversationId: relationshipOnly.conversation.id,
+      uploadedByUserId: author.id,
+      createdAt: daysAgo(1),
+    });
+
+    expect(await read([bareId])).toEqual(new Map([[bareId, null]]));
+
+    // The same uuid under BOTH labels reads the engagement thread, never the newer
+    // relationship message.
+    const kase = await seedCase();
+    const caseMessage = await conversationMessageFactory({
+      conversationId: kase.conversationId,
+      senderUserId: kase.userId,
+      createdAt: daysAgo(5),
+    });
+    const shadow = await conversationFactory({
+      contextType: 'relationship',
+      contextId: kase.engagementId,
+    });
+    await conversationMessageFactory({
+      conversationId: shadow.conversation.id,
+      senderUserId: author.id,
+      createdAt: daysAgo(1),
+    });
+
+    expect(await read([kase.engagementId])).toEqual(
+      new Map([[kase.engagementId, caseMessage.createdAt]])
+    );
+  });
+
+  it('7 — a message sent from the in-call panel counts', async () => {
+    const kase = await seedCase();
+    const inCall = await conversationMessageFactory({
+      conversationId: kase.conversationId,
+      senderUserId: kase.userId,
+      createdAt: daysAgo(3),
+      sentDuringMeetingId: await seedMeeting(kase.engagementId),
+    });
+
+    expect(await read([kase.engagementId])).toEqual(
+      new Map([[kase.engagementId, inCall.createdAt]])
+    );
+  });
+
+  it('8 — either party counts: an expert-only thread, a client-only thread, an expert-uploaded file', async () => {
+    const expert = await expertDraftFactory();
+    const seedParties = async (): Promise<{
+      engagementId: string;
+      conversationId: string;
+      clientUserId: string;
+    }> => {
+      const { engagement, conversationId, clientMemberUserId } = await caseEngagementFactory({
+        expertProfileId: expert.id,
+        withClientMember: true,
+      });
+      if (clientMemberUserId === undefined) throw new Error('expected a client member');
+      return { engagementId: engagement.id, conversationId, clientUserId: clientMemberUserId };
+    };
+    const expertOnly = await seedParties();
+    const clientOnly = await seedParties();
+    const expertFile = await seedParties();
+
+    const fromExpert = await conversationMessageFactory({
+      conversationId: expertOnly.conversationId,
+      senderUserId: expert.userId,
+      createdAt: daysAgo(3),
+    });
+    const fromClient = await conversationMessageFactory({
+      conversationId: clientOnly.conversationId,
+      senderUserId: clientOnly.clientUserId,
+      createdAt: daysAgo(4),
+    });
+    const file = await conversationFileFactory({
+      conversationId: expertFile.conversationId,
+      uploadedByUserId: expert.userId,
+      createdAt: daysAgo(2),
+    });
+
+    expect(
+      await read([expertOnly.engagementId, clientOnly.engagementId, expertFile.engagementId])
+    ).toEqual(
+      new Map([
+        [expertOnly.engagementId, fromExpert.createdAt],
+        [clientOnly.engagementId, fromClient.createdAt],
+        [expertFile.engagementId, file.createdAt],
+      ])
+    );
+  });
+
+  it('9 — NO `now` bound: a message dated tomorrow is returned as-is', async () => {
+    const kase = await seedCase();
+    const tomorrow = new Date(Date.now() + DAY_MS);
+    await conversationMessageFactory({
+      conversationId: kase.conversationId,
+      senderUserId: kase.userId,
+      createdAt: tomorrow,
+    });
+
+    expect(await read([kase.engagementId])).toEqual(new Map([[kase.engagementId, tomorrow]]));
+  });
+
+  it('10 — a case-chat FILE with no message reads as the file', async () => {
+    const kase = await seedCase();
+    const file = await conversationFileFactory({
+      conversationId: kase.conversationId,
+      uploadedByUserId: kase.userId,
+      createdAt: daysAgo(4),
+    });
+
+    expect(await read([kase.engagementId])).toEqual(new Map([[kase.engagementId, file.createdAt]]));
+  });
+
+  it('11 — the newer of message and file wins, in either order', async () => {
+    const messageNewer = await seedCase();
+    const fileNewer = await seedCase();
+    const newerMessage = await conversationMessageFactory({
+      conversationId: messageNewer.conversationId,
+      senderUserId: messageNewer.userId,
+      createdAt: daysAgo(2),
+    });
+    await conversationFileFactory({
+      conversationId: messageNewer.conversationId,
+      uploadedByUserId: messageNewer.userId,
+      createdAt: daysAgo(5),
+    });
+    await conversationMessageFactory({
+      conversationId: fileNewer.conversationId,
+      senderUserId: fileNewer.userId,
+      createdAt: daysAgo(5),
+    });
+    const newerFile = await conversationFileFactory({
+      conversationId: fileNewer.conversationId,
+      uploadedByUserId: fileNewer.userId,
+      createdAt: daysAgo(2),
+    });
+
+    expect(await read([messageNewer.engagementId, fileNewer.engagementId])).toEqual(
+      new Map([
+        [messageNewer.engagementId, newerMessage.createdAt],
+        [fileNewer.engagementId, newerFile.createdAt],
+      ])
+    );
+  });
+
+  it('12 — a newer SOFT-DELETED file is ignored; a thread whose only file is deleted reads null', async () => {
+    const mixed = await seedCase();
+    const onlyDeleted = await seedCase();
+    const live = await conversationFileFactory({
+      conversationId: mixed.conversationId,
+      uploadedByUserId: mixed.userId,
+      createdAt: daysAgo(5),
+    });
+    for (const kase of [mixed, onlyDeleted]) {
+      await conversationFileFactory({
+        conversationId: kase.conversationId,
+        uploadedByUserId: kase.userId,
+        createdAt: daysAgo(1),
+        deletedAt: daysAgo(1),
+      });
+    }
+
+    expect(await read([mixed.engagementId, onlyDeleted.engagementId])).toEqual(
+      new Map([
+        [mixed.engagementId, live.createdAt],
+        [onlyDeleted.engagementId, null],
+      ])
+    );
+  });
+
+  it.each(['chat', 'files_tab'] as const)(
+    '13 — an in-call upload from `%s` on a live case meeting counts, with an empty thread',
+    async (source) => {
+      const kase = await seedCase();
+      const upload = await meetingFileFactory({
+        meetingId: await seedMeeting(kase.engagementId),
+        source,
+        createdAt: daysAgo(3),
+      });
+
+      expect(await read([kase.engagementId])).toEqual(
+        new Map([[kase.engagementId, upload.createdAt]])
+      );
+    }
+  );
+
+  it('14 — the newer of the thread and an in-call upload wins, in either order', async () => {
+    const uploadNewer = await seedCase();
+    const messageNewer = await seedCase();
+    await conversationMessageFactory({
+      conversationId: uploadNewer.conversationId,
+      senderUserId: uploadNewer.userId,
+      createdAt: daysAgo(5),
+    });
+    const newerUpload = await meetingFileFactory({
+      meetingId: await seedMeeting(uploadNewer.engagementId),
+      source: 'chat',
+      createdAt: daysAgo(2),
+    });
+    const newerMessage = await conversationMessageFactory({
+      conversationId: messageNewer.conversationId,
+      senderUserId: messageNewer.userId,
+      createdAt: daysAgo(2),
+    });
+    await meetingFileFactory({
+      meetingId: await seedMeeting(messageNewer.engagementId),
+      source: 'files_tab',
+      createdAt: daysAgo(5),
+    });
+
+    expect(await read([uploadNewer.engagementId, messageNewer.engagementId])).toEqual(
+      new Map([
+        [uploadNewer.engagementId, newerUpload.createdAt],
+        [messageNewer.engagementId, newerMessage.createdAt],
+      ])
+    );
+  });
+
+  it('15 — an upload reads null when its row, its meeting or its case context is soft-deleted, or its meeting is not a case meeting', async () => {
+    const deletedFile = await seedCase();
+    const deletedMeeting = await seedCase();
+    const deletedContext = await seedCase();
+    const kickoffOnly = await seedCase();
+    const control = await seedCase();
+
+    await meetingFileFactory({
+      meetingId: await seedMeeting(deletedFile.engagementId),
+      source: 'chat',
+      createdAt: daysAgo(1),
+      deletedAt: daysAgo(1),
+    });
+    // `meetingFactory` leaves the context row LIVE, so only the meeting's own `deleted_at`
+    // can exclude this one.
+    await meetingFileFactory({
+      meetingId: await seedMeeting(deletedMeeting.engagementId, 'case', { deletedAt: new Date() }),
+      source: 'chat',
+      createdAt: daysAgo(1),
+    });
+    const detachedMeetingId = await seedMeeting(deletedContext.engagementId);
+    await db
+      .update(meetingContexts)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingContexts.meetingId, detachedMeetingId));
+    await meetingFileFactory({
+      meetingId: detachedMeetingId,
+      source: 'chat',
+      createdAt: daysAgo(1),
+    });
+    await meetingFileFactory({
+      meetingId: await seedMeeting(kickoffOnly.engagementId, 'project_kickoff'),
+      source: 'chat',
+      createdAt: daysAgo(1),
+    });
+    const controlUpload = await meetingFileFactory({
+      meetingId: await seedMeeting(control.engagementId),
+      source: 'chat',
+      createdAt: daysAgo(1),
+    });
+
+    expect(
+      await read([
+        deletedFile.engagementId,
+        deletedMeeting.engagementId,
+        deletedContext.engagementId,
+        kickoffOnly.engagementId,
+        control.engagementId,
+      ])
+    ).toEqual(
+      new Map([
+        [deletedFile.engagementId, null],
+        [deletedMeeting.engagementId, null],
+        [deletedContext.engagementId, null],
+        [kickoffOnly.engagementId, null],
+        [control.engagementId, controlUpload.createdAt],
+      ])
+    );
+  });
+
+  it('16 — an engagement with an upload but NO conversation at all still reads its upload', async () => {
+    const kase = await seedCase();
+    // A hard delete cascades the context row, so no thread row exists for this id at all.
+    await db.delete(conversations).where(eq(conversations.id, kase.conversationId));
+    const upload = await meetingFileFactory({
+      meetingId: await seedMeeting(kase.engagementId),
+      source: 'files_tab',
+      createdAt: daysAgo(6),
+    });
+
+    expect(await read([kase.engagementId])).toEqual(
+      new Map([[kase.engagementId, upload.createdAt]])
+    );
+  });
+
+  it('17 — a recording and a transcript on a live case meeting are NOT chat activity', async () => {
+    const kase = await seedCase();
+    const meetingId = await seedMeeting(kase.engagementId);
+    await meetingRecordingFactory({ meetingId, status: 'ready', createdAt: daysAgo(1) });
+    await transcriptFactory({
+      engagementId: kase.engagementId,
+      meetingId,
+      values: { createdAt: daysAgo(1) },
+    });
+
+    expect(await read([kase.engagementId])).toEqual(new Map([[kase.engagementId, null]]));
+  });
+
+  it('18 — CROSS-CASE ISOLATION: an unrequested case and a non-case meeting never leak into a requested one', async () => {
+    const a = await seedCase();
+    const b = await seedCase();
+    const c = await seedCase();
+
+    // Requested A: message 10d, case-chat file 9d, in-call upload 8d.
+    await conversationMessageFactory({
+      conversationId: a.conversationId,
+      senderUserId: a.userId,
+      createdAt: daysAgo(10),
+    });
+    await conversationFileFactory({
+      conversationId: a.conversationId,
+      uploadedByUserId: a.userId,
+      createdAt: daysAgo(9),
+    });
+    const aUpload = await meetingFileFactory({
+      meetingId: await seedMeeting(a.engagementId),
+      source: 'chat',
+      createdAt: daysAgo(8),
+    });
+
+    // Requested B: an empty thread, a live case meeting with NO upload, and a
+    // `project_kickoff` meeting on B's id that DOES carry a newer upload.
+    await seedMeeting(b.engagementId);
+    await meetingFileFactory({
+      meetingId: await seedMeeting(b.engagementId, 'project_kickoff'),
+      source: 'chat',
+      createdAt: daysAgo(1),
+    });
+
+    // UNREQUESTED C: a message, a file and an upload, each newer than anything above.
+    await conversationMessageFactory({
+      conversationId: c.conversationId,
+      senderUserId: c.userId,
+      createdAt: daysAgo(1),
+    });
+    await conversationFileFactory({
+      conversationId: c.conversationId,
+      uploadedByUserId: c.userId,
+      createdAt: daysAgo(1),
+    });
+    await meetingFileFactory({
+      meetingId: await seedMeeting(c.engagementId),
+      source: 'files_tab',
+      createdAt: daysAgo(1),
+    });
+
+    const result = await read([a.engagementId, b.engagementId]);
+
+    expect(result.size).toBe(2);
+    expect(result).toEqual(
+      new Map([
+        [a.engagementId, aUpload.createdAt],
+        [b.engagementId, null],
+      ])
+    );
+  });
+});
+
 describe('conversationsRepository.unreadSummaryFor', () => {
   it('I15 — counts only OTHER users activity strictly after the watermark; no watermark counts everything', async () => {
     const { conversationId } = await requestExpertRelationshipFactory();
@@ -987,19 +1460,19 @@ describe('conversationsRepository.unreadSummaryFor', () => {
     const other = await userFactory();
     const base = Date.parse('2026-06-16T00:00:00Z');
 
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: other.id,
       body: '<p>inbound-1</p>',
       createdAt: new Date(base),
     });
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: viewer.id,
       body: '<p>own</p>',
       createdAt: new Date(base + 1000),
     });
-    const inbound2 = await seedMessage({
+    const inbound2 = await conversationMessageFactory({
       conversationId,
       senderUserId: other.id,
       body: '<p>inbound-2</p>',
@@ -1053,7 +1526,7 @@ describe('conversationsRepository.unreadSummaryFor', () => {
     const viewer = await userFactory();
     const other = await userFactory();
 
-    const file = await seedFile({
+    const file = await conversationFileFactory({
       conversationId,
       uploadedByUserId: other.id,
       createdAt: new Date('2026-06-17T00:00:00Z'),
@@ -1084,19 +1557,19 @@ describe('conversationsRepository.unreadSummaryFor', () => {
     const marcus = await userFactory();
 
     // Priya writes twice AND shares a file — still ONE distinct sender.
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: priya.id,
       body: '<p>from priya</p>',
       createdAt: new Date('2026-06-17T00:00:00Z'),
     });
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: priya.id,
       body: '<p>from priya</p>',
       createdAt: new Date('2026-06-17T00:01:00Z'),
     });
-    await seedFile({
+    await conversationFileFactory({
       conversationId,
       uploadedByUserId: priya.id,
       createdAt: new Date('2026-06-17T00:02:00Z'),
@@ -1111,7 +1584,7 @@ describe('conversationsRepository.unreadSummaryFor', () => {
     expect(onePerson.distinctInboundSenderCount).toBe(1);
 
     // A second person joins the window ⇒ two.
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: marcus.id,
       body: '<p>from marcus</p>',
@@ -1124,7 +1597,7 @@ describe('conversationsRepository.unreadSummaryFor', () => {
     expect(twoPeople.distinctInboundSenderCount).toBe(2);
 
     // The VIEWER's own activity is never inbound, so it never inflates the count.
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: viewer.id,
       body: '<p>from viewer</p>',
@@ -1154,7 +1627,7 @@ describe('conversationsRepository.unreadSummaryFor', () => {
     const base = Date.parse('2026-06-18T00:00:00Z');
 
     const messageOnly = await requestExpertRelationshipFactory();
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId: messageOnly.conversationId,
       senderUserId: other.id,
       body: '<p>m</p>',
@@ -1162,20 +1635,20 @@ describe('conversationsRepository.unreadSummaryFor', () => {
     });
 
     const fileOnly = await requestExpertRelationshipFactory();
-    await seedFile({
+    await conversationFileFactory({
       conversationId: fileOnly.conversationId,
       uploadedByUserId: other.id,
       createdAt: new Date(base + 1000),
     });
 
     const both = await requestExpertRelationshipFactory();
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId: both.conversationId,
       senderUserId: other.id,
       body: '<p>m</p>',
       createdAt: new Date(base + 2000),
     });
-    await seedFile({
+    await conversationFileFactory({
       conversationId: both.conversationId,
       uploadedByUserId: other.id,
       createdAt: new Date(base + 3000),
@@ -1349,32 +1822,32 @@ describe('conversationsRepository.countThreadActivity', () => {
     const base = Date.parse('2026-06-09T00:00:00Z');
 
     // Thread A: two messages from DIFFERENT senders + one file.
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId: a.conversationId,
       senderUserId: client.id,
       body: '<p>from client</p>',
       createdAt: new Date(base),
     });
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId: a.conversationId,
       senderUserId: expert.id,
       body: '<p>from expert</p>',
       createdAt: new Date(base + 1000),
     });
-    await seedFile({
+    await conversationFileFactory({
       conversationId: a.conversationId,
       uploadedByUserId: expert.id,
       createdAt: new Date(base + 2000),
     });
 
     // Thread B: noise that must NOT leak into A's counts.
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId: b.conversationId,
       senderUserId: client.id,
       body: '<p>other thread</p>',
       createdAt: new Date(base),
     });
-    await seedFile({
+    await conversationFileFactory({
       conversationId: b.conversationId,
       uploadedByUserId: client.id,
       createdAt: new Date(base + 1000),
@@ -1395,20 +1868,20 @@ describe('conversationsRepository.countThreadActivity', () => {
     const sender = await userFactory();
     const base = Date.parse('2026-06-09T01:00:00Z');
 
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>live</p>',
       createdAt: new Date(base),
     });
-    await seedMessage({
+    await conversationMessageFactory({
       conversationId,
       senderUserId: sender.id,
       body: '<p>deleted</p>',
       createdAt: new Date(base + 1000),
       deletedAt: new Date(),
     });
-    await seedFile({
+    await conversationFileFactory({
       conversationId,
       uploadedByUserId: sender.id,
       createdAt: new Date(base + 2000),

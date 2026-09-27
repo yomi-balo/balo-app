@@ -304,10 +304,13 @@ async function nudgeCandidate(
 /**
  * BAL-572 — drop an `auto_inactive` CASE candidate that never had a completed
  * consultation. `close()` lets a case with zero held consultations auto-close (it anchors on
- * its own creation), but the nudge asks "How was your consultation with {X}?" — a question
- * with no honest answer for a call that never happened. `resolved` candidates and every
- * PROJECT candidate pass through untouched: a `resolved` case can only be closed from a
- * consultation that took place at all (see `resolve-case.ts`'s `NOT_YET_HELD` refusal).
+ * its creation, its last booking, reschedule or cancellation, or its last message or file
+ * (case chat or in-call)), but the nudge asks "How was your consultation with {X}?" — a
+ * question with no honest answer for a call that never happened. Neither scheduling nor chat
+ * activity counts as "consulted": only `lastCompletedConsultationAt` does. `resolved`
+ * candidates and every PROJECT candidate pass through untouched: a `resolved` case can only be
+ * closed from a consultation that took place at all (see `resolve-case.ts`'s `NOT_YET_HELD`
+ * refusal).
  *
  * ONE BATCHED SEAM CALL, over the `auto_inactive` case ids in THIS band only — never per
  * candidate. Drops an id whose `lastCompletedConsultationAt` is not a `Date` (`null`, or the

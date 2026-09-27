@@ -1,5 +1,6 @@
 import { Button, Hr, Section, Text } from '@react-email/components';
 import type { ReactNode } from 'react';
+import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
 import {
   consultationClause,
   heroTitleOr,
@@ -25,7 +26,8 @@ import { ReviewAskBlock } from './review-ask-block.js';
  * there was never a rating occasion to thank, and the +24h nudge (BAL-390) asks separately.
  *
  * TONE (BAL-329, binding): warm and properly-closed-off, never a reprimand. The
- * `auto_inactive` variant must read as Balo tidying up ("rather than leave it
+ * `auto_inactive` variant states the rule as a plain fact ("has had no consultations,
+ * bookings or messages for 30 days") and reads as Balo tidying up ("rather than leave it
  * hanging"), never as "you went quiet on us". Prospective copy names the PARTY
  * (`expertParty`). Dates are pre-formatted UTC strings.
  *
@@ -65,24 +67,26 @@ export function CaseClosedEmail({
   recapUrl,
   baseUrl,
 }: Readonly<CaseClosedEmailProps>) {
-  const wentQuiet = closeReason === 'auto_inactive';
+  const autoClosed = closeReason === 'auto_inactive';
   const consultations = consultationClause(consultationCount);
   const neverConsulted = consultations === '';
   const heroTitle = heroTitleOr(caseTitle, 'Your case');
 
   let lead: ReactNode;
-  if (wentQuiet && neverConsulted) {
+  if (autoClosed && neverConsulted) {
     lead = (
       <>
-        <strong>{caseTitle}</strong> had been quiet for a while, so we closed it out on {closedDate}{' '}
-        rather than leave it hanging. Everything from it stays exactly where it is.
+        <strong>{caseTitle}</strong> has had no consultations, bookings or messages for{' '}
+        {CASE_INACTIVITY_DAYS} days, so we closed it out on {closedDate} rather than leave it
+        hanging. Everything from it stays exactly where it is.
       </>
     );
-  } else if (wentQuiet) {
+  } else if (autoClosed) {
     lead = (
       <>
-        <strong>{caseTitle}</strong> had been quiet for a while, so we closed it out on {closedDate}{' '}
-        rather than leave it hanging. You worked through it with {expertParty}
+        <strong>{caseTitle}</strong> has had no consultations, bookings or messages for{' '}
+        {CASE_INACTIVITY_DAYS} days, so we closed it out on {closedDate} rather than leave it
+        hanging. You worked through it with {expertParty}
         {consultations}, and everything from it stays exactly where it is.
       </>
     );
@@ -116,14 +120,14 @@ export function CaseClosedEmail({
   return (
     <ReviewEmailLayout
       preview={
-        wentQuiet
+        autoClosed
           ? `${caseTitle} has been closed out — everything from it is still in your workspace.`
           : `${caseTitle} is wrapped up — everything from it is still in your workspace.`
       }
-      pill={wentQuiet ? '✅ Case closed' : '✅ Case resolved'}
-      heading={wentQuiet ? `${heroTitle} is closed` : `${heroTitle} is wrapped up`}
+      pill={autoClosed ? '✅ Case closed' : '✅ Case resolved'}
+      heading={autoClosed ? `${heroTitle} is closed` : `${heroTitle} is wrapped up`}
       subtext={
-        wentQuiet
+        autoClosed
           ? `Closed out on ${closedDate} for ${clientCompany}.`
           : `Closed on ${closedDate} for ${clientCompany}.`
       }
@@ -133,7 +137,8 @@ export function CaseClosedEmail({
 
       <WhatHappensNowBlock>
         Every consultation, note and action item from this case stays in your workspace, whenever
-        you want them. Opening a new case with {expertParty} takes a moment.
+        you want them. If there&apos;s more to do, book again with {expertParty} any time — that
+        starts a new case.
       </WhatHappensNowBlock>
 
       {reviewSection}

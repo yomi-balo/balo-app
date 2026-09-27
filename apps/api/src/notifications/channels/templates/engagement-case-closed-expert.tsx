@@ -24,7 +24,8 @@ import {
  * client half's recap link, this template has no reviewer-side meeting anchor to key off, and
  * the case surface is the expert's own delivery workspace for this engagement.
  *
- * TONE (BAL-329, binding): warm and properly-closed-off, never a reprimand — Balo tidying up
+ * TONE (BAL-329, binding): warm and properly-closed-off, never a reprimand — the rule stated as a
+ * plain fact ("has had no consultations, bookings or messages for 30 days") and Balo tidying up
  * ("rather than leave it hanging"), never "you went quiet on this". Prospective copy names the
  * client PARTY (`clientCompany`), never a pronoun. Dates are pre-formatted UTC strings.
  *
@@ -54,21 +55,22 @@ export function CaseClosedExpertEmail({
 
   return (
     <ReviewEmailLayout
-      preview={`${caseTitle} has been closed out for inactivity.`}
+      preview={`${caseTitle} has been closed out — everything from it is still on the case page.`}
       pill="✅ Case closed"
       heading={`${heroTitle} is closed`}
       subtext={`Closed out on ${closedDate}.`}
     >
       <Text style={reviewStyles.greeting}>Hi {firstName},</Text>
       <Text style={reviewStyles.bodyText}>
-        <strong>{caseTitle}</strong> with {clientCompany} had been quiet for {CASE_INACTIVITY_DAYS}{' '}
-        days with nothing booked, so we closed it out on {closedDate} rather than leave it hanging.
+        <strong>{caseTitle}</strong> with {clientCompany} has had no consultations, bookings or
+        messages for {CASE_INACTIVITY_DAYS} days, so we closed it out on {closedDate} rather than
+        leave it hanging.
         {workedClause}
       </Text>
 
       <WhatHappensNowBlock>
         Everything from the case stays on the case page. If there&apos;s more to do, {clientCompany}{' '}
-        can open a new case any time.
+        can book again any time — that starts a new case.
       </WhatHappensNowBlock>
 
       <Section style={reviewStyles.ctaWrapper}>

@@ -467,10 +467,10 @@ export const caseEngagementsRepository = {
    *
    * ⚠ THE SHIPPED AGGREGATE HELPER DOES NOT FIT, WHICH IS WHY THIS QUERY COMPUTES ITS OWN.
    * `meetingContextsRepository.consultationTimestampsForEngagements` answers
-   * `lastCompletedConsultationAt` / `nextScheduledConsultationAt` — two anchors BAL-425's
-   * inactivity rule needs, and NEITHER of which is `MAX(scheduled_start)` or a count. Using
-   * it would mean a second round trip that returns the wrong two numbers. The join below is
-   * the same `meeting_contexts` reverse edge (`context_type='case'`,
+   * `lastCompletedConsultationAt` / `nextScheduledConsultationAt` / `lastSchedulingActivityAt`
+   * — inputs the case-inactivity rule needs, and NONE of which is `MAX(scheduled_start)` or a
+   * count. Using it would mean a second round trip that returns the wrong numbers. The join
+   * below is the same `meeting_contexts` reverse edge (`context_type='case'`,
    * `context_id = engagement_id`) that `meeting_context_reverse_idx` exists for.
    *
    * ⚠ `consultationCount` COUNTS DISTINCT **LIVE MEETINGS**, not raw context rows. In
@@ -616,8 +616,9 @@ export const caseEngagementsRepository = {
    * The NUDGE half needs no caller wiring: `listClosedBetween` below starts matching the
    * moment `closed_at` is first stamped. It is NOT close-reason-blind, though — it reads
    * the `close_reason` written HERE and threads it to the +7d nudge copy, which says
-   * "things went quiet … rather than leave it hanging" for `auto_inactive` and a neutral
-   * "we closed the case out on {date}" for `resolved`, mirroring `CaseClosedEmail`. So
+   * "after 30 days with no consultations, bookings or messages, we closed the case out …
+   * rather than leave it hanging" for `auto_inactive` and a neutral "we closed the case out
+   * on {date}" for `resolved`, mirroring `CaseClosedEmail`. So
    * WRITE THE HONEST REASON: passing `auto_inactive` for a client-initiated close would
    * make the nudge assert inactivity about an action the client took themselves.
    */
@@ -821,14 +822,19 @@ export const caseEngagementsRepository = {
    * `CaseEngagementRow.createdAt` exposes, so the set this selects and the set the sweep
    * re-evaluates with `isCaseInactive` cannot diverge on two clocks.
    *
-   * ⚠ This is a SUPERSET, not the rule: it is consultation-blind. The refinement is
-   * `isCaseInactive()` from `@balo/shared/engagements`, fed by
+   * ⚠ This is a SUPERSET, not the rule: it is activity-blind. It is a superset BECAUSE
+   * creation is the anchor's floor — every other anchor can only move the clock LATER, so a
+   * case created after `cutoff` can never be inactive. The refinement is `isCaseInactive()`
+   * from `@balo/shared/engagements`, fed by two batched reads:
    * `meetingContextsRepository.consultationTimestampsForEngagements(ids, now)` — the
-   * `meeting_contexts` seam shipped by BAL-418. THE SUPERSET-PLUS-REFINE SHAPE
-   * IS RATIFIED, NOT A GAP — see the composition suite's header: folding the skip into
-   * this query would need a correlated subquery
-   * over `meeting_contexts` + `meetings`, i.e. a SECOND definition of "upcoming" that can
-   * drift from the seam's, and it would defeat `engagement_type_status_created_idx`.
+   * `meeting_contexts` seam shipped by BAL-418 (completed and scheduling anchors, and the
+   * next upcoming consultation) — and `conversationsRepository
+   * .latestChatActivityAtForEngagements(ids)` (messages, case-chat files and in-call uploads,
+   * BAL-572). THE SUPERSET-PLUS-REFINE SHAPE IS RATIFIED, NOT A GAP — see the composition
+   * suite's header: folding the skip into this query would need correlated subqueries over
+   * `meeting_contexts` + `meetings` and the chat tables, i.e. SECOND definitions of
+   * "upcoming" and "activity" that can drift from the reads', and it would defeat
+   * `engagement_type_status_created_idx`.
    *
    * ⚠ DO NOT resolve the anchors through `credit_sessions.engagement_id`. That column
    * exists, but money/reporting read it while this rule reads the seam, and nothing
@@ -841,11 +847,15 @@ export const caseEngagementsRepository = {
    * (a) it drops every candidate that still has a JOINABLE case meeting, via
    * `meetingContextsRepository.engagementIdsWithLiveCaseMeeting(ids,
    * now − MEETING_TOKEN_TTL_AFTER_END_MS)` — the join window, not `in_progress` alone (the
-   * seam's anchors ignore a running call, so without it a case could close mid-call); and
-   * (b) it takes the anchors ONLY from the seam's Map. A `null, null` entry the seam RETURNS
-   * is legitimate — a never-consulted case anchors on creation and closes — but CONSTRUCTING
-   * `null, null` for an id the Map lacks is a BUG, not a gap (composition case 3b). The
-   * caller computes `cutoff = now - CASE_INACTIVITY_DAYS`; the repo stays policy-free.
+   * seam's consultation anchors ignore a running call, and its scheduling anchor holds one only
+   * for `CASE_INACTIVITY_DAYS` after its latest booking or reschedule, so without the
+   * exclusion a case could close mid-call on a far-horizon or stranded meeting); and
+   * (b) it takes the anchors ONLY from the two reads' Maps — the seam's entry and the chat
+   * read's value. An all-`null` entry or a `null` chat value a read RETURNS is legitimate — a
+   * case with no activity anchors on creation and closes — but CONSTRUCTING one for an id
+   * either Map lacks is a BUG, not a gap (composition cases 3b, 15 and 21); a miss in either
+   * Map is skipped, never defaulted. The caller computes `cutoff = now -
+   * CASE_INACTIVITY_DAYS`; the repo stays policy-free.
    *
    * NO LIMIT, deliberately: the superset is oldest first and includes long-running ACTIVE
    * cases, so a LIMIT would let those fill the window on every tick and starve the inactive

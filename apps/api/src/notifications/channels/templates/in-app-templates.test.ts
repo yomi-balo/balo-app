@@ -701,15 +701,18 @@ describe('getInAppTemplate', () => {
       expect(result.actionUrl).toBeUndefined();
     });
 
-    it('softens the copy when the case went quiet rather than being resolved', () => {
+    it('states the rule as a plain fact, under its own title, when the case closed automatically', () => {
       const result = getInAppTemplate('engagement-case-closed-client', {
         caseTitle: 'Apex CPU limit',
         closedDate: '3 Aug',
         closeReason: 'auto_inactive',
         engagementId: 'eng-2',
       });
-      expect(result.body).toContain('had been quiet for a while');
-      expect(result.body).toContain('rather than leave it hanging');
+      expect(result.title).toBe("We've closed this case");
+      expect(result.body).toBe(
+        "'Apex CPU limit' has had no consultations, bookings or messages for 30 days, so we closed it out on 3 Aug rather than leave it hanging."
+      );
+      expect(result.body).not.toContain('quiet');
     });
 
     it('carries NO star row and NO review token — those live in the email only', () => {
@@ -761,9 +764,10 @@ describe('getInAppTemplate', () => {
       });
       expect(result).toEqual({
         title: "We've closed this case",
-        body: "'Flow interview stuck on a loop' with Northwind Industrial had been quiet for 30 days with nothing booked, so we closed it out on 3 Aug rather than leave it hanging.",
+        body: "'Flow interview stuck on a loop' with Northwind Industrial has had no consultations, bookings or messages for 30 days, so we closed it out on 3 Aug rather than leave it hanging.",
         actionUrl: '/cases/eng-1',
       });
+      expect(result.body).not.toContain('quiet');
     });
 
     it('deep-links to the CASE, never the recap or the engagements route', () => {

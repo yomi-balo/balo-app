@@ -72,7 +72,7 @@ vi.mock('bullmq', () => ({
 }));
 
 import { createHash } from 'node:crypto';
-import type { RatingNudgeCandidate } from '@balo/db';
+import type { ConsultationTimestamps, RatingNudgeCandidate } from '@balo/db';
 import { REVIEW_NUDGE_WINDOW_MS, REVIEW_NUDGE_STEPS } from '@balo/shared/reviews';
 import { runReviewNudgeSweep, REVIEW_NUDGE_SWEEP_CRON } from './review-nudge-sweep.js';
 
@@ -150,14 +150,12 @@ beforeEach(() => {
   // Default: every requested id HAS a completed consultation, so dropNeverConsultedAutoCloses
   // is a no-op unless a test explicitly overrides this to simulate a never-consulted case.
   mockConsultationTimestamps.mockImplementation(async (ids: string[]) => {
-    const map = new Map<
-      string,
-      { lastCompletedConsultationAt: Date | null; nextScheduledConsultationAt: Date | null }
-    >();
+    const map = new Map<string, ConsultationTimestamps>();
     for (const id of ids) {
       map.set(id, {
         lastCompletedConsultationAt: new Date(NOW.getTime() - HOUR_MS),
         nextScheduledConsultationAt: null,
+        lastSchedulingActivityAt: null,
       });
     }
     return map;
@@ -312,6 +310,34 @@ describe('review-nudge sweep — never nudge about a consultation that never hap
     );
 
     expectNoNudge(await runReviewNudgeSweep(NOW));
+    expect(mockConsultationTimestamps).toHaveBeenCalledWith(['case-1'], NOW);
+  });
+
+  /**
+   * A booking, reschedule or cancellation holds a case open, but it is not a consultation: a
+   * case whose only anchor was scheduling never had a call to ask about.
+   */
+  it('an auto_inactive case with ONLY scheduling activity is still dropped — scheduling is not "consulted"', async () => {
+    mockListClosed.mockImplementation(
+      bandFiltered([
+        candidate({ engagementId: 'case-1', engagementKind: 'case', closeReason: 'auto_inactive' }),
+      ])
+    );
+    mockConsultationTimestamps.mockResolvedValue(
+      new Map<string, ConsultationTimestamps>([
+        [
+          'case-1',
+          {
+            lastCompletedConsultationAt: null,
+            nextScheduledConsultationAt: null,
+            lastSchedulingActivityAt: new Date(NOW.getTime() - 31 * 24 * HOUR_MS),
+          },
+        ],
+      ])
+    );
+
+    expectNoNudge(await runReviewNudgeSweep(NOW));
+    expect(mockConsultationTimestamps).toHaveBeenCalledTimes(1);
     expect(mockConsultationTimestamps).toHaveBeenCalledWith(['case-1'], NOW);
   });
 

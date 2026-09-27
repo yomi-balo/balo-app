@@ -40,7 +40,10 @@ import { timestamps, softDelete } from './helpers';
  *      forges a context row that feeds `consultationTimestampsForEngagements`; one future
  *      `scheduled_start` makes `isCaseInactive` return false and holds the victim's case
  *      open for as long as that forged `scheduled_start` stays in the future — renewable at
- *      will by forging another, without the attacker ever touching a row they own.
+ *      will by forging another, without the attacker ever touching a row they own. Since
+ *      BAL-572 a forged context ALSO holds the case for 30 days after its meeting's newest
+ *      scheduling audit row (booked / rescheduled / cancelled) and its newest in-call
+ *      upload, both of which the case-inactivity reads reach through this table.
  *   3. CALENDAR (BAL-428, the newest and most directly abusable). `context_id` is now what
  *      the consultation projection resolves an EXPERT from
  *      (`_shared/consultation-projection.ts`), so an unchecked id books time on a STRANGER'S
@@ -94,6 +97,13 @@ import { timestamps, softDelete } from './helpers';
  *   · `apps/web/src/lib/conversations/authorize-conversation-context.ts` — the ENGAGEMENT arm;
  *   · `apps/web/src/lib/project-request/resolve-conversation-access.ts` — the RELATIONSHIP
  *     arm (it resolves the owning company through the request graph).
+ *
+ * ONE READER BYPASSES BOTH GATES, AND THIS TABLE'S OBLIGATION, BY DESIGN:
+ * `conversationsRepository.latestChatActivityAtForEngagements` (BAL-572), the case-inactivity
+ * sweep's chat read. It reads `conversation_contexts` AND this table (a case's meetings → their
+ * in-call uploads) with no party check. That is safe only because its one caller passes
+ * system-scoped ids from `caseEngagementsRepository.listOpenCreatedBefore`, and it returns
+ * timestamps, never content. A request-sourced caller would owe the full obligation above.
  *
  * ⚠ THREE DELIBERATE DEVIATIONS, recorded so the two seams do not read as accidental
  * divergence — each is argued in full on `conversation_contexts` itself: (1) NO `admin`

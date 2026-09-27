@@ -513,7 +513,9 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     });
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
     expect(view?.header.status.label).toBe('Closed — inactive');
-    expect(view?.header.closedNote).toContain('without activity');
+    expect(view?.header.closedNote).toBe(
+      'Closed automatically after 30 days with no consultations, bookings or messages. Everything stays available.'
+    );
   });
 
   it('offers NOTHING on a non-case context', async () => {

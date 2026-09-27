@@ -230,7 +230,22 @@ export type CaseSurfaceState = 'open' | 'resolved' | 'auto_inactive';
  * ⚠ `sweep` (BAL-572) is the FOURTH entry point and the only server-published one: the +30d
  * dormancy sweep (`apps/api/src/jobs/case-inactivity-sweep.ts`) closes with `auto_inactive` and
  * fires this event with `distinct_id: 'system:case-inactivity'` — there is no acting user, so
- * the sweep's own system identity stands in for one.
+ * the sweep's own system identity stands in for one. That identity is one pseudo-user behind
+ * every auto-close, so exclude it from unique-user counts.
+ *
+ * ⚠ `count(case_resolved)` COUNTS CASES CLOSED, NOT CLIENT DECISIONS. The three client sources
+ * record a client marking the case resolved; `sweep` records the platform closing a dormant one.
+ * Any insight about the client's decision (resolve rate, time to resolve, the source split) must
+ * filter `source != 'sweep'`. That filter is valid across all history, because no close before
+ * the sweep shipped carries `sweep`. A future system-initiated source joins that filter in the
+ * ticket that adds it.
+ *
+ * ⚠ A `sweep` SPIKE AFTER A DEPLOY OR DOWNTIME IS BACKLOG DRAIN, not a change in how cases end:
+ * the first ticks close every case already past its 30 days, at most `MAX_CASE_CLOSES_PER_TICK`
+ * per hourly tick, until the backlog clears.
+ *
+ * There is deliberately NO `is_automatic` property: it would restate `source` and could drift
+ * from it.
  */
 export type CaseResolveSource = 'recap' | 'end_of_call' | 'case_surface' | 'sweep';
 
@@ -402,7 +417,12 @@ export interface RecapEventMap {
 export const RECAP_SERVER_EVENTS = {
   /** The client dismissed the expert's resolution request. No notification fires (D-E). */
   CASE_RESOLUTION_REQUEST_DISMISSED: 'case_resolution_request_dismissed',
-  /** A case was marked resolved. `source` is the whole point — see the map below. */
+  /**
+   * A case was CLOSED: marked resolved by the client, or auto-closed by the +30d sweep
+   * (`source: 'sweep'`). `source` is the whole point — see the map below. `count(case_resolved)`
+   * counts closes; an insight about the client's decision filters `source != 'sweep'` (see
+   * {@link CaseResolveSource}).
+   */
   CASE_RESOLVED: 'case_resolved',
   /** The recap page rendered for an authorised viewer. */
   RECAP_VIEWED: 'recap_viewed',

@@ -12,8 +12,9 @@ import { StateSwap } from './state-swap';
  * third terminal answer.
  *
  * This is the ONE consequential thing on an otherwise throwaway screen, and it is here on
- * purpose: most cases would otherwise never be closed deliberately — the client stops booking,
- * 30 days pass, the sweep closes it, and the review email lands a month later with poor recall.
+ * purpose: most cases would otherwise never be closed deliberately — 30 days pass with no
+ * consultation, booking, reschedule, cancellation, message or file, the sweep closes it, and the
+ * review email lands a month later with poor recall.
  * Asking at the moment the client actually knows the answer is the whole point.
  *
  * ⚠⚠ THE CONFIRM STEP **IS** THE SHIPPED `ResolveDialog`, IMPORTED ACROSS THE SEGMENT

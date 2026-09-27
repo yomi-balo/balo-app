@@ -1,5 +1,6 @@
 import { Hr, Link, Text } from '@react-email/components';
 import type { ReactNode } from 'react';
+import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
 import { consultationClause, ReviewEmailLayout, reviewStyles } from './review-email-shared.js';
 import { ReviewAskBlock } from './review-ask-block.js';
 
@@ -46,7 +47,7 @@ export interface ReviewNudgeEmailProps {
    * CASE ONLY — why the case closed, threaded from `case_engagements.close_reason` by
    * the sweep. Drives step 2's closing clause (see {@link caseStepTwoLead}). ABSENT on
    * the project arm and on a case with no reason recorded — the copy falls back to the
-   * neutral wording, never to the "went quiet" one.
+   * neutral wording, never to the automatic-close one.
    */
   readonly closeReason?: 'resolved' | 'auto_inactive';
   /** RAW review-invite token — appears ONLY inside the star hrefs. */
@@ -86,25 +87,26 @@ function stepOneCopy(props: Readonly<ReviewNudgeEmailProps>, noun: string): Nudg
  * Step 2's CASE regrounding paragraph.
  *
  * ⚠ THE CLOSING CLAUSE IS CLOSE-REASON-AWARE, AND MUST STAY THAT WAY. `close_reason` is
- * a real two-value enum: `auto_inactive` is Balo tidying up after a quiet case, while
+ * a real two-value enum: `auto_inactive` is Balo tidying up after the inactivity rule ran
+ * out (stated as a plain fact — "no consultations, bookings or messages"), while
  * `resolved` is the CLIENT'S OWN deliberate close. Asserting the first over the second
- * would tell a client they went quiet about an action they took themselves, seven days
+ * would tell a client their case lapsed over an action they took themselves, seven days
  * after the close email correctly said "That's {case} wrapped up." This mirrors
- * `CaseClosedEmail`'s `wentQuiet` branch exactly — keep the two in step.
+ * `CaseClosedEmail`'s `autoClosed` branch exactly — keep the two in step.
  *
  * An ABSENT reason (a case row with none recorded) takes the NEUTRAL arm, which is true
- * of both reasons — never the accusatory one.
+ * of both reasons — never the automatic-close one.
  */
 function caseStepTwoLead(props: Readonly<ReviewNudgeEmailProps>, consultations: string): ReactNode {
   const { engagementTitle, expertParty, anchorDate, closeReason } = props;
-  const wentQuiet = closeReason === 'auto_inactive';
+  const autoClosed = closeReason === 'auto_inactive';
   return (
     <>
       This one goes back a bit, so here&apos;s the whole picture: you opened{' '}
       <strong>{engagementTitle}</strong> and worked through it with {expertParty}
       {consultations}
-      {wentQuiet
-        ? `. Things went quiet after that, so we closed the case out on ${anchorDate} rather than leave it hanging.`
+      {autoClosed
+        ? `. After ${CASE_INACTIVITY_DAYS} days with no consultations, bookings or messages, we closed the case out on ${anchorDate} rather than leave it hanging.`
         : `, and we closed the case out on ${anchorDate}.`}
     </>
   );

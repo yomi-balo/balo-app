@@ -27,6 +27,12 @@ import { users } from './users';
  * TRUNCATE precisely so the identity sequence is never reset), and
  * `audit-events.integration.test.ts` UPDATEs `created_at` to fabricate distinct timestamps the
  * transaction-scoped default cannot produce. Do not add such a guard.
+ *
+ * ⚠ THE MEETING SCHEDULING ROWS ARE READ AS LIVE STATE (BAL-572). The case-inactivity seam takes
+ * each case's newest `meeting.booked` / `meeting.rescheduled` / `meeting.cancelled` row
+ * (`MEETING_SCHEDULING_AUDIT_ACTIONS`) as an anchor, so any retention, purge or DELETE path
+ * over this table MUST exclude those three actions, or cases close early. The seed truncator's
+ * DELETE above is `entity_type = 'engagement'` only, so it never touches them.
  */
 export const auditEvents = pgTable(
   'audit_events',

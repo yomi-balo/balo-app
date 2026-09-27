@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { CASE_INACTIVITY_DAYS, isCaseInactive } from '@balo/shared/engagements';
 import { db } from '../client';
 import {
+  auditEvents,
   creditSessions,
   engagements,
   meetingContexts,
@@ -13,20 +14,29 @@ import {
 } from '../schema';
 import {
   caseEngagementFactory,
+  conversationFileFactory,
+  conversationMessageFactory,
   creditWalletFactory,
   expertDraftFactory,
+  meetingAuditEventFactory,
   meetingFactory,
+  meetingFileFactory,
+  meetingRecordingFactory,
   projectRequestFactory,
   requestExpertRelationshipFactory,
+  transcriptFactory,
   userFactory,
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { findProjectionForMeeting } from './_shared/consultation-projection';
+import { MEETING_SCHEDULING_AUDIT_ACTIONS } from './_shared/meeting-audit';
+import { conversationsRepository } from './conversations';
 import { meetingsRepository } from './meetings';
 import {
   meetingContextsRepository,
   MeetingAdminContextExistsError,
   MeetingPrimaryContextRepointedError,
+  type ConsultationTimestamps,
 } from './meeting-contexts';
 
 const HOUR_MS = 3_600_000;
@@ -545,6 +555,7 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
       expect(result.get(id)).toEqual({
         lastCompletedConsultationAt: null,
         nextScheduledConsultationAt: null,
+        lastSchedulingActivityAt: null,
       });
     }
   });
@@ -756,11 +767,11 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
     expect(timestamps?.nextScheduledConsultationAt?.getTime()).toBe(upcoming.getTime());
   });
 
-  it('a SOFT-DELETED meeting is excluded from both anchors', async () => {
+  it('a SOFT-DELETED meeting is excluded from every anchor', async () => {
     const { engagement } = await caseEngagementFactory();
     const now = new Date();
 
-    await meetingFactory({
+    const completed = await meetingFactory({
       contexts: [{ contextType: 'case', contextId: engagement.id }],
       values: {
         status: 'ended',
@@ -769,7 +780,7 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
         deletedAt: now,
       },
     });
-    await meetingFactory({
+    const upcoming = await meetingFactory({
       contexts: [{ contextType: 'case', contextId: engagement.id }],
       values: {
         scheduledStart: new Date(now.getTime() + DAY_MS),
@@ -777,32 +788,70 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
         deletedAt: now,
       },
     });
+    for (const { meeting } of [completed, upcoming]) {
+      await meetingAuditEventFactory({
+        meetingId: meeting.id,
+        action: 'meeting.booked',
+        createdAt: new Date(now.getTime() - 2 * DAY_MS),
+      });
+    }
 
     const result = await meetingContextsRepository.consultationTimestampsForEngagements(
       [engagement.id],
       now
     );
+    expect(result.size).toBe(1);
     expect(result.get(engagement.id)).toEqual({
       lastCompletedConsultationAt: null,
       nextScheduledConsultationAt: null,
+      lastSchedulingActivityAt: null,
     });
   });
 
-  it('BATCHES — 3 ids in, 3 entries out, each resolved independently', async () => {
+  it('BATCHES — 3 ids in, 3 entries out, each resolved independently; an UNREQUESTED case and a context-less meeting never leak in', async () => {
     const now = new Date();
     const withCompleted = (await caseEngagementFactory()).engagement.id;
     const withUpcoming = (await caseEngagementFactory()).engagement.id;
     const withNeither = (await caseEngagementFactory()).engagement.id;
+    const notRequested = (await caseEngagementFactory()).engagement.id;
     const endedAt = new Date(now.getTime() - DAY_MS);
     const upcoming = new Date(now.getTime() + DAY_MS);
 
-    await meetingFactory({
+    const completed = await meetingFactory({
       contexts: [{ contextType: 'case', contextId: withCompleted }],
       values: { status: 'ended', outcome: 'completed', endedAt },
     });
-    await meetingFactory({
+    const scheduled = await meetingFactory({
       contexts: [{ contextType: 'case', contextId: withUpcoming }],
       values: { scheduledStart: upcoming, scheduledEnd: new Date(upcoming.getTime() + HOUR_MS) },
+    });
+    const completedBooked = await meetingAuditEventFactory({
+      meetingId: completed.meeting.id,
+      action: 'meeting.booked',
+      createdAt: new Date(now.getTime() - 10 * DAY_MS),
+    });
+    const upcomingBooked = await meetingAuditEventFactory({
+      meetingId: scheduled.meeting.id,
+      action: 'meeting.booked',
+      createdAt: new Date(now.getTime() - DAY_MS),
+    });
+
+    // Newer scheduling rows the requested ids must never see: an unrequested case's meeting,
+    // and a meeting with no context at all.
+    const unrequested = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: notRequested }],
+      values: { status: 'ended', outcome: 'no_show_client' },
+    });
+    await meetingAuditEventFactory({
+      meetingId: unrequested.meeting.id,
+      action: 'meeting.booked',
+      createdAt: new Date(now.getTime() - 12 * HOUR_MS),
+    });
+    const contextless = await meetingFactory({ contexts: [] });
+    await meetingAuditEventFactory({
+      meetingId: contextless.meeting.id,
+      action: 'meeting.booked',
+      createdAt: new Date(now.getTime() - 6 * HOUR_MS),
     });
 
     const result = await meetingContextsRepository.consultationTimestampsForEngagements(
@@ -811,17 +860,20 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
     );
 
     expect(result.size).toBe(3);
-    expect(result.get(withCompleted)?.lastCompletedConsultationAt?.getTime()).toBe(
-      endedAt.getTime()
-    );
-    expect(result.get(withCompleted)?.nextScheduledConsultationAt).toBeNull();
-    expect(result.get(withUpcoming)?.nextScheduledConsultationAt?.getTime()).toBe(
-      upcoming.getTime()
-    );
-    expect(result.get(withUpcoming)?.lastCompletedConsultationAt).toBeNull();
+    expect(result.get(withCompleted)).toEqual({
+      lastCompletedConsultationAt: endedAt,
+      nextScheduledConsultationAt: null,
+      lastSchedulingActivityAt: completedBooked.createdAt,
+    });
+    expect(result.get(withUpcoming)).toEqual({
+      lastCompletedConsultationAt: null,
+      nextScheduledConsultationAt: upcoming,
+      lastSchedulingActivityAt: upcomingBooked.createdAt,
+    });
     expect(result.get(withNeither)).toEqual({
       lastCompletedConsultationAt: null,
       nextScheduledConsultationAt: null,
+      lastSchedulingActivityAt: null,
     });
   });
 
@@ -829,7 +881,7 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
     const { engagement } = await caseEngagementFactory();
     const now = new Date();
 
-    await meetingFactory({
+    const { meeting } = await meetingFactory({
       contexts: [{ contextType: 'project_kickoff', contextId: engagement.id }],
       values: {
         status: 'ended',
@@ -837,14 +889,207 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
         endedAt: new Date(now.getTime() - DAY_MS),
       },
     });
+    await meetingAuditEventFactory({
+      meetingId: meeting.id,
+      action: 'meeting.booked',
+      createdAt: new Date(now.getTime() - 2 * DAY_MS),
+    });
 
     const result = await meetingContextsRepository.consultationTimestampsForEngagements(
       [engagement.id],
       now
     );
-    expect(result.get(engagement.id)?.lastCompletedConsultationAt).toBeNull();
+    expect(result.size).toBe(1);
+    expect(result.get(engagement.id)).toEqual({
+      lastCompletedConsultationAt: null,
+      nextScheduledConsultationAt: null,
+      lastSchedulingActivityAt: null,
+    });
+  });
+
+  describe('lastSchedulingActivityAt — the latest booking, reschedule or cancellation (BAL-572)', () => {
+    const ago = (ms: number): Date => new Date(Date.now() - ms);
+
+    /** One case with one live case meeting, and the seam's entry for it. */
+    async function seedCaseWithMeeting(
+      values: Partial<NewMeeting> = {}
+    ): Promise<{ engagementId: string; meetingId: string }> {
+      const { engagement } = await caseEngagementFactory();
+      const { meeting } = await meetingFactory({
+        contexts: [{ contextType: 'case', contextId: engagement.id }],
+        values,
+      });
+      return { engagementId: engagement.id, meetingId: meeting.id };
+    }
+
+    async function schedulingAnchor(engagementId: string): Promise<Date | null | undefined> {
+      const result = await meetingContextsRepository.consultationTimestampsForEngagements(
+        [engagementId],
+        new Date()
+      );
+      expect(result.size).toBe(1);
+      return result.get(engagementId)?.lastSchedulingActivityAt;
+    }
+
+    // Spelled out rather than read from `MEETING_SCHEDULING_AUDIT_ACTIONS`, so dropping an
+    // action from the constant fails its case here instead of silently removing it.
+    const SCHEDULING_ACTIONS = [
+      'meeting.booked',
+      'meeting.rescheduled',
+      'meeting.cancelled',
+    ] as const;
+
+    it('the exported action set is exactly the three scheduling actions', () => {
+      expect([...MEETING_SCHEDULING_AUDIT_ACTIONS].sort((a, b) => a.localeCompare(b))).toEqual(
+        [...SCHEDULING_ACTIONS].sort((a, b) => a.localeCompare(b))
+      );
+    });
+
+    it.each(SCHEDULING_ACTIONS)(
+      'S1 — `%s` counts: newest of the three ⇒ its instant, as a real Date',
+      async (action) => {
+        const { engagementId, meetingId } = await seedCaseWithMeeting();
+        for (const other of SCHEDULING_ACTIONS.filter((a) => a !== action)) {
+          await meetingAuditEventFactory({ meetingId, action: other, createdAt: ago(10 * DAY_MS) });
+        }
+        const newest = await meetingAuditEventFactory({
+          meetingId,
+          action,
+          createdAt: ago(DAY_MS),
+        });
+
+        const anchor = await schedulingAnchor(engagementId);
+
+        expect(anchor).toBeInstanceOf(Date);
+        expect(anchor?.getTime()).toBe(newest.createdAt.getTime());
+      }
+    );
+
+    // One case per status, each putting the NEWEST row on a different meeting, so a filter that
+    // drops any one status or outcome fails its own case (the older rows never decide it).
+    const STATUS_BLIND_MEETINGS = [
+      { label: 'a CANCELLED', values: { status: 'cancelled' }, action: 'meeting.cancelled' },
+      {
+        label: 'a MISSED (`ended` + `no_show_client`)',
+        values: { status: 'ended', outcome: 'no_show_client' },
+        action: 'meeting.booked',
+      },
+      { label: 'a future SCHEDULED', values: { status: 'scheduled' }, action: 'meeting.booked' },
+    ] as const;
+
+    it.each(STATUS_BLIND_MEETINGS)(
+      'S2 — STATUS-BLIND: the newest row wins when it sits on $label meeting',
+      async ({ label: newestLabel }) => {
+        const { engagement } = await caseEngagementFactory();
+        let newestRowAt: Date | undefined;
+        for (const [index, seeded] of STATUS_BLIND_MEETINGS.entries()) {
+          const isNewest = seeded.label === newestLabel;
+          const { meeting } = await meetingFactory({
+            contexts: [{ contextType: 'case', contextId: engagement.id }],
+            values: seeded.values,
+          });
+          const row = await meetingAuditEventFactory({
+            meetingId: meeting.id,
+            action: seeded.action,
+            createdAt: isNewest ? ago(DAY_MS) : ago((5 + index) * DAY_MS),
+          });
+          if (isNewest) newestRowAt = row.createdAt;
+        }
+
+        expect(newestRowAt).toBeInstanceOf(Date);
+        expect((await schedulingAnchor(engagement.id))?.getTime()).toBe(newestRowAt?.getTime());
+      }
+    );
+
+    it('S3 — `meeting.ended` / `meeting.outcome_resolved` and a non-meeting entity_type do NOT count', async () => {
+      const { engagementId, meetingId } = await seedCaseWithMeeting({
+        status: 'ended',
+        outcome: 'no_show_client',
+      });
+      const booked = await meetingAuditEventFactory({
+        meetingId,
+        action: 'meeting.booked',
+        createdAt: ago(10 * DAY_MS),
+      });
+      for (const action of ['meeting.ended', 'meeting.outcome_resolved'] as const) {
+        await meetingAuditEventFactory({ meetingId, action, createdAt: ago(DAY_MS) });
+      }
+      // A scheduling action on the SAME entity_id under another entity_type.
+      await db.insert(auditEvents).values({
+        actorUserId: null,
+        action: 'meeting.booked',
+        entityType: 'consultation',
+        entityId: meetingId,
+        createdAt: ago(DAY_MS),
+      });
+
+      expect((await schedulingAnchor(engagementId))?.getTime()).toBe(booked.createdAt.getTime());
+    });
+
+    it('S4 — a soft-deleted CASE CONTEXT drops its meeting’s scheduling rows', async () => {
+      const { engagementId, meetingId } = await seedCaseWithMeeting();
+      await meetingAuditEventFactory({
+        meetingId,
+        action: 'meeting.booked',
+        createdAt: ago(DAY_MS),
+      });
+      await meetingContextsRepository.detach(meetingId, 'case', engagementId);
+
+      expect(await schedulingAnchor(engagementId)).toBeNull();
+    });
+
+    it('S5 — the REAL writers: a reschedule and then a cancellation each restart the anchor', async () => {
+      const start = new Date(Date.now() + 3 * DAY_MS);
+      const { engagementId, meetingId } = await seedCaseWithMeeting({
+        scheduledStart: start,
+        scheduledEnd: new Date(start.getTime() + HOUR_MS),
+      });
+      const booked = await meetingAuditEventFactory({
+        meetingId,
+        action: 'meeting.booked',
+        createdAt: ago(20 * DAY_MS),
+      });
+      expect((await schedulingAnchor(engagementId))?.getTime()).toBe(booked.createdAt.getTime());
+
+      const movedStart = new Date(Date.now() + 5 * DAY_MS);
+      const { rescheduleAuditId } = await meetingsRepository.updateSchedule(
+        meetingId,
+        { scheduledStart: movedStart, scheduledEnd: new Date(movedStart.getTime() + HOUR_MS) },
+        { actorUserId: null }
+      );
+      const rescheduledAt = await auditCreatedAt(rescheduleAuditId);
+      expect(rescheduledAt.getTime()).not.toBe(booked.createdAt.getTime());
+      expect((await schedulingAnchor(engagementId))?.getTime()).toBe(rescheduledAt.getTime());
+
+      const backdated = ago(15 * DAY_MS);
+      await db
+        .update(auditEvents)
+        .set({ createdAt: backdated })
+        .where(eq(auditEvents.id, rescheduleAuditId));
+      expect((await schedulingAnchor(engagementId))?.getTime()).toBe(backdated.getTime());
+
+      const { cancelAuditId } = await meetingsRepository.cancel(meetingId, {
+        actorUserId: null,
+        actorRole: 'system',
+      });
+      const cancelledAt = await auditCreatedAt(cancelAuditId);
+      expect(cancelledAt.getTime()).toBeGreaterThan(backdated.getTime());
+      expect((await schedulingAnchor(engagementId))?.getTime()).toBe(cancelledAt.getTime());
+    });
   });
 });
+
+/** `created_at` of one audit row, read back by the id its writer returned. */
+async function auditCreatedAt(auditId: string): Promise<Date> {
+  const [row] = await db
+    .select({ createdAt: auditEvents.createdAt })
+    .from(auditEvents)
+    .where(eq(auditEvents.id, auditId));
+  if (row === undefined) {
+    throw new Error(`audit row ${auditId} not found`);
+  }
+  return row.createdAt;
+}
 
 describe('meetingContextsRepository.engagementIdsWithLiveCaseMeeting (the live-meeting exclusion)', () => {
   const floorFor = (now: Date): Date => new Date(now.getTime() - JOIN_WINDOW_AFTER_END_MS);
@@ -1001,7 +1246,10 @@ describe('meetingContextsRepository.engagementIdsWithLiveCaseMeeting (the live-m
  * against a real database:
  *
  *     meetingContextsRepository.consultationTimestampsForEngagements(ids, now)
- *       ──feeds──▶  isCaseInactive({ caseCreatedAt, ...anchors, now })
+ *       (completed + scheduling anchors, next upcoming consultation)
+ *     conversationsRepository.latestChatActivityAtForEngagements(ids)
+ *       (messages, case-chat files, in-call uploads)
+ *       ──feed──▶   isCaseInactive({ caseCreatedAt, ...anchors, lastChatActivityAt, now })
  *       ──minus──▶  meetingContextsRepository.engagementIdsWithLiveCaseMeeting(ids, floor)
  *
  * ⚠ THIS IS A COMPOSITION TEST, NOT A SWEEP. Auto-close is WINDOW MATH, not a consumer of
@@ -1010,34 +1258,90 @@ describe('meetingContextsRepository.engagementIdsWithLiveCaseMeeting (the live-m
  * unit-tested beside it.
  *
  * `caseEngagementsRepository.listOpenCreatedBefore` returns only the SQL-expressible,
- * creation-anchored, consultation-BLIND superset; the seam and the rule refine it, and they
+ * creation-anchored, activity-BLIND superset; the two reads and the rule refine it, and they
  * can only refine what they are handed. The live-meeting exclusion is the last filter (cases
- * 8 and 9): the anchors ignore a call that is running now or whose start has passed, so on
- * the anchors alone a case could close mid-call.
+ * 8 and 9): the consultation anchors ignore a call that is running now or whose start has
+ * passed, so on the anchors alone a case could close mid-call.
+ *
+ * ⚠ `NOW` IS FIXED, SO EVERY ROW THE RULE READS CARRIES AN EXPLICIT TIMESTAMP RELATIVE TO IT:
+ * each seeded audit, message, file and upload row sets `createdAt`, and a row written by a
+ * real mutator (`cancel`, `updateSchedule`) is stamped with the wall clock — after `NOW` — so
+ * it is backdated by its returned audit id before any assertion. Every meeting added for
+ * BAL-572 also sets its status and window relative to `NOW`: `meetingFactory`'s default
+ * window is `Date.now() + 1h`, which reads as UPCOMING against `NOW` and would make an ACTIVE
+ * expectation vacuous.
  */
 describe('case inactivity composition (BAL-417 × BAL-418)', () => {
-  /** Resolve both anchors for one case and apply the rule, exactly as the sweep will. */
-  async function inactive(engagementId: string, caseCreatedAt: Date, now: Date): Promise<boolean> {
+  /** Every input the two reads supply for one case, taken ONLY from their Maps. */
+  async function anchorsFor(
+    engagementId: string,
+    now: Date
+  ): Promise<ConsultationTimestamps & { lastChatActivityAt: Date | null }> {
     const anchors = await meetingContextsRepository.consultationTimestampsForEngagements(
       [engagementId],
       now
     );
+    const chat = await conversationsRepository.latestChatActivityAtForEngagements([engagementId]);
     const timestamps = anchors.get(engagementId);
     if (timestamps === undefined) {
       throw new Error(`consultationTimestampsForEngagements dropped ${engagementId}`);
     }
-    return isCaseInactive({
-      now,
-      caseCreatedAt,
-      lastCompletedConsultationAt: timestamps.lastCompletedConsultationAt,
-      nextScheduledConsultationAt: timestamps.nextScheduledConsultationAt,
-    });
+    const lastChatActivityAt = chat.get(engagementId);
+    if (lastChatActivityAt === undefined) {
+      throw new Error(`latestChatActivityAtForEngagements dropped ${engagementId}`);
+    }
+    return { ...timestamps, lastChatActivityAt };
+  }
+
+  /** Resolve every anchor for one case and apply the rule, exactly as the sweep does. */
+  async function inactive(engagementId: string, caseCreatedAt: Date, now: Date): Promise<boolean> {
+    return isCaseInactive({ now, caseCreatedAt, ...(await anchorsFor(engagementId, now)) });
   }
 
   const NOW = new Date('2026-08-05T12:00:00.000Z');
   const daysAgo = (days: number): Date => new Date(NOW.getTime() - days * DAY_MS);
   const daysAhead = (days: number): Date => new Date(NOW.getTime() + days * DAY_MS);
   const FLOOR = new Date(NOW.getTime() - JOIN_WINDOW_AFTER_END_MS);
+
+  /** A case created `days` before `NOW`, with its thread and a user to write into it. */
+  async function caseCreatedDaysAgo(days: number): Promise<{
+    engagementId: string;
+    createdAt: Date;
+    conversationId: string;
+    userId: string;
+  }> {
+    const { engagement, conversationId } = await caseEngagementFactory({
+      values: { createdAt: daysAgo(days) },
+    });
+    const user = await userFactory();
+    return {
+      engagementId: engagement.id,
+      createdAt: engagement.createdAt,
+      conversationId,
+      userId: user.id,
+    };
+  }
+
+  /** A case meeting that ENDED `endedDaysAgo` before `NOW`, in a one-hour window ending then. */
+  async function endedCaseMeeting(
+    engagementId: string,
+    endedDaysAgo: number,
+    outcome: 'completed' | 'no_show_client'
+  ): Promise<string> {
+    const endedAt = daysAgo(endedDaysAgo);
+    return seedCaseMeeting(engagementId, {
+      status: 'ended',
+      outcome,
+      endedAt,
+      scheduledStart: new Date(endedAt.getTime() - HOUR_MS),
+      scheduledEnd: endedAt,
+    });
+  }
+
+  /** Backdate one audit row, found by the id its real writer returned. */
+  async function backdateAudit(auditId: string, createdAt: Date): Promise<void> {
+    await db.update(auditEvents).set({ createdAt }).where(eq(auditEvents.id, auditId));
+  }
 
   /** The sweep's last filter: does a still-joinable case meeting hold this case open? */
   async function heldOpen(engagementId: string): Promise<boolean> {
@@ -1051,8 +1355,9 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
   it('1 — created 31d ago with NO meeting contexts at all ⇒ INACTIVE', async () => {
     const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(31) } });
 
-    // The map still returns an entry (both anchors null), so the rule falls back to the
-    // creation anchor — "absent" never has to be distinguished from "none".
+    // The seam still returns an entry (all three fields null) and the chat read a null, so the
+    // rule falls back to the creation anchor — "absent" never has to be distinguished from
+    // "none".
     expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
   });
 
@@ -1081,7 +1386,7 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
     expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(false);
   });
 
-  it('3b — ⚠ PASSING `null, null` FLIPS CASE 3 TO INACTIVE. That is the whole point of this test.', async () => {
+  it('3b — ⚠ PASSING HAND-BUILT NULL ANCHORS FLIPS CASE 3 TO INACTIVE. That is the whole point of this test.', async () => {
     const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(60) } });
     await meetingFactory({
       contexts: [{ contextType: 'case', contextId: engagement.id }],
@@ -1102,6 +1407,8 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
         caseCreatedAt: engagement.createdAt,
         lastCompletedConsultationAt: null,
         nextScheduledConsultationAt: null,
+        lastSchedulingActivityAt: null,
+        lastChatActivityAt: null,
       })
     ).toBe(true);
     // …while the composed answer, on the same row, is the correct one.
@@ -1144,7 +1451,7 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
     expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
   });
 
-  it('7 — the ONLY consultation was CANCELLED ⇒ INACTIVE, anchored on case creation (AC 4)', async () => {
+  it('7 — the ONLY consultation was CANCELLED ⇒ the cancellation restarts the 30 days (BAL-572)', async () => {
     const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(31) } });
     const upcoming = daysAhead(1);
     const { meeting } = await meetingFactory({
@@ -1153,24 +1460,37 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
     });
 
     // Pre-assert: while the call is booked, the case is held open. This proves the
-    // engagement, the context row and the seam are all wired correctly, so the post-assert's
-    // flip to `true` can only come from the cancellation below, not from a wiring accident.
+    // engagement, the context row and the seam are all wired correctly, so every later flip
+    // can only come from the cancellation below, not from a wiring accident.
     expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(false);
 
     // Cancel through the REAL production path, not by seeding a cancelled row — this is
-    // what turns "a cancelled row is excluded" into "production cancellation leaves a row
-    // the seam then excludes", the actual AC 4 claim.
-    await meetingsRepository.cancel(meeting.id, { actorUserId: null, actorRole: 'system' });
+    // what turns "a cancelled row is excluded from upcoming" into "production cancellation
+    // leaves a row the seam then excludes", and it writes the real `meeting.cancelled` row.
+    const { cancelAuditId } = await meetingsRepository.cancel(meeting.id, {
+      actorUserId: null,
+      actorRole: 'system',
+    });
 
-    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+    // A day-old cancellation holds the case: the cancellation is the only anchor newer than
+    // creation, and the cancelled meeting no longer counts as upcoming.
+    await backdateAudit(cancelAuditId, daysAgo(1));
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(false);
 
     const anchors = await meetingContextsRepository.consultationTimestampsForEngagements(
       [engagement.id],
       NOW
     );
-    const timestamps = anchors.get(engagement.id);
-    expect(timestamps?.lastCompletedConsultationAt).toBeNull();
-    expect(timestamps?.nextScheduledConsultationAt).toBeNull();
+    expect(anchors.get(engagement.id)).toEqual({
+      lastCompletedConsultationAt: null,
+      nextScheduledConsultationAt: null,
+      lastSchedulingActivityAt: daysAgo(1),
+    });
+
+    // A 31-day-old cancellation does NOT: the cancelled meeting is excluded from "upcoming",
+    // so nothing else holds it.
+    await backdateAudit(cancelAuditId, daysAgo(31));
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
 
     // The exclusion must be attributable to the STATUS FILTER ALONE. If cancel ever starts
     // soft-deleting the meeting or its context rows, the booleans above keep passing for a
@@ -1214,6 +1534,178 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
 
     expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
     expect(await heldOpen(engagement.id)).toBe(false);
+  });
+
+  // ── Chat activity: messages (BAL-572) ─────────────────────────────────────
+
+  /** One live message in the case's thread, `days` before `NOW`. */
+  async function messageDaysAgo(
+    kase: { conversationId: string; userId: string },
+    days: number,
+    deletedAt?: Date
+  ): Promise<void> {
+    await conversationMessageFactory({
+      conversationId: kase.conversationId,
+      senderUserId: kase.userId,
+      createdAt: daysAgo(days),
+      ...(deletedAt === undefined ? {} : { deletedAt }),
+    });
+  }
+
+  it('10 — created 45d ago, never consulted, a message 5d ago ⇒ ACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(45);
+    await messageDaysAgo(kase, 5);
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+  });
+
+  it('11 — last completed 40d ago and last message 31d ago ⇒ INACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(60);
+    await endedCaseMeeting(kase.engagementId, 40, 'completed');
+    await messageDaysAgo(kase, 31);
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(true);
+  });
+
+  it('12 — last completed 5d ago and last message 40d ago ⇒ ACTIVE (the newer anchor wins)', async () => {
+    const kase = await caseCreatedDaysAgo(60);
+    await endedCaseMeeting(kase.engagementId, 5, 'completed');
+    await messageDaysAgo(kase, 40);
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+  });
+
+  it('13 — last message EXACTLY 30d ago ⇒ INACTIVE (the boundary is inclusive)', async () => {
+    const kase = await caseCreatedDaysAgo(45);
+    await messageDaysAgo(kase, CASE_INACTIVITY_DAYS);
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(true);
+  });
+
+  it('14 — only a SOFT-DELETED message, 1d ago ⇒ INACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(45);
+    await messageDaysAgo(kase, 1, daysAgo(1));
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(true);
+  });
+
+  it('15 — ⚠ a NULL chat anchor flips case 10 to INACTIVE; the composed answer stays ACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(45);
+    await messageDaysAgo(kase, 5);
+    const anchors = await anchorsFor(kase.engagementId, NOW);
+
+    // Hand-building the chat input instead of taking it from the read's Map collapses the rule
+    // to "created ≥ 30 days ago" for a case whose parties spoke five days ago.
+    expect(
+      isCaseInactive({
+        now: NOW,
+        caseCreatedAt: kase.createdAt,
+        ...anchors,
+        lastChatActivityAt: null,
+      })
+    ).toBe(true);
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+  });
+
+  // ── Chat activity: files and in-call uploads (BAL-572) ────────────────────
+
+  it('16 — created 45d ago, a case-chat FILE 5d ago and no message ⇒ ACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(45);
+    await conversationFileFactory({
+      conversationId: kase.conversationId,
+      uploadedByUserId: kase.userId,
+      createdAt: daysAgo(5),
+    });
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+  });
+
+  it('16b — created 45d ago, a missed call with an in-call UPLOAD 5d ago and no message ⇒ ACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(45);
+    const meetingId = await endedCaseMeeting(kase.engagementId, 5, 'no_show_client');
+    await meetingFileFactory({ meetingId, source: 'chat', createdAt: daysAgo(5) });
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+  });
+
+  it('16c — the same call with a RECORDING and a TRANSCRIPT 5d ago but no upload ⇒ INACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(45);
+    const meetingId = await endedCaseMeeting(kase.engagementId, 5, 'no_show_client');
+    await meetingRecordingFactory({ meetingId, status: 'ready', createdAt: daysAgo(5) });
+    await transcriptFactory({
+      engagementId: kase.engagementId,
+      meetingId,
+      values: { createdAt: daysAgo(5) },
+    });
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(true);
+  });
+
+  // ── Scheduling activity: bookings, reschedules, cancellations (BAL-572) ───
+
+  it('17 — booked 20d ago, then MISSED ⇒ ACTIVE (the booking holds the case)', async () => {
+    const kase = await caseCreatedDaysAgo(60);
+    const meetingId = await endedCaseMeeting(kase.engagementId, 10, 'no_show_client');
+    await meetingAuditEventFactory({ meetingId, action: 'meeting.booked', createdAt: daysAgo(20) });
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+  });
+
+  it('18 — booked 31d ago, then missed 17d ago ⇒ INACTIVE (a miss restarts nothing)', async () => {
+    const kase = await caseCreatedDaysAgo(60);
+    const meetingId = await endedCaseMeeting(kase.engagementId, 17, 'no_show_client');
+    await meetingAuditEventFactory({ meetingId, action: 'meeting.booked', createdAt: daysAgo(31) });
+    for (const action of ['meeting.ended', 'meeting.outcome_resolved'] as const) {
+      await meetingAuditEventFactory({ meetingId, action, createdAt: daysAgo(17) });
+    }
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(true);
+  });
+
+  /** Case 19's shape: booked 40d ago, rescheduled 3d ago, then missed yesterday. */
+  async function bookedMovedThenMissed(): Promise<{ engagementId: string; createdAt: Date }> {
+    const kase = await caseCreatedDaysAgo(60);
+    const meetingId = await endedCaseMeeting(kase.engagementId, 1, 'no_show_client');
+    await meetingAuditEventFactory({ meetingId, action: 'meeting.booked', createdAt: daysAgo(40) });
+    await meetingAuditEventFactory({
+      meetingId,
+      action: 'meeting.rescheduled',
+      createdAt: daysAgo(3),
+    });
+    return kase;
+  }
+
+  it('19 — booked 40d ago, RESCHEDULED 3d ago, then missed ⇒ ACTIVE (a reschedule restarts)', async () => {
+    const kase = await bookedMovedThenMissed();
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+  });
+
+  it('20 — newest scheduling row EXACTLY 30d ago ⇒ INACTIVE (the boundary is inclusive)', async () => {
+    const kase = await caseCreatedDaysAgo(60);
+    const meetingId = await endedCaseMeeting(kase.engagementId, 25, 'no_show_client');
+    await meetingAuditEventFactory({
+      meetingId,
+      action: 'meeting.booked',
+      createdAt: daysAgo(CASE_INACTIVITY_DAYS),
+    });
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(true);
+  });
+
+  it('21 — ⚠ a NULL scheduling anchor flips case 19 to INACTIVE; the composed answer stays ACTIVE', async () => {
+    const kase = await bookedMovedThenMissed();
+    const anchors = await anchorsFor(kase.engagementId, NOW);
+
+    expect(
+      isCaseInactive({
+        now: NOW,
+        caseCreatedAt: kase.createdAt,
+        ...anchors,
+        lastSchedulingActivityAt: null,
+      })
+    ).toBe(true);
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
   });
 
   it('THE CLOCK IS SHARED — `caseCreatedAt` is the PARENT engagements.created_at', async () => {

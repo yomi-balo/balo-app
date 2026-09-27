@@ -20,6 +20,7 @@ import {
   type Meeting,
 } from '@balo/db';
 import type { RecapContextType } from '@balo/analytics/events';
+import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
 import { formatLongUtc } from '@/lib/format/utc-date';
 import { log } from '@/lib/logging';
 import { fetchSessionMoneyBlock } from '@/lib/api/session-money-block';
@@ -161,7 +162,7 @@ function resolveClosedNote(caseRow: CaseEngagementRow | undefined): string | nul
   const closedAt = caseRow?.closedAt;
   if (closedAt == null) return null;
   if (caseRow?.closeReason === 'auto_inactive') {
-    return 'Closed automatically after 30 days without activity. Everything stays available.';
+    return `Closed automatically after ${CASE_INACTIVITY_DAYS} days with no consultations, bookings or messages. Everything stays available.`;
   }
   return 'Resolved on ' + formatLongUtc(closedAt) + '. Everything here stays available.';
 }

@@ -6,6 +6,7 @@ import {
 } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
+  auditEvents,
   creditSessions,
   meetingContexts,
   meetings,
@@ -16,12 +17,21 @@ import {
 import { isUniqueViolation } from './experts';
 import { assertProjectionExpertUnchangedTx } from './_shared/consultation-projection';
 import type { DbExecutor } from './_shared/db-executor';
+import {
+  MEETING_SCHEDULING_AUDIT_ACTIONS,
+  type MeetingAuditEntityType,
+} from './_shared/meeting-audit';
 
-/** BAL-425's two consultation anchors for ONE case engagement. */
+/** The case-inactivity seam's three meeting anchors for ONE case engagement. */
 export interface ConsultationTimestamps {
   lastCompletedConsultationAt: Date | null;
   nextScheduledConsultationAt: Date | null;
+  /** The newest booking, reschedule or cancellation of a live case meeting (BAL-572). */
+  lastSchedulingActivityAt: Date | null;
 }
+
+/** Every meeting audit row's `entity_type`. */
+const MEETING_AUDIT_ENTITY_TYPE: MeetingAuditEntityType = 'meeting';
 
 /**
  * `context_id` is NULLABLE (an `admin` meeting has no subject), and `= NULL` is never
@@ -140,7 +150,8 @@ async function assertPrimaryContextUnchangedTx(
  * credentials); `attach` would forge a context row that feeds
  * `consultationTimestampsForEngagements` and hold a victim's case open via `isCaseInactive`
  * for as long as that forged `scheduled_start` stays in the future — renewable at will by
- * forging another.
+ * forging another — and, since BAL-572, for 30 days after the forged meeting's newest
+ * scheduling audit row or in-call upload.
  *
  * EVERY CALLER MUST resolve the context's owning party and check `hasCapability` BEFORE
  * passing `contextId` in. That check belongs in the service / server-action layer, not
@@ -477,14 +488,17 @@ export const meetingContextsRepository = {
   },
 
   /**
-   * THE BAL-425 SEAM — the two consultation anchors `isCaseInactive`
-   * (`@balo/shared/engagements`) takes as parameters, for a BATCH of case engagements.
+   * THE BAL-425 SEAM — the meeting inputs `isCaseInactive` (`@balo/shared/engagements`) takes
+   * as parameters, for a BATCH of case engagements: two of its four anchors (the last
+   * COMPLETED consultation and the last SCHEDULING action) plus the next UPCOMING
+   * consultation. Of the other two anchors, creation comes from the engagement row and CHAT
+   * from `conversationsRepository.latestChatActivityAtForEngagements`.
    *
    * BATCHED DELIBERATELY: the sweep resolves a candidate list from
    * `caseEngagementsRepository.listOpenCreatedBefore`, so a per-engagement query would be
    * a textbook N+1.
    *
-   * Resolution rules (both directions):
+   * Resolution rules:
    *  - `lastCompletedConsultationAt` = `MAX(COALESCE(credit_sessions.ended_at,
    *    meetings.ended_at))` over live meetings whose `status='ended'` AND
    *    `outcome='completed'`. ⚠ THE LEFT JOIN IS DELIBERATE: a completed case
@@ -516,7 +530,8 @@ export const meetingContextsRepository = {
    *    `in_progress` exclusion is a judgement about the word "upcoming"; the `cancelled`
    *    exclusion is the difference between a rule that terminates and one that does not.
    *    PINNED by 'a CANCELLED future meeting is NOT upcoming — the earliest LIVE scheduled
-   *    one wins' and by composition case 7 in `meeting-contexts.integration.test.ts`.
+   *    one wins' and by composition case 7 in `meeting-contexts.integration.test.ts`, whose
+   *    31-day-old cancellation must still read INACTIVE.
    *
    *    The COMPLETED anchor needs no such filter hardening and structurally cannot: CHECK
    *    `meeting_outcome_requires_ended` makes `status='cancelled' AND outcome='completed'`
@@ -528,14 +543,52 @@ export const meetingContextsRepository = {
    *    timestamp, `waiting_for_participants` → the timestamp, `in_progress` → NULL,
    *    `ended` → NULL, `cancelled` → NULL.
    *
+   *  - `lastSchedulingActivityAt` (BAL-572) = `MAX(audit_events.created_at)` over rows with
+   *    `entity_type = 'meeting'`, `entity_id` = one of those live case meetings, and `action`
+   *    in `MEETING_SCHEDULING_AUDIT_ACTIONS` (`meeting.booked`, `meeting.rescheduled`,
+   *    `meeting.cancelled`). A LEFT JOIN on `audit_events_entity_idx (entity_type,
+   *    entity_id)`, with `action` a residual filter over one meeting's few rows; its fan-out
+   *    against the `credit_sessions` LEFT JOIN is harmless to `max`/`min`. A reschedule
+   *    PROPOSAL writes no audit row: it counts once accepted, and while it is pending its call
+   *    is upcoming, which holds the case anyway.
+   *
+   *    ⚠ ONE SOURCE: THE AUDIT TRAIL, NEVER `meetings.created_at`. The `meeting.booked` row is
+   *    written in `meetingsRepository.create`'s own transaction, so its `created_at` IS the
+   *    meeting's (both `transaction_timestamp()`); reading both would be two sources for one
+   *    instant. The consequence: a meeting inserted without its booked row — `meetingFactory`
+   *    in tests — contributes NO scheduling anchor. Every writer's same-transaction
+   *    obligation, and the rule that a BACKFILL of these actions must stamp the original event
+   *    time rather than "now", live on `MEETING_SCHEDULING_AUDIT_ACTIONS`.
+   *
+   *    ⚠ STATUS-BLIND ON PURPOSE, AND BOUNDED. There is no `status` or `outcome` filter: a
+   *    booking or reschedule holds its case even when the call is later cancelled or missed,
+   *    and the cancellation itself restarts the 30 days. That terminates: each row holds a
+   *    case for at most `CASE_INACTIVITY_DAYS` after it was written, and a cancelled meeting's
+   *    history is closed (both `cancel` and `updateSchedule` compare-and-set from
+   *    `scheduled`). DO NOT "FIX" THIS WITH A STATUS FILTER — that would drop exactly the
+   *    cancellations and missed calls this anchor exists to count. `meeting.ended` and
+   *    `meeting.outcome_resolved` are not scheduling actions, so a MISS restarts nothing: a
+   *    missed call holds its case from its latest booking or reschedule.
+   *
+   *    ⚠ THE MISSED-CALL HOLD RESTS ON THE 14-DAY BOOKING GRID. A booking made L days ahead
+   *    and then missed holds its case for `30 − L` days past the call's start. The booking UI
+   *    stops at `MAX_AVAILABILITY_WINDOW_DAYS = 14` (`@balo/shared/availability`), but the
+   *    server accepts `MAX_BOOKING_HORIZON_DAYS = 365` (`@balo/shared/meetings`), so a crafted
+   *    booking made 30+ days ahead and then missed lets its case close within the hour after
+   *    its join window. The case-inactivity sweep's test pins 14 < 30.
+   *
+   *    ⚠ `attach` (no production caller) brings a tagged meeting's EARLIER scheduling rows
+   *    with it onto the new case. Accepted: each row still holds for at most 30 days.
+   *
    * ⚠ THE BOUNDARY THAT FALLS OUT OF THAT. An `in_progress` meeting contributes to NEITHER
-   * anchor: not to `nextScheduledConsultationAt` (it is not upcoming) and not to
+   * consultation anchor: not to `nextScheduledConsultationAt` (it is not upcoming) and not to
    * `lastCompletedConsultationAt` (it is not `ended`). Neither does a `scheduled` or
-   * `waiting_for_participants` call whose start has already passed. So a case whose only
-   * activity is a consultation running RIGHT NOW reads as having none, `isCaseInactive`
-   * falls back to `engagements.created_at`, and ON THE ANCHORS ALONE a case created ≥
-   * `CASE_INACTIVITY_DAYS` ago whose first consultation is in progress would be eligible
-   * for auto-close MID-CALL.
+   * `waiting_for_participants` call whose start has already passed. Such a call contributes
+   * ONLY its latest scheduling action, so a case whose only activity is a consultation
+   * running RIGHT NOW is anchored on that booking or reschedule (or on creation, for a
+   * meeting with no audit row). ON THE ANCHORS ALONE, a case whose running call was booked or
+   * last moved ≥ `CASE_INACTIVITY_DAYS` ago — a far-horizon booking, or a stranded meeting —
+   * would be eligible for auto-close MID-CALL.
    *
    * THE REMEDY IS NOT IN THIS SEAM, and that is deliberate — the anchor's meaning is
    * "upcoming", and a running meeting is not upcoming. Widening the filter would be the
@@ -556,9 +609,9 @@ export const meetingContextsRepository = {
    * Enum literals at QUERY time are always safe — the house restriction is on index
    * predicates and CHECKs only.
    *
-   * Returns an entry for EVERY requested id (both timestamps `null` when nothing matches),
-   * so the sweep never has to distinguish "absent" from "none". An empty input returns an
-   * empty Map WITHOUT touching the DB.
+   * Returns an entry for EVERY requested id (all three timestamps `null` when nothing
+   * matches), so the sweep never has to distinguish "absent" from "none". An empty input
+   * returns an empty Map WITHOUT touching the DB.
    */
   async consultationTimestampsForEngagements(
     engagementIds: string[],
@@ -569,6 +622,7 @@ export const meetingContextsRepository = {
       result.set(engagementId, {
         lastCompletedConsultationAt: null,
         nextScheduledConsultationAt: null,
+        lastSchedulingActivityAt: null,
       });
     }
     if (result.size === 0) {
@@ -591,6 +645,8 @@ export const meetingContextsRepository = {
             filter (where ${meetings.scheduledStart} > ${now.toISOString()}::timestamptz
                       and ${meetings.status} in ('scheduled', 'waiting_for_participants'))
         `,
+        // Status-blind by design — see `lastSchedulingActivityAt` in the docblock.
+        lastSchedulingActivityAt: sql<AggregateTimestamp>`max(${auditEvents.createdAt})`,
       })
       .from(meetingContexts)
       .innerJoin(
@@ -600,6 +656,14 @@ export const meetingContextsRepository = {
       .leftJoin(
         creditSessions,
         and(eq(creditSessions.meetingId, meetings.id), isNull(creditSessions.deletedAt))
+      )
+      .leftJoin(
+        auditEvents,
+        and(
+          eq(auditEvents.entityType, MEETING_AUDIT_ENTITY_TYPE),
+          eq(auditEvents.entityId, meetings.id),
+          inArray(auditEvents.action, [...MEETING_SCHEDULING_AUDIT_ACTIONS])
+        )
       )
       .where(
         and(
@@ -617,6 +681,7 @@ export const meetingContextsRepository = {
       result.set(row.contextId, {
         lastCompletedConsultationAt: toDate(row.lastCompletedConsultationAt),
         nextScheduledConsultationAt: toDate(row.nextScheduledConsultationAt),
+        lastSchedulingActivityAt: toDate(row.lastSchedulingActivityAt),
       });
     }
     return result;
@@ -626,8 +691,9 @@ export const meetingContextsRepository = {
    * The case-inactivity sweep's CANDIDATE EXCLUSION — the subset of `engagementIds` that
    * carry at least one live `case` meeting which can STILL BE JOINED. Such a case must not
    * auto-close, whatever its anchors say (see the boundary paragraph on
-   * {@link consultationTimestampsForEngagements}: those anchors ignore a call that is
-   * running now or whose start has passed).
+   * {@link consultationTimestampsForEngagements}: the consultation anchors ignore a call that
+   * is running now or whose start has passed, and the scheduling anchor holds one only for
+   * `CASE_INACTIVITY_DAYS` after its latest booking or reschedule).
    *
    * "Can still be joined" is `assertMeetingJoinable`'s window (`apps/api`
    * `services/meetings/meeting-liveness.ts`), restated as SQL:
