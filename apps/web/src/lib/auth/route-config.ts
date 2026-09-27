@@ -13,6 +13,10 @@ export const PUBLIC_PATHS = new Set([
   '/about',
   '/pricing',
   '/contact',
+  // The marketing header's How it works and For experts links. Placeholder pages for now (like
+  // `/pricing`), rendering static copy only — no user is dereferenced and nothing is written.
+  '/how-it-works',
+  '/for-experts',
   // BAL-502 — the marketing header's supply-side "For experts" link target. EXACT PATH ONLY:
   // `PUBLIC_PATHS` is matched with `.has(pathname)` (see `isPublicRoute` below), so
   // `/expert/apply/success` and `/expert/apply/review` stay protected.

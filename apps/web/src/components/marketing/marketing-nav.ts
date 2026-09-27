@@ -1,4 +1,4 @@
-import { Search, Sparkles, type LucideIcon } from 'lucide-react';
+import { LifeBuoy, Search, Sparkles, Wallet, type LucideIcon } from 'lucide-react';
 import type { MarketingNavLink } from '@/lib/analytics';
 
 export interface MarketingNavEntry {
@@ -17,6 +17,13 @@ export interface MarketingNavEntry {
 // :113-118) asserts `components/layout/nav-registry.ts` is the ONLY non-test source file whose
 // text contains the literal substring `NAV_ENTRIES`. Renaming this constant to end in
 // `_ENTRIES` would trip that invariant and fail the suite — leave the name as-is.
+// The design reference's four links, in its order: Find experts · How it works · For experts ·
+// Pricing. Only Find experts has an active state there.
+//
+// ⚠ How it works, For experts and Pricing point at PLACEHOLDER pages for now
+// (`app/(marketing)/{how-it-works,for-experts,pricing}`). For experts deliberately does NOT go to
+// the expert application (`/expert/apply`): signed-out visitors land on the placeholder until the
+// real supply-side page exists.
 export const MARKETING_NAV_ITEMS: readonly MarketingNavEntry[] = [
   {
     key: 'find_experts',
@@ -28,16 +35,24 @@ export const MARKETING_NAV_ITEMS: readonly MarketingNavEntry[] = [
     isActive: (pathname) => pathname === '/experts' || pathname.startsWith('/experts/'),
   },
   {
+    key: 'how_it_works',
+    label: 'How it works',
+    href: '/how-it-works',
+    icon: LifeBuoy,
+    isActive: () => false,
+  },
+  {
     key: 'for_experts',
     label: 'For experts',
-    href: '/expert/apply',
+    href: '/for-experts',
     icon: Sparkles,
-    // The design reference gives this no active state.
+    isActive: () => false,
+  },
+  {
+    key: 'pricing',
+    label: 'Pricing',
+    href: '/pricing',
+    icon: Wallet,
     isActive: () => false,
   },
 ];
-
-// TODO(MJ — final link set is an MJ decision): the design reference specifies FOUR links, in
-// this order: Find experts · How it works · For experts · Pricing. `how_it_works` (icon
-// LifeBuoy) and `pricing` (icon Wallet) are omitted because neither page exists. Their keys are
-// already declared in `MARKETING_NAV_LINKS`, so adding them here later needs no analytics change.

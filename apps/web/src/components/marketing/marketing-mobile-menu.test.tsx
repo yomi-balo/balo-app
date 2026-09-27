@@ -32,7 +32,9 @@ describe('MarketingMobileMenu', () => {
     const handlers = makeHandlers();
     render(<MarketingMobileMenu open viewer={null} {...handlers} />);
     expect(screen.getByText('Find experts')).toBeInTheDocument();
+    expect(screen.getByText('How it works')).toBeInTheDocument();
     expect(screen.getByText('For experts')).toBeInTheDocument();
+    expect(screen.getByText('Pricing')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Find an expert' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Log in' })).toBeInTheDocument();
     expect(screen.queryByText('Dashboard')).not.toBeInTheDocument();
