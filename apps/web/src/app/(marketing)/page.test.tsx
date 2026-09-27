@@ -34,7 +34,6 @@ function makeHomeData(overrides: Partial<MarketingHomeData> = {}): MarketingHome
     expertTotal: 42,
     wasAvailabilityGated: false,
     spotlight: [],
-    projectTaxonomies: null,
     ...overrides,
   };
 }

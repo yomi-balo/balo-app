@@ -1104,7 +1104,7 @@ describe('ProjectRequestPanel', () => {
       it('never overwrites an existing localStorage draft', () => {
         globalThis.localStorage.setItem(
           HOME_KEY,
-          JSON.stringify({ title: 'Already typed', descriptionHtml: '' })
+          JSON.stringify({ title: 'Already typed', descriptionHtml: '', savedAt: Date.now() })
         );
         renderHome({ seed: { title: 'Seeded title' } });
         expect(screen.getByLabelText(/project title/i)).toHaveValue('Already typed');
@@ -1113,14 +1113,17 @@ describe('ProjectRequestPanel', () => {
       it('seeds a description into a draft whose editor was cleared to "<p></p>"', () => {
         globalThis.localStorage.setItem(
           HOME_KEY,
-          JSON.stringify({ title: '', descriptionHtml: '<p></p>' })
+          JSON.stringify({ title: '', descriptionHtml: '<p></p>', savedAt: Date.now() })
         );
         renderHome({ seed: { descriptionText: 'Seeded brief text.' } });
         expect(screen.getByLabelText(/project description/i)).toHaveValue('Seeded brief text.');
       });
 
       it('unions seeded product ids with the draft, filtered to live ids', () => {
-        globalThis.localStorage.setItem(HOME_KEY, JSON.stringify({ productIds: [SALES_CLOUD_ID] }));
+        globalThis.localStorage.setItem(
+          HOME_KEY,
+          JSON.stringify({ productIds: [SALES_CLOUD_ID], savedAt: Date.now() })
+        );
         renderHome({ seed: { title: 'x', productIds: [SERVICE_CLOUD_ID, 'stale-id'] } });
 
         expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
@@ -1173,7 +1176,7 @@ describe('ProjectRequestPanel', () => {
       it('resumeDraft opens at manual for a manual-source draft', () => {
         globalThis.localStorage.setItem(
           HOME_KEY,
-          JSON.stringify({ title: 'Resumed', source: 'manual' })
+          JSON.stringify({ title: 'Resumed', source: 'manual', savedAt: Date.now() })
         );
         renderHome({ resumeDraft: true });
         expect(screen.getByLabelText(/project title/i)).toHaveValue('Resumed');
@@ -1182,7 +1185,7 @@ describe('ProjectRequestPanel', () => {
       it("resumeDraft opens at upload for an 'ai'-source draft (gated there)", () => {
         globalThis.localStorage.setItem(
           HOME_KEY,
-          JSON.stringify({ title: 'Resumed AI', source: 'ai' })
+          JSON.stringify({ title: 'Resumed AI', source: 'ai', savedAt: Date.now() })
         );
         renderHome({ resumeDraft: true });
         expect(

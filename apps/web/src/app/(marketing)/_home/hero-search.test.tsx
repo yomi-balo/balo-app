@@ -22,7 +22,6 @@ interface PanelStubProps {
   seed?: unknown;
   resumeDraft?: unknown;
   isLoggedIn?: unknown;
-  projectTaxonomies?: unknown;
 }
 
 // BAL-582 — a data-attribute stub for the lazily mounted `./home-project-panel`, so this file
@@ -36,7 +35,6 @@ vi.mock('./home-project-panel', () => ({
       data-resume-draft={String(props.resumeDraft)}
       data-is-logged-in={String(props.isLoggedIn)}
       data-seed={JSON.stringify(props.seed ?? null)}
-      data-has-taxonomies={String(props.projectTaxonomies !== undefined)}
     >
       <button type="button" onClick={props.onClose}>
         close-panel-stub
@@ -88,7 +86,9 @@ function renderHeroSearch(overrides: { isLoggedIn?: boolean } = {}) {
 
 async function switchToProjectMode() {
   const user = userEvent.setup();
-  await user.click(screen.getByRole('button', { name: /Mode: book a consultation/i }));
+  await user.click(
+    screen.getByRole('button', { name: HERO_MODE_COPY.toggleLabel, pressed: false })
+  );
   return user;
 }
 
@@ -419,30 +419,29 @@ describe('HeroSection ⊃ HeroSearch — exactly one <h1> at the composition bou
 });
 
 describe('HeroSearch — BAL-582 sentence mode toggle', () => {
-  it('the phrase button carries aria-pressed, aria-label and title, and flips them on click', async () => {
+  it('the phrase button carries a STABLE accessible name across toggles, while aria-pressed flips', async () => {
     const user = userEvent.setup();
     renderHeroSearch();
 
-    const phraseBtn = screen.getByRole('button', {
-      name: 'Mode: book a consultation. Switch to start a project',
-    });
+    const phraseBtn = screen.getByRole('button', { name: HERO_MODE_COPY.toggleLabel });
     expect(phraseBtn).toHaveAttribute('aria-pressed', 'false');
-    expect(phraseBtn).toHaveAttribute('title', 'Switch to start a project');
+    expect(phraseBtn).not.toHaveAttribute('title');
 
     await user.click(phraseBtn);
 
-    const flipped = screen.getByRole('button', {
-      name: 'Mode: start a project. Switch to book a consultation',
-    });
+    // Same accessible name resolves to exactly one button after the flip — it never changed to
+    // "narrate" the new state (that is `aria-pressed`'s job, not the name's).
+    const flipped = screen.getByRole('button', { name: HERO_MODE_COPY.toggleLabel });
+    expect(flipped).toBe(phraseBtn);
     expect(flipped).toHaveAttribute('aria-pressed', 'true');
-    expect(flipped).toHaveAttribute('title', 'Switch to book a consultation');
+    expect(flipped).not.toHaveAttribute('title');
   });
 
   it('the phrase click fires heroModeChanged with source "phrase"; the tail click fires it with source "tail"', async () => {
     const user = userEvent.setup();
     renderHeroSearch();
 
-    await user.click(screen.getByRole('button', { name: /Mode: book a consultation/i }));
+    await user.click(screen.getByRole('button', { name: HERO_MODE_COPY.toggleLabel }));
     expect(mockTrack).toHaveBeenCalledWith(MARKETING_HOME_EVENTS.HERO_MODE_CHANGED, {
       mode: 'project',
       source: 'phrase',
@@ -515,7 +514,7 @@ describe('HeroSearch — BAL-582 ?intent=project', () => {
       </StrictMode>
     );
 
-    await screen.findByRole('button', { name: /Mode: start a project/i });
+    await screen.findByRole('button', { name: HERO_MODE_COPY.toggleLabel, pressed: true });
 
     const urlModeChanges = mockTrack.mock.calls.filter(
       ([event]) => event === MARKETING_HOME_EVENTS.HERO_MODE_CHANGED
@@ -562,6 +561,7 @@ describe('HeroSearch — BAL-582 project submit and panel seeding', () => {
       product_count: 0,
       signed_in: false,
       seeded_into: 'title',
+      source: 'submit',
     });
 
     const stub = await screen.findByTestId('home-project-panel-stub');
@@ -637,7 +637,7 @@ describe('HeroSearch — BAL-582 D1 resume path', () => {
     rememberPendingHomeProject();
     renderHeroSearch({ isLoggedIn: true });
 
-    await screen.findByRole('button', { name: /Mode: start a project/i });
+    await screen.findByRole('button', { name: HERO_MODE_COPY.toggleLabel, pressed: true });
     const stub = await screen.findByTestId('home-project-panel-stub');
     expect(stub).toHaveAttribute('data-open', 'true');
     expect(stub).toHaveAttribute('data-resume-draft', 'true');
@@ -649,7 +649,9 @@ describe('HeroSearch — BAL-582 D1 resume path', () => {
     rememberPendingHomeProject(Date.now() - 31 * 60 * 1000);
     renderHeroSearch({ isLoggedIn: true });
 
-    expect(screen.getByRole('button', { name: /Mode: book a consultation/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: HERO_MODE_COPY.toggleLabel, pressed: false })
+    ).toBeInTheDocument();
     expect(screen.queryByTestId('home-project-panel-stub')).not.toBeInTheDocument();
   });
 
@@ -657,7 +659,9 @@ describe('HeroSearch — BAL-582 D1 resume path', () => {
     rememberPendingHomeProject();
     renderHeroSearch({ isLoggedIn: false });
 
-    expect(screen.getByRole('button', { name: /Mode: book a consultation/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: HERO_MODE_COPY.toggleLabel, pressed: false })
+    ).toBeInTheDocument();
     expect(screen.queryByTestId('home-project-panel-stub')).not.toBeInTheDocument();
   });
 });
@@ -718,7 +722,7 @@ describe('HeroSearch — BAL-582 intent nudge', () => {
     });
     expect(mockTrack).toHaveBeenCalledWith(
       MARKETING_HOME_EVENTS.HERO_PROJECT_CTA_CLICKED,
-      expect.objectContaining({ signed_in: true })
+      expect.objectContaining({ signed_in: true, source: 'nudge' })
     );
     expect(await screen.findByTestId('home-project-panel-stub')).toHaveAttribute(
       'data-open',

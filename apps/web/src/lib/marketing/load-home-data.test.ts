@@ -9,7 +9,6 @@ const {
   mockResolveBenchTiles,
   mockResolvePopularChips,
   mockMapPublicProfileToCardData,
-  mockLoadProjectRequestTaxonomies,
 } = vi.hoisted(() => ({
   mockFindPublicProfileByUsername: vi.fn(),
   mockMapProfileToView: vi.fn(),
@@ -19,7 +18,6 @@ const {
   mockResolveBenchTiles: vi.fn(),
   mockResolvePopularChips: vi.fn(),
   mockMapPublicProfileToCardData: vi.fn(),
-  mockLoadProjectRequestTaxonomies: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -35,10 +33,6 @@ vi.mock('@balo/shared/marketing', () => ({
 
 vi.mock('@/lib/expert-profile/profile-view', () => ({
   mapProfileToView: mockMapProfileToView,
-}));
-
-vi.mock('@/lib/project-request/load-project-taxonomy', () => ({
-  loadProjectRequestTaxonomies: mockLoadProjectRequestTaxonomies,
 }));
 
 vi.mock('@/lib/search/load-taxonomy', () => ({
@@ -84,12 +78,6 @@ const SEARCH_RESULT = {
   wasAvailabilityGated: false,
 };
 
-const PROJECT_TAXONOMIES = {
-  tags: { groups: [{ id: 'grp-1', name: 'Foundational', items: [] }] },
-  products: TAXONOMY,
-  loadFailed: false,
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
   mockLoadSearchTaxonomy.mockResolvedValue(TAXONOMY);
@@ -98,7 +86,6 @@ beforeEach(() => {
   mockResolvePopularChips.mockReturnValue([{ id: 'p-1', name: 'Agentforce' }]);
   mockFindPublicProfileByUsername.mockResolvedValue(undefined);
   mockGetAvatarUrl.mockReturnValue(null);
-  mockLoadProjectRequestTaxonomies.mockResolvedValue(PROJECT_TAXONOMIES);
   mockMapProfileToView.mockImplementation((row: { avatarKey?: string }) => ({
     avatarKey: row.avatarKey ?? null,
   }));
@@ -126,47 +113,6 @@ describe('loadHomeData — happy path', () => {
     expect(data.chips).toEqual([{ id: 'p-1', name: 'Agentforce' }]);
     expect(data.benchTiles).toEqual([{ productId: 'p-1' }]);
     expect(data.productNameMap).toEqual({ 'p-1': 'Agentforce' });
-    expect(data.projectTaxonomies).toBe(PROJECT_TAXONOMIES);
-  });
-});
-
-/**
- * BAL-582 §3e/R4 — `projectTaxonomies` is `null` on EITHER failure shape: an unanticipated
- * rejection (defence in depth — the loader already catches internally) OR an in-band
- * `loadFailed: true` (the loader completed without throwing but the read itself failed). Both
- * must degrade to `null` so the hero passes no prop and the panel self-loads with Retry.
- */
-describe('loadHomeData — project-taxonomy preload (§3e, R4)', () => {
-  it('passes the loader result through unchanged on success', async () => {
-    const data = await loadHomeData();
-    expect(mockLoadProjectRequestTaxonomies).toHaveBeenCalledTimes(1);
-    expect(data.projectTaxonomies).toBe(PROJECT_TAXONOMIES);
-  });
-
-  it('is null when the loader resolves with loadFailed: true, even though it did not reject', async () => {
-    mockLoadProjectRequestTaxonomies.mockResolvedValue({
-      tags: EMPTY_TAXONOMY,
-      products: EMPTY_TAXONOMY,
-      loadFailed: true,
-    });
-
-    const data = await loadHomeData();
-
-    expect(data.projectTaxonomies).toBeNull();
-    // The rest of the page is unaffected by this one arm failing.
-    expect(data.expertTotal).toBe(214);
-  });
-
-  it('is null and logs when the loader rejects unexpectedly', async () => {
-    mockLoadProjectRequestTaxonomies.mockRejectedValue(new Error('taxonomy read exploded'));
-
-    const data = await loadHomeData();
-
-    expect(data.projectTaxonomies).toBeNull();
-    expect(log.error).toHaveBeenCalledWith(
-      'Marketing home project-taxonomy load threw unexpectedly',
-      expect.objectContaining({ error: 'taxonomy read exploded' })
-    );
   });
 });
 

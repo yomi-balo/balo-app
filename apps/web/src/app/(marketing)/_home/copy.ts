@@ -70,6 +70,13 @@ export const HERO_MODE_COPY = {
     consultation: 'book a consultation',
     project: 'start a project',
   } satisfies Record<MarketingHomeHeroMode, string>,
+  /**
+   * The phrase toggle button's `aria-label` — STABLE across both modes. A
+   * label that changes text on every click ("Mode: X. Switch to Y") is exposed to assistive tech
+   * as the accessible DESCRIPTION, re-narrating state that `aria-pressed` already carries; a
+   * fixed name is what lets a screen-reader user recognise the same control after it flips.
+   */
+  toggleLabel: 'Project mode',
   /** The search bar's submit-button label, per mode. */
   submit: {
     consultation: 'Find experts',

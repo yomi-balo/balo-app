@@ -5,10 +5,6 @@ import { FEATURED_EXPERT_LIMIT, FEATURED_EXPERT_USERNAMES } from '@balo/shared/m
 import { log } from '@/lib/logging';
 import type { ExpertCardData } from '@/components/expert/expert-card.types';
 import { mapProfileToView } from '@/lib/expert-profile/profile-view';
-import {
-  loadProjectRequestTaxonomies,
-  type ProjectRequestTaxonomies,
-} from '@/lib/project-request/load-project-taxonomy';
 import { EMPTY_FILTERS } from '@/lib/search/filters';
 import { loadSearchTaxonomy } from '@/lib/search/load-taxonomy';
 import { searchExperts, type ExpertSearchResponseDTO } from '@/lib/search/search-data';
@@ -34,14 +30,6 @@ export interface MarketingHomeData {
   wasAvailabilityGated: boolean;
   /** 0..`FEATURED_EXPERT_LIMIT` — see the 0/1/2-card states (§8.3). */
   spotlight: ExpertCardData[];
-  /**
-   * BAL-582 §3e/§5 — preloaded for the hero's home-mount `ProjectRequestPanel`, so a seeded open
-   * doesn't wait on a second client fetch. `null` when the loader's own promise rejected OR when
-   * it resolved with `loadFailed: true` (R4 — an in-band failure signal, not just a rejection) —
-   * either way the panel falls back to its own self-load with Retry, exactly as an expert-profile
-   * mount already does when this prop is omitted.
-   */
-  projectTaxonomies: ProjectRequestTaxonomies | null;
 }
 
 function logError(message: string, error: unknown): void {
@@ -158,20 +146,18 @@ function settledOr<T>(outcome: PromiseSettledResult<T>, fallback: T, message: st
 export async function loadHomeData(): Promise<MarketingHomeData> {
   /*
    * ⚠ `allSettled`, NOT `all` — this is the structural half of the "NOTHING MAY THROW"
-   * contract at the top of this file. Each of the four loaders already catches its own
+   * contract at the top of this file. Each of the three loaders already catches its own
    * failures, but `Promise.all` rejects on the FIRST rejection, so the page's no-throw
-   * property would rest entirely on all four staying internally correct forever. With
+   * property would rest entirely on all three staying internally correct forever. With
    * `allSettled` the combinator itself cannot reject, and a future loader that grows an
    * unguarded path degrades to a fallback + `log.error` instead of an error boundary on the
    * marketing front door.
    */
-  const [searchOutcome, taxonomyOutcome, spotlightOutcome, projectTaxonomiesOutcome] =
-    await Promise.allSettled([
-      loadSearchResult(),
-      loadSearchTaxonomy(),
-      loadSpotlight(),
-      loadProjectRequestTaxonomies(),
-    ]);
+  const [searchOutcome, taxonomyOutcome, spotlightOutcome] = await Promise.allSettled([
+    loadSearchResult(),
+    loadSearchTaxonomy(),
+    loadSpotlight(),
+  ]);
 
   const searchResult = settledOr(searchOutcome, null, 'Marketing home search load threw');
   const taxonomy = settledOr(
@@ -186,22 +172,6 @@ export async function loadHomeData(): Promise<MarketingHomeData> {
     [] as ExpertCardData[],
     'Marketing home spotlight load threw unexpectedly'
   );
-  /**
-   * BAL-582 R4 — `loadProjectRequestTaxonomies` never rejects in practice (it already catches
-   * and logs internally, same defence-in-depth reasoning as the taxonomy arm above), so the
-   * `null` fallback here covers only an unanticipated rejection. The IN-BAND `loadFailed: true`
-   * signal is a SEPARATE failure path checked right after — both collapse to the same `null`,
-   * which tells the hero to omit the prop and let the panel self-load with Retry.
-   */
-  const projectTaxonomiesResult = settledOr(
-    projectTaxonomiesOutcome,
-    null,
-    'Marketing home project-taxonomy load threw unexpectedly'
-  );
-  const projectTaxonomies =
-    projectTaxonomiesResult === null || projectTaxonomiesResult.loadFailed === true
-      ? null
-      : projectTaxonomiesResult;
 
   const { chips, benchTiles } = resolveChipsAndTiles(taxonomy, searchResult);
 
@@ -213,6 +183,5 @@ export async function loadHomeData(): Promise<MarketingHomeData> {
     expertTotal: searchResult?.total ?? null,
     wasAvailabilityGated: searchResult?.wasAvailabilityGated ?? false,
     spotlight,
-    projectTaxonomies,
   };
 }

@@ -90,6 +90,10 @@ export type MarketingHomeHeroModeSource = 'phrase' | 'tail' | 'nudge' | 'url';
  */
 export type MarketingHomeProjectSeedTarget = 'title' | 'description' | 'none';
 
+/** BAL-582 — which hero surface fired `HERO_PROJECT_CTA_CLICKED`: the
+ * project-mode search form's own submit, or the intent nudge's CTA. */
+export type MarketingHomeProjectCtaSource = 'submit' | 'nudge';
+
 export const MARKETING_HOME_EVENTS = {
   /** The hero search form was submitted (the page's primary client funnel entry). */
   HERO_SEARCH_SUBMITTED: 'marketing_home_hero_search_submitted',
@@ -170,5 +174,6 @@ export interface MarketingHomeEventMap {
     product_count: number;
     signed_in: boolean;
     seeded_into: MarketingHomeProjectSeedTarget;
+    source: MarketingHomeProjectCtaSource;
   };
 }

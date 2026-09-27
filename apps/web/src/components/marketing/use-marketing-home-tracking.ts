@@ -8,6 +8,7 @@ import type {
   MarketingHomeHeroMode,
   MarketingHomeHeroModeSource,
   MarketingHomeProductSource,
+  MarketingHomeProjectCtaSource,
   MarketingHomeProjectSeedTarget,
   MarketingHomeSection,
   MarketingHomeSpotlightAction,
@@ -43,12 +44,17 @@ export interface MarketingHomeTracking {
   projectNudgeClicked: (score: number) => void;
   /** BAL-582 — the project intent nudge was dismissed. */
   projectNudgeDismissed: (score: number) => void;
-  /** BAL-582 — `query` is used ONLY for its length — the text itself is never emitted. */
+  /**
+   * BAL-582 — `query` is used ONLY for its length — the text itself is never emitted.
+   * `source` records which hero surface fired this: the project-mode search
+   * form's own submit, or the intent nudge's CTA.
+   */
   heroProjectCtaClicked: (
     query: string,
     productCount: number,
     signedIn: boolean,
-    seededInto: MarketingHomeProjectSeedTarget
+    seededInto: MarketingHomeProjectSeedTarget,
+    source: MarketingHomeProjectCtaSource
   ) => void;
 }
 
@@ -134,13 +140,15 @@ export function useMarketingHomeTracking(): MarketingHomeTracking {
         query: string,
         productCount: number,
         signedIn: boolean,
-        seededInto: MarketingHomeProjectSeedTarget
+        seededInto: MarketingHomeProjectSeedTarget,
+        source: MarketingHomeProjectCtaSource
       ) => {
         track(MARKETING_HOME_EVENTS.HERO_PROJECT_CTA_CLICKED, {
           query_length: query.length,
           product_count: productCount,
           signed_in: signedIn,
           seeded_into: seededInto,
+          source,
         });
       },
     }),

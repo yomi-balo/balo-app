@@ -1,7 +1,6 @@
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import type { PopularChip } from '@/lib/marketing/popular-chips';
 import type { ResolvedBenchTile } from '@/lib/marketing/bench-tiles';
-import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
 import { HeroSearch } from './hero-search';
 import { BenchRows } from './bench-rows';
 import { BenchTile } from './bench-tile';
@@ -16,8 +15,6 @@ interface HeroSectionProps {
   readonly benchTiles: readonly ResolvedBenchTile[];
   /** BAL-582 (D1) — whether the visitor is signed in; threaded to the hero's project panel. */
   readonly isLoggedIn: boolean;
-  /** BAL-582 §3e — RSC-preloaded project taxonomies; omitted → the panel self-loads. */
-  readonly projectTaxonomies?: ProjectRequestTaxonomies;
 }
 
 /** The "timer bar" underline beneath "on demand" — ported from the design reference verbatim. */
@@ -60,7 +57,6 @@ export function HeroSection({
   chips,
   benchTiles,
   isLoggedIn,
-  projectTaxonomies,
 }: Readonly<HeroSectionProps>): React.JSX.Element {
   const showLivePill = expertTotal !== null && expertTotal > 0;
   const rowA = benchTiles.filter((tile) => tile.row === 'A');
@@ -108,7 +104,6 @@ export function HeroSection({
           projectPhrases={VERTICAL.projectPhrases}
           verticalName={VERTICAL.name}
           isLoggedIn={isLoggedIn}
-          projectTaxonomies={projectTaxonomies}
         />
       </div>
 

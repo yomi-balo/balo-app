@@ -67,7 +67,6 @@ export default async function MarketingHomePage(): Promise<React.JSX.Element> {
         chips={data.chips}
         benchTiles={data.benchTiles}
         isLoggedIn={isLoggedIn}
-        projectTaxonomies={data.projectTaxonomies ?? undefined}
       />
       <ProofBand metrics={METRICS} />
       <WaysSection />

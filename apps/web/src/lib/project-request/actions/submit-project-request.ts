@@ -52,7 +52,10 @@ export const submitProjectRequestAction = withAuth(
           documentCount: input.documents.length,
           foreignDocumentCount,
         });
-        return { success: false, error: 'Some of your selections are no longer available.' };
+        return {
+          success: false,
+          error: "One or more attached files can't be used. Remove and re-attach them.",
+        };
       }
 
       // 3. Validate tag/product IDs against the request's vertical taxonomy.

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useProjectDraft } from './use-project-draft';
 
@@ -138,5 +138,98 @@ describe('useProjectDraft — default routing + autosave key', () => {
     act(() => result.current.clearDraft());
     expect(result.current.draft.routing).toBe('match');
     expect(globalThis.localStorage.getItem('balo:project-draft:entry:direct')).toBeNull();
+  });
+});
+
+describe('useProjectDraft — 24h expiry on the home draft only', () => {
+  const HOME_KEY = 'balo:project-draft:entry:home';
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  beforeEach(() => {
+    globalThis.localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('hydrates a home draft saved just under 24h ago', () => {
+    const now = Date.parse('2026-09-27T12:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    seed({ title: 'Still fresh', savedAt: now - (DAY_MS - 1000) }, HOME_KEY);
+    const { result } = renderHook(() => useProjectDraft(undefined, 'home'));
+    expect(result.current.draft.title).toBe('Still fresh');
+  });
+
+  it('hydrates a home draft saved exactly 24h ago (inclusive boundary)', () => {
+    const now = Date.parse('2026-09-27T12:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    seed({ title: 'Exactly 24h', savedAt: now - DAY_MS }, HOME_KEY);
+    const { result } = renderHook(() => useProjectDraft(undefined, 'home'));
+    expect(result.current.draft.title).toBe('Exactly 24h');
+  });
+
+  it('discards and removes a home draft saved exactly 24h + 1ms ago', () => {
+    const now = Date.parse('2026-09-27T12:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    seed({ title: 'Expired', savedAt: now - (DAY_MS + 1) }, HOME_KEY);
+    const { result } = renderHook(() => useProjectDraft(undefined, 'home'));
+    expect(result.current.draft.title).toBe('');
+    expect(globalThis.localStorage.getItem(HOME_KEY)).toBeNull();
+  });
+
+  it('discards a home draft with no savedAt at all', () => {
+    seed({ title: 'No timestamp' }, HOME_KEY);
+    const { result } = renderHook(() => useProjectDraft(undefined, 'home'));
+    expect(result.current.draft.title).toBe('');
+    expect(globalThis.localStorage.getItem(HOME_KEY)).toBeNull();
+  });
+
+  it('discards a home draft with a non-finite savedAt', () => {
+    seed({ title: 'Bad timestamp', savedAt: Number.NaN }, HOME_KEY);
+    const { result } = renderHook(() => useProjectDraft(undefined, 'home'));
+    expect(result.current.draft.title).toBe('');
+  });
+
+  it('discards a home draft whose savedAt is in the future', () => {
+    const now = Date.parse('2026-09-27T12:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    seed({ title: 'From the future', savedAt: now + 1000 }, HOME_KEY);
+    const { result } = renderHook(() => useProjectDraft(undefined, 'home'));
+    expect(result.current.draft.title).toBe('');
+  });
+
+  it('stamps savedAt on write for the home entry point', async () => {
+    const now = Date.parse('2026-09-27T12:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const { result } = renderHook(() => useProjectDraft(undefined, 'home'));
+    act(() => result.current.setField('title', 'Home draft'));
+    await vi.advanceTimersByTimeAsync(500);
+    const stored = globalThis.localStorage.getItem(HOME_KEY);
+    expect(stored).not.toBeNull();
+    const parsed = JSON.parse(stored as string) as { savedAt: number };
+    expect(parsed.savedAt).toBeGreaterThanOrEqual(now);
+    expect(parsed.savedAt).toBeLessThan(now + 1000);
+  });
+
+  it('does not stamp savedAt for a non-home context-free entry point', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useProjectDraft(undefined, 'search'));
+    act(() => result.current.setField('title', 'Search draft'));
+    await vi.advanceTimersByTimeAsync(500);
+    const stored = globalThis.localStorage.getItem('balo:project-draft:entry:search');
+    expect(stored).not.toBeNull();
+    expect(JSON.parse(stored as string)).not.toHaveProperty('savedAt');
+  });
+
+  it('never expires the profile (expert-bound) draft, which carries no savedAt', () => {
+    seed({ title: 'Expert-bound, no savedAt' }); // KEY defaults to the expert-bound key
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.title).toBe('Expert-bound, no savedAt');
   });
 });

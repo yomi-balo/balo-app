@@ -62,7 +62,12 @@ export function useTypewriter(phrases: readonly string[], reduced: boolean): str
           timer = setTimeout(tick, HOLD_MS);
           return;
         }
-        timer = setTimeout(tick, TYPE_BASE_MS + Math.random() * TYPE_JITTER_MS);
+        // SonarCloud S2245 — `Math.random()` is a cryptography-flagged source; the cadence only
+        // needs to look non-mechanical, not be unpredictable, so the jitter is derived from the
+        // loop's own advancing `charIndex` instead. `% (TYPE_JITTER_MS + 1)` keeps it in
+        // [0, TYPE_JITTER_MS], so the per-character delay stays within the documented
+        // [TYPE_BASE_MS, TYPE_BASE_MS + TYPE_JITTER_MS] range while still varying tick to tick.
+        timer = setTimeout(tick, TYPE_BASE_MS + ((charIndex * 7) % (TYPE_JITTER_MS + 1)));
       }
     };
 

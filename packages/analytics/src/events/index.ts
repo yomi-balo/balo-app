@@ -374,6 +374,7 @@ export {
   type MarketingHomeHeroMode,
   type MarketingHomeHeroModeSource,
   type MarketingHomeProjectSeedTarget,
+  type MarketingHomeProjectCtaSource,
 } from './marketing-home';
 // BAL-503 — the client Settings surface's CLIENT event family + canonical section tuple.
 // Deliberately separate from `NAV_EVENTS` (see `./settings.ts`'s header comment).

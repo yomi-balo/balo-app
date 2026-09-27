@@ -4,6 +4,10 @@ import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { track, AUTH_EVENTS, ONBOARDING_EVENTS, DOMAIN_JOIN_EVENTS } from '@/lib/analytics';
 import type { AuthMethodSignal } from '@/lib/auth/auth-method';
+import {
+  rememberPendingHomeProject,
+  hasPendingHomeProject,
+} from '@/lib/marketing/pending-home-project';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -47,6 +51,7 @@ function renderStep(authMethod: AuthMethodSignal = 'email', returnTo: string | n
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
   mockComplete.mockResolvedValue({ success: true, data: { redirectTo: '/dashboard' } });
   mockJoinMatched.mockResolvedValue({ success: true, data: { redirectTo: '/dashboard' } });
   mockRequestJoin.mockResolvedValue({ success: true, data: { status: 'pending' } });
@@ -140,6 +145,27 @@ describe('CompanyStep', () => {
     await user.click(screen.getByRole('button', { name: /continue/i }));
 
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+  });
+
+  // D6 — the home-return exclusion is explore-only; the create terminal keeps the
+  // home marker return unchanged.
+  it('create branch still returns to / with the home marker set (D6 exclusion is explore-only)', async () => {
+    const user = userEvent.setup();
+    mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
+    render(
+      <CompanyStep
+        authMethod="email"
+        timezone="Europe/London"
+        stepNumber={5}
+        onBack={vi.fn()}
+        resolveReturnTo={({ includeHome }) => (includeHome ? '/' : null)}
+      />
+    );
+
+    await screen.findByRole('heading', { name: /name your workspace/i });
+    await user.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/'));
   });
 
   // resolveReturnTo is a callback so its result can change between mount and the click that
@@ -267,6 +293,27 @@ describe('CompanyStep', () => {
       );
     });
 
+    // D6 — the home-return exclusion is explore-only; the auto-join terminal keeps
+    // the home marker return unchanged.
+    it('auto-join branch still returns to / with the home marker set (D6 exclusion is explore-only)', async () => {
+      const user = userEvent.setup();
+      mockResolve.mockResolvedValue(matched('auto'));
+      render(
+        <CompanyStep
+          authMethod="email"
+          timezone="Europe/London"
+          stepNumber={5}
+          onBack={vi.fn()}
+          resolveReturnTo={({ includeHome }) => (includeHome ? '/' : null)}
+        />
+      );
+
+      await screen.findByRole('heading', { name: /join northwind\?/i });
+      await user.click(screen.getByRole('button', { name: /^join northwind$/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/'));
+    });
+
     it('shows an inline banner and does not navigate when the auto-join write fails', async () => {
       const user = userEvent.setup();
       mockResolve.mockResolvedValue(matched('auto'));
@@ -302,6 +349,56 @@ describe('CompanyStep', () => {
         party_type: 'company',
       });
       expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    // D6 — "Explore Balo while you wait" is EXCLUDED from the home return: it keeps its
+    // pre-BAL-582 destination (redirectTo, here /dashboard) and drops the marker so a
+    // later visit to `/` doesn't auto-open the panel.
+    it('explore ignores the home marker: goes to /dashboard and removes the marker', async () => {
+      const user = userEvent.setup();
+      rememberPendingHomeProject();
+      mockResolve.mockResolvedValue(matched('request'));
+      render(
+        <CompanyStep
+          authMethod="email"
+          timezone="Europe/London"
+          stepNumber={5}
+          onBack={vi.fn()}
+          resolveReturnTo={({ includeHome }) => (includeHome ? '/' : null)}
+        />
+      );
+
+      await screen.findByRole('heading', { name: /join northwind\?/i });
+      await user.click(screen.getByRole('button', { name: /request to join northwind/i }));
+      await screen.findByRole('heading', { name: /request sent to northwind/i });
+
+      await user.click(screen.getByRole('button', { name: /explore balo while you wait/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+      expect(mockPush).not.toHaveBeenCalledWith('/');
+      expect(hasPendingHomeProject()).toBe(false);
+    });
+
+    it('explore still honours the pending apply-intent override (unaffected by D6)', async () => {
+      const user = userEvent.setup();
+      mockResolve.mockResolvedValue(matched('request'));
+      render(
+        <CompanyStep
+          authMethod="email"
+          timezone="Europe/London"
+          stepNumber={5}
+          onBack={vi.fn()}
+          resolveReturnTo={() => '/expert/apply'}
+        />
+      );
+
+      await screen.findByRole('heading', { name: /join northwind\?/i });
+      await user.click(screen.getByRole('button', { name: /request to join northwind/i }));
+      await screen.findByRole('heading', { name: /request sent to northwind/i });
+
+      await user.click(screen.getByRole('button', { name: /explore balo while you wait/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
     });
 
     it('shows an inline banner and stays on the interstitial when the request write fails', async () => {

@@ -146,6 +146,31 @@ function readRouting(value: unknown, defaultRouting: ProjectRouting): ProjectRou
   return defaultRouting;
 }
 
+/** BAL-582 — the sliding expiry window for the unauthenticated home draft only. */
+const HOME_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * True only for the context-free `entry:home` draft — the sole key that expires. An
+ * expert-bound mount never reaches this: even if it were passed `entryPoint: 'home'`, a
+ * defined `expertProfileId` routes it to the byte-identical expert key instead (`draftKey`).
+ */
+function isHomeEntry(
+  expertProfileId: string | undefined,
+  entryPoint: ProjectRequestEntryPoint
+): boolean {
+  return expertProfileId === undefined && entryPoint === 'home';
+}
+
+/**
+ * A home draft is fresh when `savedAt` is a finite epoch-ms timestamp no more than 24h in the
+ * past and not in the future (a clock skew or tampered value is treated as expired, not trusted).
+ */
+function isFreshHomeDraft(savedAt: unknown, now: number): boolean {
+  if (typeof savedAt !== 'number' || !Number.isFinite(savedAt)) return false;
+  const age = now - savedAt;
+  return age >= 0 && age <= HOME_DRAFT_TTL_MS;
+}
+
 /**
  * Reads + narrows a persisted draft. Corrupt / legacy shapes silently fall back
  * to defaults — no throw, no `console.*`. The legacy `focusArea` key and the old
@@ -161,12 +186,17 @@ function readDraft(
 ): ProjectDraft {
   const emptyDraft: ProjectDraft = { routing: defaultRouting, ...EMPTY_DRAFT_WITHOUT_ROUTING };
   if (globalThis.window === undefined) return emptyDraft;
+  const key = draftKey(expertProfileId, entryPoint);
   try {
-    const raw = globalThis.localStorage.getItem(draftKey(expertProfileId, entryPoint));
+    const raw = globalThis.localStorage.getItem(key);
     if (raw === null) return emptyDraft;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return emptyDraft;
     const record = parsed as Record<string, unknown>;
+    if (isHomeEntry(expertProfileId, entryPoint) && !isFreshHomeDraft(record.savedAt, Date.now())) {
+      globalThis.localStorage.removeItem(key);
+      return emptyDraft;
+    }
     return {
       routing: readRouting(record.routing, defaultRouting),
       title: typeof record.title === 'string' ? record.title : '',
@@ -188,11 +218,12 @@ function readDraft(
 /**
  * BAL-582 — guarded removal of a context-free entry point's draft key (which can hold a title, a
  * brief and document refs). `useLogout` calls this for `'home'` synchronously, but only on an
- * EXPLICIT sign-out: a visitor who never signs in leaves the draft in localStorage with no TTL.
- * No expert-bound draft key is user-scoped either; the difference is that the profile mount gates
- * on sign-in before it ever opens the panel, where the home mount opens for signed-out visitors by
- * design (D1). The key literal has one definition (`draftKey`), so this and `useProjectDraft` can
- * never drift apart.
+ * EXPLICIT sign-out: a visitor who never signs in leaves the draft in localStorage, where the
+ * `entry:home` key alone self-expires 24h after its last save (`readDraft`'s home-only check) —
+ * every other context-free key keeps no TTL. No expert-bound draft key is user-scoped either; the
+ * difference is that the profile mount gates on sign-in before it ever opens the panel, where the
+ * home mount opens for signed-out visitors by design (D1). The key literal has one definition
+ * (`draftKey`), so this and `useProjectDraft` can never drift apart.
  */
 export function clearEntryPointDraft(entryPoint: ProjectRequestEntryPoint): void {
   if (globalThis.window === undefined) return;
@@ -255,9 +286,14 @@ export function useProjectDraft(
     if (writeTimer.current) clearTimeout(writeTimer.current);
     writeTimer.current = setTimeout(() => {
       try {
+        // The home draft alone carries `savedAt`, re-stamped on every write so the 24h
+        // expiry window slides forward while the visitor keeps editing.
+        const payload = isHomeEntry(expertProfileId, entryPoint)
+          ? { ...draft, savedAt: Date.now() }
+          : draft;
         globalThis.localStorage.setItem(
           draftKey(expertProfileId, entryPoint),
-          JSON.stringify(draft)
+          JSON.stringify(payload)
         );
       } catch {
         // Ignore — quota / private-mode failures are non-fatal.

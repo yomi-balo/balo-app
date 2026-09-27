@@ -13,13 +13,13 @@ import type {
   MarketingHomeHeroMode,
   MarketingHomeHeroModeSource,
   MarketingHomeProductSource,
+  MarketingHomeProjectCtaSource,
 } from '@/lib/analytics';
 import { useMarketingReducedMotion } from '@/components/marketing/motion/use-reduced-motion';
 import { useTypewriter } from '@/components/marketing/motion/use-typewriter';
 import { useMarketingHomeTracking } from '@/components/marketing/use-marketing-home-tracking';
 import { seedFromHeroQuery } from '@/lib/marketing/project-intent';
 import { consumePendingHomeProject } from '@/lib/marketing/pending-home-project';
-import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
 import type { ProjectRequestSeed } from '@/components/balo/project-request/panel';
 import { cn } from '@/lib/utils';
 import { HERO_MODE_COPY } from './copy';
@@ -47,8 +47,6 @@ interface HeroSearchProps {
   readonly verticalName: string;
   /** Whether the visitor is signed in; drives the panel's auth gate (BAL-582). */
   readonly isLoggedIn: boolean;
-  /** BAL-582 §3e — RSC-preloaded project taxonomies; omitted → the panel self-loads. */
-  readonly projectTaxonomies?: ProjectRequestTaxonomies;
 }
 
 /** State for the (lazily mounted) home project panel. `null` = never opened. */
@@ -88,7 +86,6 @@ export function HeroSearch({
   projectPhrases,
   verticalName,
   isLoggedIn,
-  projectTaxonomies,
 }: Readonly<HeroSearchProps>): React.JSX.Element {
   const router = useRouter();
   const tracking = useMarketingHomeTracking();
@@ -148,11 +145,14 @@ export function HeroSearch({
     setPanel({ open: true, seed: undefined, resume: true });
   }, [isLoggedIn]);
 
-  const openProjectPanel = useCallback(() => {
-    const { seed, seededInto } = seedFromHeroQuery(q, [...selectedIds]);
-    tracking.heroProjectCtaClicked(q, selectedIds.size, isLoggedIn, seededInto);
-    setPanel({ open: true, seed, resume: false });
-  }, [q, selectedIds, tracking, isLoggedIn]);
+  const openProjectPanel = useCallback(
+    (source: MarketingHomeProjectCtaSource) => {
+      const { seed, seededInto } = seedFromHeroQuery(q, [...selectedIds]);
+      tracking.heroProjectCtaClicked(q, selectedIds.size, isLoggedIn, seededInto, source);
+      setPanel({ open: true, seed, resume: false });
+    },
+    [q, selectedIds, tracking, isLoggedIn]
+  );
 
   const handlePanelClose = useCallback(() => {
     setPanel((prev) => (prev === null ? prev : { ...prev, open: false, resume: false }));
@@ -173,7 +173,7 @@ export function HeroSearch({
     tracking.projectNudgeClicked(nudgeScore);
     inputRef.current?.focus();
     changeMode('project', 'nudge');
-    openProjectPanel();
+    openProjectPanel('nudge');
   }, [tracking, nudgeScore, changeMode, openProjectPanel]);
 
   const handleNudgeDismiss = useCallback(() => {
@@ -224,7 +224,7 @@ export function HeroSearch({
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       if (mode === 'project') {
-        openProjectPanel();
+        openProjectPanel('submit');
         return;
       }
       const productIds = [...selectedIds];
@@ -354,7 +354,6 @@ export function HeroSearch({
             seed={panel.seed}
             resumeDraft={panel.resume}
             isLoggedIn={isLoggedIn}
-            projectTaxonomies={projectTaxonomies}
           />
         )}
       </div>

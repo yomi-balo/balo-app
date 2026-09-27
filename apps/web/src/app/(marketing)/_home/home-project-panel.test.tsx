@@ -28,7 +28,6 @@ interface PanelStubProps {
   entryPoint?: unknown;
   seed?: unknown;
   resumeDraft?: unknown;
-  projectTaxonomies?: unknown;
   onAuthRequired?: () => void;
 }
 
@@ -39,7 +38,6 @@ vi.mock('@/components/balo/project-request/panel', () => ({
       data-entry-point={String(props.entryPoint)}
       data-resume-draft={String(props.resumeDraft)}
       data-seed={JSON.stringify(props.seed ?? null)}
-      data-has-taxonomies={String(props.projectTaxonomies !== undefined)}
       data-has-auth-required={String(props.onAuthRequired !== undefined)}
     >
       {props.onAuthRequired && (
@@ -159,25 +157,14 @@ describe('HomeProjectPanel — marker cleared/kept on modal close', () => {
 });
 
 describe('HomeProjectPanel — pass-through props', () => {
-  it('passes entryPoint "home", the seed, resumeDraft and taxonomies through unchanged', () => {
+  it('passes entryPoint "home", the seed and resumeDraft through unchanged, and mounts the panel with no taxonomies prop so it self-loads (D4)', () => {
     const seed = { title: 'Migrate us from HubSpot to Sales Cloud' };
-    const projectTaxonomies = { tags: { groups: [] }, products: { groups: [] } };
 
-    render(
-      <HomeProjectPanel
-        open
-        onClose={vi.fn()}
-        seed={seed}
-        resumeDraft
-        isLoggedIn
-        projectTaxonomies={projectTaxonomies}
-      />
-    );
+    render(<HomeProjectPanel open onClose={vi.fn()} seed={seed} resumeDraft isLoggedIn />);
 
     const panel = screen.getByTestId('project-request-panel');
     expect(panel).toHaveAttribute('data-entry-point', 'home');
     expect(panel).toHaveAttribute('data-resume-draft', 'true');
     expect(panel).toHaveAttribute('data-seed', JSON.stringify(seed));
-    expect(panel).toHaveAttribute('data-has-taxonomies', 'true');
   });
 });

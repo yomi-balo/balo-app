@@ -82,8 +82,9 @@ export function useLogout(): () => void {
      * on `/` and see the previous person's in-progress project draft. Synchronous, same reasoning as
      * `forgetSetupIntent()` above — this explicit sign-out is the one path that closes it; session
      * expiry, a crashed tab or the middleware teardown run no client code and leave the draft, and
-     * a visitor who never signs in at all leaves it with no TTL (a stated, accepted residual —
-     * `use-recent-lookups.ts:29-35` documents the same limitation for every other draft key).
+     * a visitor who never signs in at all leaves it until the home draft's 24h expiry
+     * (`use-project-draft.ts`'s home-only `savedAt` check) — a stated, accepted residual;
+     * `use-recent-lookups.ts:29-35` documents the same limitation for every other draft key.
      */
     clearEntryPointDraft('home');
     forgetPendingHomeProject();

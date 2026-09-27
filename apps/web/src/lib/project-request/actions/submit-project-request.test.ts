@@ -322,7 +322,9 @@ describe('submitProjectRequestAction', () => {
         })
       );
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Some of your selections are no longer available.');
+      expect(result.error).toBe(
+        "One or more attached files can't be used. Remove and re-attach them."
+      );
       expect(mockCreateProjectRequest).not.toHaveBeenCalled();
       expect(log.warn).toHaveBeenCalledWith(
         'Project request rejected — document key outside session scope',

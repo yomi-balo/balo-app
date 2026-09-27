@@ -171,19 +171,26 @@ describe('useMarketingHomeTracking — BAL-582 dual-intent hero verbs', () => {
     });
   });
 
-  it('heroProjectCtaClicked emits query_length, product_count, signed_in and seeded_into', () => {
-    renderTracking().heroProjectCtaClicked('migrate us from HubSpot', 2, true, 'title');
+  it('heroProjectCtaClicked emits query_length, product_count, signed_in, seeded_into and source', () => {
+    renderTracking().heroProjectCtaClicked('migrate us from HubSpot', 2, true, 'title', 'submit');
     expect(trackMock).toHaveBeenCalledWith(MARKETING_HOME_EVENTS.HERO_PROJECT_CTA_CLICKED, {
       query_length: 23,
       product_count: 2,
       signed_in: true,
       seeded_into: 'title',
+      source: 'submit',
     });
   });
 
   /** ⚠ PRIVACY: same discipline as heroSearchSubmitted — the query TEXT must never leave the browser. */
   it('heroProjectCtaClicked never emits the query text itself', () => {
-    renderTracking().heroProjectCtaClicked('acme corp migration project', 0, false, 'description');
+    renderTracking().heroProjectCtaClicked(
+      'acme corp migration project',
+      0,
+      false,
+      'description',
+      'nudge'
+    );
     const [, props] = trackMock.mock.calls[0] ?? [];
     expect(JSON.stringify(props)).not.toContain('acme');
     expect(props).toEqual({
@@ -191,6 +198,15 @@ describe('useMarketingHomeTracking — BAL-582 dual-intent hero verbs', () => {
       product_count: 0,
       signed_in: false,
       seeded_into: 'description',
+      source: 'nudge',
     });
+  });
+
+  it('the nudge CTA source is distinct from the submit source', () => {
+    renderTracking().heroProjectCtaClicked('a', 0, true, 'title', 'nudge');
+    expect(trackMock).toHaveBeenCalledWith(
+      MARKETING_HOME_EVENTS.HERO_PROJECT_CTA_CLICKED,
+      expect.objectContaining({ source: 'nudge' })
+    );
   });
 });

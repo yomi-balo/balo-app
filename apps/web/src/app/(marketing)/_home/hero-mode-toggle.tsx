@@ -38,8 +38,7 @@ export function HeroModeToggle({
         type="button"
         className="mk-sent-btn"
         aria-pressed={mode === 'project'}
-        title={`Switch to ${HERO_MODE_COPY.modes[otherMode]}`}
-        aria-label={`Mode: ${HERO_MODE_COPY.modes[mode]}. Switch to ${HERO_MODE_COPY.modes[otherMode]}`}
+        aria-label={HERO_MODE_COPY.toggleLabel}
         onClick={() => onChange(otherMode, 'phrase')}
       >
         <span key={mode} className="mk-sent-word">

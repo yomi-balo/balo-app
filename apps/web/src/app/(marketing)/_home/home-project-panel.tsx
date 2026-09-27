@@ -7,7 +7,6 @@ import {
   ProjectRequestPanel,
   type ProjectRequestSeed,
 } from '@/components/balo/project-request/panel';
-import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
 import {
   forgetPendingHomeProject,
   rememberPendingHomeProject,
@@ -19,7 +18,6 @@ export interface HomeProjectPanelProps {
   readonly seed?: ProjectRequestSeed;
   readonly resumeDraft: boolean;
   readonly isLoggedIn: boolean;
-  readonly projectTaxonomies?: ProjectRequestTaxonomies;
 }
 
 /**
@@ -42,7 +40,6 @@ export function HomeProjectPanel({
   seed,
   resumeDraft,
   isLoggedIn,
-  projectTaxonomies,
 }: Readonly<HomeProjectPanelProps>): React.JSX.Element {
   const authModal = useAuthModal();
   const router = useRouter();
@@ -75,7 +72,6 @@ export function HomeProjectPanel({
       entryPoint="home"
       seed={seed}
       resumeDraft={resumeDraft}
-      projectTaxonomies={projectTaxonomies}
       onAuthRequired={isLoggedIn ? undefined : requestSignIn}
     />
   );

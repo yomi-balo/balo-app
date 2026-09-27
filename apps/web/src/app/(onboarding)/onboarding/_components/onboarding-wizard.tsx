@@ -50,11 +50,14 @@ export function OnboardingWizard({
     ? PENDING_APPLY_PATH
     : null;
 
-  // BAL-582 D1 — resolved at PUSH TIME by the Company step, not read once here: the marker
+  // BAL-582 D1/D6 — resolved at PUSH TIME by the Company step, not read once here: the marker
   // carries a TTL, and a wizard session can outlast it. The marker itself is consumed later,
-  // back on `/`, by the hero's resume effect — not here.
+  // back on `/`, by the hero's resume effect — not here. `includeHome` is `false` for the
+  // "Explore Balo while you wait" terminal only (D6): that terminal keeps its pre-BAL-582
+  // destination (apply override, then `redirectTo`, then `/dashboard`) and never returns to `/`.
   const resolveReturnTo = useCallback(
-    (): string | null => pendingApplyReturnTo ?? (hasPendingHomeProject() ? '/' : null),
+    (opts: { includeHome: boolean }): string | null =>
+      pendingApplyReturnTo ?? (opts.includeHome && hasPendingHomeProject() ? '/' : null),
     [pendingApplyReturnTo]
   );
 

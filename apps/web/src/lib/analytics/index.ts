@@ -172,6 +172,7 @@ export type {
   MarketingHomeHeroMode,
   MarketingHomeHeroModeSource,
   MarketingHomeProjectSeedTarget,
+  MarketingHomeProjectCtaSource,
   /** BAL-503 — the client Settings surface's event payload and section vocabulary. */
   SettingsEventMap,
   SettingsSection,

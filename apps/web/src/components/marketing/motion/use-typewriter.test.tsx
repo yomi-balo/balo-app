@@ -31,10 +31,24 @@ function recordRenders<T>(useHookValue: () => T): T[] {
 // same-boundary follow-up timer fire too, e.g. jumping straight from "Hi" to "" instead of
 // pausing at "H"). Advancing tick-by-tick keeps each assertion pinned to one specific tick.
 const TYPE_START_DELAY_MS = 900;
-const TYPE_STEP_MS = 32; // TYPE_BASE_MS + 0 * TYPE_JITTER_MS, since Math.random is mocked to 0
+const TYPE_BASE_MS = 32;
+const TYPE_JITTER_MS = 34;
 const HOLD_MS = 2000;
 const ERASE_MS = 14;
 const NEXT_PHRASE_DELAY_MS = 360;
+
+/**
+ * Mirrors `use-typewriter.ts`'s own deterministic per-character delay exactly, so each
+ * `advanceTimersByTime` call below still advances with ZERO slack — see the header comment above
+ * on why any slack risks also firing the next scheduled tick.
+ */
+function typeStepMs(charIndex: number): number {
+  return TYPE_BASE_MS + ((charIndex * 7) % (TYPE_JITTER_MS + 1));
+}
+
+// Every phrase in this file types its second (and, for these two-character phrases, final)
+// character from `charIndex === 1`, so this one delay covers every intermediate tick used below.
+const TYPE_STEP_MS = typeStepMs(1);
 
 describe('useTypewriter', () => {
   afterEach(() => {
@@ -55,7 +69,6 @@ describe('useTypewriter', () => {
   describe('not reduced', () => {
     beforeEach(() => {
       vi.useFakeTimers();
-      vi.spyOn(Math, 'random').mockReturnValue(0);
     });
 
     // ⚠ `phrases` MUST be a stable reference declared OUTSIDE the `renderHook` callback. That
