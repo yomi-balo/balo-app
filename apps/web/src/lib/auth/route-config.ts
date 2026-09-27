@@ -30,12 +30,18 @@ export const PUBLIC_PATHS = new Set([
   // `noindex`, but it must be reachable SIGNED OUT: it is a marketing home, so the whole
   // point is seeing it with the anonymous `MarketingHeader` variant, the same way `/` and
   // `/experts` are seen. Without this line middleware 307s anonymous visitors to
-  // `/login?returnTo=%2Fv2` and the V1-vs-V2 comparison cannot be done in a fresh browser.
+  // `/login?returnTo=%2Fv2` and it cannot be compared against `/` in a fresh browser.
   // Safe to expose: the page renders only hard-coded sample data plus the same PUBLIC
   // product taxonomy `/experts` already serves anonymously — no user is dereferenced and
   // there is no write path of any kind.
   // ⚠ PAIRED TEARDOWN: delete this line together with `app/(marketing)/v2/` (see BAL-493).
   '/v2',
+  // BAL-504 — the generated OG image with no hash suffix. No route serves this path today
+  // (Next's file convention always appends a content hash), but it is public for the same
+  // reason `/opengraph-image-` below is: an anonymous crawler unfurling `/` or `/anon` never
+  // carries a session cookie, so any real path this string could ever name must never require
+  // one either.
+  '/opengraph-image',
 ]);
 
 /** Prefix-based public paths */
@@ -73,6 +79,15 @@ export const PUBLIC_PREFIXES: readonly string[] = [
   // the two registries provably paired rather than "covered by a prefix that happens to
   // overlap". Do not delete it as dead weight; `route-config.test.ts` fails if you do.
   '/join/m/',
+  // BAL-504 — the generated OG image (`/opengraph-image-<hash>`, produced by Next's file
+  // convention) has no extension, so the middleware matcher's extension exemption doesn't catch
+  // it either: an anonymous request would otherwise 307 to `/login?returnTo=%2Fopengraph-image-
+  // <hash>` for BOTH `(marketing)`'s and `(marketing-anon)`'s image — a social-media crawler
+  // unfurling `/` or `/anon` never has a session cookie, so it would never see the image at all.
+  // A PREFIX, not an exact path, because the hash suffix is content-derived and changes whenever
+  // the image's source changes — but the trailing `-` keeps it from also matching an unrelated
+  // top-level route whose name merely starts with the same string (e.g. `/opengraph-images`).
+  '/opengraph-image-',
 ];
 
 /**
@@ -86,6 +101,17 @@ export const PUBLIC_PREFIXES: readonly string[] = [
 const ADMIN_PREFIX = '/admin';
 
 export const ONBOARDING_PATH = '/onboarding';
+
+/**
+ * BAL-504 — the internal rewrite target for the static, session-free anonymous
+ * marketing home. Edge-safe (no `server-only`), and the one definition `middleware.ts` and
+ * `is-marketing-home-path.ts` both use, so the two can't drift.
+ *
+ * Deliberately NOT in `PUBLIC_PATHS`: a direct hit is redirected to `/` BEFORE public-route
+ * classification runs (see `middleware.ts`), so an entry here would be dead — the redirect
+ * always wins first.
+ */
+export const ANON_HOME_PATH = '/anon';
 
 /**
  * The onboarding wizard root OR any nested onboarding route (e.g. BAL-348's

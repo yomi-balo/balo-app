@@ -28,11 +28,21 @@ export interface HomeProjectPanelProps {
  *
  * Signed out, `onAuthRequired` (`requestSignIn`) remembers the pending-intent marker and stacks
  * the auth modal over the still-mounted drawer (precedent `booking-flow-dialog.tsx:760-782`:
- * an app-root provider, so Radix layers keep the drawer mounted and undismissed). On success,
- * `router.refresh()` re-resolves `isLoggedIn` server-side WITHOUT resetting this client tree
- * (`expert-profile-client.tsx`, the booking dialog rely on the same fact) — the drawer, its step
- * and its draft survive, and `onAuthRequired` becomes `undefined` once `isLoggedIn` flips, so
- * Submit / a document attach just work on the next click. There is no auto-submit.
+ * an app-root provider, so Radix layers keep the drawer mounted and undismissed). `router.
+ * refresh()` on success has TWO different outcomes depending on which route rendered the panel
+ * (BAL-504 Phase 3):
+ *   1. **Signed-in `(marketing)/page.tsx`** — refresh re-resolves `isLoggedIn` server-side
+ *      WITHOUT resetting this client tree (`expert-profile-client.tsx`, the booking dialog rely
+ *      on the same fact). The drawer, its step and its draft survive in place, and
+ *      `onAuthRequired` becomes `undefined` once `isLoggedIn` flips, so Submit / a document
+ *      attach just work on the next click. There is no auto-submit.
+ *   2. **The static anon home (`(marketing-anon)/anon/page.tsx`)** — refresh instead REMOUNTS
+ *      `/` from the anon route group into `(marketing)`, because the two are genuinely
+ *      different route trees. This client tree, and its drawer step, are lost. Recovery is the
+ *      pending-intent marker plus the draft's own localStorage autosave, not tree survival:
+ *      `HeroSearch`'s mount effect (`hero-search.tsx:141-146`) sees the fresh `isLoggedIn` on
+ *      the new tree, consumes the marker, and reopens the drawer with `resume: true` on the
+ *      saved draft — landing on the form step (`initialStepFor`), not wherever the visitor was.
  */
 export function HomeProjectPanel({
   open,

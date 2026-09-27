@@ -1,3 +1,5 @@
+import { ANON_HOME_PATH } from '@/lib/auth/route-config';
+
 /**
  * BAL-493 §13.3 / N1 — is this pathname the marketing home (`/`)?
  *
@@ -11,10 +13,17 @@
  * the same pattern `isMeetingCallPath` (`lib/meetings/is-meeting-call-path.ts`) already
  * established for `AppFooter`'s in-call suppression.
  *
+ * ⚠ BAL-504 — ALSO MATCHES `ANON_HOME_PATH` (`/anon`). The anonymous home is a
+ * genuinely separate route (`(marketing-anon)/anon/page.tsx`), rewritten in transparently from
+ * `/` by middleware. Both `MarketingHeader` and `AppFooter` are CLIENT components: a static
+ * prerender of `/anon` renders with the real route pathname (`/anon`), while a hydrated browser
+ * reads the URL bar, which middleware kept at `/`. Without this widening the two disagree on
+ * `overHero`/`isMarketingHome`, which is a hydration mismatch, not just a cosmetic flash.
+ *
  * ⚠ NO REGEX. A query/hash strip via `split` is linear and carries no S5852 exposure.
  */
 export function isMarketingHomePath(pathname: string): boolean {
   const withoutHash = pathname.split('#')[0] ?? '';
   const withoutQuery = withoutHash.split('?')[0] ?? '';
-  return withoutQuery === '/';
+  return withoutQuery === '/' || withoutQuery === ANON_HOME_PATH;
 }

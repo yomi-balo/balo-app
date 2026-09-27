@@ -9,6 +9,7 @@ const {
   mockResolveBenchTiles,
   mockResolvePopularChips,
   mockMapPublicProfileToCardData,
+  mockUnstableCache,
 } = vi.hoisted(() => ({
   mockFindPublicProfileByUsername: vi.fn(),
   mockMapProfileToView: vi.fn(),
@@ -18,9 +19,18 @@ const {
   mockResolveBenchTiles: vi.fn(),
   mockResolvePopularChips: vi.fn(),
   mockMapPublicProfileToCardData: vi.fn(),
+  // Passthrough, same pattern as `lib/expert-apply/reference-data.test.ts`: `unstable_cache`
+  // needs Next's Data Cache runtime, unavailable in a plain vitest process. Recording the call
+  // also lets the "rejects with DegradedHomeDataError" suite below invoke the wrapped strict
+  // loader directly.
+  mockUnstableCache: vi.fn((...args: unknown[]) => args[0]),
 }));
 
 vi.mock('server-only', () => ({}));
+
+vi.mock('next/cache', () => ({
+  unstable_cache: (...args: unknown[]) => mockUnstableCache(...args),
+}));
 
 vi.mock('@balo/db', () => ({
   expertsRepository: { findPublicProfileByUsername: mockFindPublicProfileByUsername },
@@ -61,7 +71,25 @@ vi.mock('./spotlight-mapper', () => ({
 
 import { log } from '@/lib/logging';
 import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
-import { loadHomeData } from './load-home-data';
+import type { ExpertCardData } from '@/components/expert/expert-card.types';
+import type { ResolvedBenchTile } from './bench-tiles';
+import type { PopularChip } from './popular-chips';
+import {
+  loadHomeData,
+  loadHomeDataResult,
+  DegradedHomeDataError,
+  type MarketingHomeData,
+} from './load-home-data';
+
+// The private strict loader `unstable_cache` wraps at module load — captured once so the
+// "rejects with DegradedHomeDataError" suite can call it directly, bypassing the
+// `loadHomeDataResult()` catch that would otherwise swallow the rejection.
+const [firstUnstableCacheCall] = mockUnstableCache.mock.calls;
+if (!firstUnstableCacheCall) {
+  throw new Error('unstable_cache was not called during module load');
+}
+const [strictLoaderArg] = firstUnstableCacheCall;
+const strictLoader = strictLoaderArg as () => Promise<MarketingHomeData>;
 
 const TAXONOMY = {
   groups: [{ id: 'cat-1', name: 'AI', items: [{ id: 'p-1', name: 'Agentforce' }] }],
@@ -77,6 +105,47 @@ const SEARCH_RESULT = {
   },
   wasAvailabilityGated: false,
 };
+
+/**
+ * A fully populated `ExpertCardData` — every field non-null — for the JSON round-trip test
+ * below. `satisfies` keeps this pinned to the real interface, so a new required field on
+ * `ExpertCardData` fails this file to update, not the mapper mock silently omitting it.
+ */
+const REAL_EXPERT_CARD_FIXTURE = {
+  id: 'expert-1',
+  username: 'dana',
+  name: 'Dana Okafor',
+  initials: 'DO',
+  avatarUrl: 'https://cdn.example.com/avatars/dana.png',
+  headline: 'Senior Salesforce Architect',
+  bio: 'Ten years building on Salesforce, from Sales Cloud to Agentforce.',
+  countryCode: 'AU',
+  rate: 4.5,
+  nextAvailableAt: '2026-09-28T09:00:00.000Z',
+  languages: [{ name: 'English', flagEmoji: '🇬🇧' }],
+  agency: { name: 'CloudPeak', logoUrl: 'https://cdn.example.com/logos/cloudpeak.png' },
+  distinctions: { isSalesforceMvp: true, isSalesforceCta: false, isCertifiedTrainer: true },
+  rating: 4.8,
+  ratingCount: 42,
+  yearsExperience: 10,
+  consultationCount: 128,
+  expertise: [{ product: 'Agentforce', skills: ['technical', 'architecture'] }],
+} satisfies ExpertCardData;
+
+const REAL_BENCH_TILE_FIXTURE = {
+  productId: 'p-1',
+  product: 'Agentforce',
+  label: 'AI Agents',
+  icon: 'sparkles',
+  tint: 'violet',
+  row: 'A',
+  href: '/experts?products=p-1',
+  displayCount: 60,
+  showCount: true,
+  ariaLabel: '60+ experts available',
+} satisfies ResolvedBenchTile;
+
+const REAL_POPULAR_CHIP_FIXTURE = { id: 'p-1', name: 'Agentforce' } satisfies PopularChip;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -266,5 +335,145 @@ describe('loadHomeData — an unanticipated rejection from a loader', () => {
       'Marketing home taxonomy load threw unexpectedly',
       expect.objectContaining({ error: 'taxonomy contract changed' })
     );
+  });
+});
+
+/**
+ * BAL-504 Phase 1 — the function `unstable_cache` wraps must REJECT (not degrade-and-resolve)
+ * on every path that makes `buildHomeData()`'s `degraded` true. A rejection is the only thing
+ * `unstable_cache` can't store, so this is what keeps a degraded result out of the cross-request
+ * cache (the "degraded never cached" AC).
+ */
+describe('the strict loader unstable_cache wraps — rejects with DegradedHomeDataError', () => {
+  it('rejects when the search fetch fails', async () => {
+    mockSearchExperts.mockRejectedValue(new Error('502'));
+
+    await expect(strictLoader()).rejects.toBeInstanceOf(DegradedHomeDataError);
+  });
+
+  it('rejects when the taxonomy comes back empty', async () => {
+    mockLoadSearchTaxonomy.mockResolvedValue(EMPTY_TAXONOMY);
+
+    await expect(strictLoader()).rejects.toBeInstanceOf(DegradedHomeDataError);
+  });
+
+  it('rejects when a spotlight lookup rejects', async () => {
+    mockFindPublicProfileByUsername.mockImplementation((username: string) =>
+      username === 'dana' ? Promise.reject(new Error('db timeout')) : Promise.resolve(undefined)
+    );
+
+    await expect(strictLoader()).rejects.toBeInstanceOf(DegradedHomeDataError);
+  });
+
+  it('rejects when the spotlight mapper throws', async () => {
+    mockFindPublicProfileByUsername.mockImplementation((username: string) =>
+      Promise.resolve({ id: `row-${username}`, competencies: [] })
+    );
+    mockMapPublicProfileToCardData.mockImplementation(
+      (_row: unknown, _view: unknown, username: string) => {
+        if (username === 'priya') throw new TypeError('bad row');
+        return { id: username };
+      }
+    );
+
+    await expect(strictLoader()).rejects.toBeInstanceOf(DegradedHomeDataError);
+  });
+
+  // Mutation proof: setting `hadFailure` on the null-row branch (instead of only on a rejected
+  // lookup or mapper throw) makes this resolve fail — a `null` row is an expected, logged
+  // omission, not a degradation.
+  it('resolves — not degraded — when one featured profile is null and the rest are healthy', async () => {
+    mockFindPublicProfileByUsername.mockImplementation((username: string) =>
+      username === 'dana'
+        ? Promise.resolve({ id: 'row-dana', competencies: [] })
+        : Promise.resolve(undefined)
+    );
+
+    await expect(strictLoader()).resolves.toBeDefined();
+  });
+});
+
+describe('loadHomeDataResult — degraded via the strict loader', () => {
+  it('resolves with the degraded data without a second fetch, and warns once', async () => {
+    mockSearchExperts.mockRejectedValue(new Error('expert-search request failed with status 502'));
+
+    const result = await loadHomeDataResult();
+
+    expect(result.degraded).toBe(true);
+    expect(result.data.expertTotal).toBeNull();
+    expect(mockSearchExperts).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      'Marketing home data degraded; serving uncached',
+      expect.objectContaining({ error: expect.any(String) })
+    );
+  });
+
+  it('loadHomeData() unwraps loadHomeDataResult() to just the data', async () => {
+    mockSearchExperts.mockRejectedValue(new Error('502'));
+
+    const data = await loadHomeData();
+
+    expect(data.expertTotal).toBeNull();
+  });
+});
+
+/**
+ * Same fallback the `expert-apply` reference-data loader already proves: when the wrapper
+ * itself throws (a misconfigured cache handler, or vitest's `incrementalCache missing`),
+ * `loadHomeDataResult()` reads live via `buildHomeData()` instead of failing the page.
+ */
+describe('loadHomeDataResult — unstable_cache wrapper itself throws', () => {
+  it('falls back to a live read and warns, returning full data', async () => {
+    vi.resetModules();
+    vi.doMock('next/cache', () => ({
+      unstable_cache: () => () => {
+        throw new Error('Invariant: incrementalCache missing in unstable_cache');
+      },
+    }));
+
+    const { loadHomeDataResult: freshLoadHomeDataResult } = await import('./load-home-data');
+    const { log: freshLog } = await import('@/lib/logging');
+
+    const result = await freshLoadHomeDataResult();
+
+    expect(result.degraded).toBe(false);
+    expect(result.data.expertTotal).toBe(214);
+    expect(freshLog.warn).toHaveBeenCalledWith(
+      'unstable_cache unavailable for marketing home data; reading uncached',
+      expect.objectContaining({ error: expect.stringContaining('incrementalCache') })
+    );
+
+    vi.doUnmock('next/cache');
+    vi.resetModules();
+  });
+});
+
+/**
+ * BAL-504 ticket 1.3 — `unstable_cache` persists its resolved value through Next's Data Cache,
+ * which round-trips through JSON. A shape that survives `JSON.stringify`/`JSON.parse` unchanged
+ * (no `Date`, `Map`, `Set`, `undefined` field, etc.) is what makes that safe.
+ *
+ * The mapper/resolver mocks return REAL, fully populated `ExpertCardData` / `ResolvedBenchTile` /
+ * `PopularChip` fixtures here (not the `{ id: username }` stubs the other suites use), and the
+ * assertion is `toStrictEqual`, which — unlike `toEqual` — fails if a key goes missing or turns
+ * into `undefined`. A field JSON silently drops (e.g. a future `lastActiveAt: Date`) would pass
+ * a stub-based `toEqual` check; it fails this one.
+ */
+describe('loadHomeData — JSON round trip (ticket 1.3)', () => {
+  it('deep-equals its own JSON round trip, with a fully populated MarketingHomeData shape', async () => {
+    mockFindPublicProfileByUsername.mockImplementation((username: string) =>
+      Promise.resolve({ id: `row-${username}`, competencies: [] })
+    );
+    mockMapPublicProfileToCardData.mockReturnValue(REAL_EXPERT_CARD_FIXTURE);
+    mockResolveBenchTiles.mockReturnValue([REAL_BENCH_TILE_FIXTURE]);
+    mockResolvePopularChips.mockReturnValue([REAL_POPULAR_CHIP_FIXTURE]);
+
+    const data = await loadHomeData();
+
+    expect(data.spotlight.length).toBeGreaterThan(0);
+    expect(data.spotlight[0]).toStrictEqual(REAL_EXPERT_CARD_FIXTURE);
+    expect(data.benchTiles).toStrictEqual([REAL_BENCH_TILE_FIXTURE]);
+    expect(data.chips).toStrictEqual([REAL_POPULAR_CHIP_FIXTURE]);
+    expect(JSON.parse(JSON.stringify(data))).toStrictEqual(data);
   });
 });

@@ -10,6 +10,7 @@
     "DATABASE_URL",
     "E2E_TEST_SECRET",
     "LOG_LEVEL",
+    "NEXT_PHASE",
     "NEXT_RUNTIME",
     "NODE_ENV",
     "PORT",

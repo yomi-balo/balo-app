@@ -35,6 +35,14 @@ vi.mock('../_components/join-result-view', () => ({
   },
 }));
 
+const { mockAnalyticsIdentify } = vi.hoisted(() => ({ mockAnalyticsIdentify: vi.fn() }));
+vi.mock('@/components/providers/analytics-identify', () => ({
+  AnalyticsIdentify: (props: Record<string, unknown>) => {
+    mockAnalyticsIdentify(props);
+    return null;
+  },
+}));
+
 import JoinResultPage from './page';
 
 const PARTY = 'company-1';
@@ -84,6 +92,30 @@ describe('JoinResultPage — approved re-validation (fail closed)', () => {
       expect.objectContaining({ status: 'approved', companyName: 'Acme', alreadyOnboarded: false })
     );
     expect(mockGetMemberRole).toHaveBeenCalledWith('company', PARTY, 'user-1');
+  });
+
+  // BAL-504 — `user` is already resolved by this point (a null user redirects earlier), so this
+  // page is a placement for `<AnalyticsIdentify>`.
+  it('passes the projected analytics identify props for the requester', async () => {
+    mockGetCurrentUser.mockResolvedValue({
+      id: 'user-1',
+      email: 'requester@example.com',
+      activeMode: 'client',
+      platformRole: 'user',
+      onboardingCompleted: false,
+    });
+
+    const el = await run({ status: 'approved', party: PARTY });
+    render(el);
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({
+      userId: 'user-1',
+      userTraitsJson: JSON.stringify({
+        email: 'requester@example.com',
+        active_mode: 'client',
+        platform_role: 'user',
+      }),
+    });
   });
 
   it('redirects to /dashboard when the approved param is forged (NOT a member)', async () => {

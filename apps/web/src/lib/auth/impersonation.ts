@@ -49,6 +49,37 @@ export function analyticsIdentityFor(
   return isImpersonatedSession(user) ? undefined : user.id;
 }
 
+/** The shape {@link analyticsIdentifyPropsFor} returns — also `<AnalyticsIdentify>`'s own props. */
+export interface AnalyticsIdentifyProps {
+  readonly userId?: string;
+  readonly userTraitsJson?: string;
+}
+
+/**
+ * BAL-504 — the props `<AnalyticsIdentify>` needs, projected right where a caller already has
+ * `user` in hand (the `(marketing)`/`(dashboard)`/`(apply)` layouts, the call page, and both
+ * onboarding pages). One home for both the BAL-553 impersonation suppression (via
+ * {@link analyticsIdentityFor}) and the trait shape, so every placement derives the same thing
+ * instead of re-deriving `JSON.stringify({ email, active_mode, platform_role })` at each site.
+ *
+ * `null` — no session, or a session-read failure a caller already degraded to `null` — and an
+ * impersonated session both give `{}`, `<AnalyticsIdentify>`'s no-op input: an impersonated
+ * session must never attribute the staff member's browsing to the customer's PostHog profile.
+ */
+export function analyticsIdentifyPropsFor(user: SessionUser | null): AnalyticsIdentifyProps {
+  if (user === null) return {};
+  const id = analyticsIdentityFor(user);
+  if (id === undefined) return {};
+  return {
+    userId: id,
+    userTraitsJson: JSON.stringify({
+      email: user.email,
+      active_mode: user.activeMode,
+      platform_role: user.platformRole,
+    }),
+  };
+}
+
 /**
  * Whether a gate that admits both mutations and reads should REFUSE under impersonation.
  * Defaults to refusal at every consumer; the permissive value is only ever named explicitly, at a

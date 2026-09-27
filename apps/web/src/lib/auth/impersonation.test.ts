@@ -18,8 +18,26 @@ import {
   IMPERSONATION_REFUSAL_MESSAGE,
   markSessionAsImpersonated,
   analyticsIdentityFor,
+  analyticsIdentifyPropsFor,
 } from './impersonation';
 import type { SessionUser } from './session';
+
+function makeSessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
+  return {
+    id: 'user-1',
+    email: 'dana@northwind.test',
+    firstName: 'Dana',
+    lastName: 'Okoro',
+    avatarUrl: null,
+    activeMode: 'client',
+    onboardingCompleted: true,
+    platformRole: 'user',
+    companyId: 'company-1',
+    companyName: 'Northwind Industrial',
+    companyRole: 'owner',
+    ...overrides,
+  };
+}
 
 describe('isImpersonatedSession — true ONLY for the literal boolean true', () => {
   beforeEach(() => {
@@ -140,5 +158,42 @@ describe('analyticsIdentityFor (BAL-553)', () => {
 
   it('returns the user id when isImpersonating is undefined (every pre-existing session)', () => {
     expect(analyticsIdentityFor({ isImpersonating: undefined, id: 'user-1' })).toBe('user-1');
+  });
+});
+
+/**
+ * BAL-504 — the three BAL-553 suppression cases below (impersonated, normal, and the exact key
+ * set) live here because `analyticsIdentifyPropsFor` is defined in this module. The fourth
+ * BAL-553 case, a rejecting `getCurrentUser()` read, lives in `(marketing)/layout.test.tsx`
+ * instead: the root layout never calls `getCurrentUser()`, so there is nothing here to exercise
+ * it against.
+ */
+describe('analyticsIdentifyPropsFor (BAL-504, carrying forward BAL-553)', () => {
+  it('gives {} for an impersonated session', () => {
+    expect(
+      analyticsIdentifyPropsFor(
+        makeSessionUser({ id: 'target-1', isImpersonating: true, impersonatorUserId: 'admin-1' })
+      )
+    ).toEqual({});
+  });
+
+  it('gives the userId and the exact trait key set for a normal session', () => {
+    const props = analyticsIdentifyPropsFor(makeSessionUser());
+
+    expect(props.userId).toBe('user-1');
+    expect(JSON.parse(props.userTraitsJson ?? '{}')).toEqual({
+      email: 'dana@northwind.test',
+      active_mode: 'client',
+      platform_role: 'user',
+    });
+    expect(Object.keys(JSON.parse(props.userTraitsJson ?? '{}'))).toEqual([
+      'email',
+      'active_mode',
+      'platform_role',
+    ]);
+  });
+
+  it('gives {} when there is no session at all', () => {
+    expect(analyticsIdentifyPropsFor(null)).toEqual({});
   });
 });

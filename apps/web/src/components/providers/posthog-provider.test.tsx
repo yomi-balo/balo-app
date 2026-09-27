@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render } from '@/test/utils';
-import { setAnalyticsErrorReporter, analytics, initAnalytics } from '@/lib/analytics';
+import { setAnalyticsErrorReporter, initAnalytics } from '@/lib/analytics';
 import { PostHogProvider } from './posthog-provider';
 
 const mockCaptureException = vi.fn();
@@ -10,7 +10,6 @@ vi.mock('@sentry/nextjs', () => ({
 
 describe('PostHogProvider', () => {
   afterEach(() => {
-    vi.mocked(analytics.identify).mockClear();
     mockCaptureException.mockClear();
   });
 
@@ -56,21 +55,5 @@ describe('PostHogProvider', () => {
     render(<PostHogProvider>{null}</PostHogProvider>);
 
     expect(initAnalytics).toHaveBeenCalledTimes(1);
-  });
-
-  it('identifies the user when userId + traits are present', () => {
-    render(
-      <PostHogProvider userId="user-1" userTraitsJson={JSON.stringify({ email: 'a@b.com' })}>
-        {null}
-      </PostHogProvider>
-    );
-
-    expect(analytics.identify).toHaveBeenCalledWith('user-1', { email: 'a@b.com' });
-  });
-
-  it('does not identify when userId is absent', () => {
-    render(<PostHogProvider>{null}</PostHogProvider>);
-
-    expect(analytics.identify).not.toHaveBeenCalled();
   });
 });

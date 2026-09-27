@@ -3,8 +3,6 @@ import localFont from 'next/font/local';
 import { Providers } from '@/components/providers';
 import { AppFooter } from '@/components/layout/app-footer';
 import { Toaster } from '@/components/ui/sonner';
-import { getCurrentUser } from '@/lib/auth/session';
-import { analyticsIdentityFor } from '@/lib/auth/impersonation';
 import { resolveSiteOrigin } from '@/lib/site-url';
 import './globals.css';
 
@@ -51,42 +49,18 @@ export const metadata: Metadata = {
  */
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
-}>) {
-  let user: Awaited<ReturnType<typeof getCurrentUser>> = null;
-  try {
-    user = await getCurrentUser();
-  } catch {
-    // Session unavailable (e.g. missing env vars in E2E/CI) — continue without user
-  }
-
-  // BAL-553 — `undefined` under an impersonated session: PostHogProvider identifies from this
-  // on every page load, so without this suppression the staff member's entire browsing session
-  // would be attributed to the customer's PostHog profile. No rendering change — see
-  // `analyticsIdentityFor`'s docblock in `@/lib/auth/impersonation`.
-  const analyticsUserId = user === null ? undefined : analyticsIdentityFor(user);
-
+}>): React.JSX.Element {
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
         suppressHydrationWarning
       >
-        <Providers
-          userId={analyticsUserId}
-          userTraitsJson={
-            user && analyticsUserId !== undefined
-              ? JSON.stringify({
-                  email: user.email,
-                  active_mode: user.activeMode,
-                  platform_role: user.platformRole,
-                })
-              : undefined
-          }
-        >
+        <Providers>
           {children}
           <AppFooter />
           <Toaster richColors position="top-center" />

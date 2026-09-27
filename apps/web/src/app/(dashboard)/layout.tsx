@@ -17,6 +17,8 @@ import { CreditsChipSkeleton } from '@/components/layout/credits-chip';
 import { creditsChipIsInScope } from '@/components/layout/credits-chip-scope';
 import { log } from '@/lib/logging';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
+import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
+import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 
 export default async function DashboardLayout({
   children,
@@ -99,6 +101,7 @@ export default async function DashboardLayout({
       workspaces={workspaces}
       activeWorkspaceKey={activeWorkspaceKey}
     >
+      <AnalyticsIdentify {...analyticsIdentifyPropsFor(user)} />
       <BreadcrumbProvider>
         {/* §2.3 — `min-h-dvh`, NEVER `min-h-screen`: mobile browser chrome makes `100vh` taller
             than the visible viewport, which would leave phantom scroll under the sticky tab

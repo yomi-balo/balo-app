@@ -66,6 +66,16 @@ vi.mock('@/components/balo/notification-bell', () => ({
   NotificationBell: () => <div data-testid="notification-bell" />,
 }));
 
+// BAL-504 — a spy, not a DOM marker: real props carry the session email, and this file's
+// fixtures are stand-ins for real users, so nothing here needs it rendered to the DOM.
+const { mockAnalyticsIdentify } = vi.hoisted(() => ({ mockAnalyticsIdentify: vi.fn() }));
+vi.mock('@/components/providers/analytics-identify', () => ({
+  AnalyticsIdentify: (props: Record<string, unknown>) => {
+    mockAnalyticsIdentify(props);
+    return null;
+  },
+}));
+
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
   redirect: vi.fn(),
@@ -156,5 +166,38 @@ describe('DashboardLayout — the credits-chip gate (BAL-499 F1)', () => {
     // session-derived ids (never caller-supplied) — the chip machinery is engaged, not stubbed
     // out.
     expect(mockLoadTopBarWalletData).toHaveBeenCalledWith('user-company-1', 'co-northwind');
+  });
+});
+
+describe('DashboardLayout — analytics identify placement (BAL-504)', () => {
+  it('passes the projected identify props for a normal user', async () => {
+    mockGetCurrentUser.mockResolvedValue(COMPANY_USER);
+    mockBuildNavContext.mockResolvedValue({ workspaceType: 'company', capabilities: [] });
+
+    const element = await DashboardLayout({ children: <div>page body</div> });
+    render(element);
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({
+      userId: 'user-company-1',
+      userTraitsJson: JSON.stringify({
+        email: 'dana@northwind.example',
+        active_mode: 'client',
+        platform_role: 'user',
+      }),
+    });
+  });
+
+  it('passes {} for an impersonated session', async () => {
+    mockGetCurrentUser.mockResolvedValue({
+      ...COMPANY_USER,
+      isImpersonating: true,
+      impersonatorUserId: 'admin-1',
+    });
+    mockBuildNavContext.mockResolvedValue({ workspaceType: 'company', capabilities: [] });
+
+    const element = await DashboardLayout({ children: <div>page body</div> });
+    render(element);
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({});
   });
 });

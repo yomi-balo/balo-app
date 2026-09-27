@@ -9,6 +9,8 @@ import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { conversationChannelName, typingChannelName } from '@/lib/realtime/channels';
+import { analyticsIdentifyPropsFor, type AnalyticsIdentifyProps } from '@/lib/auth/impersonation';
+import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 import { CallClient } from './_components/call-client';
 
 /**
@@ -183,9 +185,11 @@ export default async function MeetingCallPage({
   // ⚠ NAME ONLY, AND ONLY FOR PreJoin's "Joining as …" LINE. Never the email, never the id.
   let viewerName: string | null = null;
   let userId: string | null = null;
+  let identifyProps: AnalyticsIdentifyProps = {};
   try {
     const user = await getCurrentUser();
     userId = user?.id ?? null;
+    identifyProps = analyticsIdentifyPropsFor(user);
     const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
     viewerName = name.length === 0 ? null : name;
   } catch (error) {
@@ -211,24 +215,27 @@ export default async function MeetingCallPage({
   ]);
 
   return (
-    <CallClient
-      meetingId={meetingId}
-      viewerName={viewerName}
-      // ⚠⚠ BUILT SERVER-SIDE, TOKENLESS. See `meetingJoinLinkUrl` — including why the builder
-      // lives in `lib/meetings/` rather than in this file.
-      joinLinkUrl={meetingJoinLinkUrl(meetingId)}
-      hasChat={chatSlot.hasChat}
-      // BAL-403 / BAL-466 — ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this
-      // used to say "`false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED". `true` is now the
-      // real answer for a `case` meeting once its client has been admitted — see
-      // `resolveBalanceSlot`'s docblock. `false` is still expected for every non-`case` meeting
-      // and for a Case with no admitted client.
-      hasBalance={hasBalance}
-      // ⚠ THE ENV READ HAPPENS ON THE SERVER. `ABLY_API_KEY` is not `NEXT_PUBLIC_*` and must
-      // never become one; the client only ever learns the BOOLEAN.
-      isRealtimeEnabled={isRealtimeConfigured()}
-      chatChannelName={chatSlot.chatChannelName}
-      typingChannelName={chatSlot.typingChannelName}
-    />
+    <>
+      <CallClient
+        meetingId={meetingId}
+        viewerName={viewerName}
+        // ⚠⚠ BUILT SERVER-SIDE, TOKENLESS. See `meetingJoinLinkUrl` — including why the builder
+        // lives in `lib/meetings/` rather than in this file.
+        joinLinkUrl={meetingJoinLinkUrl(meetingId)}
+        hasChat={chatSlot.hasChat}
+        // BAL-403 / BAL-466 — ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this
+        // used to say "`false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED". `true` is now the
+        // real answer for a `case` meeting once its client has been admitted — see
+        // `resolveBalanceSlot`'s docblock. `false` is still expected for every non-`case` meeting
+        // and for a Case with no admitted client.
+        hasBalance={hasBalance}
+        // ⚠ THE ENV READ HAPPENS ON THE SERVER. `ABLY_API_KEY` is not `NEXT_PUBLIC_*` and must
+        // never become one; the client only ever learns the BOOLEAN.
+        isRealtimeEnabled={isRealtimeConfigured()}
+        chatChannelName={chatSlot.chatChannelName}
+        typingChannelName={chatSlot.typingChannelName}
+      />
+      <AnalyticsIdentify {...identifyProps} />
+    </>
   );
 }

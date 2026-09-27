@@ -4,17 +4,25 @@ import type { SessionUser } from '@/lib/auth/session';
 
 // redirect() throws in real Next (NEXT_REDIRECT) to short-circuit the render —
 // mirror that so control flow stops exactly where it would in production.
-const { mockRedirect, mockGetCurrentUser, mockCheckSessionDrift } = vi.hoisted(() => ({
-  mockRedirect: vi.fn((url: string): never => {
-    throw new Error(`REDIRECT:${url}`);
-  }),
-  mockGetCurrentUser: vi.fn(),
-  mockCheckSessionDrift: vi.fn(),
-}));
+const { mockRedirect, mockGetCurrentUser, mockCheckSessionDrift, mockAnalyticsIdentify } =
+  vi.hoisted(() => ({
+    mockRedirect: vi.fn((url: string): never => {
+      throw new Error(`REDIRECT:${url}`);
+    }),
+    mockGetCurrentUser: vi.fn(),
+    mockCheckSessionDrift: vi.fn(),
+    mockAnalyticsIdentify: vi.fn(),
+  }));
 
 vi.mock('next/navigation', () => ({ redirect: mockRedirect }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/auth/session-sync', () => ({ checkSessionDrift: mockCheckSessionDrift }));
+vi.mock('@/components/providers/analytics-identify', () => ({
+  AnalyticsIdentify: (props: Record<string, unknown>) => {
+    mockAnalyticsIdentify(props);
+    return null;
+  },
+}));
 vi.mock('./_components/onboarding-wizard', () => ({
   OnboardingWizard: (): React.JSX.Element => <div>wizard rendered</div>,
 }));
@@ -89,6 +97,25 @@ describe('OnboardingPage', () => {
     render(await runPage());
     expect(screen.getByText('wizard rendered')).toBeInTheDocument();
     expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  // BAL-504 — `user` is already resolved by this point (a null user redirects above), so this
+  // page is a placement for `<AnalyticsIdentify>`.
+  it('passes the projected analytics identify props for the un-onboarded user', async () => {
+    mockCheckSessionDrift.mockResolvedValue({ action: 'ok' });
+    mockGetCurrentUser.mockResolvedValue(
+      buildUser({ id: 'user-1', email: 'sarah@example.com', onboardingCompleted: false })
+    );
+    render(await runPage());
+
+    expect(mockAnalyticsIdentify).toHaveBeenCalledWith({
+      userId: 'user-1',
+      userTraitsJson: JSON.stringify({
+        email: 'sarah@example.com',
+        active_mode: 'client',
+        platform_role: 'user',
+      }),
+    });
   });
 
   describe('BAL-374 reminder-click tracking', () => {
