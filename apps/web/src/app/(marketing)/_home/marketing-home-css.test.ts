@@ -514,3 +514,32 @@ describe('marketing-home.css — BAL-582 reduced motion covers the toggle and th
     expect(reducedBody ?? '').toContain('.mk-page .mk-nudge-go svg');
   });
 });
+
+describe('marketing-home.css — the Popular chips stay on ONE row', () => {
+  it('never wraps: nowrap + sideways scroll, spanning the search bar width', () => {
+    const body = firstRuleBody(marketingHomeCss, '.mk-chips') ?? '';
+    expect(body).toContain('flex-wrap: nowrap');
+    expect(body).toContain('overflow-x: auto');
+    expect(body).toContain('max-width: 760px');
+    expect(firstRuleBody(marketingHomeCss, '.mk-chips > *') ?? '').toContain('flex-shrink: 0');
+  });
+
+  it('centres with end-child auto margins, never justify-content (unreachable overflow)', () => {
+    expect(firstRuleBody(marketingHomeCss, '.mk-chips') ?? '').not.toContain('justify-content');
+    expect(firstRuleBody(marketingHomeCss, '.mk-chips > :first-child') ?? '').toContain(
+      'margin-left: auto'
+    );
+    expect(firstRuleBody(marketingHomeCss, '.mk-chips > :last-child') ?? '').toContain(
+      'margin-right: auto'
+    );
+  });
+
+  it('the 820px query tightens the chips and bleeds the row through the 24px hero padding', () => {
+    const body = atRuleBody(marketingHomeCss, '@media (max-width: 820px)');
+    expect(body).toBeDefined();
+    const chipsBody = firstRuleBody(body ?? '', '.mk-chips') ?? '';
+    expect(chipsBody).toContain('margin-left: -24px');
+    expect(chipsBody).toContain('padding-left: 24px');
+    expect(firstRuleBody(body ?? '', '.mk-chip') ?? '').toContain('padding: 7px 11px');
+  });
+});
