@@ -10,7 +10,7 @@ import {
 import type { SessionUser } from '@/lib/auth/session';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
-import { isDescriptionEmpty } from '@/components/balo/rich-text-editor';
+import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { lockContentionFailure } from './deadlock';
