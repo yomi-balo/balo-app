@@ -24,6 +24,11 @@ describe('MARKETING_HOME_EVENTS', () => {
       'SPOTLIGHT_EXPERT_CLICKED',
       'CTA_CLICKED',
       'SECTION_VIEWED',
+      'HERO_MODE_CHANGED',
+      'PROJECT_NUDGE_SHOWN',
+      'PROJECT_NUDGE_CLICKED',
+      'PROJECT_NUDGE_DISMISSED',
+      'HERO_PROJECT_CTA_CLICKED',
     ]);
   });
 
@@ -39,6 +44,17 @@ describe('MARKETING_HOME_EVENTS', () => {
     );
     expect(MARKETING_HOME_EVENTS.CTA_CLICKED).toBe('marketing_home_cta_clicked');
     expect(MARKETING_HOME_EVENTS.SECTION_VIEWED).toBe('marketing_home_section_viewed');
+    expect(MARKETING_HOME_EVENTS.HERO_MODE_CHANGED).toBe('marketing_home_hero_mode_changed');
+    expect(MARKETING_HOME_EVENTS.PROJECT_NUDGE_SHOWN).toBe('marketing_home_project_nudge_shown');
+    expect(MARKETING_HOME_EVENTS.PROJECT_NUDGE_CLICKED).toBe(
+      'marketing_home_project_nudge_clicked'
+    );
+    expect(MARKETING_HOME_EVENTS.PROJECT_NUDGE_DISMISSED).toBe(
+      'marketing_home_project_nudge_dismissed'
+    );
+    expect(MARKETING_HOME_EVENTS.HERO_PROJECT_CTA_CLICKED).toBe(
+      'marketing_home_hero_project_cta_clicked'
+    );
   });
 
   it('values all carry the marketing_home_ prefix and the naming convention', () => {

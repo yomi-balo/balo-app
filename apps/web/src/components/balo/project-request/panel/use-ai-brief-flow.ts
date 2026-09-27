@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { track, PROJECT_EVENTS, type ProjectStep } from '@/lib/analytics';
 import type { ProjectBriefDraftPatch } from '@/lib/project-request/actions/get-project-brief-parse';
+import type { ProjectRequestEntryPoint } from '@balo/shared/project-requests';
 import { useProjectBriefGeneration } from './use-project-brief-generation';
+import { projectFunnelDimensions } from './funnel-dimensions';
 import type { ProjectDraft } from './use-project-draft';
 
 /** The four AI-owned fields, snapshotted immediately after a successful generate. */
@@ -25,6 +27,8 @@ function snapshotsDiffer(a: AiFieldSnapshot, b: AiFieldSnapshot): boolean {
 
 export interface UseAiBriefFlowOptions {
   expertProfileId: string | undefined;
+  /** BAL-582 (D2) — threaded into `PROJECT_ENTRY_SELECTED`'s `entry_point` dimension. */
+  entryPoint: ProjectRequestEntryPoint;
   draft: ProjectDraft;
   setField: <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => void;
   setStep: (step: ProjectStep) => void;
@@ -72,6 +76,7 @@ export interface UseAiBriefFlowResult {
  */
 export function useAiBriefFlow({
   expertProfileId,
+  entryPoint,
   draft,
   setField,
   setStep,
@@ -97,12 +102,13 @@ export function useAiBriefFlow({
   const editedFieldsFiredRef = useRef<Set<string>>(new Set());
 
   const handleSelectAi = useCallback(() => {
-    if (expertProfileId !== undefined) {
-      track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, { expert_id: expertProfileId, method: 'ai' });
-    }
+    track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
+      ...projectFunnelDimensions(expertProfileId, entryPoint),
+      method: 'ai',
+    });
     setField('source', 'ai');
     setStep('upload');
-  }, [expertProfileId, setField, setStep]);
+  }, [expertProfileId, entryPoint, setField, setStep]);
 
   const currentAiSnapshot: AiFieldSnapshot = useMemo(
     () => ({ title: trimmedTitle, descriptionHtml, tagIds, productIds }),

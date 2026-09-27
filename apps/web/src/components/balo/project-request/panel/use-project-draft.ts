@@ -3,9 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectRouting } from './send-to-selector';
 import type { ProjectDocumentRef } from '@/lib/project-request/actions/schemas';
+import type { ProjectRequestEntryPoint } from '@balo/shared/project-requests';
 
-/** Where the panel was opened from — drives the context-free autosave key. */
-export type ProjectRequestEntryPoint = 'profile' | 'search' | 'card' | 'direct';
+/**
+ * Defined once in `@balo/shared/project-requests` and re-exported here so every existing import
+ * of this type from this module keeps working unchanged.
+ */
+export type { ProjectRequestEntryPoint };
 
 export interface ProjectDraft {
   routing: ProjectRouting;
@@ -178,6 +182,24 @@ function readDraft(
   } catch {
     // Corrupt or inaccessible storage — start fresh.
     return emptyDraft;
+  }
+}
+
+/**
+ * BAL-582 — guarded removal of a context-free entry point's draft key (which can hold a title, a
+ * brief and document refs). `useLogout` calls this for `'home'` synchronously, but only on an
+ * EXPLICIT sign-out: a visitor who never signs in leaves the draft in localStorage with no TTL.
+ * No expert-bound draft key is user-scoped either; the difference is that the profile mount gates
+ * on sign-in before it ever opens the panel, where the home mount opens for signed-out visitors by
+ * design (D1). The key literal has one definition (`draftKey`), so this and `useProjectDraft` can
+ * never drift apart.
+ */
+export function clearEntryPointDraft(entryPoint: ProjectRequestEntryPoint): void {
+  if (globalThis.window === undefined) return;
+  try {
+    globalThis.localStorage.removeItem(draftKey(undefined, entryPoint));
+  } catch {
+    // Ignore — nothing actionable if storage is unavailable.
   }
 }
 

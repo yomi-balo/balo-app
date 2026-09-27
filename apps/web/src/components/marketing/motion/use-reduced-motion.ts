@@ -13,7 +13,7 @@ import { useReducedMotion } from 'motion/react';
  * `apps/web/src/app/(dashboard)/expert/settings/_components/calendar-sync-pending-notice.tsx`).
  * "Unknown" therefore defaults to "motion is fine" — the same default the rest of the app uses.
  *
- * ⚠ This does NOT port the design reference's `usePrefersReduced` (`marketing-home.jsx:1169`),
+ * ⚠ This does NOT port the design reference's `usePrefersReduced` (`marketing-home.jsx:1359`),
  * a hand-rolled `matchMedia` hook. `motion` v12 is already a dependency and the repo's
  * established idiom is `useReducedMotion` from `motion/react` — no reason to duplicate it.
  */

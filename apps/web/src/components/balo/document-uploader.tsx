@@ -87,6 +87,12 @@ interface DocumentUploaderProps {
   onDocumentsChange: (docs: ProjectDocumentRef[]) => void;
   /** Bubbles whether any upload is still in flight (gates submit). */
   onUploadingChange?: (uploading: boolean) => void;
+  /**
+   * BAL-582 (D1) — present means the caller is signed out. A click or a drop onto the dropzone
+   * calls this instead of opening the file picker / starting an upload, so no file ever reaches
+   * the presign action while signed out. Absent (every other caller) → unchanged behaviour.
+   */
+  onRequireAuth?: () => void;
 }
 
 function isImageType(type: string): boolean {
@@ -123,6 +129,7 @@ export function DocumentUploader({
   initialDocuments,
   onDocumentsChange,
   onUploadingChange,
+  onRequireAuth,
 }: Readonly<DocumentUploaderProps>): React.JSX.Element {
   const reduce = useReducedMotion();
   // ⚠ LAZY INITIALISER — `initialDocuments` is read exactly once, on mount (see the prop's
@@ -314,10 +321,15 @@ export function DocumentUploader({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
+      // BAL-582 (D1) — signed out: a drop never reaches the presign action.
+      if (onRequireAuth) {
+        onRequireAuth();
+        return;
+      }
       const files = Array.from(e.dataTransfer.files);
       if (files.length > 0) handleFiles(files);
     },
-    [handleFiles]
+    [handleFiles, onRequireAuth]
   );
 
   const handleRemove = useCallback(
@@ -366,7 +378,7 @@ export function DocumentUploader({
       ) : (
         <button
           type="button"
-          onClick={openPicker}
+          onClick={() => (onRequireAuth ? onRequireAuth() : openPicker())}
           onDragOver={(e) => {
             e.preventDefault();
             setIsDragging(true);

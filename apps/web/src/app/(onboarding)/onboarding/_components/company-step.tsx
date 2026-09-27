@@ -38,11 +38,13 @@ interface CompanyStepProps {
   timezone?: string | null;
   stepNumber: number;
   onBack: () => void;
-  /** HIGH 3 (BAL-502 FIX round) — see `intent-step.tsx`'s prop of the same name.
-   * Overrides every terminal redirect below so a visitor who started at the
-   * anonymous /expert/apply wizard but picked "Find an Expert" here still lands
-   * back on their in-progress application, rather than losing it at `/dashboard`. */
-  pendingApplyReturnTo?: string | null;
+  /** Overrides every terminal redirect below, resolved at PUSH TIME (not at mount) so a
+   * TTL-backed source can't go stale while the visitor works through the wizard. Returns an
+   * allow-listed literal, never user input: the pending apply-intent override
+   * (`/expert/apply`, so a visitor who started at the anonymous /expert/apply wizard but
+   * picked "Find an Expert" here still lands back on their in-progress application), or `'/'`
+   * when a signed-out visitor came back from a home project panel sign-up. */
+  resolveReturnTo?: () => string | null;
 }
 
 /**
@@ -54,7 +56,7 @@ interface CompanyStepProps {
  * by the resolve action, never passed as a prop.
  */
 export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(function CompanyStep(
-  { authMethod, timezone, stepNumber, onBack, pendingApplyReturnTo = null },
+  { authMethod, timezone, stepNumber, onBack, resolveReturnTo },
   ref
 ) {
   const router = useRouter();
@@ -172,10 +174,10 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
           intent: 'client',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
-        router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
+        router.push(resolveReturnTo?.() ?? result.data?.redirectTo ?? '/dashboard');
       });
     },
-    [authMethod, resolvedStatus, stepNumber, timezone, router, pendingApplyReturnTo]
+    [authMethod, resolvedStatus, stepNumber, timezone, router, resolveReturnTo]
   );
 
   // Escape hatch from the JOIN branch / pending screen — "This isn't my company /
@@ -227,7 +229,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
           intent: 'client',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
-        router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
+        router.push(resolveReturnTo?.() ?? result.data?.redirectTo ?? '/dashboard');
         return;
       }
 
@@ -239,7 +241,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
       track(DOMAIN_JOIN_EVENTS.INTERSTITIAL_CONTINUED, { mode: 'request', party_type: 'company' });
       setPhase('pending');
     });
-  }, [joinCompany, authMethod, stepNumber, timezone, router, pendingApplyReturnTo]);
+  }, [joinCompany, authMethod, stepNumber, timezone, router, resolveReturnTo]);
 
   // "Explore Balo while you wait" from the pending screen — completes onboarding
   // (client mode, no rename/join) and navigates. Fails CLOSED — an inline banner
@@ -261,9 +263,9 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         intent: 'client',
         timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
-      router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
+      router.push(resolveReturnTo?.() ?? result.data?.redirectTo ?? '/dashboard');
     });
-  }, [authMethod, stepNumber, timezone, router, pendingApplyReturnTo]);
+  }, [authMethod, stepNumber, timezone, router, resolveReturnTo]);
 
   if (phase === 'resolving') {
     return (

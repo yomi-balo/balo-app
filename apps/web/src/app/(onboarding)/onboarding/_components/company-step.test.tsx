@@ -33,17 +33,14 @@ import { CompanyStep } from './company-step';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-function renderStep(
-  authMethod: AuthMethodSignal = 'email',
-  pendingApplyReturnTo: string | null = null
-) {
+function renderStep(authMethod: AuthMethodSignal = 'email', returnTo: string | null = null) {
   return render(
     <CompanyStep
       authMethod={authMethod}
       timezone="Europe/London"
       stepNumber={5}
       onBack={vi.fn()}
-      pendingApplyReturnTo={pendingApplyReturnTo}
+      resolveReturnTo={() => returnTo}
     />
   );
 }
@@ -122,7 +119,7 @@ describe('CompanyStep', () => {
 
   // HIGH 3 (BAL-502 FIX round) — the create-branch terminal honours a pending
   // apply-intent, and ordinary (non-applicant) signups are unaffected.
-  it('applicant-with-pending-intent: pendingApplyReturnTo overrides the create-branch redirect to /expert/apply', async () => {
+  it('applicant-with-pending-intent: returnTo overrides the create-branch redirect to /expert/apply', async () => {
     const user = userEvent.setup();
     mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
     renderStep('email', '/expert/apply');
@@ -134,7 +131,7 @@ describe('CompanyStep', () => {
     expect(mockPush).not.toHaveBeenCalledWith('/dashboard');
   });
 
-  it('ordinary signup: with no pendingApplyReturnTo, the create branch is unaffected (still /dashboard)', async () => {
+  it('ordinary signup: with no returnTo, the create branch is unaffected (still /dashboard)', async () => {
     const user = userEvent.setup();
     mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
     renderStep('email', null);
@@ -143,6 +140,30 @@ describe('CompanyStep', () => {
     await user.click(screen.getByRole('button', { name: /continue/i }));
 
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+  });
+
+  // resolveReturnTo is a callback so its result can change between mount and the click that
+  // pushes (a TTL-backed marker expiring mid-wizard).
+  it('resolveReturnTo is evaluated at push time, not captured once at render', async () => {
+    const user = userEvent.setup();
+    mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
+    let value: string | null = '/expert/apply';
+    render(
+      <CompanyStep
+        authMethod="email"
+        timezone="Europe/London"
+        stepNumber={5}
+        onBack={vi.fn()}
+        resolveReturnTo={() => value}
+      />
+    );
+
+    await screen.findByRole('heading', { name: /name your workspace/i });
+    value = null; // simulates the marker expiring between mount and the click
+    await user.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+    expect(mockPush).not.toHaveBeenCalledWith('/expert/apply');
   });
 
   it('marks prefill_edited when the user changes the suggested name', async () => {

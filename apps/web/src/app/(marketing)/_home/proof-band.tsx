@@ -5,7 +5,7 @@ import { useMarketingReducedMotion } from '@/components/marketing/motion/use-red
 import { useCountUp } from '@/components/marketing/motion/use-count-up';
 import type { MarketingMetric } from './copy';
 
-/** Matches the design reference's `useInView(reduced, 0.4)` threshold (`marketing-home.jsx:1757-1758`). */
+/** Matches the design reference's `useInView(reduced, 0.4)` threshold (`marketing-home.jsx:2150`). */
 const PROOF_THRESHOLD = 0.4;
 
 interface ProofMetricProps {

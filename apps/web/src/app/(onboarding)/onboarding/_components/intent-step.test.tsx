@@ -3,6 +3,10 @@ import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
+import {
+  rememberPendingHomeProject,
+  hasPendingHomeProject,
+} from '@/lib/marketing/pending-home-project';
 import { IntentStep } from './intent-step';
 
 const mockPush = vi.fn();
@@ -33,6 +37,9 @@ beforeEach(() => {
     success: true,
     data: { redirectTo: '/expert/apply' },
   });
+  sessionStorage.clear();
+  localStorage.clear();
+  globalThis.history.replaceState(null, '', '/');
 });
 
 describe('IntentStep', () => {
@@ -129,6 +136,31 @@ describe('IntentStep', () => {
         /(?:^|\s)(?:[\w-]+:)*-?(?:brightness|blur|contrast|saturate|grayscale|filter|backdrop|transform|translate|scale|rotate|will-change|contain)\b/
       );
     }
+  });
+
+  // BAL-582 D1 — the expert terminal drops a pending home-project marker so a signed-in visit
+  // to `/` afterwards does not auto-reopen the home hero's project panel.
+  it('a successful expert completion removes a pending home-project marker', async () => {
+    rememberPendingHomeProject();
+    const user = userEvent.setup();
+    renderStep();
+
+    await user.click(screen.getByRole('button', { name: /become an expert/i }));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
+    expect(hasPendingHomeProject()).toBe(false);
+  });
+
+  it('a failed expert completion keeps a pending home-project marker', async () => {
+    mockCompleteOnboarding.mockResolvedValue({ success: false, error: 'Could not save' });
+    rememberPendingHomeProject();
+    const user = userEvent.setup();
+    renderStep();
+
+    await user.click(screen.getByRole('button', { name: /become an expert/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not save'));
+    expect(hasPendingHomeProject()).toBe(true);
   });
 
   it('Back calls onBack', async () => {

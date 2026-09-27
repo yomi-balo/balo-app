@@ -21,7 +21,7 @@ interface ParallaxProps {
 
 /**
  * BAL-493 §11 — scroll-linked transform, written straight to the DOM (no re-renders). Replaces
- * the design reference's `useScrollFx` (`marketing-home.jsx:1223-1258`), wrapping children so
+ * the design reference's `useScrollFx` (`marketing-home.jsx:1412-1448`), wrapping children so
  * the wrapped content stays server-rendered (the same boundary trick documented at
  * `apps/web/src/components/balo/engagement/reveal.tsx:22-27` — only the rendered React nodes
  * cross the client boundary, never a data object).

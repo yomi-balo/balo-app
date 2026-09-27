@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { track, analytics, AUTH_EVENTS } from '@/lib/analytics';
+import {
+  hasPendingHomeProject,
+  rememberPendingHomeProject,
+} from '@/lib/marketing/pending-home-project';
 import { rememberSetupIntent, readRememberedSetupIntent } from '@/lib/stripe/setup-intent-return';
 import { useLogout } from './use-logout';
 
@@ -69,6 +73,49 @@ describe('useLogout', () => {
     // Assert BEFORE advancing the 500ms `analytics.reset()` timer at all.
     expect(globalThis.localStorage.getItem(RECENT_LOOKUPS_KEY)).toBeNull();
     expect(analytics.reset).not.toHaveBeenCalled();
+  });
+
+  it('BAL-582 §4 — clears the home entry-point draft and the pending-intent marker on sign-out', () => {
+    globalThis.localStorage.setItem(
+      'balo:project-draft:entry:home',
+      JSON.stringify({ title: 'Migrate us to Sales Cloud' })
+    );
+    rememberPendingHomeProject();
+    expect(hasPendingHomeProject()).toBe(true);
+
+    const { result } = renderHook(() => useLogout());
+    result.current();
+
+    expect(globalThis.localStorage.getItem('balo:project-draft:entry:home')).toBeNull();
+    expect(hasPendingHomeProject()).toBe(false);
+  });
+
+  it('BAL-582 §4 — the home draft/marker clear is synchronous, not on the deferred reset timer', () => {
+    vi.useFakeTimers();
+    globalThis.localStorage.setItem('balo:project-draft:entry:home', JSON.stringify({}));
+    rememberPendingHomeProject();
+
+    const { result } = renderHook(() => useLogout());
+    result.current();
+
+    // Assert BEFORE advancing the 500ms `analytics.reset()` timer at all.
+    expect(globalThis.localStorage.getItem('balo:project-draft:entry:home')).toBeNull();
+    expect(hasPendingHomeProject()).toBe(false);
+    expect(analytics.reset).not.toHaveBeenCalled();
+  });
+
+  it('BAL-582 §4 — an expert-bound project draft key is untouched (only the home entry-point key is scoped to a shared machine)', () => {
+    globalThis.localStorage.setItem(
+      'balo:project-draft:expert-123',
+      JSON.stringify({ title: 'Existing expert-bound draft' })
+    );
+
+    const { result } = renderHook(() => useLogout());
+    result.current();
+
+    expect(globalThis.localStorage.getItem('balo:project-draft:expert-123')).toEqual(
+      JSON.stringify({ title: 'Existing expert-bound draft' })
+    );
   });
 
   it('tracks LOGOUT_COMPLETED and calls logoutAction', () => {

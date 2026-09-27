@@ -6,12 +6,14 @@ import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 // re-exports modules that value-import `@balo/db` → `postgres`, which explodes in jsdom.
 // `logout.ts` imports only `../session` and `@/lib/logging`.
 import { logoutAction } from '@/lib/auth/actions/logout';
+import { forgetPendingHomeProject } from '@/lib/marketing/pending-home-project';
 import { forgetSetupIntent } from '@/lib/stripe/setup-intent-return';
 // BAL-551 fix round R4 — was a direct import of the route-private
 // `admin/lookup/_lib/use-recent-lookups`, a layering inversion (a shared layout module
 // reaching into one route's private `_lib`). The key and clear function now live in
 // `@/lib/admin-lookup/recent-storage`, imported by both this hook and that route's hook.
 import { clearStoredRecentLookups } from '@/lib/admin-lookup/recent-storage';
+import { clearEntryPointDraft } from '@/components/balo/project-request/panel/use-project-draft';
 
 /**
  * BAL-501 (D10) — the three-step logout sequence, extracted verbatim from
@@ -69,6 +71,22 @@ export function useLogout(): () => void {
     // BAL-551 fix round F7 — synchronous, same reasoning as `forgetSetupIntent()` above: this
     // is a plain key removal, not an async flush, so it does not need the deferred timer.
     clearStoredRecentLookups();
+    /**
+     * BAL-582 §4 (security) — under D1 the home hero opens `ProjectRequestPanel` for
+     * SIGNED-OUT visitors too. No project-draft key is user-scoped — expert-bound keys are
+     * `balo:project-draft:{expertProfileId}`, keyed by entry point, not by user. What sets the
+     * home entry point apart is that the profile mount asks for sign-in before the panel opens,
+     * while the home mount opens signed out, so `balo:project-draft:entry:home` (title, brief,
+     * document refs) and the post-sign-up return marker can end up in a signed-out browsing
+     * context. On a shared machine, leaving either behind lets the next signed-out visitor land
+     * on `/` and see the previous person's in-progress project draft. Synchronous, same reasoning as
+     * `forgetSetupIntent()` above — this explicit sign-out is the one path that closes it; session
+     * expiry, a crashed tab or the middleware teardown run no client code and leave the draft, and
+     * a visitor who never signs in at all leaves it with no TTL (a stated, accepted residual —
+     * `use-recent-lookups.ts:29-35` documents the same limitation for every other draft key).
+     */
+    clearEntryPointDraft('home');
+    forgetPendingHomeProject();
     // Defer reset so PostHog flushes the event with the user's identity
     setTimeout(() => analytics.reset(), 500);
     logoutAction();

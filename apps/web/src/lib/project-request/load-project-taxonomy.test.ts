@@ -17,6 +17,7 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
+import { loadSearchTaxonomy } from '@/lib/search/load-taxonomy';
 import { loadProjectRequestTaxonomies } from './load-project-taxonomy';
 
 describe('loadProjectRequestTaxonomies', () => {
@@ -103,5 +104,34 @@ describe('loadProjectRequestTaxonomies', () => {
       const result = await loadProjectRequestTaxonomies();
       expect(result.loadFailed).toBe(true);
     });
+  });
+
+  /**
+   * BAL-582 §3f — the hero's product facet (`load-taxonomy.ts`'s `loadSearchTaxonomy`) and the
+   * panel's seeded `productIds` (this loader's `products`) MUST share one id space, or a hero
+   * selection could seed an id the panel's picker never recognises. Both loaders call
+   * `getProductsByVertical` for the same vertical and map the result through the identical
+   * `mapProductsByCategoryToTaxonomy` — this test proves that with one shared repo mock, not by
+   * inspecting the two call sites.
+   */
+  it('§3f — shares one product id space with `loadSearchTaxonomy`', async () => {
+    mockGetTags.mockResolvedValue([]);
+    mockGetProducts.mockResolvedValue([
+      {
+        category: { id: 'cat-1', name: 'AI', slug: 'ai', sortOrder: 0 },
+        products: [{ id: 'prod-1', name: 'Agentforce', slug: 'agentforce', sortOrder: 0 }],
+      },
+      {
+        category: { id: 'cat-2', name: 'Data Cloud', slug: 'data-cloud', sortOrder: 1 },
+        products: [{ id: 'prod-2', name: 'Data Cloud', slug: 'data-cloud', sortOrder: 0 }],
+      },
+    ]);
+
+    const [projectTaxonomies, searchTaxonomy] = await Promise.all([
+      loadProjectRequestTaxonomies(),
+      loadSearchTaxonomy(),
+    ]);
+
+    expect(projectTaxonomies.products).toEqual(searchTaxonomy);
   });
 });

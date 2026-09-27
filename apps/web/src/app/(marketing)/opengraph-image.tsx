@@ -16,7 +16,7 @@ export const contentType = 'image/png';
  * Satori, entirely OUTSIDE the CSS cascade — it has no `<html>`/`<body>` and cannot read
  * `globals.css` custom properties (`var(--primary)` etc. resolve to nothing there). The values
  * below are the design reference's own literal palette (`.claude/design-references/
- * marketing-home.jsx:199-206` — `primary: '#2563EB'`, `violet: '#7C3AED'`, `night: '#0B1220'`),
+ * marketing-home.jsx:313-321` — `primary: '#2563EB'`, `violet: '#7C3AED'`, `night: '#0B1220'`),
  * not a guess and not a drift from the token system. Any repo-wide "no hardcoded hex" scan
  * should exclude this file for exactly this reason.
  */

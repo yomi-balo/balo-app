@@ -63,9 +63,11 @@ vi.mock('@/components/balo/document-uploader', () => ({
   DocumentUploader: ({
     initialDocuments,
     onDocumentsChange,
+    onRequireAuth,
   }: {
     initialDocuments?: readonly MockDoc[];
     onDocumentsChange: (docs: MockDoc[]) => void;
+    onRequireAuth?: () => void;
   }) => {
     const seeded = initialDocuments ?? [];
     return (
@@ -76,7 +78,13 @@ vi.mock('@/components/balo/document-uploader', () => ({
         ))}
         <button
           type="button"
-          onClick={() =>
+          onClick={() => {
+            // BAL-582 (D1) — the mock honours `onRequireAuth` exactly as the real uploader does:
+            // signed out, an attach calls it instead of publishing a document.
+            if (onRequireAuth) {
+              onRequireAuth();
+              return;
+            }
             onDocumentsChange([
               ...seeded,
               {
@@ -85,8 +93,8 @@ vi.mock('@/components/balo/document-uploader', () => ({
                 contentType: 'application/pdf',
                 sizeBytes: 1024,
               },
-            ])
-          }
+            ]);
+          }}
         >
           Attach test file
         </button>
@@ -217,6 +225,7 @@ describe('ProjectRequestPanel', () => {
     expect(screen.getByRole('heading', { name: /upload your project docs/i })).toBeInTheDocument();
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
       expert_id: EXPERT_PROFILE_ID,
+      entry_point: 'profile',
       method: 'ai',
     });
   });
@@ -229,6 +238,7 @@ describe('ProjectRequestPanel', () => {
     expect(screen.getByLabelText(/project title/i)).toBeInTheDocument();
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
       expert_id: EXPERT_PROFILE_ID,
+      entry_point: 'profile',
       method: 'manual',
     });
   });
@@ -321,6 +331,7 @@ describe('ProjectRequestPanel', () => {
 
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED, {
       expert_id: EXPERT_PROFILE_ID,
+      entry_point: 'profile',
       send_to: 'direct',
       tag_count: 1,
       product_count: 1,
@@ -486,7 +497,7 @@ describe('ProjectRequestPanel', () => {
       ([event]) => event === PROJECT_EVENTS.PROJECT_DRAWER_OPENED
     );
     expect(openCalls).toHaveLength(1);
-    expect(openCalls[0]?.[1]).toEqual({ expert_id: EXPERT_PROFILE_ID });
+    expect(openCalls[0]?.[1]).toEqual({ expert_id: EXPERT_PROFILE_ID, entry_point: 'profile' });
   });
 
   it('does not fire PROJECT_DRAWER_OPENED when closed', () => {
@@ -495,6 +506,34 @@ describe('ProjectRequestPanel', () => {
       PROJECT_EVENTS.PROJECT_DRAWER_OPENED,
       expect.anything()
     );
+  });
+
+  // BAL-582 (R3) — a reopen fires exactly one STEP_VIEWED, for the OPENING step, never the step
+  // the panel happened to be showing when it was closed.
+  it('a panel closed on review and reopened fires one step:"start" STEP_VIEWED, never "review"', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderPanel();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
+    await user.type(
+      screen.getByLabelText(/project description/i),
+      'Rebuild our lead routing in Flow.'
+    );
+    await user.click(screen.getByRole('button', { name: /^review/i }));
+    await screen.findByTestId('rt-viewer');
+
+    rerender(<ProjectRequestPanel open={false} onClose={vi.fn()} {...BASE_PROPS} />);
+    mockTrack.mockClear();
+    rerender(<ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} />);
+
+    const stepViewedCalls = mockTrack.mock.calls.filter(
+      ([event]) => event === PROJECT_EVENTS.PROJECT_STEP_VIEWED
+    );
+    expect(stepViewedCalls).toHaveLength(1);
+    expect(stepViewedCalls[0]?.[1]).toMatchObject({ step: 'start' });
+    expect(
+      stepViewedCalls.some(([, payload]) => (payload as { step: string }).step === 'review')
+    ).toBe(false);
   });
 
   it('persists the draft to localStorage and hydrates it on remount', async () => {
@@ -927,12 +966,44 @@ describe('ProjectRequestPanel', () => {
       });
     });
 
-    it('does not fire the expert-keyed open analytics event', () => {
+    // A context-free mount fires the funnel events too, with exactly `entry_point` and no
+    // `expert_id` key (there is none to carry).
+    it('fires PROJECT_DRAWER_OPENED with exactly entry_point and no expert_id', () => {
       renderContextFree();
-      expect(mockTrack).not.toHaveBeenCalledWith(
-        PROJECT_EVENTS.PROJECT_DRAWER_OPENED,
-        expect.anything()
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_DRAWER_OPENED, {
+        entry_point: 'direct',
+      });
+      const [, payload] = mockTrack.mock.calls.find(
+        ([event]) => event === PROJECT_EVENTS.PROJECT_DRAWER_OPENED
+      ) as [string, Record<string, unknown>];
+      expect(payload).not.toHaveProperty('expert_id');
+    });
+
+    it('fires PROJECT_STEP_VIEWED and PROJECT_REQUEST_SUBMITTED without an expert_id key', async () => {
+      const user = userEvent.setup();
+      renderContextFree();
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+
+      const stepCalls = mockTrack.mock.calls.filter(
+        ([event]) => event === PROJECT_EVENTS.PROJECT_STEP_VIEWED
+      ) as [string, Record<string, unknown>][];
+      const manualStepCall = stepCalls.find(([, payload]) => payload.step === 'manual');
+      expect(manualStepCall?.[1]).toEqual({ entry_point: 'direct', step: 'manual' });
+
+      await user.type(screen.getByLabelText(/project title/i), 'Need help scoping');
+      await user.type(
+        screen.getByLabelText(/project description/i),
+        'We need help scoping a Salesforce build.'
       );
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+      await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+
+      await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
+      const submittedCall = mockTrack.mock.calls.find(
+        ([event]) => event === PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED
+      ) as [string, Record<string, unknown>];
+      expect(submittedCall[1]).not.toHaveProperty('expert_id');
+      expect(submittedCall[1]).toMatchObject({ entry_point: 'direct', send_to: 'match' });
     });
 
     it('self-loads taxonomies on open when projectTaxonomies is omitted', async () => {
@@ -948,6 +1019,269 @@ describe('ProjectRequestPanel', () => {
       expect(
         await screen.findByRole('button', { name: 'New Salesforce Implementation' })
       ).toBeInTheDocument();
+    });
+  });
+
+  // ── BAL-582 (§3b/§3c, D1) — the home mount: hero seed application + the signed-out auth gate ──
+  describe('home mount (BAL-582)', () => {
+    const SALES_CLOUD_ID = '33333333-3333-3333-3333-333333333333';
+    const SERVICE_CLOUD_ID = '44444444-4444-4444-4444-444444444444';
+    const HOME_TAXONOMIES: ProjectRequestTaxonomies = {
+      tags: TAXONOMIES.tags,
+      products: {
+        groups: [
+          {
+            id: 'c1',
+            name: 'Core Clouds',
+            items: [
+              { id: SALES_CLOUD_ID, name: 'Sales Cloud' },
+              { id: SERVICE_CLOUD_ID, name: 'Service Cloud' },
+            ],
+          },
+        ],
+      },
+    };
+    const HOME_KEY = 'balo:project-draft:entry:home';
+
+    function renderHome(overrides: Partial<React.ComponentProps<typeof ProjectRequestPanel>> = {}) {
+      return render(
+        <ProjectRequestPanel
+          open
+          onClose={vi.fn()}
+          entryPoint="home"
+          projectTaxonomies={HOME_TAXONOMIES}
+          {...overrides}
+        />
+      );
+    }
+
+    it('fires DRAWER_OPENED once with entry_point home, and STEP_VIEWED once for manual (never start)', () => {
+      renderHome({ seed: { title: 'x' } });
+
+      const openCalls = mockTrack.mock.calls.filter(
+        ([event]) => event === PROJECT_EVENTS.PROJECT_DRAWER_OPENED
+      );
+      expect(openCalls).toHaveLength(1);
+      expect(openCalls[0]?.[1]).toEqual({ entry_point: 'home' });
+
+      const stepCalls = mockTrack.mock.calls.filter(
+        ([event]) => event === PROJECT_EVENTS.PROJECT_STEP_VIEWED
+      ) as [string, Record<string, unknown>][];
+      expect(stepCalls).toHaveLength(1);
+      expect(stepCalls[0]?.[1]).toEqual({ entry_point: 'home', step: 'manual' });
+      expect(stepCalls.some(([, payload]) => payload.step === 'start')).toBe(false);
+    });
+
+    describe('seed application (§3b/§3c)', () => {
+      it('a title seed opens at manual, filled, with Match copy', () => {
+        renderHome({ seed: { title: 'Migrate us from HubSpot' } });
+        expect(screen.getByLabelText(/project title/i)).toHaveValue('Migrate us from HubSpot');
+        expect(screen.getByRole('radio', { name: /find me an expert/i })).toHaveAttribute(
+          'aria-checked',
+          'true'
+        );
+      });
+
+      it('a description seed fills the editor', () => {
+        renderHome({ seed: { descriptionText: 'We need a Data Cloud rollout.' } });
+        expect(screen.getByLabelText(/project description/i)).toHaveValue(
+          'We need a Data Cloud rollout.'
+        );
+      });
+
+      it('a products-only seed opens at manual', () => {
+        renderHome({ seed: { productIds: [SALES_CLOUD_ID] } });
+        expect(screen.getByLabelText(/project title/i)).toBeInTheDocument();
+      });
+
+      it('no seed opens at start', () => {
+        renderHome();
+        expect(
+          screen.getAllByRole('heading', { name: /^start a project$/i }).length
+        ).toBeGreaterThan(0);
+      });
+
+      it('never overwrites an existing localStorage draft', () => {
+        globalThis.localStorage.setItem(
+          HOME_KEY,
+          JSON.stringify({ title: 'Already typed', descriptionHtml: '' })
+        );
+        renderHome({ seed: { title: 'Seeded title' } });
+        expect(screen.getByLabelText(/project title/i)).toHaveValue('Already typed');
+      });
+
+      it('seeds a description into a draft whose editor was cleared to "<p></p>"', () => {
+        globalThis.localStorage.setItem(
+          HOME_KEY,
+          JSON.stringify({ title: '', descriptionHtml: '<p></p>' })
+        );
+        renderHome({ seed: { descriptionText: 'Seeded brief text.' } });
+        expect(screen.getByLabelText(/project description/i)).toHaveValue('Seeded brief text.');
+      });
+
+      it('unions seeded product ids with the draft, filtered to live ids', () => {
+        globalThis.localStorage.setItem(HOME_KEY, JSON.stringify({ productIds: [SALES_CLOUD_ID] }));
+        renderHome({ seed: { title: 'x', productIds: [SERVICE_CLOUD_ID, 'stale-id'] } });
+
+        expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
+        expect(screen.getByText('Service Cloud')).toBeInTheDocument();
+        expect(screen.getByText('2 selected')).toBeInTheDocument();
+      });
+
+      it('the self-load path applies seeded products after mockRefetch resolves', async () => {
+        mockRefetch.mockResolvedValue(HOME_TAXONOMIES);
+        render(
+          <ProjectRequestPanel
+            open
+            onClose={vi.fn()}
+            entryPoint="home"
+            seed={{ productIds: [SERVICE_CLOUD_ID] }}
+          />
+        );
+
+        await waitFor(() => expect(mockRefetch).toHaveBeenCalled());
+        expect(await screen.findByText('Service Cloud')).toBeInTheDocument();
+      });
+
+      it('reopening with a new seed fills only empty fields, once per open', () => {
+        const { rerender } = renderHome({ seed: { title: 'First title' } });
+        expect(screen.getByLabelText(/project title/i)).toHaveValue('First title');
+
+        rerender(
+          <ProjectRequestPanel
+            open={false}
+            onClose={vi.fn()}
+            entryPoint="home"
+            projectTaxonomies={HOME_TAXONOMIES}
+            seed={{ title: 'First title' }}
+          />
+        );
+        rerender(
+          <ProjectRequestPanel
+            open
+            onClose={vi.fn()}
+            entryPoint="home"
+            projectTaxonomies={HOME_TAXONOMIES}
+            seed={{ title: 'Second title', descriptionText: 'Second description' }}
+          />
+        );
+
+        expect(screen.getByLabelText(/project title/i)).toHaveValue('First title');
+        expect(screen.getByLabelText(/project description/i)).toHaveValue('Second description');
+      });
+
+      it('resumeDraft opens at manual for a manual-source draft', () => {
+        globalThis.localStorage.setItem(
+          HOME_KEY,
+          JSON.stringify({ title: 'Resumed', source: 'manual' })
+        );
+        renderHome({ resumeDraft: true });
+        expect(screen.getByLabelText(/project title/i)).toHaveValue('Resumed');
+      });
+
+      it("resumeDraft opens at upload for an 'ai'-source draft (gated there)", () => {
+        globalThis.localStorage.setItem(
+          HOME_KEY,
+          JSON.stringify({ title: 'Resumed AI', source: 'ai' })
+        );
+        renderHome({ resumeDraft: true });
+        expect(
+          screen.getByRole('heading', { name: /upload your project docs/i })
+        ).toBeInTheDocument();
+      });
+
+      it('Back from a seeded manual step still reaches the AI card', async () => {
+        const user = userEvent.setup();
+        renderHome({ seed: { title: 'Seeded' } });
+        await user.click(screen.getByRole('button', { name: /change entry method/i }));
+        expect(screen.getByRole('button', { name: /upload docs/i })).toBeInTheDocument();
+      });
+    });
+
+    describe('auth gate (D1)', () => {
+      it('Submit calls onAuthRequired and never mockSubmit when signed out', async () => {
+        const onAuthRequired = vi.fn();
+        const user = userEvent.setup();
+        renderHome({ onAuthRequired });
+        await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+        await user.type(screen.getByLabelText(/project title/i), 'Need scoping');
+        await user.type(
+          screen.getByLabelText(/project description/i),
+          'We need help scoping this work.'
+        );
+        await user.click(screen.getByRole('button', { name: /^review/i }));
+        await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+
+        expect(onAuthRequired).toHaveBeenCalledTimes(1);
+        expect(mockSubmit).not.toHaveBeenCalled();
+      });
+
+      it('attaching a document (manual step) calls onAuthRequired instead of publishing one', async () => {
+        const onAuthRequired = vi.fn();
+        const user = userEvent.setup();
+        renderHome({ onAuthRequired });
+        await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+        await user.click(screen.getByRole('button', { name: /attach test file/i }));
+
+        expect(onAuthRequired).toHaveBeenCalledTimes(1);
+      });
+
+      it('attaching a document (upload/AI step) calls onAuthRequired instead of publishing one', async () => {
+        const onAuthRequired = vi.fn();
+        const user = userEvent.setup();
+        renderHome({ onAuthRequired });
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+        await user.click(screen.getByRole('button', { name: /attach test file/i }));
+
+        expect(onAuthRequired).toHaveBeenCalledTimes(1);
+      });
+
+      it('without onAuthRequired, Submit acts normally (unchanged behaviour)', async () => {
+        const user = userEvent.setup();
+        renderHome();
+        await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+        await user.type(screen.getByLabelText(/project title/i), 'Need scoping');
+        await user.type(
+          screen.getByLabelText(/project description/i),
+          'We need help scoping this work.'
+        );
+        await user.click(screen.getByRole('button', { name: /^review/i }));
+        await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+
+        await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
+      });
+
+      it('prop flip (in-place sign-in): the draft + step survive, and Submit then acts', async () => {
+        const onAuthRequired = vi.fn();
+        const user = userEvent.setup();
+        const { rerender } = renderHome({ onAuthRequired });
+        await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+        await user.type(screen.getByLabelText(/project title/i), 'Need scoping');
+        await user.type(
+          screen.getByLabelText(/project description/i),
+          'We need help scoping this work.'
+        );
+        await user.click(screen.getByRole('button', { name: /^review/i }));
+        await screen.findByTestId('rt-viewer');
+
+        rerender(
+          <ProjectRequestPanel
+            open
+            onClose={vi.fn()}
+            entryPoint="home"
+            projectTaxonomies={HOME_TAXONOMIES}
+            onAuthRequired={undefined}
+          />
+        );
+
+        // Still on review, draft untouched by the prop flip.
+        expect(screen.getByTestId('rt-viewer')).toBeInTheDocument();
+        expect(onAuthRequired).not.toHaveBeenCalled();
+
+        await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+
+        await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
+      });
     });
   });
 

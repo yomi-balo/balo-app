@@ -253,6 +253,48 @@ describe('DocumentUploader', () => {
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith([]));
   });
 
+  // ── BAL-582 (D1) — signed-out auth gate ───────────────────────────────────────────────────
+  describe('onRequireAuth (BAL-582 D1)', () => {
+    it('a click calls onRequireAuth and never opens the file input', async () => {
+      const user = userEvent.setup();
+      const onRequireAuth = vi.fn();
+      const { container } = render(
+        <DocumentUploader onDocumentsChange={vi.fn()} onRequireAuth={onRequireAuth} />
+      );
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+      const clickSpy = vi.spyOn(input, 'click');
+
+      await user.click(screen.getByText(/drag files here or browse/i));
+
+      expect(onRequireAuth).toHaveBeenCalledTimes(1);
+      expect(clickSpy).not.toHaveBeenCalled();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    it('a drop calls onRequireAuth and never reaches the presign action', () => {
+      const onRequireAuth = vi.fn();
+      render(<DocumentUploader onDocumentsChange={vi.fn()} onRequireAuth={onRequireAuth} />);
+
+      fireEvent.drop(screen.getByText(/drag files here or browse/i), {
+        dataTransfer: { files: [makeFile('spec.pdf', 'application/pdf', 1000)] },
+      });
+
+      expect(onRequireAuth).toHaveBeenCalledTimes(1);
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    it('without the prop, a click still opens the picker (unchanged behaviour)', async () => {
+      const user = userEvent.setup();
+      const { container } = render(<DocumentUploader onDocumentsChange={vi.fn()} />);
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+      const clickSpy = vi.spyOn(input, 'click');
+
+      await user.click(screen.getByText(/drag files here or browse/i));
+
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
   /**
    * ⚠ PROGRESS IS THIS COMPONENT'S BUSINESS, NOT THE PARENT'S. Every XHR `upload.onprogress`
    * tick calls `patchRow(id, {progress})`, which reaches `publish`. Without a guard a 5 MB file

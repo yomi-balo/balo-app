@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 
@@ -81,6 +81,7 @@ vi.mock('motion/react', async () => {
 
 import { OnboardingWizard } from './onboarding-wizard';
 import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
+import { rememberPendingHomeProject } from '@/lib/marketing/pending-home-project';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -97,6 +98,9 @@ describe('OnboardingWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSearchParams = new URLSearchParams();
+    sessionStorage.clear();
+    localStorage.clear();
+    globalThis.history.replaceState(null, '', '/');
   });
 
   it('renders Step 1 (welcome) by default when firstName is provided', () => {
@@ -260,6 +264,83 @@ describe('OnboardingWizard', () => {
       await user.click(screen.getByRole('button', { name: /^continue$/i }));
 
       await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+    });
+  });
+
+  // ── BAL-582 D1 — post-sign-up return path (pending home-project marker) ───
+
+  describe('post-sign-up return path (home project panel marker)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('with a fresh marker, the client path lands on / instead of /dashboard', async () => {
+      rememberPendingHomeProject();
+      const user = userEvent.setup();
+      render(<OnboardingWizard firstName="Sarah" authMethod="email" />);
+
+      await advanceToIntent(user);
+      await user.click(screen.getByRole('button', { name: /find an expert/i }));
+      await user.click(screen.getByRole('button', { name: /^continue$/i }));
+
+      await waitFor(() => expect(mockNameWorkspace).toHaveBeenCalledWith('Acme'));
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/'));
+      expect(mockPush).not.toHaveBeenCalledWith('/dashboard');
+    });
+
+    it('with a fresh marker, the expert path still lands on /expert/apply (the marker only overrides the client terminal)', async () => {
+      rememberPendingHomeProject();
+      const user = userEvent.setup();
+      render(<OnboardingWizard firstName="Sarah" authMethod="oauth_google" />);
+
+      await advanceToIntent(user);
+      await user.click(screen.getByRole('button', { name: /become an expert/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
+    });
+
+    it('an expired marker does not override the client terminal — still /dashboard', async () => {
+      rememberPendingHomeProject(Date.now() - 31 * 60 * 1000);
+      const user = userEvent.setup();
+      render(<OnboardingWizard firstName="Sarah" authMethod="email" />);
+
+      await advanceToIntent(user);
+      await user.click(screen.getByRole('button', { name: /find an expert/i }));
+      await user.click(screen.getByRole('button', { name: /^continue$/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+      expect(mockPush).not.toHaveBeenCalledWith('/');
+    });
+
+    it('?returnTo=/expert/apply still wins over a fresh home-project marker', async () => {
+      rememberPendingHomeProject();
+      mockSearchParams = new URLSearchParams('returnTo=%2Fexpert%2Fapply');
+      const user = userEvent.setup();
+      render(<OnboardingWizard firstName="Sarah" authMethod="email" />);
+
+      await advanceToIntent(user);
+      await user.click(screen.getByRole('button', { name: /find an expert/i }));
+      await user.click(screen.getByRole('button', { name: /^continue$/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
+      expect(mockPush).not.toHaveBeenCalledWith('/');
+    });
+
+    it('a marker that expires between mount and click no longer overrides the client terminal', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime });
+      rememberPendingHomeProject();
+      render(<OnboardingWizard firstName="Sarah" authMethod="email" />);
+
+      await advanceToIntent(user);
+      // The marker was fresh at mount; it expires while the visitor is still on the wizard.
+      vi.advanceTimersByTime(31 * 60 * 1000);
+
+      await user.click(screen.getByRole('button', { name: /find an expert/i }));
+      await user.click(screen.getByRole('button', { name: /^continue$/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+      expect(mockPush).not.toHaveBeenCalledWith('/');
     });
   });
 });

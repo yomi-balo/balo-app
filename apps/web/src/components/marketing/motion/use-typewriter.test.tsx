@@ -131,5 +131,35 @@ describe('useTypewriter', () => {
       });
       expect(result.current).toBe('Yo');
     });
+
+    /**
+     * BAL-582 §1 — a mode swap passes a NEW `phrases` array (a different identity), which tears
+     * down the in-flight timer chain and restarts the effect. Without the `setText('')` reset at
+     * the top of the effect, the OLD mode's partially-typed text would linger on screen for a
+     * full `TYPE_START_DELAY_MS` before the new cycle's first tick overwrote it.
+     */
+    it('clears the old phrase IMMEDIATELY on a phrases-array swap, not after the next start delay', () => {
+      const consultationPhrases = ['Hi'];
+      const projectPhrases = ['Yo'];
+      const { result, rerender } = renderHook(
+        ({ phrases }: { phrases: string[] }) => useTypewriter(phrases, false),
+        { initialProps: { phrases: consultationPhrases } }
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(TYPE_START_DELAY_MS);
+      });
+      expect(result.current).toBe('H');
+
+      rerender({ phrases: projectPhrases });
+      // No timer advance yet — the reset must happen synchronously in the effect, not on the
+      // next scheduled tick.
+      expect(result.current).toBe('');
+
+      act(() => {
+        vi.advanceTimersByTime(TYPE_START_DELAY_MS);
+      });
+      expect(result.current).toBe('Y');
+    });
   });
 });

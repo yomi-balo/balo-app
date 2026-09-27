@@ -72,7 +72,9 @@ describe('gradient-cta — the hero search submit (surface 1 of 3)', () => {
         productNameMap={{}}
         chips={[]}
         phrases={['fix a broken Flow before lunch']}
+        projectPhrases={['migrate us from HubSpot to Sales Cloud']}
         verticalName="Salesforce"
+        isLoggedIn={false}
       />
     );
     const submit = screen.getByRole('button', { name: /Find experts/i });

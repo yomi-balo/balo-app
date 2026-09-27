@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { ProjectBriefDraftPatch } from '@/lib/project-request/actions/get-project-brief-parse';
 
 vi.mock('server-only', () => ({}));
@@ -76,6 +77,7 @@ function renderFlow(isFlowActive: boolean, draft: ProjectDraft = DRAFT) {
     ({ active, currentDraft }: { active: boolean; currentDraft: ProjectDraft }) =>
       useAiBriefFlow({
         expertProfileId: undefined,
+        entryPoint: 'direct',
         draft: currentDraft,
         setField,
         setStep,
@@ -183,6 +185,7 @@ describe('useAiBriefFlow — the regenerate clobber-guard snapshot (fix round F1
       ({ draft }: { draft: ProjectDraft }) =>
         useAiBriefFlow({
           expertProfileId: undefined,
+          entryPoint: 'direct',
           draft,
           setField,
           setStep: vi.fn(),
@@ -205,5 +208,34 @@ describe('useAiBriefFlow — the regenerate clobber-guard snapshot (fix round F1
     });
 
     expect(result.current.hasEditsSinceGenerate).toBe(false);
+  });
+});
+
+// BAL-582 (D2) — the context-free mount fires PROJECT_ENTRY_SELECTED too, carrying entry_point
+// and no expert_id key (there is none to carry).
+describe('useAiBriefFlow — BAL-582 context-free entry analytics', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.onSucceeded = undefined;
+  });
+
+  it('a context-free AI selection fires ENTRY_SELECTED with entry_point and no expert_id', () => {
+    const { result } = renderHook(() =>
+      useAiBriefFlow({
+        expertProfileId: undefined,
+        entryPoint: 'home',
+        draft: DRAFT,
+        setField: vi.fn(),
+        setStep: vi.fn(),
+        isFlowActive: true,
+      })
+    );
+
+    act(() => result.current.handleSelectAi());
+
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
+      entry_point: 'home',
+      method: 'ai',
+    });
   });
 });

@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 import type { AuthMethodSignal } from '@/lib/auth/auth-method';
 import { hasPendingApplyIntent, PENDING_APPLY_PATH } from '@/lib/auth/onboarding-return-to';
+import { hasPendingHomeProject } from '@/lib/marketing/pending-home-project';
 
 interface OnboardingWizardProps {
   firstName: string | null;
@@ -48,6 +49,14 @@ export function OnboardingWizard({
   const pendingApplyReturnTo = hasPendingApplyIntent(searchParams.get('returnTo'))
     ? PENDING_APPLY_PATH
     : null;
+
+  // BAL-582 D1 — resolved at PUSH TIME by the Company step, not read once here: the marker
+  // carries a TTL, and a wizard session can outlast it. The marker itself is consumed later,
+  // back on `/`, by the hero's resume effect — not here.
+  const resolveReturnTo = useCallback(
+    (): string | null => pendingApplyReturnTo ?? (hasPendingHomeProject() ? '/' : null),
+    [pendingApplyReturnTo]
+  );
 
   const needsNameStep = firstName === null;
   // BAL-350: base + 1 for the new client-only company step (the client terminal).
@@ -160,7 +169,7 @@ export function OnboardingWizard({
               timezone={selectedTimezone}
               onBack={goBack}
               stepNumber={5}
-              pendingApplyReturnTo={pendingApplyReturnTo}
+              resolveReturnTo={resolveReturnTo}
             />
           );
         default:
@@ -199,7 +208,7 @@ export function OnboardingWizard({
             timezone={selectedTimezone}
             onBack={goBack}
             stepNumber={4}
-            pendingApplyReturnTo={pendingApplyReturnTo}
+            resolveReturnTo={resolveReturnTo}
           />
         );
       default:

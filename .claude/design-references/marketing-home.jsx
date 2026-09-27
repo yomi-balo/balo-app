@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, createContext, useContext } from 'react';
 
 // ─────────────────────────────────────────────────────────────────
-// BALO MARKETING HOME — V1.1 (Balo 2.0)
+// BALO MARKETING HOME — V1.5 (Balo 2.0)
 // Design reference — no ticket yet (author under Platform project)
 // ─────────────────────────────────────────────────────────────────
 //
@@ -95,7 +95,11 @@ import { useState, useEffect, useRef, useMemo, createContext, useContext } from 
 // • Logo mark is a stand-in — swap for the real asset.
 //
 // SUGGESTED ANALYTICS (for the ticket)
-// hero_search_submitted {query_len, product_count}, hero_facet_opened,
+// hero_search_submitted {query_len, product_count, mode}, hero_mode_changed
+// {mode, source: tab|nudge}, project_nudge_shown / _clicked / _dismissed,
+// brief_panel_opened {source: hero|nudge}, brief_submitted
+// {desc_len, products_count, timeline, budget_band}, brief_dismissed,
+// hero_facet_opened,
 // hero_product_toggled {product, source: facet|chip},
 // product_tile_clicked {product, row}, cta_clicked
 // {placement: nav|hero|ways|experts|pricing|band|final, label},
@@ -111,6 +115,87 @@ import { useState, useEffect, useRef, useMemo, createContext, useContext } from 
 // 3. Packages framing ("set price, no scoping call") — confirm with MJ.
 // 4. Where marketing lives: apps/web (marketing) route group vs a
 //    separate app. Parallax + IO hooks are client components either way.
+// 5. RESOLVED (V1.4): the project entry opens the EXISTING
+//    ProjectRequestPanel (context-free, entryPoint 'home'). No new
+//    pipeline — match requests already land in admin triage.
+// 6. Nudge scorer (V1.4): weighted signals — build verbs +3, scale
+//    words +2, timeline words +2, consult-shaped words −3, ≥2 products
+//    +1, ≥60 chars +1; nudge at score ≥3 (min 18 chars), debounced
+//    500ms. Ships with a labelled-fixture unit test; retune from
+//    nudge-dismissed / manual-tab-switch data.
+// 7. MJ copy: mode labels, project phrases, hint line, nudge wording.
+//
+// REVISIONS (V1.4 → V1.5, per Yomi 2026-09-26 — toggle option E)
+// The segmented toggle (solid-blue active pill) is replaced by the
+// SENTENCE TOGGLE picked from hero-mode-toggle-options.jsx (option E):
+//   "I want to [book a consultation ⇅]  or start a project"
+// • The bold phrase is an aria-pressed toggle button (gradient
+//   underline + flip chip); the quiet "or …" tail on the same line
+//   switches too and always names the OTHER mode.
+// • One line, never wraps; the tail hides ≤520px (bold phrase + ⇅
+//   remain the switch). Phrase swap rolls; tail fades; reduced motion
+//   makes both instant.
+// • Everything else about the modes (placeholder, submit label, hint,
+//   nudge, panel hand-off) is unchanged from V1.4.
+//
+// REVISIONS (V1.3 → V1.4, 2026-09-26 — "reuse the existing panel")
+// BAL-493 shipped (PR #253); this ref now scopes ONLY the hero delta.
+// • The V1.3 custom BriefPanel is REMOVED. Production reuses the
+//   existing ProjectRequestPanel (@/components/balo/project-request/
+//   panel) in CONTEXT-FREE mode (no expert → Match routing,
+//   "Find me an expert"), new entryPoint 'home', opened at the MANUAL
+//   step and SEEDED from the hero. The drawer below is a labelled
+//   stand-in showing the seed rule only — do not build it.
+// • The panel's server actions are withAuth, so a signed-out visitor
+//   hits the auth modal first (same gate as the expert profile page);
+//   the seed + intent survive sign-in, sign-up and the onboarding
+//   redirect via a sessionStorage pending intent.
+// • Seed rule: one-liner ≤120 chars → Project title; longer → the
+//   brief (description). Hero products → panel products.
+// • Nudge heuristic replaced by the weighted scorer (projectScore).
+// • V1.3's P-register is SUPERSEDED: the existing panel already owns
+//   budget/timeline fields, the reply promise ("usually within a
+//   day"), and the match → admin-triage pipeline. The "no account"
+//   stance is reversed by reusing an auth-gated panel — anonymous
+//   capture is an explicit follow-up, not this ticket.
+//
+// REVISIONS (V1.2 → V1.3, per Yomi 2026-09-26 — "project request panel")
+// The one-liner is the bait; the PANEL is the proper request:
+// • "Get a scoped proposal" (the project-mode submit AND the nudge)
+//   now opens a right-hand REQUEST PANEL instead of routing away —
+//   description PREFILLED with the hero one-liner (reseeded on open
+//   only while untouched), products shared with the facet/chips state.
+// • Panel fields: description · products (prod: mount the real
+//   TaxonomyMultiSelect) · timeline pills · budget bands · name +
+//   work email. Submit → in-panel success state.
+// • No account needed — deliberate: a sign-up wall would bleed the
+//   highest-revenue intent at the door.
+// PANEL DECISIONS (P-register, owner Yomi + MJ):
+//   P1 Response promise — "we reply within one business day" needs an
+//      ops owner before it ships.
+//   P2 Budget bands — placeholder values; all-in client framing only
+//      (fee-concealment invariant).
+//   P3 Lead pipeline — API + storage + team notification on submit
+//      (who is pinged, which channel) + where leads live for
+//      follow-up. Needs its own ticket.
+//   P4 Account-less submit confirmed; email verification later?
+//   P5 Spam protection — honeypot/Turnstile before launch.
+//
+// REVISIONS (V1.1 → V1.2, per Yomi 2026-09-26 — "projects entry")
+// Projects are the biggest revenue driver; the hero now serves both
+// intents:
+// • MODE TOGGLE on the composer: "Book a consultation" (default) |
+//   "Start a project". Project mode re-skins the SAME bar — the
+//   typewriter swaps to build-shaped phrases, submit becomes "Get a
+//   scoped proposal", a reassurance hint appears under the bar; the
+//   facet + chips share products[] across modes; typed text carries
+//   into the brief so nothing the buyer wrote is wasted.
+// • INTENT-DETECTION NUDGE: in consult mode, build-shaped queries
+//   (heuristic — OPEN QUESTIONS #6) surface a dismissible "Sounds
+//   like a project" pill that switches modes with the query intact.
+// • Consultation stays the default (the by-the-minute wedge is the
+//   brand); ?intent=project should preselect the project tab for
+//   targeted campaigns and outbound links.
 //
 // REVISIONS (V1 → V1.1, per Yomi 2026-08-28)
 // • Nav CTA "Find an expert": gradient → solid --primary, white text.
@@ -133,9 +218,44 @@ const VERTICAL = {
     'Marketing Cloud journeys stopped sending…',
     'Migrating from Classic to Lightning…',
   ],
+  // Project-mode typewriter (V1.2) — build-shaped problems. MJ copy.
+  projectPhrases: [
+    'Migrate us from HubSpot to Sales Cloud…',
+    'Implement CPQ across two business units…',
+    'Roll out Agentforce for our support team…',
+    'Rebuild quote-to-cash in Revenue Cloud…',
+    'Stand up Data Cloud for marketing…',
+  ],
   // Chips toggle the products[] facet — every value must be an exact
   // TAXONOMY item so chip / token / badge stay one state.
   chips: ['Agentforce', 'Data Cloud', 'CPQ', 'Sales Cloud', 'Service Cloud', 'MuleSoft', 'Tableau'],
+};
+
+// Intent-detection heuristic (V1.2, prototype tuning — OPEN QUESTIONS #6).
+const INTENT_SIGNALS = [
+  { re: /\b(implement|migrat|roll[- ]?out|rebuild|integrat|deploy|stand up)\w*/i, w: 3 }, // build verbs
+  {
+    re: /\b(across|org[- ]wide|business units?|all (our )?teams|phases?|end[- ]to[- ]end)\b/i,
+    w: 2,
+  }, // scale
+  { re: /\b(weeks?|months?|q[1-4]|go[- ]live|deadline|by end of)\b/i, w: 2 }, // timeline
+  { re: /\b(error|fails?|broken|not working|bug|debug|why does|how do i)\b/i, w: -3 }, // consult-shaped
+];
+const projectScore = (q, productCount) => {
+  const t = q.trim();
+  if (t.length < 18) return 0;
+  let s = INTENT_SIGNALS.reduce((acc, { re, w }) => acc + (re.test(t) ? w : 0), 0);
+  if (productCount >= 2) s += 1;
+  if (t.length >= 60) s += 1;
+  return s;
+};
+const looksLikeProject = (q, productCount) => projectScore(q, productCount) >= 3;
+
+// Seed rule (V1.4): one-liner ≤120 chars → Project title; longer → brief.
+const seedFromOneLiner = (q) => {
+  const t = q.trim();
+  if (t === '') return { title: '', description: '' };
+  return t.length <= 120 ? { title: t, description: '' } : { title: '', description: t };
 };
 
 // Mirrors the BAL-249 SearchComposer taxonomy (that file is the source
@@ -332,6 +452,7 @@ body { background: ${c.night}; }
 .mk-hero-inner > :nth-child(3) { animation-delay: .24s; }
 .mk-hero-inner > :nth-child(4) { animation-delay: .34s; }
 .mk-hero-inner > :nth-child(5) { animation-delay: .44s; }
+.mk-hero-inner > :nth-child(6) { animation-delay: .54s; }
 
 .mk-live { display: inline-flex; align-items: center; gap: 8px; padding: 6px 13px 6px 9px; border-radius: 999px; background: #fff; border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.04); font-size: 13px; font-weight: 500; color: var(--text2); }
 .mk-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success-bright); animation: mk-ping 2s infinite; }
@@ -342,6 +463,57 @@ body { background: ${c.night}; }
 .mk-underline { position: absolute; left: -1%; bottom: -.06em; width: 102%; height: .2em; overflow: visible; }
 .mk-underline path { animation: mk-draw 1.1s var(--ease) .9s forwards; }
 .mk-lede { font-size: clamp(16px, 1.6vw, 19px); color: var(--text2); max-width: 600px; margin: 0 auto 30px; line-height: 1.55; }
+
+/* Dual-intent mode toggle (V1.2) */
+/* Sentence toggle (V1.5 — option E) */
+.mk-sent { display: inline-flex; align-items: center; justify-content: center; gap: 2px; white-space: nowrap; font-size: clamp(16px, 1.9vw, 19px); color: var(--text2); margin: 0 0 16px; }
+.mk-sent-btn { position: relative; display: inline-flex; align-items: center; gap: 8px; border: none; background: transparent; cursor: pointer; font: 650 1em var(--sans); color: var(--ink); padding: 2px 4px; margin-left: 2px; border-radius: 8px; }
+.mk-sent-btn::after { content: ''; position: absolute; left: 4px; right: 30px; bottom: -2px; height: 2px; border-radius: 2px; background: var(--grad); }
+.mk-sent-word { display: inline-block; animation: mk-roll .34s var(--ease) both; }
+.mk-sent-flip { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 7px; background: rgba(17,24,39,.05); color: var(--text2); transition: transform .35s cubic-bezier(.34,1.3,.64,1), background .2s, box-shadow .2s, color .2s; }
+.mk-sent-btn:hover .mk-sent-flip { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(17,24,39,.08), 0 2px 8px -2px rgba(17,24,39,.10); }
+.mk-sent-btn[aria-pressed="true"] .mk-sent-flip { transform: rotate(180deg); }
+.mk-sent-alt { margin-left: 12px; font-size: .72em; color: var(--text3); }
+.mk-sent-alt button { border: none; background: none; padding: 0; font: inherit; color: var(--text3); cursor: pointer; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; transition: color .2s, text-decoration-color .2s; }
+.mk-sent-alt button:hover { color: var(--text2); text-decoration-color: currentColor; }
+.mk-sent-alt-word { display: inline-block; animation: mk-fade .3s var(--ease) both; }
+@media (max-width: 520px) { .mk-sent-alt { display: none; } }
+.mk-search-zone { position: relative; max-width: 760px; margin: 0 auto; }
+.mk-mode-hint { font-size: 12.5px; color: var(--text3); margin: 10px 0 0; }
+.mk-nudge { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 6px 6px 6px 12px; background: #fff; border: 1px solid rgba(124,58,237,.35); border-radius: 999px; box-shadow: 0 8px 24px -10px rgba(124,58,237,.35); font: 550 13px var(--sans); color: var(--ink); animation: mk-drop .25s var(--ease) both; }
+.mk-nudge-ic { color: var(--violet); display: flex; }
+.mk-nudge-go { display: inline-flex; align-items: center; gap: 5px; border: none; cursor: pointer; background: rgba(124,58,237,.1); color: var(--violet-deep); font: 600 12.5px var(--sans); padding: 7px 11px; border-radius: 999px; transition: all .18s var(--ease); }
+.mk-nudge-go:hover { background: var(--violet); color: #fff; }
+.mk-nudge-go svg { transition: transform .2s var(--ease); }
+.mk-nudge-go:hover svg { transform: translateX(2px); }
+.mk-nudge-x { display: flex; border: none; background: none; color: var(--text3); cursor: pointer; padding: 4px; }
+.mk-nudge-x:hover { color: var(--ink); }
+
+/* ── Project request panel (V1.3) ── */
+.mk-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(11,18,32,.45); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: mk-fade .25s ease both; }
+.mk-panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 61; width: min(480px, 100vw); background: #fff; box-shadow: -24px 0 60px -20px rgba(11,18,32,.35); display: flex; flex-direction: column; animation: mk-panel-in .3s var(--ease) both; }
+.mk-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 24px 18px; border-bottom: 1px solid var(--line-soft); }
+.mk-panel-head h3 { margin: 0 0 4px; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+.mk-panel-head p { margin: 0; font-size: 13.5px; color: var(--text2); line-height: 1.5; }
+.mk-panel-x { display: flex; border: 1px solid var(--line); background: #fff; color: var(--text2); border-radius: 10px; padding: 8px; cursor: pointer; transition: all .15s; }
+.mk-panel-x:hover { color: var(--ink); background: var(--mist); }
+.mk-panel-body { flex: 1; overflow-y: auto; padding: 6px 24px 18px; }
+.mk-flabel { display: block; font-family: var(--mono); font-size: 10.5px; font-weight: 500; text-transform: uppercase; letter-spacing: .07em; color: var(--text2); margin: 18px 0 8px; }
+.mk-flabel em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--text3); }
+.mk-ftextarea, .mk-finput { width: 100%; border: 1px solid var(--line); border-radius: 12px; background: #fff; font: 500 14px/1.5 var(--sans); color: var(--ink); padding: 11px 13px; outline: none; transition: border-color .15s, box-shadow .15s; resize: vertical; }
+.mk-ftextarea:focus, .mk-finput:focus { border-color: rgba(37,99,235,.55); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+.mk-ftextarea:focus-visible, .mk-finput:focus-visible { outline: none; }
+.mk-ftextarea::placeholder, .mk-finput::placeholder { color: var(--text3); }
+.mk-frow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mk-panel-foot { padding: 16px 24px; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 10px; background: #fff; }
+.mk-panel-foot .mk-btn { width: 100%; }
+.mk-panel-note { font-family: var(--mono); font-size: 11px; color: var(--text3); text-align: center; }
+.mk-panel-done { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 32px; }
+.mk-panel-done-ic { width: 52px; height: 52px; border-radius: 50%; background: rgba(5,150,105,.12); color: var(--success); display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+.mk-panel-done h3 { margin: 0 0 6px; font-size: 20px; font-weight: 700; }
+.mk-panel-done p { margin: 0 0 20px; font-size: 14px; color: var(--text2); max-width: 300px; line-height: 1.55; }
+.mk-btn:disabled { opacity: .5; cursor: not-allowed; transform: none !important; box-shadow: none; }
+@media (max-width: 560px) { .mk-frow { grid-template-columns: 1fr; } }
 
 .mk-search { position: relative; display: flex; align-items: center; gap: 8px; max-width: 760px; margin: 0 auto; padding: 6px 6px 6px 18px; background: #fff; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 10px 40px rgba(17,24,39,.08), 0 1px 2px rgba(17,24,39,.05); transition: box-shadow .25s var(--ease), border-color .25s; text-align: left; }
 .mk-search:focus-within { border-color: rgba(37,99,235,.5); box-shadow: 0 12px 44px rgba(37,99,235,.14), 0 0 0 4px rgba(37,99,235,.10); }
@@ -421,6 +593,13 @@ body { background: ${c.night}; }
 .mk-page.deep .mk-chip { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.15); color: rgba(255,255,255,.78); }
 .mk-page.deep .mk-chip:hover { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.35); box-shadow: none; }
 .mk-page.deep .mk-chip.on { background: rgba(37,99,235,.3); border-color: rgba(96,165,250,.6); color: #DBEAFE; }
+.mk-page.deep .mk-sent { color: rgba(255,255,255,.7); }
+.mk-page.deep .mk-sent-btn { color: #fff; }
+.mk-page.deep .mk-sent-flip { background: rgba(255,255,255,.1); color: rgba(255,255,255,.75); }
+.mk-page.deep .mk-sent-btn:hover .mk-sent-flip { background: rgba(255,255,255,.18); color: #fff; box-shadow: none; }
+.mk-page.deep .mk-sent-alt, .mk-page.deep .mk-sent-alt button { color: rgba(255,255,255,.5); }
+.mk-page.deep .mk-sent-alt button:hover { color: rgba(255,255,255,.8); }
+.mk-page.deep .mk-mode-hint { color: rgba(255,255,255,.55); }
 .mk-page.deep .mk-tile { background: rgba(255,255,255,.96); }
 .mk-page.deep .mk-proof { background: var(--night); color: #fff; border-color: rgba(255,255,255,.08); }
 .mk-page.deep .mk-proof-item { border-color: rgba(255,255,255,.08); }
@@ -643,13 +822,18 @@ body { background: ${c.night}; }
 .mk-page.reduced .mk-underline path { animation: none; stroke-dashoffset: 0; }
 .mk-page.reduced .mk-reveal { opacity: 1; transform: none; transition: none; }
 .mk-page.reduced .mk-facet-pop { animation: none; }
+.mk-page.reduced .mk-nudge, .mk-page.reduced .mk-sent-word, .mk-page.reduced .mk-sent-alt-word { animation: none; }
+.mk-page.reduced .mk-scrim, .mk-page.reduced .mk-panel { animation: none; }
 .mk-page.reduced .mk-steps-progress { transition: none; transform: scaleX(1); }
 .mk-page.reduced .mk-step-dot { transition: none; }
-.mk-page.reduced .mk-nav-link::after, .mk-page.reduced .mk-btn, .mk-page.reduced .mk-way, .mk-page.reduced .mk-tile, .mk-page.reduced .mk-chip, .mk-page.reduced .mk-pchip, .mk-page.reduced .mk-facet { transition-duration: .01s; }
+.mk-page.reduced .mk-nav-link::after, .mk-page.reduced .mk-btn, .mk-page.reduced .mk-way, .mk-page.reduced .mk-tile, .mk-page.reduced .mk-chip, .mk-page.reduced .mk-pchip, .mk-page.reduced .mk-facet, .mk-page.reduced .mk-sent-flip, .mk-page.reduced .mk-sent-alt button, .mk-page.reduced .mk-nudge-go { transition-duration: .01s; }
 
 /* ── Keyframes ── */
 @keyframes mk-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 @keyframes mk-drop { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@keyframes mk-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mk-roll { from { opacity: 0; transform: translateY(55%); } to { opacity: 1; transform: none; } }
+@keyframes mk-panel-in { from { transform: translateX(100%); } to { transform: none; } }
 @keyframes mk-draw { to { stroke-dashoffset: 0; } }
 @keyframes mk-blink { to { opacity: 0; } }
 @keyframes mk-ping { 0% { box-shadow: 0 0 0 0 rgba(52,211,153,.55); } 70% { box-shadow: 0 0 0 8px rgba(52,211,153,0); } 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); } }
@@ -810,6 +994,12 @@ const I = {
   chev: (p) => (
     <Svg {...p}>
       <polyline points="6 9 12 15 18 9" />
+    </Svg>
+  ),
+  flip: (p) => (
+    <Svg {...p}>
+      <polyline points="7 15 12 20 17 15" />
+      <polyline points="7 9 12 4 17 9" />
     </Svg>
   ),
   // Product-mark glyphs (neutral stand-ins — see OPEN QUESTIONS #1)
@@ -1607,10 +1797,116 @@ function ProductFacet({ products, toggle, clear, open, setOpen }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────
+// PANEL STAND-IN (V1.4) — NOT A BUILD TARGET. Production mounts the
+// existing ProjectRequestPanel (context-free · Match routing ·
+// entryPoint 'home'), opened at the manual step with this seed. This
+// drawer only visualises the seed hand-off and the auth gate.
+// ─────────────────────────────────────────────────────────────────
+function PanelStandIn({ open, onClose, seed, productNames }) {
+  useEffect(() => {
+    if (!open) return;
+    const key = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', key);
+    return () => document.removeEventListener('keydown', key);
+  }, [open, onClose]);
+  if (!open) return null;
+  const { title, description } = seedFromOneLiner(seed);
+  return (
+    <>
+      <div className="mk-scrim" onClick={onClose} aria-hidden="true" />
+      <aside
+        className="mk-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mk-standin-title"
+      >
+        <div className="mk-panel-head">
+          <div>
+            <h3 id="mk-standin-title">ProjectRequestPanel · stand-in</h3>
+            <p>
+              Existing panel, context-free (Match — &ldquo;Find me an expert&rdquo;), entryPoint{' '}
+              <span className="mk-mono">home</span>, opened at the manual step.
+            </p>
+          </div>
+          <button type="button" className="mk-panel-x" onClick={onClose} aria-label="Close panel">
+            <I.x size={18} />
+          </button>
+        </div>
+        <div className="mk-panel-body">
+          <div className="mk-flabel">Signed out?</div>
+          <p className="mk-mode-hint" style={{ marginTop: 0 }}>
+            The auth modal opens first. The seed + intent persist in sessionStorage and the panel
+            opens after sign-in, sign-up or onboarding.
+          </p>
+          <div className="mk-flabel">
+            Project title <em>· seeded when the one-liner is ≤120 chars</em>
+          </div>
+          <input
+            className="mk-finput"
+            readOnly
+            value={title}
+            placeholder="(empty — user writes it)"
+          />
+          <div className="mk-flabel">
+            What do you need? <em>· seeded when longer</em>
+          </div>
+          <textarea
+            className="mk-ftextarea"
+            rows={3}
+            readOnly
+            value={description}
+            placeholder="(empty — user writes it)"
+          />
+          <div className="mk-flabel">
+            Salesforce products <em>· carried from the hero</em>
+          </div>
+          <div className="mk-pop-chips">
+            {productNames.length === 0 ? (
+              <span className="mk-mode-hint" style={{ marginTop: 0 }}>
+                None selected
+              </span>
+            ) : (
+              productNames.map((n) => (
+                <span key={n} className="mk-pchip on">
+                  <I.check size={12} />
+                  {n}
+                </span>
+              ))
+            )}
+          </div>
+          <p className="mk-mode-hint">
+            Everything else (project type, documents, budget &amp; timeline, AI-from-documents path,
+            review, submit) is the panel exactly as it ships today.
+          </p>
+        </div>
+        <div className="mk-panel-foot">
+          <button type="button" className="mk-btn mk-btn-ghost" onClick={onClose}>
+            Close stand-in
+          </button>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+const MODE_SENTENCE = { consult: 'book a consultation', project: 'start a project' }; // MJ copy
+
 function Hero() {
   const reduced = useReduced();
-  const typed = useTypewriter(VERTICAL.phrases, reduced);
+  const [mode, setMode] = useState('consult'); // 'consult' | 'project' — ?intent=project preselects
+  const otherMode = mode === 'consult' ? 'project' : 'consult';
+  const typed = useTypewriter(
+    mode === 'project' ? VERTICAL.projectPhrases : VERTICAL.phrases,
+    reduced
+  );
   const [q, setQ] = useState('');
+  const [nudgeDismissed, setNudgeDismissed] = useState(false);
+  const [showNudge, setShowNudge] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const inputRef = useRef(null);
   const [products, setProducts] = useState(new Set());
   const [facetOpen, setFacetOpen] = useState(false);
   const searchRef = useRef(null);
@@ -1636,6 +1932,22 @@ function Hero() {
       document.removeEventListener('keydown', key);
     };
   }, [facetOpen]);
+  // Intent-detection nudge (V1.2): debounced, consult-mode only, dismissible.
+  useEffect(() => {
+    if (mode !== 'consult' || nudgeDismissed || !looksLikeProject(q, products.size)) {
+      setShowNudge(false);
+      return;
+    }
+    const t = setTimeout(() => setShowNudge(true), 500);
+    return () => clearTimeout(t);
+  }, [q, mode, nudgeDismissed, products]);
+  useEffect(() => {
+    if (q.trim() === '') setNudgeDismissed(false);
+  }, [q]);
+  const toProject = () => {
+    setMode('project');
+    setPanelOpen(true);
+  };
   const rowA = useScrollFx(FX_BENCH_A, reduced);
   const rowB = useScrollFx(FX_BENCH_B, reduced);
   const half = Math.ceil(PRODUCTS.length / 2);
@@ -1672,37 +1984,109 @@ function Hero() {
           six-week build, and pay by the minute. Nothing more.
         </p>
 
-        {/* Production: mount the real SearchComposer unified bar (BAL-249) —
-            this mirrors its FTS field + Product facet + submit. */}
-        <div className="mk-search" role="search" ref={searchRef}>
-          <span className="mk-search-icon">
-            <I.search size={20} />
-          </span>
-          <div className="mk-search-field">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              aria-label={`Describe what you need help with in ${VERTICAL.name}`}
-            />
-            {!q && (
-              <span className="mk-search-ghost" aria-hidden="true">
-                {typed}
-                {!reduced && <span className="mk-caret" />}
-              </span>
-            )}
-          </div>
-          <span className="mk-sdiv" aria-hidden="true" />
-          <ProductFacet
-            products={products}
-            toggle={toggleProduct}
-            clear={() => setProducts(new Set())}
-            open={facetOpen}
-            setOpen={setFacetOpen}
-          />
-          <button type="button" className="mk-btn mk-btn-grad">
-            Find experts
-            <I.arrow size={16} />
+        {/* Dual-intent entry (V1.2): consultation = search-first; project
+            re-skins the same bar and routes into the brief wizard with the
+            typed text + products carried. */}
+        {/* Sentence toggle (V1.5, option E): the bold phrase is an
+            aria-pressed toggle; the quiet tail names and selects the other mode. */}
+        <p className="mk-sent">
+          I want to
+          <button
+            type="button"
+            className="mk-sent-btn"
+            aria-pressed={mode === 'project'}
+            title={`Switch to ${MODE_SENTENCE[otherMode]}`}
+            aria-label={`Mode: ${MODE_SENTENCE[mode]}. Switch to ${MODE_SENTENCE[otherMode]}`}
+            onClick={() => setMode(otherMode)}
+          >
+            <span key={mode} className="mk-sent-word">
+              {MODE_SENTENCE[mode]}
+            </span>
+            <span className="mk-sent-flip">
+              <I.flip size={14} />
+            </span>
           </button>
+          <span className="mk-sent-alt">
+            or{' '}
+            <button type="button" onClick={() => setMode(otherMode)}>
+              <span key={otherMode} className="mk-sent-alt-word">
+                {MODE_SENTENCE[otherMode]}
+              </span>
+            </button>
+          </span>
+        </p>
+
+        <div className="mk-search-zone">
+          {/* Production: mount the real SearchComposer unified bar (BAL-249) —
+            this mirrors its FTS field + Product facet + submit. */}
+          <div className="mk-search" role="search" ref={searchRef}>
+            <span className="mk-search-icon">
+              <I.search size={20} />
+            </span>
+            <div className="mk-search-field">
+              <input
+                ref={inputRef}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                aria-label={
+                  mode === 'consult'
+                    ? `Describe what you need help with in ${VERTICAL.name}`
+                    : `Describe the ${VERTICAL.name} project you want scoped`
+                }
+              />
+              {!q && (
+                <span className="mk-search-ghost" aria-hidden="true">
+                  {typed}
+                  {!reduced && <span className="mk-caret" />}
+                </span>
+              )}
+            </div>
+            <span className="mk-sdiv" aria-hidden="true" />
+            <ProductFacet
+              products={products}
+              toggle={toggleProduct}
+              clear={() => setProducts(new Set())}
+              open={facetOpen}
+              setOpen={setFacetOpen}
+            />
+            {/* consult → /experts?q&products · project → request panel (q + products seeded) */}
+            <button
+              type="button"
+              className="mk-btn mk-btn-grad"
+              onClick={() => {
+                if (mode === 'project') setPanelOpen(true);
+              }}
+            >
+              {mode === 'consult' ? 'Find experts' : 'Get a scoped proposal'}
+              <I.arrow size={16} />
+            </button>
+          </div>
+
+          {showNudge && (
+            <div className="mk-nudge" role="status">
+              <span className="mk-nudge-ic">
+                <I.zap size={14} />
+              </span>
+              Sounds like a project
+              <button type="button" className="mk-nudge-go" onClick={toProject}>
+                Get a scoped proposal
+                <I.arrowPlain size={13} />
+              </button>
+              <button
+                type="button"
+                className="mk-nudge-x"
+                onClick={() => setNudgeDismissed(true)}
+                aria-label="Dismiss suggestion"
+              >
+                <I.x size={13} />
+              </button>
+            </div>
+          )}
+          {mode === 'project' && (
+            <p className="mk-mode-hint">
+              Free to submit — you get a scoped proposal, not a commitment.
+            </p>
+          )}
         </div>
 
         <div className="mk-chips">
@@ -1734,6 +2118,13 @@ function Hero() {
           ))}
         </div>
       </div>
+
+      <PanelStandIn
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
+        seed={q}
+        productNames={[...products]}
+      />
     </section>
   );
 }

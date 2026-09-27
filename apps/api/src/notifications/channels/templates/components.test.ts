@@ -154,6 +154,19 @@ describe('ProjectMatchRequestedEmail', () => {
     expect(element).toBeDefined();
     expect(element.type).toBeDefined();
   });
+
+  it('links the CTA at the real admin triage board, not the dead route (BAL-582 D3)', async () => {
+    const html = await render(
+      ProjectMatchRequestedEmail({
+        projectTitle: 'Lead routing rebuild',
+        companyName: 'Acme Inc',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+
+    expect(html).toContain('/projects?lens=admin');
+    expect(html).not.toContain('/admin/project-requests');
+  });
 });
 
 /**

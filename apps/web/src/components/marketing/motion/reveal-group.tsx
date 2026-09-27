@@ -10,13 +10,13 @@ interface RevealGroupProps {
   readonly children: ReactNode;
 }
 
-/** Matches the design reference's `useInView` threshold/rootMargin (`marketing-home.jsx:1204`). */
+/** Matches the design reference's `useInView` threshold/rootMargin (`marketing-home.jsx:1394`). */
 const REVEAL_THRESHOLD = 0.12;
 const REVEAL_ROOT_MARGIN = '0px 0px -8% 0px';
 
 /**
  * BAL-493 §11 — one IntersectionObserver per group; fires once, adds `.is-in`. Replaces the
- * design reference's `useInView` + `Reveal` (`marketing-home.jsx:1184-1220`) with a single
+ * design reference's `useInView` + `Reveal` (`marketing-home.jsx:1374-1410`) with a single
  * component covering both.
  *
  * ⚠⚠ **THE `mk-reveal-group` CLASS IS RENDERED UNCONDITIONALLY, ON THE SERVER, EVERY TIME.**

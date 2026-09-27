@@ -33,6 +33,9 @@ import { SendToSelector, type ProjectRouting } from './send-to-selector';
 import { ReviewSummary } from './review-summary';
 import { GenerationErrorBanner } from './generation-error-banner';
 import { useAiBriefFlow } from './use-ai-brief-flow';
+import { initialStepFor, type ProjectRequestSeed } from './project-seed';
+import { useProjectSeed } from './use-project-seed';
+import { projectFunnelDimensions } from './funnel-dimensions';
 import {
   useProjectDraft,
   type ProjectDraft,
@@ -78,6 +81,25 @@ export interface ProjectRequestPanelProps {
   projectTaxonomies?: ProjectRequestTaxonomies;
   /** Fired after a successful submit with the created request id. */
   onSubmitted?: (requestId: string) => void;
+  /**
+   * BAL-582 (§3b) — hero-provided text/product prefill, applied ONCE PER OPEN by
+   * `useProjectSeed`. Existing mounts pass nothing (AC8): no seed, no behaviour change. Never
+   * overwrites an existing draft or in-panel edit (AC7).
+   */
+  seed?: ProjectRequestSeed;
+  /**
+   * BAL-582 (D1 return path, home mount only) — true when this open is the post-sign-up-and-
+   * onboarding return to a saved draft. Opens at `manual` (or `upload` for an `'ai'`-sourced
+   * draft, which was gated at upload) instead of `start`.
+   */
+  resumeDraft?: boolean;
+  /**
+   * BAL-582 (D1) — present means the caller is signed out. Submit and the document uploader
+   * (both steps) call this instead of acting, so the auth modal is requested only at those two
+   * points; the taxonomy self-load and the localStorage draft work signed out. Absent (existing
+   * mounts) → unchanged, authenticated behaviour.
+   */
+  onAuthRequired?: () => void;
 }
 
 /** Mutable steps for the stepper (the readonly `as const` tuple isn't assignable). */
@@ -191,8 +213,24 @@ export function ProjectRequestPanel({
   expert,
   projectTaxonomies,
   onSubmitted,
+  seed,
+  resumeDraft,
+  onAuthRequired,
 }: Readonly<ProjectRequestPanelProps>): React.JSX.Element {
-  const [step, setStep] = useState<ProjectStep>('start');
+  // Read before the step state: it reads only props, and the step initialiser below needs
+  // `draft.source` to decide a resumed mount's opening step.
+  const { draft, setField, clearDraft } = useProjectDraft(expertProfileId, entryPoint);
+  const { routing, title, descriptionHtml, tagIds, productIds, budgetMinCents, budgetMaxCents } =
+    draft;
+
+  const resumeDraftBool = resumeDraft === true;
+  const [step, setStep] = useState<ProjectStep>(() =>
+    open ? initialStepFor(seed, resumeDraftBool, draft.source) : 'start'
+  );
+  // The step this open resolved to (`initialStepFor`'s answer), read by the `step_viewed` effect
+  // so a lazily-mounted already-open panel — or a reopen onto a fresh `initialStepFor` result —
+  // fires exactly one STEP_VIEWED, for the OPENING step, never a stale render-time step.
+  const openingStepRef = useRef<ProjectStep | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
@@ -203,10 +241,6 @@ export function ProjectRequestPanel({
   const [submittedRouting, setSubmittedRouting] = useState<ProjectRouting>(
     expertBound ? 'direct' : 'match'
   );
-
-  const { draft, setField, clearDraft } = useProjectDraft(expertProfileId, entryPoint);
-  const { routing, title, descriptionHtml, tagIds, productIds, budgetMinCents, budgetMaxCents } =
-    draft;
 
   // Local taxonomy state so Retry / self-load can refresh without a page reload.
   // Context-free mounts (no RSC-supplied taxonomies) seed EMPTY and self-load.
@@ -285,28 +319,52 @@ export function ProjectRequestPanel({
     }
     if (openFiredRef.current) return;
     openFiredRef.current = true;
-    setStep('start');
+    const openStep = initialStepFor(seed, resumeDraftBool, draft.source);
+    openingStepRef.current = openStep;
+    setStep(openStep);
     setError(null);
     setShowValidation(false);
-    // expert_id-keyed event — fired only when expert-bound (context-free analytics
-    // is a follow-up; the @balo/analytics event map is intentionally not widened).
-    if (expertProfileId !== undefined) {
-      track(PROJECT_EVENTS.PROJECT_DRAWER_OPENED, { expert_id: expertProfileId });
-    }
+    // Fires for every mount mode; `expert_id` is included only when the mount is expert-bound.
+    track(
+      PROJECT_EVENTS.PROJECT_DRAWER_OPENED,
+      projectFunnelDimensions(expertProfileId, entryPoint)
+    );
     // Context-free self-load: taxonomies were not RSC-supplied, so fetch them once
     // on first open (reusing the Retry path + the picker's loading/error UI).
     if (projectTaxonomies === undefined && !selfLoadedRef.current) {
       selfLoadedRef.current = true;
       handleRetryTaxonomies().catch(() => {});
     }
-  }, [open, expertProfileId, projectTaxonomies, handleRetryTaxonomies]);
+  }, [
+    open,
+    seed,
+    resumeDraftBool,
+    draft.source,
+    expertProfileId,
+    entryPoint,
+    projectTaxonomies,
+    handleRetryTaxonomies,
+  ]);
 
-  // `step_viewed` on every step change while open (expert-bound only).
+  // `step_viewed` on every step change while open, for every mount mode (BAL-582 D2). Skips the
+  // stale render-time step captured by the SAME effect flush that the open effect (above) just
+  // redirected away from — see `openingStepRef`'s docblock — so a reopen fires exactly one
+  // STEP_VIEWED, for the opening step, never the step the panel happened to be showing before.
   useEffect(() => {
     if (!open) return;
-    if (expertProfileId === undefined) return;
-    track(PROJECT_EVENTS.PROJECT_STEP_VIEWED, { expert_id: expertProfileId, step });
-  }, [open, step, expertProfileId]);
+    const pending = openingStepRef.current;
+    if (pending !== null) {
+      if (step !== pending) return;
+      openingStepRef.current = null;
+    }
+    track(PROJECT_EVENTS.PROJECT_STEP_VIEWED, {
+      ...projectFunnelDimensions(expertProfileId, entryPoint),
+      step,
+    });
+  }, [open, step, expertProfileId, entryPoint]);
+
+  // BAL-582 (§3b) — applies the hero seed to the draft once per open (never sets `step`).
+  useProjectSeed({ open, seed, draft, setField, productsTaxonomy: taxonomies.products });
 
   // Clear any stale submit error once the user leaves the review step.
   useEffect(() => {
@@ -336,6 +394,7 @@ export function ProjectRequestPanel({
     handleConfirmRegenerate,
   } = useAiBriefFlow({
     expertProfileId,
+    entryPoint,
     draft,
     setField,
     setStep,
@@ -345,12 +404,10 @@ export function ProjectRequestPanel({
   });
 
   const handleSelectManual = useCallback(() => {
-    if (expertProfileId !== undefined) {
-      track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
-        expert_id: expertProfileId,
-        method: 'manual',
-      });
-    }
+    track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
+      ...projectFunnelDimensions(expertProfileId, entryPoint),
+      method: 'manual',
+    });
     // ⚠⚠ BAL-254 W2 — CANCEL ANY IN-FLIGHT GENERATION FIRST. `isFlowActive` (F5) is false only
     // once the drawer is closed or the request is submitted — a user who started a generate, went
     // Back to `start`, and picked "I'll write it myself" is still an ACTIVE flow, so the parse
@@ -364,7 +421,7 @@ export function ProjectRequestPanel({
     // (and rendering the AI provenance banner over a hand-typed brief).
     setField('source', 'manual');
     setStep('manual');
-  }, [expertProfileId, setField, cancelGeneration]);
+  }, [expertProfileId, entryPoint, setField, cancelGeneration]);
 
   const handleJump = useCallback((key: string) => {
     if (key === 'start' || key === 'upload' || key === 'manual' || key === 'review') setStep(key);
@@ -432,6 +489,12 @@ export function ProjectRequestPanel({
   );
 
   const handleSubmit = useCallback(async () => {
+    // BAL-582 (D1) — the ONLY auth gate on Submit. Signed out (`onAuthRequired` present) requests
+    // sign-in instead of acting; the draft is untouched, so the same click submits once signed in.
+    if (onAuthRequired) {
+      onAuthRequired();
+      return;
+    }
     setSubmitting(true);
     setError(null);
 
@@ -465,16 +528,14 @@ export function ProjectRequestPanel({
       return;
     }
 
-    if (expertProfileId !== undefined) {
-      track(PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED, {
-        expert_id: expertProfileId,
-        send_to: effectiveRouting,
-        tag_count: tagIds.length,
-        product_count: productIds.length,
-        document_count: draft.documents.length,
-        method: draft.source === 'ai' ? 'ai' : 'manual',
-      });
-    }
+    track(PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED, {
+      ...projectFunnelDimensions(expertProfileId, entryPoint),
+      send_to: effectiveRouting,
+      tag_count: tagIds.length,
+      product_count: productIds.length,
+      document_count: draft.documents.length,
+      method: draft.source === 'ai' ? 'ai' : 'manual',
+    });
     // Snapshot routing for the done screen BEFORE clearing the draft (clear resets
     // routing to the computed default), so Match submits keep their done copy.
     setSubmittedRouting(effectiveRouting);
@@ -486,6 +547,7 @@ export function ProjectRequestPanel({
   }, [
     routing,
     expertProfileId,
+    entryPoint,
     expertFirstName,
     trimmedTitle,
     descriptionHtml,
@@ -498,6 +560,7 @@ export function ProjectRequestPanel({
     draft.source,
     clearDraft,
     onSubmitted,
+    onAuthRequired,
   ]);
 
   // ⚠ `isGenerating` (fix round F5). Submitting mid-REGENERATE reached `done`, and then the
@@ -551,6 +614,7 @@ export function ProjectRequestPanel({
       documents={draft.documents}
       onDocumentsChange={handleDocumentsChange}
       onUploadingChange={setUploading}
+      onRequireAuth={onAuthRequired}
       budgetMinCents={budgetMinCents}
       budgetMaxCents={budgetMaxCents}
       budgetRangeInvalid={budgetRangeInvalid}
@@ -608,6 +672,7 @@ export function ProjectRequestPanel({
           failureReason={briefGeneration.failureReason}
           onDocumentsChange={handleDocumentsChange}
           onUploadingChange={setUploading}
+          onRequireAuth={onAuthRequired}
           onRetryGenerate={handleRetryGenerate}
           onWriteItMyself={handleWriteItMyself}
           draft={draft}
@@ -680,6 +745,8 @@ interface ProjectRequestDrawerBodyProps {
   failureReason: ProjectBriefFailureReason | null;
   onDocumentsChange: (docs: ProjectDraft['documents']) => void;
   onUploadingChange: (uploading: boolean) => void;
+  /** BAL-582 (D1) — present means signed out; passed through to the upload step's uploader. */
+  onRequireAuth?: () => void;
   onRetryGenerate: () => void;
   onWriteItMyself: () => void;
   draft: ProjectDraft;
@@ -717,6 +784,7 @@ function ProjectRequestDrawerBody({
   failureReason,
   onDocumentsChange,
   onUploadingChange,
+  onRequireAuth,
   onRetryGenerate,
   onWriteItMyself,
   draft,
@@ -775,6 +843,7 @@ function ProjectRequestDrawerBody({
             documents={draft.documents}
             onDocumentsChange={onDocumentsChange}
             onUploadingChange={onUploadingChange}
+            onRequireAuth={onRequireAuth}
             isUploadFailed={isUploadFailed}
             failureReason={failureReason}
             onRetryGenerate={onRetryGenerate}
@@ -841,6 +910,7 @@ function UploadStepBody({
   documents,
   onDocumentsChange,
   onUploadingChange,
+  onRequireAuth,
   isUploadFailed,
   failureReason,
   onRetryGenerate,
@@ -851,6 +921,8 @@ function UploadStepBody({
   documents: ProjectDraft['documents'];
   onDocumentsChange: (docs: ProjectDraft['documents']) => void;
   onUploadingChange: (uploading: boolean) => void;
+  /** BAL-582 (D1) — present means signed out. */
+  onRequireAuth?: () => void;
   isUploadFailed: boolean;
   failureReason: ProjectBriefFailureReason | null;
   onRetryGenerate: () => void;
@@ -918,6 +990,7 @@ function UploadStepBody({
           initialDocuments={documents}
           onDocumentsChange={onDocumentsChange}
           onUploadingChange={onUploadingChange}
+          onRequireAuth={onRequireAuth}
         />
         <p className="text-muted-foreground text-xs leading-relaxed">
           These become both the draft&apos;s source material and your request&apos;s attachments —
@@ -1079,6 +1152,8 @@ interface ManualStepFieldsProps {
   documents: ProjectDraft['documents'];
   onDocumentsChange: (docs: ProjectDraft['documents']) => void;
   onUploadingChange: (uploading: boolean) => void;
+  /** BAL-582 (D1) — present means signed out; passed through to this step's uploader. */
+  onRequireAuth?: () => void;
   budgetMinCents: number | null;
   budgetMaxCents: number | null;
   budgetRangeInvalid: boolean;
@@ -1127,6 +1202,7 @@ function ManualStepFields({
   documents,
   onDocumentsChange,
   onUploadingChange,
+  onRequireAuth,
   budgetMinCents,
   budgetMaxCents,
   budgetRangeInvalid,
@@ -1255,6 +1331,7 @@ function ManualStepFields({
           initialDocuments={documents}
           onDocumentsChange={onDocumentsChange}
           onUploadingChange={onUploadingChange}
+          onRequireAuth={onRequireAuth}
         />
       </div>
 

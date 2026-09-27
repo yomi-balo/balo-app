@@ -420,3 +420,97 @@ describe('globals.css — the scoped smooth-scroll rule', () => {
     expect(globalsCss).not.toContain('html { scroll-behavior: smooth }');
   });
 });
+
+/**
+ * BAL-582 — the dual-intent hero's sentence mode toggle and intent nudge (plan §8).
+ * Same source-scan convention as the rest of this file: no regex, plain `indexOf`/
+ * `includes` walks and the shared brace-parsing helpers above.
+ */
+describe('marketing-home.css — BAL-582 sentence toggle and nudge rules exist', () => {
+  it.each([
+    '.mk-sent',
+    '.mk-sent-btn',
+    '.mk-sent-flip',
+    '.mk-sent-alt',
+    '.mk-search-zone',
+    '.mk-mode-hint',
+    '.mk-nudge',
+    '.mk-nudge-go',
+    '.mk-nudge-x',
+  ])('defines %s', (selector) => {
+    expect(firstRuleBody(marketingHomeCss, selector)).toBeDefined();
+  });
+
+  it('rotates the flip chip when the toggle is pressed', () => {
+    expect(marketingHomeCss).toContain(".mk-sent-btn[aria-pressed='true'] .mk-sent-flip {");
+  });
+
+  it('darkens the nudge CTA on hover', () => {
+    const body = firstRuleBody(marketingHomeCss, '.mk-nudge-go:hover');
+    expect(body).toBeDefined();
+    expect(body ?? '').toContain('var(--violet-deep)');
+    expect(body ?? '').toContain('var(--primary-foreground)');
+  });
+});
+
+describe('marketing-home.css — BAL-582 adds a sixth staggered hero-inner child', () => {
+  it('stages :nth-child(6) after the existing five', () => {
+    const body = firstRuleBody(marketingHomeCss, '.mk-hero-inner > :nth-child(6)');
+    expect(body).toBeDefined();
+    expect(body ?? '').toContain('animation-delay: 0.54s');
+  });
+});
+
+describe('marketing-home.css — BAL-582 keyframes for the tail fade and phrase roll', () => {
+  it.each(['mk-fade', 'mk-roll'])('defines @keyframes %s', (name) => {
+    expect(marketingHomeCss).toContain(`@keyframes ${name} {`);
+  });
+});
+
+describe('marketing-home.css — BAL-582 responsive and tap-target rules', () => {
+  it('the 520px sentence query hides the tail and gives the phrase button a tap target', () => {
+    const body = atRuleBody(marketingHomeCss, '@media (max-width: 520px)');
+    expect(body).toBeDefined();
+    expect(firstRuleBody(body ?? '', '.mk-sent-alt')).toContain('display: none');
+    expect(firstRuleBody(body ?? '', '.mk-sent-btn')).toContain('min-height: 44px');
+  });
+
+  it('gives the nudge dismiss button a 24px+ tap target (WCAG 2.5.8)', () => {
+    expect(firstRuleBody(marketingHomeCss, '.mk-nudge-x') ?? '').toContain('padding: 6px');
+  });
+
+  it('wraps the nudge pill at narrow widths so no label breaks mid-phrase', () => {
+    const body = atRuleBody(marketingHomeCss, '@media (max-width: 520px)');
+    expect(body).toBeDefined();
+    const nudgeBody = firstRuleBody(body ?? '', '.mk-nudge');
+    expect(nudgeBody).toBeDefined();
+    expect(nudgeBody ?? '').toContain('flex-wrap: wrap');
+    expect(nudgeBody ?? '').toContain('white-space: nowrap');
+    const nudgeGoBody = firstRuleBody(body ?? '', '.mk-nudge-go');
+    expect(nudgeGoBody ?? '').toContain('white-space: nowrap');
+  });
+
+  it('hides the dead toggle when there is no active scripting', () => {
+    const body = atRuleBody(marketingHomeCss, '@media (scripting: none)');
+    expect(body).toBeDefined();
+    expect(firstRuleBody(body ?? '', '.mk-sent')).toContain('display: none');
+  });
+});
+
+describe('marketing-home.css — BAL-582 reduced motion covers the toggle and the nudge', () => {
+  const reducedBody = atRuleBody(marketingHomeCss, '@media (prefers-reduced-motion: reduce)');
+
+  it('stops the nudge and sentence-word animations', () => {
+    expect(reducedBody ?? '').toContain('.mk-page .mk-nudge,');
+    expect(reducedBody ?? '').toContain('.mk-page .mk-sent-word,');
+    expect(reducedBody ?? '').toContain('.mk-page .mk-sent-alt-word');
+  });
+
+  it('damps the flip, tail-hover and nudge-CTA transitions, without dropping .mk-btn', () => {
+    expect(reducedBody ?? '').toContain('.mk-page .mk-btn,');
+    expect(reducedBody ?? '').toContain('.mk-page .mk-sent-flip');
+    expect(reducedBody ?? '').toContain('.mk-page .mk-sent-alt button');
+    expect(reducedBody ?? '').toContain('.mk-page .mk-nudge-go,');
+    expect(reducedBody ?? '').toContain('.mk-page .mk-nudge-go svg');
+  });
+});
