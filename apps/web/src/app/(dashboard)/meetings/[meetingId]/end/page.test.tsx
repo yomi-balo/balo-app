@@ -68,6 +68,8 @@ const BASE = {
   durationMinutes: 45,
   recapState: 'processing' as const,
   meetingHeld: true,
+  beganEarly: false,
+  caseClosure: null,
   caseHref: '/cases/' + ENGAGEMENT_ID,
 };
 
@@ -278,6 +280,68 @@ describe('EndOfCallPage — what actually renders', () => {
     // The onward action survives the denial — the card must still read complete with ONE action.
     // `CLIENT_VIEW` is a processing recap on a case, so that action is the "Back to the case" arm.
     expect(screen.getByRole('link', { name: /Back to the case/ })).toBeInTheDocument();
+  });
+
+  it('⚠⚠ R6-C5 — the CLIENT lens of a call left before its start says the call is still open, in the FULL approved words', async () => {
+    const { container } = await renderPage({
+      ...CLIENT_VIEW,
+      meetingHeld: false,
+      beganEarly: true,
+      rating: null,
+      resolve: null,
+    });
+    expect(screen.getByRole('heading', { name: 'Your call is still open' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'You can rejoin from the case page — the call stays open until its start time. Time you and Amara spent together before then is part of this consultation.'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Nothing to wrap up yet' })
+    ).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain("hasn't taken place");
+    // Post-call eligibility is UNCHANGED: no rating, no resolve.
+    expect(screen.queryByText(/How was your consultation/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Is this issue resolved/)).not.toBeInTheDocument();
+  });
+
+  it('⚠⚠ R6-C5 — the EXPERT lens says the same, with its own closing clause', async () => {
+    await renderPage({ ...EXPERT_VIEW, meetingHeld: false, beganEarly: true });
+    expect(screen.getByRole('heading', { name: 'Your call is still open' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'You can rejoin from the case page — the call stays open until its start time. Time you and Northwind Industrial spent together before then counts toward this session.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/How was/)).not.toBeInTheDocument();
+  });
+
+  it('⚠ R6-C5 — a call that did NOT begin early keeps the neutral arm on both lenses', async () => {
+    const { unmount } = await renderPage({
+      ...CLIENT_VIEW,
+      meetingHeld: false,
+      beganEarly: false,
+      rating: null,
+      resolve: null,
+    });
+    expect(screen.getByRole('heading', { name: 'Nothing to wrap up yet' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Your call is still open' })
+    ).not.toBeInTheDocument();
+    unmount();
+    await renderPage({ ...EXPERT_VIEW, meetingHeld: false, beganEarly: false });
+    expect(screen.getByRole('heading', { name: 'Nothing to wrap up yet' })).toBeInTheDocument();
+    expect(
+      screen.getByText("This session hasn't taken place, so there's nothing to wrap up here yet.")
+    ).toBeInTheDocument();
+  });
+
+  it('⚠ R6-C5 — a HELD meeting never shows the still-open arm, even if the flag were set', async () => {
+    await renderPage({ ...CLIENT_VIEW, meetingHeld: true, beganEarly: true });
+    expect(screen.getByRole('heading', { name: 'Consultation complete' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Your call is still open' })
+    ).not.toBeInTheDocument();
   });
 
   it('renders NO Rejoin affordance — the owner decision, and a routing fact', async () => {

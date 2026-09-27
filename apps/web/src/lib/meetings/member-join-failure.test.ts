@@ -5,6 +5,7 @@ describe('memberJoinFailureReasonFor — the allowlist', () => {
   it.each([
     [404, 'meeting_not_found', 'unavailable'],
     [409, 'meeting_not_open_for_join', 'not_open'],
+    [409, 'meeting_not_open_yet', 'not_open_yet'],
     [409, 'meeting_not_provisioned', 'not_provisioned'],
     [503, 'meeting_token_unavailable', 'outage'],
     [500, 'Internal Server Error', 'outage'],
@@ -20,6 +21,14 @@ describe('memberJoinFailureReasonFor — the allowlist', () => {
     [400, 'invalid_request', 'unavailable'],
   ] as const)('(%i, %s) → %s', (status, code, expected) => {
     expect(memberJoinFailureReasonFor(status, code)).toBe(expected);
+  });
+
+  it('⚠⚠ D16 — `meeting_not_open_yet` is a DISTINCT, NON-terminal reason: never `not_open` (which is terminal)', () => {
+    expect(memberJoinFailureReasonFor(409, 'meeting_not_open_yet')).toBe('not_open_yet');
+    expect(memberJoinFailureReasonFor(409, 'meeting_not_open_yet')).not.toBe('not_open');
+    // Only as a 409: the literal on any other status is unrecognised and collapses.
+    expect(memberJoinFailureReasonFor(404, 'meeting_not_open_yet')).toBe('unavailable');
+    expect(memberJoinFailureReasonFor(429, 'meeting_not_open_yet')).toBe('unavailable');
   });
 
   it('⚠ a 401 that merely LOOKS like a refusal code but is not exact still collapses', () => {

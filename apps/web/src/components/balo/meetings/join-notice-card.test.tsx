@@ -1,10 +1,15 @@
 import { createRef } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 
-import { JoinNoticeRetryButton, JoinRetryNotice, JoinUnavailableNotice } from './join-notice-card';
+import {
+  JoinNoticeRetryButton,
+  JoinNotOpenYetNotice,
+  JoinRetryNotice,
+  JoinUnavailableNotice,
+} from './join-notice-card';
 import {
   JOIN_TEMPORARILY_UNAVAILABLE_BODY,
   JOIN_TEMPORARILY_UNAVAILABLE_TITLE,
@@ -81,6 +86,53 @@ describe('JoinUnavailableNotice — the ONE card for every collapsed failure', (
   it('has no accessibility violations', async () => {
     const { container } = render(<JoinUnavailableNotice />);
 
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('JoinNotOpenYetNotice — D16, the join window has not opened', () => {
+  // ⚠ PINNED. `joinNotOpenYetMessage` (D17.4) date-qualifies `{time}` unless `opensAt` falls on
+  // the viewer's LOCAL TODAY, and every `opensAt` below is a fixed `2026-09-25` literal.
+  // `toFake: ['Date']` ONLY — `userEvent.click` below needs REAL timers.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-25T00:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('⚠⚠ renders the approved sentence as its heading, with the time in the viewer’s zone, and a retry', async () => {
+    const onRetry = vi.fn();
+    render(<JoinNotOpenYetNotice opensAt="2026-09-25T11:57:00.000Z" onRetry={onRetry} />);
+
+    expect(
+      screen.getByRole('heading', {
+        name: "This call isn't open yet — you can join from 11:57 AM.",
+      })
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /try again/i }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('has no body paragraph — the sentence is the whole message — and is a live region without aria-busy', () => {
+    const { container } = render(
+      <JoinNotOpenYetNotice opensAt="2026-09-25T11:57:00.000Z" onRetry={() => {}} />
+    );
+    expect(container.querySelector('p.text-muted-foreground.mt-2')).toBeNull();
+    const region = screen.getByRole('status');
+    expect(region).not.toHaveAttribute('aria-busy');
+  });
+
+  it('is the NON-terminal card: it is not the collapsed dead-link copy', () => {
+    render(<JoinNotOpenYetNotice opensAt="2026-09-25T11:57:00.000Z" onRetry={() => {}} />);
+    expect(screen.queryByText(JOIN_UNAVAILABLE_TITLE)).not.toBeInTheDocument();
+  });
+
+  it('has no accessibility violations', async () => {
+    const { container } = render(
+      <JoinNotOpenYetNotice opensAt="2026-09-25T11:57:00.000Z" onRetry={() => {}} />
+    );
     expect(await axe(container)).toHaveNoViolations();
   });
 });

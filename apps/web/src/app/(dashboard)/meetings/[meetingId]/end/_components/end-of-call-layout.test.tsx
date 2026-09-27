@@ -38,6 +38,8 @@ const CLIENT_VIEW: ClientEndOfCallView = {
   durationMinutes: 45,
   recapState: 'processing',
   meetingHeld: true,
+  beganEarly: false,
+  caseClosure: null,
   caseHref: CASE_HREF,
   lens: 'client',
   rating: null,
@@ -52,6 +54,8 @@ const EXPERT_VIEW: ExpertEndOfCallView = {
   durationMinutes: 45,
   recapState: 'processing',
   meetingHeld: true,
+  beganEarly: false,
+  caseClosure: null,
   caseHref: CASE_HREF,
   lens: 'expert',
 };
@@ -360,6 +364,145 @@ describe('EndOfCallLayout — the entrance cascade and the flat wash', () => {
     const { container } = render(<ExpertEndOfCall view={EXPERT_VIEW} />);
     expect(container.querySelector('.min-h-\\[70vh\\]')).not.toBeNull();
     expect(container.querySelector('.max-w-\\[440px\\]')).not.toBeNull();
+  });
+});
+
+/**
+ * BAL-474 (R6F-2, D15.4) — THE VOIDED NO-SHOW ARM. The meeting ended as a client no-show on a case closed before
+ * its start, so nothing happened that a tick, a duration, a recap, a receipt, a payout or a rating would describe.
+ * The sentences are the owner-approved strings, pinned against the FULL literal.
+ */
+describe('EndOfCallLayout — the case-closed arm (voided no-show)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const CLOSURE = { closedByFirstName: 'Dana', companyName: 'Northwind Industrial' } as const;
+  const CLOSED_CLIENT: ClientEndOfCallView = {
+    ...CLIENT_VIEW,
+    caseClosure: CLOSURE,
+    // ⚠ The loader nulls these; the composition must not offer them even if a view carried them.
+    rating: { engagementId: 'e1', state: { kind: 'none' }, existingBody: null },
+    resolve: {
+      engagementId: 'e1',
+      requesterLabel: null,
+      alreadyClosed: false,
+      expertShortName: 'Amara',
+    },
+  };
+  const CLOSED_EXPERT: ExpertEndOfCallView = { ...EXPERT_VIEW, caseClosure: CLOSURE };
+
+  it('states the approved title and CLIENT body, naming the person @ company', () => {
+    render(<ClientEndOfCall view={CLOSED_CLIENT} />);
+    expect(screen.getByRole('heading', { name: 'This case was closed' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Dana @ Northwind Industrial closed this case before the start time, so this consultation didn't take place and nothing was charged."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('states the approved title and EXPERT body, naming the person @ company', () => {
+    render(<ExpertEndOfCall view={CLOSED_EXPERT} />);
+    expect(screen.getByRole('heading', { name: 'This case was closed' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Dana @ Northwind Industrial closed this case before the start time, so this call isn't billed and no payout is recorded."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['client', <ClientEndOfCall key="c" view={CLOSED_CLIENT} />],
+    ['expert', <ExpertEndOfCall key="e" view={CLOSED_EXPERT} />],
+  ] as const)('replaces the success tick with the static neutral glyph — %s', (_label, element) => {
+    const { container } = render(element);
+    expect(container.querySelector('.bg-success\\/10')).toBeNull();
+    expect(container.querySelector('.text-success')).toBeNull();
+    expect(container.querySelector('.lucide-circle-dashed')).toBeNull();
+    expect(container.querySelector('svg.lucide-archive')).not.toBeNull();
+    expect(container.querySelector('.animate-in')).toBeNull();
+    expect(container.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it.each([
+    ['client', <ClientEndOfCall key="c" view={CLOSED_CLIENT} />],
+    ['expert', <ExpertEndOfCall key="e" view={CLOSED_EXPERT} />],
+  ] as const)('makes no duration, recap, receipt or completion claim — %s', (_label, element) => {
+    const { container } = render(element);
+    const text = container.textContent ?? '';
+    // ⚠ The fixtures carry `durationMinutes: 45` and `recapState: 'processing'`.
+    expect(text).not.toContain('You spoke for');
+    expect(text).not.toContain('45');
+    expect(text).not.toMatch(/recap/i);
+    expect(text).not.toMatch(/receipt/i);
+    expect(text).not.toMatch(/on the way/i);
+    expect(text).not.toMatch(/complete/i);
+    expect(text).not.toContain('Nice session');
+    expect(text).not.toContain('payout summary');
+  });
+
+  it('offers NO rating and NO resolve prompt on the client lens, even if the view carried them', () => {
+    const { container } = render(<ClientEndOfCall view={CLOSED_CLIENT} />);
+    expect(screen.queryByText(/How was your/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Is this issue resolved/)).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.border-t')).toHaveLength(0);
+  });
+
+  it.each([
+    ['client', <ClientEndOfCall key="c" view={{ ...CLOSED_CLIENT, recapState: 'ready' }} />],
+    ['expert', <ExpertEndOfCall key="e" view={{ ...CLOSED_EXPERT, recapState: 'ready' }} />],
+  ] as const)(
+    'keeps the onward CTA on the CASE arm even when the recap is ready — %s',
+    (_label, element) => {
+      render(element);
+      expect(screen.getByRole('link', { name: /Back to the case/ })).toHaveAttribute(
+        'href',
+        CASE_HREF
+      );
+      expect(screen.queryByRole('link', { name: /View recap/ })).not.toBeInTheDocument();
+    }
+  );
+
+  it('tracks the onward click as back_to_case', async () => {
+    const user = userEvent.setup();
+    render(<ExpertEndOfCall view={CLOSED_EXPERT} />);
+    await user.click(screen.getByRole('link', { name: /Back to the case/ }));
+    expect(track).toHaveBeenCalledWith(END_OF_CALL_EVENTS.ACTION, {
+      action: 'back_to_case',
+      lens: 'expert',
+    });
+  });
+
+  it('uses the approved fallbacks — no closer, and a missing company', () => {
+    const noCloser = render(
+      <ClientEndOfCall
+        view={{ ...CLOSED_CLIENT, caseClosure: { closedByFirstName: null, companyName: null } }}
+      />
+    );
+    expect(
+      screen.getByText(
+        "This case was closed before the start time, so this consultation didn't take place and nothing was charged."
+      )
+    ).toBeInTheDocument();
+    noCloser.unmount();
+
+    render(
+      <ExpertEndOfCall
+        view={{ ...CLOSED_EXPERT, caseClosure: { closedByFirstName: 'Dana', companyName: null } }}
+      />
+    );
+    expect(
+      screen.getByText(
+        "Dana @ their team closed this case before the start time, so this call isn't billed and no payout is recorded."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['client', <ClientEndOfCall key="c" view={CLOSED_CLIENT} />],
+    ['expert', <ExpertEndOfCall key="e" view={CLOSED_EXPERT} />],
+  ] as const)('has no accessibility violations — %s', async (_label, element) => {
+    const { container } = render(element);
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
 

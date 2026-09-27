@@ -12,6 +12,8 @@
  * client bundle).
  */
 
+import type { CreditSessionOpenedByLabel } from './session-opened-by';
+
 /** The minimal session shape the settlement notices + analytics carry (PII/fee-safe). */
 export interface SettleableSession {
   id: string;
@@ -19,6 +21,13 @@ export interface SettleableSession {
   walletId: string;
   expertProfileId: string;
   overdraftSettledMinor: number | null;
+  /**
+   * BAL-474 (ADR-1040 Amendment 7 §C) — who opened the session. `client` = a client company
+   * member acted; `guest` / `system` = opened ON BEHALF of the booker, so every booker-addressed
+   * notice is gated on the booker's CURRENT membership (plan D5.7) and every settlement analytic
+   * carries the label.
+   */
+  openedBy: CreditSessionOpenedByLabel;
 }
 
 /**
@@ -32,6 +41,7 @@ export function toSettleableSession(session: SettleableSession): SettleableSessi
     walletId: session.walletId,
     expertProfileId: session.expertProfileId,
     overdraftSettledMinor: session.overdraftSettledMinor,
+    openedBy: session.openedBy,
   };
 }
 

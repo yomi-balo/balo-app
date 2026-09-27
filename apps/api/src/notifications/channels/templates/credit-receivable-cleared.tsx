@@ -2,24 +2,21 @@ import { Button, Heading, Section, Text } from '@react-email/components';
 import { shared, EmailShell, LogoRow, StatusPill, SupportFooter } from './shared.js';
 
 /**
- * Props for the receivable-cleared email (BAL-535 / ADR-1040 Amendment 6 §F). `covered` is the
- * pre-formatted AUD amount the CONSULTATIONS' extra time came to; `balanceAfter` is the true
- * final wallet balance. Every amount is AUD display value — no fee/margin/Stripe reference
- * anywhere (fee-concealment posture), and "overdraft" never appears — the vocabulary is "extra
- * time" / "balance", per the copy rules this amendment settles.
+ * Props for the receivable-cleared email (BAL-535 / ADR-1040 Amendment 6 §F, copy BAL-474 v2.1).
+ * `balanceAfter` is the true final wallet balance, pre-formatted. Every amount is AUD display
+ * value — no fee/margin/Stripe reference anywhere (fee-concealment posture), and "overdraft"
+ * never appears.
  *
- * ⚠ `covered` IS ATTRIBUTED TO THE CONSULTATIONS, NEVER TO THIS PAYMENT (fix round N5/L2). It is
- * the receivable's recorded amount, which `receivable-coverage.ts` itself calls a stale snapshot
- * — it diverges from what is actually owed the moment any other ledger entry lands. "Your top-up
- * covered ($50.00)" was therefore false after a partial top-up that contributed $20. What the
- * figure IS true of is what that extra time came to, so that is what the copy says.
+ * ⚠ THERE IS NO CLEARED-AMOUNT FIGURE. The Σ of the cleared receivables' recorded amounts is a
+ * stale snapshot — it disagrees with the dunning notice's top-up figure the moment any other
+ * ledger entry lands, and it would call a no-show "extra time" — so the notice states no amount
+ * but the balance.
  */
 export interface CreditReceivableClearedEmailProps {
   /** Optional BY TYPE because the parameter default below is the real fallback — the registry
    * already passes `?? 'there'`, and a required-but-defaulted prop makes that default
    * unreachable from a test. */
   readonly firstName?: string;
-  readonly covered: string;
   readonly balanceAfter: string;
   readonly ctaUrl: string;
   readonly baseUrl: string;
@@ -35,20 +32,23 @@ const successPillStyle = {
 
 /**
  * Receivable-cleared email (BAL-535 / ADR-1040 Amendment 6 §F) — a warm, congratulatory
- * confirmation that a top-up covered the extra time still to settle from a recent consultation,
- * so the account's soft hold is released. Voice matches the auto-top-up-executed / top-up-receipt
- * family: first-name greeting, plain verbs, gender-neutral, resolution-moment tone. No fee, no
- * Stripe references, no "overdraft".
+ * confirmation that the balance now covers what the consultations came to, so the account's soft
+ * hold is released. Voice matches the auto-top-up-executed / top-up-receipt family: first-name
+ * greeting, plain verbs, gender-neutral, resolution-moment tone. No fee, no Stripe references, no
+ * "overdraft", no "extra time".
  *
- * ⚠ BAL-552 — the copy does NOT say "book again". An `account_hold` gates
- * `creditSessionsRepository.open` (`credit-sessions.ts:995`), auto-top-up and card removal, and
- * NOTHING on the booking path; on the presence path an `open()` refusal never fails a join
- * (`join-meeting.ts:358`). Bookings were never blocked, so "all set to book again" named a
- * restriction the client never had.
+ * ⚠ EVERY LINE IS TRUE ON ALL FOUR PATHS THAT SEND IT — a cash top-up that covers the balance, a
+ * settlement charge that covers the remaining debts, a settlement charge that clears its own
+ * session's last open receivable, and the covered-hold correction — because each fires only when
+ * no open receivable remains. So the body states no amount other than the balance.
+ *
+ * ⚠ "It no longer stops new bookings" claims only that the hold is gone. A company with no
+ * payment mandate can still need enough credit for its next booking (BAL-478's funding check and
+ * the planned-consultation reservation), and the booking panel says so at the time — so the copy
+ * never says "nothing else to do" or that a booking will go through.
  */
 export function CreditReceivableClearedEmail({
   firstName = 'there',
-  covered,
   balanceAfter,
   ctaUrl,
   baseUrl,
@@ -69,8 +69,8 @@ export function CreditReceivableClearedEmail({
       <Section style={shared.card}>
         <Text style={shared.greeting}>Hi {firstName},</Text>
         <Text style={shared.bodyText}>
-          The extra time still to settle from your recent consultations — {covered} — is now covered
-          by your balance, so your account is clear. There&apos;s nothing else to do.
+          Your balance now covers what your consultations came to, so your account is clear. It no
+          longer stops new bookings.
         </Text>
         <Text style={shared.bodyText}>Your balance is now {balanceAfter}.</Text>
 

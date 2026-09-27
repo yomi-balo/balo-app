@@ -54,7 +54,10 @@ export function StatementShell({
             <>
               <StatementLineItems view={view} />
               {view.lens === 'client' && (
-                <SettlementStatusNote settlementStatus={view.block.settlementStatus} />
+                <SettlementStatusNote
+                  settlementStatus={view.block.settlementStatus}
+                  settlementShape={view.block.settlementShape}
+                />
               )}
               {view.lens === 'expert' && (
                 <PayoutStatusBlock payoutStatus={view.block.payoutStatus} payout={view.payout} />

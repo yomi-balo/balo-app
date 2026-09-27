@@ -3,10 +3,16 @@
 import 'server-only';
 
 import { z } from 'zod';
+import { MEETING_END_NOT_JOINED_CODE, MEETING_END_NOT_STARTED_CODE } from '@balo/shared/meetings';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { endMeeting } from '@/lib/meetings/meeting-lifecycle-client';
-import { END_MEETING_FAILED_COPY, type EndMeetingResult } from '@/lib/meetings/meeting-state';
+import {
+  END_MEETING_FAILED_COPY,
+  END_MEETING_NOT_JOINED_COPY,
+  END_MEETING_NOT_STARTED_COPY,
+  type EndMeetingResult,
+} from '@/lib/meetings/meeting-state';
 
 /**
  * BAL-134 / ADR-1049 (§5.4) — **END THE MEETING FOR EVERYONE. THE SERVER IS THE AUTHORITY.**
@@ -21,8 +27,8 @@ import { END_MEETING_FAILED_COPY, type EndMeetingResult } from '@/lib/meetings/m
  *
  * ⚠⚠ **THIS MODULE EXPORTS EXACTLY ONE ASYNC FUNCTION.** A `'use server'` file may export ONLY
  * async functions — an `export const` here fails `next build` while tsc, eslint and vitest all
- * pass (memory `reference_use_server_no_value_exports`). `END_MEETING_FAILED_COPY` therefore
- * lives in `meeting-state.ts`, not here.
+ * pass (memory `reference_use_server_no_value_exports`). `END_MEETING_FAILED_COPY` and
+ * `END_MEETING_NOT_JOINED_COPY` and `END_MEETING_NOT_STARTED_COPY` therefore live in `meeting-state.ts`, not here.
  *
  * ⚠ A MUTATION, SO `requireOnboardedUser()` — NOT the bare `requireUser()` its read-only
  * sibling `get-meeting-state.ts` uses. `onboarding-mutation-gate.test.ts` enforces exactly
@@ -39,6 +45,16 @@ import { END_MEETING_FAILED_COPY, type EndMeetingResult } from '@/lib/meetings/m
  * server transition is a compare-and-set and the loser gets `200 { alreadyEnded: true }` with
  * no second teardown, no second audit row and no second analytics event. Reporting that as a
  * failure would put a red toast on a race that resolved exactly as intended.
+ *
+ * ⚠⚠ `meeting_not_joined` AND `meeting_not_started` ARE THE TWO REFUSALS WITH THEIR OWN COPY (BAL-474). The
+ * second (R6-C6) is an End pressed before the scheduled start. The first (D6.4): a CLIENT
+ * principal who has no presence row of their own in the meeting cannot End it — otherwise a
+ * member who never joined could turn the expert's wait into a free cancellation after the start.
+ * End renders only in the joined call, so the only way a person reaches it is the lag between
+ * joining Daily and the presence row landing (a webhook that usually takes seconds; the
+ * lifecycle sweep reconciles the roster every minute). That is an EXPECTED race, not a defect:
+ * it is logged at `info`, and the toast says the call is still running and to try again shortly.
+ * An already-ended meeting never reaches it — that is the idempotent success above (D8.7).
  */
 
 const inputSchema = z.object({ meetingId: z.uuid() });
@@ -62,6 +78,23 @@ export async function endMeetingAction(input: { meetingId: string }): Promise<En
   const { meetingId } = parsed.data;
 
   const result = await endMeeting(meetingId);
+  if (!result.ok && result.code === MEETING_END_NOT_JOINED_CODE) {
+    log.info('Meeting end refused — the client member has not joined this meeting yet', {
+      meetingId,
+      status: result.status,
+      code: result.code,
+    });
+    return { success: false, error: END_MEETING_NOT_JOINED_COPY };
+  }
+  if (!result.ok && result.code === MEETING_END_NOT_STARTED_CODE) {
+    // BAL-474 (R6-C6) — an EXPECTED refusal (End before the start), logged at `info` like its sibling.
+    log.info('Meeting end refused — the meeting has not reached its scheduled start', {
+      meetingId,
+      status: result.status,
+      code: result.code,
+    });
+    return { success: false, error: END_MEETING_NOT_STARTED_COPY };
+  }
   if (!result.ok) {
     // ⚠ `error`, NOT `warn`: unlike the polled read, this is a single user-initiated act that
     // did not do what the person asked. The api's fixed literal and the status are the fields

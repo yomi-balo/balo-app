@@ -1,3 +1,7 @@
+import { relativeDay } from '@/components/balo/date/relative-day';
+import { formatSlotDateTime } from '@/components/booking/format';
+import { formatScheduledStartLabel } from './format-scheduled-start';
+
 /**
  * BAL-132 — the lobby's shared constants and copy.
  *
@@ -184,6 +188,35 @@ export const JOIN_WAITING_BODY =
 
 export const JOIN_LONG_WAIT_BODY =
   'This is taking a little longer than usual. They may not be at their desk yet — you can keep waiting, or come back to this link later.';
+
+/**
+ * D16 (owner-approved) — THE EARLY-JOIN REFUSAL, on the member call page, the invited-guest page and the lobby.
+ * The api refuses a join earlier than `CASE_JOIN_WINDOW_MINUTES` before the start with the distinct, NON-TERMINAL
+ * `409 meeting_not_open_yet` and `opensAt` (the start minus the window). `{time}` is `opensAt` in the VIEWER's
+ * timezone, formatted in the browser with the same helper the waiting screen uses for the scheduled start
+ * (`formatScheduledStartLabel`) — time alone when `opensAt` falls on the viewer's local today, otherwise
+ * date-qualified with the booking flow's existing `formatSlotDateTime` (D17.4). Here, not in an action, because a
+ * `'use server'` file may export only async functions.
+ *
+ * ⚠ `null` FOR A MISSING OR UNPARSEABLE `opensAt` — never a placeholder time (D17.3). The api always sends one;
+ * a caller that gets `null` back falls to ITS OWN existing retryable failure copy, never a new string.
+ *
+ * ⚠ `now` IS INJECTED, DEFAULTING TO THE REAL CLOCK — every real caller omits it. It exists so a test can pin
+ * the today/not-today boundary without going red on a calendar day with no code change (memory
+ * `reference_hardcoded_date_fixtures_are_time_bombs`), matching `relativeDay`'s own signature.
+ */
+export function joinNotOpenYetMessage(
+  opensAtIso: string | null | undefined,
+  now: Date = new Date()
+): string | null {
+  if (opensAtIso === null || opensAtIso === undefined) return null;
+  const time = formatScheduledStartLabel(opensAtIso);
+  if (time === null) return null;
+  const viewerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const isToday = relativeDay(opensAtIso, viewerTimeZone, now) === 'today';
+  const label = isToday ? time : formatSlotDateTime(opensAtIso, viewerTimeZone);
+  return `This call isn't open yet — you can join from ${label}.`;
+}
 
 /**
  * BAL-581 — THE MEMBER ROUTE'S REFUSAL COPY. A signed-in member is never shown the guest

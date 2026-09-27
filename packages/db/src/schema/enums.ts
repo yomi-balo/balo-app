@@ -628,6 +628,37 @@ export const creditSettlementShapeEnum = pgEnum('credit_settlement_shape', [
 ]);
 
 /**
+ * BAL-474 (ADR-1040 Amendment 7 §C, plan AD-5) — WHO OPENED a credit session.
+ *
+ *   `client` — a client company member acted: BAL-466's admission (and every row written before
+ *              BAL-474, which is why it is the column default).
+ *   `guest`  — a client-side, EMAIL-invited guest's admission opened it, ON BEHALF of the booker
+ *              (`initiating_member_id` is the booker; the guest holds no `CONSUME_CREDITS`).
+ *   `system` — a terminal path (the lifecycle sweep, a human End) or the durability backstop
+ *              opened it — and settled it in the same transaction — ON BEHALF of the booker; or
+ *              BILLING STARTED (BAL-474 Rule A: the presence seam and the meter-sweep pass open a
+ *              session, audited `trigger: 'billing_start'`, when the expert and a client-side
+ *              participant are together at or after the scheduled start and none exists). At billing
+ *              start `initiating_member_id` is the earliest-joined client member who is PRESENT and still
+ *              a live member of the company, falling back to the booker.
+ *
+ * The two on-behalf labels always carry a `credit_session.opened_on_behalf` audit row written in
+ * the opening transaction; the booker is attribution only (D4), and booker-addressed notices on
+ * such a session are gated on the booker's CURRENT membership (D5.7).
+ *
+ * Standalone `CREATE TYPE` (never `ALTER TYPE … ADD VALUE`), so every label commits atomically
+ * WITH the type and the `DEFAULT 'client'` is usable in the same from-scratch migrator
+ * transaction (the one-transaction hazard applies only to ADD VALUE). Restated in
+ * `@balo/shared/credit` as `CREDIT_SESSION_OPENED_BY`, pinned — same set, same order — by
+ * `invariants/credit-session-opened-by-labels.test.ts`. APPEND ONLY.
+ */
+export const creditSessionOpenedByEnum = pgEnum('credit_session_opened_by', [
+  'client',
+  'guest',
+  'system',
+]);
+
+/**
  * Expert payout obligation lifecycle. `recorded` (default) = obligation booked (BAL-399).
  * `disbursing` / `paid` / `failed` are RESERVED for the future Airwallex payout-run
  * (BAL-202/203) — BAL-399 only ever writes `recorded`. Ordering carries no semantics.

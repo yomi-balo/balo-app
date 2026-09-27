@@ -398,8 +398,8 @@ describe('CasesIndexShell — analytics', () => {
     const user = userEvent.setup();
     const featured = card({
       joinPath: '/meetings/m-1/call',
-      nextBookingStartIso: new Date(Date.now() + 5 * MIN).toISOString(),
-      nextBookingEndIso: new Date(Date.now() + 35 * MIN).toISOString(),
+      nextBookingStartIso: new Date(Date.now() + 2 * MIN).toISOString(),
+      nextBookingEndIso: new Date(Date.now() + 32 * MIN).toISOString(),
     });
     render(
       <CasesIndexShell
@@ -423,8 +423,8 @@ describe('CasesIndexShell — analytics', () => {
     const user = userEvent.setup();
     const featured = card({
       joinPath: '/meetings/m-1/call',
-      nextBookingStartIso: new Date(Date.now() + 5 * MIN).toISOString(),
-      nextBookingEndIso: new Date(Date.now() + 35 * MIN).toISOString(),
+      nextBookingStartIso: new Date(Date.now() + 2 * MIN).toISOString(),
+      nextBookingEndIso: new Date(Date.now() + 32 * MIN).toISOString(),
       nextBookingRoomReady: false,
     });
     render(

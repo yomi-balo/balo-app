@@ -1,3 +1,9 @@
+import {
+  CALL_STILL_OPEN_HEADLINE,
+  CASE_CLOSED_HEADLINE,
+  clientCallStillOpenBody,
+  clientCaseClosedBody,
+} from '@/lib/meetings/end-of-call-copy';
 import type { ClientEndOfCallView } from '@/lib/meetings/end-of-call-view-types';
 import { EndOfCallLayout } from './end-of-call-layout';
 import { RateThenResolve } from './rate-then-resolve';
@@ -27,28 +33,32 @@ import { OnwardCta } from './onward-cta';
 export function ClientEndOfCall({
   view,
 }: Readonly<{ view: ClientEndOfCallView }>): React.JSX.Element {
-  const { isCase, rating, resolve, meetingHeld } = view;
+  const { isCase, rating, resolve, meetingHeld, beganEarly, caseClosure } = view;
   const noun = isCase ? 'consultation' : 'meeting';
-  // Two flat ternaries rather than one nested pair — SonarCloud S3358.
+  // Flat lookups rather than a nested ternary — SonarCloud S3358.
   const heldHeadline = isCase ? 'Consultation complete' : 'Meeting complete';
-  const headline = meetingHeld ? heldHeadline : 'Nothing to wrap up yet';
+  const notHeldHeadline = beganEarly ? CALL_STILL_OPEN_HEADLINE : 'Nothing to wrap up yet';
+  const headline = meetingHeld ? heldHeadline : notHeldHeadline;
 
-  const hasPostCallActions = rating !== null || resolve !== null;
+  // ⚠ BAL-474 (R6F-2): the voided no-show offers no rating and no resolve prompt, whatever the view carries.
+  const hasPostCallActions = caseClosure === null && (rating !== null || resolve !== null);
 
   return (
     <EndOfCallLayout
-      headline={headline}
+      headline={caseClosure === null ? headline : CASE_CLOSED_HEADLINE}
       counterpartyName={view.counterpartyName}
       durationMinutes={view.durationMinutes}
-      reassurance={resolveReassurance(meetingHeld, isCase, noun)}
+      reassurance={resolveBody(view, noun)}
       recapState={view.recapState}
       sessionHeld={meetingHeld}
+      caseClosed={caseClosure !== null}
       onward={
         <OnwardCta
           meetingId={view.meetingId}
           lens="client"
           recapState={view.recapState}
           caseHref={view.caseHref}
+          caseClosed={caseClosure !== null}
         />
       }
       postCallActions={
@@ -64,6 +74,20 @@ export function ClientEndOfCall({
       }
     />
   );
+}
+
+/**
+ * The body line: the voided no-show's closed-case sentence, the early-call sentence, or the held / not-held
+ * reassurance. Flat branches, never a nested ternary (SonarCloud S3358).
+ */
+function resolveBody(view: ClientEndOfCallView, noun: string): string {
+  if (view.caseClosure !== null) {
+    return clientCaseClosedBody(view.caseClosure);
+  }
+  if (view.beganEarly) {
+    return clientCallStillOpenBody(view.counterpartyName);
+  }
+  return resolveReassurance(view.meetingHeld, view.isCase, noun);
 }
 
 /**

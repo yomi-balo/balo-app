@@ -14,7 +14,7 @@ vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('@balo/db', () => ({
-  creditSessionsRepository: { connect: mockConnect },
+  creditSessionsRepository: { connectWithTransition: mockConnect },
 }));
 vi.mock('./authorize-session-actor.js', () => ({ authorizeSessionActor: mockAuthorize }));
 
@@ -26,7 +26,7 @@ describe('connectSession', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAuthorize.mockResolvedValue({ ok: true, session: SESSION, role: 'member' });
-    mockConnect.mockResolvedValue(SESSION);
+    mockConnect.mockResolvedValue({ session: SESSION, transitioned: true });
   });
 
   it('authorizes with CONSUME_CREDITS then connects', async () => {
@@ -94,15 +94,23 @@ describe('connectSession', () => {
 describe('connectSessionAsSystem (BAL-466, D6)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockConnect.mockResolvedValue(SESSION);
+    mockConnect.mockResolvedValue({ session: SESSION, transitioned: true });
   });
 
   it('runs NO authorizeSessionActor — system-only, no actor authorization', async () => {
-    const session = await connectSessionAsSystem('session_1');
+    const result = await connectSessionAsSystem('session_1');
 
-    expect(session).toEqual(SESSION);
+    expect(result).toEqual({ session: SESSION, transitioned: true });
     expect(mockAuthorize).not.toHaveBeenCalled();
     expect(mockConnect).toHaveBeenCalledWith('session_1', {});
+  });
+
+  it('⚠ R6F-6 — reports `transitioned: false` for a caller that found the session already active', async () => {
+    mockConnect.mockResolvedValue({ session: SESSION, transitioned: false });
+    await expect(connectSessionAsSystem('session_1')).resolves.toEqual({
+      session: SESSION,
+      transitioned: false,
+    });
   });
 
   it('passes `now` through to the repository', async () => {

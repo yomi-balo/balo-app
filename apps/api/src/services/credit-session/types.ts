@@ -1,7 +1,13 @@
 /**
  * BAL-378 (ADR-1040 Lane 2) — credit-session service IO types (pure).
  */
-import type { CreditDurationSource, CreditSession, CreditSettlementStatus } from '@balo/db';
+import type {
+  CreditDurationSource,
+  CreditSession,
+  CreditSettlementStatus,
+  OpenFundingPolicy,
+  OpenToleratedGate,
+} from '@balo/db';
 import type { EligibleCompany } from '@balo/shared/credit';
 
 export interface OpenSessionServiceInput {
@@ -57,17 +63,34 @@ export interface OpenSessionServiceInput {
    * a seam whose only coherence guard (`open-session.ts`) constrains `'presence'` alone.
    */
   durationSource?: Extract<CreditDurationSource, 'live_capture' | 'presence'>;
+  /**
+   * BAL-474 (ADR-1040 Amendment 7 §B) — how the funding gates are treated. Omitted ⇒ `'gated'`,
+   * byte-identical to every shipped caller.
+   *
+   * ⚠⚠ A **SERVICE** INPUT, NOT A WIRE FIELD, AND IT MUST STAY THAT WAY (like `durationSource`).
+   * `routes/sessions/schema.ts` does not accept it. `'overdraft_tolerant'` is the presence seam's
+   * (member admission): an open receivable, an in-flight settlement, a negative balance and an
+   * unfunded estimate with no mandate no longer refuse, because settlement is session-scoped.
+   * It REQUIRES `durationSource: 'presence'`, enforced in `openSession`.
+   */
+  fundingPolicy?: OpenFundingPolicy;
 }
 
 /** Gate outcomes surfaced as a discriminated union — the route maps codes to 403 / 409. */
 export type OpenSessionServiceErrorCode =
   | 'forbidden' // no company membership / lacks CONSUME_CREDITS → 403
   | 'wallet_missing' // the company has no credit wallet → 409 (structural — should not happen)
-  | 'account_hold' // an open receivable soft-holds the company → 409
+  | 'account_hold' // an open receivable soft-holds the company → 409 (GATED open only — BAL-474)
   | 'session_in_progress' // a live session already exists on the wallet → 409 (one live session/wallet)
-  | 'settlement_pending' // a prior session's overdraft settlement is still in flight (balance < 0) → 409
-  | 'insufficient_no_mandate' // can't fund the estimate and no mandate → 409
+  | 'settlement_pending' // a prior settlement is in flight, or the balance is < 0 → 409 (GATED open only)
+  | 'insufficient_no_mandate' // can't fund the estimate and no mandate → 409 (GATED open only)
   | 'expert_rate_missing' // the expert has no rate → 409
+  /**
+   * BAL-474 (AD-4) — the meeting already has a live (non-cancelled, ENDED OR NOT) credit session,
+   * so a second is refused under the wallet lock → 409. Never reaches a client as an error: the
+   * admission seam logs it (a benign race) and the terminal path settles THAT session.
+   */
+  | 'meeting_session_exists'
   /**
    * BAL-129 (D5) — the supplied `meetingId` does not resolve to a Case engagement this
    * caller may bill → 409.
@@ -86,7 +109,17 @@ export type OpenSessionServiceErrorCode =
   | 'meeting_not_bookable';
 
 export type OpenSessionServiceResult =
-  | { ok: true; sessionId: string; status: 'pending'; holdId: string | null }
+  | {
+      ok: true;
+      sessionId: string;
+      status: 'pending';
+      holdId: string | null;
+      /**
+       * BAL-474 — the funding gates the overdraft-tolerant open passed through (empty on the gated
+       * open). Logged at admission; never shown to a client.
+       */
+      toleratedGates: readonly OpenToleratedGate[];
+    }
   // BAL-401 — >1 eligible billing company and none chosen: the actor must pick one. Carries a
   // NARROW eligible-company list (id/name/logoUrl only). Deliberately NOT an
   // `OpenSessionServiceErrorCode` so `openErrorStatus` never has to consider `companies`.

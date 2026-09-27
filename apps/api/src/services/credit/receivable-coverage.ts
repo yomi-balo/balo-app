@@ -1,12 +1,17 @@
 /**
  * BAL-535 (ADR-1040 Amendment 6 §F, fix round B1) — THE ONE PLACE that decides whether a
- * company's own cash covers its outstanding debt. All THREE sites that can release a soft
+ * company's own cash covers its outstanding debt. All FOUR sites that can release a soft
  * account hold call this and nothing else:
  *
  *   · R3  — `clearReceivablesCoveredByCredit` (`apps/api/src/services/stripe/dispatch.ts`), the
- *           covering-credit exit itself.
+ *           covering-credit exit itself. BAL-474 (Amendment 7 §F) arms it for a session's own
+ *           `overdraft_settlement` credit as well as the two cash reasons.
  *   · R3b — `openReceivableAndDun` (`apps/api/src/services/credit-session/end-session.ts`) and
  *           `handleOverdraftChargeFailed` (`dispatch.ts`), the two late-open self-clears.
+ *   · The heal — {@link clearCoveredHold}, BAL-474's fourth site: a wallet found covered but still
+ *           held (a covering credit landed and the clear had not run) is healed under the wallet
+ *           lock, as an audited system act, from the dunning claim and from the booking guard
+ *           (both through `notify.ts`'s one `healInTx`).
  *
  * ⚠⚠ WHY IT EXISTS AS A FUNCTION RATHER THAN THREE INLINE PREDICATE CALLS. Amendment 6 §F
  * claimed the promo exclusion was "structural rather than conditional" on the strength of ONE
@@ -211,4 +216,117 @@ export async function clearLateOpenedReceivableIfCovered(
     'Late settlement failure recorded over an already-covered debt — no hold imposed'
   );
   return true;
+}
+
+/** Which entry point healed a covered-but-held wallet — carried into the audit row. */
+export type CoverageHealTrigger = 'dunning_claim' | 'booking_guard';
+
+/** What one heal cleared. `clearedIds` is empty when the wallet turned out not to be covered. */
+export interface CoverageHealResult {
+  /** The cleared receivables' ids, in the order the repository returned them. */
+  readonly clearedIds: readonly string[];
+  /** Sum of the cleared receivables' recorded amounts (AUD minor). */
+  readonly clearedMinor: number;
+  /** The company the cleared receivables belong to (`undefined` when nothing was cleared). */
+  readonly companyId: string | undefined;
+  /** The wallet balance the verdict judged (AUD minor). */
+  readonly balanceMinor: number;
+}
+
+/**
+ * BAL-474 (ADR-1040 Amendment 7 §F, plan §G.2, D7.2) — THE HEAL: a wallet that is ON HOLD but whose
+ * balance already COVERS the debt (the covering credit landed and the clear did not run — a credit
+ * posted straight through the ledger, an anchor that moved, a race) is cleared here, under the
+ * caller's wallet lock, instead of being warned about. The alternative is a hold that no notice can
+ * describe truthfully (its figure is A$0.00) and a booking brake that refuses a company that owes
+ * nothing.
+ *
+ * It asks the SAME question every other site asks — {@link assessCashCoverage}, the promo-discounted
+ * predicate — so a promo can never heal a hold any more than it can lift one. It clears with the
+ * SAME repository primitive the covering-credit exit uses, and writes one audit row per cleared
+ * receivable in the SAME transaction: a distinct action (`credit_receivable.cleared_on_coverage_heal`)
+ * and `actor_user_id` NULL — a system act (the ADR-1030 exemption), never a member.
+ *
+ * ⚠ THE `exec` MUST BE THE CALLER'S TRANSACTION, holding the wallet advisory lock (the dunning claim
+ * and the booking guard both take it first). The verdict is only meaningful inside the transaction
+ * that acts on it.
+ *
+ * ⚠ IT PUBLISHES NOTHING. The caller publishes the "account clear" notice post-commit, keyed on the
+ * first cleared receivable id (D8.4) — a heal has no ledger entry, and a per-wallet key would be
+ * deduped by BullMQ against a retained job.
+ */
+export async function clearCoveredHold(
+  exec: DbTx,
+  input: {
+    walletId: string;
+    /** The wallet's balance as the SAME locked snapshot read it. */
+    balanceMinor: number;
+    trigger: CoverageHealTrigger;
+    now?: Date;
+  }
+): Promise<CoverageHealResult> {
+  const { walletId, balanceMinor, trigger } = input;
+  const coverage = await assessCashCoverage(exec, walletId, balanceMinor);
+  const nothing: CoverageHealResult = {
+    clearedIds: [],
+    clearedMinor: 0,
+    companyId: undefined,
+    balanceMinor,
+  };
+  if (!coverage.covered) {
+    return nothing;
+  }
+  const cleared = await creditReceivablesRepository.clearOpenForWallet(
+    { walletId, ...(input.now === undefined ? {} : { now: input.now }) },
+    exec
+  );
+  const [firstCleared] = cleared;
+  if (firstCleared === undefined) {
+    return nothing;
+  }
+  await Promise.all(
+    cleared.map((row) =>
+      auditEventsRepository.record(
+        {
+          actorUserId: null,
+          action: 'credit_receivable.cleared_on_coverage_heal',
+          entityType: 'credit_receivable',
+          entityId: row.id,
+          metadata: {
+            walletId,
+            companyId: row.companyId,
+            sessionId: row.sessionId,
+            trigger,
+            receivableAmountMinor: row.amountMinor,
+            predicateBalanceMinor: coverage.balanceMinor,
+            promoDiscountedMinor: coverage.promoGrantedSinceDebtMinor,
+            cashBackedBalanceMinor: coverage.cashBackedBalanceMinor,
+          },
+        },
+        exec
+      )
+    )
+  );
+  const clearedMinor = cleared.reduce((sum, row) => sum + row.amountMinor, 0);
+  log.warn(
+    {
+      op: 'clearCoveredHold',
+      kind: 'coverage_heal',
+      walletId,
+      companyId: firstCleared.companyId,
+      trigger,
+      clearedCount: cleared.length,
+      clearedMinor,
+      predicateBalanceMinor: coverage.balanceMinor,
+      promoDiscountedMinor: coverage.promoGrantedSinceDebtMinor,
+      cashBackedBalanceMinor: coverage.cashBackedBalanceMinor,
+    },
+    'Covered-but-held wallet healed — the coverage clear had not run'
+  );
+  return {
+    clearedIds: cleared.map((row) => row.id),
+    clearedMinor,
+    companyId: firstCleared.companyId,
+    balanceMinor,
+  };
 }

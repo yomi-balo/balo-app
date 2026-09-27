@@ -119,6 +119,7 @@ const EXPECTED_EMPTY_SHAPE = {
     noShowFloorMinutes: null,
     outcome: null,
     expertPresenceObserved: false,
+    caseClosure: null,
   },
   clock: null,
   endMeeting: true,

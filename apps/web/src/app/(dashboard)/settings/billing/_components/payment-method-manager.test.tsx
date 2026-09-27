@@ -245,6 +245,99 @@ describe('PaymentMethodManager', () => {
     expect(screen.queryByText(/unsettled consultation time on this card/i)).not.toBeInTheDocument();
   });
 
+  describe('D10.6 — the card is backing upcoming bookings the credit does not cover', () => {
+    async function pressRemove(): Promise<void> {
+      await userEvent.click(screen.getByRole('button', { name: 'Remove card' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Remove card' }));
+    }
+
+    it('blocks removal with the owner-approved string, verbatim — never the generic toast', async () => {
+      mockRemoveSavedCardAction.mockResolvedValue({
+        ok: false,
+        error: 'upcoming_bookings_uncovered',
+        topUpNeededMinor: 123_450,
+        reservedBookingCount: 2,
+        companyName: 'Northwind Industrial',
+      });
+      const onRemoved = vi.fn();
+
+      render(<PaymentMethodManager card={CARD} currentMode="notify_only" onRemoved={onRemoved} />);
+      await pressRemove();
+
+      expect(
+        await screen.findByText(
+          "This card is backing 2 upcoming consultations — more than Northwind Industrial's balance covers right now. A top-up of A$1,234.50 or more, or cancelling bookings, lets you remove it."
+        )
+      ).toBeInTheDocument();
+      expect(onRemoved).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+      // The destructive action is gone; "Keep card" is the only way out.
+      expect(screen.queryByRole('button', { name: /Remove card/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Keep card' })).toBeInTheDocument();
+    });
+
+    it('singular count', async () => {
+      mockRemoveSavedCardAction.mockResolvedValue({
+        ok: false,
+        error: 'upcoming_bookings_uncovered',
+        topUpNeededMinor: 30_000,
+        reservedBookingCount: 1,
+        companyName: 'Northwind Industrial',
+      });
+
+      render(<PaymentMethodManager card={CARD} currentMode="notify_only" onRemoved={vi.fn()} />);
+      await pressRemove();
+
+      expect(
+        await screen.findByText(
+          "This card is backing 1 upcoming consultation — more than Northwind Industrial's balance covers right now. A top-up of A$300.00 or more, or cancelling bookings, lets you remove it."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('large variant above A$10,000, with the company fallback when there is no name', async () => {
+      mockRemoveSavedCardAction.mockResolvedValue({
+        ok: false,
+        error: 'upcoming_bookings_uncovered',
+        topUpNeededMinor: 1_250_000,
+        reservedBookingCount: 3,
+        companyName: null,
+      });
+
+      render(<PaymentMethodManager card={CARD} currentMode="notify_only" onRemoved={vi.fn()} />);
+      await pressRemove();
+
+      expect(
+        await screen.findByText(
+          "This card is backing 3 upcoming consultations — more than your team's balance covers right now. Top-ups totalling A$12,500.00 or more, or cancelling bookings, let you remove it."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('closing and reopening the dialog clears the block — it is not a permanent dead end', async () => {
+      mockRemoveSavedCardAction.mockResolvedValue({
+        ok: false,
+        error: 'upcoming_bookings_uncovered',
+        topUpNeededMinor: 30_000,
+        reservedBookingCount: 1,
+        companyName: null,
+      });
+
+      render(<PaymentMethodManager card={CARD} currentMode="notify_only" onRemoved={vi.fn()} />);
+      await pressRemove();
+      expect(
+        await screen.findByText(/This card is backing 1 upcoming consultation/)
+      ).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Keep card' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Remove card' }));
+
+      expect(screen.queryByText(/This card is backing/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Remove card' })).toBeInTheDocument();
+    });
+  });
+
   describe('3DS/SCA redirect return', () => {
     function setReturnUrl(status = 'succeeded', setupIntentId = 'seti_x'): void {
       // BAL-526 — the hook only reacts to a return this tab is BOUND to; seed the binding so

@@ -12,6 +12,8 @@
  * `RATE_PER_MIN_MINOR` is a presentation average, NOT the fee, and nothing here exposes it.
  */
 
+import { TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
+
 /** A$3.00/min (= A$180/hr) — presentation average for the time estimate. NEVER the fee. */
 export const RATE_PER_MIN_MINOR = 300;
 
@@ -53,10 +55,16 @@ export function resolveRestingState(balanceMinor: number): WalletRestingState {
   return 'healthy';
 }
 
-/** Slider bounds + snap, in AUD minor units: A$300 … A$10,000, snapping to A$100. */
-export const MIN_AMOUNT_MINOR = 30_000;
-export const MAX_AMOUNT_MINOR = 1_000_000;
-export const STEP_MINOR = 10_000;
+/**
+ * Slider bounds + snap, in AUD minor units: A$300 … A$10,000, snapping to A$100. DERIVED from
+ * `TOP_UP_LIMITS_MINOR` (`@balo/shared/credit`, BAL-474) — the ONE definition of what a single
+ * top-up may be, which the purchase-intent route's bounds and the booking / dunning copy ("a
+ * top-up of {amount} or more", "top-ups totalling …") also read, so a limit can never change here
+ * and be quoted stale there. The names and values are unchanged.
+ */
+export const MIN_AMOUNT_MINOR = TOP_UP_LIMITS_MINOR.min;
+export const MAX_AMOUNT_MINOR = TOP_UP_LIMITS_MINOR.max;
+export const STEP_MINOR = TOP_UP_LIMITS_MINOR.step;
 
 /** The green "goal" mark (A$5,000) — a warm reward, never pressure. */
 export const GOAL_AMOUNT_MINOR = 500_000;
@@ -140,6 +148,14 @@ export function formatAud(minor: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+/**
+ * "1 upcoming consultation" / "{n} upcoming consultations" — the count the booking balance panel and the
+ * remove-card dialog both name (BAL-474 copy v2.1 `{count}`). ONE definition, so the two cannot drift.
+ */
+export function upcomingConsultationsLabel(count: number): string {
+  return count === 1 ? '1 upcoming consultation' : `${count} upcoming consultations`;
 }
 
 /** Minor AUD → "A$1,000" (whole dollars, for slider labels + tier buttons). */

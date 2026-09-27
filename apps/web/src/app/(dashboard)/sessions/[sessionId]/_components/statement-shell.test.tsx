@@ -137,6 +137,60 @@ describe('StatementShell', () => {
     const { container } = render(<StatementShell view={view} />);
     expect(container.querySelector('a[href^="/meetings/"]')).toBeNull();
   });
+
+  // BAL-474 (copy v2.1 §7) — the settlement note is shape-aware, and the shell hands it the shape.
+  describe('the client settlement note (shape-aware)', () => {
+    it('a no_show_client + failed receipt shows the no-show string and a /settings/billing link', () => {
+      const view: SessionStatementView = {
+        ...CLIENT_MONEY,
+        block: {
+          ...CLIENT_MONEY.block,
+          settlementStatus: 'failed',
+          settlementShape: 'no_show_client',
+        },
+      };
+      render(<StatementShell view={view} />);
+      expect(
+        screen.getByText(
+          /This booking was billed at its minimum charge, and the part your balance didn't cover couldn't be charged to a card\./
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Manage billing' })).toHaveAttribute(
+        'href',
+        '/settings/billing'
+      );
+    });
+
+    it('a held + failed receipt shows the consultation string, NOT the no-show one (positive control)', () => {
+      const view: SessionStatementView = {
+        ...CLIENT_MONEY,
+        block: { ...CLIENT_MONEY.block, settlementStatus: 'failed', settlementShape: 'held' },
+      };
+      render(<StatementShell view={view} />);
+      expect(
+        screen.getByText(/The part of this consultation your balance didn't cover couldn't be/)
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/billed at its minimum charge/)).not.toBeInTheDocument();
+    });
+
+    it('a receipt with no shape (pre-BAL-412) falls back to the held wording', () => {
+      const view: SessionStatementView = {
+        ...CLIENT_MONEY,
+        block: { ...CLIENT_MONEY.block, settlementStatus: 'processing' },
+      };
+      render(<StatementShell view={view} />);
+      expect(
+        screen.getByText(
+          "The part of this consultation your balance didn't cover is still settling."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('the expert lens never renders the client settlement note', () => {
+      render(<StatementShell view={EXPERT_MONEY} />);
+      expect(screen.queryByText(/your balance didn't cover/)).not.toBeInTheDocument();
+    });
+  });
 });
 
 // ── Plan §15's a11y requirement, applied to the PAGE BODY rather than only the route shells.

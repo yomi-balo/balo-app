@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  clampIntervalsToStart,
   computeMeetingClocks,
+  coPresentMsBefore,
+  currentCoPresenceStartedAt,
+  expertPresentFromStartMs,
   presencePartyForGuest,
   type MeetingClocks,
   type PresenceInterval,
@@ -402,5 +406,299 @@ describe('computeMeetingClocks', () => {
     );
 
     expect(shuffled).toEqual(forward);
+  });
+});
+
+// ── BAL-474 Rule A (D13) ──────────────────────────────────────────────────────────────────────────────
+
+/** T = `T0`. The test's OWN oracle: count the seconds before T an expert row and a client row are both open. */
+function oracleTogetherMs(intervals: readonly PresenceInterval[], now: Date): number {
+  const from = T0.getTime() - 24 * 60 * MIN;
+  const open = (party: PresenceInterval['party'], second: number): boolean =>
+    intervals.some(
+      (row) =>
+        row.party === party &&
+        row.joinedAt.getTime() <= second &&
+        second < (row.leftAt === null ? now.getTime() : row.leftAt.getTime())
+    );
+  let together = 0;
+  for (let second = from; second < T0.getTime(); second += 1_000) {
+    if (open('expert', second) && open('client', second)) {
+      together += 1_000;
+    }
+  }
+  return together;
+}
+
+describe('clampIntervalsToStart — BAL-134 R10, applied at READ time', () => {
+  const start = T0;
+
+  it('raises a join before the start to the start, and leaves a join at or after it alone', () => {
+    const [early, exact, late] = clampIntervalsToStart(
+      [interval('expert', -5, 30), interval('expert', 0, 30), interval('expert', 5, 30)],
+      start
+    );
+    expect(early?.joinedAt).toEqual(start);
+    expect(exact?.joinedAt).toEqual(start);
+    expect(late?.joinedAt).toEqual(at(5));
+  });
+
+  it('an interval that ended BEFORE the start collapses to a zero-length interval AT the start (the old write clamp)', () => {
+    const [collapsed] = clampIntervalsToStart([interval('client', -20, -10)], start);
+    expect(collapsed?.joinedAt).toEqual(start);
+    expect(collapsed?.leftAt).toEqual(start);
+  });
+
+  it('a leave after the start is kept; an open interval stays open', () => {
+    const [kept, open] = clampIntervalsToStart(
+      [interval('expert', -5, 30), interval('client', -5, null)],
+      start
+    );
+    expect(kept?.leftAt).toEqual(at(30));
+    expect(open?.leftAt).toBeNull();
+    expect(open?.joinedAt).toEqual(start);
+  });
+
+  it('never mutates its input and keeps every other property on the row', () => {
+    const original = { ...interval('expert', -5, 30), id: 'row-1' };
+    const [clamped] = clampIntervalsToStart([original], start);
+    expect(original.joinedAt).toEqual(at(-5));
+    expect(clamped).toMatchObject({ id: 'row-1', party: 'expert' });
+  });
+
+  it('passes a non-finite row through untouched (computeMeetingClocks skips it), and a non-finite start changes nothing', () => {
+    const bad: PresenceInterval = { party: 'expert', joinedAt: INVALID, leftAt: null };
+    expect(clampIntervalsToStart([bad], start)).toEqual([bad]);
+    const rows = [interval('expert', -5, 30)];
+    expect(clampIntervalsToStart(rows, INVALID)).toEqual(rows);
+  });
+
+  it('computeMeetingClocks over the CLAMPED intervals is exactly what the old write-side clamp fed it', () => {
+    const raw = [
+      interval('expert', -30, 60),
+      interval('client', -30, -29),
+      interval('client', 0, 60),
+    ];
+    const clocks = computeMeetingClocks(clampIntervalsToStart(raw, start), at(60));
+    expect(clocks.expertFirstJoinedAt).toEqual(start);
+    expect(clocks.expertPresentMs).toBe(60 * MIN);
+    expect(clocks.billableStartedAt).toEqual(start);
+  });
+});
+
+describe('coPresentMsBefore — Rule A: the sum of the real expert ∩ client intersection before T', () => {
+  const together = (intervals: readonly PresenceInterval[], now: Date = at(120)): number =>
+    coPresentMsBefore(intervals, T0, now);
+
+  const EXAMPLES: ReadonlyArray<readonly [string, PresenceInterval[], number]> = [
+    [
+      'example 1 — 09:50–10:40 together',
+      [interval('expert', -10, 40), interval('client', -10, 40)],
+      10,
+    ],
+    [
+      'example 2 — together 09:00–09:01, the client is back only at 10:00',
+      [interval('expert', -60, 60), interval('client', -60, -59), interval('client', 0, 60)],
+      1,
+    ],
+    [
+      'example 3 — together 09:50–09:54, both back at 10:00',
+      [
+        interval('expert', -10, -6),
+        interval('client', -10, -6),
+        interval('expert', 0, 45),
+        interval('client', 0, 45),
+      ],
+      4,
+    ],
+    [
+      'example 4 — together 09:30–09:55',
+      [interval('expert', -30, -5), interval('client', -30, -5)],
+      25,
+    ],
+    [
+      'example 5 — together 09:30–09:31, the expert waits 10:00–10:15',
+      [interval('expert', -30, -29), interval('client', -30, -29), interval('expert', 0, 15)],
+      1,
+    ],
+    [
+      'F1 row — both 06:00–11:00',
+      [interval('expert', -240, 60), interval('client', -240, 60)],
+      240,
+    ],
+  ];
+
+  it.each(EXAMPLES)('%s', (_label, intervals, expectedMinutes) => {
+    expect(together(intervals)).toBe(expectedMinutes * MIN);
+    // …and it agrees with the independent second-sampling oracle.
+    expect(together(intervals)).toBe(oracleTogetherMs(intervals, at(120)));
+    expect(EXAMPLES).toHaveLength(6);
+  });
+
+  it('a SOLO early wait (either side) is not together', () => {
+    expect(together([interval('expert', -60, 30), interval('client', 0, 30)])).toBe(0);
+    expect(together([interval('client', -60, 30), interval('expert', 0, 30)])).toBe(0);
+  });
+
+  it('an OBSERVER is on neither side', () => {
+    expect(together([interval('observer', -30, 30), interval('expert', -30, 30)])).toBe(0);
+    expect(together([interval('observer', -30, 30), interval('client', -30, 30)])).toBe(0);
+  });
+
+  it('two overlapping rows of one party (two devices) count the time ONCE', () => {
+    expect(
+      together([
+        interval('expert', -20, 30),
+        interval('client', -20, -10),
+        interval('client', -15, -5),
+      ])
+    ).toBe(15 * MIN);
+  });
+
+  it('an OPEN row runs to `now`: while the room is still together at T−4 it is 6 minutes, and never past T', () => {
+    const open = [interval('expert', -10, null), interval('client', -10, null)];
+    expect(coPresentMsBefore(open, T0, at(-4))).toBe(6 * MIN);
+    expect(coPresentMsBefore(open, T0, at(30))).toBe(10 * MIN);
+  });
+
+  it('is order-independent (all six orderings of a three-row scenario)', () => {
+    const rows = [
+      interval('expert', -30, 30),
+      interval('client', -30, -20),
+      interval('client', -10, 30),
+    ];
+    const expected = together(rows);
+    expect(expected).toBe(20 * MIN);
+    for (const ordering of permutations(rows)) {
+      expect(together(ordering)).toBe(expected);
+    }
+  });
+
+  it('a non-finite row is skipped, deterministically', () => {
+    const rows: PresenceInterval[] = [
+      interval('expert', -10, 30),
+      interval('client', -10, 30),
+      { party: 'client', joinedAt: INVALID, leftAt: null },
+    ];
+    expect(together(rows)).toBe(10 * MIN);
+    expect(together([...rows].reverse())).toBe(10 * MIN);
+  });
+
+  it('a non-finite start yields 0, and nothing before the start yields 0', () => {
+    expect(
+      coPresentMsBefore([interval('expert', -10, 30), interval('client', -10, 30)], INVALID, at(30))
+    ).toBe(0);
+    expect(together([interval('expert', 5, 30), interval('client', 5, 30)])).toBe(0);
+  });
+});
+
+describe('expertPresentFromStartMs — D15.3: the expert’s span from their first presence AT OR AFTER the start', () => {
+  const START = T0;
+  const from = (intervals: readonly PresenceInterval[], now = at(600)) =>
+    expertPresentFromStartMs(intervals, START, now);
+
+  it('⚠⚠ a row entirely before the start does not anchor it: 09:00–09:30 then 10:10–11:00 is 50, not 60', () => {
+    expect(from([interval('expert', -60, -30), interval('expert', 10, 60)])).toBe(50 * MIN);
+  });
+
+  it('a row that SPANS the start begins at the start', () => {
+    expect(from([interval('expert', -10, 40)])).toBe(40 * MIN);
+  });
+
+  it('a row that ends EXACTLY at the start does not anchor it (`leftAt <= T`)', () => {
+    expect(from([interval('expert', -30, 0), interval('expert', 10, 60)])).toBe(50 * MIN);
+    expect(from([interval('expert', -30, 0)])).toBe(0);
+  });
+
+  it('0 when the expert was never present at or after the start (only before it)', () => {
+    expect(from([interval('expert', -60, -5)])).toBe(0);
+  });
+
+  it('0 when there is no expert row at all — client and observer rows are on neither side', () => {
+    expect(from([interval('client', 0, 30), interval('observer', 0, 30)])).toBe(0);
+  });
+
+  it('is gap-inclusive AFTER the start: 10:05–10:10 and 10:30–10:40 is 35', () => {
+    expect(from([interval('expert', 5, 10), interval('expert', 30, 40)])).toBe(35 * MIN);
+  });
+
+  it('a pre-deploy row stored CLAMPED (joined = left = T) has leftAt <= T and is dropped', () => {
+    expect(from([interval('expert', 0, 0), interval('expert', 10, 60)])).toBe(50 * MIN);
+  });
+
+  it('an OPEN row runs to `now`', () => {
+    expect(from([interval('expert', -20, null)], at(45))).toBe(45 * MIN);
+    expect(from([interval('expert', 10, null)], at(45))).toBe(35 * MIN);
+  });
+
+  it('is independent of input order', () => {
+    const rows = [
+      interval('expert', -60, -30),
+      interval('expert', 10, 30),
+      interval('expert', 40, 60),
+    ];
+    for (const ordering of permutations(rows)) {
+      expect(from(ordering)).toBe(50 * MIN);
+    }
+  });
+
+  it('skips a non-finite row and fails closed on a non-finite start', () => {
+    expect(
+      from([{ party: 'expert', joinedAt: INVALID, leftAt: at(30) }, interval('expert', 10, 60)])
+    ).toBe(50 * MIN);
+    expect(expertPresentFromStartMs([interval('expert', 10, 60)], INVALID, at(600))).toBe(0);
+  });
+
+  it('agrees with the start-clamped clocks whenever no expert row ended before the start', () => {
+    const rows = [
+      interval('expert', -10, 20),
+      interval('expert', 30, 50),
+      interval('client', 0, 50),
+    ];
+    const clocks = computeMeetingClocks(clampIntervalsToStart(rows, START), at(600));
+    expect(from(rows)).toBe(clocks.expertPresentMs);
+  });
+});
+
+describe('currentCoPresenceStartedAt — since when have both been here?', () => {
+  it('is the LATER of the two parties’ earliest open joins', () => {
+    expect(
+      currentCoPresenceStartedAt([interval('expert', -20, null), interval('client', -5, null)])
+    ).toEqual(at(-5));
+    expect(
+      currentCoPresenceStartedAt([interval('client', -20, null), interval('expert', -5, null)])
+    ).toEqual(at(-5));
+  });
+
+  it('is null unless BOTH an expert and a client row are open', () => {
+    expect(currentCoPresenceStartedAt([])).toBeNull();
+    expect(currentCoPresenceStartedAt([interval('expert', -5, null)])).toBeNull();
+    expect(currentCoPresenceStartedAt([interval('client', -5, null)])).toBeNull();
+    expect(
+      currentCoPresenceStartedAt([interval('expert', -5, null), interval('observer', -5, null)])
+    ).toBeNull();
+  });
+
+  it('with two devices, a party’s EARLIEST open row wins', () => {
+    expect(
+      currentCoPresenceStartedAt([
+        interval('expert', -30, null),
+        interval('expert', -10, null),
+        interval('client', -20, null),
+        interval('client', -2, null),
+      ])
+    ).toEqual(at(-20));
+  });
+
+  it('a CLOSED row is not co-presence, and a non-finite join is skipped', () => {
+    expect(
+      currentCoPresenceStartedAt([interval('expert', -5, null), interval('client', -5, -1)])
+    ).toBeNull();
+    expect(
+      currentCoPresenceStartedAt([
+        interval('expert', -5, null),
+        { party: 'client', joinedAt: INVALID, leftAt: null },
+      ])
+    ).toBeNull();
   });
 });

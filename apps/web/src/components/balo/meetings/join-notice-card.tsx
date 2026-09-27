@@ -1,6 +1,6 @@
 'use client';
 
-import { Link2Off, RefreshCw, Users } from 'lucide-react';
+import { CalendarClock, Link2Off, RefreshCw, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
   JOIN_LONG_WAIT_BODY,
@@ -10,6 +10,7 @@ import {
   JOIN_UNAVAILABLE_TITLE,
   JOIN_WAITING_BODY,
   JOIN_WAITING_TITLE,
+  joinNotOpenYetMessage,
 } from '@/lib/meetings/lobby';
 
 /**
@@ -34,7 +35,8 @@ import {
 interface JoinNoticeCardProps {
   readonly icon: LucideIcon;
   readonly title: string;
-  readonly body: string;
+  /** Omitted when the title alone is the whole message (D16's early-join refusal is one sentence). */
+  readonly body?: string;
   /**
    * ⚠ FOCUS TARGET. Every state transition on these surfaces replaces the whole card, which
    * drops focus to `<body>` — a screen-reader or keyboard user is silently returned to the top
@@ -62,7 +64,9 @@ export function JoinNoticeCard({
       <h1 ref={headingRef} tabIndex={-1} className="text-foreground mt-4 text-lg font-semibold">
         {title}
       </h1>
-      <p className="text-muted-foreground mt-2 text-[13px] leading-relaxed">{body}</p>
+      {body === undefined ? null : (
+        <p className="text-muted-foreground mt-2 text-[13px] leading-relaxed">{body}</p>
+      )}
       {children}
       <p className="text-muted-foreground border-border mt-6 w-full border-t pt-4 text-[11.5px]">
         Powered by <span className="text-foreground font-semibold">Balo</span>
@@ -120,6 +124,34 @@ export function JoinNoticeRetryButton({
     >
       Try again
     </button>
+  );
+}
+
+/**
+ * D16 (owner-approved) — "This call isn't open yet — you can join from {time}." A NON-terminal card: the call
+ * exists and the person may join, just not yet. It carries `opensAt` (the api's start-minus-window instant),
+ * formatted in the VIEWER's timezone by `joinNotOpenYetMessage`, and a "Try again" that re-runs the join. Used by
+ * the member call page; the invited-guest page and the lobby show the same sentence inline.
+ *
+ * ⚠ D17.3 — A missing or unparseable `opensAt` falls back to the EXISTING `JoinRetryNotice`, never a new string.
+ */
+export function JoinNotOpenYetNotice({
+  opensAt,
+  headingRef,
+  onRetry,
+}: Readonly<{
+  opensAt: string | null;
+  headingRef?: React.Ref<HTMLHeadingElement>;
+  onRetry: () => void;
+}>): React.JSX.Element {
+  const message = joinNotOpenYetMessage(opensAt);
+  if (message === null) {
+    return <JoinRetryNotice onRetry={onRetry} headingRef={headingRef} />;
+  }
+  return (
+    <JoinNoticeCard icon={CalendarClock} title={message} headingRef={headingRef}>
+      <JoinNoticeRetryButton onRetry={onRetry} />
+    </JoinNoticeCard>
   );
 }
 

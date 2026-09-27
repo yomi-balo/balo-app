@@ -6,6 +6,7 @@ import {
   assertMeetingTransition,
   expertClockStart,
   isLegalMeetingTransition,
+  isTerminalMeetingStatus,
   resolveTerminalRule,
   resolveWaitingPhase,
   summarisePresence,
@@ -63,6 +64,15 @@ describe('MEETING_TRANSITIONS (BAL-134 §4.1)', () => {
     for (const status of ALL) {
       expect(MEETING_TRANSITIONS[status]).not.toContain(status);
     }
+  });
+
+  it('isTerminalMeetingStatus is DERIVED from the map — exactly the two sinks are terminal (BAL-474 D8.7)', () => {
+    expect(ALL.filter((status) => isTerminalMeetingStatus(status))).toEqual(['ended', 'cancelled']);
+    expect(ALL.filter((status) => !isTerminalMeetingStatus(status))).toEqual([
+      'scheduled',
+      'waiting_for_participants',
+      'in_progress',
+    ]);
   });
 
   /** The edges the sweep, the presence writer and the end route actually take. */

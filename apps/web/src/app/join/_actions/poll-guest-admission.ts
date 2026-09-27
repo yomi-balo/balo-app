@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { log } from '@/lib/logging';
-import { postGuestJoin, type JoinGrant } from '@/lib/meetings/join-api-client';
+import { notOpenYetFrom, postGuestJoin, type JoinGrant } from '@/lib/meetings/join-api-client';
 import { JOIN_TEMPORARILY_UNAVAILABLE_TITLE, JOIN_UNAVAILABLE_TITLE } from '@/lib/meetings/lobby';
 
 /**
@@ -65,6 +65,13 @@ export type PollGuestAdmissionResult =
       status: number;
       title: string;
       retryAfterSeconds?: number;
+      /**
+       * D16 — the join window has not opened (`409 meeting_not_open_yet`). NON-terminal: the guest page shows
+       * "This call isn't open yet — you can join from {time}." and leaves the Join button live. ⚠ REACHABLE ONLY
+       * AFTER A ≥256-BIT TOKEN RESOLVED (`joinMeetingAsGuest` checks it after the token and meeting match), so it
+       * discloses nothing a valid invitee does not already hold. `opensAt` is ISO; formatted in the browser.
+       */
+      notOpenYet?: { opensAt: string };
     };
 
 /** ⚠ Transport, throttling and upstream wobbles are RETRYABLE. `404` / `409` are not. */
@@ -93,6 +100,7 @@ export async function pollGuestAdmissionAction(input: {
       status: result.status,
       code: result.code,
     });
+    const notOpenYet = notOpenYetFrom(result);
     return {
       success: false,
       retryable: isRetryableStatus(result.status),
@@ -110,6 +118,7 @@ export async function pollGuestAdmissionAction(input: {
       ...(result.retryAfterSeconds === undefined
         ? {}
         : { retryAfterSeconds: result.retryAfterSeconds }),
+      ...(notOpenYet === undefined ? {} : { notOpenYet }),
     };
   }
 

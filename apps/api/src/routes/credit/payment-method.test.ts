@@ -109,6 +109,24 @@ describe('POST /credit/payment-method/detach', () => {
     expect(res.json()).toEqual({ error: 'settlement_outstanding' });
   });
 
+  it('returns 409 upcoming_bookings_uncovered carrying the figures when the card is backing uncovered bookings (D10.6)', async () => {
+    mockDetachSavedCard.mockResolvedValue({
+      status: 'upcoming_bookings_uncovered',
+      topUpNeededMinor: 32_000,
+      reservedBookingCount: 2,
+    });
+    const res = await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: 'upcoming_bookings_uncovered',
+      topUpNeededMinor: 32_000,
+      reservedBookingCount: 2,
+    });
+  });
+
   it('returns 502 when the Stripe detach fails', async () => {
     mockDetachSavedCard.mockResolvedValue({ status: 'stripe_error' });
     const res = await inject(

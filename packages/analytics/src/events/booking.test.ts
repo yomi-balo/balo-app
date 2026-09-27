@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BOOKING_EVENTS } from './booking';
+import { BOOKING_EVENTS, BOOKING_FUNDING_BLOCK_REASONS } from './booking';
 
 describe('BOOKING_EVENTS', () => {
   it('exposes exactly the booking CLIENT events (guards against accidental drift)', () => {
@@ -42,6 +42,23 @@ describe('BOOKING_EVENTS', () => {
 
   it('uses snake_case event values throughout', () => {
     for (const value of Object.values(BOOKING_EVENTS)) {
+      expect(value).toMatch(/^[a-z0-9]+(_[a-z0-9]+)*$/);
+    }
+  });
+});
+
+describe('BOOKING_FUNDING_BLOCK_REASONS', () => {
+  it('is exactly the four refusal reasons (BAL-474 added the hold and the reservation)', () => {
+    expect([...BOOKING_FUNDING_BLOCK_REASONS].sort((a, b) => a.localeCompare(b))).toEqual([
+      'account_on_hold',
+      'no_mandate_insufficient_balance',
+      'no_wallet',
+      'reserved_by_upcoming',
+    ]);
+  });
+
+  it('uses snake_case values', () => {
+    for (const value of BOOKING_FUNDING_BLOCK_REASONS) {
       expect(value).toMatch(/^[a-z0-9]+(_[a-z0-9]+)*$/);
     }
   });

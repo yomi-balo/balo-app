@@ -8,17 +8,19 @@ import { getInAppTemplate } from './in-app-templates.js';
 /**
  * BAL-535 (ADR-1040 Amendment 6 §F) — the receivable-cleared notice, all three arms: the email
  * COMPONENT, the `getEmailTemplate` factory (subject + AUD formatting + name fallback), and the
- * in-app arm. Modelled on `credit-auto-topup.test.ts`.
+ * in-app arm. Modelled on `credit-auto-topup.test.ts`. The strings are BAL-474's owner-approved
+ * copy v2.1 §6, pinned verbatim.
  *
  * ⚠ THIS FILE IS `.test.ts`, NOT `.test.tsx`, AND MUST STAY THAT WAY. `apps/api`'s vitest config
  * globs `*.test.ts` ONLY — a `.test.tsx` here never runs and reports green, which is exactly how
  * this template shipped with zero coverage in the first place. That is why every element below
  * is built with `React.createElement` rather than JSX.
  *
- * ⚠ BAL-552 — "book again" was retired from every arm here. An `account_hold` gates
- * `creditSessionsRepository.open`, auto-top-up and card removal, and NOTHING on the booking
- * path; on the presence path an `open()` refusal never fails a join (`join-meeting.ts:358`).
- * Bookings were never blocked, so do not "restore" the friendlier "book again" phrasing.
+ * ⚠ BAL-474 — the notice is sent once per write on four paths (a cash top-up, a settlement charge
+ * that covers the remaining debts, a settlement charge that clears its own session's last
+ * receivable, and the covered-hold correction). So it states NO amount but the balance — no
+ * cleared-amount figure, no "extra time", no "nothing else to do" — and claims only that the hold
+ * no longer stops new bookings: a company with no mandate can still need enough credit to book.
  */
 
 const BASE = 'https://app.balo.expert';
@@ -51,7 +53,6 @@ type ClearedProps = React.ComponentProps<typeof CreditReceivableClearedEmail>;
 function props(over: Partial<ClearedProps> = {}): ClearedProps {
   return {
     firstName: 'Dana',
-    covered: 'A$50.00',
     balanceAfter: 'A$110.00',
     ctaUrl: `${BASE}/settings/billing`,
     baseUrl: BASE,
@@ -60,28 +61,31 @@ function props(over: Partial<ClearedProps> = {}): ClearedProps {
 }
 
 describe('CreditReceivableClearedEmail (BAL-535)', () => {
-  it('renders the warm resolution copy with both AUD face values and the CTA', async () => {
+  it('renders the approved resolution copy verbatim, with the balance and the CTA', async () => {
     const html = clean(await render(React.createElement(CreditReceivableClearedEmail, props())));
     expect(html).toContain('Hi Dana,');
+    expect(html).toContain('✅ Account clear');
     expect(html).toContain("You're all set");
     expect(html).toContain('That balance is settled.');
-    expect(html).toContain('A$50.00');
+    expect(html).toContain(
+      'Your balance now covers what your consultations came to, so your account is clear. It no longer stops new bookings.'
+    );
     expect(html).toContain('Your balance is now A$110.00');
+    expect(html).toContain('View billing');
     expect(html).toContain(`${BASE}/settings/billing`);
-    // BAL-552 — the previewText no longer implies bookings were ever blocked.
     expect(html).toContain("That balance is settled — nothing's outstanding on your account");
-    expect(html).not.toMatch(/book again/i);
+    expect(html).toContain('Questions about your balance?');
   });
 
-  it('⚠ N5/L2 — attributes the figure to the CONSULTATIONS, never to the payment', async () => {
+  it('⚠ BAL-474 — names no cleared amount, no "extra time" and no "nothing else to do"', async () => {
     const text = visibleText(
       await render(React.createElement(CreditReceivableClearedEmail, props()))
     );
-    // The regression this fixes: "Your top-up covered … (A$50.00)" claimed THIS payment covered a
-    // stale receivable amount, which is false after a partial top-up.
-    expect(text).not.toMatch(/your top-?up covered/i);
-    expect(text).toMatch(/extra time still to settle from your recent consultations/i);
-    expect(text).toMatch(/covered by your balance/i);
+    // The only figure is the balance: a Σ of cleared receivables is a stale snapshot.
+    expect(text.match(/A\$[\d,]+\.\d{2}/g)).toEqual(['A$110.00']);
+    expect(text).not.toMatch(
+      /extra time|nothing else to do|still to settle|your top-?up covered|book again/i
+    );
   });
 
   it('leaks no fee / margin / overdraft / expert figure and uses no countdown language', async () => {
@@ -101,7 +105,7 @@ describe('CreditReceivableClearedEmail (BAL-535)', () => {
 });
 
 describe('getEmailTemplate — credit-receivable-cleared factory', () => {
-  it('formats both AUD figures from the payload minors and sets the resolution subject', async () => {
+  it('formats the balance from the payload minors, ignores clearedMinor, and sets the resolution subject', async () => {
     const out = getEmailTemplate('credit-receivable-cleared', {
       recipientName: 'Dana',
       clearedMinor: 5_000,
@@ -110,12 +114,11 @@ describe('getEmailTemplate — credit-receivable-cleared factory', () => {
     expect(out.subject).toBe("You're all set — your account is clear");
     const html = clean(await render(out.component));
     expect(html).toContain('Hi Dana,');
-    // `covered` comes from clearedMinor (the consultations' figure) …
-    expect(html).toContain('A$50.00');
-    // … and `balanceAfter` from the TRUE final display balance (M3).
+    // `balanceAfter` is the TRUE final display balance (M3); `clearedMinor` is analytics-only.
     expect(html).toContain('Your balance is now A$110.00');
+    expect(html).not.toContain('A$50.00');
     expect(visibleText(html)).not.toMatch(LEAK_WORDS);
-    expect(html).not.toMatch(/book again/i);
+    expect(html).not.toMatch(/book again|extra time|nothing else to do/i);
   });
 
   it('greets "there" for a name-less recipient', async () => {
@@ -136,23 +139,27 @@ describe('getEmailTemplate — credit-receivable-cleared factory', () => {
 });
 
 describe('getInAppTemplate — credit-receivable-cleared', () => {
-  it('is a warm "account clear" card with the balance and the billing CTA', () => {
+  it('is a warm "account clear" card with the balance and the billing link — verbatim', () => {
     const out = getInAppTemplate('credit-receivable-cleared', {
       clearedMinor: 5_000,
       balanceAfterMinor: 11_000,
     });
     expect(out.title).toBe('Account clear');
-    expect(out.body).toContain('A$110.00');
-    // BAL-552 — an `account_hold` never gated booking (see the component docblock), so the copy
-    // no longer implies a restriction was lifted.
-    expect(out.body).toContain("Nothing's outstanding");
-    expect(out.body).not.toMatch(/book again/i);
+    expect(out.body).toBe(
+      'Your balance now covers what your consultations came to, so it no longer stops new bookings. Your balance is now A$110.00.'
+    );
     expect(out.actionUrl).toBe('/settings/billing');
   });
 
-  it('⚠ N5/L2 — the in-app body attributes coverage to the balance, not to the payment', () => {
-    const out = getInAppTemplate('credit-receivable-cleared', { balanceAfterMinor: 0 });
-    expect(out.body).not.toMatch(/your top-?up covered/i);
+  it('⚠ BAL-474 — no cleared amount, no "extra time", no "nothing else to do"', () => {
+    const out = getInAppTemplate('credit-receivable-cleared', {
+      clearedMinor: 5_000,
+      balanceAfterMinor: 11_000,
+    });
+    expect(out.body).not.toContain('A$50.00');
+    expect(out.body).not.toMatch(
+      /extra time|nothing else to do|still to settle|nothing's outstanding|your top-?up covered|book again/i
+    );
     expect(out.body).toMatch(/your balance now covers/i);
   });
 

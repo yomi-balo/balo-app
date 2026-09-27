@@ -715,6 +715,13 @@
       "when": 1790318821619,
       "tag": "0101_bal581_meeting_outcome_venue_unavailable",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1790456815790,
+      "tag": "0102_bal474_credit_session_opened_by",
+      "breakpoints": true
     }
   ]
 }

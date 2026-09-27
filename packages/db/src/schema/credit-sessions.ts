@@ -23,6 +23,7 @@ import {
   creditDurationSourceEnum,
   creditFinalizationPathEnum,
   creditSettlementShapeEnum,
+  creditSessionOpenedByEnum,
 } from './enums';
 import { timestamps, softDelete } from './helpers';
 
@@ -95,6 +96,14 @@ export const creditSessions = pgTable(
     // `creditSessionsRepository.open` when the first CLIENT-side member is admitted to a
     // `case` meeting, so every settlement path below is now reachable in production.
     durationSource: creditDurationSourceEnum('duration_source').notNull().default('live_capture'),
+
+    // BAL-474 (ADR-1040 Amendment 7 §C) — who opened the session: `client` (a client member,
+    // BAL-466 — and every pre-BAL-474 row, hence the default), `guest` (a client-side email-invited
+    // guest's admission, on behalf of the booker) or `system` (a terminal path / the backstop, on
+    // behalf of the booker). WRITE-ONCE at `open()`, inside the wallet advisory lock; no UPDATE
+    // path sets it. Fee-safe, but deliberately on NO client/expert allow-list — it is provenance
+    // for the notify gates (D5.7) and analytics, not a surface field.
+    openedBy: creditSessionOpenedByEnum('opened_by').notNull().default('client'),
 
     // ── Snapshots (immutable for the life of the session; economics never drift) ──
     // Sizes the hold (estimated MAX cost).
@@ -204,7 +213,8 @@ export const creditSessions = pgTable(
      * settlement — and `missed_call` is ALSO a zero settlement. The two zero shapes are
      * indistinguishable on the meeting row and distinguishable ONLY here. The fourth outcome,
      * `venue_unavailable` (the call room was never ready), never reaches this column: no room
-     * means no admission, and no admission means no credit session to settle.
+     * means no admission, so no admission-opened session, and the terminal path's sessionless open
+     * (BAL-474) opens one only for a billable shape, which needs the expert to have been present.
      */
     settlementShape: creditSettlementShapeEnum('settlement_shape'),
     /**
@@ -538,3 +548,5 @@ export type CreditDurationSource = (typeof creditDurationSourceEnum.enumValues)[
 export type CreditFinalizationPath = (typeof creditFinalizationPathEnum.enumValues)[number];
 /** BAL-412 — how a presence settlement resolved (schema-derived, four shapes). */
 export type CreditSettlementShape = (typeof creditSettlementShapeEnum.enumValues)[number];
+/** BAL-474 — who opened the session (`client` / `guest` / `system`). */
+export type CreditSessionOpenedBy = (typeof creditSessionOpenedByEnum.enumValues)[number];

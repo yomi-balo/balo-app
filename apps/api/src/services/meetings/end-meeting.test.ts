@@ -8,8 +8,12 @@ const {
   mockListByMeeting,
   mockTrackServer,
   mockError,
-  mockSettleMeetingIfBillable,
+  mockWarn,
+  mockInfo,
+  mockSettleSessionlessCaseMeeting,
   mockEnqueueRecordingStop,
+  mockHasOwnClientInterval,
+  mockFindMeetingById,
 } = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockResolveEndAuthority: vi.fn(),
@@ -18,20 +22,31 @@ const {
   mockListByMeeting: vi.fn(),
   mockTrackServer: vi.fn(),
   mockError: vi.fn(),
-  mockSettleMeetingIfBillable: vi.fn(),
+  mockWarn: vi.fn(),
+  mockInfo: vi.fn(),
+  mockSettleSessionlessCaseMeeting: vi.fn(),
   mockEnqueueRecordingStop: vi.fn(),
+  // BAL-474 (D6.4, V2-F2) — the presence precondition and the re-read behind it.
+  mockHasOwnClientInterval: vi.fn(),
+  mockFindMeetingById: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockError }),
+  createLogger: () => ({ debug: vi.fn(), info: mockInfo, warn: mockWarn, error: mockError }),
 }));
 vi.mock('@balo/db', () => ({
-  meetingsRepository: { endMeeting: mockEndMeeting },
-  meetingPresenceRepository: { listByMeeting: mockListByMeeting },
+  meetingsRepository: { endMeeting: mockEndMeeting, findById: mockFindMeetingById },
+  meetingPresenceRepository: {
+    listByMeeting: mockListByMeeting,
+    hasOwnClientInterval: mockHasOwnClientInterval,
+  },
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
-  MEETING_SERVER_EVENTS: { MEETING_ENDED: 'meeting_ended' },
+  MEETING_SERVER_EVENTS: {
+    MEETING_ENDED: 'meeting_ended',
+    MEETING_END_REFUSED: 'meeting_end_refused',
+  },
 }));
 vi.mock('./authorize-meeting-participation.js', () => ({
   authorizeMeetingParticipation: mockAuthorizeParticipation,
@@ -40,10 +55,11 @@ vi.mock('./authorize-end-meeting.js', () => ({
   resolveEndAuthority: mockResolveEndAuthority,
   logEndAuthorityDenied: mockLogDenied,
 }));
-// BAL-412 — INERT on main (D10). Mocked so this suite stays focused on the human-end sequence;
-// the settlement wrapper's own behaviour is covered in `settle-from-presence.test.ts`.
-vi.mock('../credit-session/settle-from-presence.js', () => ({
-  settleMeetingIfBillable: mockSettleMeetingIfBillable,
+// BAL-412 → BAL-474 — mocked so this suite stays focused on the human-end sequence; the sessionless
+// settlement service's own behaviour is covered in `settle-sessionless-case-meeting.test.ts` and the
+// presence wrapper's in `settle-from-presence.test.ts`.
+vi.mock('../credit-session/settle-sessionless-case-meeting.js', () => ({
+  settleSessionlessCaseMeeting: mockSettleSessionlessCaseMeeting,
 }));
 // BAL-473 — the recording-stop enqueue at the RECORDING_FINALIZATION_SEAM. Mocked so this
 // suite stays focused on the human-end sequence; the job's own behaviour is covered in
@@ -120,8 +136,14 @@ describe('endMeeting (BAL-134 §5.4)', () => {
       { party: 'expert', joinedAt: START, leftAt: NOW },
       { party: 'client', joinedAt: new Date(START.getTime() + 300_000), leftAt: NOW },
     ]);
-    // BAL-412 — INERT on main (D10): every meeting today resolves `no_meeting`.
-    mockSettleMeetingIfBillable.mockResolvedValue({ ok: false, code: 'no_meeting' });
+    // BAL-474 — a meeting with no session and nothing owed (a zero shape, or not a Case).
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'not_a_case_meeting',
+    });
+    // BAL-474 (D6.4) — the default client principal HAS joined; the never-joined cases override it.
+    mockHasOwnClientInterval.mockResolvedValue(true);
+    mockFindMeetingById.mockResolvedValue(meetingRow());
   });
 
   // ── AUTHORIZATION ───────────────────────────────────────────────────────────────────────
@@ -193,7 +215,12 @@ describe('endMeeting (BAL-134 §5.4)', () => {
 
     expect(mockEndMeeting).not.toHaveBeenCalled();
     expect(teardown.calls).toEqual([]);
-    expect(mockTrackServer).not.toHaveBeenCalled();
+    // Nothing is tracked as ENDED — only the refusal itself (BAL-474: `meeting_end_refused`).
+    expect(mockTrackServer).not.toHaveBeenCalledWith('meeting_ended', expect.anything());
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_end_refused',
+      expect.objectContaining({ reason: 'meeting_not_started' })
+    );
   });
 
   /**
@@ -401,12 +428,39 @@ describe('endMeeting (BAL-134 §5.4)', () => {
       // Expert 10:00→11:00 = 3600s; both present from 10:05 = 3300s.
       billable_seconds: 3300,
       expert_present_seconds: 3600,
+      // RULE A — both first present at/after the start, so nothing was together BEFORE it.
+      billable_before_start_seconds: 0,
       participant_count: 2,
       outcome: null,
       ended_by: 'client_principal',
       // ⚠ THE ACTING USER on a human end.
       distinct_id: USER_ID,
     });
+  });
+
+  it('⚠ Rule A — presence is read at its TRUE instants: the two clocks stay start-clamped, and `billable_before_start_seconds` is the time TOGETHER before the start', async () => {
+    // Expert 09:50→11:00 and client 09:55→11:00 against a 10:00 start: 5 minutes together before it.
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: new Date(START.getTime() - 600_000), leftAt: NOW },
+      { party: 'client', joinedAt: new Date(START.getTime() - 300_000), leftAt: NOW },
+    ]);
+
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_ended',
+      expect.objectContaining({
+        // Clamped to the start, exactly as before: 10:00→11:00 for both.
+        billable_seconds: 3600,
+        expert_present_seconds: 3600,
+        billable_before_start_seconds: 300,
+      })
+    );
   });
 
   it('reports zero clocks for a meeting nobody ever joined', async () => {
@@ -431,7 +485,7 @@ describe('endMeeting (BAL-134 §5.4)', () => {
 
   // ── BAL-412 — PRESENCE SETTLEMENT, BEST-EFFORT AND NON-FATAL ────────────────────────────
 
-  it('calls settleMeetingIfBillable with the ended meeting id and the ACTING user (not null)', async () => {
+  it('settles through settleSessionlessCaseMeeting with the ended meeting id, the human_end trigger and the ACTING user (not null)', async () => {
     await endMeeting({
       meetingId: MEETING_ID,
       userId: USER_ID,
@@ -439,14 +493,15 @@ describe('endMeeting (BAL-134 §5.4)', () => {
       now: NOW,
     });
 
-    expect(mockSettleMeetingIfBillable).toHaveBeenCalledWith({
+    expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalledWith({
       meetingId: MEETING_ID,
+      trigger: 'human_end',
       actorUserId: USER_ID,
     });
   });
 
   it('⚠ a SETTLEMENT FAILURE still returns success, and logs at error (never fails the End request)', async () => {
-    mockSettleMeetingIfBillable.mockRejectedValue(new Error('settlement boom'));
+    mockSettleSessionlessCaseMeeting.mockRejectedValue(new Error('settlement boom'));
 
     await expect(
       endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
@@ -456,6 +511,96 @@ describe('endMeeting (BAL-134 §5.4)', () => {
       expect.objectContaining({ meetingId: MEETING_ID }),
       expect.stringContaining('Presence settlement failed')
     );
+  });
+
+  it('a DEFERRED sessionless settlement logs a warn — the backstop owns the retry — and still succeeds', async () => {
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'deferred',
+      reason: 'session_in_progress',
+      outcome: 'no_show_client',
+    });
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toMatchObject({ ok: true, alreadyEnded: false });
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, kind: 'deferred' }),
+      expect.stringContaining('sessionless-meeting backstop retries it')
+    );
+  });
+
+  it('a REFUSED sessionless settlement logs a warn (the refusal already alarmed inside) and still succeeds', async () => {
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'refused',
+      reason: 'booker_unattributable',
+    });
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toMatchObject({ ok: true });
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'refused', reason: 'booker_unattributable' }),
+      expect.stringContaining(
+        'permanent: the meeting is marked and the refusal alarmed, and nothing retries it'
+      )
+    );
+    // A refusal is permanent — the log must never promise a backstop retry.
+    expect(mockWarn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('backstop')
+    );
+  });
+
+  it.each(['released_closed_case_no_show', 'released_expert_invited_guest_only'])(
+    '⚠ BAL-474 — `%s` is TERMINAL: an info line, never a "backstop will retry" warn',
+    async (code) => {
+      mockSettleSessionlessCaseMeeting.mockResolvedValue({
+        kind: 'settled_existing_session',
+        outcome: { ok: false, code },
+      });
+      await endMeeting({
+        meetingId: MEETING_ID,
+        userId: USER_ID,
+        teardown: fakeTeardown(),
+        now: NOW,
+      });
+      expect(mockInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, code }),
+        expect.stringContaining('released on the human End path')
+      );
+      expect(mockWarn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('Presence settlement declined')
+      );
+    }
+  );
+
+  it('a DECLINED presence settlement of an existing session logs a warn, except no_meeting', async () => {
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'settled_existing_session',
+      outcome: { ok: false, code: 'meeting_not_terminal' },
+    });
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, code: 'meeting_not_terminal' }),
+      expect.stringContaining('Presence settlement declined')
+    );
+
+    mockWarn.mockClear();
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'settled_existing_session',
+      outcome: { ok: false, code: 'no_meeting' },
+    });
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 
   it('does not call settlement on the idempotent already-ended branch', async () => {
@@ -468,7 +613,188 @@ describe('endMeeting (BAL-134 §5.4)', () => {
       now: NOW,
     });
 
-    expect(mockSettleMeetingIfBillable).not.toHaveBeenCalled();
+    expect(mockSettleSessionlessCaseMeeting).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-474 (D6.4, ADR-1040 Amendment 7 §C step 7, D8.7) — A CLIENT PRINCIPAL WHO NEVER JOINED CANNOT END ──
+
+describe('endMeeting — the presence precondition (BAL-474, D6.4 / D8.7)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuthorizeParticipation.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      meeting: meetingRow(),
+      subject: { contextType: 'case', contextId: 'ctx-1' },
+      companyId: 'company-1',
+      expertProfileId: null,
+    });
+    mockResolveEndAuthority.mockResolvedValue({
+      canEndMeeting: true,
+      endedBy: 'client_principal',
+      isExpertHost: false,
+      isClientPrincipal: true,
+    });
+    mockEndMeeting.mockResolvedValue({
+      meeting: meetingRow({ status: 'ended', endedAt: NOW, endedBy: 'client_principal' }),
+      closedIntervals: 2,
+    });
+    mockListByMeeting.mockResolvedValue([]);
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'not_a_case_meeting',
+    });
+    mockHasOwnClientInterval.mockResolvedValue(true);
+    mockFindMeetingById.mockResolvedValue(meetingRow());
+  });
+
+  it('⚠⚠ a client principal with NO client presence of their own ⇒ meeting_not_joined; nothing is ended, torn down, tracked as ended or settled', async () => {
+    mockHasOwnClientInterval.mockResolvedValue(false);
+    const teardown = fakeTeardown();
+
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown, now: NOW })
+    ).resolves.toEqual({ ok: false, code: 'meeting_not_joined' });
+
+    expect(mockHasOwnClientInterval).toHaveBeenCalledWith(MEETING_ID, USER_ID);
+    expect(mockEndMeeting).not.toHaveBeenCalled();
+    expect(teardown.calls).toEqual([]);
+    expect(mockEnqueueRecordingStop).not.toHaveBeenCalled();
+    expect(mockSettleSessionlessCaseMeeting).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalledWith('meeting_ended', expect.anything());
+    expect(mockInfo).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, userId: USER_ID },
+      'Meeting end refused — the client member has not joined this meeting'
+    );
+  });
+
+  it('the refusal emits meeting_end_refused with the reason and the ender arm (the friction measure)', async () => {
+    mockHasOwnClientInterval.mockResolvedValue(false);
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+    expect(mockTrackServer).toHaveBeenCalledWith('meeting_end_refused', {
+      meeting_id: MEETING_ID,
+      reason: 'meeting_not_joined',
+      ended_by: 'client_principal',
+      distinct_id: USER_ID,
+    });
+  });
+
+  it('⚠ D8.7 — a never-joined principal on a meeting the gate ALREADY READ AS ENDED gets the idempotent 200, and the presence read is never made', async () => {
+    mockHasOwnClientInterval.mockResolvedValue(false);
+    mockAuthorizeParticipation.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      meeting: meetingRow({ status: 'ended', endedAt: NOW }),
+      subject: { contextType: 'case', contextId: 'ctx-1' },
+      companyId: 'company-1',
+      expertProfileId: null,
+    });
+    // The compare-and-set answers "already terminal".
+    mockEndMeeting.mockResolvedValue(undefined);
+
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toEqual({ ok: true, status: 'ended', alreadyEnded: true, endedBy: null });
+    expect(mockHasOwnClientInterval).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('⚠ D8.7 — the meeting ENDS between the gate’s read and step 3c (the re-read says ended) ⇒ 200 alreadyEnded, never the "not joined" refusal', async () => {
+    mockHasOwnClientInterval.mockResolvedValue(false);
+    mockFindMeetingById.mockResolvedValue(meetingRow({ status: 'ended', endedAt: NOW }));
+
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toEqual({ ok: true, status: 'ended', alreadyEnded: true, endedBy: null });
+    expect(mockEndMeeting).not.toHaveBeenCalled();
+    expect(mockInfo).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, userId: USER_ID },
+      'Meeting end was a no-op — already terminal'
+    );
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('a `cancelled` meeting is terminal too — the idempotent success, not the refusal', async () => {
+    mockHasOwnClientInterval.mockResolvedValue(false);
+    mockFindMeetingById.mockResolvedValue(meetingRow({ status: 'cancelled' }));
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toMatchObject({ ok: true, alreadyEnded: true });
+  });
+
+  it('a principal whose closed interval exists ends the meeting — open or closed, any length', async () => {
+    mockHasOwnClientInterval.mockResolvedValue(true);
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toMatchObject({ ok: true, alreadyEnded: false, endedBy: 'client_principal' });
+    expect(mockEndMeeting).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ an EXPERT HOST with no presence at all ends the meeting, and the presence check is never made', async () => {
+    mockResolveEndAuthority.mockResolvedValue({
+      canEndMeeting: true,
+      endedBy: 'expert_host',
+      isExpertHost: true,
+      isClientPrincipal: false,
+    });
+    mockEndMeeting.mockResolvedValue({
+      meeting: meetingRow({ status: 'ended', endedAt: NOW, endedBy: 'expert_host' }),
+      closedIntervals: 0,
+    });
+    mockHasOwnClientInterval.mockResolvedValue(false);
+
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toMatchObject({ ok: true, endedBy: 'expert_host' });
+    expect(mockHasOwnClientInterval).not.toHaveBeenCalled();
+  });
+
+  it('⚠ the TIE (a holder of both arms) is stamped expert_host by the authority, so 3c never checks them', async () => {
+    // `endedByForActor` makes the expert arm win a tie; this service keys 3c on the stamped label.
+    mockResolveEndAuthority.mockResolvedValue({
+      canEndMeeting: true,
+      endedBy: 'expert_host',
+      isExpertHost: true,
+      isClientPrincipal: true,
+    });
+    mockEndMeeting.mockResolvedValue({
+      meeting: meetingRow({ status: 'ended', endedAt: NOW, endedBy: 'expert_host' }),
+      closedIntervals: 0,
+    });
+    mockHasOwnClientInterval.mockResolvedValue(false);
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toMatchObject({ ok: true });
+    expect(mockHasOwnClientInterval).not.toHaveBeenCalled();
+  });
+
+  it('⚠ the ORDER — a never-joined principal who presses End BEFORE the start still gets meeting_not_started, and is measured', async () => {
+    mockHasOwnClientInterval.mockResolvedValue(false);
+    const future = new Date(START.getTime() + 3 * 24 * 3_600_000);
+    mockAuthorizeParticipation.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      meeting: meetingRow({ status: 'scheduled', scheduledStart: future, startedAt: null }),
+      subject: { contextType: 'case', contextId: 'ctx-1' },
+      companyId: 'company-1',
+      expertProfileId: null,
+    });
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown: fakeTeardown(), now: NOW })
+    ).resolves.toEqual({ ok: false, code: 'meeting_not_started' });
+    expect(mockHasOwnClientInterval).not.toHaveBeenCalled();
+    expect(mockTrackServer).toHaveBeenCalledWith('meeting_end_refused', {
+      meeting_id: MEETING_ID,
+      reason: 'meeting_not_started',
+      ended_by: 'client_principal',
+      distinct_id: USER_ID,
+    });
   });
 });
 

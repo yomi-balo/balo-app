@@ -21,7 +21,7 @@ const {
   mockWarn,
   mockErrorLog,
   mockInfo,
-  mockSettleMeetingIfBillable,
+  mockSettleSessionlessCaseMeeting,
   mockEnqueueRecordingEnsure,
   mockEnqueueRecordingStop,
   mockFindCapturingForMeeting,
@@ -47,7 +47,7 @@ const {
   mockWarn: vi.fn(),
   mockErrorLog: vi.fn(),
   mockInfo: vi.fn(),
-  mockSettleMeetingIfBillable: vi.fn(),
+  mockSettleSessionlessCaseMeeting: vi.fn(),
   mockEnqueueRecordingEnsure: vi.fn(),
   mockEnqueueRecordingStop: vi.fn(),
   mockFindCapturingForMeeting: vi.fn(),
@@ -104,10 +104,11 @@ vi.mock('../services/meetings/delivering-party.js', () => ({
   deliveringPartyName: mockDeliveringPartyName,
 }));
 vi.mock('../services/meetings/end-meeting.js', () => ({ emitMeetingEnded: mockEmitMeetingEnded }));
-// BAL-412 — INERT on main (D10). Mocked so this suite stays focused on the sweep's own three
-// passes; the settlement wrapper's own behaviour is covered in `settle-from-presence.test.ts`.
-vi.mock('../services/credit-session/settle-from-presence.js', () => ({
-  settleMeetingIfBillable: mockSettleMeetingIfBillable,
+// BAL-412 → BAL-474. Mocked so this suite stays focused on the sweep's own three passes; the
+// sessionless settlement service's own behaviour is covered in
+// `settle-sessionless-case-meeting.test.ts`, the presence wrapper's in `settle-from-presence.test.ts`.
+vi.mock('../services/credit-session/settle-sessionless-case-meeting.js', () => ({
+  settleSessionlessCaseMeeting: mockSettleSessionlessCaseMeeting,
 }));
 vi.mock('../notifications/scheduling/meeting-absence.js', () => ({
   scheduleExpertAbsentAlert: mockScheduleExpertAbsent,
@@ -218,7 +219,11 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     // ⚠ BAL-466 wires the enabling condition; `no_meeting` is still the default here because
     // most fixtures in this file are non-`case` / unfunded meetings, not because settlement is
     // globally inert.
-    mockSettleMeetingIfBillable.mockResolvedValue({ ok: false, code: 'no_meeting' });
+    // BAL-474 — nothing owed by default (a zero shape, or not a Case meeting).
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'not_a_case_meeting',
+    });
     // BAL-480 — no capturing segment by default; individual tests override to exercise the
     // level-triggered gate.
     mockFindCapturingForMeeting.mockResolvedValue(undefined);
@@ -269,6 +274,25 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
         limit: MEETING_LIFECYCLE_BATCH_LIMIT,
         oldestScheduledStart: START.toISOString(),
       }),
+      expect.stringContaining('FILLED')
+    );
+  });
+
+  it('⚠ R6F-15 — the full-batch warn names the OLDEST start in the batch, though the batch is ranked by status first', async () => {
+    const oldest = new Date(START.getTime() - 3 * 60 * 60_000);
+    mockListCandidates.mockResolvedValue([
+      // An in_progress call that started EARLY comes first; the oldest meeting is later in the batch.
+      meeting({ id: 'early-call', status: 'in_progress', scheduledStart: at(45) }),
+      ...Array.from({ length: MEETING_LIFECYCLE_BATCH_LIMIT - 2 }, (_unused, index) =>
+        meeting({ id: `meeting-${index}`, status: 'scheduled' })
+      ),
+      meeting({ id: 'oldest', status: 'scheduled', scheduledStart: oldest }),
+    ]);
+
+    await runMeetingLifecycleSweep(at(1), () => {}, EMPTY_READER);
+
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ oldestScheduledStart: oldest.toISOString() }),
       expect.stringContaining('FILLED')
     );
   });
@@ -601,10 +625,11 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
    * that has exhausted `MAX_DAILY_FAILURES_PER_MEETING` returns from `handleEnsure`'s step 5.5
    * WITHOUT inserting, so it never acquires a capturing row, so the two cheap checks answer
    * `true` for it on EVERY subsequent tick for the rest of its life. `listLifecycleCandidates`
-   * orders `asc(scheduledStart), asc(id)` — stable — so without this term twenty permanently
-   * -capped meetings would occupy the whole per-tick budget forever and no later meeting's
-   * self-heal would ever run. Post-outage, that is exactly when the budget must reach the
-   * meetings that are still recoverable.
+   * orders by status rank first (`in_progress`, then `waiting_for_participants`, then `scheduled`,
+   * R6F-15), then `asc(scheduledStart), asc(id)` within each rank — stable — so without this term
+   * twenty permanently-capped `in_progress` meetings would occupy the whole per-tick budget
+   * forever and no later meeting's self-heal would ever run. Post-outage, that is exactly when the
+   * budget must reach the meetings that are still recoverable.
    */
   it('⚠⚠ BAL-480 — a meeting AT the Daily failure cap is not enqueued (no budget starvation)', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
@@ -1283,12 +1308,46 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     const result = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
 
     expect(result.terminated).toBe(1);
-    expect(mockSettleMeetingIfBillable).toHaveBeenCalledWith({
+    expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalledWith({
       meetingId: MEETING_ID,
+      trigger: 'lifecycle_sweep',
       actorUserId: null,
       now: at(35),
     });
   });
+
+  // BAL-474 (D5.3) — every terminal rule (idle end, no-show, missed call, abandoned wait and
+  // BAL-581's venue unavailable) reaches the same call: the service decides from the shape whether
+  // anything is owed. The rows are the five terminal rules' own arrangements (`TERMINAL_ROWS`), so a
+  // rule added or changed there is covered here too.
+  it.each(TERMINAL_ROWS)(
+    '⚠ the $label rule settles through the sessionless service (keyed on the presence shape, not the rule)',
+    async (rowSpec) => {
+      const candidate = meeting({ status: rowSpec.status, ...rowSpec.meeting });
+      mockListCandidates.mockResolvedValue([candidate]);
+      mockListByMeeting.mockResolvedValue(rowSpec.intervals);
+      if (rowSpec.meeting !== undefined) {
+        // The venue rule re-reads the row before ending it; the re-read and the CAS row must carry
+        // the candidate's own venue facts (see the `TERMINAL_ROWS` test above).
+        mockFindMeetingById.mockResolvedValue(candidate);
+        mockEndMeeting.mockResolvedValue({
+          meeting: { ...candidate, status: 'ended' },
+          closedIntervals: 0,
+        });
+      }
+
+      const result = await runMeetingLifecycleSweep(at(rowSpec.nowMinutes), () => {}, EMPTY_READER);
+
+      expect(result.terminated).toBe(1);
+      expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalledTimes(1);
+      expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        trigger: 'lifecycle_sweep',
+        actorUserId: null,
+        now: at(rowSpec.nowMinutes),
+      });
+    }
+  );
 
   it('⚠ a SETTLEMENT FAILURE does not abort the sweep tick — logs at error and continues', async () => {
     mockListCandidates.mockResolvedValue([
@@ -1299,7 +1358,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       { party: 'expert', joinedAt: START, leftAt: at(30) },
       { party: 'client', joinedAt: at(2), leftAt: at(30) },
     ]);
-    mockSettleMeetingIfBillable.mockRejectedValueOnce(new Error('settlement boom'));
+    mockSettleSessionlessCaseMeeting.mockRejectedValueOnce(new Error('settlement boom'));
 
     const result = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
 
@@ -1316,7 +1375,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
 
     await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
 
-    expect(mockSettleMeetingIfBillable).not.toHaveBeenCalled();
+    expect(mockSettleSessionlessCaseMeeting).not.toHaveBeenCalled();
   });
 
   it('BAL-466 — a candidate whose meeting has a presence session settles, actorUserId: null', async () => {
@@ -1325,17 +1384,17 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       { party: 'expert', joinedAt: START, leftAt: at(30) },
       { party: 'client', joinedAt: at(2), leftAt: at(30) },
     ]);
-    mockSettleMeetingIfBillable.mockResolvedValue({
-      ok: true,
-      settlement: { shape: 'held' },
-      result: {},
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'settled_existing_session',
+      outcome: { ok: true, settlement: { shape: 'held' }, result: {} },
     });
 
     const result = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
 
     expect(result.terminated).toBe(1);
-    expect(mockSettleMeetingIfBillable).toHaveBeenCalledWith({
+    expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalledWith({
       meetingId: MEETING_ID,
+      trigger: 'lifecycle_sweep',
       actorUserId: null,
       now: at(35),
     });
@@ -1347,7 +1406,10 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       { party: 'expert', joinedAt: START, leftAt: at(30) },
       { party: 'client', joinedAt: at(2), leftAt: at(30) },
     ]);
-    mockSettleMeetingIfBillable.mockResolvedValue({ ok: false, code: 'already_settled' });
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'settled_existing_session',
+      outcome: { ok: false, code: 'already_settled' },
+    });
 
     const result = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
 
@@ -1357,6 +1419,59 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       expect.stringContaining('Presence settlement declined')
     );
   });
+
+  it.each(['released_closed_case_no_show', 'released_expert_invited_guest_only'])(
+    '⚠ BAL-474 — `%s` is TERMINAL on the sweep too: an info line, never a "backstop will retry" warn',
+    async (code) => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'waiting_for_participants' })]);
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: START, leftAt: null }]);
+      mockSettleSessionlessCaseMeeting.mockResolvedValue({
+        kind: 'settled_existing_session',
+        outcome: { ok: false, code },
+      });
+
+      const swept = await runMeetingLifecycleSweep(at(15), () => {}, EMPTY_READER);
+
+      expect(swept.terminated).toBe(1);
+      expect(mockInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, code }),
+        expect.stringContaining('released on the lifecycle sweep')
+      );
+      expect(mockWarn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('Presence settlement declined')
+      );
+    }
+  );
+
+  it.each([
+    [
+      { kind: 'deferred', reason: 'session_in_progress', outcome: 'no_show_client' },
+      'settlement deferred on the lifecycle sweep — the meter sweep sessionless-meeting backstop retries it',
+    ],
+    [
+      { kind: 'refused', reason: 'booker_unattributable' },
+      'settlement refused on the lifecycle sweep — permanent: the meeting is marked and the refusal alarmed, and nothing retries it',
+    ],
+  ])(
+    'a %j sessionless result logs its OWN warn (a deferral is retried, a refusal never is) — the sweep tick still succeeds',
+    async (result, message) => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+      mockListByMeeting.mockResolvedValue([
+        { party: 'expert', joinedAt: START, leftAt: at(30) },
+        { party: 'client', joinedAt: at(2), leftAt: at(30) },
+      ]);
+      mockSettleSessionlessCaseMeeting.mockResolvedValue(result);
+
+      const swept = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
+
+      expect(swept.terminated).toBe(1);
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, kind: result.kind }),
+        expect.stringContaining(message)
+      );
+    }
+  );
 });
 
 describe('the sweep cadence', () => {

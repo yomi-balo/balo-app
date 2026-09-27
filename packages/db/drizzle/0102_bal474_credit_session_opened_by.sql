@@ -1,0 +1,2 @@
+CREATE TYPE "public"."credit_session_opened_by" AS ENUM('client', 'guest', 'system');--> statement-breakpoint
+ALTER TABLE "credit_sessions" ADD COLUMN "opened_by" "credit_session_opened_by" DEFAULT 'client' NOT NULL;

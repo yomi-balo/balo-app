@@ -292,6 +292,11 @@ async function publishGuestRescheduledNotifications(
  * held by exactly the same legitimate participants. Build no revocation cascade.
  *
  * ── POST-COMMIT (never inside `updateSchedule`'s transaction) ──────────────────────────────
+ *   5b. `releaseCreditHoldBestEffort` (BAL-474, D11.2) — a call moved out no longer needs the pending
+ *      presence session and hold an in-window admission opened for its OLD time, and nothing else would
+ *      free them (a `scheduled` meeting is invisible to every sweep that settles or cancels). The
+ *      meeting-lifecycle stays `scheduled`, so the release is a plain `pending → cancelled`; the
+ *      meter-sweep `beyond_window` pass is the backstop if this best-effort call fails.
  *   6. `afterMeetingMutation` — the availability-cache rebuild (already shared with every
  *      other mutator; not duplicated here).
  *   7. `enqueueMeetingCalendarAmend` — the retrying, converging Apiroc amend (§4). Enqueued
@@ -314,6 +319,11 @@ export async function rescheduleMeeting(
     await meetingsRepository.updateSchedule(meetingId, schedule, { actorUserId }),
     log
   );
+
+  // BAL-474 (D11.2, security N2) — release the never-connected presence session (and its hold) that an
+  // in-window admission opened for the OLD time. Best-effort and non-fatal: the reschedule already
+  // committed, and the meter sweep's beyond-window pass retries.
+  await releaseCreditHoldBestEffort(meetingId, log);
 
   if (result.expertProfileId !== null) {
     await enqueueMeetingCalendarAmend(
@@ -388,7 +398,9 @@ export async function rescheduleMeeting(
 }
 
 /**
- * BAL-410 — POST-COMMIT, BEST-EFFORT: cancel any live credit session bound to this meeting.
+ * BAL-410 — POST-COMMIT, BEST-EFFORT: cancel any live credit session bound to this meeting. It runs on the
+ * CANCEL path and, since BAL-474 (D11.2), on the RESCHEDULE path too: a call that moved out no longer needs its
+ * pending session's hold.
  * **THE MOST IMPORTANT LINE OF THE CANCEL PATH, and the one with nothing on screen to prove it
  * ran.**
  *
@@ -396,8 +408,9 @@ export async function rescheduleMeeting(
  * ADMISSION (`join-meeting.ts` → `openCaseSessionBestEffort`), with `durationSource: 'presence'`
  * and an ACTIVE HOLD — and admission does NOT change `meetings.status`
  * (`presence-writer.ts` writes the `scheduled → waiting_for_participants` flip, on real Daily
- * presence). `assertMeetingJoinable` has no early-join lower bound; the 15-minute gate is a UI
- * affordance. So a `status='scheduled'` meeting CAN already carry a `pending` presence session
+ * presence). `assertMeetingJoinable` refuses a join earlier than `CASE_JOIN_WINDOW_MINUTES` (3) before the
+ * start (D16), so an admission is at most that far ahead — but that is still BEFORE the start. So a
+ * `status='scheduled'` meeting CAN already carry a `pending` presence session
  * holding live credit, and `meetingsRepository.cancel` accepts exactly that meeting.
  *
  * ⚠⚠ AND NOTHING ELSE WOULD EVER CLEAN IT UP. `findStalePending` excludes
@@ -453,10 +466,11 @@ async function releaseCreditHoldBestEffort(
     return session.holdId !== null;
   } catch (error) {
     if (error instanceof InvalidSessionTransitionError) {
-      // ⚠⚠ STRUCTURALLY UNREACHABLE, AND LOUD BECAUSE OF IT. A session becomes `active` only
-      // via `connect`, whose only production call sites require the meeting to be ALREADY
-      // `in_progress`; this repository's CAS requires `scheduled`, and Postgres serialises the
-      // two writes on the same row. So a metering session here is an INVARIANT VIOLATION to
+      // ⚠⚠ STRUCTURALLY UNREACHABLE, AND LOUD BECAUSE OF IT. A session becomes `active` only via
+      // `connect`, whose only production caller is the start-billing seam (`start-billing.ts`), and that
+      // seam runs only for a meeting the presence writer has already moved to `in_progress` and never
+      // before its scheduled start; a cancel or reschedule needs `scheduled`, and Postgres serialises
+      // the two writes on the same row. So a metering session here is an INVARIANT VIOLATION to
       // investigate, not a state to recover: a metering session means the call is underway,
       // which is the NO-SHOW / SETTLEMENT path (BAL-412), not cancellation. We do NOT
       // special-case it and we do NOT force it — the backstop sweep will not touch a
@@ -467,7 +481,7 @@ async function releaseCreditHoldBestEffort(
           errorName: error.name,
           error: error.message,
         },
-        'Credit session for a cancelled meeting was not pending — INVARIANT VIOLATION, not settled here (BAL-412 owns settlement)'
+        'Credit session for a cancelled or rescheduled meeting was not pending — INVARIANT VIOLATION, not settled here (BAL-412 owns settlement)'
       );
       return false;
     }
@@ -478,7 +492,7 @@ async function releaseCreditHoldBestEffort(
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       },
-      'Credit session release failed after a cancellation — the backstop sweep will retry'
+      'Credit session release failed after a cancellation or reschedule — the backstop sweep will retry'
     );
     return false;
   }

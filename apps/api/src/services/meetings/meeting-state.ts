@@ -18,13 +18,20 @@
  * render neutral copy. No new guest surface is opened here.
  */
 import {
+  companiesRepository,
   meetingPresenceRepository,
   meetingsRepository,
+  usersRepository,
   type MeetingEndedBy as DbMeetingEndedBy,
   type MeetingStatus as DbMeetingStatus,
 } from '@balo/db';
+import { billingBasisMs, caseClosedBeforeStart, caseClosureNames } from '@balo/shared/credit';
+import { createLogger } from '@balo/shared/logging';
 import {
+  clampIntervalsToStart,
+  coPresentMsBefore,
   computeMeetingClocks,
+  expertPresentFromStartMs,
   meetingVenueReadyAt,
   resolveWaitingPhase,
   summarisePresence,
@@ -35,7 +42,11 @@ import {
   type MeetingViewerRole,
   type MeetingWaitingPhase,
 } from '@balo/shared/meetings';
+import { resolveCaseBillingSubject } from '../credit-session/case-billing-subject.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
+import { deliveringExpertUserId } from './delivering-party.js';
+
+const log = createLogger('meeting-state');
 
 /**
  * ⚠⚠ THE DRIFT GUARDS FOR `@balo/shared/meetings`'s HAND-RESTATED ENUM LABELS.
@@ -63,6 +74,11 @@ export type AssertMeetingLifecycleLabelsMatch = [
   AssertNever<StrayEndedByLabel>,
 ];
 
+export interface CaseClosureView {
+  readonly closedByFirstName: string | null;
+  readonly companyName: string | null;
+}
+
 /** ⚠ ONE DENIAL LITERAL. There is no `403` anywhere on `/meetings/*`. */
 export type MeetingStateErrorCode = 'meeting_not_found';
 
@@ -75,7 +91,32 @@ export interface MeetingStateView {
   readonly viewerRole: MeetingViewerRole;
   /** ⚠ SERVER-COMPUTED. See the module docblock. */
   readonly phase: MeetingWaitingPhase;
+  /**
+   * The two clocks over presence CLAMPED to the scheduled start (BAL-134's R10 rule, applied at read
+   * time since BAL-474 Rule A stores presence at its true instants) — bit-for-bit what this route always
+   * sent, so an older web build keeps showing today's values.
+   */
   readonly clocks: MeetingClocks;
+  /**
+   * BAL-474 (Rule A, D13) — what the bill would be RIGHT NOW, pre-floor and pre-cap, plus whether it is
+   * still growing. `soFarMs` is {@link billingBasisMs}: the time the expert and a client-side participant
+   * were really TOGETHER before the start, plus BAL-412's from-start figure (a lone expert's own wait from
+   * the start is what the amber "counted" chip shows). `running` is `expertOpen && (clientOpen || now >=
+   * start)`: the chip ticks only while the room is producing time. Optional on the web parse, so either
+   * deploy order is safe.
+   */
+  readonly billingClock: { readonly soFarMs: number; readonly running: boolean };
+  /**
+   * BAL-474 (R6-C3, owner-approved) — the case-closed-before-the-start read the expert's waiting and ended
+   * screens render, or `null`. `null` is the overwhelmingly common answer.
+   *
+   * ⚠ IT IS COMPUTED ONLY WHEN ALL OF THESE HOLD, and never on a live `in_progress` poll: the viewer is the
+   * DELIVERING expert; no client-side participant was ever present; the meeting is pre-`in_progress`, or
+   * `ended` with outcome `no_show_client`. Then `resolveCaseBillingSubject(…, { requireActive: false })` →
+   * `caseClosedBeforeStart` → the closer's FIRST name and the company's name (two primary-key reads). Both
+   * names are individually nullable (an inactivity-sweep close has no human closer).
+   */
+  readonly caseClosure: CaseClosureView | null;
   /**
    * The instant the clocks were measured at.
    *
@@ -130,6 +171,65 @@ export interface GetMeetingStateInput {
 
 const MS_PER_MINUTE = 60_000;
 
+/** The statuses R6-C3 can be true in, before the cheap presence gate: pre-start, or the voided no-show end. */
+function caseClosureCanApply(status: MeetingLifecycleStatus, outcome: string | null): boolean {
+  if (status === 'ended') {
+    return outcome === 'no_show_client';
+  }
+  return status === 'scheduled' || status === 'waiting_for_participants';
+}
+
+/**
+ * BAL-474 (R6-C3) — see {@link MeetingStateView.caseClosure}. The gates are ordered cheapest-first and run
+ * BEFORE any read, so a live `in_progress` poll (and every client viewer) costs nothing here. Never throws
+ * into the poll: a failed read degrades to `null` (the expert then sees the ordinary waiting copy).
+ */
+async function readCaseClosure(input: {
+  readonly meetingId: string;
+  readonly userId: string;
+  readonly viewerRole: MeetingViewerRole;
+  readonly status: MeetingLifecycleStatus;
+  readonly outcome: string | null;
+  readonly clientSideEverPresent: boolean;
+  readonly scheduledStart: Date;
+}): Promise<CaseClosureView | null> {
+  if (
+    input.viewerRole !== 'expert' ||
+    input.clientSideEverPresent ||
+    !caseClosureCanApply(input.status, input.outcome)
+  ) {
+    return null;
+  }
+  try {
+    const subject = await resolveCaseBillingSubject(input.meetingId, { requireActive: false });
+    if (subject === undefined || !caseClosedBeforeStart(subject, input.scheduledStart)) {
+      return null;
+    }
+    // The DELIVERING expert only: an agency admin who can act on the meeting is not who the sentence is for.
+    if ((await deliveringExpertUserId(subject.expertProfileId)) !== input.userId) {
+      return null;
+    }
+    const [closer, company] = await Promise.all([
+      subject.closedByUserId === null
+        ? undefined
+        : usersRepository.findNamesByIds([subject.closedByUserId]),
+      companiesRepository.findNameById(subject.companyId),
+    ]);
+    return caseClosureNames(closer?.[0], company);
+  } catch (error) {
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        userId: input.userId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Case-closure read failed — rendering the ordinary waiting copy'
+    );
+    return null;
+  }
+}
+
 /**
  * Milliseconds → the WHOLE MINUTES the wire carries.
  *
@@ -181,6 +281,44 @@ export async function getMeetingState(input: GetMeetingStateInput): Promise<GetM
   const status: MeetingLifecycleStatus = meeting.status;
   const presence = summarisePresence(intervals);
   const ceiling = status === 'ended' && meeting.endedAt !== null ? meeting.endedAt : now;
+  // Rule A — presence is stored at its true instants: the clocks are over start-CLAMPED intervals, the
+  // pre-start time together is over the RAW ones.
+  const clocks = computeMeetingClocks(
+    clampIntervalsToStart(intervals, meeting.scheduledStart),
+    ceiling
+  );
+  const caseClosure = await readCaseClosure({
+    meetingId,
+    userId,
+    viewerRole: authorized.side,
+    status,
+    outcome: meeting.outcome,
+    clientSideEverPresent: presence.clientSideEverPresent,
+    scheduledStart: meeting.scheduledStart,
+  });
+  // R6F-4a — the chip's together term drops the delivering expert's own invited guests, exactly as settlement's
+  // does (one definition: `meetingPresenceRepository.omitExpertInvitedGuestRows`), so the chip and the bill agree.
+  const togetherIntervals = await meetingPresenceRepository.omitExpertInvitedGuestRows(
+    rows,
+    async () =>
+      (await resolveCaseBillingSubject(meetingId, { requireActive: false }))?.expertProfileId ??
+      null
+  );
+  const clientOpen = intervals.some(
+    (interval) => interval.party === 'client' && interval.leftAt === null
+  );
+  const billingClock = {
+    soFarMs: billingBasisMs({
+      expertPresentFromStartMs: expertPresentFromStartMs(
+        intervals,
+        meeting.scheduledStart,
+        ceiling
+      ),
+      togetherBeforeStartMs: coPresentMsBefore(togetherIntervals, meeting.scheduledStart, ceiling),
+    }),
+    running:
+      presence.expertOpen && (clientOpen || now.getTime() >= meeting.scheduledStart.getTime()),
+  };
 
   return {
     ok: true,
@@ -199,7 +337,9 @@ export async function getMeetingState(input: GetMeetingStateInput): Promise<GetM
         // "flagged to the Balo team" renders exactly when that alert fires.
         venueReadyAt: meetingVenueReadyAt(meeting),
       }),
-      clocks: computeMeetingClocks(intervals, ceiling),
+      clocks,
+      billingClock,
+      caseClosure,
       asOf: now.toISOString(),
       // ⚠ FROM THE INJECTED (ENV-RESOLVED) TIMERS — never `DEFAULT_MEETING_TIMERS`, which is what
       // would re-introduce the drift D8 exists to prevent, just one layer further in.

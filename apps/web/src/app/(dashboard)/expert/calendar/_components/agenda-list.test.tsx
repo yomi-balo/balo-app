@@ -85,8 +85,8 @@ describe('AgendaList', () => {
   it('replaces the chevron with a Join button on an imminent row, and not otherwise', () => {
     const imminent = meeting({
       meetingId: 'imminent-1',
-      scheduledStart: '2026-08-24T00:10:00.000Z',
-      scheduledEnd: '2026-08-24T00:40:00.000Z',
+      scheduledStart: '2026-08-24T00:02:00.000Z',
+      scheduledEnd: '2026-08-24T00:32:00.000Z',
       counterpartyCompanyName: 'Imminent Co',
     });
     const later = meeting({
@@ -106,7 +106,7 @@ describe('AgendaList', () => {
     );
 
     expect(
-      screen.getByRole('button', { name: /Join Imminent Co's meeting, starting in 10 minutes/i })
+      screen.getByRole('button', { name: /Join Imminent Co's meeting, starting in 2 minutes/i })
     ).toBeInTheDocument();
     // The non-imminent row keeps its chevron (no accessible "Join" control for it).
     expect(
@@ -120,8 +120,8 @@ describe('AgendaList', () => {
     const onJoinClick = vi.fn();
     const imminent = meeting({
       meetingId: 'imminent-2',
-      scheduledStart: '2026-08-24T00:05:00.000Z',
-      scheduledEnd: '2026-08-24T00:35:00.000Z',
+      scheduledStart: '2026-08-24T00:02:00.000Z',
+      scheduledEnd: '2026-08-24T00:32:00.000Z',
       counterpartyCompanyName: 'Click Co',
     });
     render(
@@ -133,7 +133,7 @@ describe('AgendaList', () => {
       />
     );
     const joinButton = screen.getByRole('button', {
-      name: /Join Click Co's meeting, starting in 5 minutes/i,
+      name: /Join Click Co's meeting, starting in 2 minutes/i,
     });
     joinButton.click();
     expect(onJoinClick).toHaveBeenCalledWith(imminent);
@@ -150,8 +150,8 @@ describe('AgendaList', () => {
   it('renders NO element whose href contains the member call route (S1, widened BAL-566 D9)', () => {
     const imminent = meeting({
       meetingId: 'imminent-4',
-      scheduledStart: '2026-08-24T00:05:00.000Z',
-      scheduledEnd: '2026-08-24T00:35:00.000Z',
+      scheduledStart: '2026-08-24T00:02:00.000Z',
+      scheduledEnd: '2026-08-24T00:32:00.000Z',
     });
     const { container } = render(
       <AgendaList
@@ -173,8 +173,8 @@ describe('AgendaList', () => {
   it('A1 — the Join control meets the 44px minimum tap target on the mobile-default surface', () => {
     const imminent = meeting({
       meetingId: 'imminent-5',
-      scheduledStart: '2026-08-24T00:05:00.000Z',
-      scheduledEnd: '2026-08-24T00:35:00.000Z',
+      scheduledStart: '2026-08-24T00:02:00.000Z',
+      scheduledEnd: '2026-08-24T00:32:00.000Z',
     });
     render(
       <AgendaList
@@ -288,8 +288,8 @@ describe('AgendaList — the overrun grace and terminal-status gate (BAL-513 C2)
         meetings={[
           meeting({
             meetingId: 'not-ready-1',
-            scheduledStart: '2026-08-24T00:10:00.000Z',
-            scheduledEnd: '2026-08-24T00:40:00.000Z',
+            scheduledStart: '2026-08-24T00:02:00.000Z',
+            scheduledEnd: '2026-08-24T00:32:00.000Z',
             counterpartyCompanyName: 'Pending Co',
             roomReady: false,
           }),
@@ -444,8 +444,8 @@ describe('AgendaList — accessibility', () => {
     });
     const imminent = meeting({
       meetingId: 'imminent-3',
-      scheduledStart: '2026-08-24T00:05:00.000Z',
-      scheduledEnd: '2026-08-24T00:35:00.000Z',
+      scheduledStart: '2026-08-24T00:02:00.000Z',
+      scheduledEnd: '2026-08-24T00:32:00.000Z',
     });
     const { container } = render(
       <AgendaList

@@ -15,7 +15,7 @@ The list is company-wide: it shows every case your company has booked with an ex
 the ones you started yourself.
 
 Your next consultation is promoted to a ticket at the top of the list, with the day, the time and
-how long it runs. **Join call** appears 15 minutes before it starts and takes you straight into
+how long it runs. **Join call** appears 3 minutes before it starts and takes you straight into
 the call — you're already signed in, so there's no name or email step. Outside that window the
 ticket says when Join opens instead. Join stays available until 30 minutes after the scheduled
 end, or until the call itself ends, whichever comes first.

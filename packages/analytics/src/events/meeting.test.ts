@@ -18,6 +18,9 @@ describe('MEETING_SERVER_EVENTS', () => {
       // `MEETING_MISSED_…` < `MEETING_PROVISION_FAILED` because `M` < `P`; `MEETING_STARTED` <
       // `MEETING_VENUE_…` because `S` < `V`; and `MEETING_VENUE_…` < `MEETING_WAITING_…`
       // because `V` < `W`.
+      // BAL-474 (1) — the refused human End. `MEETING_END_` < `MEETING_ENDED` under ICU
+      // collation, because `_` carries a lower primary weight than `E`.
+      'MEETING_END_REFUSED',
       'MEETING_ENDED',
       'MEETING_EXPERT_ABSENT_ALERT',
       // BAL-132. `J` < `M`, so this sorts before the missed call.
@@ -41,6 +44,7 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(MEETING_SERVER_EVENTS.MEETING_MISSED_CALL).toBe('meeting_missed_call');
     expect(MEETING_SERVER_EVENTS.MEETING_VENUE_UNAVAILABLE).toBe('meeting_venue_unavailable');
     expect(MEETING_SERVER_EVENTS.MEETING_ENDED).toBe('meeting_ended');
+    expect(MEETING_SERVER_EVENTS.MEETING_END_REFUSED).toBe('meeting_end_refused');
     expect(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED).toBe('meeting_calendar_projected');
   });
 
@@ -94,6 +98,7 @@ describe('MEETING_SERVER_EVENTS', () => {
       meeting_id: 'meeting-1',
       billable_seconds: 1800,
       expert_present_seconds: 1860,
+      billable_before_start_seconds: 0,
       participant_count: 2,
       outcome: null,
       ended_by: 'client_principal',

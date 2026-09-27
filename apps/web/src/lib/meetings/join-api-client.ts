@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { headers } from 'next/headers';
+import { MEETING_NOT_OPEN_YET_CODE } from '@balo/shared/engagements';
 import type {
   GuestJoinState,
   LobbyClaimState,
@@ -84,7 +85,26 @@ export type JoinApiResult<T> =
       readonly code: string;
       /** Seconds, from a `429`'s `Retry-After`. ⚠ Absent unless the server sent a usable one. */
       readonly retryAfterSeconds?: number;
+      /**
+       * D16 — ISO instant the join window opens. ⚠ Present ONLY on `409 meeting_not_open_yet`, and only when the
+       * body carried a string; every other failure omits it.
+       */
+      readonly opensAt?: string;
     };
+
+/**
+ * D17.5 — THE ONE CHECK for "this failure is the D16 early-join refusal, with a usable `opensAt`".
+ * The three action call sites (`claim-lobby-place.ts`, `poll-guest-admission.ts`,
+ * `join-as-member.ts`) each repeated `code === MEETING_NOT_OPEN_YET_CODE && opensAt !== undefined`
+ * inline; this is that check, once.
+ */
+export function notOpenYetFrom(
+  result: Extract<JoinApiResult<unknown>, { ok: false }>
+): { opensAt: string } | undefined {
+  return result.code === MEETING_NOT_OPEN_YET_CODE && result.opensAt !== undefined
+    ? { opensAt: result.opensAt }
+    : undefined;
+}
 
 /** Parse a body as JSON, tolerating an empty one. Never throws. */
 function safeParse(text: string): Record<string, unknown> {
@@ -232,6 +252,36 @@ function warnVisitorIpUnresolved(
 }
 
 /**
+ * A non-2xx response as a typed failure.
+ *
+ * ⚠ THE FIXED LITERAL ONLY. Never a message, never a vendor string. Every optional key is **OMITTED**, NOT SET TO
+ * `undefined`: a present-but-undefined optional property is a different thing to an absent one — it survives an
+ * `in` check and it violates the declared type under `exactOptionalPropertyTypes`.
+ */
+async function failureFrom(
+  response: Response,
+  parsed: Record<string, unknown>
+): Promise<Extract<JoinApiResult<never>, { ok: false }>> {
+  // ⚠ ONLY READ ON A `429`. Any other status's `Retry-After` is not advice about OUR
+  // window, and a poller that obeyed it would stall on an unrelated upstream's opinion.
+  const retryAfterSeconds = response.status === 429 ? readRetryAfter(response) : undefined;
+  // BAL-568 — a 401 carrying the account-refusal marker is a LIVENESS refusal. ⚠ THE TWO
+  // PUBLIC HOPS SHARE THIS FUNCTION AND THAT IS HARMLESS: a public route has no `requireAuth`
+  // preHandler, so it never emits the marker and `consumeApiAccountRefusal` returns `null`.
+  const refusal = await consumeApiAccountRefusal(response);
+  const code = refusal ?? readString(parsed, 'error') ?? 'request_failed';
+  // D16 — `opensAt` rides ONLY on the early-join refusal.
+  const opensAt = code === MEETING_NOT_OPEN_YET_CODE ? readString(parsed, 'opensAt') : undefined;
+  return {
+    ok: false,
+    status: response.status,
+    code,
+    ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+    ...(opensAt === undefined ? {} : { opensAt }),
+  };
+}
+
+/**
  * One call to the join api.
  *
  * ⚠ `authorization` IS AN EXPLICIT PARAMETER RATHER THAN SOMETHING THIS FUNCTION RESOLVES.
@@ -278,23 +328,7 @@ async function callJoinApi<T>(
     const parsed = safeParse(await response.text());
 
     if (!response.ok) {
-      // ⚠ ONLY READ ON A `429`. Any other status's `Retry-After` is not advice about OUR
-      // window, and a poller that obeyed it would stall on an unrelated upstream's opinion.
-      const retryAfterSeconds = response.status === 429 ? readRetryAfter(response) : undefined;
-      // BAL-568 — a 401 carrying the account-refusal marker is a LIVENESS refusal. ⚠ THE TWO
-      // PUBLIC HOPS SHARE THIS FUNCTION AND THAT IS HARMLESS: a public route has no `requireAuth`
-      // preHandler, so it never emits the marker and `consumeApiAccountRefusal` returns `null`.
-      const refusal = await consumeApiAccountRefusal(response);
-      return {
-        ok: false,
-        status: response.status,
-        // ⚠ THE FIXED LITERAL ONLY. Never a message, never a vendor string.
-        code: refusal ?? readString(parsed, 'error') ?? 'request_failed',
-        // ⚠ THE KEY IS **OMITTED**, NOT SET TO `undefined`. A present-but-undefined optional
-        // property is a different thing to an absent one: it survives an `in` check and it
-        // violates the declared type under `exactOptionalPropertyTypes`.
-        ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
-      };
+      return await failureFrom(response, parsed);
     }
     return { ok: true, data: parsed as T };
   } catch (error) {

@@ -521,10 +521,14 @@ export const calendarRepository = {
   /**
    * Stamp the reconnect notification.
    *
-   * ⚠ CALL THIS **AFTER** THE PUBLISH, NEVER BEFORE. House precedent: `markDunned()` on
-   * `credit_receivables`. Stamping first turns a failed publish into permanent silence —
-   * the sweep would see the marker on every later tick and never retry; stamping after
-   * turns it into at-most-one-extra email, which is the survivable direction.
+   * ⚠ CALL THIS **AFTER** THE PUBLISH, NEVER BEFORE. Stamping first would turn a failed publish
+   * into permanent silence for this calendar notice — the sweep would see the marker on every
+   * later tick and never retry; stamping after turns it into at-most-one-extra email, which is
+   * the survivable direction.
+   *
+   * (Receivable dunning deliberately differs, BAL-474: it stamps inside its claim transaction
+   * BEFORE a post-commit publish, because its due set is RE-EVALUATED DAILY — a lost publish
+   * there costs one cadence, never permanent silence. This notice has no such re-evaluation.)
    */
   async markReconnectNotified(connectionId: string, notifiedAt: Date): Promise<void> {
     await db

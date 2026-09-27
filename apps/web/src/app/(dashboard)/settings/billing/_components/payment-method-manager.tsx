@@ -17,7 +17,11 @@ import {
 } from '@/lib/stripe/use-setup-intent-redirect-return';
 import { CardCapturePanel } from './card-capture-panel';
 import { RemoveCardConfirm } from './remove-card-confirm';
-import { STRIPE_UNCONFIGURED_MESSAGE, CHANGE_CARD_DISABLED_REASON } from './messages';
+import {
+  STRIPE_UNCONFIGURED_MESSAGE,
+  CHANGE_CARD_DISABLED_REASON,
+  cardRemovalUncoveredMessage,
+} from './messages';
 
 interface PaymentMethodManagerProps {
   /** The EFFECTIVE saved card (coordinator's `cardRemoved` local-optimism already applied). */
@@ -209,6 +213,12 @@ export function PaymentMethodManager({
           // open receivable is still outstanding on this wallet. Block, don't just toast — the
           // dialog stays open with factual copy rather than the generic failure message.
           setRemoveBlockedReason(SETTLEMENT_OUTSTANDING_MESSAGE);
+          return;
+        }
+        if (result.error === 'upcoming_bookings_uncovered') {
+          // BAL-474 D10.6 — the card is backing upcoming bookings the credit does not cover. Same
+          // block-don't-toast treatment: the dialog stays open with the owner-approved copy.
+          setRemoveBlockedReason(cardRemovalUncoveredMessage(result));
           return;
         }
         toast.error(REMOVE_FAILURE_MESSAGE);

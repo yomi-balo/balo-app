@@ -130,6 +130,34 @@ const stateSchema = z.object({
    * stopped — over-stating credited time in the one place this ticket exists to make honest.
    */
   presence: z.object({ expertOpen: z.boolean() }).optional(),
+
+  /**
+   * BAL-474 (Rule A, D13) — what the bill would be right now (pre-floor) and whether it is still growing.
+   * `soFarMs` is the time the expert and a client-side participant were really TOGETHER before the start
+   * plus the from-start figure — which, per D15.3, counts from the expert's FIRST PRESENCE AT OR AFTER the
+   * start, never from the start itself when the expert is late; `running` is
+   * `expertOpen && (clientOpen || now >= start)`.
+   *
+   * ⚠ OPTIONAL, for the same deploy-skew reason as the two fields above: apps/web and apps/api deploy
+   * independently, and making it required would fail the whole `safeParse` for every live call. ABSENT ⇒
+   * the chip shows today's figures (the API keeps sending start-clamped `clocks`).
+   */
+  billingClock: z.object({ soFarMs: z.number().nonnegative(), running: z.boolean() }).optional(),
+
+  /**
+   * BAL-474 (R6-C3) — sent ONLY to the delivering expert, when the meeting's case was closed before the
+   * start and nobody from the client side ever came. `null` and ABSENT both mean "not that state".
+   *
+   * ⚠ OPTIONAL, for the same deploy-skew reason as the fields above: the whole `safeParse` fails on a required
+   * field an older api does not send, which would blank every live call's mirror.
+   */
+  caseClosure: z
+    .object({
+      closedByFirstName: z.string().nullable(),
+      companyName: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
 });
 
 /** The body exactly as the api sends it — instants still ISO strings. */
@@ -158,6 +186,13 @@ export interface MeetingStateSnapshot {
   readonly noShowFloorMinutes: number | null;
   /** ⚠ `null` ⇒ the server did not say. See {@link noShowFloorMinutes}. */
   readonly expertPresenceOpen: boolean | null;
+  /** BAL-474 (Rule A) — `null` ⇒ the server did not say; the chip falls back to `clocks` and ticks. */
+  readonly billingClock: { readonly soFarMs: number; readonly running: boolean } | null;
+  /** BAL-474 (R6-C3) — `null` ⇒ not the closed-case state, or the server did not say. */
+  readonly caseClosure: {
+    readonly closedByFirstName: string | null;
+    readonly companyName: string | null;
+  } | null;
 }
 
 /** `null` for anything that is not a well-formed state body. ⚠ Never throws, never coerces. */
@@ -166,7 +201,7 @@ export function parseMeetingState(raw: unknown): MeetingStateSnapshot | null {
   if (!parsed.success) {
     return null;
   }
-  const { clocks, noShowFloorMinutes, presence, ...rest } = parsed.data;
+  const { clocks, noShowFloorMinutes, presence, billingClock, caseClosure, ...rest } = parsed.data;
   return {
     ...rest,
     clocks: {
@@ -180,6 +215,8 @@ export function parseMeetingState(raw: unknown): MeetingStateSnapshot | null {
     // spells "not sent" differently from "not known".
     noShowFloorMinutes: noShowFloorMinutes ?? null,
     expertPresenceOpen: presence?.expertOpen ?? null,
+    billingClock: billingClock ?? null,
+    caseClosure: caseClosure ?? null,
   };
 }
 
@@ -217,6 +254,30 @@ export type EndMeetingResult =
  * they are still in it, not which of three server rules declined.
  */
 export const END_MEETING_FAILED_COPY = "We couldn't end the call — everyone is still connected.";
+
+/**
+ * BAL-474 (D6.4, copy v2.1 §9) — the refusal for a CLIENT member who presses End before Balo has
+ * recorded their presence in the meeting.
+ *
+ * ⚠ IT IS TRUE AT READ TIME. End renders only in the joined call, so the refusal means the Daily
+ * join webhook has not landed yet — it usually takes seconds, and the lifecycle sweep reconciles
+ * the roster every minute. The call is still running and everyone is still connected. It is never
+ * shown for a meeting that has already ended (that is the idempotent success). Expert-side End is
+ * unchanged, and guests never see End. Every other refusal keeps {@link END_MEETING_FAILED_COPY}.
+ */
+export const END_MEETING_NOT_JOINED_COPY =
+  "We couldn't end the call just yet — it can take a moment after you join. Try again shortly; everyone is still connected.";
+
+/**
+ * BAL-474 (R6-C6, owner-approved) — the refusal for an End pressed BEFORE the meeting's scheduled start.
+ *
+ * ⚠ IT IS TRUE AT READ TIME. End is refused until the start (`meeting_not_started`); leaving is always possible;
+ * and the call stays open at least until the start + 5 minutes (the idle end is never earlier), so "you can come
+ * back to it" holds. Early calls are billed under Rule A, so people will try to end them — the generic
+ * {@link END_MEETING_FAILED_COPY} stayed true but did not say why. Every other refusal keeps the generic copy.
+ */
+export const END_MEETING_NOT_STARTED_COPY =
+  "This call can't be ended before its start time. You can leave — it stays open, so you can come back to it.";
 
 /**
  * BAL-134 — the ERROR state of the four this surface owes, and the one that was missing.

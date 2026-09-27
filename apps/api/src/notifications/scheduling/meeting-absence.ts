@@ -51,6 +51,7 @@ import {
   type PresenceFacts,
 } from '@balo/shared/meetings';
 import { resolveMeetingTimers } from '../../config/meeting-timers.js';
+import { resolveCaseBillingSubject } from '../../services/credit-session/case-billing-subject.js';
 import { scheduleNotification } from './schedule.js';
 import type { ScheduledRecheck } from './rechecks.js';
 
@@ -99,6 +100,31 @@ async function loadAbsenceState(
       intervals.map((row) => ({ party: row.party, joinedAt: row.joinedAt, leftAt: row.leftAt }))
     ),
   };
+}
+
+/**
+ * BAL-474 (R6F-13, widened by D17.5) — is this meeting's Case no longer active, WHENEVER it closed? Joins are
+ * refused on a closed case (`engagement_not_active`), so a nudge that says "{expert} is in the room and ready
+ * when you are" invites a client to a call they cannot enter, and the expert is told the same by the in-call
+ * "case closed" copy. D17.5 widens this past the original before-the-start check: a case closed AFTER the start
+ * is still an invitation the client cannot use, so it is suppressed too. A read failure answers `false`: the
+ * nudge is only ever suppressed on evidence, never on an error.
+ */
+async function isCaseNoLongerActive(meetingId: string): Promise<boolean> {
+  try {
+    const subject = await resolveCaseBillingSubject(meetingId, { requireActive: false });
+    return subject !== undefined && !subject.isActive;
+  } catch (error) {
+    log.warn(
+      {
+        meetingId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Case-closure read failed — treating the case as open for the client nudge'
+    );
+    return false;
+  }
 }
 
 /** `meetings.status` values on which either promise is moot. */
@@ -201,12 +227,14 @@ export const meetingExpertAbsentRecheck: ScheduledRecheck = async (row) => {
 /**
  * THE CLIENT-ABSENT GUARD. Publishes only if the expert is STILL waiting alone.
  *
- * Five ways it skips, and each is a different fact:
+ * Six ways it skips, and each is a different fact:
  *   · the client turned up — the nudge is moot;
  *   · the EXPERT left — nudging a client to join a room with nobody in it would be worse than
  *     silence, and this is the case cancellation alone cannot cover (nothing about the expert
  *     leaving triggers a cancel);
  *   · the meeting is terminal;
+ *   · the case is no longer active, whenever it closed (R6F-13, widened by D17.5) — the client cannot join
+ *     it, so the nudge would invite them to a call that refuses them;
  *   · the payload names no meeting, or no company — `malformed_payload`;
  *   · the company has no live recipient — `no_recipients`.
  *
@@ -236,6 +264,11 @@ export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
   }
   if (!state.facts.expertOpen) {
     return { publish: false, reason: 'expert_left_before_nudge' };
+  }
+  // R6F-13, widened by D17.5 — the client cannot join a case that is no longer active, whenever it closed,
+  // so there is no one to nudge.
+  if (await isCaseNoLongerActive(meetingId)) {
+    return { publish: false, reason: 'case_closed' };
   }
 
   // ⚠⚠ A MISSING OR BLANK `companyId` IS A MALFORMED PAYLOAD, EXACTLY LIKE A MISSING
@@ -359,6 +392,15 @@ export interface ScheduleClientAbsentNudgeInput {
 export async function scheduleClientAbsentNudge(
   input: ScheduleClientAbsentNudgeInput
 ): Promise<void> {
+  // R6F-13, widened by D17.5 — a case that is no longer active, whenever it closed, is never nudged; the
+  // fire-time recheck applies the same rule.
+  if (await isCaseNoLongerActive(input.meetingId)) {
+    log.info(
+      { meetingId: input.meetingId },
+      'Client-absent nudge not armed — the case is no longer active'
+    );
+    return;
+  }
   const fireAt = new Date(input.clockStart.getTime() + input.timers.clientAbsentNudgeMs);
   const { outcome } = await scheduleNotification(
     'meeting.client_absent',

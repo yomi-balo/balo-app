@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatAudMinor,
+  formatAudWholeDollars,
   formatExpiryDateLong,
   formatExpiryDateShort,
   lowBalanceModeLabel,
@@ -20,6 +21,26 @@ describe('formatAudMinor', () => {
 
   it('degrades a non-finite amount to A$0.00 (never NaN)', () => {
     expect(formatAudMinor(Number.NaN)).toBe('A$0.00');
+  });
+});
+
+describe('formatAudWholeDollars', () => {
+  it('renders the per-top-up maximum as whole dollars, no cents', () => {
+    expect(formatAudWholeDollars(1_000_000)).toBe('A$10,000');
+  });
+
+  it('groups thousands and renders small amounts without a fraction', () => {
+    expect(formatAudWholeDollars(30_000)).toBe('A$300');
+    expect(formatAudWholeDollars(123_456_700)).toBe('A$1,234,567');
+  });
+
+  it('rounds to the nearest dollar', () => {
+    expect(formatAudWholeDollars(34_749)).toBe('A$347');
+    expect(formatAudWholeDollars(34_750)).toBe('A$348');
+  });
+
+  it('degrades a non-finite amount to A$0 (never NaN)', () => {
+    expect(formatAudWholeDollars(Number.NaN)).toBe('A$0');
   });
 });
 

@@ -2,14 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { creditCoversOutstandingDebt } from '@balo/shared/credit';
+import {
+  CASH_CREDIT_REASONS,
+  DEBT_COVERING_CREDIT_REASONS,
+  creditCoversOutstandingDebt,
+  isDebtCoveringCreditReason,
+} from '@balo/shared/credit';
 
 /**
  * ⚠⚠ INVARIANT — A COMPANY'S SOFT ACCOUNT HOLD OUTLIVES ONLY AN UNPAID BALANCE, AND ONLY THE
- * COMPANY'S OWN CASH CAN END IT. ADR-1040 Amendment 6 §F/§G (BAL-535): a cash-funded credit that
- * returns the wallet to a non-negative CASH-BACKED balance clears every open receivable on that
- * wallet, in the SAME transaction as the ledger write that covered it — releasing the company's
- * soft hold. A marketing grant never can.
+ * COMPANY'S OWN MONEY — CASH OR A SETTLEMENT CHARGE ON ITS OWN CARD — CAN END IT, OR A HEAL THAT
+ * FINDS IT ALREADY COVERED. ADR-1040 Amendment 6 §F/§G (BAL-535), amended by Amendment 7 §F
+ * (BAL-474): a debt-covering credit (a cash top-up, or a session's own `overdraft_settlement`)
+ * that returns the wallet to a non-negative CASH-BACKED balance clears every open receivable on
+ * that wallet, in the SAME transaction as the ledger write that covered it — releasing the
+ * company's soft hold. A wallet found covered-but-held is healed by the same coverage module, as
+ * an audited system act. A marketing grant never can end a hold.
+ *
+ * ⚠⚠ BAL-474 AMENDED THIS FILE ON THE RECORD (ADR-1032). Amendment 7's overdraft-tolerant open
+ * makes an older session's receivable routinely coexist with a newer session's settlement, so a
+ * settlement credit that returns the wallet to zero must be allowed to clear the OLDER receivable
+ * too (share-bound proof: a session's charge is capped by its own consumption, so the settlement
+ * credit reaches zero only when other credits already paid every older debt). Item 2 below, the
+ * claim-5 describe and the "hold-releasing sites" case were renamed/extended — not relaxed.
  *
  * ⚠ THIS FILE CREATES THE INVARIANT; IT DOES NOT AMEND ONE. Before BAL-535 an open
  * `credit_receivables` row had NO self-service exit: a top-up did not clear it, the dunning
@@ -34,15 +49,18 @@ import { creditCoversOutstandingDebt } from '@balo/shared/credit';
  * Five independent claims, each failing by name — see the `describe` blocks below:
  *  1. The pure core: the predicate is the wallet's resulting BALANCE minus promo `>= 0`, never
  *     the receivable's `amount_minor` (design question (a) / (b)).
- *  2. The reason set is CASH-ONLY (`manual_purchase`, `auto_topup`) and the promo exclusion is
- *     REAL — one discount, one shared coverage module, three call sites that cannot disagree
- *     (design question (d), fix round B1).
+ *  2. The reason set is the DEBT-COVERING set (cash + `overdraft_settlement`), and the promo
+ *     exclusion is REAL — one discount, one shared coverage module, four call sites that cannot
+ *     disagree (design question (d), fix round B1, Amendment 7 §F).
  *  3. Both late-open (R3b) transactions take the wallet advisory lock FIRST, so the clear
  *     serialises against the credit path rather than racing it (fix round M2).
  *  4. The one-per-session receivable unique stays STATUS-BLIND, so a cleared row can never be
  *     re-opened (§F final paragraph / design question (f)).
- *  5. An open receivable never coexists with a `processing` settlement — every opening site
- *     marks the session terminal in the SAME transaction it opens the receivable in (§G.1).
+ *  5. An open receivable never coexists with a `processing` settlement ON THE SAME SESSION —
+ *     every opening site marks the session terminal in the SAME transaction it opens the
+ *     receivable in (§G.1, re-scoped to session grain by Amendment 7: at WALLET grain an older
+ *     session's receivable now routinely coexists with a newer session's `processing` settlement,
+ *     and that is expected).
  */
 
 /** See `session-debt-carries-its-collection-instrument.test.ts` for the rationale in full. */
@@ -109,6 +127,15 @@ const END_SESSION_URL = new URL(
   '../../../../apps/api/src/services/credit-session/end-session.ts',
   import.meta.url
 );
+
+const NOTIFY_DISPLAY_PATH = 'apps/api/src/services/credit-session/notify.ts';
+const NOTIFY_URL = new URL(
+  '../../../../apps/api/src/services/credit-session/notify.ts',
+  import.meta.url
+);
+
+const CREDIT_SESSIONS_DISPLAY_PATH = 'packages/db/src/repositories/credit-sessions.ts';
+const CREDIT_SESSIONS_URL = new URL('../repositories/credit-sessions.ts', import.meta.url);
 
 describe('INVARIANT: an account hold outlives only an unpaid balance — pure core (creditCoversOutstandingDebt)', () => {
   interface Row {
@@ -262,8 +289,11 @@ describe('INVARIANT: an account hold outlives only an unpaid balance — pure co
   });
 });
 
-describe('INVARIANT: the clear is armed for cash reasons only, and the promo exclusion is a REAL discount (source scan)', () => {
-  it('the clear is armed for exactly the two CASH reasons', () => {
+describe('INVARIANT: the clear is armed for the debt-covering reasons (cash + overdraft_settlement), and the promo exclusion is a REAL discount (source scan)', () => {
+  // ⚠ BAL-474 RENAMED THIS `it` ON THE RECORD (was "the clear is armed for exactly the two CASH
+  // reasons"). The CASH set itself is unchanged and still pinned verbatim below; what arms the
+  // clear is now the DEBT-COVERING set derived from it (next `it`).
+  it('the CASH set is exactly the two top-up reasons (unchanged by Amendment 7)', () => {
     // MOVED in the fix round from `dispatch.ts` to `@balo/shared/credit` so `@balo/analytics` and
     // `@balo/shared/notifications` can DERIVE `CashCreditReason` from the one list instead of
     // restating the union (N9/L5). Same list, same job, new home — scanned at the new home.
@@ -274,6 +304,73 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
       "export const CASH_CREDIT_REASONS = ['manual_purchase', 'auto_topup'] as const;"
     );
     expect(src).toContain('export type CashCreditReason = (typeof CASH_CREDIT_REASONS)[number];');
+  });
+
+  it('the debt-covering set is the cash set plus overdraft_settlement, DERIVED — never restated', () => {
+    // Amendment 7 §F — a session's own settlement charge is the company's own money on its own
+    // card, so it may end the hold. DERIVED from `CASH_CREDIT_REASONS` by spread, so a third cash
+    // reason can never be forgotten here; restating the three literals fails the source pin.
+    const src = normalize(
+      readScannedSourceOrFail(SHARED_PREDICATE_DISPLAY_PATH, SHARED_PREDICATE_URL)
+    );
+    // A regex over the whitespace-normalised source — it pins the DERIVATION, not whether
+    // Prettier wraps the array (and adds a trailing comma) at 100 columns.
+    expect(src).toMatch(
+      /export const DEBT_COVERING_CREDIT_REASONS = \[ ?\.\.\.CASH_CREDIT_REASONS, 'overdraft_settlement',? ?\] as const;/
+    );
+    expect(src).toContain(
+      'export type DebtCoveringCreditReason = (typeof DEBT_COVERING_CREDIT_REASONS)[number];'
+    );
+    expect([...DEBT_COVERING_CREDIT_REASONS]).toEqual([
+      ...CASH_CREDIT_REASONS,
+      'overdraft_settlement',
+    ]);
+    expect(isDebtCoveringCreditReason('overdraft_settlement')).toBe(true);
+    expect(isDebtCoveringCreditReason('manual_purchase')).toBe(true);
+    expect(isDebtCoveringCreditReason('auto_topup')).toBe(true);
+    // ⚠ The promo exclusion is unchanged: a marketing grant is never a debt-covering reason.
+    expect(isDebtCoveringCreditReason('promo')).toBe(false);
+    expect(isDebtCoveringCreditReason('session_consume')).toBe(false);
+  });
+
+  it('dispatch arms the clear on the debt-covering set', () => {
+    const dispatch = normalize(
+      codeOnly(readScannedSourceOrFail(DISPATCH_DISPLAY_PATH, DISPATCH_URL))
+    );
+    expect(dispatch).toContain('if (!isDebtCoveringCreditReason(reason))');
+    expect(dispatch).not.toContain('isCashCreditReason');
+    // The pinned single-call counts survive the widening — still ONE coverage decision and ONE
+    // clear per credit, on whichever branch runs it.
+    const raw = normalize(readScannedSourceOrFail(DISPATCH_DISPLAY_PATH, DISPATCH_URL));
+    expect(raw.match(/assessCashCoverage\(/g) ?? []).toHaveLength(1);
+    expect(raw.match(/clearOpenForWallet\(/g) ?? []).toHaveLength(1);
+  });
+
+  it('on the settlement arm, the session settles BEFORE the wallet-grain clear', () => {
+    // R3-F6a — `markSettlementSettled` clears the settling session's OWN receivable first, so the
+    // wallet-grain coverage clear then judges the REMAINING debts from their own anchor. The
+    // reverse order judged from the settled session's older anchor and left a covered hold open
+    // with a top-up figure of A$0.00 (WE4(d)). Mutation-proven by swapping the two calls.
+    const dispatch = codeOnly(readScannedSourceOrFail(DISPATCH_DISPLAY_PATH, DISPATCH_URL));
+    const applyCredit = sliceFunctionBody(dispatch, 'async function applyCredit(');
+    const branchStart = applyCredit.indexOf("if (effect.reason === 'overdraft_settlement'");
+    const branchEnd = applyCredit.indexOf("if (effect.reason === 'auto_topup')", branchStart);
+    expect(branchStart).toBeGreaterThanOrEqual(0);
+    expect(branchEnd).toBeGreaterThan(branchStart);
+    const branch = applyCredit.slice(branchStart, branchEnd);
+    const settleIdx = branch.indexOf('markSettlementSettled(');
+    const clearIdx = branch.indexOf('clearReceivablesCoveredByCredit(');
+    expect(settleIdx).toBeGreaterThanOrEqual(0);
+    expect(clearIdx).toBeGreaterThan(settleIdx);
+  });
+
+  it('a settlement-arm clear is a system act (actor NULL)', () => {
+    // D5.8 — Stripe delivered the settlement credit; no member acted. The session id and its
+    // initiating member ride in the metadata instead (ADR-1030 system-actor exemption).
+    const dispatch = normalize(
+      codeOnly(readScannedSourceOrFail(DISPATCH_DISPLAY_PATH, DISPATCH_URL))
+    );
+    expect(dispatch).toContain("effect.reason === 'overdraft_settlement' ? null : effect.memberId");
   });
 
   it('⚠⚠ B1 — the coverage decision has exactly ONE home, and the raw predicate is called from nowhere else in apps/api', () => {
@@ -354,7 +451,11 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
     );
   });
 
-  it('all THREE hold-releasing sites route through the one coverage module (R3 + both R3b)', () => {
+  // ⚠ BAL-474 RENAMED THIS `it` ON THE RECORD (was "all THREE hold-releasing sites … (R3 + both
+  // R3b)"). Amendment 7 adds a FOURTH site — the covered-but-held heal (`clearCoveredHold`, reached
+  // from the dunning claim and the booking guard through `notify.ts`'s one `healInTx`) — and it
+  // lives in the SAME coverage module, so the one-home rule is extended, not relaxed.
+  it('all FOUR hold-releasing sites route through the one coverage module (R3 + both R3b + the dunning heal)', () => {
     // R3 asks directly; both R3b sites go through `clearLateOpenedReceivableIfCovered`, which
     // asks on their behalf. A site that stopped importing from here would have to re-derive the
     // discount, which is what B1 exists to prevent — and it fails one of these counts.
@@ -370,6 +471,19 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
       "import { clearLateOpenedReceivableIfCovered } from '../credit/receivable-coverage.js';"
     );
     expect(endSession.match(/clearLateOpenedReceivableIfCovered\(/g) ?? []).toHaveLength(1);
+
+    // The fourth site — the heal. ONE caller in `notify.ts` (the module-private `healInTx`),
+    // imported from the one coverage module; the coverage decision itself stays inside it.
+    const notify = normalize(codeOnly(readScannedSourceOrFail(NOTIFY_DISPLAY_PATH, NOTIFY_URL)));
+    expect(notify).toContain("} from '../credit/receivable-coverage.js';");
+    expect(notify.match(/clearCoveredHold\(/g) ?? []).toHaveLength(1);
+
+    const service = normalize(
+      codeOnly(readScannedSourceOrFail(COVERAGE_SERVICE_DISPLAY_PATH, COVERAGE_SERVICE_URL))
+    );
+    expect(service).toContain('export async function clearCoveredHold(');
+    expect(service.match(/clearOpenForWallet\(/g) ?? []).toHaveLength(1);
+    expect(service.match(/creditCoversOutstandingDebt\(/g) ?? []).toHaveLength(1);
   });
 
   it("the clear rides the caller's txn — never a bare `db`", () => {
@@ -579,7 +693,10 @@ describe('INVARIANT: the one-per-session receivable unique stays STATUS-BLIND (s
   });
 });
 
-describe('INVARIANT: an open receivable never coexists with a `processing` settlement (§G.1)', () => {
+// ⚠ BAL-474 RENAMED THIS DESCRIBE ON THE RECORD (was "… a `processing` settlement (§G.1)").
+// Amendment 7 re-scopes §G.1 to SESSION grain: the per-session source scans below still hold, and
+// the new final case pins that WALLET-grain coexistence is expected, so nobody "restores" it.
+describe('INVARIANT: an open receivable never coexists with a `processing` settlement on the SAME session (Amendment 6 §G.1, re-scoped to session grain by Amendment 7)', () => {
   it("⚠⚠ end-session.ts's openReceivableAndDun marks the session terminal in the SAME txn it opens the receivable in", () => {
     const raw = readScannedSourceOrFail(END_SESSION_DISPLAY_PATH, END_SESSION_URL);
     const body = sliceFunctionBody(raw, 'async function openReceivableAndDun(');
@@ -618,5 +735,30 @@ describe('INVARIANT: an open receivable never coexists with a `processing` settl
       )
     );
     expect(settleFromPresence.match(/status: 'processing'/g) ?? []).toHaveLength(0);
+  });
+
+  it('wallet-grain coexistence is EXPECTED — nothing refuses or clears on it', () => {
+    // Amendment 7 §B — the overdraft-tolerant open (every presence-seam open) opens THROUGH an
+    // open receivable and an in-flight settlement, recording each as a tolerated gate rather than
+    // returning a refusal. The session-scoped share (§A) is what makes that safe. A future
+    // "restore wallet-grain §G.1" edit that returned on either gate for the tolerant policy fails
+    // here, by name.
+    const repo = normalize(
+      codeOnly(readScannedSourceOrFail(CREDIT_SESSIONS_DISPLAY_PATH, CREDIT_SESSIONS_URL))
+    );
+    expect(repo).toContain("toleratedGates.push('account_hold')");
+    expect(repo).toContain("toleratedGates.push('settlement_processing')");
+    // The gated policy still refuses both — the push is the tolerant arm, not a deletion.
+    expect(repo).toContain("return { ok: false, code: 'account_hold' }");
+    expect(repo).toContain("return { ok: false, code: 'settlement_pending' }");
+    // STRUCTURE, not just presence: the refusal is the GATED arm (`if (!tolerant)` returns), and the push
+    // sits AFTER it — so the tolerant policy falls through to the push, and the gated one never reaches it.
+    // Deleting the `!tolerant` guard, or moving the push above it, leaves the strings and fails here.
+    expect(repo).toMatch(
+      /hasOpenReceivable\([^)]*\)\) \{ if \(!tolerant\) \{ return \{ ok: false, code: 'account_hold' \}; \} toleratedGates\.push\('account_hold'\);/
+    );
+    expect(repo).toMatch(
+      /if \(!input\.tolerant\) \{ return true; \} if \(settling !== undefined\) \{ toleratedGates\.push\('settlement_processing'\); \}/
+    );
   });
 });

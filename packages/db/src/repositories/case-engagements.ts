@@ -13,6 +13,7 @@ import {
 import type { RatingNudgeCandidate } from './reviews';
 import { partyMembershipsRepository } from './party-memberships';
 import { conversationsRepository } from './conversations';
+import { engagementsRepository } from './engagements';
 import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
 import { insertEngagementRowTx, lockEngagementRowTx } from './_shared/engagement-supertype';
 
@@ -63,6 +64,18 @@ export type CaseEngagementRow = Omit<Engagement, 'baloFeeBps'> &
     | 'deletedAt'
     | 'bookingIdempotencyKey'
   >;
+
+/**
+ * D17.5 (BAL-474) — the narrow shape `findClosureSubject` answers: is this Case engagement active,
+ * and if not, who closed it and when. See that function's own docblock.
+ */
+export interface CaseClosureSubject {
+  readonly companyId: string;
+  readonly expertProfileId: string;
+  readonly isActive: boolean;
+  readonly closedAt: Date | null;
+  readonly closedByUserId: string | null;
+}
 
 /**
  * BAL-400 §2.5 — ONE of the client's OPEN cases with a given expert, as the booking flow's
@@ -251,7 +264,51 @@ async function writeResolutionRequestTx(
   });
 }
 
+/**
+ * D17.5 (BAL-474) — THE ONE TWO-STEP READ OF "IS THIS CASE ENGAGEMENT ACTIVE, AND IF NOT, WHO CLOSED
+ * IT AND WHEN". Extracted so `apps/api`'s `resolveCaseBillingSubject` and the web's end-of-call loader
+ * (`load-end-of-call.ts`) share ONE implementation instead of each re-reading the engagement then the
+ * case child row.
+ *
+ * `opts.requireActive` matches `resolveCaseBillingSubject`'s own flag exactly, so this is a drop-in
+ * replacement for its post-context-resolution logic: `true` short-circuits to `undefined` for a
+ * non-active engagement WITHOUT reading the case child row at all — no new read on the hot admission
+ * path. `undefined` otherwise means: not a case, the engagement does not exist, or (with
+ * `requireActive`) not active.
+ */
+async function findClosureSubject(
+  engagementId: string,
+  opts: { requireActive: boolean }
+): Promise<CaseClosureSubject | undefined> {
+  const engagement = await engagementsRepository.findById(engagementId);
+  if (engagement === undefined || engagement.engagementType !== 'case') {
+    return undefined;
+  }
+  if (engagement.status === 'active') {
+    return {
+      companyId: engagement.companyId,
+      expertProfileId: engagement.expertProfileId,
+      isActive: true,
+      closedAt: null,
+      closedByUserId: null,
+    };
+  }
+  if (opts.requireActive) {
+    return undefined;
+  }
+  const caseRow = await caseEngagementsRepository.findByEngagementId(engagementId);
+  return {
+    companyId: engagement.companyId,
+    expertProfileId: engagement.expertProfileId,
+    isActive: false,
+    closedAt: caseRow?.closedAt ?? null,
+    closedByUserId: caseRow?.closedByUserId ?? null,
+  };
+}
+
 export const caseEngagementsRepository = {
+  findClosureSubject,
+
   /**
    * Create a case: the supertype row (`engagementType: 'case'`) + the child, in ONE
    * transaction. `description` MUST already be sanitised HTML — the WEB caller

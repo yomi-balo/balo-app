@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import type { MeetingClocks } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   meetingContexts,
@@ -9,6 +10,7 @@ import {
 } from '../schema';
 import {
   engagementFactory,
+  expertFactory,
   meetingFactory,
   meetingGuestFactory,
   userFactory,
@@ -31,6 +33,19 @@ const T0 = new Date('2026-07-01T10:00:00.000Z');
 /** `T0 + n` minutes. */
 function at(minutes: number): Date {
   return new Date(T0.getTime() + minutes * MIN);
+}
+
+/**
+ * A meeting's RAW clocks (no start clamp, no together term) through the one production read of them:
+ * `settlementFacts` with a scheduled start before every fixture row, so the clamp is a no-op. `now` omitted
+ * resolves the ceiling exactly as settlement does (`ended_at` for a terminal meeting, else the wall clock).
+ */
+async function clocksOf(meetingId: string, now?: Date): Promise<MeetingClocks> {
+  const { clocks } = await meetingPresenceRepository.settlementFacts(meetingId, {
+    scheduledStart: new Date(0),
+    ...(now === undefined ? {} : { now }),
+  });
+  return clocks;
 }
 
 /** `open` at `T0 + minutes` for an AUTHENTICATED (or unmapped, `userId: null`) participant. */
@@ -192,7 +207,7 @@ describe('meetingPresenceRepository.open / close', () => {
     const closed = await leave(meeting.id, null, 5);
     expect(closed?.joinedAt.getTime()).toBe(at(0).getTime()); // the EARLIEST open interval
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(60));
+    const clocks = await clocksOf(meeting.id, at(60));
     expect(clocks.billableMs).toBe(0);
     expect(clocks.expertPresentMs).toBe(0);
   });
@@ -336,7 +351,7 @@ describe('meetingPresenceRepository — guest identity', () => {
     await guestJoin(meeting.id, agencyColleague.id, 'observer', 0);
     await leave(meeting.id, expert.id, 40);
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(40));
+    const clocks = await clocksOf(meeting.id, at(40));
 
     // The billable span anchors on the CLIENT-side guest at minute 10, NOT on the expert-side
     // one at minute 0 — an agency colleague must never put a non-delivering attendee on the
@@ -366,13 +381,41 @@ describe('meetingPresenceRepository — guest identity', () => {
   });
 });
 
-// ── BAL-134 (R10): the WRITE-SIDE window clamp ─────────────────────────────────────────────
+// ── BAL-134 (R10) / BAL-474 (Rule A): the WRITE-SIDE window — an UPPER bound on a leave only ──
 
-describe('meetingPresenceRepository — the R10 write-side clamp', () => {
-  /** A meeting window of `T0 → T0 + 60`, plus the generous 24h post-end tolerance. */
-  const WINDOW = { notBefore: at(0), notAfter: at(60 + 24 * 60) };
+describe('meetingPresenceRepository — the write-side window (BAL-474 Rule A: joins are TRUE instants)', () => {
+  /** A meeting window ending `T0 + 60`, plus the generous 24h post-end tolerance. */
+  const WINDOW = { notAfter: at(60 + 24 * 60) };
 
-  it('THE TICKET RULE: an expert arriving at 09:55 for a 10:00 call is not credited for arriving early', async () => {
+  it('THE RULE A CHANGE: a join BEFORE the scheduled start is stored EXACTLY as given, with and without a window', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    // 09:55 for a 10:00 call. It used to be raised to 10:00 here; the raise now happens in the READERS
+    // (`clampIntervalsToStart`), so the true instant survives for the pre-start intersection.
+    const withWindow = await meetingPresenceRepository.open({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt: at(-5),
+      window: WINDOW,
+    });
+    const withoutWindow = await join(meeting.id, client.id, 'client', -5);
+
+    expect(withWindow.joinedAt.getTime()).toBe(at(-5).getTime());
+    expect(withoutWindow.joinedAt.getTime()).toBe(at(-5).getTime());
+
+    const persisted = await meetingPresenceRepository.listByMeeting(meeting.id);
+    expect(persisted).toHaveLength(2);
+    expect(persisted.map((row) => row.joinedAt.getTime())).toEqual([
+      at(-5).getTime(),
+      at(-5).getTime(),
+    ]);
+  });
+
+  it('a join AFTER `notAfter` is stored as given too — the window never touches a join', async () => {
     const { meeting } = await meetingFactory();
     const expert = await userFactory();
 
@@ -381,11 +424,12 @@ describe('meetingPresenceRepository — the R10 write-side clamp', () => {
       userId: expert.id,
       meetingGuestId: null,
       party: 'expert',
-      joinedAt: at(-5), // 09:55 for a 10:00 call
-      window: WINDOW,
+      joinedAt: at(200),
+      window: { notAfter: at(60) },
     });
 
-    expect(opened.joinedAt.getTime()).toBe(at(0).getTime());
+    expect(opened.joinedAt.getTime()).toBe(at(200).getTime());
+    expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(1);
   });
 
   it('leaves a join INSIDE the window exactly as given', async () => {
@@ -466,40 +510,59 @@ describe('meetingPresenceRepository — the R10 write-side clamp', () => {
       window: WINDOW,
     });
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(120));
+    const clocks = await clocksOf(meeting.id, at(120));
     expect(clocks.billableMs).toBe(75 * MIN);
   });
 
-  it('DEGRADES TO A ZERO-LENGTH INTERVAL when the clamped leave lands below its own join', async () => {
+  it('a leave clamped to `notAfter` that lands below its own (later) join DEGRADES to a zero-length interval', async () => {
     const { meeting } = await meetingFactory();
     const expert = await userFactory();
 
-    // Joined 09:55 → clamped UP to 10:00. Left 09:58 → below its own stored `joined_at`.
-    // A bare write would trip `meeting_presence_left_after_joined` with 23514; the clamp
-    // raises it to `joined_at` instead, which is legal (the CHECK is `>=`) and bills nothing.
-    await meetingPresenceRepository.open({
+    // Joined 11:10 — AFTER the 11:00 `notAfter` (a real, if odd, event, stored as given). The matching
+    // leave at 11:20 is lowered to 11:00, which sits below the stored `joined_at`. A bare write would
+    // trip `meeting_presence_left_after_joined` with 23514; the clamp raises it to `joined_at`
+    // instead, which is legal (the CHECK is `>=`) and bills nothing.
+    const opened = await meetingPresenceRepository.open({
       meetingId: meeting.id,
       userId: expert.id,
       meetingGuestId: null,
       party: 'expert',
-      joinedAt: at(-5),
-      window: WINDOW,
+      joinedAt: at(70),
+      window: { notAfter: at(60) },
     });
+    expect(opened.joinedAt.getTime()).toBe(at(70).getTime());
 
     const closed = await meetingPresenceRepository.close({
       meetingId: meeting.id,
       userId: expert.id,
       meetingGuestId: null,
-      leftAt: at(-2),
-      window: WINDOW,
+      leftAt: at(80),
+      window: { notAfter: at(60) },
     });
 
-    expect(closed?.joinedAt.getTime()).toBe(at(0).getTime());
-    expect(closed?.leftAt?.getTime()).toBe(at(0).getTime());
-    expect(await meetingPresenceRepository.clocks(meeting.id, at(60))).toMatchObject({
+    expect(closed?.joinedAt.getTime()).toBe(at(70).getTime());
+    expect(closed?.leftAt?.getTime()).toBe(at(70).getTime());
+    expect(await clocksOf(meeting.id, at(120))).toMatchObject({
       expertPresentMs: 0,
       billableMs: 0,
     });
+  });
+
+  it('a PRE-START join closed under a window keeps its true join; only the leave is bounded', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -5);
+    const closed = await meetingPresenceRepository.close({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      leftAt: at(10 * 24 * 60),
+      window: WINDOW,
+    });
+
+    expect(closed?.joinedAt.getTime()).toBe(at(-5).getTime());
+    expect(closed?.leftAt?.getTime()).toBe(WINDOW.notAfter.getTime());
   });
 
   it('WITHOUT a window nothing is clamped, and an inverted pair still raises 23514 loudly', async () => {
@@ -564,7 +627,7 @@ describe('meetingPresenceRepository — the R10 write-side clamp', () => {
         meetingGuestId: null,
         party: 'expert',
         joinedAt: at(0),
-        window: { notBefore: new Date(Number.NaN), notAfter: at(60) },
+        window: { notAfter: new Date(Number.NaN) },
       })
     ).rejects.toThrow(InvalidPresenceTimestampError);
   });
@@ -612,29 +675,36 @@ describe('meetingPresenceRepository.closeAllOpen / listOpen', () => {
     expect(rows[0]?.leftAt?.getTime()).toBe(at(30).getTime());
   });
 
-  it('⚠ GREATEST(joined_at, leftAt): an end BEFORE a clamped join degrades, it does not 23514', async () => {
+  it('⚠ GREATEST(joined_at, leftAt): an end BEFORE a stored join degrades, it does not 23514', async () => {
     const { meeting } = await meetingFactory();
     const expert = await userFactory();
 
-    // The real sequence: the expert joined at 09:55, the R10 clamp stored `joined_at = 10:00`,
-    // and then somebody ended the call at 09:58. A bare `SET left_at = $endedAt` writes
+    // A join whose stored instant is AFTER the end the caller supplies (a late-arriving join
+    // webhook for a call somebody already ended). A bare `SET left_at = $endedAt` writes
     // `left_at < joined_at`, trips the CHECK, and — inside `endMeeting`'s transaction — rolls
     // back the WHOLE termination, leaving the meeting un-endable by that path forever.
-    const opened = await meetingPresenceRepository.open({
-      meetingId: meeting.id,
-      userId: expert.id,
-      meetingGuestId: null,
-      party: 'expert',
-      joinedAt: at(-5),
-      window: { notBefore: at(0), notAfter: at(60) },
-    });
-    expect(opened.joinedAt.getTime()).toBe(at(0).getTime());
+    const opened = await join(meeting.id, expert.id, 'expert', 20);
+    expect(opened.joinedAt.getTime()).toBe(at(20).getTime());
 
-    const closed = await meetingPresenceRepository.closeAllOpen(meeting.id, at(-2));
+    const closed = await meetingPresenceRepository.closeAllOpen(meeting.id, at(10));
     expect(closed).toBe(1);
 
     const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
-    expect(rows[0]?.leftAt?.getTime()).toBe(at(0).getTime()); // raised to its own joined_at
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.leftAt?.getTime()).toBe(at(20).getTime()); // raised to its own joined_at
+  });
+
+  it('closeAllOpen leaves a PRE-START join at its true instant', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -5);
+    expect(await meetingPresenceRepository.closeAllOpen(meeting.id, at(30))).toBe(1);
+
+    const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.joinedAt.getTime()).toBe(at(-5).getTime());
+    expect(rows[0]?.leftAt?.getTime()).toBe(at(30).getTime());
   });
 
   it('touches neither ALREADY-CLOSED nor SOFT-DELETED nor OTHER meetings’ intervals', async () => {
@@ -715,7 +785,7 @@ describe('meetingPresenceRepository.closeAllOpen / listOpen', () => {
   });
 });
 
-describe('meetingPresenceRepository.clocks', () => {
+describe('a meeting’s raw clocks (through settlementFacts)', () => {
   it('THE AC REJOIN CASE — a client drop+rejoin yields ONE continuous billable span', async () => {
     const { meeting } = await meetingFactory();
     const expert = await userFactory();
@@ -729,7 +799,7 @@ describe('meetingPresenceRepository.clocks', () => {
     await leave(meeting.id, client.id, 35);
     await leave(meeting.id, expert.id, 40);
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(60));
+    const clocks = await clocksOf(meeting.id, at(60));
 
     // A SUM would be 10 + 10 = 20 min — under-billing the call by the 10-min gap. The
     // SPAN is 5 → 35 = 30 min, gap INCLUSIVE. The timer never restarted.
@@ -752,7 +822,7 @@ describe('meetingPresenceRepository.clocks', () => {
     await join(meeting.id, client.id, 'client', 2);
     await leave(meeting.id, client.id, 28);
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(60));
+    const clocks = await clocksOf(meeting.id, at(60));
 
     expect(clocks.expertFirstJoinedAt?.getTime()).toBe(at(0).getTime());
     expect(clocks.expertPresentMs).toBe(30 * MIN); // 0 → 30, gap inclusive
@@ -766,7 +836,7 @@ describe('meetingPresenceRepository.clocks', () => {
     await join(meeting.id, expert.id, 'expert', 0);
     await leave(meeting.id, expert.id, 15);
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(60));
+    const clocks = await clocksOf(meeting.id, at(60));
 
     expect(clocks.expertPresentMs).toBe(15 * MIN);
     expect(clocks.billableMs).toBe(0);
@@ -783,7 +853,7 @@ describe('meetingPresenceRepository.clocks', () => {
     await leave(meeting.id, staffer.id, 20);
     await leave(meeting.id, expert.id, 20);
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(60));
+    const clocks = await clocksOf(meeting.id, at(60));
 
     expect(clocks.expertPresentMs).toBe(20 * MIN);
     expect(clocks.billableMs).toBe(0);
@@ -798,7 +868,7 @@ describe('meetingPresenceRepository.clocks', () => {
     await join(meeting.id, expert.id, 'expert', 0);
     await join(meeting.id, client.id, 'client', 5);
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(25));
+    const clocks = await clocksOf(meeting.id, at(25));
 
     expect(clocks.expertPresentMs).toBe(25 * MIN);
     expect(clocks.billableMs).toBe(20 * MIN);
@@ -817,7 +887,7 @@ describe('meetingPresenceRepository.clocks', () => {
     await leave(meeting.id, expert.id, 40);
 
     // The meeting is terminal — presence is still a durable BILLING input, not room state.
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(600));
+    const clocks = await clocksOf(meeting.id, at(600));
     expect(clocks.expertPresentMs).toBe(40 * MIN);
     expect(clocks.billableMs).toBe(35 * MIN);
     expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(2);
@@ -838,7 +908,7 @@ describe('meetingPresenceRepository.clocks', () => {
       .set({ deletedAt: new Date() })
       .where(eq(meetingPresence.id, expertInterval.id));
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(60));
+    const clocks = await clocksOf(meeting.id, at(60));
     expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(1);
     expect(clocks.expertPresentMs).toBe(0);
     expect(clocks.billableMs).toBe(0);
@@ -859,7 +929,7 @@ describe('meetingPresenceRepository.clocks', () => {
     await join(meeting.id, client.id, 'client', 2);
 
     // NO explicit `now` — this is exactly how a settlement job would call it.
-    const clocks = await meetingPresenceRepository.clocks(meeting.id);
+    const clocks = await clocksOf(meeting.id);
 
     expect(clocks.expertPresentMs).toBe(30 * MIN);
     expect(clocks.billableMs).toBe(28 * MIN);
@@ -890,13 +960,13 @@ describe('meetingPresenceRepository.clocks', () => {
     const twoAmNextMorning = at(16 * 60);
     expect(twoAmNextMorning.toISOString()).toBe('2026-07-02T02:00:00.000Z');
 
-    const wallClockCeiling = await meetingPresenceRepository.clocks(meeting.id, twoAmNextMorning);
+    const wallClockCeiling = await clocksOf(meeting.id, twoAmNextMorning);
     expect(wallClockCeiling.billableMs).toBe(16 * 60 * MIN);
     // The anchor is the 10:00 JOIN, not the 10:30 end — that is WHY it is 16h and not 15.5h.
     expect(wallClockCeiling.billableStartedAt).toEqual(at(0));
 
     // What the repository does instead: `ended_at` is the ceiling ⇒ the true 30 minutes.
-    const settlementCeiling = await meetingPresenceRepository.clocks(meeting.id);
+    const settlementCeiling = await clocksOf(meeting.id);
     expect(settlementCeiling.billableMs).toBe(30 * MIN);
   });
 
@@ -924,7 +994,7 @@ describe('meetingPresenceRepository.clocks', () => {
       joinedAt: tenMinutesAgo,
     });
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id);
+    const clocks = await clocksOf(meeting.id);
 
     expect(clocks.billableMs).toBeGreaterThanOrEqual(10 * MIN);
     expect(clocks.billableMs).toBeLessThan(11 * MIN);
@@ -955,7 +1025,7 @@ describe('meetingPresenceRepository.clocks', () => {
       joinedAt: fiveMinutesAgo,
     });
 
-    const clocks = await meetingPresenceRepository.clocks(meeting.id);
+    const clocks = await clocksOf(meeting.id);
     expect(clocks.billableMs).toBeGreaterThanOrEqual(5 * MIN);
     expect(clocks.billableMs).toBeLessThan(6 * MIN);
   });
@@ -970,14 +1040,14 @@ describe('meetingPresenceRepository.clocks', () => {
     await join(meeting.id, client.id, 'client', 0);
 
     // ended_at is at(30), but the caller asks for the clocks as at minute 12.
-    const clocks = await meetingPresenceRepository.clocks(meeting.id, at(12));
+    const clocks = await clocksOf(meeting.id, at(12));
     expect(clocks.billableMs).toBe(12 * MIN);
   });
 
   it('a meeting with no presence at all reports zeroed clocks and null anchors', async () => {
     const { meeting } = await meetingFactory();
 
-    expect(await meetingPresenceRepository.clocks(meeting.id, at(60))).toEqual({
+    expect(await clocksOf(meeting.id, at(60))).toEqual({
       expertPresentMs: 0,
       billableMs: 0,
       expertFirstJoinedAt: null,
@@ -1159,7 +1229,10 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
     await leave(meeting.id, client.id, 35);
     await leave(meeting.id, expert.id, 40);
 
-    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+    });
 
     // The SAME numbers `clocks()` gives — `settlementFacts` is not a second, different clock.
     expect(clocks.expertPresentMs).toBe(40 * MIN);
@@ -1188,7 +1261,10 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
     await join(meeting.id, expert.id, 'expert', 5);
     await leave(meeting.id, expert.id, 25);
 
-    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+    });
 
     // Indistinguishable from a no-show on the clocks…
     expect(clocks.billableMs).toBe(0);
@@ -1208,7 +1284,10 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
     await leave(meeting.id, staffer.id, 20);
     await leave(meeting.id, expert.id, 20);
 
-    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+    });
 
     expect(facts.expertEverPresent).toBe(true);
     expect(facts.clientSideEverPresent).toBe(false); // the no-show input
@@ -1223,7 +1302,10 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
     await join(meeting.id, client.id, 'client', 0);
     await leave(meeting.id, client.id, 20);
 
-    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+    });
 
     expect(facts.expertEverPresent).toBe(false);
     expect(facts.clientSideEverPresent).toBe(true);
@@ -1239,7 +1321,10 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
     await join(meeting.id, expert.id, 'expert', 0);
     await join(meeting.id, client.id, 'client', 5);
 
-    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(25));
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(25),
+    });
 
     expect(clocks.expertPresentMs).toBe(25 * MIN);
     expect(clocks.billableMs).toBe(20 * MIN);
@@ -1263,7 +1348,9 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
     await join(meeting.id, expert.id, 'expert', 0);
     await join(meeting.id, client.id, 'client', 2);
 
-    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id);
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+    });
 
     expect(clocks.expertPresentMs).toBe(30 * MIN);
     expect(clocks.billableMs).toBe(28 * MIN);
@@ -1287,7 +1374,10 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
       .set({ deletedAt: new Date() })
       .where(eq(meetingPresence.id, clientInterval.id));
 
-    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+    });
 
     // The client's attendance is gone from the FACTS as well as from the clocks — the two
     // reductions read the SAME rows, which is the whole point of the single read.
@@ -1299,7 +1389,11 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
   it('an EMPTY meeting yields the all-false facts and zero clocks (nobody ever joined)', async () => {
     const { meeting } = await meetingFactory();
 
-    const { clocks, facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+    const { clocks, facts, togetherBeforeStartMs } =
+      await meetingPresenceRepository.settlementFacts(meeting.id, {
+        scheduledStart: at(0),
+        now: at(60),
+      });
 
     expect(facts).toEqual({
       expertEverPresent: false,
@@ -1311,6 +1405,253 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
     });
     expect(clocks.expertPresentMs).toBe(0);
     expect(clocks.billableMs).toBe(0);
+    expect(togetherBeforeStartMs).toBe(0);
+  });
+});
+
+// ── BAL-474 Rule A (D13) — the raw rows, the start-clamped clocks, and the pre-start intersection ──
+
+describe('meetingPresenceRepository.settlementFacts — Rule A (BAL-474) and D15.3: one read, four figures', () => {
+  /** The scheduled start every case below reads against: `T0` (10:00). */
+  const START = at(0);
+
+  async function facts(
+    meetingId: string,
+    now: Date
+  ): Promise<Awaited<ReturnType<typeof meetingPresenceRepository.settlementFacts>>> {
+    return meetingPresenceRepository.settlementFacts(meetingId, { scheduledStart: START, now });
+  }
+
+  it('expert 09:50–10:40 with client 09:50–10:40: clocks are clamped to 10:00 (40 min), 10 minutes were together BEFORE the start', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -10);
+    await join(meeting.id, client.id, 'client', -10);
+    await leave(meeting.id, expert.id, 40);
+    await leave(meeting.id, client.id, 40);
+
+    const { clocks, facts: presenceFacts, togetherBeforeStartMs } = await facts(meeting.id, at(60));
+
+    // The from-start basis — bit for bit what the write-side clamp used to produce.
+    expect(clocks.expertPresentMs).toBe(40 * MIN);
+    expect(clocks.billableMs).toBe(40 * MIN);
+    expect(clocks.expertFirstJoinedAt?.getTime()).toBe(START.getTime());
+    expect(clocks.billableStartedAt?.getTime()).toBe(START.getTime());
+    // The figure the clamp would have destroyed.
+    expect(togetherBeforeStartMs).toBe(10 * MIN);
+    // The facts read the RAW rows: the first join is the true 09:50.
+    expect(presenceFacts.expertFirstJoinedAt?.getTime()).toBe(at(-10).getTime());
+    // …and the rows themselves are stored at their true instants.
+    const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.joinedAt.getTime())).toEqual([
+      at(-10).getTime(),
+      at(-10).getTime(),
+    ]);
+  });
+
+  it('⚠ D15.3: expert 09:00–09:30 then 10:10–11:00 (client with them both times): the from-start figure is 50, though the clamped clock reads 60', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -60);
+    await join(meeting.id, client.id, 'client', -60);
+    await leave(meeting.id, expert.id, -30);
+    await leave(meeting.id, client.id, -30);
+    await join(meeting.id, expert.id, 'expert', 10);
+    await join(meeting.id, client.id, 'client', 10);
+    await leave(meeting.id, expert.id, 60);
+    await leave(meeting.id, client.id, 60);
+
+    const { clocks, togetherBeforeStartMs, expertPresentFromStartMs } = await facts(
+      meeting.id,
+      at(120)
+    );
+
+    expect(togetherBeforeStartMs).toBe(30 * MIN);
+    // The clamped clock collapses the 09:00–09:30 row AT the start and so anchors there: the shape/no-show clock.
+    expect(clocks.expertPresentMs).toBe(60 * MIN);
+    // The billing figure counts from the first presence at or after the start.
+    expect(expertPresentFromStartMs).toBe(50 * MIN);
+  });
+
+  it('D15.3: an expert row that SPANS the start begins at the start; an expert only before it is 0', async () => {
+    const spanning = await meetingFactory();
+    const expertA = await userFactory();
+    await join(spanning.meeting.id, expertA.id, 'expert', -10);
+    await leave(spanning.meeting.id, expertA.id, 40);
+    expect((await facts(spanning.meeting.id, at(60))).expertPresentFromStartMs).toBe(40 * MIN);
+
+    const early = await meetingFactory();
+    const expertB = await userFactory();
+    await join(early.meeting.id, expertB.id, 'expert', -30);
+    await leave(early.meeting.id, expertB.id, -5);
+    expect((await facts(early.meeting.id, at(60))).expertPresentFromStartMs).toBe(0);
+  });
+
+  it('THE D13 EXAMPLE: expert 09:00–11:00, client 09:00–09:01 then 10:00–11:00 ⇒ ONE minute together before the start', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -60);
+    await join(meeting.id, client.id, 'client', -60);
+    await leave(meeting.id, client.id, -59);
+    await join(meeting.id, client.id, 'client', 0);
+    await leave(meeting.id, client.id, 60);
+    await leave(meeting.id, expert.id, 60);
+
+    const { clocks, togetherBeforeStartMs } = await facts(meeting.id, at(120));
+
+    // A SUM of intersections, not the gap-inclusive span: the 58-minute hole adds nothing.
+    expect(togetherBeforeStartMs).toBe(1 * MIN);
+    expect(clocks.expertPresentMs).toBe(60 * MIN);
+    expect(clocks.billableMs).toBe(60 * MIN);
+    expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(3);
+  });
+
+  it('a client who drops and rejoins BEFORE the start adds the two intersections, not the span', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -10);
+    await join(meeting.id, client.id, 'client', -10);
+    await leave(meeting.id, client.id, -8); // 2 min together
+    await join(meeting.id, client.id, 'client', -3);
+    await leave(meeting.id, client.id, 5); // 3 min together before the start
+    await leave(meeting.id, expert.id, 10);
+
+    const { togetherBeforeStartMs } = await facts(meeting.id, at(60));
+
+    expect(togetherBeforeStartMs).toBe(5 * MIN);
+  });
+
+  it('a SOLO early expert ⇒ 0 together, while the clocks still start at the scheduled start', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -10);
+    await join(meeting.id, client.id, 'client', 5);
+    await leave(meeting.id, client.id, 30);
+    await leave(meeting.id, expert.id, 30);
+
+    const { clocks, togetherBeforeStartMs } = await facts(meeting.id, at(60));
+
+    expect(togetherBeforeStartMs).toBe(0);
+    expect(clocks.expertPresentMs).toBe(30 * MIN); // clamped: 10:00 → 10:30, not 09:50 → 10:30
+    expect(clocks.billableMs).toBe(25 * MIN);
+  });
+
+  it('an OBSERVER is on neither side of the pre-start intersection', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const staffer = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -10);
+    await join(meeting.id, staffer.id, 'observer', -10);
+    await leave(meeting.id, staffer.id, 20);
+    await leave(meeting.id, expert.id, 20);
+
+    const { clocks, facts: presenceFacts, togetherBeforeStartMs } = await facts(meeting.id, at(60));
+
+    expect(togetherBeforeStartMs).toBe(0);
+    expect(presenceFacts.clientSideEverPresent).toBe(false);
+    expect(clocks.billableMs).toBe(0);
+  });
+
+  it('a client-side GUEST counts toward the intersection', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+
+    await join(meeting.id, expert.id, 'expert', -10);
+    await guestJoin(meeting.id, guest.id, 'client', -4);
+    await leave(meeting.id, expert.id, 20);
+    await guestLeave(meeting.id, guest.id, 20);
+
+    const { togetherBeforeStartMs } = await facts(meeting.id, at(60));
+
+    expect(togetherBeforeStartMs).toBe(4 * MIN);
+  });
+
+  it('OPEN rows run to the ceiling: capped at the start once `now` is past it, and cut at `now` when `now` is before it', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -10);
+    await join(meeting.id, client.id, 'client', -5);
+
+    // The same two open rows, read at two different ceilings.
+    const afterStart = await facts(meeting.id, at(30));
+    const beforeStart = await facts(meeting.id, at(-2));
+
+    expect(afterStart.togetherBeforeStartMs).toBe(5 * MIN);
+    expect(afterStart.facts.anyOpen).toBe(true);
+    expect(beforeStart.togetherBeforeStartMs).toBe(3 * MIN);
+    // Clocks: every open interval measured to `now`, from the start.
+    expect(afterStart.clocks.expertPresentMs).toBe(30 * MIN);
+    expect(afterStart.clocks.billableMs).toBe(30 * MIN);
+  });
+
+  it('a meeting where everybody arrives at or after the start has 0 together before it (and unchanged clocks)', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', 0);
+    await join(meeting.id, client.id, 'client', 5);
+
+    const { clocks, togetherBeforeStartMs } = await facts(meeting.id, at(25));
+
+    expect(togetherBeforeStartMs).toBe(0);
+    expect(clocks.expertPresentMs).toBe(25 * MIN);
+    expect(clocks.billableMs).toBe(20 * MIN);
+  });
+
+  it('a SOFT-DELETED pre-start row is invisible to the intersection as well', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -10);
+    const clientRow = await join(meeting.id, client.id, 'client', -10);
+    await leave(meeting.id, client.id, 5);
+    await leave(meeting.id, expert.id, 5);
+
+    expect((await facts(meeting.id, at(60))).togetherBeforeStartMs).toBe(10 * MIN);
+
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, clientRow.id));
+
+    expect((await facts(meeting.id, at(60))).togetherBeforeStartMs).toBe(0);
+  });
+
+  it('with NO `now`, a TERMINAL meeting resolves the ceiling to ended_at for the intersection too', async () => {
+    // Both leave webhooks were lost, so both rows are still open. The call ended at 09:58 — BEFORE the
+    // scheduled start — so the open rows are cut at `ended_at`: 09:55 → 09:58 is 3 minutes together, where
+    // a wall-clock ceiling would have reported 5 (capped at the start).
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', outcome: 'completed', endedAt: at(-2) },
+    });
+    const expert = await userFactory();
+    const client = await userFactory();
+
+    await join(meeting.id, expert.id, 'expert', -10);
+    await join(meeting.id, client.id, 'client', -5);
+
+    const { togetherBeforeStartMs } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: START,
+    });
+
+    expect(togetherBeforeStartMs).toBe(3 * MIN);
   });
 });
 
@@ -1454,8 +1795,238 @@ describe('meetingPresenceRepository.factsByMeetingIds', () => {
     const batched = (await meetingPresenceRepository.factsByMeetingIds([meeting.id])).get(
       meeting.id
     );
-    const { facts } = await meetingPresenceRepository.settlementFacts(meeting.id, at(60));
+    const { facts } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+    });
 
     expect(batched).toEqual(facts);
+  });
+});
+
+// ── BAL-474 — who made the client side present (D5.9), and "has THIS user joined" (D6.4) ──────
+
+describe('meetingPresenceRepository.clientPartyIdentities (BAL-474, D5.9)', () => {
+  it('reports each client-side member once, and each client-party guest with its inviter', async () => {
+    const { meeting } = await meetingFactory();
+    const member = await userFactory();
+    const inviter = await userFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id, invitedById: inviter.id });
+
+    await join(meeting.id, member.id, 'client', 0);
+    await leave(meeting.id, member.id, 5);
+    await join(meeting.id, member.id, 'client', 6); // a rejoin — still ONE member
+    await guestJoin(meeting.id, guest.id, 'client', 1);
+
+    expect(await meetingPresenceRepository.clientPartyIdentities(meeting.id)).toEqual({
+      memberUserIds: [member.id],
+      guestInviterIds: [inviter.id],
+    });
+  });
+
+  it('ignores expert-side, observer and soft-deleted intervals', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const staff = await userFactory();
+    const departed = await userFactory();
+    await join(meeting.id, expert.id, 'expert', 0);
+    await join(meeting.id, staff.id, 'observer', 0);
+    const gone = await join(meeting.id, departed.id, 'client', 0);
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, gone.id));
+
+    expect(await meetingPresenceRepository.clientPartyIdentities(meeting.id)).toEqual({
+      memberUserIds: [],
+      guestInviterIds: [],
+    });
+  });
+});
+
+describe('R6F-4a — the pre-start together term drops the delivering expert’s OWN invited guests (ADR-1040 Amendment 7 §E)', () => {
+  /** An expert who is ALSO a client member, an own guest they invited, and a real client member. */
+  async function scene() {
+    const { meeting } = await meetingFactory();
+    const expertUser = await userFactory();
+    const expert = await expertFactory({ userId: expertUser.id });
+    const member = await userFactory();
+    const otherInviter = await userFactory();
+    const { guest: ownGuest } = await meetingGuestFactory({
+      meetingId: meeting.id,
+      invitedById: expertUser.id,
+    });
+    const { guest: otherGuest } = await meetingGuestFactory({
+      meetingId: meeting.id,
+      invitedById: otherInviter.id,
+    });
+    return { meeting, expertUser, expert, member, ownGuest, otherGuest };
+  }
+
+  it('⚠⚠ expert 09:50–10:40 with their OWN guest 09:50–10:40 (client party): 0 minutes together before the start, though the shape still sees a client', async () => {
+    const { meeting, expertUser, expert, ownGuest } = await scene();
+    await join(meeting.id, expertUser.id, 'expert', -10);
+    await guestJoin(meeting.id, ownGuest.id, 'client', -10);
+    await leave(meeting.id, expertUser.id, 40);
+    await meetingPresenceRepository.close({
+      meetingId: meeting.id,
+      userId: null,
+      meetingGuestId: ownGuest.id,
+      leftAt: at(40),
+    });
+
+    const withGuard = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+      resolveExpertProfileId: async () => expert.id,
+    });
+    const withoutGuard = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+    });
+
+    expect(withGuard.togetherBeforeStartMs).toBe(0);
+    // The guard NEVER touches the shape: the guest still makes `clientSideEverPresent` true (that call is
+    // `not_billable` through the D5.9 guard, not a billed no-show), and the from-start clock is unchanged.
+    expect(withGuard.facts.clientSideEverPresent).toBe(true);
+    expect(withGuard.clocks.expertPresentMs).toBe(40 * MIN);
+    expect(withGuard.clocks.billableMs).toBe(40 * MIN);
+    // Positive control: without naming the expert nothing is dropped.
+    expect(withoutGuard.togetherBeforeStartMs).toBe(10 * MIN);
+  });
+
+  it('a guest invited by SOMEONE ELSE, and a real client member, still count before the start', async () => {
+    const { meeting, expertUser, expert, member, otherGuest } = await scene();
+    await join(meeting.id, expertUser.id, 'expert', -10);
+    await join(meeting.id, member.id, 'client', -8); // 8 minutes together
+    await guestJoin(meeting.id, otherGuest.id, 'client', -10); // merged with the member: 10 minutes total
+    await leave(meeting.id, expertUser.id, 20);
+
+    const { togetherBeforeStartMs } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+      resolveExpertProfileId: async () => expert.id,
+    });
+
+    expect(togetherBeforeStartMs).toBe(10 * MIN);
+  });
+
+  it('an own guest beside a real member: only the member’s minutes count (the guest’s span is dropped, not merged in)', async () => {
+    const { meeting, expertUser, expert, member, ownGuest } = await scene();
+    await join(meeting.id, expertUser.id, 'expert', -20);
+    await guestJoin(meeting.id, ownGuest.id, 'client', -20); // would be 20 minutes
+    await join(meeting.id, member.id, 'client', -5); // 5 minutes
+    await leave(meeting.id, expertUser.id, 30);
+
+    const { togetherBeforeStartMs } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(60),
+      resolveExpertProfileId: async () => expert.id,
+    });
+
+    expect(togetherBeforeStartMs).toBe(5 * MIN);
+  });
+
+  it('the lookup is LAZY: with no client-party guest row the resolver is never called', async () => {
+    const { meeting, expertUser, member } = await scene();
+    await join(meeting.id, expertUser.id, 'expert', -10);
+    await join(meeting.id, member.id, 'client', -10);
+    const resolver = vi.fn(async () => null);
+
+    const { togetherBeforeStartMs } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(30),
+      resolveExpertProfileId: resolver,
+    });
+
+    expect(togetherBeforeStartMs).toBe(10 * MIN);
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('an unresolvable expert (null profile) drops nothing — it fails toward billing', async () => {
+    const { meeting, expertUser, ownGuest } = await scene();
+    await join(meeting.id, expertUser.id, 'expert', -10);
+    await guestJoin(meeting.id, ownGuest.id, 'client', -10);
+
+    const { togetherBeforeStartMs } = await meetingPresenceRepository.settlementFacts(meeting.id, {
+      scheduledStart: at(0),
+      now: at(30),
+      resolveExpertProfileId: async () => null,
+    });
+
+    expect(togetherBeforeStartMs).toBe(10 * MIN);
+  });
+
+  it('omitExpertInvitedGuestRows filters exactly the own-guest CLIENT rows and nothing else', async () => {
+    const { meeting, expertUser, expert, member, ownGuest, otherGuest } = await scene();
+    await join(meeting.id, expertUser.id, 'expert', -10);
+    await join(meeting.id, member.id, 'client', -10);
+    await guestJoin(meeting.id, ownGuest.id, 'client', -10);
+    await guestJoin(meeting.id, otherGuest.id, 'client', -10);
+
+    const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+    const kept = await meetingPresenceRepository.omitExpertInvitedGuestRows(
+      rows,
+      async () => expert.id
+    );
+
+    expect(rows).toHaveLength(4);
+    expect(kept).toHaveLength(3);
+    expect(kept.map((row) => row.meetingGuestId)).not.toContain(ownGuest.id);
+    expect(kept.map((row) => row.meetingGuestId)).toContain(otherGuest.id);
+  });
+});
+
+describe('meetingPresenceRepository.hasOwnClientInterval (BAL-474, D6.4)', () => {
+  it('is true for an OPEN, a CLOSED and a ZERO-LENGTH client interval of this user', async () => {
+    const { meeting: openMeeting } = await meetingFactory();
+    const { meeting: closedMeeting } = await meetingFactory();
+    const { meeting: blipMeeting } = await meetingFactory();
+    const member = await userFactory();
+
+    await join(openMeeting.id, member.id, 'client', 0);
+    await join(closedMeeting.id, member.id, 'client', 0);
+    await leave(closedMeeting.id, member.id, 12);
+    await join(blipMeeting.id, member.id, 'client', 3);
+    await leave(blipMeeting.id, member.id, 3);
+
+    for (const meetingId of [openMeeting.id, closedMeeting.id, blipMeeting.id]) {
+      expect(await meetingPresenceRepository.hasOwnClientInterval(meetingId, member.id)).toBe(true);
+    }
+  });
+
+  it('is false for another user’s row, an observer row, a guest row, a soft-deleted row, and another meeting', async () => {
+    const { meeting } = await meetingFactory();
+    const { meeting: elsewhere } = await meetingFactory();
+    const member = await userFactory();
+    const colleague = await userFactory();
+
+    // Another member was in the room — D6.4 asks about THIS principal's own presence.
+    await join(meeting.id, colleague.id, 'client', 0);
+    expect(await meetingPresenceRepository.hasOwnClientInterval(meeting.id, member.id)).toBe(false);
+
+    // An observer row of the SAME user does not make the client side present.
+    await join(meeting.id, member.id, 'observer', 0);
+    expect(await meetingPresenceRepository.hasOwnClientInterval(meeting.id, member.id)).toBe(false);
+    await leave(meeting.id, member.id, 0); // close it, so the client join below opens its own row
+
+    // A guest-token row (no user id) is not this user's authenticated presence.
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+    await guestJoin(meeting.id, guest.id, 'client', 0);
+    expect(await meetingPresenceRepository.hasOwnClientInterval(meeting.id, member.id)).toBe(false);
+
+    // Present on ANOTHER meeting only.
+    await join(elsewhere.id, member.id, 'client', 0);
+    expect(await meetingPresenceRepository.hasOwnClientInterval(meeting.id, member.id)).toBe(false);
+
+    // A soft-deleted client interval does not count (anti-vacuity: it counted while live).
+    const deleted = await join(meeting.id, member.id, 'client', 1);
+    expect(deleted.party).toBe('client');
+    expect(await meetingPresenceRepository.hasOwnClientInterval(meeting.id, member.id)).toBe(true);
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, deleted.id));
+    expect(await meetingPresenceRepository.hasOwnClientInterval(meeting.id, member.id)).toBe(false);
   });
 });

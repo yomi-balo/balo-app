@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
+import { log } from '@/lib/logging';
 import type { RecapContextType } from '@/lib/meetings/end-of-call-view-types';
 
 const MEETING_ID = 'a0000000-0000-4000-8000-000000000001';
@@ -18,12 +19,16 @@ const mockFindProfile = vi.fn();
 const mockFindCase = vi.fn();
 const mockCreditSessions = vi.fn();
 const mockFindNames = vi.fn();
+const mockFindClosureSubject = vi.fn();
 
 vi.mock('@balo/db', () => ({
   transcriptsRepository: { findByMeetingId: (...a: unknown[]) => mockFindTranscript(...a) },
   companiesRepository: { findNameById: (...a: unknown[]) => mockFindCompany(...a) },
   expertsRepository: { findDisplayProfileById: (...a: unknown[]) => mockFindProfile(...a) },
-  caseEngagementsRepository: { findByEngagementId: (...a: unknown[]) => mockFindCase(...a) },
+  caseEngagementsRepository: {
+    findByEngagementId: (...a: unknown[]) => mockFindCase(...a),
+    findClosureSubject: (...a: unknown[]) => mockFindClosureSubject(...a),
+  },
   // Present ONLY so a regression that starts reading money here fails loudly rather than
   // exploding on a missing export. Nothing in the loader may call it.
   creditSessionsRepository: { findIdByMeetingId: (...a: unknown[]) => mockCreditSessions(...a) },
@@ -116,6 +121,13 @@ function seed(): void {
   });
   mockFindNames.mockResolvedValue([{ id: REQUESTER_ID, firstName: 'Amara', lastName: 'Okafor' }]);
   mockFormatRequester.mockReturnValue('Amara Okafor @ CloudPeak');
+  mockFindClosureSubject.mockResolvedValue({
+    companyId: COMPANY_ID,
+    expertProfileId: PROFILE_ID,
+    isActive: true,
+    closedAt: null,
+    closedByUserId: null,
+  });
 }
 
 /** The case row shape, with the resolution-request pair supplied per test. */
@@ -161,6 +173,260 @@ describe('loadEndOfCall — the gate', () => {
       expect(view, status + ' must still render').not.toBeNull();
       expect(view?.durationMinutes).toBeNull();
     }
+  });
+});
+
+/**
+ * BAL-474 (R6-C5) — `beganEarly`: the meeting is `in_progress` while `now < scheduled_start`. It selects the
+ * "Your call is still open" arm; it does NOT touch post-call eligibility.
+ */
+describe('loadEndOfCall — beganEarly (R6-C5)', () => {
+  beforeEach(seed);
+
+  async function beganEarlyFor(status: string, scheduledStart: Date): Promise<boolean | undefined> {
+    mockResolveAccess.mockResolvedValue(
+      access({ meeting: meeting({ status, scheduledStart, startedAt: null, endedAt: null }) })
+    );
+    return (await loadEndOfCall(MEETING_ID, USER_ID, NOW))?.beganEarly;
+  }
+
+  it('⚠⚠ is true ONLY for an in_progress meeting whose start is still ahead', async () => {
+    expect(await beganEarlyFor('in_progress', FUTURE_START)).toBe(true);
+  });
+
+  it('⚠ is false once the start has passed, even while in_progress', async () => {
+    expect(await beganEarlyFor('in_progress', PAST_START)).toBe(false);
+  });
+
+  it('⚠ is false at exactly the start instant — the boundary is strict', async () => {
+    expect(await beganEarlyFor('in_progress', NOW)).toBe(false);
+  });
+
+  it('⚠ is false for every status other than in_progress, whatever the start', async () => {
+    for (const status of ['scheduled', 'waiting_for_participants', 'ended', 'cancelled']) {
+      expect(await beganEarlyFor(status, FUTURE_START), status).toBe(false);
+    }
+  });
+
+  it('⚠ leaves post-call eligibility UNCHANGED — a future in_progress meeting still gets no rating and no resolve', async () => {
+    mockResolveAccess.mockResolvedValue(
+      access({ meeting: meeting({ status: 'in_progress', scheduledStart: FUTURE_START }) })
+    );
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view).toMatchObject({ beganEarly: true, meetingHeld: false });
+    expect(view).toMatchObject({ rating: null, resolve: null });
+  });
+
+  /**
+   * BAL-474 (R6F-14) — the early-call body says "rejoin from the case page", so the arm is a CASE arm only. A
+   * non-case early call keeps "Nothing to wrap up yet" (its onward CTA is "View recap", not the case page).
+   */
+  it('⚠⚠ is false for a NON-case context that is in_progress with the start still ahead', async () => {
+    mockResolveAccess.mockResolvedValue(
+      access({
+        meeting: meeting({
+          status: 'in_progress',
+          scheduledStart: FUTURE_START,
+          startedAt: null,
+          endedAt: null,
+        }),
+        subject: { contextType: 'project_kickoff', contextId: ENGAGEMENT_ID },
+      })
+    );
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view).toMatchObject({ beganEarly: false, caseHref: null });
+  });
+
+  it('⚠ is false for a non-case context on the expert lens too', async () => {
+    mockResolveAccess.mockResolvedValue(
+      access({
+        lens: 'expert',
+        meeting: meeting({ status: 'in_progress', scheduledStart: FUTURE_START }),
+        subject: { contextType: 'request_interaction', contextId: ENGAGEMENT_ID },
+      })
+    );
+    expect((await loadEndOfCall(MEETING_ID, USER_ID, NOW))?.beganEarly).toBe(false);
+  });
+});
+
+/**
+ * BAL-474 (R6F-2, D15.4) — `caseClosure`: the meeting ENDED as a client no-show on a CASE that was closed before
+ * its start. The predicate for "closed before the start" is the shared `caseClosedBeforeStart`; every negative
+ * below also asserts the reads that must NOT have been issued.
+ */
+describe('loadEndOfCall — the voided no-show arm (R6F-2)', () => {
+  beforeEach(seed);
+
+  const CLOSER_ID = '11111111-0000-4000-8000-000000000007';
+  const BEFORE_START = new Date('2026-08-12T08:30:00.000Z');
+
+  /** Arms the voided-no-show fixture; every parameter is overridable per negative test. */
+  function arm(
+    over: {
+      meetingOver?: Record<string, unknown>;
+      accessOver?: Record<string, unknown>;
+      /** `undefined` ⇒ `findClosureSubject` resolves nothing (a missing / non-case engagement). */
+      subject?: Record<string, unknown> | undefined;
+      closedAt?: Date | null;
+      closedByUserId?: string | null;
+    } = {}
+  ): void {
+    mockResolveAccess.mockResolvedValue(
+      access({
+        meeting: meeting({ status: 'ended', outcome: 'no_show_client', ...over.meetingOver }),
+        ...over.accessOver,
+      })
+    );
+    mockFindClosureSubject.mockResolvedValue(
+      'subject' in over
+        ? over.subject
+        : {
+            companyId: COMPANY_ID,
+            expertProfileId: PROFILE_ID,
+            isActive: false,
+            closedAt: 'closedAt' in over ? over.closedAt : BEFORE_START,
+            closedByUserId: 'closedByUserId' in over ? over.closedByUserId : CLOSER_ID,
+          }
+    );
+    mockFindNames.mockResolvedValue([{ id: CLOSER_ID, firstName: 'Dana', lastName: 'Reyes' }]);
+  }
+
+  const DANA = { closedByFirstName: 'Dana', companyName: 'Northwind Industrial' };
+
+  it('⚠⚠ is ON for an ended no_show_client on a case closed before the start — CLIENT lens, no rating, no resolve', async () => {
+    arm();
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view).toMatchObject({ lens: 'client', caseClosure: DANA, rating: null, resolve: null });
+  });
+
+  it('⚠⚠ is ON for the EXPERT lens, which still carries neither field', async () => {
+    arm({ accessOver: { lens: 'expert' } });
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view).toMatchObject({ lens: 'expert', caseClosure: DANA });
+    expect(view).not.toHaveProperty('rating');
+    expect(view).not.toHaveProperty('resolve');
+  });
+
+  it('⚠ reads the closer by the case row’s closed_by_user_id, and the company ONCE', async () => {
+    arm();
+    await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(mockFindClosureSubject).toHaveBeenCalledWith(ENGAGEMENT_ID, { requireActive: false });
+    expect(mockFindNames).toHaveBeenCalledWith([CLOSER_ID]);
+    expect(mockFindCompany).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ names no closer when the sweep closed the case, and issues no user read for it', async () => {
+    arm({ closedByUserId: null });
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view?.caseClosure).toEqual({
+      closedByFirstName: null,
+      companyName: 'Northwind Industrial',
+    });
+    expect(mockFindNames).not.toHaveBeenCalled();
+  });
+
+  it('⚠ names no company when the company row is missing, and no closer when the user row is blank', async () => {
+    arm();
+    mockFindCompany.mockResolvedValue(undefined);
+    mockFindNames.mockResolvedValue([{ id: CLOSER_ID, firstName: '  ', lastName: null }]);
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view?.caseClosure).toEqual({ closedByFirstName: null, companyName: null });
+  });
+
+  it('⚠ a non-active case with NO close instant is still closed-before-the-start (never billed on a guess)', async () => {
+    arm({ closedAt: null, closedByUserId: null });
+    expect((await loadEndOfCall(MEETING_ID, USER_ID, NOW))?.caseClosure).not.toBeNull();
+  });
+
+  it('⚠⚠ NEGATIVE — a case closed AFTER the start is not the arm (the no-show is still owed)', async () => {
+    for (const closedAt of [PAST_START, new Date('2026-08-12T09:30:00.000Z')]) {
+      arm({ closedAt });
+      const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+      expect(view?.caseClosure, closedAt.toISOString()).toBeNull();
+      // The ordinary client arm is intact: the rating is offered again.
+      expect(view).toMatchObject({ lens: 'client', rating: { state: { kind: 'none' } } });
+    }
+    expect(mockFindNames).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ NEGATIVE — an ACTIVE case is not the arm, and its case row is not read for a close instant', async () => {
+    arm({
+      subject: {
+        companyId: COMPANY_ID,
+        expertProfileId: PROFILE_ID,
+        isActive: true,
+        closedAt: null,
+        closedByUserId: null,
+      },
+      accessOver: { lens: 'expert' },
+    });
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view?.caseClosure).toBeNull();
+    expect(mockFindNames).not.toHaveBeenCalled();
+  });
+
+  it('⚠ NEGATIVE — a missing engagement is not the arm', async () => {
+    arm({ subject: undefined });
+    expect((await loadEndOfCall(MEETING_ID, USER_ID, NOW))?.caseClosure).toBeNull();
+  });
+
+  it('⚠⚠ NEGATIVE — a HELD call (any outcome other than no_show_client) is not the arm, and issues no closure read', async () => {
+    for (const outcome of ['completed', 'missed_call', null]) {
+      arm({ meetingOver: { outcome } });
+      const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+      expect(view?.caseClosure, String(outcome)).toBeNull();
+      expect(mockFindClosureSubject, String(outcome)).not.toHaveBeenCalled();
+    }
+    expect(mockFindNames).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ NEGATIVE — a status other than ended is not the arm, even with the outcome set', async () => {
+    for (const status of ['scheduled', 'waiting_for_participants', 'in_progress', 'cancelled']) {
+      arm({ meetingOver: { status } });
+      const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+      expect(view?.caseClosure, status).toBeNull();
+      expect(mockFindClosureSubject, status).not.toHaveBeenCalled();
+    }
+  });
+
+  it('⚠⚠ NEGATIVE — a non-case context is not the arm, and issues no closure read', async () => {
+    arm({ accessOver: { subject: { contextType: 'project_kickoff', contextId: ENGAGEMENT_ID } } });
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view?.caseClosure).toBeNull();
+    expect(mockFindClosureSubject).not.toHaveBeenCalled();
+    expect(mockFindNames).not.toHaveBeenCalled();
+  });
+
+  it('⚠ NEGATIVE — an ordinary meeting issues no closure read at all', async () => {
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view?.caseClosure).toBeNull();
+    expect(mockFindClosureSubject).not.toHaveBeenCalled();
+  });
+
+  it('⚠⚠ a failed read degrades to null (the ordinary arms) and is LOGGED', async () => {
+    arm();
+    mockFindClosureSubject.mockRejectedValue(new Error('connection reset'));
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view).toMatchObject({ lens: 'client', caseClosure: null });
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('case-closure read failed'),
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        error: 'connection reset',
+        stack: expect.any(String),
+      })
+    );
+  });
+
+  it('⚠ a failed user read degrades the same way', async () => {
+    arm();
+    mockFindNames.mockRejectedValue('not an Error');
+    const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(view?.caseClosure).toBeNull();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ error: 'not an Error', stack: undefined })
+    );
   });
 });
 

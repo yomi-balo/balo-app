@@ -505,10 +505,17 @@ function UpcomingTitle(props: Readonly<UpcomingTitleProps>): React.JSX.Element {
  * ⚠ GENDER-NEUTRAL, and the deadline-free register CLAUDE.md asks for: "go in when you're ready",
  * never a countdown-led instruction. MJ sign-off on all four strings is flagged in the PR body.
  */
-function upcomingBody(lens: 'client' | 'expert', counterparty: string, live: boolean): string {
+export function upcomingBody(
+  lens: 'client' | 'expert',
+  counterparty: string,
+  live: boolean
+): string {
   if (lens === 'client') {
+    // BAL-474 (R6-C7, owner-approved): the old "…the timer starts when you're both in." was false after the
+    // start (a client who arrives late while the expert waited is billed from the start). Before the start only
+    // time you're both in the call is charged, and the sentence says nothing about after it.
     return live
-      ? `${counterparty} will join from here. Go in when you're ready — the timer starts when you're both in.`
+      ? `${counterparty} will join from here. Go in when you're ready — before the start time, you're only charged for time you're both in the call.`
       : `Your call with ${counterparty} is booked. Join from here when it's time, and we'll send a reminder — nothing to do until then.`;
   }
   return live

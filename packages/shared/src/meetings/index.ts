@@ -135,6 +135,10 @@ export * from './mux-playback-policy';
 // calendar's Join affordance and the server's `assertMeetingJoinable` read ONE definition. Note the
 // direction is the OPPOSITE of `cancellable`/`reschedulable` above, deliberately: see its docblock.
 export * from './closed-to-join';
+// BAL-474 (D8.6) — THE ONE DEFINITION of "this booking idempotency key names this booking",
+// moved out of `apps/api`'s `provision-meeting.ts` so the API probe and the web booking action's
+// replay skip classify a key identically. Pure — the callers do the reads.
+export * from './booking-replay';
 
 import type { MeetingPresenceParty } from './guest-participation';
 
@@ -156,6 +160,14 @@ export interface PresenceInterval {
   leftAt: Date | null;
 }
 
+/**
+ * ⚠ BAL-474 (Rule A, D13) — PRESENCE ROWS ARE STORED AT THEIR TRUE INSTANTS. BAL-134's R10 clamp (a
+ * `joined_at` before the scheduled start is raised to it) used to run on the WRITE side; it now runs
+ * here, at READ time, through {@link clampIntervalsToStart}. Every reader that used these clocks
+ * therefore feeds them CLAMPED intervals and gets exactly the figures it always got. The one thing the
+ * clamp destroyed — how long the expert and a client-side participant were really TOGETHER before the
+ * scheduled start — is read from the RAW intervals by {@link coPresentMsBefore}.
+ */
 export interface MeetingClocks {
   /** Span from the FIRST expert join to the last expert presence. Gap-inclusive. */
   expertPresentMs: number;
@@ -338,4 +350,139 @@ export function computeMeetingClocks(intervals: PresenceInterval[], now: Date): 
     expertFirstJoinedAt: expertSpan === null ? null : new Date(expertSpan.startMs),
     billableStartedAt: billableSpan === null ? null : new Date(billableSpan.startMs),
   };
+}
+
+/**
+ * BAL-134's R10 rule, applied at READ time (BAL-474, Rule A): `joinedAt' = max(joinedAt, start)` and
+ * `leftAt' = leftAt === null ? null : max(leftAt, joinedAt')`. An interval that ended before the start
+ * collapses to a zero-length interval AT the start, exactly as the old write-side clamp stored it.
+ *
+ * Generic over the row type so a caller may keep whatever else it carries on each interval. A
+ * non-finite instant is passed through unchanged: {@link computeMeetingClocks} skips it.
+ */
+export function clampIntervalsToStart<T extends PresenceInterval>(
+  intervals: readonly T[],
+  start: Date
+): T[] {
+  const startMs = start.getTime();
+  if (!Number.isFinite(startMs)) {
+    return [...intervals];
+  }
+  return intervals.map((interval) => {
+    const joinedMs = interval.joinedAt.getTime();
+    if (!Number.isFinite(joinedMs)) {
+      return interval;
+    }
+    const joinedAt = joinedMs < startMs ? start : interval.joinedAt;
+    if (interval.leftAt === null) {
+      return { ...interval, joinedAt };
+    }
+    const leftMs = interval.leftAt.getTime();
+    if (!Number.isFinite(leftMs)) {
+      return { ...interval, joinedAt };
+    }
+    const leftAt = leftMs < joinedAt.getTime() ? joinedAt : interval.leftAt;
+    return { ...interval, joinedAt, leftAt };
+  });
+}
+
+/**
+ * BAL-474 (D15.3) — THE FROM-START FIGURE: the gap-inclusive span of the delivering expert's presence AT OR
+ * AFTER `start`. It starts at the expert's first presence at or after `start` (a row that spans `start`
+ * begins at `start`), ends at their last presence, and is `0` when they were never present at or after it.
+ * A row that ended at or before `start` does not anchor it — so an expert who checked in early, left, and came
+ * back late is counted from the return, not from `start`.
+ *
+ * Pass RAW intervals. It is deliberately NOT a function of the start-clamped clocks: the clamp collapses an
+ * expert row that ended before `start` to a zero-length row AT `start`, which would anchor this figure there
+ * (the quirk the no-show clock still carries — `computeMeetingClocks` over clamped intervals). Open rows run
+ * to `now`; a non-finite row is skipped exactly as {@link computeMeetingClocks} skips it.
+ *
+ * One definition: settlement and the state route's "billable so far" chip both reach it through
+ * `billingBasisMs`, so the figure a client watches and the figure it is billed cannot differ.
+ */
+export function expertPresentFromStartMs(
+  intervals: readonly PresenceInterval[],
+  start: Date,
+  now: Date
+): number {
+  const startMs = start.getTime();
+  if (!Number.isFinite(startMs)) {
+    return 0;
+  }
+  const atOrAfter = merge(toSpans(intervals, 'expert', now.getTime())).filter(
+    (span) => span.end > startMs
+  );
+  const first = atOrAfter[0];
+  const last = atOrAfter.at(-1);
+  if (first === undefined || last === undefined) {
+    return 0;
+  }
+  return last.end - Math.max(first.start, startMs);
+}
+
+/**
+ * BAL-474 (Rule A, D13) — the milliseconds the delivering expert AND a client-side participant were
+ * really TOGETHER strictly before `before` (the scheduled start): the sum of the part of every
+ * (expert ∩ client) span that lies before it. An `observer` is on neither side. Open rows run to
+ * `now`. Order-independent; a non-finite row is skipped exactly as {@link computeMeetingClocks}
+ * skips it.
+ *
+ * Pass RAW intervals (never {@link clampIntervalsToStart}ed ones — the clamp is what destroys the
+ * pre-start instants this reads). Unlike the gap-inclusive span the clocks measure, this is a SUM of
+ * intersections: a solo early wait, or one party leaving and returning, adds nothing.
+ */
+export function coPresentMsBefore(
+  intervals: readonly PresenceInterval[],
+  before: Date,
+  now: Date
+): number {
+  const beforeMs = before.getTime();
+  const nowMs = now.getTime();
+  if (!Number.isFinite(beforeMs)) {
+    return 0;
+  }
+  const expert = merge(toSpans(intervals, 'expert', nowMs));
+  const client = merge(toSpans(intervals, 'client', nowMs));
+  let total = 0;
+  for (const span of intersect(expert, client)) {
+    const end = Math.min(span.end, beforeMs);
+    if (end > span.start) {
+      total += end - span.start;
+    }
+  }
+  return total;
+}
+
+/**
+ * BAL-474 (Rule A, D13) — when the co-presence that is running RIGHT NOW began: the later of the
+ * earliest OPEN expert row's join and the earliest OPEN client row's join, or `null` unless a row of
+ * each is open. Only open rows are read (pass `listOpen`'s result). With two devices a party's earliest
+ * open row wins. `observer` rows are ignored; a non-finite join is skipped.
+ *
+ * It answers "since when have both been here?" — the metered clock starts at `max(scheduled start, this)`.
+ */
+export function currentCoPresenceStartedAt(
+  openIntervals: readonly PresenceInterval[]
+): Date | null {
+  let expertSince: number | null = null;
+  let clientSince: number | null = null;
+  for (const interval of openIntervals) {
+    if (interval.leftAt !== null) {
+      continue;
+    }
+    const joinedMs = interval.joinedAt.getTime();
+    if (!Number.isFinite(joinedMs)) {
+      continue;
+    }
+    if (interval.party === 'expert') {
+      expertSince = expertSince === null ? joinedMs : Math.min(expertSince, joinedMs);
+    } else if (interval.party === 'client') {
+      clientSince = clientSince === null ? joinedMs : Math.min(clientSince, joinedMs);
+    }
+  }
+  if (expertSince === null || clientSince === null) {
+    return null;
+  }
+  return new Date(Math.max(expertSince, clientSince));
 }

@@ -89,10 +89,45 @@ export interface BookMeetingInput {
 }
 
 /**
+ * BAL-474 (ADR-1040 Amendment 7 §H) — the funding refusals `POST /meetings` answers for a `case`
+ * context BEFORE any write, as `409 { error }`:
+ *
+ *   - `account_on_hold`  — an open receivable (the soft account hold) refuses a new Case booking;
+ *   - `booking_unfunded` — no active mandate and not enough available credit (BAL-478);
+ *   - `booking_reserved` — planned consultations set the credit aside (D6.5).
+ *
+ * The api's fixed literals are read straight off the body like every other code here, so the
+ * transport passes them through unchanged; this tuple is the ONE list the booking action tests a
+ * failure's `code` against. Each is a refusal the web gate has already met (or will re-run to
+ * name), never a slot problem.
+ */
+export const BOOKING_FUNDING_REFUSAL_CODES = [
+  'account_on_hold',
+  'booking_unfunded',
+  'booking_reserved',
+] as const;
+
+export type BookingFundingRefusalCode = (typeof BOOKING_FUNDING_REFUSAL_CODES)[number];
+
+/**
+ * `503 { error: 'booking_funding_unavailable' }` — the api's own funding read failed, so it fails
+ * the booking CLOSED (it cannot tell a funded company from an unfunded one). Not a refusal: the
+ * action maps it to the generic `booking_failed` path and notifies nobody.
+ */
+export const BOOKING_FUNDING_UNAVAILABLE_CODE = 'booking_funding_unavailable' as const;
+
+export function isBookingFundingRefusalCode(code: string): code is BookingFundingRefusalCode {
+  return (BOOKING_FUNDING_REFUSAL_CODES as readonly string[]).includes(code);
+}
+
+/**
  * `POST /meetings` — book + provision the consultation. Idempotent on `bookingIdempotencyKey`
  * (Decision 7): a retry with the same key against the SAME `contextId` replays the existing
  * meeting rather than creating a second Daily room; against a DIFFERENT `contextId` it 409s
  * `idempotency_key_conflict`.
+ *
+ * A `case` booking may also answer, BEFORE any write, one of the {@link BOOKING_FUNDING_REFUSAL_CODES}
+ * (409) or {@link BOOKING_FUNDING_UNAVAILABLE_CODE} (503) — see those constants.
  */
 export async function postBookMeeting(
   input: BookMeetingInput

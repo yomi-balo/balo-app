@@ -61,6 +61,30 @@ export type BookingFailureCode =
    */
   | 'funding_admins_notified'
   /**
+   * BAL-474 (D6.1) — the paying company has an open receivable (its soft account hold), which
+   * refuses a NEW Case booking until a top-up clears it, AND the booker holds MANAGE_BILLING, so
+   * they can top up themselves. Mirrors `funding_setup_required`: nothing is wrong with the slot,
+   * the case or the session, and the panel reads as a solvable step. Consultations already booked
+   * are unaffected. The failure's `balance` names the figure and the company.
+   */
+  | 'hold_top_up_required'
+  /**
+   * BAL-474 (D6.1) — the same hold, for a booker who does NOT hold MANAGE_BILLING. Mirrors
+   * `funding_admins_notified`: its own code so the panel never offers a dead-end Top-up, and its
+   * promise ("your billing admins have been notified") is kept by `enforceBookingFunding`, which
+   * publishes `booking.funding_blocked` before it returns.
+   */
+  | 'hold_admins_notified'
+  /**
+   * BAL-474 (D6.5) — a company WITHOUT an active mandate cannot book past its credit once its
+   * planned consultations are set aside, AND the booker holds MANAGE_BILLING. A check-time soft
+   * reservation, not a ledger hold: the balance still shows in full. The failure's `balance`
+   * carries the figure and the COUNT of planned consultations.
+   */
+  | 'reserved_top_up_required'
+  /** BAL-474 (D6.5) — the same reservation refusal, for a booker without MANAGE_BILLING. */
+  | 'reserved_admins_notified'
+  /**
    * The viewer's WorkOS credential is dead — not a refusal of the booking itself.
    *
    * ⚠ Its own code so it can never be reported as a slot problem: nothing is wrong with the
@@ -80,6 +104,30 @@ export type BookingFailureCode =
    */
   | 'impersonation_refused'
   | 'booking_failed';
+
+/**
+ * BAL-474 — what the balance panel needs to render a hold (D6.1) or a reservation (D6.5)
+ * refusal. Present on a failure whose code is one of the four `hold_*` / `reserved_*` codes.
+ *
+ * ⚠ THE FIGURE IS A TOP-UP AMOUNT, never a debt. `topUpNeededMinor` is `null` ONLY on the hold
+ * variant's failed-heal fallback (a covered hold the booking API could not clear) — the panel
+ * then renders a truthful no-figure body, and nothing ever renders A$0.00. The reserved variant
+ * always has a figure and a count.
+ */
+export interface BookingBalanceFailure {
+  readonly variant: 'hold' | 'reserved';
+  readonly topUpNeededMinor: number | null;
+  /** `reserved` only — how many planned consultations set credit aside. A count, never money. */
+  readonly reservedBookingCount: number | null;
+  /** The company whose balance refused the booking — the Top-up action must target THIS one. */
+  readonly company: {
+    readonly id: string;
+    /** `null` ⇒ the name read failed; the panel says "your team". */
+    readonly name: string | null;
+    /** True ⇒ already the active workspace, so Top-up needs no switch. */
+    readonly isActive: boolean;
+  };
+}
 
 export type BookConsultationResult =
   | {
@@ -117,4 +165,10 @@ export type BookConsultationResult =
        */
       engagementId?: string;
       caseTitle?: string;
+      /**
+       * BAL-474 — present iff `code` is a `hold_*` / `reserved_*` code. On a `stage: 'meeting'`
+       * refusal (the API's pre-write funding guard answered after the case row was written)
+       * `engagementId`/`caseTitle` ride along so the panel can say the case is saved.
+       */
+      balance?: BookingBalanceFailure;
     };

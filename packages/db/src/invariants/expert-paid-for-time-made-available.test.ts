@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolveMeetingSettlement, clampedExpertPresentMs } from '@balo/shared/credit';
+import {
+  resolveMeetingSettlement,
+  clampedExpertPresentMs,
+  type MeetingSettlementInput,
+} from '@balo/shared/credit';
 import type { MeetingClocks } from '@balo/shared/meetings';
 
 /**
@@ -22,6 +26,14 @@ import type { MeetingClocks } from '@balo/shared/meetings';
  * (decision D2): the expert WAS present, but left BELOW the floor with no client ever present.
  * The floor-is-never-undercut assertion below therefore holds only over the two shapes where
  * money is actually owed (`held` / `no_show_client`), never over the two zero shapes.
+ *
+ * ⚠ BAL-474 (ADR-1040 Amendment 7 §C/§D) — THIS FILE PINS THE PURE CORE; THE END-TO-END
+ * REACHABILITY LIVES IN `apps/api/src/invariants/a-client-no-show-consumes-exactly-the-floor.integration.test.ts`
+ * (F3). Before BAL-474 a client no-show had no credit session at all (one opened only when a
+ * client member was admitted), so "a client no-show bills the floor FLAT" below was true of the
+ * pure core and unreachable in production. F3 drives the real terminal paths and proves the floor
+ * is actually consumed; the source scan at the bottom of this file proves the sessionless open
+ * settles through this SAME pure core rather than a second settlement branch.
  */
 
 const MS_PER_MINUTE = 60_000;
@@ -31,6 +43,21 @@ const SCHEDULED_START = new Date('2026-08-20T10:00:00.000Z');
 /** Deliberately DISTINCT rates so "same MINUTE count" is never confused with "same AMOUNT". */
 const CLIENT_RATE_MINOR_PER_MINUTE = 700;
 const EXPERT_RATE_MINOR_PER_MINUTE = 500;
+
+/**
+ * D15.3 — the `held` from-start figure is its own settlement input. Every case below has the expert present
+ * from the start with no earlier row that ended before it, where it equals the clamped clock's figure, so it
+ * defaults to that; the D15.3 case passes it explicitly.
+ */
+function settle(
+  input: Omit<MeetingSettlementInput, 'expertPresentFromStartMs'> &
+    Partial<Pick<MeetingSettlementInput, 'expertPresentFromStartMs'>>
+): ReturnType<typeof resolveMeetingSettlement> {
+  return resolveMeetingSettlement({
+    expertPresentFromStartMs: clampedExpertPresentMs(input.clocks, input.scheduledStart),
+    ...input,
+  });
+}
 
 /** Build the `MeetingClocks` a `client`-side-present (or absent) span of `spanMs` implies. */
 function clocksFor(spanMs: number, clientSideEverPresent: boolean): MeetingClocks {
@@ -69,12 +96,13 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
 
       it.each(EXPERT_PRESENT_SPANS_MS)('expert present %ims', (spanMs) => {
         for (const clientSideEverPresent of [true, false]) {
-          const settlement = resolveMeetingSettlement({
+          const settlement = settle({
             clocks: clocksFor(spanMs, clientSideEverPresent),
             scheduledStart: SCHEDULED_START,
             clientSideEverPresent,
             floorMs,
             minutesAlreadyDrawn: 0,
+            togetherBeforeStartMs: 0,
             maxBillableMinutes: MAX_BILLABLE_MINUTES,
           });
           // `abandoned_wait` is deliberately EXCLUDED — it is the money-owed-NOTHING shape
@@ -120,12 +148,13 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
       for (const spanMs of EXPERT_PRESENT_SPANS_MS) {
         for (const clientSideEverPresent of [true, false]) {
           for (const minutesAlreadyDrawn of DRAWN_CASES) {
-            const settlement = resolveMeetingSettlement({
+            const settlement = settle({
               clocks: clocksFor(spanMs, clientSideEverPresent),
               scheduledStart: SCHEDULED_START,
               clientSideEverPresent,
               floorMs,
               minutesAlreadyDrawn,
+              togetherBeforeStartMs: 0,
               maxBillableMinutes: MAX_BILLABLE_MINUTES,
             });
             // The range starts immediately after what was already drawn — never re-posting a
@@ -170,13 +199,14 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
    * where the floor IS the entire charge.
    */
   it('⚠ floorApplied is FALSE when the no-refund clamp — not the floor — raised the figure', () => {
-    const settlement = resolveMeetingSettlement({
+    const settlement = settle({
       // A 6-minute held call under a 6-minute floor: the rule figure is 6, equal to actual.
       clocks: clocksFor(6 * MS_PER_MINUTE, true),
       scheduledStart: SCHEDULED_START,
       clientSideEverPresent: true,
       floorMs: 6 * MS_PER_MINUTE,
       minutesAlreadyDrawn: 10, // …but ten minutes were already drawn.
+      togetherBeforeStartMs: 0,
       maxBillableMinutes: MAX_BILLABLE_MINUTES,
     });
     expect(settlement.ruleMinutes).toBe(6);
@@ -188,12 +218,13 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
   });
 
   it('⚠ …and TRUE when the floor genuinely bound, clamp or no clamp', () => {
-    const floored = resolveMeetingSettlement({
+    const floored = settle({
       clocks: clocksFor(6 * MS_PER_MINUTE, true),
       scheduledStart: SCHEDULED_START,
       clientSideEverPresent: true,
       floorMs: 15 * MS_PER_MINUTE,
       minutesAlreadyDrawn: 0,
+      togetherBeforeStartMs: 0,
       maxBillableMinutes: MAX_BILLABLE_MINUTES,
     });
     expect(floored.ruleMinutes).toBe(15);
@@ -217,12 +248,13 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
    */
   it('⚠ a client no-show bills the floor FLAT — a 40-minute wait bills the floor, not 40', () => {
     for (const floorMinutes of FLOORS_MINUTES) {
-      const settlement = resolveMeetingSettlement({
+      const settlement = settle({
         clocks: clocksFor(40 * MS_PER_MINUTE, false),
         scheduledStart: SCHEDULED_START,
         clientSideEverPresent: false,
         floorMs: floorMinutes * MS_PER_MINUTE,
         minutesAlreadyDrawn: 0,
+        togetherBeforeStartMs: 0,
         maxBillableMinutes: MAX_BILLABLE_MINUTES,
       });
       expect(settlement.shape).toBe('no_show_client');
@@ -237,12 +269,13 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
   });
 
   it('⚠ …while `held` is UNCHANGED — a real two-party 40-minute call still bills 40', () => {
-    const settlement = resolveMeetingSettlement({
+    const settlement = settle({
       clocks: clocksFor(40 * MS_PER_MINUTE, true),
       scheduledStart: SCHEDULED_START,
       clientSideEverPresent: true,
       floorMs: 15 * MS_PER_MINUTE,
       minutesAlreadyDrawn: 0,
+      togetherBeforeStartMs: 0,
       maxBillableMinutes: MAX_BILLABLE_MINUTES,
     });
     expect(settlement.shape).toBe('held');
@@ -251,7 +284,7 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
   });
 
   it('⚠ a session where the expert NEVER joined consumes nothing', () => {
-    const settlement = resolveMeetingSettlement({
+    const settlement = settle({
       clocks: {
         expertPresentMs: 0,
         billableMs: 0,
@@ -262,6 +295,7 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
       clientSideEverPresent: false,
       floorMs: 15 * MS_PER_MINUTE,
       minutesAlreadyDrawn: 0,
+      togetherBeforeStartMs: 0,
       maxBillableMinutes: MAX_BILLABLE_MINUTES,
     });
     expect(settlement.shape).toBe('missed_call');
@@ -274,12 +308,13 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
   });
 
   it('⚠ an expert who left BELOW the floor with no client ever present consumes nothing (D2)', () => {
-    const settlement = resolveMeetingSettlement({
+    const settlement = settle({
       clocks: clocksFor(8 * MS_PER_MINUTE, false),
       scheduledStart: SCHEDULED_START,
       clientSideEverPresent: false,
       floorMs: 15 * MS_PER_MINUTE,
       minutesAlreadyDrawn: 0,
+      togetherBeforeStartMs: 0,
       maxBillableMinutes: MAX_BILLABLE_MINUTES,
     });
     expect(settlement.shape).toBe('abandoned_wait');
@@ -316,22 +351,74 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
     expect(onTime).toBe(15 * MS_PER_MINUTE);
   });
 
-  it('⚠ the floor is a PARAMETER, not a constant — nothing here reads MIN_MEETING_MINUTES', () => {
-    const short = clocksFor(1 * MS_PER_MINUTE, true); // held, well below either floor
-    const at15 = resolveMeetingSettlement({
-      clocks: short,
+  it('⚠ BAL-474 Rule A (D13): time TOGETHER before the start is paid — 4 minutes together, then 45 from the start, is 49', () => {
+    // Both present 09:50–09:54, both back 10:00–10:45 (D13 example 3). The from-T figure is
+    // unchanged (45); the 4 minutes the two were really together before the start are added.
+    const clocks: MeetingClocks = {
+      expertPresentMs: 45 * MS_PER_MINUTE,
+      billableMs: 45 * MS_PER_MINUTE,
+      expertFirstJoinedAt: SCHEDULED_START,
+      billableStartedAt: SCHEDULED_START,
+    };
+    const input = {
+      clocks,
+      togetherBeforeStartMs: 4 * MS_PER_MINUTE,
+      scheduledStart: SCHEDULED_START,
+      clientSideEverPresent: true,
+      floorMs: 15 * MS_PER_MINUTE,
+      minutesAlreadyDrawn: 0,
+      maxBillableMinutes: MAX_BILLABLE_MINUTES,
+    };
+    const settlement = settle(input);
+    expect(settlement.shape).toBe('held');
+    expect(settlement.billableMinutes).toBe(49);
+    expect(settlement.actualMinutes).toBe(49);
+    // The from-T figure (D4) keeps its meaning and is NOT inflated by the together term.
+    expect(settlement.effectiveExpertPresentMs).toBe(45 * MS_PER_MINUTE);
+    expect(settlement.topUpToTickSeq).toBe(49);
+  });
+
+  it('⚠ BAL-474 D15.3: an early check-in then a late return — together 30, both back at 10:10 to 11:00 — is 30 + 50 = 80, not 90', () => {
+    // The clamped clock anchors at T and reads 60; the from-start input counts from the expert's first presence
+    // at or after T (10:10), so 50. Shape is decided from the clamped clock and stays `held`.
+    const settlement = settle({
+      clocks: {
+        expertPresentMs: 60 * MS_PER_MINUTE,
+        billableMs: 60 * MS_PER_MINUTE,
+        expertFirstJoinedAt: SCHEDULED_START,
+        billableStartedAt: SCHEDULED_START,
+      },
+      togetherBeforeStartMs: 30 * MS_PER_MINUTE,
+      expertPresentFromStartMs: 50 * MS_PER_MINUTE,
       scheduledStart: SCHEDULED_START,
       clientSideEverPresent: true,
       floorMs: 15 * MS_PER_MINUTE,
       minutesAlreadyDrawn: 0,
       maxBillableMinutes: MAX_BILLABLE_MINUTES,
     });
-    const at20 = resolveMeetingSettlement({
+    expect(settlement.shape).toBe('held');
+    expect(settlement.billableMinutes).toBe(80);
+    expect(settlement.effectiveExpertPresentMs).toBe(50 * MS_PER_MINUTE);
+  });
+
+  it('⚠ the floor is a PARAMETER, not a constant — nothing here reads MIN_MEETING_MINUTES', () => {
+    const short = clocksFor(1 * MS_PER_MINUTE, true); // held, well below either floor
+    const at15 = settle({
+      clocks: short,
+      scheduledStart: SCHEDULED_START,
+      clientSideEverPresent: true,
+      floorMs: 15 * MS_PER_MINUTE,
+      minutesAlreadyDrawn: 0,
+      togetherBeforeStartMs: 0,
+      maxBillableMinutes: MAX_BILLABLE_MINUTES,
+    });
+    const at20 = settle({
       clocks: short,
       scheduledStart: SCHEDULED_START,
       clientSideEverPresent: true,
       floorMs: 20 * MS_PER_MINUTE,
       minutesAlreadyDrawn: 0,
+      togetherBeforeStartMs: 0,
       maxBillableMinutes: MAX_BILLABLE_MINUTES,
     });
     expect(at15.billableMinutes).toBe(15);
@@ -359,4 +446,54 @@ describe('INVARIANT: expert paid for time made available, with a 15-minute floor
     // as fact) without failing on the deliberate quote-to-refute.
     expect(source).toContain('NOT "always paid actual minutes"');
   });
+
+  it('⚠ the sessionless open settles through the SAME settlement path — no second settlement branch (source scan)', () => {
+    // BAL-474 D5.3 / AD-3 — a sessionless Case meeting is opened AND settled in one transaction.
+    // It must reach the floor rule through the ONE pure core (`computeMeetingPresenceSettlement`
+    // → `resolveMeetingSettlement`) and the ONE post-commit tail, and write ticks only through
+    // the repository's own settlement body. A service that re-implemented the minute maths, or
+    // posted its own `session_consume` rows, would be a second settlement branch free to drift
+    // from this file's invariant — it fails here.
+    const serviceUrl = new URL(
+      '../../../../apps/api/src/services/credit-session/settle-sessionless-case-meeting.ts',
+      import.meta.url
+    );
+    let service: string;
+    try {
+      service = codeOnly(readFileSync(fileURLToPath(serviceUrl), 'utf8'));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        'BAL-474 invariant source scan: could not read ' +
+          '"apps/api/src/services/credit-session/settle-sessionless-case-meeting.ts". ' +
+          `Update the path here rather than letting the scan pass vacuously. ${reason}`
+      );
+    }
+    expect(service).toContain('computeMeetingPresenceSettlement(');
+    expect(service).toContain('completePresenceSettlement(');
+    expect(service).toContain('openAndSettleFromPresence(');
+    expect(service).not.toContain('settle(');
+    expect(service).not.toContain('applyLedgerEntry(');
+    expect(service).not.toContain('session_consume');
+
+    const repo = codeOnly(
+      readFileSync(
+        fileURLToPath(new URL('../repositories/credit-sessions.ts', import.meta.url)),
+        'utf8'
+      )
+    );
+    const start = repo.indexOf('async openAndSettleFromPresence(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    // The method body runs to the next repository method (comments are stripped, so the next
+    // `async ` at method indentation is the boundary).
+    const next = repo.indexOf('\n  async ', start + 1);
+    const body = repo.slice(start, next === -1 ? repo.length : next);
+    expect(body).toContain('openInTx(');
+    expect(body).toContain('settleFromPresenceInTx(');
+  });
 });
+
+/** Comments removed — a docblock naming a forbidden call must neither break nor satisfy a scan. */
+function codeOnly(src: string): string {
+  return src.replace(/\/\*[^]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { creditReceivables, creditSessions, expertProfiles } from '../schema';
+import { creditReceivables, creditSessions, creditWallets, expertProfiles } from '../schema';
 import { creditWalletFactory, expertFactory, userFactory } from '../test/factories';
 import { creditReceivablesRepository } from './credit-receivables';
 import { creditSessionsRepository } from './credit-sessions';
@@ -9,7 +9,9 @@ import { creditSessionsRepository } from './credit-sessions';
 /**
  * Integration tests for `creditReceivablesRepository` (BAL-378). Covers idempotent `open`
  * per session (partial-unique on `session_id`), the `hasOpenReceivable` soft-hold predicate,
- * `listOpenForDunning` cadence filtering, and `clear` (which releases the soft hold). Each
+ * BAL-474's `readHoldStatus` and wallet-grain daily dunning (`listWalletsDueForDailyDunning` /
+ * `stampDailyDunning` / `lastDailyDunningAt`, which replace the per-receivable
+ * `listOpenForDunning` / `markDunned`), and `clear` (which releases the soft hold). Each
  * receivable needs a real `credit_sessions` row (the FK is RESTRICT).
  */
 
@@ -146,36 +148,194 @@ describe('creditReceivablesRepository.hasOpenReceivable — soft-hold predicate'
   });
 });
 
-describe('creditReceivablesRepository.listOpenForDunning / markDunned', () => {
-  it('returns never-dunned and stale-dunned receivables, excluding freshly-dunned ones', async () => {
+/** Set a wallet's cached balance directly — these cases pin READS, not ledger reconciliation. */
+async function setBalance(walletId: string, balanceMinor: number): Promise<void> {
+  await db.update(creditWallets).set({ balanceMinor }).where(eq(creditWallets.id, walletId));
+}
+
+describe('creditReceivablesRepository.readHoldStatus (BAL-474, ADR-1040 Amendment 7 §G.1)', () => {
+  it('not on hold ⇒ no figure, no promo read, the live balance reported', async () => {
+    const { walletId } = await seedSession();
+    expect(await creditReceivablesRepository.readHoldStatus({ walletId })).toEqual({
+      onHold: false,
+      openReceivableCount: 0,
+      confirmationWasRequested: false,
+      balanceMinor: 50_000,
+      promoGrantedSinceDebtMinor: 0,
+      amountToClearMinor: 0,
+    });
+  });
+
+  it('on hold ⇒ the top-up that clears it is the whole negative balance (no promo)', async () => {
+    const { companyId, walletId, sessionId } = await seedSession();
+    await creditReceivablesRepository.open({
+      companyId,
+      walletId,
+      sessionId,
+      amountMinor: 4_000,
+      reason: 'settlement_declined',
+    });
+    await setBalance(walletId, -4_000);
+    const status = await creditReceivablesRepository.readHoldStatus({ walletId });
+    expect(status).toMatchObject({
+      onHold: true,
+      openReceivableCount: 1,
+      confirmationWasRequested: false,
+      balanceMinor: -4_000,
+      amountToClearMinor: 4_000,
+    });
+  });
+
+  it('confirmationWasRequested reports a requires_action receivable as a past fact', async () => {
+    const { companyId, walletId, sessionId } = await seedSession();
+    await creditReceivablesRepository.open({
+      companyId,
+      walletId,
+      sessionId,
+      amountMinor: 4_000,
+      reason: 'settlement_requires_action',
+    });
+    expect(
+      (await creditReceivablesRepository.readHoldStatus({ walletId })).confirmationWasRequested
+    ).toBe(true);
+  });
+
+  it('a covered-but-held wallet reads onHold with a ZERO figure — the state the heal clears', async () => {
+    const { companyId, walletId, sessionId } = await seedSession();
+    await creditReceivablesRepository.open({
+      companyId,
+      walletId,
+      sessionId,
+      amountMinor: 4_000,
+      reason: 'settlement_declined',
+    });
+    // The balance already covers it (a top-up that cleared nothing).
+    const status = await creditReceivablesRepository.readHoldStatus({ walletId });
+    expect(status.onHold).toBe(true);
+    expect(status.amountToClearMinor).toBe(0);
+  });
+
+  it('reads on a caller-supplied executor (the dunning claim and the booking snapshot pass theirs)', async () => {
+    const { companyId, walletId, sessionId } = await seedSession();
+    await creditReceivablesRepository.open({
+      companyId,
+      walletId,
+      sessionId,
+      amountMinor: 1_000,
+      reason: 'settlement_declined',
+    });
+    await setBalance(walletId, -1_000);
+    const status = await db.transaction((tx) =>
+      creditReceivablesRepository.readHoldStatus({ walletId }, tx)
+    );
+    expect(status).toMatchObject({ onHold: true, amountToClearMinor: 1_000 });
+  });
+});
+
+describe('creditReceivablesRepository — wallet-grain daily dunning (BAL-474, §G.2)', () => {
+  async function openOn(
+    seed: { companyId: string; walletId: string; sessionId: string },
+    amountMinor: number
+  ): Promise<string> {
+    const { receivable } = await creditReceivablesRepository.open({
+      companyId: seed.companyId,
+      walletId: seed.walletId,
+      sessionId: seed.sessionId,
+      amountMinor,
+      reason: 'settlement_declined',
+    });
+    return receivable.id;
+  }
+
+  it('one row per WALLET, however many receivables it holds; a never-reminded wallet is due', async () => {
+    // Both sessions exist BEFORE any receivable opens — the gated open refuses on a held wallet.
     const a = await seedSession();
-    const b = await seedSession();
+    const second = await seedAnotherSessionOnWallet(a.walletId, a.companyId);
+    await openOn(a, 1_000);
+    await openOn({ ...a, sessionId: second.sessionId }, 2_000);
 
-    const { receivable: recA } = await creditReceivablesRepository.open({
-      companyId: a.companyId,
-      walletId: a.walletId,
-      sessionId: a.sessionId,
-      amountMinor: 1000,
-      reason: 'settlement_declined',
-    });
-    const { receivable: recB } = await creditReceivablesRepository.open({
-      companyId: b.companyId,
-      walletId: b.walletId,
-      sessionId: b.sessionId,
-      amountMinor: 2000,
-      reason: 'settlement_declined',
-    });
+    const due = await creditReceivablesRepository.listWalletsDueForDailyDunning(
+      new Date(Date.now() - 20 * 60 * 60_000)
+    );
+    expect(due.filter((row) => row.walletId === a.walletId)).toEqual([
+      { walletId: a.walletId, companyId: a.companyId },
+    ]);
+  });
 
-    const now = new Date('2027-03-01T09:00:00.000Z');
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60_000);
+  it('due by the wallet’s LATEST stamp: reminded inside the cadence ⇒ not due; before it ⇒ due', async () => {
+    const now = Date.now();
+    const notRemindedSince = new Date(now - 20 * 60 * 60_000);
+    const fresh = await seedSession();
+    await openOn(fresh, 1_000);
+    await creditReceivablesRepository.stampDailyDunning(fresh.walletId, new Date(now - 60_000));
+    const stale = await seedSession();
+    await openOn(stale, 1_000);
+    await creditReceivablesRepository.stampDailyDunning(
+      stale.walletId,
+      new Date(now - 30 * 60 * 60_000)
+    );
 
-    // recB was dunned just now (fresh) → excluded from a `notDunnedSince = 1 day ago` sweep.
-    await creditReceivablesRepository.markDunned(recB.id, now);
+    const dueIds = (
+      await creditReceivablesRepository.listWalletsDueForDailyDunning(notRemindedSince)
+    ).map((row) => row.walletId);
+    expect(dueIds).toContain(stale.walletId);
+    expect(dueIds).not.toContain(fresh.walletId);
+  });
 
-    const due = await creditReceivablesRepository.listOpenForDunning(oneDayAgo);
-    const dueIds = due.map((r) => r.id);
-    expect(dueIds).toContain(recA.id); // never dunned
-    expect(dueIds).not.toContain(recB.id); // dunned within the cadence
+  it('⚠ fairness (V4-F5): never-reminded first, then the OLDEST stamp; the batch bound holds', async () => {
+    const now = Date.now();
+    const oldest = await seedSession();
+    await openOn(oldest, 1_000);
+    await creditReceivablesRepository.stampDailyDunning(
+      oldest.walletId,
+      new Date(now - 72 * 60 * 60_000)
+    );
+    const newer = await seedSession();
+    await openOn(newer, 1_000);
+    await creditReceivablesRepository.stampDailyDunning(
+      newer.walletId,
+      new Date(now - 48 * 60 * 60_000)
+    );
+    const never = await seedSession();
+    await openOn(never, 1_000);
+
+    const batch = await creditReceivablesRepository.listWalletsDueForDailyDunning(
+      new Date(now - 20 * 60 * 60_000),
+      2
+    );
+    expect(batch.map((row) => row.walletId)).toEqual([never.walletId, oldest.walletId]);
+  });
+
+  it('a cleared receivable is not dunned', async () => {
+    const seed = await seedSession();
+    await openOn(seed, 1_000);
+    await creditReceivablesRepository.clear({ sessionId: seed.sessionId });
+    const dueIds = (
+      await creditReceivablesRepository.listWalletsDueForDailyDunning(new Date())
+    ).map((row) => row.walletId);
+    expect(dueIds).not.toContain(seed.walletId);
+  });
+
+  it('stampDailyDunning stamps every OPEN receivable of the wallet and returns their ids; lastDailyDunningAt reads it', async () => {
+    const seed = await seedSession();
+    const second = await seedAnotherSessionOnWallet(seed.walletId, seed.companyId);
+    const open1 = await openOn(seed, 1_000);
+    const cleared = await openOn({ ...seed, sessionId: second.sessionId }, 2_000);
+    await creditReceivablesRepository.clear({ receivableId: cleared });
+
+    expect(await creditReceivablesRepository.lastDailyDunningAt(seed.walletId)).toBeUndefined();
+    const stampedAt = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const stamped = await creditReceivablesRepository.stampDailyDunning(seed.walletId, stampedAt);
+    expect(stamped).toEqual([open1]);
+    expect((await creditReceivablesRepository.lastDailyDunningAt(seed.walletId))?.getTime()).toBe(
+      stampedAt.getTime()
+    );
+
+    const [clearedRow] = await db
+      .select({ lastDunningAt: creditReceivables.lastDunningAt })
+      .from(creditReceivables)
+      .where(eq(creditReceivables.id, cleared));
+    expect(clearedRow?.lastDunningAt).toBeNull();
   });
 });
 
@@ -519,9 +679,9 @@ describe('creditReceivablesRepository.earliestOpenDebtAnchor', () => {
 });
 
 /**
- * BAL-548 / ADR-1055 — the `receivable.open` finder read. A DIFFERENT method from
- * `listOpenForDunning` on purpose (R5): this one is the alert queue's — bounded, ordered, and
- * carrying no dunning-cadence term. The two must never be merged.
+ * BAL-548 / ADR-1055 — the `receivable.open` finder read. A DIFFERENT method from the dunning
+ * reads on purpose (R5; since BAL-474 `listWalletsDueForDailyDunning`): this one is the alert
+ * queue's — bounded, ordered, and carrying no dunning-cadence term. The two must never be merged.
  */
 describe('creditReceivablesRepository.listOpen — the admin-queue finder read', () => {
   /** One open receivable on its own company/wallet/session, with a chosen `opened_at`. */

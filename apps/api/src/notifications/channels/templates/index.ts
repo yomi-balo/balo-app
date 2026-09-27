@@ -65,7 +65,17 @@ import { SessionSettlementFailedEmail } from './session-settlement-failed.js';
 import { CreditTopupCompletedEmail } from './credit-topup-completed.js';
 import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
 import { CreditSavedCardDetachedEmail } from './credit-saved-card-detached.js';
-import { BookingFundingBlockedEmail } from './booking-funding-blocked.js';
+import {
+  BookingFundingBlockedEmail,
+  bookingFundingBlockedSubject,
+} from './booking-funding-blocked.js';
+import {
+  buildTopUpFigure,
+  companyLabelAtStart,
+  companyLabelFor,
+  readCompanyName,
+  resolveFundingBlockNotice,
+} from './top-up-figure.js';
 import {
   BillingEmailChangedEmail,
   BillingEmailChangedPreviousEmail,
@@ -1342,18 +1352,15 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   },
 
   // BAL-535 (ADR-1040 Amendment 6 §F) receivable cleared — server-only, EMAIL to the billing
-  // admins. Warm, congratulatory: the balance now covers the extra time from a recent
-  // consultation, so the account's soft hold is released. AUD face-value figures only.
-  //
-  // ⚠ `covered` is `clearedMinor` — the sum of what those CONSULTATIONS' extra time came to, and
-  // the copy attributes it to them, never to this payment (fix round N5/L2). Attributing it to
-  // the top-up was false after a partial one: the figure is the receivable's recorded amount,
-  // which diverges from what is actually owed the moment any other ledger entry lands.
+  // admins. Warm, congratulatory: the balance now covers what the consultations came to, so the
+  // account's soft hold is released. The only figure is the true final balance (`balanceAfter`,
+  // AUD face value): the payload's `clearedMinor` is a Σ of stale receivable snapshots, kept for
+  // analytics and never quoted. Sent once per write on every path that clears the hold, so no
+  // line may depend on which path it was.
   'credit-receivable-cleared': (data) => {
     return {
       component: React.createElement(CreditReceivableClearedEmail, {
         firstName: (data.recipientName as string) ?? 'there',
-        covered: formatAudMinor(numberCount(data.clearedMinor)),
         balanceAfter: formatAudMinor(numberCount(data.balanceAfterMinor)),
         ctaUrl: `${BASE_URL}/settings/billing`,
         baseUrl: BASE_URL,
@@ -1385,31 +1392,37 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     };
   },
 
-  // BAL-378 (ADR-1040 Lane 2) settlement failed — billing-admin dunning. `reason` switches the
-  // SCA arm (`requires_action` — confirm your card, links to /settings/billing) from the
-  // hard-decline arm (a covering top-up, links to /billing/top-up — the dunning sweep only
-  // re-notifies and never re-charges, ADR-1040 Amendment 6 §F). Warm, no "overdraft".
+  // BAL-474 (ADR-1040 Amendment 7 §G, owner ruling D6.2) balance dunning — billing admins. ONE
+  // wallet-grain notice stating the TOTAL top-up that clears the account hold, neutral about how
+  // many consultations ran over. `topUpNeededMinor` is `amountNeededToClearHold`, read under the
+  // wallet lock at `asOfIso`. The claim never publishes without one (a covered hold is healed,
+  // not warned about), so a missing figure here is a contract break: it throws rather than
+  // render `A$0.00`. The CTA is always "Top up" — a covering cash credit is the only thing that
+  // clears the hold (dunning never re-charges, and nothing completes a card confirmation on a
+  // settlement charge). Warm, no "overdraft", no "extra time".
   'session-settlement-failed': (data) => {
-    const reason = data.reason === 'requires_action' ? 'requires_action' : 'declined';
+    const figure = buildTopUpFigure(numberCount(data.topUpNeededMinor), data.asOfIso);
+    if (figure === null) {
+      throw new Error(
+        'session-settlement-failed needs a positive topUpNeededMinor and an asOfIso — the dunning claim never publishes without a figure'
+      );
+    }
+    const companyName = readCompanyName(data.company);
     return {
       component: React.createElement(SessionSettlementFailedEmail, {
         firstName: (data.recipientName as string) ?? 'there',
-        amount: formatAudMinor(numberCount(data.amountMinor)),
-        reason,
-        // BAL-552 — the dunning sweep only ever RE-NOTIFIES, never re-charges
-        // (`mandate.ts:1040`), so a card update alone clears nothing on the declined arm. The
-        // real exit is a covering CASH top-up (`receivable-coverage.ts`), so that arm's CTA
-        // points at the top-up composer instead of the card-update settings page.
-        ctaUrl:
-          reason === 'requires_action'
-            ? `${BASE_URL}/settings/billing`
-            : `${BASE_URL}/billing/top-up`,
+        companyLabel: companyLabelFor(companyName),
+        amount: figure.amount,
+        asOf: figure.asOf,
+        exceedsSingleTopUp: figure.exceedsSingleTopUp,
+        maxTopUp: figure.maxTopUp,
+        promoWasGranted: numberCount(data.promoGrantedSinceDebtMinor) > 0,
+        confirmationWasRequested: data.confirmationWasRequested === true,
+        ctaUrl: `${BASE_URL}/billing/top-up`,
+        cardSettingsUrl: `${BASE_URL}/settings/billing`,
         baseUrl: BASE_URL,
       }),
-      subject:
-        reason === 'requires_action'
-          ? 'Confirm your card to settle your recent session'
-          : 'A payment on your recent session needs attention',
+      subject: `${sanitizeSubjectTitle(companyLabelAtStart(companyName))}'s balance needs a top-up`,
     };
   },
 
@@ -1456,25 +1469,41 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     };
   },
 
-  // BAL-478 funding-blocked — EMAIL to each fanned-out MANAGE_BILLING holder (minus the booker
-  // themselves, if they hold — fix round 2 B2). `requestedByLabel` arrives PRE-COMPOSED from the
-  // resolver's `hydrateBookingFundingBlockedActor` (the SAME F4/F5 precedent
+  // BAL-478 / BAL-474 funding-blocked — EMAIL to each fanned-out MANAGE_BILLING holder (minus the
+  // booker themselves, if they hold — fix round 2 B2). `requestedByLabel` arrives PRE-COMPOSED
+  // from the resolver's `hydrateBookingFundingBlockedActor` (the SAME F4/F5 precedent
   // `credit-saved-card-detached` establishes) — SUBJECT reuses it verbatim rather than
   // recomputing `personWithOrgLabel` a second time. `expertPartyLabel` is prospective, carried
-  // verbatim. NO money figure anywhere (D4c). CTA lands on billing settings.
+  // verbatim. The payload's `blockKind` picks the arm (`resolveFundingBlockNotice`): `unfunded`
+  // carries NO money figure (D4c) and lands on billing settings; the two balance arms quote the
+  // dated top-up figure — or, for a hold the booking API could not clear, none — and land on the
+  // top-up page. The company is the resolver's `data.company` name, else "your team".
   'booking-funding-blocked': (data) => {
     const requestedByLabel = (data.requestedByLabel as string) ?? 'A teammate';
     const expertPartyLabel = (data.expertPartyLabel as string) ?? 'an expert';
-    const subject = `${sanitizeSubjectTitle(requestedByLabel)} needs billing set up to book`;
+    const companyLabel = companyLabelFor(readCompanyName(data.company));
+    const notice = resolveFundingBlockNotice(
+      data.blockKind,
+      numberCount(data.topUpNeededMinor),
+      data.asOfIso,
+      numberCount(data.reservedBookingCount)
+    );
+    const ctaPath = notice.variant === 'unfunded' ? '/settings/billing' : '/billing/top-up';
     return {
       component: React.createElement(BookingFundingBlockedEmail, {
         firstName: (data.recipientName as string) ?? 'there',
         requestedByLabel,
         expertPartyLabel,
-        ctaUrl: `${BASE_URL}/settings/billing`,
+        companyLabel,
+        notice,
+        ctaUrl: `${BASE_URL}${ctaPath}`,
         baseUrl: BASE_URL,
       }),
-      subject,
+      subject: bookingFundingBlockedSubject(
+        notice,
+        sanitizeSubjectTitle(requestedByLabel),
+        sanitizeSubjectTitle(companyLabel)
+      ),
     };
   },
 

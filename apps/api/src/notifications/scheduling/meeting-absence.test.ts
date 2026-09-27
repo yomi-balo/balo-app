@@ -7,6 +7,8 @@ const {
   mockScheduleNotification,
   mockTrackServer,
   mockWarn,
+  mockInfo,
+  mockResolveSubject,
 } = vi.hoisted(() => ({
   mockMeetingFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
@@ -14,10 +16,12 @@ const {
   mockScheduleNotification: vi.fn(),
   mockTrackServer: vi.fn(),
   mockWarn: vi.fn(),
+  mockInfo: vi.fn(),
+  mockResolveSubject: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockWarn, error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: mockInfo, warn: mockWarn, error: vi.fn() }),
 }));
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockMeetingFindById },
@@ -29,6 +33,10 @@ vi.mock('@balo/analytics/server', () => ({
   MEETING_SERVER_EVENTS: { MEETING_EXPERT_ABSENT_ALERT: 'meeting_expert_absent_alert' },
 }));
 vi.mock('./schedule.js', () => ({ scheduleNotification: mockScheduleNotification }));
+// R6F-13 — the closed-case read behind both client-nudge guards.
+vi.mock('../../services/credit-session/case-billing-subject.js', () => ({
+  resolveCaseBillingSubject: mockResolveSubject,
+}));
 // ⚠ `@balo/shared/meetings` is NOT mocked — `summarisePresence` is the shared reduction both
 // guards read, and mocking it would make this file assert its own fixtures.
 
@@ -279,6 +287,8 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
     mockMeetingFindById.mockResolvedValue(meeting());
     mockListByMeeting.mockResolvedValue(EXPERT_WAITING);
     mockListAdminUserIds.mockResolvedValue(['user-a', 'user-b']);
+    // An ACTIVE case by default — nothing was closed.
+    mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
   });
 
   it('PUBLISHES when the expert is still waiting alone', async () => {
@@ -388,10 +398,114 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
   });
 });
 
+describe('R6F-13 / D17.5 — the client nudge is skipped whenever the case is no longer active (fire-time recheck)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockMeetingFindById.mockResolvedValue(meeting());
+    mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(0), leftAt: null }]);
+    mockListAdminUserIds.mockResolvedValue(['user-a']);
+  });
+
+  it.each([
+    ['closed a day before the start', new Date(START.getTime() - 86_400_000)],
+    ['closed one millisecond before the start', new Date(START.getTime() - 1)],
+    ['closed EXACTLY at the start', START],
+    [
+      'closed AFTER the start (D17.5 widens past "the floor is owed")',
+      new Date(START.getTime() + 60_000),
+    ],
+    ['with no close instant recorded', null],
+  ])('⚠⚠ case %s ⇒ SKIPPED `case_closed`, no recipients read', async (_l, closedAt) => {
+    mockResolveSubject.mockResolvedValue({ isActive: false, closedAt });
+
+    const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+
+    expect(result).toEqual({ publish: false, reason: 'case_closed' });
+    expect(mockResolveSubject).toHaveBeenCalledWith(MEETING_ID, { requireActive: false });
+    expect(mockListAdminUserIds).not.toHaveBeenCalled();
+  });
+
+  it('an ACTIVE case is nudged, and a meeting that is not a Case (no subject) is unaffected', async () => {
+    mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
+    expect((await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }))).publish).toBe(true);
+    mockResolveSubject.mockResolvedValue(undefined);
+    expect((await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }))).publish).toBe(true);
+  });
+
+  it('a failing closure read is logged and the nudge PROCEEDS — suppression is only ever on evidence', async () => {
+    mockResolveSubject.mockRejectedValue(new Error('db down'));
+    const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+    expect(result.publish).toBe(true);
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, error: 'db down' }),
+      expect.stringContaining('Case-closure read failed')
+    );
+  });
+
+  it('the closure is read only AFTER the cheap presence checks — a client who already came never costs a read', async () => {
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: at(0), leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+    await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+    expect(mockResolveSubject).not.toHaveBeenCalled();
+  });
+});
+
 describe('the two schedulers (§6.1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockScheduleNotification.mockResolvedValue({ outcome: 'scheduled' });
+    mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
+  });
+
+  it('⚠⚠ R6F-13 — does NOT arm the client nudge for a case closed before the start (and logs why)', async () => {
+    mockResolveSubject.mockResolvedValue({
+      isActive: false,
+      closedAt: new Date(START.getTime() - 1),
+    });
+
+    await scheduleClientAbsentNudge({
+      meetingId: MEETING_ID,
+      companyId: COMPANY_ID,
+      scheduledStart: START,
+      clockStart: START,
+      waitingPartyName: 'CloudPeak',
+      timers: DEFAULT_MEETING_TIMERS,
+    });
+
+    expect(mockScheduleNotification).not.toHaveBeenCalled();
+    expect(mockInfo).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID },
+      expect.stringContaining('not armed')
+    );
+  });
+
+  it('D17.5 — also does NOT arm the client nudge for a case closed AFTER the start; the expert-absent alert is never gated on it', async () => {
+    mockResolveSubject.mockResolvedValue({
+      isActive: false,
+      closedAt: new Date(START.getTime() + 60_000),
+    });
+    await scheduleClientAbsentNudge({
+      meetingId: MEETING_ID,
+      companyId: COMPANY_ID,
+      scheduledStart: START,
+      clockStart: START,
+      waitingPartyName: 'CloudPeak',
+      timers: DEFAULT_MEETING_TIMERS,
+    });
+    expect(mockScheduleNotification).not.toHaveBeenCalled();
+
+    mockScheduleNotification.mockClear();
+    mockResolveSubject.mockResolvedValue({ isActive: false, closedAt: null });
+    await scheduleExpertAbsentAlert({
+      meetingId: MEETING_ID,
+      scheduledStart: START,
+      absenceAnchor: START,
+      contextType: 'case',
+      timers: DEFAULT_MEETING_TIMERS,
+    });
+    expect(mockScheduleNotification).toHaveBeenCalledTimes(1);
   });
 
   it('arms the ops alert at scheduled_start + EXPERT_ABSENT_ALERT_MS, with its recheck', async () => {

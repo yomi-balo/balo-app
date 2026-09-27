@@ -9,6 +9,7 @@ import {
   type WaitingPhase,
   type WaitingSubject,
 } from '@/lib/meetings/waiting-copy';
+import { CaseClosedGlyph } from './case-closed-glyph';
 import { MeetingAvatar } from './meeting-avatar';
 
 /**
@@ -66,16 +67,24 @@ export function WaitingStage({
 }: Readonly<WaitingStageProps>): React.JSX.Element {
   const reduceMotion = useReducedMotion();
   const { title, body } = resolveWaitingCopy(phase, subject, facts);
-  const iconKind = waitingIconKindFor(subject?.absentParty ?? null, phase);
+  const iconKind = waitingIconKindFor(subject?.absentParty ?? null, phase, facts);
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-5 px-6 text-center">
-      <div className="relative">
-        <WaitingAvatar name={subject?.counterpartyFirstName ?? null} />
-        <span className="bg-card absolute -right-1 -bottom-1 flex h-[26px] w-[26px] items-center justify-center rounded-full">
-          <WaitingGlyph kind={iconKind} reduceMotion={reduceMotion === true} />
+      {iconKind === 'caseClosed' ? (
+        // ⚠ THE GLYPH STANDS ALONE, WITHOUT THE ABSENT CLIENT'S AVATAR OR ITS CORNER BADGE: an avatar
+        // beside "This case has been closed" reads as somebody still expected.
+        <span className="bg-muted/60 flex h-[72px] w-[72px] items-center justify-center rounded-full">
+          <CaseClosedGlyph className="h-7 w-7" />
         </span>
-      </div>
+      ) : (
+        <div className="relative">
+          <WaitingAvatar name={subject?.counterpartyFirstName ?? null} />
+          <span className="bg-card absolute -right-1 -bottom-1 flex h-[26px] w-[26px] items-center justify-center rounded-full">
+            <WaitingGlyph kind={iconKind} reduceMotion={reduceMotion === true} />
+          </span>
+        </div>
+      )}
 
       <div>
         <h1
@@ -138,7 +147,7 @@ function WaitingGlyph({
   kind,
   reduceMotion,
 }: Readonly<{
-  kind: ReturnType<typeof waitingIconKindFor>;
+  kind: Exclude<ReturnType<typeof waitingIconKindFor>, 'caseClosed'>;
   reduceMotion: boolean;
 }>): React.JSX.Element {
   if (kind === 'missed_call') {

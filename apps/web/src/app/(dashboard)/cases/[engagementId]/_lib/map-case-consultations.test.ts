@@ -668,9 +668,9 @@ describe('mapCaseConsultations — row action flags (canCancel / canReschedule /
   });
 
   it('the join window drops canReschedule/canProposeReschedule but leaves canCancel true', () => {
-    const startsInFiveMinutes = new Date(NOW.getTime() + 5 * 60_000);
+    const startsInTwoMinutes = new Date(NOW.getTime() + 2 * 60_000);
     const [row] = mapCaseConsultations(
-      [upcoming({ scheduledStart: startsInFiveMinutes })],
+      [upcoming({ scheduledStart: startsInTwoMinutes })],
       EMPTY_COUNTS,
       NOW,
       CLIENT_MAY_ACT

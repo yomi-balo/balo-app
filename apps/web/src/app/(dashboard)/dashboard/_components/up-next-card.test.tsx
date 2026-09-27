@@ -151,7 +151,7 @@ describe('UpNextCard — Join affordance', () => {
   it('shows Join only for a row inside the join window, and no a[href*="/join/"] ever appears', () => {
     const joinable = row({
       meetingId: 'joinable',
-      scheduledStart: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      scheduledStart: new Date(NOW.getTime() + 2 * MIN).toISOString(),
     });
     const notYet = row({
       meetingId: 'not-yet',
@@ -169,7 +169,7 @@ describe('UpNextCard — Join affordance', () => {
   it('BAL-581 — an in-window row with roomReady:false renders the setting-up slot, no Join, and is not featured', () => {
     const notReady = row({
       meetingId: 'not-ready',
-      scheduledStart: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      scheduledStart: new Date(NOW.getTime() + 2 * MIN).toISOString(),
       roomReady: false,
     });
     const { container } = render(
@@ -206,10 +206,10 @@ describe('UpNextCard — Join affordance', () => {
       value: { href: realLocation.href, origin: realLocation.origin, assign: mockAssign },
     });
 
-    // 10 minutes out: inside the join window, not yet live — 'starting_soon'.
+    // 2 minutes out: inside the join window, not yet live — 'starting_soon'.
     const joinable = row({
       meetingId: 'm-1',
-      scheduledStart: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      scheduledStart: new Date(NOW.getTime() + 2 * MIN).toISOString(),
       joinPath: '/meetings/m-1/call',
     });
     render(
@@ -276,7 +276,7 @@ describe('UpNextCard — Join affordance', () => {
     const joinable = row({
       meetingId: 'm-row',
       contextType: 'project_kickoff',
-      scheduledStart: new Date(NOW.getTime() + 10 * MIN).toISOString(),
+      scheduledStart: new Date(NOW.getTime() + 2 * MIN).toISOString(),
       href: '/engagements/eng-9',
     });
     render(
@@ -304,11 +304,11 @@ describe('UpNextCard — Join affordance', () => {
   it('F3(d): the featured highlight class is on the FIRST joinable row only, not the second', () => {
     const first = row({
       meetingId: 'first',
-      scheduledStart: new Date(NOW.getTime() + 5 * MIN).toISOString(),
+      scheduledStart: new Date(NOW.getTime() + 1 * MIN).toISOString(),
     });
     const second = row({
       meetingId: 'second',
-      scheduledStart: new Date(NOW.getTime() + 8 * MIN).toISOString(),
+      scheduledStart: new Date(NOW.getTime() + 2 * MIN).toISOString(),
     });
     const { container } = render(
       <UpNextCard
@@ -390,8 +390,8 @@ describe('UpNextCard — F3(c) rendered row DOM content', () => {
     // Today, joinable, with a live pending reschedule proposal.
     const todayRow = row({
       meetingId: 'today',
-      scheduledStart: new Date(NOW.getTime() + 10 * MIN).toISOString(),
-      scheduledEnd: new Date(NOW.getTime() + 40 * MIN).toISOString(),
+      scheduledStart: new Date(NOW.getTime() + 2 * MIN).toISOString(),
+      scheduledEnd: new Date(NOW.getTime() + 32 * MIN).toISOString(),
       status: 'scheduled',
       rescheduleProposalExpiresAt: new Date(NOW.getTime() + 60 * MIN).toISOString(),
       counterpartyName: 'Priya Sharma',
@@ -406,9 +406,9 @@ describe('UpNextCard — F3(c) rendered row DOM content', () => {
       />
     );
 
-    expect(screen.getByText('Today, 12:10 pm')).toBeInTheDocument();
+    expect(screen.getByText('Today, 12:02 pm')).toBeInTheDocument();
     expect(screen.getByText('30 min')).toBeInTheDocument();
-    expect(screen.getByText(upNextStartsIn(10))).toBeInTheDocument();
+    expect(screen.getByText(upNextStartsIn(2))).toBeInTheDocument();
     expect(screen.getByText(UP_NEXT_COPY.company.rescheduleNote)).toBeInTheDocument();
     expect(screen.getByText('CloudPeak', { exact: false })).toBeInTheDocument();
   });
@@ -528,7 +528,7 @@ describe('UpNextCard — D10 tick behaviour', () => {
     expect(screen.queryByTestId('calendar-join')).toBeNull();
 
     mockUseViewerClock.mockReturnValue({
-      now: new Date(NOW.getTime() + 10 * MIN),
+      now: new Date(NOW.getTime() + 18 * MIN),
       timeZone: 'UTC',
     });
     rerender(

@@ -646,19 +646,76 @@ const bookingRescheduledPayload = z.object({
   initiatedBy: z.enum(['client', 'expert']),
 });
 
-// BAL-478 — a Case booking was refused because the paying company has neither an active
-// mandate nor enough available credit (web-published). `correlationId` is hour-bucketed —
-// `booking-funding:{companyId}:{userId}:{hourBucket}` — the `credit.topup.requested` shape
-// verbatim, so a burst of retried submits collapses to one dispatch per hour via BullMQ jobId
-// dedup. No money field — no balance, no shortfall, no rate, no estimate (D4c). No case title —
-// client-typed text with no business in a Balo-branded email. Mirrors
+// A Case booking was refused (web-published). `blockKind` says why: `unfunded` (BAL-478 — no
+// active mandate and not enough available credit), `account_on_hold` (an open receivable) or
+// `reserved_by_upcoming` (part of the credit is set aside for planned consultations).
+// `correlationId` is hour-bucketed and carries the block kind —
+// `booking-funding:{companyId}:{userId}:{blockKind}:{hourBucket}` — so a burst of retried submits
+// collapses to one dispatch per kind per hour via BullMQ jobId dedup.
+//
+// A money figure rides ONLY on the two balance arms: `topUpNeededMinor` (the top-up that would
+// clear the hold / make room) and its `asOfIso` instant travel together, and `reservedBookingCount`
+// (a count, never another booking's details) belongs to `reserved_by_upcoming` alone. The
+// `unfunded` arm carries none. An `account_on_hold` payload WITHOUT a figure is the failed-heal
+// fallback — a covered hold the booking API could not clear — never a zero. The reserved arm
+// must carry both a figure (with its `asOfIso`) and a count, and the `superRefine` below rejects a
+// reserved payload missing either; the templates still read one that got past it as the
+// `unfunded` arm rather than invent a figure-less sentence. No rate, no estimate (D4c) and
+// no case title (client-typed text with no business in a Balo-branded email). Mirrors
 // packages/shared/src/notifications/index.ts.
-const bookingFundingBlockedPayload = z.object({
-  correlationId: z.string().min(1).max(200),
-  companyId: z.uuid(),
-  requestedByUserId: z.uuid(),
-  expertPartyLabel: z.string().min(1).max(200),
-});
+const bookingFundingBlockedPayload = z
+  .object({
+    correlationId: z.string().min(1).max(200),
+    companyId: z.uuid(),
+    requestedByUserId: z.uuid(),
+    expertPartyLabel: z.string().min(1).max(200),
+    blockKind: z.enum(['unfunded', 'account_on_hold', 'reserved_by_upcoming']),
+    topUpNeededMinor: z.number().int().positive().optional(),
+    reservedBookingCount: z.number().int().positive().optional(),
+    asOfIso: z.iso.datetime().optional(),
+  })
+  .superRefine((payload, ctx) => {
+    if ((payload.topUpNeededMinor === undefined) !== (payload.asOfIso === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['asOfIso'],
+        message: 'topUpNeededMinor and asOfIso are present together or not at all',
+      });
+    }
+    if (payload.blockKind === 'unfunded' && payload.topUpNeededMinor !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['topUpNeededMinor'],
+        message: 'the unfunded arm carries no money figure',
+      });
+    }
+    if (
+      payload.blockKind !== 'reserved_by_upcoming' &&
+      payload.reservedBookingCount !== undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reservedBookingCount'],
+        message: 'reservedBookingCount belongs to reserved_by_upcoming only',
+      });
+    }
+    if (payload.blockKind === 'reserved_by_upcoming') {
+      if (payload.topUpNeededMinor === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['topUpNeededMinor'],
+          message: 'the reserved_by_upcoming arm carries a top-up figure',
+        });
+      }
+      if (payload.reservedBookingCount === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['reservedBookingCount'],
+          message: 'the reserved_by_upcoming arm carries the count of planned consultations',
+        });
+      }
+    }
+  });
 
 // BAL-411 — the expert proposed alternative times (web-published, mirroring
 // `booking.rescheduled`). `correlationId` = proposalId — a fresh row per propose, so

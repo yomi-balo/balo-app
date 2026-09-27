@@ -2,7 +2,8 @@
  * BAL-378 (ADR-1040 Lane 2) — `endSession` settlement flow (§7).
  *
  * Final meter → repo `end` (PURE DB: release hold, finalize the expert accrual + audit row,
- * compute the terminal overdraft, set `settlementStatus`) → if overdraft > 0, settle off-session
+ * compute THIS session's share of the wallet's negative balance — never debt older than the session,
+ * ADR-1040 Amendment 7 §A — set `settlementStatus`) → if that share > 0, settle off-session
  * against the COMPANY mandate. Three outcomes: `processing` (credit + session-settled land via
  * the `payment_intent.succeeded` webhook — `dispatch.ts`), `requires_action` (SCA → receivable
  * + dunning), throw (hard decline → receivable + dunning). The expert is ALWAYS paid — the
@@ -52,6 +53,7 @@ import { clearLateOpenedReceivableIfCovered } from '../credit/receivable-coverag
 import { authorizeSessionActor } from './authorize-session-actor.js';
 import { driveSession } from './meter-driver.js';
 import { finalizeBilling } from './finalize-billing.js';
+import { reportOwnerlessPriorDebt } from './debt-owner-alarm.js';
 import { publishSessionSettled, publishSettlementFailure } from './notify.js';
 import { settlementIdempotencyKey } from './settlement.js';
 import type { EndSessionServiceOutcome, EndSessionServiceResult } from './types.js';
@@ -140,20 +142,27 @@ async function openReceivableAndDun(
   amountMinor: number,
   reason: FailureReason,
   paymentIntentId: string | null
-): Promise<void> {
+): Promise<'opened' | 'settled_elsewhere'> {
   const receivableReason: CreditReceivableReason =
     reason === 'requires_action' ? 'settlement_requires_action' : 'settlement_declined';
   const settlementStatus: Extract<CreditSettlementStatus, 'failed' | 'requires_action'> =
     reason === 'requires_action' ? 'requires_action' : 'failed';
 
-  const { created, alreadyCovered } = await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
     // M2 — FIRST statement: serialise this whole transaction against the credit path.
     await acquireWalletLock(tx, session.walletId);
-    await creditSessionsRepository.markSettlementResult(tx, {
+    // BAL-474 (D7.4) — COMPARE-AND-SET: this stamp lands only while the row is still in flight,
+    // so a throw AFTER Stripe confirmed the charge (the webhook already wrote the terminal
+    // state) can never flip a `settled` row back to a failure. The repository returns the row
+    // it found; `settled` means the money is in — record NO receivable and dun nobody.
+    const stamped = await creditSessionsRepository.markSettlementResult(tx, {
       sessionId: session.id,
       status: settlementStatus,
       stripePaymentIntentId: paymentIntentId,
     });
+    if (stamped.settlementStatus === 'settled') {
+      return { created: false, alreadyCovered: false, settledElsewhere: true, receivableId: null };
+    }
     const { receivable, created } = await creditReceivablesRepository.open(
       {
         companyId: session.companyId,
@@ -167,7 +176,12 @@ async function openReceivableAndDun(
     );
     const wallet = await creditWalletsRepository.findById(session.walletId, tx);
     if (wallet === undefined) {
-      return { created, alreadyCovered: false };
+      return {
+        created,
+        alreadyCovered: false,
+        settledElsewhere: false,
+        receivableId: receivable.id,
+      };
     }
     const alreadyCovered = await clearLateOpenedReceivableIfCovered(tx, {
       receivable: {
@@ -185,17 +199,27 @@ async function openReceivableAndDun(
       actorUserId: null,
       stripePaymentIntentId: paymentIntentId,
     });
-    return { created, alreadyCovered };
+    return { created, alreadyCovered, settledElsewhere: false, receivableId: receivable.id };
   });
+  const { created, alreadyCovered, settledElsewhere, receivableId } = outcome;
 
-  if (created && !alreadyCovered) {
+  if (settledElsewhere) {
+    log.info(
+      { sessionId: session.id, walletId: session.walletId, attemptedStatus: settlementStatus },
+      'Settlement failure stamp skipped — the session already settled (the charge succeeded after the client-side error)'
+    );
+    return 'settled_elsewhere';
+  }
+  if (created && !alreadyCovered && receivableId !== null) {
     await publishSettlementFailure({
       session: toSettleableSession(session),
       reason,
       amountMinor,
-      attemptEpochMs: Date.now(),
+      receivableId,
+      now: new Date(),
     });
   }
+  return 'opened';
 }
 
 /** Settle a positive terminal overdraft off-session, handling all three charge outcomes. */
@@ -215,6 +239,12 @@ async function settleOverdraft(
     settlementStatus: status,
     overdraftSettledMinor: overdraftMinor,
   });
+  // The receivable opener's compare-and-set can find the session already `settled` (the webhook won
+  // the race): report THAT, not the failure the caller was about to record.
+  const afterDun = (
+    outcome: 'opened' | 'settled_elsewhere',
+    status: CreditSettlementStatus
+  ): EndSessionServiceResult => failed(outcome === 'settled_elsewhere' ? 'settled' : status);
 
   // ⚠⚠ THE ASYMMETRY IS DELIBERATE AND PERMANENT (ADR-1040 Amendment 6 §A.1/§C, BAL-535 —
   // SETTLED, not pending): settlement gates on the MANDATE ALONE and must stay that way, on
@@ -260,8 +290,10 @@ async function settleOverdraft(
       },
       SETTLEMENT_NO_USABLE_MANDATE_MSG
     );
-    await openReceivableAndDun(session, overdraftMinor, 'declined', null);
-    return failed('failed');
+    return afterDun(
+      await openReceivableAndDun(session, overdraftMinor, 'declined', null),
+      'failed'
+    );
   }
 
   // BAL-525 (Qodo follow-up) — the MIRROR of the warn above. The wallet had NO usable mandate at
@@ -322,8 +354,13 @@ async function settleOverdraft(
     );
   }
 
+  // ⚠ BAL-474 (D7.4) — ONLY THE STRIPE CALL SITS INSIDE THE TRY. Everything after it (the
+  // in-flight stamp and its read-back, the SCA arm's receivable) is a DATABASE step: a fault there
+  // is not a card decline and must never be misread as one — it propagates to the caller's catch /
+  // the backstop instead of opening a receivable against a charge Stripe may have taken.
+  let result: Awaited<ReturnType<typeof createOffSessionCharge>>;
   try {
-    const result = await createOffSessionCharge({
+    result = await createOffSessionCharge({
       reason: 'overdraft_settlement',
       walletId: session.walletId,
       customerId: instrument.customerId,
@@ -334,35 +371,6 @@ async function settleOverdraft(
       memberId: session.initiatingMemberId,
       sessionId: session.id,
     });
-
-    if (result.status === 'processing') {
-      // Stamp the in-flight settlement PI so the reaper can retrieve its REAL status before
-      // ever re-charging (FIX 6a) — the credit + session-settled land via the
-      // payment_intent.succeeded webhook.
-      await creditSessionsRepository.markSettlementResult(db, {
-        sessionId: session.id,
-        status: 'processing',
-        stripePaymentIntentId: result.paymentIntentId,
-      });
-      log.info(
-        {
-          sessionId: session.id,
-          paymentIntentId: result.paymentIntentId,
-          overdraftMinor,
-          instrumentSource: instrument.source,
-        },
-        'Overdraft settlement processing — awaiting webhook'
-      );
-      return failed('processing');
-    }
-
-    // requires_action (SCA) — cannot complete off-session; open a recovery receivable.
-    log.warn(
-      { sessionId: session.id, paymentIntentId: result.paymentIntentId },
-      'Overdraft settlement requires action (SCA) — opening receivable + dunning'
-    );
-    await openReceivableAndDun(session, overdraftMinor, 'requires_action', result.paymentIntentId);
-    return failed('requires_action');
   } catch (error) {
     // A hard-decline StripeCardError carries the failed PI — keep it as the recovery reference.
     const paymentIntentId = extractPaymentIntentId(error);
@@ -377,9 +385,55 @@ async function settleOverdraft(
       },
       'Overdraft settlement failed (hard decline / error) — opening receivable + dunning'
     );
-    await openReceivableAndDun(session, overdraftMinor, 'declined', paymentIntentId);
-    return failed('failed');
+    return afterDun(
+      await openReceivableAndDun(session, overdraftMinor, 'declined', paymentIntentId),
+      'failed'
+    );
   }
+
+  if (result.status === 'processing') {
+    // Stamp the in-flight settlement PI so the reaper can retrieve its REAL status before
+    // ever re-charging (FIX 6a) — the credit + session-settled land via the
+    // payment_intent.succeeded webhook. BAL-474 (D5.2): compare-and-set — the webhook may already
+    // have resolved this session (a synchronously-succeeded PI), and the returned row says so.
+    const stamped = await creditSessionsRepository.markSettlementResult(db, {
+      sessionId: session.id,
+      status: 'processing',
+      stripePaymentIntentId: result.paymentIntentId,
+    });
+    if (stamped.settlementStatus === 'processing') {
+      log.info(
+        {
+          sessionId: session.id,
+          paymentIntentId: result.paymentIntentId,
+          overdraftMinor,
+          instrumentSource: instrument.source,
+        },
+        'Overdraft settlement processing — awaiting webhook'
+      );
+    } else {
+      log.info(
+        {
+          sessionId: session.id,
+          paymentIntentId: result.paymentIntentId,
+          settlementStatus: stamped.settlementStatus,
+        },
+        'Settlement processing stamp skipped — the settlement webhook already resolved this session'
+      );
+    }
+    // D11.3 (N4) — when the webhook already resolved the session, report THAT (the stamp was skipped).
+    return failed(stamped.settlementStatus === 'settled' ? 'settled' : 'processing');
+  }
+
+  // requires_action (SCA) — cannot complete off-session; open a recovery receivable.
+  log.warn(
+    { sessionId: session.id, paymentIntentId: result.paymentIntentId },
+    'Overdraft settlement requires action (SCA) — opening receivable + dunning'
+  );
+  return afterDun(
+    await openReceivableAndDun(session, overdraftMinor, 'requires_action', result.paymentIntentId),
+    'requires_action'
+  );
 }
 
 /**
@@ -467,7 +521,7 @@ export async function endSessionAsSystem(
   // 2. Repo end (pure DB): release hold, finalize accrual + audit, compute overdraft, stamp the
   //    billing-finalization markers with the finalization path.
   const ended = await creditSessionsRepository.end(sessionId, { now, finalizationPath });
-  const { session, overdraftMinor, mandateActive, alreadyEnded } = ended;
+  const { session, overdraftMinor, overdraftBasis, mandateActive, alreadyEnded } = ended;
 
   if (alreadyEnded) {
     // BAL-399 durability: a crash (or a finalizeBilling throw) between the end() commit and the
@@ -486,6 +540,19 @@ export async function endSessionAsSystem(
       overdraftSettledMinor: session.overdraftSettledMinor ?? 0,
     };
   }
+
+  // BAL-474 (D7.3) — the share's basis and the ownerless-debt reading taken INSIDE the terminal
+  // transaction. Its own line, and the alarm fires BEFORE the tail so a tail fault cannot swallow it.
+  log.info(
+    { sessionId, openedBy: session.openedBy, overdraftBasis },
+    'Session end settlement basis'
+  );
+  reportOwnerlessPriorDebt({
+    sessionId,
+    walletId: session.walletId,
+    companyId: session.companyId,
+    basis: overdraftBasis,
+  });
 
   return finalizeAndSettle(session, overdraftMinor, mandateActive, finalizationPath, now);
 }

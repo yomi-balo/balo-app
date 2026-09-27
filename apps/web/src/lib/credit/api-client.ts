@@ -46,6 +46,13 @@ export interface CreditApiErrorBody {
   outcome?: string;
   error?: string;
   code?: string | null;
+  /**
+   * BAL-474 D10.6 — carried only by the detach refusal `upcoming_bookings_uncovered`: the top-up
+   * that lets the card go (`reserved − available`, AUD minor units) and how many upcoming
+   * consultations the card is backing.
+   */
+  topUpNeededMinor?: number;
+  reservedBookingCount?: number;
 }
 
 /** Thrown when a credit intent-creation call to apps/api fails (caught at the action boundary). */
@@ -76,6 +83,12 @@ function parseErrorBody(text: string): CreditApiErrorBody | undefined {
       ...(typeof rec['outcome'] === 'string' ? { outcome: rec['outcome'] } : {}),
       ...(typeof rec['error'] === 'string' ? { error: rec['error'] } : {}),
       ...(typeof rec['code'] === 'string' ? { code: rec['code'] } : {}),
+      ...(typeof rec['topUpNeededMinor'] === 'number'
+        ? { topUpNeededMinor: rec['topUpNeededMinor'] }
+        : {}),
+      ...(typeof rec['reservedBookingCount'] === 'number'
+        ? { reservedBookingCount: rec['reservedBookingCount'] }
+        : {}),
     };
   } catch {
     return undefined;
@@ -202,7 +215,9 @@ export interface DetachSavedCardResponse {
  * Detach the wallet's saved card at Stripe and clear it locally, reconciling a card-backed
  * low-balance mode to `notify_only` in the SAME server-side transaction (BAL-516). A non-2xx
  * throws `CreditApiError` (404 `wallet_not_found`, 409 `settlement_outstanding` — a live
- * overdraft-grace session or open receivable, FIX ROUND security MEDIUM — 502
+ * overdraft-grace session or open receivable, FIX ROUND security MEDIUM; 409
+ * `upcoming_bookings_uncovered` — an active mandate backing upcoming bookings the credit does not
+ * cover, BAL-474 D10.6, carrying `topUpNeededMinor` + `reservedBookingCount`; 502
  * `stripe_detach_failed`) — the caller maps it, never re-derives the wallet id from anything
  * client-supplied (this always passes the wallet resolved from the actor's own session/company).
  *

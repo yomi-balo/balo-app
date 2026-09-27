@@ -16,19 +16,29 @@ import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
 import { bookConsultationAction } from '@/lib/booking/actions/book-consultation';
 import { refetchOpenCasesAction } from '@/lib/booking/actions/refetch-open-cases';
 import { refetchBookingContextAction } from '@/lib/booking/actions/refetch-booking-context';
+import { switchWorkspaceAction } from '@/lib/auth/actions/switch-workspace';
 import type { AvailabilitySlotSelection } from '@/components/availability';
-import type { BookConsultationResult, BookingFailureCode } from '@/lib/booking/actions/types';
-import type { EligibleCompany } from '@balo/shared/credit';
+import type {
+  BookConsultationResult,
+  BookingBalanceFailure,
+  BookingFailureCode,
+} from '@/lib/booking/actions/types';
+import { TOP_UP_LIMITS_MINOR, type EligibleCompany } from '@balo/shared/credit';
+import { companyWorkspaceKey } from '@balo/shared/workspaces';
 import { BookingHeader, type BookingStep } from './booking-header';
 import { StepPickTime } from './step-pick-time';
 import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confirm';
 import { StepBooked } from './step-booked';
 import { OnboardingRoutingState } from './onboarding-routing-state';
 import {
+  BookingBalancePanel,
   FundingSetupPanel,
   HardFailurePanel,
   PartialFailurePanel,
   SessionExpiredPanel,
+  bookingSwitchFailedCopy,
+  type BookingBalancePanelProps,
+  type CaseSavedNote,
   type HardFailurePanelCopy,
 } from './booking-error-panels';
 import type { GuestDraft } from './guest-invite-composer';
@@ -42,7 +52,8 @@ type Phase =
   | 'error_hard'
   | 'error_partial'
   | 'error_session'
-  | 'error_funding';
+  | 'error_funding'
+  | 'error_balance';
 
 interface BookedSnapshot {
   engagementId: string;
@@ -232,23 +243,116 @@ const IMPERSONATION_REFUSAL_PANEL: HardFailurePanelCopy = {
   hideRetry: true,
 };
 
+/**
+ * BAL-474 — a hold (D6.1) or reservation (D6.5) refusal, ready for {@link BookingBalancePanel}.
+ * The `reserved` arm is only constructible WITH a figure and a count: a reservation refuses only
+ * when a top-up would make room, so a figure-less one is a malformed result and never reaches
+ * this shape (it falls to the generic hard panel instead).
+ */
+type BalanceRefusal = {
+  readonly canManageBilling: boolean;
+  readonly company: BookingBalanceFailure['company'];
+  /** Set only when the refusal came from the MEETING hop, after the case row was written. */
+  readonly caseTitle: string | null;
+} & (
+  | { readonly variant: 'hold'; readonly topUpNeededMinor: number | null }
+  | {
+      readonly variant: 'reserved';
+      readonly topUpNeededMinor: number;
+      readonly reservedBookingCount: number;
+    }
+);
+
+type BalanceOutcome = { kind: 'balance' } & BalanceRefusal;
+
 type SubmitFailureOutcome =
   | { kind: 'stale_slot' }
   | { kind: 'impersonation_refused' }
   | { kind: 'session_expired'; caseTitle: string | null }
   | { kind: 'partial'; engagementId: string; caseTitle: string }
   | { kind: 'company_fail_closed'; code: BookingFailureCode }
-  | { kind: 'funding'; canManageBilling: boolean }
+  | { kind: 'funding'; canManageBilling: boolean; caseTitle: string | null }
+  | BalanceOutcome
   | { kind: 'hard' };
+
+/**
+ * The actor's capability, carried by the CODE (`*_top_up_required` ⇒ MANAGE_BILLING, so they can
+ * top up themselves; `*_admins_notified` ⇒ they cannot, and the gate's fan-out told the billing
+ * admins). A code that is not here is not a balance refusal.
+ */
+const BALANCE_CODE_CAN_MANAGE_BILLING: Readonly<Partial<Record<BookingFailureCode, boolean>>> = {
+  hold_top_up_required: true,
+  hold_admins_notified: false,
+  reserved_top_up_required: true,
+  reserved_admins_notified: false,
+};
+
+/**
+ * The funding pre-conditions, keyed on the CODE and never the stage (D8.2): a refusal that came
+ * back from the MEETING hop (the API's pre-write guard) now carries `stage: 'meeting'` with the
+ * case's `engagementId`/`caseTitle`, so the partial-failure arm would otherwise swallow it and
+ * offer a "Try again" that cannot help. `caseTitle` — set only on that path — lets the panel say
+ * the case is saved.
+ *
+ * `null` ⇒ not a funding refusal; the caller keeps classifying.
+ */
+function resolveFundingOutcome(
+  result: Extract<BookConsultationResult, { ok: false }>
+): SubmitFailureOutcome | null {
+  const caseTitle = result.stage === 'meeting' ? (result.caseTitle ?? null) : null;
+
+  // BAL-478 — the unfunded pre-condition. `funding_setup_required` ⇒ the actor holds
+  // MANAGE_BILLING and can self-serve; `funding_admins_notified` ⇒ they don't, and the
+  // billing-admin fan-out (published by the gate itself) is the only affordance.
+  if (result.code === 'funding_setup_required' || result.code === 'funding_admins_notified') {
+    return {
+      kind: 'funding',
+      canManageBilling: result.code === 'funding_setup_required',
+      caseTitle,
+    };
+  }
+
+  const canManageBilling = BALANCE_CODE_CAN_MANAGE_BILLING[result.code];
+  if (canManageBilling === undefined) {
+    return null;
+  }
+  const { balance } = result;
+  if (balance === undefined) {
+    return { kind: 'hard' };
+  }
+  if (balance.variant === 'hold') {
+    return {
+      kind: 'balance',
+      variant: 'hold',
+      canManageBilling,
+      topUpNeededMinor: balance.topUpNeededMinor,
+      company: balance.company,
+      caseTitle,
+    };
+  }
+  if (balance.topUpNeededMinor === null || balance.reservedBookingCount === null) {
+    return { kind: 'hard' };
+  }
+  return {
+    kind: 'balance',
+    variant: 'reserved',
+    canManageBilling,
+    topUpNeededMinor: balance.topUpNeededMinor,
+    reservedBookingCount: balance.reservedBookingCount,
+    company: balance.company,
+    caseTitle,
+  };
+}
 
 /**
  * `handleSubmit`'s failure-branch classification, pulled out to a pure function so the
  * component body only has to switch on an already-resolved discriminant. Order matters and is
  * preserved: `slot_unavailable` first (never treated as a case-level partial failure, even
  * though it also carries `engagementId`/`caseTitle`), then `session_expired` (which carries the
- * same fields and would otherwise be swallowed by the arm below it), then any `stage:'meeting'`
- * failure that names a case (the partial-recovery arm, D4b), then a `stage:'company'` failure
- * (M4's fail-closed arm), then the generic hard failure.
+ * same fields and would otherwise be swallowed by the arm below it), then the funding
+ * pre-conditions by CODE (same reason), then any `stage:'meeting'` failure that names a case
+ * (the partial-recovery arm, D4b), then a `stage:'company'` failure (M4's fail-closed arm), then
+ * the generic hard failure.
  */
 function resolveSubmitFailureOutcome(
   result: Extract<BookConsultationResult, { ok: false }>
@@ -268,6 +372,11 @@ function resolveSubmitFailureOutcome(
   if (result.code === 'session_expired') {
     return { kind: 'session_expired', caseTitle: result.caseTitle ?? null };
   }
+  // ⚠ BEFORE the partial arm, keyed on the CODE — see `resolveFundingOutcome`.
+  const funding = resolveFundingOutcome(result);
+  if (funding !== null) {
+    return funding;
+  }
   if (
     result.stage === 'meeting' &&
     result.engagementId !== undefined &&
@@ -278,13 +387,51 @@ function resolveSubmitFailureOutcome(
   if (result.stage === 'company') {
     return { kind: 'company_fail_closed', code: result.code };
   }
-  // BAL-478 — the funding pre-condition refused before any write. `funding_setup_required` ⇒
-  // the actor holds MANAGE_BILLING and can self-serve; `funding_admins_notified` ⇒ they don't,
-  // and the billing-admin fan-out (published by the gate itself) is the only affordance.
-  if (result.stage === 'funding') {
-    return { kind: 'funding', canManageBilling: result.code === 'funding_setup_required' };
-  }
   return { kind: 'hard' };
+}
+
+/**
+ * The balance panel's props, built once so the two `BalanceRefusal` arms map onto the panel's
+ * discriminated props without a ternary in the JSX.
+ *
+ * `amountExceedsSingleTopUp` is derived from the SAME constant the top-up page enforces
+ * (`TOP_UP_LIMITS_MINOR.max`): a figure above it cannot be covered by one top-up, so the copy
+ * says "top-ups totalling". `caseSaved` is set only when the refusal came from the meeting hop;
+ * `expertLabel` is the PARTY label (agency, or the independent expert's own name).
+ */
+function buildBalancePanelProps(
+  refusal: BalanceRefusal,
+  shared: {
+    readonly expertLabel: string;
+    readonly isSwitching: boolean;
+    readonly onTopUp: () => void;
+    readonly onClose: () => void;
+  }
+): BookingBalancePanelProps {
+  const caseSaved: CaseSavedNote | null =
+    refusal.caseTitle === null
+      ? null
+      : { caseTitle: refusal.caseTitle, expertLabel: shared.expertLabel };
+  const common = {
+    canManageBilling: refusal.canManageBilling,
+    companyName: refusal.company.name,
+    companyIsActive: refusal.company.isActive,
+    amountExceedsSingleTopUp:
+      refusal.topUpNeededMinor !== null && refusal.topUpNeededMinor > TOP_UP_LIMITS_MINOR.max,
+    caseSaved,
+    isSwitching: shared.isSwitching,
+    onTopUp: shared.onTopUp,
+    onClose: shared.onClose,
+  };
+  if (refusal.variant === 'hold') {
+    return { ...common, variant: 'hold', topUpNeededMinor: refusal.topUpNeededMinor };
+  }
+  return {
+    ...common,
+    variant: 'reserved',
+    topUpNeededMinor: refusal.topUpNeededMinor,
+    reservedBookingCount: refusal.reservedBookingCount,
+  };
 }
 
 /**
@@ -344,8 +491,20 @@ export function BookingFlowDialog(
   const [hardFailure, setHardFailure] = useState<HardFailurePanelCopy | null>(null);
   /** BAL-478 — which `error_funding` copy arm to render. Reset every open→close→open cycle. */
   const [fundingCanManageBilling, setFundingCanManageBilling] = useState(false);
+  /** BAL-474 — the case title the `error_funding` panel names, when hop 2 refused after the write. */
+  const [fundingCaseTitle, setFundingCaseTitle] = useState<string | null>(null);
+  /** BAL-474 — the hold / reservation refusal the `error_balance` panel renders. */
+  const [balanceRefusal, setBalanceRefusal] = useState<BalanceOutcome | null>(null);
+  /** BAL-474 — true while the workspace switch behind the balance panel's Top-up is in flight. */
+  const [isSwitching, setIsSwitching] = useState(false);
 
   const openFiredRef = useRef(false);
+  /**
+   * BAL-474 (D11.3 N3) — mirrors the `open` prop so an in-flight workspace switch can tell that the dialog
+   * was closed while it was awaiting, and NOT navigate away from the page the person chose to stay on.
+   */
+  const openRef = useRef(open);
+  openRef.current = open;
   /** Frozen true the moment ANY submit creates a real case row (D4b) — see `handleSubmit`. */
   const caseAlreadyCreatedRef = useRef(false);
 
@@ -375,6 +534,9 @@ export function BookingFlowDialog(
     setCaseChoiceLoading(false);
     setSessionExpiredCaseTitle(null);
     setFundingCanManageBilling(false);
+    setFundingCaseTitle(null);
+    setBalanceRefusal(null);
+    setIsSwitching(false);
 
     if (entry.mode === 'fixed_case') {
       setPhase('confirm');
@@ -641,13 +803,24 @@ export function BookingFlowDialog(
         return;
       }
       if (outcome.kind === 'funding') {
-        // BAL-478 — an expected business refusal, not an exception: nothing was written and
-        // nothing is wrong with the slot, the case or the session. NO Sentry capture (unlike
-        // `company_fail_closed` above, whose failing eligibility READ is a defect) and NO
-        // analytics `track()` — the server-side event in `enforceBookingFunding` is the single
-        // emit for this refusal.
+        // BAL-478 — an expected business refusal, not an exception: nothing is wrong with the
+        // slot, the case or the session. NO Sentry capture (unlike `company_fail_closed` above,
+        // whose failing eligibility READ is a defect) and NO analytics `track()` — the
+        // server-side event in `enforceBookingFunding` is the single emit for this refusal.
+        // `caseTitle` is set only when the API's guard refused at the meeting hop, after the
+        // case row was written.
         setFundingCanManageBilling(outcome.canManageBilling);
+        setFundingCaseTitle(outcome.caseTitle);
         setPhase('error_funding');
+        return;
+      }
+      if (outcome.kind === 'balance') {
+        // BAL-474 — the same posture as `funding` above: an expected refusal (an open receivable
+        // or planned consultations set the credit aside), no Sentry and no client `track()`.
+        // The server event is the single emit.
+        setBalanceRefusal(outcome);
+        setIsSwitching(false);
+        setPhase('error_balance');
         return;
       }
       setHardFailure(null);
@@ -789,6 +962,53 @@ export function BookingFlowDialog(
   const handleChooseDifferentTimeAfterPartial = useCallback(() => {
     setPhase('pick_time');
   }, []);
+
+  /**
+   * ⚠⚠ THE BALANCE PANEL'S TOP-UP TARGETS THE COMPANY THAT REFUSED. `/billing/top-up` tops up the
+   * ACTIVE workspace's company, which may not be the company this booking bills (a user in two
+   * companies). So when the held company is the active one the action just navigates; otherwise
+   * it switches workspace to the held company first (the BAL-494 action) and only then navigates.
+   *
+   * A failed switch (a returned failure OR a thrown action) toasts and STAYS on the panel — never
+   * a silent navigation to a page that would top up the wrong company. There is no success toast:
+   * the navigation is the feedback (the `meeting-frame-impl` precedent). On success the spinner is
+   * deliberately left up — the page is navigating away, and re-enabling the button would open a
+   * double-switch window.
+   */
+  const handleTopUp = useCallback(async (): Promise<void> => {
+    if (balanceRefusal === null) return;
+    const { company } = balanceRefusal;
+    if (company.isActive) {
+      router.push('/billing/top-up');
+      return;
+    }
+    setIsSwitching(true);
+    try {
+      const result = await switchWorkspaceAction(companyWorkspaceKey(company.id));
+      if (result.success) {
+        // The dialog may have been closed while the switch was in flight — never navigate then.
+        if (openRef.current) {
+          router.push('/billing/top-up');
+        } else {
+          setIsSwitching(false);
+        }
+        return;
+      }
+    } catch (error) {
+      // `@/lib/logging` is SERVER-only — `Sentry.captureException` is the build-safe client-side
+      // equivalent (see `handleRetryCompanies`).
+      Sentry.captureException(error, {
+        tags: { feature: 'booking', step: 'top_up_workspace_switch' },
+        extra: { companyId: company.id },
+      });
+    }
+    toast.error(bookingSwitchFailedCopy(company.name));
+    setIsSwitching(false);
+  }, [balanceRefusal, router]);
+
+  const handleTopUpClick = useCallback(() => {
+    handleTopUp().catch(() => {});
+  }, [handleTopUp]);
 
   const submitDisabled =
     submitting ||
@@ -985,6 +1205,23 @@ export function BookingFlowDialog(
                 canManageBilling={fundingCanManageBilling}
                 onManageBilling={() => router.push('/settings/billing')}
                 onClose={onClose}
+                caseSaved={
+                  fundingCaseTitle === null
+                    ? null
+                    : { caseTitle: fundingCaseTitle, expertLabel: expert.partyLabel }
+                }
+              />
+            </motion.div>
+          )}
+          {phase === 'error_balance' && balanceRefusal !== null && (
+            <motion.div key="error_balance" {...pageTransition}>
+              <BookingBalancePanel
+                {...buildBalancePanelProps(balanceRefusal, {
+                  expertLabel: expert.partyLabel,
+                  isSwitching,
+                  onTopUp: handleTopUpClick,
+                  onClose,
+                })}
               />
             </motion.div>
           )}
@@ -995,7 +1232,7 @@ export function BookingFlowDialog(
 
   if (isMobile) {
     return (
-      <Sheet open={open} onOpenChange={(next) => !next && handleAbandon()}>
+      <Sheet open={open} onOpenChange={(next) => !next && !isSwitching && handleAbandon()}>
         <SheetContent side="bottom" className="max-h-[94dvh] overflow-hidden rounded-t-2xl p-0">
           <SheetTitle className="sr-only">Book a consultation with {expert.name}</SheetTitle>
           <SheetDescription className="sr-only">
@@ -1008,7 +1245,7 @@ export function BookingFlowDialog(
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && handleAbandon()}>
+    <Dialog open={open} onOpenChange={(next) => !next && !isSwitching && handleAbandon()}>
       {/* Same width, same reason, as reschedule-dialog.tsx — Step 1 embeds the identical
           calendar and was squeezed the same way at 640px. */}
       <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[min(92vw,840px)]">

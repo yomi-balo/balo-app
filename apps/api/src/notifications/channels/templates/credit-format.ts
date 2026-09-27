@@ -22,6 +22,20 @@ export function formatAudMinor(minor: number): string {
 }
 
 /**
+ * AUD minor units → whole dollars, e.g. `formatAudWholeDollars(1000000)` → `'A$10,000'`. Rounded to
+ * the nearest dollar and thousands-grouped (en-GB); no fraction digits. For a round LIMIT quoted in
+ * prose (the per-top-up maximum), where cents would read as false precision; a figure the client
+ * acts on to the cent uses `formatAudMinor`. A non-finite input degrades to `'A$0'`.
+ */
+export function formatAudWholeDollars(minor: number): string {
+  const safe = Number.isFinite(minor) ? minor : 0;
+  const amount = Math.round(safe / 100).toLocaleString('en-GB', {
+    maximumFractionDigits: 0,
+  });
+  return `A$${amount}`;
+}
+
+/**
  * BAL-377 — presentment (card) minor units + a lowercase ISO-4217 code → a display string
  * for the receipt, e.g. `formatPresentmentMinor(4200, 'usd')` → `'USD 42.00'`. Two fraction
  * digits, thousands-grouped (en-GB), the code upper-cased. Presentation only — this is the

@@ -16,6 +16,7 @@
 import type {
   MeetingBookingContextType,
   MeetingContextTypeWithHolder,
+  MeetingEndRefusalReason,
   MeetingProvisionTrigger,
 } from '@balo/shared/meetings';
 
@@ -43,6 +44,13 @@ export const MEETING_SERVER_EVENTS = {
   MEETING_VENUE_UNAVAILABLE: 'meeting_venue_unavailable',
   /** EVERY terminal path — the five system rules and the human End alike. */
   MEETING_ENDED: 'meeting_ended',
+  /**
+   * BAL-474 (D6.4, ADR-1040 Amendment 7 §C) — a human End was REFUSED: the client principal had
+   * never been present (`meeting_not_joined`) or the meeting had not started (`meeting_not_started`).
+   * It measures D6.4's friction (the Daily join webhook's lag), which the client-side
+   * `ENDED_FOR_ALL` cannot: that fires before the server answers, so a refused End counts as ended.
+   */
+  MEETING_END_REFUSED: 'meeting_end_refused',
   /**
    * BAL-433 Slice 1 (ADR-1044 amendment 2026-08-25) — one booking's EXPERT-party calendar
    * entry was resolved, and this is what it became.
@@ -250,9 +258,19 @@ export interface MeetingServerEventMap {
    */
   [MEETING_SERVER_EVENTS.MEETING_ENDED]: {
     meeting_id: string;
-    /** ⚠ MEASUREMENT, NOT MONEY. BAL-412 settles; this ticket only produces the numbers. */
+    /**
+     * ⚠ MEASUREMENT, NOT MONEY. BAL-412 settles; this ticket only produces the numbers. Both figures
+     * are measured over presence CLAMPED to the scheduled start (BAL-134's R10 rule, applied at read
+     * time since BAL-474 Rule A), exactly as they always were — an early arrival is not in them.
+     */
     billable_seconds: number;
     expert_present_seconds: number;
+    /**
+     * BAL-474 (Rule A, D13) — seconds the expert and a client-side participant were really TOGETHER
+     * before the scheduled start (the sum of the intersection of their presence). Billable, on top of
+     * the from-start time; `0` for a call nobody joined early.
+     */
+    billable_before_start_seconds: number;
     /** Presence intervals recorded across the whole meeting, all parties. */
     participant_count: number;
     /**
@@ -263,6 +281,15 @@ export interface MeetingServerEventMap {
     /** `meetings.ended_by`. ⚠ ALL FIVE system rules report `system_idle`; `outcome` separates them. */
     ended_by: 'client_principal' | 'expert_host' | 'system_idle';
     /** The acting user on a human End; the MEETING id on all five system paths. */
+    distinct_id: string;
+  };
+
+  /** BAL-474 — see {@link MEETING_SERVER_EVENTS.MEETING_END_REFUSED}. */
+  [MEETING_SERVER_EVENTS.MEETING_END_REFUSED]: {
+    meeting_id: string;
+    reason: MeetingEndRefusalReason;
+    ended_by: 'client_principal' | 'expert_host';
+    /** The acting user. */
     distinct_id: string;
   };
 

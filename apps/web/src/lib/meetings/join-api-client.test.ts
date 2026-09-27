@@ -192,6 +192,38 @@ describe('⚠ nothing here throws', () => {
     });
   });
 
+  it('⚠ D16 — `opensAt` rides ONLY on a `meeting_not_open_yet` failure, on every hop', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      response(409, { error: 'meeting_not_open_yet', opensAt: '2026-09-25T11:57:00.000Z' })
+    );
+    await expect(postGuestJoin(MEETING_ID, GUEST_TOKEN)).resolves.toEqual({
+      ok: false,
+      status: 409,
+      code: 'meeting_not_open_yet',
+      opensAt: '2026-09-25T11:57:00.000Z',
+    });
+    await expect(postLobbyClaim(MEETING_ID, 'Sam', 'sam@x.example')).resolves.toMatchObject({
+      code: 'meeting_not_open_yet',
+      opensAt: '2026-09-25T11:57:00.000Z',
+    });
+
+    // Any other failure that happens to carry an `opensAt` field never surfaces it.
+    mockLoggedFetch.mockResolvedValue(
+      response(409, { error: 'meeting_not_open_for_join', opensAt: '2026-09-25T11:57:00.000Z' })
+    );
+    const terminal = await postGuestJoin(MEETING_ID, GUEST_TOKEN);
+    expect(terminal).toEqual({ ok: false, status: 409, code: 'meeting_not_open_for_join' });
+    expect('opensAt' in terminal).toBe(false);
+  });
+
+  it('D16 — a `meeting_not_open_yet` body with no usable `opensAt` omits the key rather than inventing one', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      response(409, { error: 'meeting_not_open_yet', opensAt: 42 })
+    );
+    const result = await postGuestJoin(MEETING_ID, GUEST_TOKEN);
+    expect(result).toEqual({ ok: false, status: 409, code: 'meeting_not_open_yet' });
+  });
+
   it('maps a transport error to a failure rather than an exception', async () => {
     // An exception escaping a Server Action becomes a Next error boundary, which is the
     // wrong shape for "this link isn't active".

@@ -1,4 +1,21 @@
-import { and, asc, eq, gt, gte, inArray, isNull, lt, lte, ne, notInArray, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  ne,
+  exists,
+  notExists,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
+import type { ReservableCaseBooking } from '@balo/shared/credit';
 import {
   assertMeetingTransition,
   DAILY_ROOM_NAME_PREFIX,
@@ -12,11 +29,15 @@ import { db } from '../client';
 import {
   meetings,
   meetingContexts,
+  meetingPresence,
   consultations,
+  creditSessions,
   engagements,
+  expertProfiles,
   projectRequests,
   requestExpertRelationships,
   companies,
+  type CreditSessionStatus,
   type Meeting,
   type MeetingContext,
   type MeetingContextType,
@@ -783,6 +804,65 @@ export function assembleCalendarMeetings(
   return result;
 }
 
+/**
+ * BAL-474 (R6F-11) — the three predicates every COMPANY-scoped Case meeting reader shares
+ * (`listReservableCaseBookings`, `hasLiveSessionlessCaseMeeting`), so they cannot drift on what "a Case meeting
+ * of this company" means: the engagement → live `case` context join condition, the context → live meeting join
+ * condition, and the company's non-deleted `case` engagement filter. Each reader adds its own status filters.
+ */
+const caseContextJoinOn = () =>
+  and(
+    eq(meetingContexts.contextType, 'case'),
+    eq(meetingContexts.contextId, engagements.id),
+    isNull(meetingContexts.deletedAt)
+  );
+const liveMeetingJoinOn = () =>
+  and(eq(meetings.id, meetingContexts.meetingId), isNull(meetings.deletedAt));
+const companyCaseEngagement = (companyId: string) =>
+  and(
+    eq(engagements.companyId, companyId),
+    eq(engagements.engagementType, 'case'),
+    isNull(engagements.deletedAt)
+  );
+
+/**
+ * BAL-474 (R6F-11) — "the meeting has NO live credit session other than the ignored statuses": `NOT EXISTS` a
+ * non-deleted session whose status is not one of `ignoredStatuses`. `['cancelled']` is "no live session" (a
+ * cancelled session never bills, so its meeting reads as sessionless); the billing-start finder also ignores
+ * `pending`, because a pending session is exactly what it exists to connect.
+ */
+function noLiveSessionExcept(exec: DbExecutor, ignoredStatuses: readonly CreditSessionStatus[]) {
+  return notExists(
+    exec
+      .select({ one: sql`1` })
+      .from(creditSessions)
+      .where(
+        and(
+          eq(creditSessions.meetingId, meetings.id),
+          notInArray(creditSessions.status, [...ignoredStatuses]),
+          isNull(creditSessions.deletedAt)
+        )
+      )
+  );
+}
+
+/** BAL-474 (R6F-11) — `EXISTS` a live, still-OPEN presence row of `party` for the meeting being selected. */
+function openPresenceRow(exec: DbExecutor, party: 'expert' | 'client') {
+  return exists(
+    exec
+      .select({ one: sql`1` })
+      .from(meetingPresence)
+      .where(
+        and(
+          eq(meetingPresence.meetingId, meetings.id),
+          eq(meetingPresence.party, party),
+          isNull(meetingPresence.leftAt),
+          isNull(meetingPresence.deletedAt)
+        )
+      )
+  );
+}
+
 interface ResolvedCalendarMeetingOwner {
   readonly engagementType: EngagementType | null;
   readonly projectRequestId: string | null;
@@ -1477,7 +1557,22 @@ export const meetingsRepository = {
 
   /**
    * BAL-134 — the lifecycle sweep's candidate scan (§4.3). Live, non-terminal meetings whose
-   * scheduled start is recent enough to still be actionable, OLDEST FIRST.
+   * scheduled start is recent enough to still be actionable: `in_progress` first, then
+   * `waiting_for_participants`, then `scheduled`, and OLDEST FIRST within each.
+   *
+   * ⚠ THE STATUS RANK IS WHAT KEEPS A LIVE CALL RECONCILED (BAL-474, R6F-15). The scan has a floor but no ceiling
+   * on `scheduled_start`, so every future `scheduled` meeting is a candidate too, and a pure oldest-first order
+   * lets a full batch of them crowd out a call that started EARLY — an `in_progress` meeting whose start is still
+   * ahead — leaving its dropped `participant.left` unreconciled for as long as the window stays full. Ranking
+   * `scheduled` last never starves a meeting that already has a presence row to reconcile, since the first
+   * presence moves it on to `in_progress`/`waiting_for_participants`.
+   *
+   * ⚠ RESIDUAL (D17.2) — it CAN starve a still-`scheduled` meeting's own repair. The reconcile pass also opens a
+   * row for a dropped `participant.joined` on a meeting the batch has not yet reached, and that meeting is still
+   * `scheduled` until the repair runs — the premise above ("a meeting with a row to reconcile is never
+   * `scheduled`") does not cover this one case. It needs `MEETING_LIFECYCLE_BATCH_LIMIT` (200) or more concurrent
+   * `in_progress`/`waiting_for_participants` meetings to fill the batch and crowd it out; below that ceiling every
+   * `scheduled` repair runs the same tick it is found. The window itself is unchanged.
    *
    * Rides `meeting_status_scheduled_start_idx` — the index whose own docblock says "BAL-134's
    * starting-soon scans" — because the predicate leads with `status` and then ranges on
@@ -1490,8 +1585,9 @@ export const meetingsRepository = {
    *
    * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`** — the no-silent-caps
    * rule. A full batch means meetings were DROPPED from this tick, and the sweep is the only
-   * layer that can say so (`@balo/db` has no business logging a business event). Ordering is
-   * ascending so that warning can name the oldest `scheduled_start` it did reach.
+   * layer that can say so (`@balo/db` has no business logging a business event). The caller names
+   * the oldest `scheduled_start` it reached by taking the minimum over the batch — the first row is
+   * no longer the oldest.
    *
    * An empty `statuses` array returns `[]` without a query — drizzle would render `inArray(x,
    * [])` as a false predicate anyway, but an explicit short-circuit says so rather than
@@ -1514,7 +1610,11 @@ export const meetingsRepository = {
           isNull(meetings.deletedAt)
         )
       )
-      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .orderBy(
+        sql`CASE ${meetings.status} WHEN 'in_progress' THEN 0 WHEN 'waiting_for_participants' THEN 1 ELSE 2 END`,
+        asc(meetings.scheduledStart),
+        asc(meetings.id)
+      )
       .limit(input.limit);
   },
 
@@ -1755,8 +1855,10 @@ export const meetingsRepository = {
    * logs the `false` case — this repository does not log (`repositories-never-notify`'s
    * sibling rule); see the presence-settlement service.
    *
-   * ⚠ BAL-466 wires the enabling condition — its only caller is the presence settlement,
-   * which `joinMeetingAsMember` now makes reachable at admission to a `case` meeting.
+   * ⚠ TWO CALLERS, BOTH ON A TRANSACTION (BAL-474): the presence settlement (reachable at
+   * admission to a `case` meeting since BAL-466, and from the sessionless terminal-path open since
+   * BAL-474), and `creditSessionsRepository.markSessionlessCaseMeeting`, which resolves a
+   * sessionless meeting's outcome in the SAME transaction as its terminal marker.
    */
   async setOutcomeIfUnset(
     exec: DbExecutor,
@@ -1790,6 +1892,161 @@ export const meetingsRepository = {
       metadata: { outcome: input.outcome },
     });
     return true;
+  },
+
+  /**
+   * BAL-474 (ADR-1040 Amendment 7 §H, owner ruling D6.5; plan §I.2) — the company's UPCOMING,
+   * NOT-YET-STARTED, SESSIONLESS Case bookings: what the check-time soft reservation sums when a
+   * company without an active mandate books another Case consultation. Read inside the booking
+   * funding snapshot's ONE repeatable-read transaction (`exec`).
+   *
+   * Why each filter:
+   *   · a live `case` context on an ACTIVE, non-deleted `case` engagement of THIS company — a closed
+   *     case refuses joins (`meeting-liveness.ts`), so it cannot bill;
+   *   · `status IN ('scheduled', 'waiting_for_participants')` — not yet started: billing has not
+   *     begun (an expert alone in the room is `waiting_for_participants`, and IS reserved);
+   *   · `scheduled_end > now` — upcoming; a stuck row ages out with its window;
+   *   · NO live session (non-cancelled, non-deleted) — a meeting with a session already has its
+   *     (netted) hold inside `available`; counting it again would double-reserve. A meeting whose
+   *     only session was cancelled IS counted (it reads as sessionless).
+   *
+   * ⚠ NO LIMIT: a sum over a truncated set would under-reserve. The cardinality is bounded by what a
+   * company can book. ⚠ Not reserved, stated truthfully (plan §I.2): a sessionless meeting already
+   * `in_progress` (an admission open that was refused or threw), and an ended, unsettled
+   * sessionless meeting — both are billed their full presence-derived amount by the terminal path.
+   *
+   * `expertRateCents` is the booked expert's CURRENT `rate_cents` — the same column `open()` prices
+   * from — so a rate change since booking re-prices the reservation on the next check (§I.4).
+   * ⚠ IT IS THE RAW, UN-MARKED-UP CONSULTANT RATE: server-side only, for the booking verdict; it
+   * must never reach a client payload (the verdict returns figures, never rates).
+   *
+   * Rides `engagement_company_idx`, `meeting_context_reverse_idx`, the two primary keys and
+   * `credit_sessions_meeting_idx` — no new index. A meeting reached through more than one case
+   * context of the company (a data anomaly) is returned ONCE.
+   */
+  async listReservableCaseBookings(
+    input: { companyId: string; now: Date },
+    exec: DbExecutor = db
+  ): Promise<ReservableCaseBooking[]> {
+    const rows = await exec
+      .select({
+        meetingId: meetings.id,
+        scheduledStart: meetings.scheduledStart,
+        scheduledEnd: meetings.scheduledEnd,
+        expertProfileId: expertProfiles.id,
+        expertRateCents: expertProfiles.rateCents,
+      })
+      .from(engagements)
+      .innerJoin(meetingContexts, caseContextJoinOn())
+      .innerJoin(meetings, liveMeetingJoinOn())
+      .innerJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
+      .where(
+        and(
+          companyCaseEngagement(input.companyId),
+          eq(engagements.status, 'active'),
+          inArray(meetings.status, ['scheduled', 'waiting_for_participants']),
+          gt(meetings.scheduledEnd, input.now),
+          noLiveSessionExcept(exec, ['cancelled'])
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id));
+
+    const seen = new Set<string>();
+    return rows.filter((row) => {
+      if (seen.has(row.meetingId)) return false;
+      seen.add(row.meetingId);
+      return true;
+    });
+  },
+
+  /**
+   * BAL-474 (D11.1, Rule A) — does this company have a LIVE Case call that has no session yet? The
+   * card-removal guard's belt-and-braces (`detachSavedCard` → `settlement_outstanding`). Under Rule A an
+   * early call has NO session until billing starts at the scheduled start, so the saved card is the only
+   * thing standing behind a call that is already running — and it is the PRIMARY guard before that.
+   *
+   * A Case meeting of the company (`engagements.company_id`, `engagement_type = 'case'`, through a live
+   * `case` context — the same engagement + context predicate as {@link listReservableCaseBookings}) that
+   * is `in_progress`, or `waiting_for_participants` with a `client`-party presence row open, and has NO
+   * non-cancelled session. The engagement's own status is deliberately NOT filtered: a case the client
+   * closed can still have a call running. Rides `engagement_company_idx`, `meeting_context_reverse_idx`,
+   * `credit_sessions_meeting_idx` and `meeting_presence_meeting_party_idx`; reads only an existence.
+   */
+  async hasLiveSessionlessCaseMeeting(
+    input: { companyId: string },
+    exec: DbExecutor = db
+  ): Promise<boolean> {
+    const [row] = await exec
+      .select({ meetingId: meetings.id })
+      .from(engagements)
+      .innerJoin(meetingContexts, caseContextJoinOn())
+      .innerJoin(meetings, liveMeetingJoinOn())
+      .where(
+        and(
+          companyCaseEngagement(input.companyId),
+          or(
+            eq(meetings.status, 'in_progress'),
+            and(eq(meetings.status, 'waiting_for_participants'), openPresenceRow(exec, 'client'))
+          ),
+          noLiveSessionExcept(exec, ['cancelled'])
+        )
+      )
+      .limit(1);
+    return row !== undefined;
+  },
+
+  /**
+   * BAL-474 (Rule A, D13) — THE BILLING-START PASS'S FINDER: Case meetings that are `in_progress` with an
+   * expert AND a client-side participant in the room right now, whose scheduled start has PASSED, and
+   * that have no session that is metering or settled — i.e. no session at all, or only `pending` ones.
+   * Those are the calls the meter should be running for and is not: a co-presence that spans the start
+   * (no webhook fires at the start), a failed or wallet-busy open, a D5.9 guard that clears later, or a
+   * session that a reschedule release cancelled.
+   *
+   * ⚠ IT IS ITS OWN FINDER (never the lifecycle sweep's 200-row window) so a busy sweep cannot starve it.
+   * Ordered `scheduled_start, id` and bounded by `limit`; both `deleted_at` guards; a live `case` context.
+   *
+   * ⚠ THE SET IT RE-SELECTS IS BOUNDED TO LIVE CO-PRESENT CALLS, AND THAT IS THE BOUND (R6F-9). There is no
+   * per-meeting deferral marker: a meeting the seam defers PERMANENTLY (`expert_invited_guest`,
+   * `expert_rate_missing`, `meeting_not_bookable`, `booker_unattributable`) is selected again every minute — but
+   * only while an expert row AND a client row are open on an `in_progress` meeting, so it leaves the set when the
+   * call ends. The seam logs those repeats at `debug`; the terminal path's alarm is the signal. If many such
+   * calls ever ran at once the oldest-first `limit` could hold a due call back for a tick, never lose it.
+   * Rides `meeting_status_scheduled_start_idx` (`status = 'in_progress' AND scheduled_start <= now`),
+   * `meeting_context_meeting_idx` (the `case`-context EXISTS is keyed on `meeting_id`), `meeting_presence_meeting_party_idx`
+   * and `credit_sessions_meeting_idx`.
+   */
+  async listCaseMeetingsDueToStartBilling(input: {
+    now: Date;
+    limit: number;
+  }): Promise<Array<{ meetingId: string; scheduledStart: Date }>> {
+    return db
+      .select({ meetingId: meetings.id, scheduledStart: meetings.scheduledStart })
+      .from(meetings)
+      .where(
+        and(
+          eq(meetings.status, 'in_progress'),
+          isNull(meetings.deletedAt),
+          lte(meetings.scheduledStart, input.now),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(meetingContexts)
+              .where(
+                and(
+                  eq(meetingContexts.meetingId, meetings.id),
+                  eq(meetingContexts.contextType, 'case'),
+                  isNull(meetingContexts.deletedAt)
+                )
+              )
+          ),
+          openPresenceRow(db, 'expert'),
+          openPresenceRow(db, 'client'),
+          noLiveSessionExcept(db, ['cancelled', 'pending'])
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .limit(input.limit);
   },
 
   /**

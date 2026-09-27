@@ -238,6 +238,46 @@ describe('credit api-client', () => {
     });
   });
 
+  it('carries the D10.6 refusal figures on the CreditApiError body, and drops non-numeric ones', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      jsonResponse(
+        {
+          error: 'upcoming_bookings_uncovered',
+          topUpNeededMinor: 32_000,
+          reservedBookingCount: 2,
+        },
+        false,
+        409
+      )
+    );
+    await expect(detachSavedCardPaymentMethod('wallet-1', 'user-1')).rejects.toMatchObject({
+      status: 409,
+      body: {
+        error: 'upcoming_bookings_uncovered',
+        topUpNeededMinor: 32_000,
+        reservedBookingCount: 2,
+      },
+    });
+
+    mockLoggedFetch.mockResolvedValue(
+      jsonResponse(
+        {
+          error: 'upcoming_bookings_uncovered',
+          topUpNeededMinor: '32000',
+          reservedBookingCount: null,
+        },
+        false,
+        409
+      )
+    );
+    await expect(detachSavedCardPaymentMethod('wallet-1', 'user-1')).rejects.toMatchObject({
+      body: { error: 'upcoming_bookings_uncovered' },
+    });
+    await expect(detachSavedCardPaymentMethod('wallet-1', 'user-1')).rejects.not.toMatchObject({
+      body: { topUpNeededMinor: expect.anything() },
+    });
+  });
+
   it('setCompanyBillingEmail posts to /credit/billing-email with the internal header', async () => {
     mockLoggedFetch.mockResolvedValue(
       jsonResponse({

@@ -3,12 +3,11 @@
  * company (fail-closed), then pending → active (idempotent on already-active). No money, no
  * wallet lock.
  *
- * ⚠ BAL-466 (D7) — THE CLIENT DOES NOT FIRE `session_started`, AND NEVER DID. That claim was
- * false on `main`: the only production render of `InSessionPanel` is `variant="embedded"`,
- * whose `expertProfileId` is typed `never`, so the effect always early-returned. The event now
+ * ⚠ THE CLIENT DOES NOT FIRE `session_started`. The only production render of `InSessionPanel` is
+ * `variant="embedded"`, whose `expertProfileId` is typed `never`, so its effect always early-returns. The event
  * fires SERVER-SIDE as `SESSION_SERVER_EVENTS.SESSION_STARTED`, at the real connect seam
- * (`services/meetings/presence-writer.ts`'s co-presence transition), and the client constant
- * was removed.
+ * (`services/credit-session/start-billing.ts`, the BAL-474 Rule A start-billing seam), and only for the caller
+ * that performed `pending → active`.
  */
 import { creditSessionsRepository, type CreditSession } from '@balo/db';
 import { CAPABILITIES } from '@balo/shared/authz';
@@ -22,24 +21,32 @@ const log = createLogger('credit-session');
  * BAL-466 (D6) — SYSTEM connect: `pending → active`, stamping `connectedAt` (the metering
  * anchor). No money, no wallet lock, idempotent on an already-`active` session.
  *
+ * ⚠ `transitioned` IS `true` ONLY FOR THE CALL THAT PERFORMED `pending → active` (R6F-6). Two callers can
+ * race to connect (the presence writer and the meter sweep's billing-start pass); the second gets the already-
+ * active row back with `transitioned: false`, and must not emit `session_started`, log "Billing started" or
+ * count a start.
+ *
  * ⚠⚠ **SYSTEM-ONLY. NEVER CALL THIS FROM A ROUTE** — the same warning `endSessionAsSystem` and
  * `settleSessionFromPresence` carry, for the same reason: it performs NO ACTOR AUTHORIZATION.
- * Its ONE caller is `presence-writer.ts`'s co-presence transition, which is driven by the Daily
- * webhook and the meeting-lifecycle sweep and has no acting human by construction. A route
- * reaching it would let any caller who can name a `sessionId` start a victim's meter.
+ * Its ONE presence caller is `start-billing.ts` (BAL-474 Rule A), which the presence writer and the meter
+ * sweep drive, and which has no acting human by construction. It is never called before the meeting's
+ * scheduled start. A route reaching it would let any caller who can name a `sessionId` start a victim's meter.
  * Route-facing connect goes through {@link connectSession}, which authorizes the actor.
  *
  * ⚠ IT THROWS. `SessionNotFoundError` / `InvalidSessionTransitionError` propagate exactly as
- * they do from `connectSession`; the caller decides. `presence-writer.ts` catches and logs,
- * because a webhook must not fail on a metering fault.
+ * they do from `connectSession`; the caller decides. `start-billing.ts` treats the transition error as an
+ * expected race and contains every other failure, because a webhook must not fail on a metering fault.
  */
 export async function connectSessionAsSystem(
   sessionId: string,
   opts: { now?: Date } = {}
-): Promise<CreditSession> {
-  const session = await creditSessionsRepository.connect(sessionId, opts);
-  log.info({ sessionId, status: session.status }, 'Session connected (system)');
-  return session;
+): Promise<{ readonly session: CreditSession; readonly transitioned: boolean }> {
+  const result = await creditSessionsRepository.connectWithTransition(sessionId, opts);
+  log.info(
+    { sessionId, status: result.session.status, transitioned: result.transitioned },
+    'Session connected (system)'
+  );
+  return result;
 }
 
 export async function connectSession(
@@ -56,12 +63,11 @@ export async function connectSession(
     return auth;
   }
 
-  // BAL-466 (F1, review fix round) — a `'presence'` session's `pending → active` transition is
-  // driven ONLY by the Daily co-presence webhook, via `connectSessionAsSystem` from
-  // `presence-writer.ts`. This ACTOR-facing wrapper's only gate is CONSUME_CREDITS (any live
-  // company member), and until this PR no `'presence'` session existed, so it was never taught
-  // to refuse one. Connecting early — before real co-presence — starts the meter ahead of the
-  // Q1 no-refund clamp, permanently overcharging for minutes nobody was actually on the call for.
+  // A `'presence'` session's `pending → active` transition is driven ONLY by the start-billing seam
+  // (`start-billing.ts`, called by the presence writer and the meter sweep) via `connectSessionAsSystem`.
+  // This ACTOR-facing wrapper's only gate is CONSUME_CREDITS (any live company member), so it refuses a
+  // presence session: connecting early — before real co-presence — starts the meter ahead of the Q1
+  // no-refund clamp, permanently overcharging for minutes nobody was actually on the call for.
   if (auth.session.durationSource === 'presence') {
     log.warn(
       { sessionId, userId },
@@ -70,7 +76,7 @@ export async function connectSession(
     return { ok: false, code: 'forbidden' };
   }
 
-  const session = await connectSessionAsSystem(sessionId, opts);
+  const { session } = await connectSessionAsSystem(sessionId, opts);
   log.info({ sessionId, userId, status: session.status }, 'Session connected');
   return { ok: true, session };
 }

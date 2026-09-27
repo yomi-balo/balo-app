@@ -11,6 +11,7 @@ import {
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { createLogger } from '@balo/shared/logging';
 import {
+  clampIntervalsToStart,
   computeMeetingClocks,
   dailyParticipantIdFor,
   dailyRoomNameForMeeting,
@@ -37,7 +38,8 @@ import {
   scheduleExpertAbsentAlert,
 } from '../notifications/scheduling/meeting-absence.js';
 import { emitMeetingEnded } from '../services/meetings/end-meeting.js';
-import { settleMeetingIfBillable } from '../services/credit-session/settle-from-presence.js';
+import { isReleasedSettlementCode } from '../services/credit-session/released-settlement-codes.js';
+import { settleSessionlessCaseMeeting } from '../services/credit-session/settle-sessionless-case-meeting.js';
 import {
   applyPresenceEffect,
   closePresenceEffectForRow,
@@ -163,7 +165,11 @@ async function loadCandidateState(meeting: Meeting, now: Date): Promise<Candidat
     // definition of the two spans, and this number reaches the `meeting_waiting_abandoned` event
     // and the "Terminal rule fired" log line, never a decision. Rule 4 once compared it against
     // the no-show floor; that comparison was the C2 stranding hole (`lifecycle.ts`).
-    expertPresentMs: computeMeetingClocks(intervals, now).expertPresentMs,
+    // Presence is stored at its true instants (Rule A): the figure is over start-CLAMPED intervals.
+    expertPresentMs: computeMeetingClocks(
+      clampIntervalsToStart(intervals, meeting.scheduledStart),
+      now
+    ).expertPresentMs,
   };
 }
 
@@ -291,6 +297,50 @@ function claimFor(userId: string | null, meetingGuestId: string | null): string 
   return null;
 }
 
+/**
+ * Log what the sessionless settlement did on this sweep — one line per outcome that needs one. A
+ * deferral is retried by the meter sweep's sessionless-meeting backstop; a refusal is permanent (the
+ * meeting is marked and the refusal alarmed); a RELEASED settlement — either `released_closed_case_no_show`
+ * (a no-show on a case closed before the start) or `released_expert_invited_guest_only` (a `held` call
+ * attended only by client-party guests the delivering expert invited), see `isReleasedSettlementCode` — is
+ * TERMINAL (`info`) and never retried; any other declined presence settlement is retried by the
+ * presence-settlement backstop.
+ */
+function logSessionlessSettlement(
+  meetingId: string,
+  result: Awaited<ReturnType<typeof settleSessionlessCaseMeeting>>
+): void {
+  if (result.kind === 'deferred') {
+    logger.warn(
+      { meetingId, kind: result.kind, reason: result.reason },
+      'Sessionless Case settlement deferred on the lifecycle sweep — the meter sweep sessionless-meeting backstop retries it'
+    );
+    return;
+  }
+  if (result.kind === 'refused') {
+    logger.warn(
+      { meetingId, kind: result.kind, reason: result.reason },
+      'Sessionless Case settlement refused on the lifecycle sweep — permanent: the meeting is marked and the refusal alarmed, and nothing retries it'
+    );
+    return;
+  }
+  if (result.kind !== 'settled_existing_session' || result.outcome.ok) {
+    return;
+  }
+  const { code } = result.outcome;
+  if (isReleasedSettlementCode(code)) {
+    logger.info(
+      { meetingId, code },
+      'Session released with nothing owed — released on the lifecycle sweep'
+    );
+  } else if (code !== 'no_meeting') {
+    logger.warn(
+      { meetingId, code },
+      'Presence settlement declined on the lifecycle sweep — the meter sweep presence-settlement backstop will retry'
+    );
+  }
+}
+
 /** PASS 2 — evaluate the five terminal rules and, on a match, end the meeting. */
 async function terminateIfDue(
   state: CandidateState,
@@ -370,27 +420,27 @@ async function terminateIfDue(
     now,
   });
 
-  // ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. BAL-466 wires it: `joinMeetingAsMember`
-  // opens a `duration_source='presence'` session when the first CLIENT-side member is admitted
-  // to a `case` meeting. Still returns `no_meeting` for every non-`case` meeting and for a Case
-  // whose client never joined. BEST-EFFORT AND NON-FATAL, the same posture as `tearDownRoom`
-  // below — the meeting is already terminal in Postgres, so a settlement fault must never abort
-  // this sweep tick (it would strand every OTHER candidate batched behind it). `actorUserId:
-  // null` — the ADR-1030 system-actor exemption, same as `endMeeting` above. The meter sweep's
-  // durability backstop (§4.3, `credit-session-meter-sweep.ts`'s `findPresenceUnsettled` pass)
-  // recovers a settlement fault caught here.
+  // ⚠⚠ BAL-412 (ADR-1044 §7) → BAL-474 (ADR-1040 Amendment 7 §C) — SETTLEMENT, FOR EVERY RULE.
+  // `settleSessionlessCaseMeeting` settles the meeting's existing session from presence (BAL-466's
+  // admission-opened one) OR — when a billable Case meeting has none — opens it on behalf of the
+  // booker and settles it in ONE transaction. It is keyed on the presence SHAPE, not on which rule
+  // fired (D5.3): a client no-show (`no_show`) bills the floor, and so does an expert who left after
+  // the floor before this tick (`abandoned_wait` at the floor is shape `no_show_client`); the two
+  // zero shapes (`missed_call`, `abandoned_wait` below the floor) owe nothing, get a `not_billable`
+  // marker, and stay silent. BEST-EFFORT AND NON-FATAL, the same posture as `tearDownRoom` below —
+  // the meeting is already terminal in Postgres, so a settlement fault must never abort this sweep
+  // tick (it would strand every OTHER candidate batched behind it). `actorUserId: null` — the
+  // ADR-1030 system-actor exemption, same as `endMeeting` above. The meter sweep's durability
+  // backstop (`credit-session-meter-sweep.ts`: the sessionless-meeting pass and the
+  // `findPresenceUnsettled` pass) recovers a settlement fault caught here.
   try {
-    const outcome = await settleMeetingIfBillable({
+    const result = await settleSessionlessCaseMeeting({
       meetingId: state.meeting.id,
+      trigger: 'lifecycle_sweep',
       actorUserId: null,
       now,
     });
-    if (!outcome.ok && outcome.code !== 'no_meeting') {
-      logger.warn(
-        { meetingId: state.meeting.id, code: outcome.code },
-        'Presence settlement declined on the lifecycle sweep — the meter sweep durability backstop will retry'
-      );
-    }
+    logSessionlessSettlement(state.meeting.id, result);
   } catch (error) {
     logger.error(
       { meetingId: state.meeting.id, error: errorMessage(error) },
@@ -667,11 +717,13 @@ async function enqueueRecordingEnsureBestEffort(meetingId: string, now: Date): P
  * ⚠⚠ FIX ROUND 1 — THE CAP TERM IS WHAT STOPS THE FAN-OUT BUDGET STARVING. A meeting that has
  * exhausted `MAX_DAILY_FAILURES_PER_MEETING` returns from `handleEnsure`'s step 5.5 WITHOUT
  * inserting, so it never acquires a capturing row, so the two checks above answer `true` for it
- * on EVERY subsequent tick for the rest of its life. `listLifecycleCandidates` orders
- * `asc(scheduledStart), asc(id)` — stable — so without this term twenty permanently-capped
- * meetings would occupy the whole of `MAX_RECORDING_ENSURES_PER_SWEEP_TICK` forever and no later
- * meeting's self-heal would ever run. That matters precisely POST-OUTAGE, when many meetings are
- * capped at once and the budget must reach the ones still recoverable.
+ * on EVERY subsequent tick for the rest of its life. `listLifecycleCandidates` orders BY STATUS
+ * RANK FIRST (`in_progress`, then `waiting_for_participants`, then `scheduled`, R6F-15), then
+ * `asc(scheduledStart), asc(id)` within each rank — stable — so without this term twenty
+ * permanently-capped `in_progress` meetings would occupy the whole of
+ * `MAX_RECORDING_ENSURES_PER_SWEEP_TICK` forever and no later meeting's self-heal would ever run.
+ * That matters precisely POST-OUTAGE, when many meetings are capped at once and the budget must
+ * reach the ones still recoverable.
  *
  * ⚠ IT IS A NEW CALL SITE OF AN EXISTING READ, and it is LAST for the same reason the
  * recordings read is: a healthy meeting is already suppressed by the line above, so this costs
@@ -754,11 +806,18 @@ export interface MeetingLifecycleSweepResult {
  */
 function warnIfBatchFilled(candidates: readonly Meeting[]): void {
   if (candidates.length === MEETING_LIFECYCLE_BATCH_LIMIT) {
-    const [oldest] = candidates;
+    // The batch is ranked by status before age, so the FIRST row is not the oldest — take the minimum.
+    const oldest = candidates.reduce<Date | undefined>(
+      (min, meeting) =>
+        min === undefined || meeting.scheduledStart.getTime() < min.getTime()
+          ? meeting.scheduledStart
+          : min,
+      undefined
+    );
     logger.warn(
       {
         limit: MEETING_LIFECYCLE_BATCH_LIMIT,
-        oldestScheduledStart: oldest?.scheduledStart.toISOString(),
+        oldestScheduledStart: oldest?.toISOString(),
       },
       'Meeting lifecycle batch FILLED — meetings were dropped from this tick'
     );

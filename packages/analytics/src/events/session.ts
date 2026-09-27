@@ -1,4 +1,8 @@
-import type { CashCreditReason, DrawdownKey } from '@balo/shared/credit';
+import type {
+  CreditSessionOpenedByLabel,
+  DebtCoveringCreditReason,
+  DrawdownKey,
+} from '@balo/shared/credit';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) in-session drawdown / overdraft analytics.
@@ -10,10 +14,10 @@ import type { CashCreditReason, DrawdownKey } from '@balo/shared/credit';
  * key-set guard uses the GENERIC snake_case matcher, not a `session_` prefix regex. Server
  * events carry `distinct_id = companyId` (the natural subject of a company-wallet event).
  *
- * ⚠ BAL-466 (D7) — `STARTED` MOVED CLIENT → SERVER. It never fired client-side in production
- * (the only render of `InSessionPanel` types `expertProfileId` as `never`), so there was
- * nothing to "move" behaviourally — the constant simply relocated to `SESSION_SERVER_EVENTS`,
- * fired at the real connect seam (`presence-writer.ts`'s co-presence transition).
+ * ⚠ `SESSION_STARTED` IS A SERVER EVENT. The only render of `InSessionPanel` types `expertProfileId` as
+ * `never`, so a client-side start never fired in production. It lives in `SESSION_SERVER_EVENTS` and fires at
+ * the real connect seam (`start-billing.ts`, BAL-474 Rule A — called by the presence writer and the meter
+ * sweep), once per session, for the caller that performed `pending → active`.
  *
  * ⚠⚠ BAL-403 ADDED `IN_SESSION_PANEL_VIEWED` AND `NUDGE_CLICKED` — the in-call BALANCE drawer's
  * impression and its one interaction. Both fire from `components/balo/credit/`, OUTSIDE the
@@ -78,17 +82,13 @@ export const SESSION_SERVER_EVENTS = {
    */
   RECEIVABLE_CLEARED: 'receivable_cleared',
   /**
-   * BAL-466 (F7/F8, review fix round; widened by G5, second review round) — admission tried to
-   * open a `'presence'` credit session and the gate refused, so the consultation proceeds
-   * UNBILLED and (for every reason but `insufficient_no_mandate`) the expert goes UNPAID. Fired
-   * for every reason that is a real money-path anomaly, not the ordinary same-meeting join race
-   * (that stays `log.info`, no event): a DIFFERENT meeting already holds the company's
-   * one-live-session-per-wallet slot (`wallet_busy`, tracked at BAL-477), the wallet cannot fund
-   * the estimate and carries no mandate (`insufficient_no_mandate`, tracked at BAL-474 — which
-   * gains the overdraft-tolerant open that will replace this refusal), or one of the other
-   * money-gate / structural refusals `handleOpenSessionFailure` used to let fall through to a
-   * bare, unalarmed `log.error` (`account_hold`, `settlement_pending`, `expert_rate_missing`,
-   * `wallet_missing`, `forbidden`, `meeting_not_bookable` — G5 closed that gap). Deliberately
+   * BAL-466 (F7/F8, review fix round; widened by G5) — the presence seam tried to OPEN a
+   * `'presence'` credit session and it was refused. ⚠ BAL-474 (ADR-1040 Amendment 7 §D) REWROTE
+   * WHAT THIS MEANS: the seam's open is now overdraft-tolerant, so `insufficient_no_mandate`,
+   * `account_hold` and `settlement_pending` are no longer refusals at all, and a refusal at
+   * ADMISSION is unbilled only when the terminal path cannot recover it — `recovered_by_terminal_path`
+   * says which. Fired from ADMISSION (client member / guest) and from the TERMINAL PATH (a system
+   * open on behalf of the booker, or the durability backstop's `retry_exhausted`). Deliberately
    * carries NO `session_id` — no row was created.
    */
   SESSION_OPEN_REFUSED: 'session_open_refused',
@@ -126,6 +126,12 @@ export interface SessionServerEventMap {
     /** ⚠ THE PAYMENT outcome (D7) — do NOT overload with the settlement shape below. */
     outcome: 'success' | 'fail' | 'requires_action';
     overdraft_settled_minor: number;
+    /**
+     * BAL-474 (ADR-1040 Amendment 7 §C) — who opened the session. Required: it separates a
+     * member's own admission from the on-behalf opens (`guest`, `system`), which is the signal
+     * D3's guest-admission billing and the no-show system open exist to recover.
+     */
+    opened_by: CreditSessionOpenedByLabel;
     /** = company_id. */
     distinct_id: string;
     // ── BAL-412 (ADR-1044 §7). OPTIONAL, present only on a presence-settled session. A
@@ -154,34 +160,44 @@ export interface SessionServerEventMap {
     /** Sum of the cleared receivables' recorded amounts (AUD minor). */
     cleared_minor: number;
     balance_after_minor: number;
-    /** How it was covered — DERIVED from `CASH_CREDIT_REASONS`, never a restated union. */
-    cleared_by: CashCreditReason;
+    /**
+     * How it was covered — DERIVED from `DEBT_COVERING_CREDIT_REASONS` (BAL-474: a cash top-up or
+     * a session's own settlement charge), or `'coverage_heal'` (a covered-but-held wallet whose
+     * clear had not run was healed under the wallet lock). Never a restated union.
+     */
+    cleared_by: DebtCoveringCreditReason | 'coverage_heal';
     /** = company_id. */
     distinct_id: string;
   };
   [SESSION_SERVER_EVENTS.SESSION_OPEN_REFUSED]: {
     meeting_id: string;
-    company_id: string;
+    /** `null` when the terminal path could not even resolve the meeting's billing company. */
+    company_id: string | null;
     /** `null` when the diagnostic wallet lookup itself could not resolve one. */
     wallet_id: string | null;
     /**
-     * ⚠⚠ G5 (second review round) — WIDENED FROM `'wallet_busy' | 'insufficient_no_mandate'`.
-     * Every `OpenSessionServiceErrorCode` except `session_in_progress`'s benign same-meeting
-     * shape (no event) now alarms with its own reason — see `handleOpenSessionFailure`
-     * (`apps/api/src/services/meetings/join-meeting.ts`). `company_selection_required` is
-     * deliberately NOT a member: it is structurally unreachable at this seam (D1 threads an
-     * explicit `companyId`), so it is logged, never alarmed.
+     * ⚠ BAL-474 — the reason set after the overdraft-tolerant open: `insufficient_no_mandate`,
+     * `account_hold` and `settlement_pending` are GONE (the presence seam tolerates all three),
+     * and `booker_unattributable` / `retry_exhausted` are new (the terminal path's own refusals).
+     * `company_selection_required` stays deliberately NOT a member (structurally unreachable).
      */
     reason:
       | 'wallet_busy'
-      | 'insufficient_no_mandate'
-      | 'account_hold'
-      | 'settlement_pending'
       | 'expert_rate_missing'
       | 'wallet_missing'
       | 'forbidden'
-      | 'meeting_not_bookable';
-    /** = company_id. */
+      | 'meeting_not_bookable'
+      | 'booker_unattributable'
+      | 'retry_exhausted';
+    /** BAL-474 — who tried to open it: a member's admission, a guest's, or the terminal path. */
+    opened_by: CreditSessionOpenedByLabel;
+    /**
+     * BAL-474 (D7.6) — `true` when the reason is one the terminal path recovers (it opens and
+     * settles the session at meeting end), so the consultation is NOT unbilled; `false` for the
+     * reasons it cannot recover and for the terminal path's own post-hoc refusals.
+     */
+    recovered_by_terminal_path: boolean;
+    /** = company_id, or meeting_id when the company is null (the refusal named no company). */
     distinct_id: string;
   };
 }

@@ -30,6 +30,7 @@ interface RemoveCardConfirmProps {
    * FIX ROUND (security MEDIUM) — set when the server refused removal because the wallet has
    * unsettled consultation time on this card. Replaces the normal description with blocking
    * copy and hides the destructive action entirely — "Keep card" is the only way out.
+   * BAL-474 D10.6 uses the same slot for the "card is backing upcoming consultations" refusal.
    */
   readonly blockedReason?: string | null;
 }

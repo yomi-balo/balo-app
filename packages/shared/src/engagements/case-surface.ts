@@ -29,11 +29,19 @@ import { rescheduleProposalIsLive } from '../meetings';
  * How close to `scheduled_start` a consultation counts as LIVE — i.e. the join affordance
  * lights up and the nudge shows its pulsing dot.
  *
+ * ⚠⚠ D16 (owner ruling, BAL-474): JOINING OPENS THIS MANY MINUTES BEFORE THE START, ON THE BUTTON **AND ON THE
+ * SERVER**. `assertMeetingJoinable` refuses an earlier join (`join_window_not_open`) through
+ * {@link withinJoinWindow}, on every join path. The button reads its OWN boolean formula (a deliberate
+ * duplicate — see `apps/web/src/lib/cases/case-join-window.ts`'s docblock), but both sides derive the opening
+ * boundary from the SAME instant, {@link joinWindowOpensAt} (D17.5), so the two cannot disagree about WHEN it
+ * opens. Everything derived from it follows: the web join window, the countdown line, D10.4's admission-time
+ * session gate and D11.2's beyond-window backstop.
+ *
  * ⚠ A CONSTANT, NOT CONFIG. `platform_config` is not on `main` (its PR is unmerged), so a
  * typed constant is what "configurable" means today — the same ruling `load-recap.ts` records
  * for `PIPELINE_GRACE_MS`.
  */
-export const CASE_JOIN_WINDOW_MINUTES = 15;
+export const CASE_JOIN_WINDOW_MINUTES = 3;
 
 /**
  * BAL-513 — how long PAST `scheduled_end` the product still offers Join. The closing bracket of the
@@ -137,8 +145,24 @@ export type CaseNudge =
  * formula-identical. `case-join-window.test.ts` pins agreement against this function's public
  * `live` output at the boundary.
  */
-function withinJoinWindow(now: Date, scheduledStart: Date): boolean {
+export function withinJoinWindow(now: Date, scheduledStart: Date): boolean {
   return scheduledStart.getTime() - now.getTime() <= CASE_JOIN_WINDOW_MINUTES * MS_PER_MINUTE;
+}
+
+/**
+ * D16 — the wire literal a join refused BEFORE the window opens answers (`409 { error, opensAt }`). ONE definition
+ * for both apps, and DISTINCT from `meeting_not_open_for_join`, which the web maps to a TERMINAL state (ended,
+ * cancelled, window closed): this one is non-terminal — try again from `opensAt`.
+ */
+export const MEETING_NOT_OPEN_YET_CODE = 'meeting_not_open_yet' as const;
+
+/**
+ * The instant joining opens: `CASE_JOIN_WINDOW_MINUTES` before the start. The one definition the server's refusal
+ * reports as `opensAt`, so the message a person reads and the boundary {@link withinJoinWindow} enforces are the
+ * same instant.
+ */
+export function joinWindowOpensAt(scheduledStart: Date): Date {
+  return new Date(scheduledStart.getTime() - CASE_JOIN_WINDOW_MINUTES * MS_PER_MINUTE);
 }
 
 /**

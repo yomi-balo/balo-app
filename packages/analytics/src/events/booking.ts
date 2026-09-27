@@ -204,8 +204,20 @@ export const BOOKING_SERVER_EVENTS = {
   FUNDING_BLOCKED: 'booking_funding_blocked',
 } as const;
 
-/** WHICH zero-arm shape it was — separates "never transacted" from "lapsed card / drained balance". */
-export type BookingFundingBlockReason = 'no_wallet' | 'no_mandate_insufficient_balance';
+/**
+ * WHICH refusal it was — separates "never transacted" from "lapsed card / drained balance".
+ * BAL-474 (ADR-1040 Amendment 7 §H) added `account_on_hold` (D6.1's brake: an open receivable)
+ * and `reserved_by_upcoming` (D6.5's check-time reservation). The tuple is the source; the union is
+ * DERIVED from it so a test can pin the exact set.
+ */
+export const BOOKING_FUNDING_BLOCK_REASONS = [
+  'no_wallet',
+  'no_mandate_insufficient_balance',
+  'account_on_hold',
+  'reserved_by_upcoming',
+] as const;
+
+export type BookingFundingBlockReason = (typeof BOOKING_FUNDING_BLOCK_REASONS)[number];
 
 export interface BookingServerEventMap {
   [BOOKING_SERVER_EVENTS.FUNDING_BLOCKED]: {
@@ -215,6 +227,11 @@ export interface BookingServerEventMap {
     can_manage_billing: boolean;
     /** The slot's declared duration — the estimate's minutes input. */
     duration_minutes: number;
+    /**
+     * BAL-474 — `reserved_by_upcoming` only: how many planned consultations set credit aside. A
+     * COUNT, never money (BAL-478 REV-2: no money figure on this event).
+     */
+    reserved_booking_count?: number;
     distinct_id: string;
   };
 }

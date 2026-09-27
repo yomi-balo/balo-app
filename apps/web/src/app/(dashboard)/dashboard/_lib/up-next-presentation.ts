@@ -48,7 +48,7 @@ export function formatUpNextWhen(
 export interface UpNextRowTiming {
   /** `!calendarMeetingTiming(...).isPast`. */
   readonly visible: boolean;
-  /** `calendarMeetingTiming(...).joinVisible` — −15 min inclusive .. end + 30 min exclusive, non-terminal. */
+  /** `calendarMeetingTiming(...).joinVisible` — −`CASE_JOIN_WINDOW_MINUTES` (3) min inclusive .. end + 30 min exclusive, non-terminal. */
   readonly joinVisible: boolean;
   readonly rowState: DashboardUpNextRowState;
   /** `starting_soon` → `upNextStartsIn(n)`; `happening_now` → `UP_NEXT_HAPPENING_NOW`; `upcoming` → `null`. */

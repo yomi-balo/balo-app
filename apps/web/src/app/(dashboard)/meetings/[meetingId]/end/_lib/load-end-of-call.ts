@@ -7,7 +7,14 @@ import {
   expertsRepository,
   transcriptsRepository,
   usersRepository,
+  type Meeting,
 } from '@balo/db';
+import {
+  caseClosedBeforeStart,
+  caseClosureNames,
+  type CaseClosureNames,
+} from '@balo/shared/credit';
+import { log } from '@/lib/logging';
 import { durationMinutesOf } from '@/lib/meetings/meeting-duration';
 import { meetingAllowsPostCallActions } from '@/lib/meetings/post-call-eligibility';
 import { resolveRecapAccess, type RecapAccess } from '@/lib/meetings/resolve-recap-access';
@@ -70,6 +77,8 @@ import { contextIsRateable, resolveEndOfCallRecapReadiness } from './resolve-end
  * `Promise.all` below, exactly as `load-recap.ts` gates `reviewsRepository.findLive`. The expert
  * lens does not merely fail to RENDER the rating — the data never enters the process. That is
  * layer 2 of the four-layer structural proof; layer 1 is the union in `end-of-call-view-types.ts`.
+ * (The one exception is `readCaseClosure`, which reads the case's close instant and closer for the voided
+ * no-show arm on EITHER lens; only the two names it returns reach the payload, never the row.)
  */
 
 /**
@@ -123,6 +132,14 @@ export const loadEndOfCall = cache(
 
     const clientCompanyName = company?.name ?? 'the client';
 
+    const caseClosure = await readCaseClosure({
+      meetingId,
+      meeting,
+      isCase,
+      contextId: subject.contextId,
+      company,
+    });
+
     /**
      * ⚠⚠ THE REQUESTER NAME IS FETCHED **ALONGSIDE** THE COUNTERPARTY, NOT AFTER IT. It only
      * ever needed `case_engagements.resolution_requested_by_user_id`, which the batch above has
@@ -151,6 +168,8 @@ export const loadEndOfCall = cache(
         : usersRepository.findNamesByIds([requestedByUserId]),
     ]);
 
+    const caseHref = resolveCaseHref(isCase, subject.contextId);
+
     const base = {
       meetingId,
       contextType,
@@ -171,7 +190,7 @@ export const loadEndOfCall = cache(
        * it `contextId` + `isCase` to assemble a URL from would put route-shape knowledge in a
        * browser bundle and give the null case a second definition.
        */
-      caseHref: resolveCaseHref(isCase, subject.contextId),
+      caseHref,
       /**
        * ⚠⚠ ON **BOTH** ARMS. The loader already used this to null the two consequential
        * controls; the shell needs the same fact to stop asserting "Consultation complete" over a
@@ -180,6 +199,14 @@ export const loadEndOfCall = cache(
        * context, and the expert arm has neither field.
        */
       meetingHeld: postCallActionsAllowed,
+      /**
+       * BAL-474 (R6-C5 / R6F-14) — an early CASE call that is still open: `in_progress` with the start still
+       * ahead. `caseHref !== null` is the "is a Case" test the copy needs: its body says "rejoin from the case
+       * page", and only a Case context has one. A non-case early call keeps "Nothing to wrap up yet".
+       */
+      beganEarly:
+        meeting.status === 'in_progress' && now < meeting.scheduledStart && caseHref !== null,
+      caseClosure,
     };
 
     // ⚠⚠ THE EXPERT ARM IS CONSTRUCTED WITHOUT `rating` AND WITHOUT `resolve` — there is no
@@ -194,7 +221,8 @@ export const loadEndOfCall = cache(
     // prompt to rate an unmet expert and an irreversible close. ONE predicate, asserted where
     // the payload is actually built. `postCallActionsAllowed` is a live signal on both sides,
     // so neither this branch nor the one below it is dead.
-    if (!postCallActionsAllowed) {
+    // BAL-474 (R6F-2) — a voided no-show offers nothing to rate or close: the consultation never took place.
+    if (!postCallActionsAllowed || caseClosure !== null) {
       return { ...base, lens: 'client', rating: null, resolve: null };
     }
 
@@ -229,6 +257,57 @@ export const loadEndOfCall = cache(
     };
   }
 );
+
+/**
+ * BAL-474 (R6F-2, D15.4) — the two names of the closed-case arm, or `null`: the meeting ended as a client
+ * no-show on a CASE that was closed before its scheduled start.
+ *
+ * ⚠⚠ THE "CLOSED BEFORE THE START" TEST IS `caseClosedBeforeStart` — THE PREDICATE SETTLEMENT USES — and the two
+ * names are assembled by the shared `caseClosureNames`, exactly as the in-call state route does, so this screen
+ * cannot disagree with what was settled or with what the expert was shown while waiting.
+ *
+ * ⚠ GATED CHEAPEST-FIRST: the context, the status and the outcome are all on the meeting row already in hand, so
+ * every meeting that is not a voided-no-show candidate issues NO read here. The company row is the one the loader
+ * already read, never a second read. Every read goes through a repository.
+ *
+ * ⚠ A FAILED READ DEGRADES TO `null` (the ordinary arms render) and is LOGGED — the failure is otherwise
+ * invisible, and the ordinary expert arm promises a payout the voided no-show does not owe.
+ */
+async function readCaseClosure(input: {
+  readonly meetingId: string;
+  readonly meeting: Pick<Meeting, 'status' | 'outcome' | 'scheduledStart'>;
+  readonly isCase: boolean;
+  readonly contextId: string;
+  readonly company: { readonly name: string } | undefined;
+}): Promise<CaseClosureNames | null> {
+  const { meetingId, meeting, isCase, contextId, company } = input;
+  if (!isCase || meeting.status !== 'ended' || meeting.outcome !== 'no_show_client') {
+    return null;
+  }
+  try {
+    // D17.5 — the engagement-then-case-row read is `caseEngagementsRepository.findClosureSubject`,
+    // shared with the API's `resolveCaseBillingSubject`.
+    const subject = await caseEngagementsRepository.findClosureSubject(contextId, {
+      requireActive: false,
+    });
+    if (subject === undefined) {
+      return null;
+    }
+    if (!caseClosedBeforeStart(subject, meeting.scheduledStart)) {
+      return null;
+    }
+    const closerId = subject.closedByUserId;
+    const closers = closerId === null ? [] : await usersRepository.findNamesByIds([closerId]);
+    return caseClosureNames(closers[0], company);
+  } catch (error) {
+    log.warn('End-of-call case-closure read failed — rendering the ordinary arms', {
+      meetingId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return null;
+  }
+}
 
 /**
  * The resolve half of the client arm, or `null` when there is no case to close.

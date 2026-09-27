@@ -533,6 +533,53 @@ describe('rescheduleMeeting — T-API-SVC', () => {
   });
 
   // ── BAL-475 — the calendar-invite re-send ─────────────────────────────────────
+  // ── BAL-474 D11.2 (security N2) — a reschedule RELEASES the meeting's never-connected session ──
+  describe('D11.2 — the reschedule releases a pending presence session', () => {
+    it('⚠ cancels a bound PENDING session, stamping the PLACER — the hold does not sit on the wallet for a call that moved', async () => {
+      mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+      mockFindSessionIdByMeetingId.mockResolvedValue({ id: 'session-1' });
+      mockCancelSession.mockResolvedValue({ id: 'session-1', holdId: HOLD_ID });
+
+      await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+      expect(mockCancelSession).toHaveBeenCalledTimes(1);
+      expect(mockCancelSession).toHaveBeenCalledWith('session-1', { memberId: PLACER_MEMBER_ID });
+    });
+
+    it('no session bound ⇒ nothing is cancelled (the overwhelmingly common case)', async () => {
+      mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+      mockFindSessionIdByMeetingId.mockResolvedValue(undefined);
+
+      await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+      expect(mockFindSessionIdByMeetingId).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockCancelSession).not.toHaveBeenCalled();
+    });
+
+    it('a failing release NEVER fails the committed reschedule — it is logged, and the beyond-window backstop retries', async () => {
+      const result = rescheduleResult(EXPERT_ID);
+      mockUpdateSchedule.mockResolvedValue(result);
+      mockFindSessionIdByMeetingId.mockRejectedValue(new Error('db blip'));
+
+      await expect(rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log)).resolves.toEqual(
+        result
+      );
+      expect(log.error).toHaveBeenCalled();
+    });
+
+    it('runs AFTER the schedule commit — never before it', async () => {
+      mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+      mockFindSessionIdByMeetingId.mockResolvedValue({ id: 'session-1' });
+      mockCancelSession.mockResolvedValue({ id: 'session-1', holdId: HOLD_ID });
+
+      await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+      expect(mockUpdateSchedule.mock.invocationCallOrder[0]).toBeLessThan(
+        mockCancelSession.mock.invocationCallOrder[0] ?? 0
+      );
+    });
+  });
+
   describe('BAL-475 — publishRescheduleCalendarInvites', () => {
     it('calls the publisher with result.calendarEvents, rescheduleAuditId and expertProfileId', async () => {
       const calendarEvents: MeetingCalendarSequenceBump[] = [

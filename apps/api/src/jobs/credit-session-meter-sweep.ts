@@ -1,5 +1,12 @@
 import { Worker, type Job } from 'bullmq';
-import { creditSessionsRepository, type CreditSession } from '@balo/db';
+import * as Sentry from '@sentry/node';
+import {
+  creditSessionsRepository,
+  meetingPresenceRepository,
+  meetingsRepository,
+  type CreditSession,
+} from '@balo/db';
+import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import {
   MAX_SESSION_MINUTES,
   PENDING_STALE_CANCEL_MINUTES,
@@ -15,12 +22,29 @@ import {
   reconcileStuckSettlement,
   settleSessionFromPresence,
 } from '../services/credit-session/index.js';
+import { isReleasedSettlementCode } from '../services/credit-session/released-settlement-codes.js';
+import { startBillingIfDue } from '../services/credit-session/start-billing.js';
+import {
+  SESSIONLESS_BACKSTOP_BATCH_LIMIT,
+  SESSIONLESS_BACKSTOP_GRACE_MINUTES,
+  SESSIONLESS_BACKSTOP_RETRY_HOURS,
+  SESSIONLESS_BACKSTOP_WINDOW_HOURS,
+  backstopWindowClosing,
+  exhaustSessionlessCaseMeeting,
+  settleSessionlessCaseMeeting,
+} from '../services/credit-session/settle-sessionless-case-meeting.js';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) — the per-minute credit-session reaper. ONE repeatable BullMQ job
  * (concurrency 1, under the wallet advisory lock inside each repo method) doing the passes below
  * each tick, each row isolated in its own try/catch so one failure never aborts the batch:
  *
+ *  0. BILLING-START (BAL-474, Rule A) — runs FIRST: Case meetings that are `in_progress` with an expert AND a
+ *     client-side participant present and whose scheduled start has passed, but whose meter is not running
+ *     (`listCaseMeetingsDueToStartBilling`) → `startBillingIfDue` opens the session if none exists and connects
+ *     it at `max(start, co-presence)`, so the METER pass below draws its first ticks in the same run.
+ *  0b. BEYOND-WINDOW (BAL-474, D11.2) — a `pending` presence session on a still-`scheduled` meeting that now
+ *     starts beyond the join window (a reschedule's best-effort release failed) → cancel (releases the hold).
  *  1. METER — `findMeterable()` (active/grace) → `driveSession` posts the missing ticks + drives
  *     the grace/ceiling state machine + publishes transition notices. A well-funded but
  *     abandoned session is force-ended once it passes `MAX_SESSION_MINUTES`.
@@ -36,10 +60,16 @@ import {
  *     notices; does NOT settle/charge). Keys on the DB end-state, so it covers all four ending
  *     paths (route, wrapped-idle reaper, max-duration reaper, external) uniformly. Idempotent via
  *     the payout `created` guard, so it is race-safe against a concurrent legitimate finalize.
+ *  5b. SESSIONLESS-MEETING BACKSTOP (BAL-474, ADR-1040 Amendment 7 §D) — ended Case meetings with NO
+ *     session at all (`findSessionlessEndedCaseMeetings`): a client no-show, a guest-only call, an
+ *     admission whose open was refused or threw. `settleSessionlessCaseMeeting` opens and settles
+ *     each on behalf of the booker (or marks it `not_billable`); a still-sessionless meeting is
+ *     exhausted — a marker plus ONE alarm — on the first attempt past 25h. Pass 6 below can only
+ *     retry sessions that already exist; this is the pass for the ones that do not.
  *  6. PRESENCE-SETTLEMENT DURABILITY BACKSTOP (BAL-412, plan §4.3) — `duration_source='presence'`
  *     sessions whose MEETING has ended but which never settled (`findPresenceUnsettled`). NEEDED
  *     because both terminal paths (`end-meeting.ts`, `meeting-lifecycle-sweep.ts`) call
- *     `settleMeetingIfBillable` BEST-EFFORT and NON-FATAL, so a fault there strands a session
+ *     `settleSessionlessCaseMeeting` BEST-EFFORT and NON-FATAL, so a fault there strands a session
  *     `findFinalizedMissingPayout` (pass 5) cannot see — that finder keys on
  *     `billing_finalized_at IS NOT NULL`, the exact opposite half of this space. BAL-466 wires
  *     `duration_source='presence'` at admission (`joinMeetingAsMember`), so this pass is now
@@ -54,6 +84,12 @@ import {
  *
  * Metering is deterministic + idempotent (tickSeq minute-index ledger key), so a re-meter that
  * crosses nothing publishes nothing. All money/lock logic lives in `@balo/db` — this stays thin.
+ *
+ * ⚠ BAL-474 (V4-F4) — EVERY PASS IS ISOLATED IN ITS OWN TRY/CATCH. Five passes' finders sit outside
+ * any per-row try, so a persistent fault in ANY earlier pass used to abort the whole tick before a
+ * later pass ran — including the sessionless-meeting backstop, whose whole point is to be the net
+ * under a broken sibling. A broken pass now stays LOUD (an `error` log with the pass name plus
+ * Sentry) and counts 0, but can no longer starve the passes behind it.
  */
 export const CREDIT_SESSION_METER_SWEEP_QUEUE = 'credit-session-meter-sweep';
 export const CREDIT_SESSION_METER_SWEEP_CRON = '* * * * *'; // every minute
@@ -72,7 +108,7 @@ const PAYOUT_RECONCILE_GRACE_MINUTES = 5;
  * BAL-412 (plan §4.3) — how far behind `now` a meeting's `ended_at` must be before the presence
  * durability backstop picks up its unsettled session. Mirrors `PAYOUT_RECONCILE_GRACE_MINUTES`'s
  * posture: small enough to recover quickly, large enough to never race the µs-window between a
- * terminal path's `endMeeting` commit and its own best-effort `settleMeetingIfBillable` call.
+ * terminal path's `endMeeting` commit and its own best-effort `settleSessionlessCaseMeeting` call.
  */
 const PRESENCE_SETTLEMENT_GRACE_MINUTES = 2;
 /** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
@@ -94,11 +130,123 @@ const CANCELLED_MEETING_BATCH_LIMIT = 100;
 const SETTLED_MISSING_CREDIT_MINUTES = 60;
 /** ⚠ SAME NO-SILENT-CAPS RULE as the two batch-bounded passes above. The caller warns; it does. */
 const SETTLED_MISSING_CREDIT_BATCH_LIMIT = 100;
+const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 
 const logger = createLogger('credit-session-meter-sweep');
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * BAL-474 (V4-F4, D8.8) — run ONE pass inside its own try/catch. A throw is logged at `error` with
+ * the pass name AND captured in Sentry, and the pass counts 0 — the tick continues to the next pass.
+ * A broken pass is loud; it just cannot take the passes behind it down with it.
+ */
+async function runPassIsolated(
+  passName: string,
+  pass: () => Promise<number>,
+  log: (message: string) => void
+): Promise<number> {
+  try {
+    return await pass();
+  } catch (error) {
+    const message = errorMessage(error);
+    log(`meter sweep pass ${passName} failed: ${message}`);
+    logger.error(
+      { pass: passName, error: message, stack: error instanceof Error ? error.stack : undefined },
+      'Meter sweep pass failed — the tick continues with the next pass'
+    );
+    Sentry.captureException(error, { extra: { pass: passName } });
+    return 0;
+  }
+}
+
+/** Batch bound for the billing-start pass; the pass logs `warn` when the batch FILLS. */
+const BILLING_START_BATCH_LIMIT = 100;
+/** Batch bound for the beyond-window release pass. */
+const BEYOND_WINDOW_BATCH_LIMIT = 100;
+
+/**
+ * Pass 0 (BAL-474, Rule A, D13) — THE BILLING-START PASS. It catches what no webhook fires for: a
+ * co-presence that SPANS the scheduled start (nothing happens at T), a failed or wallet-busy open, a D5.9
+ * guard that clears later, and a session a reschedule release cancelled. It is its OWN finder, so the
+ * lifecycle sweep's 200-row window can never starve it, and it runs BEFORE the meter pass so a session it
+ * connects is metered in the same run. `startBillingIfDue` never throws; a per-row failure is still
+ * isolated. Returns how many meters it STARTED.
+ */
+async function runBillingStartPass(now: Date, log: (message: string) => void): Promise<number> {
+  const due = await meetingsRepository.listCaseMeetingsDueToStartBilling({
+    now,
+    limit: BILLING_START_BATCH_LIMIT,
+  });
+  if (due.length === BILLING_START_BATCH_LIMIT) {
+    // ⚠ NO SILENT CAPS — a full batch means due meetings were DROPPED from this tick.
+    logger.warn(
+      { limit: BILLING_START_BATCH_LIMIT, oldestMeetingId: due[0]?.meetingId },
+      'Billing-start batch FILLED — meetings were left for the next tick'
+    );
+  }
+  let started = 0;
+  for (const { meetingId } of due) {
+    try {
+      const meeting = await meetingsRepository.findById(meetingId);
+      if (meeting === undefined) {
+        continue;
+      }
+      const openRows = await meetingPresenceRepository.listOpen(meetingId);
+      const outcome = await startBillingIfDue({ meeting, openRows, now });
+      if (outcome.kind === 'started') {
+        started += 1;
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      log(`billing-start failed for meeting ${meetingId}: ${message}`);
+      logger.error(
+        {
+          meetingId,
+          error: message,
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+        'Billing-start pass failed for a meeting'
+      );
+    }
+  }
+  return started;
+}
+
+/**
+ * Pass 0b (BAL-474, D11.2, security N2) — release a `pending` presence session whose meeting is still
+ * `scheduled` but now starts BEYOND the join window. The reschedule itself releases it
+ * (`rescheduleMeeting`); this is the second chance if that best-effort release failed. Returns how many
+ * holds it freed. `cancel` releases the hold under the wallet lock it takes itself and is idempotent.
+ */
+async function runBeyondWindowPass(now: Date, log: (message: string) => void): Promise<number> {
+  const sessions = await creditSessionsRepository.findPendingBeyondJoinWindow({
+    now,
+    windowMs: CASE_JOIN_WINDOW_MINUTES * MS_PER_MINUTE,
+    limit: BEYOND_WINDOW_BATCH_LIMIT,
+  });
+  let released = 0;
+  for (const session of sessions) {
+    try {
+      await creditSessionsRepository.cancel(session.id, { memberId: session.initiatingMemberId });
+      released += 1;
+    } catch (error) {
+      const message = errorMessage(error);
+      log(`beyond-window release failed for session ${session.id}: ${message}`);
+      logger.error(
+        {
+          sessionId: session.id,
+          meetingId: session.meetingId,
+          error: message,
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+        'Beyond-window pending session could not be released'
+      );
+    }
+  }
+  return released;
 }
 
 /** Force-end a still-live session that has run past the safety cap. */
@@ -115,7 +263,7 @@ async function enforceMaxDuration(session: CreditSession, now: Date): Promise<vo
   // BAL-412 (Q3, plan §4.3) — a `presence` session's terminal path is the meeting lifecycle
   // sweep's idle-end rule (`meeting-lifecycle-sweep.ts`), NEVER this force-end: finalizing it
   // here would settle it behind the meeting's back, with no floor and no outcome resolved.
-  // Skipped and left to the owning rule; settlement (`settleMeetingIfBillable`) follows from
+  // Skipped and left to the owning rule; settlement (`settleSessionlessCaseMeeting`) follows from
   // there, and this file's own pass 6 durability backstop covers a settlement that then fails.
   // Residual, accepted (Q3): a `presence` session on a room nobody ever leaves CAN exceed
   // `MAX_SESSION_MINUTES` in DURATION.
@@ -321,8 +469,125 @@ async function runFinalizedMissingPayoutPass(
 }
 
 /**
+ * Pass 5b (BAL-474, ADR-1040 Amendment 7 §D, D5.4, D5.5, D7.5) — THE SESSIONLESS-MEETING DURABILITY
+ * BACKSTOP. Pass 6 can only retry sessions that already EXIST; this finds ended Case meetings that
+ * have NONE — a client no-show whose terminal-path attempt threw or was deferred, a guest-only call, an
+ * admission whose open was refused — and runs the same `settleSessionlessCaseMeeting` the terminal
+ * paths run (`trigger: 'backstop'`). Idempotent: the finder's `NOT EXISTS`, the in-lock
+ * one-session-per-meeting check and the single transaction make it race the inline attempt harmlessly.
+ *
+ * WINDOWS. The finder selects meetings that ended at least {@link SESSIONLESS_BACKSTOP_GRACE_MINUTES}
+ * ago (the inline path had its go) and whose `scheduled_start` AND `ended_at` are inside
+ * {@link SESSIONLESS_BACKSTOP_WINDOW_HOURS}. Retry EXHAUSTION is decided on the FIRST attempt past
+ * {@link SESSIONLESS_BACKSTOP_RETRY_HOURS}, whenever that attempt runs — the window leaves 47 hours of
+ * ticks in which it can land, so a redeploy, a slow tick or a database blip cannot age a row out
+ * silently — OR on an attempt inside the finder's LAST hour ({@link backstopWindowClosing}): a meeting
+ * that ended long after its scheduled start reaches the window's edge before it reaches the retry age. Exhaustion writes a marker (the row leaves the finder, so it happens exactly once) and
+ * raises ONE alarm.
+ *
+ * ⚠⚠ A THROWN ATTEMPT IS EXHAUSTED ONLY IF IT BILLED NOTHING (V4-F3). The throw can come from the
+ * post-commit TAIL after `openAndSettleFromPresence` committed (`finalizeAndSettle`, the settlement
+ * stamp, the dunning claim). So before exhausting on a throw the pass re-reads
+ * `findIdByMeetingId`: a session exists ⇒ the consultation IS billed — log `error` (+ Sentry), NO
+ * marker, NO alert; the reconcile and payout passes own what is left. No session ⇒ exhausted.
+ *
+ * ⚠ BOUNDED AND LOUD ABOUT IT — `SESSIONLESS_BACKSTOP_BATCH_LIMIT`, with the same "batch FILLED" warn
+ * the other backstops use. Per-row try/catch so one bad row never stops the batch.
+ */
+async function runSessionlessCaseMeetingPass(
+  now: Date,
+  log: (message: string) => void
+): Promise<number> {
+  let settled = 0;
+  const candidates = await creditSessionsRepository.findSessionlessEndedCaseMeetings({
+    endedBefore: new Date(now.getTime() - SESSIONLESS_BACKSTOP_GRACE_MINUTES * MS_PER_MINUTE),
+    windowStart: new Date(now.getTime() - SESSIONLESS_BACKSTOP_WINDOW_HOURS * MS_PER_HOUR),
+    limit: SESSIONLESS_BACKSTOP_BATCH_LIMIT,
+  });
+  if (candidates.length === SESSIONLESS_BACKSTOP_BATCH_LIMIT) {
+    // ⚠ NO SILENT CAPS — a full batch means sessionless meetings were DROPPED from this tick.
+    const [oldest] = candidates;
+    logger.warn(
+      { limit: SESSIONLESS_BACKSTOP_BATCH_LIMIT, oldestMeetingId: oldest?.meetingId },
+      'Sessionless-meeting batch FILLED — meetings were dropped from this tick'
+    );
+  }
+  const retryCutoffMs = now.getTime() - SESSIONLESS_BACKSTOP_RETRY_HOURS * MS_PER_HOUR;
+  for (const candidate of candidates) {
+    // Exhausted on the first attempt past the retry age, OR when the finder is about to drop the row
+    // (a meeting that ended long after its scheduled start reaches the window's edge first — D10.2).
+    const pastRetryWindow =
+      candidate.endedAt.getTime() <= retryCutoffMs || backstopWindowClosing(candidate, now);
+    try {
+      const result = await settleSessionlessCaseMeeting({
+        meetingId: candidate.meetingId,
+        trigger: 'backstop',
+        actorUserId: null,
+        now,
+      });
+      if (result.kind === 'opened_and_settled') {
+        settled += 1;
+      } else if (result.kind === 'deferred' && pastRetryWindow) {
+        await exhaustSessionlessCaseMeeting({
+          meetingId: candidate.meetingId,
+          reason: 'session_in_progress',
+          trigger: 'backstop',
+          outcome: result.outcome,
+        });
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      log(`sessionless-meeting backstop failed for meeting ${candidate.meetingId}: ${message}`);
+      await handleSessionlessAttemptFailure(candidate.meetingId, error, pastRetryWindow);
+    }
+  }
+  return settled;
+}
+
+/**
+ * A backstop attempt THREW. If a session now exists the throw was in the post-commit tail after a
+ * committed open-and-settle: the consultation is billed, so write NO marker and raise NO alert — just
+ * log `error` + Sentry (V4-F3). Otherwise the row is exhausted when it is past the retry window and
+ * left for the next tick when it is not. Never throws: it runs inside the per-row catch.
+ */
+async function handleSessionlessAttemptFailure(
+  meetingId: string,
+  error: unknown,
+  pastRetryWindow: boolean
+): Promise<void> {
+  const fields = {
+    meetingId,
+    error: errorMessage(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  };
+  try {
+    if ((await creditSessionsRepository.findIdByMeetingId(meetingId)) !== undefined) {
+      logger.error(
+        fields,
+        'Sessionless meeting opened and settled; its post-commit tail failed — the reconcile and payout passes own the recovery'
+      );
+      Sentry.captureException(error, { extra: { meetingId, op: 'sessionless_backstop_tail' } });
+      return;
+    }
+    logger.error(fields, 'Sessionless-meeting backstop attempt failed');
+    if (pastRetryWindow) {
+      await exhaustSessionlessCaseMeeting({ meetingId, reason: 'error', trigger: 'backstop' });
+    }
+  } catch (followUp) {
+    logger.error(
+      {
+        meetingId,
+        error: errorMessage(followUp),
+        stack: followUp instanceof Error ? followUp.stack : undefined,
+      },
+      'Sessionless-meeting backstop could not record its failure — the next tick retries'
+    );
+  }
+}
+
+/**
  * Pass 6 (BAL-412, plan §4.3) — THE PRESENCE-SETTLEMENT DURABILITY BACKSTOP. Both terminal paths
- * (`end-meeting.ts`, `meeting-lifecycle-sweep.ts`) call `settleMeetingIfBillable` BEST-EFFORT and
+ * (`end-meeting.ts`, `meeting-lifecycle-sweep.ts`) call `settleSessionlessCaseMeeting` BEST-EFFORT and
  * NON-FATAL, so a settlement fault there strands a session that pass 5 above CANNOT see —
  * `findFinalizedMissingPayout` keys on `billing_finalized_at IS NOT NULL`, the exact opposite
  * half of the space. `findPresenceUnsettled` is the NEW finder for the opposite half: a meeting
@@ -364,6 +629,13 @@ async function runPresenceSettlementPass(
       });
       if (outcome.ok) {
         settled += 1;
+      } else if (isReleasedSettlementCode(outcome.code)) {
+        // Terminal, not "declined": a session released with nothing owed (a no-show on a case closed before
+        // the start, or a call attended only by guests the delivering expert invited).
+        logger.info(
+          { sessionId: session.id, code: outcome.code },
+          'Session released with nothing owed — released by the presence-settlement backstop'
+        );
       } else if (outcome.code !== 'already_settled') {
         // A racing terminal path settled it between the finder read and here → benign. Anything
         // else (`no_meeting` / `meeting_not_terminal` / `not_presence_sourced`) means the finder's
@@ -404,9 +676,9 @@ async function runPresenceSettlementPass(
  * `stripe_webhook_events` marker, so the webhook's replay short-circuit does not swallow it.
  *
  * ⚠ NO PER-ROW TRY/CATCH, unlike every other pass — there is no per-row work that CAN fail: the
- * body is a `log.error` per row. A throw from the FINDER itself fails the BullMQ job, which the
- * per-minute repeat retries; and because this pass runs LAST, no earlier pass's (already
- * committed) work is lost when it does. Do not move it earlier without adding one.
+ * body is a `log.error` per row. A throw from the FINDER itself is caught by the tick's per-pass
+ * isolation ({@link runPassIsolated}), which logs it, captures it in Sentry and counts 0; the
+ * per-minute repeat retries it.
  */
 async function runSettledMissingCreditPass(
   now: Date,
@@ -464,43 +736,101 @@ export async function runSessionMeterSweep(
   cancelledMeetingHolds: number;
   reconciled: number;
   recovered: number;
+  /** BAL-474 — sessionless ended Case meetings this tick opened AND settled. Non-zero ⇒ a terminal
+   *  path's inline attempt did not complete; see `runSessionlessCaseMeetingPass`. */
+  sessionlessMeetingsSettled: number;
+  /** BAL-474 (Rule A) — meters this tick STARTED at the billing-start pass. */
+  billingStarted: number;
+  /** BAL-474 (D11.2) — pending sessions released because their meeting moved beyond the join window. */
+  beyondWindowReleased: number;
   presenceSettled: number;
   /** Pass 7 — sessions marked `settled` with NO `overdraft_settlement` ledger credit. Non-zero ⇒
    *  a money discrepancy needing a human; see `runSettledMissingCreditPass`. Expected 0 forever. */
   settledMissingCredit: number;
 }> {
-  const metered = await runMeterPass(now, log);
-  const ended = await runWrappedIdlePass(now, log);
-  const cancelled = await runStalePendingPass(now, log);
+  // ⚠ BAL-474 (V4-F4) — every pass in its own try/catch (`runPassIsolated`): a broken pass is loud and
+  // counts 0, and cannot starve the ones behind it.
+  // BAL-474 (Rule A) — billing starts FIRST, so a meter it connects draws its first ticks this run; then
+  // the beyond-window release (a moved call's pending session must not sit on the wallet).
+  const billingStarted = await runPassIsolated(
+    'billing_start',
+    () => runBillingStartPass(now, log),
+    log
+  );
+  const beyondWindowReleased = await runPassIsolated(
+    'beyond_window',
+    () => runBeyondWindowPass(now, log),
+    log
+  );
+  const metered = await runPassIsolated('meter', () => runMeterPass(now, log), log);
+  const ended = await runPassIsolated('wrapped_idle', () => runWrappedIdlePass(now, log), log);
+  const cancelled = await runPassIsolated(
+    'stale_pending',
+    () => runStalePendingPass(now, log),
+    log
+  );
   // BAL-410 — runs beside the stale-pending pass, never inside it: the two select DISJOINT rows
   // for opposite reasons. See `runCancelledMeetingPass`.
-  const cancelledMeetingHolds = await runCancelledMeetingPass(log);
-  const reconciled = await runStuckSettlingPass(now, log);
-  const recovered = await runFinalizedMissingPayoutPass(now, log);
-  const presenceSettled = await runPresenceSettlementPass(now, log);
+  const cancelledMeetingHolds = await runPassIsolated(
+    'cancelled_meeting',
+    () => runCancelledMeetingPass(log),
+    log
+  );
+  const reconciled = await runPassIsolated(
+    'stuck_settling',
+    () => runStuckSettlingPass(now, log),
+    log
+  );
+  const recovered = await runPassIsolated(
+    'finalized_missing_payout',
+    () => runFinalizedMissingPayoutPass(now, log),
+    log
+  );
+  // BAL-474 — the sessionless-meeting backstop, before the presence-unsettled pass: a session this
+  // pass opens-and-settles is finalized in the same call, so pass 6 never sees it half-done.
+  const sessionlessMeetingsSettled = await runPassIsolated(
+    'sessionless_case_meeting',
+    () => runSessionlessCaseMeetingPass(now, log),
+    log
+  );
+  const presenceSettled = await runPassIsolated(
+    'presence_settlement',
+    () => runPresenceSettlementPass(now, log),
+    log
+  );
   // Runs LAST, after the reconcile pass that repairs this shape at its source — so a row this
   // tick's pass 4 has just healed is never also reported here as corrupt.
-  const settledMissingCredit = await runSettledMissingCreditPass(now, log);
+  const settledMissingCredit = await runPassIsolated(
+    'settled_missing_credit',
+    () => runSettledMissingCreditPass(now, log),
+    log
+  );
   logger.info(
     {
+      billingStarted,
+      beyondWindowReleased,
       metered,
       ended,
       cancelled,
       cancelledMeetingHolds,
       reconciled,
       recovered,
+      sessionlessMeetingsSettled,
       presenceSettled,
       settledMissingCredit,
     },
     'Session meter sweep complete'
   );
   return {
+    billingStarted,
+    beyondWindowReleased,
     metered,
     ended,
     cancelled,
     cancelledMeetingHolds,
     reconciled,
     recovered,
+    sessionlessMeetingsSettled,
     presenceSettled,
     settledMissingCredit,
   };
@@ -512,16 +842,19 @@ export function startCreditSessionMeterSweepWorker(): Worker {
     CREDIT_SESSION_METER_SWEEP_QUEUE,
     async (job: Job) => {
       const {
+        billingStarted,
+        beyondWindowReleased,
         metered,
         ended,
         cancelled,
         reconciled,
         recovered,
+        sessionlessMeetingsSettled,
         presenceSettled,
         settledMissingCredit,
       } = await runSessionMeterSweep(new Date(), (m) => job.log(m));
       job.log(
-        `session meter sweep: ${metered} metered, ${ended} ended, ${cancelled} cancelled, ${reconciled} reconciled, ${recovered} recovered, ${presenceSettled} presence-settled, ${settledMissingCredit} settled-without-credit`
+        `session meter sweep: ${billingStarted} billing-started, ${beyondWindowReleased} beyond-window-released, ${metered} metered, ${ended} ended, ${cancelled} cancelled, ${reconciled} reconciled, ${recovered} recovered, ${sessionlessMeetingsSettled} sessionless-settled, ${presenceSettled} presence-settled, ${settledMissingCredit} settled-without-credit`
       );
     },
     {

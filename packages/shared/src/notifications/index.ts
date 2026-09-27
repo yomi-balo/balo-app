@@ -17,7 +17,7 @@
  * packages/shared is consumed as raw TS by Turbopack, so a `.js` suffix here 404s the web build
  * while every local gate stays green. Opposite rule to `apps/api`.
  */
-import type { CashCreditReason, MeetingSettlementShape } from '../credit';
+import type { DebtCoveringCreditReason, MeetingSettlementShape } from '../credit';
 /**
  * BAL-540 (fix round) — the two request-lifecycle unions are IMPORTED, never re-spelled inline,
  * for the same reason the settlement shapes above are. `../project-requests` is this package's
@@ -543,19 +543,24 @@ export interface CreditAutoTopupFailedPayload {
 // ⚠ ONE NOTICE PER CLEAR OPERATION, NOT PER ROW (fix round N4). A wallet can hold several open
 // receivables, so `correlationId` is keyed on the LEDGER ENTRY that covered them — one per
 // operation, itself idempotency-keyed, so a webhook replay collapses onto the same BullMQ jobId.
+// BAL-474 (D8.4): the key's suffix is an OPERATION id — the ledger entry on a credit arm, the
+// first cleared receivable id on a heal (a receivable clears once) — never a per-wallet key.
 //
 // ⚠ `balanceAfterMinor` IS THE DISPLAY FIGURE — the TRUE final balance, promo grant included
 // (M3), because the same MANAGE_BILLING holder gets the top-up receipt seconds later and the two
 // must not disagree. The predicate's own pre-promo / promo-discounted figures live on the
 // `audit_events` row, never in this payload.
 export interface CreditReceivableClearedPayload {
-  correlationId: string; // = receivable_cleared:{ledgerEntryId} — one notice per clear operation
+  correlationId: string; // = receivable_cleared:{operationId} — one notice per WRITE (D8.4)
   companyId: string;
   walletId: string;
   receivableCount: number; // how many open receivables this operation cleared (>= 1)
   clearedMinor: number; // what those consultations' extra time came to (AUD minor)
   balanceAfterMinor: number; // the TRUE final wallet balance the client is shown (AUD minor)
-  clearedBy: CashCreditReason; // how it was covered — DERIVED, never a restated union
+  // BAL-474 (ADR-1040 Amendment 7 §F, D8.4) — how it was covered: a debt-covering credit reason
+  // (a cash top-up, or a session's own settlement charge) or `'coverage_heal'` (a covered-but-held
+  // wallet whose clear had not run was healed under the wallet lock). DERIVED, never restated.
+  clearedBy: DebtCoveringCreditReason | 'coverage_heal';
 }
 
 // BAL-378 (ADR-1040 Lane 2) — in-session drawdown / settlement notification payloads.
@@ -589,7 +594,9 @@ export interface SessionLowBalancePayload {
 export interface SessionGraceEnteredPayload {
   correlationId: string; // `${sessionId}:grace_entered`
   sessionId: string;
-  userId: string; // the in-session member (recipient 'self' + SMS)
+  // BAL-474 (D5.7): OMITTED for an on-behalf session (`openedBy !== 'client'`) whose booker has
+  // since left the company — the billing-admin ping still goes out; the self arm is skipped.
+  userId?: string; // the in-session member (recipient 'self' + SMS)
   companyId: string; // → data.billingUserIds (admin ping)
   graceRemainingMinutes: number;
   ceilingRoomMinor: number;
@@ -622,17 +629,25 @@ export interface SessionSettledPayload {
 }
 
 /**
- * A settlement could not complete — sync hard decline / SCA `requires_action` / an async
- * `payment_failed` after a `processing` accept. Fans out to the billing admins (email +
- * in-app) as dunning. Re-notifiable (the daily dunning sweep) via the attempt-stamped key.
+ * BAL-474 (ADR-1040 Amendment 7 §G, D6.2, D7.1) — the company's balance needs a top-up to lift its
+ * soft account hold. WALLET grain, not session grain: ONE notice states the TOTAL top-up that
+ * clears the hold (`amountNeededToClearHold`), neutral about how many consultations ran over. Fans
+ * out to the billing admins (email + in-app) as dunning.
+ *
+ * Published for EVERY new receivable (never throttled) and once per daily reminder cadence; the
+ * notice is CLAIMED under the wallet advisory lock (figure read + daily stamp in one transaction)
+ * and published post-commit, so the figure is always one consistent snapshot and is never 0 — a
+ * covered-but-held wallet is healed instead of warned about.
  */
 export interface SessionSettlementFailedPayload {
-  correlationId: string; // `${sessionId}:settlement_failed:${attemptEpochMs}`
-  sessionId: string;
-  companyId: string; // → data.billingUserIds
+  correlationId: string; // hold_dunning:{receivableId} | hold_dunning:{walletId}:{epochMs} — per WRITE
+  companyId: string; // → data.billingUserIds + data.company (name)
   walletId: string;
-  amountMinor: number;
-  reason: 'declined' | 'requires_action';
+  topUpNeededMinor: number; // amountNeededToClearHold — always > 0 (0 is healed, never published)
+  promoGrantedSinceDebtMinor: number; // > 0 ⇒ the "anything beyond what's owed stays in your balance" sentence
+  confirmationWasRequested: boolean; // a PAST fact: an earlier settlement attempt stopped at requires_action
+  asOfIso: string; // the claim transaction's `now` — every figure is dated AND timed
+  trigger: 'receivable_opened' | 'daily_reminder';
 }
 
 /**
@@ -790,7 +805,9 @@ export interface SessionMissedCallPayload {
   correlationId: string; // `${sessionId}:missed_call` → BullMQ jobId dedup
   sessionId: string;
   meetingId: string;
-  userId: string; // the acting member → recipient 'self'; resolver hydrates data.user
+  // BAL-474 (D5.7): OMITTED for an on-behalf session (`openedBy !== 'client'`) whose booker has
+  // since left the company — the expert arm still goes out; the client self arm is skipped.
+  userId?: string; // the acting member → recipient 'self'; resolver hydrates data.user
   companyId: string;
   expertProfileId: string; // → data.expert → recipient 'expert'
   expertName: string;
@@ -1393,11 +1410,31 @@ export interface BookingRescheduledPayload {
  * Defined ONCE here.
  */
 export interface BookingFundingBlockedPayload {
-  correlationId: string; // booking-funding:{companyId}:{userId}:{hourBucket} → jobId dedup
+  correlationId: string; // booking-funding:{companyId}:{userId}:{blockKind}:{hourBucket} → jobId dedup
   companyId: string; // → data.billingUserIds (fan-out) + data.company (name)
   requestedByUserId: string; // → data.requestedByName / data.requestedByLabel; may be filtered out of billingUserIds
   expertPartyLabel: string; // agency name, or the independent expert's own name
+  // BAL-474 (ADR-1040 Amendment 7 §H, D6.1/D6.5, D7.7) — WHY the booking was refused. In the
+  // correlationId so a hold notice is never swallowed by an unfunded notice in the same hour.
+  blockKind: BookingFundingBlockKind;
+  // The top-up that would clear the hold / make room for the reserved bookings, in AUD minor.
+  // `account_on_hold` / `reserved_by_upcoming` only. ABSENT ⇒ the failed-heal fallback (a covered
+  // hold the booking API could not clear) — NEVER 0, so no notice ever renders "A$0.00".
+  topUpNeededMinor?: number;
+  // `reserved_by_upcoming` only — a COUNT of planned consultations, never money and never another
+  // booking's details.
+  reservedBookingCount?: number;
+  // Present iff `topUpNeededMinor` is: the instant the figure was read, ISO-8601, formatted in the
+  // API template (every figure is dated AND timed).
+  asOfIso?: string;
 }
+
+/**
+ * BAL-474 — why a Case booking was refused funding. `unfunded` is BAL-478's (no mandate and not
+ * enough credit); `account_on_hold` is D6.1's brake (an open receivable); `reserved_by_upcoming` is
+ * D6.5's check-time soft reservation.
+ */
+export type BookingFundingBlockKind = 'unfunded' | 'account_on_hold' | 'reserved_by_upcoming';
 
 /**
  * BAL-410 — a booked consultation was CANCELLED. Published by `apps/api`'s cancel ROUTE after

@@ -7,16 +7,20 @@ const {
   mockClaimLobbyPlace,
   mockCheckRateLimit,
   mockRequestLobbyReentryLink,
+  mockLogInfo,
+  mockLogWarn,
 } = vi.hoisted(() => ({
   mockJoinAsMember: vi.fn(),
   mockJoinAsGuest: vi.fn(),
   mockClaimLobbyPlace: vi.fn(),
   mockCheckRateLimit: vi.fn(),
   mockRequestLobbyReentryLink: vi.fn(),
+  mockLogInfo: vi.fn(),
+  mockLogWarn: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: mockLogInfo, warn: mockLogWarn, error: vi.fn() }),
 }));
 vi.mock('../../lib/require-auth.js', () => ({
   requireAuth: async (request: { userId?: string; headers: Record<string, unknown> }) => {
@@ -79,6 +83,7 @@ const RAW_TOKEN = 'z'.repeat(43);
 const ERROR_STATUS: ReadonlyArray<{ code: string; status: number }> = [
   { code: 'meeting_not_found', status: 404 },
   { code: 'meeting_not_open_for_join', status: 409 },
+  { code: 'meeting_not_open_yet', status: 409 },
   { code: 'meeting_not_provisioned', status: 409 },
   { code: 'meeting_token_unavailable', status: 503 },
 ];
@@ -202,6 +207,51 @@ describe('meeting join routes (BAL-132)', () => {
 
       expect(res.statusCode).toBe(status);
       expect(res.json()).toEqual({ error: code });
+    });
+
+    // D16 — the early-join refusal is a DISTINCT 409 literal carrying `opensAt`, on all three arms, and it is an
+    // expected early click: `info`, never `warn`.
+    const OPENS_AT = new Date('2026-09-25T11:57:00.000Z');
+
+    it.each([
+      ['member', JOIN_URL, undefined, () => mockJoinAsMember],
+      ['guest', GUEST_JOIN_URL, { guestToken: RAW_TOKEN }, () => mockJoinAsGuest],
+      [
+        'lobby knock',
+        LOBBY_URL,
+        { name: 'Sam', email: 'sam@cloudpeak.example' },
+        () => mockClaimLobbyPlace,
+      ],
+    ])(
+      '⚠ D16 — the %s arm answers 409 { error: meeting_not_open_yet, opensAt } at info, never the terminal literal',
+      async (_arm, url, payload, mock) => {
+        mock().mockResolvedValue({ ok: false, code: 'meeting_not_open_yet', opensAt: OPENS_AT });
+
+        const res = await call({
+          method: 'POST',
+          url,
+          ...(payload === undefined ? { headers: AUTH_HEADERS } : { payload }),
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toEqual({
+          error: 'meeting_not_open_yet',
+          opensAt: '2026-09-25T11:57:00.000Z',
+        });
+        expect(res.json().error).not.toBe('meeting_not_open_for_join');
+        expect(mockLogInfo).toHaveBeenCalledWith(
+          expect.objectContaining({ code: 'meeting_not_open_yet', status: 409 }),
+          expect.stringContaining('join window has not opened')
+        );
+        expect(mockLogWarn).not.toHaveBeenCalled();
+      }
+    );
+
+    it('the terminal `meeting_not_open_for_join` still logs at warn and carries NO opensAt', async () => {
+      mockJoinAsMember.mockResolvedValue({ ok: false, code: 'meeting_not_open_for_join' });
+      const res = await call({ method: 'POST', url: JOIN_URL, headers: AUTH_HEADERS });
+      expect(res.json()).toEqual({ error: 'meeting_not_open_for_join' });
+      expect(mockLogWarn).toHaveBeenCalled();
     });
 
     it('answers 400 for a non-uuid meeting id', async () => {

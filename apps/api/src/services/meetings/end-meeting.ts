@@ -15,6 +15,9 @@
  * 3b. NOT YET LIVE (`now < scheduled_start`) → **`409 meeting_not_started`**. Ending a meeting
  *     that never opened is a CANCELLATION and has its own route; see the gate's own comment for
  *     why the repository's CAS cannot be relied on to stop it.
+ * 3c. BAL-474 (D6.4) — A CLIENT PRINCIPAL WHO NEVER JOINED CANNOT END → **`409
+ *     meeting_not_joined`**, decided AFTER the idempotent already-ended success (D8.7). See the
+ *     step's own comment.
  *  4. `meetingsRepository.endMeeting` — ONE transaction: close every open interval clamped to
  *     `endedAt`, then a compare-and-set stamping `status`/`ended_at`/`ended_by`/`outcome`
  *     TOGETHER, then the audit row. All three or none.
@@ -35,13 +38,20 @@ import { meetingPresenceRepository, meetingsRepository, type Meeting } from '@ba
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { createLogger } from '@balo/shared/logging';
 import {
+  MEETING_END_NOT_JOINED_CODE,
+  MEETING_END_NOT_STARTED_CODE,
+  clampIntervalsToStart,
+  coPresentMsBefore,
   computeMeetingClocks,
+  isTerminalMeetingStatus,
   summarisePresence,
   type MeetingEndedBy,
+  type MeetingEndRefusalReason,
 } from '@balo/shared/meetings';
 import { dailyRoomTeardown, type RoomTeardown } from '../daily/rooms.js';
 import { enqueueRecordingStop } from '../../jobs/recording-capture.js';
-import { settleMeetingIfBillable } from '../credit-session/settle-from-presence.js';
+import { isReleasedSettlementCode } from '../credit-session/released-settlement-codes.js';
+import { settleSessionlessCaseMeeting } from '../credit-session/settle-sessionless-case-meeting.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
 import { logEndAuthorityDenied, resolveEndAuthority } from './authorize-end-meeting.js';
 
@@ -96,9 +106,11 @@ async function enqueueRecordingStopBestEffort(meetingId: string): Promise<void> 
  * ⚠ `meeting_not_found` IS STILL THE ONLY *DENIAL* LITERAL — there is no `403` on `/meetings/*`
  * and this surface is not the exception. `meeting_not_started` is a different KIND of answer: it
  * is only reachable AFTER tenancy and end authority have both been proven, so it confirms
- * nothing to anybody who was not already entitled to know the meeting exists.
+ * nothing to anybody who was not already entitled to know the meeting exists. BAL-474's
+ * `meeting_not_joined` (D6.4) is the same kind of answer, reachable only after tenancy AND end
+ * authority are proven.
  */
-export type EndMeetingErrorCode = 'meeting_not_found' | 'meeting_not_started';
+export type EndMeetingErrorCode = 'meeting_not_found' | MeetingEndRefusalReason;
 
 export interface EndMeetingInput {
   readonly meetingId: string;
@@ -159,22 +171,50 @@ async function tearDownRoom(
 }
 
 /**
- * ⚠⚠ BAL-412 (ADR-1044 §7) — settle the meeting's presence-sourced credit session, if it has
- * one. BEST-EFFORT AND NON-FATAL, by design, exactly like {@link tearDownRoom}: the meeting is
- * ALREADY terminal in Postgres by the time this runs, so a settlement fault must never fail the
- * End request the person who ended the meeting is waiting on. BAL-466 wires it:
- * `joinMeetingAsMember` opens a `duration_source='presence'` session when the first
- * CLIENT-side member is admitted to a `case` meeting. Still returns `no_meeting` for every
- * non-`case` meeting and for a Case whose client never joined.
+ * ⚠⚠ BAL-412 (ADR-1044 §7) → BAL-474 — settle the meeting's credit session, opening it first when a
+ * billable Case meeting has none. BEST-EFFORT AND NON-FATAL, by design, exactly like
+ * {@link tearDownRoom}: the meeting is ALREADY terminal in Postgres by the time this runs, so a
+ * settlement fault must never fail the End request the person who ended the meeting is waiting on.
+ *
+ * `settleSessionlessCaseMeeting` covers every case: a meeting WITH a session is settled from presence
+ * (as BAL-466 wired it); a Case meeting WITHOUT one whose presence settles as `no_show_client` or
+ * `held` is opened on behalf of the booker and settled in one transaction (ADR-1040 Amendment 7 §C —
+ * this is how an expert who presses End after the floor is still paid); every other meeting is a no-op.
+ * A `deferred` or `refused` result logs `warn` here (the refusal itself already alarmed inside), and
+ * the durability backstop retries a deferral.
  */
 async function settleBestEffort(meetingId: string, actorUserId: string): Promise<void> {
   try {
-    const outcome = await settleMeetingIfBillable({ meetingId, actorUserId });
-    if (!outcome.ok && outcome.code !== 'no_meeting') {
+    const result = await settleSessionlessCaseMeeting({
+      meetingId,
+      trigger: 'human_end',
+      actorUserId,
+    });
+    if (result.kind === 'deferred') {
       log.warn(
-        { meetingId, code: outcome.code },
-        'Presence settlement declined on the human End path — the meter sweep durability backstop will retry'
+        { meetingId, kind: result.kind, reason: result.reason },
+        'Sessionless Case settlement deferred on the human End path — the meter sweep sessionless-meeting backstop retries it'
       );
+    } else if (result.kind === 'refused') {
+      log.warn(
+        { meetingId, kind: result.kind, reason: result.reason },
+        'Sessionless Case settlement refused on the human End path — permanent: the meeting is marked and the refusal alarmed, and nothing retries it'
+      );
+    } else if (result.kind === 'settled_existing_session') {
+      const { outcome } = result;
+      if (!outcome.ok && isReleasedSettlementCode(outcome.code)) {
+        // Terminal, not retryable: a no-show on a case closed before the start, or a call attended only by
+        // guests the delivering expert invited — released, nothing owed.
+        log.info(
+          { meetingId, code: outcome.code },
+          'Session released with nothing owed — released on the human End path'
+        );
+      } else if (!outcome.ok && outcome.code !== 'no_meeting') {
+        log.warn(
+          { meetingId, code: outcome.code },
+          'Presence settlement declined on the human End path — the meter sweep presence-settlement backstop will retry'
+        );
+      }
     }
   } catch (error) {
     log.error(
@@ -186,6 +226,25 @@ async function settleBestEffort(meetingId: string, actorUserId: string): Promise
       'Presence settlement failed on the human End path — the meeting stays ended; the meter sweep durability backstop will retry'
     );
   }
+}
+
+/**
+ * BAL-474 — the `meeting_end_refused` server event, for the two refusals that are a FRICTION signal
+ * (`meeting_not_joined`, `meeting_not_started`). Measures D6.4's cost (the Daily join webhook's
+ * lag), which the client-side `ENDED_FOR_ALL` cannot: that fires before the server answers.
+ */
+function trackEndRefused(
+  meetingId: string,
+  userId: string,
+  reason: MeetingEndRefusalReason,
+  endedBy: MeetingEndedBy
+): void {
+  trackServer(MEETING_SERVER_EVENTS.MEETING_END_REFUSED, {
+    meeting_id: meetingId,
+    reason,
+    ended_by: endedBy === 'client_principal' ? 'client_principal' : 'expert_host',
+    distinct_id: userId,
+  });
 }
 
 /**
@@ -206,7 +265,8 @@ export async function endMeeting(input: EndMeetingInput): Promise<EndMeetingResu
   if (!authorized.ok) {
     return { ok: false, code: 'meeting_not_found' };
   }
-  // ⚠ THE GATE'S `meeting` ROW IS READ FOR EXACTLY ONE THING — the LIVENESS gate below.
+  // ⚠ THE GATE'S `meeting` ROW IS READ FOR TWO THINGS — the LIVENESS gate below and (BAL-474) the
+  // terminal check that puts the idempotent already-ended success ahead of the presence check.
   // Everything AFTER the transaction reads the row `endMeeting` RETURNS, which is the
   // post-transaction state (`status: 'ended'`, `ended_at` stamped): teardown and analytics must
   // both see the terminal row, not the pre-read one that still says `in_progress`.
@@ -245,7 +305,43 @@ export async function endMeeting(input: EndMeetingInput): Promise<EndMeetingResu
       },
       'Meeting end refused — the consultation has not started yet; ending it would be a cancellation'
     );
-    return { ok: false, code: 'meeting_not_started' };
+    trackEndRefused(meetingId, userId, MEETING_END_NOT_STARTED_CODE, authority.endedBy);
+    return { ok: false, code: MEETING_END_NOT_STARTED_CODE };
+  }
+
+  // 3c. ⚠ D6.4 (ADR-1040 Amendment 7 §C step 7; ADR-1049 end-authority note) — A CLIENT PRINCIPAL
+  //     MUST HAVE BEEN IN THE ROOM. Without this, a member who never joined could End after the
+  //     scheduled start and turn the expert's wait into a zero-shape settlement: a free
+  //     cancellation after the start. Refusing it leaves the meeting running, so the `no_show`
+  //     rule fires at the floor as normal.
+  //
+  //     ⚠ D8.7 — THE IDEMPOTENT SUCCESS COMES FIRST. `end.ts`'s rule is "a second End is `200`,
+  //     never `409`". An already-terminal meeting (the gate's pre-read) skips this check and the
+  //     compare-and-set below answers `alreadyEnded`; and when the meeting ends between the gate's
+  //     read and here (another holder pressed End) the re-read catches it. So the "everyone is
+  //     still connected" toast can never follow an End that raced another.
+  //
+  //     ⚠ KEYED ON `endedBy === 'client_principal'` — the label the transaction would stamp. The
+  //     expert arm wins a tie (`endedByForActor`), so a `HOST_MEETINGS` holder is NEVER checked:
+  //     expert-side End is unchanged. The rows that count are the actor's OWN live
+  //     `party = 'client'` presence rows — open or closed, any length — exactly those that make the
+  //     settlement's `clientSideEverPresent` true. Order: 3b first, so a never-joined principal who
+  //     presses End before the start still gets `meeting_not_started`.
+  if (authority.endedBy === 'client_principal' && !isTerminalMeetingStatus(meeting.status)) {
+    const joined = await meetingPresenceRepository.hasOwnClientInterval(meetingId, userId);
+    if (!joined) {
+      const fresh = await meetingsRepository.findById(meetingId);
+      if (fresh !== undefined && isTerminalMeetingStatus(fresh.status)) {
+        log.info({ meetingId, userId }, 'Meeting end was a no-op — already terminal');
+        return { ok: true, status: 'ended', alreadyEnded: true, endedBy: null };
+      }
+      log.info(
+        { meetingId, userId },
+        'Meeting end refused — the client member has not joined this meeting'
+      );
+      trackEndRefused(meetingId, userId, MEETING_END_NOT_JOINED_CODE, authority.endedBy);
+      return { ok: false, code: MEETING_END_NOT_JOINED_CODE };
+    }
   }
 
   // 4. THE ONE TRANSACTION. ⚠ `outcome: null` — the ender never sets the outcome (D5).
@@ -280,13 +376,15 @@ export async function endMeeting(input: EndMeetingInput): Promise<EndMeetingResu
     now,
   });
 
-  // 9. ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. BAL-466 wires it: `joinMeetingAsMember`
-  //    opens a `duration_source='presence'` session when the first CLIENT-side member is
-  //    admitted to a `case` meeting. Still returns `no_meeting` for every non-`case` meeting
-  //    and for a Case whose client never joined. BEST-EFFORT AND NON-FATAL, the same posture as
+  // 9. ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. BAL-466 opens a
+  //    `duration_source='presence'` session when the first CLIENT-side member is admitted to a
+  //    `case` meeting; BAL-474 opens one HERE for a sessionless Case meeting that owes money (a
+  //    client no-show, a guest-only call) and no-ops for every non-`case` meeting.
+  //    BEST-EFFORT AND NON-FATAL, the same posture as
   //    `tearDownRoom` above — the meeting is already terminal in Postgres, so a settlement fault
-  //    costs nothing that matters to THIS request, and the meter sweep's durability backstop
-  //    (§4.3, `credit-session-meter-sweep.ts`'s `findPresenceUnsettled` pass) recovers it.
+  //    costs nothing that matters to THIS request, and the meter sweep's durability backstops
+  //    (`credit-session-meter-sweep.ts`: the sessionless-meeting pass for a meeting with no
+  //    session, the `findPresenceUnsettled` pass for one whose session never settled) recover it.
   await settleBestEffort(ended.meeting.id, userId);
 
   log.info(
@@ -325,9 +423,17 @@ export async function emitMeetingEnded(input: {
 }): Promise<void> {
   const { meeting, endedBy, actorUserId, now } = input;
   const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+  const intervals = rows.map((row) => ({
+    party: row.party,
+    joinedAt: row.joinedAt,
+    leftAt: row.leftAt,
+  }));
+  const ceiling = meeting.endedAt ?? now;
+  // Presence is stored at its TRUE instants (Rule A); the two duration figures below are measured over
+  // intervals CLAMPED to the scheduled start, exactly as they always were.
   const clocks = computeMeetingClocks(
-    rows.map((row) => ({ party: row.party, joinedAt: row.joinedAt, leftAt: row.leftAt })),
-    meeting.endedAt ?? now
+    clampIntervalsToStart(intervals, meeting.scheduledStart),
+    ceiling
   );
 
   trackServer(MEETING_SERVER_EVENTS.MEETING_ENDED, {
@@ -335,6 +441,10 @@ export async function emitMeetingEnded(input: {
     // ⚠ MEASUREMENT, NOT MONEY. BAL-412 settles; this ticket only produces the numbers.
     billable_seconds: Math.round(clocks.billableMs / 1000),
     expert_present_seconds: Math.round(clocks.expertPresentMs / 1000),
+    // RULE A — the time the expert and a client-side participant were really together BEFORE the start.
+    billable_before_start_seconds: Math.round(
+      coPresentMsBefore(intervals, meeting.scheduledStart, ceiling) / 1000
+    ),
     participant_count: rows.length,
     outcome: meeting.outcome,
     ended_by: endedBy,

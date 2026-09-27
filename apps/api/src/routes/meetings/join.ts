@@ -28,6 +28,11 @@
  * lobby arm ONLY — a cancelled or ended meeting and a full room. Which shape it was goes to
  * the LOG as a distinct `reason`; NEVER to the wire.
  *
+ * ⚠ THE ONE DELIBERATE EXCEPTION IS `409 meeting_not_open_yet` (D16): a join earlier than the join window
+ * (`CASE_JOIN_WINDOW_MINUTES` before the start) is refused with that DISTINCT, NON-TERMINAL literal plus
+ * `opensAt` (ISO), on all three arms — never `meeting_not_open_for_join`, which the web treats as terminal.
+ * It is an expected early click, logged at `info`.
+ *
  * ⚠⚠ AND NO RESPONSE EVER ECHOES `err.message`. `DailyApiError` carries the vendor's raw body
  * and the requested room name, which is a pure function of `meetings.id` — i.e. a raw uuid.
  * The wire value is `meeting_token_unavailable`; the error goes to `log.error` inside the
@@ -35,6 +40,7 @@
  * issues ONLY, which describe the caller's own input.
  */
 import { isIP } from 'node:net';
+import { MEETING_NOT_OPEN_YET_CODE } from '@balo/shared/engagements';
 import { createLogger } from '@balo/shared/logging';
 import { canonicalGuestEmail } from '@balo/shared/meetings';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -54,6 +60,7 @@ import {
   joinMeetingAsGuest,
   joinMeetingAsMember,
   type JoinErrorCode,
+  type JoinFailure,
 } from '../../services/meetings/join-meeting.js';
 import { requestLobbyReentryLink } from '../../services/meetings/request-lobby-reentry-link.js';
 import {
@@ -77,6 +84,9 @@ const log = createLogger('meeting-join-route');
 const JOIN_ERROR_STATUS: Record<JoinErrorCode, number> = {
   meeting_not_found: 404,
   meeting_not_open_for_join: 409,
+  // D16 — the join window has not opened. A DISTINCT 409 literal: the web maps `meeting_not_open_for_join` to a
+  // TERMINAL state, and this one is not.
+  [MEETING_NOT_OPEN_YET_CODE]: 409,
   meeting_not_provisioned: 409,
   meeting_token_unavailable: 503,
 };
@@ -260,10 +270,18 @@ const CLIENT_IP_HEADER = 'x-balo-client-ip';
  */
 function sendJoinError(
   reply: FastifyReply,
-  code: JoinErrorCode,
+  failure: JoinFailure,
   context: Record<string, unknown>
 ): void {
+  const { code } = failure;
   const status = JOIN_ERROR_STATUS[code];
+  if (code === MEETING_NOT_OPEN_YET_CODE && failure.opensAt !== undefined) {
+    // ⚠ AN EXPECTED EARLY CLICK from a stale page — `info`, never `warn`. `opensAt` is the ONE extra field on the
+    // wire: the copy needs it, and it is derived from the meeting's own scheduled start.
+    log.info({ ...context, code, status }, 'Meeting join refused — the join window has not opened');
+    reply.code(status).send({ error: code, opensAt: failure.opensAt.toISOString() });
+    return;
+  }
   log.warn({ ...context, code, status }, 'Meeting join refused');
   reply.code(status).send({ error: code });
 }
@@ -426,7 +444,7 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
 
     const result = await joinMeetingAsMember({ meetingId: params.meetingId, userId });
     if (!result.ok) {
-      sendJoinError(reply, result.code, { route: 'join', meetingId: params.meetingId, userId });
+      sendJoinError(reply, result, { route: 'join', meetingId: params.meetingId, userId });
       return;
     }
     // ⚠ BAL-435 (R6 / R10): the grant's five fields stay at the TOP LEVEL, byte for byte, and
@@ -484,7 +502,7 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
     });
     if (!result.ok) {
       // ⚠ NO EMAIL ADDRESS IN THIS CONTEXT — the meeting id is the safe, useful field.
-      sendJoinError(reply, result.code, { route: 'lobby', meetingId: params.meetingId });
+      sendJoinError(reply, result, { route: 'lobby', meetingId: params.meetingId });
       return;
     }
     reply.code(201).send({ state: 'waiting', lobbyToken: result.lobbyToken });
@@ -655,7 +673,7 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
     if (!result.ok) {
       // ⚠ NO TOKEN, NOT EVEN A PREFIX, IN THE ROUTE LOG — the service already logged a hash
       // prefix where one is useful, and this context reaches a different log line.
-      sendJoinError(reply, result.code, { route: 'guest-join', meetingId: params.meetingId });
+      sendJoinError(reply, result, { route: 'guest-join', meetingId: params.meetingId });
       return;
     }
     if (result.state === 'live') {

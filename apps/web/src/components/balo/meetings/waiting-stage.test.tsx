@@ -40,6 +40,7 @@ const FACTS: WaitingFacts = {
   noShowFloorMinutes: 15,
   outcome: null,
   expertPresenceObserved: true,
+  caseClosure: null,
 };
 
 function factsFor(absentParty: WaitingAbsentParty): WaitingFacts {
@@ -135,6 +136,44 @@ describe('WaitingStage — the 4 × 2 copy table, rendered', () => {
   });
 });
 
+describe('WaitingStage — R6-C3, the case was closed before the start', () => {
+  const CLOSED: WaitingFacts = {
+    ...FACTS,
+    caseClosure: { closedByFirstName: 'Maya', companyName: 'Northwind' },
+  };
+
+  it('⚠⚠ renders the approved waiting sentence for the expert, in the one <h1> and the live region', () => {
+    renderWaiting('client', 'running', undefined, CLOSED);
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'This case has been closed'
+    );
+    expect(
+      screen.getByText(
+        "Maya @ Northwind closed this case before the start time, so nobody from Northwind can join this call, and it won't be billed. You're free to leave."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Your time is being counted/)).not.toBeInTheDocument();
+  });
+
+  it('⚠ renders the approved ended sentence once the meeting settled as a no-show', () => {
+    renderWaiting('client', 'settled', undefined, { ...CLOSED, outcome: 'no_show_client' });
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('This case was closed');
+    expect(
+      screen.getByText(
+        "Maya @ Northwind closed this case before the start time, so this call isn't billed and no payout is recorded. You're free to leave."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('⚠ the client-side viewer never sees it — the copy for an absent EXPERT is unchanged', () => {
+    renderWaiting('expert', 'running', undefined, CLOSED);
+
+    expect(screen.queryByText('This case has been closed')).not.toBeInTheDocument();
+  });
+});
+
 describe('WaitingStage — the heading is the state, and the ref reaches it', () => {
   it('renders exactly one <h1>, and it carries the title', () => {
     const container = renderWaiting('expert', 'pre-start');
@@ -176,6 +215,62 @@ describe('WaitingStage — the glyph', () => {
     const clientSettled = glyphMarkupOf(renderWaiting('client', 'settled'));
 
     expect(expertSettled).not.toBe(clientSettled);
+  });
+
+  describe('R6F-12 — the case-closed glyph', () => {
+    const CLOSED: WaitingFacts = {
+      ...FACTS,
+      caseClosure: { closedByFirstName: 'Maya', companyName: 'Northwind' },
+    };
+
+    it.each([
+      ['waiting', 'running', CLOSED],
+      ['ended', 'settled', { ...CLOSED, outcome: 'no_show_client' }],
+    ] as const)(
+      '⚠⚠ is static, neutral and stands alone — no spinner, no avatar badge (%s)',
+      (_label, phase, facts) => {
+        const container = renderWaiting('client', phase, undefined, facts);
+
+        expect(container.querySelector('svg.lucide-archive')).not.toBeNull();
+        expect(container.querySelector('.animate-spin')).toBeNull();
+        expect(container.querySelector('.lucide-loader-circle')).toBeNull();
+        expect(container.querySelector('.text-warning')).toBeNull();
+        expect(container.querySelector('.text-primary')).toBeNull();
+        expect(container.querySelector('.text-muted-foreground.h-7')).not.toBeNull();
+        // The absent client's avatar (initials "D") and its corner badge are both gone.
+        expect(screen.queryByText('D')).not.toBeInTheDocument();
+        expect(container.querySelector('.absolute')).toBeNull();
+        expect(container.querySelectorAll('svg')).toHaveLength(1);
+      }
+    );
+
+    it('⚠ differs from the spinner and from the amber no-show check', () => {
+      const closed = glyphMarkupOf(renderWaiting('client', 'running', undefined, CLOSED));
+      const spinner = glyphMarkupOf(renderWaiting('client', 'running'));
+      const noShow = glyphMarkupOf(renderWaiting('client', 'settled'));
+
+      expect(closed).not.toBe(spinner);
+      expect(closed).not.toBe(noShow);
+    });
+
+    it('⚠ leaves the ordinary glyphs untouched when the arm does not apply', () => {
+      // No closure, an absent EXPERT, and a settled outcome that is not no_show_client.
+      const noClosure = renderWaiting('client', 'running');
+      expect(noClosure.querySelector('.animate-spin')).not.toBeNull();
+      expect(noClosure.querySelector('svg.lucide-archive')).toBeNull();
+      expect(screen.getByText('D')).toBeInTheDocument();
+
+      const expertAbsent = renderWaiting('expert', 'running', undefined, CLOSED);
+      expect(expertAbsent.querySelector('svg.lucide-archive')).toBeNull();
+      expect(expertAbsent.querySelector('.animate-spin')).not.toBeNull();
+
+      const otherOutcome = renderWaiting('client', 'settled', undefined, {
+        ...CLOSED,
+        outcome: 'completed',
+      });
+      expect(otherOutcome.querySelector('svg.lucide-archive')).toBeNull();
+      expect(otherOutcome.querySelector('.text-warning')).not.toBeNull();
+    });
   });
 
   it('⚠ never conveys the state by the glyph alone — the copy always carries it', () => {

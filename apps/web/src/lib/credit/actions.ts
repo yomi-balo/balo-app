@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import {
   db,
+  companiesRepository,
   creditWalletsRepository,
   creditLedgerRepository,
   creditSessionsRepository,
@@ -1186,7 +1187,80 @@ export async function startCardCaptureAction(): Promise<StartCardCaptureResult> 
 /** Outcome of removing the wallet's saved card (BAL-516). */
 export type RemoveSavedCardResult =
   | { ok: true; lowBalanceMode: LowBalanceMode; modeReconciled: boolean }
-  | { ok: false; error: 'unauthorized' | 'no_wallet' | 'settlement_outstanding' | 'error' };
+  | { ok: false; error: 'unauthorized' | 'no_wallet' | 'settlement_outstanding' | 'error' }
+  /**
+   * BAL-474 owner ruling D10.6 — the card is backing upcoming bookings the credit does not cover.
+   * The figures are the api's (`reserved − available`, and how many consultations); the company
+   * name is read here, server-side, because the dialog's copy names it. `null` ⇒ the name read
+   * failed and the dialog says "your team's".
+   */
+  | {
+      ok: false;
+      error: 'upcoming_bookings_uncovered';
+      topUpNeededMinor: number;
+      reservedBookingCount: number;
+      companyName: string | null;
+    };
+
+/** A figure the api sent that the dialog may quote: a positive whole number. */
+function isPositiveWholeNumber(value: number | undefined): value is number {
+  return value !== undefined && Number.isInteger(value) && value > 0;
+}
+
+/**
+ * BAL-474 D10.6 — map the api's 409 `upcoming_bookings_uncovered` to its own result arm, or `null`
+ * when the error is anything else. A refusal is expected and user-actionable, so it is a warn, not
+ * an error. A body missing either figure is a contract break and also answers `null`, so it falls
+ * through to the generic error rather than render a made-up figure.
+ */
+async function mapUncoveredBookingsRefusal(
+  error: unknown,
+  walletId: string | undefined,
+  companyId: string | undefined
+): Promise<RemoveSavedCardResult | null> {
+  if (!(error instanceof CreditApiError) || error.body?.error !== 'upcoming_bookings_uncovered') {
+    return null;
+  }
+  const { topUpNeededMinor, reservedBookingCount } = error.body;
+  if (
+    companyId === undefined ||
+    !isPositiveWholeNumber(topUpNeededMinor) ||
+    !isPositiveWholeNumber(reservedBookingCount)
+  ) {
+    return null;
+  }
+  log.warn('Saved card removal refused — upcoming bookings are not covered by the balance', {
+    walletId,
+    companyId,
+    topUpNeededMinor,
+    reservedBookingCount,
+  });
+  return {
+    ok: false,
+    error: 'upcoming_bookings_uncovered',
+    topUpNeededMinor,
+    reservedBookingCount,
+    companyName: await readCompanyNameSoft(companyId),
+  };
+}
+
+/**
+ * The company's display name for the D10.6 refusal copy. Fail-soft: a failed read must never turn
+ * a determined refusal into a generic error, so it degrades to `null` (the dialog then says
+ * "your team's").
+ */
+async function readCompanyNameSoft(companyId: string): Promise<string | null> {
+  try {
+    const company = await companiesRepository.findNameById(companyId);
+    return company?.name ?? null;
+  } catch (error) {
+    log.warn('Saved card removal refusal — company name read failed, using the neutral label', {
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
 
 /**
  * Remove the wallet's saved card: detach at Stripe, clear locally, and reconcile a card-backed
@@ -1202,6 +1276,10 @@ export type RemoveSavedCardResult =
  * pull their card mid-consultation to dodge an already-incurred debt. That refusal surfaces here
  * as its own error arm — never folded into the generic `error` case — so the dialog can render
  * blocking copy instead of "please try again".
+ *
+ * BAL-474 owner ruling D10.6 — it also refuses (409 `upcoming_bookings_uncovered`) while the
+ * wallet has an active mandate and its upcoming Case bookings are not covered by its credit; that
+ * arm carries the api's figures plus the company name the dialog's copy needs.
  */
 export async function removeSavedCardAction(): Promise<RemoveSavedCardResult> {
   let walletId: string | undefined;
@@ -1240,6 +1318,10 @@ export async function removeSavedCardAction(): Promise<RemoveSavedCardResult> {
         companyId,
       });
       return { ok: false, error: 'settlement_outstanding' };
+    }
+    const uncovered = await mapUncoveredBookingsRefusal(error, walletId, companyId);
+    if (uncovered !== null) {
+      return uncovered;
     }
     // FIX ROUND (security LOW) — `walletId` + `companyId`, no card facts, no `mandateRef`, no
     // Stripe ids. This is the one window that genuinely needs fast forensics (detached at

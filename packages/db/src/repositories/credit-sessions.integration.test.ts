@@ -8,6 +8,7 @@ import {
   DEFAULT_OVERDRAFT_CEILING_MINOR,
 } from '@balo/shared/pricing';
 import { isWalletMandateActive, walletAllowsOverdraftGrace } from '@balo/shared/credit';
+import { selectPrimaryMeetingContext } from '@balo/shared/meetings';
 import { db, type Database } from '../client';
 import {
   auditEvents,
@@ -30,6 +31,7 @@ import {
   expertFactory,
   meetingFactory,
   userFactory,
+  type MeetingFactoryContext,
 } from '../test/factories';
 import {
   creditSessionsRepository,
@@ -38,6 +40,9 @@ import {
   InvalidSessionTransitionError,
   SessionNotFoundError,
   SettlementDrawDivergedError,
+  SESSION_OPENED_ON_BEHALF_ACTION,
+  SESSIONLESS_CASE_MEETING_MARKED_ACTION,
+  type OpenAndSettleFromPresenceInput,
   type OpenSessionResult,
   type SettleFromPresenceRepoInput,
 } from './credit-sessions';
@@ -267,7 +272,7 @@ describe('creditSessionsRepository.open — gate', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
-    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(res.session.id, { now: BASE });
     // min1 250, min2 0, min3 would cross to −250 → refused, wrapped, nothing posted.
     const metered = await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -334,7 +339,7 @@ describe('creditSessionsRepository.open — one live session per wallet', () => 
   it('rejects session_in_progress while an ACTIVE session exists on the wallet', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const second = await openAgain(ctx);
     expect(second).toEqual<OpenSessionResult>({ ok: false, code: 'session_in_progress' });
@@ -364,7 +369,7 @@ describe('creditSessionsRepository.open — one live session per wallet', () => 
   it('allows a new session once the prior one has ENDED (terminal)', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -409,7 +414,7 @@ describe('creditSessionsRepository.open — settlement-pending gate', () => {
     memberId: string;
   }): Promise<{ sessionId: string; overdraftMinor: number }> {
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
       floorMinutes: METER_FLOOR_MINUTES,
     }); // 24×250=6000 vs 5000 → −1000
@@ -530,29 +535,30 @@ describe('creditSessionsRepository.open — settlement-pending gate', () => {
   });
 });
 
-// ── connect ────────────────────────────────────────────────────────────
+// ── connectWithTransition ─────────────────────────────────────────────────
 
-describe('creditSessionsRepository.connect', () => {
-  it('moves pending → active, stamping connectedAt; idempotent on active', async () => {
+describe('creditSessionsRepository.connectWithTransition (BAL-474, R6F-6)', () => {
+  it('⚠ reports `transitioned: true` for the call that moved pending → active, and `false` for the caller that finds it active', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx);
 
-    const active = await creditSessionsRepository.connect(id, { now: BASE });
-    expect(active.status).toBe('active');
-    expect(active.connectedAt?.getTime()).toBe(BASE.getTime());
+    const first = await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+    expect(first.transitioned).toBe(true);
+    expect(first.session.status).toBe('active');
+    expect(first.session.connectedAt?.getTime()).toBe(BASE.getTime());
 
-    // Re-connect is idempotent and does NOT re-anchor the clock.
-    const again = await creditSessionsRepository.connect(id, { now: meterAt(5) });
-    expect(again.status).toBe('active');
-    expect(again.connectedAt?.getTime()).toBe(BASE.getTime());
+    const second = await creditSessionsRepository.connectWithTransition(id, { now: meterAt(5) });
+    expect(second.transitioned).toBe(false);
+    // The first anchor wins — never re-anchored.
+    expect(second.session.connectedAt?.getTime()).toBe(BASE.getTime());
   });
 
-  it('throws on connecting an ended session (illegal transition)', async () => {
+  it('an ended session is still an illegal transition', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.end(id, { now: meterAt(1) });
-    await expect(creditSessionsRepository.connect(id)).rejects.toBeInstanceOf(
+    await expect(creditSessionsRepository.connectWithTransition(id)).rejects.toBeInstanceOf(
       InvalidSessionTransitionError
     );
   });
@@ -564,7 +570,7 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
   it('posts one session_consume tick per whole minute and advances counters', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -586,7 +592,7 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
   it('re-metering to the same instant posts nothing (idempotent tickSeq)', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -608,7 +614,7 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
     // balance 2000 → runway 8 min at 250/min; low fires the first tick runway ≤ 8.
     const ctx = await setup({ balanceMinor: 2000 });
     const id = await openOk(ctx, 4);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const first = await creditSessionsRepository.meterSessionToNow(id, meterAt(1), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -644,7 +650,7 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
       //                ⇒ discretionary 1250 ⇒ 5 ≤ 8    ⇒ FIRES.
       const ctx = await setup({ balanceMinor: 5000 });
       const id = await openOk(ctx);
-      await creditSessionsRepository.connect(id, { now: BASE });
+      await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
       const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(1), {
         floorMinutes: METER_FLOOR_MINUTES,
@@ -661,7 +667,7 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
       // above comes from the floor correction and nothing else.
       const ctx = await setup({ balanceMinor: 5000 });
       const id = await openOk(ctx);
-      await creditSessionsRepository.connect(id, { now: BASE });
+      await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
       const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(1), {
         floorMinutes: 0,
@@ -676,7 +682,7 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
       // runway = floor(6000/250) = 24 > 8 ⇒ no warning, exactly as before BAL-412.
       const ctx = await setup({ balanceMinor: 10_000 });
       const id = await openOk(ctx);
-      await creditSessionsRepository.connect(id, { now: BASE });
+      await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
       const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(16), {
         floorMinutes: METER_FLOOR_MINUTES,
@@ -697,7 +703,7 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
       overdraftCeilingMinor: 100_000,
     });
     const id = await openOk(ctx, 2);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -714,7 +720,7 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
     // balance 500, no mandate → min1 250, min2 0, min3 would cross → STOP (no tick, wrapped).
     const ctx = await setup({ balanceMinor: 500, mandate: false });
     const id = await openOk(ctx, 2);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -732,7 +738,7 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
     // balance 500, mandate live but notify_only → min1 250, min2 0, min3 would cross → STOP.
     const ctx = await setup({ balanceMinor: 500, mandate: true, lowBalanceMode: 'notify_only' });
     const id = await openOk(ctx, 2);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -750,7 +756,7 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
     // ceiling 500: min1 250, min2 0, min3 grace −250, min4 −500 (|−500| ≥ 500) → wrap.
     const ctx = await setup({ balanceMinor: 500, ...GRACE_CAPABLE, overdraftCeilingMinor: 500 });
     const id = await openOk(ctx, 2);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(6), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -770,7 +776,7 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
       overdraftCeilingMinor: 1_000_000,
     });
     const id = await openOk(ctx, 1);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     // Shrink the grace bound snapshot to 3 min for a fast, deterministic time-bound wrap.
     await db.update(creditSessions).set({ graceBoundMinutes: 3 }).where(eq(creditSessions.id, id));
 
@@ -795,7 +801,7 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
     await credit(ctx.walletId, 'manual_purchase', 2000, ctx.memberId);
 
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     // 24 min × 250 = 6000 charged; 6000 − 5000 = 1000 overdraft (pure cash; promo consumed first).
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
       floorMinutes: METER_FLOOR_MINUTES,
@@ -816,7 +822,7 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
       overdraftCeilingMinor: 100_000,
     });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
       floorMinutes: METER_FLOOR_MINUTES,
     }); // drains to −1000
@@ -849,7 +855,7 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
   it('sets settlementStatus=not_required with no overdraft, and releases the hold', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -864,7 +870,7 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
   it('is idempotent on an already-ended session (no duplicate accrual audit)', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(2), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -894,7 +900,7 @@ describe('creditSessionsRepository.markSettlementResult', () => {
       overdraftCeilingMinor: 100_000,
     });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -918,7 +924,7 @@ describe('creditSessionsRepository.markSettlementResult', () => {
       overdraftCeilingMinor: 100_000,
     });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -952,7 +958,7 @@ describe('creditSessionsRepository.cancel', () => {
   it('throws when cancelling an active (already-connected) session', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await expect(creditSessionsRepository.cancel(id)).rejects.toBeInstanceOf(
       InvalidSessionTransitionError
     );
@@ -989,14 +995,14 @@ describe('creditSessionsRepository — reads + fee/PII projection', () => {
       await creditSessionsRepository.findById('00000000-0000-0000-0000-000000000000')
     ).toBeUndefined();
     await expect(
-      creditSessionsRepository.connect('00000000-0000-0000-0000-000000000000')
+      creditSessionsRepository.connectWithTransition('00000000-0000-0000-0000-000000000000')
     ).rejects.toBeInstanceOf(SessionNotFoundError);
   });
 
   it('findMeterable returns active + grace sessions only', async () => {
     const ctxActive = await setup({ balanceMinor: 50_000 });
     const activeId = await openOk(ctxActive, 10);
-    await creditSessionsRepository.connect(activeId, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(activeId, { now: BASE });
     // A pending session on its OWN wallet (one live session per wallet is enforced by `open`).
     const ctxPending = await setup({ balanceMinor: 50_000 });
     const pendingId = await openOk(ctxPending, 10); // stays pending
@@ -1021,7 +1027,7 @@ describe('creditSessionsRepository — reads + fee/PII projection', () => {
     // Wrapped idle — its own low-balance, no-mandate wallet; drive to wrapped, backdate.
     const ctxWrapped = await setup({ balanceMinor: 500, mandate: false });
     const wrappedId = await openOk(ctxWrapped, 2);
-    await creditSessionsRepository.connect(wrappedId, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(wrappedId, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(wrappedId, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
     }); // → wrapped
@@ -1039,7 +1045,7 @@ describe('creditSessionsRepository — reads + fee/PII projection', () => {
       overdraftCeilingMinor: 100_000,
     });
     const settleId = await openOk(ctx2, 10);
-    await creditSessionsRepository.connect(settleId, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(settleId, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(settleId, meterAt(24), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -1217,7 +1223,7 @@ describe('creditSessionsRepository.end — billing-finalization stamping (BAL-39
   it('stamps billingFinalizedAt + finalizationPath=live_capture by default', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -1230,7 +1236,7 @@ describe('creditSessionsRepository.end — billing-finalization stamping (BAL-39
   it('records an explicit finalizationPath (external/BAL-133 finalizer)', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(2), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -1247,7 +1253,7 @@ describe('creditSessionsRepository — external duration lifecycle (BAL-399)', (
   it('parkAwaitingDuration releases the hold and parks the session as wrapped', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await markExternal(id);
     expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(
       10 * CLIENT_RATE_PER_MIN
@@ -1266,7 +1272,7 @@ describe('creditSessionsRepository — external duration lifecycle (BAL-399)', (
   it('applyExternalDuration posts N consume ticks, draws the balance, and is idempotent', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await markExternal(id);
     await creditSessionsRepository.parkAwaitingDuration(id);
 
@@ -1298,7 +1304,7 @@ describe('creditSessionsRepository — external duration lifecycle (BAL-399)', (
     // this ever starts failing, the mode conjunct has leaked into a settlement path.
     const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await markExternal(id);
     await creditSessionsRepository.parkAwaitingDuration(id);
 
@@ -1319,7 +1325,7 @@ describe('creditSessionsRepository — external duration lifecycle (BAL-399)', (
   it('bounds tick posting to ONCE — a second finalize with DIFFERENT minutes conflicts (TOCTOU)', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await markExternal(id);
     await creditSessionsRepository.parkAwaitingDuration(id);
 
@@ -1348,7 +1354,7 @@ describe('creditSessionsRepository — reaper guards exclude external (BAL-399)'
   it('findMeterable excludes an external active session', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await markExternal(id);
 
     const meterable = await creditSessionsRepository.findMeterable();
@@ -1358,7 +1364,7 @@ describe('creditSessionsRepository — reaper guards exclude external (BAL-399)'
   it('findWrappedIdle excludes an external parked session', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await markExternal(id);
     await creditSessionsRepository.parkAwaitingDuration(id);
     await db
@@ -1382,7 +1388,7 @@ describe('creditSessionsRepository — displayed client charge == ledger-settled
       overdraftCeilingMinor: 100_000,
     });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(5), {
       floorMinutes: METER_FLOOR_MINUTES,
     }); // 5 ticks; minutes 3-5 = grace
@@ -1422,7 +1428,7 @@ describe('creditSessionsRepository.findFinalizedMissingPayout (BAL-399 reconcili
   }> {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -1541,7 +1547,7 @@ describe('creditSessionsRepository.findSettledMissingLedgerCredit (settled-witho
       overdraftCeilingMinor: 100_000,
     });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -1850,7 +1856,7 @@ describe('creditSessionsRepository.hasUnsettledOverdraftForWallet', () => {
   it('⚠ is true while the BAL-133 external finalizer holds the wallet NEGATIVE with grace never entered', async () => {
     const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await markExternal(id);
     await creditSessionsRepository.parkAwaitingDuration(id);
 
@@ -1871,7 +1877,7 @@ describe('creditSessionsRepository.hasUnsettledOverdraftForWallet', () => {
   it('⚠ arm (0) does NOT fire on a funded wallet — a live, unfinalized session on a positive balance stays quiet', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await markExternal(id);
     await creditSessionsRepository.parkAwaitingDuration(id);
 
@@ -2015,7 +2021,7 @@ describe('creditSessionsRepository.open — meetingId / engagementId (BAL-418)',
     expect(res.session.engagementId).toBe(otherEngagement.id);
 
     const sessionEndedAt = new Date(BASE.getTime() + 30 * 60_000);
-    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(res.session.id, { now: BASE });
     await creditSessionsRepository.end(res.session.id, { now: sessionEndedAt });
 
     // THE CONSEQUENCE, on a LIVE reader. The inactivity sweep resolves through the seam, so this
@@ -2167,7 +2173,7 @@ describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', ()
       engagementId,
     });
     if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
-    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(res.session.id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(minutes), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -2341,7 +2347,7 @@ describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', ()
     });
     if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
     expect(res.session.engagementId).toBeNull();
-    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(res.session.id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(4), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -2383,7 +2389,7 @@ describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', ()
       engagementId: named.id, // DIVERGENT — accepted today; nothing relates the two values.
     });
     if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
-    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(res.session.id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(2), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -2657,7 +2663,7 @@ describe('creditSessionsRepository.settleFromPresence — the 4 → 15 top-up', 
 
     // A `presence` session METERS LIVE, exactly like `live_capture` (D11 / §4.2). Four
     // minutes are already drawn under keys :1 … :4 before settlement runs.
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     const metered = await creditSessionsRepository.meterSessionToNow(id, meterAt(4), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -2700,7 +2706,7 @@ describe('creditSessionsRepository.settleFromPresence — the 4 → 15 top-up', 
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await endedMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(10), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -2798,7 +2804,7 @@ describe('⚠ INVARIANT (D12): ledger ticks === connected_minutes === accrual ÷
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     const metered = await creditSessionsRepository.meterSessionToNow(id, meterAt(4), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -2828,7 +2834,7 @@ describe('⚠ INVARIANT (D12): ledger ticks === connected_minutes === accrual ÷
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(10), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -2883,7 +2889,7 @@ describe('creditSessionsRepository.settleFromPresence — concurrent metering (F
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     // ── the caller's PRE-READ: 18 minutes drawn ──
     await creditSessionsRepository.meterSessionToNow(id, meterAt(18), {
@@ -2931,7 +2937,7 @@ describe('creditSessionsRepository.settleFromPresence — concurrent metering (F
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(18), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -2984,7 +2990,7 @@ describe('creditSessionsRepository.settleFromPresence — concurrent metering (F
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(4), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -3116,7 +3122,7 @@ describe('creditSessionsRepository.settleFromPresence — idempotency + guards',
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await endedMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -3441,7 +3447,7 @@ describe('creditSessionsRepository — the settlement instrument pin (BAL-525)',
     const ctx = await setup({ balanceMinor: 5000, overdraftCeilingMinor: 100_000 });
     const id = await openOk(ctx, 10);
     expect((await creditSessionsRepository.findById(id))?.settlementStripeCustomerId).toBeNull();
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     // A card + live consent + a card-backed mode arrive mid-call, so grace carries the balance
     // past zero (BAL-523) and a real debt exists to collect.
@@ -3472,7 +3478,7 @@ describe('creditSessionsRepository — the settlement instrument pin (BAL-525)',
     const pinnedAt = (await creditSessionsRepository.findById(id))?.settlementInstrumentPinnedAt;
     expect(pinnedAt).toBeInstanceOf(Date);
 
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -3570,7 +3576,7 @@ describe('creditSessionsRepository — presence in the reaper finders (BAL-412)'
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const ids = (await creditSessionsRepository.findMeterable()).map((row) => row.id);
     expect(ids).toContain(id);
@@ -3599,7 +3605,7 @@ describe('creditSessionsRepository — presence in the reaper finders (BAL-412)'
             : { status: 'cancelled' },
       });
       const id = await openPresence(ctx, meeting.id);
-      await creditSessionsRepository.connect(id, { now: BASE });
+      await creditSessionsRepository.connectWithTransition(id, { now: BASE });
       // The session itself is a perfectly ordinary meterable row — status alone cannot tell.
       expect((await creditSessionsRepository.findById(id))?.status).toBe('active');
 
@@ -3612,7 +3618,7 @@ describe('creditSessionsRepository — presence in the reaper finders (BAL-412)'
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     // Detach it — a shape `open()` cannot produce today, but the LEFT JOIN must fail closed
     // rather than meter money nothing can ever settle.
     await db.update(creditSessions).set({ meetingId: null }).where(eq(creditSessions.id, id));
@@ -3627,7 +3633,7 @@ describe('creditSessionsRepository — presence in the reaper finders (BAL-412)'
     // unscoped predicate) would have silently stopped metering the entire shipped fleet.
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const ids = (await creditSessionsRepository.findMeterable()).map((row) => row.id);
     expect(ids).toContain(id);
@@ -3709,7 +3715,7 @@ describe('creditSessionsRepository — BAL-466, the three settlement paths end t
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const id = await openPresence(ctx, meetingId);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     // (a) findMeterable SELECTS it while the meeting is live and status='active'.
     expect((await creditSessionsRepository.findMeterable()).map((r) => r.id)).toContain(id);
@@ -3840,7 +3846,7 @@ describe('creditSessionsRepository — legacy rows are unchanged by BAL-412', ()
   it('a live_capture session finalized the shipped way carries NULL on all three new columns', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);
-    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
       floorMinutes: METER_FLOOR_MINUTES,
     });
@@ -3996,7 +4002,7 @@ describe('creditSessionsRepository — cancelling a booked meeting’s session (
     const ctx = await setup({ balanceMinor: 50_000 });
     const meetingId = await liveMeeting();
     const sessionId = await openPresence(ctx, meetingId, 30);
-    await creditSessionsRepository.connect(sessionId, { now: BASE });
+    await creditSessionsRepository.connectWithTransition(sessionId, { now: BASE });
     const heldBefore = await creditHoldsRepository.sumActiveByWallet(ctx.walletId);
 
     await expect(
@@ -4149,5 +4155,863 @@ describe('creditSessionsRepository.findPendingForCancelledMeetings (BAL-410 back
     }
 
     expect(await creditSessionsRepository.findPendingForCancelledMeetings(2)).toHaveLength(2);
+  });
+});
+
+// ── BAL-474 (ADR-1040 Amendment 7) — the tolerant open, the CAS stamps, the share basis, the ──
+// ── sessionless meeting's one-transaction open-and-settle, the backstop finder and marker ─────
+
+const HOUR_MS = 60 * 60_000;
+
+/** A meeting bound to a Case engagement, for the presence opens below (context id = engagement). */
+async function caseMeeting(
+  values: Partial<typeof meetings.$inferInsert> = {}
+): Promise<{ meetingId: string; engagementId: string }> {
+  const { meeting, caseEngagementId } = await meetingFactory({
+    values: { status: 'ended', endedBy: 'expert_host', endedAt: new Date(), ...values },
+  });
+  if (caseEngagementId === undefined) throw new Error('case meeting seed failed');
+  return { meetingId: meeting.id, engagementId: caseEngagementId };
+}
+
+function tolerantInput(
+  ctx: { walletId: string; companyId: string; expertProfileId: string; memberId: string },
+  meeting: { meetingId: string; engagementId: string },
+  overrides: Partial<Parameters<typeof creditSessionsRepository.open>[0]> = {}
+): Parameters<typeof creditSessionsRepository.open>[0] {
+  return {
+    walletId: ctx.walletId,
+    companyId: ctx.companyId,
+    expertProfileId: ctx.expertProfileId,
+    initiatingMemberId: ctx.memberId,
+    estimatedMinutes: 10,
+    meetingId: meeting.meetingId,
+    engagementId: meeting.engagementId,
+    durationSource: 'presence',
+    fundingPolicy: 'overdraft_tolerant',
+    ...overrides,
+  };
+}
+
+describe('creditSessionsRepository.open — funding policies and provenance (BAL-474)', () => {
+  it('opened_by defaults to client; the gated default reports no tolerated gate and writes no on-behalf row', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+    });
+    if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
+    expect(res.toleratedGates).toEqual([]);
+    expect(res.session.openedBy).toBe('client');
+    expect(await sessionAudits(res.session.id, SESSION_OPENED_ON_BEHALF_ACTION)).toEqual([]);
+  });
+
+  it('open(input, exec) runs on the given executor with identical gated behaviour', async () => {
+    const ctx = await setup({ balanceMinor: 1_000 });
+    const refused = await db.transaction((tx) =>
+      creditSessionsRepository.open(
+        {
+          walletId: ctx.walletId,
+          companyId: ctx.companyId,
+          expertProfileId: ctx.expertProfileId,
+          initiatingMemberId: ctx.memberId,
+          estimatedMinutes: 10,
+        },
+        tx as unknown as Database
+      )
+    );
+    expect(refused).toEqual<OpenSessionResult>({ ok: false, code: 'insufficient_no_mandate' });
+  });
+
+  it('tolerant: an open receivable is passed through as account_hold', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const prior = await openOk(ctx, 10);
+    await creditReceivablesRepository.open({
+      companyId: ctx.companyId,
+      walletId: ctx.walletId,
+      sessionId: prior,
+      amountMinor: 500,
+      reason: 'settlement_declined',
+    });
+    await creditSessionsRepository.cancel(prior);
+    const res = await creditSessionsRepository.open(tolerantInput(ctx, await caseMeeting()));
+    if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
+    expect(res.toleratedGates).toEqual(['account_hold']);
+  });
+
+  it('tolerant: a processing settlement and a negative balance are passed through', async () => {
+    const ctx = await setup({
+      balanceMinor: 5_000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
+    const prior = await openOk(ctx, 10);
+    await creditSessionsRepository.connectWithTransition(prior, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(prior, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    const ended = await creditSessionsRepository.end(prior, { now: meterAt(24) });
+    expect(ended.session.settlementStatus).toBe('processing');
+
+    const res = await creditSessionsRepository.open(tolerantInput(ctx, await caseMeeting()));
+    if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
+    expect(res.toleratedGates).toEqual(['settlement_processing', 'negative_balance']);
+  });
+
+  it('tolerant: an unfunded estimate with no mandate is passed through, and the hold is still the full estimate', async () => {
+    const ctx = await setup({ balanceMinor: 1_000 });
+    const res = await creditSessionsRepository.open(tolerantInput(ctx, await caseMeeting()));
+    if (!res.ok) throw new Error(`expected open ok, got ${res.code}`);
+    expect(res.toleratedGates).toEqual(['insufficient_no_mandate']);
+    const [hold] = await db
+      .select({ amountMinor: creditHolds.amountMinor })
+      .from(creditHolds)
+      .where(eq(creditHolds.sessionId, res.session.id));
+    expect(hold?.amountMinor).toBe(10 * CLIENT_RATE_PER_MIN);
+  });
+
+  it('tolerant still REFUSES session_in_progress and expert_rate_missing', async () => {
+    const busy = await setup({ balanceMinor: 50_000 });
+    await openOk(busy, 10);
+    expect(
+      await creditSessionsRepository.open(tolerantInput(busy, await caseMeeting()))
+    ).toEqual<OpenSessionResult>({ ok: false, code: 'session_in_progress' });
+
+    const rateless = await setup({ balanceMinor: 50_000, expertHourlyCents: null });
+    expect(
+      await creditSessionsRepository.open(tolerantInput(rateless, await caseMeeting()))
+    ).toEqual<OpenSessionResult>({ ok: false, code: 'expert_rate_missing' });
+  });
+
+  it('an incoherent policy is a programming error, thrown before any transaction', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meeting = await caseMeeting();
+    // Tolerant without the presence provenance.
+    await expect(
+      creditSessionsRepository.open(tolerantInput(ctx, meeting, { durationSource: 'live_capture' }))
+    ).rejects.toThrow(/overdraft_tolerant open must be a presence session/);
+    // On behalf, but gated.
+    await expect(
+      creditSessionsRepository.open(
+        tolerantInput(ctx, meeting, { fundingPolicy: 'gated', openedBy: 'system' })
+      )
+    ).rejects.toThrow(/on-behalf open/);
+    // A guest id on a non-guest open.
+    await expect(
+      creditSessionsRepository.open(
+        tolerantInput(ctx, meeting, { meetingGuestId: '00000000-0000-4000-8000-000000000000' })
+      )
+    ).rejects.toThrow(/meetingGuestId requires openedBy 'guest'/);
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(0);
+  });
+});
+
+describe('creditSessionsRepository.markSettlementResult — compare-and-set (BAL-474 D5.2 / D7.4)', () => {
+  async function processingSession(): Promise<string> {
+    const ctx = await setup({
+      balanceMinor: 5_000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    await creditSessionsRepository.end(id, { now: meterAt(24) });
+    return id;
+  }
+
+  it('the processing stamp applies to a processing row (it stamps the in-flight PI)', async () => {
+    const id = await processingSession();
+    const row = await creditSessionsRepository.markSettlementResult(db, {
+      sessionId: id,
+      status: 'processing',
+      stripePaymentIntentId: 'pi_in_flight',
+    });
+    expect(row.settlementStatus).toBe('processing');
+    expect(row.stripePaymentIntentId).toBe('pi_in_flight');
+  });
+
+  it('processing, failed and requires_action NEVER overwrite a settled row — it comes back unchanged', async () => {
+    const id = await processingSession();
+    await creditSessionsRepository.markSettlementResult(db, {
+      sessionId: id,
+      status: 'settled',
+      stripePaymentIntentId: 'pi_won',
+    });
+    for (const status of ['processing', 'failed', 'requires_action'] as const) {
+      const row = await creditSessionsRepository.markSettlementResult(db, {
+        sessionId: id,
+        status,
+        stripePaymentIntentId: 'pi_late',
+      });
+      expect(row.settlementStatus).toBe('settled');
+      expect(row.stripePaymentIntentId).toBe('pi_won');
+    }
+  });
+
+  it('failed / requires_action apply only FROM processing', async () => {
+    const failing = await processingSession();
+    expect(
+      (
+        await creditSessionsRepository.markSettlementResult(db, {
+          sessionId: failing,
+          status: 'failed',
+        })
+      ).settlementStatus
+    ).toBe('failed');
+
+    const inCredit = await setup({ balanceMinor: 50_000 });
+    const notRequired = await openOk(inCredit, 10);
+    const row = await creditSessionsRepository.markSettlementResult(db, {
+      sessionId: notRequired,
+      status: 'requires_action',
+    });
+    expect(row.settlementStatus).toBe('not_required');
+  });
+
+  it('settled is unconditional — the webhook is the single source of truth for success', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    const row = await creditSessionsRepository.markSettlementResult(db, {
+      sessionId: id,
+      status: 'settled',
+    });
+    expect(row.settlementStatus).toBe('settled');
+  });
+
+  it('an unknown session still throws SessionNotFoundError', async () => {
+    await expect(
+      creditSessionsRepository.markSettlementResult(db, {
+        sessionId: '00000000-0000-4000-8000-000000000000',
+        status: 'failed',
+      })
+    ).rejects.toBeInstanceOf(SessionNotFoundError);
+  });
+});
+
+describe('creditSessionsRepository — the overdraft basis (BAL-474 §A, D7.3)', () => {
+  it('end() returns the share basis on a terminal and null on the idempotent re-end', async () => {
+    const ctx = await setup({
+      balanceMinor: 5_000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    const ended = await creditSessionsRepository.end(id, { now: meterAt(24) });
+    expect(ended.overdraftBasis).toEqual({
+      overdraftMinor: 1_000,
+      walletNegativeMinor: 1_000,
+      ownConsumedMinor: 24 * CLIENT_RATE_PER_MIN,
+      priorDebtLeftMinor: 0,
+      ownerlessPriorDebtMinor: 0,
+    });
+    const again = await creditSessionsRepository.end(id, { now: meterAt(25) });
+    expect(again.alreadyEnded).toBe(true);
+    expect(again.overdraftBasis).toBeNull();
+  });
+
+  it('settleFromPresence returns the basis, records the share and opened_by on presence_settled, and null when already settled', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    const settled = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId)
+    );
+    expect(settled.overdraftBasis).toEqual({
+      overdraftMinor: 0,
+      walletNegativeMinor: 0,
+      ownConsumedMinor: FLOOR_MINUTES * CLIENT_RATE_PER_MIN,
+      priorDebtLeftMinor: 0,
+      ownerlessPriorDebtMinor: 0,
+    });
+    const [audit] = await sessionAudits(id, 'credit_session.presence_settled');
+    expect(audit?.metadata).toMatchObject({
+      openedBy: 'client',
+      overdraftShare: { overdraftMinor: 0, ownConsumedMinor: FLOOR_MINUTES * CLIENT_RATE_PER_MIN },
+    });
+    const replay = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId)
+    );
+    expect(replay.alreadySettled).toBe(true);
+    expect(replay.overdraftBasis).toBeNull();
+  });
+});
+
+describe('creditSessionsRepository.openAndSettleFromPresence (BAL-474 AD-3)', () => {
+  function input(
+    ctx: { walletId: string; companyId: string; expertProfileId: string; memberId: string },
+    meeting: { meetingId: string; engagementId: string },
+    settlement: Partial<SettleFromPresenceRepoInput> = {}
+  ): OpenAndSettleFromPresenceInput {
+    const full = settlementInput('unused', meeting.meetingId, settlement);
+    const figures: OpenAndSettleFromPresenceInput['settlement'] = {
+      billableMinutes: full.billableMinutes,
+      actualMinutes: full.actualMinutes,
+      billingFloorMinutes: full.billingFloorMinutes,
+      topUpFromTickSeq: full.topUpFromTickSeq,
+      topUpToTickSeq: full.topUpToTickSeq,
+      minutesAlreadyDrawn: full.minutesAlreadyDrawn,
+      shape: full.shape,
+      floorApplied: full.floorApplied,
+      outcome: full.outcome,
+      actorUserId: full.actorUserId,
+      now: full.now,
+    };
+    return {
+      open: {
+        walletId: ctx.walletId,
+        companyId: ctx.companyId,
+        expertProfileId: ctx.expertProfileId,
+        initiatingMemberId: ctx.memberId,
+        estimatedMinutes: 30,
+        meetingId: meeting.meetingId,
+        engagementId: meeting.engagementId,
+        durationSource: 'presence',
+        fundingPolicy: 'overdraft_tolerant',
+        openedBy: 'system',
+        trigger: 'backstop',
+      },
+      settlement: figures,
+    };
+  }
+
+  it('opens ON BEHALF of the booker and settles the floor in ONE transaction', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meeting = await caseMeeting();
+    const res = await creditSessionsRepository.openAndSettleFromPresence(input(ctx, meeting));
+    if (!res.ok) throw new Error(`expected ok, got ${res.code}`);
+    expect(res.toleratedGates).toEqual([]);
+    const { session } = res.settled;
+    expect(session.status).toBe('ended');
+    expect(session.openedBy).toBe('system');
+    expect(session.initiatingMemberId).toBe(ctx.memberId);
+    expect(session.meetingId).toBe(meeting.meetingId);
+    expect(session.settlementShape).toBe('no_show_client');
+    expect(session.connectedMinutes).toBe(FLOOR_MINUTES);
+    expect(await consumeKeys(session.id)).toHaveLength(FLOOR_MINUTES);
+    // The hold placed by the open is released by the settlement, in the same transaction.
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(0);
+
+    const [onBehalf] = await sessionAudits(session.id, SESSION_OPENED_ON_BEHALF_ACTION);
+    expect(onBehalf?.actorUserId).toBeNull();
+    expect(onBehalf?.metadata).toMatchObject({
+      openedBy: 'system',
+      onBehalfOfUserId: ctx.memberId,
+      meetingId: meeting.meetingId,
+      engagementId: meeting.engagementId,
+      fundingPolicy: 'overdraft_tolerant',
+      trigger: 'backstop',
+    });
+    expect(await sessionAudits(session.id, 'credit_session.presence_settled')).toHaveLength(1);
+  });
+
+  it('a refusal writes NOTHING — no session, no hold, no audit', async () => {
+    const ctx = await setup({ balanceMinor: 50_000, expertHourlyCents: null });
+    const meeting = await caseMeeting();
+    const res = await creditSessionsRepository.openAndSettleFromPresence(input(ctx, meeting));
+    expect(res).toEqual({ ok: false, code: 'expert_rate_missing' });
+    expect(await creditSessionsRepository.findIdByMeetingId(meeting.meetingId)).toBeUndefined();
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(0);
+  });
+
+  it('a meeting that already has a session ⇒ meeting_session_exists naming it, nothing written', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meeting = await caseMeeting();
+    const existing = await openPresence(ctx, meeting.meetingId);
+    const res = await creditSessionsRepository.openAndSettleFromPresence(input(ctx, meeting));
+    expect(res).toEqual({
+      ok: false,
+      code: 'meeting_session_exists',
+      existingSessionId: existing,
+    });
+    expect(await consumeKeys(existing)).toEqual([]);
+  });
+
+  it('refuses a settlement that is not FROM ZERO, before any transaction', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meeting = await caseMeeting();
+    await expect(
+      creditSessionsRepository.openAndSettleFromPresence(
+        input(ctx, meeting, { minutesAlreadyDrawn: 4, topUpFromTickSeq: 5 })
+      )
+    ).rejects.toThrow(/has drawn nothing/);
+    expect(await creditSessionsRepository.findIdByMeetingId(meeting.meetingId)).toBeUndefined();
+  });
+});
+
+describe('creditSessionsRepository.findSessionlessEndedCaseMeetings (BAL-474 §D.1)', () => {
+  /** An ended meeting with the given contexts, ended `endedMinutesAgo` ago. */
+  async function endedWith(
+    contexts: MeetingFactoryContext[],
+    opts: {
+      scheduledHoursAgo?: number;
+      endedMinutesAgo?: number;
+      values?: Partial<typeof meetings.$inferInsert>;
+    } = {}
+  ): Promise<string> {
+    const now = Date.now();
+    const scheduledStart = new Date(now - (opts.scheduledHoursAgo ?? 2) * HOUR_MS);
+    const { meeting } = await meetingFactory({
+      contexts,
+      values: {
+        status: 'ended',
+        scheduledStart,
+        scheduledEnd: new Date(scheduledStart.getTime() + 30 * 60_000),
+        endedAt: new Date(now - (opts.endedMinutesAgo ?? 60) * 60_000),
+        ...opts.values,
+      },
+    });
+    return meeting.id;
+  }
+
+  const caseCtx = (): MeetingFactoryContext => ({ contextType: 'case', contextId: randomUUID() });
+
+  async function candidates(): Promise<string[]> {
+    const now = Date.now();
+    const rows = await creditSessionsRepository.findSessionlessEndedCaseMeetings({
+      endedBefore: new Date(now - 2 * 60_000),
+      windowStart: new Date(now - 72 * HOUR_MS),
+      limit: 500,
+    });
+    return rows.map((row) => row.meetingId);
+  }
+
+  it('selects an ended, sessionless Case meeting REGARDLESS of outcome', async () => {
+    const nullOutcome = await endedWith([caseCtx()]);
+    const completed = await endedWith([caseCtx()], { values: { outcome: 'completed' } });
+    const noShow = await endedWith([caseCtx()], { values: { outcome: 'no_show_client' } });
+    const found = await candidates();
+    expect(found).toEqual(expect.arrayContaining([nullOutcome, completed, noShow]));
+  });
+
+  it('excludes a meeting with a session, a marked meeting, one inside the grace, a soft-deleted one, and a non-terminal one', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const withSession = await endedWith([caseCtx()]);
+    await openPresence(ctx, withSession);
+    const marked = await endedWith([caseCtx()]);
+    await creditSessionsRepository.markSessionlessCaseMeeting({
+      meetingId: marked,
+      disposition: 'not_billable',
+      reason: 'missed_call',
+      trigger: 'lifecycle_sweep',
+    });
+    const inGrace = await endedWith([caseCtx()], { endedMinutesAgo: 0 });
+    const deleted = await endedWith([caseCtx()], { values: { deletedAt: new Date() } });
+    const { meeting: live } = await meetingFactory({ contexts: [caseCtx()] });
+
+    const found = await candidates();
+    for (const excluded of [withSession, marked, inGrace, deleted, live.id]) {
+      expect(found).not.toContain(excluded);
+    }
+  });
+
+  it('a meeting whose only session was CANCELLED is selected', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedWith([caseCtx()]);
+    const sessionId = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.cancel(sessionId);
+    expect(await candidates()).toContain(meetingId);
+  });
+
+  it('is bounded on BOTH scheduled_start and ended_at (72h)', async () => {
+    const scheduledTooLongAgo = await endedWith([caseCtx()], { scheduledHoursAgo: 73 });
+    const endedTooLongAgo = await endedWith([caseCtx()], {
+      scheduledHoursAgo: 71,
+      endedMinutesAgo: 73 * 60,
+    });
+    const inside = await endedWith([caseCtx()], { scheduledHoursAgo: 71 });
+    const found = await candidates();
+    expect(found).not.toContain(scheduledTooLongAgo);
+    expect(found).not.toContain(endedTooLongAgo);
+    expect(found).toContain(inside);
+  });
+
+  it('orders oldest-ended first and honours the batch bound', async () => {
+    const older = await endedWith([caseCtx()], { endedMinutesAgo: 90 });
+    const newer = await endedWith([caseCtx()], { endedMinutesAgo: 30 });
+    const now = Date.now();
+    const rows = await creditSessionsRepository.findSessionlessEndedCaseMeetings({
+      endedBefore: new Date(now - 2 * 60_000),
+      windowStart: new Date(now - 72 * HOUR_MS),
+      limit: 1,
+    });
+    expect(rows.map((row) => row.meetingId)).toEqual([older]);
+    expect(await candidates()).toEqual(expect.arrayContaining([older, newer]));
+  });
+
+  it('N5: orders by LEAST(scheduled_start, ended_at) — the row nearest to leaving the window first — then id', async () => {
+    // The row leaves the finder at the EARLIER of `scheduled_start + window` and `ended_at + window`.
+    //   A  scheduled 6h ago, ended 30m ago  → LEAST = scheduled (6h ago)
+    //   D  scheduled 1h ago, ended 4h ago   → LEAST = ended (4h ago)   (an early call that ended before its start)
+    //   B  scheduled 3h ago, ended 2h ago   → LEAST = scheduled (3h ago)
+    // LEAST order is A, D, B. An `ended_at`-only order would give D, B, A and a `scheduled_start`-only order
+    // A, B, D — so neither single-column order can pass this. Seeded in a third order again, so insertion
+    // order cannot either.
+    const b = await endedWith([caseCtx()], { scheduledHoursAgo: 3, endedMinutesAgo: 2 * 60 });
+    const d = await endedWith([caseCtx()], { scheduledHoursAgo: 1, endedMinutesAgo: 4 * 60 });
+    const a = await endedWith([caseCtx()], { scheduledHoursAgo: 6, endedMinutesAgo: 30 });
+
+    const now = Date.now();
+    const rows = await creditSessionsRepository.findSessionlessEndedCaseMeetings({
+      endedBefore: new Date(now - 2 * 60_000),
+      windowStart: new Date(now - 72 * HOUR_MS),
+      limit: 500,
+    });
+
+    expect(rows.map((row) => row.meetingId)).toEqual([a, d, b]);
+    expect(rows).toHaveLength(3);
+  });
+
+  it('N5: a tie on LEAST(scheduled_start, ended_at) falls back to the id', async () => {
+    const sharedStart = new Date(Date.now() - 2 * HOUR_MS);
+    const first = await endedWith([caseCtx()], { values: { scheduledStart: sharedStart } });
+    const second = await endedWith([caseCtx()], { values: { scheduledStart: sharedStart } });
+    const tied = [first, second].sort((x, y) => x.localeCompare(y));
+
+    const found = await candidates();
+
+    expect(found).toHaveLength(2);
+    expect(found).toEqual(tied);
+  });
+
+  it('⚠ PARITY with selectPrimaryMeetingContext — the finder selects exactly the meetings whose primary context is a case', async () => {
+    const ctxId = (): string => randomUUID();
+    const TABLE: ReadonlyArray<{ label: string; contexts: MeetingFactoryContext[] }> = [
+      { label: 'a lone case', contexts: [caseCtx()] },
+      {
+        label: 'case + project_discovery (engagement grain wins)',
+        contexts: [caseCtx(), { contextType: 'project_discovery', contextId: ctxId() }],
+      },
+      {
+        label: 'case + request_interaction (engagement grain wins)',
+        contexts: [caseCtx(), { contextType: 'request_interaction', contextId: ctxId() }],
+      },
+      {
+        label: 'case + admin (admin never ties)',
+        contexts: [caseCtx(), { contextType: 'admin', contextId: null }],
+      },
+      {
+        label: 'case + project_kickoff (ambiguous top tier)',
+        contexts: [caseCtx(), { contextType: 'project_kickoff', contextId: ctxId() }],
+      },
+      { label: 'two different cases (ambiguous)', contexts: [caseCtx(), caseCtx()] },
+      {
+        label: 'a lone project_kickoff',
+        contexts: [{ contextType: 'project_kickoff', contextId: ctxId() }],
+      },
+      { label: 'a lone admin', contexts: [{ contextType: 'admin', contextId: null }] },
+      {
+        label: 'package_session + project_discovery (not a case)',
+        contexts: [
+          { contextType: 'package_session', contextId: ctxId() },
+          { contextType: 'project_discovery', contextId: ctxId() },
+        ],
+      },
+    ];
+
+    const seeded: Array<{ label: string; meetingId: string; primaryIsCase: boolean }> = [];
+    for (const row of TABLE) {
+      const meetingId = await endedWith(row.contexts);
+      const primary = selectPrimaryMeetingContext(row.contexts);
+      seeded.push({
+        label: row.label,
+        meetingId,
+        primaryIsCase: primary.ok && primary.context.contextType === 'case',
+      });
+    }
+    const found = new Set(await candidates());
+    const disagreements = seeded
+      .filter((row) => found.has(row.meetingId) !== row.primaryIsCase)
+      .map((row) => row.label);
+    expect(disagreements).toEqual([]);
+    // Positive controls — the table exercises both answers.
+    expect(seeded.some((row) => row.primaryIsCase)).toBe(true);
+    expect(seeded.some((row) => !row.primaryIsCase)).toBe(true);
+  });
+});
+
+describe('creditSessionsRepository.findPendingBeyondJoinWindow (BAL-474, D11.2 / N2)', () => {
+  const MINUTE_MS = 60_000;
+  const WINDOW_MS = 30 * MINUTE_MS;
+
+  type CallState = 'in_progress' | 'waiting_for_participants' | 'cancelled' | 'ended';
+
+  /**
+   * A `pending` session on a meeting that starts at `start`. The session is opened while the meeting is
+   * `scheduled` (as production does), then the meeting / session is moved to the state under test.
+   */
+  async function seedSession(
+    start: Date,
+    opts: {
+      meetingState?: CallState;
+      meetingDeleted?: boolean;
+      sessionStatus?: 'active' | 'cancelled';
+      sessionDeleted?: boolean;
+      liveCapture?: boolean;
+      createdAt?: Date;
+    } = {}
+  ): Promise<{ sessionId: string; meetingId: string }> {
+    const ctx = await setup({ balanceMinor: 100_000 });
+    const { meeting } = await meetingFactory({
+      values: {
+        status: 'scheduled',
+        scheduledStart: start,
+        scheduledEnd: new Date(start.getTime() + 30 * MINUTE_MS),
+      },
+    });
+    const opened = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 15,
+      meetingId: meeting.id,
+      ...(opts.liveCapture === true ? {} : { durationSource: 'presence' as const }),
+    });
+    if (!opened.ok) throw new Error(`expected open ok, got ${opened.code}`);
+    const sessionId = opened.session.id;
+
+    if (opts.meetingState === 'ended') {
+      await db
+        .update(meetings)
+        .set({ status: 'ended', endedBy: 'expert_host', endedAt: new Date() })
+        .where(eq(meetings.id, meeting.id));
+    } else if (opts.meetingState !== undefined) {
+      await db
+        .update(meetings)
+        .set({ status: opts.meetingState })
+        .where(eq(meetings.id, meeting.id));
+    }
+    if (opts.meetingDeleted === true) {
+      await db.update(meetings).set({ deletedAt: new Date() }).where(eq(meetings.id, meeting.id));
+    }
+    if (opts.sessionStatus === 'cancelled') {
+      await creditSessionsRepository.cancel(sessionId);
+    } else if (opts.sessionStatus === 'active') {
+      await db
+        .update(creditSessions)
+        .set({ status: 'active' })
+        .where(eq(creditSessions.id, sessionId));
+    }
+    if (opts.sessionDeleted === true) {
+      await db
+        .update(creditSessions)
+        .set({ deletedAt: new Date() })
+        .where(eq(creditSessions.id, sessionId));
+    }
+    if (opts.createdAt !== undefined) {
+      await db
+        .update(creditSessions)
+        .set({ createdAt: opts.createdAt })
+        .where(eq(creditSessions.id, sessionId));
+    }
+    return { sessionId, meetingId: meeting.id };
+  }
+
+  async function beyondIds(now: Date, limit?: number): Promise<string[]> {
+    const rows = await creditSessionsRepository.findPendingBeyondJoinWindow({
+      now,
+      windowMs: WINDOW_MS,
+      ...(limit === undefined ? {} : { limit }),
+    });
+    return rows.map((row) => row.id);
+  }
+
+  /** A start that is `minutes` past the edge of the join window relative to `now`. */
+  function pastWindow(now: Date, minutes: number): Date {
+    return new Date(now.getTime() + WINDOW_MS + minutes * MINUTE_MS);
+  }
+
+  it('SELECTS a pending presence session on a scheduled meeting that now starts BEYOND the join window', async () => {
+    const now = new Date();
+    const beyond = await seedSession(pastWindow(now, 5));
+
+    const rows = await creditSessionsRepository.findPendingBeyondJoinWindow({
+      now,
+      windowMs: WINDOW_MS,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(beyond.sessionId);
+    expect(rows[0]?.status).toBe('pending');
+    expect(rows[0]?.durationSource).toBe('presence');
+  });
+
+  it('EXCLUDES a start within the window, and one EXACTLY at the boundary (the comparison is strict)', async () => {
+    const now = new Date();
+    const control = await seedSession(pastWindow(now, 5));
+    await seedSession(pastWindow(now, -5));
+    await seedSession(pastWindow(now, 0));
+
+    const ids = await beyondIds(now);
+
+    expect(ids).toHaveLength(1);
+    expect(ids).toEqual([control.sessionId]);
+  });
+
+  it('a start one millisecond past the boundary IS selected', async () => {
+    const now = new Date();
+    const justPast = await seedSession(new Date(now.getTime() + WINDOW_MS + 1));
+
+    expect(await beyondIds(now)).toEqual([justPast.sessionId]);
+  });
+
+  it.each(['in_progress', 'waiting_for_participants', 'cancelled', 'ended'] as const)(
+    'EXCLUDES a session whose meeting is %s — only a still-`scheduled` meeting is releasable here',
+    async (meetingState) => {
+      const now = new Date();
+      const control = await seedSession(pastWindow(now, 5));
+      await seedSession(pastWindow(now, 5), { meetingState });
+
+      const ids = await beyondIds(now);
+
+      expect(ids).toHaveLength(1);
+      expect(ids).toEqual([control.sessionId]);
+    }
+  );
+
+  it('EXCLUDES a soft-deleted meeting and a soft-deleted session', async () => {
+    const now = new Date();
+    const control = await seedSession(pastWindow(now, 5));
+    await seedSession(pastWindow(now, 5), { meetingDeleted: true });
+    await seedSession(pastWindow(now, 5), { sessionDeleted: true });
+
+    const ids = await beyondIds(now);
+
+    expect(ids).toHaveLength(1);
+    expect(ids).toEqual([control.sessionId]);
+  });
+
+  it('EXCLUDES an active session and an already-cancelled one — only `pending` is releasable', async () => {
+    const now = new Date();
+    const control = await seedSession(pastWindow(now, 5));
+    await seedSession(pastWindow(now, 5), { sessionStatus: 'active' });
+    await seedSession(pastWindow(now, 5), { sessionStatus: 'cancelled' });
+
+    const ids = await beyondIds(now);
+
+    expect(ids).toHaveLength(1);
+    expect(ids).toEqual([control.sessionId]);
+  });
+
+  it('EXCLUDES a live_capture session — an actor-opened session is not this finder’s to cancel', async () => {
+    const now = new Date();
+    const control = await seedSession(pastWindow(now, 5));
+    const captured = await seedSession(pastWindow(now, 5), { liveCapture: true });
+    expect(captured.sessionId).not.toBe(control.sessionId);
+
+    const ids = await beyondIds(now);
+
+    expect(ids).toHaveLength(1);
+    expect(ids).toEqual([control.sessionId]);
+  });
+
+  it('orders OLDEST-CREATED first (not by insertion or by start)', async () => {
+    const now = new Date();
+    const newest = await seedSession(pastWindow(now, 5), {
+      createdAt: new Date(now.getTime() - 10 * MINUTE_MS),
+    });
+    const oldest = await seedSession(pastWindow(now, 90), {
+      createdAt: new Date(now.getTime() - 60 * MINUTE_MS),
+    });
+    const middle = await seedSession(pastWindow(now, 30), {
+      createdAt: new Date(now.getTime() - 30 * MINUTE_MS),
+    });
+
+    const ids = await beyondIds(now);
+
+    expect(ids).toHaveLength(3);
+    expect(ids).toEqual([oldest.sessionId, middle.sessionId, newest.sessionId]);
+  });
+
+  it('honours the limit — the OLDEST-created rows survive the cut — and defaults to a bounded batch', async () => {
+    const now = new Date();
+    const oldest = await seedSession(pastWindow(now, 5), {
+      createdAt: new Date(now.getTime() - 60 * MINUTE_MS),
+    });
+    const middle = await seedSession(pastWindow(now, 5), {
+      createdAt: new Date(now.getTime() - 30 * MINUTE_MS),
+    });
+    await seedSession(pastWindow(now, 5), { createdAt: new Date(now.getTime() - 10 * MINUTE_MS) });
+
+    const limited = await beyondIds(now, 2);
+
+    expect(limited).toHaveLength(2);
+    expect(limited).toEqual([oldest.sessionId, middle.sessionId]);
+    expect(await beyondIds(now)).toHaveLength(3);
+  });
+});
+
+describe('creditSessionsRepository.markSessionlessCaseMeeting (BAL-474 §D.3)', () => {
+  it('writes the marker and resolves the outcome in ONE call — first write wins', async () => {
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', endedBy: 'system_idle', endedAt: new Date() },
+    });
+    const first = await creditSessionsRepository.markSessionlessCaseMeeting({
+      meetingId: meeting.id,
+      disposition: 'not_billable',
+      reason: 'abandoned_wait',
+      trigger: 'lifecycle_sweep',
+      shape: 'abandoned_wait',
+      outcome: 'completed',
+    });
+    expect(first.outcomeWritten).toBe(true);
+    const [row] = await db.select().from(meetings).where(eq(meetings.id, meeting.id));
+    expect(row?.outcome).toBe('completed');
+
+    const markers = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityId, meeting.id),
+          eq(auditEvents.action, SESSIONLESS_CASE_MEETING_MARKED_ACTION)
+        )
+      );
+    expect(markers).toHaveLength(1);
+    expect(markers[0]?.actorUserId).toBeNull();
+    expect(markers[0]?.entityType).toBe('meeting');
+    expect(markers[0]?.metadata).toEqual({
+      disposition: 'not_billable',
+      reason: 'abandoned_wait',
+      trigger: 'lifecycle_sweep',
+      shape: 'abandoned_wait',
+    });
+
+    // A second marker never overwrites the resolved outcome.
+    const second = await creditSessionsRepository.markSessionlessCaseMeeting({
+      meetingId: meeting.id,
+      disposition: 'retry_exhausted',
+      reason: 'error',
+      trigger: 'backstop',
+      outcome: 'no_show_client',
+    });
+    expect(second.outcomeWritten).toBe(false);
+    const [still] = await db.select().from(meetings).where(eq(meetings.id, meeting.id));
+    expect(still?.outcome).toBe('completed');
+  });
+
+  it('without an outcome writes only the marker', async () => {
+    const { meeting } = await meetingFactory({
+      values: { status: 'ended', endedBy: 'system_idle', endedAt: new Date() },
+    });
+    const res = await creditSessionsRepository.markSessionlessCaseMeeting({
+      meetingId: meeting.id,
+      disposition: 'refused',
+      reason: 'booker_unattributable',
+      trigger: 'backstop',
+    });
+    expect(res.outcomeWritten).toBe(false);
+    const [row] = await db.select().from(meetings).where(eq(meetings.id, meeting.id));
+    expect(row?.outcome).toBeNull();
   });
 });

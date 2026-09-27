@@ -100,8 +100,8 @@ describe('formatUpNextWhen', () => {
 });
 
 describe('resolveUpNextRowTiming', () => {
-  it('−15 min exactly (inclusive) → joinVisible true, starting_soon', () => {
-    const start = new Date(NOW.getTime() + 15 * MIN);
+  it('−3 min exactly (inclusive, D16) → joinVisible true, starting_soon', () => {
+    const start = new Date(NOW.getTime() + 3 * MIN);
     const timing = resolveUpNextRowTiming(
       row({
         scheduledStart: start.toISOString(),
@@ -111,11 +111,11 @@ describe('resolveUpNextRowTiming', () => {
     );
     expect(timing.joinVisible).toBe(true);
     expect(timing.rowState).toBe('starting_soon');
-    expect(timing.statusLine).toBe(upNextStartsIn(15));
+    expect(timing.statusLine).toBe(upNextStartsIn(3));
   });
 
-  it('−16 min → joinVisible false (before the window opens)', () => {
-    const start = new Date(NOW.getTime() + 16 * MIN);
+  it('−4 min → joinVisible false (before the window opens)', () => {
+    const start = new Date(NOW.getTime() + 4 * MIN);
     const timing = resolveUpNextRowTiming(
       row({
         scheduledStart: start.toISOString(),
@@ -165,7 +165,7 @@ describe('resolveUpNextRowTiming', () => {
   });
 
   it('in_progress before the scheduled start (early start) → happening_now', () => {
-    const start = new Date(NOW.getTime() + 5 * MIN);
+    const start = new Date(NOW.getTime() + 2 * MIN);
     const timing = resolveUpNextRowTiming(
       row({
         scheduledStart: start.toISOString(),
@@ -194,7 +194,7 @@ describe('resolveUpNextRowTiming', () => {
   /** BAL-581 — a not-ready room inside the window stays `'upcoming'`: never featured, never
    *  a status line, and never Join. */
   it('in-window, roomReady:false → no Join, roomSettingUp true, rowState stays upcoming', () => {
-    const start = new Date(NOW.getTime() + 5 * MIN);
+    const start = new Date(NOW.getTime() + 2 * MIN);
     const timing = resolveUpNextRowTiming(
       row({
         scheduledStart: start.toISOString(),
@@ -214,7 +214,7 @@ describe('resolveUpNextRowTiming', () => {
   });
 
   it('the joinVisible arm always returns roomSettingUp: false', () => {
-    const start = new Date(NOW.getTime() + 5 * MIN);
+    const start = new Date(NOW.getTime() + 2 * MIN);
     const timing = resolveUpNextRowTiming(
       row({
         scheduledStart: start.toISOString(),

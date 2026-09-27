@@ -6,10 +6,17 @@ import {
   auditEventsRepository,
   caseEngagementsRepository,
   companiesRepository,
+  meetingsRepository,
   partyMembershipsRepository,
   referenceDataRepository,
   isUniqueViolation,
 } from '@balo/db';
+import {
+  bookingReplayWindowMatches,
+  classifyBookingReplay,
+  type BookingReplayClassification,
+  type BookingReplayProbe,
+} from '@balo/shared/meetings';
 import { CAPABILITIES } from '@/lib/authz';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
@@ -20,9 +27,20 @@ import { deriveBookingIdempotencyKey } from '../booking-idempotency';
 import { bookingSlotSchema, MS_PER_MINUTE } from '../booking-slot-schema';
 import { sanitizeCaseDescription } from '../sanitize-case-description';
 import { authorizeCaseAttach } from '../authorize-case-attach';
-import { enforceBookingFunding } from '../booking-funding-gate';
+import {
+  enforceBookingFunding,
+  type BookingFundingRefusal,
+  type EnforceBookingFundingInput,
+} from '../booking-funding-gate';
 import { resolveBookingExpertDisplay } from '../load-booking-context';
-import { postBookMeeting, postInviteGuests } from '../booking-api-client';
+import {
+  isBookingFundingRefusalCode,
+  postBookMeeting,
+  postInviteGuests,
+  type BookingApiResult,
+  type BookMeetingResponse,
+  type BookingFundingRefusalCode,
+} from '../booking-api-client';
 import { isExpiredCredentialFailure, viewerApiCredentialIsLive } from '@/lib/api/balo-api-client';
 import type {
   BookConsultationInput,
@@ -34,14 +52,17 @@ import type {
 /**
  * BAL-400 — `bookConsultationAction`, the two-hop booking orchestration (Decisions 1/3/4/5/6/7).
  *
- * ⚠⚠ THE MONEY IS READ-ONLY (D1, NARROWED BY BAL-478). This action still never calls
- * `openSession`, never places a hold, and still renders no rate and no balance (D4c). What
- * BAL-478 added is ONE READ-ONLY PRE-CONDITION: before the first write, `enforceBookingFunding`
- * proves the paying company can settle this consultation — an active mandate OR available
- * balance >= the estimate, the SAME two arms, the SAME predicate and the SAME estimate helper
- * as the authoritative in-txn gate in `creditSessionsRepository.open`. It is ADVISORY by
- * construction (unlocked reads); the authoritative gate is unchanged and still lives under the
- * wallet lock at admission (BAL-466 D2 — admission is never blocked on funding).
+ * ⚠⚠ THE MONEY IS READ-ONLY (D1, NARROWED BY BAL-478 AND BAL-474). This action still never
+ * calls `openSession`, never places a hold, and renders no rate (D4c). What it carries is ONE
+ * READ-ONLY, ADVISORY PRE-CONDITION: before the first write, `enforceBookingFunding` runs the
+ * ONE booking verdict (`assessCaseBookingFunding`) over the ONE funding snapshot — an open
+ * receivable refuses (D6.1), an active mandate or enough available credit funds, and a company
+ * without a mandate has its planned consultations set aside first (D6.5). After ADR-1040
+ * Amendment 7 admission no longer enforces funding: the presence seam's open is
+ * overdraft-tolerant. So this gate is advisory (unlocked reads, check-time), `POST /meetings`
+ * re-checks the same verdict as defence in depth, and a shortfall that slips past both is
+ * billed session-scoped into a receivable, which then brakes the next booking. The only money
+ * figure a client sees from this flow is the top-up amount on the balance panels.
  *
  * TWO NON-ATOMIC HOPS: a `@balo/db` write (open or attach a case) THEN a Bearer hop to
  * `POST /meetings`. A hop-2 failure leaves a real, zero-consultation case — an ACCEPTABLE
@@ -102,12 +123,13 @@ const caseChoiceSchema = z.discriminatedUnion('kind', [
  * round 3 so this SECURITY CHECK cannot diverge from `book-intro-call.ts`'s identical one. See
  * that module's docblock for the full rationale. Before it existed here, `durationMinutes` was
  * checked against the duration ladder and then consumed by TWO DIFFERENT DOWNSTREAM STEPS that
- * never cross-checked it against the window: `enforceBookingFunding` sizes the estimate from
- * `durationMinutes` (`estimatedMinutes: input.slot.durationMinutes`), while the meeting is
- * booked — and admission later re-estimates — from `slot.startIso`/`slot.endIso`. A crafted
- * submit declaring `durationMinutes: 15` against a 3-hour window passed the balance arm on a
- * fraction of the funds, then booked the full window — precisely the unbilled consultation this
- * ticket exists to prevent.
+ * never cross-checked it against the window: `enforceBookingFunding` sized the estimate from
+ * `durationMinutes`, while the meeting is booked — and admission later re-estimates — from
+ * `slot.startIso`/`slot.endIso`. A crafted submit declaring `durationMinutes: 15` against a
+ * 3-hour window passed the balance arm on a fraction of the funds, then booked the full window
+ * — precisely the unbilled consultation this ticket exists to prevent. The gate now derives its
+ * estimate from the slot WINDOW (`estimatedMinutesForWindow`, the same figure the API and
+ * admission compute), and this schema still refuses a declared duration that disagrees with it.
  */
 const bookConsultationSchema = z
   .object({
@@ -160,6 +182,60 @@ function caseFailure(
   code: BookingFailureCode
 ): { readonly ok: false; readonly result: BookConsultationResult & { ok: false } } {
   return { ok: false, result: { ok: false, stage, code } };
+}
+
+type FundingRefusalSite =
+  | { readonly stage: 'funding' }
+  | { readonly stage: 'meeting'; readonly engagementId: string; readonly caseTitle: string };
+
+/**
+ * A determined funding refusal, as a `BookConsultationResult`. `stage: 'funding'` is the web
+ * gate's own refusal (before any write); `stage: 'meeting'` is a refusal the API's pre-write
+ * guard answered at the meeting hop — the case row already exists, so `engagementId` /
+ * `caseTitle` ride along and the panel can say the case is saved.
+ *
+ * The CODE encodes the actor's capability (`*_top_up_required` ⇒ MANAGE_BILLING, so they can act;
+ * `*_admins_notified` ⇒ they cannot, and the gate's fan-out already told the billing admins).
+ */
+function fundingRefusalFailure(
+  refusal: BookingFundingRefusal,
+  site: FundingRefusalSite
+): BookConsultationResult & { ok: false } {
+  const where =
+    site.stage === 'funding'
+      ? { stage: 'funding' as const }
+      : { stage: 'meeting' as const, engagementId: site.engagementId, caseTitle: site.caseTitle };
+  if (refusal.reason === 'unfunded') {
+    return {
+      ok: false,
+      ...where,
+      code: refusal.canManageBilling ? 'funding_setup_required' : 'funding_admins_notified',
+    };
+  }
+  if (refusal.reason === 'on_hold') {
+    return {
+      ok: false,
+      ...where,
+      code: refusal.canManageBilling ? 'hold_top_up_required' : 'hold_admins_notified',
+      balance: {
+        variant: 'hold',
+        topUpNeededMinor: refusal.topUpNeededMinor,
+        reservedBookingCount: null,
+        company: refusal.billingCompany,
+      },
+    };
+  }
+  return {
+    ok: false,
+    ...where,
+    code: refusal.canManageBilling ? 'reserved_top_up_required' : 'reserved_admins_notified',
+    balance: {
+      variant: 'reserved',
+      topUpNeededMinor: refusal.topUpNeededMinor,
+      reservedBookingCount: refusal.reservedBookingCount,
+      company: refusal.billingCompany,
+    },
+  };
 }
 
 /** Resolve which company bills this booking (Decision 5's fail-closed IDOR guard). */
@@ -526,6 +602,77 @@ async function planCase(
 }
 
 /**
+ * ⚠⚠ THE WEB MIRROR OF THE API'S REPLAY PROBE (D7.7, D8.6). Classifies what `key` already names
+ * with the SAME two reads and the SAME pure classifier (`classifyBookingReplay`,
+ * `@balo/shared/meetings`) `POST /meetings` uses — window first (no second read when it
+ * disagrees), then the meeting's contexts. There is ONE definition of "this key names this
+ * booking"; a second, drifting copy is how a web gate would refuse a retry the API replays.
+ *
+ * ⚠ FAILS TOWARDS THE GATES. A read failure is `none` (logged `warn`): the funding gates then
+ * run, the fail-closed direction. A lost-201 retry that hits a transient read blip is at worst
+ * asked to retry, never waved through.
+ */
+async function classifyBookingKey(
+  key: string,
+  probe: BookingReplayProbe
+): Promise<BookingReplayClassification> {
+  try {
+    const existing = await meetingsRepository.findByBookingIdempotencyKey(key);
+    if (existing === undefined) {
+      return 'none';
+    }
+    if (!bookingReplayWindowMatches(existing, probe)) {
+      return 'conflict';
+    }
+    const withContexts = await meetingsRepository.findWithContexts(existing.id);
+    return classifyBookingReplay(
+      {
+        scheduledStart: existing.scheduledStart,
+        scheduledEnd: existing.scheduledEnd,
+        contexts: withContexts?.contexts ?? [],
+      },
+      probe
+    );
+  } catch (error) {
+    log.warn('Booking key classification read failed — running the funding gates', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 'none';
+  }
+}
+
+/**
+ * ⚠⚠ A KEY THAT ALREADY NAMES A MEETING SKIPS EVERY WEB FUNDING GATE (D7.7). A `match` is a
+ * lost-201 retry of a booking that already exists: it must never read a hold or a reservation,
+ * and can never reserve against its own meeting (which is `scheduled` and sessionless, so it
+ * WOULD be counted). A `conflict` skips them too, because the API answers
+ * `409 idempotency_key_conflict` BEFORE its own funding guard — so a mismatched key gets the
+ * conflict answer, never a funding panel or a billing-admin notice. Only the `existing` plan can
+ * carry a used key: a new-case plan has no case row yet.
+ */
+async function bookingKeyAlreadyNamesAMeeting(
+  userId: string,
+  key: string,
+  slot: ValidatedInput['slot'],
+  resolved: ResolvedCase
+): Promise<boolean> {
+  const replay = await classifyBookingKey(key, {
+    contextType: 'case',
+    contextId: resolved.engagementId,
+    scheduledStart: new Date(slot.startIso),
+    scheduledEnd: new Date(slot.endIso),
+  });
+  if (replay === 'none') {
+    return false;
+  }
+  log.info(
+    'Booking key already names a meeting — web funding gates skipped; the API replays or refuses it',
+    { userId, engagementId: resolved.engagementId, replay }
+  );
+  return true;
+}
+
+/**
  * ⚠⚠ THE FUNDING GATE'S ONE CALL SITE (BAL-478 / R1). Both company sources reach it:
  * `resolveBillingCompanyId` (the new-case arm, via `planNewCase`) and `authorizeCaseAttach`
  * (the existing + replay arms). It runs AFTER every cheap validation — so a rate-limited or
@@ -533,28 +680,38 @@ async function planCase(
  * notice to billing admins — and BEFORE `writeCase`, the module's ONLY write. A refusal below
  * therefore leaves no case row, no engagement, no meeting: the same invariant
  * `viewerApiCredentialIsLive()` states at `bookConsultationAction`'s own pre-flight.
+ *
+ * `onCoveredHold: 'defer'`: a hold the balance already covers is healed by the API's guard at the
+ * meeting hop, never refused here (see `completeBooking` for the one `'refuse'` re-run).
  */
 async function resolveCase(
   userId: string,
+  activeCompanyId: string,
   key: string,
   input: ValidatedInput
 ): Promise<CaseResolution> {
   const planned = await planCase(userId, key, input);
   if (!planned.ok) return { ok: false, result: planned.result };
 
+  if (
+    planned.plan.kind === 'existing' &&
+    (await bookingKeyAlreadyNamesAMeeting(userId, key, input.slot, planned.plan.resolved))
+  ) {
+    return { ok: true, resolved: planned.plan.resolved };
+  }
+
   const subject = planFundingSubject(planned.plan);
   const funding = await enforceBookingFunding({
     actorUserId: userId,
     companyId: subject.companyId,
     expertProfileId: subject.expertProfileId,
-    estimatedMinutes: input.slot.durationMinutes,
+    slot: { startIso: input.slot.startIso, endIso: input.slot.endIso },
+    activeCompanyId,
+    onCoveredHold: 'defer',
   });
   if (!funding.ok) {
     if (funding.reason === 'unavailable') return caseFailure('case', 'booking_failed');
-    return caseFailure(
-      'funding',
-      funding.canManageBilling ? 'funding_setup_required' : 'funding_admins_notified'
-    );
+    return { ok: false, result: fundingRefusalFailure(funding, { stage: 'funding' }) };
   }
 
   if (planned.plan.kind === 'existing') return { ok: true, resolved: planned.plan.resolved };
@@ -619,6 +776,105 @@ async function resolvePriorConsultationCount(
 }
 
 /**
+ * ⚠⚠ THE API'S PRE-WRITE FUNDING GUARD ANSWERED AT THE MEETING HOP. `POST /meetings` refused
+ * before writing anything — but the case row this booking created (or attached to) at hop 1
+ * already exists. The web gate is re-run FRESH, so the panel is built from a current snapshot (a
+ * receivable that opened between the gate and hop 2 reaches the panel with a real figure) and
+ * the billing-admin fan-out is published by the one place that publishes it.
+ *
+ *  - The re-run agrees ⇒ the refusal's panel, at `stage: 'meeting'`, carrying the case title.
+ *  - The re-run passes, or is `unavailable` ⇒ the refusal did not reproduce. A generic
+ *    `booking_failed` (the "case saved" partial panel) is the truthful answer; nothing is
+ *    published, and no figure is invented.
+ *
+ * `onCoveredHold`: `'refuse'` only after `account_on_hold`. If the web STILL sees a covered hold
+ * then, the API's locked heal failed — the one state that renders the failed-heal fallback.
+ */
+async function refuseAtMeetingHop(params: {
+  readonly funding: Omit<EnforceBookingFundingInput, 'onCoveredHold'>;
+  readonly code: BookingFundingRefusalCode;
+  readonly engagementId: string;
+  readonly caseTitle: string;
+}): Promise<BookConsultationResult & { ok: false }> {
+  const { funding, code, engagementId, caseTitle } = params;
+  const again = await enforceBookingFunding({
+    ...funding,
+    onCoveredHold: code === 'account_on_hold' ? 'refuse' : 'defer',
+  });
+  if (again.ok || again.reason === 'unavailable') {
+    log.warn('Hop-2 funding refusal did not reproduce at the web gate — generic retry', {
+      code,
+      engagementId,
+      companyId: funding.companyId,
+    });
+    return { ok: false, stage: 'meeting', code: 'booking_failed', engagementId, caseTitle };
+  }
+  return fundingRefusalFailure(again, { stage: 'meeting', engagementId, caseTitle });
+}
+
+/**
+ * Every `POST /meetings` failure, classified. Kept out of `completeBooking` so that function
+ * holds the happy path. Each arm resolves a `BookConsultationResult`; none throws.
+ */
+async function mapMeetingHopFailure(params: {
+  readonly booked: Extract<BookingApiResult<BookMeetingResponse>, { ok: false }>;
+  readonly userId: string;
+  readonly key: string;
+  readonly activeCompanyId: string;
+  readonly resolved: ResolvedCase;
+  readonly slot: ValidatedInput['slot'];
+}): Promise<BookConsultationResult & { ok: false }> {
+  const { booked, userId, key, activeCompanyId, resolved, slot } = params;
+  const { engagementId, companyId, expertProfileId, title: caseTitle } = resolved;
+
+  if (booked.code === 'window_not_available') {
+    return { ok: false, stage: 'meeting', code: 'slot_unavailable', engagementId, caseTitle };
+  }
+  if (booked.code === 'idempotency_key_conflict') {
+    return {
+      ok: false,
+      stage: 'meeting',
+      code: 'idempotency_key_conflict',
+      engagementId,
+      caseTitle,
+    };
+  }
+  // ⚠ A dead credential is not a booking failure. Rare, since the pre-flight gate catches it
+  // first, but the partial-failure panel's "Try again" would re-send the same dead token
+  // forever. Classified before the catch-all so the client can offer sign-in instead.
+  if (isExpiredCredentialFailure(booked.status, booked.code)) {
+    return { ok: false, stage: 'meeting', code: 'session_expired', engagementId, caseTitle };
+  }
+  // The API's own pre-write funding guard (defence in depth). `booking_funding_unavailable` (503)
+  // is deliberately NOT handled here: the API could not read funding and failed closed, and the
+  // catch-all below turns that into the generic `booking_failed` with nothing notified.
+  if (isBookingFundingRefusalCode(booked.code)) {
+    return refuseAtMeetingHop({
+      funding: {
+        actorUserId: userId,
+        companyId,
+        expertProfileId,
+        slot: { startIso: slot.startIso, endIso: slot.endIso },
+        activeCompanyId,
+      },
+      code: booked.code,
+      engagementId,
+      caseTitle,
+    });
+  }
+  // Decision 3 — accept the orphan. The case is NOT deleted; "Try again" re-enters via the
+  // case-grain replay above.
+  log.error('Booking meeting hop failed after case create', {
+    engagementId,
+    bookingIdempotencyKey: key,
+    expertProfileId,
+    status: booked.status,
+    code: booked.code,
+  });
+  return { ok: false, stage: 'meeting', code: 'booking_failed', engagementId, caseTitle };
+}
+
+/**
  * ⚠⚠ EVERYTHING AFTER THE CASE IS RESOLVED, IN A SCOPE THAT CANNOT SEE THE REQUEST'S CLAIMED
  * EXPERT (S1/M5). `resolved.expertProfileId` — read off the `engagements` row by
  * {@link resolveCase} — is the ONLY expert identity in scope here. That is the structural
@@ -628,12 +884,13 @@ async function resolvePriorConsultationCount(
  */
 async function completeBooking(params: {
   readonly userId: string;
+  readonly activeCompanyId: string;
   readonly key: string;
   readonly resolved: ResolvedCase;
   readonly slot: ValidatedInput['slot'];
   readonly guests: ValidatedInput['guests'];
 }): Promise<BookConsultationResult> {
-  const { userId, key, resolved, slot, guests } = params;
+  const { userId, activeCompanyId, key, resolved, slot, guests } = params;
   const { engagementId, companyId, expertProfileId, title: caseTitle, isNewCase } = resolved;
 
   const booked = await postBookMeeting({
@@ -648,34 +905,7 @@ async function completeBooking(params: {
   });
 
   if (!booked.ok) {
-    if (booked.code === 'window_not_available') {
-      return { ok: false, stage: 'meeting', code: 'slot_unavailable', engagementId, caseTitle };
-    }
-    if (booked.code === 'idempotency_key_conflict') {
-      return {
-        ok: false,
-        stage: 'meeting',
-        code: 'idempotency_key_conflict',
-        engagementId,
-        caseTitle,
-      };
-    }
-    // ⚠ A dead credential is not a booking failure. Rare, since the pre-flight gate catches it
-    // first, but the partial-failure panel's "Try again" would re-send the same dead token
-    // forever. Classified before the catch-all so the client can offer sign-in instead.
-    if (isExpiredCredentialFailure(booked.status, booked.code)) {
-      return { ok: false, stage: 'meeting', code: 'session_expired', engagementId, caseTitle };
-    }
-    // Decision 3 — accept the orphan. The case is NOT deleted; "Try again" re-enters via the
-    // case-grain replay above.
-    log.error('Booking meeting hop failed after case create', {
-      engagementId,
-      bookingIdempotencyKey: key,
-      expertProfileId,
-      status: booked.status,
-      code: booked.code,
-    });
-    return { ok: false, stage: 'meeting', code: 'booking_failed', engagementId, caseTitle };
+    return mapMeetingHopFailure({ booked, userId, key, activeCompanyId, resolved, slot });
   }
 
   // ⚠⚠ THE WINDOW COMES BACK FROM THE SERVER (S2), and everything below reads it rather than
@@ -819,7 +1049,7 @@ export async function bookConsultationAction(
   // place that can ALSO drop the booker from `data.billingUserIds` when they are themselves a
   // holder, so a display-name fallback duplicated here would be a second, incomplete copy of
   // that logic (the earlier version of this comment's "not a second copy" claim was wrong).
-  const caseResult = await resolveCase(user.id, key, input);
+  const caseResult = await resolveCase(user.id, user.companyId, key, input);
   if (!caseResult.ok) {
     return caseResult.result;
   }
@@ -828,6 +1058,7 @@ export async function bookConsultationAction(
   // already carries the server-resolved one (S1/M5).
   return completeBooking({
     userId: user.id,
+    activeCompanyId: user.companyId,
     key,
     resolved: caseResult.resolved,
     slot: input.slot,

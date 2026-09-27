@@ -183,6 +183,69 @@ describe('JoinControl — the invited guest`s join', () => {
     expect(screen.queryByRole('button', { name: /join the call/i })).not.toBeInTheDocument();
   });
 
+  describe('D16 — the join window has not opened (NON-terminal)', () => {
+    // ⚠ PINNED. `joinNotOpenYetMessage` (D17.4) date-qualifies `{time}` unless `opensAt` falls on
+    // the viewer's LOCAL TODAY, and `NOT_OPEN_YET.opensAt` below is a fixed 2026-09-25 literal —
+    // without pinning the clock to that same day this would silently depend on the real calendar
+    // date the suite runs on. The global `afterEach` above already calls `vi.useRealTimers()`.
+    // ⚠ `toFake: ['Date']` ONLY — `userEvent`'s internal delays need REAL timers.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-25T00:00:00.000Z'));
+    });
+
+    const NOT_OPEN_YET = {
+      success: false,
+      retryable: false,
+      status: 409,
+      title: JOIN_UNAVAILABLE_TITLE,
+      notOpenYet: { opensAt: '2026-09-25T11:57:00.000Z' },
+    };
+
+    it('⚠⚠ shows the approved sentence beside a LIVE Join button — never the dead-link card, never a toast', async () => {
+      mockPoll.mockResolvedValue(NOT_OPEN_YET);
+      const user = userEvent.setup();
+      renderControl();
+
+      await user.click(screen.getByRole('button', { name: /join the call/i }));
+
+      expect(
+        await screen.findByText("This call isn't open yet — you can join from 11:57 AM.")
+      ).toBeInTheDocument();
+      expect(screen.queryByText(JOIN_UNAVAILABLE_TITLE)).not.toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
+      // The invitation card stays, and the button is live again for the next attempt.
+      expect(screen.getByText(INVITATION_HEADLINE)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /join the call/i })).toBeEnabled();
+    });
+
+    it('is announced (role=status), and clears when the guest tries again', async () => {
+      mockPoll.mockResolvedValueOnce(NOT_OPEN_YET);
+      const user = userEvent.setup();
+      renderControl();
+      await user.click(screen.getByRole('button', { name: /join the call/i }));
+      expect(await screen.findByRole('status')).toHaveTextContent("This call isn't open yet");
+
+      mockPoll.mockResolvedValue({ success: true, state: 'waiting' });
+      await user.click(screen.getByRole('button', { name: /join the call/i }));
+
+      await waitFor(() => {
+        expect(screen.queryByText(/isn't open yet/)).not.toBeInTheDocument();
+      });
+    });
+
+    it('an ordinary terminal 409 (no `notOpenYet`) still lands on the dead-link card', async () => {
+      mockPoll.mockResolvedValue({ ...DEAD_TOKEN_FAILURE, status: 409 });
+      const user = userEvent.setup();
+      renderControl();
+
+      await user.click(screen.getByRole('button', { name: /join the call/i }));
+
+      expect(await screen.findByText(JOIN_UNAVAILABLE_TITLE)).toBeInTheDocument();
+      expect(screen.queryByText(/isn't open yet/)).not.toBeInTheDocument();
+    });
+  });
+
   it('lands on the uniform copy when the api refuses', async () => {
     mockPoll.mockResolvedValue(DEAD_TOKEN_FAILURE);
     const user = userEvent.setup();

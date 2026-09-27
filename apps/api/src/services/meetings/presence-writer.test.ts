@@ -14,8 +14,7 @@ const {
   mockTrackServer,
   mockWarn,
   mockError,
-  mockFindIdByMeetingId,
-  mockConnectSessionAsSystem,
+  mockStartBillingIfDue,
 } = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockDeliveringUserId: vi.fn(),
@@ -30,9 +29,8 @@ const {
   mockTrackServer: vi.fn(),
   mockWarn: vi.fn(),
   mockError: vi.fn(),
-  /** BAL-466 — the co-presence connect seam. */
-  mockFindIdByMeetingId: vi.fn(),
-  mockConnectSessionAsSystem: vi.fn(),
+  /** BAL-474 (Rule A) — the level-triggered start-billing seam. */
+  mockStartBillingIfDue: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -45,7 +43,6 @@ vi.mock('@balo/db', () => ({
     markWaitingForParticipants: mockMarkWaiting,
     markInProgress: mockMarkInProgress,
   },
-  creditSessionsRepository: { findIdByMeetingId: mockFindIdByMeetingId },
 }));
 vi.mock('./delivering-party.js', () => ({
   deliveringExpertUserId: mockDeliveringUserId,
@@ -54,7 +51,6 @@ vi.mock('./delivering-party.js', () => ({
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
   MEETING_SERVER_EVENTS: { MEETING_STARTED: 'meeting_started' },
-  SESSION_SERVER_EVENTS: { SESSION_STARTED: 'session_started' },
 }));
 vi.mock('./authorize-meeting-participation.js', () => ({
   authorizeMeetingParticipation: mockAuthorizeParticipation,
@@ -62,8 +58,8 @@ vi.mock('./authorize-meeting-participation.js', () => ({
 vi.mock('../../notifications/scheduling/schedule.js', () => ({
   cancelScheduledNotification: mockCancelScheduled,
 }));
-vi.mock('../credit-session/connect-session.js', () => ({
-  connectSessionAsSystem: mockConnectSessionAsSystem,
+vi.mock('../credit-session/start-billing.js', () => ({
+  startBillingIfDue: mockStartBillingIfDue,
 }));
 // ⚠ `@balo/shared/meetings` is NOT mocked: `parseDailyParticipantId` and
 // `presencePartyForGuest` (THE MONEY RULE) are precisely what the party-derivation rows assert.
@@ -97,9 +93,9 @@ const MEETING = {
 /** A stand-in executor. The repository is mocked, so it only has to be PASSED THROUGH. */
 const EXEC = {} as never;
 
-describe('presenceWindowFor — the R10 clamp (BAL-134)', () => {
-  it('lower bound is the scheduled start — early arrival earns nothing', () => {
-    expect(presenceWindowFor(MEETING).notBefore).toEqual(START);
+describe('presenceWindowFor — the R10 upper bound (BAL-134; the lower bound moved to the readers in BAL-474)', () => {
+  it('⚠ Rule A — there is NO lower bound: presence is stored at its TRUE instants (the readers apply clampIntervalsToStart)', () => {
+    expect(Object.keys(presenceWindowFor(MEETING))).toEqual(['notAfter']);
   });
 
   /**
@@ -353,7 +349,7 @@ describe('resolvePresenceEffect — identity and PARTY DERIVATION (the money rul
     }
   );
 
-  it('carries the R10 window on every effect', async () => {
+  it('carries the R10 upper bound on every effect', async () => {
     const effect = await resolvePresenceEffect({
       action: 'close',
       meeting: MEETING,
@@ -361,7 +357,7 @@ describe('resolvePresenceEffect — identity and PARTY DERIVATION (the money rul
       at: END,
     });
 
-    expect(effect.window.notBefore).toEqual(START);
+    expect(effect.window).toEqual({ notAfter: new Date(END.getTime() + 24 * 60 * 60 * 1000) });
     expect(effect.action).toBe('close');
   });
 });
@@ -386,7 +382,7 @@ describe('closePresenceEffectForRow — the reconciler close path', () => {
     expect(mockDeliveringUserId).not.toHaveBeenCalled();
   });
 
-  it('carries the STORED identity and party, plus the R10 window', () => {
+  it('carries the STORED identity and party, plus the R10 upper bound', () => {
     expect(
       closePresenceEffectForRow(
         MEETING,
@@ -400,7 +396,7 @@ describe('closePresenceEffectForRow — the reconciler close path', () => {
       meetingGuestId: null,
       party: 'client',
       at: END,
-      window: { notBefore: START, notAfter: new Date(END.getTime() + 24 * 60 * 60 * 1000) },
+      window: { notAfter: new Date(END.getTime() + 24 * 60 * 60 * 1000) },
       identityKind: 'user',
     });
   });
@@ -424,7 +420,7 @@ describe('applyPresenceEffect', () => {
     meetingGuestId: null,
     party: 'client' as const,
     at: START,
-    window: { notBefore: START, notAfter: END },
+    window: { notAfter: END },
     identityKind: 'user' as const,
   };
 
@@ -444,7 +440,7 @@ describe('applyPresenceEffect', () => {
         meetingGuestId: null,
         party: 'client',
         joinedAt: START,
-        window: { notBefore: START, notAfter: END },
+        window: { notAfter: END },
       },
       EXEC
     );
@@ -495,15 +491,7 @@ describe('reconcileMeetingStatus — the transitions presence implies', () => {
     mockCancelScheduled.mockResolvedValue(1);
     mockMarkWaiting.mockResolvedValue({ id: MEETING_ID, status: 'waiting_for_participants' });
     mockMarkInProgress.mockResolvedValue({ id: MEETING_ID, status: 'in_progress' });
-    // BAL-466 — no session by default; a test that wants the connect seam opts in.
-    mockFindIdByMeetingId.mockResolvedValue(undefined);
-    mockConnectSessionAsSystem.mockResolvedValue({
-      id: 'sess-1',
-      companyId: 'company-1',
-      expertProfileId: EXPERT_PROFILE_ID,
-      clientRateMinorPerMinute: 450,
-      status: 'active',
-    });
+    mockStartBillingIfDue.mockResolvedValue({ kind: 'not_due' });
   });
 
   it('the FIRST interval on a `scheduled` meeting moves it to waiting_for_participants', async () => {
@@ -578,76 +566,74 @@ describe('reconcileMeetingStatus — the transitions presence implies', () => {
   });
 });
 
-describe('reconcileMeetingStatus — BAL-466 (D6), the credit session connect seam', () => {
+describe('reconcileMeetingStatus — BAL-474 (Rule A, D13), the level-triggered start-billing seam', () => {
+  const OPEN_ROWS = [
+    { party: 'expert', joinedAt: START, leftAt: null, userId: USER_ID },
+    { party: 'client', joinedAt: START, leftAt: null, userId: DELIVERING_USER_ID },
+  ];
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockCancelScheduled.mockResolvedValue(1);
     mockMarkWaiting.mockResolvedValue({ id: MEETING_ID, status: 'waiting_for_participants' });
     mockMarkInProgress.mockResolvedValue({ id: MEETING_ID, status: 'in_progress' });
-    mockFindIdByMeetingId.mockResolvedValue(undefined);
-    mockConnectSessionAsSystem.mockResolvedValue({
-      id: 'sess-1',
-      companyId: 'company-1',
-      expertProfileId: EXPERT_PROFILE_ID,
-      clientRateMinorPerMinute: 450,
-      status: 'active',
+    mockStartBillingIfDue.mockResolvedValue({ kind: 'not_due' });
+  });
+
+  it('whenever an expert AND a client are open it asks the seam — with the meeting, the open rows and `now`', async () => {
+    mockListOpen.mockResolvedValue(OPEN_ROWS);
+
+    await reconcileMeetingStatus(MEETING, END);
+
+    expect(mockStartBillingIfDue).toHaveBeenCalledTimes(1);
+    expect(mockStartBillingIfDue).toHaveBeenCalledWith({
+      meeting: MEETING,
+      openRows: OPEN_ROWS,
+      now: END,
     });
   });
 
-  it('on co-presence, finds the session and connects it as system', async () => {
-    mockListOpen.mockResolvedValue([{ party: 'expert' }, { party: 'client' }]);
-    mockFindIdByMeetingId.mockResolvedValue({ id: 'sess-1' });
+  it('⚠ EVEN WHEN THE markInProgress CAS WAS LOST — the seam is level-triggered, not a one-shot latch', async () => {
+    mockListOpen.mockResolvedValue(OPEN_ROWS);
+    mockMarkInProgress.mockResolvedValue(undefined);
 
-    await reconcileMeetingStatus(MEETING, END);
+    await expect(reconcileMeetingStatus(MEETING, END)).resolves.toBeNull();
 
-    expect(mockFindIdByMeetingId).toHaveBeenCalledWith(MEETING_ID);
-    expect(mockConnectSessionAsSystem).toHaveBeenCalledWith('sess-1', { now: END });
+    expect(mockStartBillingIfDue).toHaveBeenCalledTimes(1);
+    // …but the once-per-meeting `meeting_started` event still fires only for the CAS winner.
+    expect(mockTrackServer).not.toHaveBeenCalled();
   });
 
-  it('fires SESSION_SERVER_EVENTS.SESSION_STARTED with distinct_id = companyId and the CLIENT rate', async () => {
-    mockListOpen.mockResolvedValue([{ party: 'expert' }, { party: 'client' }]);
-    mockFindIdByMeetingId.mockResolvedValue({ id: 'sess-1' });
-
-    await reconcileMeetingStatus(MEETING, END);
-
-    expect(mockTrackServer).toHaveBeenCalledWith('session_started', {
-      session_id: 'sess-1',
-      meeting_id: MEETING_ID,
-      expert_profile_id: EXPERT_PROFILE_ID,
-      rate_per_minute_minor: 450,
-      distinct_id: 'company-1',
-    });
-  });
-
-  it('no session for this meeting ⇒ neither findIdByMeetingId nor connect fires anything beyond the one indexed read', async () => {
-    mockListOpen.mockResolvedValue([{ party: 'expert' }, { party: 'client' }]);
-    mockFindIdByMeetingId.mockResolvedValue(undefined);
-
-    await reconcileMeetingStatus(MEETING, END);
-
-    expect(mockFindIdByMeetingId).toHaveBeenCalledWith(MEETING_ID);
-    expect(mockConnectSessionAsSystem).not.toHaveBeenCalled();
-    expect(mockTrackServer).not.toHaveBeenCalledWith('session_started', expect.anything());
-  });
-
-  it('a throw from connect is caught, logged at error, and reconcileMeetingStatus still returns in_progress', async () => {
-    mockListOpen.mockResolvedValue([{ party: 'expert' }, { party: 'client' }]);
-    mockFindIdByMeetingId.mockResolvedValue({ id: 'sess-1' });
-    mockConnectSessionAsSystem.mockRejectedValue(new Error('invalid transition'));
+  it('the CAS winner still reports in_progress and emits `meeting_started` exactly once', async () => {
+    mockListOpen.mockResolvedValue(OPEN_ROWS);
 
     await expect(reconcileMeetingStatus(MEETING, END)).resolves.toBe('in_progress');
-    expect(mockError).toHaveBeenCalledWith(
-      expect.objectContaining({ meetingId: MEETING_ID, error: 'invalid transition' }),
-      'Credit session could not be connected at co-presence — the call is not metering'
-    );
+
+    expect(mockTrackServer).toHaveBeenCalledTimes(1);
+    expect(mockStartBillingIfDue).toHaveBeenCalledTimes(1);
   });
 
-  it('the waiting_for_participants arm never connects', async () => {
+  it('the waiting_for_participants arm never asks — billing needs an expert AND a client side', async () => {
     mockListOpen.mockResolvedValue([{ party: 'expert' }]);
 
     await reconcileMeetingStatus(MEETING, END);
 
-    expect(mockFindIdByMeetingId).not.toHaveBeenCalled();
-    expect(mockConnectSessionAsSystem).not.toHaveBeenCalled();
+    expect(mockStartBillingIfDue).not.toHaveBeenCalled();
+  });
+
+  it('an `observer` beside the expert never asks the seam', async () => {
+    mockListOpen.mockResolvedValue([{ party: 'expert' }, { party: 'observer' }]);
+
+    await reconcileMeetingStatus(MEETING, END);
+
+    expect(mockStartBillingIfDue).not.toHaveBeenCalled();
+  });
+
+  it('an empty room asks nothing', async () => {
+    mockListOpen.mockResolvedValue([]);
+
+    await reconcileMeetingStatus(MEETING, END);
+
+    expect(mockStartBillingIfDue).not.toHaveBeenCalled();
   });
 });

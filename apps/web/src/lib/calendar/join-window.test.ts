@@ -38,10 +38,10 @@ function minutesAfterEnd(minutes: number): Date {
 }
 
 describe('calendarJoinAffordanceVisible', () => {
-  it('is false at T-16min (just before the window opens)', () => {
+  it('is false at T-4min (just before the window opens)', () => {
     expect(
       calendarJoinAffordanceVisible(
-        minutesBeforeStart(16),
+        minutesBeforeStart(CASE_JOIN_WINDOW_MINUTES + 1),
         SCHEDULED_START,
         SCHEDULED_END,
         'scheduled'
@@ -49,7 +49,7 @@ describe('calendarJoinAffordanceVisible', () => {
     ).toBe(false);
   });
 
-  it('is true at T-15min (inclusive boundary, driven by the shared constant)', () => {
+  it('is true at T-CASE_JOIN_WINDOW_MINUTES (inclusive boundary, driven by the shared constant)', () => {
     expect(
       calendarJoinAffordanceVisible(
         minutesBeforeStart(CASE_JOIN_WINDOW_MINUTES),
@@ -95,7 +95,7 @@ describe('calendarJoinAffordanceVisible', () => {
 
   it('reads CASE_JOIN_WINDOW_MINUTES rather than a hard-coded literal', () => {
     // If the shared constant ever changes, the computed boundary here must move with it —
-    // proving this module has no second, hard-coded copy of "15".
+    // proving this module has no second, hard-coded copy of the window.
     const boundary = minutesBeforeStart(CASE_JOIN_WINDOW_MINUTES);
     expect(
       calendarJoinAffordanceVisible(boundary, SCHEDULED_START, SCHEDULED_END, 'scheduled')
@@ -249,16 +249,16 @@ describe('calendarMeetingTiming', () => {
     });
   });
 
-  it('inside the window (5 min out): joinVisible true, labelled', () => {
+  it('inside the window (2 min out): joinVisible true, labelled', () => {
     const result = calendarMeetingTiming(
-      minutesBeforeStart(5),
+      minutesBeforeStart(2),
       SCHEDULED_START,
       SCHEDULED_END,
       'scheduled',
       true
     );
     expect(result.joinVisible).toBe(true);
-    expect(result.joinTimingLabel).toBe('starting in 5 minutes');
+    expect(result.joinTimingLabel).toBe('starting in 2 minutes');
     expect(result.isPast).toBe(false);
   });
 
@@ -368,7 +368,7 @@ describe('calendarMeetingTiming', () => {
   describe('roomReady: false (BAL-581)', () => {
     it('inside the window: no Join, roomSettingUp true, no label', () => {
       const result = calendarMeetingTiming(
-        minutesBeforeStart(5),
+        minutesBeforeStart(2),
         SCHEDULED_START,
         SCHEDULED_END,
         'scheduled',
@@ -418,7 +418,7 @@ describe('calendarMeetingTiming', () => {
 
   const INSTANTS: readonly { readonly label: string; readonly now: Date }[] = [
     { label: 'T-20', now: minutesBeforeStart(20) },
-    { label: 'T-5', now: minutesBeforeStart(5) },
+    { label: 'T-2', now: minutesBeforeStart(2) },
     { label: 'start', now: SCHEDULED_START },
     { label: 'mid', now: new Date(SCHEDULED_START.getTime() + 10 * 60_000) },
     { label: 'end', now: SCHEDULED_END },
