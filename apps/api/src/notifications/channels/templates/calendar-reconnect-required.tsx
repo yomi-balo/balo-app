@@ -65,7 +65,7 @@ export function CalendarReconnectRequiredEmail({
   stillSearchable,
 }: Readonly<CalendarReconnectRequiredEmailProps>) {
   const previewText = stillSearchable
-    ? 'Your calendar disconnected — reconnect so your busy time is covered again.'
+    ? 'Your calendar disconnected — reconnect so clients can book you again.'
     : 'Your calendar disconnected — reconnect to appear in search again.';
 
   return (
@@ -76,7 +76,7 @@ export function CalendarReconnectRequiredEmail({
         <Heading style={styles.heroHeading}>Your calendar disconnected</Heading>
         <Text style={styles.heroSubtext}>
           {stillSearchable
-            ? "Your profile, rate and past bookings are all safe, and you're still appearing in Balo search."
+            ? "You're still appearing in Balo search, but bookings are paused until you reconnect."
             : 'Your profile, rate and past bookings are all safe — reconnecting brings everything straight back.'}
         </Text>
       </Section>
@@ -87,10 +87,10 @@ export function CalendarReconnectRequiredEmail({
 
         {stillSearchable ? (
           <Text style={styles.bodyText}>
-            Balo lost access to your {providerLabel}, so busy time on it is no longer being checked
-            before a booking — you could end up double-booked against it. Your other connected
-            calendar is still covering your Balo search listing, and your profile, rate and past
-            bookings are untouched. Reconnecting brings your full availability picture back.
+            Balo lost access to your {providerLabel}. We can&apos;t check it for busy time, so
+            we&apos;ve paused bookings with you until it&apos;s reconnected — that way nothing gets
+            booked over time you&apos;ve already committed. Your Balo search listing, profile, rate
+            and past bookings are untouched. Reconnecting opens your availability straight back up.
           </Text>
         ) : (
           <Text style={styles.bodyText}>

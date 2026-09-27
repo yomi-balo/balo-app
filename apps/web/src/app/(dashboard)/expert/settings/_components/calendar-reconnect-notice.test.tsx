@@ -10,6 +10,16 @@ describe('CalendarReconnectNotice', () => {
     expect(screen.getByRole('button', { name: /Reconnect/ })).toBeInTheDocument();
   });
 
+  // BAL-576 — the notice used to claim availability "still shows" while broken, which is false:
+  // the busy check fails closed, so a broken connection pauses bookings, not just sync.
+  it('states that bookings are paused, never that availability still shows', () => {
+    render(<CalendarReconnectNotice onReconnect={vi.fn()} />);
+    expect(
+      screen.getByText(/bookings with you are paused until you reconnect/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/availability still shows/)).not.toBeInTheDocument();
+  });
+
   it('calls onReconnect when clicked', async () => {
     const onReconnect = vi.fn();
     const user = userEvent.setup();

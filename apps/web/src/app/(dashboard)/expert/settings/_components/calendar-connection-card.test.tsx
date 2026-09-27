@@ -29,6 +29,7 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
   lastSyncedAt: null,
   targetCalendarId: 'cal-1',
   subCalendars: [makeSubCalendar()],
+  isBookingTarget: true,
   ...overrides,
 });
 
@@ -45,7 +46,15 @@ const handlers = {
 function renderRow(
   slotState: CalendarSlotState,
   connection: CalendarConnection | undefined,
-  { pending = false, provider = 'google' }: { pending?: boolean; provider?: CalendarProvider } = {}
+  {
+    pending = false,
+    provider = 'google',
+    bookingTarget = connection,
+  }: {
+    pending?: boolean;
+    provider?: CalendarProvider;
+    bookingTarget?: CalendarConnection | undefined;
+  } = {}
 ): ReturnType<typeof render> {
   return render(
     <CalendarConnectionCard
@@ -53,6 +62,7 @@ function renderRow(
       slotState={slotState}
       connection={connection}
       pending={pending}
+      bookingTarget={bookingTarget}
       {...handlers}
     />
   );
@@ -248,6 +258,20 @@ describe('CalendarConnectionCard', () => {
     expect(screen.getByRole('combobox', { name: 'Where bookings go' })).toBeVisible();
     // Nothing collapsible stands between the expert and the controls.
     expect(screen.queryByRole('button', { expanded: false, name: /calendars/i })).toBeNull();
+  });
+
+  // BAL-576 — proves `bookingTarget` threads through the card into the panel: a connected row
+  // that is NOT the flagged target renders the STANDBY copy, naming the account that is.
+  it('threads bookingTarget to the panel — a non-target connected row shows the STANDBY copy', () => {
+    const target = makeConnection({
+      provider: 'microsoft',
+      providerEmail: 'team@example.com',
+      isBookingTarget: true,
+    });
+    renderRow('connected', makeConnection({ isBookingTarget: false }), { bookingTarget: target });
+    expect(screen.getByRole('combobox', { name: 'Where bookings go' })).toHaveAccessibleDescription(
+      "Bookings go to one account at a time — right now that's your Microsoft Outlook account (team@example.com). The calendar you pick here takes over if that account is disconnected."
+    );
   });
 
   it('leaves the panels operable under connected', () => {

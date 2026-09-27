@@ -88,15 +88,23 @@ vi.mock('./calendar-target-calendar-panel', () => ({
     connection,
     pending,
     disabled = false,
+    bookingTarget,
     onChange,
   }: {
-    connection: { targetCalendarId: string | null; subCalendars: { id: string; name: string }[] };
+    connection: {
+      targetCalendarId: string | null;
+      subCalendars: { id: string; name: string }[];
+      isBookingTarget: boolean;
+    };
     pending: boolean;
     disabled?: boolean;
+    bookingTarget?: { provider: string } | undefined;
     onChange: (id: string) => void;
   }) => (
     <div>
       <span data-testid="target-value">{connection.targetCalendarId ?? 'none'}</span>
+      <span data-testid="is-booking-target">{String(connection.isBookingTarget)}</span>
+      <span data-testid="booking-target-provider">{bookingTarget?.provider ?? 'none'}</span>
       {connection.subCalendars.map((cal) => (
         <button
           key={cal.id}
@@ -131,6 +139,7 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
   subCalendars: [
     { id: 'cal-1', name: 'Work', provider: 'google', primary: true, conflictChecking: true },
   ],
+  isBookingTarget: true,
   ...overrides,
 });
 
@@ -286,6 +295,32 @@ describe('CalendarConnectionsSection', () => {
     expect(screen.getAllByRole('heading', { level: 3, name: 'Google Calendar' })).toHaveLength(2);
     // Each row's booking-target picker still renders its own copy of the panel.
     expect(screen.getAllByTestId('target-value')).toHaveLength(2);
+  });
+
+  // BAL-576 — proves BOTH halves of the threading: each row's own `isBookingTarget` flag passes
+  // through unchanged, AND the section computes ONE `bookingTarget` and passes that SAME
+  // connection to every card's panel (not just the flagged row's own).
+  it('with two connections, threads each row its own flag plus the ONE shared bookingTarget', async () => {
+    mockGetConnections.mockResolvedValue({
+      ok: true,
+      connections: [
+        makeConnection({ isBookingTarget: true }),
+        makeConnection({
+          provider: 'microsoft',
+          providerEmail: 'yomi@outlook.com',
+          isBookingTarget: false,
+        }),
+      ],
+    });
+    render(<CalendarConnectionsSection />);
+
+    await screen.findByText('yomi@outlook.com');
+    const flags = screen.getAllByTestId('is-booking-target').map((el) => el.textContent);
+    expect(flags).toEqual(['true', 'false']);
+    const bookingTargets = screen
+      .getAllByTestId('booking-target-provider')
+      .map((el) => el.textContent);
+    expect(bookingTargets).toEqual(['google', 'google']);
   });
 
   it('always renders the trust line and the iCloud line in the card footer', async () => {
@@ -859,6 +894,92 @@ describe('CalendarConnectionsSection', () => {
 
       await waitFor(() => expect(toast.error).toHaveBeenCalledWith('server said no'));
       expect(screen.getByTestId('target-value')).toHaveTextContent('cal-1');
+    });
+
+    // BAL-576 — picking a new calendar on a card that is NOT the booking target must never
+    // claim "Bookings will go to {name}"; that card is standby, not the target.
+    it('toasts the standby wording, naming the account that IS the target, on a standby card', async () => {
+      const google = makeConnection({ isBookingTarget: true });
+      const microsoftStandby = makeToggleableConnection({
+        provider: 'microsoft',
+        providerEmail: 'yomi@outlook.com',
+        isBookingTarget: false,
+      });
+      mockGetConnections.mockResolvedValue({
+        ok: true,
+        connections: [google, microsoftStandby],
+      });
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+
+      await screen.findByText('yomi@outlook.com');
+      await user.click(screen.getByRole('button', { name: 'Book into Team' }));
+
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith(
+          'Saved — bookings will go to Team if Google Calendar is disconnected'
+        )
+      );
+    });
+
+    // BAL-576 — a null→set pick is the one case that can flip targetness, and which connection
+    // wins depends on `OLDEST_LIVE_FIRST` order the client does not have — so this case alone
+    // refetches, and the toast must follow what the SERVER says, not a client-side guess.
+    //
+    // The refetch flips Microsoft to the TARGET (it out-ages Google, which loses it) — the one
+    // outcome a client-side prediction cannot produce, since the pre-pick data has Google as the
+    // target and this connection as non-writable. Only reading `refetchedRow.isBookingTarget`
+    // gets this right; a prediction based on the pre-pick state would say standby instead.
+    it('refetches on a null-target pick and the toast follows the refetched isBookingTarget flag, even when it flips targetness', async () => {
+      const google = makeConnection({ isBookingTarget: true });
+      const microsoftNullTarget = makeConnection({
+        provider: 'microsoft',
+        providerEmail: 'yomi@outlook.com',
+        targetCalendarId: null,
+        isBookingTarget: false,
+        subCalendars: [
+          {
+            id: 'cal-2',
+            name: 'Team',
+            provider: 'microsoft',
+            primary: true,
+            conflictChecking: true,
+          },
+        ],
+      });
+      mockGetConnections.mockResolvedValueOnce({
+        ok: true,
+        connections: [google, microsoftNullTarget],
+      });
+      mockGetConnections.mockResolvedValueOnce({
+        ok: true,
+        connections: [
+          makeConnection({ isBookingTarget: false }),
+          makeConnection({
+            provider: 'microsoft',
+            providerEmail: 'yomi@outlook.com',
+            targetCalendarId: 'cal-2',
+            isBookingTarget: true,
+            subCalendars: [
+              {
+                id: 'cal-2',
+                name: 'Team',
+                provider: 'microsoft',
+                primary: true,
+                conflictChecking: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const user = userEvent.setup();
+      render(<CalendarConnectionsSection />);
+
+      await screen.findByText('yomi@outlook.com');
+      await user.click(screen.getByRole('button', { name: 'Book into Team' }));
+
+      await waitFor(() => expect(mockGetConnections).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Bookings will go to Team'));
     });
   });
 

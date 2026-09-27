@@ -211,8 +211,55 @@ describe('calendar API routes (BAL-396)', () => {
             color: undefined,
           },
         ],
+        // BAL-576 — the FIRST (oldest-live-first-ordered) writable row is the booking target.
+        isBookingTarget: true,
       });
       expect(body.connections[1].provider).toBe('microsoft');
+      // BAL-576 — both rows are ACTIVE with a target calendar; only the first one is the
+      // booking target. A per-row (`isWritable`-shaped) regression would make this `true`.
+      expect(body.connections[1].isBookingTarget).toBe(false);
+    });
+
+    // BAL-576 — the target follows the repository's own OLDEST_LIVE_FIRST order, never
+    // credential health alone: an EXPIRED older row cedes the target to the newer ACTIVE one.
+    it('gives the booking-target flag to the newer connection when the older one is EXPIRED', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ id: 'conn-1', credentialStatus: 'EXPIRED' }),
+        buildConnection({ id: 'conn-2', provider: 'microsoft', targetCalendarId: 'cal-ms' }),
+      ]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      const body = res.json();
+      expect(body.connections.map((c: { isBookingTarget: boolean }) => c.isBookingTarget)).toEqual([
+        false,
+        true,
+      ]);
+    });
+
+    it('gives every connection isBookingTarget: false when none is writable', async () => {
+      mockListConnectionsByExpertProfileId.mockResolvedValue([
+        buildConnection({ id: 'conn-1', credentialStatus: 'EXPIRED' }),
+        buildConnection({ id: 'conn-2', provider: 'microsoft', targetCalendarId: null }),
+      ]);
+      mockFindSubCalendarsByConnectionId.mockResolvedValue([]);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/calendar/connection?expertProfileId=${EXPERT_UUID}`,
+        headers: AUTH_HEADERS,
+      });
+
+      const body = res.json();
+      expect(body.connections.map((c: { isBookingTarget: boolean }) => c.isBookingTarget)).toEqual([
+        false,
+        false,
+      ]);
     });
 
     // BAL-397 — this is the regression the deleted `toLegacyStatus` adapter used to cause:

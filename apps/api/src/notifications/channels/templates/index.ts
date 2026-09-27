@@ -1241,7 +1241,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         stillSearchable,
       }),
       subject: stillSearchable
-        ? 'Reconnect your calendar to keep your availability accurate'
+        ? 'Reconnect your calendar so clients can book you again'
         : 'Reconnect your calendar to appear in search again',
     };
   },

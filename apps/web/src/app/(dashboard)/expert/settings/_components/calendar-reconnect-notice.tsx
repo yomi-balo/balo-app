@@ -22,8 +22,8 @@ export function CalendarReconnectNotice({
         />
         <p className="text-foreground text-[12.5px] leading-relaxed">
           We&apos;ve lost access to this calendar — this usually happens after a password change, or
-          when calendar access is turned off. Your current availability still shows, but new changes
-          won&apos;t sync until you reconnect.
+          when calendar access is turned off. We can&apos;t check it for busy time, so bookings with
+          you are paused until you reconnect.
         </p>
       </div>
       {/* Warning-toned, matching the structurally-parallel "Fix permissions" CTA in

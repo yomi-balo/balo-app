@@ -20,6 +20,7 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
   lastSyncedAt: null,
   targetCalendarId: null,
   subCalendars: [makeSubCalendar()],
+  isBookingTarget: false,
   ...overrides,
 });
 

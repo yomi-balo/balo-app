@@ -1,15 +1,14 @@
-import {
-  calendarRepository,
-  meetingCalendarEventsRepository,
-  type CalendarConnection,
-  type CalendarCredentialStatus,
-} from '@balo/db';
+import { calendarRepository, meetingCalendarEventsRepository } from '@balo/db';
 import type { FastifyBaseLogger } from 'fastify';
 import { ApirocConfigError, ApirocError, type ApirocFailureKind } from '../../lib/apiroc/errors.js';
 import { reconcileByTag } from './reconcile-by-tag.js';
 import type { CalendarProjectedContextType } from './calendar-context-registry.js';
 import { buildConsultationEvent } from './event-mapper.js';
 import { writeConsultationEvent } from './write-consultation-event.js';
+import {
+  pickBookingWriteTarget,
+  type WritableCalendarConnection,
+} from '../calendar/booking-write-target.js';
 
 /**
  * BAL-400 (D2), widened by BAL-433 Slice 1 — the EXPERT-side calendar entry for one booking.
@@ -88,35 +87,6 @@ export interface ProjectBookingToCalendarInput {
 
 /** BAL-400's shipped headline noun — the default, so omitting `eventLabel` changes nothing. */
 const DEFAULT_EVENT_LABEL = 'Consultation';
-
-const READABLE_STATUS: CalendarCredentialStatus = 'ACTIVE';
-
-/**
- * A connection this projection may write to: `ACTIVE` and it has a chosen target calendar.
- * The repository deliberately does not filter status (mirrors `vendor-busy.ts`'s
- * `isUnreadable` guard) — this is the caller's obligation.
- */
-function isWritable(
-  connection: CalendarConnection
-): connection is CalendarConnection & { targetCalendarId: string } {
-  return connection.credentialStatus === READABLE_STATUS && connection.targetCalendarId !== null;
-}
-
-/**
- * Pick the connection to write the consultation event to, when the expert has more than one
- * live provider connected. `calendarRepository.listConnectionsByExpertProfileId` already
- * orders `OLDEST_LIVE_FIRST` (`createdAt` then `id`), so the first writable row IS the
- * oldest-live-first pick — deterministic, though which calendar "should" win when an expert
- * has both a Google and a Microsoft connection is settled nowhere in the repo or the ADRs
- * (flagged in the plan for a product call). The partial unique on `(meeting_id, party)`
- * structurally guarantees exactly one live entry per party regardless of which connection is
- * chosen.
- */
-function pickWriteTarget(
-  connections: readonly CalendarConnection[]
-): (CalendarConnection & { targetCalendarId: string }) | undefined {
-  return connections.find(isWritable);
-}
 
 /**
  * BAL-475 (U3) — did the VENDOR CREATE ITSELF fail (as opposed to a failure after a successful
@@ -217,7 +187,7 @@ async function recordIcsFallbackAfterProviderFailure(
  */
 async function handleAmbiguousVendorCreateFailure(
   input: ProjectBookingToCalendarInput,
-  target: CalendarConnection & { targetCalendarId: string },
+  target: WritableCalendarConnection,
   apirocErrorKind: string,
   log: FastifyBaseLogger
 ): Promise<void> {
@@ -313,12 +283,12 @@ export async function projectBookingToExpertCalendar(
   // ⚠ HOISTED ABOVE THE `try` (BAL-475) — the catch below needs to know whether a write target
   // was ever selected, to distinguish "no writable connection" (handled inline, no exception)
   // from "the vendor create itself failed" (U3's fallback).
-  let target: (CalendarConnection & { targetCalendarId: string }) | undefined;
+  let target: WritableCalendarConnection | undefined;
   try {
     const connections = await calendarRepository.listConnectionsByExpertProfileId(
       input.expertProfileId
     );
-    target = pickWriteTarget(connections);
+    target = pickBookingWriteTarget(connections);
     if (target === undefined) {
       /**
        * ADR-1044 amendment 2026-08-25, RULING 1 — no writable provider connection (none
@@ -328,7 +298,7 @@ export async function projectBookingToExpertCalendar(
        * is the partial unique on `(meeting_id, party)`, not this branch.
        *
        * ⚠ THERE IS NO PROVIDER CHECK AT THIS WRITE PATH AND THERE NEVER WAS. Do not add one,
-       * and do not "restore" one: `isWritable` is exactly two conditions.
+       * and do not "restore" one: `isWritableConnection` is exactly two conditions.
        *
        * ⚠ NOTHING IS SENT HERE — BAL-475 delivers the ICS from this row
        * (`publishBookingCalendarInvites`); BAL-476 owns cancellation. Do not add a send here.

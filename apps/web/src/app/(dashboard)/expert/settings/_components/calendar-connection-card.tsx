@@ -20,6 +20,9 @@ interface CalendarConnectionCardProps {
   readonly slotState: CalendarSlotState;
   readonly connection: CalendarConnection | undefined;
   readonly pending: boolean;
+  /** BAL-576 — the connection bookings actually land on, across the expert's WHOLE set of
+   *  connections (not just this row's). Threaded straight to the target-calendar panel. */
+  readonly bookingTarget: CalendarConnection | undefined;
   readonly onConnect: (provider: CalendarProvider) => void;
   readonly onCancelConnect: (provider: CalendarProvider) => void;
   readonly onReconnect: (provider: CalendarProvider) => void;
@@ -98,6 +101,7 @@ export function CalendarConnectionCard({
   slotState,
   connection,
   pending,
+  bookingTarget,
   onConnect,
   onCancelConnect,
   onReconnect,
@@ -136,6 +140,7 @@ export function CalendarConnectionCard({
         provider={provider}
         pending={pending}
         disabled={disabled}
+        bookingTarget={bookingTarget}
         onChange={onChangeTarget}
       />
     </>

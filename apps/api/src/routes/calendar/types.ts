@@ -35,4 +35,10 @@ export interface CalendarConnection {
   lastSyncedAt: string | null;
   targetCalendarId: string | null;
   subCalendars: SubCalendar[];
+  /**
+   * BAL-576 — is THIS the one connection bookings actually land on? Computed server-side by
+   * `pickBookingWriteTarget` (`services/calendar/booking-write-target.ts`), the same rule the
+   * consultation-event projection writes through. Only one connection can be `true` at a time.
+   */
+  isBookingTarget: boolean;
 }

@@ -10,6 +10,7 @@ function buildConnection(overrides: Partial<CalendarConnection> = {}): CalendarC
     lastSyncedAt: null,
     targetCalendarId: null,
     subCalendars: [],
+    isBookingTarget: false,
     ...overrides,
   };
 }

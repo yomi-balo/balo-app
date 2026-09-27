@@ -39,4 +39,10 @@ export interface CalendarConnection {
   lastSyncedAt: string | null;
   targetCalendarId: string | null;
   subCalendars: SubCalendar[];
+  /**
+   * BAL-576 — is THIS the one connection bookings actually land on? The SERVER computes this
+   * (`pickBookingWriteTarget`, the same rule the consultation-event projection writes through)
+   * — the client must never re-derive it. Only one connection can be `true` at a time.
+   */
+  isBookingTarget: boolean;
 }

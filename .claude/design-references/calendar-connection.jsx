@@ -385,9 +385,9 @@ const AccountCard = ({ state }) => {
           <AlertTriangle size={17} color={t.warnInk} style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ flex: 1 }}>
             <div style={{ color: t.warnInk, fontSize: 13.5, lineHeight: 1.5 }}>
-              We've lost access to this calendar — this usually happens after a password change or
-              when calendar access is turned off. Your current availability still shows, but new
-              changes won't sync until you reconnect.
+              We've lost access to this calendar — this usually happens after a password change, or
+              when calendar access is turned off. We can't check it for busy time, so bookings with
+              you are paused until you reconnect.
             </div>
             <div style={{ marginTop: 11 }}>
               <Btn size="sm" variant="warn" icon={RefreshCw}>
