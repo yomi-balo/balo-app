@@ -64,7 +64,7 @@ The project has skill files in `.claude/skills/` that define Balo-specific patte
 
 Every downstream agent re-reads this plan: the DBA, each builder, each reviewer and each fixer. Plans that ran to 1,150–1,875 lines needed chunked reads, which made each agent's context balloon. Aim for a plan that is short, precise and cited.
 
-- **Hard cap: the number in the orchestrator's brief.** If the brief gives none, use about 120 lines for a copy-only change or simple bug, 250 by default, and 350 for a large ticket (more than about 80 files or about 8 work packages). If you are over the cap, cut and check again. On a large ticket, you may instead keep the main plan at 250 and put per-package detail in `bal-<NNN>-plan-wp-<X>.md` appendices, each read only by that package's builder.
+- **Hard cap: the number in the orchestrator's prompt.** If the prompt gives none, use about 120 lines for a copy-only change or simple bug, 250 by default, and 350 for a large ticket (more than about 80 files or about 8 work packages). If you are over the cap, cut and check again. On a large ticket, you may instead keep the main plan at 250 and put per-package detail in `bal-<NNN>-plan-wp-<X>.md` appendices, each read only by that package's builder.
 - **Use prose rather than code.** A code block is allowed only when it is shorter than the prose would be: a type signature, an enum value list, a props interface, a config row. Never write component bodies, test bodies or migration SQL.
 - **Don't restate the ticket.** Downstream agents can read it. Cite it by section instead ("per What-to-build §5"). Restate only a decision that changes how something is built.
 - **Cite `file:line`** for every existing symbol, pattern or precedent you depend on, so builders don't have to search again.
@@ -74,6 +74,8 @@ Every downstream agent re-reads this plan: the DBA, each builder, each reviewer 
 ## Output Format
 
 Write the plan as a structured markdown document. Be specific: give file paths, function signatures and type names. Builders implement the plan literally, so ambiguity causes problems. Write the plan within the length budget.
+
+**Tag every detail section with its work package.** Prefix each heading with the letter of the package that owns it, for example `### [B] API Contracts — submit action`, and split a layer section by package when it spans several. Builders read only the sections carrying their letter. An untagged section is read by everyone, so keep shared sections rare and short.
 
 Every plan must include these two sections, even when they are brief:
 

@@ -38,10 +38,11 @@ Your first step is to gather full context:
 
 Every subsequent phase happens in this worktree on this branch; **Phase 9 just commits and raises the PR from here — it does NOT re-sync `main` or re-create the branch** (Setup already did that).
 
-**Handoff files are ticket-scoped and live in the worktree's `.implement/` directory.** The directory is gitignored, and Prettier honours `.gitignore`, so `git add -A` and `format:check` never touch it. Run `mkdir -p .implement` at Setup. Each file is named `bal-<NNN>-<kind>.md`:
+**Handoff files are ticket-scoped and live in the worktree's `.implement/` directory.** The directory is in the root `.gitignore`, which Prettier 3 also reads (a nested `.gitignore` is not read), so neither `git add -A` nor `format:check` touches it. Run `mkdir -p .implement` at Setup. Each file is named `bal-<NNN>-<kind>.md`:
 
 | File                          | Written by                                                                                  | Read by                                                        |
 | ----------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `bal-<NNN>-ticket.md`         | orchestrator, after Phase 0.5                                                               | architect, and any phase that needs the AC wording             |
 | `bal-<NNN>-design.md`         | Phase 0 (the approved spec)                                                                 | architect, build, ux-review                                    |
 | `bal-<NNN>-plan.md`           | architect                                                                                   | every later phase                                              |
 | `bal-<NNN>-decisions.md`      | orchestrator: rulings on resolver objections and on open questions from the plan or reviews | every later phase; it overrides the ticket where they conflict |
@@ -56,7 +57,7 @@ Don't use `/tmp`. A spawned `claude -p` sub-agent can write there but **can't re
 Every phase re-reads the handoffs, so whatever goes into them is paid for many times over. Keep each agent's input small and its output short:
 
 - **Pass paths, never contents.** A spawn prompt names its handoff files. It never inlines them with `$(cat …)` and never pastes a diff. Reviewers run `git diff --cached` themselves and exclude generated files, such as `packages/db/drizzle/meta/*_snapshot.json`, which runs to about 17k lines per migration.
-- **Each agent reads only its slice.** A builder reads the build contract, the decisions file, and only its own package sections and the AC map in the plan. Never hand an agent another agent's transcript or full report. Distil what it needs into its brief or into `decisions.md`.
+- **Each agent reads only its slice.** A builder reads the build contract, the decisions file, and only the plan sections tagged with its package letter (see `architect.md`), plus the AC map. Never hand an agent another agent's transcript or full report. Distil what it needs into its brief or into `decisions.md`.
 - **Briefs state what's already verified and what's out of scope,** so the agent doesn't re-derive it. A resolver brief lists the exact claims to check, with `file:line`.
 - **Cap every reply** at 150–300 words: a verdict or status, findings with `file:line`, and no pasted code or logs. The orchestrator checks claims with targeted commands (`git status`, `grep`, one test file), never by reading transcripts.
 - **Cap the architect's plan by ticket size** and state the cap in the architect prompt. The architect checks it with `wc -l` (see `architect.md`). The plan is cheap only while it stays short, because it sits in every agent's context on every turn.
@@ -144,6 +145,9 @@ A targeted resolver finishes in minutes. Scale it to the ticket: for a simple bu
 - Review each objection, and verify any load-bearing one yourself with a single targeted read
 - Record your ruling on each as a numbered entry in `.implement/bal-<NNN>-decisions.md`. Write the corrected premise and the reason, not the history
 - Update the ticket description to correct the stale or incorrect claims before proceeding
+
+**Snapshot the ticket.** After the resolver's update, write the full ticket description, including the Pre-flight Check, to `.implement/bal-<NNN>-ticket.md`. Later phases read this file, never Linear, so no spawn after Phase 0.5 needs the Linear MCP.
+
 - Re-run the resolver only if the objections were substantial enough to warrant a second pass (e.g. the approach fundamentally changes)
 
 **If no objections:** proceed immediately.
@@ -155,7 +159,7 @@ Spawn the architect sub-agent:
 ```bash
 claude -p --model claude-opus-5-5 --effort xhigh \
   --system-prompt "$(cat .claude/commands/architect.md)" \
-  "Write the technical plan for Linear {LINEAR_ISSUE_ID} to .implement/bal-<NNN>-plan.md. Inputs: the ticket (including its Pre-flight Check), .implement/bal-<NNN>-decisions.md (it overrides the ticket), and .implement/bal-<NNN>-design.md if present. HARD LIMIT: ≤ {PLAN_CAP} lines (see Context budget); run wc -l before finishing. Read all relevant skills before proposing anything. Reply in ≤ 150 words: line count, work packages and order, migration yes/no, open questions."
+  "Write the technical plan for Linear {LINEAR_ISSUE_ID} to .implement/bal-<NNN>-plan.md. Inputs: .implement/bal-<NNN>-ticket.md (the ticket, including its Pre-flight Check), .implement/bal-<NNN>-decisions.md (it overrides the ticket), and .implement/bal-<NNN>-design.md if present. HARD LIMIT: ≤ {PLAN_CAP} lines (see Context budget); run wc -l before finishing. Read all relevant skills before proposing anything. Reply in ≤ 150 words: line count, work packages and order, migration yes/no, open questions."
 ```
 
 **Output:** the plan, written to `.implement/bal-<NNN>-plan.md`.
@@ -180,7 +184,7 @@ claude -p --model claude-opus-5-5 --effort xhigh \
 
 Before Phase 2/3, write `.implement/bal-<NNN>-build-contract.md`. It is shared by the dba, every builder and every fixer, and it contains:
 
-- the reading order: the build contract, the decisions file, then only your own package sections and the AC map in the plan;
+- the reading order: the build contract, the decisions file, then only the plan sections tagged with your package letter, plus the AC map;
 - edit only the files your package Owns, and report rather than edit anything outside them;
 - never `Write` over an existing file (check `git ls-files` first);
 - no git writes except `git mv`, and do mutation proofs with Edit only;
@@ -203,7 +207,7 @@ After each stage, the orchestrator checks the work before starting the next:
 - run `git diff --stat` to catch large deletions in `*.test.*` files;
 - read the one or two files that later packages depend on.
 
-After the last stage, run the integration gates once: a forced full typecheck (`turbo … --force`) and `apps/web/src/invariants`.
+After the last stage, run the integration gates once: a forced full typecheck (`turbo … --force`) and every invariants suite: `apps/web/src/invariants`, `apps/api/src/invariants` and `packages/db/src/invariants`. Those suites only run when someone owns their package, so this pass is the one that catches cross-cutting breaks.
 
 ### Phase 4: UX Validation (if UI changes)
 
@@ -229,7 +233,7 @@ claude -p --model sonnet --effort high \
 
 **Output:** UX verdict with issues or approval.
 
-If CRITICAL issues → back to Phase 3 with fix instructions.
+Findings, CRITICAL included, go into the single fix round after Phase 6. Don't bounce to Phase 3 before all three verdicts are in.
 
 ### Phase 5: Security Audit (always runs)
 
@@ -243,7 +247,7 @@ claude -p --model claude-opus-5-5 --effort xhigh \
 
 **Output:** Security verdict.
 
-If CRITICAL issues → back to Phase 3 with fix instructions.
+Findings, CRITICAL included, go into the single fix round after Phase 6. Don't bounce to Phase 3 before all three verdicts are in.
 
 ### Phase 6: Technical Review (always runs)
 
@@ -285,7 +289,7 @@ claude -p --model sonnet --effort medium \
 - run vitest per package, and run `apps/web` with `TZ=UTC`, split by `src/lib`, `src/components` and `src/app`;
 - read back only the summary and the `Test Files` lines.
 
-`pnpm format:check` will then flag the gitignored `next-env.d.ts` files that the build regenerates. That's a local-only false red; confirm it with `prettier --check` on the staged files.
+`next-env.d.ts`, which the build regenerates, is in the root `.prettierignore`, so `format:check` stays green after a local build.
 
 - If GREEN LIGHT → proceed to Phase 8 (complete)
 - If BLOCKED → attempt to fix blockers yourself (type errors, missing tests). If blockers require implementation changes, go back to Phase 3 (build) with fix instructions. Maximum 1 retry of the pre-pr gate after fixes.

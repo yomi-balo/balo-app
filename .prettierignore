@@ -9,3 +9,4 @@ test-results
 .agents
 # Bundled design exports (inline fonts + base64 assets) — reference artefacts, not source.
 .claude/design-references/*.html
+next-env.d.ts
