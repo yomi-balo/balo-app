@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { ProjectEngagementWithMilestones } from '@balo/db';
 import type { EngagementViewerContext, EngagementLens } from './resolve-engagement-lens';
-import { mapEngagementToWorkspaceView, DELIVERY_QUIET_THRESHOLD_DAYS } from './engagement-view';
+import {
+  mapEngagementToWorkspaceView,
+  offersRatingCard,
+  DELIVERY_QUIET_THRESHOLD_DAYS,
+  type EngagementWorkspaceStatus,
+} from './engagement-view';
 
 // Deterministic "now" — all date math runs under TZ=UTC (see vitest env).
 const NOW = new Date('2026-07-07T00:00:00.000Z');
@@ -897,4 +902,21 @@ describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
       "1 of 1 milestone still to complete before the project can be sent for Northwind Industrial's review."
     );
   });
+});
+
+describe('offersRatingCard', () => {
+  const statuses: EngagementWorkspaceStatus[] = [
+    'active',
+    'pending_acceptance',
+    'completed',
+    'cancelled',
+  ];
+  const lenses: EngagementLens[] = ['client', 'expert', 'admin'];
+
+  it.each(statuses.flatMap((status) => lenses.map((lens) => [status, lens] as const)))(
+    'status=%s lens=%s',
+    (status, lens) => {
+      expect(offersRatingCard(status, lens)).toBe(status === 'completed' && lens === 'client');
+    }
+  );
 });

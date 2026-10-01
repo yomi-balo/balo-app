@@ -2,11 +2,12 @@
 
 import { useCallback, useState } from 'react';
 import { Reveal } from '@/components/balo/engagement/reveal';
+import { RatingBlock } from '@/components/balo/reviews/rating-block';
+import { track, END_OF_CALL_EVENTS } from '@/lib/analytics';
 import type {
   EndOfCallRatingView,
   EndOfCallResolveView,
 } from '@/lib/meetings/end-of-call-view-types';
-import { RatingBlock } from './rating-block';
 import { ResolvePrompt } from './resolve-prompt';
 
 /**
@@ -22,6 +23,12 @@ import { ResolvePrompt } from './resolve-prompt';
  *
  * ⚠⚠ RATING AND RESOLVE LIVE IN **ONE** ISLAND BECAUSE THEY SHARE EXACTLY ONE PIECE OF STATE.
  * The island is the smallest thing that can own `justRated`.
+ *
+ * ⚠⚠ THIS IS THE ONE PLACE `end_of_call_action` FIRES (BAL-587). `RatingBlock` moved to
+ * `components/balo/reviews/` so it could mount at three MORE placements that must NEVER emit
+ * this event; its `onRated` callback now only reports the upsert's `created` flag, and this
+ * island is what turns that flag into `'rated'` / `'rating_revised'` and tracks it, alongside
+ * setting `justRated`.
  *
  * ⚠⚠ NO `router.refresh()` AFTER RATING, DELIBERATELY. The whole point of the rule is that the
  * resolve prompt appears in the SAME PAINT, in context, while the client is still here. A round
@@ -71,7 +78,13 @@ export function RateThenResolve({
 }>): React.JSX.Element {
   const initialRatingExists = rating !== null && rating.state.kind !== 'none';
   const [justRated, setJustRated] = useState(false);
-  const onRated = useCallback(() => setJustRated(true), []);
+  const onRated = useCallback((outcome: { created: boolean }) => {
+    track(END_OF_CALL_EVENTS.ACTION, {
+      action: outcome.created ? 'rated' : 'rating_revised',
+      lens: 'client',
+    });
+    setJustRated(true);
+  }, []);
 
   const ratingExists = initialRatingExists || justRated;
 
@@ -82,6 +95,7 @@ export function RateThenResolve({
           rating={rating}
           counterpartyName={counterpartyName}
           noun={noun}
+          surface="end_of_call"
           onRated={onRated}
         />
       )}

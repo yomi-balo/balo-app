@@ -48,6 +48,7 @@ import { resolveCaseAccess, type CaseAccess } from '@/lib/cases/resolve-case-acc
 import { resolveActorLabel } from '@/lib/cases/actor-attribution';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { deriveConsultationOrdinal } from '@/lib/meetings/derive-consultation-ordinal';
+import { readRatingCard } from '@/lib/reviews/read-rating-card';
 import {
   mapConversationFileRowToView,
   mapMessageRowToView,
@@ -1006,7 +1007,18 @@ export const loadCase = cache(
         canManageReschedule: capabilities.canManageReschedule,
       };
     }
-    return { ...base, lens: 'client', canClose: isOpen, caseScopeDomains };
+    // Gated for every close reason: a case can be closed from the case surface without a
+    // held consultation, so `requireHeldConsultation` is unconditional here rather than
+    // keyed on `closeReason`.
+    const rating = isOpen
+      ? null
+      : await readRatingCard({
+          engagementId,
+          viewerUserId: userId,
+          requireHeldConsultation: true,
+          now,
+        });
+    return { ...base, lens: 'client', canClose: isOpen, caseScopeDomains, rating };
   }
 );
 

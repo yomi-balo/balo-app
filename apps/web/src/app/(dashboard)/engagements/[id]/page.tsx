@@ -5,8 +5,9 @@ import { projectEngagementsRepository, actionItemsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
-import { mapEngagementToWorkspaceView } from '@/lib/engagement/engagement-view';
+import { mapEngagementToWorkspaceView, offersRatingCard } from '@/lib/engagement/engagement-view';
 import { mapActionItemsToView } from '@/lib/engagement/action-items-view';
+import { readRatingCard } from '@/lib/reviews/read-rating-card';
 import {
   trackServerAndFlush,
   ENGAGEMENT_SERVER_EVENTS,
@@ -138,10 +139,24 @@ export default async function EngagementWorkspacePage({
 
   const view = mapEngagementToWorkspaceView(engagement, ctx);
 
-  // Load the engagement's LIVE action items (BAL-391) as a separate read — they are not
-  // on the hydrated engagement graph, so the workspace loader stays a single query — and
-  // map them into the serialisable panel view for the client island.
-  const actionItems = await actionItemsRepository.listByEngagement(engagement.id);
+  // The in-app rating card. `offersRatingCard` is the VIEW decision (completed + client
+  // lens only); the read degrades to `null` on its own, so a fault here never blocks an
+  // otherwise-successful workspace render. No consultation is required for a project
+  // (unlike the case surface / recap): a project can complete with zero consultation calls.
+  // Runs alongside the action-items read below — two independent reads, one round trip.
+  const [rating, actionItems] = await Promise.all([
+    offersRatingCard(engagement.status, ctx.lens)
+      ? readRatingCard({
+          engagementId: engagement.id,
+          viewerUserId: user.id,
+          requireHeldConsultation: false,
+          now: new Date(),
+        })
+      : Promise.resolve(null),
+    // The engagement's LIVE action items (BAL-391) — they are not on the hydrated
+    // engagement graph, so the workspace loader stays a single query.
+    actionItemsRepository.listByEngagement(engagement.id),
+  ]);
   const actionItemsView = mapActionItemsToView(engagement, actionItems, ctx);
 
   // Fire the server-side view event on the authorised path. `after()` is
@@ -165,6 +180,7 @@ export default async function EngagementWorkspacePage({
         view={view}
         initialAction={resolveInitialAction(action)}
         actionItems={actionItemsView}
+        rating={rating}
       />
     </>
   );

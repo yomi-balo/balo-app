@@ -15,9 +15,11 @@ import { codeLinesOf, resolveRouteDir, scanRouteSources } from '@/invariants/_so
  * `expert-end-of-call.tsx` is a delegation: the card body lives in `end-of-call-layout.tsx`,
  * which a two-file scan would never open. Adding `import { RateThenResolve }` plus a
  * `{view.lens === 'client' && …}` to the LAYOUT would leak the island to the expert lens with
- * every other assertion still green. The allow-list is the point: the four modules that may
- * legitimately name the island are the client composition and the three client-only components
- * that ARE it.
+ * every other assertion still green. The allow-list is the point: the three modules that may
+ * legitimately name the island are the client composition and the two client-only components
+ * that remain under THIS route (`rate-then-resolve.tsx`, `resolve-prompt.tsx`) — `RatingBlock`
+ * moved to `components/balo/reviews/` by BAL-587, so a reference to it now shows up here only
+ * as a specifier `rate-then-resolve.tsx` carries, not as a file this scan walks.
  *
  * ⚠ THE READ USES A CWD-CANDIDATE LIST. CI runs web vitest from the REPO ROOT while a developer
  * runs it from `apps/web`; a single cwd-relative path resolves to nothing in one of the two, and
@@ -51,16 +53,11 @@ const FORBIDDEN_NAMES = [
 ] as const;
 
 /**
- * The ONLY modules allowed to name them: the client composition, and the three client-only
- * components that ARE the island. Everything else — the layout, the onward CTA, and both
- * expert-side files — must be incapable of mounting it.
+ * The ONLY modules allowed to name them: the client composition, and the two client-only
+ * components under this route that are part of the island. Everything else — the layout, the
+ * onward CTA, and both expert-side files — must be incapable of mounting it.
  */
-const ALLOWED = new Set([
-  'client-end-of-call.tsx',
-  'rate-then-resolve.tsx',
-  'rating-block.tsx',
-  'resolve-prompt.tsx',
-]);
+const ALLOWED = new Set(['client-end-of-call.tsx', 'rate-then-resolve.tsx', 'resolve-prompt.tsx']);
 
 /**
  * The recap's DISMISSAL model, by name. The end screen's ticket is explicit that ignoring or

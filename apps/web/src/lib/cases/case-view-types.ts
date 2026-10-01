@@ -4,6 +4,7 @@ import type {
   ConversationMessageView,
 } from '@/lib/conversations/conversation-view-types';
 import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
+import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 
 /**
  * BAL-421 — the case surface's single serializable contract. PLAIN TYPES ONLY: no values, no
@@ -458,6 +459,15 @@ export type CaseSurfaceView =
        * ⚠ NEVER AN AUTHORIZATION INPUT. ADR-1038: the scope is computed and stored server-side.
        */
       caseScopeDomains: readonly string[];
+      /**
+       * The in-app rating card's data, or `null` when there is nothing to show: an
+       * OPEN case, or a closed case that never held a consultation (the never-consulted
+       * gate applies to BOTH `resolved` and `auto_inactive`). Resolved by `readRatingCard`
+       * in `load-case.ts`, never derived here.
+       * ⚠ STRUCTURALLY ABSENT FROM THE EXPERT ARM (the `earnings` precedent) — the card is
+       * client-only, so there is no optional field for a bug to populate on the expert side.
+       */
+      rating: EndOfCallRatingView | null;
     })
   | (CaseSurfaceViewBase & {
       lens: 'expert';

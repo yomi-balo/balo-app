@@ -2,10 +2,10 @@
 
 import { useCallback, useState } from 'react';
 import { CircleCheck } from 'lucide-react';
+import { StateSwap } from '@/components/balo/state-swap';
 import { Button } from '@/components/ui/button';
 import type { EndOfCallResolveView } from '@/lib/meetings/end-of-call-view-types';
 import { ResolveDialog } from '../../_components/resolve-dialog';
-import { StateSwap } from './state-swap';
 
 /**
  * BAL-389 — the case-resolution prompt: `ask → confirm → done`, with `acknowledged` as the

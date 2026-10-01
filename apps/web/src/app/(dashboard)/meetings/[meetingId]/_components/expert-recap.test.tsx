@@ -37,6 +37,10 @@ const RESOLVE_PROMPT_NAMES = [
   'wrap-up-card',
   'ResolveDialog',
   'resolve-dialog',
+  'EngagementRatingCard',
+  'engagement-rating-card',
+  'RatingBlock',
+  'rating-block',
 ] as const;
 
 /**
@@ -74,6 +78,13 @@ describe('expert-recap — the resolve prompt is STRUCTURALLY unreachable', () =
     const clientCode = fileNamed('client-recap.tsx');
     expect(clientCode).toContain('ResolvePromptBanner');
     expect(clientCode).toContain('WrapUpCard');
+  });
+
+  it('guards the guard — wrap-up-card.tsx genuinely names EngagementRatingCard', () => {
+    // If this ever goes red, the name changed and the negative assertion below has
+    // quietly become vacuous for the rating card too.
+    const wrapUpCode = fileNamed('wrap-up-card.tsx');
+    expect(wrapUpCode).toContain('EngagementRatingCard');
   });
 
   it('names the resolve prompt in NO file under _components/ except the four that are it', () => {

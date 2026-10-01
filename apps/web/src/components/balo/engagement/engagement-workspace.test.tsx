@@ -6,6 +6,19 @@ import type {
   EngagementWorkspaceView,
   MilestoneNodeView,
 } from '@/lib/engagement/engagement-view';
+import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
+
+// The rating card's `RatingBlock` swaps its own content via `StateSwap`
+// (`motion/react`, `mode="wait"`) — stubbed the same way `engagement-rating-card.test.tsx`
+// stubs it, and `submit-engagement-review` is mocked so rendering the card never pulls
+// its `@balo/db`-reaching Server Action module.
+vi.mock('motion/react', async () => {
+  const { createMotionStub } = await import('@/test/motion-stub');
+  return createMotionStub();
+});
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review', () => ({
+  submitEngagementReviewAction: vi.fn(),
+}));
 
 // Stub the interactive expert rail so this composition test doesn't pull the
 // server-action module graph (@balo/db); its behaviour is covered in
@@ -330,5 +343,43 @@ describe('EngagementWorkspace — state × lens matrix', () => {
     );
     expect(screen.getByText('Oversight')).toBeInTheDocument();
     expect(screen.getByText('Last delivery activity: 2d ago')).toBeInTheDocument();
+  });
+});
+
+describe('EngagementWorkspace — the in-app rating card', () => {
+  const RATING: EndOfCallRatingView = {
+    engagementId: 'eng-1',
+    state: { kind: 'none' },
+    existingBody: null,
+  };
+
+  it('renders the rating card heading after the completed banner when rating is non-null', () => {
+    render(
+      <EngagementWorkspace
+        view={view({
+          status: 'completed',
+          completedBanner: {
+            title: 'Project completed',
+            body: 'The project was accepted automatically.',
+            readyToInvoice: false,
+            clientCta: {
+              nextProjectHref: '/projects/new',
+              messageHref: '/projects/req-1',
+              messagePersonLabel: 'Priya Sharma',
+            },
+          },
+        })}
+        rating={RATING}
+      />
+    );
+    const banner = screen.getByText('Project completed');
+    const heading = screen.getByText('How was working with Priya?');
+    expect(banner.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('renders no rating heading or radio group when rating is omitted', () => {
+    render(<EngagementWorkspace view={view({ status: 'completed' })} />);
+    expect(screen.queryByText(/How was working with/)).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
   });
 });

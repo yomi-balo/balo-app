@@ -2564,6 +2564,19 @@ describe('projectEngagementsRepository.listAcceptedBetween', () => {
     expect(await candidateIds()).not.toContain(seeded.engagement.id);
   });
 
+  it('EXCLUDES an engagement rated from the project workspace — the surface does not matter to suppression', async () => {
+    const seeded = await seedAccepted(ANCHOR);
+    expect(await candidateIds()).toContain(seeded.engagement.id);
+    // A non-owner member, as above; the insert itself proves the label exists in Postgres.
+    const { review } = await reviewFactory({
+      engagement: seeded,
+      values: { surface: 'project_workspace' },
+    });
+
+    expect(review.surface).toBe('project_workspace');
+    expect(await candidateIds()).not.toContain(seeded.engagement.id);
+  });
+
   it('still returns an engagement whose only review is SOFT-DELETED', async () => {
     const seeded = await seedAccepted(ANCHOR);
     await reviewFactory({ engagement: seeded, values: { deletedAt: new Date() } });

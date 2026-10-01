@@ -4,6 +4,7 @@ import { useCallback, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Reveal } from '@/components/balo/engagement/reveal';
+import { EngagementRatingCard } from '@/components/balo/reviews/engagement-rating-card';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { useRefreshOnFocus } from '@/hooks/use-refresh-on-focus';
 import type { CaseConsultationRowView, CaseSurfaceView } from '@/lib/cases/case-view-types';
@@ -556,6 +557,17 @@ export function CaseSurface({
               {view.lens === 'expert' && view.canRequestResolution && (
                 <div className="mt-3">
                   <RequestResolutionButton engagementId={view.engagementId} />
+                </div>
+              )}
+              {view.lens === 'client' && view.rating !== null && (
+                <div className="mt-3">
+                  <EngagementRatingCard
+                    frame="rail"
+                    surface="case_surface"
+                    engagementKind="case"
+                    rating={view.rating}
+                    counterpartyName={counterpartyFirstName}
+                  />
                 </div>
               )}
             </Reveal>

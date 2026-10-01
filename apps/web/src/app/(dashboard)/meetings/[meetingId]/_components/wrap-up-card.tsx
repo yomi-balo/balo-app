@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { CircleCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SectionHead } from '@/components/balo/section/section-states';
+import { EngagementRatingCard } from '@/components/balo/reviews/engagement-rating-card';
 import type { RecapResolveView } from '@/lib/meetings/recap-view-types';
 import { ResolveDialog } from './resolve-dialog';
 
@@ -30,6 +31,10 @@ import { ResolveDialog } from './resolve-dialog';
  * the structural half of the acceptance criterion; a static source-scan test over EVERY file in
  * this directory pins it.
  *
+ * ⚠ `resolve.resolved.rating` renders `EngagementRatingCard` BELOW the review-link line rather
+ * than replacing it — both stay together. `null` — a never-consulted close, or a review read
+ * that failed — renders no card at all.
+ *
  * ⚠ THE CTA IS DELIBERATELY **OUTLINE**, NOT THE PRIMARY GRADIENT. This is an OFFER, not the
  * page main action. Chasing a close is exactly the wrong register, and the reassurance line
  * below says so out loud.
@@ -55,6 +60,17 @@ export function WrapUpCard({
             {resolve.expertShortName}
             {' — two minutes, and only if you feel like it.'}
           </p>
+        )}
+        {resolve.resolved.rating !== null && (
+          <div className="border-border/60 mt-4 border-t pt-4">
+            <EngagementRatingCard
+              frame="none"
+              surface="recap"
+              engagementKind="case"
+              rating={resolve.resolved.rating}
+              counterpartyName={resolve.expertShortName}
+            />
+          </div>
         )}
       </section>
     );

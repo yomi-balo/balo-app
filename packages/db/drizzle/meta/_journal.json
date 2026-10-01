@@ -722,6 +722,13 @@
       "when": 1790456815790,
       "tag": "0102_bal474_credit_session_opened_by",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1790805731942,
+      "tag": "0103_bal587_review_surface_in_app",
+      "breakpoints": true
     }
   ]
 }

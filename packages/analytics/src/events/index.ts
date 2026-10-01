@@ -272,6 +272,10 @@ export {
   type ReviewServerEventMap,
   type ReviewEngagementKind,
   type ReviewWriteProperties,
+  // BAL-587 — the client namespace in this same (mixed) file.
+  REVIEW_EVENTS,
+  type ReviewEventMap,
+  type ReviewPromptSurface,
 } from './review';
 export {
   MEETING_SERVER_EVENTS,

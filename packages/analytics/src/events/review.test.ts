@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { REVIEW_SERVER_EVENTS } from './review';
+import { REVIEW_EVENTS, REVIEW_SERVER_EVENTS } from './review';
 
 describe('REVIEW_SERVER_EVENTS', () => {
   it('exposes exactly the BAL-390 review server events', () => {
@@ -33,5 +33,22 @@ describe('REVIEW_SERVER_EVENTS', () => {
 
   it('splits created from edited, so the write branches stay answerable', () => {
     expect(REVIEW_SERVER_EVENTS.SUBMITTED).not.toBe(REVIEW_SERVER_EVENTS.UPDATED);
+  });
+});
+
+describe('REVIEW_EVENTS (BAL-587 — the client namespace in this file)', () => {
+  it('exposes exactly one client event', () => {
+    expect(Object.keys(REVIEW_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'PROMPT_VIEWED',
+    ]);
+  });
+
+  it('maps the constant to its exact snake_case event name', () => {
+    expect(REVIEW_EVENTS.PROMPT_VIEWED).toBe('review_prompt_viewed');
+  });
+
+  it('prefixes the event with the feature noun, never the BAL-338 collision name', () => {
+    expect(REVIEW_EVENTS.PROMPT_VIEWED.startsWith('review_')).toBe(true);
+    expect(REVIEW_EVENTS.PROMPT_VIEWED).not.toContain('engagement_review');
   });
 });

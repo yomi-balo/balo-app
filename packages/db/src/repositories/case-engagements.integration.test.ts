@@ -892,6 +892,32 @@ describe('caseEngagementsRepository.listClosedBetween', () => {
     expect(ids).toContain(moderated.engagement.id);
   });
 
+  it.each(['case_surface', 'recap'] as const)(
+    'EXCLUDES a closed case rated in-app from surface %s — suppression is surface-agnostic',
+    async (surface) => {
+      const rated = await seedClosed(ANCHOR);
+      expect(await candidateIds()).toContain(rated.engagement.id);
+
+      const reviewer = await userFactory();
+      await companyMemberFactory({ companyId: rated.companyId, userId: reviewer.id });
+      // The insert itself proves the label exists in Postgres.
+      const [review] = await db
+        .insert(reviews)
+        .values({
+          engagementId: rated.engagement.id,
+          reviewerUserId: reviewer.id,
+          expertProfileId: rated.expertProfileId,
+          rating: 4,
+          surface,
+          authMethod: 'session',
+        })
+        .returning();
+
+      expect(review?.surface).toBe(surface);
+      expect(await candidateIds()).not.toContain(rated.engagement.id);
+    }
+  );
+
   it('NEVER returns a project engagement — the scan is child-rooted', async () => {
     const project = await engagementFactory({
       projectValues: {

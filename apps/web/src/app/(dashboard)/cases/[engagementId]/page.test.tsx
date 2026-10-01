@@ -173,6 +173,7 @@ const CLIENT_VIEW: CaseSurfaceView = {
   lens: 'client',
   canClose: true,
   caseScopeDomains: [],
+  rating: null,
 };
 
 const EXPERT_VIEW: CaseSurfaceView = {

@@ -119,6 +119,9 @@ vi.mock('@/lib/analytics', async () => {
     // in for `@/lib/analytics`, the client barrel (memory
     // `reference_web_analytics_test_mock_export_list`).
     END_OF_CALL_EVENTS: events.END_OF_CALL_EVENTS,
+    // BAL-587 — the in-app rating card's CLIENT event. `REVIEW_SERVER_EVENTS` must never join
+    // this list — this mock stands in for `@/lib/analytics`, the client barrel.
+    REVIEW_EVENTS: events.REVIEW_EVENTS,
     WALLET_EVENTS: events.WALLET_EVENTS,
     SCHEDULE_EVENTS: events.SCHEDULE_EVENTS,
     MEETING_CALL_EVENTS: events.MEETING_CALL_EVENTS,

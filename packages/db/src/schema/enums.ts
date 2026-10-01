@@ -1047,11 +1047,23 @@ export const scheduledNotificationModeEnum = pgEnum('scheduled_notification_mode
  * BAL-390 — WHERE the review was captured.
  *   `end_of_call` — the in-app post-call control (BAL-389 mounts it; BAL-390 ships only
  *                   the pure resolver + the submit action + the reader).
- *   `recap`       — BAL-388's recap surface. DECLARED, NO PRODUCER: shipping the label
- *                   now means the recap capture path never needs an ALTER TYPE … ADD VALUE.
+ *   `recap`       — BAL-388's recap surface. Produced by BAL-587: the in-app rating card
+ *                   inside the recap's wrap-up card once the case is closed.
  *   `email`       — the magic-link landing form.
+ *   `project_workspace` — BAL-587: the rating card on a completed project's workspace.
+ *   `case_surface`      — BAL-587: the rating card on a closed case's surface rail. Unrelated
+ *                         to the same-named `RecapEntrySource` and case-close `source` values.
+ *
+ * APPEND-ONLY: Postgres enum values are added with `ALTER TYPE … ADD VALUE` and never
+ * reordered or removed.
  */
-export const reviewSurfaceEnum = pgEnum('review_surface', ['end_of_call', 'recap', 'email']);
+export const reviewSurfaceEnum = pgEnum('review_surface', [
+  'end_of_call',
+  'recap',
+  'email',
+  'project_workspace',
+  'case_surface',
+]);
 
 /**
  * BAL-390 — HOW the writer authenticated.

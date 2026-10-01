@@ -3,7 +3,14 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { REVIEW_BODY_MAX, RATING_MAX, RATING_MIN, isRating } from '@balo/shared/reviews';
+import {
+  IN_APP_REVIEW_SURFACES,
+  REVIEW_BODY_MAX,
+  RATING_MAX,
+  RATING_MIN,
+  isRating,
+  type InAppReviewSurface,
+} from '@balo/shared/reviews';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { checkMemoryLimit } from '@/lib/rate-limit/memory-window';
 import {
@@ -27,8 +34,11 @@ import { applyReview } from '@/app/review/_actions/review-write-shared';
  * this must never join.
  *
  * ⚠ `surface` IS A PARAMETER, not a constant, and that is the whole point of the seam:
- * BAL-389 mounts the end-of-call control and passes `'end_of_call'`; BAL-388's recap
- * surface passes `'recap'` and needs no change here. `'email'` is deliberately NOT
+ * BAL-389 mounts the end-of-call control and passes `'end_of_call'`; BAL-587 adds three more
+ * in-app producers — the recap wrap-up card (`'recap'`), the project workspace
+ * (`'project_workspace'`) and the case rail (`'case_surface'`) — and none of them need a
+ * change here. The Zod enum is `IN_APP_REVIEW_SURFACES`, so a fifth in-app surface is a
+ * one-line change in `@balo/shared/reviews`, not here. `'email'` is deliberately NOT
  * accepted — that surface is the magic-link landing, which authenticates by token.
  *
  * ⚠ IDOR-SAFE WITHOUT A LENS LOOKUP: the only identity the caller supplies is the
@@ -83,7 +93,7 @@ const submitEngagementReviewSchema = z
     engagementId: z.uuid(),
     rating: z.number().int().min(RATING_MIN).max(RATING_MAX),
     body: z.string().trim().max(REVIEW_BODY_MAX).optional(),
-    surface: z.enum(['end_of_call', 'recap']),
+    surface: z.enum(IN_APP_REVIEW_SURFACES),
   })
   .strict();
 
@@ -91,7 +101,7 @@ export interface SubmitEngagementReviewInput {
   engagementId: string;
   rating: number;
   body?: string;
-  surface: 'end_of_call' | 'recap';
+  surface: InAppReviewSurface;
 }
 
 export type SubmitEngagementReviewResult =

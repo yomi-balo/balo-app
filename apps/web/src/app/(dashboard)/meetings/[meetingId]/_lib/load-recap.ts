@@ -24,6 +24,7 @@ import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
 import { formatLongUtc } from '@/lib/format/utc-date';
 import { log } from '@/lib/logging';
 import { fetchSessionMoneyBlock } from '@/lib/api/session-money-block';
+import { readRatingCard } from '@/lib/reviews/read-rating-card';
 import { durationMinutesOf } from '@/lib/meetings/meeting-duration';
 import { resolveRecapAccess, type RecapAccess } from '@/lib/meetings/resolve-recap-access';
 import type {
@@ -205,13 +206,21 @@ async function resolveTitle(
  * SKIPS the token when this reviewer already rated this expert on this engagement, and an
  * `auto_inactive` close mints none at all — so both the dialog fact and the success line are
  * keyed on the same read rather than promising an email that will not come.
+ *
+ * ⚠⚠ `rating` IS GATED THE SAME WAY FOR **BOTH** CLOSE REASONS. The case-surface
+ * `resolve-case.ts` closes a `resolved` case with `canClose: isOpen`, with no check that a
+ * consultation ever happened. `readRatingCard` is called with `requireHeldConsultation: true`
+ * on both branches of `closedAt != null`, reusing the sweep's own "consulted" check rather
+ * than writing a second one.
  */
 async function resolveResolveView(
   contextId: string,
   caseRow: CaseEngagementRow | undefined,
   isCase: boolean,
   labels: CounterpartyLabels,
-  alreadyReviewed: boolean
+  alreadyReviewed: boolean,
+  userId: string,
+  now: Date
 ): Promise<RecapResolveView> {
   const base = {
     engagementId: contextId,
@@ -229,6 +238,12 @@ async function resolveResolveView(
       requesterLabel: null,
       resolved: {
         reviewLinkSent: caseRow.closeReason !== 'auto_inactive' && !alreadyReviewed,
+        rating: await readRatingCard({
+          engagementId: contextId,
+          viewerUserId: userId,
+          requireHeldConsultation: true,
+          now,
+        }),
       },
     };
   }
@@ -522,7 +537,9 @@ export const loadRecap = cache(
         caseRow,
         isCase,
         labels,
-        alreadyReviewed
+        alreadyReviewed,
+        userId,
+        now
       ),
     };
   }
