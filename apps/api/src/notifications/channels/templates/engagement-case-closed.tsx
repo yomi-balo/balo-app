@@ -20,10 +20,12 @@ import { ReviewAskBlock } from './review-ask-block.js';
  * — both real emails to a real client.
  *
  * `reviewToken` ABSENT ⇒ the star block is omitted ENTIRELY — not greyed, gone. For a
- * `resolved` close, absent means already rated, and it is replaced by one short
- * thank-you line (the rating was captured at end-of-call and the client is never chased
- * for it); for an `auto_inactive` close with no token, NO rating content renders at all —
- * there was never a rating occasion to thank, and the +24h nudge (BAL-390) asks separately.
+ * `resolved` close with consultations, absent means already rated, and it is replaced by one
+ * short thank-you line (the rating was captured at end-of-call and the client is never chased
+ * for it). A `resolved` close with `consultationCount: 0` (the case surface can close a case
+ * before any consultation) mints no token because there is nothing to rate — it renders NO
+ * rating content and no "worked through it" clause. Same for an `auto_inactive` close with
+ * no token: there was never a rating occasion to thank, and the +24h nudge asks separately.
  *
  * TONE (BAL-329, binding): warm and properly-closed-off, never a reprimand. The
  * `auto_inactive` variant states the rule as a plain fact ("has had no consultations,
@@ -70,6 +72,8 @@ export function CaseClosedEmail({
   const autoClosed = closeReason === 'auto_inactive';
   const consultations = consultationClause(consultationCount);
   const neverConsulted = consultations === '';
+  // A KNOWN zero, not an absent count: every resolved publisher sends `consultationCount`.
+  const resolvedWithoutConsultation = !autoClosed && consultationCount === 0;
   const heroTitle = heroTitleOr(caseTitle, 'Your case');
 
   let lead: ReactNode;
@@ -88,6 +92,13 @@ export function CaseClosedEmail({
         {CASE_INACTIVITY_DAYS} days, so we closed it out on {closedDate} rather than leave it
         hanging. You worked through it with {expertParty}
         {consultations}, and everything from it stays exactly where it is.
+      </>
+    );
+  } else if (resolvedWithoutConsultation) {
+    lead = (
+      <>
+        That&apos;s <strong>{caseTitle}</strong> wrapped up — we closed the case out on {closedDate}
+        , and everything from it stays exactly where it is.
       </>
     );
   } else {
@@ -109,7 +120,7 @@ export function CaseClosedEmail({
         promptLine={`How was your consultation with ${expertParty}?`}
       />
     );
-  } else if (closeReason === 'resolved') {
+  } else if (closeReason === 'resolved' && !resolvedWithoutConsultation) {
     reviewSection = (
       <Text style={reviewStyles.ctaSubline}>
         Thanks for rating this one already — that is genuinely useful to the next client.

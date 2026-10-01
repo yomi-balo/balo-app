@@ -489,6 +489,34 @@ describe('engagement-case-closed-client — the fused close email', () => {
     expect(html).not.toContain('quiet');
   });
 
+  /**
+   * The case surface can close a case before any consultation, and `resolve-case` then mints
+   * no token. A missing token on a resolved close must NOT read as "already rated".
+   */
+  it('a resolved close with consultationCount 0 and no token asks nothing and thanks for nothing', async () => {
+    const html = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'resolved', consultationCount: 0, reviewToken: undefined })
+    );
+    expect(html).not.toContain('/review/');
+    expect(html).not.toContain(STAR);
+    expect(html).not.toContain('Thanks for rating');
+    expect(html).not.toContain('worked through it');
+    expect(html).toContain(
+      'wrapped up — we closed the case out on 3 Aug, and everything from it stays exactly where it is.'
+    );
+  });
+
+  it('a CONSULTED resolved close with no token still thanks for the existing rating', async () => {
+    const html = await renderCopy(
+      'engagement-case-closed-client',
+      caseClosedData({ closeReason: 'resolved', consultationCount: 2, reviewToken: undefined })
+    );
+    expect(html).toContain('Thanks for rating this one already');
+    expect(html).toContain('worked through it with CloudPeak Consulting');
+    expect(html).toContain('across 2 consultations');
+  });
+
   it('keeps "worked through it" on an auto_inactive close with a real count', async () => {
     const html = await renderCopy(
       'engagement-case-closed-client',
