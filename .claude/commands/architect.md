@@ -58,9 +58,29 @@ The project has skill files in `.claude/skills/` that define Balo-specific patte
 
 4. **Flag decisions that need an ADR** if the feature introduces new architectural patterns not covered by existing skills or CLAUDE.md.
 
+5. **Respect the length budget** (below). Run `wc -l` on the plan before you finish, and report the final count.
+
+## Length Budget
+
+Every downstream agent re-reads this plan: the DBA, each builder, each reviewer and each fixer. Plans that ran to 1,150–1,875 lines needed chunked reads, which made each agent's context balloon. Aim for a plan that is short, precise and cited.
+
+- **Hard cap: the number in the orchestrator's prompt.** If the prompt gives none, use about 120 lines for a copy-only change or simple bug, 250 by default, and 350 for a large ticket (more than about 80 files or about 8 work packages). If you are over the cap, cut and check again. On a large ticket, you may instead keep the main plan at 250 and put per-package detail in `bal-<NNN>-plan-wp-<X>.md` appendices, each read only by that package's builder.
+- **Use prose rather than code.** A code block is allowed only when it is shorter than the prose would be: a type signature, an enum value list, a props interface, a config row. Never write component bodies, test bodies or migration SQL.
+- **Don't restate the ticket.** Downstream agents can read it. Cite it by section instead ("per What-to-build §5"). Restate only a decision that changes how something is built.
+- **Cite `file:line`** for every existing symbol, pattern or precedent you depend on, so builders don't have to search again.
+- **Collapse empty sections to one line** ("Notification Events: none, per the ticket"). Don't keep template headings that carry no content.
+- **Tests: name the assertion, not the code.** For example: "an `auto_inactive` case with no held consultation → `rating: null`".
+
 ## Output Format
 
-Write the plan as a structured markdown document. Be specific — file paths, function signatures, type names. The builder agent will implement this plan literally, so ambiguity causes problems.
+Write the plan as a structured markdown document. Be specific: give file paths, function signatures and type names. Builders implement the plan literally, so ambiguity causes problems. Write the plan within the length budget.
+
+**Tag every detail section with its work package.** Prefix each heading with the letter of the package that owns it, for example `### [B] API Contracts — submit action`, and split a layer section by package when it spans several. Builders read only the sections carrying their letter. An untagged section is read by everyone, so keep shared sections rare and short.
+
+Every plan must include these two sections, even when they are brief:
+
+- **Work Packages.** Group the changes into packages. Give each package a **disjoint "Owns" file list**, so that no file is owned by two packages, and show the dependency order between them. Say which packages are type-coupled and must land together. This lets several builders work in parallel in one worktree, and lets fix rounds be split by path.
+- **Test / AC map.** Map each acceptance criterion to the test or tests that prove it.
 
 ```markdown
 # Technical Plan: {Feature Name}
@@ -87,6 +107,21 @@ One paragraph summary of what this feature does.
 
 - `apps/api/src/routes/index.ts` — Register new route
 - etc.
+
+## Work Packages
+
+| Pkg | Owns (disjoint)          | Depends on |
+| --- | ------------------------ | ---------- |
+| A   | `packages/db/...` (list) | —          |
+| B   | `apps/web/...` (list)    | A          |
+
+Note any type-coupled packages that must land together.
+
+## Test / AC Map
+
+| AC  | Proving test(s)                 |
+| --- | ------------------------------- |
+| 1   | `foo.test.ts`: asserts X when Y |
 
 ## Data Model
 
@@ -157,6 +192,7 @@ so they are not missed when tickets are created.
 2. Always check what already exists before creating new abstractions
 3. Prefer composition of existing components over new ones
 4. If the feature touches auth, payments, or data — explicitly reference the governing skill
-5. The plan must be implementable by someone who has never seen the PRD — all context must be in the plan
-6. If the plan introduces new files in `packages/db/src/repositories/`, include a "Testing Requirements" section in the plan output listing each file. These require companion integration test Linear tasks — do not omit them.
-7. If the feature triggers any action that should inform another user (booking, payment, status change, application submitted, etc.), include a "Notification Events" section and read the `notification-engine` skill. Feature code must never send email or SMS directly.
+5. A builder must be able to implement the plan without re-deriving any decision. Every _decision_ and every dependency on existing code (cited with `file:line`) belongs in the plan. Background, rationale and the ticket's wording do not; cite the ticket for those.
+6. Stay within the **Length Budget**: the cap set in the brief, or the size-based default, checked with `wc -l`.
+7. If the plan introduces new files in `packages/db/src/repositories/`, include a "Testing Requirements" section in the plan output listing each file. These require companion integration test Linear tasks — do not omit them.
+8. If the feature triggers any action that should inform another user (booking, payment, status change, application submitted, etc.), include a "Notification Events" section and read the `notification-engine` skill. Feature code must never send email or SMS directly.
