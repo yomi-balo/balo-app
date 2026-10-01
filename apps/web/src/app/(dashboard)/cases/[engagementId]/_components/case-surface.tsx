@@ -113,7 +113,7 @@ function focusRowTrigger(
   selection: ConsultationActionSelection | null,
   focusTrigger: (meetingId: string, slot?: ConsultationRowTriggerSlot) => void
 ): void {
-  if (selection === null || selection.source !== 'row') return;
+  if (selection?.source !== 'row') return;
   focusTrigger(selection.meetingId, selection.verb === 'invite' ? selection.triggerSlot : 'menu');
 }
 
@@ -210,7 +210,7 @@ export function CaseSurface({
       : (view.consultations.find((row) => row.meetingId === nudgeMeetingId) ?? null);
 
   const handleOpenReschedule = useCallback(() => {
-    if (view.nudge === null || view.nudge.kind !== 'upcoming') return;
+    if (view.nudge?.kind !== 'upcoming') return;
     setSelection({
       verb: 'reschedule',
       source: 'nudge',
@@ -223,7 +223,7 @@ export function CaseSurface({
   }, [view.nudge, nudgeRow]);
 
   const handleOpenPropose = useCallback(() => {
-    if (view.nudge === null || view.nudge.kind !== 'upcoming') return;
+    if (view.nudge?.kind !== 'upcoming') return;
     setSelection({
       verb: 'propose',
       source: 'nudge',

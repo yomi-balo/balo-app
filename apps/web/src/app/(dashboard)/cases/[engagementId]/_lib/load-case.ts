@@ -763,7 +763,7 @@ export const loadCase = cache(
     const invitableMeetingIds = derivedStates
       .filter((row) => caseConsultationIsUpcoming(row.state))
       .map((row) => row.meetingId);
-    const [guestCountRows, caseScopeDomains] = await Promise.all([
+    const [guestCountRows, caseScopeDomains, rating] = await Promise.all([
       invitableMeetingIds.length === 0
         ? Promise.resolve<Array<{ meetingId: string; count: number }>>([])
         : meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds),
@@ -785,6 +785,12 @@ export const loadCase = cache(
             .listByParty('company', companyId)
             .then((rows) => rows.map((row) => row.domain))
         : Promise.resolve<string[]>([]),
+      // Gated for every close reason: a case can be closed from the case surface without a
+      // held consultation, so `requireHeldConsultation` is unconditional rather than keyed on
+      // `closeReason`. Client lens only — the expert arm carries no `rating`.
+      lens === 'client' && caseRow.closedAt !== null
+        ? readRatingCard({ engagementId, viewerUserId: userId, requireHeldConsultation: true, now })
+        : Promise.resolve(null),
     ]);
     const guestCountByMeetingId = new Map(guestCountRows.map((row) => [row.meetingId, row.count]));
 
@@ -1007,17 +1013,6 @@ export const loadCase = cache(
         canManageReschedule: capabilities.canManageReschedule,
       };
     }
-    // Gated for every close reason: a case can be closed from the case surface without a
-    // held consultation, so `requireHeldConsultation` is unconditional here rather than
-    // keyed on `closeReason`.
-    const rating = isOpen
-      ? null
-      : await readRatingCard({
-          engagementId,
-          viewerUserId: userId,
-          requireHeldConsultation: true,
-          now,
-        });
     return { ...base, lens: 'client', canClose: isOpen, caseScopeDomains, rating };
   }
 );
