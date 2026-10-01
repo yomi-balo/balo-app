@@ -368,6 +368,26 @@ describe('resolveCaseAction (case surface) — the review ask degrades, never bl
     expect(mockFindLiveReview).toHaveBeenCalledWith(ENGAGEMENT_ID, USER_ID, PROFILE_ID);
   });
 
+  /**
+   * Zero held consultations means nothing to rate — the gate must skip the mint entirely,
+   * not just let it run and discard the result, so `findLive` and `create` are never called.
+   */
+  it('skips the mint entirely when NOTHING was held — the published reviewToken is undefined', async () => {
+    seed({ siblings: [] });
+    await resolveCaseAction(INPUT);
+    expect(mockFindLiveReview).not.toHaveBeenCalled();
+    expect(mockCreateToken).not.toHaveBeenCalled();
+    expect(publishedPayload().reviewToken).toBeUndefined();
+  });
+
+  it('mints normally once at least one consultation was held', async () => {
+    seed({ siblings: [sibling('m1')] });
+    await resolveCaseAction(INPUT);
+    expect(mockFindLiveReview).toHaveBeenCalledWith(ENGAGEMENT_ID, USER_ID, PROFILE_ID);
+    expect(mockCreateToken).toHaveBeenCalledTimes(1);
+    expect(typeof publishedPayload().reviewToken).toBe('string');
+  });
+
   it('never logs the raw token or its hash on the success path', async () => {
     await resolveCaseAction(INPUT);
     const token = publishedPayload().reviewToken as string;

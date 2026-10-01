@@ -456,10 +456,43 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
       resolutionRequestedByUserId: null,
     });
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens === 'client' && view.resolve.variant).toBe('none');
+  });
+
+  it('promises NO review email for a CLOSED resolved case with no held consultation', async () => {
+    m.findCase.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      title: 'Flow interview loop',
+      closedAt: new Date('2026-07-30T00:00:00Z'),
+      closeReason: 'resolved',
+      resolutionRequestedAt: null,
+      resolutionRequestedByUserId: null,
+    });
+    // Default seed: readRatingCard resolves null — the case-surface close needs no held
+    // consultation, so the case-surface "Mark resolved" never minted a token here either.
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
     expect(view?.lens === 'client' && view.resolve.resolved).toEqual({
-      reviewLinkSent: true,
+      reviewLinkSent: false,
       rating: null,
     });
+  });
+
+  it('sends the review link for a CONSULTED, not-yet-reviewed resolved case', async () => {
+    m.findCase.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      title: 'Flow interview loop',
+      closedAt: new Date('2026-07-30T00:00:00Z'),
+      closeReason: 'resolved',
+      resolutionRequestedAt: null,
+      resolutionRequestedByUserId: null,
+    });
+    mockReadRatingCard.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      state: { kind: 'none' },
+      existingBody: null,
+    });
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens === 'client' && view.resolve.resolved?.reviewLinkSent).toBe(true);
   });
 
   it('promises NO review email when this reviewer already rated this expert', async () => {

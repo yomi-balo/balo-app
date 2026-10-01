@@ -112,13 +112,19 @@ export async function resolveCaseAction(input: {
     // id, and never pick "the most recent meeting".
     const { heldCount, anchorMeetingId } = await readCloseAnchors(engagementId);
 
-    const reviewToken = await resolveReviewAsk(
-      engagementId,
-      expertProfileId,
-      // The RESOLVING member IS the reviewer — the same subject `reviewsRepository.findLive`
-      // is asked about, and the same person `recipientId` names.
-      user.id
-    );
+    // Zero held consultations means nothing to rate: skip the mint so the close email's
+    // template sees no token and renders no star row, rather than asking about a call that
+    // never happened.
+    const reviewToken =
+      heldCount > 0
+        ? await resolveReviewAsk(
+            engagementId,
+            expertProfileId,
+            // The RESOLVING member IS the reviewer — the same subject `reviewsRepository.findLive`
+            // is asked about, and the same person `recipientId` names.
+            user.id
+          )
+        : undefined;
     await publishCaseClosed({
       engagementId,
       meetingId: anchorMeetingId,

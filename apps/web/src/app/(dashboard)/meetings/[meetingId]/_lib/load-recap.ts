@@ -237,7 +237,10 @@ async function resolveResolveView(
       variant: 'none',
       requesterLabel: null,
       resolved: {
-        reviewLinkSent: caseRow.closeReason !== 'auto_inactive' && !alreadyReviewed,
+        // `rating` is read with `requireHeldConsultation: true`, so `null` also covers a
+        // held consultation whose read degraded — either way it only hides the sentence.
+        reviewLinkSent:
+          caseRow.closeReason !== 'auto_inactive' && !alreadyReviewed && rating !== null,
         rating,
       },
     };
