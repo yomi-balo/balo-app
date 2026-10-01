@@ -7,6 +7,7 @@ import type {
   CaseFileRowView,
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
+import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { PEOPLE_CARD_CLIENT_DISCLOSURE, PEOPLE_CARD_NARROW_DISCLOSURE } from './case-people-card';
 
@@ -233,6 +234,12 @@ vi.mock('../_actions/request-case-file-upload', () => ({ requestCaseFileUploadAc
 vi.mock('../_actions/confirm-case-file-upload', () => ({ confirmCaseFileUploadAction: vi.fn() }));
 vi.mock('../_actions/get-case-file-download', () => ({ getCaseFileDownloadAction: vi.fn() }));
 
+// `RatingBlock` (mounted via `EngagementRatingCard`) imports this action directly;
+// out of scope for this composition test, the same reason the four dialogs above are stubbed.
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review', () => ({
+  submitEngagementReviewAction: vi.fn(),
+}));
+
 import { CaseSurface } from './case-surface';
 
 const BASE = {
@@ -298,6 +305,7 @@ function clientView(over: Record<string, unknown> = {}): CaseSurfaceView {
     lens: 'client',
     canClose: true,
     caseScopeDomains: [],
+    rating: null,
     ...over,
   } as CaseSurfaceView;
 }
@@ -490,6 +498,52 @@ describe('CaseSurface — the CLIENT lens gets the close, and never the ask', ()
       .queryAllByRole('button')
       .filter((button) => button.hasAttribute('disabled'));
     expect(disabled.map((button) => button.textContent ?? '').join(' ')).not.toMatch(MARK_RESOLVED);
+  });
+});
+
+/**
+ * The in-app rating card on the case rail. `canClose` and a non-null `rating` are
+ * mutually exclusive by construction (`load-case.ts`: `rating` is only ever non-null on a
+ * CLOSED case), so the card and "Mark resolved" never render together in practice; these tests
+ * still exercise both flags independently, matching what the VIEW TYPE actually allows.
+ */
+describe('CaseSurface — the in-app rating card', () => {
+  const RATING: EndOfCallRatingView = {
+    engagementId: ENGAGEMENT_ID,
+    state: { kind: 'none' },
+    existingBody: null,
+  };
+
+  it('shows the rating card on a CLOSED client view with a rating, and no "Mark resolved"', () => {
+    const view = clientView({
+      canClose: false,
+      header: { ...BASE.header, isOpen: false, closeReason: 'resolved' },
+      rating: RATING,
+    });
+    render(<CaseSurface view={view} />);
+    expect(screen.getByText('Your rating')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: MARK_RESOLVED })).not.toBeInTheDocument();
+  });
+
+  it('shows NO rating card on a CLOSED client view with `rating: null`', () => {
+    const view = clientView({
+      canClose: false,
+      header: { ...BASE.header, isOpen: false, closeReason: 'resolved' },
+      rating: null,
+    });
+    const { container } = render(<CaseSurface view={view} />);
+    expect(screen.queryByText('Your rating')).not.toBeInTheDocument();
+    expect(container.textContent ?? '').not.toMatch(/how was working with/i);
+  });
+
+  it('never shows the rating card on the EXPERT lens, closed or not', () => {
+    const view = expertView({
+      header: { ...BASE.header, isOpen: false, closeReason: 'resolved' },
+      canRequestResolution: false,
+    });
+    const { container } = render(<CaseSurface view={view} />);
+    expect(screen.queryByText('Your rating')).not.toBeInTheDocument();
+    expect(container.textContent ?? '').not.toMatch(/how was working with/i);
   });
 });
 

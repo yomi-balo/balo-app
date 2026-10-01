@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  IN_APP_REVIEW_SURFACES,
   LOW_RATING_THRESHOLD,
   RATING_LABELS,
   RATING_MAX,
@@ -14,6 +15,7 @@ import {
   quantiseNudgeTick,
   resolveEndOfCallReviewState,
   reviewNudgeBands,
+  type InAppReviewSurface,
   type Rating,
   type ReviewNudgeBand,
   type ReviewNudgeStep,
@@ -52,6 +54,28 @@ describe('constants (D2 — typed consts, NOT platform config)', () => {
     expect(Object.keys(RATING_LABELS).map(Number).sort()).toEqual(ratings);
     for (const rating of ratings) {
       expect(RATING_LABELS[rating].trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('IN_APP_REVIEW_SURFACES (BAL-587)', () => {
+  it('pins the exact four in-app surfaces, in order', () => {
+    expect(IN_APP_REVIEW_SURFACES).toEqual([
+      'end_of_call',
+      'recap',
+      'project_workspace',
+      'case_surface',
+    ]);
+  });
+
+  it('excludes email — that surface authenticates by token, not by session', () => {
+    expect(IN_APP_REVIEW_SURFACES).not.toContain('email');
+  });
+
+  it('every member is assignable to InAppReviewSurface', () => {
+    for (const surface of IN_APP_REVIEW_SURFACES) {
+      const narrowed: InAppReviewSurface = surface;
+      expect(IN_APP_REVIEW_SURFACES).toContain(narrowed);
     }
   });
 });

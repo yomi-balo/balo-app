@@ -1,5 +1,7 @@
 import type { EngagementWorkspaceView } from '@/lib/engagement/engagement-view';
 import type { ActionItemsPanelView } from '@/lib/engagement/action-items-view';
+import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
+import { EngagementRatingCard } from '@/components/balo/reviews/engagement-rating-card';
 import { Reveal } from './reveal';
 import { EngagementHeader } from './engagement-header';
 import { ReviewBanner } from './review-banner';
@@ -21,6 +23,13 @@ interface EngagementWorkspaceProps {
   initialAction?: ReviewInitialAction | null;
   /** BAL-391 — the action-items panel view; omitted (undefined) → the section is skipped. */
   actionItems?: ActionItemsPanelView;
+  /**
+   * BAL-587 — the in-app rating card's data, or `null` when there's nothing to show (an
+   * expert/admin view, a non-completed status, or the loader's own never-consulted /
+   * degrade-on-error branches). `offersRatingCard` on the server decides whether this is
+   * ever non-null; this component does no lens or status check of its own.
+   */
+  rating?: EndOfCallRatingView | null;
 }
 
 /**
@@ -40,6 +49,7 @@ export function EngagementWorkspace({
   view,
   initialAction = null,
   actionItems,
+  rating = null,
 }: Readonly<EngagementWorkspaceProps>): React.JSX.Element {
   // Render the action-items panel only when it has something to show — live items OR a
   // writable (active) engagement inviting the first add. A read-only, empty panel is
@@ -109,6 +119,18 @@ export function EngagementWorkspace({
       {view.completedBanner !== null && (
         <Reveal delay={0.05}>
           <CompletedBanner banner={view.completedBanner} engagementId={view.engagementId} />
+        </Reveal>
+      )}
+
+      {rating !== null && (
+        <Reveal delay={0.08}>
+          <EngagementRatingCard
+            frame="section"
+            surface="project_workspace"
+            engagementKind="project"
+            rating={rating}
+            counterpartyName={view.parties.expertPersonShort}
+          />
         </Reveal>
       )}
 

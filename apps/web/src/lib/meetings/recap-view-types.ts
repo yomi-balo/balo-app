@@ -8,6 +8,7 @@ import type {
 } from '@balo/analytics/events';
 import type { MeetingFileView } from './meeting-file-view-types';
 import type { ActionItemsPanelView } from '@/lib/engagement/action-items-view';
+import type { EndOfCallRatingView } from './end-of-call-view-types';
 
 /**
  * BAL-388 — the recap page's single serializable contract. PLAIN TYPES ONLY: no values, no
@@ -245,6 +246,14 @@ export interface RecapResolvedView {
    * it so the page never confirms an email that was never sent.
    */
   reviewLinkSent: boolean;
+  /**
+   * The in-app rating card's data, or `null`. Populated by `readRatingCard` with
+   * `requireHeldConsultation: true` for BOTH close reasons (a `resolved` case-surface close
+   * can still have zero held consultations, so this is never gated on `closeReason` alone). The
+   * wrap-up card renders it below the "We have emailed you a short review link" line — both
+   * lines stay.
+   */
+  rating: EndOfCallRatingView | null;
 }
 
 export interface RecapResolveView {

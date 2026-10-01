@@ -38,6 +38,9 @@ export {
   CASE_BILLING_EVENTS,
   RECAP_EVENTS,
   END_OF_CALL_EVENTS,
+  // BAL-587 — the in-app rating card's client event. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a
+  // name here fails in a DIFFERENT package (`apps/web` cannot import it), not in this one.
+  REVIEW_EVENTS,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
   MEETING_CALL_EVENTS,

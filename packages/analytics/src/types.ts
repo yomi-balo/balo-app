@@ -41,7 +41,7 @@ import type { MeetingCallEventMap } from './events/meeting-call';
 import type { MeetingPanelEventMap } from './events/meeting-panel';
 import type { TranscriptServerEventMap } from './events/transcript';
 import type { RecordingServerEventMap } from './events/recording';
-import type { ReviewServerEventMap } from './events/review';
+import type { ReviewServerEventMap, ReviewEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
@@ -134,7 +134,11 @@ export type AllEvents = AuthEventMap &
   AdminCaptureHealthEventMap &
   // BAL-566 — the dashboard "Up next" card's CLIENT family. `UpNextCard` (apps/web) is the ONE
   // dispatch point; no server events (read-only surface).
-  DashboardEventMap;
+  DashboardEventMap &
+  // BAL-587 — the in-app rating card's CLIENT family. `EngagementRatingCard` (apps/web) is the
+  // ONE dispatch point. `ReviewServerEventMap` (the write/nudge events) stays in `ServerEvents`
+  // below; the two must never cross.
+  ReviewEventMap;
 
 export type EventName = keyof AllEvents;
 

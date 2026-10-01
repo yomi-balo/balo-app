@@ -128,6 +128,14 @@ vi.mock('@/lib/realtime/ably-server', () => ({
   isRealtimeConfigured: () => mockIsRealtimeConfigured(),
 }));
 
+// The rating-card read is a SEPARATE seam from everything above: this file proves
+// only WHEN `loadCase` calls it and with WHAT arguments, never its own internal
+// branching (that's `read-rating-card.test.ts`'s job).
+const mockReadRatingCard = vi.fn();
+vi.mock('@/lib/reviews/read-rating-card', () => ({
+  readRatingCard: (...a: unknown[]) => mockReadRatingCard(...a),
+}));
+
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import { loadCase } from './load-case';
 import { log } from '@/lib/logging';
@@ -247,6 +255,7 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.countsLiveByMeetingIds.mockResolvedValue([]);
   m.listPartyDomains.mockResolvedValue([]);
   m.factsByMeetingIds.mockResolvedValue(new Map());
+  mockReadRatingCard.mockResolvedValue(null);
 }
 
 /** Load and assert non-null, so each test can read the view without re-narrowing. */
@@ -2248,5 +2257,91 @@ describe('loadCase — rescheduleProposals hosts a card per upcoming meeting (Ru
     const view = await loadOrThrow();
 
     expect(view.rescheduleProposals[0]?.durationMinutes).toBe(30);
+  });
+});
+
+/**
+ * THE IN-APP RATING CARD. `readRatingCard` is called ONLY on a CLOSED CLIENT-lens case,
+ * and with `requireHeldConsultation: true` for BOTH `resolved` AND `auto_inactive` — the
+ * case-surface close is gated only on `isOpen`, not on any consultation count, so the
+ * never-consulted gate applies to EVERY closed case.
+ */
+describe('loadCase — the in-app rating card', () => {
+  it('never calls readRatingCard on an OPEN client case', async () => {
+    const view = await loadOrThrow();
+
+    expect(mockReadRatingCard).not.toHaveBeenCalled();
+    expect(view.lens).toBe('client');
+    if (view.lens === 'client') {
+      expect(view.rating).toBeNull();
+    }
+  });
+
+  it('calls readRatingCard with requireHeldConsultation: true on a manually RESOLVED case', async () => {
+    seed({ caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' } });
+
+    await loadOrThrow();
+
+    expect(mockReadRatingCard).toHaveBeenCalledWith({
+      engagementId: ENGAGEMENT_ID,
+      viewerUserId: USER_ID,
+      requireHeldConsultation: true,
+      now: NOW,
+    });
+  });
+
+  it('calls readRatingCard with requireHeldConsultation: true on an AUTO_INACTIVE case too', async () => {
+    seed({ caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'auto_inactive' } });
+
+    await loadOrThrow();
+
+    expect(mockReadRatingCard).toHaveBeenCalledWith({
+      engagementId: ENGAGEMENT_ID,
+      viewerUserId: USER_ID,
+      requireHeldConsultation: true,
+      now: NOW,
+    });
+  });
+
+  it('passes a null read through as `rating: null`', async () => {
+    seed({ caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' } });
+    mockReadRatingCard.mockResolvedValue(null);
+
+    const view = await loadOrThrow();
+
+    expect(view.lens).toBe('client');
+    if (view.lens === 'client') {
+      expect(view.rating).toBeNull();
+    }
+  });
+
+  it('passes a non-null read through onto the client arm', async () => {
+    seed({ caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' } });
+    const RATING_VIEW = {
+      engagementId: ENGAGEMENT_ID,
+      state: { kind: 'none' as const },
+      existingBody: null,
+    };
+    mockReadRatingCard.mockResolvedValue(RATING_VIEW);
+
+    const view = await loadOrThrow();
+
+    expect(view.lens).toBe('client');
+    if (view.lens === 'client') {
+      expect(view.rating).toEqual(RATING_VIEW);
+    }
+  });
+
+  it('never calls readRatingCard on the EXPERT lens, which has no `rating` key at all', async () => {
+    seed({
+      access: { lens: 'expert' },
+      caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' },
+    });
+
+    const view = await loadOrThrow();
+
+    expect(mockReadRatingCard).not.toHaveBeenCalled();
+    expect(view.lens).toBe('expert');
+    expect('rating' in view).toBe(false);
   });
 });

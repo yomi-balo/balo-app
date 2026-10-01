@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { axe } from 'jest-axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
+import { track, END_OF_CALL_EVENTS } from '@/lib/analytics';
 import type {
   EndOfCallRatingView,
   EndOfCallResolveView,
@@ -115,6 +116,47 @@ describe('RateThenResolve — the ORDERING RULE: rate first, then resolve', () =
     await user.click(screen.getByRole('button', { name: 'Save review' }));
     await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
     expect(screen.queryByText(ASK)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * BAL-587 — `end_of_call_action` moved here from `RatingBlock`, which now mounts at three more
+ * placements that must never emit it. `RatingBlock.onRated` reports only `{ created }`; THIS
+ * island is what turns that flag into `'rated'` / `'rating_revised'` and tracks it.
+ */
+describe('RateThenResolve — maps created:true to rated and created:false to rating_revised', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("tracks 'rated' on a fresh rating", async () => {
+    mockSubmit.mockResolvedValue({ success: true, created: true });
+    const user = userEvent.setup();
+    renderIsland(UNRATED, OPEN_CASE);
+    await user.click(screen.getByRole('radio', { name: '5 out of 5 — Outstanding' }));
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(END_OF_CALL_EVENTS.ACTION, {
+        action: 'rated',
+        lens: 'client',
+      })
+    );
+    // ⚠ EXACTLY ONCE per save — `RatingBlock` itself fires no analytics, so this island is the
+    // only source of `end_of_call_action`.
+    expect(track).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks 'rating_revised' on a revision", async () => {
+    mockSubmit.mockResolvedValue({ success: true, created: false });
+    const user = userEvent.setup();
+    renderIsland(RATED_LOW, OPEN_CASE);
+    await user.click(screen.getByRole('button', { name: 'Update my rating' }));
+    await user.click(screen.getByRole('button', { name: 'Update review' }));
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(END_OF_CALL_EVENTS.ACTION, {
+        action: 'rating_revised',
+        lens: 'client',
+      })
+    );
+    expect(track).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -40,11 +40,33 @@ export type Rating = 1 | 2 | 3 | 4 | 5;
 /**
  * WHERE the review was captured. Mirrors the `review_surface` pgEnum without importing
  * `@balo/db`.
- *   `end_of_call` — the in-app post-call control (BAL-389 mounts it).
- *   `recap`       — BAL-388's recap surface (declared; no producer ships).
- *   `email`       — the magic-link landing form.
+ *   `end_of_call`       — the in-app post-call control (BAL-389 mounts it).
+ *   `recap`             — the recap wrap-up card's RESOLVED state (BAL-587 mounts it).
+ *   `project_workspace` — the project workspace, under `CompletedBanner` (BAL-587).
+ *   `case_surface`      — the case rail, in `MarkResolvedButton`'s slot (BAL-587).
+ *   `email`             — the magic-link landing form.
  */
-export type ReviewSurface = 'end_of_call' | 'recap' | 'email';
+export type ReviewSurface =
+  | 'end_of_call'
+  | 'recap'
+  | 'project_workspace'
+  | 'case_surface'
+  | 'email';
+
+/**
+ * The in-app surfaces — every {@link ReviewSurface} except `email`, which authenticates by
+ * token rather than session and is therefore never accepted by a session-authed write path.
+ * `submitEngagementReviewAction`'s Zod enum derives its accepted values from this tuple,
+ * rather than hand-copying four of `ReviewSurface`'s five literals.
+ */
+export const IN_APP_REVIEW_SURFACES = [
+  'end_of_call',
+  'recap',
+  'project_workspace',
+  'case_surface',
+] as const;
+
+export type InAppReviewSurface = (typeof IN_APP_REVIEW_SURFACES)[number];
 
 /**
  * HOW the writer authenticated. Mirrors the `review_auth_method` pgEnum.

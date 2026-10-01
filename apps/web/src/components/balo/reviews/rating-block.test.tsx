@@ -4,7 +4,8 @@ import { axe } from 'jest-axe';
 import userEvent from '@testing-library/user-event';
 import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
 import { render, screen, waitFor } from '@/test/utils';
-import { track, END_OF_CALL_EVENTS } from '@/lib/analytics';
+import { track } from '@/lib/analytics';
+import type { InAppReviewSurface } from '@balo/shared/reviews';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 
 const ENGAGEMENT_ID = 'e0000000-0000-4000-8000-000000000005';
@@ -55,11 +56,23 @@ const RATED_LOW: EndOfCallRatingView = {
   existingBody: 'Nearly there.',
 };
 
-function renderBlock(rating: EndOfCallRatingView, onRated = vi.fn()) {
+function renderBlock(
+  rating: EndOfCallRatingView,
+  onRated: (outcome: { created: boolean }) => void = vi.fn(),
+  surface: InAppReviewSurface = 'end_of_call',
+  captureHeading?: string
+) {
   return {
     onRated,
     ...render(
-      <RatingBlock rating={rating} counterpartyName="Amara" noun="consultation" onRated={onRated} />
+      <RatingBlock
+        rating={rating}
+        counterpartyName="Amara"
+        noun="consultation"
+        surface={surface}
+        onRated={onRated}
+        captureHeading={captureHeading}
+      />
     ),
   };
 }
@@ -88,6 +101,21 @@ describe('RatingBlock — BAL-390 state 1: no rating yet', () => {
     expect(screen.getByRole('radio', { name: "1 out of 5 — Didn't help" })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: '5 out of 5 — Outstanding' })).toBeInTheDocument();
   });
+
+  it('keeps the end-of-call heading BYTE-IDENTICAL when no captureHeading is given', () => {
+    // ⚠ The default proof BAL-587 requires: a caller that passes no override must render
+    // EXACTLY what BAL-389 shipped. `renderBlock`'s own default arguments (`captureHeading`
+    // left `undefined`) ARE that caller, and the previous test already pins this string —
+    // this test exists only to name the guarantee explicitly.
+    renderBlock(NONE);
+    expect(screen.getByText('How was your consultation with Amara?')).toBeInTheDocument();
+  });
+
+  it("overrides the none-state heading with the caller's captureHeading", () => {
+    renderBlock(NONE, vi.fn(), 'end_of_call', 'How was working with Amara?');
+    expect(screen.getByText('How was working with Amara?')).toBeInTheDocument();
+    expect(screen.queryByText('How was your consultation with Amara?')).not.toBeInTheDocument();
+  });
 });
 
 /**
@@ -96,7 +124,7 @@ describe('RatingBlock — BAL-390 state 1: no rating yet', () => {
  * `apps/web`, and a path that resolves to nothing passes every assertion vacuously (memory
  * `reference_web_server_disk_asset_cwd`).
  */
-const BLOCK = 'app/(dashboard)/meetings/[meetingId]/end/_components/rating-block.tsx';
+const BLOCK = 'components/balo/reviews/rating-block.tsx';
 const blockPath = resolveRouteDir(['src/' + BLOCK, 'apps/web/src/' + BLOCK]);
 
 describe('RatingBlock — it MOUNTS the shipped controls rather than re-implementing them', () => {
@@ -272,6 +300,20 @@ describe('RatingBlock — the write', () => {
     );
   });
 
+  it("forwards the CALLER's surface — BAL-587 mounts this block at three more placements", async () => {
+    mockSubmit.mockResolvedValue({ success: true, created: true });
+    const user = userEvent.setup();
+    renderBlock(NONE, vi.fn(), 'project_workspace');
+    await user.click(screen.getByRole('radio', { name: '5 out of 5 — Outstanding' }));
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ surface: 'project_workspace' })
+      )
+    );
+  });
+
   it('omits an empty body rather than writing a blank string', async () => {
     mockSubmit.mockResolvedValue({ success: true, created: true });
     const user = userEvent.setup();
@@ -299,32 +341,25 @@ describe('RatingBlock — the write', () => {
     );
   });
 
-  it("maps created:true to 'rated' and created:false to 'rating_revised'", async () => {
-    // ⚠ THE DIMENSION COMES FREE FROM THE WRITE PATH — it cannot disagree with what the DB did.
+  it("fires onRated with the upsert's created flag — {created:true} on a fresh rating", async () => {
+    // ⚠ THIS BLOCK FIRES NO ANALYTICS OF ITS OWN (BAL-587): `end_of_call_action` moved OUT to
+    // `RateThenResolve`'s `onRated`, which derives `rated` vs `rating_revised` from this exact
+    // flag. See `rate-then-resolve.test.tsx` for that mapping.
     mockSubmit.mockResolvedValue({ success: true, created: true });
     const user = userEvent.setup();
-    const first = renderBlock(NONE);
+    const { onRated } = renderBlock(NONE);
     await user.click(screen.getByRole('radio', { name: '5 out of 5 — Outstanding' }));
     await user.click(screen.getByRole('button', { name: 'Save review' }));
-    await waitFor(() =>
-      expect(track).toHaveBeenCalledWith(END_OF_CALL_EVENTS.ACTION, {
-        action: 'rated',
-        lens: 'client',
-      })
-    );
-    first.unmount();
+    await waitFor(() => expect(onRated).toHaveBeenCalledWith({ created: true }));
+  });
 
-    vi.clearAllMocks();
+  it('fires onRated with {created:false} on a revision', async () => {
     mockSubmit.mockResolvedValue({ success: true, created: false });
-    renderBlock(RATED_LOW);
+    const user = userEvent.setup();
+    const { onRated } = renderBlock(RATED_LOW);
     await user.click(screen.getByRole('button', { name: 'Update my rating' }));
     await user.click(screen.getByRole('button', { name: 'Update review' }));
-    await waitFor(() =>
-      expect(track).toHaveBeenCalledWith(END_OF_CALL_EVENTS.ACTION, {
-        action: 'rating_revised',
-        lens: 'client',
-      })
-    );
+    await waitFor(() => expect(onRated).toHaveBeenCalledWith({ created: false }));
   });
 
   it('toasts, confirms in place, and fires onRated ONLY on success', async () => {
@@ -337,6 +372,9 @@ describe('RatingBlock — the write', () => {
     await waitFor(() => expect(screen.getByText('Thanks — saved.')).toBeInTheDocument());
     expect(mockToastSuccess).toHaveBeenCalledWith('Thanks — your rating is saved.');
     expect(onRated).toHaveBeenCalledOnce();
+    // ⚠ THIS BLOCK FIRES NO ANALYTICS OF ITS OWN — the caller's `onRated` is the only hook a
+    // successful save invokes. See the module docblock.
+    expect(track).not.toHaveBeenCalled();
   });
 
   it('toasts the returned copy verbatim on failure, and KEEPS the stars and the note', async () => {
@@ -595,7 +633,7 @@ describe('RatingBlock — accessibility', () => {
     // could not move between them at all. Visual weight is deliberately unchanged.
     renderBlock(NONE);
     expect(
-      screen.getByRole('heading', { name: 'How was your consultation with Amara?' })
+      screen.getByRole('heading', { level: 2, name: 'How was your consultation with Amara?' })
     ).toBeInTheDocument();
   });
 

@@ -610,6 +610,18 @@ function deriveCompletedBanner(
   };
 }
 
+/**
+ * BAL-587 — does the project workspace offer the in-app rating card? A pure VIEW
+ * decision: true only for a `completed` engagement on the CLIENT lens. Authorization
+ * for the write stays entirely in `applyReview` (`app/review/_actions/review-write-shared.ts`)
+ * — this predicate adds no second check, it only decides whether the read-and-render
+ * path runs at all. Admin is false even when `isClientOwner` happens to be true (the
+ * lens, not the ownership flag, decides — mirrors `resolveEngagementLens`'s precedence).
+ */
+export function offersRatingCard(status: EngagementWorkspaceStatus, lens: EngagementLens): boolean {
+  return status === 'completed' && lens === 'client';
+}
+
 function deriveCancelledBanner(
   engagement: ProjectEngagementWithMilestones
 ): CancelledBannerView | null {

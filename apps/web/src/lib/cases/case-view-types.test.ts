@@ -42,6 +42,9 @@ export type AssertClientArmHasNoEarnings = AssertNever<Extract<keyof ClientArm, 
 /** ⚠ 2. Only a client may close a case (BAL-417); the expert may only ASK. */
 export type AssertExpertArmHasNoCanClose = AssertNever<Extract<keyof ExpertArm, 'canClose'>>;
 
+/** ⚠ BAL-587 — the in-app rating card is CLIENT-only; the expert arm cannot hold it. */
+export type AssertExpertArmHasNoRating = AssertNever<Extract<keyof ExpertArm, 'rating'>>;
+
 /**
  * ⚠ 3. THE BALO MARGIN APPEARS TO NOBODY. Neither arm may carry any of the vocabulary the
  * un-marked-up rate travels under. `rate_cents` matters most: it is the UN-MARKED-UP consultant
@@ -147,6 +150,7 @@ const CLIENT_VIEW: CaseSurfaceView = {
   lens: 'client',
   canClose: true,
   caseScopeDomains: [],
+  rating: null,
 };
 
 const EXPERT_VIEW: CaseSurfaceView = {
@@ -190,6 +194,12 @@ describe('CaseSurfaceView — the lens is a discriminant, not a flag', () => {
   it('fix round 1 item 18 — only the EXPERT arm carries canManageReschedule', () => {
     expect('canManageReschedule' in CLIENT_VIEW).toBe(false);
     expect('canManageReschedule' in EXPERT_VIEW).toBe(true);
+  });
+
+  it('BAL-587 — only the CLIENT arm carries the rating card, and it may be null', () => {
+    expect('rating' in CLIENT_VIEW).toBe(true);
+    expect('rating' in EXPERT_VIEW).toBe(false);
+    expect(Object.keys(EXPERT_VIEW)).not.toContain('rating');
   });
 });
 

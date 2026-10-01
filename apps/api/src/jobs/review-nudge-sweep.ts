@@ -54,12 +54,13 @@ import { mintReviewInviteToken } from '../lib/review-token.js';
  * `auto_inactive`. The unit test asserts both anchors are queried precisely so a future
  * "the case one always returns empty, drop it" cannot land.
  *
- * ⚠ BAL-572 — AN `auto_inactive` CANDIDATE THAT NEVER HAD A COMPLETED CONSULTATION IS
- * DROPPED BEFORE NUDGING. `dropNeverConsultedAutoCloses` makes ONE batched BAL-425 seam call
- * over the `auto_inactive` case ids in a band and removes any whose `lastCompletedConsultationAt`
- * is not a `Date` — otherwise the nudge would ask "How was your consultation with {X}?" about a
- * call that never happened. `resolved` candidates are untouched; a `resolved` case can only be
- * closed from a consultation that took place (see `resolve-case.ts`'s `NOT_YET_HELD` refusal).
+ * ⚠ A CASE CANDIDATE THAT NEVER HAD A COMPLETED CONSULTATION IS DROPPED BEFORE NUDGING, FOR
+ * EITHER CLOSE REASON. `dropNeverConsultedCases` makes ONE batched BAL-425 seam call over
+ * every case id in a band and removes any whose `lastCompletedConsultationAt` is not a
+ * `Date` — otherwise the nudge would ask "How was your consultation with {X}?" about a call
+ * that never happened. The case-surface "Mark resolved" close needs no held consultation
+ * (see `resolve-case.ts`), so `resolved` is gated identically to `auto_inactive`, never
+ * exempted from it.
  *
  * NO THIRD NUDGE, AND NO SCHEMA STATE. An anchor older than `7d + 1h` is outside every
  * band forever, so the hard stop is window math: no `nudge_sent_at` column, no
@@ -302,43 +303,39 @@ async function nudgeCandidate(
 }
 
 /**
- * BAL-572 — drop an `auto_inactive` CASE candidate that never had a completed
- * consultation. `close()` lets a case with zero held consultations auto-close (it anchors on
- * its creation, its last booking, reschedule or cancellation, or its last message or file
- * (case chat or in-call)), but the nudge asks "How was your consultation with {X}?" — a
+ * Drop a CASE candidate that never had a completed consultation, for EITHER close reason.
+ * `close()` lets a case with zero held consultations auto-close (it anchors on its creation,
+ * its last booking, reschedule or cancellation, or its last message or file — case chat or
+ * in-call), and the case-surface "Mark resolved" close needs no held consultation either (see
+ * `resolve-case.ts`). Either way the nudge asks "How was your consultation with {X}?" — a
  * question with no honest answer for a call that never happened. Neither scheduling nor chat
- * activity counts as "consulted": only `lastCompletedConsultationAt` does. `resolved`
- * candidates and every PROJECT candidate pass through untouched: a `resolved` case can only be
- * closed from a consultation that took place at all (see `resolve-case.ts`'s `NOT_YET_HELD`
- * refusal).
+ * activity counts as "consulted": only `lastCompletedConsultationAt` does. Every PROJECT
+ * candidate passes through untouched — this only ever receives the `closed` case array.
  *
- * ONE BATCHED SEAM CALL, over the `auto_inactive` case ids in THIS band only — never per
- * candidate. Drops an id whose `lastCompletedConsultationAt` is not a `Date` (`null`, or the
- * seam-Map has no entry for it at all, which a batched read from `listClosedBetween`'s own
- * ids should never produce, but failing closed here costs nothing).
+ * ONE BATCHED SEAM CALL, over every case id in THIS band only — never per candidate. Drops an
+ * id whose `lastCompletedConsultationAt` is not a `Date` (`null`, or the seam-Map has no entry
+ * for it at all, which a batched read from `listClosedBetween`'s own ids should never produce,
+ * but failing closed here costs nothing).
  */
-async function dropNeverConsultedAutoCloses(
+async function dropNeverConsultedCases(
   candidates: readonly RatingNudgeCandidate[],
   now: Date
 ): Promise<RatingNudgeCandidate[]> {
-  const autoInactiveCaseIds = candidates
-    .filter(
-      (candidate) =>
-        candidate.engagementKind === 'case' && candidate.closeReason === 'auto_inactive'
-    )
+  const caseIds = candidates
+    .filter((candidate) => candidate.engagementKind === 'case')
     .map((candidate) => candidate.engagementId);
 
-  if (autoInactiveCaseIds.length === 0) {
+  if (caseIds.length === 0) {
     return [...candidates];
   }
 
   const timestamps = await meetingContextsRepository.consultationTimestampsForEngagements(
-    autoInactiveCaseIds,
+    caseIds,
     now
   );
 
   return candidates.filter((candidate) => {
-    if (candidate.engagementKind !== 'case' || candidate.closeReason !== 'auto_inactive') {
+    if (candidate.engagementKind !== 'case') {
       return true;
     }
     return timestamps.get(candidate.engagementId)?.lastCompletedConsultationAt instanceof Date;
@@ -375,7 +372,7 @@ export async function runReviewNudgeSweep(
     const accepted = await projectEngagementsRepository.listAcceptedBetween(after, until);
     const closed = await caseEngagementsRepository.listClosedBetween(after, until);
     // Never ask about a consultation that never happened.
-    const nudgeable = await dropNeverConsultedAutoCloses(closed, now);
+    const nudgeable = await dropNeverConsultedCases(closed, now);
 
     for (const candidate of [...accepted, ...nudgeable]) {
       try {

@@ -24,6 +24,8 @@ import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
 import { formatLongUtc } from '@/lib/format/utc-date';
 import { log } from '@/lib/logging';
 import { fetchSessionMoneyBlock } from '@/lib/api/session-money-block';
+import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
+import { readRatingCard } from '@/lib/reviews/read-rating-card';
 import { durationMinutesOf } from '@/lib/meetings/meeting-duration';
 import { resolveRecapAccess, type RecapAccess } from '@/lib/meetings/resolve-recap-access';
 import type {
@@ -205,13 +207,20 @@ async function resolveTitle(
  * SKIPS the token when this reviewer already rated this expert on this engagement, and an
  * `auto_inactive` close mints none at all — so both the dialog fact and the success line are
  * keyed on the same read rather than promising an email that will not come.
+ *
+ * ⚠⚠ `rating` IS GATED THE SAME WAY FOR **BOTH** CLOSE REASONS. The case-surface
+ * `resolve-case.ts` closes a `resolved` case with no check that a consultation ever happened
+ * (its button is offered on any open case — `canClose: isOpen` in `load-case.ts`). `readRatingCard` is called with `requireHeldConsultation: true`
+ * on both branches of `closedAt != null`, reusing the sweep's own "consulted" check rather
+ * than writing a second one.
  */
 async function resolveResolveView(
   contextId: string,
   caseRow: CaseEngagementRow | undefined,
   isCase: boolean,
   labels: CounterpartyLabels,
-  alreadyReviewed: boolean
+  alreadyReviewed: boolean,
+  rating: EndOfCallRatingView | null
 ): Promise<RecapResolveView> {
   const base = {
     engagementId: contextId,
@@ -228,7 +237,11 @@ async function resolveResolveView(
       variant: 'none',
       requesterLabel: null,
       resolved: {
-        reviewLinkSent: caseRow.closeReason !== 'auto_inactive' && !alreadyReviewed,
+        // `rating` is read with `requireHeldConsultation: true`, so `null` also covers a
+        // held consultation whose read degraded — either way it only hides the sentence.
+        reviewLinkSent:
+          caseRow.closeReason !== 'auto_inactive' && !alreadyReviewed && rating !== null,
+        rating,
       },
     };
   }
@@ -412,19 +425,31 @@ export const loadRecap = cache(
     );
 
     // Independent reads, run together — no waterfall.
-    const [title, artifactContents, fileRows, recordings, labels, moneyBlock] = await Promise.all([
-      resolveTitle(contextType, subject.contextId, caseRow),
-      readArtifactContents(transcript?.id),
-      mapRecapFiles(files, userId),
-      mapRecapRecordings(recordingRows, meeting.endedAt, now),
-      resolveCounterparty(
-        lens,
-        profile,
-        clientCompanyName,
-        isCase ? formatOrdinalLine(ordinal) : null
-      ),
-      session === undefined ? Promise.resolve(null) : readMoneyBlock(session.id, meetingId, userId),
-    ]);
+    const [title, artifactContents, fileRows, recordings, labels, moneyBlock, rating] =
+      await Promise.all([
+        resolveTitle(contextType, subject.contextId, caseRow),
+        readArtifactContents(transcript?.id),
+        mapRecapFiles(files, userId),
+        mapRecapRecordings(recordingRows, meeting.endedAt, now),
+        resolveCounterparty(
+          lens,
+          profile,
+          clientCompanyName,
+          isCase ? formatOrdinalLine(ordinal) : null
+        ),
+        session === undefined
+          ? Promise.resolve(null)
+          : readMoneyBlock(session.id, meetingId, userId),
+        // Client lens, closed case only — the expert arm carries no `resolve`.
+        lens === 'client' && isCase && caseRow?.closedAt != null
+          ? readRatingCard({
+              engagementId: subject.contextId,
+              viewerUserId: userId,
+              requireHeldConsultation: true,
+              now,
+            })
+          : Promise.resolve(null),
+      ]);
 
     const artifacts = resolveArtifacts({
       transcriptStatus: (transcript?.status ?? null) as TranscriptStatusLike | null,
@@ -522,7 +547,8 @@ export const loadRecap = cache(
         caseRow,
         isCase,
         labels,
-        alreadyReviewed
+        alreadyReviewed,
+        rating
       ),
     };
   }

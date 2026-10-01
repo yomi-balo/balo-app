@@ -147,7 +147,7 @@ beforeEach(() => {
     async (input: { candidateUserIds: string[] }) => input.candidateUserIds
   );
   mockCreateToken.mockResolvedValue({ id: 'tok-1' });
-  // Default: every requested id HAS a completed consultation, so dropNeverConsultedAutoCloses
+  // Default: every requested id HAS a completed consultation, so dropNeverConsultedCases
   // is a no-op unless a test explicitly overrides this to simulate a never-consulted case.
   mockConsultationTimestamps.mockImplementation(async (ids: string[]) => {
     const map = new Map<string, ConsultationTimestamps>();
@@ -369,41 +369,64 @@ describe('review-nudge sweep — never nudge about a consultation that never hap
     );
   });
 
-  it('a never-consulted RESOLVED case is still nudged — the drop is auto_inactive-only', async () => {
+  it('a never-consulted RESOLVED case is dropped — the gate covers both close reasons', async () => {
     mockListClosed.mockImplementation(
       bandFiltered([
         candidate({ engagementId: 'case-1', engagementKind: 'case', closeReason: 'resolved' }),
+      ])
+    );
+    mockConsultationTimestamps.mockResolvedValue(
+      new Map([
+        ['case-1', { lastCompletedConsultationAt: null, nextScheduledConsultationAt: null }],
+      ])
+    );
+
+    expectNoNudge(await runReviewNudgeSweep(NOW));
+    expect(mockConsultationTimestamps).toHaveBeenCalledWith(['case-1'], NOW);
+  });
+
+  it('a CONSULTED resolved case is nudged normally', async () => {
+    mockListClosed.mockImplementation(
+      bandFiltered([
+        candidate({ engagementId: 'case-1', engagementKind: 'case', closeReason: 'resolved' }),
+      ])
+    );
+    // Default mock already answers with a completed consultation; assert explicitly.
+    mockConsultationTimestamps.mockResolvedValue(
+      new Map([
+        [
+          'case-1',
+          {
+            lastCompletedConsultationAt: new Date(NOW.getTime() - HOUR_MS),
+            nextScheduledConsultationAt: null,
+          },
+        ],
       ])
     );
 
     const result = await runReviewNudgeSweep(NOW);
 
     expect(result).toEqual({ sent: 1 });
-    // resolved never reaches the seam filter's id list — it is untouched by construction.
     expect(mockPublish).toHaveBeenCalledWith(
       'review.reminder',
       expect.objectContaining({ engagementId: 'case-1', closeReason: 'resolved' })
     );
   });
 
-  it('no seam call happens without an auto_inactive candidate in the band', async () => {
+  it('no seam call happens with only PROJECT candidates in the band — the gate never sees them', async () => {
     mockListAccepted.mockImplementation(bandFiltered([candidate()]));
-    mockListClosed.mockImplementation(
-      bandFiltered([
-        candidate({ engagementId: 'case-1', engagementKind: 'case', closeReason: 'resolved' }),
-      ])
-    );
+    mockListClosed.mockResolvedValue([]);
 
     await runReviewNudgeSweep(NOW);
 
     expect(mockConsultationTimestamps).not.toHaveBeenCalled();
   });
 
-  it('a mixed band (resolved + never-consulted auto_inactive + consulted auto_inactive) nudges the resolved and consulted cases only, with one seam call over just the two auto_inactive ids', async () => {
+  it('a mixed band (never-consulted resolved + never-consulted auto_inactive + consulted auto_inactive) nudges the consulted case only, with one seam call over all three case ids', async () => {
     mockListClosed.mockImplementation(
       bandFiltered([
         candidate({
-          engagementId: 'case-resolved',
+          engagementId: 'case-resolved-never',
           engagementKind: 'case',
           closeReason: 'resolved',
         }),
@@ -427,12 +450,12 @@ describe('review-nudge sweep — never nudge about a consultation that never hap
       for (const id of ids) {
         map.set(
           id,
-          id === 'case-auto-never'
-            ? { lastCompletedConsultationAt: null, nextScheduledConsultationAt: null }
-            : {
+          id === 'case-auto-consulted'
+            ? {
                 lastCompletedConsultationAt: new Date(NOW.getTime() - HOUR_MS),
                 nextScheduledConsultationAt: null,
               }
+            : { lastCompletedConsultationAt: null, nextScheduledConsultationAt: null }
         );
       }
       return map;
@@ -442,19 +465,15 @@ describe('review-nudge sweep — never nudge about a consultation that never hap
 
     expect(mockConsultationTimestamps).toHaveBeenCalledTimes(1);
     expect(mockConsultationTimestamps).toHaveBeenCalledWith(
-      ['case-auto-never', 'case-auto-consulted'],
+      ['case-resolved-never', 'case-auto-never', 'case-auto-consulted'],
       NOW
     );
-    expect(result).toEqual({ sent: 2 });
-    expect(mockPublish).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ sent: 1 });
+    expect(mockPublish).toHaveBeenCalledTimes(1);
     const publishedIds = (mockPublish.mock.calls as [string, { engagementId: string }][]).map(
       ([, payload]) => payload.engagementId
     );
-    expect(publishedIds.sort((a, b) => a.localeCompare(b))).toEqual([
-      'case-auto-consulted',
-      'case-resolved',
-    ]);
-    expect(publishedIds).not.toContain('case-auto-never');
+    expect(publishedIds).toEqual(['case-auto-consulted']);
   });
 });
 

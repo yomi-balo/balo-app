@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { RecapFileRowView, RecapResolveView } from '@/lib/meetings/recap-view-types';
+import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 
 const MEETING_ID = 'a0000000-0000-4000-8000-000000000001';
 
@@ -40,6 +41,18 @@ vi.mock('../_actions/get-meeting-recording-playback', () => ({
   getMeetingRecordingPlaybackAction: vi.fn(),
 }));
 
+// `EngagementRatingCard` → `RatingBlock` swaps its own content via `StateSwap` (`motion/react`) —
+// stubbed the same way every other consumer test stubs it.
+vi.mock('motion/react', async () => {
+  const { createMotionStub } = await import('@/test/motion-stub');
+  return createMotionStub();
+});
+
+const mockSubmitReview = vi.fn();
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review', () => ({
+  submitEngagementReviewAction: (...a: unknown[]) => mockSubmitReview(...a),
+}));
+
 import { SummarySection } from './summary-section';
 import { TranscriptSection } from './transcript-section';
 import { FilesCard } from './files-card';
@@ -74,8 +87,15 @@ const RESOLVED: RecapResolveView = {
   variant: 'none',
   requesterLabel: null,
   expertShortName: 'Amara',
-  resolved: { reviewLinkSent: true },
+  resolved: { reviewLinkSent: true, rating: null },
   reviewWillBeAsked: true,
+};
+
+/** BAL-587 — the in-app rating card's data, for a closed and consulted case. */
+const RATING: EndOfCallRatingView = {
+  engagementId: 'e1',
+  state: { kind: 'none' },
+  existingBody: null,
 };
 
 /**
@@ -506,7 +526,7 @@ describe('WrapUpCard - the post-resolve success state', () => {
     render(
       <WrapUpCard
         meetingId={MEETING_ID}
-        resolve={{ ...RESOLVED, resolved: { reviewLinkSent: false } }}
+        resolve={{ ...RESOLVED, resolved: { reviewLinkSent: false, rating: null } }}
       />
     );
     expect(screen.getByText(/Everything from this case stays here/)).toBeInTheDocument();
@@ -516,6 +536,22 @@ describe('WrapUpCard - the post-resolve success state', () => {
   it('has no accessibility violations', async () => {
     const { container } = render(<WrapUpCard meetingId={MEETING_ID} resolve={RESOLVED} />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('renders the in-app rating card inside the Resolved section when a rating is given', () => {
+    render(
+      <WrapUpCard
+        meetingId={MEETING_ID}
+        resolve={{ ...RESOLVED, resolved: { reviewLinkSent: true, rating: RATING } }}
+      />
+    );
+    expect(screen.getByText(/Resolved/)).toBeInTheDocument();
+    expect(screen.getByText(/How was working with Amara\?/)).toBeInTheDocument();
+  });
+
+  it('renders NO rating card when rating is null (never consulted, or a read failure)', () => {
+    render(<WrapUpCard meetingId={MEETING_ID} resolve={RESOLVED} />);
+    expect(screen.queryByText(/How was working with/)).not.toBeInTheDocument();
   });
 });
 

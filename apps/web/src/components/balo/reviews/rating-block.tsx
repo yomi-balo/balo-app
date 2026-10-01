@@ -3,15 +3,19 @@
 import { useCallback, useId, useState } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { REVIEW_BODY_MAX, isRating, type Rating } from '@balo/shared/reviews';
+import {
+  REVIEW_BODY_MAX,
+  isRating,
+  type InAppReviewSurface,
+  type Rating,
+} from '@balo/shared/reviews';
 import { RatingInput } from '@/components/balo/rating-input';
 import { StarRow } from '@/components/expert/profile/rating-stars';
+import { StateSwap } from '@/components/balo/state-swap';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { track, END_OF_CALL_EVENTS } from '@/lib/analytics';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 import { submitEngagementReviewAction } from '@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review';
-import { StateSwap } from './state-swap';
 
 /**
  * BAL-389 — the rating capture, in BAL-390's THREE states.
@@ -19,6 +23,22 @@ import { StateSwap } from './state-swap';
  *   `none`      → ask.
  *   `rated_ok`  → display it, and do NOT prompt.
  *   `rated_low` → display it and invite a revision.
+ *
+ * ⚠⚠ MOVED HERE BY BAL-587 — MOVED, NOT COPIED. `components/` may not import from a route's
+ * `_components`, and this block now mounts at three MORE placements (the project workspace, the
+ * case rail, the recap wrap-up card) besides its original end-of-call home, via the new
+ * `EngagementRatingCard` wrapper (`engagement-rating-card.tsx`, same directory).
+ *
+ * ⚠⚠ `surface` IS NOW A REQUIRED PROP, NOT A HARD-CODED `'end_of_call'` — every caller states
+ * where it is mounting. ⚠⚠ `onRated` NOW CARRIES `{ created: boolean }` AND THIS COMPONENT FIRES
+ * NO ANALYTICS OF ITS OWN: the `END_OF_CALL_EVENTS.ACTION` track moved OUT to `RateThenResolve`'s
+ * `onRated`, so a rating given on the project workspace or the case rail never emits
+ * `end_of_call_action` — that event names a screen this block no longer owns exclusively.
+ *
+ * ⚠ `captureHeading` OVERRIDES the `none`-state heading below FOR A NON-END-OF-CALL CALLER
+ * (`EngagementRatingCard` passes one; `RateThenResolve` does not, so the end-of-call heading is
+ * BYTE-IDENTICAL to what BAL-389 shipped). The `rated` / `rated_low` headings are untouched —
+ * they are not overridable, on purpose: a copy override only ever applies to the FIRST ask.
  *
  * ⚠⚠ THE THRESHOLD IS NEVER RE-DERIVED HERE. This component switches on `state.kind` and
  * NOTHING ELSE — no `rating < 4`, no imported `LOW_RATING_THRESHOLD`, no literal `4`. The
@@ -121,15 +141,29 @@ export function RatingBlock({
   rating,
   counterpartyName,
   noun,
+  surface,
   onRated,
+  captureHeading,
+  headingLevel = 2,
 }: Readonly<{
   rating: EndOfCallRatingView;
   /** The delivering expert's given name. Never an email address. */
   counterpartyName: string;
   /** `consultation` on a case, `meeting` otherwise — the design's own context rule. */
   noun: string;
-  /** Fired ONLY on a successful write; it is what reveals the resolve prompt. */
-  onRated: () => void;
+  /** WHERE this mount is capturing the review — forwarded to the write action untouched. */
+  surface: InAppReviewSurface;
+  /** Fired ONLY on a successful write, with the upsert's create/update branch. */
+  onRated: (outcome: { created: boolean }) => void;
+  /** Overrides the `none`-state heading. `undefined` keeps the end-of-call default. */
+  captureHeading?: string;
+  /**
+   * The element that carries the question text (the ask, or the revise prompt when an
+   * existing rating is being changed). Defaults to `2`; `end_of_call` never passes this, so
+   * its heading stays an `h2`. A caller that nests this block under its own `h2` (the rail-card
+   * `SectionHead`) passes `3`, so the page keeps one `h2` rather than two.
+   */
+  headingLevel?: 2 | 3;
 }>): React.JSX.Element {
   const { state, engagementId, existingBody } = rating;
   const existingRating = state.kind === 'none' ? null : state.rating;
@@ -200,18 +234,14 @@ export function RatingBlock({
       engagementId,
       rating: sent,
       body: body.length === 0 ? undefined : body.slice(0, REVIEW_BODY_MAX),
-      surface: 'end_of_call',
+      surface,
     })
       .then((result) => {
         if (result.success) {
-          track(END_OF_CALL_EVENTS.ACTION, {
-            action: result.created ? 'rated' : 'rating_revised',
-            lens: 'client',
-          });
           toast.success('Thanks — your rating is saved.');
           setFocusTarget('saved');
           setSentRating(sent);
-          onRated();
+          onRated({ created: result.created });
           return;
         }
         // ⚠ The draft and the note SURVIVE — see the module docblock.
@@ -223,7 +253,7 @@ export function RatingBlock({
         setFailure('Something went wrong. Please try again.');
       })
       .finally(() => setBusy(false));
-  }, [draft, engagementId, note, onRated]);
+  }, [draft, engagementId, note, onRated, surface]);
 
   let branch: Branch = 'capture';
   if (sentRating !== null) {
@@ -234,7 +264,7 @@ export function RatingBlock({
 
   const heading =
     existingRating === null
-      ? 'How was your ' + noun + ' with ' + counterpartyName + '?'
+      ? (captureHeading ?? 'How was your ' + noun + ' with ' + counterpartyName + '?')
       : 'How was this one with ' + counterpartyName + '?';
 
   /**
@@ -300,7 +330,11 @@ export function RatingBlock({
         >
           {/* ⚠ m6 — A HEADING, NOT A PARAGRAPH. Two consequential questions sit on this card and
               a screen-reader user could not jump between them. Visual weight is unchanged. */}
-          <h2 className="text-foreground mb-2 text-sm font-medium">{heading}</h2>
+          {headingLevel === 3 ? (
+            <h3 className="text-foreground mb-2 text-sm font-medium">{heading}</h3>
+          ) : (
+            <h2 className="text-foreground mb-2 text-sm font-medium">{heading}</h2>
+          )}
           {/* ⚠ `size={40}` is the end-of-call figure `RatingInput`'s own prop docblock names, and
               `disabled={busy}` is why the in-flight selection cannot move under the request. */}
           <RatingInput

@@ -105,20 +105,23 @@ describe('submitEngagementReviewAction', () => {
     });
   });
 
-  it('parameterises the surface — the recap seam reuses it unchanged', async () => {
-    primeHappyPath();
-    await submitEngagementReviewAction({
-      engagementId: ENGAGEMENT_ID,
-      rating: 4,
-      surface: 'recap',
-    });
+  it.each(['recap', 'project_workspace', 'case_surface'] as const)(
+    'parameterises the surface — %s reuses the same write path unchanged',
+    async (surface) => {
+      primeHappyPath();
+      await submitEngagementReviewAction({
+        engagementId: ENGAGEMENT_ID,
+        rating: 4,
+        surface,
+      });
 
-    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ surface: 'recap' }));
-    expect(mockTrack).toHaveBeenCalledWith(
-      'review_submitted',
-      expect.objectContaining({ surface: 'recap', auth_method: 'session' })
-    );
-  });
+      expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ surface }));
+      expect(mockTrack).toHaveBeenCalledWith(
+        'review_submitted',
+        expect.objectContaining({ surface, auth_method: 'session' })
+      );
+    }
+  );
 
   it("refuses surface 'email' — that path authenticates by token, not by session", async () => {
     primeHappyPath();

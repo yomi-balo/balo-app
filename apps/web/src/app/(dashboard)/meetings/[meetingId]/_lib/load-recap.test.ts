@@ -71,6 +71,11 @@ vi.mock('@/lib/meetings/resolve-recap-access', () => ({
   resolveRecapAccess: (...a: unknown[]) => mockResolveAccess(...a),
 }));
 
+const mockReadRatingCard = vi.fn();
+vi.mock('@/lib/reviews/read-rating-card', () => ({
+  readRatingCard: (...a: unknown[]) => mockReadRatingCard(...a),
+}));
+
 import { log } from '@/lib/logging';
 import { loadRecap } from './load-recap';
 
@@ -183,6 +188,7 @@ function seedRecapMocks(seed: RecapMockSeed = {}): void {
   m.findLiveReview.mockResolvedValue(undefined);
   m.presenceFacts.mockResolvedValue(new Map());
   mockFetchMoneyBlock.mockResolvedValue(null);
+  mockReadRatingCard.mockResolvedValue(null);
 }
 
 describe('loadRecap', () => {
@@ -450,7 +456,43 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
       resolutionRequestedByUserId: null,
     });
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
-    expect(view?.lens === 'client' && view.resolve.resolved).toEqual({ reviewLinkSent: true });
+    expect(view?.lens === 'client' && view.resolve.variant).toBe('none');
+  });
+
+  it('promises NO review email for a CLOSED resolved case with no held consultation', async () => {
+    m.findCase.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      title: 'Flow interview loop',
+      closedAt: new Date('2026-07-30T00:00:00Z'),
+      closeReason: 'resolved',
+      resolutionRequestedAt: null,
+      resolutionRequestedByUserId: null,
+    });
+    // Default seed: readRatingCard resolves null — the case-surface close needs no held
+    // consultation, so the case-surface "Mark resolved" never minted a token here either.
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens === 'client' && view.resolve.resolved).toEqual({
+      reviewLinkSent: false,
+      rating: null,
+    });
+  });
+
+  it('sends the review link for a CONSULTED, not-yet-reviewed resolved case', async () => {
+    m.findCase.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      title: 'Flow interview loop',
+      closedAt: new Date('2026-07-30T00:00:00Z'),
+      closeReason: 'resolved',
+      resolutionRequestedAt: null,
+      resolutionRequestedByUserId: null,
+    });
+    mockReadRatingCard.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      state: { kind: 'none' },
+      existingBody: null,
+    });
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens === 'client' && view.resolve.resolved?.reviewLinkSent).toBe(true);
   });
 
   it('promises NO review email when this reviewer already rated this expert', async () => {
@@ -465,7 +507,10 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     });
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
     // `resolveReviewAsk` SKIPS the token in exactly this case, so the copy must not promise one.
-    expect(view?.lens === 'client' && view.resolve.resolved).toEqual({ reviewLinkSent: false });
+    expect(view?.lens === 'client' && view.resolve.resolved).toEqual({
+      reviewLinkSent: false,
+      rating: null,
+    });
     expect(view?.lens === 'client' && view.resolve.reviewWillBeAsked).toBe(false);
   });
 
@@ -479,7 +524,10 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
       resolutionRequestedByUserId: null,
     });
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
-    expect(view?.lens === 'client' && view.resolve.resolved).toEqual({ reviewLinkSent: false });
+    expect(view?.lens === 'client' && view.resolve.resolved).toEqual({
+      reviewLinkSent: false,
+      rating: null,
+    });
   });
 
   it('carries NO resolved state while the case is still open', async () => {
@@ -516,6 +564,86 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     expect(view?.header.closedNote).toBe(
       'Closed automatically after 30 days with no consultations, bookings or messages. Everything stays available.'
     );
+  });
+
+  it('gives NO rating card for a CLOSED resolved case with no held consultation', async () => {
+    m.findCase.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      title: 'Flow interview loop',
+      closedAt: new Date('2026-07-30T00:00:00Z'),
+      closeReason: 'resolved',
+      resolutionRequestedAt: null,
+      resolutionRequestedByUserId: null,
+    });
+    mockReadRatingCard.mockResolvedValue(null);
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens === 'client' && view.resolve.resolved?.rating).toBeNull();
+    expect(mockReadRatingCard).toHaveBeenCalledWith({
+      engagementId: ENGAGEMENT_ID,
+      viewerUserId: USER_ID,
+      requireHeldConsultation: true,
+      now: NOW,
+    });
+  });
+
+  it('gives NO rating card for an AUTO-INACTIVE close with no held consultation', async () => {
+    m.findCase.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      title: 'Flow interview loop',
+      closedAt: new Date('2026-07-30T00:00:00Z'),
+      closeReason: 'auto_inactive',
+      resolutionRequestedAt: null,
+      resolutionRequestedByUserId: null,
+    });
+    mockReadRatingCard.mockResolvedValue(null);
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens === 'client' && view.resolve.resolved?.rating).toBeNull();
+    expect(mockReadRatingCard).toHaveBeenCalledWith({
+      engagementId: ENGAGEMENT_ID,
+      viewerUserId: USER_ID,
+      requireHeldConsultation: true,
+      now: NOW,
+    });
+  });
+
+  it('carries the rating view through once the case is closed and consulted', async () => {
+    const rating = {
+      engagementId: ENGAGEMENT_ID,
+      state: { kind: 'none' },
+      existingBody: null,
+    };
+    m.findCase.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      title: 'Flow interview loop',
+      closedAt: new Date('2026-07-30T00:00:00Z'),
+      closeReason: 'resolved',
+      resolutionRequestedAt: null,
+      resolutionRequestedByUserId: null,
+    });
+    mockReadRatingCard.mockResolvedValue(rating);
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens === 'client' && view.resolve.resolved?.rating).toEqual(rating);
+  });
+
+  it('never calls readRatingCard while the case is still OPEN', async () => {
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.lens === 'client' && view.resolve.resolved).toBeNull();
+    expect(mockReadRatingCard).not.toHaveBeenCalled();
+  });
+
+  it('never calls readRatingCard on the EXPERT lens', async () => {
+    m.findCase.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      title: 'Flow interview loop',
+      closedAt: new Date('2026-07-30T00:00:00Z'),
+      closeReason: 'resolved',
+      resolutionRequestedAt: null,
+      resolutionRequestedByUserId: null,
+    });
+    mockResolveAccess.mockResolvedValue({ ...CASE_ACCESS, lens: 'expert' });
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view && 'resolve' in view).toBe(false);
+    expect(mockReadRatingCard).not.toHaveBeenCalled();
   });
 
   it('offers NOTHING on a non-case context', async () => {

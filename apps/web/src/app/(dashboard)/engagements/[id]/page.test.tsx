@@ -8,6 +8,18 @@ import type { SessionUser } from '@/lib/auth/session';
 // with the sibling projects page test.
 vi.mock('server-only', () => ({}));
 
+// A `completed` + client-lens render reaches `EngagementRatingCard` → `RatingBlock`
+// (`StateSwap`'s `AnimatePresence mode="wait"`), so stub `motion/react` and the write
+// action the same way `rating-block.test.tsx` does, keeping this composition test out
+// of that Server Action's `@balo/db` module graph.
+vi.mock('motion/react', async () => {
+  const { createMotionStub } = await import('@/test/motion-stub');
+  return createMotionStub();
+});
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review', () => ({
+  submitEngagementReviewAction: vi.fn(),
+}));
+
 // ── Seams the page composes (mirrors the projects RSC page-test precedent) ──
 const {
   mockFindWithMilestones,
@@ -19,6 +31,7 @@ const {
   mockLogWarn,
   mockLogError,
   mockTrackServerAndFlush,
+  mockReadRatingCard,
 } = vi.hoisted(() => ({
   mockFindWithMilestones: vi.fn(),
   mockFindIdByProjectRequestId: vi.fn(),
@@ -34,6 +47,7 @@ const {
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
   mockTrackServerAndFlush: vi.fn(),
+  mockReadRatingCard: vi.fn(),
 }));
 
 // `engagement-view.ts` value-imports `AUTO_ACCEPT_DAYS` from `@balo/db`; provide it
@@ -65,6 +79,7 @@ vi.mock('@/lib/analytics/server', () => ({
   trackServerAndFlush: mockTrackServerAndFlush,
   ENGAGEMENT_SERVER_EVENTS: { WORKSPACE_VIEWED: 'engagement_workspace_viewed' },
 }));
+vi.mock('@/lib/reviews/read-rating-card', () => ({ readRatingCard: mockReadRatingCard }));
 
 import EngagementWorkspacePage, { generateMetadata } from './page';
 
@@ -155,6 +170,7 @@ async function renderPage(from?: string, id = ENGAGEMENT_ID) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockListActionItems.mockResolvedValue([]);
+  mockReadRatingCard.mockResolvedValue(null);
 });
 
 describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
@@ -342,5 +358,58 @@ describe('EngagementWorkspacePage — generateMetadata (no existence/title leak)
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
     mockFindWithMilestones.mockRejectedValue(new Error('db down'));
     expect((await meta()).title).toBe('Delivery workspace — Balo');
+  });
+});
+
+describe('EngagementWorkspacePage (RSC) — readRatingCard wiring', () => {
+  it('client + completed calls readRatingCard with the viewer id, no consultation required', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement({ status: 'completed' }));
+    mockReadRatingCard.mockResolvedValue({
+      engagementId: ENGAGEMENT_ID,
+      state: { kind: 'none' },
+      existingBody: null,
+    });
+
+    await renderPage();
+
+    expect(mockReadRatingCard).toHaveBeenCalledWith({
+      engagementId: ENGAGEMENT_ID,
+      viewerUserId: 'user-x',
+      requireHeldConsultation: false,
+      now: expect.any(Date),
+    });
+    expect(screen.getByText(/How was working with/)).toBeInTheDocument();
+  });
+
+  it('expert + completed never calls readRatingCard', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement({ status: 'completed' }));
+
+    await renderPage();
+
+    expect(mockReadRatingCard).not.toHaveBeenCalled();
+  });
+
+  it('admin + completed never calls readRatingCard', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement({ status: 'completed' }));
+
+    await renderPage();
+
+    expect(mockReadRatingCard).not.toHaveBeenCalled();
+  });
+
+  it('client + active never calls readRatingCard', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement({ status: 'active' }));
+
+    await renderPage();
+
+    expect(mockReadRatingCard).not.toHaveBeenCalled();
   });
 });
