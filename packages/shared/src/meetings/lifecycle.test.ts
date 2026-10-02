@@ -7,6 +7,7 @@ import {
   expertClockStart,
   isLegalMeetingTransition,
   isTerminalMeetingStatus,
+  overrunStopCeiling,
   resolveTerminalRule,
   resolveWaitingPhase,
   summarisePresence,
@@ -243,6 +244,8 @@ interface TerminalRow {
   readonly nowMinutes: number;
   /** Defaults to `START` — overridden only by the D12 reschedule rows. */
   readonly scheduledStart?: Date;
+  /** Defaults to `START + 60 min`. */
+  readonly scheduledEnd?: Date;
   readonly expected: MeetingTerminalRuleName | null;
   readonly outcome?: 'completed' | 'no_show_client' | 'missed_call' | 'venue_unavailable' | null;
   /**
@@ -262,12 +265,39 @@ function inputFor(row: TerminalRow): TerminalRuleInput {
   return {
     status: row.status,
     scheduledStart: row.scheduledStart ?? START,
+    scheduledEnd: row.scheduledEnd ?? at(60),
     presence: summarisePresence(row.intervals),
     timers: DEFAULT_MEETING_TIMERS,
     now: at(row.nowMinutes),
     venueReadyAt: venueReadyAtFor(row),
   };
 }
+
+/** The open-interval shapes an `in_progress` meeting can still be holding at its ceiling. */
+const OVERRUN_SHAPES: ReadonlyArray<{
+  readonly shape: string;
+  readonly intervals: readonly LifecyclePresenceInterval[];
+}> = [
+  { shape: 'expert only', intervals: [{ party: 'expert', joinedAt: at(0), leftAt: null }] },
+  { shape: 'client only', intervals: [{ party: 'client', joinedAt: at(0), leftAt: null }] },
+  {
+    shape: 'both',
+    intervals: [
+      { party: 'expert', joinedAt: at(0), leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ],
+  },
+];
+
+/** Ceiling = max(end, start + 240) + 30: a short booking is bound by the meter limit, a long one by its end. */
+const OVERRUN_BOOKINGS: ReadonlyArray<{
+  readonly booking: string;
+  readonly endMinutes: number;
+  readonly ceilingMinutes: number;
+}> = [
+  { booking: '60-min booking', endMinutes: 60, ceilingMinutes: 270 },
+  { booking: '300-min booking', endMinutes: 300, ceilingMinutes: 330 },
+];
 
 /**
  * ONE ROW PER RULE, PLUS ONE ROW PER NEAR-MISS. Every row asserts that EXACTLY ONE rule fires,
@@ -624,6 +654,29 @@ const TERMINAL_ROWS: readonly TerminalRow[] = [
     expected: null,
   },
 
+  // ── RULE 6 — OVERRUN STOP. in_progress + an OPEN interval at the ceiling. ───────────────
+  ...OVERRUN_SHAPES.flatMap(({ shape, intervals }) =>
+    OVERRUN_BOOKINGS.flatMap(({ booking, endMinutes, ceilingMinutes }): TerminalRow[] => [
+      {
+        label: `RULE 6 — ${booking}, ${shape} open, 1 min before the ceiling matches nothing`,
+        status: 'in_progress',
+        intervals,
+        scheduledEnd: at(endMinutes),
+        nowMinutes: ceilingMinutes - 1,
+        expected: null,
+      },
+      {
+        label: `RULE 6 overrun stop — ${booking}, ${shape} open, at the ceiling`,
+        status: 'in_progress',
+        intervals,
+        scheduledEnd: at(endMinutes),
+        nowMinutes: ceilingMinutes,
+        expected: 'overrun_stop',
+        outcome: 'completed',
+      },
+    ])
+  ),
+
   // ── THE HUMAN END IS NOT A SWEEP RULE ─────────────────────────────────────────────────
   {
     label:
@@ -664,8 +717,8 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
   });
 
   /**
-   * ⚠⚠ THE DISJOINTNESS PROOF. The five rules are mutually exclusive BY PRECONDITION, which is
-   * stronger than an evaluation order — so this evaluates all five PREDICATES independently and
+   * ⚠⚠ THE DISJOINTNESS PROOF. The six rules are mutually exclusive BY PRECONDITION, which is
+   * stronger than an evaluation order — so this evaluates all six PREDICATES independently and
    * asserts at most one holds. Written against `MEETING_TERMINAL_PREDICATES` rather than
    * against `resolveTerminalRule`'s if-chain, so it is a real proof and not a restatement.
    */
@@ -676,14 +729,28 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
     expect(firing[0]?.rule ?? null).toBe(row.expected);
   });
 
-  it('the predicate list names all five rules, once each', () => {
+  it('the predicate list names all six rules, once each', () => {
     expect(MEETING_TERMINAL_PREDICATES.map((entry) => entry.rule)).toEqual([
       'idle_end',
       'no_show',
       'missed_call',
       'venue_unavailable',
       'abandoned_wait',
+      'overrun_stop',
     ]);
+  });
+
+  it('the overrun stop carries the hard_ceiling arm and every other rule carries none', () => {
+    for (const row of TERMINAL_ROWS.filter((r) => r.expected !== null)) {
+      const decision = resolveTerminalRule(inputFor(row));
+      expect(decision?.arm).toBe(row.expected === 'overrun_stop' ? 'hard_ceiling' : null);
+    }
+  });
+
+  it('overrunStopCeiling is max(end, start + 240 min) + grace', () => {
+    expect(overrunStopCeiling(START, at(60), DEFAULT_MEETING_TIMERS)).toEqual(at(270));
+    expect(overrunStopCeiling(START, at(300), DEFAULT_MEETING_TIMERS)).toEqual(at(330));
+    expect(overrunStopCeiling(START, at(240), DEFAULT_MEETING_TIMERS)).toEqual(at(270));
   });
 
   /**
@@ -785,6 +852,7 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
       const input: TerminalRuleInput = {
         status,
         scheduledStart: START,
+        scheduledEnd: at(60),
         presence: summarisePresence(intervals),
         timers: DEFAULT_MEETING_TIMERS,
         now: at(LONG_AFTER),
@@ -799,35 +867,62 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
   );
 
   /**
-   * ⚠ THE ONE CARVE-OUT, ASSERTED RATHER THAN ASSUMED. A room somebody is STILL IN matches
-   * nothing but the no-show, and that is correct: an occupied meeting is not stranded, it is
-   * happening. It is also BOUNDED — every open interval is closed by `participant.left`, by
-   * `meeting.ended`, or by the per-minute reconciler — so the room becomes empty (and therefore
-   * terminable by the matrix above) shortly after everyone really leaves.
+   * ⚠ AN OCCUPIED `in_progress` ROOM IS BOUNDED, NOT STRANDED. It matches nothing before the
+   * ceiling and the overrun stop at it, whatever the webhooks and reconciler are doing.
    */
-  it('⚠ an OCCUPIED room is the only state that may match nothing, and only while occupied', () => {
+  it('⚠ an OCCUPIED in_progress room matches nothing before the ceiling and the overrun stop at it', () => {
     const occupied: readonly LifecyclePresenceInterval[] = [
       { party: 'expert', joinedAt: at(0), leftAt: null },
       { party: 'client', joinedAt: at(1), leftAt: null },
     ];
     const base = {
       scheduledStart: START,
+      scheduledEnd: at(60),
       presence: summarisePresence(occupied),
       timers: DEFAULT_MEETING_TIMERS,
-      now: at(LONG_AFTER),
       venueReadyAt: at(-1440),
     };
 
-    expect(resolveTerminalRule({ ...base, status: 'in_progress' })).toBeNull();
+    expect(resolveTerminalRule({ ...base, status: 'in_progress', now: at(269) })).toBeNull();
+    expect(resolveTerminalRule({ ...base, status: 'in_progress', now: at(270) })).toMatchObject({
+      rule: 'overrun_stop',
+    });
+    expect(
+      MEETING_TERMINAL_PREDICATES.filter((entry) =>
+        entry.applies({ ...base, status: 'in_progress', now: at(LONG_AFTER) })
+      )
+    ).toHaveLength(1);
 
-    // …and the moment the room empties, the very same meeting terminates.
+    // …and the moment the room empties, the very same meeting idle-ends instead.
     const emptied = summarisePresence(
       occupied.map((interval) => ({ ...interval, leftAt: at(LONG_AFTER - 30) }))
     );
     expect(
-      resolveTerminalRule({ ...base, status: 'in_progress', presence: emptied })
-    ).not.toBeNull();
+      resolveTerminalRule({
+        ...base,
+        status: 'in_progress',
+        presence: emptied,
+        now: at(LONG_AFTER),
+      })
+    ).toMatchObject({ rule: 'idle_end' });
   });
+
+  /** Pre-`in_progress` occupied rooms are the residual no rule covers; the overrun stop never fires there. */
+  it.each(['scheduled', 'waiting_for_participants'] as const)(
+    'the overrun stop never fires on a %s meeting',
+    (status) => {
+      const input: TerminalRuleInput = {
+        status,
+        scheduledStart: START,
+        scheduledEnd: at(60),
+        presence: summarisePresence([{ party: 'client', joinedAt: at(0), leftAt: null }]),
+        timers: DEFAULT_MEETING_TIMERS,
+        now: at(LONG_AFTER),
+        venueReadyAt: at(-1440),
+      };
+      expect(resolveTerminalRule(input)?.rule).not.toBe('overrun_stop');
+    }
+  );
 });
 
 // ── THE SERVER-COMPUTED WAITING PHASE (§7.1) ──────────────────────────────────────────────

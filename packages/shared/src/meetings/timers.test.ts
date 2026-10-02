@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { MAX_MEETING_MINUTES } from './bounds';
 import {
   CLIENT_ABSENT_NUDGE_MS,
   DEFAULT_MEETING_TIMERS,
   EXPERT_ABSENT_ALERT_MS,
   IDLE_END_EMPTY_MS,
+  LIFECYCLE_LOOKBACK_MS,
   MISSED_CALL_TERMINATION_MS,
   NO_SHOW_FLOOR_MS,
+  OVERRUN_STOP_GRACE_MS,
   meetingTimersAreCoherent,
   type MeetingTimers,
 } from './timers';
@@ -14,12 +17,23 @@ import {
 const MINUTE = 60_000;
 
 describe('meeting lifecycle timers (BAL-134 D8)', () => {
-  it('ships the five documented defaults, in milliseconds', () => {
+  it('ships the six documented defaults, in milliseconds', () => {
     expect(EXPERT_ABSENT_ALERT_MS).toBe(5 * MINUTE);
     expect(MISSED_CALL_TERMINATION_MS).toBe(10 * MINUTE);
     expect(CLIENT_ABSENT_NUDGE_MS).toBe(5 * MINUTE);
     expect(NO_SHOW_FLOOR_MS).toBe(15 * MINUTE);
     expect(IDLE_END_EMPTY_MS).toBe(5 * MINUTE);
+    expect(OVERRUN_STOP_GRACE_MS).toBe(30 * MINUTE);
+  });
+
+  it('the worst-case overrun ceiling (510 min) lands inside the lifecycle lookback', () => {
+    expect(MAX_MEETING_MINUTES * MINUTE + DEFAULT_MEETING_TIMERS.overrunStopGraceMs).toBe(
+      510 * MINUTE
+    );
+    expect(MAX_MEETING_MINUTES * MINUTE + DEFAULT_MEETING_TIMERS.overrunStopGraceMs).toBeLessThan(
+      LIFECYCLE_LOOKBACK_MS
+    );
+    expect(LIFECYCLE_LOOKBACK_MS).toBe(1440 * MINUTE);
   });
 
   it('every default is a positive finite number of milliseconds', () => {
@@ -29,7 +43,7 @@ describe('meeting lifecycle timers (BAL-134 D8)', () => {
     }
   });
 
-  it('DEFAULT_MEETING_TIMERS names exactly the five timers', () => {
+  it('DEFAULT_MEETING_TIMERS names exactly the six timers', () => {
     // ⚠ THE COMPARATOR IS NOT OPTIONAL — a bare `.sort()` is a SonarCloud reliability bug.
     expect(Object.keys(DEFAULT_MEETING_TIMERS).sort((a, b) => a.localeCompare(b))).toEqual([
       'clientAbsentNudgeMs',
@@ -37,6 +51,7 @@ describe('meeting lifecycle timers (BAL-134 D8)', () => {
       'idleEndEmptyMs',
       'missedCallTerminationMs',
       'noShowFloorMs',
+      'overrunStopGraceMs',
     ]);
   });
 
@@ -47,6 +62,7 @@ describe('meeting lifecycle timers (BAL-134 D8)', () => {
       clientAbsentNudgeMs: CLIENT_ABSENT_NUDGE_MS,
       noShowFloorMs: NO_SHOW_FLOOR_MS,
       idleEndEmptyMs: IDLE_END_EMPTY_MS,
+      overrunStopGraceMs: OVERRUN_STOP_GRACE_MS,
     });
   });
 
@@ -105,10 +121,10 @@ describe('meeting lifecycle timers (BAL-134 D8)', () => {
     expect(source).toContain(
       'export const NO_SHOW_FLOOR_MS = MIN_MEETING_MINUTES * MS_PER_MINUTE;'
     );
-    expect(source).toContain("import { MIN_MEETING_MINUTES } from './bounds';");
+    expect(source).toMatch(/import \{[^}]*\bMIN_MEETING_MINUTES\b[^}]*\} from '\.\/bounds';/);
   });
 
-  it('the five values are what the anchors need — the alert precedes its termination', () => {
+  it('the values are what the anchors need — the alert precedes its termination', () => {
     expect(DEFAULT_MEETING_TIMERS.expertAbsentAlertMs).toBeLessThan(
       DEFAULT_MEETING_TIMERS.missedCallTerminationMs
     );
@@ -143,7 +159,22 @@ describe('meetingTimersAreCoherent', () => {
     { label: 'zero client nudge', patch: { clientAbsentNudgeMs: 0 } },
     { label: 'zero idle window', patch: { idleEndEmptyMs: 0 } },
     { label: 'negative idle window', patch: { idleEndEmptyMs: -1 } },
+    { label: 'zero overrun-stop grace', patch: { overrunStopGraceMs: 0 } },
+    {
+      label: 'overrun-stop grace below the Join window (29 min)',
+      patch: { overrunStopGraceMs: 29 * MINUTE },
+    },
+    { label: 'negative overrun-stop grace', patch: { overrunStopGraceMs: -1 } },
+    {
+      label: 'overrun-stop grace that pushes the ceiling past the lookback',
+      patch: { overrunStopGraceMs: 960 * MINUTE },
+    },
   ];
+
+  it('accepts an overrun-stop grace of exactly 30 min and a longer one', () => {
+    expect(meetingTimersAreCoherent(withOverride({ overrunStopGraceMs: 30 * MINUTE }))).toBe(true);
+    expect(meetingTimersAreCoherent(withOverride({ overrunStopGraceMs: 60 * MINUTE }))).toBe(true);
+  });
 
   it.each(INCOHERENT)('rejects $label', ({ patch }) => {
     expect(meetingTimersAreCoherent(withOverride(patch))).toBe(false);

@@ -1,7 +1,7 @@
 /**
- * BAL-134 (D8) — THE FIVE MEETING LIFECYCLE TIMERS, AS TYPED DEFAULTS.
+ * BAL-134 (D8) — THE SIX MEETING LIFECYCLE TIMERS, AS TYPED DEFAULTS.
  *
- * ⚠⚠ THERE ARE **FIVE**, NOT FOUR, AND THE TWO FIVE-MINUTE ONES MUST NOT BE UNIFIED. They
+ * ⚠⚠ THERE ARE **SIX**, AND THE TWO FIVE-MINUTE ONES MUST NOT BE UNIFIED. They
  * carry the same default and have DIFFERENT ANCHORS, so collapsing them would be a silent
  * behaviour change the moment either is overridden:
  *
@@ -16,7 +16,7 @@
  * subpath precisely to avoid the `@balo/db` client-bundle footgun (memory
  * `reference_balo_db_client_bundle_footgun`). A `process.env` read here would ship into a
  * browser bundle. The env-override reader lives at `apps/api/src/config/meeting-timers.ts`
- * and is the ONLY place these five variables are read.
+ * and is the ONLY place these six variables are read.
  *
  * ⚠ AND THE BROWSER NEVER SEES A THRESHOLD AT ALL. The waiting phase is computed SERVER-SIDE
  * (`resolveWaitingPhase`, reached through `GET /meetings/:meetingId/state`) and sent on the
@@ -34,9 +34,28 @@
  * these — `lifecycle.ts` reads no clock and no constant of its own.
  */
 
-import { MIN_MEETING_MINUTES } from './bounds';
+import { MAX_SESSION_MINUTES } from '../pricing';
+import { MAX_MEETING_MINUTES, MIN_MEETING_MINUTES } from './bounds';
 
 const MS_PER_MINUTE = 60_000;
+
+/**
+ * How long after a meeting's scheduled end the call stays joinable, in minutes. It is also the
+ * grace the overrun hard stop adds to the meeting's ceiling ({@link OVERRUN_STOP_GRACE_MS}).
+ * Lives here, and is re-exported by `@balo/shared/engagements`, because that module imports
+ * this one and the reverse import would be a cycle.
+ *
+ * Deliberately far inside the 24h server token TTL (`MEETING_TOKEN_TTL_AFTER_END_MS`), and a
+ * constant rather than config: `platform_config` is not on `main`.
+ */
+export const MEETING_OVERRUN_GRACE_MINUTES = 30;
+
+/**
+ * How far back the lifecycle sweep still manages a meeting (by `scheduled_start`). A meeting
+ * older than this is invisible to every terminal rule, so every ceiling must land inside it;
+ * see {@link meetingTimersAreCoherent}.
+ */
+export const LIFECYCLE_LOOKBACK_MS = 24 * 60 * MS_PER_MINUTE;
 
 /**
  * The expert has not joined by `anchor + this` ⇒ alert Balo ops so a human can chase them.
@@ -97,7 +116,7 @@ export const NO_SHOW_FLOOR_MS = MIN_MEETING_MINUTES * MS_PER_MINUTE;
  * empty (the latest `meeting_presence.left_at`).
  *
  * ⚠ IT IS SCOPED, ON BOTH OF ITS USES, TO A MEETING SOMEBODY ACTUALLY REACHED — never to
- * "is empty" (ADR-1049 forbids widening it, and the five terminal rules are disjoint by
+ * "is empty" (ADR-1049 forbids widening it, and the six terminal rules are disjoint by
  * status/presence precisely because of that scoping). Widening it would pre-empt the no-show
  * and missed-call rules on a room nobody ever entered.
  *
@@ -106,7 +125,18 @@ export const NO_SHOW_FLOOR_MS = MIN_MEETING_MINUTES * MS_PER_MINUTE;
 export const IDLE_END_EMPTY_MS = 5 * MS_PER_MINUTE;
 
 /**
- * The five timers as ONE injected value.
+ * The overrun hard stop's grace past a meeting's ceiling: an `in_progress` meeting that still
+ * has an open presence interval at `max(scheduled_end, scheduled_start + MAX_SESSION_MINUTES)
+ * + this` is ended by the system (`overrun_stop`). Equals {@link MEETING_OVERRUN_GRACE_MINUTES}.
+ *
+ * Env override: `MEETING_OVERRUN_STOP_GRACE_MINUTES`, which may lengthen the grace but never
+ * shorten it below this default (the Join window's end), so the stop never cuts a call that is
+ * still joinable ({@link meetingTimersAreCoherent}).
+ */
+export const OVERRUN_STOP_GRACE_MS = MEETING_OVERRUN_GRACE_MINUTES * MS_PER_MINUTE;
+
+/**
+ * The six timers as ONE injected value.
  *
  * ⚠ EVERY LIFECYCLE FUNCTION TAKES THIS RATHER THAN READING THE CONSTANTS ABOVE. That is what
  * lets `apps/api` hand the ENV-RESOLVED set to the sweep and to the state route, and what lets
@@ -123,6 +153,8 @@ export interface MeetingTimers {
   readonly noShowFloorMs: number;
   /** @see IDLE_END_EMPTY_MS */
   readonly idleEndEmptyMs: number;
+  /** @see OVERRUN_STOP_GRACE_MS */
+  readonly overrunStopGraceMs: number;
 }
 
 /** The shipped defaults, as one value. `apps/api` overlays env overrides onto this. */
@@ -132,15 +164,17 @@ export const DEFAULT_MEETING_TIMERS: MeetingTimers = {
   clientAbsentNudgeMs: CLIENT_ABSENT_NUDGE_MS,
   noShowFloorMs: NO_SHOW_FLOOR_MS,
   idleEndEmptyMs: IDLE_END_EMPTY_MS,
+  overrunStopGraceMs: OVERRUN_STOP_GRACE_MS,
 };
 
 /**
- * ⚠ THE INVARIANT THE FIVE NUMBERS MUST SATISFY, STATED AS CODE RATHER THAN AS PROSE.
+ * ⚠ THE INVARIANT THE SIX NUMBERS MUST SATISFY, STATED AS CODE RATHER THAN AS PROSE.
  *
  * An ALERT must fire strictly BEFORE the termination it is trying to prevent, on both
  * progressions — otherwise Balo would be told "nobody turned up" only after having already
  * closed the meeting, and the salvage window this feature exists to create would be zero
- * seconds wide. `apps/api`'s env reader calls this and refuses (logs + falls back) on a
+ * seconds wide. The overrun stop's latest ceiling must also land inside the sweep's lookback, or
+ * a long meeting would fall out of view before the stop could fire. `apps/api`'s env reader calls this and refuses (logs + falls back) on a
  * violating override, so a typo in a Railway variable cannot silently disarm the alerts.
  */
 export function meetingTimersAreCoherent(timers: MeetingTimers): boolean {
@@ -149,6 +183,9 @@ export function meetingTimersAreCoherent(timers: MeetingTimers): boolean {
     timers.missedCallTerminationMs > timers.expertAbsentAlertMs &&
     timers.clientAbsentNudgeMs > 0 &&
     timers.noShowFloorMs > timers.clientAbsentNudgeMs &&
-    timers.idleEndEmptyMs > 0
+    timers.idleEndEmptyMs > 0 &&
+    timers.overrunStopGraceMs >= OVERRUN_STOP_GRACE_MS &&
+    Math.max(MAX_MEETING_MINUTES, MAX_SESSION_MINUTES) * MS_PER_MINUTE + timers.overrunStopGraceMs <
+      LIFECYCLE_LOOKBACK_MS
   );
 }

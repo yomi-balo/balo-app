@@ -47,6 +47,7 @@ const TIMERS = {
   clientAbsentNudgeMs: 300_000,
   noShowFloorMs: 900_000,
   idleEndEmptyMs: 300_000,
+  overrunStopGraceMs: 30 * 60_000,
 };
 
 const STATE = {

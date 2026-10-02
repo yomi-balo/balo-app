@@ -1,5 +1,5 @@
 /**
- * BAL-134 (D8) — THE **ONLY** PLACE THE FIVE MEETING TIMERS ARE READ FROM `process.env`.
+ * BAL-134 (D8) — THE **ONLY** PLACE THE SIX MEETING TIMERS ARE READ FROM `process.env`.
  *
  * ⚠⚠ WHY IT IS HERE AND NOT IN `@balo/shared/meetings`. That subpath is DELIBERATELY
  * CLIENT-REACHABLE — BAL-403's in-session panel imports `computeMeetingClocks` from it
@@ -35,9 +35,9 @@ const log = createLogger('meeting-timers-config');
 const MS_PER_MINUTE = 60_000;
 
 /**
- * The five env variables, as DATA — the CLAUDE.md data-driven rule applied to configuration.
+ * The six env variables, as DATA — the CLAUDE.md data-driven rule applied to configuration.
  *
- * ⚠ ONE ROW PER TIMER, and the row names both the variable and the field it overrides. Five
+ * ⚠ ONE ROW PER TIMER, and the row names both the variable and the field it overrides. Six
  * copy-pasted `parseInt(process.env.X)` blocks would be exactly the shape SonarCloud's
  * duplication gate flags, and would make it possible to wire a variable to the wrong field
  * without anything failing.
@@ -51,6 +51,7 @@ const TIMER_OVERRIDES: ReadonlyArray<{
   { field: 'clientAbsentNudgeMs', variable: 'MEETING_CLIENT_ABSENT_NUDGE_MINUTES' },
   { field: 'noShowFloorMs', variable: 'MEETING_NO_SHOW_FLOOR_MINUTES' },
   { field: 'idleEndEmptyMs', variable: 'MEETING_IDLE_END_MINUTES' },
+  { field: 'overrunStopGraceMs', variable: 'MEETING_OVERRUN_STOP_GRACE_MINUTES' },
 ];
 
 /**
@@ -74,7 +75,7 @@ function parseMinutes(raw: string | undefined): number | null {
 }
 
 /**
- * The five timers, with any valid env overrides applied.
+ * The six timers, with any valid env overrides applied.
  *
  * ⚠ COHERENCE IS CHECKED ON THE WHOLE SET, AND A VIOLATION DISCARDS **ALL** OVERRIDES rather
  * than the offending one. An alert must fire strictly before the termination it exists to

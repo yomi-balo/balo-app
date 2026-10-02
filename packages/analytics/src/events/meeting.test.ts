@@ -13,7 +13,7 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(Object.keys(MEETING_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       // BAL-433 (1) — the expert-party calendar-delivery outcome. `C` < `E`, so it leads.
       'MEETING_CALENDAR_PROJECTED',
-      // BAL-134 / BAL-581 (6). ⚠ THE ORDER BELOW IS `localeCompare`'s, NOT a code-unit sort's —
+      // BAL-134 / BAL-581 / BAL-585 (7). ⚠ THE ORDER BELOW IS `localeCompare`'s, NOT a code-unit sort's —
       // see the note above. `MEETING_ENDED` < `MEETING_EXPERT_…` because `N` < `X`;
       // `MEETING_MISSED_…` < `MEETING_PROVISION_FAILED` because `M` < `P`; `MEETING_STARTED` <
       // `MEETING_VENUE_…` because `S` < `V`; and `MEETING_VENUE_…` < `MEETING_WAITING_…`
@@ -26,6 +26,8 @@ describe('MEETING_SERVER_EVENTS', () => {
       // BAL-132. `J` < `M`, so this sorts before the missed call.
       'MEETING_JOIN_GRANTED',
       'MEETING_MISSED_CALL',
+      // `MEETING_O…` sorts after `MISSED` (`M` < `O`) and before `PROVISION` (`O` < `P`).
+      'MEETING_OVERRUN_STOPPED',
       'MEETING_PROVISION_FAILED',
       'MEETING_PROVISIONED',
       'MEETING_STARTED',
@@ -43,6 +45,7 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(MEETING_SERVER_EVENTS.MEETING_EXPERT_ABSENT_ALERT).toBe('meeting_expert_absent_alert');
     expect(MEETING_SERVER_EVENTS.MEETING_MISSED_CALL).toBe('meeting_missed_call');
     expect(MEETING_SERVER_EVENTS.MEETING_VENUE_UNAVAILABLE).toBe('meeting_venue_unavailable');
+    expect(MEETING_SERVER_EVENTS.MEETING_OVERRUN_STOPPED).toBe('meeting_overrun_stopped');
     expect(MEETING_SERVER_EVENTS.MEETING_ENDED).toBe('meeting_ended');
     expect(MEETING_SERVER_EVENTS.MEETING_END_REFUSED).toBe('meeting_end_refused');
     expect(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED).toBe('meeting_calendar_projected');

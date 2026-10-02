@@ -464,6 +464,10 @@ export {
   ExpertProfileNotFoundError,
   /** BAL-412 (F2) — the presence-settlement TOCTOU refusal; the backstop retries on it. */
   SettlementDrawDivergedError,
+  /** A PERMANENT settlement refusal (a figure/invariant guard); the backstop marks it exhausted. */
+  SettlementRefusedError,
+  PRESENCE_SETTLEMENT_EXHAUSTED_ACTION,
+  type SettlementRefusalGuard,
   SESSION_EXPERT_ACCRUED_ACTION,
   SESSION_AUDIT_ENTITY_TYPE,
   CLIENT_SESSION_VIEW_COLUMNS,

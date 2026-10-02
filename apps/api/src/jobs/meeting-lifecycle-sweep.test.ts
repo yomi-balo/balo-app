@@ -85,6 +85,7 @@ vi.mock('@balo/analytics/server', () => ({
     MEETING_MISSED_CALL: 'meeting_missed_call',
     // BAL-581 — MANDATORY: without this the venue arm calls `trackServer(undefined, …)`.
     MEETING_VENUE_UNAVAILABLE: 'meeting_venue_unavailable',
+    MEETING_OVERRUN_STOPPED: 'meeting_overrun_stopped',
   },
 }));
 // ⚠⚠ THE FULL MODULE SURFACE, NOT JUST THE TWO FUNCTIONS THIS FILE HAPPENS TO ASSERT ON.
@@ -150,6 +151,7 @@ import {
   MAX_RECORDING_ENSURES_PER_SWEEP_TICK,
   MEETING_LIFECYCLE_BATCH_LIMIT,
   MEETING_LIFECYCLE_SWEEP_CRON,
+  roomOccupancy,
   runMeetingLifecycleSweep,
 } from './meeting-lifecycle-sweep.js';
 import type { PresenceReader } from '../services/daily/rooms.js';
@@ -813,6 +815,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
 
   const TERMINAL_ROWS: ReadonlyArray<{
     label: string;
+    rule: string;
     status: string;
     intervals: Array<{ party: string; joinedAt: Date; leftAt: Date | null }>;
     nowMinutes: number;
@@ -825,6 +828,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
   }> = [
     {
       label: 'IDLE END — completed',
+      rule: 'idle_end',
       status: 'in_progress',
       intervals: [
         { party: 'expert', joinedAt: START, leftAt: at(30) },
@@ -835,6 +839,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     },
     {
       label: 'NO-SHOW — no_show_client',
+      rule: 'no_show',
       status: 'waiting_for_participants',
       intervals: [{ party: 'expert', joinedAt: START, leftAt: null }],
       nowMinutes: 15,
@@ -842,6 +847,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     },
     {
       label: 'MISSED CALL — missed_call + its own event',
+      rule: 'missed_call',
       status: 'scheduled',
       intervals: [],
       nowMinutes: 10,
@@ -850,6 +856,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     },
     {
       label: 'ABANDONED WAIT (D9) — NULL outcome + its own event',
+      rule: 'abandoned_wait',
       status: 'waiting_for_participants',
       intervals: [{ party: 'expert', joinedAt: START, leftAt: at(8) }],
       nowMinutes: 13,
@@ -858,6 +865,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     },
     {
       label: 'VENUE UNAVAILABLE (BAL-581) — venue_unavailable + its own event',
+      rule: 'venue_unavailable',
       status: 'scheduled',
       intervals: [],
       nowMinutes: 10,
@@ -868,6 +876,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     },
     {
       label: 'VENUE UNAVAILABLE (BAL-581) — a MISMATCHED stamped name still counts as stamped',
+      rule: 'venue_unavailable',
       status: 'scheduled',
       intervals: [],
       nowMinutes: 10,
@@ -903,10 +912,11 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     expect(mockEndMeeting).toHaveBeenCalledWith({
       id: MEETING_ID,
       outcome: rowSpec.outcome,
-      // ⚠ ALL FIVE SYSTEM RULES REPORT `system_idle`. `ended_by` answers "person or system?";
-      // WHICH rule fired is answered by `outcome` plus the audit row.
+      // ⚠ ALL SIX SYSTEM RULES REPORT `system_idle`. `ended_by` answers "person or system?";
+      // WHICH rule fired is answered by `outcome` plus the audit row's `terminalRule`.
       endedBy: 'system_idle',
       endedAt: at(rowSpec.nowMinutes),
+      terminalRule: { rule: rowSpec.rule, arm: null },
       // ⚠ NULL ACTOR — the ADR-1030 system-actor exemption. Never a fabricated actor.
       actorUserId: null,
     });
@@ -1472,6 +1482,142 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       );
     }
   );
+});
+
+describe('overrun_stop — the Arm B hard ceiling (BAL-585)', () => {
+  const BOTH_CLAIMS = [
+    dailyParticipantIdFor('user', USER_ID),
+    dailyParticipantIdFor('user', OTHER_USER_ID),
+  ];
+  /** scheduledEnd = start+60, so the ceiling is max(start+60, start+240) + 30 = start+270. */
+  const CEILING_MINUTES = 270;
+  const TWO_OPEN = [
+    { party: 'expert', joinedAt: START, leftAt: null },
+    { party: 'client', joinedAt: at(2), leftAt: null },
+  ];
+  const OPEN_ROWS = [
+    { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'expert', joinedAt: START },
+    { id: 'row-2', userId: OTHER_USER_ID, meetingGuestId: null, party: 'client', joinedAt: at(2) },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
+    mockListByMeeting.mockResolvedValue(TWO_OPEN);
+    mockListOpen.mockResolvedValue([]);
+    mockListContexts.mockResolvedValue([]);
+    mockEndMeeting.mockResolvedValue({
+      meeting: meeting({ status: 'ended' }),
+      closedIntervals: 2,
+    });
+    mockDeleteRoom.mockResolvedValue('deleted');
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'not_a_case_meeting',
+    });
+    mockFindCapturingForMeeting.mockResolvedValue(undefined);
+    mockCountFailedByStage.mockResolvedValue(0);
+  });
+
+  it('does nothing one minute before the ceiling, whatever the roster says', async () => {
+    const result = await runMeetingLifecycleSweep(at(CEILING_MINUTES - 1), () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(0);
+    expect(mockEndMeeting).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('INCIDENT SHAPE — a whole-platform-empty roster still ends the meeting at the ceiling, occupancy unknown', async () => {
+    const now = at(CEILING_MINUTES);
+
+    const result = await runMeetingLifecycleSweep(now, () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(1);
+    expect(mockEndMeeting).toHaveBeenCalledTimes(1);
+    expect(mockEndMeeting).toHaveBeenCalledWith({
+      id: MEETING_ID,
+      outcome: 'completed',
+      endedBy: 'system_idle',
+      endedAt: now,
+      actorUserId: null,
+      terminalRule: { rule: 'overrun_stop', arm: 'hard_ceiling' },
+    });
+    expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueRecordingStop).toHaveBeenCalledWith({ meetingId: MEETING_ID });
+    expect(mockDeleteRoom).toHaveBeenCalledWith(ROOM);
+    expect(mockTrackServer).toHaveBeenCalledWith('meeting_overrun_stopped', {
+      meeting_id: MEETING_ID,
+      room_occupancy: 'unknown',
+      minutes_past_scheduled_end: CEILING_MINUTES - 60,
+      open_intervals_closed: 2,
+      distinct_id: MEETING_ID,
+    });
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ rule: 'overrun_stop', arm: 'hard_ceiling' }),
+      'Terminal rule fired'
+    );
+  });
+
+  it('a roster that confirms both claims reports the room as occupied', async () => {
+    mockListOpen.mockResolvedValue(OPEN_ROWS);
+
+    const result = await runMeetingLifecycleSweep(at(CEILING_MINUTES), () => {}, {
+      getAllPresence: async () => ({ [ROOM]: BOTH_CLAIMS.map((userId) => ({ userId })) }),
+    });
+
+    expect(result.terminated).toBe(1);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_overrun_stopped',
+      expect.objectContaining({ room_occupancy: 'occupied', open_intervals_closed: 2 })
+    );
+  });
+
+  it('an unreadable roster (vendor outage) reports occupancy unknown and still ends the meeting', async () => {
+    const result = await runMeetingLifecycleSweep(at(CEILING_MINUTES), () => {}, {
+      getAllPresence: async () => {
+        throw new Error('daily is down');
+      },
+    });
+
+    expect(result.terminated).toBe(1);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_overrun_stopped',
+      expect.objectContaining({ room_occupancy: 'unknown' })
+    );
+  });
+
+  it('a pre-in_progress meeting is never ended by the ceiling alone', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'waiting_for_participants' })]);
+    mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: START, leftAt: null }]);
+
+    await runMeetingLifecycleSweep(at(CEILING_MINUTES), () => {}, EMPTY_READER);
+
+    expect(mockTrackServer).not.toHaveBeenCalledWith('meeting_overrun_stopped', expect.anything());
+  });
+
+  it('a long booking is bounded by scheduledEnd + grace, not the 240-minute session cap', async () => {
+    const longMeeting = meeting({ status: 'in_progress', scheduledEnd: at(300) });
+    mockListCandidates.mockResolvedValue([longMeeting]);
+    mockFindMeetingById.mockResolvedValue(longMeeting);
+
+    await runMeetingLifecycleSweep(at(329), () => {}, EMPTY_READER);
+    expect(mockEndMeeting).not.toHaveBeenCalled();
+
+    await runMeetingLifecycleSweep(at(330), () => {}, EMPTY_READER);
+    expect(mockEndMeeting).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('roomOccupancy', () => {
+  it.each([
+    { roster: null, platformEmpty: false, expected: 'unknown' },
+    { roster: ['a'], platformEmpty: true, expected: 'unknown' },
+    { roster: [], platformEmpty: false, expected: 'empty' },
+    { roster: ['a'], platformEmpty: false, expected: 'occupied' },
+  ])('roster $roster, platform empty $platformEmpty -> $expected', (row) => {
+    expect(roomOccupancy(row.roster, row.platformEmpty)).toBe(row.expected);
+  });
 });
 
 describe('the sweep cadence', () => {
