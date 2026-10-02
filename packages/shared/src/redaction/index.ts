@@ -46,7 +46,10 @@
  *      not a static guarantee against a property a future posthog-js version might add.
  *   3. `apps/web/src/lib/observability/sentry-scrub.ts` → Sentry errors, transactions,
  *      breadcrumbs and Session Replay, wired into all three `Sentry.init` runtimes.
- * A fourth sink that captures a URL and does NOT appear on this list is the defect.
+ *   4. `apps/web/src/components/providers/ybug-widget.tsx` → the Ybug feedback widget, whose
+ *      reports carry the page URL and its console/network log with no redaction hook — so, like
+ *      Session Replay, it is REFUSED on a sensitive URL (`isSensitiveUrl`) rather than scrubbed.
+ * Any other sink that captures a URL and does NOT appear on this list is the defect.
  *
  * ⚠ BAL-529 §B — a THIRD query-param registry, {@link STRIPE_SETUP_INTENT_RETURN_QUERY_PARAMS}
  * / `PATH_INDEPENDENT_SENSITIVE_QUERY_PARAMS`, joins {@link SENSITIVE_PATH_PREFIXES} and

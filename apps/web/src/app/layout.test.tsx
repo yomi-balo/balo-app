@@ -13,6 +13,11 @@ vi.mock('@/components/ui/sonner', () => ({ Toaster: () => <div data-testid="toas
 vi.mock('@/components/layout/app-footer', () => ({
   AppFooter: () => <div data-testid="app-footer" />,
 }));
+// The real widget reads `useSearchParams`, which needs the App Router's context; its own
+// behaviour is covered in `ybug-widget.test.tsx`.
+vi.mock('@/components/providers/ybug-widget', () => ({
+  YbugWidget: () => <div data-testid="ybug-widget" />,
+}));
 
 /**
  * BAL-504 — `Providers` is stubbed so this test asserts what the LAYOUT actually PASSES DOWN
@@ -39,13 +44,14 @@ beforeEach(() => {
  * `<Providers>` here makes the second `it` below fail.
  */
 describe('RootLayout — session-free (BAL-504)', () => {
-  it('renders children, the footer and the toaster', () => {
+  it('renders children, the footer, the toaster and the Ybug widget', () => {
     const ui = RootLayout({ children: <p>Body</p> });
     render(ui);
 
     expect(screen.getByText('Body')).toBeInTheDocument();
     expect(screen.getByTestId('app-footer')).toBeInTheDocument();
     expect(screen.getByTestId('toaster')).toBeInTheDocument();
+    expect(screen.getByTestId('ybug-widget')).toBeInTheDocument();
   });
 
   it('passes Providers only `children` — no identity props', () => {
