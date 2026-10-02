@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import localFont from 'next/font/local';
+import { Suspense } from 'react';
 import { Providers } from '@/components/providers';
 import { AppFooter } from '@/components/layout/app-footer';
 import { Toaster } from '@/components/ui/sonner';
@@ -66,7 +67,10 @@ export default function RootLayout({
           <AppFooter />
           <Toaster richColors position="top-center" />
         </Providers>
-        <YbugWidget />
+        {/* `YbugWidget` reads `useSearchParams`; without this boundary static pages can't prerender. */}
+        <Suspense fallback={null}>
+          <YbugWidget />
+        </Suspense>
       </body>
     </html>
   );
