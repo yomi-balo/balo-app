@@ -4,6 +4,7 @@ import {
   creditSessionsRepository,
   meetingPresenceRepository,
   meetingsRepository,
+  SettlementRefusedError,
   type CreditSession,
 } from '@balo/db';
 import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
@@ -67,13 +68,17 @@ import {
  *     exhausted — a marker plus ONE alarm — on the first attempt past 25h. Pass 6 below can only
  *     retry sessions that already exist; this is the pass for the ones that do not.
  *  6. PRESENCE-SETTLEMENT DURABILITY BACKSTOP (BAL-412, plan §4.3) — `duration_source='presence'`
- *     sessions whose MEETING has ended but which never settled (`findPresenceUnsettled`). NEEDED
+ *     sessions whose MEETING has ended but which never settled (`findPresenceSettlementCandidates`). NEEDED
  *     because both terminal paths (`end-meeting.ts`, `meeting-lifecycle-sweep.ts`) call
  *     `settleSessionlessCaseMeeting` BEST-EFFORT and NON-FATAL, so a fault there strands a session
  *     `findFinalizedMissingPayout` (pass 5) cannot see — that finder keys on
  *     `billing_finalized_at IS NOT NULL`, the exact opposite half of this space. BAL-466 wires
  *     `duration_source='presence'` at admission (`joinMeetingAsMember`), so this pass is now
- *     reachable for a `case` meeting whose client was admitted.
+ *     reachable for a `case` meeting whose client was admitted. A settlement the repository refuses
+ *     PERMANENTLY (`SettlementRefusedError`) gets an `audit_events` exhaustion marker, which
+ *     the candidate finder excludes, so a row that can never settle cannot fill the batch and starve
+ *     newer ones; every other error stays a log-and-retry. The alert read (`findPresenceUnsettled`)
+ *     still sees marked rows.
  *  7. SETTLED-WITHOUT-CREDIT ALARM — `settlement_status='settled'` with NO `overdraft_settlement`
  *     ledger row (`findSettledMissingLedgerCredit`). ALARM ONLY: it writes nothing, because the
  *     repair belongs where the evidence is about to be erased (`markSettledFromReconcile`, which
@@ -261,28 +266,20 @@ async function enforceMaxDuration(session: CreditSession, now: Date): Promise<vo
     return;
   }
   // BAL-412 (Q3, plan §4.3) — a `presence` session's terminal path is the meeting lifecycle
-  // sweep's idle-end rule (`meeting-lifecycle-sweep.ts`), NEVER this force-end: finalizing it
-  // here would settle it behind the meeting's back, with no floor and no outcome resolved.
-  // Skipped and left to the owning rule; settlement (`settleSessionlessCaseMeeting`) follows from
-  // there, and this file's own pass 6 durability backstop covers a settlement that then fails.
-  // Residual, accepted (Q3): a `presence` session on a room nobody ever leaves CAN exceed
-  // `MAX_SESSION_MINUTES` in DURATION.
+  // sweep's `idle_end` / `overrun_stop` rules (`meeting-lifecycle-sweep.ts`), NEVER this force-end:
+  // finalizing it here would settle it behind the meeting's back, with no floor and no outcome
+  // resolved. Skipped and left to those rules; settlement (`settleSessionlessCaseMeeting`) follows
+  // from there, and this file's own pass 6 durability backstop covers a settlement that then fails.
   //
-  // ⚠⚠ AN EARLIER REVISION OF THIS COMMENT CLAIMED THIS WAS "not a money hazard — the
-  // grace/ceiling wrap already stops metering at `effectiveCeilingMinor`". **THAT WAS FALSE**
-  // (F1), and it is corrected here rather than quietly reworded because it was the stated
-  // reason no bound was added. `effectiveCeilingMinor` bounds the LIVE METER's overdraft wrap
-  // (`applyGraceTick`); NOTHING in the settlement path reads it, so it never bounded the
-  // settlement TOP-UP — which is where the off-session charge is actually sized.
-  //
-  // THE MONEY BOUND IS `maxBillableMinutes`, injected into `resolveMeetingSettlement` at the
-  // `apps/api` boundary (`resolveMaxBillableMinutes()`, `config/billing-floor.ts`). It is what
-  // makes this skip safe: settlement cannot bill above `MAX_SESSION_MINUTES` however long the
-  // room stayed occupied. What remains here is a DURATION residual only.
+  // The skip is safe because presence draw is bounded twice: `meterSessionToNow` never posts a tick
+  // past `MAX_SESSION_MINUTES`, and the lifecycle sweep ends the meeting at its `overrun_stop` hard ceiling.
+  // Settlement bills `max(ruleMinutes <= 240, drawn <= 240)`; only legacy rows drawn before the
+  // clamp can exceed that, and they settle in full. (An earlier revision credited
+  // `effectiveCeilingMinor` with bounding settlement; it bounds only the live overdraft wrap.)
   if (session.durationSource === 'presence') {
     logger.warn(
       { sessionId: session.id, elapsedMinutes },
-      'Presence session exceeded MAX_SESSION_MINUTES — skipping force-end; the meeting lifecycle sweep (its idle-end rule) owns termination for this duration_source, not this reaper'
+      'Presence session exceeded MAX_SESSION_MINUTES — skipping force-end; the meeting lifecycle sweep (its idle-end / overrun-stop rules) owns termination for this duration_source, not this reaper'
     );
     return;
   }
@@ -586,19 +583,50 @@ async function handleSessionlessAttemptFailure(
 }
 
 /**
+ * Pass 6 — record that a session's settlement was permanently refused, removing it from the
+ * backstop's candidate read. Never throws: a failed marker write is logged and the row is retried
+ * on the next tick.
+ */
+async function exhaustPresenceSettlement(
+  session: CreditSession,
+  error: SettlementRefusedError
+): Promise<void> {
+  try {
+    await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: session.id,
+      ...(session.meetingId === null ? {} : { meetingId: session.meetingId }),
+      guard: error.guard,
+      error: error.message,
+    });
+    logger.error(
+      { sessionId: session.id, guard: error.guard, error: error.message },
+      'Presence settlement permanently refused — marked exhausted and removed from pass 6'
+    );
+  } catch (markerError) {
+    logger.error(
+      { sessionId: session.id, guard: error.guard, error: errorMessage(markerError) },
+      'Presence settlement refusal marker write failed — will retry on the next tick'
+    );
+  }
+}
+
+/**
  * Pass 6 (BAL-412, plan §4.3) — THE PRESENCE-SETTLEMENT DURABILITY BACKSTOP. Both terminal paths
  * (`end-meeting.ts`, `meeting-lifecycle-sweep.ts`) call `settleSessionlessCaseMeeting` BEST-EFFORT and
  * NON-FATAL, so a settlement fault there strands a session that pass 5 above CANNOT see —
  * `findFinalizedMissingPayout` keys on `billing_finalized_at IS NOT NULL`, the exact opposite
- * half of the space. `findPresenceUnsettled` is the NEW finder for the opposite half: a meeting
- * that has ENDED with a `duration_source='presence'` session that never settled.
+ * half of the space. Pass 6's read is `findPresenceSettlementCandidates`: a meeting that has ENDED
+ * with a `duration_source='presence'` session that never settled, minus sessions already marked
+ * permanently refused. `findPresenceUnsettled` is the unfiltered read kept for the admin alert.
+ * After the loop, `countPresenceSettlementExhausted` drives an interim warn so marked sessions
+ * never go silent while they await manual repair.
  *
  * `settleSessionFromPresence` is itself idempotent (the repository's row lock is the real
  * guard), so a row picked up here and settled by a racing terminal path in the same instant is a
  * harmless `already_settled` no-op.
  *
  * ⚠ BAL-466 wires it: `joinMeetingAsMember` opens a `duration_source='presence'` session when
- * the first CLIENT-side member is admitted to a `case` meeting, so `findPresenceUnsettled` now
+ * the first CLIENT-side member is admitted to a `case` meeting, so the candidate read now
  * selects a real row once that meeting ends unsettled — see `credit-sessions.integration.test.ts`
  * for the end-to-end proof.
  */
@@ -608,7 +636,7 @@ async function runPresenceSettlementPass(
 ): Promise<number> {
   let settled = 0;
   const cutoff = new Date(now.getTime() - PRESENCE_SETTLEMENT_GRACE_MINUTES * MS_PER_MINUTE);
-  const sessions = await creditSessionsRepository.findPresenceUnsettled(
+  const sessions = await creditSessionsRepository.findPresenceSettlementCandidates(
     cutoff,
     PRESENCE_SETTLEMENT_BATCH_LIMIT
   );
@@ -646,6 +674,10 @@ async function runPresenceSettlementPass(
         );
       }
     } catch (error) {
+      if (error instanceof SettlementRefusedError) {
+        await exhaustPresenceSettlement(session, error);
+        continue;
+      }
       const message = errorMessage(error);
       log(`presence settlement backstop failed for session ${session.id}: ${message}`);
       logger.error(
@@ -654,7 +686,23 @@ async function runPresenceSettlementPass(
       );
     }
   }
+  await warnOnExhaustedPresenceSettlements(cutoff);
   return settled;
+}
+
+/** Interim signal for permanently refused sessions; never throws out of the sweep. */
+async function warnOnExhaustedPresenceSettlements(cutoff: Date): Promise<void> {
+  try {
+    const exhaustedCount = await creditSessionsRepository.countPresenceSettlementExhausted(cutoff);
+    if (exhaustedCount > 0) {
+      logger.warn(
+        { exhaustedCount },
+        'Presence sessions refused settlement and are awaiting manual repair'
+      );
+    }
+  } catch (error) {
+    logger.error({ error: errorMessage(error) }, 'Counting exhausted presence settlements failed');
+  }
 }
 
 /**

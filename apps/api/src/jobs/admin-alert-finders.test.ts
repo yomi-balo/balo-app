@@ -68,6 +68,7 @@ vi.mock('../config/meeting-timers.js', () => ({
     clientAbsentNudgeMs: 5 * 60_000,
     noShowFloorMs: 15 * 60_000,
     idleEndEmptyMs: 5 * 60_000,
+    overrunStopGraceMs: 30 * 60_000,
   }),
 }));
 

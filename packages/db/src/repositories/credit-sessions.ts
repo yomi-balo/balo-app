@@ -1,6 +1,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   exists,
@@ -15,6 +16,7 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 // BAL-525 — the two pin helpers return partial column assignments containing raw `sql` fragments
@@ -117,6 +119,16 @@ export const SESSIONLESS_CASE_MEETING_MARKED_ACTION =
   'credit_session.sessionless_meeting_marked' as const;
 
 /**
+ * The terminal marker that takes a presence session whose settlement was PERMANENTLY refused (a
+ * {@link SettlementRefusedError}) out of the durability backstop's candidate read:
+ * `entity_type 'credit_session'`, `entity_id` the session, `actor_user_id` NULL,
+ * `metadata { guard, error, meetingId, trigger }`. Append-only; written by
+ * {@link creditSessionsRepository.markPresenceSettlementExhausted} only.
+ */
+export const PRESENCE_SETTLEMENT_EXHAUSTED_ACTION =
+  'credit_session.presence_settlement_exhausted' as const;
+
+/**
  * BAL-474 (ADR-1040 Amendment 7 §B) — how `open()` treats the funding gates.
  *
  *   `gated`              — the shipped behaviour, byte-identical: an open receivable, an in-flight
@@ -195,6 +207,30 @@ export class SettlementDrawDivergedError extends Error {
         `${String(actualLastTickSeq)}. Nothing was written; retry against fresh state.`
     );
     this.name = 'SettlementDrawDivergedError';
+  }
+}
+
+/** Which settlement guard refused a figure or an invariant; carried on {@link SettlementRefusedError}. */
+export type SettlementRefusalGuard =
+  | 'figure_not_integer'
+  | 'figure_exceeds_bound'
+  | 'meeting_mismatch'
+  | 'open_not_from_zero';
+
+/**
+ * A PERMANENT settlement refusal: a figure or invariant guard on the presence-settle path tripped,
+ * so retrying the same inputs can never succeed. The durability backstop tells it apart from a
+ * temporary failure (`SettlementDrawDivergedError`, `SessionNotFoundError`,
+ * `InvalidSessionTransitionError`, a DB error) by `instanceof` and writes the exhaustion marker
+ * ({@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION}) instead of retrying forever.
+ */
+export class SettlementRefusedError extends Error {
+  constructor(
+    public readonly guard: SettlementRefusalGuard,
+    message: string
+  ) {
+    super(message);
+    this.name = 'SettlementRefusedError';
   }
 }
 
@@ -410,6 +446,12 @@ export interface MeterTransitions {
   wrapped?: boolean;
   /** The wrap was caused by hitting the overdraft ceiling (vs the 30-min / no-mandate bound). */
   ceilingHit?: boolean;
+  /**
+   * The meter just reached `MAX_SESSION_MINUTES` and will draw no further tick: a backfill past
+   * the ceiling (any provenance) or a `presence` session reaching it (its meeting outlives the
+   * meter). Set by exactly ONE committed run; every later run hits the early return.
+   */
+  maxSessionMinutesReached?: boolean;
 }
 
 export interface MeterSessionResult {
@@ -745,19 +787,18 @@ function assertOpenPolicyCoherent(input: OpenSessionInput): void {
  * harmless (the loop is empty) but is evidence the caller's maths broke, and a money path
  * should fail loudly on evidence rather than post a plausible amount.
  *
- * ⚠⚠ **AND IT IS BOUNDED FROM ABOVE, SYMMETRICALLY (F1).** The lower bound alone let an absurd
- * figure through: a `presence` session on a room nobody ever left settled at 480 minutes and was
- * charged OFF-SESSION against the stored mandate. `resolveMeetingSettlement` now caps
- * `ruleMinutes` at an injected `maxBillableMinutes`, but that is the CALLER's guard — this one
- * exists so a FUTURE SECOND CALLER that skips or misconfigures the pure core still cannot write
- * an unbillable number. `MAX_SESSION_MINUTES` is the same ceiling the reaper's force-end and
- * both the `estimatedMinutes` / `finalizeDuration` Zod schemas already hold every other
- * provenance to; a settlement above it is a defect, never a long consultation.
+ * `ruleMinutes` is capped by the pure core (`resolveMeetingSettlement` takes a required
+ * `maxBillableMinutes`). `billableMinutes`, `actualMinutes` and `topUpToTickSeq` are deliberately
+ * UNBOUNDED here: they carry what the meter already drew, so anything the meter posted can settle
+ * and be billed in full; the `meterSessionToNow` clamp keeps every new session at or below
+ * `MAX_SESSION_MINUTES`.
  *
- * ⚠ `billingFloorMinutes` is bounded for the same reason (F5): the floor is a MONEY input — an
- * operator who set `MEETING_NO_SHOW_FLOOR_MINUTES=900` thinking seconds would make every
- * no-show settle at 900 minutes. `apps/api`'s `resolveBillingFloorMs` discards such an override
- * at the config seam; this refuses it even from a caller that does not.
+ * ⚠ `billingFloorMinutes` stays bounded (F5): the floor is a MONEY input — an operator who set
+ * `MEETING_NO_SHOW_FLOOR_MINUTES=900` thinking seconds would make every no-show settle at 900
+ * minutes. `apps/api`'s `resolveBillingFloorMs` discards such an override at the config seam; this
+ * refuses it even from a caller that does not.
+ *
+ * Every refusal is a {@link SettlementRefusedError}: the same inputs can never succeed.
  */
 function assertSettlementFigures(
   input: Omit<SettleFromPresenceRepoInput, 'sessionId' | 'meetingId'>
@@ -774,31 +815,68 @@ function assertSettlementFigures(
   ];
   for (const [name, value] of figures) {
     if (!Number.isInteger(value) || value < 0) {
-      throw new Error(
+      throw new SettlementRefusedError(
+        'figure_not_integer',
         `settleFromPresence: ${name} must be a non-negative integer (received ${String(value)})`
       );
     }
   }
   if (!Number.isInteger(input.topUpToTickSeq)) {
-    throw new Error(
+    throw new SettlementRefusedError(
+      'figure_not_integer',
       `settleFromPresence: topUpToTickSeq must be an integer (received ${String(input.topUpToTickSeq)})`
     );
   }
-  const bounded: ReadonlyArray<readonly [string, number]> = [
-    ['billableMinutes', input.billableMinutes],
-    ['actualMinutes', input.actualMinutes],
-    ['topUpToTickSeq', input.topUpToTickSeq],
-    ['billingFloorMinutes', input.billingFloorMinutes],
-  ];
-  for (const [name, value] of bounded) {
-    if (value > MAX_SESSION_MINUTES) {
-      throw new Error(
-        `settleFromPresence: ${name} must not exceed MAX_SESSION_MINUTES (${String(MAX_SESSION_MINUTES)}) — received ${String(value)}. ` +
-          'The caller caps the presence-derived figure (resolveMeetingSettlement takes a required ' +
-          'maxBillableMinutes); this repository refuses to post an unbillable settlement.'
-      );
-    }
+  if (input.billingFloorMinutes > MAX_SESSION_MINUTES) {
+    throw new SettlementRefusedError(
+      'figure_exceeds_bound',
+      `settleFromPresence: billingFloorMinutes must not exceed MAX_SESSION_MINUTES (${String(MAX_SESSION_MINUTES)}) — received ${String(input.billingFloorMinutes)}.`
+    );
   }
+}
+
+/** The shared `WHERE` terms of the presence-unsettled reads (see `findPresenceUnsettled`). */
+function presenceUnsettledTerms(cutoff: Date): SQL | undefined {
+  return and(
+    // Enum literals at QUERY time are always safe (the ADD-VALUE restriction is index
+    // predicates + CHECKs).
+    eq(creditSessions.durationSource, 'presence'),
+    isNull(creditSessions.billingFinalizedAt),
+    ne(creditSessions.status, 'cancelled'),
+    isNull(creditSessions.deletedAt),
+    eq(meetings.status, 'ended'),
+    lte(meetings.endedAt, cutoff),
+    isNull(meetings.deletedAt)
+  );
+}
+
+/** The correlated sub-select matching a session's {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} marker. */
+function exhaustionMarkerFor() {
+  return db
+    .select({ one: sql`1` })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, SESSION_AUDIT_ENTITY_TYPE),
+        eq(auditEvents.entityId, creditSessions.id),
+        eq(auditEvents.action, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION)
+      )
+    );
+}
+
+/** Oldest-ended-first, batch-bounded read over {@link presenceUnsettledTerms} plus any extra term. */
+async function selectPresenceUnsettled(
+  where: SQL | undefined,
+  limit: number
+): Promise<CreditSession[]> {
+  const rows = await db
+    .select({ session: creditSessions })
+    .from(creditSessions)
+    .innerJoin(meetings, eq(meetings.id, creditSessions.meetingId))
+    .where(where)
+    .orderBy(asc(meetings.endedAt), asc(creditSessions.id))
+    .limit(limit);
+  return rows.map((row) => row.session);
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────
@@ -1653,7 +1731,8 @@ async function settleFromPresenceInTx(
   //   comparing would make a divergent pair silently AGREE (the BAL-421 rule); comparing
   //   catches it. Loud, before any write.
   if (session.meetingId !== input.meetingId) {
-    throw new Error(
+    throw new SettlementRefusedError(
+      'meeting_mismatch',
       `settleFromPresence: session ${session.id} belongs to meeting ${String(session.meetingId)}, ` +
         `but settlement was computed for meeting ${input.meetingId}`
     );
@@ -1683,6 +1762,22 @@ async function settleFromPresenceInTx(
       session.id,
       input.minutesAlreadyDrawn,
       session.lastTickSeq
+    );
+  }
+
+  // 2c. THE FIGURES TIE TO THE DRAW, NOW THAT THE DRAW IS KNOWN. `billableMinutes` may exceed
+  //   `MAX_SESSION_MINUTES` only by what the meter already drew, and the top-up can never run past
+  //   the billed figure — either is a caller defect, refused before any write.
+  if (input.billableMinutes > Math.max(MAX_SESSION_MINUTES, session.lastTickSeq)) {
+    throw new SettlementRefusedError(
+      'figure_exceeds_bound',
+      `settleFromPresence: billableMinutes ${String(input.billableMinutes)} exceeds max(MAX_SESSION_MINUTES ${String(MAX_SESSION_MINUTES)}, drawn ${String(session.lastTickSeq)})`
+    );
+  }
+  if (input.topUpToTickSeq > input.billableMinutes) {
+    throw new SettlementRefusedError(
+      'figure_exceeds_bound',
+      `settleFromPresence: topUpToTickSeq ${String(input.topUpToTickSeq)} exceeds billableMinutes ${String(input.billableMinutes)}`
     );
   }
 
@@ -2352,8 +2447,8 @@ export const creditSessionsRepository = {
    *
    *   · both terminal paths call settlement BEST-EFFORT and NON-FATAL, so a settlement that
    *     FAULTS leaves the session `active` with its meeting already `ended`;
-   *   · `meterSessionToNow` draws off the WALL CLOCK (`floor((now − connectedAt)/60s)`), so it
-   *     keeps posting `session_consume` ticks for a room nobody is in;
+   *   · `meterSessionToNow` draws off the WALL CLOCK (`floor((now − connectedAt)/60s)`, clamped at
+   *     `MAX_SESSION_MINUTES`), so it keeps posting `session_consume` ticks for a room nobody is in;
    *   · `enforceMaxDuration` deliberately SKIPS `presence` (Q3), so nothing force-ends it;
    *   · and the Q1 NO-REFUND CLAMP then makes the runaway PERMANENT — the backstop settles
    *     `billableMinutes = max(20, 35) = 35` for a 20-minute call, against an append-only
@@ -2407,7 +2502,8 @@ export const creditSessionsRepository = {
 
   /**
    * The authoritative metering primitive (§5) — in ONE wallet-locked txn, post every missing
-   * `session_consume` tick from `lastTickSeq+1` to `floor((now − connectedAt)/60s)`, advance
+   * `session_consume` tick from `lastTickSeq+1` to `min(floor((now − connectedAt)/60s),
+   * MAX_SESSION_MINUTES)`, advance
    * the grace/ceiling/no-mandate state machine, set one-shot markers, and return the set of
    * NEWLY-crossed transitions. Deterministic + idempotent: a replayed tickSeq dedups on the
    * ledger UNIQUE (balance mirrors DB truth), so re-metering crosses nothing new.
@@ -2430,6 +2526,12 @@ export const creditSessionsRepository = {
    * One-shot markers: `lowWarnedAt` (active, `minutesOfRunway(...)` ≤
    * LOW_BALANCE_WARNING_MINUTES), `nearWrapWarnedAt` (grace, grace-remaining OR ceiling-room ≤
    * NEAR_WRAP_MINUTES).
+   *
+   * ⚠ THE METER NEVER POSTS A TICK PAST `MAX_SESSION_MINUTES`, whatever the wall clock says: a
+   * session whose meeting nobody ended stops drawing at the ceiling. `maxSessionMinutesReached`
+   * flags the ONE committed run that lands `last_tick_seq` on the ceiling because the clamp bound
+   * (elapsed above it, or a `presence` session reaching it); a `live_capture` session arriving at
+   * exactly the ceiling on time is the reaper's ordinary force-end and is not flagged.
    *
    * ⚠⚠ BAL-412 (F13/D6) — `params.floorMinutes` is the ADR-1044 §7 billing floor, **REQUIRED**
    * and INJECTED because this package reads no env (`MEETING_NO_SHOW_FLOOR_MINUTES` is resolved
@@ -2472,7 +2574,8 @@ export const creditSessionsRepository = {
       const wallet = await readWalletOrThrow(tx, session.walletId);
 
       const connectedAtMs = session.connectedAt.getTime();
-      const targetTickSeq = Math.floor((now.getTime() - connectedAtMs) / 60_000);
+      const elapsedTickSeq = Math.floor((now.getTime() - connectedAtMs) / 60_000);
+      const targetTickSeq = Math.min(elapsedTickSeq, MAX_SESSION_MINUTES);
       if (targetTickSeq <= session.lastTickSeq) {
         return { session, transitions: {}, ticksPosted: 0 };
       }
@@ -2507,6 +2610,14 @@ export const creditSessionsRepository = {
         } else {
           await applyGraceTick(tx, session, state, meterParams, seq, tickTimeMs, transitions);
         }
+      }
+
+      if (
+        state.lastTickSeq === MAX_SESSION_MINUTES &&
+        session.lastTickSeq < MAX_SESSION_MINUTES &&
+        (elapsedTickSeq > MAX_SESSION_MINUTES || session.durationSource === 'presence')
+      ) {
+        transitions.maxSessionMinutesReached = true;
       }
 
       const updated = await persistMeterState(tx, session, state);
@@ -2776,7 +2887,8 @@ export const creditSessionsRepository = {
     assertOpenPolicyCoherent(input.open);
     assertSettlementFigures(input.settlement);
     if (input.settlement.minutesAlreadyDrawn !== 0 || input.settlement.topUpFromTickSeq !== 1) {
-      throw new Error(
+      throw new SettlementRefusedError(
+        'open_not_from_zero',
         'openAndSettleFromPresence: a session opened in this transaction has drawn nothing — ' +
           `minutesAlreadyDrawn must be 0 and topUpFromTickSeq 1 (received ` +
           `${String(input.settlement.minutesAlreadyDrawn)} / ${String(input.settlement.topUpFromTickSeq)})`
@@ -3242,6 +3354,9 @@ export const creditSessionsRepository = {
    * predicate; `duration_source` is the leading scan key. See that index for why the enum
    * label is a KEY COLUMN rather than part of the predicate (it cannot be — `ADD VALUE`).
    *
+   * ⚠ This is the operator ALERT read: it includes sessions whose settlement was permanently
+   * refused and marked exhausted. The backstop itself reads `findPresenceSettlementCandidates`.
+   *
    * Ordered oldest-ended first and batch-bounded via `limit`. ⚠ The CALLER must `log.warn`
    * when the batch FILLS — a silent cap on a money backstop reads as "nothing was stranded".
    *
@@ -3253,26 +3368,69 @@ export const creditSessionsRepository = {
    * not yet landed within the grace window.
    */
   async findPresenceUnsettled(cutoff: Date, limit = 100): Promise<CreditSession[]> {
-    const rows = await db
-      .select({ session: creditSessions })
+    return selectPresenceUnsettled(presenceUnsettledTerms(cutoff), limit);
+  },
+
+  /**
+   * The durability backstop's PASS-6 candidate read: {@link findPresenceUnsettled}'s predicate and
+   * order, minus every session carrying a {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} marker.
+   *
+   * ⚠ A permanently refused settlement keeps `billing_finalized_at NULL` forever, so on
+   * the unfiltered read it would sit at the head of the oldest-first batch on every tick and, once
+   * `limit` such rows accumulate, starve every newer row behind them. The marker moves them out of
+   * THIS read only; {@link findPresenceUnsettled} (the operator alert read) still returns them
+   * until they actually settle.
+   */
+  async findPresenceSettlementCandidates(cutoff: Date, limit = 100): Promise<CreditSession[]> {
+    return selectPresenceUnsettled(
+      and(presenceUnsettledTerms(cutoff), notExists(exhaustionMarkerFor())),
+      limit
+    );
+  },
+
+  /**
+   * How many presence sessions are unsettled AND marked exhausted — the ones pass 6 no longer
+   * reads. The interim operator signal: a marked session must not go silent.
+   */
+  async countPresenceSettlementExhausted(cutoff: Date, exec: DbExecutor = db): Promise<number> {
+    const [row] = await exec
+      .select({ total: count() })
       .from(creditSessions)
       .innerJoin(meetings, eq(meetings.id, creditSessions.meetingId))
-      .where(
-        and(
-          // Enum literals at QUERY time are always safe (the ADD-VALUE restriction is index
-          // predicates + CHECKs).
-          eq(creditSessions.durationSource, 'presence'),
-          isNull(creditSessions.billingFinalizedAt),
-          ne(creditSessions.status, 'cancelled'),
-          isNull(creditSessions.deletedAt),
-          eq(meetings.status, 'ended'),
-          lte(meetings.endedAt, cutoff),
-          isNull(meetings.deletedAt)
-        )
-      )
-      .orderBy(asc(meetings.endedAt), asc(creditSessions.id))
-      .limit(limit);
-    return rows.map((row) => row.session);
+      .where(and(presenceUnsettledTerms(cutoff), exists(exhaustionMarkerFor())));
+    return row?.total ?? 0;
+  },
+
+  /**
+   * Write the {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} marker for a session whose settlement
+   * was permanently refused (a {@link SettlementRefusedError}) — `actor_user_id` NULL, a system
+   * act. Append-only: a duplicate marker is harmless, the candidate read needs only one.
+   */
+  async markPresenceSettlementExhausted(
+    input: {
+      sessionId: string;
+      meetingId?: string;
+      guard: SettlementRefusalGuard;
+      error: string;
+    },
+    exec: DbExecutor = db
+  ): Promise<{ markerId: string }> {
+    const marker = await auditEventsRepository.record(
+      {
+        actorUserId: null,
+        action: PRESENCE_SETTLEMENT_EXHAUSTED_ACTION,
+        entityType: SESSION_AUDIT_ENTITY_TYPE,
+        entityId: input.sessionId,
+        metadata: {
+          guard: input.guard,
+          error: input.error,
+          ...(input.meetingId === undefined ? {} : { meetingId: input.meetingId }),
+          trigger: 'presence_settlement_backstop',
+        },
+      },
+      exec
+    );
+    return { markerId: marker.id };
   },
 
   /**

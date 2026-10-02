@@ -24,6 +24,8 @@ import {
   selectPrimaryMeetingContext,
   type MeetingLifecycleStatus,
   type MeetingContextTypeWithHolder,
+  type MeetingTerminalRuleName,
+  type OverrunStopArm,
 } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
@@ -211,6 +213,14 @@ export interface EndMeetingInput {
    * exemption — an unattributed row, never a fabricated actor).
    */
   actorUserId: string | null;
+  /**
+   * The system terminal rule that fired, written to the `meeting.ended` audit row as
+   * `terminalRule` / `terminalArm`. Omitted on the human paths, whose rows carry neither key.
+   */
+  terminalRule?: {
+    readonly rule: MeetingTerminalRuleName;
+    readonly arm: OverrunStopArm | null;
+  };
 }
 
 /** BAL-134 — what `endMeeting` returns when it actually terminated the meeting. */
@@ -1809,6 +1819,9 @@ export const meetingsRepository = {
             // string and typing it otherwise would be a lie on the way back out (memory
             // `reference_jsonb_date_type_lie`). The same conversion `recordMeetingBooked` does.
             endedAt: input.endedAt.toISOString(),
+            ...(input.terminalRule === undefined
+              ? {}
+              : { terminalRule: input.terminalRule.rule, terminalArm: input.terminalRule.arm }),
           },
         });
 

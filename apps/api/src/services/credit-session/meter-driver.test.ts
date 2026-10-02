@@ -7,6 +7,7 @@ const {
   mockPublishGraceEntered,
   mockPublishNearWrap,
   mockTrackCeilingHit,
+  mockLogError,
 } = vi.hoisted(() => ({
   mockMeterSessionToNow: vi.fn(),
   mockFindWallet: vi.fn(),
@@ -14,10 +15,11 @@ const {
   mockPublishGraceEntered: vi.fn(),
   mockPublishNearWrap: vi.fn(),
   mockTrackCeilingHit: vi.fn(),
+  mockLogError: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLogError }),
 }));
 vi.mock('@balo/db', () => ({
   creditSessionsRepository: { meterSessionToNow: mockMeterSessionToNow },
@@ -77,6 +79,27 @@ describe('driveSession', () => {
     mockMeterSessionToNow.mockResolvedValue(meterResult({ wrapped: true, ceilingHit: true }));
     await driveSession('session_1', NOW);
     expect(mockTrackCeilingHit).toHaveBeenCalledWith(SESSION, -2000);
+  });
+
+  it('logs an error exactly once and publishes nothing when the meter reaches MAX_SESSION_MINUTES', async () => {
+    mockMeterSessionToNow.mockResolvedValue(meterResult({ maxSessionMinutesReached: true }));
+    await driveSession('session_1', NOW);
+    expect(mockLogError).toHaveBeenCalledTimes(1);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session_1' }),
+      expect.stringContaining('MAX_SESSION_MINUTES')
+    );
+    expect(mockFindWallet).not.toHaveBeenCalled();
+    expect(mockPublishLowBalance).not.toHaveBeenCalled();
+    expect(mockPublishGraceEntered).not.toHaveBeenCalled();
+    expect(mockPublishNearWrap).not.toHaveBeenCalled();
+    expect(mockTrackCeilingHit).not.toHaveBeenCalled();
+  });
+
+  it('does not log an error when the cap flag is absent', async () => {
+    mockMeterSessionToNow.mockResolvedValue(meterResult({ low: true }));
+    await driveSession('session_1', NOW);
+    expect(mockLogError).not.toHaveBeenCalled();
   });
 
   it('returns the repo meter result', async () => {

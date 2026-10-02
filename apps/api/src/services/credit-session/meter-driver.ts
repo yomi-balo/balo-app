@@ -37,6 +37,17 @@ export async function driveSession(sessionId: string, now: Date): Promise<MeterS
   });
   const { session, transitions } = result;
 
+  if (transitions.maxSessionMinutesReached === true) {
+    log.error(
+      {
+        sessionId,
+        durationSource: session.durationSource,
+        lastTickSeq: session.lastTickSeq,
+      },
+      "Session meter reached MAX_SESSION_MINUTES — no further ticks are drawn; a presence session's meeting ends via the lifecycle sweep's overrun_stop rule"
+    );
+  }
+
   const hasTransition =
     transitions.low === true ||
     transitions.graceEntered === true ||

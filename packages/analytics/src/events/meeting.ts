@@ -42,7 +42,12 @@ export const MEETING_SERVER_EVENTS = {
    * `scheduled_start + MISSED_CALL_TERMINATION_MS`. Balo's failure, never an expert no-show.
    */
   MEETING_VENUE_UNAVAILABLE: 'meeting_venue_unavailable',
-  /** EVERY terminal path — the five system rules and the human End alike. */
+  /**
+   * The overrun hard stop fired: an `in_progress` meeting still had an open presence interval
+   * at its ceiling and the system ended it.
+   */
+  MEETING_OVERRUN_STOPPED: 'meeting_overrun_stopped',
+  /** EVERY terminal path — the six system rules and the human End alike. */
   MEETING_ENDED: 'meeting_ended',
   /**
    * BAL-474 (D6.4, ADR-1040 Amendment 7 §C) — a human End was REFUSED: the client principal had
@@ -240,6 +245,17 @@ export interface MeetingServerEventMap {
     distinct_id: string;
   };
 
+  /** The overrun hard stop ended an occupied-or-unverifiable meeting at its ceiling. */
+  [MEETING_SERVER_EVENTS.MEETING_OVERRUN_STOPPED]: {
+    meeting_id: string;
+    /** What the Daily roster said at the stop; `unknown` when it could not be read. */
+    room_occupancy: 'occupied' | 'empty' | 'unknown';
+    minutes_past_scheduled_end: number;
+    open_intervals_closed: number;
+    /** The meeting id — no acting human on a system path. */
+    distinct_id: string;
+  };
+
   /**
    * BAL-581 — the venue-unavailable rule fired: the call room was never ready by
    * `scheduled_start + MISSED_CALL_TERMINATION_MS`. Balo's failure, never an expert no-show.
@@ -253,7 +269,7 @@ export interface MeetingServerEventMap {
   };
 
   /**
-   * EVERY terminal path — the five system rules and the human End alike. The one event a
+   * EVERY terminal path — the six system rules and the human End alike. The one event a
    * funnel can count meetings by.
    */
   [MEETING_SERVER_EVENTS.MEETING_ENDED]: {

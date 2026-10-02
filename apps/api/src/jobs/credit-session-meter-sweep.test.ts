@@ -7,7 +7,7 @@ const {
   mockFindStalePending,
   mockFindStuckSettling,
   mockFindFinalizedMissingPayout,
-  mockFindPresenceUnsettled,
+  mockFindPresenceCandidates,
   mockFindPendingForCancelledMeetings,
   mockFindSettledMissingLedgerCredit,
   mockCancel,
@@ -29,13 +29,17 @@ const {
   mockListOpen,
   mockStartBillingIfDue,
   mockFindPendingBeyondJoinWindow,
+  mockMarkPresenceExhausted,
+  mockCountExhausted,
+  MockSettlementRefusedError,
+  MockSettlementDrawDivergedError,
 } = vi.hoisted(() => ({
   mockFindMeterable: vi.fn(),
   mockFindWrappedIdle: vi.fn(),
   mockFindStalePending: vi.fn(),
   mockFindStuckSettling: vi.fn(),
   mockFindFinalizedMissingPayout: vi.fn(),
-  mockFindPresenceUnsettled: vi.fn(),
+  mockFindPresenceCandidates: vi.fn(),
   mockFindPendingForCancelledMeetings: vi.fn(),
   mockFindSettledMissingLedgerCredit: vi.fn(),
   mockCancel: vi.fn(),
@@ -62,6 +66,19 @@ const {
   mockListOpen: vi.fn(),
   mockStartBillingIfDue: vi.fn(),
   mockFindPendingBeyondJoinWindow: vi.fn(),
+  mockMarkPresenceExhausted: vi.fn(),
+  mockCountExhausted: vi.fn(),
+  // Real classes (not importActual, which would pull in the db client) so `instanceof` classifies.
+  MockSettlementRefusedError: class SettlementRefusedError extends Error {
+    constructor(
+      readonly guard: string,
+      message: string
+    ) {
+      super(message);
+      this.name = 'SettlementRefusedError';
+    }
+  },
+  MockSettlementDrawDivergedError: class SettlementDrawDivergedError extends Error {},
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -79,14 +96,18 @@ vi.mock('@balo/db', () => ({
     findStalePending: mockFindStalePending,
     findStuckSettling: mockFindStuckSettling,
     findFinalizedMissingPayout: mockFindFinalizedMissingPayout,
-    findPresenceUnsettled: mockFindPresenceUnsettled,
+    findPresenceSettlementCandidates: mockFindPresenceCandidates,
     findPendingForCancelledMeetings: mockFindPendingForCancelledMeetings,
     findSettledMissingLedgerCredit: mockFindSettledMissingLedgerCredit,
     findSessionlessEndedCaseMeetings: mockFindSessionlessEndedCaseMeetings,
     findIdByMeetingId: mockFindIdByMeetingId,
     findPendingBeyondJoinWindow: mockFindPendingBeyondJoinWindow,
+    markPresenceSettlementExhausted: mockMarkPresenceExhausted,
+    countPresenceSettlementExhausted: mockCountExhausted,
     cancel: mockCancel,
   },
+  SettlementRefusedError: MockSettlementRefusedError,
+  SettlementDrawDivergedError: MockSettlementDrawDivergedError,
   meetingsRepository: {
     listCaseMeetingsDueToStartBilling: mockListDueToStartBilling,
     findById: mockMeetingFindById,
@@ -147,7 +168,8 @@ describe('runSessionMeterSweep', () => {
     mockFindStalePending.mockResolvedValue([]);
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
-    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPresenceCandidates.mockResolvedValue([]);
+    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -293,7 +315,7 @@ describe('runSessionMeterSweep', () => {
   // BAL-412 (plan §4.3) — pass 6, the presence-settlement durability backstop.
   describe('presence-settlement durability backstop (pass 6)', () => {
     it('settles every presence-unsettled session the finder returns', async () => {
-      mockFindPresenceUnsettled.mockResolvedValue([
+      mockFindPresenceCandidates.mockResolvedValue([
         activeSession({ id: 's1', durationSource: 'presence' }),
         activeSession({ id: 's2', durationSource: 'presence' }),
       ]);
@@ -309,7 +331,7 @@ describe('runSessionMeterSweep', () => {
     });
 
     it('does not count a benign already_settled decline (a racing terminal path won)', async () => {
-      mockFindPresenceUnsettled.mockResolvedValue([
+      mockFindPresenceCandidates.mockResolvedValue([
         activeSession({ id: 's1', durationSource: 'presence' }),
       ]);
       mockSettleSessionFromPresence.mockResolvedValue({ ok: false, code: 'already_settled' });
@@ -318,7 +340,7 @@ describe('runSessionMeterSweep', () => {
     });
 
     it('isolates a per-row settlement failure (batch continues, sweep does not abort)', async () => {
-      mockFindPresenceUnsettled.mockResolvedValue([
+      mockFindPresenceCandidates.mockResolvedValue([
         activeSession({ id: 's1', durationSource: 'presence' }),
         activeSession({ id: 's2', durationSource: 'presence' }),
       ]);
@@ -333,6 +355,140 @@ describe('runSessionMeterSweep', () => {
       const result = await runSessionMeterSweep(NOW);
       expect(mockSettleSessionFromPresence).not.toHaveBeenCalled();
       expect(result.presenceSettled).toBe(0);
+    });
+
+    describe('permanent refusal marker', () => {
+      const BATCH = 100;
+
+      /**
+       * Stateful fake of `findPresenceSettlementCandidates`: the first `limit` live ids in order,
+       * minus any id already passed to the marker mock.
+       */
+      function installStatefulFinder(ids: string[]): void {
+        const marked = new Set<string>();
+        mockMarkPresenceExhausted.mockImplementation(async (input: { sessionId: string }) => {
+          marked.add(input.sessionId);
+          return { markerId: `marker_${input.sessionId}` };
+        });
+        mockFindPresenceCandidates.mockImplementation(async (_cutoff: Date, limit: number) =>
+          ids
+            .filter((id) => !marked.has(id))
+            .slice(0, limit)
+            .map((id) => activeSession({ id, durationSource: 'presence', meetingId: `m_${id}` }))
+        );
+      }
+
+      it('a permanent refusal is marked once and drops out of the read, so a newer row settles on the next run (no starvation)', async () => {
+        const refused = Array.from({ length: BATCH }, (_, i) => `refused_${i}`);
+        installStatefulFinder([...refused, 'newer']);
+        mockSettleSessionFromPresence.mockImplementation(async (input: { sessionId: string }) => {
+          if (input.sessionId === 'newer') {
+            return { ok: true };
+          }
+          throw new MockSettlementRefusedError('figure_exceeds_bound', 'refused');
+        });
+
+        const first = await runSessionMeterSweep(NOW);
+        expect(mockMarkPresenceExhausted).toHaveBeenCalledTimes(BATCH);
+        expect(mockSettleSessionFromPresence).toHaveBeenCalledTimes(BATCH);
+        expect(mockSettleSessionFromPresence).not.toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: 'newer' })
+        );
+        expect(first.presenceSettled).toBe(0);
+
+        const second = await runSessionMeterSweep(NOW);
+        expect(mockMarkPresenceExhausted).toHaveBeenCalledTimes(BATCH);
+        expect(mockSettleSessionFromPresence).toHaveBeenCalledTimes(BATCH + 1);
+        expect(mockSettleSessionFromPresence).toHaveBeenLastCalledWith(
+          expect.objectContaining({ sessionId: 'newer' })
+        );
+        expect(second.presenceSettled).toBe(1);
+      });
+
+      it('writes the marker with the guard, meeting id and message, and logs the exhaustion', async () => {
+        installStatefulFinder(['s1']);
+        mockSettleSessionFromPresence.mockRejectedValue(
+          new MockSettlementRefusedError('meeting_mismatch', 'wrong meeting')
+        );
+        await runSessionMeterSweep(NOW);
+        expect(mockMarkPresenceExhausted).toHaveBeenCalledWith({
+          sessionId: 's1',
+          meetingId: 'm_s1',
+          guard: 'meeting_mismatch',
+          error: 'wrong meeting',
+        });
+        expect(mockLoggerError).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: 's1', guard: 'meeting_mismatch' }),
+          expect.stringContaining('permanently refused')
+        );
+      });
+
+      it('SettlementDrawDivergedError is never marked and is retried on the next run', async () => {
+        installStatefulFinder(['s1']);
+        mockSettleSessionFromPresence.mockRejectedValue(
+          new MockSettlementDrawDivergedError('diverged')
+        );
+        await runSessionMeterSweep(NOW);
+        await runSessionMeterSweep(NOW);
+        expect(mockMarkPresenceExhausted).not.toHaveBeenCalled();
+        expect(mockSettleSessionFromPresence).toHaveBeenCalledTimes(2);
+      });
+
+      it('an unknown error is never marked', async () => {
+        installStatefulFinder(['s1']);
+        mockSettleSessionFromPresence.mockRejectedValue(new Error('connection reset'));
+        await runSessionMeterSweep(NOW);
+        expect(mockSettleSessionFromPresence).toHaveBeenCalledTimes(1);
+        expect(mockMarkPresenceExhausted).not.toHaveBeenCalled();
+      });
+
+      it('warns with the count when sessions are awaiting manual repair', async () => {
+        mockCountExhausted.mockResolvedValue(3);
+        await runSessionMeterSweep(NOW);
+        expect(mockLoggerWarn).toHaveBeenCalledWith(
+          { exhaustedCount: 3 },
+          expect.stringContaining('awaiting manual repair')
+        );
+      });
+
+      it('does not warn when none are awaiting repair', async () => {
+        await runSessionMeterSweep(NOW);
+        expect(mockCountExhausted).toHaveBeenCalledTimes(1);
+        expect(mockLoggerWarn).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('awaiting manual repair')
+        );
+      });
+
+      it('a failing count is logged and does not abort the sweep', async () => {
+        installStatefulFinder(['s1']);
+        mockSettleSessionFromPresence.mockResolvedValueOnce({ ok: true });
+        mockCountExhausted.mockRejectedValue(new Error('count down'));
+        const result = await runSessionMeterSweep(NOW);
+        expect(result.presenceSettled).toBe(1);
+        expect(mockLoggerError).toHaveBeenCalledWith(
+          { error: 'count down' },
+          expect.stringContaining('Counting exhausted')
+        );
+      });
+
+      it('a failing marker write is logged and never aborts the batch; the row is retried', async () => {
+        installStatefulFinder(['s1', 's2']);
+        mockMarkPresenceExhausted.mockRejectedValueOnce(new Error('audit write down'));
+        mockSettleSessionFromPresence.mockImplementation(async (input: { sessionId: string }) => {
+          if (input.sessionId === 's1') {
+            throw new MockSettlementRefusedError('open_not_from_zero', 'refused');
+          }
+          return { ok: true };
+        });
+        const result = await runSessionMeterSweep(NOW);
+        expect(mockSettleSessionFromPresence).toHaveBeenCalledTimes(2);
+        expect(result.presenceSettled).toBe(1);
+        expect(mockLoggerError).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: 's1', error: 'audit write down' }),
+          expect.stringContaining('marker')
+        );
+      });
     });
   });
 
@@ -572,7 +728,8 @@ describe('runSessionMeterSweep — the sessionless-meeting backstop (pass 5b, BA
     mockFindStalePending.mockResolvedValue([]);
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
-    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPresenceCandidates.mockResolvedValue([]);
+    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -786,7 +943,7 @@ describe('runSessionMeterSweep — the sessionless-meeting backstop (pass 5b, BA
   it('runs BEFORE the presence-unsettled pass — a session it opens-and-settles is finalized in the same call', async () => {
     await runSessionMeterSweep(NOW);
     expect(mockFindSessionlessEndedCaseMeetings.mock.invocationCallOrder[0]).toBeLessThan(
-      mockFindPresenceUnsettled.mock.invocationCallOrder[0] ?? 0
+      mockFindPresenceCandidates.mock.invocationCallOrder[0] ?? 0
     );
   });
 });
@@ -799,7 +956,8 @@ describe('runSessionMeterSweep — every pass is isolated (BAL-474, V4-F4)', () 
     mockFindStalePending.mockResolvedValue([]);
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
-    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPresenceCandidates.mockResolvedValue([]);
+    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -812,7 +970,7 @@ describe('runSessionMeterSweep — every pass is isolated (BAL-474, V4-F4)', () 
     const result = await runSessionMeterSweep(NOW);
 
     expect(mockFindSessionlessEndedCaseMeetings).toHaveBeenCalledTimes(1);
-    expect(mockFindPresenceUnsettled).toHaveBeenCalledTimes(1);
+    expect(mockFindPresenceCandidates).toHaveBeenCalledTimes(1);
     expect(mockFindSettledMissingLedgerCredit).toHaveBeenCalledTimes(1);
     // A broken pass counts 0 — never a partial figure.
     expect(result.metered).toBe(0);
@@ -858,7 +1016,8 @@ describe('runSessionMeterSweep — the billing-start pass (pass 0, BAL-474 Rule 
     mockFindStalePending.mockResolvedValue([]);
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
-    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPresenceCandidates.mockResolvedValue([]);
+    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -948,7 +1107,8 @@ describe('runSessionMeterSweep — the beyond-window release pass (pass 0b, BAL-
     mockFindStalePending.mockResolvedValue([]);
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
-    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPresenceCandidates.mockResolvedValue([]);
+    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -1018,7 +1178,7 @@ describe('runSessionMeterSweep — pass 6 treats `released_closed_case_no_show` 
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
     mockFindPendingBeyondJoinWindow.mockResolvedValue([]);
     mockListDueToStartBilling.mockResolvedValue([]);
-    mockFindPresenceUnsettled.mockResolvedValue([{ id: 'session_9' }]);
+    mockFindPresenceCandidates.mockResolvedValue([{ id: 'session_9' }]);
   });
 
   it.each(['released_closed_case_no_show', 'released_expert_invited_guest_only'])(

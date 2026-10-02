@@ -6,8 +6,13 @@ import {
   deriveMinuteRateCents,
   DEFAULT_BALO_FEE_BPS,
   DEFAULT_OVERDRAFT_CEILING_MINOR,
+  MAX_SESSION_MINUTES,
 } from '@balo/shared/pricing';
-import { isWalletMandateActive, walletAllowsOverdraftGrace } from '@balo/shared/credit';
+import {
+  isWalletMandateActive,
+  resolveMeetingSettlement,
+  walletAllowsOverdraftGrace,
+} from '@balo/shared/credit';
 import { selectPrimaryMeetingContext } from '@balo/shared/meetings';
 import { db, type Database } from '../client';
 import {
@@ -40,6 +45,8 @@ import {
   InvalidSessionTransitionError,
   SessionNotFoundError,
   SettlementDrawDivergedError,
+  SettlementRefusedError,
+  PRESENCE_SETTLEMENT_EXHAUSTED_ACTION,
   SESSION_OPENED_ON_BEHALF_ACTION,
   SESSIONLESS_CASE_MEETING_MARKED_ACTION,
   type OpenAndSettleFromPresenceInput,
@@ -691,6 +698,70 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
       expect(res.transitions.low).toBeUndefined();
       expect(res.session.lowWarnedAt).toBeNull();
     });
+  });
+});
+
+describe('creditSessionsRepository.meterSessionToNow — the MAX_SESSION_MINUTES clamp', () => {
+  const RICH = 500_000; // funds well past 320 minutes at the client rate
+  const meter = (
+    id: string,
+    minutes: number
+  ): ReturnType<typeof creditSessionsRepository.meterSessionToNow> =>
+    creditSessionsRepository.meterSessionToNow(id, meterAt(minutes), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+
+  it('presence: never posts past the ceiling, flags the reaching run once, then draws nothing', async () => {
+    const ctx = await setup({ balanceMinor: RICH });
+    const id = await openPresence(ctx, await liveMeeting());
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+
+    const first = await meter(id, 300);
+    expect(first.ticksPosted).toBe(MAX_SESSION_MINUTES);
+    expect(first.session.lastTickSeq).toBe(MAX_SESSION_MINUTES);
+    expect(first.transitions.maxSessionMinutesReached).toBe(true);
+    expect(await consumeKeys(id)).toHaveLength(MAX_SESSION_MINUTES);
+
+    const second = await meter(id, 301);
+    expect(second.ticksPosted).toBe(0);
+    expect(second.transitions.maxSessionMinutesReached).toBeUndefined();
+    expect(await consumeKeys(id)).toHaveLength(MAX_SESSION_MINUTES);
+  });
+
+  it('presence: reaching the ceiling on time is flagged too — the meeting outlives the meter', async () => {
+    const ctx = await setup({ balanceMinor: RICH });
+    const id = await openPresence(ctx, await liveMeeting());
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+
+    const res = await meter(id, MAX_SESSION_MINUTES);
+    expect(res.ticksPosted).toBe(MAX_SESSION_MINUTES);
+    expect(res.transitions.maxSessionMinutesReached).toBe(true);
+  });
+
+  it('live_capture outage: backfills up to the ceiling only, flags once, then posts nothing', async () => {
+    const ctx = await setup({ balanceMinor: RICH });
+    const id = await openOk(ctx);
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+    await db.update(creditSessions).set({ lastTickSeq: 100 }).where(eq(creditSessions.id, id));
+
+    const first = await meter(id, 300);
+    expect(first.ticksPosted).toBe(MAX_SESSION_MINUTES - 100);
+    expect(first.session.lastTickSeq).toBe(MAX_SESSION_MINUTES);
+    expect(first.transitions.maxSessionMinutesReached).toBe(true);
+
+    const second = await meter(id, 301);
+    expect(second.ticksPosted).toBe(0);
+    expect(second.transitions.maxSessionMinutesReached).toBeUndefined();
+  });
+
+  it('live_capture on time: arriving at exactly the ceiling posts 240 ticks and is NOT flagged', async () => {
+    const ctx = await setup({ balanceMinor: RICH });
+    const id = await openOk(ctx);
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+
+    const res = await meter(id, MAX_SESSION_MINUTES);
+    expect(res.ticksPosted).toBe(MAX_SESSION_MINUTES);
+    expect(res.transitions.maxSessionMinutesReached).toBeUndefined();
   });
 });
 
@@ -3196,6 +3267,143 @@ describe('creditSessionsRepository.settleFromPresence — idempotency + guards',
     expect((await creditSessionsRepository.findById(id))?.status).toBe('pending');
   });
 
+  it('⚠ the figure guards throw SettlementRefusedError with the guard that tripped', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    const fractional = creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { billableMinutes: 1.5 })
+    );
+    await expect(fractional).rejects.toBeInstanceOf(SettlementRefusedError);
+    await expect(fractional).rejects.toMatchObject({ guard: 'figure_not_integer' });
+
+    const floor = creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { billingFloorMinutes: MAX_SESSION_MINUTES + 1 })
+    );
+    await expect(floor).rejects.toBeInstanceOf(SettlementRefusedError);
+    await expect(floor).rejects.toMatchObject({ guard: 'figure_exceeds_bound' });
+  });
+
+  it('⚠ refuses billableMinutes above max(MAX_SESSION_MINUTES, drawn) and a top-up past billable', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    const overBillable = creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { billableMinutes: MAX_SESSION_MINUTES + 1 })
+    );
+    await expect(overBillable).rejects.toBeInstanceOf(SettlementRefusedError);
+    await expect(overBillable).rejects.toMatchObject({ guard: 'figure_exceeds_bound' });
+
+    const overTopUp = creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { billableMinutes: 15, topUpToTickSeq: 16 })
+    );
+    await expect(overTopUp).rejects.toBeInstanceOf(SettlementRefusedError);
+    await expect(overTopUp).rejects.toMatchObject({ guard: 'figure_exceeds_bound' });
+
+    expect(await consumeKeys(id)).toHaveLength(0);
+    expect((await creditSessionsRepository.findById(id))?.billingFinalizedAt).toBeNull();
+  });
+
+  it('⚠ a meeting mismatch is a SettlementRefusedError (meeting_mismatch)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openPresence(ctx, await endedMeeting());
+
+    await expect(
+      creditSessionsRepository.settleFromPresence(settlementInput(id, await endedMeeting()))
+    ).rejects.toMatchObject({ name: 'SettlementRefusedError', guard: 'meeting_mismatch' });
+  });
+
+  it('⚠ actualMinutes above MAX_SESSION_MINUTES is NOT refused — anything the meter drew can settle', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        actualMinutes: 4233,
+        billableMinutes: FLOOR_MINUTES,
+        shape: 'held',
+        floorApplied: false,
+        outcome: 'completed',
+      })
+    );
+    expect(res.alreadySettled).toBe(false);
+    expect(res.session.actualMinutes).toBe(4233);
+  });
+
+  it('settles a fully-drawn 240 over a 480-minute held span at 240 billable / 480 actual', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(MAX_SESSION_MINUTES), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    const span = 480 * 60_000;
+    const settlement = resolveMeetingSettlement({
+      clocks: {
+        expertPresentMs: span,
+        billableMs: span,
+        expertFirstJoinedAt: BASE,
+        billableStartedAt: BASE,
+      },
+      expertPresentFromStartMs: span,
+      togetherBeforeStartMs: 0,
+      scheduledStart: BASE,
+      clientSideEverPresent: true,
+      floorMs: FLOOR_MINUTES * 60_000,
+      minutesAlreadyDrawn: MAX_SESSION_MINUTES,
+      maxBillableMinutes: MAX_SESSION_MINUTES,
+    });
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: settlement.billableMinutes,
+        actualMinutes: settlement.actualMinutes,
+        shape: settlement.shape,
+        floorApplied: settlement.floorApplied,
+        outcome: settlement.outcome,
+        topUpFromTickSeq: settlement.topUpFromTickSeq,
+        topUpToTickSeq: settlement.topUpToTickSeq,
+        minutesAlreadyDrawn: MAX_SESSION_MINUTES,
+      })
+    );
+    expect(res.alreadySettled).toBe(false);
+    expect(res.ticksPosted).toBe(0);
+    expect(res.session.connectedMinutes).toBe(MAX_SESSION_MINUTES);
+    expect(res.session.actualMinutes).toBe(480);
+    expect(res.session.billingFinalizedAt).not.toBeNull();
+  });
+
+  it('settles a LEGACY over-drawn session (4233 already drawn) in full with no further ticks', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await db
+      .update(creditSessions)
+      .set({ lastTickSeq: 4233, connectedMinutes: 4233 })
+      .where(eq(creditSessions.id, id));
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, {
+        billableMinutes: 4233,
+        actualMinutes: 4233,
+        shape: 'held',
+        floorApplied: false,
+        outcome: 'completed',
+        topUpFromTickSeq: 4234,
+        topUpToTickSeq: 4233,
+        minutesAlreadyDrawn: 4233,
+      })
+    );
+    expect(res.alreadySettled).toBe(false);
+    expect(res.ticksPosted).toBe(0);
+    expect(res.session.connectedMinutes).toBe(4233);
+    expect(res.session.billingFinalizedAt).not.toBeNull();
+  });
+
   it('⚠ DOES NOT OVERWRITE an outcome the lifecycle sweep already wrote', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const { meeting } = await meetingFactory({
@@ -3839,6 +4047,110 @@ describe('creditSessionsRepository.findPresenceUnsettled (BAL-412 durability bac
     await openPresence(ctx, meetingId);
 
     expect(await creditSessionsRepository.findPresenceUnsettled(CUTOFF, 0)).toHaveLength(0);
+  });
+});
+
+describe('creditSessionsRepository.findPresenceSettlementCandidates / markPresenceSettlementExhausted', () => {
+  const CUTOFF = meterAt(60);
+
+  async function unsettled(): Promise<{ id: string; meetingId: string }> {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting(meterAt(20));
+    return { id: await openPresence(ctx, meetingId), meetingId };
+  }
+
+  it('an unmarked row is in BOTH reads', async () => {
+    const { id } = await unsettled();
+
+    const candidates = await creditSessionsRepository.findPresenceSettlementCandidates(CUTOFF);
+    const alerts = await creditSessionsRepository.findPresenceUnsettled(CUTOFF);
+    expect(candidates.map((r) => r.id)).toEqual([id]);
+    expect(alerts.map((r) => r.id)).toEqual([id]);
+  });
+
+  it('a marked row leaves the candidates read but stays in the alert read, with the marker recorded', async () => {
+    const { id, meetingId } = await unsettled();
+
+    const { markerId } = await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: id,
+      meetingId,
+      guard: 'figure_exceeds_bound',
+      error: 'floor too high',
+    });
+
+    const candidates = await creditSessionsRepository.findPresenceSettlementCandidates(CUTOFF);
+    const alerts = await creditSessionsRepository.findPresenceUnsettled(CUTOFF);
+    expect(candidates).toHaveLength(0);
+    expect(alerts.map((r) => r.id)).toEqual([id]);
+
+    const [row] = await sessionAudits(id, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION);
+    expect(row?.id).toBe(markerId);
+    expect(row?.actorUserId).toBeNull();
+    expect(row?.entityType).toBe('credit_session');
+    expect(row?.metadata).toEqual({
+      guard: 'figure_exceeds_bound',
+      error: 'floor too high',
+      meetingId,
+      trigger: 'presence_settlement_backstop',
+    });
+  });
+
+  it('a marked row does not hide an unmarked newer one (the starvation shape)', async () => {
+    const older = await unsettled();
+    await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: older.id,
+      meetingId: older.meetingId,
+      guard: 'meeting_mismatch',
+      error: 'x',
+    });
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const newerMeeting = await endedMeeting(meterAt(30));
+    const newerId = await openPresence(ctx, newerMeeting);
+
+    const candidates = await creditSessionsRepository.findPresenceSettlementCandidates(CUTOFF, 1);
+    expect(candidates).toHaveLength(1);
+    expect(candidates.map((r) => r.id)).toEqual([newerId]);
+  });
+
+  it('countPresenceSettlementExhausted counts marked+unsettled rows only', async () => {
+    const marked = await unsettled();
+    await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: marked.id,
+      guard: 'figure_exceeds_bound',
+      error: 'x',
+    });
+    const unmarked = await unsettled();
+    const settled = await unsettled();
+    await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: settled.id,
+      meetingId: settled.meetingId,
+      guard: 'figure_not_integer',
+      error: 'x',
+    });
+    expect(await creditSessionsRepository.countPresenceSettlementExhausted(CUTOFF)).toBe(2);
+
+    await creditSessionsRepository.settleFromPresence(
+      settlementInput(settled.id, settled.meetingId)
+    );
+    expect(await creditSessionsRepository.countPresenceSettlementExhausted(CUTOFF)).toBe(1);
+    expect(unmarked.id).not.toBe(marked.id);
+    const [row] = await sessionAudits(marked.id, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION);
+    expect(row).toBeDefined();
+    expect(row?.metadata).not.toHaveProperty('meetingId');
+  });
+
+  it('once a marked row settles it is absent from both reads', async () => {
+    const { id, meetingId } = await unsettled();
+    await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: id,
+      meetingId,
+      guard: 'figure_not_integer',
+      error: 'x',
+    });
+    await creditSessionsRepository.settleFromPresence(settlementInput(id, meetingId));
+
+    expect(await creditSessionsRepository.findPresenceSettlementCandidates(CUTOFF)).toHaveLength(0);
+    expect(await creditSessionsRepository.findPresenceUnsettled(CUTOFF)).toHaveLength(0);
   });
 });
 
@@ -4543,7 +4855,26 @@ describe('creditSessionsRepository.openAndSettleFromPresence (BAL-474 AD-3)', ()
       creditSessionsRepository.openAndSettleFromPresence(
         input(ctx, meeting, { minutesAlreadyDrawn: 4, topUpFromTickSeq: 5 })
       )
-    ).rejects.toThrow(/has drawn nothing/);
+    ).rejects.toBeInstanceOf(SettlementRefusedError);
+    await expect(
+      creditSessionsRepository.openAndSettleFromPresence(
+        input(ctx, meeting, { minutesAlreadyDrawn: 4, topUpFromTickSeq: 5 })
+      )
+    ).rejects.toMatchObject({ guard: 'open_not_from_zero', message: /has drawn nothing/ });
+    expect(await creditSessionsRepository.findIdByMeetingId(meeting.meetingId)).toBeUndefined();
+  });
+
+  it('⚠ a from-zero open-and-settle with billable above the ceiling is refused with the typed error', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const meeting = await caseMeeting();
+    await expect(
+      creditSessionsRepository.openAndSettleFromPresence(
+        input(ctx, meeting, {
+          billableMinutes: MAX_SESSION_MINUTES + 1,
+          topUpToTickSeq: MAX_SESSION_MINUTES + 1,
+        })
+      )
+    ).rejects.toMatchObject({ name: 'SettlementRefusedError', guard: 'figure_exceeds_bound' });
     expect(await creditSessionsRepository.findIdByMeetingId(meeting.meetingId)).toBeUndefined();
   });
 });

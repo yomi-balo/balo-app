@@ -1263,6 +1263,40 @@ describe('meetingsRepository.endMeeting', () => {
     }
   });
 
+  it('carries terminalRule / terminalArm on the meeting.ended audit row only when given', async () => {
+    const withRule = await lifecycleMeeting('in_progress');
+    await meetingsRepository.endMeeting({
+      id: withRule,
+      outcome: 'completed',
+      endedBy: 'system_idle',
+      endedAt: new Date(Date.now() - 60_000),
+      actorUserId: null,
+      terminalRule: { rule: 'overrun_stop', arm: 'hard_ceiling' },
+    });
+    const withoutRule = await lifecycleMeeting('in_progress');
+    await meetingsRepository.endMeeting({
+      id: withoutRule,
+      outcome: null,
+      endedBy: 'client_principal',
+      endedAt: new Date(Date.now() - 60_000),
+      actorUserId: (await userFactory()).id,
+    });
+
+    const [given] = (await auditEventsForEntity(withRule)).filter(
+      (row) => row.action === 'meeting.ended'
+    );
+    expect(given?.metadata).toMatchObject({
+      terminalRule: 'overrun_stop',
+      terminalArm: 'hard_ceiling',
+    });
+    const [omitted] = (await auditEventsForEntity(withoutRule)).filter(
+      (row) => row.action === 'meeting.ended'
+    );
+    expect(omitted).toBeDefined();
+    expect(omitted?.metadata).not.toHaveProperty('terminalRule');
+    expect(omitted?.metadata).not.toHaveProperty('terminalArm');
+  });
+
   it('writes EXACTLY ONE meeting.ended audit row, carrying endedBy / outcome / closedIntervals', async () => {
     const id = await lifecycleMeeting('in_progress');
     await openExpertInterval(id, 20);

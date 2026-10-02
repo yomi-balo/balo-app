@@ -6,8 +6,8 @@
  *   1. {@link MEETING_TRANSITIONS} — the legal-edge map (§4.1), plus
  *      {@link assertMeetingTransition}. Total, pure, and asserted by all three
  *      `meetingsRepository` status mutators against their own compare-and-set FROM sets.
- *   2. {@link resolveTerminalRule} — which of the five SYSTEM termination rules (§4.2)
- *      applies to a meeting, or `null`. The sixth path — the human End — is user-initiated
+ *   2. {@link resolveTerminalRule} — which of the six SYSTEM termination rules (§4.2)
+ *      applies to a meeting, or `null`. The human End is a further path — user-initiated
  *      and therefore not resolvable from facts; see that function's docblock.
  *   3. {@link resolveWaitingPhase} — the server-computed waiting-stage label.
  *
@@ -24,6 +24,7 @@
  * turned out to be a stranding hole rather than a safeguard — see {@link TerminalRuleInput}.
  */
 
+import { MAX_SESSION_MINUTES } from '../pricing';
 import type { MeetingTimers } from './timers';
 
 /**
@@ -294,7 +295,7 @@ export function expertClockStart(
     : scheduledStart;
 }
 
-// ── THE FIVE SYSTEM TERMINAL RULES (§4.2) ─────────────────────────────────────────────────
+// ── THE SIX SYSTEM TERMINAL RULES (§4.2) ─────────────────────────────────────────────────
 
 /** Which system rule fired. The human End is not one of these — see {@link resolveTerminalRule}. */
 export type MeetingTerminalRuleName =
@@ -302,7 +303,11 @@ export type MeetingTerminalRuleName =
   | 'no_show'
   | 'missed_call'
   | 'venue_unavailable'
-  | 'abandoned_wait';
+  | 'abandoned_wait'
+  | 'overrun_stop';
+
+/** Which ceiling arm of the overrun stop fired. Only one exists today. */
+export type OverrunStopArm = 'hard_ceiling';
 
 /** The four `meeting_outcome` labels this feature writes. `null` = "BAL-412 resolves it". */
 export type MeetingTerminalOutcome =
@@ -321,6 +326,8 @@ export interface MeetingTerminalDecision {
    * are DEFINED by their outcome in the ADR's own table, so they carry one.
    */
   readonly outcome: MeetingTerminalOutcome | null;
+  /** The overrun stop's ceiling arm; `null` for every other rule. */
+  readonly arm: OverrunStopArm | null;
 }
 
 /**
@@ -338,6 +345,8 @@ export interface MeetingTerminalDecision {
 export interface TerminalRuleInput {
   readonly status: MeetingLifecycleStatus;
   readonly scheduledStart: Date;
+  /** The booked end; the overrun stop's ceiling is measured from it. */
+  readonly scheduledEnd: Date;
   readonly presence: PresenceFacts;
   readonly timers: MeetingTimers;
   readonly now: Date;
@@ -363,6 +372,21 @@ export interface TerminalRuleInput {
 export function venueAbsenceAnchor(scheduledStart: Date, venueReadyAt: Date | null): Date | null {
   if (venueReadyAt === null) return null;
   return venueReadyAt.getTime() > scheduledStart.getTime() ? venueReadyAt : scheduledStart;
+}
+
+/**
+ * The instant an `in_progress` meeting that still has an open interval is force-ended:
+ * `max(scheduledEnd, scheduledStart + MAX_SESSION_MINUTES) + overrunStopGraceMs`. The meter
+ * stops drawing at `MAX_SESSION_MINUTES`, so a meeting booked shorter than that still ends by
+ * the meter's own limit plus grace; a longer booking ends at its own end plus grace.
+ */
+export function overrunStopCeiling(
+  scheduledStart: Date,
+  scheduledEnd: Date,
+  timers: MeetingTimers
+): Date {
+  const meterLimitMs = scheduledStart.getTime() + MAX_SESSION_MINUTES * 60_000;
+  return new Date(Math.max(scheduledEnd.getTime(), meterLimitMs) + timers.overrunStopGraceMs);
 }
 
 /** `true` for the two PRE-`in_progress` statuses rules 3, 4 and 5 all require. */
@@ -400,6 +424,18 @@ function roomEmptyPastWindow(input: TerminalRuleInput): boolean {
 /** Rule 1 — IDLE END. The only rule that requires `in_progress`. */
 function idleEndApplies(input: TerminalRuleInput): boolean {
   return input.status === 'in_progress' && roomEmptyPastWindow(input);
+}
+
+/**
+ * Rule 6 — OVERRUN STOP. An `in_progress` meeting somebody is STILL IN at the ceiling.
+ * Disjoint from rule 1 by `anyOpen` (rule 1 needs an empty room) and from rules 2–5 by status.
+ */
+function overrunStopApplies(input: TerminalRuleInput): boolean {
+  if (input.status !== 'in_progress' || !input.presence.anyOpen) {
+    return false;
+  }
+  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
+  return input.now.getTime() >= ceiling.getTime();
 }
 
 /**
@@ -534,7 +570,7 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
 /**
  * ⚠⚠ THE PRECEDENCE TABLE, AND WHY THE ORDER IS ALMOST DECORATION.
  *
- * ADR-1049 names ordering as a build risk. **The five rules are not merely ordered — they are
+ * ADR-1049 names ordering as a build risk. **The six rules are not merely ordered — they are
  * MUTUALLY EXCLUSIVE BY PRECONDITION**, which is a stronger property than an order:
  *
  *   · #1 vs everything — #1 is the ONLY rule that requires `in_progress`; #2/#3/#4/#5 all
@@ -547,6 +583,10 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  *   · #5 vs everything (BAL-581) — #5 by status, exactly like #3 (both require pre-`in_progress`
  *     and the expert NEVER joined); #5 vs #3 is disjoint by VENUE — #3 requires a READY venue,
  *     #5 requires its ABSENCE. #5 vs #2/#4 is disjoint by presence, same as #3.
+ *
+ *   · #6 vs everything — #6 requires `in_progress` like #1 but ALSO an OPEN interval, which #1
+ *     forbids (*disjoint by presence*); #2–#5 all require a pre-`in_progress` status
+ *     (*disjoint by status*).
  *
  * The fixed order below exists so the sweep stays DETERMINISTIC if a future change ever breaks
  * that disjointness, and `lifecycle.test.ts` asserts disjointness directly rather than trusting
@@ -569,14 +609,14 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  *     room was ready, #5 when it never was, #4 when the expert came — exhaustive over
  *     `(expertEverPresent × venue ready)`.
  *
- * ⚠ AND THE ONE CARVE-OUT, NAMED RATHER THAN LEFT AS A GAP: a room somebody is STILL IN matches
- * nothing but #2, and that is correct — an occupied meeting is not stranded, it is happening.
- * Every open interval is closed by a `participant.left` webhook, by `meeting.ended`, or by the
- * per-minute reconciler within one tick, so "occupied" is a bounded state and the meeting
- * becomes empty (and therefore terminable) shortly after everyone really leaves.
+ * ⚠ AND WHAT IS LEFT, NAMED RATHER THAN LEFT AS A GAP: a room somebody is STILL IN matches
+ * nothing but #2 until the ceiling. An occupied `in_progress` meeting is bounded by #6 at
+ * {@link overrunStopCeiling}, whatever the webhooks and the reconciler are doing, so it can no
+ * longer stay open forever. The residual is a PRE-`in_progress` room the expert still holds
+ * after a client left: it matches no rule (BAL-584 owns it, not this table).
  * `lifecycle.test.ts` executes the invariant over a status × presence-shape matrix.
  *
- * ⚠ THE SIXTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
+ * ⚠ THE SEVENTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
  * presence gate and no wall-clock gate; its only precondition is that a `canEndMeeting` holder
  * pressed a button, which is a fact about a REQUEST, not about a meeting. It lives in
  * `apps/api`'s end service, is CAS-guarded, and if it lands first the meeting is terminal and
@@ -586,22 +626,25 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  */
 export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDecision | null {
   if (idleEndApplies(input)) {
-    return { rule: 'idle_end', outcome: 'completed' };
+    return { rule: 'idle_end', outcome: 'completed', arm: null };
+  }
+  if (overrunStopApplies(input)) {
+    return { rule: 'overrun_stop', outcome: 'completed', arm: 'hard_ceiling' };
   }
   if (noShowApplies(input)) {
-    return { rule: 'no_show', outcome: 'no_show_client' };
+    return { rule: 'no_show', outcome: 'no_show_client', arm: null };
   }
   if (missedCallApplies(input)) {
-    return { rule: 'missed_call', outcome: 'missed_call' };
+    return { rule: 'missed_call', outcome: 'missed_call', arm: null };
   }
   if (venueUnavailableApplies(input)) {
-    return { rule: 'venue_unavailable', outcome: 'venue_unavailable' };
+    return { rule: 'venue_unavailable', outcome: 'venue_unavailable', arm: null };
   }
   if (abandonedWaitApplies(input)) {
     // ⚠ NO OUTCOME (D5/D9). BAL-412 resolves it from the presence rows, exactly as for a human
     // end. `meeting_outcome_requires_ended` is one-directional, so `ended` with a NULL outcome
     // is legal and is precisely what this path writes.
-    return { rule: 'abandoned_wait', outcome: null };
+    return { rule: 'abandoned_wait', outcome: null, arm: null };
   }
   return null;
 }
@@ -609,7 +652,7 @@ export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDe
 /**
  * ⚠ EVERY RULE, AS DATA — for the disjointness proof and for nothing else.
  *
- * `lifecycle.test.ts` evaluates all five predicates against one scenario and asserts AT MOST
+ * `lifecycle.test.ts` evaluates all six predicates against one scenario and asserts AT MOST
  * ONE holds. Exporting the predicate list is what makes that a real proof rather than a
  * restatement of {@link resolveTerminalRule}'s if-chain.
  */
@@ -622,6 +665,7 @@ export const MEETING_TERMINAL_PREDICATES: ReadonlyArray<{
   { rule: 'missed_call', applies: missedCallApplies },
   { rule: 'venue_unavailable', applies: venueUnavailableApplies },
   { rule: 'abandoned_wait', applies: abandonedWaitApplies },
+  { rule: 'overrun_stop', applies: overrunStopApplies },
 ];
 
 // ── THE SERVER-COMPUTED WAITING PHASE (§7.1) ──────────────────────────────────────────────

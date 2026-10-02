@@ -48,6 +48,7 @@ const MAX_BILLABLE_MINUTES = 240;
 
 /** T = 10:00 UTC. Every instant below is a wall-clock string on this day. */
 const SCHEDULED_START = new Date('2026-09-27T10:00:00.000Z');
+const SCHEDULED_END = new Date('2026-09-27T11:00:00.000Z');
 const DAY_START = new Date('2026-09-27T00:00:00.000Z');
 
 function clock(hhmm: string): Date {
@@ -399,6 +400,7 @@ describe('INVARIANT: before the scheduled start only time together bills; from t
       const base = {
         status: 'waiting_for_participants' as const,
         scheduledStart: SCHEDULED_START,
+        scheduledEnd: SCHEDULED_END,
         presence,
         timers: DEFAULT_MEETING_TIMERS,
         venueReadyAt: clock('09:00'),
@@ -417,6 +419,7 @@ describe('INVARIANT: before the scheduled start only time together bills; from t
       const base = {
         status: 'in_progress' as const,
         scheduledStart: SCHEDULED_START,
+        scheduledEnd: SCHEDULED_END,
         presence,
         timers: DEFAULT_MEETING_TIMERS,
         venueReadyAt: clock('09:00'),

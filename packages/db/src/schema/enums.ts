@@ -853,12 +853,14 @@ export const meetingOutcomeEnum = pgEnum('meeting_outcome', [
  *   `expert_host`      — the delivering expert (or their agency owner/admin) pressed End
  *                        (D7: `hasEngagementCapability(HOST_MEETINGS)`, ADR-1046).
  *   `system_idle`      — NOBODY pressed anything. The lifecycle sweep terminated the meeting
- *                        under one of the five SYSTEM rules (idle end, no-show, missed call,
- *                        abandoned wait, venue unavailable). ⚠ ONE LABEL FOR ALL FIVE,
+ *                        under one of the six SYSTEM rules (idle end, overrun stop, no-show,
+ *                        missed call, abandoned wait, venue unavailable). ⚠ ONE LABEL FOR ALL SIX,
  *                        deliberately: which system rule fired is carried by `outcome`
  *                        (`completed` / `no_show_client` / `missed_call` / `venue_unavailable`
  *                        / NULL for an abandoned wait) and by the analytics event, so splitting
  *                        this axis would encode the same fact twice and let the two disagree.
+ *                        `idle_end` and `overrun_stop` share `outcome='completed'`; the
+ *                        `meeting.ended` audit row's `terminalRule` tells them apart.
  *
  * ⚠ WHY THE HUMAN PATHS CARRY NO `outcome` (D5). ADR-1049: "the ender never sets the
  * outcome" — BAL-412 resolves it from `meeting_presence`. `meeting_outcome_requires_ended`

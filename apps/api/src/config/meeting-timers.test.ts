@@ -19,6 +19,7 @@ const VARIABLES = [
   'MEETING_CLIENT_ABSENT_NUDGE_MINUTES',
   'MEETING_NO_SHOW_FLOOR_MINUTES',
   'MEETING_IDLE_END_MINUTES',
+  'MEETING_OVERRUN_STOP_GRACE_MINUTES',
 ] as const;
 
 const MINUTE = 60_000;
@@ -54,6 +55,7 @@ describe('resolveMeetingTimers (BAL-134 D8)', () => {
     { variable: 'MEETING_CLIENT_ABSENT_NUDGE_MINUTES', field: 'clientAbsentNudgeMs', minutes: 2 },
     { variable: 'MEETING_NO_SHOW_FLOOR_MINUTES', field: 'noShowFloorMs', minutes: 20 },
     { variable: 'MEETING_IDLE_END_MINUTES', field: 'idleEndEmptyMs', minutes: 7 },
+    { variable: 'MEETING_OVERRUN_STOP_GRACE_MINUTES', field: 'overrunStopGraceMs', minutes: 45 },
   ];
 
   it.each(WIRING)(
@@ -75,6 +77,20 @@ describe('resolveMeetingTimers (BAL-134 D8)', () => {
       );
     }
   );
+
+  it('INCOHERENT — a 29-minute overrun grace is below the Join-window floor and is refused', () => {
+    process.env.MEETING_OVERRUN_STOP_GRACE_MINUTES = '29';
+
+    expect(resolveMeetingTimers()).toEqual(DEFAULT_MEETING_TIMERS);
+    expect(mockError).toHaveBeenCalledTimes(1);
+  });
+
+  it('INCOHERENT — a 960-minute overrun grace puts the ceiling past the lookback and is refused', () => {
+    process.env.MEETING_OVERRUN_STOP_GRACE_MINUTES = '960';
+
+    expect(resolveMeetingTimers()).toEqual(DEFAULT_MEETING_TIMERS);
+    expect(mockError).toHaveBeenCalledTimes(1);
+  });
 
   it('accepts a fractional number of minutes', () => {
     process.env.MEETING_IDLE_END_MINUTES = '0.5';

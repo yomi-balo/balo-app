@@ -16,6 +16,7 @@ import {
   dailyParticipantIdFor,
   dailyRoomNameForMeeting,
   expertClockStart,
+  LIFECYCLE_LOOKBACK_MS,
   meetingVenueReadyAt,
   resolveTerminalRule,
   selectPrimaryMeetingContext,
@@ -99,15 +100,12 @@ export const MEETING_LIFECYCLE_SWEEP_CRON = '* * * * *'; // every minute
 
 /**
  * ⚠ A LOOKBACK FLOOR, NOT A WINDOW. Anything older than this is a data-repair problem, not a
- * live meeting, and scanning it every minute forever would grow without bound.
- *
- * ⚠ EXPORTED for `case-inactivity-sweep.test.ts` (BAL-572), which pins
- * `MEETING_TOKEN_TTL_AFTER_END_MS >= LIFECYCLE_LOOKBACK_MS` — that sweep's live-meeting
- * exclusion floor is derived from the join-token TTL, and it must stay at least as wide as
- * this lookback so every meeting the lifecycle sweep still manages is covered. No other
- * behaviour here changes.
+ * live meeting, and scanning it every minute forever would grow without bound. Defined in
+ * `@balo/shared/meetings` (the timer coherence check bounds the overrun ceiling by it) and
+ * re-exported here for `case-inactivity-sweep.test.ts`, which pins
+ * `MEETING_TOKEN_TTL_AFTER_END_MS >= LIFECYCLE_LOOKBACK_MS`.
  */
-export const LIFECYCLE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+export { LIFECYCLE_LOOKBACK_MS };
 
 /** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
 export const MEETING_LIFECYCLE_BATCH_LIMIT = 200;
@@ -171,6 +169,25 @@ async function loadCandidateState(meeting: Meeting, now: Date): Promise<Candidat
       now
     ).expertPresentMs,
   };
+}
+
+/**
+ * What the Daily roster said about a meeting's room at the moment of a stop.
+ *
+ * `null` (the vendor read failed) and a whole-platform-empty roster (the sanity gate in
+ * `reconcileMeeting`) are both `unknown`; an `[]` roster is a confirmed-empty room.
+ */
+export type RoomOccupancy = 'occupied' | 'empty' | 'unknown';
+
+/** @see RoomOccupancy */
+export function roomOccupancy(
+  roster: readonly string[] | null,
+  platformRosterEmpty: boolean
+): RoomOccupancy {
+  if (roster === null || platformRosterEmpty) {
+    return 'unknown';
+  }
+  return roster.length === 0 ? 'empty' : 'occupied';
 }
 
 /**
@@ -341,15 +358,17 @@ function logSessionlessSettlement(
   }
 }
 
-/** PASS 2 — evaluate the five terminal rules and, on a match, end the meeting. */
+/** PASS 2 — evaluate the six terminal rules and, on a match, end the meeting. */
 async function terminateIfDue(
   state: CandidateState,
   timers: MeetingTimers,
-  now: Date
+  now: Date,
+  occupancy: RoomOccupancy
 ): Promise<MeetingTerminalDecision | null> {
   const decision = resolveTerminalRule({
     status: state.meeting.status,
     scheduledStart: state.meeting.scheduledStart,
+    scheduledEnd: state.meeting.scheduledEnd,
     presence: state.facts,
     timers,
     now,
@@ -373,6 +392,7 @@ async function terminateIfDue(
     const confirmed = resolveTerminalRule({
       status: fresh.status,
       scheduledStart: fresh.scheduledStart,
+      scheduledEnd: fresh.scheduledEnd,
       presence: state.facts,
       timers,
       now,
@@ -387,11 +407,12 @@ async function terminateIfDue(
   const ended = await meetingsRepository.endMeeting({
     id: state.meeting.id,
     outcome: decision.outcome,
-    // ⚠ ALL FIVE SYSTEM RULES REPORT `system_idle` — `ended_by` answers "person or system?", and
-    // WHICH rule fired is answered by `outcome` plus the `meeting.ended` audit row. A label per
-    // rule would duplicate `outcome` and then be free to disagree with it.
+    // ⚠ ALL SIX SYSTEM RULES REPORT `system_idle` — `ended_by` answers "person or system?", and
+    // WHICH rule fired is answered by `outcome` plus the `meeting.ended` audit row's
+    // `terminalRule` (`idle_end` and `overrun_stop` share `outcome='completed'`).
     endedBy: 'system_idle',
     endedAt: now,
+    terminalRule: { rule: decision.rule, arm: decision.arm },
     // ⚠ NULL ACTOR — the ADR-1030 system-actor exemption. An unattributed audit row, never a
     // fabricated actor.
     actorUserId: null,
@@ -405,6 +426,7 @@ async function terminateIfDue(
     {
       meetingId: state.meeting.id,
       rule: decision.rule,
+      arm: decision.arm,
       outcome: decision.outcome,
       endedBy: 'system_idle',
       expertPresentMs: state.expertPresentMs,
@@ -412,7 +434,11 @@ async function terminateIfDue(
     'Terminal rule fired'
   );
 
-  emitRuleAnalytics(state, decision, ended.meeting);
+  emitRuleAnalytics(state, decision, ended.meeting, {
+    now,
+    occupancy,
+    closedIntervals: ended.closedIntervals,
+  });
   await emitMeetingEnded({
     meeting: ended.meeting,
     endedBy: 'system_idle',
@@ -448,8 +474,8 @@ async function terminateIfDue(
     );
   }
 
-  // ⚠⚠ BAL-473 (§5.2, ARCHITECT AMENDMENT to OD-2) — also hook the five SYSTEM terminal rules,
-  // not just the human `end-meeting.ts` path. Exactly one of the five (`idle_end`) is scoped
+  // ⚠⚠ BAL-473 (§5.2, ARCHITECT AMENDMENT to OD-2) — also hook the six SYSTEM terminal rules,
+  // not just the human `end-meeting.ts` path. Two of the six (`idle_end`, `overrun_stop`) are scoped
   // to a meeting that reached `in_progress`, which is the only status under which a recording
   // exists; the other four no-op for free inside `recording-stop` itself (nothing capturing).
   // BEST-EFFORT, the same posture as `tearDownRoom` immediately below: the meeting is already
@@ -478,9 +504,9 @@ async function enqueueRecordingStopBestEffort(meetingId: string): Promise<void> 
 /**
  * The per-rule analytics event, beside the universal `meeting_ended`.
  *
- * ⚠ THREE OF THE FIVE RULES HAVE THEIR OWN EVENT AND TWO DO NOT, and that is the ticket's list
- * rather than an omission: `meeting_waiting_abandoned`, `meeting_missed_call` and
- * `meeting_venue_unavailable` name failure modes the product needs to count separately — a
+ * ⚠ FOUR OF THE SIX RULES HAVE THEIR OWN EVENT AND TWO DO NOT, and that is the ticket's list
+ * rather than an omission: `meeting_waiting_abandoned`, `meeting_missed_call`,
+ * `meeting_venue_unavailable` and `meeting_overrun_stopped` name failure modes the product needs to count separately — a
  * provisioning failure is a platform incident the product must count separately from any
  * no-show — while the idle end and the no-show are fully described by `meeting_ended.outcome`.
  *
@@ -491,7 +517,8 @@ async function enqueueRecordingStopBestEffort(meetingId: string): Promise<void> 
 function emitRuleAnalytics(
   state: CandidateState,
   decision: MeetingTerminalDecision,
-  endedMeeting: Meeting
+  endedMeeting: Meeting,
+  stop: { readonly now: Date; readonly occupancy: RoomOccupancy; readonly closedIntervals: number }
 ): void {
   if (decision.rule === 'abandoned_wait') {
     trackServer(MEETING_SERVER_EVENTS.MEETING_WAITING_ABANDONED, {
@@ -514,6 +541,18 @@ function emitRuleAnalytics(
     trackServer(MEETING_SERVER_EVENTS.MEETING_VENUE_UNAVAILABLE, {
       meeting_id: endedMeeting.id,
       room_name_stamped: endedMeeting.dailyRoomName !== null,
+      distinct_id: endedMeeting.id,
+    });
+    return;
+  }
+  if (decision.rule === 'overrun_stop') {
+    trackServer(MEETING_SERVER_EVENTS.MEETING_OVERRUN_STOPPED, {
+      meeting_id: endedMeeting.id,
+      room_occupancy: stop.occupancy,
+      minutes_past_scheduled_end: Math.floor(
+        (stop.now.getTime() - endedMeeting.scheduledEnd.getTime()) / 60_000
+      ),
+      open_intervals_closed: stop.closedIntervals,
       distinct_id: endedMeeting.id,
     });
   }
@@ -766,7 +805,12 @@ async function processCandidate(
     return { terminated: false, closed, opened, needsRecordingEnsure: false };
   }
 
-  const decision = await terminateIfDue(state, timers, now);
+  const decision = await terminateIfDue(
+    state,
+    timers,
+    now,
+    roomOccupancy(roster, platformRosterEmpty)
+  );
   if (decision !== null) {
     return { terminated: true, closed, opened, needsRecordingEnsure: false };
   }
