@@ -3,25 +3,30 @@ import { render, screen } from '@/test/utils';
 import { YbugWidget } from './ybug-widget';
 
 const scriptRenders = vi.hoisted((): string[] => []);
+const loader = vi.hoisted((): { onLoad?: () => void } => ({}));
 
 // The real `next/script` injects `<script>` tags through a module-level cache that dedupes by
 // id/src across renders, so every render after the first in this file would load nothing. This
 // stand-in renders each `<Script>` as an element whose props can be asserted instead — and logs
 // every render, because rendering `<Script>` at all is what makes Next preload and load it: a
-// transient render on a sensitive landing leaks even if the DOM ends up empty.
+// transient render on a sensitive landing leaks even if the DOM ends up empty. It also keeps the
+// loader's `onLoad`, which a test calls in place of the browser's `load` event.
 vi.mock('next/script', () => ({
   default: ({
     id,
     src,
     strategy,
+    onLoad,
     children,
   }: {
     id?: string;
     src?: string;
     strategy?: string;
+    onLoad?: () => void;
     children?: string;
   }) => {
     scriptRenders.push(id ?? src ?? '');
+    if (src !== undefined) loader.onLoad = onLoad;
     return (
       <div data-testid="next-script" data-id={id} data-src={src} data-strategy={strategy}>
         {children}
@@ -44,6 +49,15 @@ function navigateTo(url: string): void {
   globalThis.history.replaceState(null, '', url);
 }
 
+/** Sets `document.referrer` — the page a new tab or a full page load came from. */
+function arriveFrom(path: string): void {
+  const referrer = `${globalThis.location.origin}${path}`;
+  Object.defineProperty(globalThis.document, 'referrer', {
+    configurable: true,
+    get: () => referrer,
+  });
+}
+
 function renderedScripts(): HTMLElement[] {
   return screen.queryAllByTestId('next-script');
 }
@@ -52,6 +66,7 @@ describe('YbugWidget', () => {
   beforeEach(() => {
     navigateTo('/');
     scriptRenders.length = 0;
+    loader.onLoad = undefined;
     vi.stubEnv('NEXT_PUBLIC_YBUG_ID', 'abc123');
     vi.stubGlobal('Ybug', { destroy });
   });
@@ -60,6 +75,7 @@ describe('YbugWidget', () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     destroy.mockClear();
+    Reflect.deleteProperty(globalThis.document, 'referrer');
     navigateTo('/');
   });
 
@@ -76,10 +92,10 @@ describe('YbugWidget', () => {
 
     const scripts = renderedScripts();
     expect(scripts).toHaveLength(2);
-    const [settings, loader] = scripts;
+    const [settings, loaderScript] = scripts;
     expect(settings).toHaveAttribute('data-id', 'ybug-settings');
     expect(settings?.textContent).toBe('window.ybug_settings = {"id":"abc123"};');
-    expect(loader).toHaveAttribute('data-src', 'https://widget.ybug.io/button/abc123.js');
+    expect(loaderScript).toHaveAttribute('data-src', 'https://widget.ybug.io/button/abc123.js');
     expect(scripts.map((script) => script.getAttribute('data-strategy'))).toEqual([
       'afterInteractive',
       'afterInteractive',
@@ -111,7 +127,27 @@ describe('YbugWidget', () => {
   ])('never loads on $landing, even in a production deploy', ({ url }) => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VERCEL_ENV', 'production');
+    // A refused landing never loaded Ybug, so the refusal must cope with there being none.
+    vi.stubGlobal('Ybug', undefined);
     navigateTo(url);
+
+    const { container } = render(<YbugWidget />);
+
+    expect(scriptRenders).toEqual([]);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it.each([
+    { origin: 'an admin Lookup search', referrer: '/admin/lookup?q=dana%40northwind.example' },
+    {
+      origin: 'a Stripe PaymentIntent return',
+      referrer:
+        '/billing/top-up?payment_intent=pi_123&payment_intent_client_secret=pi_123_secret_456&redirect_status=succeeded',
+    },
+  ])('never loads on a safe page opened from $origin', ({ referrer }) => {
+    vi.stubGlobal('Ybug', undefined);
+    arriveFrom(referrer);
+    navigateTo('/projects/6f1c2a4e');
 
     const { container } = render(<YbugWidget />);
 
@@ -125,6 +161,15 @@ describe('YbugWidget', () => {
     { landing: 'the admin Lookup page before a search', url: '/admin/lookup' },
   ])('loads on $landing', ({ url }) => {
     navigateTo(url);
+
+    render(<YbugWidget />);
+
+    expect(renderedScripts()).toHaveLength(2);
+  });
+
+  it('loads on a page opened from a safe one', () => {
+    arriveFrom('/experts?q=agentforce');
+    navigateTo('/projects/6f1c2a4e');
 
     render(<YbugWidget />);
 
@@ -147,6 +192,34 @@ describe('YbugWidget', () => {
 
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(renderedScripts()).toHaveLength(0);
+  });
+
+  it('destroys Ybug when its loader finishes downloading after the URL turned sensitive', () => {
+    vi.stubGlobal('Ybug', undefined);
+    navigateTo('/admin/lookup');
+    const { rerender } = render(<YbugWidget />);
+    const onLoad = loader.onLoad;
+    expect(onLoad).toBeTypeOf('function');
+
+    navigateTo('/admin/lookup?q=dana%40northwind.example');
+    rerender(<YbugWidget />);
+    expect(renderedScripts()).toHaveLength(0);
+
+    // The in-flight loader executes — booting `window.Ybug` — and then dispatches `load`.
+    vi.stubGlobal('Ybug', { destroy });
+    onLoad?.();
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves Ybug running when its loader finishes on a safe URL', () => {
+    navigateTo('/experts');
+    render(<YbugWidget />);
+
+    loader.onLoad?.();
+
+    expect(destroy).not.toHaveBeenCalled();
+    expect(renderedScripts()).toHaveLength(2);
   });
 
   it('stays loaded across client-side navigations between safe URLs', () => {
