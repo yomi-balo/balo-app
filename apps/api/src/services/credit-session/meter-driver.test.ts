@@ -8,6 +8,7 @@ const {
   mockPublishNearWrap,
   mockTrackCeilingHit,
   mockLogError,
+  mockLogWarn,
 } = vi.hoisted(() => ({
   mockMeterSessionToNow: vi.fn(),
   mockFindWallet: vi.fn(),
@@ -16,10 +17,11 @@ const {
   mockPublishNearWrap: vi.fn(),
   mockTrackCeilingHit: vi.fn(),
   mockLogError: vi.fn(),
+  mockLogWarn: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLogError }),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), error: mockLogError, warn: mockLogWarn }),
 }));
 vi.mock('@balo/db', () => ({
   creditSessionsRepository: { meterSessionToNow: mockMeterSessionToNow },
@@ -81,25 +83,71 @@ describe('driveSession', () => {
     expect(mockTrackCeilingHit).toHaveBeenCalledWith(SESSION, -2000);
   });
 
-  it('logs an error exactly once and publishes nothing when the meter reaches MAX_SESSION_MINUTES', async () => {
-    mockMeterSessionToNow.mockResolvedValue(meterResult({ maxSessionMinutesReached: true }));
-    await driveSession('session_1', NOW);
-    expect(mockLogError).toHaveBeenCalledTimes(1);
-    expect(mockLogError).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'session_1' }),
-      expect.stringContaining('MAX_SESSION_MINUTES')
-    );
-    expect(mockFindWallet).not.toHaveBeenCalled();
-    expect(mockPublishLowBalance).not.toHaveBeenCalled();
-    expect(mockPublishGraceEntered).not.toHaveBeenCalled();
-    expect(mockPublishNearWrap).not.toHaveBeenCalled();
-    expect(mockTrackCeilingHit).not.toHaveBeenCalled();
-  });
+  describe('cap reached (maxSessionMinutesReached)', () => {
+    function capResult(
+      durationSource: string,
+      withheldTicks: number,
+      pastScheduledEnd: boolean | null
+    ) {
+      return {
+        session: { ...SESSION, durationSource, lastTickSeq: 240 },
+        transitions: { maxSessionMinutesReached: { withheldTicks, pastScheduledEnd } },
+        ticksPosted: 1,
+      };
+    }
 
-  it('does not log an error when the cap flag is absent', async () => {
-    mockMeterSessionToNow.mockResolvedValue(meterResult({ low: true }));
-    await driveSession('session_1', NOW);
-    expect(mockLogError).not.toHaveBeenCalled();
+    it.each([
+      ['presence past its scheduled end', 'presence', 0, true],
+      ['live_capture backfilled 60 ticks late', 'live_capture', 60, null],
+    ] as const)('%s logs an error once and no warning', async (_label, source, withheld, past) => {
+      mockMeterSessionToNow.mockResolvedValue(capResult(source, withheld, past));
+      await driveSession('session_1', NOW);
+      expect(mockLogError).toHaveBeenCalledTimes(1);
+      expect(mockLogError).toHaveBeenCalledWith(
+        {
+          sessionId: 'session_1',
+          durationSource: source,
+          withheldTicks: withheld,
+          pastScheduledEnd: past,
+        },
+        expect.stringContaining('MAX_SESSION_MINUTES')
+      );
+      expect(mockLogWarn).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['presence within its booking', 'presence', 0, false],
+      ['live_capture one sweep late', 'live_capture', 1, null],
+    ] as const)('%s logs a warning once and no error', async (_label, source, withheld, past) => {
+      mockMeterSessionToNow.mockResolvedValue(capResult(source, withheld, past));
+      await driveSession('session_1', NOW);
+      expect(mockLogWarn).toHaveBeenCalledTimes(1);
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        {
+          sessionId: 'session_1',
+          durationSource: source,
+          withheldTicks: withheld,
+          pastScheduledEnd: past,
+        },
+        expect.stringContaining('billable cap')
+      );
+      expect(mockLogError).not.toHaveBeenCalled();
+    });
+
+    it('publishes nothing on a cap-only run', async () => {
+      mockMeterSessionToNow.mockResolvedValue(capResult('presence', 0, true));
+      await driveSession('session_1', NOW);
+      expect(mockFindWallet).not.toHaveBeenCalled();
+      expect(mockPublishLowBalance).not.toHaveBeenCalled();
+      expect(mockTrackCeilingHit).not.toHaveBeenCalled();
+    });
+
+    it('logs neither when the flag is absent', async () => {
+      mockMeterSessionToNow.mockResolvedValue(meterResult({ low: true }));
+      await driveSession('session_1', NOW);
+      expect(mockLogError).not.toHaveBeenCalled();
+      expect(mockLogWarn).not.toHaveBeenCalled();
+    });
   });
 
   it('returns the repo meter result', async () => {

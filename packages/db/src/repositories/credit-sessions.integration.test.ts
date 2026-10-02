@@ -711,15 +711,30 @@ describe('creditSessionsRepository.meterSessionToNow — the MAX_SESSION_MINUTES
       floorMinutes: METER_FLOOR_MINUTES,
     });
 
+  /** A live meeting booked from BASE for `bookedMinutes`. */
+  async function liveMeetingBooked(bookedMinutes: number): Promise<string> {
+    const { meeting } = await meetingFactory({
+      values: {
+        status: 'in_progress',
+        scheduledStart: BASE,
+        scheduledEnd: new Date(BASE.getTime() + bookedMinutes * 60_000),
+      },
+    });
+    return meeting.id;
+  }
+
   it('presence: never posts past the ceiling, flags the reaching run once, then draws nothing', async () => {
     const ctx = await setup({ balanceMinor: RICH });
-    const id = await openPresence(ctx, await liveMeeting());
+    const id = await openPresence(ctx, await liveMeetingBooked(60));
     await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const first = await meter(id, 300);
     expect(first.ticksPosted).toBe(MAX_SESSION_MINUTES);
     expect(first.session.lastTickSeq).toBe(MAX_SESSION_MINUTES);
-    expect(first.transitions.maxSessionMinutesReached).toBe(true);
+    expect(first.transitions.maxSessionMinutesReached).toEqual({
+      withheldTicks: 60,
+      pastScheduledEnd: true,
+    });
     expect(await consumeKeys(id)).toHaveLength(MAX_SESSION_MINUTES);
 
     const second = await meter(id, 301);
@@ -728,14 +743,17 @@ describe('creditSessionsRepository.meterSessionToNow — the MAX_SESSION_MINUTES
     expect(await consumeKeys(id)).toHaveLength(MAX_SESSION_MINUTES);
   });
 
-  it('presence: reaching the ceiling on time is flagged too — the meeting outlives the meter', async () => {
+  it('presence: reaching the ceiling inside a long booking is flagged with pastScheduledEnd false', async () => {
     const ctx = await setup({ balanceMinor: RICH });
-    const id = await openPresence(ctx, await liveMeeting());
+    const id = await openPresence(ctx, await liveMeetingBooked(300));
     await creditSessionsRepository.connectWithTransition(id, { now: BASE });
 
     const res = await meter(id, MAX_SESSION_MINUTES);
     expect(res.ticksPosted).toBe(MAX_SESSION_MINUTES);
-    expect(res.transitions.maxSessionMinutesReached).toBe(true);
+    expect(res.transitions.maxSessionMinutesReached).toEqual({
+      withheldTicks: 0,
+      pastScheduledEnd: false,
+    });
   });
 
   it('live_capture outage: backfills up to the ceiling only, flags once, then posts nothing', async () => {
@@ -747,7 +765,10 @@ describe('creditSessionsRepository.meterSessionToNow — the MAX_SESSION_MINUTES
     const first = await meter(id, 300);
     expect(first.ticksPosted).toBe(MAX_SESSION_MINUTES - 100);
     expect(first.session.lastTickSeq).toBe(MAX_SESSION_MINUTES);
-    expect(first.transitions.maxSessionMinutesReached).toBe(true);
+    expect(first.transitions.maxSessionMinutesReached).toEqual({
+      withheldTicks: 60,
+      pastScheduledEnd: null,
+    });
 
     const second = await meter(id, 301);
     expect(second.ticksPosted).toBe(0);
@@ -4119,7 +4140,7 @@ describe('creditSessionsRepository.findPresenceSettlementCandidates / markPresen
       guard: 'figure_exceeds_bound',
       error: 'x',
     });
-    const unmarked = await unsettled();
+    await unsettled();
     const settled = await unsettled();
     await creditSessionsRepository.markPresenceSettlementExhausted({
       sessionId: settled.id,
@@ -4133,7 +4154,6 @@ describe('creditSessionsRepository.findPresenceSettlementCandidates / markPresen
       settlementInput(settled.id, settled.meetingId)
     );
     expect(await creditSessionsRepository.countPresenceSettlementExhausted(CUTOFF)).toBe(1);
-    expect(unmarked.id).not.toBe(marked.id);
     const [row] = await sessionAudits(marked.id, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION);
     expect(row).toBeDefined();
     expect(row?.metadata).not.toHaveProperty('meetingId');

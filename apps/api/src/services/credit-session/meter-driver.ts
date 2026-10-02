@@ -11,6 +11,7 @@ import {
   creditSessionsRepository,
   creditWalletsRepository,
   type MeterSessionResult,
+  type MeterTransitions,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { resolveBillingFloorMinutes } from '../../config/billing-floor.js';
@@ -22,6 +23,36 @@ import {
 } from './notify.js';
 
 const log = createLogger('credit-session');
+
+type CapReached = NonNullable<MeterTransitions['maxSessionMinutesReached']>;
+
+/**
+ * Logged once, on the run that first lands the meter on `MAX_SESSION_MINUTES`. It is an error when
+ * the cap was reached abnormally (a presence meeting still running past its scheduled end, or a
+ * live_capture backfill more than one sweep late) and a warning when a legitimate long booking or a
+ * one-sweep delay reached it.
+ */
+function logCapReached(
+  sessionId: string,
+  durationSource: string,
+  { withheldTicks, pastScheduledEnd }: CapReached
+): void {
+  const context = { sessionId, durationSource, withheldTicks, pastScheduledEnd };
+  const abnormal =
+    (durationSource === 'presence' && pastScheduledEnd === true) ||
+    (durationSource === 'live_capture' && withheldTicks > 1);
+  if (abnormal) {
+    log.error(
+      context,
+      "Session meter reached MAX_SESSION_MINUTES abnormally — no further ticks are drawn; a presence session's meeting ends via the lifecycle sweep's overrun_stop rule"
+    );
+    return;
+  }
+  log.warn(
+    context,
+    'Session reached the billable cap within its booking or one sweep late — no further ticks are drawn'
+  );
+}
 
 /**
  * Meter a session to `now` and publish on the newly-crossed transitions. Returns the repo
@@ -37,15 +68,8 @@ export async function driveSession(sessionId: string, now: Date): Promise<MeterS
   });
   const { session, transitions } = result;
 
-  if (transitions.maxSessionMinutesReached === true) {
-    log.error(
-      {
-        sessionId,
-        durationSource: session.durationSource,
-        lastTickSeq: session.lastTickSeq,
-      },
-      "Session meter reached MAX_SESSION_MINUTES — no further ticks are drawn; a presence session's meeting ends via the lifecycle sweep's overrun_stop rule"
-    );
+  if (transitions.maxSessionMinutesReached !== undefined) {
+    logCapReached(sessionId, session.durationSource, transitions.maxSessionMinutesReached);
   }
 
   const hasTransition =

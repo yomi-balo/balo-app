@@ -451,7 +451,16 @@ export interface MeterTransitions {
    * the ceiling (any provenance) or a `presence` session reaching it (its meeting outlives the
    * meter). Set by exactly ONE committed run; every later run hits the early return.
    */
-  maxSessionMinutesReached?: boolean;
+  maxSessionMinutesReached?: {
+    /** `elapsed − MAX_SESSION_MINUTES` (≥ 0): the ticks the clamp declined to post. */
+    withheldTicks: number;
+    /**
+     * `presence`: whether the meeting's `scheduled_end` had passed (`false` = a long booking that
+     * legitimately reached the billable cap). `live_capture`, or a presence session with no
+     * readable meeting: `null`.
+     */
+    pastScheduledEnd: boolean | null;
+  };
 }
 
 export interface MeterSessionResult {
@@ -848,6 +857,22 @@ function presenceUnsettledTerms(cutoff: Date): SQL | undefined {
     lte(meetings.endedAt, cutoff),
     isNull(meetings.deletedAt)
   );
+}
+
+/** Whether `now` is at or past the meeting's `scheduled_end`; null when the meeting is unreadable. */
+async function readPastScheduledEnd(
+  exec: DbExecutor,
+  meetingId: string | null,
+  now: Date
+): Promise<boolean | null> {
+  if (meetingId === null) {
+    return null;
+  }
+  const [row] = await exec
+    .select({ scheduledEnd: meetings.scheduledEnd })
+    .from(meetings)
+    .where(eq(meetings.id, meetingId));
+  return row === undefined ? null : now.getTime() >= row.scheduledEnd.getTime();
 }
 
 /** The correlated sub-select matching a session's {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} marker. */
@@ -2529,7 +2554,7 @@ export const creditSessionsRepository = {
    *
    * ⚠ THE METER NEVER POSTS A TICK PAST `MAX_SESSION_MINUTES`, whatever the wall clock says: a
    * session whose meeting nobody ended stops drawing at the ceiling. `maxSessionMinutesReached`
-   * flags the ONE committed run that lands `last_tick_seq` on the ceiling because the clamp bound
+   * (`{ withheldTicks, pastScheduledEnd }`) flags the ONE committed run that lands `last_tick_seq` on the ceiling because the clamp bound
    * (elapsed above it, or a `presence` session reaching it); a `live_capture` session arriving at
    * exactly the ceiling on time is the reaper's ordinary force-end and is not flagged.
    *
@@ -2617,7 +2642,13 @@ export const creditSessionsRepository = {
         session.lastTickSeq < MAX_SESSION_MINUTES &&
         (elapsedTickSeq > MAX_SESSION_MINUTES || session.durationSource === 'presence')
       ) {
-        transitions.maxSessionMinutesReached = true;
+        transitions.maxSessionMinutesReached = {
+          withheldTicks: elapsedTickSeq - MAX_SESSION_MINUTES,
+          pastScheduledEnd:
+            session.durationSource === 'presence'
+              ? await readPastScheduledEnd(tx, session.meetingId, now)
+              : null,
+        };
       }
 
       const updated = await persistMeterState(tx, session, state);
