@@ -756,6 +756,21 @@ describe('creditSessionsRepository.meterSessionToNow — the MAX_SESSION_MINUTES
     });
   });
 
+  it('presence: a soft-deleted meeting yields pastScheduledEnd null', async () => {
+    const ctx = await setup({ balanceMinor: RICH });
+    const meetingId = await liveMeetingBooked(60);
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+    await db.update(meetings).set({ deletedAt: new Date() }).where(eq(meetings.id, meetingId));
+
+    const res = await meter(id, 300);
+    expect(res.ticksPosted).toBe(MAX_SESSION_MINUTES);
+    expect(res.transitions.maxSessionMinutesReached).toEqual({
+      withheldTicks: 60,
+      pastScheduledEnd: null,
+    });
+  });
+
   it('live_capture outage: backfills up to the ceiling only, flags once, then posts nothing', async () => {
     const ctx = await setup({ balanceMinor: RICH });
     const id = await openOk(ctx);

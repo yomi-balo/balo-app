@@ -98,6 +98,7 @@ describe('driveSession', () => {
 
     it.each([
       ['presence past its scheduled end', 'presence', 0, true],
+      ['presence with an unreadable meeting', 'presence', 0, null],
       ['live_capture backfilled 60 ticks late', 'live_capture', 60, null],
     ] as const)('%s logs an error once and no warning', async (_label, source, withheld, past) => {
       mockMeterSessionToNow.mockResolvedValue(capResult(source, withheld, past));

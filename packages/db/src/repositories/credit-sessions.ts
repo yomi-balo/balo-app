@@ -871,7 +871,7 @@ async function readPastScheduledEnd(
   const [row] = await exec
     .select({ scheduledEnd: meetings.scheduledEnd })
     .from(meetings)
-    .where(eq(meetings.id, meetingId));
+    .where(and(eq(meetings.id, meetingId), isNull(meetings.deletedAt)));
   return row === undefined ? null : now.getTime() >= row.scheduledEnd.getTime();
 }
 

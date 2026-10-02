@@ -28,7 +28,7 @@ type CapReached = NonNullable<MeterTransitions['maxSessionMinutesReached']>;
 
 /**
  * Logged once, on the run that first lands the meter on `MAX_SESSION_MINUTES`. It is an error when
- * the cap was reached abnormally (a presence meeting still running past its scheduled end, or a
+ * the cap was reached abnormally (a presence meeting still running past its scheduled end or with an unreadable meeting, or a
  * live_capture backfill more than one sweep late) and a warning when a legitimate long booking or a
  * one-sweep delay reached it.
  */
@@ -39,7 +39,7 @@ function logCapReached(
 ): void {
   const context = { sessionId, durationSource, withheldTicks, pastScheduledEnd };
   const abnormal =
-    (durationSource === 'presence' && pastScheduledEnd === true) ||
+    (durationSource === 'presence' && pastScheduledEnd !== false) ||
     (durationSource === 'live_capture' && withheldTicks > 1);
   if (abnormal) {
     log.error(
