@@ -190,9 +190,13 @@ const BASE_PROPS = {
     firstName: 'Priya',
     initials: 'PS',
     avatarKey: null,
+    headline: 'Salesforce Solution Architect',
+    availableForWork: true,
   },
   projectTaxonomies: TAXONOMIES,
 } as const;
+
+const UNAVAILABLE_EXPERT = { ...BASE_PROPS.expert, availableForWork: false };
 
 function renderPanel(overrides: Partial<React.ComponentProps<typeof ProjectRequestPanel>> = {}) {
   return render(<ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} {...overrides} />);
@@ -258,19 +262,23 @@ describe('ProjectRequestPanel', () => {
     });
   });
 
-  it('defaults routing to Direct and shows the Direct FormDescription', async () => {
+  it('defaults routing to Direct: pinned expert card, Direct helper, no radios', async () => {
     const user = userEvent.setup();
     renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
 
-    const radios = screen.getAllByRole('radio');
-    // Direct card (first) is checked by default.
-    expect(radios[0]).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByText(/priya receives this brief directly/i)).toBeInTheDocument();
-    // Submit-related copy will be "Send to Priya".
+    expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Salesforce Solution Architect')).toBeInTheDocument();
+    expect(
+      screen.getByText('Priya will review your brief and reply with a proposal.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Get matched with someone else instead' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
   });
 
-  it('switches all routing-aware copy when Match is selected', async () => {
+  it('switches all routing-aware copy when toggled to Match, and back to Direct', async () => {
     const user = userEvent.setup();
     renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
@@ -280,7 +288,7 @@ describe('ProjectRequestPanel', () => {
       screen.queryByText(/tell us what you need and we'll match you with the right expert/i)
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('radio', { name: /find me an expert/i }));
+    await user.click(screen.getByRole('button', { name: 'Get matched with someone else instead' }));
 
     expect(
       screen.getByText(/our team reviews your brief and introduces a matched expert/i)
@@ -289,6 +297,137 @@ describe('ProjectRequestPanel', () => {
     expect(
       screen.getByText(/tell us what you need and we'll match you with the right expert/i)
     ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Send to Priya instead' }));
+    expect(
+      screen.getByText('Priya will review your brief and reply with a proposal.')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps every typed field when toggling to Match and back, while the budget hint flips', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
+    await user.type(screen.getByLabelText(/project description/i), 'Rebuild lead routing.');
+    await user.type(screen.getByLabelText(/min budget/i), '1500');
+    await user.type(screen.getByLabelText(/^timeline/i), 'Q3');
+
+    expect(screen.getByText('Helps Priya scope and price the work.')).toBeInTheDocument();
+    expect(screen.queryByText(/optional —/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Get matched with someone else instead' }));
+    expect(screen.getByText('Helps your expert scope and price the work.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Send to Priya instead' }));
+
+    expect(screen.getByText('Helps Priya scope and price the work.')).toBeInTheDocument();
+    expect(screen.getByLabelText(/project title/i)).toHaveValue('Lead routing rebuild');
+    expect(screen.getByLabelText(/project description/i)).toHaveValue('Rebuild lead routing.');
+    expect(screen.getByLabelText(/min budget/i)).toHaveValue('1500');
+    expect(screen.getByLabelText(/^timeline/i)).toHaveValue('Q3');
+  });
+
+  it('tracks PROJECT_ROUTING_SWITCHED when the toggle changes routing', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.click(screen.getByRole('button', { name: 'Get matched with someone else instead' }));
+
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ROUTING_SWITCHED, {
+      from: 'direct',
+      to: 'match',
+      entry_point: 'profile',
+      expert_id: EXPERT_PROFILE_ID,
+    });
+  });
+
+  it('describes the Timeline field with the example hint and leaves no clipping placeholder', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+
+    const timeline = screen.getByLabelText(/^timeline/i);
+    expect(timeline).toHaveAccessibleDescription('e.g. Go-live by end of Q3');
+    expect(timeline).toHaveAttribute('placeholder', ' ');
+  });
+
+  describe('expert not taking new projects', () => {
+    it('shows the notice on the form with no toggle, and tracks it once', async () => {
+      const user = userEvent.setup();
+      renderPanel({ expert: UNAVAILABLE_EXPERT });
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+
+      expect(screen.getByText("Priya isn't taking new projects right now.")).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'Get matched with someone else instead' })
+      ).not.toBeInTheDocument();
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN, {
+        expert_id: EXPERT_PROFILE_ID,
+        entry_point: 'profile',
+      });
+    });
+
+    it('drops the Direct helper line and uses the Match budget hint while blocked', async () => {
+      const user = userEvent.setup();
+      renderPanel({ expert: UNAVAILABLE_EXPERT });
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+
+      expect(screen.queryByText(/will review your brief and reply with a proposal/i)).toBeNull();
+      expect(screen.queryByText('Helps Priya scope and price the work.')).toBeNull();
+      expect(screen.getByText('Helps your expert scope and price the work.')).toBeInTheDocument();
+    });
+
+    it('moves focus to the "Send to Priya instead" toggle after "Get matched instead" on the form', async () => {
+      const user = userEvent.setup();
+      renderPanel({ expert: UNAVAILABLE_EXPERT });
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      await user.click(screen.getByRole('button', { name: 'Get matched instead' }));
+
+      expect(screen.getByRole('button', { name: 'Send to Priya instead' })).toHaveFocus();
+    });
+
+    it('shows the notice again on review, disables the Direct submit, and "Get matched instead" unblocks it', async () => {
+      const user = userEvent.setup();
+      renderPanel({ expert: UNAVAILABLE_EXPERT });
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
+      await user.type(
+        screen.getByLabelText(/project description/i),
+        'Rebuild our lead routing in Flow.'
+      );
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+
+      expect(screen.getByText("Priya isn't taking new projects right now.")).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /send to priya/i })).toBeDisabled();
+
+      await user.click(screen.getByRole('button', { name: 'Get matched instead' }));
+
+      expect(screen.queryByText(/isn't taking new projects/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Find me an expert' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Find me an expert' })).toHaveFocus();
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ROUTING_SWITCHED, {
+        from: 'direct',
+        to: 'match',
+        entry_point: 'profile',
+        expert_id: EXPERT_PROFILE_ID,
+      });
+      expect(
+        mockTrack.mock.calls.filter(
+          ([event]) => event === PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN
+        )
+      ).toHaveLength(1);
+    });
+
+    it('shows no notice when an unavailable expert is toggled to Match, and offers the way back', async () => {
+      const user = userEvent.setup();
+      renderPanel({ expert: UNAVAILABLE_EXPERT });
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      await user.click(screen.getByRole('button', { name: 'Get matched instead' }));
+
+      expect(screen.queryByText(/isn't taking new projects/i)).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Send to Priya instead' }));
+      expect(screen.getByText("Priya isn't taking new projects right now.")).toBeInTheDocument();
+    });
   });
 
   it('blocks Review with an inline message until title + description are valid', async () => {
@@ -476,7 +615,7 @@ describe('ProjectRequestPanel', () => {
     const user = userEvent.setup();
     renderPanel();
     await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
-    await user.click(screen.getByRole('radio', { name: /find me an expert/i }));
+    await user.click(screen.getByRole('button', { name: 'Get matched with someone else instead' }));
     await user.type(screen.getByLabelText(/project title/i), 'Match me up');
     await user.type(screen.getByLabelText(/project description/i), 'We need help scoping work.');
     await user.click(screen.getByRole('button', { name: /^review/i }));
@@ -491,7 +630,34 @@ describe('ProjectRequestPanel', () => {
     // No expertProfileId in the match payload.
     const payload = mockSubmit.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload).not.toHaveProperty('expertProfileId');
+    expect(mockTrack).toHaveBeenCalledWith(
+      PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED,
+      expect.objectContaining({
+        send_to: 'match',
+        entry_point: 'profile',
+        expert_id: EXPERT_PROFILE_ID,
+      })
+    );
     expect(await screen.findByText(/we're finding your expert/i)).toBeInTheDocument();
+  });
+
+  it('treats an expertProfileId without expert data as context-free: no toggle, submits match', async () => {
+    const user = userEvent.setup();
+    renderPanel({ expert: undefined });
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+
+    expect(screen.getByText('Find me an expert')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /instead/i })).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/project title/i), 'Unbound brief');
+    await user.type(screen.getByLabelText(/project description/i), 'We need help scoping work.');
+    await user.click(screen.getByRole('button', { name: /^review/i }));
+    await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+
+    await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
+    expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ sendTo: 'match' }));
+    const payload = mockSubmit.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('expertProfileId');
   });
 
   it('on submit failure shows an inline error + toast.error and stays on review', async () => {
@@ -932,26 +1098,27 @@ describe('ProjectRequestPanel', () => {
       ).not.toBeInTheDocument();
     });
 
-    it('defaults routing to Match and renders a neutral Direct card', async () => {
+    it('shows a static "Find me an expert" block with nothing to choose', async () => {
       const user = userEvent.setup();
       renderContextFree();
       await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
 
-      // Match (second radio) is checked by default in context-free mode.
-      expect(screen.getByRole('radio', { name: /find me an expert/i })).toHaveAttribute(
-        'aria-checked',
-        'true'
-      );
-      // Direct card renders neutral copy (no expert name).
-      expect(screen.getByRole('radio', { name: /send to an expert/i })).toBeInTheDocument();
+      expect(screen.getByText('Find me an expert')).toBeInTheDocument();
+      expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /get matched with someone else|send to .* instead/i })
+      ).not.toBeInTheDocument();
+      expect(screen.getByText('Helps your expert scope and price the work.')).toBeInTheDocument();
     });
 
-    it('submits sendTo:match with no expertProfileId even if Direct is selected', async () => {
+    it('reads a stored context-free Direct draft as Match and submits sendTo:match with no expertProfileId', async () => {
+      globalThis.localStorage.setItem(
+        'balo:project-draft:entry:direct',
+        JSON.stringify({ routing: 'direct' })
+      );
       const user = userEvent.setup();
       renderContextFree();
       await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
-      // Select the neutral Direct card — submit must still clamp to match.
-      await user.click(screen.getByRole('radio', { name: /send to an expert/i }));
       await user.type(screen.getByLabelText(/project title/i), 'Need help scoping');
       await user.type(
         screen.getByLabelText(/project description/i),
@@ -1095,14 +1262,43 @@ describe('ProjectRequestPanel', () => {
       expect(stepCalls.some(([, payload]) => payload.step === 'start')).toBe(false);
     });
 
+    it('a fresh stored home draft carrying routing "direct" offers no toggle and submits match', async () => {
+      globalThis.localStorage.setItem(
+        HOME_KEY,
+        JSON.stringify({ routing: 'direct', title: 'Stored home brief', savedAt: Date.now() })
+      );
+      const user = userEvent.setup();
+      renderHome({ resumeDraft: true });
+      expect(screen.getByLabelText(/project title/i)).toHaveValue('Stored home brief');
+      expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /instead/i })).not.toBeInTheDocument();
+
+      await user.type(screen.getByLabelText(/project description/i), 'We need a rollout.');
+      await waitFor(() =>
+        expect(JSON.parse(globalThis.localStorage.getItem(HOME_KEY) ?? '{}')).toMatchObject({
+          routing: 'match',
+          title: 'Stored home brief',
+        })
+      );
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+      await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+
+      await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
+      expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ sendTo: 'match' }));
+      const payload = mockSubmit.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('expertProfileId');
+      expect(mockTrack).toHaveBeenCalledWith(
+        PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED,
+        expect.objectContaining({ send_to: 'match', entry_point: 'home' })
+      );
+    });
+
     describe('seed application (§3b/§3c)', () => {
       it('a title seed opens at manual, filled, with Match copy', () => {
         renderHome({ seed: { title: 'Migrate us from HubSpot' } });
         expect(screen.getByLabelText(/project title/i)).toHaveValue('Migrate us from HubSpot');
-        expect(screen.getByRole('radio', { name: /find me an expert/i })).toHaveAttribute(
-          'aria-checked',
-          'true'
-        );
+        expect(screen.getByText('Find me an expert')).toBeInTheDocument();
+        expect(screen.queryByRole('radio')).not.toBeInTheDocument();
       });
 
       it('a description seed fills the editor', () => {

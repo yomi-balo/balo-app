@@ -1,6 +1,6 @@
 import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@/test/utils';
+import { render, screen, act, within } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
@@ -488,6 +488,43 @@ describe('ExpertProfileClient — CTA handlers', () => {
     });
     // No "Coming soon" toast for the project CTA.
     expect(mockToast).not.toHaveBeenCalled();
+  });
+
+  it('passes the expert headline into the panel — the pinned recipient card shows it', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+      />
+    );
+    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
+    if (startProject) await user.click(startProject);
+    await user.click(await screen.findByRole('button', { name: /describe it yourself/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Salesforce Solution Architect')).toBeInTheDocument();
+  });
+
+  it('passes availableForWork into the panel — an unavailable expert shows the notice', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExpertProfileClient
+        view={makeView({ availableForWork: false })}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+      />
+    );
+    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
+    if (startProject) await user.click(startProject);
+    await user.click(await screen.findByRole('button', { name: /describe it yourself/i }));
+
+    expect(await screen.findByText(/isn't taking new projects right now/i)).toBeInTheDocument();
   });
 
   /**

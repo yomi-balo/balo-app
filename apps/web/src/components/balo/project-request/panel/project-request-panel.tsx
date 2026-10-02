@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ArrowRight, ChevronLeft, Loader2, RotateCw, Send, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
@@ -29,8 +29,14 @@ import { refetchProjectTaxonomiesAction } from '@/lib/project-request/actions/re
 import { PROJECT_PATHS, PROJECT_STEPS, PROJECT_STEPS_AI } from './constants';
 import { FieldLabel } from './field-label';
 import { PathCard } from './path-card';
-import { SendToSelector, type ProjectRouting } from './send-to-selector';
+import {
+  SendToSelector,
+  ExpertUnavailableNotice,
+  type ProjectRequestExpert,
+  type ProjectRouting,
+} from './send-to-selector';
 import { ReviewSummary } from './review-summary';
+import { useProjectRouting } from './use-project-routing';
 import { GenerationErrorBanner } from './generation-error-banner';
 import { useAiBriefFlow } from './use-ai-brief-flow';
 import { initialStepFor, type ProjectRequestSeed } from './project-seed';
@@ -45,15 +51,6 @@ import {
 
 export type { ProjectRequestEntryPoint } from './use-project-draft';
 
-/** Expert display data used by the Direct routing card + review/done copy. */
-interface ProjectRequestExpert {
-  name: string;
-  firstName: string;
-  initials: string;
-  /** R2 key / http URL for the avatar. */
-  avatarKey: string | null;
-}
-
 export interface ProjectRequestPanelProps {
   open: boolean;
   /** Replaces the old `onOpenChange` — the panel only ever asks to CLOSE. */
@@ -61,17 +58,18 @@ export interface ProjectRequestPanelProps {
   /** Where the panel was opened from. Drives autosave-key fallback + analytics dimension. */
   entryPoint: ProjectRequestEntryPoint;
   /**
-   * When present → expert-bound mode: routing defaults to `direct` (this expert),
-   * the SendToSelector + done copy bind to the expert, submit sends `sendTo:'direct'`.
-   * When absent → context-free mode: routing defaults to `match` ("Match for me"),
-   * the Direct card still renders (selectable) but with a neutral "an expert" media,
-   * submit sends `sendTo:'match'`.
+   * When present → expert-bound mode: routing defaults to `direct` (this expert), the
+   * SendToSelector pins the expert's card with a toggle to get matched instead, and done copy
+   * binds to the expert; submit sends `sendTo:'direct'` (or `'match'` once toggled).
+   * When absent → context-free mode: routing is always `match` ("Find me an expert") and the
+   * selector is a static block with nothing to choose; submit sends `sendTo:'match'`.
    */
   expertProfileId?: string;
   /**
    * Expert display data — REQUIRED in practice whenever `expertProfileId` is set
-   * (the Direct card / review block need a name + avatar). Grouped into one optional
-   * object so context-free callers pass nothing. Absent → context-free rendering.
+   * (the recipient card / review block need a name + avatar, and `availableForWork` gates
+   * Direct). Grouped into one optional object so context-free callers pass nothing. Absent →
+   * context-free rendering.
    */
   expert?: ProjectRequestExpert;
   /**
@@ -153,6 +151,8 @@ interface RoutingCopy {
    */
   manualHeading: string | null;
   formDescription: string;
+  /** The hint under the optional budget fields. */
+  budgetHint: string;
   submitCta: string;
   successDescription: string;
   doneHeading: string;
@@ -164,6 +164,7 @@ const MATCH_COPY: RoutingCopy = {
   manualHeading: "Tell us what you need and we'll match you with the right expert.",
   formDescription:
     'Our team reviews your brief and introduces a matched expert, usually within a day.',
+  budgetHint: 'Helps your expert scope and price the work.',
   submitCta: 'Find me an expert',
   successDescription: "We'll introduce a matched expert soon.",
   doneHeading: "Request sent — we're finding your expert",
@@ -174,15 +175,16 @@ const MATCH_COPY: RoutingCopy = {
 };
 
 /**
- * Routing-aware copy. The Direct copy is only used when an expert is bound (the
- * panel clamps a context-free Direct selection to Match), so `firstName` is
- * always defined on the Direct branch.
+ * Routing-aware copy. The Direct copy is only used when an expert is bound (a
+ * context-free mount is always Match), so `firstName` is always defined on the
+ * Direct branch.
  */
 function getRoutingCopy(routing: ProjectRouting, firstName: string | undefined): RoutingCopy {
   if (routing === 'direct' && firstName !== undefined) {
     return {
       manualHeading: null,
-      formDescription: `${firstName} receives this brief directly.`,
+      formDescription: `${firstName} will review your brief and reply with a proposal.`,
+      budgetHint: `Helps ${firstName} scope and price the work.`,
       submitCta: `Send to ${firstName}`,
       successDescription: `${firstName} will reply with a proposal.`,
       doneHeading: `Request sent to ${firstName}`,
@@ -193,13 +195,34 @@ function getRoutingCopy(routing: ProjectRouting, firstName: string | undefined):
   return MATCH_COPY;
 }
 
+/** The expert id a mount routes to — defined only when the display data for that expert is too. */
+function boundExpertId(
+  expertProfileId: string | undefined,
+  expert: ProjectRequestExpert | undefined
+): string | undefined {
+  return expert ? expertProfileId : undefined;
+}
+
+/**
+ * The review step's "expert isn't taking new projects" notice — rendered only while Direct is
+ * blocked for a named expert.
+ */
+function unavailableNoticeFor(
+  directBlocked: boolean,
+  firstName: string | undefined,
+  onMatchInstead: () => void
+): React.ReactNode {
+  if (!directBlocked || firstName === undefined) return undefined;
+  return <ExpertUnavailableNotice firstName={firstName} onMatchInstead={onMatchInstead} />;
+}
+
 /**
  * BAL-254 — the AI branch's stepper: same three dots, middle one relabelled + rekeyed. While on
  * `manual` WITH `source === 'ai'` (arrived via an Edit link), keep the AI array but report
  * `upload` as current so the middle dot stays lit.
  *
  * ⚠ EXTRACTED so the decision lives in ONE place rather than as scattered conditionals inside the
- * panel — which also keeps `ProjectRequestPanel` under SonarJS's cognitive-complexity cap.
+ * panel.
  */
 function resolveStepper(
   isAiPath: boolean,
@@ -220,9 +243,11 @@ function resolveStepper(
  *
  * Two mount modes:
  *  - **Expert-bound** (`expertProfileId` + `expert` supplied): routing defaults
- *    to Direct, the selector/copy bind to the expert, submit sends `direct`.
- *  - **Context-free** (no expert): routing defaults to Match, the Direct card is
- *    neutral, submit clamps to `match` (there is no id to route to).
+ *    to Direct, the selector/copy bind to the expert, submit sends `direct`. A
+ *    text toggle switches to Match and back without touching any field; Direct
+ *    is blocked while the expert isn't taking new projects.
+ *  - **Context-free** (no expert): routing is always Match, the selector is a
+ *    static block, submit sends `match`.
  *
  * Taxonomies are supplied RSC-side (expert-bound profile) or self-loaded via the
  * Retry action on first open (context-free).
@@ -239,10 +264,13 @@ export function ProjectRequestPanel({
   resumeDraft,
   onAuthRequired,
 }: Readonly<ProjectRequestPanelProps>): React.JSX.Element {
+  // A mount is expert-bound only when it has both the id and the display data, so the draft key,
+  // the routing and the submit all agree on whether a recipient card is on screen.
+  const boundExpertProfileId = boundExpertId(expertProfileId, expert);
   // Read before the step state: it reads only props, and the step initialiser below needs
   // `draft.source` to decide a resumed mount's opening step.
   const { draft, setField, clearDraft, resetDraft, replaceDraft, revision } = useProjectDraft(
-    expertProfileId,
+    boundExpertProfileId,
     entryPoint
   );
   const { routing, title, descriptionHtml, tagIds, productIds, budgetMinCents, budgetMaxCents } =
@@ -281,7 +309,7 @@ export function ProjectRequestPanel({
   }, [revision]);
   // Snapshot of the routing at submit time — the done screen + success toast read
   // this, NOT the live draft (which `clearDraft()` resets on success).
-  const expertBound = expertProfileId !== undefined;
+  const expertBound = boundExpertProfileId !== undefined;
   const [submittedRouting, setSubmittedRouting] = useState<ProjectRouting>(
     expertBound ? 'direct' : 'match'
   );
@@ -337,6 +365,17 @@ export function ProjectRequestPanel({
   const copy = getRoutingCopy(routing, expertFirstName);
   // Done screen uses the snapshot (draft is cleared on success).
   const doneCopy = getRoutingCopy(submittedRouting, expertFirstName);
+
+  const { directBlocked, changeRouting, matchInsteadFromReview, submitButtonRef } =
+    useProjectRouting({
+      open,
+      step,
+      routing,
+      expertProfileId: boundExpertProfileId,
+      expertAvailableForWork: expert?.availableForWork,
+      entryPoint,
+      setRouting: (r) => setField('routing', r),
+    });
 
   const handleRetryTaxonomies = useCallback(async () => {
     if (retrying) return;
@@ -583,11 +622,11 @@ export function ProjectRequestPanel({
       budgetMaxCents: draft.budgetMaxCents,
       timeline: draft.timeline,
     };
-    // Submit clamp: only emit `direct` when there is an expert id to route to.
-    // A context-free Direct selection (or any missing id) falls back to `match`.
-    const sendDirect = expertProfileId !== undefined && routing === 'direct';
+    // Guard: only emit `direct` for an expert-bound mount. Routing already follows the entry
+    // point, so a missing binding (never `direct` in practice) falls back to `match`.
+    const sendDirect = boundExpertProfileId !== undefined && routing === 'direct';
     const payload = sendDirect
-      ? { sendTo: 'direct' as const, expertProfileId, ...base }
+      ? { sendTo: 'direct' as const, expertProfileId: boundExpertProfileId, ...base }
       : { sendTo: 'match' as const, ...base };
     // The routing actually submitted (clamped) — drives the done screen + toast.
     const effectiveRouting: ProjectRouting = sendDirect ? 'direct' : 'match';
@@ -620,6 +659,7 @@ export function ProjectRequestPanel({
     if (result.projectRequestId !== undefined) onSubmitted?.(result.projectRequestId);
   }, [
     routing,
+    boundExpertProfileId,
     expertProfileId,
     entryPoint,
     expertFirstName,
@@ -642,7 +682,7 @@ export function ProjectRequestPanel({
   // back to `review` from the confirmation screen. The abandoned-flow guard in `useAiBriefFlow`
   // is the belt; this is the braces — the button is simply not live while a draft is being
   // rewritten under it.
-  const submitDisabled = !reviewValid || submitting || uploading || isGenerating;
+  const submitDisabled = !reviewValid || submitting || uploading || isGenerating || directBlocked;
 
   const startHeading = expert ? `Start a project with ${expert.name}` : 'Start a project';
   const startBody =
@@ -659,8 +699,9 @@ export function ProjectRequestPanel({
       onBack={() => setStep('start')}
       manualHeading={copy.manualHeading}
       formDescription={copy.formDescription}
+      budgetHint={directBlocked ? MATCH_COPY.budgetHint : copy.budgetHint}
       routing={routing}
-      onRoutingChange={(r) => setField('routing', r)}
+      onRoutingChange={changeRouting}
       expert={expert}
       titleInputRef={titleInputRef}
       title={title}
@@ -775,6 +816,11 @@ export function ProjectRequestPanel({
           isAiPath={isAiPath}
           onDismissRegenerateFailure={briefGeneration.dismissFailure}
           reviewReassurance={copy.reviewReassurance}
+          unavailableNotice={unavailableNoticeFor(
+            directBlocked,
+            expertFirstName,
+            matchInsteadFromReview
+          )}
           uploading={uploading}
           error={error}
           submittedRouting={submittedRouting}
@@ -794,6 +840,7 @@ export function ProjectRequestPanel({
           submitting={submitting}
           onSubmit={handleSubmit}
           submitDisabled={submitDisabled}
+          submitButtonRef={submitButtonRef}
           routing={routing}
           submitCta={copy.submitCta}
           onDone={handleClose}
@@ -849,6 +896,8 @@ interface ProjectRequestDrawerBodyProps {
   isAiPath: boolean;
   onDismissRegenerateFailure: () => void;
   reviewReassurance: string;
+  /** Shown after the review summary when Direct is blocked (the expert isn't taking new projects). */
+  unavailableNotice?: React.ReactNode;
   uploading: boolean;
   error: string | null;
   submittedRouting: ProjectRouting;
@@ -887,6 +936,7 @@ function ProjectRequestDrawerBody({
   isAiPath,
   onDismissRegenerateFailure,
   reviewReassurance,
+  unavailableNotice,
   uploading,
   error,
   submittedRouting,
@@ -957,6 +1007,7 @@ function ProjectRequestDrawerBody({
             unmatchedProductLabels={unmatchedLabels.products}
             skeleton={isAiPath && isGenerating}
           />
+          {unavailableNotice}
           {isAiPath && isUploadFailed && (
             <GenerationErrorBanner
               reason={failureReason ?? 'unknown'}
@@ -1117,6 +1168,7 @@ interface ProjectRequestDrawerFooterProps {
   submitting: boolean;
   onSubmit: () => void;
   submitDisabled: boolean;
+  submitButtonRef: React.Ref<HTMLButtonElement>;
   routing: ProjectRouting;
   submitCta: string;
   onDone: () => void;
@@ -1135,6 +1187,7 @@ function ProjectRequestDrawerFooter({
   submitting,
   onSubmit,
   submitDisabled,
+  submitButtonRef,
   routing,
   submitCta,
   onDone,
@@ -1176,7 +1229,7 @@ function ProjectRequestDrawerFooter({
     return (
       <DrawerFooter>
         <BackButton onClick={onBackFromReview} disabled={submitting} />
-        <PrimaryButton onClick={onSubmit} disabled={submitDisabled}>
+        <PrimaryButton onClick={onSubmit} disabled={submitDisabled} buttonRef={submitButtonRef}>
           {submitting ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Sending…
@@ -1213,6 +1266,7 @@ interface ManualStepFieldsProps {
   onBack: () => void;
   manualHeading: string | null;
   formDescription: string;
+  budgetHint: string;
   routing: ProjectRouting;
   onRoutingChange: (r: ProjectRouting) => void;
   expert?: ProjectRequestExpert;
@@ -1265,6 +1319,7 @@ function ManualStepFields({
   onBack,
   manualHeading,
   formDescription,
+  budgetHint,
   routing,
   onRoutingChange,
   expert,
@@ -1304,6 +1359,7 @@ function ManualStepFields({
   timeline,
   onTimelineChange,
 }: Readonly<ManualStepFieldsProps>): React.JSX.Element {
+  const timelineHintId = useId();
   return (
     <div className="space-y-6 p-6">
       {notice}
@@ -1324,11 +1380,9 @@ function ManualStepFields({
         <SendToSelector
           value={routing}
           onChange={onRoutingChange}
-          expertName={expert?.name}
-          expertInitials={expert?.initials}
-          expertAvatarKey={expert?.avatarKey}
+          expert={expert}
+          helperText={formDescription}
         />
-        <p className="text-muted-foreground text-xs leading-relaxed">{formDescription}</p>
       </div>
 
       {/* 2.2 — Title */}
@@ -1432,9 +1486,7 @@ function ManualStepFields({
       {/* 2.7 — Budget & timeline (optional) */}
       <div className="space-y-2">
         <FieldLabel optional>Budget &amp; timeline</FieldLabel>
-        <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">
-          Optional — helps the expert scope and price the work.
-        </p>
+        <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">{budgetHint}</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <InputFloating
             label="Min budget (A$)"
@@ -1458,10 +1510,13 @@ function ManualStepFields({
         )}
         <InputFloating
           label="Timeline"
-          placeholder="Target go-live: end of Q3"
+          aria-describedby={timelineHintId}
           value={timeline ?? ''}
           onChange={(e) => onTimelineChange(e.target.value)}
         />
+        <p id={timelineHintId} className="text-muted-foreground text-xs">
+          e.g. Go-live by end of Q3
+        </p>
       </div>
     </div>
   );
@@ -1538,14 +1593,17 @@ function BackButton({
 function PrimaryButton({
   onClick,
   disabled,
+  buttonRef,
   children,
 }: Readonly<{
   onClick: () => void;
   disabled?: boolean;
+  buttonRef?: React.Ref<HTMLButtonElement>;
   children: React.ReactNode;
 }>): React.JSX.Element {
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={onClick}
       disabled={disabled}

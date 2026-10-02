@@ -103,6 +103,11 @@ export const PROJECT_EVENTS = {
   PROJECT_NEW_REQUEST_NOTICE_SHOWN: 'project_new_request_notice_shown',
   PROJECT_NEW_REQUEST_UNDO_CLICKED: 'project_new_request_undo_clicked',
   PROJECT_NEW_REQUEST_DISMISSED: 'project_new_request_dismissed',
+  // BAL-588 — routing follows the entry point. The first fires when a profile-mounted request
+  // genuinely switches between Direct and Match; the second when the "expert isn't taking new
+  // projects" notice first renders for an expert-bound mount.
+  PROJECT_ROUTING_SWITCHED: 'project_routing_switched',
+  PROJECT_EXPERT_UNAVAILABLE_SHOWN: 'project_expert_unavailable_shown',
 } as const;
 
 /**
@@ -376,6 +381,17 @@ export interface ProjectEventMap {
   };
   [PROJECT_EVENTS.PROJECT_NEW_REQUEST_DISMISSED]: {
     expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
+  };
+  // BAL-588 — both fire only on expert-bound mounts, so `expert_id` is required.
+  [PROJECT_EVENTS.PROJECT_ROUTING_SWITCHED]: {
+    from: 'direct' | 'match';
+    to: 'direct' | 'match';
+    entry_point: ProjectRequestEntryPoint;
+    expert_id: string;
+  };
+  [PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN]: {
+    expert_id: string;
     entry_point: ProjectRequestEntryPoint;
   };
 }

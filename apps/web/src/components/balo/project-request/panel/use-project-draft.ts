@@ -157,11 +157,14 @@ function readDocuments(value: unknown): ProjectDocumentRef[] {
 }
 
 /**
- * Narrow a persisted `routing` value. A stored `'direct'`/`'match'` is honoured
- * as-is; anything else (missing/corrupt) falls back to the computed default
- * (expert-bound → direct, context-free → match).
+ * Narrow a persisted `routing` value. A `defaultRouting` of `'match'` means no expert is bound
+ * (`defaultRoutingFor`): a context-free mount is always Match, so a stored `'direct'` reads back as
+ * `'match'`. For an expert-bound mount a stored
+ * `'direct'`/`'match'` is honoured as-is; anything else (missing/corrupt) falls back to the
+ * computed default.
  */
 function readRouting(value: unknown, defaultRouting: ProjectRouting): ProjectRouting {
+  if (defaultRouting === 'match') return 'match';
   if (value === 'match') return 'match';
   if (value === 'direct') return 'direct';
   return defaultRouting;

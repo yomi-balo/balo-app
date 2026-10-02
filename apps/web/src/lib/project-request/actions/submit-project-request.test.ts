@@ -30,7 +30,11 @@ const mockCreateProjectRequest = vi.fn();
 const mockGetVertical = vi.fn();
 const mockGetTags = vi.fn();
 const mockGetProducts = vi.fn();
+const mockFindDirectEligibility = vi.fn();
 vi.mock('@balo/db', () => ({
+  expertsRepository: {
+    findDirectRequestEligibility: (...args: unknown[]) => mockFindDirectEligibility(...args),
+  },
   projectRequestsRepository: {
     createProjectRequest: (...args: unknown[]) => mockCreateProjectRequest(...args),
   },
@@ -125,6 +129,7 @@ describe('submitProjectRequestAction', () => {
       },
     ]);
     mockCreateProjectRequest.mockResolvedValue(createdRow());
+    mockFindDirectEligibility.mockResolvedValue({ eligible: true });
   });
 
   describe('authentication', () => {
@@ -247,6 +252,43 @@ describe('submitProjectRequestAction', () => {
         'Project request submitted',
         expect.objectContaining({ hasBudget: true, hasTimeline: false })
       );
+    });
+  });
+
+  describe('direct eligibility', () => {
+    it('checks eligibility for the requested expert and proceeds when eligible', async () => {
+      const result = await submitProjectRequestAction(directInput());
+      expect(mockFindDirectEligibility).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+      expect(result).toEqual({ success: true, projectRequestId: CREATED_ID });
+    });
+
+    it.each(['not_found', 'owner_not_live', 'not_approved', 'not_searchable', 'not_available'])(
+      'rejects a direct request when the expert is ineligible (%s)',
+      async (reason) => {
+        mockFindDirectEligibility.mockResolvedValue({ eligible: false, reason });
+
+        const result = await submitProjectRequestAction(directInput());
+
+        expect(result).toEqual({
+          success: false,
+          error:
+            "This expert isn't taking new projects right now. Switch to matching and we'll find someone with similar experience.",
+        });
+        expect(mockCreateProjectRequest).not.toHaveBeenCalled();
+        expect(mockPublish).not.toHaveBeenCalled();
+        expect(log.warn).toHaveBeenCalledWith(
+          'Project request rejected — expert not taking direct requests',
+          { userId: USER_ID, expertProfileId: EXPERT_PROFILE_ID, reason }
+        );
+      }
+    );
+
+    it('never consults eligibility for a match request', async () => {
+      mockCreateProjectRequest.mockResolvedValue(
+        createdRow({ sendTo: 'match', expertProfileId: null })
+      );
+      await submitProjectRequestAction(matchInput());
+      expect(mockFindDirectEligibility).not.toHaveBeenCalled();
     });
   });
 
