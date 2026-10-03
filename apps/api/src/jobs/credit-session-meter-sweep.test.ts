@@ -33,6 +33,7 @@ const {
   mockCountExhausted,
   MockSettlementRefusedError,
   MockSettlementDrawDivergedError,
+  capturedWorkerProcessor,
 } = vi.hoisted(() => ({
   mockFindMeterable: vi.fn(),
   mockFindWrappedIdle: vi.fn(),
@@ -79,6 +80,12 @@ const {
     }
   },
   MockSettlementDrawDivergedError: class SettlementDrawDivergedError extends Error {},
+  /** The processor the mocked BullMQ `Worker` below receives from `startCreditSessionMeterSweepWorker`. */
+  capturedWorkerProcessor: {
+    fn: undefined as
+      | ((job: { log: (message: string) => Promise<number> }) => Promise<void>)
+      | undefined,
+  },
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -138,6 +145,18 @@ vi.mock(
 );
 vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn() }));
 vi.mock('../lib/queue.js', () => ({ getQueue: vi.fn() }));
+// `startCreditSessionMeterSweepWorker` constructs a BullMQ Worker. The mock keeps its processor so
+// the worker's completion summary runs for real, with no Redis connection.
+vi.mock('bullmq', () => ({
+  Worker: class {
+    constructor(
+      _name: string,
+      processor: (job: { log: (message: string) => Promise<number> }) => Promise<void>
+    ) {
+      capturedWorkerProcessor.fn = processor;
+    }
+  },
+}));
 vi.mock('../services/credit-session/index.js', () => ({
   driveSession: mockDriveSession,
   endSessionAsSystem: mockEndSession,
@@ -146,7 +165,10 @@ vi.mock('../services/credit-session/index.js', () => ({
   settleSessionFromPresence: mockSettleSessionFromPresence,
 }));
 
-import { runSessionMeterSweep } from './credit-session-meter-sweep.js';
+import {
+  runSessionMeterSweep,
+  startCreditSessionMeterSweepWorker,
+} from './credit-session-meter-sweep.js';
 
 const NOW = new Date('2026-07-16T12:00:00.000Z');
 
@@ -704,6 +726,36 @@ describe('runSessionMeterSweep', () => {
         expect.objectContaining({ limit: 100, oldestSessionId: 's0' }),
         expect.stringContaining('FILLED')
       );
+    });
+  });
+
+  describe("the worker's job.log completion summary", () => {
+    function startedProcessor(): (job: {
+      log: (message: string) => Promise<number>;
+    }) => Promise<void> {
+      startCreditSessionMeterSweepWorker();
+      const processor = capturedWorkerProcessor.fn;
+      if (processor === undefined) {
+        throw new Error('Worker processor was never captured — the bullmq mock did not fire');
+      }
+      return processor;
+    }
+
+    it('logs the completion summary via job.log', async () => {
+      const jobLog = vi.fn().mockResolvedValue(1);
+      await startedProcessor()({ log: jobLog });
+      expect(jobLog).toHaveBeenLastCalledWith(
+        'session meter sweep: 0 billing-started, 0 beyond-window-released, 0 metered, 0 ended, 0 cancelled, 0 reconciled, 0 recovered, 0 sessionless-settled, 0 presence-settled, 0 settled-without-credit'
+      );
+    });
+
+    it('awaits the summary write, so a failed write fails the job rather than floating', async () => {
+      const jobLog = vi.fn((message: string) =>
+        message.startsWith('session meter sweep:')
+          ? Promise.reject(new Error('redis unavailable'))
+          : Promise.resolve(1)
+      );
+      await expect(startedProcessor()({ log: jobLog })).rejects.toThrow('redis unavailable');
     });
   });
 });
