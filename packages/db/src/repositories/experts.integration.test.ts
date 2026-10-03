@@ -14,6 +14,7 @@ import {
   languages,
   products,
   supportTypes,
+  users,
   workHistory,
   type ExpertProfile,
 } from '../schema';
@@ -832,7 +833,7 @@ describe('expertsRepository.isPubliclyVisible', () => {
 
   it('false when approvedAt is null', async () => {
     const draft = await expertDraftFactory();
-    await expertsRepository.updateProfile(draft.id, { searchable: true });
+    await setSearchableDirectly(draft.id, true);
 
     expect(await expertsRepository.isPubliclyVisible(draft.id)).toBe(false);
   });
@@ -860,6 +861,86 @@ describe('expertsRepository.isPubliclyVisible', () => {
     expect(await expertsRepository.isPubliclyVisible('00000000-0000-4000-8000-000000000000')).toBe(
       false
     );
+  });
+});
+
+// ── findDirectRequestEligibility (BAL-588) ───────────────────────────
+
+describe('expertsRepository.findDirectRequestEligibility', () => {
+  it('eligible for an approved, searchable, available expert with a live owner', async () => {
+    const expert = await searchExpertFactory({ username: uniq('eligible'), searchable: true });
+
+    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+      eligible: true,
+    });
+  });
+
+  it('not_found for an unknown id', async () => {
+    expect(
+      await expertsRepository.findDirectRequestEligibility('00000000-0000-4000-8000-000000000000')
+    ).toEqual({ eligible: false, reason: 'not_found' });
+  });
+
+  it('owner_not_live once the owning user is soft-deleted', async () => {
+    const user = await userFactory();
+    const expert = await searchExpertFactory({
+      userId: user.id,
+      username: uniq('deleted-owner'),
+      searchable: true,
+    });
+    await usersRepository.softDelete(user.id);
+
+    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+      eligible: false,
+      reason: 'owner_not_live',
+    });
+  });
+
+  it('owner_not_live when the owning user is suspended', async () => {
+    const user = await userFactory();
+    const expert = await searchExpertFactory({
+      userId: user.id,
+      username: uniq('suspended-owner'),
+      searchable: true,
+    });
+    await db.update(users).set({ status: 'suspended' }).where(eq(users.id, user.id));
+
+    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+      eligible: false,
+      reason: 'owner_not_live',
+    });
+  });
+
+  it('not_approved for a draft, even when searchable', async () => {
+    const draft = await expertDraftFactory();
+    await setSearchableDirectly(draft.id, true);
+
+    expect(await expertsRepository.findDirectRequestEligibility(draft.id)).toEqual({
+      eligible: false,
+      reason: 'not_approved',
+    });
+  });
+
+  it('not_searchable for an approved expert that is not searchable', async () => {
+    const expert = await expertFactory();
+
+    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+      eligible: false,
+      reason: 'not_searchable',
+    });
+  });
+
+  it('not_available when available_for_work is false', async () => {
+    const expert = await searchExpertFactory({ username: uniq('unavailable'), searchable: true });
+    await db
+      .update(expertProfiles)
+      .set({ availableForWork: false })
+      .where(eq(expertProfiles.id, expert.id));
+
+    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+      eligible: false,
+      reason: 'not_available',
+    });
   });
 });
 

@@ -15,6 +15,7 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
+import { userRowIsLive } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { type Database, db } from '../client';
@@ -41,6 +42,18 @@ import {
 import { generateBaseUsername, pickNextAvailable } from './username-utils';
 
 const log = createLogger('experts-repository');
+
+/** Why an expert cannot take a new `direct` project request. The first failing check wins. */
+export type DirectRequestIneligibleReason =
+  | 'not_found'
+  | 'owner_not_live'
+  | 'not_approved'
+  | 'not_searchable'
+  | 'not_available';
+
+export type DirectRequestEligibility =
+  | { eligible: true }
+  | { eligible: false; reason: DirectRequestIneligibleReason };
 
 /**
  * Either the base Drizzle client or an in-flight transaction handle. Lets a method
@@ -949,6 +962,40 @@ export const expertsRepository = {
       )
       .limit(1);
     return rows.length > 0;
+  },
+
+  /**
+   * Whether an expert can take a new `direct` project request: the profile exists, is
+   * approved, searchable and `available_for_work`, and the owning user is live
+   * (`userRowIsLive`, the single definition of "live").
+   *
+   * Stricter than `isPubliclyVisible`, which ignores `available_for_work` and `users.status`
+   * (it only checks `users.deleted_at`). The owner's soft-delete is read as a column rather
+   * than filtered in WHERE so a deleted owner reports `owner_not_live`, not `not_found`.
+   * `expert_profiles` has no `deleted_at`.
+   */
+  async findDirectRequestEligibility(expertProfileId: string): Promise<DirectRequestEligibility> {
+    const [row] = await db
+      .select({
+        approvedAt: expertProfiles.approvedAt,
+        searchable: expertProfiles.searchable,
+        availableForWork: expertProfiles.availableForWork,
+        userStatus: users.status,
+        userDeletedAt: users.deletedAt,
+      })
+      .from(expertProfiles)
+      .innerJoin(users, eq(users.id, expertProfiles.userId))
+      .where(eq(expertProfiles.id, expertProfileId))
+      .limit(1);
+
+    if (!row) return { eligible: false, reason: 'not_found' };
+    if (!userRowIsLive({ status: row.userStatus, deletedAt: row.userDeletedAt })) {
+      return { eligible: false, reason: 'owner_not_live' };
+    }
+    if (row.approvedAt === null) return { eligible: false, reason: 'not_approved' };
+    if (!row.searchable) return { eligible: false, reason: 'not_searchable' };
+    if (!row.availableForWork) return { eligible: false, reason: 'not_available' };
+    return { eligible: true };
   },
 
   /** Check if a username is available, optionally excluding a specific profile */

@@ -324,6 +324,8 @@ export function ExpertProfileClient({
           firstName: view.firstName,
           initials: view.initials,
           avatarKey: view.avatarKey,
+          headline: view.headline,
+          availableForWork: view.availableForWork,
         }}
         projectTaxonomies={projectTaxonomies}
       />

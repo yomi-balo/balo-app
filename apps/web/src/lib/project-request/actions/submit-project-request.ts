@@ -2,7 +2,7 @@
 import 'server-only';
 import { z } from 'zod';
 import { withAuth } from '@/lib/auth/with-auth';
-import { projectRequestsRepository, referenceDataRepository } from '@balo/db';
+import { expertsRepository, projectRequestsRepository, referenceDataRepository } from '@balo/db';
 import { DEFAULT_BALO_FEE_BPS } from '@balo/shared/pricing';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -21,6 +21,8 @@ interface SubmitProjectRequestResult {
 }
 
 const GENERIC_ERROR = 'Something went wrong sending your request. Please try again.';
+const EXPERT_UNAVAILABLE_ERROR =
+  "This expert isn't taking new projects right now. Switch to matching and we'll find someone with similar experience.";
 
 export const submitProjectRequestAction = withAuth(
   async (session, rawInput: RawProjectRequestInput): Promise<SubmitProjectRequestResult> => {
@@ -84,6 +86,22 @@ export const submitProjectRequestAction = withAuth(
       // 4. Resolve the expert (direct only). companyId/createdByUserId are from
       //    the session, never client-supplied.
       const expertProfileId = input.sendTo === 'direct' ? input.expertProfileId : null;
+
+      // A `direct` request to an expert who can't take new work is rejected here, not only in
+      // the UI: the client's eligibility view can be stale or bypassed.
+      if (input.sendTo === 'direct') {
+        const eligibility = await expertsRepository.findDirectRequestEligibility(
+          input.expertProfileId
+        );
+        if (!eligibility.eligible) {
+          log.warn('Project request rejected — expert not taking direct requests', {
+            userId: session.user.id,
+            expertProfileId,
+            reason: eligibility.reason,
+          });
+          return { success: false, error: EXPERT_UNAVAILABLE_ERROR };
+        }
+      }
 
       // 5. Persist request + tags + products + documents in one transaction.
       const created = await projectRequestsRepository.createProjectRequest({

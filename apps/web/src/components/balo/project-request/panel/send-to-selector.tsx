@@ -1,138 +1,139 @@
 'use client';
 
-import { Check, Sparkles, User } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { getAvatarUrl } from '@/lib/storage/avatar-url';
+import { useCallback, useEffect, useRef } from 'react';
+import { AlertTriangle, Sparkles } from 'lucide-react';
+import { ExpertAvatarMedia, MatchMedia } from './recipient-media';
 
 export type ProjectRouting = 'direct' | 'match';
 
-interface SendToSelectorProps {
-  value: ProjectRouting;
-  onChange: (routing: ProjectRouting) => void;
-  /**
-   * Expert display name for the Direct card. Absent → context-free mode: the
-   * Direct card renders a neutral "Send to an expert" label + person glyph.
-   */
-  expertName?: string;
-  expertInitials?: string;
-  /** R2 key or http URL for the expert's avatar (resolved client-side). */
-  expertAvatarKey?: string | null;
+/** Expert display data used by the recipient card, review summary and done copy. */
+export interface ProjectRequestExpert {
+  name: string;
+  firstName: string;
+  initials: string;
+  /** R2 key / http URL for the avatar. */
+  avatarKey: string | null;
+  headline: string | null;
+  /** False when the expert isn't taking new projects — Direct is blocked for them. */
+  availableForWork: boolean;
 }
 
-interface RoutingCardProps {
-  selected: boolean;
-  onSelect: () => void;
-  label: string;
-  sublabel: string;
-  /** Avatar/initials tile (Direct) or icon tile (Match). */
-  media: React.ReactNode;
+interface ExpertUnavailableNoticeProps {
+  firstName: string;
+  onMatchInstead: () => void;
 }
 
-function RoutingCard({
-  selected,
-  onSelect,
-  label,
-  sublabel,
-  media,
-}: Readonly<RoutingCardProps>): React.JSX.Element {
+/** Inline notice for an expert who isn't taking new projects, with a way to get matched instead. */
+export function ExpertUnavailableNotice({
+  firstName,
+  onMatchInstead,
+}: Readonly<ExpertUnavailableNoticeProps>): React.JSX.Element {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onSelect}
-      className={cn(
-        'focus-visible:ring-ring relative flex flex-1 items-center gap-3 rounded-xl border p-3.5 text-left transition-all focus-visible:ring-2 focus-visible:outline-none',
-        selected
-          ? 'border-primary bg-primary/[0.06]'
-          : 'border-border bg-card hover:border-primary/40 hover:bg-primary/[0.03]'
-      )}
-    >
-      {media}
-      <span className="min-w-0 flex-1">
-        <span className="text-foreground block text-sm font-semibold">{label}</span>
-        <span className="text-muted-foreground mt-0.5 block text-xs leading-snug">{sublabel}</span>
-      </span>
-      {selected && (
-        <span className="bg-primary text-primary-foreground absolute top-2.5 right-2.5 flex h-4 w-4 items-center justify-center rounded-full">
-          <Check className="h-2.5 w-2.5" aria-hidden="true" />
-        </span>
-      )}
-    </button>
+    <div className="border-warning/40 bg-warning/15 text-warning-strong mt-3 flex gap-2.5 rounded-lg border p-3">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0 text-xs">
+        <p className="font-semibold">{firstName} isn&apos;t taking new projects right now.</p>
+        <p className="mt-0.5">
+          Your brief is saved. We can match you with someone with similar experience instead.
+        </p>
+        <button
+          type="button"
+          onClick={onMatchInstead}
+          className="bg-warning text-warning-foreground focus-visible:ring-ring mt-2.5 inline-flex min-h-11 items-center gap-1.5 rounded-md px-3 text-xs font-semibold hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> Get matched instead
+        </button>
+      </div>
+    </div>
   );
 }
 
+interface SendToSelectorProps {
+  value: ProjectRouting;
+  onChange: (next: ProjectRouting) => void;
+  /** Absent → context-free mount: always "Find me an expert", with nothing to choose. */
+  expert?: ProjectRequestExpert;
+  /** The line under the recipient block (`RoutingCopy.formDescription`); omitted while Direct is blocked. */
+  helperText: string;
+}
+
 /**
- * Routing selector — the first decision in the brief (design §2.1). Two
- * selectable cards in a `radiogroup`: Direct (this expert, default) and Match
- * (find me an expert). The chosen value drives the heading, review summary,
- * submit CTA, and the done screen. Modeled on the `PathCard` structure but
- * selectable, not navigational.
- *
- * Expert-bound (an `expertName` is supplied): the Direct card binds to the
- * expert's name + avatar/initials. Context-free (no expert): the Direct card
- * renders a neutral "Send to an expert" label + person glyph and is still
- * selectable (the panel clamps the submit routing to `match` when there is no
- * expert id to route to).
+ * Where the request goes — decided by the entry point, not picked from a list. A context-free
+ * mount is a static "Find me an expert" block. An expert-bound mount pins the expert's card
+ * (Direct) with a text toggle to get matched instead and back; an expert who isn't taking new
+ * projects shows the unavailable notice in place of the toggle until the client switches.
  */
 export function SendToSelector({
   value,
   onChange,
-  expertName,
-  expertInitials,
-  expertAvatarKey,
+  expert,
+  helperText,
 }: Readonly<SendToSelectorProps>): React.JSX.Element {
-  const avatarUrl = getAvatarUrl(expertAvatarKey ?? null, 'thumbnail');
-  const hasExpert = expertName !== undefined;
+  const direct = expert !== undefined && value === 'direct';
+  const blocked = direct && !expert.availableForWork;
+  const showToggle = expert !== undefined && !blocked;
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const focusToggleRef = useRef(false);
 
-  let directMedia: React.ReactNode;
-  if (!hasExpert) {
-    directMedia = (
-      <span className="border-border bg-muted text-muted-foreground flex h-10 w-10 shrink-0 items-center justify-center rounded-full border">
-        <User className="h-4.5 w-4.5" aria-hidden="true" />
-      </span>
-    );
-  } else if (avatarUrl) {
-    directMedia = (
-      <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
-        {/* eslint-disable-next-line @next/next/no-img-element -- avatar from Cloudflare Image Resizing */}
-        <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
-      </span>
-    );
-  } else {
-    directMedia = (
-      <span className="border-border bg-muted flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full">
-        <span className="text-foreground text-xs font-semibold">{expertInitials}</span>
-      </span>
-    );
-  }
+  // After "Get matched instead" the notice (and its button) unmounts; hand focus to the toggle
+  // that takes its place so keyboard and screen-reader users aren't dropped back to the page.
+  useEffect(() => {
+    if (!focusToggleRef.current || value !== 'match') return;
+    focusToggleRef.current = false;
+    toggleRef.current?.focus();
+  }, [value]);
 
-  const matchMedia = (
-    <span className="border-primary/25 bg-primary/10 text-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-full border">
-      <Sparkles className="h-4.5 w-4.5" aria-hidden="true" />
-    </span>
-  );
+  const handleMatchInstead = useCallback(() => {
+    focusToggleRef.current = true;
+    onChange('match');
+  }, [onChange]);
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Send request to"
-      className="flex flex-col gap-2.5 sm:flex-row"
-    >
-      <RoutingCard
-        selected={value === 'direct'}
-        onSelect={() => onChange('direct')}
-        label={hasExpert ? `Send to ${expertName}` : 'Send to an expert'}
-        sublabel="They'll reply with a proposal."
-        media={directMedia}
-      />
-      <RoutingCard
-        selected={value === 'match'}
-        onSelect={() => onChange('match')}
-        label="Find me an expert"
-        sublabel="We'll match you with the right fit."
-        media={matchMedia}
-      />
+    <div>
+      <div aria-live="polite" className="border-primary bg-primary/[0.06] rounded-xl border p-4">
+        {direct ? (
+          <>
+            <div className="flex items-start gap-3">
+              <ExpertAvatarMedia avatarKey={expert.avatarKey} initials={expert.initials} />
+              <div className="min-w-0 flex-1">
+                <p className="text-foreground text-sm font-semibold">{expert.name}</p>
+                {expert.headline !== null && (
+                  <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">
+                    {expert.headline}
+                  </p>
+                )}
+              </div>
+            </div>
+            {!expert.availableForWork && (
+              <ExpertUnavailableNotice
+                firstName={expert.firstName}
+                onMatchInstead={handleMatchInstead}
+              />
+            )}
+          </>
+        ) : (
+          <div className="flex items-center gap-3">
+            <MatchMedia />
+            <div className="min-w-0 flex-1">
+              <p className="text-foreground text-sm font-semibold">Find me an expert</p>
+              <p className="text-muted-foreground mt-0.5 text-xs">
+                We&apos;ll match you with the right fit.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+      {!blocked && <p className="text-muted-foreground mt-2 text-xs">{helperText}</p>}
+      {showToggle && (
+        <button
+          ref={toggleRef}
+          type="button"
+          onClick={() => onChange(direct ? 'match' : 'direct')}
+          className="text-primary focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
+        >
+          {direct ? 'Get matched with someone else instead' : `Send to ${expert.firstName} instead`}
+        </button>
+      )}
     </div>
   );
 }

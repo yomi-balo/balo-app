@@ -106,6 +106,38 @@ describe('useProjectDraft — default routing + autosave key', () => {
     expect(result.current.draft.routing).toBe('match');
   });
 
+  it('reads a stored context-free "direct" back as match (entry:direct)', () => {
+    seed({ routing: 'direct', title: 'x' }, 'balo:project-draft:entry:direct');
+    const { result } = renderHook(() => useProjectDraft(undefined, 'direct'));
+    expect(result.current.draft.routing).toBe('match');
+    expect(result.current.draft.title).toBe('x');
+  });
+
+  it('reads a stored context-free "direct" back as match (entry:home, fresh)', () => {
+    seed({ routing: 'direct', title: 'x', savedAt: Date.now() }, 'balo:project-draft:entry:home');
+    const { result } = renderHook(() => useProjectDraft(undefined, 'home'));
+    expect(result.current.draft.routing).toBe('match');
+    expect(result.current.draft.title).toBe('x');
+  });
+
+  it('keeps a stored expert-bound "direct" as direct', () => {
+    seed({ routing: 'direct' });
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.routing).toBe('direct');
+  });
+
+  it('keeps a stored expert-bound "match" as match', () => {
+    seed({ routing: 'match' });
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.routing).toBe('match');
+  });
+
+  it('falls back to direct for an expert-bound draft with a corrupt routing', () => {
+    seed({ routing: 'bogus' });
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.routing).toBe('direct');
+  });
+
   it('uses the byte-identical expert-bound key for an expert-bound mount', async () => {
     const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
     act(() => result.current.setField('title', 'Expert-bound draft'));
