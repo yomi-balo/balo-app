@@ -27,6 +27,12 @@ vi.mock('@aws-sdk/client-s3', () => ({
       this.input = input;
     }
   },
+  CopyObjectCommand: class {
+    input: Record<string, unknown>;
+    constructor(input: Record<string, unknown>) {
+      this.input = input;
+    }
+  },
 }));
 
 vi.mock('@aws-sdk/s3-request-presigner', () => ({
@@ -37,10 +43,19 @@ vi.mock('@/lib/logging', () => ({
   log: { info: vi.fn(), warn: mockWarn, error: vi.fn() },
 }));
 
+vi.mock('@/lib/storage/conversation-file', () => ({
+  CONVERSATION_FILE_PREFIX: 'conversation-files/',
+}));
+
+vi.mock('@/lib/storage/meeting-file', () => ({
+  MEETING_FILE_PREFIX: 'meeting-files/',
+}));
+
 import {
   generateProjectDocumentKey,
   createPresignedProjectDocumentUpload,
   deleteProjectDocumentFromR2,
+  copyCaseFileIntoProjectDocuments,
   MAX_DOCUMENT_BYTES,
   PROJECT_DOCUMENT_PREFIX,
 } from './project-document';
@@ -115,5 +130,91 @@ describe('project-document storage', () => {
 
   it('exposes the documented size limit', () => {
     expect(MAX_DOCUMENT_BYTES).toBe(5 * 1024 * 1024);
+  });
+
+  describe('copyCaseFileIntoProjectDocuments', () => {
+    const SRC_CONVERSATION = `conversation-files/conv-1/${USER}/stored-object`;
+    const SRC_MEETING = `meeting-files/meeting-1/${USER}/stored-object`;
+    const DEST = `${PROJECT_DOCUMENT_PREFIX}${COMPANY}/${USER}/copied-object`;
+
+    it('copies a conversation file into the project-documents prefix', async () => {
+      mockSend.mockResolvedValue({});
+      await copyCaseFileIntoProjectDocuments(SRC_CONVERSATION, DEST);
+      expect(mockSend).toHaveBeenCalledOnce();
+    });
+
+    it('copies a meeting file into the project-documents prefix', async () => {
+      mockSend.mockResolvedValue({});
+      await copyCaseFileIntoProjectDocuments(SRC_MEETING, DEST);
+      expect(mockSend).toHaveBeenCalledOnce();
+    });
+
+    it('refuses a source outside the case-files space (guard)', async () => {
+      await expect(
+        copyCaseFileIntoProjectDocuments(`${PROJECT_DOCUMENT_PREFIX}other/x/y`, DEST)
+      ).rejects.toThrow(/case-files space/);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('refuses a destination outside the project-documents space (guard)', async () => {
+      await expect(
+        copyCaseFileIntoProjectDocuments(SRC_CONVERSATION, 'conversation-files/other/x/y')
+      ).rejects.toThrow(/project-documents space/);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('rethrows (does not swallow) on R2 failure, unlike the delete path', async () => {
+      mockSend.mockRejectedValue(new Error('R2 down'));
+      await expect(copyCaseFileIntoProjectDocuments(SRC_CONVERSATION, DEST)).rejects.toThrow(
+        'R2 down'
+      );
+      expect(mockWarn).toHaveBeenCalled();
+    });
+
+    // ── F13 — never log or throw the R2 key, only the source origin + message ────────────────
+    it('logs the source origin and error message on failure, never the keys (F13)', async () => {
+      mockSend.mockRejectedValue(new Error('R2 down'));
+      await expect(copyCaseFileIntoProjectDocuments(SRC_CONVERSATION, DEST)).rejects.toThrow(
+        'R2 down'
+      );
+      expect(mockWarn).toHaveBeenCalledWith('Failed to copy case file into project documents', {
+        sourceOrigin: 'conversation',
+        error: 'R2 down',
+      });
+      const [, context] = mockWarn.mock.calls[0] as [string, Record<string, unknown>];
+      expect(context).not.toHaveProperty('srcKey');
+      expect(context).not.toHaveProperty('destKey');
+    });
+
+    it('tags a meeting-sourced failure with the meeting origin (F13)', async () => {
+      mockSend.mockRejectedValue(new Error('R2 down'));
+      await expect(copyCaseFileIntoProjectDocuments(SRC_MEETING, DEST)).rejects.toThrow('R2 down');
+      expect(mockWarn).toHaveBeenCalledWith('Failed to copy case file into project documents', {
+        sourceOrigin: 'meeting',
+        error: 'R2 down',
+      });
+    });
+
+    it('the guard errors never include the key (F13)', async () => {
+      const badSrc = `${PROJECT_DOCUMENT_PREFIX}other/x/y`;
+      let srcError: unknown;
+      try {
+        await copyCaseFileIntoProjectDocuments(badSrc, DEST);
+      } catch (error) {
+        srcError = error;
+      }
+      expect(srcError).toBeInstanceOf(Error);
+      expect((srcError as Error).message).not.toContain(badSrc);
+
+      const badDest = 'conversation-files/other/x/y';
+      let destError: unknown;
+      try {
+        await copyCaseFileIntoProjectDocuments(SRC_CONVERSATION, badDest);
+      } catch (error) {
+        destError = error;
+      }
+      expect(destError).toBeInstanceOf(Error);
+      expect((destError as Error).message).not.toContain(badDest);
+    });
   });
 });

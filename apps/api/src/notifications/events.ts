@@ -148,6 +148,10 @@ export interface ProjectRequestSubmittedPayload {
   tagIds: string[]; // selected project-type tag ids (counts in template)
   productIds: string[]; // selected product ids (counts in template)
   documentCount: number; // number of attached documents (counts in template)
+  // BAL-589 (D19) — set only when the request was converted from a case. The template
+  // names the client COMPANY ("{Company} wants to turn {caseTitle} into a project."), not the
+  // submitting person — `requesterUserId` is deliberately not on this payload.
+  sourceCase?: { id: string; title: string };
 }
 
 export interface ProjectMatchRequestedPayload {

@@ -31,19 +31,35 @@ export interface ProjectBriefParseUsage {
   readonly outputTokens: number | null;
 }
 
-export interface CreateProjectBriefParseInput {
+/**
+ * A parse has EXACTLY ONE source — the requester's documents, or one case's history — and the
+ * `project_brief_parses_exactly_one_source` CHECK enforces the same rule in the database.
+ */
+export type CreateProjectBriefParseInput = {
   readonly companyId: string;
   readonly requestedByUserId: string;
-  /**
-   * ⚠⚠ ALREADY SESSION-VALIDATED (Ruling A / §12 Gate 1). This repository does NOT and CANNOT
-   * check the keys — it has no session. `startProjectBriefParseAction` re-derives
-   * `project-documents/{session.companyId}/{session.userId}/` for every key before calling
-   * here, and this is the ONLY write path into `source_documents`. A second caller of `create`
-   * that skipped that check would defeat the gate that makes the `{ parseId }`-only job
-   * payload safe.
-   */
-  readonly sourceDocuments: readonly ProjectBriefParseSourceDocument[];
-}
+} & (
+  | {
+      readonly source: 'documents';
+      /**
+       * ⚠⚠ ALREADY SESSION-VALIDATED (Ruling A / §12 Gate 1). This repository does NOT and
+       * CANNOT check the keys — it has no session. The documents start action re-derives
+       * `project-documents/{session.companyId}/{session.userId}/` for every key before calling
+       * here, and this is the ONLY write path into `source_documents`. A second caller of
+       * `create` that skipped that check would defeat the gate that makes the
+       * `{ parseId }`-only job payload safe. Must be non-empty (CHECK).
+       */
+      readonly sourceDocuments: readonly ProjectBriefParseSourceDocument[];
+    }
+  | {
+      readonly source: 'case';
+      /**
+       * ⚠ ALREADY AUTHORIZED by the case start action (client-side case access + PARTICIPATE).
+       * The worker re-checks the case against the ROW's `company_id` before reading anything.
+       */
+      readonly sourceEngagementId: string;
+    }
+);
 
 export interface FindProjectBriefParseForOwnerInput {
   readonly parseId: string;
@@ -177,7 +193,9 @@ function auditColumns(
  *   • {@link projectBriefParsesRepository.findById} — the WORKER's read. No session exists in a
  *     BullMQ processor, so there is nothing to scope by; the worker's protection is Gate 3, it
  *     re-asserts every `source_documents` key against `project-documents/{row.companyId}/
- *     {row.requestedByUserId}/` derived from THE ROW. ⚠ Do not call this from a request path.
+ *     {row.requestedByUserId}/` derived from THE ROW; for a case source, the case gate checks
+ *     `source_engagement_id` against the row's `companyId` instead. ⚠ Do not call this from a
+ *     request path.
  *
  * Every read filters `deleted_at IS NULL`.
  */
@@ -192,16 +210,26 @@ export const projectBriefParsesRepository = {
    * against a retained completed job (memory
    * `reference_bullmq_jobid_must_be_per_write_not_per_state`). The previous row stays as
    * historical record.
+   *
+   * A case source writes `source_documents = []` and `source_engagement_id`; a documents source
+   * leaves `source_engagement_id` NULL.
    */
   async create(input: CreateProjectBriefParseInput): Promise<ProjectBriefParse> {
+    const sourceColumns =
+      input.source === 'case'
+        ? { sourceDocuments: [], sourceEngagementId: input.sourceEngagementId }
+        : {
+            // Copied into a mutable array for the jsonb column; the input stays `readonly` so a
+            // caller's array cannot be mutated by this package.
+            sourceDocuments: [...input.sourceDocuments],
+            sourceEngagementId: null,
+          };
     const [row] = await db
       .insert(projectBriefParses)
       .values({
         companyId: input.companyId,
         requestedByUserId: input.requestedByUserId,
-        // Copied into a mutable array for the jsonb column; the input stays `readonly` so a
-        // caller's array cannot be mutated by this package.
-        sourceDocuments: [...input.sourceDocuments],
+        ...sourceColumns,
       })
       .returning();
     if (row === undefined) throw new Error('project brief parse insert failed');
@@ -260,8 +288,9 @@ export const projectBriefParsesRepository = {
   /**
    * ⚠ THE WORKER'S READ, AND THE ONLY UNSCOPED ONE. A BullMQ processor has no session to scope
    * by. Its protection is Gate 3 — it re-asserts every `source_documents` key against the
-   * prefix derived from THIS ROW's `companyId`/`requestedByUserId`. Do not call it from a
-   * request path; use `findForOwner` or `findForRequester` there.
+   * prefix derived from THIS ROW's `companyId`/`requestedByUserId` (or, for a case source, the
+   * case gate checks the case against THIS ROW's `companyId`). Do not call it from a request
+   * path; use `findForOwner` or `findForRequester` there.
    */
   async findById(parseId: string): Promise<ProjectBriefParse | undefined> {
     const [row] = await db

@@ -14,9 +14,21 @@ import {
   PROJECT_BRIEF_MAX_OUTPUT_TOKENS,
   PROJECT_BRIEF_BUDGET_INPUT_TOKENS,
 } from './config.js';
-import { briefParsePrompt, briefParseOutputSchema, type BriefParseOutput } from './prompts.js';
-import { buildTaxonomyChoices, deriveUnmatchedLabels, mapSlugsToIds } from './taxonomy-mapping.js';
-import { projectBriefNoopResult } from './noop-fallback.js';
+import {
+  briefParsePrompt,
+  briefFromCasePrompt,
+  briefParseOutputSchema,
+  type BriefParseOutput,
+  type RenderedBriefPrompt,
+} from './prompts.js';
+import {
+  buildTaxonomyChoices,
+  deriveUnmatchedLabels,
+  mapSlugsToIds,
+  type TaxonomyChoice,
+} from './taxonomy-mapping.js';
+import { projectBriefNoopResult, projectBriefCaseNoopResult } from './noop-fallback.js';
+import { loadCaseSource } from './case-source.js';
 
 const log = createLogger('project-brief-parse');
 
@@ -172,6 +184,74 @@ async function readSourceDocuments(row: ParseRow, parseId: string): Promise<Pars
   return files;
 }
 
+/** Everything `generateBrief` needs, regardless of which arm produced it. */
+interface ParseSource {
+  readonly prompt: RenderedBriefPrompt;
+  readonly files: readonly ParseFilePart[];
+  readonly noopFallback: () => BriefParseOutput;
+}
+
+/**
+ * The documents arm (BAL-254, unchanged): Gate 3, the byte cap, the real read, then the
+ * documents prompt.
+ */
+async function loadDocumentsSource(
+  row: ParseRow,
+  parseId: string,
+  tagChoices: readonly TaxonomyChoice[],
+  productChoices: readonly TaxonomyChoice[]
+): Promise<ParseSource> {
+  assertOwnerScopedKeys(row, parseId);
+  await assertRealBytesWithinCap(row, parseId);
+  const files = await readSourceDocuments(row, parseId);
+  const fileNames = files.map((f) => f.filename);
+  return {
+    prompt: briefParsePrompt({ tagChoices, productChoices, fileNames }),
+    files,
+    noopFallback: () => projectBriefNoopResult(fileNames),
+  };
+}
+
+/**
+ * The case arm (BAL-589): the case gate + D7a history build (`loadCaseSource`), then the
+ * from-case prompt. `files` is always `[]` — the case arm is text-only.
+ */
+async function loadCaseParseSource(
+  row: ParseRow,
+  parseId: string,
+  tagChoices: readonly TaxonomyChoice[],
+  productChoices: readonly TaxonomyChoice[]
+): Promise<ParseSource> {
+  const caseSource = await loadCaseSource(row, parseId);
+  return {
+    prompt: briefFromCasePrompt({
+      tagChoices,
+      productChoices,
+      caseTitle: caseSource.caseTitle,
+      historyText: caseSource.historyText,
+    }),
+    files: [],
+    noopFallback: () => projectBriefCaseNoopResult(caseSource.caseTitle),
+  };
+}
+
+/**
+ * Dispatch on the row's source (D6/D7): a case source (`source_engagement_id` set) takes the
+ * case arm; otherwise the documents arm. The CHECK `project_brief_parses_exactly_one_source`
+ * guarantees these are exhaustive and mutually exclusive.
+ */
+async function loadParseSource(
+  row: ParseRow,
+  parseId: string,
+  tagChoices: readonly TaxonomyChoice[],
+  productChoices: readonly TaxonomyChoice[]
+): Promise<ParseSource> {
+  if (row.sourceEngagementId === null) {
+    return loadDocumentsSource(row, parseId, tagChoices, productChoices);
+  }
+  return loadCaseParseSource(row, parseId, tagChoices, productChoices);
+}
+
 /** The model call's outcome — the value plus the provenance/usage the row records. */
 interface BriefGeneration {
   readonly value: BriefParseOutput;
@@ -198,11 +278,11 @@ interface BriefGeneration {
 async function generateBrief(input: {
   ai: AiClient;
   parseId: string;
-  prompt: ReturnType<typeof briefParsePrompt>;
+  prompt: RenderedBriefPrompt;
   files: readonly ParseFilePart[];
-  fileNames: readonly string[];
+  noopFallback: () => BriefParseOutput;
 }): Promise<BriefGeneration> {
-  const { ai, parseId, prompt, files, fileNames } = input;
+  const { ai, parseId, prompt, files, noopFallback } = input;
 
   let modelId: string;
   try {
@@ -225,7 +305,7 @@ async function generateBrief(input: {
       promptId: prompt.promptId,
       promptVersion: prompt.promptVersion,
       files: files.map((f) => ({ data: f.data, mediaType: f.mediaType, filename: f.filename })),
-      noopFallback: () => projectBriefNoopResult(fileNames),
+      noopFallback,
     });
     return { value: result.value, audit: result.audit, usage: result.usage };
   } catch (error) {
@@ -259,19 +339,16 @@ async function isStillClaimable(parseId: string): Promise<boolean> {
 }
 
 /**
- * BAL-254 — the worker's orchestration. Steps, in order, per the plan's §8.5:
+ * BAL-254 / BAL-589 — the worker's orchestration. Steps, in order:
  *  1. Load the row (idempotent no-op if already terminal).
- *  2. Gate 3 (Ruling A) — re-assert every source document's key against the ROW's
- *     companyId/requestedByUserId, never the payload (there is none — the job carries only
- *     `{ parseId }`).
- *  3. Byte cap.
- *  4. Read bytes from R2, re-checking the real total.
- *  5. Load the live taxonomy.
- *  6. Re-check the row is still claimable (W8 — never spend a paid call on a settled row).
- *  7. Call the model (multimodal, schema-bound).
- *  8. Usable-output floor.
- *  9. Slug → id mapping (D5) + the unmatched-label footnote.
- * 10. Persist the outcome.
+ *  2. Load the live taxonomy (needed to render either arm's prompt).
+ *  3. Load the parse source — the documents arm (Gate 3, the byte cap, the real read) or the
+ *     case arm (the case gate + the D7a history build), dispatched on `source_engagement_id`.
+ *  4. Re-check the row is still claimable (W8 — never spend a paid call on a settled row).
+ *  5. Call the model (multimodal for documents, text-only for a case; schema-bound either way).
+ *  6. Usable-output floor.
+ *  7. Slug → id mapping (D5) + the unmatched-label footnote.
+ *  8. Persist the outcome.
  *
  * Non-retryable classifications (mapped by the CALLER — `jobs/project-brief-parse.ts` — to
  * BullMQ's `UnrecoverableError`) are thrown as `ProjectBriefParseError`; a transient/stochastic
@@ -289,10 +366,6 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
     return;
   }
 
-  assertOwnerScopedKeys(row, parseId);
-  await assertRealBytesWithinCap(row, parseId);
-  const files = await readSourceDocuments(row, parseId);
-
   // ── Live taxonomy ─────────────────────────────────────────────────────────────────────────
   const vertical = await referenceDataRepository.getSalesforceVertical();
   const [tagGroups, productCats] = await Promise.all([
@@ -301,6 +374,9 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
   ]);
   const tagChoices = buildTaxonomyChoices(tagGroups);
   const productChoices = buildTaxonomyChoices(productCats);
+
+  // ── The parse source (D6/D7) — documents or a case, never both (CHECK) ──────────────────
+  const source = await loadParseSource(row, parseId, tagChoices, productChoices);
 
   // ── The model call ────────────────────────────────────────────────────────────────────────
   // ⚠⚠ BAL-254 W8 — LAST CHANCE TO NOT SPEND AN OPUS CALL. The row was claimable when this job
@@ -318,15 +394,12 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
     return;
   }
 
-  const fileNames = files.map((f) => f.filename);
-  const prompt = briefParsePrompt({ tagChoices, productChoices, fileNames });
-
   const { value, audit, usage } = await generateBrief({
     ai: deps.ai,
     parseId,
-    prompt,
-    files,
-    fileNames,
+    prompt: source.prompt,
+    files: source.files,
+    noopFallback: source.noopFallback,
   });
 
   // ── Usable-output floor ──────────────────────────────────────────────────────────────────

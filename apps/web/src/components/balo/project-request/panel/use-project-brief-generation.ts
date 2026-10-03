@@ -2,13 +2,28 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/nextjs';
-import { startProjectBriefParseAction } from '@/lib/project-request/actions/start-project-brief-parse';
+import {
+  startProjectBriefParseAction,
+  type StartProjectBriefParseResult,
+} from '@/lib/project-request/actions/start-project-brief-parse';
+import { startCaseBriefParseAction } from '@/app/(dashboard)/cases/[engagementId]/_actions/start-case-brief-parse';
 import {
   getProjectBriefParseAction,
   type ProjectBriefDraftPatch,
 } from '@/lib/project-request/actions/get-project-brief-parse';
 import type { ProjectBriefFailureReason } from '@balo/shared/project-requests';
 import type { ProjectDocumentRef } from '@/lib/project-request/actions/schemas';
+
+/**
+ * BAL-589 — the two things this hook can poll a generation FOR. The documents arm is BAL-254's
+ * original upload path; the case arm is the "Convert to project" case-history path
+ * (`useCaseBriefFlow`). Both start actions resolve to the SAME {@link StartProjectBriefParseResult}
+ * shape, so everything past `start()` — the polling, the terminal phases, the failure mapping —
+ * is identical regardless of source.
+ */
+export type BriefSource =
+  | { kind: 'documents'; documents: ProjectDocumentRef[] }
+  | { kind: 'case'; caseId: string };
 
 const POLL_INTERVAL_MS = 2_000;
 /** ~2 min — a ceiling, not a target. LLM structured extraction over a handful of small
@@ -26,7 +41,7 @@ export interface UseProjectBriefGenerationResult {
   phase: BriefGenerationPhase;
   headingIndex: 0 | 1 | 2;
   failureReason: ProjectBriefFailureReason | null;
-  start: (documents: ProjectDocumentRef[]) => Promise<void>;
+  start: (source: BriefSource) => Promise<void>;
   dismissFailure: () => void;
   /**
    * ⚠⚠ BAL-254 W2 — ABANDON THE CURRENT GENERATION. Stops the interval AND clears
@@ -70,6 +85,17 @@ export function useProjectBriefGeneration(
   const parseIdRef = useRef<string | null>(null);
   const pollCountRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /**
+   * ⚠⚠ FIX ROUND F3 — THE RUN TOKEN. Bumped by every `start()` AND every `cancel()`. `cancel()`
+   * only invalidates an ALREADY-INSTALLED interval (via `parseIdRef`) — it does nothing about a
+   * `start()` whose action call is still in flight, because that run has not reached the point
+   * where it sets `parseIdRef` yet. Without this, closing the drawer mid-start and reopening it
+   * let the FIRST (cancelled) start's action resolve late and install its own interval right on
+   * top of the second start's, leaking an orphan that polls forever. Every `start()` captures its
+   * own token at issue time and bails, installing neither state nor an interval, if the token has
+   * moved on by the time its action resolves.
+   */
+  const runTokenRef = useRef(0);
 
   const clearPolling = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -88,6 +114,9 @@ export function useProjectBriefGeneration(
 
   /** @see UseProjectBriefGenerationResult.cancel */
   const cancel = useCallback(() => {
+    // ⚠ FIX ROUND F3 — invalidates any `start()` whose action call is still in flight too (not
+    // just an already-installed interval, which `parseIdRef` below still covers).
+    runTokenRef.current += 1;
     clearPolling();
     // ⚠ CLEARING THE ID IS THE POINT. `clearPolling` only stops FUTURE ticks; the poll whose
     // promise is already in flight still resolves, and its `isCurrentGeneration()` guard is what
@@ -99,7 +128,10 @@ export function useProjectBriefGeneration(
   }, [clearPolling]);
 
   const start = useCallback(
-    async (documents: ProjectDocumentRef[]) => {
+    async (source: BriefSource) => {
+      // ⚠ FIX ROUND F3 — THE RUN TOKEN, captured at issue time. See the ref's own docblock.
+      runTokenRef.current += 1;
+      const myRunToken = runTokenRef.current;
       clearPolling();
       // ⚠ FIX ROUND F4 — clearing the id, not just the interval, is what INVALIDATES every poll
       // the previous generation already has in flight. See the generation guard below.
@@ -108,16 +140,22 @@ export function useProjectBriefGeneration(
       setFailureReason(null);
       setHeadingIndex(0);
 
-      let result: Awaited<ReturnType<typeof startProjectBriefParseAction>>;
+      let result: StartProjectBriefParseResult;
       try {
-        result = await startProjectBriefParseAction({ documents });
+        result =
+          source.kind === 'documents'
+            ? await startProjectBriefParseAction({ documents: source.documents })
+            : await startCaseBriefParseAction({ caseId: source.caseId });
       } catch (error) {
-        // ⚠⚠ FIX ROUND F3 — THE PERMANENT SPINNER. This await can THROW, not just resolve
-        // unsuccessfully: `withAuth` throws on an expired session, and the repository write
-        // throws on a DB error. Without this catch `phase` stayed `'generating'` forever — no
-        // interval had been created yet, so `MAX_POLLS` could never rescue it, and the caller's
-        // `.catch(() => {})` swallowed the rejection in silence. Every escape has to end at a
-        // TERMINAL phase so the error banner renders.
+        // ⚠ FIX ROUND F3 — a `cancel()` or a NEWER `start()` superseded this run while the action
+        // above was in flight; a stale run must install neither a terminal phase nor an interval.
+        if (runTokenRef.current !== myRunToken) return;
+        // ⚠⚠ FIX ROUND F3 (ORIGINAL) — THE PERMANENT SPINNER. This await can THROW, not just
+        // resolve unsuccessfully: `withAuth` throws on an expired session, and the repository
+        // write throws on a DB error. Without this catch `phase` stayed `'generating'` forever —
+        // no interval had been created yet, so `MAX_POLLS` could never rescue it, and the
+        // caller's `.catch(() => {})` swallowed the rejection in silence. Every escape has to end
+        // at a TERMINAL phase so the error banner renders.
         //
         // ⚠ `Sentry.captureException`, NOT `@/lib/logging` — this is a client component, and the
         // web logger pulls in Pino → `async_hooks` (memory
@@ -127,6 +165,10 @@ export function useProjectBriefGeneration(
         setFailureReason('unknown');
         return;
       }
+
+      // ⚠ FIX ROUND F3 — same bail, for the non-throwing path: a cancel/newer-start superseded
+      // this run while the action above was in flight.
+      if (runTokenRef.current !== myRunToken) return;
 
       if (!result.success || result.parseId === undefined) {
         setPhase('failed');

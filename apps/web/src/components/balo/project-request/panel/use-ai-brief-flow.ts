@@ -8,15 +8,20 @@ import { useProjectBriefGeneration } from './use-project-brief-generation';
 import { projectFunnelDimensions } from './funnel-dimensions';
 import type { ProjectDraft } from './use-project-draft';
 
-/** The four AI-owned fields, snapshotted immediately after a successful generate. */
-interface AiFieldSnapshot {
+/**
+ * The four AI-owned fields, snapshotted immediately after a successful generate. Exported
+ * (BAL-589) so `useCaseBriefFlow` — the case-history sibling of this flow — reuses the exact
+ * same shape and comparison rather than redefining both.
+ */
+export interface AiFieldSnapshot {
   title: string;
   descriptionHtml: string;
   tagIds: string[];
   productIds: string[];
 }
 
-function snapshotsDiffer(a: AiFieldSnapshot, b: AiFieldSnapshot): boolean {
+/** @see AiFieldSnapshot */
+export function snapshotsDiffer(a: AiFieldSnapshot, b: AiFieldSnapshot): boolean {
   return (
     a.title !== b.title ||
     a.descriptionHtml !== b.descriptionHtml ||
@@ -301,7 +306,7 @@ export function useAiBriefFlow({
     // ⚠ NO `.catch(() => {})` (fix round F3). `start` now handles every failure internally and
     // always resolves on a TERMINAL phase. The empty catch that used to sit here could only ever
     // hide a bug, and it hid exactly one: a thrown start action left the panel spinning forever.
-    briefGeneration.start(draft.documents);
+    briefGeneration.start({ kind: 'documents', documents: draft.documents });
   }, [draft.documents, briefGeneration]);
 
   const handleRetryGenerate = useCallback(() => {
@@ -333,7 +338,7 @@ export function useAiBriefFlow({
       is_regenerate: true,
     });
     // No `.catch(() => {})` — see `handleGenerateClick` (fix round F3).
-    briefGeneration.start(draft.documents);
+    briefGeneration.start({ kind: 'documents', documents: draft.documents });
   }, [draft.documents, briefGeneration, hasEditsSinceGenerate]);
 
   const handleRegenerateClick = useCallback(() => {

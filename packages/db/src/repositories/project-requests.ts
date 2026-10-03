@@ -104,6 +104,9 @@ export interface CreateProjectRequestInput {
    * status, source, title, sanitised-HTML description, …). The routing CHECK
    * constraint is enforced at the DB layer — the caller must supply an
    * expertProfileId for `direct` and omit it for `match`.
+   *
+   * `sourceCaseId` (a case conversion) must already be authorized by the caller; when set,
+   * the `project_request.converted_from_case` audit row is written in the same transaction.
    */
   request: NewProjectRequest;
   /** Validated project-tag ids (already checked against the vertical taxonomy). */
@@ -263,6 +266,11 @@ export const projectRequestsRepository = {
    * product, and document rows in ONE transaction. Returns the created request
    * row. Junction inserts assume the ids are pre-validated by the caller (the
    * `restrict` FKs are the last-line guard, not the validation surface).
+   *
+   * A request converted from a case (`request.sourceCaseId` set) also records a
+   * `project_request.converted_from_case` audit row, LAST, inside the same transaction — so the
+   * provenance outlives the `source_case_id` FK being nulled by a case hard-delete. An unknown
+   * case id fails the FK and rolls the whole request back.
    */
   async createProjectRequest(input: CreateProjectRequestInput): Promise<ProjectRequest> {
     return db.transaction(async (tx) => {
@@ -287,6 +295,21 @@ export const projectRequestsRepository = {
         await tx
           .insert(projectRequestDocuments)
           .values(input.documents.map((d) => ({ projectRequestId: row.id, ...d })));
+      }
+
+      // ⚠ FIXED METADATA CONTRACT — `audit_events` is append-only, so `{ sourceCaseId }` is
+      // asserted key-by-key in `project-requests.integration.test.ts`.
+      if (row.sourceCaseId !== null) {
+        await auditEventsRepository.record(
+          {
+            actorUserId: row.createdByUserId,
+            action: 'project_request.converted_from_case',
+            entityType: 'project_request',
+            entityId: row.id,
+            metadata: { sourceCaseId: row.sourceCaseId },
+          },
+          tx
+        );
       }
 
       return row;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   projectBriefNoopResult,
+  projectBriefCaseNoopResult,
   PROJECT_BRIEF_NOOP_TITLE,
   PROJECT_BRIEF_NOOP_DISCLAIMER,
 } from './noop-fallback.js';
@@ -60,6 +61,48 @@ describe('projectBriefNoopResult', () => {
   it('clears the usable-output floor even with no filenames (dev/CI completes, never fails)', () => {
     // `parse.ts` rejects `title.trim().length < 3 || descriptionMarkdown.trim().length === 0`.
     const result = projectBriefNoopResult([]);
+    expect(result.title.trim().length).toBeGreaterThanOrEqual(3);
+    expect(result.descriptionMarkdown.trim().length).toBeGreaterThan(0);
+  });
+});
+
+/** BAL-589 — the case-source sibling of {@link projectBriefNoopResult}. */
+describe('projectBriefCaseNoopResult', () => {
+  it('the title carries both the synthetic marker and the case title', () => {
+    const result = projectBriefCaseNoopResult('Sandbox refresh keeps failing');
+    expect(result.title).toContain(PROJECT_BRIEF_NOOP_TITLE);
+    expect(result.title).toContain('Sandbox refresh keeps failing');
+  });
+
+  it('⚠ it never claims to have read anything', () => {
+    const markdown = projectBriefCaseNoopResult('A case').descriptionMarkdown;
+    expect(markdown).toContain(PROJECT_BRIEF_NOOP_DISCLAIMER);
+  });
+
+  it('carries the same four headings a real from-case draft would', () => {
+    const markdown = projectBriefCaseNoopResult('A case').descriptionMarkdown;
+    expect(markdown).toContain('## Problem');
+    expect(markdown).toContain('## Resolved in the case');
+    expect(markdown).toContain("## What's left");
+    expect(markdown).toContain('## Likely scope');
+  });
+
+  it('⚠ emits NO taxonomy signal — a stub must never populate slugs or unmatched labels', () => {
+    const result = projectBriefCaseNoopResult('A case');
+    expect(result.tagSlugs).toEqual([]);
+    expect(result.productSlugs).toEqual([]);
+    expect(result.unmatchedTagLabels).toEqual([]);
+    expect(result.unmatchedProductLabels).toEqual([]);
+  });
+
+  it('satisfies the real output schema', () => {
+    expect(briefParseOutputSchema.safeParse(projectBriefCaseNoopResult('A case')).success).toBe(
+      true
+    );
+  });
+
+  it('clears the usable-output floor', () => {
+    const result = projectBriefCaseNoopResult('A case');
     expect(result.title.trim().length).toBeGreaterThanOrEqual(3);
     expect(result.descriptionMarkdown.trim().length).toBeGreaterThan(0);
   });

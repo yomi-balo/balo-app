@@ -118,6 +118,10 @@ export {
   // (`apps/web` cannot import it), not in this one.
   CASES_INDEX_TARGETS,
   CASES_INDEX_CARD_STATES,
+  // BAL-589 — the "Convert a case to a project" AI brief's event constant. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it),
+  // not in this one.
+  CASE_BRIEF_EVENTS,
 } from '../events';
 
 export type {
@@ -263,4 +267,6 @@ export type {
   DashboardUpNextMeetingType,
   DashboardUpNextTarget,
   DashboardUpNextRowState,
+  // BAL-589 — the "Convert a case to a project" AI brief's event payload.
+  CaseBriefEventMap,
 } from '../events';

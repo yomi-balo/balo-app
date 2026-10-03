@@ -1,4 +1,14 @@
-import { pgTable, uuid, text, integer, timestamp, jsonb, index, check } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  text,
+  integer,
+  timestamp,
+  jsonb,
+  index,
+  check,
+  foreignKey,
+} from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 // TYPE-ONLY. `@balo/db` already depends on `@balo/shared`; the reverse is forbidden (a client
 // component that value-imports `@balo/db` drags the `postgres` driver into the browser bundle),
@@ -9,13 +19,15 @@ import type {
 } from '@balo/shared/project-requests';
 import { companies } from './companies';
 import { users } from './users';
+import { caseEngagements } from './case-engagements';
 import { timestamps, softDelete } from './helpers';
 
 /**
- * project_brief_parses (BAL-254 / ADR-1022 amendment) — ONE ROW PER "read my documents and
- * draft the brief" attempt. It is the async handoff between the web Server Action that
- * validates the uploads, the BullMQ worker that reads them and calls the model, and the panel
- * that polls for the answer.
+ * project_brief_parses (BAL-254 / ADR-1022 amendment) — ONE ROW PER "draft the brief" attempt,
+ * from EXACTLY ONE source: the requester's uploaded documents, or (BAL-589) one case's history
+ * (`source_engagement_id`). It is the async handoff between the web Server Action that
+ * validates the source, the BullMQ worker that reads it and calls the model, and the panel
+ * that polls for the answer. `project_brief_parses_exactly_one_source` makes the source total.
  *
  * Rows are EPHEMERAL WORKING DATA, not a record of anything. Nothing downstream reads them
  * after the draft is populated; a submitted `project_requests` row carries no reference back.
@@ -35,11 +47,13 @@ import { timestamps, softDelete } from './helpers';
  * The repository still hands callers a discriminated union, so nothing above the DB notices.
  *
  * ── (2) ⚠⚠ `source_documents` IS THE SECURITY-RELEVANT COLUMN (Ruling A) ──────────────
- * It is populated by the VALIDATED WRITE PATH AND NOTHING ELSE: `startProjectBriefParseAction`
- * writes it once, only after every `r2Key` has been re-derived against
- * `project-documents/{session.companyId}/{session.userId}/`. THE WORKER READS THE KEYS FROM
- * HERE, NEVER FROM A JOB PAYLOAD — which is precisely why the payload is `{ parseId }` alone
- * and why no R2 key ever crosses the wire. A second writer of this column would silently undo
+ * It is populated by the VALIDATED WRITE PATH AND NOTHING ELSE: both start actions (documents
+ * and case) write it once, through `enqueueProjectBriefParse`. The documents action writes it
+ * only after every `r2Key` has been re-derived against
+ * `project-documents/{session.companyId}/{session.userId}/`; the case action writes `[]`, which
+ * it holds IF AND ONLY IF the source is a case. THE WORKER READS THE KEYS FROM HERE, NEVER FROM
+ * A JOB PAYLOAD — which is precisely why the payload is `{ parseId }` alone and why no R2 key
+ * ever crosses the wire. A writer that bypasses `enqueueProjectBriefParse` would silently undo
  * the whole gate; there must not be one.
  *
  * ── (3) BOTH FKs CASCADE — `requested_by_user_id` DELIBERATELY SO ─────────────────────
@@ -87,14 +101,23 @@ export const projectBriefParses = pgTable(
 
     /**
      * ⚠⚠ THE SECURITY-RELEVANT COLUMN (Ruling A) — see (2) in the table docblock. Written
-     * ONCE, by `startProjectBriefParseAction`, only after every `r2Key` has been validated
-     * against `project-documents/{session.companyId}/{session.userId}/`. The worker reads its
+     * ONCE, through `enqueueProjectBriefParse`: by the documents action only after every
+     * `r2Key` has been validated against `project-documents/{session.companyId}/{session.userId}/`,
+     * and as `[]` by the case action (`[]` ⇔ a case source, by CHECK). The worker reads its
      * keys from HERE, never from a job payload.
      *
      * ⚠ HOLDS NO DATES, AND MUST NOT ACQUIRE ONE (memory `reference_jsonb_date_type_lie`: a
      * `Date` written into jsonb reads back as an ISO STRING while still typed `Date`).
      */
     sourceDocuments: jsonb('source_documents').$type<ProjectBriefParseSourceDocument[]>().notNull(),
+
+    /**
+     * The case whose history is the source (BAL-589). NULL ⇔ a documents source. The worker's
+     * case gate re-checks that the case is live, is a `case`, and belongs to `company_id`.
+     * The FK lives in the table extras with an explicit name (Drizzle's default would exceed
+     * Postgres' 63-char identifier limit); CASCADE, because the row is ephemeral working data.
+     */
+    sourceEngagementId: uuid('source_engagement_id'),
 
     /**
      * The parse's answer. NULL ⇒ not succeeded (either still running or failed).
@@ -149,6 +172,24 @@ export const projectBriefParses = pgTable(
      * soft-deleted rows, which is acceptable on a table this size and on a path this rare.
      */
     index('project_brief_parses_company_idx').on(t.companyId),
+
+    /** The `source_engagement_id` cascade FK's delete-time scan. NOT PARTIAL, for the same reason. */
+    index('project_brief_parses_source_engagement_idx').on(t.sourceEngagementId),
+
+    foreignKey({
+      columns: [t.sourceEngagementId],
+      foreignColumns: [caseEngagements.engagementId],
+      name: 'project_brief_parses_source_case_fk',
+    }).onDelete('cascade'),
+
+    /**
+     * ⚠ EXACTLY ONE SOURCE: non-empty documents XOR a case. An inequality of two boolean tests
+     * (neither side can be NULL — `source_documents` is NOT NULL), so it is total.
+     */
+    check(
+      'project_brief_parses_exactly_one_source',
+      sql`(jsonb_array_length(${t.sourceDocuments}) > 0) <> (${t.sourceEngagementId} IS NOT NULL)`
+    ),
 
     /**
      * ⚠ A ROW IS NEVER BOTH SUCCEEDED AND FAILED. Written as a disjunction of two `IS NULL`

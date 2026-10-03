@@ -460,6 +460,29 @@ export const caseEngagementsRepository = {
   },
 
   /**
+   * The live `case_engagement_products.product_id` values for ONE case, in tagging order
+   * (`created_at, id`). `[]` when the case has none. Rides
+   * `case_engagement_product_engagement_idx`.
+   *
+   * ⚠ THIS IS A LOOKUP, NOT AN AUTHORIZATION GATE — the caller has already resolved access to
+   * the case. It does not check the case itself is live. `products` carries no `deleted_at`,
+   * so only the junction is filtered.
+   */
+  async listProductIds(engagementId: string): Promise<string[]> {
+    const rows = await db
+      .select({ productId: caseEngagementProducts.productId })
+      .from(caseEngagementProducts)
+      .where(
+        and(
+          eq(caseEngagementProducts.engagementId, engagementId),
+          isNull(caseEngagementProducts.deletedAt)
+        )
+      )
+      .orderBy(asc(caseEngagementProducts.createdAt), asc(caseEngagementProducts.id));
+    return rows.map((row) => row.productId);
+  },
+
+  /**
    * BAL-400 — THE IDEMPOTENT-REPLAY LOOKUP AT THE CASE GRAIN. The one live case created
    * under this booking key, or `undefined`. Rides
    * `case_engagement_booking_idempotency_key_idx`.

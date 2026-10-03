@@ -93,6 +93,13 @@ interface DocumentUploaderProps {
    * the presign action while signed out. Absent (every other caller) → unchanged behaviour.
    */
   onRequireAuth?: () => void;
+  /**
+   * BAL-589 fix round F1 — the cap this INSTANCE enforces, defaulting to {@link MAX_DOCUMENTS}.
+   * A case mount reserves one slot per case-file copy already selected in `CaseFilePicker` (those
+   * never become rows here — see `ProjectDraft.caseFileSelections`'s docblock) by passing
+   * `MAX_DOCUMENTS - caseCopyCount`, so the shared cap is never exceeded across the two surfaces.
+   */
+  maxDocuments?: number;
 }
 
 function isImageType(type: string): boolean {
@@ -130,6 +137,7 @@ export function DocumentUploader({
   onDocumentsChange,
   onUploadingChange,
   onRequireAuth,
+  maxDocuments = MAX_DOCUMENTS,
 }: Readonly<DocumentUploaderProps>): React.JSX.Element {
   const reduce = useReducedMotion();
   // ⚠ LAZY INITIALISER — `initialDocuments` is read exactly once, on mount (see the prop's
@@ -276,7 +284,15 @@ export function DocumentUploader({
   // Validate + queue an incoming selection.
   const handleFiles = useCallback(
     (incoming: File[]) => {
-      const { accepted, rejected } = partitionFiles(incoming, rowsRef.current.length);
+      // ⚠ `partitionFiles` caps against the MODULE-LEVEL `MAX_DOCUMENTS`, not this instance's
+      // own `maxDocuments` — reserving `MAX_DOCUMENTS - maxDocuments` slots up front (the case
+      // copies that never become rows here) makes its cap agree with this instance's lower one,
+      // with no change needed to that shared helper.
+      const reservedSlots = MAX_DOCUMENTS - maxDocuments;
+      const { accepted, rejected } = partitionFiles(
+        incoming,
+        rowsRef.current.length + reservedSlots
+      );
 
       for (const rej of rejected) {
         toast.error(rej.message);
@@ -305,7 +321,7 @@ export function DocumentUploader({
       // .catch keeps it floating-safe.
       for (const row of newRows) runUpload(row.id, row.file).catch(() => {});
     },
-    [commitRows, runUpload, dismissRejection, rejectionKey]
+    [commitRows, runUpload, dismissRejection, rejectionKey, maxDocuments]
   );
 
   const handleInputChange = useCallback(
@@ -360,20 +376,20 @@ export function DocumentUploader({
     [runUpload]
   );
 
-  const atCap = rows.length >= MAX_DOCUMENTS;
+  const atCap = rows.length >= maxDocuments;
   const openPicker = useCallback(() => fileInputRef.current?.click(), []);
 
   let dropLabel: string;
   if (isDragging) dropLabel = 'Drop to attach';
   else if (rows.length === 0) dropLabel = 'Drag files here or browse';
-  else dropLabel = `Add more — ${rows.length} of ${MAX_DOCUMENTS}`;
+  else dropLabel = `Add more — ${rows.length} of ${maxDocuments}`;
 
   return (
     <div className="space-y-3">
       {/* Drop zone / cap note */}
       {atCap ? (
         <p className="border-border bg-muted/30 text-muted-foreground rounded-xl border border-dashed px-4 py-3 text-center text-[13px]">
-          {MAX_DOCUMENTS} of {MAX_DOCUMENTS} attached
+          {maxDocuments} of {maxDocuments} attached
         </p>
       ) : (
         <button

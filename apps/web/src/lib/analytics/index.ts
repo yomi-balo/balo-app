@@ -92,6 +92,8 @@ export {
    * `DASHBOARD_EVENTS` from this module too.
    */
   DASHBOARD_EVENTS,
+  /** BAL-589 — the "Convert a case to a project" AI brief's event constant. */
+  CASE_BRIEF_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -207,4 +209,6 @@ export type {
   DashboardUpNextMeetingType,
   DashboardUpNextTarget,
   DashboardUpNextRowState,
+  /** BAL-589 — the "Convert a case to a project" AI brief's event payload. */
+  CaseBriefEventMap,
 } from '@balo/analytics/client';

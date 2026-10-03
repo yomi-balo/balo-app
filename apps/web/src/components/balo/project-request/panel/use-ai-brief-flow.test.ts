@@ -45,6 +45,8 @@ const DRAFT: ProjectDraft = {
   budgetMinCents: null,
   budgetMaxCents: null,
   timeline: null,
+  caseFileSelections: {},
+  caseBriefSnapshot: null,
   source: 'ai',
   seededFrom: null,
 };

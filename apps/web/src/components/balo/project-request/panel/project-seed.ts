@@ -39,16 +39,22 @@ export function isSeedEmpty(seed: ProjectRequestSeed | undefined): boolean {
 }
 
 /**
- * The step a mount should OPEN on (BAL-582 §3b). Resume takes priority over a fresh seed — a
- * resumed 'ai' draft was gated at `upload` (that's where the auth wall sat), everything else
- * resumes at `manual`. A non-empty seed (no resume) skips straight to `manual`; otherwise the
- * mount opens at `start`, exactly as every existing (unseeded) mount does today.
+ * The step a mount should OPEN on (BAL-582 §3b, BAL-589 §D4). A case mount (`isCaseMount`) wins
+ * over everything else, including resume: it never has a `start` or `upload` step (BAL-589
+ * constants `PROJECT_STEPS_CASE`), so even a resumed `'ai'`-sourced case draft opens at
+ * `manual` — the `upload` step simply does not exist on this stepper. Short of that, resume
+ * takes priority over a fresh seed — a resumed 'ai' draft was gated at `upload` (that's where
+ * the auth wall sat), everything else resumes at `manual`. A non-empty seed (no resume) skips
+ * straight to `manual`; otherwise the mount opens at `start`, exactly as every existing
+ * (unseeded) mount does today.
  */
 export function initialStepFor(
   seed: ProjectRequestSeed | undefined,
   resumeDraft: boolean,
-  draftSource: ProjectDraft['source']
+  draftSource: ProjectDraft['source'],
+  isCaseMount = false
 ): ProjectStep {
+  if (isCaseMount) return 'manual';
   if (resumeDraft) return draftSource === 'ai' ? 'upload' : 'manual';
   if (!isSeedEmpty(seed)) return 'manual';
   return 'start';

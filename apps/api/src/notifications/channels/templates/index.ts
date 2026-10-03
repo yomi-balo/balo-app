@@ -483,17 +483,40 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     };
   },
 
-  'project-request-submitted': (data) => ({
-    component: React.createElement(ProjectRequestSubmittedEmail, {
-      firstName: (data.recipientName as string) ?? 'there',
-      projectTitle: (data.title as string) ?? 'a new project',
+  // BAL-589 (D19) — the `sourceCase` branch names the client COMPANY, matching the
+  // `project-request-submitted-admin` precedent just below: the submitting person is not on the
+  // payload, so the party is the correct attribution for this prospective-feel copy.
+  'project-request-submitted': (data) => {
+    const title = (data.title as string) ?? 'a new project';
+    const sourceCase = data.sourceCase as { title?: string } | undefined;
+    const firstName = (data.recipientName as string) ?? 'there';
+    const emailProps = {
+      firstName,
+      projectTitle: title,
       baseUrl: BASE_URL,
       tagCount: arrayLength(data.tagIds),
       productCount: arrayLength(data.productIds),
       documentCount: numberCount(data.documentCount),
-    }),
-    subject: `New project request: ${sanitizeSubjectTitle((data.title as string) ?? 'a new project')}`,
-  }),
+    };
+
+    if (sourceCase?.title) {
+      const company = data.company as { name?: string } | undefined;
+      const clientName = company?.name ?? 'A client';
+      return {
+        component: React.createElement(ProjectRequestSubmittedEmail, {
+          ...emailProps,
+          sourceCaseTitle: sourceCase.title,
+          clientName,
+        }),
+        subject: `${sanitizeSubjectTitle(clientName)} wants to turn ${sanitizeSubjectTitle(sourceCase.title)} into a project.`,
+      };
+    }
+
+    return {
+      component: React.createElement(ProjectRequestSubmittedEmail, emailProps),
+      subject: `New project request: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
 
   // The BALO STAFF counterpart to `project-request-submitted` (the expert's copy). Same event,
   // different audience: the expert is asked to respond, staff are asked to TRIAGE. Deliberately

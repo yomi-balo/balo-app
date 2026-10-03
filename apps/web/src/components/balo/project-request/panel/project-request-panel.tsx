@@ -1,14 +1,27 @@
 'use client';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowRight, ChevronLeft, Loader2, RotateCw, Send, Sparkles } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronLeft,
+  Loader2,
+  MessageSquare,
+  RotateCw,
+  Send,
+  Sparkles,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { track, PROJECT_EVENTS, type ProjectStep } from '@/lib/analytics';
 import type { ProjectBriefFailureReason } from '@balo/shared/project-requests';
 import { Drawer, DrawerHeader, DrawerBody, DrawerFooter, FlowStepper } from '@/components/flow';
 import { InputFloating } from '@/components/enhanced/input-floating';
-import { RichTextEditor, validateDescription } from '@/components/balo/rich-text-editor';
+import {
+  RichTextEditor,
+  RichTextViewer,
+  validateDescription,
+} from '@/components/balo/rich-text-editor';
 import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
 import { DocumentUploader } from '@/components/balo/document-uploader';
 import { buildProductNameMap, EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
@@ -24,9 +37,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
+import { MAX_DOCUMENTS, type ProjectDocumentRef } from '@/lib/project-request/actions/schemas';
 import { submitProjectRequestAction } from '@/lib/project-request/actions/submit-project-request';
 import { refetchProjectTaxonomiesAction } from '@/lib/project-request/actions/refetch-project-taxonomies';
-import { PROJECT_PATHS, PROJECT_STEPS, PROJECT_STEPS_AI } from './constants';
+import type { CaseFileRowView } from '@/lib/cases/case-view-types';
+import { PROJECT_PATHS, PROJECT_STEPS, PROJECT_STEPS_AI, PROJECT_STEPS_CASE } from './constants';
 import { FieldLabel } from './field-label';
 import { PathCard } from './path-card';
 import {
@@ -40,17 +55,63 @@ import { useProjectRouting } from './use-project-routing';
 import { useExpertUnavailableOverride } from './use-expert-unavailable-override';
 import { GenerationErrorBanner } from './generation-error-banner';
 import { useAiBriefFlow } from './use-ai-brief-flow';
+import {
+  useCaseBriefFlow,
+  type CaseBriefPhase,
+  type UseCaseBriefFlowResult,
+} from './use-case-brief-flow';
+import { CaseFilePicker } from './case-file-picker';
 import { initialStepFor, type ProjectRequestSeed } from './project-seed';
 import { useProjectSeed } from './use-project-seed';
 import { NewRequestNotice } from './new-request-notice';
 import { projectFunnelDimensions } from './funnel-dimensions';
 import {
   useProjectDraft,
+  allDraftDocuments,
   type ProjectDraft,
   type ProjectRequestEntryPoint,
+  type SetProjectDraftField,
 } from './use-project-draft';
 
 export type { ProjectRequestEntryPoint } from './use-project-draft';
+
+/**
+ * BAL-589 — what a "Convert to project" mount (`convert-to-project.tsx`) hands the panel: the
+ * case's own id/title (for the draft key, the audit provenance and the "Linked to case" copy),
+ * its live product ids (prefill, D8) and its file rows (`CaseFilePicker`'s "From this case"
+ * list). One object, not a bare `caseId` (plan S1) — so the title/products/files can never
+ * arrive without the id.
+ */
+export interface ProjectRequestSourceCase {
+  id: string;
+  title: string;
+  productIds: readonly string[];
+  files: readonly CaseFileRowView[];
+}
+
+/**
+ * Everything `CaseBriefField` (the manual step's description block on a case mount) and
+ * `CaseFilePicker` need, bundled into the single optional prop `ManualStepFields` gains for
+ * BAL-589 — kept out of `ManualStepFieldsProps` itself so a non-case mount's prop list is
+ * unchanged.
+ */
+interface CaseBriefBundle {
+  sourceCase: ProjectRequestSourceCase;
+  phase: CaseBriefPhase;
+  failureReason: ProjectBriefFailureReason | null;
+  revealedHtml: string | null;
+  hasAiDraft: boolean;
+  onRedraftClick: () => void;
+  onRetry: () => void;
+  onDismissFailure: () => void;
+  /** The uploader's own document count — `CaseFilePicker` combines it with its own selection
+   *  count for the shared cap (fix round F1). */
+  uploadedDocumentCount: number;
+  caseFileSelections: Record<string, ProjectDocumentRef>;
+  onCaseFileSelectionsChange: (
+    updater: (prev: Record<string, ProjectDocumentRef>) => Record<string, ProjectDocumentRef>
+  ) => void;
+}
 
 export interface ProjectRequestPanelProps {
   open: boolean;
@@ -108,12 +169,22 @@ export interface ProjectRequestPanelProps {
    * still guards Direct regardless of what the panel opens on.
    */
   initialRouting?: ProjectRouting;
+  /**
+   * BAL-589 — present means this is a "Convert to project" mount, bound to the case's own
+   * expert: `entryPoint` is `'case'`, the draft key is `balo:project-draft:case:{id}` (checked
+   * before the expert key), the mount opens straight at `manual` with no `start`/`upload` step
+   * (D4), and the manual step auto-drafts a brief from the case's history instead of offering a
+   * choice of entry path (`useCaseBriefFlow`).
+   */
+  sourceCase?: ProjectRequestSourceCase;
 }
 
 /** Mutable steps for the stepper (the readonly `as const` tuple isn't assignable). */
 const STEPPER_STEPS = PROJECT_STEPS.map((s) => ({ key: s.key, label: s.label }));
 /** BAL-254 — the AI branch's stepper array, same mutability fix. */
 const STEPPER_STEPS_AI = PROJECT_STEPS_AI.map((s) => ({ key: s.key, label: s.label }));
+/** BAL-589 — the case mount's two-dot stepper (no `start`, no `upload`), same mutability fix. */
+const STEPPER_STEPS_CASE = PROJECT_STEPS_CASE.map((s) => ({ key: s.key, label: s.label }));
 
 /** BAL-254 — the progressive wait-state heading, indexed by `useProjectBriefGeneration`'s
  *  `headingIndex` (0s / 5s / 15s). Caps at the last message past 15s. */
@@ -203,6 +274,111 @@ function getRoutingCopy(routing: ProjectRouting, firstName: string | undefined):
   return MATCH_COPY;
 }
 
+/**
+ * BAL-589 (S2) — what `source`/`method` the submit actually records. A case mount's
+ * `draft.source` stays `'manual'` forever (the case flow never sets it — S2), so this reads
+ * `caseBriefFlow.hasAiDraft` instead; every other mount keeps reading `draft.source` as before.
+ */
+function resolveSubmitSource(
+  isCaseMount: boolean,
+  hasCaseAiDraft: boolean,
+  draftSource: ProjectDraft['source']
+): 'manual' | 'ai' {
+  if (isCaseMount) return hasCaseAiDraft ? 'ai' : 'manual';
+  return draftSource === 'ai' ? 'ai' : 'manual';
+}
+
+/**
+ * BAL-589 — `brief_edited` on `PROJECT_REQUEST_SUBMITTED`: the ACTIVE AI-ish flow's own
+ * edits-since-generate, never both at once (a mount is either case-bound or not), and `false`
+ * when no AI draft of either kind ever landed.
+ */
+function resolveBriefEdited(
+  isCaseMount: boolean,
+  caseHasEdits: boolean,
+  draftSource: ProjectDraft['source'],
+  aiHasEdits: boolean
+): boolean {
+  if (isCaseMount) return caseHasEdits;
+  if (draftSource === 'ai') return aiHasEdits;
+  return false;
+}
+
+/**
+ * BAL-589 — everything `CaseBriefField` + `CaseFilePicker` need, or `undefined` off a case
+ * mount. Extracted (rather than an inline ternary in the component body) so SonarCloud's
+ * cognitive-complexity count lands on this small, obviously-correct function instead of
+ * `ProjectRequestPanel` itself.
+ */
+function buildCaseBriefBundle(
+  sourceCase: ProjectRequestSourceCase | undefined,
+  flow: UseCaseBriefFlowResult,
+  draft: Pick<ProjectDraft, 'documents' | 'caseFileSelections'>,
+  setField: SetProjectDraftField
+): CaseBriefBundle | undefined {
+  if (sourceCase === undefined) return undefined;
+  return {
+    sourceCase,
+    phase: flow.phase,
+    failureReason: flow.failureReason,
+    revealedHtml: flow.revealedHtml,
+    hasAiDraft: flow.hasAiDraft,
+    onRedraftClick: flow.handleRedraftClick,
+    onRetry: flow.handleRetry,
+    onDismissFailure: flow.dismissFailure,
+    uploadedDocumentCount: draft.documents.length,
+    caseFileSelections: draft.caseFileSelections,
+    onCaseFileSelectionsChange: (updater) => setField('caseFileSelections', updater),
+  };
+}
+
+/** BAL-589 — "Continue" (manual → review) is disabled while a case brief is drafting or
+ *  revealing; extracted for the same complexity reason as {@link buildCaseBriefBundle}. */
+function isCaseBriefWorking(isCaseMount: boolean, phase: CaseBriefPhase): boolean {
+  if (!isCaseMount) return false;
+  return phase === 'generating' || phase === 'revealing';
+}
+
+interface RegenerateDialogConfig {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+}
+
+/**
+ * BAL-589 (D16) — the "replace my edits?" confirm dialog is shared chrome; only its copy and
+ * the flow it drives differ between a case mount (`useCaseBriefFlow`'s redraft) and the AI
+ * upload path (`useAiBriefFlow`'s regenerate). Extracted for the same complexity reason as
+ * {@link buildCaseBriefBundle}.
+ */
+function resolveRegenerateDialog(
+  isCaseMount: boolean,
+  caseBriefFlow: UseCaseBriefFlowResult,
+  aiRegenerate: { open: boolean; onOpenChange: (open: boolean) => void; onConfirm: () => void }
+): RegenerateDialogConfig {
+  if (isCaseMount) {
+    return {
+      open: caseBriefFlow.regenerateConfirmOpen,
+      onOpenChange: caseBriefFlow.setRegenerateConfirmOpen,
+      title: 'Redraft from case?',
+      body: 'Replace your edits with a fresh draft from the case?',
+      confirmLabel: 'Redraft',
+      onConfirm: caseBriefFlow.handleConfirmRedraft,
+    };
+  }
+  return {
+    open: aiRegenerate.open,
+    onOpenChange: aiRegenerate.onOpenChange,
+    title: 'Regenerate the brief?',
+    body: "This replaces your edits with a new draft from the same documents. Your edits won't be recoverable.",
+    confirmLabel: 'Regenerate',
+    onConfirm: aiRegenerate.onConfirm,
+  };
+}
+
 /** The expert id a mount routes to — defined only when the display data for that expert is too. */
 function boundExpertId(
   expertProfileId: string | undefined,
@@ -233,9 +409,11 @@ function unavailableNoticeFor(
  * panel.
  */
 function resolveStepper(
+  isCaseMount: boolean,
   isAiPath: boolean,
   step: ProjectStep
 ): { steps: { key: string; label: string }[]; current: ProjectStep } {
+  if (isCaseMount) return { steps: STEPPER_STEPS_CASE, current: step };
   if (!isAiPath) return { steps: STEPPER_STEPS, current: step };
   return { steps: STEPPER_STEPS_AI, current: step === 'manual' ? 'upload' : step };
 }
@@ -272,7 +450,11 @@ export function ProjectRequestPanel({
   resumeDraft,
   onAuthRequired,
   initialRouting,
+  sourceCase,
 }: Readonly<ProjectRequestPanelProps>): React.JSX.Element {
+  // BAL-589 — true only for a "Convert to project" mount. Read before everything else: the
+  // draft key, the opening step and the stepper all branch on it.
+  const isCaseMount = sourceCase !== undefined;
   // A mount is expert-bound only when it has both the id and the display data, so the draft key,
   // the routing and the submit all agree on whether a recipient card is on screen.
   const boundExpertProfileId = boundExpertId(expertProfileId, expert);
@@ -280,14 +462,15 @@ export function ProjectRequestPanel({
   // `draft.source` to decide a resumed mount's opening step.
   const { draft, setField, clearDraft, resetDraft, replaceDraft, revision } = useProjectDraft(
     boundExpertProfileId,
-    entryPoint
+    entryPoint,
+    sourceCase?.id
   );
   const { routing, title, descriptionHtml, tagIds, productIds, budgetMinCents, budgetMaxCents } =
     draft;
 
   const resumeDraftBool = resumeDraft === true;
   const [step, setStep] = useState<ProjectStep>(() =>
-    open ? initialStepFor(seed, resumeDraftBool, draft.source) : 'start'
+    open ? initialStepFor(seed, resumeDraftBool, draft.source, isCaseMount) : 'start'
   );
   // The step this open resolved to (`initialStepFor`'s answer), read by the `step_viewed` effect
   // so a lazily-mounted already-open panel — or a reopen onto a fresh `initialStepFor` result —
@@ -415,7 +598,7 @@ export function ProjectRequestPanel({
     }
     if (openFiredRef.current) return;
     openFiredRef.current = true;
-    const openStep = initialStepFor(seed, resumeDraftBool, draft.source);
+    const openStep = initialStepFor(seed, resumeDraftBool, draft.source, isCaseMount);
     openingStepRef.current = openStep;
     setStep(openStep);
     setError(null);
@@ -440,6 +623,7 @@ export function ProjectRequestPanel({
     seed,
     resumeDraftBool,
     draft.source,
+    isCaseMount,
     expertProfileId,
     entryPoint,
     projectTaxonomies,
@@ -467,11 +651,18 @@ export function ProjectRequestPanel({
     });
   }, [open, step, expertProfileId, entryPoint]);
 
+  // ⚠ F5 — closing the drawer does not unmount this component, so a parse that lands after the
+  // user has closed it, or after they have submitted, must write nothing. Computed ONCE and
+  // shared by both brief flows below (rather than repeating the expression) so SonarCloud's
+  // cognitive-complexity count sees one `&&`, not two.
+  const isFlowActive = open && step !== 'done';
+
   const {
     briefGeneration,
     isGenerating,
     isUploadFailed,
     unmatchedLabels,
+    hasEditsSinceGenerate: aiHasEditsSinceGenerate,
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleSelectAi,
@@ -490,9 +681,18 @@ export function ProjectRequestPanel({
     draft,
     setField,
     setStep,
-    // ⚠ F5 — closing the drawer does not unmount this component, so a parse that lands after the
-    // user has closed it, or after they have submitted, must write nothing.
-    isFlowActive: open && step !== 'done',
+    isFlowActive,
+  });
+
+  // BAL-589 — the case-history sibling of the AI flow above. INERT when `sourceCase` is
+  // `undefined` (every non-case mount) — see the hook's own docblock. Called unconditionally,
+  // alongside `useAiBriefFlow`, because hooks can never be called conditionally.
+  const caseBriefFlow = useCaseBriefFlow({
+    sourceCase,
+    open,
+    isFlowActive,
+    draft,
+    setField,
   });
 
   // BAL-582 (§3b) — applies the hero seed to the draft once per open (never sets `step`). Threads
@@ -632,13 +832,25 @@ export function ProjectRequestPanel({
     setSubmitting(true);
     setError(null);
 
+    const effectiveSource = resolveSubmitSource(
+      isCaseMount,
+      caseBriefFlow.hasAiDraft,
+      draft.source
+    );
+    // ⚠ FIX ROUND F1 — every document the request carries: the uploader's own PLUS every
+    // case-file copy, which `draft.documents` alone never holds (see `allDraftDocuments`).
+    const submittedDocuments = allDraftDocuments({
+      documents: draft.documents,
+      caseFileSelections: draft.caseFileSelections,
+    });
     const base = {
       title: trimmedTitle,
       description: descriptionHtml,
       tagIds,
       productIds,
-      documents: draft.documents,
-      source: draft.source,
+      documents: submittedDocuments,
+      source: effectiveSource,
+      sourceCaseId: sourceCase?.id,
       budgetMinCents: draft.budgetMinCents,
       budgetMaxCents: draft.budgetMaxCents,
       timeline: draft.timeline,
@@ -674,8 +886,15 @@ export function ProjectRequestPanel({
       send_to: effectiveRouting,
       tag_count: tagIds.length,
       product_count: productIds.length,
-      document_count: draft.documents.length,
-      method: draft.source === 'ai' ? 'ai' : 'manual',
+      document_count: submittedDocuments.length,
+      method: effectiveSource,
+      source_case_id: sourceCase?.id,
+      brief_edited: resolveBriefEdited(
+        isCaseMount,
+        caseBriefFlow.hasEditsSinceGenerate,
+        draft.source,
+        aiHasEditsSinceGenerate
+      ),
     });
     // Snapshot routing for the done screen BEFORE clearing the draft (clear resets
     // routing to the computed default), so Match submits keep their done copy.
@@ -697,10 +916,16 @@ export function ProjectRequestPanel({
     tagIds,
     productIds,
     draft.documents,
+    draft.caseFileSelections,
     draft.budgetMinCents,
     draft.budgetMaxCents,
     draft.timeline,
     draft.source,
+    isCaseMount,
+    sourceCase?.id,
+    caseBriefFlow.hasAiDraft,
+    caseBriefFlow.hasEditsSinceGenerate,
+    aiHasEditsSinceGenerate,
     clearDraft,
     onSubmitted,
     onAuthRequired,
@@ -721,6 +946,11 @@ export function ProjectRequestPanel({
 
   const descriptionRefinePerson =
     expertFirstName === undefined ? 'with your expert' : `with ${expertFirstName}`;
+
+  // BAL-589 — everything `CaseBriefField` + `CaseFilePicker` need, bundled into one optional
+  // prop so `ManualStepFields` gains exactly one new prop rather than a dozen case-only ones.
+  // `undefined` on every non-case mount.
+  const caseBriefBundle = buildCaseBriefBundle(sourceCase, caseBriefFlow, draft, setField);
 
   const manualBody = (
     <ManualStepFields
@@ -767,11 +997,16 @@ export function ProjectRequestPanel({
       onBudgetChange={handleBudgetChange}
       timeline={draft.timeline}
       onTimelineChange={handleTimelineChange}
+      caseBrief={caseBriefBundle}
     />
   );
 
   const isAiPath = draft.source === 'ai';
-  const { steps: stepperSteps, current: stepperCurrent } = resolveStepper(isAiPath, step);
+  const { steps: stepperSteps, current: stepperCurrent } = resolveStepper(
+    isCaseMount,
+    isAiPath,
+    step
+  );
 
   // ⚠ `isGenerating ||` REMOVED (fix round F5/#17). It was dead: `phase` is one of
   // `idle | generating | failed`, so `isGenerating` already implies `!isUploadFailed`. The
@@ -784,6 +1019,20 @@ export function ProjectRequestPanel({
         onChangeSourceDocuments={() => setStep('upload')}
       />
     ) : undefined;
+
+  // BAL-589 — "Continue" (manual → review) is disabled while a case brief is still drafting or
+  // revealing; the AI path has no equivalent (its own step, `upload`, already blocks on
+  // `isGenerating`).
+  const caseBriefWorking = isCaseBriefWorking(isCaseMount, caseBriefFlow.phase);
+
+  // BAL-589 (D16) — the "replace my edits?" confirm dialog is shared chrome; only its copy and
+  // the flow it drives differ between a case mount (`useCaseBriefFlow`'s redraft) and the AI
+  // upload path (`useAiBriefFlow`'s regenerate).
+  const regenerateDialog = resolveRegenerateDialog(isCaseMount, caseBriefFlow, {
+    open: regenerateConfirmOpen,
+    onOpenChange: setRegenerateConfirmOpen,
+    onConfirm: handleConfirmRegenerate,
+  });
 
   return (
     <Drawer
@@ -855,6 +1104,7 @@ export function ProjectRequestPanel({
           submittedRouting={submittedRouting}
           doneHeading={doneCopy.doneHeading}
           doneBody={doneCopy.doneBody}
+          sourceCase={sourceCase}
         />
 
         <ProjectRequestDrawerFooter
@@ -873,23 +1123,22 @@ export function ProjectRequestPanel({
           routing={routing}
           submitCta={copy.submitCta}
           onDone={handleClose}
+          isCaseMount={isCaseMount}
+          caseBriefWorking={caseBriefWorking}
         />
       </div>
 
-      <Dialog open={regenerateConfirmOpen} onOpenChange={setRegenerateConfirmOpen}>
+      <Dialog open={regenerateDialog.open} onOpenChange={regenerateDialog.onOpenChange}>
         <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>
-            <DialogTitle>Regenerate the brief?</DialogTitle>
-            <DialogDescription>
-              This replaces your edits with a new draft from the same documents. Your edits
-              won&apos;t be recoverable.
-            </DialogDescription>
+            <DialogTitle>{regenerateDialog.title}</DialogTitle>
+            <DialogDescription>{regenerateDialog.body}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRegenerateConfirmOpen(false)}>
+            <Button variant="outline" onClick={() => regenerateDialog.onOpenChange(false)}>
               Keep my edits
             </Button>
-            <Button onClick={handleConfirmRegenerate}>Regenerate</Button>
+            <Button onClick={regenerateDialog.onConfirm}>{regenerateDialog.confirmLabel}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -932,6 +1181,8 @@ interface ProjectRequestDrawerBodyProps {
   submittedRouting: ProjectRouting;
   doneHeading: string;
   doneBody: string;
+  /** BAL-589 — present only on a case mount; drives the review/done steps' "Linked to case" copy. */
+  sourceCase?: ProjectRequestSourceCase;
 }
 
 /**
@@ -971,6 +1222,7 @@ function ProjectRequestDrawerBody({
   submittedRouting,
   doneHeading,
   doneBody,
+  sourceCase,
 }: Readonly<ProjectRequestDrawerBodyProps>): React.JSX.Element {
   return (
     <DrawerBody>
@@ -1035,6 +1287,7 @@ function ProjectRequestDrawerBody({
             unmatchedTagLabels={unmatchedLabels.tags}
             unmatchedProductLabels={unmatchedLabels.products}
             skeleton={isAiPath && isGenerating}
+            sourceCaseTitle={sourceCase?.title}
           />
           {unavailableNotice}
           {isAiPath && isUploadFailed && (
@@ -1067,6 +1320,17 @@ function ProjectRequestDrawerBody({
           <p className="text-muted-foreground mx-auto mt-2.5 max-w-[340px] text-sm leading-relaxed">
             {doneBody}
           </p>
+          {sourceCase !== undefined && (
+            <p className="mt-4 text-sm">
+              <Link
+                href={`/cases/${sourceCase.id}`}
+                className="text-primary hover:text-primary/80 focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md font-semibold focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                Linked to case: {sourceCase.title}
+              </Link>
+            </p>
+          )}
         </div>
       )}
     </DrawerBody>
@@ -1201,6 +1465,10 @@ interface ProjectRequestDrawerFooterProps {
   routing: ProjectRouting;
   submitCta: string;
   onDone: () => void;
+  /** BAL-589 — a case mount's `manual` step has no `start` step to go back to. */
+  isCaseMount: boolean;
+  /** BAL-589 — true while the case brief is drafting or revealing; disables "Review". */
+  caseBriefWorking: boolean;
 }
 
 /** The drawer's per-step footer, extracted for the same reason as {@link ProjectRequestDrawerBody}. */
@@ -1220,12 +1488,14 @@ function ProjectRequestDrawerFooter({
   routing,
   submitCta,
   onDone,
+  isCaseMount,
+  caseBriefWorking,
 }: Readonly<ProjectRequestDrawerFooterProps>): React.JSX.Element | null {
   if (step === 'manual') {
     return (
-      <DrawerFooter>
-        <BackButton onClick={onBackToStart} />
-        <PrimaryButton onClick={onGoReview}>
+      <DrawerFooter className={isCaseMount ? 'justify-end' : undefined}>
+        {!isCaseMount && <BackButton onClick={onBackToStart} />}
+        <PrimaryButton onClick={onGoReview} disabled={caseBriefWorking}>
           Review <ArrowRight className="h-4 w-4" aria-hidden="true" />
         </PrimaryButton>
       </DrawerFooter>
@@ -1336,10 +1606,12 @@ interface ManualStepFieldsProps {
   onBudgetChange: (key: 'budgetMinCents' | 'budgetMaxCents', raw: string) => void;
   timeline: string | null;
   onTimelineChange: (raw: string) => void;
+  /** BAL-589 — present only on a case mount; see {@link CaseBriefBundle}. */
+  caseBrief?: CaseBriefBundle;
 }
 
 /**
- * The `manual` step's field set (BAL-259, extended by BAL-254). Extracted out of
+ * The `manual` step's field set (BAL-259, extended by BAL-254, BAL-589). Extracted out of
  * `ProjectRequestPanel` — inlined, its half-dozen independent validation/loading conditionals
  * pushed the panel's own cognitive complexity over the SonarCloud gate.
  */
@@ -1387,18 +1659,29 @@ function ManualStepFields({
   onBudgetChange,
   timeline,
   onTimelineChange,
+  caseBrief,
 }: Readonly<ManualStepFieldsProps>): React.JSX.Element {
   const timelineHintId = useId();
+  // Fix round F18 — copies the picker reports as in-flight reserve a slot too, shrinking the
+  // uploader's own `maxDocuments` by the same amount the picker already reserves for them.
+  const [busyCopyCount, setBusyCopyCount] = useState(0);
   return (
     <div className="space-y-6 p-6">
       {notice}
-      <button
-        type="button"
-        onClick={onBack}
-        className="text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded-md text-[13px] font-semibold focus-visible:ring-2 focus-visible:outline-none"
-      >
-        <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" /> Change entry method
-      </button>
+      {caseBrief ? (
+        <div className="bg-muted text-muted-foreground inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium">
+          <MessageSquare className="h-3 w-3" aria-hidden="true" />
+          Converting this case to a project
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded-md text-[13px] font-semibold focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" /> Change entry method
+        </button>
+      )}
 
       {/* 2.1 — Send request to */}
       <div className="space-y-2">
@@ -1433,22 +1716,32 @@ function ManualStepFields({
       </div>
 
       {/* 2.3 — Description */}
-      <div className="space-y-2">
-        <FieldLabel>What do you need?</FieldLabel>
-        <RichTextEditor
-          value={descriptionHtml}
-          onChange={onDescriptionChange}
-          placeholder={descriptionPlaceholder}
+      {caseBrief ? (
+        <CaseBriefField
+          bundle={caseBrief}
+          descriptionHtml={descriptionHtml}
+          onDescriptionChange={onDescriptionChange}
+          descriptionError={descriptionError}
+          showValidation={showValidation}
         />
-        {showValidation && descriptionError !== null && (
-          <p role="alert" className="text-destructive text-xs">
-            {descriptionError}
+      ) : (
+        <div className="space-y-2">
+          <FieldLabel>What do you need?</FieldLabel>
+          <RichTextEditor
+            value={descriptionHtml}
+            onChange={onDescriptionChange}
+            placeholder={descriptionPlaceholder}
+          />
+          {showValidation && descriptionError !== null && (
+            <p role="alert" className="text-destructive text-xs">
+              {descriptionError}
+            </p>
+          )}
+          <p className="text-muted-foreground text-xs leading-relaxed">
+            Keep it as short as you like — a rough sketch is fine.
           </p>
-        )}
-        <p className="text-muted-foreground text-xs leading-relaxed">
-          Keep it as short as you like — a rough sketch is fine.
-        </p>
-      </div>
+        </div>
+      )}
 
       {/* 2.4 — Project type (tags) */}
       <div className="space-y-2">
@@ -1478,7 +1771,9 @@ function ManualStepFields({
       <div className="space-y-2">
         <FieldLabel optional>Salesforce products</FieldLabel>
         <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">
-          Which products does this touch? Same list as expert search.
+          {caseBrief
+            ? 'Prefilled from your case. Change as needed.'
+            : 'Which products does this touch? Same list as expert search.'}
         </p>
         <TaxonomyMultiSelect
           taxonomy={taxonomies.products}
@@ -1504,11 +1799,29 @@ function ManualStepFields({
         <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">
           PDF, PNG, JPEG or WEBP · up to 4 files · 5 MB each.
         </p>
+        {caseBrief && (
+          <CaseFilePicker
+            caseId={caseBrief.sourceCase.id}
+            files={caseBrief.sourceCase.files}
+            uploadedDocumentCount={caseBrief.uploadedDocumentCount}
+            caseFileSelections={caseBrief.caseFileSelections}
+            onCaseFileSelectionsChange={caseBrief.onCaseFileSelectionsChange}
+            onBusyCountChange={setBusyCopyCount}
+          />
+        )}
         <DocumentUploader
           initialDocuments={documents}
           onDocumentsChange={onDocumentsChange}
           onUploadingChange={onUploadingChange}
           onRequireAuth={onRequireAuth}
+          // ⚠ FIX ROUND F1 — on a case mount, every selected case-file copy reserves one of the
+          // shared MAX_DOCUMENTS slots even though it never joins this uploader's own rows.
+          // FIX ROUND F18 — a copy still in flight reserves its slot too.
+          maxDocuments={
+            caseBrief
+              ? MAX_DOCUMENTS - Object.keys(caseBrief.caseFileSelections).length - busyCopyCount
+              : undefined
+          }
         />
       </div>
 
@@ -1547,6 +1860,139 @@ function ManualStepFields({
           e.g. Go-live by end of Q3
         </p>
       </div>
+    </div>
+  );
+}
+
+interface CaseBriefFieldProps {
+  bundle: CaseBriefBundle;
+  descriptionHtml: string;
+  onDescriptionChange: (html: string) => void;
+  descriptionError: string | null;
+  showValidation: boolean;
+}
+
+/**
+ * An "editor-shaped" skeleton — a few pulsing bars the width of the real editor's text.
+ *
+ * ⚠ FIX ROUND F8 — the heading is now VISIBLE (not just `aria-label`), matching the AI-upload
+ * path's own generating state (`GENERATING_HEADINGS`). The `aria-label` stays too: `role="status"`
+ * computes its accessible name from the author, never from content, so dropping it would silence
+ * screen readers.
+ */
+function CaseBriefSkeleton(): React.JSX.Element {
+  return (
+    <div
+      className="border-border bg-card space-y-3 rounded-lg border p-4"
+      role="status"
+      aria-label="Drafting a brief from your case…"
+    >
+      <p className="text-foreground text-sm font-semibold">Drafting a brief from your case…</p>
+      <div className="space-y-2">
+        <div className="bg-muted h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
+        <div className="bg-muted h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
+        <div className="bg-muted h-3.5 w-5/6 animate-pulse rounded" aria-hidden="true" />
+        <div className="bg-muted h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
+        <div className="bg-muted h-3.5 w-2/3 animate-pulse rounded" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
+
+/** FIX ROUND F4 — "Redraft from case" is live only once a case brief has actually landed and
+ *  nothing is in flight; disabled the rest of the time (including the auto-start's own
+ *  `generating` phase, before `hasAiDraft` is even relevant). */
+function canRedraftCaseBrief(hasAiDraft: boolean, phase: CaseBriefPhase): boolean {
+  return hasAiDraft && (phase === 'idle' || phase === 'failed');
+}
+
+/** The helper line under a case mount's description field — working / drafted / nothing. */
+function caseBriefHelperLine(working: boolean, hasAiDraft: boolean): string | null {
+  if (working) return 'Summarising your case messages and call transcripts…';
+  if (hasAiDraft) {
+    return 'Drafted from your case history. Review and edit it, since it goes out under your name.';
+  }
+  return null;
+}
+
+/**
+ * BAL-589 — the case mount's description field: a skeleton while `useCaseBriefFlow` is
+ * generating, the progressive reveal while it is revealing, `GenerationErrorBanner` above an
+ * empty editor on failure, and the plain editor otherwise (idle — a fresh success already
+ * landed, or a resumed draft). Extracted out of `ManualStepFields` to keep the manual step's
+ * (and this block's own) cognitive complexity under the SonarCloud gate.
+ */
+function CaseBriefField({
+  bundle,
+  descriptionHtml,
+  onDescriptionChange,
+  descriptionError,
+  showValidation,
+}: Readonly<CaseBriefFieldProps>): React.JSX.Element {
+  const {
+    phase,
+    failureReason,
+    revealedHtml,
+    hasAiDraft,
+    onRedraftClick,
+    onRetry,
+    onDismissFailure,
+  } = bundle;
+  const working = phase === 'generating' || phase === 'revealing';
+  const helperLine = caseBriefHelperLine(working, hasAiDraft);
+  const canRedraft = canRedraftCaseBrief(hasAiDraft, phase);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-end justify-between gap-3">
+        <FieldLabel>What do you need?</FieldLabel>
+        <div className="flex items-center gap-2">
+          {hasAiDraft && (
+            <span className="bg-primary/10 text-primary inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium">
+              <Sparkles className="h-3 w-3" aria-hidden="true" /> AI draft
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onRedraftClick}
+            disabled={!canRedraft}
+            className="text-primary hover:text-primary/80 focus-visible:ring-ring disabled:text-muted-foreground inline-flex items-center gap-1 rounded-md text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed"
+          >
+            <RotateCw className="h-3 w-3" aria-hidden="true" /> Redraft from case
+          </button>
+        </div>
+      </div>
+
+      {phase === 'generating' && <CaseBriefSkeleton />}
+
+      {phase === 'revealing' && revealedHtml !== null && <RichTextViewer value={revealedHtml} />}
+
+      {(phase === 'idle' || phase === 'failed') && (
+        <>
+          {phase === 'failed' && (
+            <GenerationErrorBanner
+              reason={failureReason ?? 'unknown'}
+              variant="case"
+              onRetry={onRetry}
+              onDismiss={onDismissFailure}
+            />
+          )}
+          <RichTextEditor
+            value={descriptionHtml}
+            onChange={onDescriptionChange}
+            placeholder="Describe the problem or the outcome you're after — bullet points are fine."
+          />
+          {showValidation && descriptionError !== null && (
+            <p role="alert" className="text-destructive text-xs">
+              {descriptionError}
+            </p>
+          )}
+        </>
+      )}
+
+      {helperLine !== null && (
+        <p className="text-muted-foreground text-xs leading-relaxed">{helperLine}</p>
+      )}
     </div>
   );
 }

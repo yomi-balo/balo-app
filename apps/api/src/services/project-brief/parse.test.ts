@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NoObjectGeneratedError } from 'ai';
 import { runProjectBriefParse, ProjectBriefParseError } from './parse.js';
 import type { AiClient } from '../ai/index.js';
-import type { BriefParseOutput } from './prompts.js';
+import {
+  PROJECT_BRIEF_PROMPT_ID,
+  PROJECT_BRIEF_FROM_CASE_PROMPT_ID,
+  type BriefParseOutput,
+} from './prompts.js';
 
 const findById = vi.fn();
 const markSucceeded = vi.fn();
@@ -12,6 +16,16 @@ const getProjectTagsByVertical = vi.fn();
 const getProductsByVertical = vi.fn();
 const getR2ObjectBytes = vi.fn();
 const headR2ObjectSize = vi.fn();
+
+// ── BAL-589 case arm ─────────────────────────────────────────────────────────────────────────
+const findByEngagementId = vi.fn();
+const findUserIdsByProfileIds = vi.fn();
+const findByContext = vi.fn();
+const listMessages = vi.fn();
+const listMeetingsForContext = vi.fn();
+const findByMeetingIds = vi.fn();
+const findByTranscriptAndKind = vi.fn();
+const findTranscriptById = vi.fn();
 
 vi.mock('@balo/db', () => ({
   projectBriefParsesRepository: {
@@ -23,6 +37,26 @@ vi.mock('@balo/db', () => ({
     getSalesforceVertical: (...args: unknown[]) => getSalesforceVertical(...args),
     getProjectTagsByVertical: (...args: unknown[]) => getProjectTagsByVertical(...args),
     getProductsByVertical: (...args: unknown[]) => getProductsByVertical(...args),
+  },
+  caseEngagementsRepository: {
+    findByEngagementId: (...args: unknown[]) => findByEngagementId(...args),
+  },
+  expertsRepository: {
+    findUserIdsByProfileIds: (...args: unknown[]) => findUserIdsByProfileIds(...args),
+  },
+  conversationsRepository: {
+    findByContext: (...args: unknown[]) => findByContext(...args),
+    listMessages: (...args: unknown[]) => listMessages(...args),
+  },
+  meetingContextsRepository: {
+    listMeetingsForContext: (...args: unknown[]) => listMeetingsForContext(...args),
+  },
+  transcriptsRepository: {
+    findByMeetingIds: (...args: unknown[]) => findByMeetingIds(...args),
+    findById: (...args: unknown[]) => findTranscriptById(...args),
+  },
+  transcriptArtifactsRepository: {
+    findByTranscriptAndKind: (...args: unknown[]) => findByTranscriptAndKind(...args),
   },
 }));
 
@@ -38,6 +72,8 @@ vi.mock('@balo/shared/logging', () => ({
 const OWNER_COMPANY = '11111111-1111-1111-1111-111111111111';
 const OWNER_USER = '22222222-2222-2222-2222-222222222222';
 const PARSE_ID = '33333333-3333-3333-3333-333333333333';
+const CASE_ID = '55555555-5555-5555-5555-555555555555';
+const EXPERT_PROFILE_ID = '66666666-6666-6666-6666-666666666666';
 
 /**
  * ⚠ A REAL KEY SHAPE (BAL-254 W9). Gate 3 now runs the SHARED
@@ -63,11 +99,21 @@ function baseRow(overrides: Record<string, unknown> = {}): Record<string, unknow
         sizeBytes: 100,
       },
     ],
+    sourceEngagementId: null,
     result: null,
     failureReason: null,
     completedAt: null,
     ...overrides,
   };
+}
+
+/** A row whose source is a case rather than documents (BAL-589). */
+function caseRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return baseRow({
+    sourceDocuments: [],
+    sourceEngagementId: CASE_ID,
+    ...overrides,
+  });
 }
 
 /** A row whose single source document sits at `r2Key`. */
@@ -391,5 +437,99 @@ describe('runProjectBriefParse', () => {
         }),
       })
     );
+  });
+
+  // ── BAL-589 — the case arm ────────────────────────────────────────────────────────────────
+  describe('the case arm', () => {
+    function mockHappyCase(): void {
+      findByEngagementId.mockResolvedValue({
+        companyId: OWNER_COMPANY,
+        expertProfileId: EXPERT_PROFILE_ID,
+        title: 'Sandbox refresh keeps failing',
+      });
+      findUserIdsByProfileIds.mockResolvedValue(['expert-user-1']);
+      findByContext.mockResolvedValue({ id: 'conv-1' });
+      listMessages.mockResolvedValue([
+        {
+          senderUserId: 'client-user-1',
+          body: 'The sandbox refresh keeps failing.',
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+        },
+      ]);
+      listMeetingsForContext.mockResolvedValue([]);
+    }
+
+    it('⚠ a case row never touches R2 or Gate 3, and uses the from-case prompt id with files: []', async () => {
+      findById.mockResolvedValue(caseRow());
+      mockHappyCase();
+      const generateObject = vi.fn().mockResolvedValue({
+        value: validModelOutput,
+        audit: { modelId: 'claude-opus-5', modelVersion: null, promptId: 'p', promptVersion: 'v1' },
+        usage: { inputTokens: 10, outputTokens: 5 },
+      });
+
+      await runProjectBriefParse(PARSE_ID, { ai: fakeAi(generateObject) });
+
+      expect(getR2ObjectBytes).not.toHaveBeenCalled();
+      expect(headR2ObjectSize).not.toHaveBeenCalled();
+      expect(generateObject).toHaveBeenCalledWith(
+        expect.objectContaining({ promptId: PROJECT_BRIEF_FROM_CASE_PROMPT_ID, files: [] })
+      );
+      expect(markSucceeded).toHaveBeenCalled();
+    });
+
+    it('a case belonging to another company fails the gate with `case_unavailable`', async () => {
+      findById.mockResolvedValue(caseRow());
+      findByEngagementId.mockResolvedValue({
+        companyId: 'different-company',
+        expertProfileId: EXPERT_PROFILE_ID,
+        title: 'x',
+      });
+      await expect(runProjectBriefParse(PARSE_ID, { ai: fakeAi(vi.fn()) })).rejects.toMatchObject({
+        reason: 'case_unavailable',
+      });
+    });
+
+    it('an undefined case fails the gate with `case_unavailable`', async () => {
+      findById.mockResolvedValue(caseRow());
+      findByEngagementId.mockResolvedValue(undefined);
+      await expect(runProjectBriefParse(PARSE_ID, { ai: fakeAi(vi.fn()) })).rejects.toMatchObject({
+        reason: 'case_unavailable',
+      });
+    });
+
+    it('a case with no messages and no transcripts fails with `no_case_history`', async () => {
+      findById.mockResolvedValue(caseRow());
+      findByEngagementId.mockResolvedValue({
+        companyId: OWNER_COMPANY,
+        expertProfileId: EXPERT_PROFILE_ID,
+        title: 'x',
+      });
+      findUserIdsByProfileIds.mockResolvedValue([]);
+      findByContext.mockResolvedValue(undefined);
+      listMeetingsForContext.mockResolvedValue([]);
+      await expect(runProjectBriefParse(PARSE_ID, { ai: fakeAi(vi.fn()) })).rejects.toMatchObject({
+        reason: 'no_case_history',
+      });
+    });
+
+    it('the documents path is unchanged: it still uses the documents prompt id, with populated files', async () => {
+      findById.mockResolvedValue(baseRow());
+      const generateObject = vi.fn().mockResolvedValue({
+        value: validModelOutput,
+        audit: { modelId: 'claude-opus-5', modelVersion: null, promptId: 'p', promptVersion: 'v1' },
+        usage: { inputTokens: 10, outputTokens: 5 },
+      });
+
+      await runProjectBriefParse(PARSE_ID, { ai: fakeAi(generateObject) });
+
+      expect(generateObject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          promptId: PROJECT_BRIEF_PROMPT_ID,
+          files: [expect.objectContaining({ filename: 'rfp.pdf' })],
+        })
+      );
+      expect(findByEngagementId).not.toHaveBeenCalled();
+    });
   });
 });

@@ -17,9 +17,11 @@ import {
   conversationMessages,
   requestExpertRelationships,
   auditEvents,
+  engagements,
   users,
 } from '../schema';
 import {
+  caseEngagementFactory,
   userFactory,
   expertDraftFactory,
   projectRequestFactory,
@@ -450,6 +452,126 @@ describe('projectRequestsRepository.createProjectRequest', () => {
         documents: [],
       })
     ).rejects.toThrow();
+  });
+});
+
+// ── createProjectRequest — case provenance ──────────────────────────
+
+async function convertedFromCaseAuditRows(requestId: string) {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityId, requestId),
+        eq(auditEvents.action, 'project_request.converted_from_case')
+      )
+    );
+}
+
+describe('projectRequestsRepository.createProjectRequest — case provenance', () => {
+  it('persists source_case_id and writes exactly one converted_from_case audit row', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+    const { engagement } = await caseEngagementFactory({ companyId, expertProfileId });
+
+    const row = await projectRequestsRepository.createProjectRequest({
+      request: {
+        companyId,
+        expertProfileId,
+        createdByUserId,
+        sourceCaseId: engagement.id,
+        title: 'Finish the routing rebuild',
+        description: '<p>Carry the case work into a project.</p>',
+      },
+      tagIds: [],
+      productIds: [],
+      documents: [],
+    });
+
+    expect(row.sourceCaseId).toBe(engagement.id);
+    expect((await projectRequestsRepository.findById(row.id))?.sourceCaseId).toBe(engagement.id);
+
+    const audits = await convertedFromCaseAuditRows(row.id);
+    expect(audits).toHaveLength(1);
+    const [audit] = audits;
+    expect(audit?.actorUserId).toBe(createdByUserId);
+    expect(audit?.entityType).toBe('project_request');
+    expect(audit?.metadata).toEqual({ sourceCaseId: engagement.id });
+    expect(Object.keys(audit?.metadata ?? {})).toEqual(['sourceCaseId']);
+  });
+
+  it('writes NO converted_from_case audit row for a request without a case', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+
+    const row = await projectRequestsRepository.createProjectRequest({
+      request: {
+        companyId,
+        expertProfileId,
+        createdByUserId,
+        title: 'Lead routing rebuild',
+        description: '<p>No case behind this one.</p>',
+      },
+      tagIds: [],
+      productIds: [],
+      documents: [],
+    });
+
+    expect(row.sourceCaseId).toBeNull();
+    expect(await convertedFromCaseAuditRows(row.id)).toHaveLength(0);
+  });
+
+  it('rejects an unknown source_case_id (FK) and leaves no request row behind', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+    const title = `Orphan case ${randomUUID()}`;
+
+    await expect(
+      projectRequestsRepository.createProjectRequest({
+        request: {
+          companyId,
+          expertProfileId,
+          createdByUserId,
+          sourceCaseId: randomUUID(),
+          title,
+          description: '<p>Should fail the source_case_id foreign key.</p>',
+        },
+        tagIds: [],
+        productIds: [],
+        documents: [],
+      })
+    ).rejects.toMatchObject({ code: '23503', constraint_name: 'project_requests_source_case_fk' });
+
+    const rows = await db
+      .select({ id: projectRequests.id })
+      .from(projectRequests)
+      .where(eq(projectRequests.title, title));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('nulls source_case_id on a case hard-delete while the audit row keeps the provenance', async () => {
+    const { companyId, expertProfileId, createdByUserId } = await seedActors();
+    const { engagement } = await caseEngagementFactory({ companyId, expertProfileId });
+    const row = await projectRequestsRepository.createProjectRequest({
+      request: {
+        companyId,
+        expertProfileId,
+        createdByUserId,
+        sourceCaseId: engagement.id,
+        title: 'Outlives its case',
+        description: '<p>The case goes away; the request stays.</p>',
+      },
+      tagIds: [],
+      productIds: [],
+      documents: [],
+    });
+
+    await db.delete(engagements).where(eq(engagements.id, engagement.id));
+
+    const read = await projectRequestsRepository.findById(row.id);
+    expect(read?.id).toBe(row.id);
+    expect(read?.sourceCaseId).toBeNull();
+    const audits = await convertedFromCaseAuditRows(row.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.metadata).toEqual({ sourceCaseId: engagement.id });
   });
 });
 

@@ -164,6 +164,18 @@ describe('CaseHeader — the record it states', () => {
     expect(screen.queryByText('Resolved')).not.toBeInTheDocument();
   });
 
+  it('renders the action slot top-right when supplied, and nothing when omitted', () => {
+    stubOverflow(false);
+    const { unmount } = render(
+      <CaseHeader header={BASE} action={<button type="button">Convert to project</button>} />
+    );
+    expect(screen.getByRole('button', { name: 'Convert to project' })).toBeInTheDocument();
+    unmount();
+
+    render(<CaseHeader header={BASE} />);
+    expect(screen.queryByRole('button', { name: 'Convert to project' })).not.toBeInTheDocument();
+  });
+
   it('renders the closed note when there is one, and nothing while open', () => {
     stubOverflow(false);
     const { unmount } = render(
