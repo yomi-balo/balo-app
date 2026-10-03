@@ -1614,4 +1614,62 @@ describe('publishBodySchema', () => {
       expect(result.success).toBe(false);
     });
   });
+
+  describe('project.request_submitted', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440010',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440010',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440011',
+      companyId: '550e8400-e29b-41d4-a716-446655440012',
+      title: 'CPQ implementation',
+      sendTo: 'direct' as const,
+      tagIds: [],
+      productIds: [],
+      documentCount: 0,
+    };
+
+    it('accepts a valid payload without sourceCase', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.request_submitted',
+        payload: validPayload,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts the BAL-589 sourceCase arm', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.request_submitted',
+        payload: {
+          ...validPayload,
+          sourceCase: {
+            id: '550e8400-e29b-41d4-a716-446655440013',
+            title: 'Flow interview loop',
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a sourceCase with a non-uuid id', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.request_submitted',
+        payload: {
+          ...validPayload,
+          sourceCase: { id: 'not-a-uuid', title: 'Flow interview loop' },
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a sourceCase with an empty title', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'project.request_submitted',
+        payload: {
+          ...validPayload,
+          sourceCase: { id: '550e8400-e29b-41d4-a716-446655440013', title: '' },
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
 });

@@ -14,6 +14,9 @@ const PRODUCT_ID = 'c0000000-0000-4000-8000-000000000003';
 const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const CREATED_ID = 'request-1';
+const CASE_ID = 'd0000000-0000-4000-8000-000000000007';
+const OTHER_COMPANY_ID = 'd0000000-0000-4000-8000-000000000008';
+const OTHER_EXPERT_PROFILE_ID = 'd0000000-0000-4000-8000-000000000009';
 const OWNED_DOCUMENT_KEY = `project-documents/${COMPANY_ID}/${USER_ID}/cccccccc-cccc-4ccc-8ccc-cccccccccccc`;
 const FOREIGN_DOCUMENT_KEY =
   'project-documents/dddddddd-dddd-4ddd-8ddd-dddddddddddd/' +
@@ -48,6 +51,11 @@ vi.mock('@balo/db', () => ({
 const mockPublish = vi.fn();
 vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: (...args: unknown[]) => mockPublish(...args),
+}));
+
+const mockAuthorizeClientCaseMutation = vi.fn();
+vi.mock('@/app/(dashboard)/cases/[engagementId]/_lib/authorize-client-case-mutation', () => ({
+  authorizeClientCaseMutation: (...args: unknown[]) => mockAuthorizeClientCaseMutation(...args),
 }));
 
 // The sanitiser is exercised in its own unit test; here we mock it so we can
@@ -96,6 +104,16 @@ function createdRow(overrides: Record<string, unknown> = {}): Record<string, unk
     source: 'manual',
     title: 'Lead routing rebuild',
     description: '<p>Rebuild lead routing in Flow.</p>',
+    ...overrides,
+  };
+}
+
+function caseGateOk(overrides: Record<string, unknown> = {}): unknown {
+  return {
+    ok: true,
+    companyId: COMPANY_ID,
+    expertProfileId: EXPERT_PROFILE_ID,
+    caseRow: { title: 'Salesforce integration cleanup' },
     ...overrides,
   };
 }
@@ -322,6 +340,109 @@ describe('submitProjectRequestAction', () => {
       });
       // Must NOT publish the direct event.
       expect(mockPublish).not.toHaveBeenCalledWith('project.request_submitted', expect.anything());
+    });
+  });
+
+  describe('case conversion (BAL-589)', () => {
+    it('rejects when the case gate denies access (e.g. an expert-lens actor)', async () => {
+      mockAuthorizeClientCaseMutation.mockResolvedValue({
+        ok: false,
+        error: "You don't have permission to convert this case.",
+      });
+
+      const result = await submitProjectRequestAction(
+        directInput({ sourceCaseId: CASE_ID } as Partial<RawInput>)
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: "You don't have permission to convert this case.",
+      });
+      expect(mockCreateProjectRequest).not.toHaveBeenCalled();
+      expect(mockPublish).not.toHaveBeenCalled();
+    });
+
+    it('rejects a case belonging to another company', async () => {
+      mockAuthorizeClientCaseMutation.mockResolvedValue(
+        caseGateOk({ companyId: OTHER_COMPANY_ID })
+      );
+
+      const result = await submitProjectRequestAction(
+        directInput({ sourceCaseId: CASE_ID } as Partial<RawInput>)
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Switch to the workspace this case belongs to.',
+      });
+      expect(mockCreateProjectRequest).not.toHaveBeenCalled();
+    });
+
+    it("rejects a direct request to an expert other than the case's own", async () => {
+      mockAuthorizeClientCaseMutation.mockResolvedValue(
+        caseGateOk({ expertProfileId: OTHER_EXPERT_PROFILE_ID })
+      );
+
+      const result = await submitProjectRequestAction(
+        directInput({ sourceCaseId: CASE_ID } as Partial<RawInput>)
+      );
+
+      expect(result).toEqual({ success: false, error: "This case isn't with that expert." });
+      expect(mockCreateProjectRequest).not.toHaveBeenCalled();
+    });
+
+    it('allows a match request bound to a case — the match payload carries no sourceCase', async () => {
+      mockAuthorizeClientCaseMutation.mockResolvedValue(caseGateOk());
+      mockCreateProjectRequest.mockResolvedValue(
+        createdRow({ sendTo: 'match', expertProfileId: null })
+      );
+
+      const result = await submitProjectRequestAction(
+        matchInput({ sourceCaseId: CASE_ID } as Partial<RawInput>)
+      );
+
+      expect(result).toEqual({ success: true, projectRequestId: CREATED_ID });
+      expect(mockPublish).toHaveBeenCalledWith('project.match_requested', {
+        correlationId: CREATED_ID,
+        projectRequestId: CREATED_ID,
+        companyId: COMPANY_ID,
+        title: 'Lead routing rebuild',
+        tagIds: [],
+        productIds: [],
+        documentCount: 0,
+      });
+    });
+
+    it('the direct payload carries sourceCase, and the repository receives sourceCaseId', async () => {
+      mockAuthorizeClientCaseMutation.mockResolvedValue(caseGateOk());
+
+      const result = await submitProjectRequestAction(
+        directInput({ sourceCaseId: CASE_ID } as Partial<RawInput>)
+      );
+
+      expect(result).toEqual({ success: true, projectRequestId: CREATED_ID });
+      expect(mockCreateProjectRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({ sourceCaseId: CASE_ID }),
+        })
+      );
+      expect(mockPublish).toHaveBeenCalledWith(
+        'project.request_submitted',
+        expect.objectContaining({
+          sourceCase: { id: CASE_ID, title: 'Salesforce integration cleanup' },
+        })
+      );
+    });
+
+    it('passes a null sourceCaseId through to the repository when absent', async () => {
+      await submitProjectRequestAction(directInput());
+
+      expect(mockCreateProjectRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({ sourceCaseId: null }),
+        })
+      );
+      expect(mockAuthorizeClientCaseMutation).not.toHaveBeenCalled();
     });
   });
 

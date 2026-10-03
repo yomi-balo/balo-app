@@ -4,11 +4,16 @@ import { renderHook, act } from '@testing-library/react';
 vi.mock('server-only', () => ({}));
 
 const mockStart = vi.fn();
+const mockStartCase = vi.fn();
 const mockPoll = vi.fn();
 const mockCaptureException = vi.fn();
 
 vi.mock('@/lib/project-request/actions/start-project-brief-parse', () => ({
   startProjectBriefParseAction: (...args: unknown[]) => mockStart(...args),
+}));
+// BAL-589 — the case arm's start action, mocked the same way as the documents arm's.
+vi.mock('@/app/(dashboard)/cases/[engagementId]/_actions/start-case-brief-parse', () => ({
+  startCaseBriefParseAction: (...args: unknown[]) => mockStartCase(...args),
 }));
 vi.mock('@/lib/project-request/actions/get-project-brief-parse', () => ({
   getProjectBriefParseAction: (...args: unknown[]) => mockPoll(...args),
@@ -17,7 +22,10 @@ vi.mock('@sentry/nextjs', () => ({
   captureException: (...args: unknown[]) => mockCaptureException(...args),
 }));
 
-import { useProjectBriefGeneration } from './use-project-brief-generation';
+import {
+  useProjectBriefGeneration,
+  reportUnexpectedBriefError,
+} from './use-project-brief-generation';
 
 const DOCS = [
   { r2Key: 'k', fileName: 'a.pdf', contentType: 'application/pdf' as const, sizeBytes: 10 },
@@ -40,7 +48,7 @@ describe('useProjectBriefGeneration', () => {
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
 
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     expect(result.current.phase).toBe('generating');
 
@@ -55,11 +63,41 @@ describe('useProjectBriefGeneration', () => {
 
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
 
     expect(result.current.phase).toBe('failed');
     expect(result.current.failureReason).toBe('enqueue_failed');
+  });
+
+  // X4c — the action's own `error` string survives onto the hook as `startError`.
+  it('a failed start() exposes the action error as `startError`', async () => {
+    mockStart.mockResolvedValue({ success: false, error: 'nope' });
+
+    const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
+    await act(async () => {
+      await result.current.start({ kind: 'documents', documents: DOCS });
+    });
+
+    expect(result.current.startError).toBe('nope');
+  });
+
+  it('startError is null before any start and is cleared by a fresh start()', async () => {
+    const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
+    expect(result.current.startError).toBeNull();
+
+    mockStart.mockResolvedValue({ success: false, error: 'nope' });
+    await act(async () => {
+      await result.current.start({ kind: 'documents', documents: DOCS });
+    });
+    expect(result.current.startError).toBe('nope');
+
+    mockStart.mockResolvedValue({ success: true, parseId: 'p1' });
+    mockPoll.mockResolvedValue({ status: 'pending' });
+    await act(async () => {
+      await result.current.start({ kind: 'documents', documents: DOCS });
+    });
+    expect(result.current.startError).toBeNull();
   });
 
   it('stops polling and calls onSucceeded when the poll reports succeeded', async () => {
@@ -77,7 +115,7 @@ describe('useProjectBriefGeneration', () => {
 
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded }));
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
@@ -99,7 +137,7 @@ describe('useProjectBriefGeneration', () => {
 
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
@@ -115,7 +153,7 @@ describe('useProjectBriefGeneration', () => {
 
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
 
     await act(async () => {
@@ -134,7 +172,7 @@ describe('useProjectBriefGeneration', () => {
       useProjectBriefGeneration({ onSucceeded: vi.fn() })
     );
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     unmount();
     mockPoll.mockClear();
@@ -154,7 +192,7 @@ describe('useProjectBriefGeneration', () => {
 
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
 
     expect(result.current.phase).toBe('failed');
@@ -166,7 +204,7 @@ describe('useProjectBriefGeneration', () => {
     mockStart.mockRejectedValue(new Error('boom'));
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000 * 61);
@@ -205,7 +243,7 @@ describe('useProjectBriefGeneration', () => {
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded }));
 
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
@@ -214,7 +252,7 @@ describe('useProjectBriefGeneration', () => {
 
     // Retry / regenerate — generation 2 starts while generation 1's poll is still in flight.
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
 
     // …and NOW the old promise resolves, successfully, with the old draft.
@@ -252,13 +290,13 @@ describe('useProjectBriefGeneration', () => {
 
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     await act(async () => {
       rejectStalePoll(new Error('stale network error'));
@@ -280,7 +318,7 @@ describe('useProjectBriefGeneration', () => {
       mockStart.mockResolvedValue({ success: true, parseId: 'p1' });
       const rendered = renderHook(() => useProjectBriefGeneration({ onSucceeded }));
       await act(async () => {
-        await rendered.result.current.start(DOCS);
+        await rendered.result.current.start({ kind: 'documents', documents: DOCS });
       });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2000);
@@ -341,16 +379,163 @@ describe('useProjectBriefGeneration', () => {
     });
   });
 
+  // cancel() doesn't invalidate a start() whose ACTION call is still pending.
+  it('⚠ open, close (cancel), then reopen (start again) while the first start is pending leaves exactly one interval and no forced timed_out', async () => {
+    let resolveFirstStart: (value: { success: true; parseId: string }) => void = () => {};
+    mockStart
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstStart = resolve;
+          })
+      )
+      .mockResolvedValueOnce({ success: true, parseId: 'p2' });
+    mockPoll.mockResolvedValue({ status: 'pending' });
+
+    const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
+
+    // Open: kick off the first start — its action call never resolves yet.
+    let firstStartSettled = false;
+    act(() => {
+      result.current
+        .start({ kind: 'documents', documents: DOCS })
+        .then(() => {
+          firstStartSettled = true;
+        })
+        .catch(() => {});
+    });
+
+    // Close: cancel while the first start's action is still in flight.
+    act(() => result.current.cancel());
+
+    // Reopen: start again — resolves immediately with a DIFFERENT parseId.
+    await act(async () => {
+      await result.current.start({ kind: 'documents', documents: DOCS });
+    });
+    expect(mockPoll).not.toHaveBeenCalled();
+
+    // NOW the first (cancelled) start's action resolves, late.
+    await act(async () => {
+      resolveFirstStart({ success: true, parseId: 'p1' });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(firstStartSettled).toBe(true);
+
+    // Only ONE interval exists — the second start's — and it polls p2, never the stale p1.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(mockPoll).toHaveBeenCalledTimes(1);
+    expect(mockPoll).toHaveBeenCalledWith({ parseId: 'p2' });
+
+    // An ORPHANED second interval would double every subsequent tick's poll count (and so
+    // reach MAX_POLLS — and `timed_out` — in HALF the wall-clock time). Five more ticks must
+    // add exactly five more calls, and the hook must still be cleanly `generating`.
+    mockPoll.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000 * 5);
+    });
+    expect(mockPoll).toHaveBeenCalledTimes(5);
+    expect(result.current.phase).toBe('generating');
+    expect(result.current.failureReason).toBeNull();
+  });
+
   it('dismissFailure resets to idle', async () => {
     mockStart.mockResolvedValue({ success: false, error: 'nope' });
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
     await act(async () => {
-      await result.current.start(DOCS);
+      await result.current.start({ kind: 'documents', documents: DOCS });
     });
     expect(result.current.phase).toBe('failed');
 
     act(() => result.current.dismissFailure());
     expect(result.current.phase).toBe('idle');
     expect(result.current.failureReason).toBeNull();
+  });
+
+  // BAL-589 — the case arm calls the CASE start action, not the documents one, and polling is
+  // otherwise identical.
+  describe('the case source (BAL-589)', () => {
+    const CASE_ID = '22222222-2222-2222-2222-222222222222';
+
+    it('calls startCaseBriefParseAction with the case id, never the documents action', async () => {
+      mockStartCase.mockResolvedValue({ success: true, parseId: 'p-case' });
+      mockPoll.mockResolvedValue({ status: 'pending' });
+
+      const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
+      await act(async () => {
+        await result.current.start({ kind: 'case', caseId: CASE_ID });
+      });
+
+      expect(mockStartCase).toHaveBeenCalledWith({ caseId: CASE_ID });
+      expect(mockStart).not.toHaveBeenCalled();
+      expect(result.current.phase).toBe('generating');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(mockPoll).toHaveBeenCalledWith({ parseId: 'p-case' });
+    });
+
+    it('a failed case start goes straight to failed', async () => {
+      mockStartCase.mockResolvedValue({ success: false, error: 'denied' });
+
+      const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
+      await act(async () => {
+        await result.current.start({ kind: 'case', caseId: CASE_ID });
+      });
+
+      expect(result.current.phase).toBe('failed');
+      expect(result.current.failureReason).toBe('enqueue_failed');
+      expect(result.current.startError).toBe('denied');
+    });
+
+    it('a thrown case start lands on failed and reports to Sentry', async () => {
+      mockStartCase.mockRejectedValue(new Error('session expired'));
+
+      const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
+      await act(async () => {
+        await result.current.start({ kind: 'case', caseId: CASE_ID });
+      });
+
+      expect(result.current.phase).toBe('failed');
+      expect(result.current.failureReason).toBe('unknown');
+      expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    });
+
+    it('a case generation that succeeds calls onSucceeded with the draft', async () => {
+      mockStartCase.mockResolvedValue({ success: true, parseId: 'p-case' });
+      const draft = {
+        title: 'From case',
+        descriptionHtml: '<p>summary</p>',
+        tagIds: [],
+        productIds: [],
+        unmatchedTagLabels: [],
+        unmatchedProductLabels: [],
+      };
+      mockPoll.mockResolvedValue({ status: 'succeeded', draft });
+      const onSucceeded = vi.fn();
+
+      const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded }));
+      await act(async () => {
+        await result.current.start({ kind: 'case', caseId: CASE_ID });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(onSucceeded).toHaveBeenCalledWith(draft);
+      expect(result.current.phase).toBe('idle');
+    });
+  });
+
+  // The one caller-side reporting helper for a `start()` that rejects anyway.
+  describe('reportUnexpectedBriefError', () => {
+    it('reports to Sentry when a caller `.catch`es an unexpectedly rejecting `start`', () => {
+      const error = new Error('unexpected');
+      reportUnexpectedBriefError(error);
+      expect(mockCaptureException).toHaveBeenCalledWith(error);
+    });
   });
 });

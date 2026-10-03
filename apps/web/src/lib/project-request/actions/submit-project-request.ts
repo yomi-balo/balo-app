@@ -9,6 +9,7 @@ import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
 import { isSessionOwnedProjectDocumentKey } from '@balo/shared/project-requests';
+import { authorizeSourceCase } from '@/lib/project-request/authorize-source-case';
 import { projectRequestInputSchema } from './schemas';
 
 /** Raw (pre-validation) input — `source` and arrays are optional (schema defaults them). */
@@ -25,6 +26,93 @@ interface SubmitProjectRequestResult {
 const GENERIC_ERROR = 'Something went wrong sending your request. Please try again.';
 const EXPERT_UNAVAILABLE_ERROR =
   "This expert isn't taking on new work right now. Choose Get matched instead and we'll find someone with similar experience.";
+
+/**
+ * A `direct` request to an expert who can't take new work is rejected here, not only in the
+ * UI: the client's eligibility view can be stale or bypassed. A no-op for `match` (or when no
+ * expert was resolved), so the caller can call this unconditionally — a flat gate rather than
+ * a nested `if`, matching {@link authorizeSourceCase}'s shape (extracted for the same reason:
+ * SonarCloud's cognitive-complexity cap on `submitProjectRequestAction` itself).
+ */
+async function authorizeDirectEligibility(
+  sendTo: 'direct' | 'match',
+  expertProfileId: string | null,
+  userId: string
+): Promise<{ ok: true } | { ok: false; error: string; code: 'expert_unavailable' }> {
+  if (sendTo !== 'direct' || expertProfileId === null) {
+    return { ok: true };
+  }
+  const eligibility = await expertsRepository.findNewWorkEligibility(expertProfileId);
+  if (!eligibility.eligible) {
+    log.warn('Project request rejected — expert not taking on new work', {
+      userId,
+      expertProfileId,
+      reason: eligibility.reason,
+    });
+    return { ok: false, error: EXPERT_UNAVAILABLE_ERROR, code: 'expert_unavailable' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Publish the routing-appropriate event (fire-and-forget — a notification failure must never
+ * fail the submit). Extracted alongside {@link authorizeDirectEligibility} and
+ * {@link authorizeSourceCase} to keep `submitProjectRequestAction` itself under SonarCloud's
+ * cognitive-complexity cap.
+ */
+function publishProjectRequestSubmitted(params: {
+  created: { id: string; title: string };
+  companyId: string;
+  sendTo: 'direct' | 'match';
+  expertProfileId: string | null;
+  tagIds: string[];
+  productIds: string[];
+  documentCount: number;
+  sourceCase: { id: string; title: string } | null;
+}): void {
+  const {
+    created,
+    companyId,
+    sendTo,
+    expertProfileId,
+    tagIds,
+    productIds,
+    documentCount,
+    sourceCase,
+  } = params;
+
+  if (sendTo === 'direct' && expertProfileId !== null) {
+    publishNotificationEvent('project.request_submitted', {
+      correlationId: created.id,
+      projectRequestId: created.id,
+      expertProfileId,
+      companyId,
+      title: created.title,
+      sendTo: 'direct',
+      tagIds,
+      productIds,
+      documentCount,
+      // BAL-589 — only the DIRECT publish carries this; the match publish is unchanged
+      // even when a case conversion is routed to match (the "Get matched instead" fallback).
+      ...(sourceCase ? { sourceCase } : {}),
+    }).catch(() => {
+      // publishNotificationEvent logs internally
+    });
+    return;
+  }
+
+  publishNotificationEvent('project.match_requested', {
+    correlationId: created.id,
+    projectRequestId: created.id,
+    companyId,
+    title: created.title,
+    tagIds,
+    productIds,
+    documentCount,
+  }).catch(() => {
+    // publishNotificationEvent logs internally
+  });
+}
 
 export const submitProjectRequestAction = withAuth(
   async (session, rawInput: RawProjectRequestInput): Promise<SubmitProjectRequestResult> => {
@@ -89,18 +177,27 @@ export const submitProjectRequestAction = withAuth(
       //    the session, never client-supplied.
       const expertProfileId = input.sendTo === 'direct' ? input.expertProfileId : null;
 
-      // A `direct` request to an expert who can't take new work is rejected here, not only in
-      // the UI: the client's eligibility view can be stale or bypassed.
-      if (input.sendTo === 'direct') {
-        const eligibility = await expertsRepository.findNewWorkEligibility(input.expertProfileId);
-        if (!eligibility.eligible) {
-          log.warn('Project request rejected — expert not taking on new work', {
-            userId: session.user.id,
-            expertProfileId,
-            reason: eligibility.reason,
-          });
-          return { success: false, error: EXPERT_UNAVAILABLE_ERROR, code: 'expert_unavailable' };
-        }
+      // 4b. BAL-589 — re-authorize a case conversion. `sourceCaseId` is client input and
+      //     is checked against the session, exactly like every other input above — the
+      //     client's own gating (the render hint) is never trusted as the real gate.
+      const sourceCaseGate = await authorizeSourceCase({
+        sourceCaseId: input.sourceCaseId,
+        sendTo: input.sendTo,
+        directExpertProfileId: expertProfileId,
+        user: session.user,
+      });
+      if (!sourceCaseGate.ok) {
+        return { success: false, error: sourceCaseGate.error };
+      }
+      const { sourceCase } = sourceCaseGate;
+
+      const eligibilityGate = await authorizeDirectEligibility(
+        input.sendTo,
+        expertProfileId,
+        session.user.id
+      );
+      if (!eligibilityGate.ok) {
+        return { success: false, error: eligibilityGate.error, code: eligibilityGate.code };
       }
 
       // 5. Persist request + tags + products + documents in one transaction.
@@ -124,6 +221,7 @@ export const submitProjectRequestAction = withAuth(
           // budgetCurrency). Proposals snapshot this at create/resubmit.
           baloFeeBps: DEFAULT_BALO_FEE_BPS,
           timeline: input.timeline,
+          sourceCaseId: sourceCase?.id ?? null,
         },
         tagIds: input.tagIds,
         productIds: input.productIds,
@@ -148,37 +246,21 @@ export const submitProjectRequestAction = withAuth(
         // Capture presence only — never the amounts.
         hasBudget: input.budgetMinCents !== null || input.budgetMaxCents !== null,
         hasTimeline: input.timeline !== null,
+        sourceCaseId: sourceCase?.id,
       });
 
       // 6. Publish the routing-appropriate event (fire-and-forget — a
       //    notification failure must not fail the submit).
-      if (input.sendTo === 'direct' && expertProfileId) {
-        publishNotificationEvent('project.request_submitted', {
-          correlationId: created.id,
-          projectRequestId: created.id,
-          expertProfileId,
-          companyId: session.user.companyId,
-          title: created.title,
-          sendTo: 'direct',
-          tagIds: input.tagIds,
-          productIds: input.productIds,
-          documentCount: input.documents.length,
-        }).catch(() => {
-          // publishNotificationEvent logs internally
-        });
-      } else {
-        publishNotificationEvent('project.match_requested', {
-          correlationId: created.id,
-          projectRequestId: created.id,
-          companyId: session.user.companyId,
-          title: created.title,
-          tagIds: input.tagIds,
-          productIds: input.productIds,
-          documentCount: input.documents.length,
-        }).catch(() => {
-          // publishNotificationEvent logs internally
-        });
-      }
+      publishProjectRequestSubmitted({
+        created,
+        companyId: session.user.companyId,
+        sendTo: input.sendTo,
+        expertProfileId,
+        tagIds: input.tagIds,
+        productIds: input.productIds,
+        documentCount: input.documents.length,
+        sourceCase,
+      });
 
       return { success: true, projectRequestId: created.id };
     } catch (error) {

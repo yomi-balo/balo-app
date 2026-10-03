@@ -160,6 +160,14 @@ export interface ProjectEventMap {
     product_count: number;
     document_count: number;
     method: ProjectEntryMethod;
+    /** BAL-589 — present only on a case-mounted (`entry_point: 'case'`) submit. */
+    source_case_id?: string;
+    /**
+     * BAL-589 — whether the submitted description still matches the last generated draft.
+     * The active flow's `hasEditsSinceGenerate`: the case brief flow on a case mount, the
+     * BAL-254 AI flow when `method === 'ai'`, and `false` when no AI draft ever landed.
+     */
+    brief_edited?: boolean;
   };
   [PROJECT_EVENTS.PROJECT_REQUEST_CREATED]: {
     request_id: string;

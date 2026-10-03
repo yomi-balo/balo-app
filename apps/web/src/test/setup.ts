@@ -204,6 +204,10 @@ vi.mock('@/lib/analytics', async () => {
     // test whose module graph reaches `UpNextCard` or `CalendarDisconnectedBanner` throws on an
     // undefined constant (memory `reference_web_analytics_test_mock_export_list`).
     DASHBOARD_EVENTS: events.DASHBOARD_EVENTS,
+    // BAL-589 — the "Convert a case to a project" AI brief's CLIENT event constant. ⚠ WITHOUT
+    // THIS LINE every test whose module graph reaches `useCaseBriefFlow` throws on an undefined
+    // constant (memory `reference_web_analytics_test_mock_export_list`).
+    CASE_BRIEF_EVENTS: events.CASE_BRIEF_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

@@ -108,6 +108,8 @@ const projectRequestSubmittedPayload = z.object({
   tagIds: z.array(z.uuid()),
   productIds: z.array(z.uuid()),
   documentCount: z.number().int().nonnegative(),
+  // BAL-589 — present only when the request was converted from a case.
+  sourceCase: z.object({ id: z.uuid(), title: z.string().min(1) }).optional(),
 });
 
 const projectMatchRequestedPayload = z.object({

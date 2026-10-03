@@ -44,7 +44,16 @@ import type { CaseHeaderView } from '@/lib/cases/case-view-types';
  * If that call is ever removed, this line becomes stored XSS the moment BAL-400 lets a client
  * type a description.
  */
-export function CaseHeader({ header }: Readonly<{ header: CaseHeaderView }>): React.JSX.Element {
+export function CaseHeader({
+  header,
+  action,
+}: Readonly<{
+  header: CaseHeaderView;
+  /** BAL-589 — the "Convert to project" button, top-right (design reference :972-986).
+   *  Optional: a render hint supplied by the caller (client lens only) — this component
+   *  stays lens-agnostic and renders whatever it is given. */
+  action?: React.ReactNode;
+}>): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const descriptionRef = useRef<HTMLDivElement | null>(null);
@@ -102,7 +111,10 @@ export function CaseHeader({ header }: Readonly<{ header: CaseHeaderView }>): Re
             <span className="truncate">{header.counterpartyOrgLabel}</span>
           </div>
         </div>
-        <StatusChip isOpen={header.isOpen} closeReason={header.closeReason} />
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <StatusChip isOpen={header.isOpen} closeReason={header.closeReason} />
+          {action}
+        </div>
       </div>
 
       <div className="mt-3 max-w-2xl">

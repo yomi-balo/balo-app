@@ -422,3 +422,7 @@ export {
   type AdminApplicationsEventMap,
   type AdminApplicationDecision,
 } from './admin-applications';
+// BAL-589 — the "Convert a case to a project" AI brief's CLIENT event family. Deliberately its
+// own `case_brief_*` namespace, not folded into `PROJECT_EVENTS`'s `PROJECT_AI_*` family — see
+// this module's own header for why.
+export { CASE_BRIEF_EVENTS, type CaseBriefEventMap } from './case-brief';

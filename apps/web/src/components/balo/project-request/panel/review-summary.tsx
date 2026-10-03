@@ -1,14 +1,17 @@
 'use client';
 
-import { Pencil, FileText, Image as ImageIcon } from 'lucide-react';
+import { Pencil, FileText, Image as ImageIcon, MessageSquare } from 'lucide-react';
 import { RichTextViewer } from '@/components/balo/rich-text-editor';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
 import { formatBudgetRange } from '@/lib/utils/currency';
 import { ExpertAvatarMedia, MatchMedia } from './recipient-media';
-import type { ProjectDraft } from './use-project-draft';
+import { allDraftDocuments, type ProjectDraft } from './use-project-draft';
 
 interface ReviewSummaryProps {
   draft: ProjectDraft;
+  /** BAL-589 — present only on a case-mounted ("Convert to project") request. Renders a
+   *  "Linked to case: {title}" line below the document list. */
+  sourceCaseTitle?: string;
   /** Expert display data. Absent → context-free mode: the routing block reads as a match. */
   expertName?: string;
   expertInitials?: string;
@@ -90,6 +93,7 @@ function ReadOnlyChips({
  */
 export function ReviewSummary({
   draft,
+  sourceCaseTitle,
   expertName,
   expertInitials,
   expertAvatarKey,
@@ -107,6 +111,9 @@ export function ReviewSummary({
   const routingLabel = directToNamedExpert
     ? `Going to ${expertName}`
     : "We'll match you with an expert";
+  // ⚠ Every document the request carries: the uploader's own PLUS every
+  // case-file copy, which `draft.documents` alone never holds.
+  const documents = allDraftDocuments(draft);
 
   return (
     <div className="space-y-3">
@@ -203,11 +210,11 @@ export function ReviewSummary({
       </SummaryBlock>
 
       <SummaryBlock label="Documents" onEdit={onEdit}>
-        {draft.documents.length === 0 ? (
+        {documents.length === 0 ? (
           <p className="text-muted-foreground text-sm">None</p>
         ) : (
           <ul className="space-y-1.5">
-            {draft.documents.map((doc) => {
+            {documents.map((doc) => {
               const Glyph = doc.contentType.startsWith('image/') ? ImageIcon : FileText;
               return (
                 <li key={doc.r2Key} className="flex items-center gap-2 text-sm">
@@ -222,6 +229,13 @@ export function ReviewSummary({
           </ul>
         )}
       </SummaryBlock>
+
+      {sourceCaseTitle !== undefined && (
+        <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+          <MessageSquare className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          Linked to case: {sourceCaseTitle}
+        </p>
+      )}
     </div>
   );
 }

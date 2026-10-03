@@ -121,6 +121,10 @@ export const PROJECT_BRIEF_FAILURE_REASONS = [
   'truncated',
   /** `AiModelNotAllowedError`, or any provider/config failure. */
   'model_unavailable',
+  /** Case source: the worker's case gate failed (not live, not a case, or another company's). */
+  'case_unavailable',
+  /** Case source: the case has no messages and no transcripts to draft from. */
+  'no_case_history',
   /** ⚠ DERIVED at read from `created_at`; never stored. */
   'timed_out',
   /** ⚠ DERIVED at read; never stored. Also the answer for a cross-tenant `parseId` (Gate 4). */

@@ -499,9 +499,15 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'project-request-submitted': (data) => {
     const title = (data.title as string) ?? 'a new project';
     const projectRequestId = data.projectRequestId as string | undefined;
+    const sourceCase = data.sourceCase as { title?: string } | undefined;
+    // BAL-589 — converted from a case: name the client COMPANY, the same attribution the
+    // `-admin` variant below uses, since the submitting person is not on the payload.
+    const body = sourceCase?.title
+      ? `${(data.company as { name?: string } | undefined)?.name ?? 'A client'} wants to turn "${sourceCase.title}" into a project.`
+      : `A client sent you a direct request for "${title}"`;
     return {
       title: 'New project request for you',
-      body: `A client sent you a direct request for "${title}"`,
+      body,
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useProjectDraft } from './use-project-draft';
+import { useProjectDraft, allDraftDocuments } from './use-project-draft';
 
 const EXPERT_ID = '99999999-9999-9999-9999-999999999999';
 const KEY = `balo:project-draft:${EXPERT_ID}`;
@@ -120,22 +120,14 @@ describe('useProjectDraft — default routing + autosave key', () => {
     expect(result.current.draft.title).toBe('x');
   });
 
-  it('keeps a stored expert-bound "direct" as direct', () => {
-    seed({ routing: 'direct' });
+  it.each([
+    ['direct', 'direct'],
+    ['match', 'match'],
+    ['bogus', 'direct'],
+  ])('resolves a stored expert-bound routing of %s to %s', (stored, expected) => {
+    seed({ routing: stored });
     const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
-    expect(result.current.draft.routing).toBe('direct');
-  });
-
-  it('keeps a stored expert-bound "match" as match', () => {
-    seed({ routing: 'match' });
-    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
-    expect(result.current.draft.routing).toBe('match');
-  });
-
-  it('falls back to direct for an expert-bound draft with a corrupt routing', () => {
-    seed({ routing: 'bogus' });
-    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
-    expect(result.current.draft.routing).toBe('direct');
+    expect(result.current.draft.routing).toBe(expected);
   });
 
   it('uses the byte-identical expert-bound key for an expert-bound mount', async () => {
@@ -293,6 +285,8 @@ describe('useProjectDraft — resetDraft / replaceDraft (a new hero search and i
       budgetMinCents: null,
       budgetMaxCents: null,
       timeline: null,
+      caseFileSelections: {},
+      caseBriefSnapshot: null,
       source: 'manual',
       seededFrom: null,
     });
@@ -358,5 +352,145 @@ describe('useProjectDraft — resetDraft / replaceDraft (a new hero search and i
     act(() => result.current.clearDraft());
     act(() => result.current.resetDraft({ title: 'After submit' }));
     await waitFor(() => expect(globalThis.localStorage.getItem(KEY)).toContain('After submit'));
+  });
+});
+
+// BAL-589 — a case mount's draft key wins over everything else.
+describe('useProjectDraft — case draft key (BAL-589)', () => {
+  const CASE_ID = '11111111-1111-1111-1111-111111111111';
+  const CASE_KEY = `balo:project-draft:case:${CASE_ID}`;
+
+  beforeEach(() => globalThis.localStorage.clear());
+
+  it('reads from the case key, not the expert key, when both are bound', () => {
+    seed({ title: 'Expert draft' }, KEY);
+    seed({ title: 'Case draft' }, CASE_KEY);
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(result.current.draft.title).toBe('Case draft');
+  });
+
+  it('autosaves to the case key, leaving the expert-bound profile draft untouched', async () => {
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    act(() => result.current.setField('title', 'Converting this case'));
+    await waitFor(() =>
+      expect(globalThis.localStorage.getItem(CASE_KEY)).toContain('Converting this case')
+    );
+    expect(globalThis.localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('a case mount without a caseId behaves exactly like today’s expert-bound mount', () => {
+    seed({ title: 'Unaffected profile draft' }, KEY);
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.title).toBe('Unaffected profile draft');
+  });
+
+  const COPIED_DOC = {
+    r2Key: 'project-documents/c/u/k',
+    fileName: 'case-file.pdf',
+    contentType: 'application/pdf' as const,
+    sizeBytes: 100,
+  };
+
+  it('round-trips caseFileSelections (full ProjectDocumentRef values) through setField + reload', async () => {
+    const { result, unmount } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(result.current.draft.caseFileSelections).toEqual({});
+    act(() => result.current.setField('caseFileSelections', { 'conversation:f1': COPIED_DOC }));
+    await waitFor(() =>
+      expect(globalThis.localStorage.getItem(CASE_KEY)).toContain('caseFileSelections')
+    );
+    unmount();
+
+    const { result: reloaded } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(reloaded.current.draft.caseFileSelections).toEqual({ 'conversation:f1': COPIED_DOC });
+  });
+
+  it('drops an invalid document-ref value from a persisted caseFileSelections', () => {
+    seed({ caseFileSelections: { a: COPIED_DOC, b: 42, c: { fileName: 'incomplete' } } }, CASE_KEY);
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(result.current.draft.caseFileSelections).toEqual({ a: COPIED_DOC });
+  });
+
+  it('falls back to {} for a corrupt caseFileSelections value', () => {
+    seed({ caseFileSelections: 'not-an-object' }, CASE_KEY);
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(result.current.draft.caseFileSelections).toEqual({});
+  });
+
+  // setField also accepts an updater, applied against the LATEST draft value.
+  it('setField applies an updater against the latest value, not a stale snapshot', async () => {
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    act(() => result.current.setField('caseFileSelections', { 'conversation:f1': COPIED_DOC }));
+    act(() =>
+      result.current.setField('caseFileSelections', (prev) => ({
+        ...prev,
+        'meeting:f2': { ...COPIED_DOC, r2Key: 'project-documents/c/u/k2' },
+      }))
+    );
+    expect(result.current.draft.caseFileSelections).toEqual({
+      'conversation:f1': COPIED_DOC,
+      'meeting:f2': { ...COPIED_DOC, r2Key: 'project-documents/c/u/k2' },
+    });
+  });
+
+  // caseBriefSnapshot persists hasAiDraft/hasEditsSinceGenerate across a reload.
+  const SNAPSHOT = {
+    title: 'Drafted title',
+    descriptionHtml: '<p>Drafted body</p>',
+    tagIds: ['t1'],
+    productIds: ['p1'],
+  };
+
+  it('round-trips caseBriefSnapshot through setField + reload', async () => {
+    const { result, unmount } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(result.current.draft.caseBriefSnapshot).toBeNull();
+    act(() => result.current.setField('caseBriefSnapshot', SNAPSHOT));
+    await waitFor(() =>
+      expect(globalThis.localStorage.getItem(CASE_KEY)).toContain('caseBriefSnapshot')
+    );
+    unmount();
+
+    const { result: reloaded } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(reloaded.current.draft.caseBriefSnapshot).toEqual(SNAPSHOT);
+  });
+
+  it('falls back to null for a caseBriefSnapshot missing required fields', () => {
+    seed({ caseBriefSnapshot: { title: 'Only a title' } }, CASE_KEY);
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(result.current.draft.caseBriefSnapshot).toBeNull();
+  });
+
+  it('falls back to null for a corrupt caseBriefSnapshot value', () => {
+    seed({ caseBriefSnapshot: 'not-an-object' }, CASE_KEY);
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
+    expect(result.current.draft.caseBriefSnapshot).toBeNull();
+  });
+});
+
+// allDraftDocuments combines uploads + case-file selections.
+describe('allDraftDocuments', () => {
+  const UPLOADED_DOC = {
+    r2Key: 'project-documents/c/u/upload-1',
+    fileName: 'upload.pdf',
+    contentType: 'application/pdf' as const,
+    sizeBytes: 100,
+  };
+  const CASE_DOC = {
+    r2Key: 'project-documents/c/u/copied-1',
+    fileName: 'case-file.pdf',
+    contentType: 'application/pdf' as const,
+    sizeBytes: 200,
+  };
+
+  it('returns an empty array when neither holds anything', () => {
+    expect(allDraftDocuments({ documents: [], caseFileSelections: {} })).toEqual([]);
+  });
+
+  it('combines uploads and case-file selections, uploads first', () => {
+    expect(
+      allDraftDocuments({
+        documents: [UPLOADED_DOC],
+        caseFileSelections: { 'conversation:f1': CASE_DOC },
+      })
+    ).toEqual([UPLOADED_DOC, CASE_DOC]);
   });
 });

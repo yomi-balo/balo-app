@@ -127,6 +127,67 @@ describe('ProjectRequestSubmittedEmail', () => {
     expect(element).toBeDefined();
     expect(element.type).toBeDefined();
   });
+
+  it('BAL-589: renders the case lead line naming the client company', async () => {
+    const html = await render(
+      ProjectRequestSubmittedEmail({
+        firstName: 'Erin',
+        projectTitle: 'CPQ implementation',
+        baseUrl: 'https://app.balo.expert',
+        sourceCaseTitle: 'Flow interview loop',
+        clientName: 'Northwind Industrial',
+      })
+    );
+
+    expect(html).toContain(
+      'Northwind Industrial wants to turn Flow interview loop into a project.'
+    );
+    expect(html).not.toContain('A client wants to work with you.');
+  });
+
+  it('BAL-589: falls back to "A client" when clientName is absent', async () => {
+    const html = await render(
+      ProjectRequestSubmittedEmail({
+        firstName: 'Erin',
+        projectTitle: 'CPQ implementation',
+        baseUrl: 'https://app.balo.expert',
+        sourceCaseTitle: 'Flow interview loop',
+      })
+    );
+
+    expect(html).toContain('A client wants to turn Flow interview loop into a project.');
+  });
+
+  it('BAL-589: getEmailTemplate wires the sourceCase subject and sanitizes it', () => {
+    const template = getEmailTemplate('project-request-submitted', {
+      title: 'CPQ implementation',
+      recipientName: 'Erin',
+      company: { name: 'Northwind Industrial' },
+      sourceCase: { title: 'Flow interview loop' },
+    });
+
+    expect(template.subject).toBe(
+      'Northwind Industrial wants to turn "Flow interview loop" into a project'
+    );
+  });
+
+  it('BAL-589: getEmailTemplate sanitizes a hostile company name or case title in the sourceCase subject', () => {
+    const template = getEmailTemplate('project-request-submitted', {
+      title: 'CPQ implementation',
+      company: { name: 'Acme\r\nBcc: attacker@evil.com' },
+      sourceCase: { title: 'Flow\r\ninterview loop' },
+    });
+
+    expect(template.subject).not.toMatch(/[\r\n]/);
+  });
+
+  it('BAL-589: keeps the original subject and copy when sourceCase is absent', () => {
+    const template = getEmailTemplate('project-request-submitted', {
+      title: 'CPQ implementation',
+    });
+
+    expect(template.subject).toBe('New project request: CPQ implementation');
+  });
 });
 
 describe('ProjectMatchRequestedEmail', () => {

@@ -238,6 +238,48 @@ describe('DocumentUploader', () => {
     });
   });
 
+  // maxDocuments: a case mount reserves slots for its own case-file selections.
+  describe('maxDocuments (BAL-589)', () => {
+    it('defaults to MAX_DOCUMENTS (4) when omitted — unchanged for every other caller', () => {
+      render(<DocumentUploader onDocumentsChange={vi.fn()} />);
+      expect(
+        screen.getByText('PDF, PNG, JPEG or WEBP · up to 4 files · 5 MB each')
+      ).toBeInTheDocument();
+    });
+
+    it('a lower maxDocuments caps "N of M" and the at-cap note below MAX_DOCUMENTS', async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <DocumentUploader onDocumentsChange={vi.fn()} maxDocuments={2} />
+      );
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+      await user.upload(input, makeFile('one.pdf', 'application/pdf', 100));
+      await waitFor(() => expect(screen.getByText('Attached')).toBeInTheDocument());
+      expect(screen.getByText('Add more — 1 of 2')).toBeInTheDocument();
+
+      await user.upload(input, makeFile('two.pdf', 'application/pdf', 100));
+      await waitFor(() => expect(screen.getAllByText('Attached')).toHaveLength(2));
+      expect(screen.getByText('2 of 2 attached')).toBeInTheDocument();
+    });
+
+    it('a lower maxDocuments rejects an upload that would exceed IT, below MAX_DOCUMENTS', async () => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <DocumentUploader onDocumentsChange={vi.fn()} maxDocuments={1} />
+      );
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+      await user.upload(input, makeFile('one.pdf', 'application/pdf', 100));
+      await waitFor(() => expect(screen.getByText('Attached')).toBeInTheDocument());
+
+      // A second file is rejected — this instance's own cap is 1, well under MAX_DOCUMENTS (4).
+      await user.upload(input, makeFile('two.pdf', 'application/pdf', 100));
+      expect(mockToast.error).toHaveBeenCalledWith(expect.stringContaining('two.pdf not added'));
+      expect(screen.getAllByText('Attached')).toHaveLength(1);
+    });
+  });
+
   it('removes a confirmed file (best-effort R2 delete) and updates the parent', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

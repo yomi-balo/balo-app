@@ -6,9 +6,9 @@ import type {
   ProjectBriefParseSourceDocument,
 } from '@balo/shared/project-requests';
 import { db } from '../client';
-import { projectBriefParses } from '../schema';
+import { engagements, projectBriefParses } from '../schema';
 import type { Company, User } from '../schema';
-import { companyFactory, userFactory } from '../test/factories';
+import { caseEngagementFactory, companyFactory, userFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import {
   projectBriefParsesRepository,
@@ -107,6 +107,7 @@ async function seedPendingParse(): Promise<{
   const row = await projectBriefParsesRepository.create({
     companyId: company.id,
     requestedByUserId: user.id,
+    source: 'documents',
     sourceDocuments: sourceDocuments(),
   });
   return { user, company, parseId: row.id };
@@ -119,6 +120,7 @@ describe('projectBriefParsesRepository.create / findById', () => {
     const created = await projectBriefParsesRepository.create({
       companyId: company.id,
       requestedByUserId: user.id,
+      source: 'documents',
       sourceDocuments: sourceDocuments(),
     });
 
@@ -138,6 +140,7 @@ describe('projectBriefParsesRepository.create / findById', () => {
     const created = await projectBriefParsesRepository.create({
       companyId: company.id,
       requestedByUserId: user.id,
+      source: 'documents',
       sourceDocuments: documents,
     });
     const read = await projectBriefParsesRepository.findById(created.id);
@@ -147,6 +150,69 @@ describe('projectBriefParsesRepository.create / findById', () => {
 
   it('findById returns undefined for an unknown id', async () => {
     expect(await projectBriefParsesRepository.findById(randomUUID())).toBeUndefined();
+  });
+});
+
+describe('projectBriefParsesRepository.create — case source', () => {
+  it('writes source_engagement_id and an EMPTY source_documents for a case source', async () => {
+    const { user, company } = await seedOwner();
+    const { engagement } = await caseEngagementFactory({ companyId: company.id });
+
+    const created = await projectBriefParsesRepository.create({
+      companyId: company.id,
+      requestedByUserId: user.id,
+      source: 'case',
+      sourceEngagementId: engagement.id,
+    });
+    const read = await projectBriefParsesRepository.findById(created.id);
+
+    expect(read?.sourceEngagementId).toBe(engagement.id);
+    expect(read?.sourceDocuments).toEqual([]);
+    expect(read === undefined ? undefined : toProjectBriefParseState(read).state).toBe('pending');
+  });
+
+  it('leaves source_engagement_id NULL for a documents source', async () => {
+    const { parseId } = await seedPendingParse();
+
+    const read = await projectBriefParsesRepository.findById(parseId);
+
+    expect(read?.sourceEngagementId).toBeNull();
+    expect(read?.sourceDocuments).toHaveLength(2);
+  });
+
+  it('cascades the parse away when its case is hard-deleted', async () => {
+    const { user, company } = await seedOwner();
+    const { engagement } = await caseEngagementFactory({ companyId: company.id });
+    const created = await projectBriefParsesRepository.create({
+      companyId: company.id,
+      requestedByUserId: user.id,
+      source: 'case',
+      sourceEngagementId: engagement.id,
+    });
+
+    await db.delete(engagements).where(eq(engagements.id, engagement.id));
+
+    const rows = await db
+      .select({ id: projectBriefParses.id })
+      .from(projectBriefParses)
+      .where(eq(projectBriefParses.id, created.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('rejects an unknown source_engagement_id (FK)', async () => {
+    const { user, company } = await seedOwner();
+
+    await expectConstraintViolation(
+      '23503',
+      (tx) =>
+        tx.insert(projectBriefParses).values({
+          companyId: company.id,
+          requestedByUserId: user.id,
+          sourceDocuments: [],
+          sourceEngagementId: randomUUID(),
+        }),
+      'project_brief_parses_source_case_fk'
+    );
   });
 });
 
@@ -353,17 +419,20 @@ describe('projectBriefParsesRepository.countCreatedSince', () => {
     const first = await projectBriefParsesRepository.create({
       companyId: company.id,
       requestedByUserId: user.id,
+      source: 'documents',
       sourceDocuments: sourceDocuments(),
     });
     await projectBriefParsesRepository.create({
       companyId: company.id,
       requestedByUserId: user.id,
+      source: 'documents',
       sourceDocuments: sourceDocuments(),
     });
     // Another user's parse, in the same company — must not count toward this user's budget.
     await projectBriefParsesRepository.create({
       companyId: company.id,
       requestedByUserId: otherUser.id,
+      source: 'documents',
       sourceDocuments: sourceDocuments(),
     });
     // This user's parse from BEFORE the window. `created_at` is set explicitly because the
@@ -481,6 +550,38 @@ describe('project_brief_parses CHECK constraints', () => {
         .update(projectBriefParses)
         .set({ failureReason: 'unreadable' })
         .where(eq(projectBriefParses.id, parseId))
+    );
+  });
+
+  it('rejects a row with BOTH documents and a case (exactly_one_source)', async () => {
+    const { user, company } = await seedOwner();
+    const { engagement } = await caseEngagementFactory({ companyId: company.id });
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx.insert(projectBriefParses).values({
+          companyId: company.id,
+          requestedByUserId: user.id,
+          sourceDocuments: sourceDocuments(),
+          sourceEngagementId: engagement.id,
+        }),
+      'project_brief_parses_exactly_one_source'
+    );
+  });
+
+  it('rejects a row with NEITHER documents nor a case (exactly_one_source)', async () => {
+    const { user, company } = await seedOwner();
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx.insert(projectBriefParses).values({
+          companyId: company.id,
+          requestedByUserId: user.id,
+          sourceDocuments: [],
+        }),
+      'project_brief_parses_exactly_one_source'
     );
   });
 });

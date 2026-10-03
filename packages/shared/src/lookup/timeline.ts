@@ -223,6 +223,7 @@ export const AUDIT_ACTION_SENTENCES: Record<string, (m: Record<string, unknown>)
   'agency.ownership_transferred': () => 'Ownership transferred',
 
   'project_request.balo_fee_overridden': () => 'Balo fee overridden',
+  'project_request.converted_from_case': () => 'Converted from a case',
   'project_request.owner_assigned': (m) =>
     m.to === null ? 'Balo owner cleared' : 'Balo owner assigned',
   'project_request.closed': (m) => {

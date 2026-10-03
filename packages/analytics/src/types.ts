@@ -57,6 +57,7 @@ import type { StripeRedirectEventMap } from './events/stripe-redirect';
 import type { AdminLookupEventMap } from './events/admin-lookup';
 import type { AdminApplicationsEventMap } from './events/admin-applications';
 import type { DashboardEventMap } from './events/dashboard';
+import type { CaseBriefEventMap } from './events/case-brief';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -138,7 +139,10 @@ export type AllEvents = AuthEventMap &
   // BAL-587 — the in-app rating card's CLIENT family. `EngagementRatingCard` (apps/web) is the
   // ONE dispatch point. `ReviewServerEventMap` (the write/nudge events) stays in `ServerEvents`
   // below; the two must never cross.
-  ReviewEventMap;
+  ReviewEventMap &
+  // BAL-589 — the "Convert a case to a project" AI brief's CLIENT family. `useCaseBriefFlow`
+  // (apps/web) is the ONE dispatch point; no server events (see the family's own header).
+  CaseBriefEventMap;
 
 export type EventName = keyof AllEvents;
 

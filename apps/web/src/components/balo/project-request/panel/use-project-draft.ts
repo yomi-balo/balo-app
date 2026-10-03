@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectRouting } from './send-to-selector';
 import type { ProjectDocumentRef } from '@/lib/project-request/actions/schemas';
 import type { ProjectRequestEntryPoint } from '@balo/shared/project-requests';
+import type { AiFieldSnapshot } from './use-ai-brief-flow';
 
 /**
  * Defined once in `@balo/shared/project-requests` and re-exported here so every existing import
@@ -25,6 +26,31 @@ export interface ProjectDraft {
   budgetMaxCents: number | null;
   /** Optional free-text timeline. Null = not specified. */
   timeline: string | null;
+  /**
+   * BAL-589 — case files the client has selected in `CaseFilePicker`, keyed by
+   * `` `${origin}:${id}` `` (the case file's own identity, origin-qualified since
+   * `meeting_files.id`/`conversation_files.id` are unique only within their own table) and
+   * mapped to the FULL {@link ProjectDocumentRef} the copy landed at in `project-documents/`.
+   * Lets the picker show a selection as already-copied across a reopen, and lets deselecting
+   * find the exact key to remove. Empty `{}` for every non-case mount and for a case mount with
+   * no selections.
+   *
+   * ⚠ Kept OUT of `documents`. `DocumentUploader` is uncontrolled (seeded once
+   * from `initialDocuments`, and `onDocumentsChange` REPLACES its caller's list wholesale from
+   * its own internal row state alone); a case copy added to `documents` from here was silently
+   * dropped the next time the uploader published its own rows — e.g. the first time the client
+   * also uploaded a file. Every consumer of "all the request's documents" combines the two
+   * through {@link allDraftDocuments} rather than reading `documents` alone.
+   */
+  caseFileSelections: Record<string, ProjectDocumentRef>;
+  /**
+   * BAL-589 — the snapshot taken right after `useCaseBriefFlow`'s last successful
+   * generation, persisted so `hasAiDraft`/`hasEditsSinceGenerate` survive a reload instead of
+   * resetting to "no AI draft" on every mount (they otherwise lived only in that hook's own,
+   * mount-scoped state). `null` whenever no case brief has ever landed, a new run has just
+   * started, or the last run failed.
+   */
+  caseBriefSnapshot: AiFieldSnapshot | null;
   /**
    * BAL-254 — which entry path produced this draft; threaded into
    * `submitProjectRequestAction`'s payload (replacing the old hardcoded `'manual'` literal at
@@ -60,9 +86,23 @@ const EMPTY_DRAFT_WITHOUT_ROUTING: DraftWithoutRouting = {
   budgetMinCents: null,
   budgetMaxCents: null,
   timeline: null,
+  caseFileSelections: {},
+  caseBriefSnapshot: null,
   source: 'manual',
   seededFrom: null,
 };
+
+/**
+ * BAL-589 — every document the request actually carries: the uploader-owned
+ * `documents` plus every case-file copy the client has selected. ONE helper so the submit
+ * payload, the review summary, the analytics `document_count`, and `useCaseBriefFlow`'s own
+ * resume check never drift from one another.
+ */
+export function allDraftDocuments(
+  draft: Pick<ProjectDraft, 'documents' | 'caseFileSelections'>
+): ProjectDocumentRef[] {
+  return [...draft.documents, ...Object.values(draft.caseFileSelections)];
+}
 
 const DEBOUNCE_MS = 400;
 
@@ -82,15 +122,19 @@ function defaultRoutingFor(expertProfileId: string | undefined): ProjectRouting 
 }
 
 /**
- * localStorage key. Expert-bound keeps the BYTE-IDENTICAL key from before this
- * relocation (`balo:project-draft:{id}`) so in-flight drafts survive. Context-free
- * mounts (no expert) namespace by entry point so different entry surfaces don't
+ * localStorage key. BAL-589 — a case mount's `caseId` wins over everything else: checked
+ * BEFORE the expert branch, so a case-bound mount never collides with (or falls back to) the
+ * SAME expert's profile draft. Expert-bound (no `caseId`) keeps the BYTE-IDENTICAL key from
+ * before this relocation (`balo:project-draft:{id}`) so in-flight drafts survive. Context-free
+ * mounts (no expert, no case) namespace by entry point so different entry surfaces don't
  * collide.
  */
 function draftKey(
   expertProfileId: string | undefined,
-  entryPoint: ProjectRequestEntryPoint
+  entryPoint: ProjectRequestEntryPoint,
+  caseId?: string
 ): string {
+  if (caseId !== undefined) return `balo:project-draft:case:${caseId}`;
   return expertProfileId
     ? `balo:project-draft:${expertProfileId}`
     : `balo:project-draft:entry:${entryPoint}`;
@@ -130,28 +174,64 @@ function readNullableTimeline(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/** Narrow one unknown value to a `ProjectDocumentRef`, else `null`. Shared by `readDocuments`
+ *  (an array of these) and `readCaseFileSelections` (a record of these) so the two never drift
+ *  on what counts as a valid persisted document ref. */
+function readDocumentRef(value: unknown): ProjectDocumentRef | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const { r2Key, fileName, contentType, sizeBytes } = record;
+  if (
+    typeof r2Key === 'string' &&
+    typeof fileName === 'string' &&
+    typeof contentType === 'string' &&
+    DOCUMENT_CONTENT_TYPES.has(contentType) &&
+    typeof sizeBytes === 'number'
+  ) {
+    return {
+      r2Key,
+      fileName,
+      contentType: contentType as ProjectDocumentRef['contentType'],
+      sizeBytes,
+    };
+  }
+  return null;
+}
+
+/** Narrow a persisted `caseFileSelections` to a `string`→`ProjectDocumentRef` record, dropping
+ *  any entry whose value isn't a valid document ref. `{}` for anything that isn't a plain
+ *  object. */
+function readCaseFileSelections(value: unknown): Record<string, ProjectDocumentRef> {
+  if (typeof value !== 'object' || value === null) return {};
+  const result: Record<string, ProjectDocumentRef> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const doc = readDocumentRef(entry);
+    if (doc !== null) result[key] = doc;
+  }
+  return result;
+}
+
+/** Narrow a persisted `caseBriefSnapshot` — anything malformed reads as "no AI case draft". */
+function readCaseBriefSnapshot(value: unknown): AiFieldSnapshot | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const { title, descriptionHtml } = record;
+  if (typeof title !== 'string' || typeof descriptionHtml !== 'string') return null;
+  return {
+    title,
+    descriptionHtml,
+    tagIds: readStringArray(record.tagIds),
+    productIds: readStringArray(record.productIds),
+  };
+}
+
 /** Narrow an unknown array to validated `ProjectDocumentRef[]`. */
 function readDocuments(value: unknown): ProjectDocumentRef[] {
   if (!Array.isArray(value)) return [];
   const docs: ProjectDocumentRef[] = [];
   for (const item of value) {
-    if (typeof item !== 'object' || item === null) continue;
-    const record = item as Record<string, unknown>;
-    const { r2Key, fileName, contentType, sizeBytes } = record;
-    if (
-      typeof r2Key === 'string' &&
-      typeof fileName === 'string' &&
-      typeof contentType === 'string' &&
-      DOCUMENT_CONTENT_TYPES.has(contentType) &&
-      typeof sizeBytes === 'number'
-    ) {
-      docs.push({
-        r2Key,
-        fileName,
-        contentType: contentType as ProjectDocumentRef['contentType'],
-        sizeBytes,
-      });
-    }
+    const doc = readDocumentRef(item);
+    if (doc !== null) docs.push(doc);
   }
   return docs;
 }
@@ -206,11 +286,12 @@ function isFreshHomeDraft(savedAt: unknown, now: number): boolean {
 function readDraft(
   expertProfileId: string | undefined,
   entryPoint: ProjectRequestEntryPoint,
-  defaultRouting: ProjectRouting
+  defaultRouting: ProjectRouting,
+  caseId?: string
 ): ProjectDraft {
   const emptyDraft: ProjectDraft = { routing: defaultRouting, ...EMPTY_DRAFT_WITHOUT_ROUTING };
   if (globalThis.window === undefined) return emptyDraft;
-  const key = draftKey(expertProfileId, entryPoint);
+  const key = draftKey(expertProfileId, entryPoint, caseId);
   try {
     const raw = globalThis.localStorage.getItem(key);
     if (raw === null) return emptyDraft;
@@ -231,6 +312,8 @@ function readDraft(
       budgetMinCents: readNullableCents(record.budgetMinCents),
       budgetMaxCents: readNullableCents(record.budgetMaxCents),
       timeline: readNullableTimeline(record.timeline),
+      caseFileSelections: readCaseFileSelections(record.caseFileSelections),
+      caseBriefSnapshot: readCaseBriefSnapshot(record.caseBriefSnapshot),
       source: readSource(record.source),
       seededFrom: readSeededFrom(record.seededFrom),
     };
@@ -264,9 +347,20 @@ export type FreshDraftFields = Partial<
   Pick<ProjectDraft, 'title' | 'descriptionHtml' | 'seededFrom'>
 >;
 
+/**
+ * BAL-589 — `setField` also accepts an UPDATER, exactly like React's own `setState`
+ * overload: `(key, (prev) => next)` applies against the LATEST draft value for that field, even
+ * when another `setField` call for the same key is still in flight (e.g. two case-file
+ * selections resolving back-to-back). A plain `value` is applied as before.
+ */
+export type SetProjectDraftField = <K extends keyof ProjectDraft>(
+  key: K,
+  value: ProjectDraft[K] | ((prev: ProjectDraft[K]) => ProjectDraft[K])
+) => void;
+
 interface UseProjectDraftResult {
   draft: ProjectDraft;
-  setField: <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => void;
+  setField: SetProjectDraftField;
   clearDraft: () => void;
   /** Replaces the whole draft with an empty one (default routing) carrying only `fields`. Unlike
    *  `clearDraft`, the result is autosaved like any edit. */
@@ -282,29 +376,46 @@ interface UseProjectDraftResult {
   revision: number;
 }
 
+/** @see SetProjectDraftField */
+function resolveFieldValue<T>(prev: T, value: T | ((prev: T) => T)): T {
+  if (typeof value === 'function') return (value as (prev: T) => T)(prev);
+  return value as T;
+}
+
 /**
  * localStorage autosave for the project-request form. Lazy-inits from storage,
  * debounces writes (~400ms), and exposes `clearDraft()` (called on a successful
  * submit) which removes the key entirely and resets to the computed default
  * routing. The key + default routing both derive from whether an expert is bound
  * (`expertProfileId`) — expert-bound defaults to Direct, context-free to Match.
+ *
+ * BAL-589 — `caseId`, present only for a "Convert to project" mount, overrides the key
+ * (`draftKey`'s case branch runs first), never the default routing — a case mount is always
+ * expert-bound too, so `defaultRoutingFor` already resolves to Direct.
  */
 export function useProjectDraft(
   expertProfileId: string | undefined,
-  entryPoint: ProjectRequestEntryPoint
+  entryPoint: ProjectRequestEntryPoint,
+  caseId?: string
 ): UseProjectDraftResult {
   const defaultRouting = defaultRoutingFor(expertProfileId);
   const [draft, setDraft] = useState<ProjectDraft>(() =>
-    readDraft(expertProfileId, entryPoint, defaultRouting)
+    readDraft(expertProfileId, entryPoint, defaultRouting, caseId)
   );
   const [revision, setRevision] = useState(0);
   const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearedRef = useRef(false);
 
-  const setField = useCallback(<K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => {
-    clearedRef.current = false;
-    setDraft((prev) => ({ ...prev, [key]: value }));
-  }, []);
+  const setField = useCallback(
+    <K extends keyof ProjectDraft>(
+      key: K,
+      value: ProjectDraft[K] | ((prev: ProjectDraft[K]) => ProjectDraft[K])
+    ) => {
+      clearedRef.current = false;
+      setDraft((prev) => ({ ...prev, [key]: resolveFieldValue(prev[key], value) }));
+    },
+    []
+  );
 
   const clearDraft = useCallback(() => {
     clearedRef.current = true;
@@ -315,11 +426,11 @@ export function useProjectDraft(
     setDraft({ routing: defaultRouting, ...EMPTY_DRAFT_WITHOUT_ROUTING });
     if (globalThis.window === undefined) return;
     try {
-      globalThis.localStorage.removeItem(draftKey(expertProfileId, entryPoint));
+      globalThis.localStorage.removeItem(draftKey(expertProfileId, entryPoint, caseId));
     } catch {
       // Ignore — nothing actionable if storage is unavailable.
     }
-  }, [expertProfileId, entryPoint, defaultRouting]);
+  }, [expertProfileId, entryPoint, caseId, defaultRouting]);
 
   const resetDraft = useCallback(
     (fields: FreshDraftFields) => {
@@ -350,7 +461,7 @@ export function useProjectDraft(
           ? { ...draft, savedAt: Date.now() }
           : draft;
         globalThis.localStorage.setItem(
-          draftKey(expertProfileId, entryPoint),
+          draftKey(expertProfileId, entryPoint, caseId),
           JSON.stringify(payload)
         );
       } catch {
@@ -360,7 +471,7 @@ export function useProjectDraft(
     return () => {
       if (writeTimer.current) clearTimeout(writeTimer.current);
     };
-  }, [draft, expertProfileId, entryPoint]);
+  }, [draft, expertProfileId, entryPoint, caseId]);
 
   return { draft, setField, clearDraft, resetDraft, replaceDraft, revision };
 }

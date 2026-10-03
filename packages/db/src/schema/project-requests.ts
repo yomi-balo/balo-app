@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   unique,
   check,
+  foreignKey,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import {
@@ -22,6 +23,7 @@ import { users } from './users';
 import { products } from './verticals';
 import { projectTags } from './project-tags';
 import { requestExpertRelationships } from './request-origination';
+import { caseEngagements } from './case-engagements';
 import { timestamps, softDelete } from './helpers';
 
 /**
@@ -165,6 +167,19 @@ export const projectRequests = pgTable(
       onDelete: 'restrict',
     }),
 
+    // ── Case provenance (BAL-589 / ADR-1025 amendment) ──────────────────────
+    /**
+     * The case this request was converted from. NULL ⇔ not converted from a case. It reaches
+     * the eventual project through `project_engagements.project_request_id`, so no column is
+     * needed on the engagement side.
+     *
+     * Written ONLY by `createProjectRequest`, in the same transaction as the
+     * `project_request.converted_from_case` audit row, which carries `{ sourceCaseId }` — so
+     * provenance survives this FK nulling. SET NULL, not CASCADE: a case hard-delete must never
+     * take a request with it. The FK lives in the table extras with an explicit name.
+     */
+    sourceCaseId: uuid('source_case_id'),
+
     ...timestamps,
     ...softDelete,
   },
@@ -177,6 +192,14 @@ export const projectRequests = pgTable(
     // Same FK-column rule (BAL-541). It ALSO serves the future "requests I own" queue
     // (ADR-1055) and the restrict FK's delete-time scan.
     index('project_requests_balo_owner_idx').on(table.baloOwnerUserId),
+    // Same FK-column rule (BAL-589). NOT PARTIAL — the SET NULL FK's delete-time scan ignores
+    // `deleted_at`.
+    index('project_requests_source_case_idx').on(table.sourceCaseId),
+    foreignKey({
+      columns: [table.sourceCaseId],
+      foreignColumns: [caseEngagements.engagementId],
+      name: 'project_requests_source_case_fk',
+    }).onDelete('set null'),
     // Soft-delete-aware composite for the expert's future "incoming requests"
     // inbox: expert + status, partial predicate on live rows.
     index('project_requests_expert_status_idx')

@@ -175,6 +175,7 @@ const CLIENT_VIEW: CaseSurfaceView = {
   canClose: true,
   caseScopeDomains: [],
   rating: null,
+  projectConversion: { productIds: [], expertAvailableForWork: true },
 };
 
 const EXPERT_VIEW: CaseSurfaceView = {
