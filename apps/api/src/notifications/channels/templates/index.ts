@@ -508,7 +508,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
           sourceCaseTitle: sourceCase.title,
           clientName,
         }),
-        subject: `${sanitizeSubjectTitle(clientName)} wants to turn ${sanitizeSubjectTitle(sourceCase.title)} into a project.`,
+        subject: `${sanitizeSubjectTitle(clientName)} wants to turn "${sanitizeSubjectTitle(sourceCase.title)}" into a project`,
       };
     }
 

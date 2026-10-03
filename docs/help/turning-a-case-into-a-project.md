@@ -38,8 +38,8 @@ files count toward the same four-file limit as anything you upload directly.
 
 ## The link back
 
-Once the request is sent, it carries a link back to the case it came from, so the expert — and
-you — can always trace a project to the conversation that started it.
+The request records the case it came from. You'll see "Linked to case" on the review step
+before you send it, and again on the confirmation screen once it's sent.
 
 ## Questions?
 

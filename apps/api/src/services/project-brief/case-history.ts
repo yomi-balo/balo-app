@@ -1,9 +1,11 @@
 import {
   conversationsRepository,
   meetingContextsRepository,
+  partyMembershipsRepository,
   transcriptArtifactsRepository,
   transcriptsRepository,
 } from '@balo/db';
+import { htmlToPlainText } from '@balo/shared/notifications';
 import { CASE_HISTORY_MAX_TRANSCRIPTS } from './config.js';
 
 /**
@@ -17,12 +19,14 @@ import { CASE_HISTORY_MAX_TRANSCRIPTS } from './config.js';
  * so a vendor row carrying extra money-ish columns cannot leak through by accident.
  *
  * It never calls `consultationTimestampsForEngagements`, and never touches `credit*`,
- * `expert_profiles`, a rate, a fee, or a currency.
+ * `expert_profiles`, a rate, a fee, or a currency. `partyMembershipsRepository.getMemberRole`
+ * is the one exception worth calling out explicitly: it resolves a sender's company
+ * MEMBERSHIP (for the `author` label), never a money surface.
  */
 
 /** One case conversation message, narrowed to what the brief prompt may read. */
 export interface CaseHistoryMessage {
-  readonly author: 'client' | 'expert';
+  readonly author: 'client' | 'expert' | 'participant';
   readonly sentAt: Date;
   readonly text: string;
 }
@@ -41,14 +45,54 @@ export interface CaseHistoryInput {
 }
 
 /**
- * The case's live conversation messages, narrowed to `author` / `sentAt` / `text`.
+ * A sender's `author` label for one case conversation message: `expertUserIds` decides
+ * `'expert'`; a sender who is a LIVE member of the case's company is `'client'`; every other
+ * sender — the expert's agency colleagues, a departed client member or delegate, a Balo staff
+ * account dropping a note, or anyone else with no live membership on either side — is
+ * `'participant'`. Deliberately NOT `'balo'`: that bucket also catches non-staff senders, and
+ * labelling their text "Balo:" would read as staff authority to the model.
+ */
+function resolveAuthor(
+  senderUserId: string,
+  expertUserIds: ReadonlySet<string>,
+  clientUserIds: ReadonlySet<string>
+): CaseHistoryMessage['author'] {
+  if (expertUserIds.has(senderUserId)) return 'expert';
+  if (clientUserIds.has(senderUserId)) return 'client';
+  return 'participant';
+}
+
+/**
+ * The non-expert senders among `senderUserIds` who are LIVE members of `companyId`, resolved
+ * through the existing `partyMembershipsRepository.getMemberRole` seam (no new repository
+ * method) — a defined role means a live membership, `undefined` means none.
+ */
+async function resolveClientUserIds(
+  companyId: string,
+  senderUserIds: ReadonlySet<string>
+): Promise<ReadonlySet<string>> {
+  const resolved = await Promise.all(
+    [...senderUserIds].map(async (userId) => {
+      const role = await partyMembershipsRepository.getMemberRole('company', companyId, userId);
+      return { userId, isLiveMember: role !== undefined };
+    })
+  );
+  return new Set(resolved.filter((entry) => entry.isLiveMember).map((entry) => entry.userId));
+}
+
+/**
+ * The case's live conversation messages, narrowed to `author` / `sentAt` / `text`. Each body is
+ * sanitised HTML (`schema/conversations.ts`), so it is decoded to plain text with
+ * `htmlToPlainText` before it is narrowed into the output — otherwise every tag would reach the
+ * prompt as literal markup noise once `escapeCaseAngleBrackets` (`prompts.ts`) escapes its
+ * angle brackets.
  *
  * The context type is `'engagement'`, never `'case'` (the case surface's own
- * `resolve-case-access.ts` reads the same anchor). `expertUserIds` decides `author` only —
- * every other sender is `'client'`.
+ * `resolve-case-access.ts` reads the same anchor).
  */
 async function buildMessages(
   engagementId: string,
+  companyId: string,
   expertUserIds: ReadonlySet<string>
 ): Promise<CaseHistoryMessage[]> {
   const conversation = await conversationsRepository.findByContext({
@@ -60,10 +104,15 @@ async function buildMessages(
   }
 
   const rows = await conversationsRepository.listMessages(conversation.id, { kind: 'full' });
+  const nonExpertSenderIds = new Set(
+    rows.map((row) => row.senderUserId).filter((senderUserId) => !expertUserIds.has(senderUserId))
+  );
+  const clientUserIds = await resolveClientUserIds(companyId, nonExpertSenderIds);
+
   return rows.map((row) => ({
-    author: expertUserIds.has(row.senderUserId) ? 'expert' : 'client',
+    author: resolveAuthor(row.senderUserId, expertUserIds, clientUserIds),
     sentAt: row.createdAt,
-    text: row.body,
+    text: htmlToPlainText(row.body),
   }));
 }
 
@@ -99,22 +148,30 @@ async function buildTranscriptLine(
  * absent one, the canonical segment text is joined instead. `durationMs`, `startMs` and
  * `endMs` are never read.
  *
+ * ⚠ `findByMeetingIds` is called for EVERY meeting on the case, not just the newest
+ * {@link CASE_HISTORY_MAX_TRANSCRIPTS} — it is a cheap ids-and-status lookup, and slicing to the
+ * newest N BEFORE knowing which meetings actually have a transcript ref would let newer,
+ * transcript-less meetings crowd an older one with real content out of the window entirely. The
+ * newest-N cut happens AFTER filtering to meetings that have a ref.
+ *
  * ⚠ The per-meeting reads run via `Promise.all`, not an `await` inside the loop.
  * `Promise.all` preserves input order in its resolved array regardless of resolution order, so
  * the newest-first ordering `renderCaseHistory` relies on survives unchanged.
  */
 async function buildTranscripts(engagementId: string): Promise<CaseHistoryTranscript[]> {
   const meetings = await meetingContextsRepository.listMeetingsForContext('case', engagementId);
-  const newest = [...meetings]
-    .sort((a, b) => b.scheduledStart.getTime() - a.scheduledStart.getTime())
-    .slice(0, CASE_HISTORY_MAX_TRANSCRIPTS);
-  if (newest.length === 0) {
+  if (meetings.length === 0) {
     return [];
   }
 
   const refsByMeetingId = await transcriptsRepository.findByMeetingIds(
-    newest.map((meeting) => meeting.id)
+    meetings.map((meeting) => meeting.id)
   );
+
+  const newest = meetings
+    .filter((meeting) => refsByMeetingId.has(meeting.id))
+    .sort((a, b) => b.scheduledStart.getTime() - a.scheduledStart.getTime())
+    .slice(0, CASE_HISTORY_MAX_TRANSCRIPTS);
 
   const lines = await Promise.all(
     newest.map((meeting) => buildTranscriptLine(meeting, refsByMeetingId.get(meeting.id)))
@@ -125,14 +182,19 @@ async function buildTranscripts(engagementId: string): Promise<CaseHistoryTransc
 /**
  * Build the narrowed case-history input for one case's project brief. PURE from the caller's
  * perspective — every field is read-only data, narrowed before it leaves this function.
+ *
+ * `companyId` is the case's own company — it never resolves anything money-shaped, only which
+ * non-expert senders are live members of that company (so they are labelled `'client'` rather
+ * than `'participant'`).
  */
 export async function buildCaseHistoryInput(input: {
   engagementId: string;
+  companyId: string;
   expertUserIds: readonly string[];
 }): Promise<CaseHistoryInput> {
   const expertUserIds = new Set(input.expertUserIds);
   const [messages, transcripts] = await Promise.all([
-    buildMessages(input.engagementId, expertUserIds),
+    buildMessages(input.engagementId, input.companyId, expertUserIds),
     buildTranscripts(input.engagementId),
   ]);
   return { messages, transcripts };
@@ -149,15 +211,27 @@ function formatDay(at: Date): string {
   return iso.slice(0, 10);
 }
 
+/** The rendered label for a message's `author`. */
+function authorLabel(author: CaseHistoryMessage['author']): string {
+  if (author === 'expert') return 'Expert';
+  if (author === 'client') return 'Client';
+  return 'Participant';
+}
+
 function messageLine(message: CaseHistoryMessage): HistoryLine {
-  const who = message.author === 'expert' ? 'Expert' : 'Client';
+  const who = authorLabel(message.author);
   return { at: message.sentAt, text: `[${formatDay(message.sentAt)}] ${who}: ${message.text}` };
+}
+
+/** The rendered label for a transcript's `source` — a raw transcript is never a "summary". */
+function transcriptLabel(source: CaseHistoryTranscript['source']): string {
+  return source === 'summary' ? 'Call summary' : 'Call transcript';
 }
 
 function transcriptLine(transcript: CaseHistoryTranscript): HistoryLine {
   return {
     at: transcript.heldAt,
-    text: `[${formatDay(transcript.heldAt)}] Call summary: ${transcript.text}`,
+    text: `[${formatDay(transcript.heldAt)}] ${transcriptLabel(transcript.source)}: ${transcript.text}`,
   };
 }
 

@@ -36,7 +36,7 @@ export interface EnqueueProjectBriefParseInput {
   logContext: Record<string, unknown>;
 }
 
-const GENERIC_ERROR = 'Something went wrong generating your brief. Your files are still attached.';
+const GENERIC_ERROR = 'Something went wrong generating your brief. Please try again.';
 
 /** The api answers `{ enqueued: true }` on success — nothing else is read from the body. */
 function parseEnqueueResponse(parsed: Record<string, unknown>): { enqueued: true } | null {

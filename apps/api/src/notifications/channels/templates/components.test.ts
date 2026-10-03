@@ -167,7 +167,7 @@ describe('ProjectRequestSubmittedEmail', () => {
     });
 
     expect(template.subject).toBe(
-      'Northwind Industrial wants to turn Flow interview loop into a project.'
+      'Northwind Industrial wants to turn "Flow interview loop" into a project'
     );
   });
 

@@ -69,16 +69,33 @@ const COPY_BY_REASON: Record<ProjectBriefFailureReason, CopyEntry> = {
 export interface GenerationErrorBannerProps {
   reason: ProjectBriefFailureReason;
   /** BAL-589 — `'case'` is the case-conversion manual step's failure state: one copy for every
-   *  reason (the client never sees which internal check failed), Try again + Dismiss. */
+   *  reason but `no_case_history` (the client never sees which internal check failed), Try
+   *  again + Dismiss. `no_case_history` gets its own copy and drops Try again (fix round 4,
+   *  X4a) — there is nothing to retry until the case itself has more history. */
   variant: 'upload' | 'review' | 'case';
+  /**
+   * BAL-589 fix round 4 (X4c) — the case variant's start-action error (the hourly rate limit,
+   * the wrong-workspace check), shown in place of {@link CASE_VARIANT_COPY} when present. Only
+   * read on `variant === 'case'`; ignored otherwise.
+   */
+  startError?: string | null;
   onRetry?: () => void;
   onWriteItMyself?: () => void;
   onDismiss?: () => void;
 }
 
-/** The ONE copy for a case-source failure, regardless of reason. */
+/** The ONE copy for a case-source failure with no more specific message to show, regardless
+ *  of reason. */
 const CASE_VARIANT_COPY: CopyEntry = {
   headline: "We couldn't draft a brief from this case — write it yourself below.",
+  clause: '',
+};
+
+/** X4a — a case with no message/call history to draft from: no retry makes this succeed, so
+ *  the banner offers none. */
+const CASE_NO_HISTORY_COPY: CopyEntry = {
+  headline:
+    "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below.",
   clause: '',
 };
 
@@ -93,15 +110,23 @@ const REVIEW_VARIANT_COPY: CopyEntry = {
  *  `upload`/the default case look up `reason` in {@link COPY_BY_REASON}. */
 function copyFor(
   variant: GenerationErrorBannerProps['variant'],
-  reason: ProjectBriefFailureReason
+  reason: ProjectBriefFailureReason,
+  startError: string | null | undefined
 ): CopyEntry {
-  if (variant === 'case') return CASE_VARIANT_COPY;
+  if (variant === 'case') {
+    if (reason === 'no_case_history') return CASE_NO_HISTORY_COPY;
+    if (startError !== null && startError !== undefined && startError.length > 0) {
+      return { headline: startError, clause: '' };
+    }
+    return CASE_VARIANT_COPY;
+  }
   if (variant === 'review') return REVIEW_VARIANT_COPY;
   return COPY_BY_REASON[reason];
 }
 
 interface ErrorBannerActionsProps {
   variant: GenerationErrorBannerProps['variant'];
+  reason: ProjectBriefFailureReason;
   onRetry?: () => void;
   onWriteItMyself?: () => void;
   onDismiss?: () => void;
@@ -111,6 +136,7 @@ interface ErrorBannerActionsProps {
  *  ternary to pick between three variants' very different button sets. */
 function ErrorBannerActions({
   variant,
+  reason,
   onRetry,
   onWriteItMyself,
   onDismiss,
@@ -138,7 +164,8 @@ function ErrorBannerActions({
     );
   }
 
-  if (variant === 'case') {
+  // X4a — no_case_history has nothing a retry can fix: Dismiss only, same as `review`.
+  if (variant === 'case' && reason !== 'no_case_history') {
     return (
       <div className="flex flex-col gap-2 sm:flex-row">
         <button
@@ -182,12 +209,13 @@ function ErrorBannerActions({
 export function GenerationErrorBanner({
   reason,
   variant,
+  startError,
   onRetry,
   onWriteItMyself,
   onDismiss,
 }: Readonly<GenerationErrorBannerProps>): React.JSX.Element {
   const reduce = useReducedMotion();
-  const copy = copyFor(variant, reason);
+  const copy = copyFor(variant, reason, startError);
 
   return (
     <motion.div
@@ -209,6 +237,7 @@ export function GenerationErrorBanner({
 
       <ErrorBannerActions
         variant={variant}
+        reason={reason}
         onRetry={onRetry}
         onWriteItMyself={onWriteItMyself}
         onDismiss={onDismiss}

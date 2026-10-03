@@ -26,6 +26,7 @@ const listMeetingsForContext = vi.fn();
 const findByMeetingIds = vi.fn();
 const findByTranscriptAndKind = vi.fn();
 const findTranscriptById = vi.fn();
+const getMemberRole = vi.fn();
 
 vi.mock('@balo/db', () => ({
   projectBriefParsesRepository: {
@@ -57,6 +58,9 @@ vi.mock('@balo/db', () => ({
   },
   transcriptArtifactsRepository: {
     findByTranscriptAndKind: (...args: unknown[]) => findByTranscriptAndKind(...args),
+  },
+  partyMembershipsRepository: {
+    getMemberRole: (...args: unknown[]) => getMemberRole(...args),
   },
 }));
 
@@ -173,6 +177,7 @@ beforeEach(() => {
   getProductsByVertical.mockResolvedValue([]);
   getR2ObjectBytes.mockResolvedValue(new Uint8Array([1, 2, 3]));
   headR2ObjectSize.mockResolvedValue(3);
+  getMemberRole.mockResolvedValue('member');
 });
 
 describe('runProjectBriefParse', () => {

@@ -61,6 +61,16 @@ export async function createPresignedProjectDocumentUpload(
 
 // ── R2 server-side copy (server-only) ──
 /**
+ * The case-files origin a source key belongs to, for log/error context — never the key itself.
+ * `null` means the key is outside the case-files space.
+ */
+function caseFileSourceOrigin(srcKey: string): 'conversation' | 'meeting' | null {
+  if (srcKey.startsWith(CONVERSATION_FILE_PREFIX)) return 'conversation';
+  if (srcKey.startsWith(MEETING_FILE_PREFIX)) return 'meeting';
+  return null;
+}
+
+/**
  * BAL-589 — server-side copy of ONE case file (`conversation-files/…` or `meeting-files/…`)
  * into the requester's `project-documents/{companyId}/{userId}/{uuid}` prefix, so converting a
  * case to a project never makes the client re-upload a file they already shared. Modelled on
@@ -72,16 +82,6 @@ export async function createPresignedProjectDocumentUpload(
  * failure — the calling action catches it, logs, and returns a friendly error rather than
  * reporting a copy that did not happen as a success.
  */
-/**
- * The case-files origin a source key belongs to, for log/error context — never the key itself.
- * `null` means the key is outside the case-files space.
- */
-function caseFileSourceOrigin(srcKey: string): 'conversation' | 'meeting' | null {
-  if (srcKey.startsWith(CONVERSATION_FILE_PREFIX)) return 'conversation';
-  if (srcKey.startsWith(MEETING_FILE_PREFIX)) return 'meeting';
-  return null;
-}
-
 export async function copyCaseFileIntoProjectDocuments(
   srcKey: string,
   destKey: string

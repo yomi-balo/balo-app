@@ -4,7 +4,6 @@ import {
   isSessionOwnedProjectDocumentKey,
   MAX_PARSE_DOCUMENT_BYTES,
   MAX_PARSE_INPUT_BYTES,
-  type ProjectBriefFailureReason,
 } from '@balo/shared/project-requests';
 import { createLogger } from '@balo/shared/logging';
 import { getR2ObjectBytes, headR2ObjectSize } from '../../lib/storage/r2.js';
@@ -29,6 +28,7 @@ import {
 } from './taxonomy-mapping.js';
 import { projectBriefNoopResult, projectBriefCaseNoopResult } from './noop-fallback.js';
 import { loadCaseSource } from './case-source.js';
+import { ProjectBriefParseError } from './errors.js';
 
 const log = createLogger('project-brief-parse');
 
@@ -44,20 +44,9 @@ function logR2Failure(parseId: string, error: unknown, message: string): void {
   log.error({ parseId, errorName: error instanceof Error ? error.name : 'unknown' }, message);
 }
 
-/**
- * A classified, terminal failure — carries the closed `ProjectBriefFailureReason` literal the
- * worker will persist via `markFailed`. `cause` (when present) is logged, never persisted.
- */
-export class ProjectBriefParseError extends Error {
-  constructor(
-    readonly reason: ProjectBriefFailureReason,
-    message: string,
-    readonly cause?: unknown
-  ) {
-    super(message);
-    this.name = 'ProjectBriefParseError';
-  }
-}
+// `ProjectBriefParseError` lives in `errors.ts` (not here) to avoid a circular import with
+// `case-source.ts`; re-exported so every existing importer of it from this module is unaffected.
+export { ProjectBriefParseError };
 
 export interface ParseDeps {
   readonly ai: AiClient;

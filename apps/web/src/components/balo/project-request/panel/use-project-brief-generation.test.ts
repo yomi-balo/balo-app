@@ -70,6 +70,36 @@ describe('useProjectBriefGeneration', () => {
     expect(result.current.failureReason).toBe('enqueue_failed');
   });
 
+  // X4c — the action's own `error` string survives onto the hook as `startError`.
+  it('a failed start() exposes the action error as `startError`', async () => {
+    mockStart.mockResolvedValue({ success: false, error: 'nope' });
+
+    const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
+    await act(async () => {
+      await result.current.start({ kind: 'documents', documents: DOCS });
+    });
+
+    expect(result.current.startError).toBe('nope');
+  });
+
+  it('startError is null before any start and is cleared by a fresh start()', async () => {
+    const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));
+    expect(result.current.startError).toBeNull();
+
+    mockStart.mockResolvedValue({ success: false, error: 'nope' });
+    await act(async () => {
+      await result.current.start({ kind: 'documents', documents: DOCS });
+    });
+    expect(result.current.startError).toBe('nope');
+
+    mockStart.mockResolvedValue({ success: true, parseId: 'p1' });
+    mockPoll.mockResolvedValue({ status: 'pending' });
+    await act(async () => {
+      await result.current.start({ kind: 'documents', documents: DOCS });
+    });
+    expect(result.current.startError).toBeNull();
+  });
+
   it('stops polling and calls onSucceeded when the poll reports succeeded', async () => {
     mockStart.mockResolvedValue({ success: true, parseId: 'p1' });
     const draft = {
@@ -458,6 +488,7 @@ describe('useProjectBriefGeneration', () => {
 
       expect(result.current.phase).toBe('failed');
       expect(result.current.failureReason).toBe('enqueue_failed');
+      expect(result.current.startError).toBe('denied');
     });
 
     it('a thrown case start lands on failed and reports to Sentry', async () => {

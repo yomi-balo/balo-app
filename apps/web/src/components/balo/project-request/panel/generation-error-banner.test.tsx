@@ -40,15 +40,10 @@ describe('GenerationErrorBanner', () => {
 
   // BAL-589 — the case-conversion manual step's failure state.
   describe('case variant', () => {
-    it('shows the SAME copy regardless of reason', () => {
+    it('shows the SAME generic copy for every reason but no_case_history', () => {
       const { rerender } = render(
         <GenerationErrorBanner reason="case_unavailable" variant="case" />
       );
-      expect(
-        screen.getByText("We couldn't draft a brief from this case — write it yourself below.")
-      ).toBeInTheDocument();
-
-      rerender(<GenerationErrorBanner reason="no_case_history" variant="case" />);
       expect(
         screen.getByText("We couldn't draft a brief from this case — write it yourself below.")
       ).toBeInTheDocument();
@@ -77,6 +72,58 @@ describe('GenerationErrorBanner', () => {
       expect(onRetry).toHaveBeenCalled();
       await user.click(screen.getByRole('button', { name: /dismiss/i }));
       expect(onDismiss).toHaveBeenCalled();
+    });
+
+    // X4a — no history to draft from: its own copy, and no Try again (nothing to retry).
+    it('no_case_history gets its own copy and drops Try again', async () => {
+      const onDismiss = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <GenerationErrorBanner reason="no_case_history" variant="case" onDismiss={onDismiss} />
+      );
+
+      expect(
+        screen.getByText(
+          "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below."
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /dismiss/i }));
+      expect(onDismiss).toHaveBeenCalled();
+    });
+
+    // X4c — the start action's own error (rate limit, wrong workspace) replaces the generic copy.
+    it('shows startError in place of the generic copy, and keeps Try again', () => {
+      render(
+        <GenerationErrorBanner
+          reason="enqueue_failed"
+          variant="case"
+          startError="Switch to the workspace this case belongs to."
+        />
+      );
+
+      expect(screen.getByText('Switch to the workspace this case belongs to.')).toBeInTheDocument();
+      expect(
+        screen.queryByText("We couldn't draft a brief from this case — write it yourself below.")
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    });
+
+    // no_case_history wins even if a stale startError is still set.
+    it('no_case_history takes priority over a startError', () => {
+      render(
+        <GenerationErrorBanner
+          reason="no_case_history"
+          variant="case"
+          startError="Switch to the workspace this case belongs to."
+        />
+      );
+
+      expect(
+        screen.getByText(
+          "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below."
+        )
+      ).toBeInTheDocument();
     });
   });
 });

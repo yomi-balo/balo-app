@@ -2208,19 +2208,96 @@ describe('ProjectRequestPanel', () => {
       expect(screen.getByLabelText(/project title/i)).toHaveValue(CASE_SOURCE.title);
     }, 8000);
 
-    it('a failed generation shows the case banner above an empty editor', async () => {
+    // X4a — no_case_history gets its own copy and no "Try again" (nothing to retry).
+    it('a no_case_history failure shows the no-history banner, with no Try again', async () => {
       mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
       mockGetBrief.mockResolvedValue({ status: 'failed', failureReason: 'no_case_history' });
       renderCasePanel();
 
       expect(
         await screen.findByText(
-          "We couldn't draft a brief from this case — write it yourself below.",
+          "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below.",
           {},
           { timeout: 4000 }
         )
       ).toBeInTheDocument();
       expect(screen.getByLabelText(/project description/i)).toHaveValue('');
+      expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument();
+    }, 8000);
+
+    // Coordinator correction — the no-history flag is per-open, not persisted: a close then
+    // reopen of the SAME case mount gets a fresh auto-start attempt (so a case that gained
+    // messages in between can draft from them).
+    it('a reopen of a no_case_history draft auto-starts the generation again', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'failed', failureReason: 'no_case_history' });
+      const { rerender } = renderCasePanel();
+
+      await screen.findByText(
+        "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below.",
+        {},
+        { timeout: 4000 }
+      );
+      mockStartCaseBrief.mockClear();
+
+      // Close, then reopen the SAME case mount.
+      rerender(
+        <ProjectRequestPanel
+          open={false}
+          onClose={vi.fn()}
+          {...BASE_PROPS}
+          sourceCase={CASE_SOURCE}
+        />
+      );
+      rerender(
+        <ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} sourceCase={CASE_SOURCE} />
+      );
+
+      await waitFor(() => expect(mockStartCaseBrief).toHaveBeenCalledTimes(1));
+      expect(mockStartCaseBrief).toHaveBeenCalledWith({ caseId: CASE_SOURCE.id });
+    }, 8000);
+
+    // Coordinator correction (point 2) — while the no-history banner is showing, the client
+    // may have added messages to the case since; "Redraft from case" stays clickable despite
+    // there being no AI draft yet, so they can retry without closing the panel.
+    it('enables "Redraft from case" during a no_case_history failure, and clicking it starts a new run', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'failed', failureReason: 'no_case_history' });
+      const user = userEvent.setup();
+      renderCasePanel();
+
+      await screen.findByText(
+        "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below.",
+        {},
+        { timeout: 4000 }
+      );
+
+      const redraftButton = screen.getByRole('button', { name: /redraft from case/i });
+      expect(redraftButton).toBeEnabled();
+
+      mockStartCaseBrief.mockClear();
+      await user.click(redraftButton);
+
+      expect(mockStartCaseBrief).toHaveBeenCalledWith({ caseId: CASE_SOURCE.id });
+    }, 8000);
+
+    // X4c — a start-action error (rate limit, wrong workspace) replaces the generic case copy.
+    it('a start-action error (not no_case_history) shows startError as the banner copy', async () => {
+      mockStartCaseBrief.mockResolvedValue({
+        success: false,
+        error: 'Switch to the workspace this case belongs to.',
+      });
+      renderCasePanel();
+
+      expect(
+        await screen.findByText(
+          'Switch to the workspace this case belongs to.',
+          {},
+          { timeout: 4000 }
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
     }, 8000);
 
     it('a case mount with availableForWork=false shows "Get matched instead" on the manual step', () => {

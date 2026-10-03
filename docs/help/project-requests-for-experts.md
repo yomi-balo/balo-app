@@ -1,7 +1,7 @@
 # Project requests
 
-When a request started life as a case, it says so and links back to that case, so you have the
-full message history and consultation record to draw on before you reply.
+When a request started life as a case, the new-request notification names the case it came
+from, so you know there's message history and consultation records behind it before you reply.
 
 ## Questions?
 

@@ -52,6 +52,13 @@ export interface UseProjectBriefGenerationResult {
   phase: BriefGenerationPhase;
   headingIndex: 0 | 1 | 2;
   failureReason: ProjectBriefFailureReason | null;
+  /**
+   * BAL-589 fix round 4 (X4c) — the `error` string the start action returned alongside
+   * `success: false` (the hourly rate limit, the wrong-workspace check), or `null` for every
+   * other failure path (a thrown action, a poll failure) where there is no such message. A
+   * case-mount caller shows this in place of its generic failure copy when it is non-null.
+   */
+  startError: string | null;
   start: (source: BriefSource) => Promise<void>;
   dismissFailure: () => void;
   /**
@@ -88,6 +95,7 @@ export function useProjectBriefGeneration(
 ): UseProjectBriefGenerationResult {
   const [phase, setPhase] = useState<BriefGenerationPhase>('idle');
   const [failureReason, setFailureReason] = useState<ProjectBriefFailureReason | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
   const [headingIndex, setHeadingIndex] = useState<0 | 1 | 2>(0);
 
   const onSucceededRef = useRef(options.onSucceeded);
@@ -121,6 +129,7 @@ export function useProjectBriefGeneration(
   const dismissFailure = useCallback(() => {
     setPhase('idle');
     setFailureReason(null);
+    setStartError(null);
   }, []);
 
   /** @see UseProjectBriefGenerationResult.cancel */
@@ -135,6 +144,7 @@ export function useProjectBriefGeneration(
     parseIdRef.current = null;
     setPhase('idle');
     setFailureReason(null);
+    setStartError(null);
     setHeadingIndex(0);
   }, [clearPolling]);
 
@@ -149,6 +159,7 @@ export function useProjectBriefGeneration(
       parseIdRef.current = null;
       setPhase('generating');
       setFailureReason(null);
+      setStartError(null);
       setHeadingIndex(0);
 
       let result: StartProjectBriefParseResult;
@@ -184,6 +195,7 @@ export function useProjectBriefGeneration(
       if (!result.success || result.parseId === undefined) {
         setPhase('failed');
         setFailureReason('enqueue_failed');
+        setStartError(result.error ?? null);
         return;
       }
 
@@ -243,5 +255,5 @@ export function useProjectBriefGeneration(
     [clearPolling]
   );
 
-  return { phase, headingIndex, failureReason, start, dismissFailure, cancel };
+  return { phase, headingIndex, failureReason, startError, start, dismissFailure, cancel };
 }

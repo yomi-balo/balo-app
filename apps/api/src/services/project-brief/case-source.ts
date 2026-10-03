@@ -2,7 +2,7 @@ import { caseEngagementsRepository, expertsRepository, type ProjectBriefParse } 
 import { createLogger } from '@balo/shared/logging';
 import { buildCaseHistoryInput, renderCaseHistory } from './case-history.js';
 import { CASE_HISTORY_MAX_CHARS } from './config.js';
-import { ProjectBriefParseError } from './parse.js';
+import { ProjectBriefParseError } from './errors.js';
 
 const log = createLogger('project-brief-case-source');
 
@@ -39,7 +39,11 @@ export async function loadCaseSource(row: ProjectBriefParse, parseId: string): P
 
   const expertUserIds = await expertsRepository.findUserIdsByProfileIds([caseRow.expertProfileId]);
 
-  const historyInput = await buildCaseHistoryInput({ engagementId, expertUserIds });
+  const historyInput = await buildCaseHistoryInput({
+    engagementId,
+    companyId: row.companyId,
+    expertUserIds,
+  });
   if (historyInput.messages.length === 0 && historyInput.transcripts.length === 0) {
     log.warn({ parseId, caseId: engagementId }, 'Project brief parse — case has no history');
     throw new ProjectBriefParseError('no_case_history', 'The case has no messages or transcripts');

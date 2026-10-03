@@ -23,7 +23,8 @@ const mockCancel = vi.fn();
 let genState: {
   phase: 'idle' | 'generating' | 'failed';
   failureReason: ProjectBriefFailureReason | null;
-} = { phase: 'idle', failureReason: null };
+  startError: string | null;
+} = { phase: 'idle', failureReason: null, startError: null };
 
 vi.mock('./use-project-brief-generation', () => ({
   useProjectBriefGeneration: (options: {
@@ -34,6 +35,7 @@ vi.mock('./use-project-brief-generation', () => ({
       phase: genState.phase,
       headingIndex: 0 as const,
       failureReason: genState.failureReason,
+      startError: genState.startError,
       start: mockStart,
       dismissFailure: mockDismissFailure,
       cancel: mockCancel,
@@ -111,7 +113,7 @@ describe('useCaseBriefFlow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     captured.onSucceeded = undefined;
-    genState = { phase: 'idle', failureReason: null };
+    genState = { phase: 'idle', failureReason: null, startError: null };
   });
 
   describe('inert when sourceCase is undefined', () => {
@@ -317,7 +319,7 @@ describe('useCaseBriefFlow', () => {
   describe('a failed generation', () => {
     it('tracks CASE_BRIEF_EVENTS.GENERATED with success: false and the reason, once', () => {
       const { view } = renderFlow();
-      genState = { phase: 'failed', failureReason: 'no_case_history' };
+      genState = { phase: 'failed', failureReason: 'no_case_history', startError: null };
       view.rerender({ sourceCase: SOURCE_CASE, open: true, isFlowActive: true, draft: DRAFT });
 
       expect(track).toHaveBeenCalledWith(
@@ -341,6 +343,45 @@ describe('useCaseBriefFlow', () => {
         .mocked(track)
         .mock.calls.filter((call) => call[0] === CASE_BRIEF_EVENTS.GENERATED).length;
       expect(callCountAfterSecond).toBe(callCountAfterFirst);
+    });
+
+    // Coordinator correction (not persisted) — within the SAME open, a no_case_history
+    // failure must not trigger a second auto-start attempt.
+    it('does not auto-retry within the same open after a no_case_history failure', () => {
+      const { view } = renderFlow();
+      expect(mockStart).toHaveBeenCalledTimes(1);
+
+      genState = { phase: 'failed', failureReason: 'no_case_history', startError: null };
+      view.rerender({ sourceCase: SOURCE_CASE, open: true, isFlowActive: true, draft: DRAFT });
+      // Further re-renders of the SAME open must not call start() again.
+      view.rerender({ sourceCase: SOURCE_CASE, open: true, isFlowActive: true, draft: DRAFT });
+
+      expect(mockStart).toHaveBeenCalledTimes(1);
+    });
+
+    // The per-open flag is NOT persisted — a fresh open always gets a fresh attempt, so a case
+    // that gains messages after a no_case_history failure can draft from it on the next open.
+    it('a reopen (close then open) auto-starts again after a no_case_history failure', () => {
+      const { view } = renderFlow();
+      expect(mockStart).toHaveBeenCalledTimes(1);
+
+      genState = { phase: 'failed', failureReason: 'no_case_history', startError: null };
+      view.rerender({ sourceCase: SOURCE_CASE, open: true, isFlowActive: true, draft: DRAFT });
+
+      // Close, then reopen — a FRESH open. The draft is still empty (nothing was ever written),
+      // so the resume guard doesn't block it either.
+      view.rerender({ sourceCase: SOURCE_CASE, open: false, isFlowActive: false, draft: DRAFT });
+      genState = { phase: 'idle', failureReason: null, startError: null };
+      view.rerender({ sourceCase: SOURCE_CASE, open: true, isFlowActive: true, draft: DRAFT });
+
+      expect(mockStart).toHaveBeenCalledTimes(2);
+    });
+
+    // X4c — the start action's own error string passes straight through.
+    it("exposes the generation hook's startError unchanged", () => {
+      genState = { phase: 'failed', failureReason: 'enqueue_failed', startError: 'denied' };
+      const { view } = renderFlow();
+      expect(view.result.current.startError).toBe('denied');
     });
   });
 

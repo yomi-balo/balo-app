@@ -83,6 +83,7 @@ const listMeetingsForContext = vi.fn();
 const findByMeetingIds = vi.fn();
 const findByTranscriptAndKind = vi.fn();
 const findById = vi.fn();
+const getMemberRole = vi.fn();
 
 vi.mock('@balo/db', () => ({
   conversationsRepository: {
@@ -99,15 +100,20 @@ vi.mock('@balo/db', () => ({
   transcriptArtifactsRepository: {
     findByTranscriptAndKind: (...args: unknown[]) => findByTranscriptAndKind(...args),
   },
+  partyMembershipsRepository: {
+    getMemberRole: (...args: unknown[]) => getMemberRole(...args),
+  },
 }));
 
 const ENGAGEMENT_ID = '11111111-1111-1111-1111-111111111111';
+const COMPANY_ID = '66666666-6666-6666-6666-666666666666';
 const MEETING_ID = '22222222-2222-2222-2222-222222222222';
 const TRANSCRIPT_ID = '33333333-3333-3333-3333-333333333333';
 
 describe('invariant: buildCaseHistoryInput — the shape check', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getMemberRole.mockResolvedValue('member');
   });
 
   it('⚠⚠ the output key set is EXACTLY {messages:[author,sentAt,text], transcripts:[heldAt,source,text]} — even when the underlying rows carry money-ish fields', async () => {
@@ -170,6 +176,7 @@ describe('invariant: buildCaseHistoryInput — the shape check', () => {
 
     const result = await buildCaseHistoryInput({
       engagementId: ENGAGEMENT_ID,
+      companyId: COMPANY_ID,
       expertUserIds: ['user-expert'],
     });
 

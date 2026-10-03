@@ -99,6 +99,8 @@ interface CaseBriefBundle {
   sourceCase: ProjectRequestSourceCase;
   phase: CaseBriefPhase;
   failureReason: ProjectBriefFailureReason | null;
+  /** @see UseCaseBriefFlowResult.startError */
+  startError: string | null;
   revealedHtml: string | null;
   hasAiDraft: boolean;
   onRedraftClick: () => void;
@@ -321,6 +323,7 @@ function buildCaseBriefBundle(
     sourceCase,
     phase: flow.phase,
     failureReason: flow.failureReason,
+    startError: flow.startError,
     revealedHtml: flow.revealedHtml,
     hasAiDraft: flow.hasAiDraft,
     onRedraftClick: flow.handleRedraftClick,
@@ -1904,10 +1907,19 @@ function CaseBriefSkeleton(): React.JSX.Element {
   );
 }
 
-/** "Redraft from case" is live only once a case brief has actually landed and
- *  nothing is in flight; disabled the rest of the time (including the auto-start's own
- *  `generating` phase, before `hasAiDraft` is even relevant). */
-function canRedraftCaseBrief(hasAiDraft: boolean, phase: CaseBriefPhase): boolean {
+/**
+ * "Redraft from case" is live once a case brief has actually landed and nothing is in flight;
+ * disabled the rest of the time (including the auto-start's own `generating` phase, before
+ * `hasAiDraft` is even relevant) — EXCEPT a `no_case_history` failure, which also enables it
+ * despite there being no AI draft yet: the client may have added messages to the case since the
+ * failure, and clicking it lets them retry without closing and reopening the panel.
+ */
+function canRedraftCaseBrief(
+  hasAiDraft: boolean,
+  phase: CaseBriefPhase,
+  failureReason: ProjectBriefFailureReason | null
+): boolean {
+  if (phase === 'failed' && failureReason === 'no_case_history') return true;
   return hasAiDraft && (phase === 'idle' || phase === 'failed');
 }
 
@@ -1937,6 +1949,7 @@ function CaseBriefField({
   const {
     phase,
     failureReason,
+    startError,
     revealedHtml,
     hasAiDraft,
     onRedraftClick,
@@ -1945,7 +1958,7 @@ function CaseBriefField({
   } = bundle;
   const working = phase === 'generating' || phase === 'revealing';
   const helperLine = caseBriefHelperLine(working, hasAiDraft);
-  const canRedraft = canRedraftCaseBrief(hasAiDraft, phase);
+  const canRedraft = canRedraftCaseBrief(hasAiDraft, phase, failureReason);
 
   return (
     <div className="space-y-2">
@@ -1978,6 +1991,7 @@ function CaseBriefField({
             <GenerationErrorBanner
               reason={failureReason ?? 'unknown'}
               variant="case"
+              startError={startError}
               onRetry={onRetry}
               onDismiss={onDismissFailure}
             />

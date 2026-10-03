@@ -46,6 +46,8 @@ export type CaseBriefPhase = 'idle' | 'generating' | 'revealing' | 'failed';
 export interface UseCaseBriefFlowResult {
   phase: CaseBriefPhase;
   failureReason: ProjectBriefFailureReason | null;
+  /** @see UseProjectBriefGenerationResult.startError */
+  startError: string | null;
   /** The progressively-revealed HTML while `phase === 'revealing'`; `null` otherwise. */
   revealedHtml: string | null;
   /** True once at least one case brief has landed successfully — persisted, so
@@ -122,6 +124,14 @@ export function useCaseBriefFlow({
   const generateStartedAtRef = useRef<number | null>(null);
   const failureTrackedRef = useRef(false);
   const openAutoStartedRef = useRef(false);
+  /**
+   * BAL-589 fix round 4 (coordinator correction) — PER-OPEN, not persisted: true once THIS
+   * open's generation has failed with `no_case_history`. Reset to `false` whenever the panel
+   * closes (see the auto-start effect below), so a later open always gets a fresh attempt —
+   * unlike the earlier draft-persisted flag, which never cleared and left a case that later
+   * gained messages permanently stuck on auto-start.
+   */
+  const [noHistoryThisOpen, setNoHistoryThisOpen] = useState(false);
 
   // ⚠ `hasAiDraft`/`hasEditsSinceGenerate` are DERIVED from the PERSISTED
   // `draft.caseBriefSnapshot`, not mount-scoped hook state, so a reload still knows a brief
@@ -143,7 +153,11 @@ export function useCaseBriefFlow({
   // this, the first paint showed the plain (empty) editor for one frame before the effect's
   // `start()` call landed its own `generating` state.
   const willAutoStart =
-    sourceCase !== undefined && open && !openAutoStartedRef.current && !isResumingCaseDraft(draft);
+    sourceCase !== undefined &&
+    open &&
+    !openAutoStartedRef.current &&
+    !isResumingCaseDraft(draft) &&
+    !noHistoryThisOpen;
 
   const handleGenerationSucceeded = useCallback(
     (patch: ProjectBriefDraftPatch) => {
@@ -191,6 +205,7 @@ export function useCaseBriefFlow({
     start: startGeneration,
     cancel: cancelBriefGeneration,
     dismissFailure: dismissGenerationFailure,
+    startError,
   } = briefGeneration;
 
   // Abandon on flow inactive (drawer closed / request submitted) — mirrors `useAiBriefFlow`.
@@ -216,6 +231,11 @@ export function useCaseBriefFlow({
             failure_reason: briefGeneration.failureReason,
           });
         }
+        // ⚠ BAL-589 fix round 4 — per-open only (`willAutoStart` reads it); reset on the
+        // NEXT close so a case that later gains messages isn't stuck forever.
+        if (briefGeneration.failureReason === 'no_case_history') {
+          setNoHistoryThisOpen(true);
+        }
       }
     } else {
       failureTrackedRef.current = false;
@@ -239,6 +259,10 @@ export function useCaseBriefFlow({
   useEffect(() => {
     if (!open) {
       openAutoStartedRef.current = false;
+      // ⚠ BAL-589 fix round 4 — THE PER-OPEN RESET. Forgets any no_case_history failure from
+      // the open that just ended, so the NEXT open gets a fresh auto-start attempt instead of
+      // staying stuck forever (the bug in the earlier draft-persisted version of this flag).
+      setNoHistoryThisOpen(false);
       return;
     }
     if (openAutoStartedRef.current) return;
@@ -247,6 +271,11 @@ export function useCaseBriefFlow({
     openAutoStartedRef.current = true;
 
     if (isResumingCaseDraft(draftRef.current)) return;
+    // ⚠ The per-open gate this flag exists for. Normally already `false` here — the close
+    // branch above resets it before any later open reaches this point — so this only trips
+    // when that reset is skipped, which is exactly what guards against a case with no history
+    // staying stuck on every reopen.
+    if (noHistoryThisOpen) return;
 
     if (draftRef.current.title.trim() === '') setField('title', sourceCaseNow.title);
     if (draftRef.current.productIds.length === 0) {
@@ -255,7 +284,7 @@ export function useCaseBriefFlow({
     runGenerate();
     // `sourceCase`/`draft` are read through refs (fresh at the instant this effect first runs
     // for a given `open`); only `open` itself should re-trigger it.
-  }, [open, runGenerate, setField]);
+  }, [open, runGenerate, setField, noHistoryThisOpen]);
 
   const runRedraft = useCallback(() => {
     const sourceCaseNow = sourceCaseRef.current;
@@ -288,6 +317,7 @@ export function useCaseBriefFlow({
   return {
     phase,
     failureReason: briefGeneration.failureReason,
+    startError,
     revealedHtml: phase === 'revealing' ? reveal.visibleHtml : null,
     hasAiDraft,
     hasEditsSinceGenerate,

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ProjectBriefParse } from '@balo/db';
 import { loadCaseSource } from './case-source.js';
-import { ProjectBriefParseError } from './parse.js';
+import { ProjectBriefParseError } from './errors.js';
 
 const findByEngagementId = vi.fn();
 const findUserIdsByProfileIds = vi.fn();
@@ -9,6 +9,7 @@ const findByContext = vi.fn();
 const listMessages = vi.fn();
 const listMeetingsForContext = vi.fn();
 const findByMeetingIds = vi.fn();
+const getMemberRole = vi.fn();
 
 vi.mock('@balo/db', () => ({
   caseEngagementsRepository: {
@@ -30,6 +31,9 @@ vi.mock('@balo/db', () => ({
   },
   transcriptArtifactsRepository: {
     findByTranscriptAndKind: vi.fn(),
+  },
+  partyMembershipsRepository: {
+    getMemberRole: (...args: unknown[]) => getMemberRole(...args),
   },
 }));
 
@@ -68,6 +72,7 @@ function parseRow(overrides: Partial<ProjectBriefParse> = {}): ProjectBriefParse
 beforeEach(() => {
   vi.clearAllMocks();
   listMeetingsForContext.mockResolvedValue([]);
+  getMemberRole.mockResolvedValue('member');
 });
 
 describe('loadCaseSource', () => {
