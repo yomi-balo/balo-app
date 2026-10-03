@@ -278,7 +278,8 @@ describe('CasePartyCard — the open-case follow-up for a paused expert (BAL-591
   it('books in-page and tracks the click instead of linking to the profile', async () => {
     const user = userEvent.setup();
     const onBookFollowUp = vi.fn();
-    renderCard({ onBookFollowUp, followUpRequest: 3 });
+    const followUpRequest = { seq: 3, source: 'book_again' } as const;
+    renderCard({ onBookFollowUp, followUpRequest });
 
     expect(screen.queryByRole('link', { name: BOOK_AGAIN })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: BOOK_AGAIN }));
@@ -288,7 +289,20 @@ describe('CasePartyCard — the open-case follow-up for a paused expert (BAL-591
       action: 'book_another',
       lens: 'client',
     });
-    expect(mockQuickPickProps).toHaveBeenCalledWith(expect.objectContaining({ openRequest: 3 }));
+    expect(mockQuickPickProps).toHaveBeenCalledWith(
+      expect.objectContaining({ openRequest: followUpRequest })
+    );
+  });
+
+  it('still offers the in-page CTA when the expert has no username (it never uses the href)', async () => {
+    const user = userEvent.setup();
+    const onBookFollowUp = vi.fn();
+    renderCard({
+      party: { ...PARTY, bookAgainHref: null },
+      onBookFollowUp,
+    });
+    await user.click(screen.getByRole('button', { name: BOOK_AGAIN }));
+    expect(onBookFollowUp).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the profile link when no in-page handler is given (closed case or available expert)', () => {

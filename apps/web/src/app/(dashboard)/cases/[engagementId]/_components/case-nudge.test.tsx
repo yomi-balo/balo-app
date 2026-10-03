@@ -1275,6 +1275,22 @@ describe('CaseNudge — the nothing-booked CTA for a paused expert on an open ca
     expect(onBookFollowUp).toHaveBeenCalledTimes(1);
   });
 
+  it('still offers the in-page CTA with a null bookAgainHref (the href is link-path only)', async () => {
+    const user = userEvent.setup();
+    const onBookFollowUp = vi.fn();
+    render(
+      <CaseNudge
+        {...BASE}
+        bookAgainHref={null}
+        onBookFollowUp={onBookFollowUp}
+        nudge={{ kind: 'nothing_booked' }}
+        lens="client"
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Book a consultation' }));
+    expect(onBookFollowUp).toHaveBeenCalledTimes(1);
+  });
+
   it('never offers the in-page CTA on the expert lens', () => {
     render(
       <CaseNudge

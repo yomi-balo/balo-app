@@ -84,8 +84,10 @@ vi.mock('@/components/booking/reschedule-dialog', () => ({
 // BAL-591 — the quick-pick strip fetches availability on its own; stubbed to expose the
 // `openRequest` counter the surface bumps for an in-page follow-up booking.
 vi.mock('./case-slot-quick-pick', () => ({
-  CaseSlotQuickPick: (props: Readonly<{ openRequest?: number }>) => (
-    <div data-testid="quick-pick-stub">request: {String(props.openRequest)}</div>
+  CaseSlotQuickPick: (props: Readonly<{ openRequest?: { seq: number; source: string } }>) => (
+    <div data-testid="quick-pick-stub">
+      request: {String(props.openRequest?.seq)} source: {props.openRequest?.source}
+    </div>
   ),
 }));
 
@@ -1602,9 +1604,13 @@ describe('CaseSurface — follow-ups for a paused expert (BAL-591)', () => {
     expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 0');
 
     await user.click(screen.getByRole('button', { name: 'Book with Amara again' }));
-    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 1');
+    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent(
+      'request: 1 source: book_again'
+    );
     await user.click(screen.getByRole('button', { name: 'Book a consultation' }));
-    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 2');
+    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent(
+      'request: 2 source: case_nudge'
+    );
   });
 
   it('CLOSED + paused keeps the profile links (a new case lands on the paused card)', () => {

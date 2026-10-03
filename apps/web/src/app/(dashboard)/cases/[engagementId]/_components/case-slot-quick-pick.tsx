@@ -6,10 +6,12 @@ import { Video } from 'lucide-react';
 import { toast } from 'sonner';
 import { useExpertAvailability } from '@/components/availability/use-expert-availability';
 import { SLOT_DURATION_LADDER, type SlotDurationMinutes } from '@balo/shared/availability';
+import type { BookingSource } from '@/lib/analytics';
 import { BookingFlowDialog, type BookingFlowExpert, type PresetSlot } from '@/components/booking';
 
 const QUICK_PICK_WINDOW_DAYS = 7;
 const QUICK_PICK_COUNT = 3;
+const NO_REQUEST: FollowUpRequest = { seq: 0, source: 'book_again' };
 
 /** The longest allowed duration that still fits inside `maxDuration`, or `null` if none does. */
 function bestDurationFor(maxDuration: number): SlotDurationMinutes | null {
@@ -26,6 +28,13 @@ function formatPill(iso: string): string {
   return `${day} ${time}`;
 }
 
+/** An external ask to open the dialog on the first slot, tagged with the CTA that raised it. */
+export interface FollowUpRequest {
+  /** Bumped per ask; `0` means nothing has been requested. */
+  seq: number;
+  source: Extract<BookingSource, 'book_again' | 'case_nudge'>;
+}
+
 export interface CaseSlotQuickPickProps {
   engagementId: string;
   caseTitle: string;
@@ -40,11 +49,11 @@ export interface CaseSlotQuickPickProps {
    */
   viewerEmailDomain: string | null;
   /**
-   * A counter the case surface bumps when a follow-up CTA elsewhere on the page (the party
-   * card's "Book again", the nudge's "Book a consultation") asks this strip to open the booking
-   * dialog on the next available slot. `0` means nothing has been requested.
+   * Raised by the case surface when a follow-up CTA elsewhere on the page (the party card's
+   * "Book again", the nudge's "Book a consultation") asks this strip to open the booking dialog
+   * on the next available slot. Its `source` attributes the dialog's `FLOW_OPENED` event.
    */
-  openRequest?: number;
+  openRequest?: FollowUpRequest;
 }
 
 /**
@@ -59,9 +68,11 @@ export interface CaseSlotQuickPickProps {
  * section is absent from the tree entirely, not defaulted or collapsed (D4a).
  *
  * Silently renders nothing when there is no ready availability (`not_configured`, empty
- * window, unreachable, error) — the party card's "Book with {expert} again" button is the
- * always-present fallback action, so hiding this convenience shortcut here is not the
- * "hide the whole section" anti-pattern the balo-ui-skill warns against.
+ * window, unreachable, error) — the party card's "Book with {expert} again" button is still
+ * there, so hiding this convenience shortcut is not the "hide the whole section" anti-pattern
+ * the balo-ui-skill warns against. On an open case with a paused expert that button routes
+ * through THIS strip (`openRequest`), so a failed read is surfaced by toast with a retry rather
+ * than swallowed.
  */
 export function CaseSlotQuickPick({
   engagementId,
@@ -71,7 +82,7 @@ export function CaseSlotQuickPick({
   expertProfileId,
   expert,
   viewerEmailDomain,
-  openRequest = 0,
+  openRequest = NO_REQUEST,
 }: Readonly<CaseSlotQuickPickProps>): React.JSX.Element | null {
   const { view, reload } = useExpertAvailability(
     expertProfileId,
@@ -79,18 +90,18 @@ export function CaseSlotQuickPick({
     // A follow-up on an open case is existing work, so a paused expert still has real slots.
     'existing_work'
   );
-  const [presetSlot, setPresetSlot] = useState<PresetSlot | null>(null);
+  const [dialog, setDialog] = useState<{ presetSlot: PresetSlot; source: BookingSource } | null>(
+    null
+  );
   const router = useRouter();
 
   /**
-   * This is the only booking entry point that does not leave the page — the nudge and the party
-   * card are `<Link>`s out to the expert profile, so they return through a fresh server render.
-   * Here the dialog opens over a server-rendered surface, so the refresh is what makes the new
-   * booking visible. `BookingFlowDialogProps` has no success callback, so this fires on any
+   * The dialog opens over a server-rendered surface (pills, and the party-card / nudge CTAs for
+   * a paused expert), so the refresh is what makes the new booking visible. `BookingFlowDialogProps` has no success callback, so this fires on any
    * close; refreshing after an abandoned booking is harmless.
    */
   const handleDialogClose = useCallback((): void => {
-    setPresetSlot(null);
+    setDialog(null);
     router.refresh();
     // `router.refresh()` re-runs server components only; these slots come from a client hook
     // with its own fetch, so it needs telling separately or it keeps offering the booked slot.
@@ -109,24 +120,41 @@ export function CaseSlotQuickPick({
       : [];
 
   // Answers an external "book a follow-up" request once, on the first slot, as soon as the
-  // availability read settles. No slot to offer is said out loud rather than swallowed.
+  // availability read settles. No slot to offer, or a failed read, is said out loud rather than
+  // swallowed; the failure toast's retry re-arms the request so slots arriving open the dialog.
   const handledRequestRef = useRef(0);
   const [firstPill] = pills;
   useEffect(() => {
-    if (openRequest === 0 || handledRequestRef.current === openRequest) return;
+    if (openRequest.seq === 0 || handledRequestRef.current === openRequest.seq) return;
     if (view.kind === 'loading') return;
-    handledRequestRef.current = openRequest;
+    handledRequestRef.current = openRequest.seq;
+    const name = expert.firstName ?? 'This expert';
+    if (view.kind === 'unavailable' || view.kind === 'error') {
+      toast.error(`Couldn't load ${name}'s times. Try again.`, {
+        action: {
+          label: 'Try again',
+          onClick: () => {
+            handledRequestRef.current = 0;
+            reload();
+          },
+        },
+      });
+      return;
+    }
     if (firstPill === undefined) {
-      toast.info(`${expert.firstName ?? 'This expert'} has no open times right now.`);
+      toast.info(`${name} has no open times right now.`);
       return;
     }
     const start = new Date(firstPill.start);
-    setPresetSlot({
-      startIso: start.toISOString(),
-      endIso: new Date(start.getTime() + firstPill.duration * 60_000).toISOString(),
-      durationMinutes: firstPill.duration,
+    setDialog({
+      presetSlot: {
+        startIso: start.toISOString(),
+        endIso: new Date(start.getTime() + firstPill.duration * 60_000).toISOString(),
+        durationMinutes: firstPill.duration,
+      },
+      source: openRequest.source,
     });
-  }, [openRequest, view.kind, firstPill, expert.firstName]);
+  }, [openRequest, view.kind, firstPill, expert.firstName, reload]);
 
   if (view.kind !== 'ready') {
     return null;
@@ -148,10 +176,13 @@ export function CaseSlotQuickPick({
               onClick={() => {
                 const start = new Date(pill.start);
                 const end = new Date(start.getTime() + pill.duration * 60_000);
-                setPresetSlot({
-                  startIso: start.toISOString(),
-                  endIso: end.toISOString(),
-                  durationMinutes: pill.duration,
+                setDialog({
+                  presetSlot: {
+                    startIso: start.toISOString(),
+                    endIso: end.toISOString(),
+                    durationMinutes: pill.duration,
+                  },
+                  source: 'case_quick_pick',
                 });
               }}
               className="border-border bg-card hover:border-primary/40 hover:bg-primary/5 focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
@@ -162,12 +193,12 @@ export function CaseSlotQuickPick({
           ))}
         </div>
       </div>
-      {presetSlot !== null && (
+      {dialog !== null && (
         <BookingFlowDialog
           open
           onClose={handleDialogClose}
           expert={expert}
-          source="case_quick_pick"
+          source={dialog.source}
           entry={{
             mode: 'fixed_case',
             fixedCase: {
@@ -176,10 +207,10 @@ export function CaseSlotQuickPick({
               consultationCount,
               openedAtIso,
             },
-            presetSlot,
+            presetSlot: dialog.presetSlot,
           }}
           viewerEmailDomain={viewerEmailDomain}
-          onMessage={() => setPresetSlot(null)}
+          onMessage={() => setDialog(null)}
           scope="existing_work"
         />
       )}

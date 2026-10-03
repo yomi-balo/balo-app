@@ -24,6 +24,7 @@ import type {
   ConsultationRowTriggerSlot,
 } from './consultation-row-menu';
 import { CasePartyCard } from './case-party-card';
+import type { FollowUpRequest } from './case-slot-quick-pick';
 import { CaseActionItems } from './case-action-items';
 import { CaseFilesCard } from './case-files-card';
 import { CasePeopleCard } from './case-people-card';
@@ -131,10 +132,21 @@ export function CaseSurface({
 
   // BAL-591 — an OPEN case with a paused expert books its follow-up in-page (the profile refuses
   // new work), by asking the party card's quick-pick to open its `existing_work` dialog.
-  const [followUpRequest, setFollowUpRequest] = useState(0);
-  const handleBookFollowUp = useCallback(() => {
-    setFollowUpRequest((n) => n + 1);
+  const [followUpRequest, setFollowUpRequest] = useState<FollowUpRequest>({
+    seq: 0,
+    source: 'book_again',
+  });
+  const requestFollowUp = useCallback((source: FollowUpRequest['source']) => {
+    setFollowUpRequest((prev) => ({ seq: prev.seq + 1, source }));
   }, []);
+  const handlePartyBookFollowUp = useCallback(
+    () => requestFollowUp('book_again'),
+    [requestFollowUp]
+  );
+  const handleNudgeBookFollowUp = useCallback(
+    () => requestFollowUp('case_nudge'),
+    [requestFollowUp]
+  );
   const bookFollowUpInPage =
     view.lens === 'client' && view.header.isOpen && !view.party.availableForWork;
 
@@ -370,7 +382,7 @@ export function CaseSurface({
               lens={view.lens}
               counterpartyLabel={counterpartyFirstName}
               bookAgainHref={view.party.bookAgainHref}
-              onBookFollowUp={bookFollowUpInPage ? handleBookFollowUp : undefined}
+              onBookFollowUp={bookFollowUpInPage ? handleNudgeBookFollowUp : undefined}
               onMarkResolved={handleMarkResolved}
               onDismissAsk={handleDismissAsk}
               canReschedule={nudgeRow?.canReschedule ?? false}
@@ -534,7 +546,7 @@ export function CaseSurface({
                 consultationCount={view.header.consultationCount}
                 openedAtIso={view.header.openedAtIso}
                 viewerEmailDomain={viewerEmailDomain}
-                onBookFollowUp={bookFollowUpInPage ? handleBookFollowUp : undefined}
+                onBookFollowUp={bookFollowUpInPage ? handlePartyBookFollowUp : undefined}
                 followUpRequest={followUpRequest}
               />
             </Reveal>
