@@ -27,6 +27,8 @@ const DRAFT: ProjectDraft = {
   budgetMinCents: 4500000,
   budgetMaxCents: 7000000,
   timeline: 'Target go-live: end of Q3',
+  caseFileSelections: {},
+  caseBriefSnapshot: null,
   source: 'manual',
   seededFrom: null,
 };
@@ -108,5 +110,46 @@ describe('ReviewSummary', () => {
     const editButtons = screen.getAllByRole('button', { name: /edit/i });
     await user.click(editButtons[0]!);
     expect(onEdit).toHaveBeenCalled();
+  });
+
+  // BAL-589 — the case-conversion provenance line.
+  it('renders the case link when sourceCaseTitle is present', () => {
+    render(
+      <ReviewSummary
+        draft={DRAFT}
+        onEdit={vi.fn()}
+        sourceCaseTitle="Skills-based routing rollout"
+        {...BASE}
+      />
+    );
+    expect(screen.getByText(/Linked to case: Skills-based routing rollout/)).toBeInTheDocument();
+  });
+
+  it('renders no case line when sourceCaseTitle is absent', () => {
+    render(<ReviewSummary draft={DRAFT} onEdit={vi.fn()} {...BASE} />);
+    expect(screen.queryByText(/Linked to case:/)).not.toBeInTheDocument();
+  });
+
+  // Case-file selections are listed alongside uploads, never dropped.
+  it('lists case-file selections in the Documents block alongside uploads', () => {
+    render(
+      <ReviewSummary
+        draft={{
+          ...DRAFT,
+          caseFileSelections: {
+            'conversation:f1': {
+              r2Key: 'project-documents/c/u/copied-1',
+              fileName: 'case-brief.pdf',
+              contentType: 'application/pdf',
+              sizeBytes: 512,
+            },
+          },
+        }}
+        onEdit={vi.fn()}
+        {...BASE}
+      />
+    );
+    expect(screen.getByText('spec.pdf')).toBeInTheDocument();
+    expect(screen.getByText('case-brief.pdf')).toBeInTheDocument();
   });
 });

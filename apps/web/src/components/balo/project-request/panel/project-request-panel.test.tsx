@@ -44,6 +44,18 @@ vi.mock('@/lib/project-request/actions/get-project-brief-parse', () => ({
   getProjectBriefParseAction: mockGetBrief,
 }));
 
+// BAL-589 — the case-sourced start action + the case-file copy action.
+const { mockStartCaseBrief, mockCopyCaseFile } = vi.hoisted(() => ({
+  mockStartCaseBrief: vi.fn(),
+  mockCopyCaseFile: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/cases/[engagementId]/_actions/start-case-brief-parse', () => ({
+  startCaseBriefParseAction: mockStartCaseBrief,
+}));
+vi.mock('@/app/(dashboard)/cases/[engagementId]/_actions/copy-case-file-to-project', () => ({
+  copyCaseFileToProjectAction: mockCopyCaseFile,
+}));
+
 // BAL-254 — the real DocumentUploader drives a presigned-upload + XHR flow that is out of
 // scope for this panel-level suite (covered by `document-uploader.test.tsx`). A single button
 // stand-in lets the AI-flow tests attach a document without re-exercising that machinery.
@@ -71,10 +83,15 @@ vi.mock('@/components/balo/document-uploader', async () => {
       initialDocuments,
       onDocumentsChange,
       onRequireAuth,
+      maxDocuments,
     }: {
       initialDocuments?: readonly MockDoc[];
       onDocumentsChange: (docs: MockDoc[]) => void;
       onRequireAuth?: () => void;
+      /** BAL-589 — captured so a panel-level test can assert the WIRING (the value
+       *  the panel computes and passes down); the cap it ENFORCES is `document-uploader.test.tsx`'s
+       *  own job. */
+      maxDocuments?: number;
     }) {
       // ⚠ LAZY, like the real uploader: `initialDocuments` is read ONCE, on mount. So a test only
       // sees a replaced draft's files here if the panel actually REMOUNTED the uploader.
@@ -83,6 +100,7 @@ vi.mock('@/components/balo/document-uploader', async () => {
       return (
         <div>
           <p>{`seeded: ${rows.length}`}</p>
+          <p>{`maxDocuments: ${maxDocuments ?? 'default'}`}</p>
           {rows.map((doc) => (
             <p key={doc.r2Key}>{doc.fileName}</p>
           ))}
@@ -200,6 +218,55 @@ const UNAVAILABLE_EXPERT = { ...BASE_PROPS.expert, availableForWork: false };
 
 function renderPanel(overrides: Partial<React.ComponentProps<typeof ProjectRequestPanel>> = {}) {
   return render(<ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} {...overrides} />);
+}
+
+// BAL-589 — a "Convert to project" mount's source case.
+const CASE_SOURCE = {
+  id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  title: 'Skills-based routing rollout',
+  productIds: ['33333333-3333-3333-3333-333333333333'],
+  files: [
+    {
+      origin: 'conversation' as const,
+      id: 'f1',
+      meetingId: null,
+      fileName: 'intake-notes.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1024,
+      createdAtIso: '2026-01-01T00:00:00.000Z',
+      uploaderLabel: 'You',
+      sourceLabel: 'Conversation',
+    },
+  ],
+};
+
+function renderCasePanel(
+  overrides: Partial<React.ComponentProps<typeof ProjectRequestPanel>> = {}
+) {
+  return render(
+    <ProjectRequestPanel
+      open
+      onClose={vi.fn()}
+      {...BASE_PROPS}
+      sourceCase={CASE_SOURCE}
+      {...overrides}
+    />
+  );
+}
+
+/** Narrow by destructure + guard (never `!`) — the sole file on `CASE_SOURCE`. */
+function requireFirstCaseFile(): (typeof CASE_SOURCE.files)[number] {
+  const [firstFile] = CASE_SOURCE.files;
+  if (firstFile === undefined) throw new Error('expected CASE_SOURCE to carry a file');
+  return firstFile;
+}
+
+/** Narrow by destructure + guard (never `!`) — the Nth checkbox currently on screen. */
+function nthCheckbox(index: number): HTMLElement {
+  const checkboxes = screen.getAllByRole('checkbox');
+  const checkbox = checkboxes[index];
+  if (checkbox === undefined) throw new Error(`expected a checkbox at index ${index}`);
+  return checkbox;
 }
 
 /** start → manual → fill required fields → review. */
@@ -492,6 +559,9 @@ describe('ProjectRequestPanel', () => {
       product_count: 1,
       document_count: 0,
       method: 'manual',
+      // BAL-589 — present (as `undefined`) on every non-case mount.
+      source_case_id: undefined,
+      brief_edited: false,
     });
     expect(await screen.findByText(/request sent to priya/i)).toBeInTheDocument();
     expect(mockToast.success).toHaveBeenCalledWith('Request sent', expect.objectContaining({}));
@@ -1951,6 +2021,335 @@ describe('ProjectRequestPanel', () => {
         await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
       });
     });
+  });
+
+  // ── BAL-589: the case-conversion mount ──────────────────────────────────
+  // Real timers throughout, same reason as the AI brief path above.
+  describe('case mount (BAL-589)', () => {
+    beforeEach(() => {
+      mockStartCaseBrief.mockReset();
+      mockCopyCaseFile.mockReset();
+    });
+
+    it('opens directly at manual with the case chip — no start/upload step', () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+      renderCasePanel();
+
+      expect(screen.getByText('Converting this case to a project')).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /describe it yourself/i })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: /change entry method/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it('auto-starts a case brief parse exactly once, with the case id', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+      renderCasePanel();
+
+      await waitFor(() =>
+        expect(mockStartCaseBrief).toHaveBeenCalledWith({ caseId: CASE_SOURCE.id })
+      );
+      expect(mockStartCaseBrief).toHaveBeenCalledTimes(1);
+    });
+
+    it('prefills the title and products from the case', () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+      renderCasePanel();
+
+      expect(screen.getByLabelText(/project title/i)).toHaveValue(CASE_SOURCE.title);
+    });
+
+    // Case-file copies are no longer dropped when a file is also uploaded.
+    it('selecting two case files, then uploading one, submits all three documents', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({
+        status: 'succeeded',
+        draft: {
+          title: 'AI case title',
+          descriptionHtml: '<p>Drafted from the case.</p>',
+          tagIds: [],
+          productIds: [],
+          unmatchedTagLabels: [],
+          unmatchedProductLabels: [],
+        },
+      });
+      const firstFile = requireFirstCaseFile();
+      const twoFiles = [firstFile, { ...firstFile, id: 'f2', fileName: 'scope.pdf' }];
+      mockCopyCaseFile
+        .mockResolvedValueOnce({
+          success: true,
+          document: {
+            r2Key: 'project-documents/c/u/copied-1',
+            fileName: 'intake-notes.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 1024,
+          },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          document: {
+            r2Key: 'project-documents/c/u/copied-2',
+            fileName: 'scope.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 1024,
+          },
+        });
+      const user = userEvent.setup();
+      renderCasePanel({ sourceCase: { ...CASE_SOURCE, files: twoFiles } });
+
+      await waitFor(
+        () =>
+          expect(screen.getByLabelText(/project description/i)).toHaveValue(
+            'Drafted from the case.'
+          ),
+        { timeout: 4000 }
+      );
+
+      await user.click(nthCheckbox(0));
+      await user.click(nthCheckbox(1));
+      await waitFor(() => expect(mockCopyCaseFile).toHaveBeenCalledTimes(2));
+
+      // One file uploaded through the DocumentUploader stand-in.
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+      await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
+      const payload = mockSubmit.mock.calls.at(-1)?.[0] as { documents: Array<{ r2Key: string }> };
+      expect(payload.documents).toHaveLength(3);
+      expect(payload.documents.map((d) => d.r2Key)).toEqual(
+        expect.arrayContaining([
+          'project-documents/c/u/copied-1',
+          'project-documents/c/u/copied-2',
+          'project-documents/c/u/k0',
+        ])
+      );
+    }, 8000);
+
+    it('two case-file selections reserve two slots out of the shared cap for the uploader', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+      const firstFile = requireFirstCaseFile();
+      const twoFiles = [firstFile, { ...firstFile, id: 'f2', fileName: 'scope.pdf' }];
+      mockCopyCaseFile
+        .mockResolvedValueOnce({
+          success: true,
+          document: {
+            r2Key: 'project-documents/c/u/copied-1',
+            fileName: 'intake-notes.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 1024,
+          },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          document: {
+            r2Key: 'project-documents/c/u/copied-2',
+            fileName: 'scope.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 1024,
+          },
+        });
+      const user = userEvent.setup();
+      renderCasePanel({ sourceCase: { ...CASE_SOURCE, files: twoFiles } });
+
+      expect(screen.getByText('maxDocuments: 4')).toBeInTheDocument();
+
+      await user.click(nthCheckbox(0));
+      await waitFor(() => expect(screen.getByText('maxDocuments: 3')).toBeInTheDocument());
+
+      await user.click(nthCheckbox(1));
+      await waitFor(() => expect(screen.getByText('maxDocuments: 2')).toBeInTheDocument());
+    });
+
+    it('shows a skeleton while generating, never the description editor, and disables Review', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+      renderCasePanel();
+
+      expect(
+        await screen.findByRole('status', { name: /drafting a brief from your case/i })
+      ).toBeInTheDocument();
+      expect(screen.queryByLabelText(/project description/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^review/i })).toBeDisabled();
+    });
+
+    it('reveals a successful brief into an editable, filled-in editor with the AI draft badge', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({
+        status: 'succeeded',
+        draft: {
+          title: 'AI case title',
+          descriptionHtml: '<p>Drafted from the case.</p>',
+          tagIds: [],
+          productIds: [],
+          unmatchedTagLabels: [],
+          unmatchedProductLabels: [],
+        },
+      });
+      renderCasePanel();
+
+      await waitFor(
+        () =>
+          expect(screen.getByLabelText(/project description/i)).toHaveValue(
+            'Drafted from the case.'
+          ),
+        { timeout: 4000 }
+      );
+      expect(screen.getByText('AI draft')).toBeInTheDocument();
+      // Title/products were already prefilled from the case — the patch's own title never
+      // overwrites them.
+      expect(screen.getByLabelText(/project title/i)).toHaveValue(CASE_SOURCE.title);
+    }, 8000);
+
+    // X4a — no_case_history gets its own copy and no "Try again" (nothing to retry).
+    it('a no_case_history failure shows the no-history banner, with no Try again', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'failed', failureReason: 'no_case_history' });
+      renderCasePanel();
+
+      expect(
+        await screen.findByText(
+          "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below.",
+          {},
+          { timeout: 4000 }
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/project description/i)).toHaveValue('');
+      expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /dismiss/i })).toBeInTheDocument();
+    }, 8000);
+
+    // Coordinator correction — the no-history flag is per-open, not persisted: a close then
+    // reopen of the SAME case mount gets a fresh auto-start attempt (so a case that gained
+    // messages in between can draft from them).
+    it('a reopen of a no_case_history draft auto-starts the generation again', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'failed', failureReason: 'no_case_history' });
+      const { rerender } = renderCasePanel();
+
+      await screen.findByText(
+        "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below.",
+        {},
+        { timeout: 4000 }
+      );
+      mockStartCaseBrief.mockClear();
+
+      // Close, then reopen the SAME case mount.
+      rerender(
+        <ProjectRequestPanel
+          open={false}
+          onClose={vi.fn()}
+          {...BASE_PROPS}
+          sourceCase={CASE_SOURCE}
+        />
+      );
+      rerender(
+        <ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} sourceCase={CASE_SOURCE} />
+      );
+
+      await waitFor(() => expect(mockStartCaseBrief).toHaveBeenCalledTimes(1));
+      expect(mockStartCaseBrief).toHaveBeenCalledWith({ caseId: CASE_SOURCE.id });
+    }, 8000);
+
+    // Coordinator correction (point 2) — while the no-history banner is showing, the client
+    // may have added messages to the case since; "Redraft from case" stays clickable despite
+    // there being no AI draft yet, so they can retry without closing the panel.
+    it('enables "Redraft from case" during a no_case_history failure, and clicking it starts a new run', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'failed', failureReason: 'no_case_history' });
+      const user = userEvent.setup();
+      renderCasePanel();
+
+      await screen.findByText(
+        "This case doesn't have any messages or call notes to draft from yet — write the brief yourself below.",
+        {},
+        { timeout: 4000 }
+      );
+
+      const redraftButton = screen.getByRole('button', { name: /redraft from case/i });
+      expect(redraftButton).toBeEnabled();
+
+      mockStartCaseBrief.mockClear();
+      await user.click(redraftButton);
+
+      expect(mockStartCaseBrief).toHaveBeenCalledWith({ caseId: CASE_SOURCE.id });
+    }, 8000);
+
+    // X4c — a start-action error (rate limit, wrong workspace) replaces the generic case copy.
+    it('a start-action error (not no_case_history) shows startError as the banner copy', async () => {
+      mockStartCaseBrief.mockResolvedValue({
+        success: false,
+        error: 'Switch to the workspace this case belongs to.',
+      });
+      renderCasePanel();
+
+      expect(
+        await screen.findByText(
+          'Switch to the workspace this case belongs to.',
+          {},
+          { timeout: 4000 }
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    }, 8000);
+
+    it('a case mount with availableForWork=false shows "Get matched instead" on the manual step', () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+      renderCasePanel({ expert: UNAVAILABLE_EXPERT });
+
+      expect(screen.getByText("Priya isn't taking on new work right now.")).toBeInTheDocument();
+    });
+
+    it('review and done both show the "Linked to case" line; submit carries sourceCaseId', async () => {
+      mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
+      mockGetBrief.mockResolvedValue({
+        status: 'succeeded',
+        draft: {
+          title: 'AI case title',
+          descriptionHtml: '<p>Drafted from the case.</p>',
+          tagIds: [],
+          productIds: [],
+          unmatchedTagLabels: [],
+          unmatchedProductLabels: [],
+        },
+      });
+      mockSubmit.mockResolvedValue({ success: true, projectRequestId: 'req-1' });
+      const user = userEvent.setup();
+      renderCasePanel();
+
+      await waitFor(
+        () =>
+          expect(screen.getByLabelText(/project description/i)).toHaveValue(
+            'Drafted from the case.'
+          ),
+        { timeout: 4000 }
+      );
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+      expect(screen.getByText(`Linked to case: ${CASE_SOURCE.title}`)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+      expect(await screen.findByText(`Linked to case: ${CASE_SOURCE.title}`)).toBeInTheDocument();
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceCaseId: CASE_SOURCE.id, source: 'ai' })
+      );
+      expect(mockTrack).toHaveBeenCalledWith(
+        PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED,
+        expect.objectContaining({
+          source_case_id: CASE_SOURCE.id,
+          method: 'ai',
+          brief_edited: false,
+        })
+      );
+    }, 8000);
   });
 
   describe('onClose contract', () => {

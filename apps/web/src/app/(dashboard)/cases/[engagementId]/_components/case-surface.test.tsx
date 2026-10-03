@@ -50,6 +50,19 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
+// BAL-589 — a minimal stand-in. The real component mounts `ProjectRequestPanel`, which pulls
+// in `useIsMobile` (reads `window.matchMedia`, absent in jsdom) and a long chain of `'use
+// server'` action modules — all out of scope for this composition suite, whose own test file
+// (`convert-to-project.test.tsx`) already proves what it's handed. This stand-in proves only
+// that `CaseSurface` mounts it with a `view` carrying the right lens.
+vi.mock('./convert-to-project', () => ({
+  ConvertToProject: (props: { view: { lens: string } }) => (
+    <button type="button" data-testid="convert-to-project-stub" data-lens={props.view.lens}>
+      Convert to project
+    </button>
+  ),
+}));
+
 // N8/N14(c) — a minimal stand-in for the real dialog (which itself fetches availability and
 // posts a Server Action — out of scope for a composition test). Exposes just enough surface to
 // prove the CTA→dialog SEAM: it mounts only when `open`, and its three callback props are wired.
@@ -317,6 +330,7 @@ function clientView(over: Record<string, unknown> = {}): CaseSurfaceView {
     canClose: true,
     caseScopeDomains: [],
     rating: null,
+    projectConversion: { productIds: [], expertAvailableForWork: true },
     ...over,
   } as CaseSurfaceView;
 }
@@ -600,6 +614,30 @@ describe('CaseSurface — the lens is a discriminant all the way down', () => {
     render(<CaseSurface view={expertView()} />);
     expect(screen.getByRole('heading', { name: 'Flow interview loop' })).toBeInTheDocument();
     expect(screen.getByText('You')).toBeInTheDocument();
+  });
+
+  // BAL-589 — the "Convert to project" header action: client lens only, open or
+  // closed. `ConvertToProject` itself proves the panel's props in its own test file.
+  it('mounts "Convert to project" on the CLIENT lens, and never on the EXPERT lens', () => {
+    const { unmount } = render(<CaseSurface view={clientView()} />);
+    const stub = screen.getByTestId('convert-to-project-stub');
+    expect(stub).toHaveAttribute('data-lens', 'client');
+    unmount();
+
+    render(<CaseSurface view={expertView()} />);
+    expect(screen.queryByTestId('convert-to-project-stub')).not.toBeInTheDocument();
+  });
+
+  it('mounts "Convert to project" on a CLOSED client case too — the case is never mutated', () => {
+    render(
+      <CaseSurface
+        view={clientView({
+          canClose: false,
+          header: { ...BASE.header, isOpen: false, closeReason: 'resolved' },
+        })}
+      />
+    );
+    expect(screen.getByTestId('convert-to-project-stub')).toBeInTheDocument();
   });
 });
 

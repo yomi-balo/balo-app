@@ -45,6 +45,11 @@ export type AssertExpertArmHasNoCanClose = AssertNever<Extract<keyof ExpertArm, 
 /** ⚠ BAL-587 — the in-app rating card is CLIENT-only; the expert arm cannot hold it. */
 export type AssertExpertArmHasNoRating = AssertNever<Extract<keyof ExpertArm, 'rating'>>;
 
+/** ⚠ BAL-589 — only a client may convert a case to a project; the expert arm cannot hold it. */
+export type AssertExpertArmHasNoProjectConversion = AssertNever<
+  Extract<keyof ExpertArm, 'projectConversion'>
+>;
+
 /**
  * ⚠ 3. THE BALO MARGIN APPEARS TO NOBODY. Neither arm may carry any of the vocabulary the
  * un-marked-up rate travels under. `rate_cents` matters most: it is the UN-MARKED-UP consultant
@@ -152,6 +157,7 @@ const CLIENT_VIEW: CaseSurfaceView = {
   canClose: true,
   caseScopeDomains: [],
   rating: null,
+  projectConversion: { productIds: [], expertAvailableForWork: true },
 };
 
 const EXPERT_VIEW: CaseSurfaceView = {
@@ -201,6 +207,12 @@ describe('CaseSurfaceView — the lens is a discriminant, not a flag', () => {
     expect('rating' in CLIENT_VIEW).toBe(true);
     expect('rating' in EXPERT_VIEW).toBe(false);
     expect(Object.keys(EXPERT_VIEW)).not.toContain('rating');
+  });
+
+  it('BAL-589 — only the CLIENT arm carries projectConversion', () => {
+    expect('projectConversion' in CLIENT_VIEW).toBe(true);
+    expect('projectConversion' in EXPERT_VIEW).toBe(false);
+    expect(Object.keys(EXPERT_VIEW)).not.toContain('projectConversion');
   });
 });
 

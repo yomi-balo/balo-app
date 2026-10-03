@@ -4,19 +4,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { track, PROJECT_EVENTS, type ProjectStep } from '@/lib/analytics';
 import type { ProjectBriefDraftPatch } from '@/lib/project-request/actions/get-project-brief-parse';
 import type { ProjectRequestEntryPoint } from '@balo/shared/project-requests';
-import { useProjectBriefGeneration } from './use-project-brief-generation';
+import {
+  useProjectBriefGeneration,
+  reportUnexpectedBriefError,
+} from './use-project-brief-generation';
 import { projectFunnelDimensions } from './funnel-dimensions';
 import type { ProjectDraft } from './use-project-draft';
 
-/** The four AI-owned fields, snapshotted immediately after a successful generate. */
-interface AiFieldSnapshot {
+/**
+ * The four AI-owned fields, snapshotted immediately after a successful generate. Exported
+ * (BAL-589) so `useCaseBriefFlow` — the case-history sibling of this flow — reuses the exact
+ * same shape and comparison rather than redefining both.
+ */
+export interface AiFieldSnapshot {
   title: string;
   descriptionHtml: string;
   tagIds: string[];
   productIds: string[];
 }
 
-function snapshotsDiffer(a: AiFieldSnapshot, b: AiFieldSnapshot): boolean {
+/** @see AiFieldSnapshot */
+export function snapshotsDiffer(a: AiFieldSnapshot, b: AiFieldSnapshot): boolean {
   return (
     a.title !== b.title ||
     a.descriptionHtml !== b.descriptionHtml ||
@@ -298,10 +306,11 @@ export function useAiBriefFlow({
       document_count: draft.documents.length,
       is_regenerate: false,
     });
-    // ⚠ NO `.catch(() => {})` (fix round F3). `start` now handles every failure internally and
-    // always resolves on a TERMINAL phase. The empty catch that used to sit here could only ever
-    // hide a bug, and it hid exactly one: a thrown start action left the panel spinning forever.
-    briefGeneration.start(draft.documents);
+    // ⚠ `start` handles every EXPECTED failure itself and always resolves on a
+    // TERMINAL phase; this `.catch` only reports a bug that let a rejection escape that handling.
+    briefGeneration
+      .start({ kind: 'documents', documents: draft.documents })
+      .catch(reportUnexpectedBriefError);
   }, [draft.documents, briefGeneration]);
 
   const handleRetryGenerate = useCallback(() => {
@@ -332,8 +341,10 @@ export function useAiBriefFlow({
       document_count: draft.documents.length,
       is_regenerate: true,
     });
-    // No `.catch(() => {})` — see `handleGenerateClick` (fix round F3).
-    briefGeneration.start(draft.documents);
+    // See `handleGenerateClick` for why this `.catch` exists at all.
+    briefGeneration
+      .start({ kind: 'documents', documents: draft.documents })
+      .catch(reportUnexpectedBriefError);
   }, [draft.documents, briefGeneration, hasEditsSinceGenerate]);
 
   const handleRegenerateClick = useCallback(() => {

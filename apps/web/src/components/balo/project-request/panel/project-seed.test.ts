@@ -86,6 +86,8 @@ const EMPTY_DRAFT: ProjectDraft = {
   budgetMinCents: null,
   budgetMaxCents: null,
   timeline: null,
+  caseFileSelections: {},
+  caseBriefSnapshot: null,
   source: 'manual',
   seededFrom: null,
 };
@@ -357,5 +359,23 @@ describe('initialStepFor', () => {
 
   it.each(cases)('$label', ({ seed, resumeDraft, draftSource, step }) => {
     expect(initialStepFor(seed, resumeDraft, draftSource)).toBe(step);
+  });
+
+  // BAL-589 — a case mount has no `start`/`upload` step, so it always opens at `manual`,
+  // even over a resumed 'ai'-sourced draft (which, off a case mount, would gate at `upload`).
+  it('a case mount with an "ai" resume still opens at manual', () => {
+    expect(initialStepFor(undefined, true, 'ai', true)).toBe('manual');
+  });
+
+  it('a case mount with no seed and no resume still opens at manual', () => {
+    expect(initialStepFor(undefined, false, 'manual', true)).toBe('manual');
+  });
+
+  it('a case mount ignores a non-empty seed too — manual wins outright', () => {
+    expect(initialStepFor({ title: 'Ignored seed' }, false, 'manual', true)).toBe('manual');
+  });
+
+  it('isCaseMount defaults to false, so every existing call site is unaffected', () => {
+    expect(initialStepFor(undefined, false, 'manual')).toBe('start');
   });
 });

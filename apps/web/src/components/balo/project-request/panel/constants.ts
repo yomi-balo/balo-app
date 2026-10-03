@@ -52,3 +52,14 @@ export const PROJECT_STEPS_AI = [
   { key: 'upload', label: 'Upload' },
   { key: 'review', label: 'Review' },
 ] as const;
+
+/**
+ * BAL-589 — the case-conversion mount's stepper: no `start` (it never offers a choice of entry
+ * path — it IS the AI-from-case path) and no `upload` (there is nothing to upload; the brief is
+ * drafted from the case's own history). `initialStepFor` always resolves a case mount to
+ * `manual`, so this is the full stepper such a mount ever shows.
+ */
+export const PROJECT_STEPS_CASE = [
+  { key: 'manual', label: 'Describe' },
+  { key: 'review', label: 'Review' },
+] as const;

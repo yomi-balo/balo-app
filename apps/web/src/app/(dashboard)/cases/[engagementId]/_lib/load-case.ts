@@ -62,6 +62,7 @@ import type {
   CaseNudgeView,
   CasePartyView,
   CasePersonView,
+  CaseProjectConversionView,
   CaseRescheduleProposalView,
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
@@ -653,6 +654,7 @@ export const loadCase = cache(
       conversationFileRows,
       earningsAggregate,
       viewer,
+      projectConversion,
     ] = await Promise.all([
       meetingContextsRepository.listMeetingsForContext('case', engagementId),
       actionItemsRepository.listByEngagement(engagementId),
@@ -673,6 +675,9 @@ export const loadCase = cache(
         ? creditSessionsRepository.sumExpertEarningsForEngagement(engagementId)
         : Promise.resolve(null),
       usersRepository.findDisplayById(userId),
+      // BAL-589 — CLIENT LENS ONLY, the `projectConversion` precedent's own mirror of
+      // the `earnings` read immediately above.
+      resolveProjectConversionIfClient(lens, engagementId, expertProfileId),
     ]);
 
     const clientCompanyName = company?.name ?? 'the client';
@@ -1020,7 +1025,16 @@ export const loadCase = cache(
         canManageReschedule: capabilities.canManageReschedule,
       };
     }
-    return { ...base, lens: 'client', canClose: isOpen, caseScopeDomains, rating };
+    return {
+      ...base,
+      lens: 'client',
+      canClose: isOpen,
+      caseScopeDomains,
+      rating,
+      // Never null here — resolved above under the same `lens === 'client'` guard. The
+      // fallback covers a TS narrowing gap across the intervening `await`s, not a real arm.
+      projectConversion: projectConversionOrEmpty(projectConversion),
+    };
   }
 );
 
@@ -1133,6 +1147,47 @@ async function resolveExpertLensCapabilities(
     ));
 
   return { mayRequestResolution, canManageReschedule, mayCancelAsExpert, mayInviteAsExpert };
+}
+
+/**
+ * BAL-589 — CLIENT LENS ONLY: the "Convert to project" mount's prefill + eligibility
+ * data. `null` on the expert lens, where `CaseSurfaceView` has no `projectConversion` field to
+ * put it in — mirrors `resolveExpertCapabilitiesIfNeeded`'s shape immediately below.
+ *
+ * ⚠⚠ `findNewWorkEligibility` IS THE REAL GATE. NEVER copy the `availableForWork: true`
+ * hardcode `CasePartyCard` builds for its own `BookingFlowExpert` quick-pick fixture — that one
+ * has no equivalent read; this is a separate, honest answer, and the submit action re-checks
+ * it independently regardless.
+ */
+async function resolveProjectConversionIfClient(
+  lens: 'client' | 'expert',
+  engagementId: string,
+  expertProfileId: string
+): Promise<CaseProjectConversionView | null> {
+  if (lens !== 'client') return null;
+  const [productIds, eligibility] = await Promise.all([
+    caseEngagementsRepository.listProductIds(engagementId),
+    expertsRepository.findNewWorkEligibility(expertProfileId),
+  ]);
+  return { productIds, expertAvailableForWork: eligibility.eligible };
+}
+
+/** The empty state for the unreachable branch where `projectConversion` resolved outside the
+ *  `lens === 'client'` guard — visibly empty, never a fabricated eligibility. */
+const EMPTY_PROJECT_CONVERSION: CaseProjectConversionView = {
+  productIds: [],
+  expertAvailableForWork: false,
+};
+
+/**
+ * `projectConversion ?? EMPTY_PROJECT_CONVERSION`, pulled out of `loadCase`'s own return
+ * statement — the `??` there pushed the function's SonarJS cognitive complexity past 15.
+ * Never null in practice on the client arm (see the call site).
+ */
+function projectConversionOrEmpty(
+  value: CaseProjectConversionView | null
+): CaseProjectConversionView {
+  return value ?? EMPTY_PROJECT_CONVERSION;
 }
 
 async function resolveExpertCapabilitiesIfNeeded(

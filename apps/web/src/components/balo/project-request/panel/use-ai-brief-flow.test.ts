@@ -12,10 +12,12 @@ vi.mock('server-only', () => ({}));
  * deterministic test slow and flaky for no extra coverage.
  */
 const captured: { onSucceeded?: (patch: ProjectBriefDraftPatch) => void } = {};
-const mockStart = vi.fn();
+// `start` is `Promise<void>`; the real hook's `start()` resolves rather than
+// rejects on every EXPECTED failure, so the mock does too by default (`.catch` on its result
+// must have something to call `.catch` on).
+const mockStart = vi.fn().mockResolvedValue(undefined);
 const mockDismissFailure = vi.fn();
 const mockCancel = vi.fn();
-
 vi.mock('./use-project-brief-generation', () => ({
   useProjectBriefGeneration: (options: {
     onSucceeded: (patch: ProjectBriefDraftPatch) => void;
@@ -30,6 +32,9 @@ vi.mock('./use-project-brief-generation', () => ({
       cancel: mockCancel,
     };
   },
+  // No call-site in this suite asserts on this directly; an inline stub is enough to keep
+  // `use-ai-brief-flow.ts`'s `.catch(reportUnexpectedBriefError)` from calling `undefined`.
+  reportUnexpectedBriefError: vi.fn(),
 }));
 
 import { useAiBriefFlow } from './use-ai-brief-flow';
@@ -45,6 +50,8 @@ const DRAFT: ProjectDraft = {
   budgetMinCents: null,
   budgetMaxCents: null,
   timeline: null,
+  caseFileSelections: {},
+  caseBriefSnapshot: null,
   source: 'ai',
   seededFrom: null,
 };

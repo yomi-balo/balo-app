@@ -69,6 +69,8 @@ const m = {
   countsLiveByMeetingIds: vi.fn(),
   listPartyDomains: vi.fn(),
   factsByMeetingIds: vi.fn(),
+  listProductIds: vi.fn(),
+  findNewWorkEligibility: vi.fn(),
 };
 
 vi.mock('@balo/db', () => ({
@@ -76,7 +78,10 @@ vi.mock('@balo/db', () => ({
   MEETING_FILE_LIST_LIMIT: 200,
   actionItemsRepository: { listByEngagement: (...a: unknown[]) => m.listActionItems(...a) },
   agenciesRepository: { getSummaryById: (...a: unknown[]) => m.findAgency(...a) },
-  caseEngagementsRepository: { findByEngagementId: (...a: unknown[]) => m.findCase(...a) },
+  caseEngagementsRepository: {
+    findByEngagementId: (...a: unknown[]) => m.findCase(...a),
+    listProductIds: (...a: unknown[]) => m.listProductIds(...a),
+  },
   companiesRepository: { findNameById: (...a: unknown[]) => m.findCompany(...a) },
   conversationsRepository: {
     listMessagesPage: (...a: unknown[]) => m.listMessagesPage(...a),
@@ -88,6 +93,7 @@ vi.mock('@balo/db', () => ({
   expertsRepository: {
     findDisplayProfileById: (...a: unknown[]) => m.findProfile(...a),
     findResolverSettings: (...a: unknown[]) => m.findResolverSettings(...a),
+    findNewWorkEligibility: (...a: unknown[]) => m.findNewWorkEligibility(...a),
   },
   meetingContextsRepository: { listMeetingsForContext: (...a: unknown[]) => m.listMeetings(...a) },
   meetingFilesRepository: { listByMeeting: (...a: unknown[]) => m.listMeetingFiles(...a) },
@@ -260,6 +266,8 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.countsLiveByMeetingIds.mockResolvedValue([]);
   m.listPartyDomains.mockResolvedValue([]);
   m.factsByMeetingIds.mockResolvedValue(new Map());
+  m.listProductIds.mockResolvedValue([]);
+  m.findNewWorkEligibility.mockResolvedValue({ eligible: true });
   mockReadRatingCard.mockResolvedValue(null);
 }
 
@@ -385,6 +393,48 @@ describe('loadCase — the lens is a DISCRIMINANT, not a flag', () => {
     seed({ caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' } });
     const view = await loadOrThrow();
     expect(view).toMatchObject({ lens: 'client', canClose: false });
+  });
+});
+
+// ── projectConversion (BAL-589) ──────────────────────────────────────────────────────────
+
+describe('loadCase — projectConversion (the "Convert to project" mount\'s prefill + gate)', () => {
+  it("CLIENT arm carries the case's live products and the real eligibility answer", async () => {
+    m.listProductIds.mockResolvedValue(['prod-1', 'prod-2']);
+    m.findNewWorkEligibility.mockResolvedValue({ eligible: true });
+
+    const view = await loadOrThrow();
+
+    expect(view).toMatchObject({
+      lens: 'client',
+      projectConversion: { productIds: ['prod-1', 'prod-2'], expertAvailableForWork: true },
+    });
+    expect(m.listProductIds).toHaveBeenCalledWith(ENGAGEMENT_ID);
+    expect(m.findNewWorkEligibility).toHaveBeenCalledWith(PROFILE_ID);
+  });
+
+  it('an INELIGIBLE expert gives expertAvailableForWork: false — never the case-party-card hardcode', async () => {
+    m.findNewWorkEligibility.mockResolvedValue({
+      eligible: false,
+      reason: 'not_available',
+    });
+
+    const view = await loadOrThrow();
+
+    expect(view).toMatchObject({
+      lens: 'client',
+      projectConversion: { expertAvailableForWork: false },
+    });
+  });
+
+  it('EXPERT arm has NO projectConversion field at all, and never reads either source', async () => {
+    seed({ access: { lens: 'expert' } });
+    const view = await loadOrThrow();
+
+    expect(view.lens).toBe('expert');
+    expect(Object.hasOwn(view, 'projectConversion')).toBe(false);
+    expect(m.listProductIds).not.toHaveBeenCalled();
+    expect(m.findNewWorkEligibility).not.toHaveBeenCalled();
   });
 });
 

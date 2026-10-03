@@ -248,6 +248,23 @@ export type CaseEarningsView =
   | { state: 'pending'; earningsAudMinor: null; finalizedCount: 0; pendingCount: number }
   | { state: 'finalized'; earningsAudMinor: number; finalizedCount: number; pendingCount: number };
 
+// ── convert to project (BAL-589) ─────────────────────────────────────────────────────────
+
+/**
+ * BAL-589 — what the "Convert to project" mount needs: the case's own live product ids
+ * (prefill) and whether the delivering expert can take a new DIRECT project request.
+ *
+ * ⚠⚠ `expertAvailableForWork` IS THE REAL `expertsRepository.findNewWorkEligibility`
+ * GATE, READ ONCE PER LOAD (client lens only) — NEVER the `availableForWork: true` hardcode
+ * `CasePartyCard` builds for its OWN `BookingFlowExpert` quick-pick fixture. That hardcode
+ * exists because the booking quick-pick has no equivalent read; this field is a separate,
+ * real answer for the panel's Direct-request gate, and the server action re-checks it anyway.
+ */
+export interface CaseProjectConversionView {
+  productIds: string[];
+  expertAvailableForWork: boolean;
+}
+
 // ── header + nudge ───────────────────────────────────────────────────────────────────────
 
 export type CaseCloseReasonLabel = 'resolved' | 'auto_inactive';
@@ -474,6 +491,13 @@ export type CaseSurfaceView =
        * client-only, so there is no optional field for a bug to populate on the expert side.
        */
       rating: EndOfCallRatingView | null;
+      /**
+       * BAL-589 — the "Convert to project" mount's prefill + eligibility data.
+       * ⚠ STRUCTURALLY ABSENT FROM THE EXPERT ARM (the `earnings` precedent) — only a client
+       * can convert a case to a project, so there is no optional field for a bug to populate
+       * on the expert side.
+       */
+      projectConversion: CaseProjectConversionView;
     })
   | (CaseSurfaceViewBase & {
       lens: 'expert';

@@ -150,6 +150,27 @@ describe('getInAppTemplate', () => {
       expect(result.body).toBe('A client sent you a direct request for "a new project"');
       expect(result.actionUrl).toBeUndefined();
     });
+
+    it('BAL-589: names the client company when sourceCase is set', () => {
+      const result = getInAppTemplate('project-request-submitted', {
+        title: 'Marketing Cloud migration',
+        projectRequestId: 'req-9',
+        company: { name: 'Northwind Industrial' },
+        sourceCase: { title: 'Flow interview loop' },
+      });
+      expect(result).toEqual({
+        title: 'New project request for you',
+        body: 'Northwind Industrial wants to turn "Flow interview loop" into a project.',
+        actionUrl: '/projects/req-9',
+      });
+    });
+
+    it('BAL-589: falls back to "A client" when the company is absent', () => {
+      const result = getInAppTemplate('project-request-submitted', {
+        sourceCase: { title: 'Flow interview loop' },
+      });
+      expect(result.body).toBe('A client wants to turn "Flow interview loop" into a project.');
+    });
   });
 
   describe('project-request-submitted-admin (the Balo staff copy)', () => {

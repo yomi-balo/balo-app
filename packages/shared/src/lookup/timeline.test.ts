@@ -174,6 +174,11 @@ describe('describeAuditEvent — mapped actions', () => {
       expected: 'Balo fee overridden',
     },
     {
+      action: 'project_request.converted_from_case',
+      metadata: { sourceCaseId: 'case_1' },
+      expected: 'Converted from a case',
+    },
+    {
       action: 'project_request.owner_assigned',
       metadata: { from: null, to: 'user_1' },
       expected: 'Balo owner assigned',

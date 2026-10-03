@@ -1683,6 +1683,87 @@ describe('caseEngagementsRepository.create — product tags (BAL-400)', () => {
   });
 });
 
+describe('caseEngagementsRepository.listProductIds', () => {
+  it("returns the case's own live product ids", async () => {
+    const a = await seedProductId();
+    const b = await seedProductId();
+    const created = await caseEngagementsRepository.create({
+      ...(await newCaseInput()),
+      title: 'Tagged',
+      description: '<p>Tagged.</p>',
+      productIds: [a, b],
+    });
+
+    const ids = await caseEngagementsRepository.listProductIds(created.id);
+
+    expect(ids).toHaveLength(2);
+    expect([...ids].sort((x, y) => x.localeCompare(y))).toEqual(
+      [a, b].sort((x, y) => x.localeCompare(y))
+    );
+  });
+
+  it('orders by tagging time, oldest first', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const first = await seedProductId();
+    const second = await seedProductId();
+    const now = Date.now();
+    await db.insert(caseEngagementProducts).values([
+      { engagementId: engagement.id, productId: second, createdAt: new Date(now) },
+      { engagementId: engagement.id, productId: first, createdAt: new Date(now - 60_000) },
+    ]);
+
+    expect(await caseEngagementsRepository.listProductIds(engagement.id)).toEqual([first, second]);
+  });
+
+  it('excludes soft-deleted links', async () => {
+    const kept = await seedProductId();
+    const dropped = await seedProductId();
+    const created = await caseEngagementsRepository.create({
+      ...(await newCaseInput()),
+      title: 'Half untagged',
+      description: '<p>Half untagged.</p>',
+      productIds: [kept, dropped],
+    });
+    await db
+      .update(caseEngagementProducts)
+      .set({ deletedAt: new Date() })
+      .where(
+        and(
+          eq(caseEngagementProducts.engagementId, created.id),
+          eq(caseEngagementProducts.productId, dropped)
+        )
+      );
+
+    expect(await caseEngagementsRepository.listProductIds(created.id)).toEqual([kept]);
+  });
+
+  it("never returns another case's products", async () => {
+    const mine = await seedProductId();
+    const theirs = await seedProductId();
+    const base = await newCaseInput();
+    const own = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Mine',
+      description: '<p>Mine.</p>',
+      productIds: [mine],
+    });
+    await caseEngagementsRepository.create({
+      ...base,
+      title: 'Theirs',
+      description: '<p>Theirs.</p>',
+      productIds: [theirs],
+    });
+
+    expect(await caseEngagementsRepository.listProductIds(own.id)).toEqual([mine]);
+  });
+
+  it('returns [] for a case with no products', async () => {
+    const { engagement } = await caseEngagementFactory();
+
+    expect(await caseEngagementsRepository.listProductIds(engagement.id)).toEqual([]);
+  });
+});
+
 describe('caseEngagementsRepository.findByBookingIdempotencyKey (BAL-400)', () => {
   it('returns the live case that was created under the key', async () => {
     const base = await newCaseInput();

@@ -145,5 +145,8 @@ export function narrowToProjectRequestCloseReason(
  *
  * `'home'` is the context-free Match-mode mount opened from the marketing home hero (BAL-582);
  * its draft key is `balo:project-draft:entry:home`.
+ *
+ * `'case'` is the "Convert to project" mount on a case (BAL-589), bound to the case's expert;
+ * its draft key is `balo:project-draft:case:{caseId}`, checked before the expert key.
  */
-export type ProjectRequestEntryPoint = 'profile' | 'search' | 'card' | 'direct' | 'home';
+export type ProjectRequestEntryPoint = 'profile' | 'search' | 'card' | 'direct' | 'home' | 'case';

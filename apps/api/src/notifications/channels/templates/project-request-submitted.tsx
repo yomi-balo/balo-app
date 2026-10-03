@@ -60,6 +60,10 @@ interface ProjectRequestSubmittedEmailProps {
   readonly tagCount?: number;
   readonly productCount?: number;
   readonly documentCount?: number;
+  // BAL-589 — set only when the request was converted from a case. Replaces the generic
+  // hero subtext with "{clientName} wants to turn {sourceCaseTitle} into a project."
+  readonly sourceCaseTitle?: string;
+  readonly clientName?: string;
 }
 
 export function ProjectRequestSubmittedEmail({
@@ -69,9 +73,14 @@ export function ProjectRequestSubmittedEmail({
   tagCount = 0,
   productCount = 0,
   documentCount = 0,
+  sourceCaseTitle,
+  clientName,
 }: Readonly<ProjectRequestSubmittedEmailProps>) {
   const previewText = `${firstName}, you have a new project request: ${projectTitle}`;
   const summary = buildSelectionSummary({ tagCount, productCount, documentCount });
+  const leadLine = sourceCaseTitle
+    ? `${clientName ?? 'A client'} wants to turn ${sourceCaseTitle} into a project.`
+    : 'A client wants to work with you.';
 
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
@@ -82,7 +91,7 @@ export function ProjectRequestSubmittedEmail({
         <Heading style={shared.smallHeroHeading}>
           {firstName}, you have a new project request.
         </Heading>
-        <Text style={shared.smallHeroSubtext}>A client wants to work with you.</Text>
+        <Text style={shared.smallHeroSubtext}>{leadLine}</Text>
       </Section>
 
       {/* ── Body card ── */}

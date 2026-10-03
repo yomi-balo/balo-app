@@ -25,6 +25,7 @@ import type {
 } from './consultation-row-menu';
 import { CasePartyCard } from './case-party-card';
 import type { FollowUpRequest } from './case-slot-quick-pick';
+import { ConvertToProject } from './convert-to-project';
 import { CaseActionItems } from './case-action-items';
 import { CaseFilesCard } from './case-files-card';
 import { CasePeopleCard } from './case-people-card';
@@ -373,7 +374,12 @@ export function CaseSurface({
     <div className="from-background to-muted/30 min-h-full bg-gradient-to-b">
       <div className="mx-auto w-full max-w-[1060px] px-4 py-8 sm:px-6 lg:px-8">
         <Reveal>
-          <CaseHeader header={view.header} />
+          <CaseHeader
+            header={view.header}
+            // BAL-589 — client lens only, on BOTH open and closed cases; a render
+            // hint, never authorization (see `ConvertToProject`'s own docblock).
+            action={view.lens === 'client' ? <ConvertToProject view={view} /> : undefined}
+          />
           {/* ⚠ No horizontal padding: these are peer cards and belong on the same vertical
               edges as every other card on the surface. */}
           <div>

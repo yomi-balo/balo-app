@@ -37,3 +37,26 @@ export function projectBriefNoopResult(fileNames: readonly string[]): BriefParse
     unmatchedProductLabels: [],
   };
 }
+
+/**
+ * BAL-589 — the case-source sibling of {@link projectBriefNoopResult}. Same synthetic-marker
+ * contract: a dev/CI brief drafted from a case must be just as visibly unreal as one drafted
+ * from documents, and must carry the four from-case headings so the dev/CI path exercises the
+ * same markdown shape a real draft would.
+ */
+export function projectBriefCaseNoopResult(caseTitle: string): BriefParseOutput {
+  const descriptionMarkdown =
+    `${PROJECT_BRIEF_NOOP_DISCLAIMER}\n\n` +
+    `## Problem\n${PROJECT_BRIEF_NOOP_DISCLAIMER}\n\n` +
+    `## Resolved in the case\n(not read)\n\n` +
+    `## What's left\n(not read)\n\n` +
+    `## Likely scope\n(not read)`;
+  return {
+    title: `${PROJECT_BRIEF_NOOP_TITLE} — ${caseTitle}`,
+    descriptionMarkdown,
+    tagSlugs: [],
+    productSlugs: [],
+    unmatchedTagLabels: [],
+    unmatchedProductLabels: [],
+  };
+}
