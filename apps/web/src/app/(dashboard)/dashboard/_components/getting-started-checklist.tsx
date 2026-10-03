@@ -8,6 +8,7 @@ import {
   Calendar,
   Clock,
   CreditCard,
+  Pause,
   Sparkles,
   Check,
   ArrowRight,
@@ -69,6 +70,13 @@ const CHECKLIST_ITEMS_UI: ChecklistItemUI[] = [
   },
 ];
 
+/** Shown in place of the availability row while the expert has paused new work. */
+const PAUSED_AVAILABILITY_UI: Pick<ChecklistItemUI, 'icon' | 'label' | 'description'> = {
+  icon: Pause,
+  label: 'Paused for new work',
+  description: 'Turn availability back on in Schedule',
+};
+
 const containerVariants = {
   hidden: {},
   visible: {
@@ -92,7 +100,9 @@ export function GettingStartedChecklist({
   const { completedCount } = status;
   const progressPercent = (completedCount / 5) * 100;
 
-  // Count incomplete items for numbering
+  // Numbering counts only the rows still to do. The paused availability row is its own state,
+  // neither done nor to do, so it takes no number and does not advance this count.
+  // `completedCount` comes from the server derivation, unchanged by a pause.
   let incompleteIndex = 0;
 
   return (
@@ -138,13 +148,16 @@ export function GettingStartedChecklist({
         initial="hidden"
         animate="visible"
       >
-        {CHECKLIST_ITEMS_UI.map((item) => {
-          const isComplete = status.items[item.key];
+        {CHECKLIST_ITEMS_UI.map((baseItem) => {
+          // A paused expert is set up, not behind: the row stops nagging and says where to resume.
+          const isPaused = baseItem.key === 'availability' && !status.availableForWork;
+          const item = isPaused ? { ...baseItem, ...PAUSED_AVAILABILITY_UI } : baseItem;
+          const isComplete = !isPaused && status.items[item.key];
 
-          if (!isComplete) {
+          if (!isComplete && !isPaused) {
             incompleteIndex++;
           }
-          const displayNumber = isComplete ? null : incompleteIndex;
+          const displayNumber = isComplete || isPaused ? null : incompleteIndex;
 
           return (
             <motion.button
@@ -154,14 +167,16 @@ export function GettingStartedChecklist({
               className="group hover:bg-muted/50 flex w-full items-center gap-4 px-6 py-4 text-left transition-colors"
             >
               {/* Completion circle or number */}
-              {isComplete ? (
+              {isPaused && <div aria-hidden="true" className="h-8 w-8 shrink-0" />}
+              {isComplete && (
                 <div
                   className="from-primary flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-r to-purple-500"
                   style={{ animation: 'checkPop 0.3s ease-out' }}
                 >
                   <Check className="h-4 w-4 text-white" />
                 </div>
-              ) : (
+              )}
+              {!isComplete && !isPaused && (
                 <div className="border-border text-muted-foreground flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-sm font-medium">
                   {displayNumber}
                 </div>
@@ -190,10 +205,14 @@ export function GettingStartedChecklist({
                 <p className="text-muted-foreground text-xs">{item.description}</p>
               </div>
 
-              {/* Done badge or arrow */}
-              {isComplete ? (
-                <span className="text-success text-xs font-medium">Done</span>
-              ) : (
+              {/* Done badge, neutral Paused badge, or arrow */}
+              {isComplete && <span className="text-success text-xs font-medium">Done</span>}
+              {isPaused && (
+                <span className="bg-paused-surface border-paused-border text-foreground/75 rounded-full border px-2 py-0.5 text-[11px] font-semibold">
+                  Paused
+                </span>
+              )}
+              {!isComplete && !isPaused && (
                 <ArrowRight className="text-muted-foreground h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
               )}
             </motion.button>

@@ -60,16 +60,26 @@ const { mockPickerMountCount } = vi.hoisted(() => ({ mockPickerMountCount: { val
 const { mockAvailabilityView } = vi.hoisted(() => ({
   mockAvailabilityView: { value: { kind: 'not_configured' } as AvailabilityView },
 }));
+const { mockHookArgs, mockCalendarScope } = vi.hoisted(() => ({
+  mockHookArgs: { value: [] as unknown[] },
+  mockCalendarScope: { value: undefined as string | undefined },
+}));
 vi.mock('@/components/availability/use-expert-availability', () => ({
-  useExpertAvailability: () => ({ view: mockAvailabilityView.value, reload: vi.fn() }),
+  useExpertAvailability: (...args: unknown[]) => {
+    mockHookArgs.value = args;
+    return { view: mockAvailabilityView.value, reload: vi.fn() };
+  },
 }));
 
 vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: ({
     onSlotSelect,
+    scope,
   }: {
     onSlotSelect: (s: { start: string; end: string; duration: number }) => void;
+    scope?: string;
   }) => {
+    mockCalendarScope.value = scope;
     useEffect(() => {
       mockPickerMountCount.value += 1;
     }, []);
@@ -108,6 +118,14 @@ beforeEach(() => {
 async function advanceToConfirm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(screen.getByRole('button', { name: 'pick-slot' }));
 }
+
+describe('existing-work scope (BAL-591)', () => {
+  it('reads the suggested-times grid and the calendar as existing_work, so a paused expert still has slots', () => {
+    render(<RescheduleDialog {...BASE_PROPS} />);
+    expect(mockHookArgs.value[2]).toBe('existing_work');
+    expect(mockCalendarScope.value).toBe('existing_work');
+  });
+});
 
 describe('RescheduleDialog — T-WEB-UI', () => {
   it('renders the picker at step 1', () => {

@@ -103,7 +103,7 @@ export function Hero({ view, portraitUrl }: Readonly<HeroProps>): React.JSX.Elem
             ) : (
               <div className="absolute right-3.5 bottom-3.5 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-[var(--hero-pill-bg)] px-2.5 py-1 backdrop-blur-sm">
                 <span className="text-[11.5px] font-medium text-white/70">
-                  Currently unavailable
+                  Not taking on new work right now
                 </span>
               </div>
             )}

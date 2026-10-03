@@ -33,6 +33,7 @@ function status(overrides: Partial<ChecklistStatus> = {}): ChecklistStatus {
     completedCount: 6,
     allComplete: true,
     rateCents: 313,
+    availableForWork: true,
     calendarNeedsReconnect: false,
     ...overrides,
   };

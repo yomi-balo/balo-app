@@ -11,7 +11,11 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 const mockFindById = vi.fn();
 const mockTransitionStatus = vi.fn();
 const mockInvite = vi.fn();
+const mockFindNewWorkEligibility = vi.fn();
 vi.mock('@balo/db', () => ({
+  expertsRepository: {
+    findNewWorkEligibility: (...args: unknown[]) => mockFindNewWorkEligibility(...args),
+  },
   projectRequestsRepository: {
     findById: (...args: unknown[]) => mockFindById(...args),
     transitionStatus: (...args: unknown[]) => mockTransitionStatus(...args),
@@ -67,6 +71,7 @@ describe('inviteExpertsAction', () => {
     mockActorHoldsLive.mockImplementation(async () => true);
     mockFindById.mockResolvedValue(requestRow('requested'));
     mockTransitionStatus.mockResolvedValue(undefined);
+    mockFindNewWorkEligibility.mockResolvedValue({ eligible: true });
     let n = 0;
     mockInvite.mockImplementation((input: { expertProfileId: string }) => {
       n += 1;
@@ -231,6 +236,57 @@ describe('inviteExpertsAction', () => {
     expect(result.success && result.invitedCount).toBe(1);
     expect(mockPublish).toHaveBeenCalledTimes(1);
     expect(mockTransitionStatus).toHaveBeenCalledTimes(1);
+  });
+
+  describe('experts who cannot take new work (BAL-591)', () => {
+    it('refuses the WHOLE batch when one expert is paused: no invite, no event, no transition', async () => {
+      mockFindNewWorkEligibility.mockImplementation(async (id: string) =>
+        id === EXPERT_B ? { eligible: false, reason: 'not_available' } : { eligible: true }
+      );
+      const result = await inviteExpertsAction({
+        requestId: REQUEST_ID,
+        expertProfileIds: [EXPERT_A, EXPERT_B],
+      });
+      expect(result).toEqual({
+        success: false,
+        error: "One or more of these experts aren't taking on new work right now.",
+        code: 'expert_unavailable',
+        unavailableExpertProfileIds: [EXPERT_B],
+      });
+      expect(mockInvite).not.toHaveBeenCalled();
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(mockTransitionStatus).not.toHaveBeenCalled();
+      expect(revalidatePath).not.toHaveBeenCalled();
+    });
+
+    it('checks every selected expert and logs the reasons as a warning', async () => {
+      mockFindNewWorkEligibility.mockResolvedValue({ eligible: false, reason: 'owner_not_live' });
+      const result = await inviteExpertsAction({
+        requestId: REQUEST_ID,
+        expertProfileIds: [EXPERT_A, EXPERT_B],
+      });
+      expect(mockFindNewWorkEligibility).toHaveBeenCalledWith(EXPERT_A);
+      expect(mockFindNewWorkEligibility).toHaveBeenCalledWith(EXPERT_B);
+      expect(result).toMatchObject({
+        code: 'expert_unavailable',
+        unavailableExpertProfileIds: [EXPERT_A, EXPERT_B],
+      });
+      expect(log.warn).toHaveBeenCalledWith(
+        'Expert invite refused — expert not taking on new work',
+        expect.objectContaining({
+          unavailable: [
+            { id: EXPERT_A, reason: 'owner_not_live' },
+            { id: EXPERT_B, reason: 'owner_not_live' },
+          ],
+        })
+      );
+    });
+
+    it('does not read eligibility when the request is outside the invite window', async () => {
+      mockFindById.mockResolvedValue(requestRow('closed'));
+      await inviteExpertsAction({ requestId: REQUEST_ID, expertProfileIds: [EXPERT_A] });
+      expect(mockFindNewWorkEligibility).not.toHaveBeenCalled();
+    });
   });
 
   it('returns invitedCount 0 with no transition when all are live dups', async () => {

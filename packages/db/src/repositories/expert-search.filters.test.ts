@@ -51,18 +51,28 @@ function params(overrides: Partial<ExpertSearchParams> = {}): ExpertSearchParams
 }
 
 describe('buildWhereConditions — base visibility', () => {
-  it('always includes vertical + searchable + approved (and nothing else when empty)', () => {
+  it('always includes vertical + searchable + approved + live owner (and nothing else when empty)', () => {
     const conds = buildWhereConditions(params(), NOW);
-    expect(conds).toHaveLength(3);
+    expect(conds).toHaveLength(4);
     const sql = joinSql(conds);
     expect(sql).toContain('"vertical_id"');
     expect(sql).toContain('"searchable"');
     expect(sql).toContain('"approved_at" is not null');
   });
 
+  it('the fourth base term is the shared owner-liveness fragment, correlated on the profile owner', async () => {
+    const { expertOwnerIsLive } = await import('./_shared/expert-owner-live');
+    const conds = buildWhereConditions(params(), NOW);
+    expect(conds[3]).toBe(expertOwnerIsLive);
+    const sql = toSql(conds[3] as SQL);
+    expect(sql).toContain('"expert_profiles"."user_id"');
+    expect(sql).toContain('live_owner.deleted_at IS NULL');
+    expect(sql).toContain("live_owner.status = 'active'");
+  });
+
   it('does NOT filter deleted_at on expert_profiles (no such column)', () => {
     const sql = joinSql(buildWhereConditions(params(), NOW));
-    expect(sql).not.toContain('deleted_at');
+    expect(sql).not.toContain('"expert_profiles"."deleted_at"');
   });
 });
 
@@ -77,13 +87,13 @@ describe('buildWhereConditions — facet filters (OR-within / AND-across)', () =
       }),
       NOW
     );
-    // 3 base + 4 facet exists
-    expect(conds).toHaveLength(7);
+    // 4 base + 4 facet exists
+    expect(conds).toHaveLength(8);
   });
 
   it('emits an IN list for OR-within a facet (multiple product ids)', () => {
     const conds = buildWhereConditions(params({ productIds: ['p1', 'p2', 'p3'] }), NOW);
-    const existsSql = toSql(conds[3]);
+    const existsSql = toSql(conds[4]);
     expect(existsSql).toContain('exists');
     expect(existsSql).toContain('"expert_competency"');
     expect(existsSql).toContain('"product_id" in ($1, $2, $3)');
@@ -91,22 +101,22 @@ describe('buildWhereConditions — facet filters (OR-within / AND-across)', () =
 
   it('uses support_type_id for the supportTypes facet', () => {
     const conds = buildWhereConditions(params({ supportTypeIds: ['st1'] }), NOW);
-    expect(toSql(conds[3])).toContain('"support_type_id" in');
+    expect(toSql(conds[4])).toContain('"support_type_id" in');
   });
 
   it('uses expert_languages for the languages facet', () => {
     const conds = buildWhereConditions(params({ languageIds: ['l1'] }), NOW);
-    expect(toSql(conds[3])).toContain('"expert_languages"');
+    expect(toSql(conds[4])).toContain('"expert_languages"');
   });
 
   it('uses expert_industries for the industries facet', () => {
     const conds = buildWhereConditions(params({ industryIds: ['i1'] }), NOW);
-    expect(toSql(conds[3])).toContain('"expert_industries"');
+    expect(toSql(conds[4])).toContain('"expert_industries"');
   });
 
   it('skips empty facet arrays (no invalid IN ())', () => {
     const conds = buildWhereConditions(params({ productIds: [] }), NOW);
-    expect(conds).toHaveLength(3);
+    expect(conds).toHaveLength(4);
     expect(joinSql(conds)).not.toContain('in ()');
   });
 });
@@ -114,17 +124,17 @@ describe('buildWhereConditions — facet filters (OR-within / AND-across)', () =
 describe('buildWhereConditions — rate bounds', () => {
   it('adds a >= bound for rateMin', () => {
     const conds = buildWhereConditions(params({ rateMinCents: 100 }), NOW);
-    expect(toSql(conds[3])).toContain('"rate_cents" >=');
+    expect(toSql(conds[4])).toContain('"rate_cents" >=');
   });
 
   it('adds a <= bound for rateMax', () => {
     const conds = buildWhereConditions(params({ rateMaxCents: 200 }), NOW);
-    expect(toSql(conds[3])).toContain('"rate_cents" <=');
+    expect(toSql(conds[4])).toContain('"rate_cents" <=');
   });
 
   it('adds both bounds when both are set', () => {
     const conds = buildWhereConditions(params({ rateMinCents: 100, rateMaxCents: 200 }), NOW);
-    expect(conds).toHaveLength(5);
+    expect(conds).toHaveLength(6);
   });
 
   it('adds no rate predicate when neither bound is set', () => {
@@ -136,10 +146,10 @@ describe('buildWhereConditions — rate bounds', () => {
 describe('buildWhereConditions — availability gate', () => {
   it('adds NOT NULL + future predicates when the gate is enabled', () => {
     const conds = buildWhereConditions(params({ availabilityGateEnabled: true }), NOW);
-    expect(conds).toHaveLength(5);
-    expect(toSql(conds[3])).toBe('ac.earliest_available_at IS NOT NULL');
-    expect(toSql(conds[4])).toContain('ac.earliest_available_at >');
-    expect(toSql(conds[4])).toContain('::timestamptz');
+    expect(conds).toHaveLength(6);
+    expect(toSql(conds[4])).toBe('ac.earliest_available_at IS NOT NULL');
+    expect(toSql(conds[5])).toContain('ac.earliest_available_at >');
+    expect(toSql(conds[5])).toContain('::timestamptz');
   });
 
   it('adds no availability predicate when the gate is disabled', () => {
@@ -154,9 +164,9 @@ describe('buildWhereConditions — timeframe (gate-independent)', () => {
       params({ timeframe: 'today', availabilityGateEnabled: false }),
       NOW
     );
-    expect(conds).toHaveLength(5);
-    expect(toSql(conds[3])).toBe('ac.earliest_available_at IS NOT NULL');
-    expect(toSql(conds[4])).toContain('ac.earliest_available_at <=');
+    expect(conds).toHaveLength(6);
+    expect(toSql(conds[4])).toBe('ac.earliest_available_at IS NOT NULL');
+    expect(toSql(conds[5])).toContain('ac.earliest_available_at <=');
   });
 
   it('stacks with the gate when both are present', () => {
@@ -164,17 +174,17 @@ describe('buildWhereConditions — timeframe (gate-independent)', () => {
       params({ timeframe: 'week', availabilityGateEnabled: true }),
       NOW
     );
-    // 3 base + 2 gate + 2 timeframe
-    expect(conds).toHaveLength(7);
+    // 4 base + 2 gate + 2 timeframe
+    expect(conds).toHaveLength(8);
   });
 });
 
 describe('buildWhereConditions — full-text query', () => {
   it('adds an FTS+fuzzy match clause only when q is present', () => {
-    expect(buildWhereConditions(params(), NOW)).toHaveLength(3);
+    expect(buildWhereConditions(params(), NOW)).toHaveLength(4);
     const conds = buildWhereConditions(params({ query: 'agentforce' }), NOW);
-    expect(conds).toHaveLength(4);
-    const sql = toSql(conds[3]);
+    expect(conds).toHaveLength(5);
+    const sql = toSql(conds[4]);
     expect(sql).toContain('websearch_to_tsquery');
     expect(sql).toContain('word_similarity');
     expect(sql).toContain('"search_vector" @@');
@@ -182,7 +192,7 @@ describe('buildWhereConditions — full-text query', () => {
 
   it('includes a trigram name predicate over users.first_name/last_name (BAL-263)', () => {
     const conds = buildWhereConditions(params({ query: 'ada lovelace' }), NOW);
-    const sql = toSql(conds[3]);
+    const sql = toSql(conds[4]);
     // The name OR-term matches the expert's name on the joined `users u` row,
     // which the stored search_vector (headline + bio only) never covers.
     expect(sql).toContain(
@@ -191,7 +201,7 @@ describe('buildWhereConditions — full-text query', () => {
   });
 
   it('treats a blank/whitespace q as absent', () => {
-    expect(buildWhereConditions(params({ query: '   ' }), NOW)).toHaveLength(3);
+    expect(buildWhereConditions(params({ query: '   ' }), NOW)).toHaveLength(4);
   });
 });
 

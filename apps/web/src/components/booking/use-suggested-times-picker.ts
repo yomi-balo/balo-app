@@ -41,7 +41,9 @@ export function useSuggestedTimesPicker(params: {
   const { expertProfileId, fixedDurationMinutes, originalStartIso, extraFilter } = params;
   const { view: availabilityView, reload } = useExpertAvailability(
     expertProfileId,
-    DEFAULT_AVAILABILITY_WINDOW_DAYS
+    DEFAULT_AVAILABILITY_WINDOW_DAYS,
+    // Reschedules serve work already in flight, so a paused expert still has a real grid.
+    'existing_work'
   );
   const suggestions =
     fixedDurationMinutes !== undefined && availabilityView.kind === 'ready'

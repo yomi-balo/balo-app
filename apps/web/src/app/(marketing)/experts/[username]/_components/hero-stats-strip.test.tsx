@@ -26,6 +26,7 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
     consultationCount: 0,
     certCount: 0,
     availableForWork: true,
+    vertical: { name: 'Salesforce', slug: 'salesforce' },
     baloVerified: true,
     topRated: false,
     ratingAverage: null,

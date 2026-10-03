@@ -30,10 +30,10 @@ const mockCreateProjectRequest = vi.fn();
 const mockGetVertical = vi.fn();
 const mockGetTags = vi.fn();
 const mockGetProducts = vi.fn();
-const mockFindDirectEligibility = vi.fn();
+const mockFindNewWorkEligibility = vi.fn();
 vi.mock('@balo/db', () => ({
   expertsRepository: {
-    findDirectRequestEligibility: (...args: unknown[]) => mockFindDirectEligibility(...args),
+    findNewWorkEligibility: (...args: unknown[]) => mockFindNewWorkEligibility(...args),
   },
   projectRequestsRepository: {
     createProjectRequest: (...args: unknown[]) => mockCreateProjectRequest(...args),
@@ -129,7 +129,7 @@ describe('submitProjectRequestAction', () => {
       },
     ]);
     mockCreateProjectRequest.mockResolvedValue(createdRow());
-    mockFindDirectEligibility.mockResolvedValue({ eligible: true });
+    mockFindNewWorkEligibility.mockResolvedValue({ eligible: true });
   });
 
   describe('authentication', () => {
@@ -258,26 +258,27 @@ describe('submitProjectRequestAction', () => {
   describe('direct eligibility', () => {
     it('checks eligibility for the requested expert and proceeds when eligible', async () => {
       const result = await submitProjectRequestAction(directInput());
-      expect(mockFindDirectEligibility).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+      expect(mockFindNewWorkEligibility).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
       expect(result).toEqual({ success: true, projectRequestId: CREATED_ID });
     });
 
     it.each(['not_found', 'owner_not_live', 'not_approved', 'not_searchable', 'not_available'])(
       'rejects a direct request when the expert is ineligible (%s)',
       async (reason) => {
-        mockFindDirectEligibility.mockResolvedValue({ eligible: false, reason });
+        mockFindNewWorkEligibility.mockResolvedValue({ eligible: false, reason });
 
         const result = await submitProjectRequestAction(directInput());
 
         expect(result).toEqual({
           success: false,
           error:
-            "This expert isn't taking new projects right now. Switch to matching and we'll find someone with similar experience.",
+            "This expert isn't taking on new work right now. Choose Get matched instead and we'll find someone with similar experience.",
+          code: 'expert_unavailable',
         });
         expect(mockCreateProjectRequest).not.toHaveBeenCalled();
         expect(mockPublish).not.toHaveBeenCalled();
         expect(log.warn).toHaveBeenCalledWith(
-          'Project request rejected — expert not taking direct requests',
+          'Project request rejected — expert not taking on new work',
           { userId: USER_ID, expertProfileId: EXPERT_PROFILE_ID, reason }
         );
       }
@@ -288,7 +289,7 @@ describe('submitProjectRequestAction', () => {
         createdRow({ sendTo: 'match', expertProfileId: null })
       );
       await submitProjectRequestAction(matchInput());
-      expect(mockFindDirectEligibility).not.toHaveBeenCalled();
+      expect(mockFindNewWorkEligibility).not.toHaveBeenCalled();
     });
   });
 

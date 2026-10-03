@@ -385,6 +385,14 @@ describe('bookIntroCallAction', () => {
     });
   });
 
+  it('not_permitted maps from api 409 expert_unavailable (owner not live)', async () => {
+    mockPostBookMeeting.mockResolvedValue({ ok: false, status: 409, code: 'expert_unavailable' });
+    await expect(bookIntroCallAction(input())).resolves.toEqual({
+      ok: false,
+      code: 'not_permitted',
+    });
+  });
+
   it('rate_limited maps from api 429/503', async () => {
     mockPostBookMeeting.mockResolvedValue({ ok: false, status: 429, code: 'rate_limited' });
     await expect(bookIntroCallAction(input())).resolves.toEqual({

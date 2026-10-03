@@ -45,6 +45,10 @@ const RULE_FIELDS: readonly RuleField[] = [
 interface BookingRulesSectionProps {
   settings: BookingSettings;
   onChange: (settings: BookingSettings) => void;
+  /** Paused for new work: the selects are inert and keep their values. */
+  disabled?: boolean;
+  /** Id of the note explaining why the selects are inert. */
+  pausedNoteId?: string;
 }
 
 /**
@@ -55,6 +59,8 @@ interface BookingRulesSectionProps {
 export function BookingRulesSection({
   settings,
   onChange,
+  disabled,
+  pausedNoteId,
 }: Readonly<BookingRulesSectionProps>): React.JSX.Element {
   const handleChange = useCallback(
     (key: keyof BookingSettings, value: string): void => {
@@ -78,10 +84,11 @@ export function BookingRulesSection({
               <Select
                 value={String(settings[field.key])}
                 onValueChange={(value) => handleChange(field.key, value)}
+                disabled={disabled}
               >
                 <SelectTrigger
                   id={fieldId}
-                  aria-describedby={helpId}
+                  aria-describedby={disabled && pausedNoteId ? `${helpId} ${pausedNoteId}` : helpId}
                   className="w-full text-[13px]"
                 >
                   <SelectValue />

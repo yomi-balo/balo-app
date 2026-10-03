@@ -12,6 +12,7 @@ function makeProfile(overrides: Partial<PublicExpertProfile> = {}): PublicExpert
     headline: 'Salesforce Architect',
     bio: 'A bio.',
     availableForWork: true,
+    vertical: { name: 'Salesforce', slug: 'salesforce' },
     consultationCount: 0,
     // ⚠ `rating_average` is `numeric(2,1)`, so Drizzle's relational `columns:` allow-list
     // hands back a STRING. The fixture mirrors the raw row so the mapper's
@@ -117,6 +118,17 @@ describe('mapProfileToView — names & basics', () => {
  * i.e. the un-marked-up consultant rate, which is LOWER than the client is actually charged.
  * The public profile now emits the client all-in rate, matching `/experts`.
  */
+describe('mapProfileToView — vertical', () => {
+  it('exposes the vertical name and slug for the paused booking card', () => {
+    const view = mapProfileToView(
+      makeProfile({
+        vertical: { name: 'Workday', slug: 'workday' } as PublicExpertProfile['vertical'],
+      })
+    );
+    expect(view.vertical).toEqual({ name: 'Workday', slug: 'workday' });
+  });
+});
+
 describe('mapProfileToView — rate', () => {
   it('emits the CLIENT ALL-IN rate per minute (Balo fee included)', () => {
     // applyBaloFee(950, 2500) = round(950 × 12500 / 10000) = round(1187.5) = 1188 → 11.88

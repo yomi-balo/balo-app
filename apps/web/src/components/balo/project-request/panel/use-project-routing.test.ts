@@ -12,6 +12,7 @@ interface HookProps {
   routing: ProjectRouting;
   expertProfileId: string | undefined;
   expertAvailableForWork: boolean | undefined;
+  unavailableTrigger: 'profile_data' | 'submit_rejected';
 }
 
 const BASE: HookProps = {
@@ -20,6 +21,7 @@ const BASE: HookProps = {
   routing: 'direct',
   expertProfileId: EXPERT_ID,
   expertAvailableForWork: true,
+  unavailableTrigger: 'profile_data',
 };
 
 function setup(initial: Partial<HookProps> = {}): ReturnType<
@@ -118,6 +120,16 @@ describe('useProjectRouting — expert unavailable event', () => {
     expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN, {
       expert_id: EXPERT_ID,
       entry_point: 'profile',
+      trigger: 'profile_data',
+    });
+  });
+
+  it('reports the submit-rejected trigger when a refused submit raised the notice', () => {
+    setup({ expertAvailableForWork: false, unavailableTrigger: 'submit_rejected' });
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN, {
+      expert_id: EXPERT_ID,
+      entry_point: 'profile',
+      trigger: 'submit_rejected',
     });
   });
 

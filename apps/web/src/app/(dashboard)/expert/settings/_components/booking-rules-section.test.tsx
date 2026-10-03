@@ -56,4 +56,11 @@ describe('BookingRulesSection', () => {
 
     expect(onChange).toHaveBeenCalledWith({ ...DEFAULT_BOOKING_SETTINGS, bufferAfterMinutes: 30 });
   });
+
+  it('disables the three selects when paused, keeping their values', () => {
+    render(<BookingRulesSection settings={DEFAULT_BOOKING_SETTINGS} onChange={vi.fn()} disabled />);
+    const selects = screen.getAllByRole('combobox');
+    expect(selects).toHaveLength(3);
+    for (const select of selects) expect(select).toBeDisabled();
+  });
 });

@@ -59,6 +59,10 @@ interface ScheduleDayRowProps {
   onAddRange: () => void;
   onRemoveRange: (rangeId: string) => void;
   onCopyToDays: (targetIndices: number[]) => void;
+  /** Paused for new work: every control is inert, values stay as they are. */
+  disabled?: boolean;
+  /** Id of the note explaining why the controls are inert; set on every disabled control. */
+  pausedNoteId?: string;
 }
 
 /**
@@ -77,10 +81,13 @@ export function ScheduleDayRow({
   onAddRange,
   onRemoveRange,
   onCopyToDays,
+  disabled,
+  pausedNoteId,
 }: Readonly<ScheduleDayRowProps>): React.JSX.Element {
   const meta = DAY_META[dayIndex];
   const nextMeta = DAY_META[(dayIndex + 1) % DAY_META.length];
   const switchId = useId();
+  const pausedDescribedBy = disabled ? pausedNoteId : undefined;
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyTargets, setCopyTargets] = useState<number[]>([]);
 
@@ -120,6 +127,8 @@ export function ScheduleDayRow({
           id={switchId}
           checked={day.enabled}
           onCheckedChange={onToggle}
+          disabled={disabled}
+          aria-describedby={pausedDescribedBy}
           aria-label={`${meta.full} availability`}
         />
         <label
@@ -152,8 +161,13 @@ export function ScheduleDayRow({
                 <ScheduleTimeSelect
                   value={range.start}
                   ariaLabel={`${meta.full} range ${rangeIndex + 1} start time`}
-                  ariaDescribedBy={hasConflict ? errorId : undefined}
+                  ariaDescribedBy={
+                    [hasConflict ? errorId : undefined, pausedDescribedBy]
+                      .filter((id): id is string => id !== undefined)
+                      .join(' ') || undefined
+                  }
                   invalid={hasConflict}
+                  disabled={disabled}
                   triggerClassName={hasConflict ? 'bg-destructive/5' : undefined}
                   onChange={(value) => onRangeChange(range.id, 'start', value)}
                 />
@@ -164,8 +178,13 @@ export function ScheduleDayRow({
                   value={range.end}
                   options={endOptions}
                   ariaLabel={`${meta.full} range ${rangeIndex + 1} end time`}
-                  ariaDescribedBy={describedBy || undefined}
+                  ariaDescribedBy={
+                    [describedBy || undefined, pausedDescribedBy]
+                      .filter((id): id is string => id !== undefined)
+                      .join(' ') || undefined
+                  }
                   invalid={hasConflict}
+                  disabled={disabled}
                   triggerClassName={endTone}
                   onChange={(value) => onRangeChange(range.id, 'end', value)}
                 />
@@ -186,6 +205,8 @@ export function ScheduleDayRow({
                     size="icon-sm"
                     className="text-muted-foreground hover:text-foreground"
                     aria-label={`Remove ${meta.full} range ${rangeIndex + 1}`}
+                    aria-describedby={pausedDescribedBy}
+                    disabled={disabled}
                     onClick={() => onRemoveRange(range.id)}
                   >
                     <X className="h-4 w-4" aria-hidden="true" />
@@ -217,7 +238,9 @@ export function ScheduleDayRow({
             <button
               type="button"
               onClick={onAddRange}
-              className="text-primary focus-visible:ring-ring inline-flex h-8 items-center gap-1 rounded-md px-1.5 text-[13px] font-medium whitespace-nowrap underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
+              disabled={disabled}
+              aria-describedby={pausedDescribedBy}
+              className="text-primary focus-visible:ring-ring inline-flex h-8 items-center gap-1 rounded-md px-1.5 text-[13px] font-medium whitespace-nowrap underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
             >
               <Plus className="h-3.5 w-3.5" aria-hidden="true" />
               Add range <span className="sr-only">to {meta.full}</span>
@@ -231,6 +254,8 @@ export function ScheduleDayRow({
                 size="icon-sm"
                 className="text-muted-foreground hover:text-foreground"
                 aria-label={`Copy ${meta.full} hours to other days`}
+                disabled={disabled}
+                aria-describedby={pausedDescribedBy}
               >
                 <Copy className="h-4 w-4" aria-hidden="true" />
               </Button>

@@ -39,6 +39,7 @@ function expertRow(id: string, name: string) {
     name,
     headline: `${name} headline`,
     avatarUrl: null,
+    availableForWork: true,
     // Extra DTO fields the action drops — present to prove the mapping is minimal.
     username: 'x',
     bio: null,
@@ -101,8 +102,20 @@ describe('searchExpertsForInviteAction', () => {
     expect(result).toEqual({
       success: true,
       experts: [
-        { id: 'e-1', name: 'Priya Nair', headline: 'Priya Nair headline', avatarUrl: null },
-        { id: 'e-2', name: 'Sofia Ruiz', headline: 'Sofia Ruiz headline', avatarUrl: null },
+        {
+          id: 'e-1',
+          name: 'Priya Nair',
+          headline: 'Priya Nair headline',
+          avatarUrl: null,
+          availableForWork: true,
+        },
+        {
+          id: 'e-2',
+          name: 'Sofia Ruiz',
+          headline: 'Sofia Ruiz headline',
+          avatarUrl: null,
+          availableForWork: true,
+        },
       ],
     });
   });

@@ -13,6 +13,7 @@ import { hasLiveCalendarConnection, deriveExpertChecklist } from '@balo/shared/e
 import { expertDraftFactory, userFactory } from '../test/factories';
 import { seedApirocConnection } from '../test/helpers/seed-apiroc-connection';
 import { availabilityRulesRepository } from './availability-rules';
+import { expertsRepository } from './experts';
 import { calendarRepository } from './calendar';
 import { payoutsRepository } from './payouts';
 import { usersRepository } from './users';
@@ -242,6 +243,28 @@ describe('expertSearchabilityRepository.loadInputs — projection', () => {
     expect(anyConnectionActive(snapshot)).toBe(true);
     expect(snapshot.currentSearchable).toBe(false);
     expect(snapshot.rateCents).toBe(25_000);
+    expect(snapshot.availableForWork).toBe(true);
+  });
+
+  /**
+   * BAL-591 — `availableForWork` rides on the snapshot for the settings tabs, but is NOT a
+   * checklist input: pausing new work must never de-list an expert from search.
+   */
+  it('reports a paused expert as availableForWork=false without touching the checklist inputs', async () => {
+    const expert = await expertDraftFactory();
+    const before = await loadOrFail(expert.id);
+
+    await expertsRepository.setAvailableForWork({
+      expertProfileId: expert.id,
+      availableForWork: false,
+      actorUserId: expert.userId,
+    });
+    const after = await loadOrFail(expert.id);
+
+    expect(before.availableForWork).toBe(true);
+    expect(after.availableForWork).toBe(false);
+    expect(after.inputs).toEqual(before.inputs);
+    expect(deriveExpertChecklist(after.inputs)).toEqual(deriveExpertChecklist(before.inputs));
   });
 
   it('returns the empty-checklist shape for a bare expert (no nulls-as-crashes)', async () => {

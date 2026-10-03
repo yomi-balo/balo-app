@@ -24,7 +24,7 @@ const mockToast = vi.mocked(toast);
 const REQUEST_ID = 'req-1';
 
 function expert(id: string, name: string): ExpertInviteOption {
-  return { id, name, headline: `${name} headline`, avatarUrl: null };
+  return { id, name, headline: `${name} headline`, avatarUrl: null, availableForWork: true };
 }
 
 function renderOpen(props: Partial<React.ComponentProps<typeof ExpertInviteDialog>> = {}) {
@@ -86,6 +86,48 @@ describe('ExpertInviteDialog', () => {
     await screen.findByText('Priya Nair');
     expect(screen.getByText('Already invited')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Priya Nair/i })).toBeDisabled();
+  });
+
+  it('shows an expert who paused new work as "Not taking on new work" and not selectable', async () => {
+    mockSearchExperts.mockResolvedValue({
+      success: true,
+      experts: [
+        { ...expert('e-1', 'Priya Nair'), availableForWork: false },
+        expert('e-2', 'Sofia Ruiz'),
+      ],
+    });
+    renderOpen();
+    await screen.findByText('Priya Nair');
+    expect(screen.getByText('Not taking on new work')).toBeInTheDocument();
+    const paused = screen.getByRole('button', { name: /Priya Nair/i });
+    expect(paused).toBeDisabled();
+    fireEvent.click(paused);
+    expect(screen.getByRole('button', { name: 'Invite experts' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Sofia Ruiz/i })).toBeEnabled();
+  });
+
+  it('surfaces a refused batch as an error toast and keeps the dialog open', async () => {
+    mockSearchExperts.mockResolvedValue({
+      success: true,
+      experts: [expert('e-1', 'Priya Nair')],
+    });
+    mockInviteExperts.mockResolvedValue({
+      success: false,
+      error: "One or more of these experts aren't taking on new work right now.",
+      code: 'expert_unavailable',
+      unavailableExpertProfileIds: ['e-1'],
+    });
+    const onOpenChange = vi.fn();
+    renderOpen({ onOpenChange });
+    fireEvent.click(await screen.findByRole('button', { name: /Priya Nair/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Invite 1 expert/i }));
+
+    await waitFor(() =>
+      expect(mockToast.error).toHaveBeenCalledWith(
+        "One or more of these experts aren't taking on new work right now."
+      )
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   it('multi-selects and invites, firing analytics + a success toast', async () => {

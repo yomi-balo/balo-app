@@ -16,6 +16,7 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     bio: 'Ten years of platform work.',
     rateCents: 250,
     earliestAvailableAt: new Date('2026-06-03T09:30:00.000Z'),
+    availableForWork: true,
     isSalesforceMvp: true,
     isSalesforceCta: false,
     isCertifiedTrainer: true,
@@ -84,6 +85,13 @@ describe('mapRowToExpertSearchResult', () => {
   it('maps null availability to null', () => {
     const result = mapRowToExpertSearchResult(buildRow({ earliestAvailableAt: null }), NOW);
     expect(result.nextAvailableAt).toBeNull();
+  });
+
+  it('passes availableForWork through, true and false', () => {
+    expect(mapRowToExpertSearchResult(buildRow(), NOW).availableForWork).toBe(true);
+    expect(
+      mapRowToExpertSearchResult(buildRow({ availableForWork: false }), NOW).availableForWork
+    ).toBe(false);
   });
 
   it('maps languages with flag emoji passthrough (incl. null)', () => {
@@ -218,6 +226,7 @@ describe('public serializer boundary (BAL-493 AC-5)', () => {
     const dto = mapRowToExpertSearchResult(buildRow(), NOW);
     expect(Object.keys(dto).sort()).toEqual([
       'agency',
+      'availableForWork',
       'avatarUrl',
       'bio',
       'competencies',

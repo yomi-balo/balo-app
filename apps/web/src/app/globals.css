@@ -61,6 +61,11 @@
   --violet-deep: oklch(0.491 0.27 292.6);
   --subtle-foreground: oklch(0.714 0.019 261.3);
 
+  /* Paused-for-new-work motif (BAL-591): slate surface + border, and the hatch stripe tone. */
+  --paused-surface: oklch(0.968 0.007 247.9);
+  --paused-border: oklch(0.869 0.022 252.9);
+  --paused-hatch: oklch(0.554 0.046 257.4 / 0.11);
+
   /* Composed expressions — :root ONLY. Their operands (--primary, --violet, etc.) are
      already per-mode, so they re-resolve automatically under .dark; duplicating them in
      .dark would fork two copies of the same derivation and is a bug farm. */
@@ -136,6 +141,10 @@
   --violet-deep: oklch(0.541 0.281 293);
   --subtle-foreground: oklch(0.6 0.028 258);
 
+  --paused-surface: oklch(0.232 0.031 261);
+  --paused-border: oklch(0.372 0.044 257.3);
+  --paused-hatch: oklch(0.704 0.04 256.8 / 0.14);
+
   --chart-1: oklch(0.626 0.186 259.6);
   --chart-2: oklch(0.72 0.192 149.5);
   --chart-3: oklch(0.77 0.165 70.6);
@@ -183,6 +192,8 @@
   --color-warning-strong: var(--warning-strong);
   --color-info-strong: var(--info-strong);
   --color-destructive-strong: var(--destructive-strong);
+  --color-paused-surface: var(--paused-surface);
+  --color-paused-border: var(--paused-border);
 
   /* BAL-493 (D4) — marketing surfaces. Colour tokens only; --grad/--grad-hover/--ease
      are not colours and are consumed directly as var(--grad) etc. in marketing-home.css. */
@@ -582,6 +593,18 @@
 }
 .scrollbar-none::-webkit-scrollbar {
   display: none;
+}
+
+/* The one "paused for new work" motif (BAL-591): a 135° 6px hatch over the paused surface.
+   Used by the Schedule status card, the client preview, the Calendar's open hours and the
+   public profile's booking card. */
+@utility bg-paused-hatch {
+  background-color: var(--paused-surface);
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--paused-hatch) 0 6px,
+    transparent 6px 12px
+  );
 }
 
 /* White inputs on tinted wizard background */

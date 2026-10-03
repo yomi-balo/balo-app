@@ -33,6 +33,7 @@ export function mapRowToExpertSearchResult(row: ExpertSearchRow, now: Date): Exp
     // BAL-493 / D1 — client all-in, Balo fee included at the DEFAULT bps. See the docblock.
     rate: publicDisplayRatePerMinute(row.rateCents),
     nextAvailableAt: row.earliestAvailableAt?.toISOString() ?? null,
+    availableForWork: row.availableForWork,
     languages: row.languages.map((l) => ({ name: l.name, flagEmoji: l.flagEmoji })),
     agency: row.agencyName ? { name: row.agencyName, logoUrl: row.agencyLogoUrl ?? null } : null,
     distinctions: {

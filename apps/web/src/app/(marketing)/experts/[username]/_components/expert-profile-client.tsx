@@ -29,7 +29,8 @@ import { WorkSection } from './work-section';
 import { ReviewsSection } from './reviews-section';
 import { BookingCard } from './booking-card';
 import { ExpertProfileAnalytics } from './expert-profile-analytics';
-import { ProjectRequestPanel } from '@/components/balo/project-request/panel';
+import { ProjectRequestPanel, type ProjectRouting } from '@/components/balo/project-request/panel';
+import { buildSimilarExpertsHref } from '@/lib/search/similar-experts-href';
 
 interface ExpertProfileClientProps {
   view: ExpertProfileView;
@@ -106,6 +107,11 @@ export function ExpertProfileClient({
   // the BookingCard and the QuickStarts empty-state. The trigger + analytics stay
   // here (profile-specific); the panel itself is a Projects-owned reusable module.
   const [projectOpen, setProjectOpen] = useState(false);
+  // The routing the panel opens on: `match` from the paused card's "Get matched", otherwise its
+  // own default (Direct).
+  const [projectInitialRouting, setProjectInitialRouting] = useState<ProjectRouting | undefined>(
+    undefined
+  );
 
   // Suppress scroll-spy updates briefly while a programmatic smooth-scroll runs.
   const jumpingRef = useRef(false);
@@ -213,10 +219,21 @@ export function ExpertProfileClient({
 
   // `?book=1` deep link (entry points 2/4) — auto-opens once bookingContext (or auth) resolves.
   useEffect(() => {
-    if (!autoOpenBooking || autoOpenFiredRef.current) return;
+    // A paused expert takes no new bookings: the deep link opens nothing, and the card's
+    // alternatives are what the visitor sees.
+    if (!autoOpenBooking || autoOpenFiredRef.current || !view.availableForWork) return;
     autoOpenFiredRef.current = true;
     openBookingFlow(autoOpenBookingSource);
-  }, [autoOpenBooking, autoOpenBookingSource, openBookingFlow]);
+  }, [autoOpenBooking, autoOpenBookingSource, openBookingFlow, view.availableForWork]);
+
+  const similarExpertsHref = useMemo(
+    () =>
+      buildSimilarExpertsHref({
+        verticalSlug: view.vertical.slug,
+        productId: view.competencies[0]?.id,
+      }),
+    [view.vertical.slug, view.competencies]
+  );
 
   const bookingExpert: BookingFlowExpert = useMemo(
     () => ({
@@ -228,8 +245,9 @@ export function ExpertProfileClient({
       partyLabel: view.agency?.name ?? view.name,
       verified: view.baloVerified,
       availableForWork: view.availableForWork,
+      similarExpertsHref,
     }),
-    [view, bookingAvatarUrl]
+    [view, bookingAvatarUrl, similarExpertsHref]
   );
 
   const chooserContext: BookingContext = bookingContext ?? { arm: 'onboarding_required' };
@@ -244,15 +262,32 @@ export function ExpertProfileClient({
   // is attached — threw `Error: Unauthorized` (Sentry BALO-WEB-19). Gate HERE, before the panel
   // opens, not inside it: there is no draft yet at this point, so auth costs the visitor
   // nothing. A gate placed after the panel opens would have to survive `router.refresh()`.
+  const openProjectPanel = useCallback(
+    (routing: ProjectRouting | undefined) => {
+      setProjectInitialRouting(routing);
+      if (!isLoggedIn) {
+        pendingOpenRef.current = 'project';
+        authModal.open({ onSuccess: () => router.refresh() });
+        return;
+      }
+      setProjectOpen(true);
+    },
+    [isLoggedIn, authModal, router]
+  );
+
   const onStartProject = useCallback(() => {
     track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'project' });
-    if (!isLoggedIn) {
-      pendingOpenRef.current = 'project';
-      authModal.open({ onSuccess: () => router.refresh() });
-      return;
-    }
-    setProjectOpen(true);
-  }, [view.expertId, isLoggedIn, authModal, router]);
+    openProjectPanel(undefined);
+  }, [view.expertId, openProjectPanel]);
+
+  // The paused card's "Get matched for a project": the panel opens already on Match.
+  const onGetMatched = useCallback(() => {
+    track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+      expert_id: view.expertId,
+      cta: 'match_project',
+    });
+    openProjectPanel('match');
+  }, [view.expertId, openProjectPanel]);
 
   const analyticsSections = useMemo<ExpertProfileSection[]>(
     () => sections.map((s) => s.key),
@@ -307,8 +342,12 @@ export function ExpertProfileClient({
             expertId={view.expertId}
             rate={view.rate}
             availableForWork={view.availableForWork}
+            firstName={view.firstName}
+            verticalName={view.vertical.name}
+            similarExpertsHref={similarExpertsHref}
             onBook={onBook}
             onStartProject={onStartProject}
+            onGetMatched={onGetMatched}
             onMessage={onMessage}
           />
         </div>
@@ -328,6 +367,7 @@ export function ExpertProfileClient({
           availableForWork: view.availableForWork,
         }}
         projectTaxonomies={projectTaxonomies}
+        initialRouting={projectInitialRouting}
       />
 
       <BookingFlowDialog

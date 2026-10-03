@@ -20,6 +20,8 @@ export interface ExpertInviteOption {
   name: string;
   headline: string | null;
   avatarUrl: string | null;
+  /** False when the expert has paused new work: shown, but not selectable. */
+  availableForWork: boolean;
 }
 
 export type SearchExpertsForInviteResult =
@@ -83,6 +85,7 @@ export async function searchExpertsForInviteAction(
         name: expert.name,
         headline: expert.headline,
         avatarUrl: expert.avatarUrl,
+        availableForWork: expert.availableForWork,
       })),
     };
   } catch (error) {

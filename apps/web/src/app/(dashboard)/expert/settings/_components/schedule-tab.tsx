@@ -17,7 +17,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { track, SCHEDULE_EVENTS } from '@/lib/analytics';
+import { track, SCHEDULE_EVENTS, EXPERT_EVENTS } from '@/lib/analytics';
+import { cn } from '@/lib/utils';
 import { CalendarConnectionsSection } from './calendar-connections-section';
 import { DateOverridesCard } from './date-overrides-card';
 import { ScheduleDayRow } from './schedule-day-row';
@@ -27,9 +28,11 @@ import { ScheduleEmptyState } from './schedule-empty-state';
 import { ScheduleDstWarning } from './schedule-dst-warning';
 import { SettingsCard, SettingsEyebrow } from './settings-card';
 import { SettingsPageHeader } from './settings-page-header';
+import { WorkAvailabilityCard } from './work-availability-card';
 import { getScheduleAction } from '../_actions/get-schedule';
 import { saveScheduleAction } from '../_actions/save-schedule';
 import { clearScheduleAction } from '../_actions/clear-schedule';
+import { setWorkAvailabilityAction } from '../_actions/set-work-availability';
 import { updateScheduleTimezoneAction } from '../_actions/update-schedule-timezone';
 import {
   DAY_META,
@@ -54,12 +57,14 @@ import {
   type WeekState,
   type ScheduleConflict,
 } from '../_lib/schedule-helpers';
-import type { BookingSettings } from '../_types/schedule';
+import type { BookingSettings, WorkInFlight } from '../_types/schedule';
 
 type ViewState = 'loading' | 'empty' | 'error' | 'ready';
 
 const AVAILABILITY_HEADING_ID = 'schedule-availability-heading';
 const PREVIEW_HEADING_ID = 'schedule-preview-heading';
+const PAUSED_NOTE_ID = 'schedule-paused-note';
+const NO_WORK_IN_FLIGHT: WorkInFlight = { upcomingConsultations: 0, activeProjects: 0 };
 
 export function ScheduleTab(): React.JSX.Element {
   const reduceMotion = useReducedMotion();
@@ -76,6 +81,13 @@ export function ScheduleTab(): React.JSX.Element {
   // Target timezone awaiting confirmation (AC12): non-null while the reinterpret
   // warning dialog is open. Only reached when the expert has active saved rules.
   const [pendingTimezone, setPendingTimezone] = useState<string | null>(null);
+  // "Available for new work". Paused dims the Availability card's controls (Time off stays
+  // editable) and swaps the client preview
+  // for the paused message; nothing the expert entered is ever cleared.
+  const [availableForWork, setAvailableForWork] = useState(true);
+  const [workInFlight, setWorkInFlight] = useState<WorkInFlight>(NO_WORK_IN_FLIGHT);
+  const [savingWork, setSavingWork] = useState(false);
+  const paused = !availableForWork;
 
   /**
    * The SAVED timezone, mirrored into state alongside the ref (same reason `expertProfileId`
@@ -102,6 +114,8 @@ export function ScheduleTab(): React.JSX.Element {
     }
     expertIdRef.current = data.expertProfileId;
     setExpertProfileId(data.expertProfileId);
+    setAvailableForWork(data.availableForWork);
+    setWorkInFlight(data.workInFlight);
     persistedTimezoneRef.current = data.timezone;
     setPersistedTimezone(data.timezone);
     persistedBookingSettingsRef.current = data.bookingSettings;
@@ -234,6 +248,34 @@ export function ScheduleTab(): React.JSX.Element {
     if (next) void commitTimezoneChange(next);
   }, [pendingTimezone, commitTimezoneChange]);
 
+  // ── Available for new work (persisted immediately, no Save) ──────
+
+  const commitWorkAvailability = useCallback(async (next: boolean): Promise<void> => {
+    setAvailableForWork(next);
+    setSavingWork(true);
+    const result = await setWorkAvailabilityAction({ availableForWork: next });
+    setSavingWork(false);
+    if (result.success) {
+      track(EXPERT_EVENTS.WORK_AVAILABILITY_CHANGED, { available_for_work: next });
+      toast.success(next ? "You're available for new work again" : "You're paused");
+    } else {
+      setAvailableForWork(!next);
+      toast.error(result.error ?? 'Failed to update availability');
+    }
+  }, []);
+
+  const handleResumeWork = useCallback((): void => {
+    commitWorkAvailability(true).catch(() => undefined);
+  }, [commitWorkAvailability]);
+
+  const handlePauseWork = useCallback((): void => {
+    commitWorkAvailability(false).catch(() => undefined);
+  }, [commitWorkAvailability]);
+
+  const handlePauseCancelled = useCallback((): void => {
+    track(EXPERT_EVENTS.WORK_AVAILABILITY_PAUSE_CANCELLED, {});
+  }, []);
+
   // ── Empty-state entry points ─────────────────────────────────────
 
   const handleUseDefaults = useCallback((): void => {
@@ -353,7 +395,12 @@ export function ScheduleTab(): React.JSX.Element {
         }
       >
         {timezoneKnown && (
-          <ScheduleTimezoneLine timezone={timezone} onChange={handleTimezoneChange} />
+          <ScheduleTimezoneLine
+            timezone={timezone}
+            onChange={handleTimezoneChange}
+            disabled={paused}
+            pausedNoteId={PAUSED_NOTE_ID}
+          />
         )}
         {viewState === 'loading' && (
           <div
@@ -362,6 +409,19 @@ export function ScheduleTab(): React.JSX.Element {
           />
         )}
       </SettingsPageHeader>
+
+      {viewState === 'loading' && <WorkAvailabilitySkeleton />}
+
+      {timezoneKnown && (
+        <WorkAvailabilityCard
+          available={availableForWork}
+          workInFlight={workInFlight}
+          saving={savingWork}
+          onResume={handleResumeWork}
+          onPause={handlePauseWork}
+          onPauseCancelled={handlePauseCancelled}
+        />
+      )}
 
       <SettingsCard
         aria-labelledby={AVAILABILITY_HEADING_ID}
@@ -381,16 +441,34 @@ export function ScheduleTab(): React.JSX.Element {
           </div>
         </div>
 
+        {paused && (
+          <p
+            id={PAUSED_NOTE_ID}
+            className="text-muted-foreground bg-paused-surface border-paused-border rounded-lg border px-3.5 py-2.5 text-[13px] leading-relaxed"
+          >
+            {viewState === 'empty'
+              ? 'Turn on availability to set your hours.'
+              : 'Your hours are kept exactly as they are and come back when you turn on availability.'}
+          </p>
+        )}
+
         {viewState === 'loading' && <ScheduleLoadingState />}
 
         {viewState === 'error' && <ScheduleErrorState onRetry={loadSchedule} />}
 
         {viewState === 'empty' && (
-          <ScheduleEmptyState onUseDefaults={handleUseDefaults} onSetUp={handleSetUp} />
+          <div className={cn(paused && 'opacity-70')}>
+            <ScheduleEmptyState
+              onUseDefaults={handleUseDefaults}
+              onSetUp={handleSetUp}
+              disabled={paused}
+              pausedNoteId={PAUSED_NOTE_ID}
+            />
+          </div>
         )}
 
         {viewState === 'ready' && (
-          <>
+          <div className={cn('flex flex-col gap-6', paused && 'opacity-70')}>
             <div className="flex flex-col gap-3">
               <SettingsEyebrow>Weekly hours</SettingsEyebrow>
               {week.map((day, index) => {
@@ -408,6 +486,8 @@ export function ScheduleTab(): React.JSX.Element {
                     onAddRange={() => handleAddRange(index)}
                     onRemoveRange={(rangeId) => handleRemoveRange(index, rangeId)}
                     onCopyToDays={(targets) => handleCopyToDays(index, targets)}
+                    disabled={paused}
+                    pausedNoteId={PAUSED_NOTE_ID}
                   />
                 );
               })}
@@ -418,7 +498,12 @@ export function ScheduleTab(): React.JSX.Element {
 
             <CardDivider />
 
-            <BookingRulesSection settings={bookingSettings} onChange={handleBookingChange} />
+            <BookingRulesSection
+              settings={bookingSettings}
+              onChange={handleBookingChange}
+              disabled={paused}
+              pausedNoteId={PAUSED_NOTE_ID}
+            />
 
             <CardDivider />
 
@@ -427,8 +512,14 @@ export function ScheduleTab(): React.JSX.Element {
               converted to their own timezone.
             </p>
 
-            <ScheduleActions saving={saving} onClear={handleClear} onSave={handleSave} />
-          </>
+            <ScheduleActions
+              saving={saving}
+              disabled={paused}
+              pausedNoteId={PAUSED_NOTE_ID}
+              onClear={handleClear}
+              onSave={handleSave}
+            />
+          </div>
         )}
       </SettingsCard>
 
@@ -438,11 +529,22 @@ export function ScheduleTab(): React.JSX.Element {
       <DateOverridesCard />
 
       <CalendarConnectionsSection />
+      {/* Deliberately NOT dimmed while paused: sync keeps existing bookings and conflict checks
+          correct. Sits under the section as a sibling, pulled up into its gap. */}
+      {paused && (
+        <p className="text-muted-foreground -mt-4 flex items-start gap-2 text-[12.5px] leading-normal">
+          <RefreshCw className="text-success mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            Still syncing while you&apos;re paused, so the consultations you&apos;ve already booked
+            stay up to date.
+          </span>
+        </p>
+      )}
 
       {/* BAL-236 — the resolved bookable-slot preview. Only inside `ready` (the expert has
           saved rules); in `empty`, `ScheduleEmptyState` already owns the message and a
           `not_configured` preview would just duplicate it. */}
-      {viewState === 'ready' && expertProfileId && (
+      {(paused ? timezoneKnown : viewState === 'ready' && expertProfileId) && (
         <SettingsCard aria-labelledby={PREVIEW_HEADING_ID} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1">
             <SettingsEyebrow as="h2" id={PREVIEW_HEADING_ID}>
@@ -452,13 +554,17 @@ export function ScheduleTab(): React.JSX.Element {
               Your hours, minus anything already busy on your connected calendar.
             </p>
           </div>
-          <ExpertAvailabilityCalendar
-            expertProfileId={expertProfileId}
-            mode="preview"
-            viewerTimezone={persistedTimezone}
-            daysAhead={14}
-            viewerType="expert"
-          />
+          {paused || !expertProfileId ? (
+            <PausedPreview />
+          ) : (
+            <ExpertAvailabilityCalendar
+              expertProfileId={expertProfileId}
+              mode="preview"
+              viewerTimezone={persistedTimezone}
+              daysAhead={14}
+              viewerType="expert"
+            />
+          )}
         </SettingsCard>
       )}
 
@@ -493,8 +599,25 @@ function CardDivider(): React.JSX.Element {
   return <div aria-hidden="true" className="bg-border/60 h-px" />;
 }
 
+/** What clients see while new work is paused. The resolver is never called for this state. */
+function PausedPreview(): React.JSX.Element {
+  return (
+    <div className="bg-paused-hatch border-paused-border rounded-xl border border-dashed px-[22px] py-[26px] text-center">
+      <div className="text-foreground text-sm font-semibold">
+        Nothing bookable while you&apos;re paused
+      </div>
+      <p className="text-muted-foreground mx-auto mt-1.5 max-w-[400px] text-[13px] leading-relaxed">
+        Clients see that you&apos;re not taking on new work right now, with a way to find someone
+        with similar experience.
+      </p>
+    </div>
+  );
+}
+
 interface ScheduleActionsProps {
   saving: boolean;
+  disabled?: boolean;
+  pausedNoteId?: string;
   onClear: () => Promise<void>;
   onSave: () => Promise<void>;
 }
@@ -502,6 +625,8 @@ interface ScheduleActionsProps {
 /** "Clear schedule" (confirmed first — it is destructive) on the left, "Save schedule" right. */
 function ScheduleActions({
   saving,
+  disabled,
+  pausedNoteId,
   onClear,
   onSave,
 }: Readonly<ScheduleActionsProps>): React.JSX.Element {
@@ -512,7 +637,8 @@ function ScheduleActions({
           <Button
             type="button"
             variant="link"
-            disabled={saving}
+            disabled={saving || disabled}
+            aria-describedby={disabled ? pausedNoteId : undefined}
             className="text-muted-foreground hover:text-destructive h-11 px-0 text-[13px] sm:h-9"
           >
             Clear schedule
@@ -536,7 +662,12 @@ function ScheduleActions({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <Button type="button" onClick={onSave} disabled={saving}>
+      <Button
+        type="button"
+        onClick={onSave}
+        disabled={saving || disabled}
+        aria-describedby={disabled ? pausedNoteId : undefined}
+      >
         {saving && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
         Save schedule
       </Button>
@@ -545,6 +676,27 @@ function ScheduleActions({
 }
 
 /** Skeleton of the seven day rows, so the card keeps its shape while hours load. */
+/** Placeholder shaped like `WorkAvailabilityCard` (icon tile, title + description, switch). */
+function WorkAvailabilitySkeleton(): React.JSX.Element {
+  return (
+    <output className="border-border bg-card flex items-start gap-3.5 rounded-[14px] border px-[22px] py-[18px] shadow-xs">
+      <span className="sr-only">Loading your availability status</span>
+      <div
+        aria-hidden="true"
+        className="bg-muted size-[34px] shrink-0 animate-pulse rounded-[9px] motion-reduce:animate-none"
+      />
+      <div aria-hidden="true" className="flex-1">
+        <div className="bg-muted h-4 w-44 animate-pulse rounded motion-reduce:animate-none" />
+        <div className="bg-muted mt-2.5 h-3.5 w-full max-w-[420px] animate-pulse rounded motion-reduce:animate-none" />
+      </div>
+      <div
+        aria-hidden="true"
+        className="bg-muted h-[18px] w-8 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+      />
+    </output>
+  );
+}
+
 function ScheduleLoadingState(): React.JSX.Element {
   return (
     <output className="flex flex-col gap-3">

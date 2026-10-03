@@ -11,9 +11,11 @@ import {
   categories,
   products,
   supportTypes,
+  users,
 } from '../schema';
 import { referenceDataRepository } from './reference-data';
 import { expertsRepository } from './experts';
+import { usersRepository } from './users';
 import { meetingFactory, searchExpertFactory, userFactory } from '../test/factories';
 import {
   EXPECTED_CONSULTATION_COUNT,
@@ -927,6 +929,124 @@ describe('expertSearchRepository.search — base visibility', () => {
   });
 });
 
+// ── 12b. Owner liveness (BAL-591 Part B) ───────────────────────────
+
+describe('expertSearchRepository — owner liveness', () => {
+  /**
+   * Seeds one live expert plus one expert per non-live owner state (soft-deleted, suspended,
+   * inactive), all on the same product and language, so every surface can be asserted to
+   * count exactly the live one.
+   */
+  async function seedOwnerStates(): Promise<{
+    verticalId: string;
+    productId: string;
+    languageId: string;
+    liveId: string;
+    hiddenIds: string[];
+  }> {
+    const verticalId = await getVerticalId();
+    const productId = await createProduct(verticalId, uniq('LiveSkill'));
+    const stId = await createSupportType(verticalId, 'Technical');
+    const languageId = await createLanguage(uniq('Lang'));
+    const seed = (): ReturnType<typeof searchExpertFactory> =>
+      searchExpertFactory({
+        verticalId,
+        competencies: [{ productId, supportTypeId: stId }],
+        languages: [{ languageId }],
+      });
+
+    const live = await seed();
+    const deleted = await seed();
+    const suspended = await seed();
+    const inactive = await seed();
+    await usersRepository.softDelete(deleted.userId);
+    await db.update(users).set({ status: 'suspended' }).where(eq(users.id, suspended.userId));
+    await db.update(users).set({ status: 'inactive' }).where(eq(users.id, inactive.userId));
+
+    return {
+      verticalId,
+      productId,
+      languageId,
+      liveId: live.id,
+      hiddenIds: [deleted.id, suspended.id, inactive.id],
+    };
+  }
+
+  it('search returns only the expert whose owner is live (soft-deleted, suspended, inactive excluded)', async () => {
+    const seeded = await seedOwnerStates();
+
+    const result = await expertSearchRepository.search(
+      params({ verticalId: seeded.verticalId, productIds: [seeded.productId], pageSize: 50 })
+    );
+
+    expect(result.rows.map((r) => r.id)).toEqual([seeded.liveId]);
+    expect(result.total).toBe(1);
+  });
+
+  it('the zero-results recount (countMatchingIgnoringGate) excludes non-live owners too', async () => {
+    const seeded = await seedOwnerStates();
+
+    const count = await expertSearchRepository.countMatchingIgnoringGate(
+      params({ verticalId: seeded.verticalId, productIds: [seeded.productId], pageSize: 50 })
+    );
+
+    expect(count).toBe(1);
+  });
+
+  it('a page beyond the results still reports a total that excludes non-live owners', async () => {
+    const seeded = await seedOwnerStates();
+
+    const result = await expertSearchRepository.search(
+      params({
+        verticalId: seeded.verticalId,
+        productIds: [seeded.productId],
+        page: 2,
+        pageSize: 1,
+      })
+    );
+
+    expect(result.rows).toHaveLength(0);
+    expect(result.total).toBe(1);
+  });
+
+  it('facet totals count only the live expert', async () => {
+    const seeded = await seedOwnerStates();
+
+    const facets = await expertSearchRepository.facetCounts(seeded.verticalId, false, NOW);
+
+    expect(facets.products.find((f) => f.id === seeded.productId)?.count).toBe(1);
+    expect(facets.languages.find((f) => f.id === seeded.languageId)?.count).toBe(1);
+  });
+
+  it('a paused expert stays searchable and carries availableForWork=false', async () => {
+    const verticalId = await getVerticalId();
+    const productId = await createProduct(verticalId, uniq('PausedSkill'));
+    const stId = await createSupportType(verticalId, 'Technical');
+    const available = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId, supportTypeId: stId }],
+    });
+    const paused = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId, supportTypeId: stId }],
+    });
+    await expertsRepository.setAvailableForWork({
+      expertProfileId: paused.id,
+      availableForWork: false,
+      actorUserId: paused.userId,
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, productIds: [productId], pageSize: 50 })
+    );
+
+    const byId = new Map(rows.map((r) => [r.id, r.availableForWork]));
+    expect(byId.size).toBe(2);
+    expect(byId.get(available.id)).toBe(true);
+    expect(byId.get(paused.id)).toBe(false);
+  });
+});
+
 // ── 13. consultationCount proxy ─────────────────────────────────────
 
 describe('expertSearchRepository.search — consultationCount proxy', () => {
@@ -1097,8 +1217,8 @@ describe('buildWhereConditions / buildOrderBy / timeframeBoundary (pure)', () =>
   it('base conditions only when no filters supplied', () => {
     const verticalId = '00000000-0000-0000-0000-000000000000';
     const conds = buildWhereConditions(params({ verticalId }), NOW);
-    // vertical + searchable + approved = 3 base conditions, no filters.
-    expect(conds).toHaveLength(3);
+    // vertical + searchable + approved + live owner = 4 base conditions, no filters.
+    expect(conds).toHaveLength(4);
   });
 
   it('adds one EXISTS condition per non-empty facet (AND across)', () => {
@@ -1113,8 +1233,8 @@ describe('buildWhereConditions / buildOrderBy / timeframeBoundary (pure)', () =>
       }),
       NOW
     );
-    // 3 base + 4 facet EXISTS.
-    expect(conds).toHaveLength(7);
+    // 4 base + 4 facet EXISTS.
+    expect(conds).toHaveLength(8);
   });
 
   it('adds gate predicates when the gate is enabled', () => {

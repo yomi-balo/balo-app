@@ -106,6 +106,11 @@ export interface ExpertSearchabilitySnapshot {
   readonly currentSearchable: boolean;
   /** Returned so `apps/web`'s settings tabs need no second query for the same column. */
   readonly rateCents: number | null;
+  /**
+   * BAL-591 — the "Available for new work" switch, returned for the same reason as `rateCents`.
+   * NOT a checklist input: a paused expert stays searchable.
+   */
+  readonly availableForWork: boolean;
 }
 
 // ── The audit vocabulary ─────────────────────────────────────────
@@ -274,6 +279,7 @@ export const expertSearchabilityRepository = {
         bio: expertProfiles.bio,
         rateCents: expertProfiles.rateCents,
         searchable: expertProfiles.searchable,
+        availableForWork: expertProfiles.availableForWork,
         avatarUrl: users.avatarUrl,
         phoneVerifiedAt: users.phoneVerifiedAt,
         userDeletedAt: users.deletedAt,
@@ -311,6 +317,7 @@ export const expertSearchabilityRepository = {
       },
       currentSearchable: row.searchable,
       rateCents: row.rateCents,
+      availableForWork: row.availableForWork,
     };
   },
 

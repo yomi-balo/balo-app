@@ -5,6 +5,7 @@ const {
   mockBookAndProvisionMeeting,
   mockLookupBookingReplay,
   mockCheckCaseBookingFunding,
+  mockCheckExpertBookingEligibility,
   mockCheckRateLimit,
   mockIsWindowAvailableForExpert,
   MatchModeDiscoveryNotBookableError,
@@ -64,6 +65,7 @@ const {
     mockBookAndProvisionMeeting: vi.fn(),
     mockLookupBookingReplay: vi.fn(),
     mockCheckCaseBookingFunding: vi.fn(),
+    mockCheckExpertBookingEligibility: vi.fn(),
     mockCheckRateLimit: vi.fn(),
     mockIsWindowAvailableForExpert: vi.fn(),
     MatchModeDiscoveryNotBookableError,
@@ -97,6 +99,10 @@ vi.mock('../../services/meetings/authorize-meeting-booking.js', () => ({
 // BAL-474 — the Case funding guard; its own verdict/heal behaviour is `case-booking-funding.test.ts`.
 vi.mock('../../services/meetings/case-booking-funding.js', () => ({
   checkCaseBookingFunding: mockCheckCaseBookingFunding,
+}));
+// BAL-591 — owner-liveness guard; its own verdict logic is `expert-booking-eligibility.test.ts`.
+vi.mock('../../services/meetings/expert-booking-eligibility.js', () => ({
+  checkExpertBookingEligibility: mockCheckExpertBookingEligibility,
 }));
 vi.mock('../../services/meetings/provision-meeting.js', () => ({
   bookAndProvisionMeeting: mockBookAndProvisionMeeting,
@@ -204,6 +210,7 @@ describe('POST /meetings', () => {
     mockLookupBookingReplay.mockResolvedValue({ kind: 'none' });
     // BAL-474 — the Case funding guard passes by default; the guard's own cases override it.
     mockCheckCaseBookingFunding.mockResolvedValue({ ok: true });
+    mockCheckExpertBookingEligibility.mockResolvedValue({ ok: true });
     mockAuthorizeMeetingBooking.mockResolvedValue({
       ok: true,
       companyId: 'company_1',
@@ -558,6 +565,85 @@ describe('POST /meetings', () => {
 
       expect(res.statusCode).toBe(404);
       expect(mockCheckCaseBookingFunding).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the expert eligibility guard (BAL-591)', () => {
+    it.each([
+      'case',
+      'project_kickoff',
+      'package_session',
+      'project_discovery',
+      'request_interaction',
+    ] as const)('checks the gate-resolved expert for a `%s` booking', async (contextType) => {
+      const res = await post(body({ contextType }));
+
+      expect(res.statusCode).toBe(201);
+      expect(mockCheckExpertBookingEligibility).toHaveBeenCalledTimes(1);
+      expect(mockCheckExpertBookingEligibility).toHaveBeenCalledWith({
+        contextType,
+        expertProfileId: EXPERT_PROFILE_ID,
+      });
+    });
+
+    it('answers 409 expert_unavailable and books NOTHING when the expert is refused', async () => {
+      mockCheckExpertBookingEligibility.mockResolvedValue({ ok: false, reason: 'owner_not_live' });
+
+      const res = await post(body());
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'expert_unavailable' });
+      expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
+    });
+
+    it('the wire answer never names the reason', async () => {
+      mockCheckExpertBookingEligibility.mockResolvedValue({ ok: false, reason: 'not_found' });
+
+      const res = await post(body());
+
+      expect(res.body).not.toContain('not_found');
+      expect(res.body).not.toContain('owner_not_live');
+    });
+
+    it('a refusal runs before the funding guard, the per-pair limit and the availability read', async () => {
+      mockCheckExpertBookingEligibility.mockResolvedValue({ ok: false, reason: 'owner_not_live' });
+
+      await post(body());
+
+      expect(mockCheckCaseBookingFunding).not.toHaveBeenCalled();
+      expect(mockCheckRateLimit).toHaveBeenCalledTimes(1);
+      expect(mockIsWindowAvailableForExpert).not.toHaveBeenCalled();
+    });
+
+    it('an exact replay is never re-checked', async () => {
+      mockLookupBookingReplay.mockResolvedValue({ kind: 'match', meeting: bookedMeeting() });
+      mockCheckExpertBookingEligibility.mockResolvedValue({ ok: false, reason: 'owner_not_live' });
+
+      const res = await post(body({ bookingIdempotencyKey: 'a'.repeat(64) }));
+
+      expect(res.statusCode).toBe(201);
+      expect(mockCheckExpertBookingEligibility).not.toHaveBeenCalled();
+    });
+
+    it('a context that names no expert skips the check', async () => {
+      mockAuthorizeMeetingBooking.mockResolvedValue({
+        ok: true,
+        companyId: 'company_1',
+        engagementType: 'project',
+        expertProfileId: null,
+      });
+
+      await post(body({ contextType: 'project_discovery' }));
+
+      expect(mockCheckExpertBookingEligibility).not.toHaveBeenCalled();
+    });
+
+    it('never runs before the tenancy gate has answered', async () => {
+      mockAuthorizeMeetingBooking.mockResolvedValue({ ok: false, code: 'context_not_found' });
+
+      await post(body());
+
+      expect(mockCheckExpertBookingEligibility).not.toHaveBeenCalled();
     });
   });
 

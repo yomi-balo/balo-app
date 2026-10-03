@@ -56,7 +56,7 @@ function inviteButtonLabel(isInviting: boolean, count: number): string {
  * Admin expert picker — searches experts via `searchExpertsForInviteAction`,
  * multi-selects, and persists via `inviteExpertsAction`. All four async states:
  * loading (spinner), empty ("No experts match"), error (retry), results
- * (selectable rows). Already-invited experts render disabled. Fires
+ * (selectable rows). Already-invited experts and experts who paused new work render disabled. Fires
  * `PROJECT_EXPERT_INVITED` per invite + `PROJECT_REQUEST_STATUS_TRANSITIONED` when
  * the request advanced.
  */
@@ -231,19 +231,21 @@ export function ExpertInviteDialog({
             <ul className="flex flex-col gap-1.5 py-1">
               {loadState.experts.map((expert) => {
                 const isInvited = alreadyInvited.has(expert.id);
+                const isPaused = !expert.availableForWork;
+                const isLocked = isInvited || isPaused;
                 const isSelected = selected.has(expert.id);
                 return (
                   <li key={expert.id}>
                     <button
                       type="button"
-                      disabled={isInvited}
+                      disabled={isLocked}
                       aria-pressed={isSelected}
                       onClick={() => toggle(expert.id)}
                       className={cn(
                         'flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors',
-                        isInvited && 'cursor-not-allowed opacity-60',
-                        !isInvited && isSelected && 'border-primary bg-primary/5',
-                        !isInvited && !isSelected && 'border-border hover:bg-muted/50'
+                        isLocked && 'cursor-not-allowed opacity-60',
+                        !isLocked && isSelected && 'border-primary bg-primary/5',
+                        !isLocked && !isSelected && 'border-border hover:bg-muted/50'
                       )}
                     >
                       <span className="bg-muted text-muted-foreground flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold">
@@ -259,9 +261,9 @@ export function ExpertInviteDialog({
                           </span>
                         )}
                       </span>
-                      {isInvited ? (
+                      {isLocked ? (
                         <span className="text-muted-foreground shrink-0 text-xs font-medium">
-                          Already invited
+                          {isInvited ? 'Already invited' : 'Not taking on new work'}
                         </span>
                       ) : (
                         <span

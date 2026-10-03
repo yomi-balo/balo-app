@@ -65,7 +65,12 @@ export function CaseSlotQuickPick({
   expert,
   viewerEmailDomain,
 }: Readonly<CaseSlotQuickPickProps>): React.JSX.Element | null {
-  const { view, reload } = useExpertAvailability(expertProfileId, QUICK_PICK_WINDOW_DAYS);
+  const { view, reload } = useExpertAvailability(
+    expertProfileId,
+    QUICK_PICK_WINDOW_DAYS,
+    // A follow-up on an open case is existing work, so a paused expert still has real slots.
+    'existing_work'
+  );
   const [presetSlot, setPresetSlot] = useState<PresetSlot | null>(null);
   const router = useRouter();
 
@@ -144,6 +149,7 @@ export function CaseSlotQuickPick({
           }}
           viewerEmailDomain={viewerEmailDomain}
           onMessage={() => setPresetSlot(null)}
+          scope="existing_work"
         />
       )}
     </>

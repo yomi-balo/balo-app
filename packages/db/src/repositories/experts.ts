@@ -5,6 +5,7 @@ import {
   desc,
   gte,
   lte,
+  ne,
   not,
   inArray,
   or,
@@ -21,7 +22,11 @@ import { parseRatingAverage } from '@balo/shared/reviews';
 import { type Database, db } from '../client';
 import { auditEventsRepository } from './audit-events';
 import { consultationCountExpression } from './_shared/consultation-count';
+import { expertOwnerIsLive } from './_shared/expert-owner-live';
+import { recordScheduleAudit } from './_shared/schedule-audit';
 import {
+  consultations,
+  engagements,
   expertProfiles,
   expertCompetency,
   expertCertifications,
@@ -43,17 +48,26 @@ import { generateBaseUsername, pickNextAvailable } from './username-utils';
 
 const log = createLogger('experts-repository');
 
-/** Why an expert cannot take a new `direct` project request. The first failing check wins. */
-export type DirectRequestIneligibleReason =
+/**
+ * Why an expert cannot take on new work (a new consultation case, a `direct` project request,
+ * a project invite). The first failing check wins.
+ */
+export type NewWorkIneligibleReason =
   | 'not_found'
   | 'owner_not_live'
   | 'not_approved'
   | 'not_searchable'
   | 'not_available';
 
-export type DirectRequestEligibility =
+export type NewWorkEligibility =
   | { eligible: true }
-  | { eligible: false; reason: DirectRequestIneligibleReason };
+  | { eligible: false; reason: NewWorkIneligibleReason };
+
+/** What is still in flight for an expert, for the pause confirmation's "carries on" line. */
+export interface WorkInFlightCounts {
+  upcomingConsultations: number;
+  activeProjects: number;
+}
 
 /**
  * Either the base Drizzle client or an in-flight transaction handle. Lets a method
@@ -147,6 +161,47 @@ async function syncCertificationsTx(
       }))
     );
   }
+}
+
+/** Input for `expertsRepository.setAvailableForWork`. */
+export interface SetAvailableForWorkInput {
+  expertProfileId: string;
+  availableForWork: boolean;
+  actorUserId: string | null;
+}
+
+/**
+ * The conditional flip of `available_for_work` + its audit row, on one executor. Extracted so
+ * the self-wrapping and compose-under-a-caller's-tx arms of `setAvailableForWork` run the same
+ * body.
+ */
+async function setAvailableForWorkTx(
+  exec: DbExecutor,
+  input: SetAvailableForWorkInput
+): Promise<{ changed: boolean }> {
+  const updated = await exec
+    .update(expertProfiles)
+    .set({ availableForWork: input.availableForWork, updatedAt: new Date() })
+    .where(
+      and(
+        eq(expertProfiles.id, input.expertProfileId),
+        ne(expertProfiles.availableForWork, input.availableForWork)
+      )
+    )
+    .returning({ id: expertProfiles.id });
+
+  // Zero rows: the row already held the target value (or does not exist). Nothing to record.
+  const [row] = updated;
+  if (row === undefined) return { changed: false };
+
+  // The value predicate guarantees the replaced value was the opposite one, so `from` is exact.
+  await recordScheduleAudit(exec, {
+    actorUserId: input.actorUserId,
+    action: 'expert_work_availability.changed',
+    expertProfileId: input.expertProfileId,
+    metadata: { from: !input.availableForWork, to: input.availableForWork },
+  });
+  return { changed: true };
 }
 
 /** Single draft lookup by the `(user_id, vertical_id)` unique key. */
@@ -729,6 +784,9 @@ export const expertsRepository = {
    * `userId` was added by BAL-416 fix round 1 (S1) so a caller can assert
    * `expertProfiles.userId === <session userId>` against an already-fetched
    * row instead of a second query — see `findOverrideConflicts`.
+   *
+   * `availableForWork` is the expert's "Available for new work" switch (BAL-591): the DB
+   * availability rebuild reads it here to publish no earliest slot while paused.
    */
   async findResolverSettings(expertProfileId: string): Promise<{
     userId: string;
@@ -736,6 +794,7 @@ export const expertsRepository = {
     bufferBeforeMinutes: number;
     bufferAfterMinutes: number;
     minimumNoticeMinutes: number;
+    availableForWork: boolean;
   } | null> {
     const row = await db.query.expertProfiles.findFirst({
       where: eq(expertProfiles.id, expertProfileId),
@@ -745,6 +804,7 @@ export const expertsRepository = {
         bookingBufferBeforeMinutes: true,
         bookingBufferAfterMinutes: true,
         bookingMinimumNoticeMinutes: true,
+        availableForWork: true,
       },
     });
     if (!row) return null;
@@ -754,6 +814,7 @@ export const expertsRepository = {
       bufferBeforeMinutes: row.bookingBufferBeforeMinutes,
       bufferAfterMinutes: row.bookingBufferAfterMinutes,
       minimumNoticeMinutes: row.bookingMinimumNoticeMinutes,
+      availableForWork: row.availableForWork,
     };
   },
 
@@ -813,26 +874,18 @@ export const expertsRepository = {
   /**
    * Public profile read for /experts/[username]. Returns the full graph the
    * detail page renders. Visibility-gated: only approved + searchable profiles
-   * belonging to a LIVE user are publicly visible — drafts/unapproved/
-   * non-searchable/soft-deleted resolve to undefined (→ 404). Username match is
-   * exact (the unique username index).
+   * belonging to a LIVE owner are publicly visible — drafts/unapproved/
+   * non-searchable profiles, and owners that are soft-deleted, suspended or inactive,
+   * resolve to undefined (→ 404). Username match is exact (the unique username index).
    *
-   * ⚠ BAL-493 ADDED THE `users.deleted_at IS NULL` TERM. `isPubliclyVisible` (below) has
-   * always carried it; this read did not, so a soft-deleted expert who was approved and
-   * searchable at deletion time stayed reachable by username. Pre-existing and unreachable
-   * in practice — until BAL-493 promoted this exact read to the PUBLIC FRONT PAGE's curated
-   * spotlight. `expert_profiles` has no `deletedAt` of its own, so the term has to be on the
-   * joined USER row, and a relational `findFirst` cannot join.
+   * Owner liveness is `expertOwnerIsLive` (`_shared/expert-owner-live.ts`), the SQL twin of
+   * `userRowIsLive`, shared with `findPublicVisibility` and search so the public surfaces
+   * cannot disagree on who is visible. This read also backs the public front page's curated
+   * spotlight, so a suspended expert drops off it too. The fragment is a raw `sql` EXISTS for
+   * the relational-alias reason its docblock records.
    *
-   * ⚠⚠ IT IS A RAW `sql` EXISTS, NOT `exists(db.select()…)`, AND THAT IS NOT STYLE. The
-   * relational query builder aliases the top-level table as `"expertProfiles"` (camelCase, the
-   * JS key — see any query it logs). A Column embedded in a raw `sql` template is rendered
-   * WITH that alias in scope; a nested `db.select().from(users).where(eq(…, expertProfiles.
-   * userId))` is compiled as an independent query and emits the bare table name
-   * `"expert_profiles"`, which is not in the outer FROM → Postgres 42P01, "invalid reference
-   * to FROM-clause entry", on EVERY call. Typecheck and lint are both clean on that version;
-   * only `experts.integration.test.ts` catches it. Use the same embedding
-   * `consultationCountExpression` uses for its correlated `${expertProfiles.id}` below.
+   * `availableForWork` is projected but does NOT gate visibility: an expert who has paused new
+   * work keeps a public profile, which renders the paused alternatives instead of booking.
    *
    * ⚠ WHERE-CLAUSE ONLY. No schema change, no migration, and the `rateCents` projection
    * stays the RAW un-marked-up consultant rate — the D1 markup lives at the serializer, never
@@ -844,10 +897,7 @@ export const expertsRepository = {
         eq(expertProfiles.username, username),
         eq(expertProfiles.searchable, true),
         isNotNull(expertProfiles.approvedAt),
-        sql`EXISTS (
-          SELECT 1 FROM users u
-          WHERE u.id = ${expertProfiles.userId} AND u.deleted_at IS NULL
-        )`
+        expertOwnerIsLive
       ),
       // Defense-in-depth: explicit allowlist of the ONLY top-level columns the
       // public view-model + page consume. Keeps sensitive columns
@@ -892,6 +942,9 @@ export const expertsRepository = {
           },
         },
         agency: { columns: { id: true, name: true, slug: true, logoUrl: true } },
+        // The paused booking card's "similar {vertical} experience" copy and its
+        // vertical-scoped "Find a similar expert" search link.
+        vertical: { columns: { name: true, slug: true } },
         competencies: {
           with: {
             product: { columns: { id: true, name: true, slug: true } },
@@ -924,57 +977,51 @@ export const expertsRepository = {
   },
 
   /**
-   * BAL-236 — is this profile publicly visible? Approved AND searchable, as
-   * `findPublicProfileByUsername` (above) and `buildWhereConditions` (`expert-search.ts`) both
-   * require. Do not write a fourth visibility rule.
+   * BAL-236 / BAL-591 — is this profile publicly visible, and if so, is the expert taking on new
+   * work? Visible means approved AND searchable AND a live owner (`expertOwnerIsLive`), the same
+   * rule `findPublicProfileByUsername` (above) and `buildWhereConditions` (`expert-search.ts`)
+   * apply. Do not write a fourth visibility rule. Returns null when not visible.
+   *
+   * `availableForWork` rides along so the public slot route can answer a paused expert without
+   * a second read; it does not affect visibility.
    *
    * Deliberately the FIRST read the public availability route performs, so an enumeration probe
-   * against a random uuid costs exactly one indexed PK lookup — no vendor round-trip, no
-   * four-way fan-out.
+   * against a random uuid costs exactly one indexed PK lookup (plus the owner's PK probe) — no
+   * vendor round-trip, no four-way fan-out.
    *
    * ⚠ `expert_profiles` has NO `deleted_at` — do NOT add a soft-delete predicate ON THIS TABLE.
-   *
-   * ⚠ THE OWNING `users` ROW'S SOFT DELETE IS FILTERED HERE. `searchable` is a profile column,
-   * so a soft-deleted user whose profile still carries `searchable = true` would keep
-   * publishing live calendar data — the complement of a real person's calendar, from a public
-   * unauthenticated endpoint, after they asked to be deleted. Unreachable today
-   * (`usersRepository.softDelete` has no application-code caller), which is exactly why it is
-   * cheap to close ahead of account deletion shipping.
-   *
-   * ⚠ BAL-493 BROUGHT `findPublicProfileByUsername` INTO LINE (it now carries the same term via
-   * a correlated `exists`), because that read is what the public front page's curated spotlight
-   * calls. `buildWhereConditions` (`expert-search.ts`) is still WITHOUT it — the remaining
-   * divergence, and the one whoever ships account deletion must close, alongside flipping
-   * `searchable = false` in the deletion transaction.
+   * The owner's soft delete and suspension live on `users`, and are what keep a deleted or
+   * suspended person's calendar complement off this public, unauthenticated endpoint.
    */
-  async isPubliclyVisible(expertProfileId: string): Promise<boolean> {
-    const rows = await db
-      .select({ id: expertProfiles.id })
+  async findPublicVisibility(
+    expertProfileId: string
+  ): Promise<{ availableForWork: boolean } | null> {
+    const [row] = await db
+      .select({ availableForWork: expertProfiles.availableForWork })
       .from(expertProfiles)
-      .innerJoin(users, eq(users.id, expertProfiles.userId))
       .where(
         and(
           eq(expertProfiles.id, expertProfileId),
           eq(expertProfiles.searchable, true),
           isNotNull(expertProfiles.approvedAt),
-          isNull(users.deletedAt)
+          expertOwnerIsLive
         )
       )
       .limit(1);
-    return rows.length > 0;
+    return row ?? null;
   },
 
   /**
-   * Whether an expert can take a new `direct` project request: the profile exists, is
-   * approved, searchable and `available_for_work`, and the owning user is live
-   * (`userRowIsLive`, the single definition of "live").
+   * Whether an expert can take on new work — a new consultation case, a `direct` project
+   * request, a project invite: the profile exists, is approved, searchable and
+   * `available_for_work`, and the owning user is live (`userRowIsLive`, the single definition
+   * of "live").
    *
-   * Stricter than `isPubliclyVisible`, which ignores `available_for_work` and `users.status`
-   * (it only checks `users.deleted_at`). The owner's soft-delete is read as a column rather
-   * than filtered in WHERE so a deleted owner reports `owner_not_live`, not `not_found`.
-   * `expert_profiles` has no `deleted_at`.
+   * Stricter than `findPublicVisibility`, which ignores `available_for_work`. The owner's
+   * liveness is read as columns rather than filtered in WHERE so a deleted or suspended owner
+   * reports `owner_not_live`, not `not_found`. `expert_profiles` has no `deleted_at`.
    */
-  async findDirectRequestEligibility(expertProfileId: string): Promise<DirectRequestEligibility> {
+  async findNewWorkEligibility(expertProfileId: string): Promise<NewWorkEligibility> {
     const [row] = await db
       .select({
         approvedAt: expertProfiles.approvedAt,
@@ -996,6 +1043,77 @@ export const expertsRepository = {
     if (!row.searchable) return { eligible: false, reason: 'not_searchable' };
     if (!row.availableForWork) return { eligible: false, reason: 'not_available' };
     return { eligible: true };
+  },
+
+  /**
+   * BAL-591 — the expert's "Available for new work" switch. A conditional compare-and-set:
+   *
+   *     UPDATE expert_profiles SET available_for_work = $v, updated_at = now()
+   *      WHERE id = $id AND available_for_work <> $v
+   *  RETURNING id
+   *
+   * and, only when a row actually changed, one `expert_work_availability.changed` audit row
+   * (`{ from, to }`) in the SAME transaction (ADR-1030). A repeated or racing write to the same
+   * value matches zero rows, so it is idempotent and appends nothing — the
+   * `expertSearchabilityRepository.applySearchable` pattern. Self-wraps in `db.transaction`
+   * when `executor` is omitted; pass a `tx` to join a caller's transaction.
+   *
+   * Only this column moves: weekly rules, date overrides and booking rules are untouched, so
+   * resuming restores the expert's settings exactly. Cache invalidation and the availability
+   * rebuild are the caller's job, gated on `changed`, after commit.
+   */
+  async setAvailableForWork(
+    input: SetAvailableForWorkInput,
+    executor?: DbExecutor
+  ): Promise<{ changed: boolean }> {
+    if (executor !== undefined) return setAvailableForWorkTx(executor, input);
+    return db.transaction((tx) => setAvailableForWorkTx(tx, input));
+  },
+
+  /**
+   * BAL-591 — what carries on if the expert pauses new work, for the confirmation dialog:
+   * upcoming consultations (live `confirmed` projection rows starting at or after `now`) and
+   * active projects (live `project` engagements with `status = 'active'`). One round trip: the
+   * profile's PK row carrying two scalar subqueries, served by
+   * `consultations_expert_status_range_idx` and `engagement_expert_idx`. An unknown profile id
+   * matches no row and counts zero.
+   */
+  async countWorkInFlight(expertProfileId: string, now: Date): Promise<WorkInFlightCounts> {
+    const upcomingConsultations = db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(consultations)
+      .where(
+        and(
+          eq(consultations.expertProfileId, expertProfileId),
+          eq(consultations.status, 'confirmed'),
+          isNull(consultations.deletedAt),
+          gte(consultations.startAt, now)
+        )
+      );
+    const activeProjects = db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(engagements)
+      .where(
+        and(
+          eq(engagements.expertProfileId, expertProfileId),
+          eq(engagements.engagementType, 'project'),
+          eq(engagements.status, 'active'),
+          isNull(engagements.deletedAt)
+        )
+      );
+
+    // A query builder embedded in `sql` renders parenthesised, i.e. as a scalar subquery.
+    const [row] = await db
+      .select({
+        upcomingConsultations: sql<number>`${upcomingConsultations}`,
+        activeProjects: sql<number>`${activeProjects}`,
+      })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, expertProfileId));
+    return {
+      upcomingConsultations: Number(row?.upcomingConsultations ?? 0),
+      activeProjects: Number(row?.activeProjects ?? 0),
+    };
   },
 
   /** Check if a username is available, optionally excluding a specific profile */
@@ -1615,7 +1733,7 @@ export const expertsRepository = {
    *
    * ⚠ `approved_at` IS STILL WRITTEN ON THE APPROVE ARM, beside `decided_at`, with the SAME
    * `Date`. Four shipped readers depend on it (`findPublicProfileByUsername`,
-   * `isPubliclyVisible`, `platform-lookup.ts`, `deriveExpertChecklist`) and searchability is out
+   * `findPublicVisibility`, `platform-lookup.ts`, `deriveExpertChecklist`) and searchability is out
    * of BAL-549's scope. It is NOT cleared on the decline arm — a declined application never had
    * one.
    *

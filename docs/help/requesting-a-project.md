@@ -17,11 +17,12 @@ If you'd rather we find the right fit, choose **Get matched with someone else in
 then reviews your brief and introduces a matched expert. Everything you've written stays exactly
 as it is, so you can switch back and forth without starting over.
 
-## If an expert isn't taking new projects
+## If an expert isn't taking on new work
 
-Sometimes an expert can't take on new work for a while. When that happens, you'll see a note on
-their request form. Choose **Get matched instead** and we'll find someone with similar
-experience, keeping your brief as you wrote it.
+Experts can pause new work for a while. When they do, you'll see a note on their request form
+saying they aren't taking on new work right now. If they pause while you're writing, the note
+appears when you send. Either way, choose **Get matched instead** and we'll find someone with
+similar experience, keeping your brief as you wrote it.
 
 ## Questions?
 

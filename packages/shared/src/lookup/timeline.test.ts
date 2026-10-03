@@ -137,6 +137,16 @@ describe('describeAuditEvent — mapped actions', () => {
       expected: 'Removed from search (a broken calendar connection)',
     },
     {
+      action: 'expert_work_availability.changed',
+      metadata: { from: true, to: false },
+      expected: 'Paused new work',
+    },
+    {
+      action: 'expert_work_availability.changed',
+      metadata: { from: false, to: true },
+      expected: 'Available for new work again',
+    },
+    {
       action: 'company.join_mode_changed',
       metadata: { from: 'invite_only', to: 'domain_auto_join' },
       expected: 'Domain join mode changed from invite_only to domain_auto_join',

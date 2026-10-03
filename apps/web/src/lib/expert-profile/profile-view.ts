@@ -178,6 +178,7 @@ export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileVie
     consultationCount: profile.consultationCount,
     certCount: certifications.length,
     availableForWork: profile.availableForWork,
+    vertical: { name: profile.vertical.name, slug: profile.vertical.slug },
     baloVerified: true,
     // Still deferred — an editorial badge with no decided threshold. NOT derived from
     // `ratingAverage`; picking a cutoff here would invent a rule nobody agreed.

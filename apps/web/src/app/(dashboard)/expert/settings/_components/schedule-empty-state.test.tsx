@@ -28,4 +28,10 @@ describe('ScheduleEmptyState', () => {
     await user.click(screen.getByRole('button', { name: 'Set them up myself' }));
     expect(onSetUp).toHaveBeenCalledTimes(1);
   });
+
+  it('disables both entry points when paused', () => {
+    render(<ScheduleEmptyState onUseDefaults={vi.fn()} onSetUp={vi.fn()} disabled />);
+    expect(screen.getByRole('button', { name: 'Use these hours' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Set them up myself' })).toBeDisabled();
+  });
 });

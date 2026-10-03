@@ -2,8 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, CalendarX, Clock, Globe, RefreshCw } from 'lucide-react';
-import type { AvailabilitySlotDto, SlotDurationMinutes } from '@balo/shared/availability';
+import { AlertTriangle, CalendarX, Clock, Globe, Pause, RefreshCw } from 'lucide-react';
+import type {
+  AvailabilityScope,
+  AvailabilitySlotDto,
+  SlotDurationMinutes,
+} from '@balo/shared/availability';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 import { Button } from '@/components/ui/button';
 import {
@@ -66,6 +70,14 @@ export interface ExpertAvailabilityCalendarProps {
   viewerType?: 'expert' | 'client';
   /** Optional CTA rendered inside the `not_configured` / `no availability` states. */
   emptyAction?: ReactNode;
+  /** Replaces `emptyAction` on the paused state only (a "Find a similar expert" link). */
+  pausedAction?: ReactNode;
+  /**
+   * Which kind of work the grid is read for. Default `new_work`: a paused expert shows the
+   * paused panel instead of slots. Pass `existing_work` for pickers that serve work already in
+   * flight (intro calls, reschedules, follow-ups on an open case).
+   */
+  scope?: AvailabilityScope;
   className?: string;
 }
 
@@ -94,6 +106,7 @@ interface AvailabilityStateMessageProps {
    *  `selectable` mode (see the panel's own comment below). */
   viewerType: 'expert' | 'client';
   emptyAction?: ReactNode;
+  pausedAction?: ReactNode;
   onRetry: () => void;
   onWiden: () => void;
 }
@@ -144,6 +157,7 @@ function AvailabilityStateMessage({
   mode,
   viewerType,
   emptyAction,
+  pausedAction,
   onRetry,
   onWiden,
 }: Readonly<AvailabilityStateMessageProps>): React.JSX.Element {
@@ -165,6 +179,22 @@ function AvailabilityStateMessage({
    */
   if (view.kind === 'not_published' && viewerType === 'expert') {
     return <NotPublishedForExpertMessage mode={mode} emptyAction={emptyAction} />;
+  }
+
+  if (view.kind === 'paused') {
+    return (
+      <AvailabilityMessage
+        paused
+        icon={<Pause className="h-5 w-5" aria-hidden="true" />}
+        title="Not taking on new work right now"
+        body={
+          mode === 'preview'
+            ? 'Clients see this message instead of your times until you turn new work back on.'
+            : 'You can still message them.'
+        }
+        action={pausedAction ?? emptyAction}
+      />
+    );
   }
 
   if (view.kind === 'error' || view.kind === 'not_published') {
@@ -235,6 +265,8 @@ export function ExpertAvailabilityCalendar({
   onSlotSelect,
   viewerType = 'client',
   emptyAction,
+  pausedAction,
+  scope,
   className,
 }: Readonly<ExpertAvailabilityCalendarProps>): React.JSX.Element {
   const [resolvedTimezone, setResolvedTimezone] = useState<string | null>(
@@ -268,7 +300,7 @@ export function ExpertAvailabilityCalendar({
   const [confirmed, setConfirmed] = useState(false);
   const [confirmedSummary, setConfirmedSummary] = useState<string | null>(null);
 
-  const { view, reload } = useExpertAvailability(expertProfileId, days);
+  const { view, reload } = useExpertAvailability(expertProfileId, days, scope);
 
   const viewedTrackedRef = useRef(false);
   useEffect(() => {
@@ -432,6 +464,7 @@ export function ExpertAvailabilityCalendar({
           mode={mode}
           viewerType={viewerType}
           emptyAction={emptyAction}
+          pausedAction={pausedAction}
           onRetry={reload}
           onWiden={() => setDays(MAX_AVAILABILITY_WINDOW_DAYS)}
         />

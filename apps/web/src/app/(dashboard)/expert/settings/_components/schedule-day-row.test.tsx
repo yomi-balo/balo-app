@@ -329,4 +329,31 @@ describe('ScheduleDayRow', () => {
     const { container } = render(<ScheduleDayRow dayIndex={7} day={enabledDay()} {...noop} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('disables every control when paused, leaving the values in place', () => {
+    render(<ScheduleDayRow dayIndex={0} day={splitDay()} {...noop} disabled />);
+
+    expect(screen.getByRole('switch', { name: 'Monday availability' })).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Monday availability' })).toBeChecked();
+    for (const name of [
+      'Monday range 1 start time',
+      'Monday range 1 end time',
+      'Monday range 2 start time',
+      'Monday range 2 end time',
+    ]) {
+      expect(screen.getByRole('combobox', { name })).toBeDisabled();
+    }
+    expect(screen.getByRole('combobox', { name: 'Monday range 1 start time' })).toHaveTextContent(
+      '9:00 AM'
+    );
+    expect(screen.getByRole('button', { name: 'Remove Monday range 1' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add range to Monday' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Copy Monday hours to other days' })).toBeDisabled();
+  });
+
+  it('leaves the controls enabled when not paused', () => {
+    render(<ScheduleDayRow dayIndex={0} day={splitDay()} {...noop} />);
+    expect(screen.getByRole('switch', { name: 'Monday availability' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add range to Monday' })).toBeEnabled();
+  });
 });

@@ -11,6 +11,7 @@ import {
 import { isValidTimezone } from '@balo/shared/timezone';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
+import { invalidateExpertSlots } from '../../services/availability/expert-slots-cache.js';
 
 // ── Validation schemas ──────────────────────────────────────────
 
@@ -55,6 +56,11 @@ const postBodySchema = z.object({
   timezone: timezoneSchema,
   bookingSettings: bookingSettingsSchema,
   rules: z.array(ruleSchema).max(21), // ≤ 3 ranges × 7 days
+  actorUserId: actorUserIdSchema,
+});
+
+const workAvailabilityBodySchema = z.object({
+  availableForWork: z.boolean(),
   actorUserId: actorUserIdSchema,
 });
 
@@ -172,6 +178,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             bufferAfterMinutes: settings.bufferAfterMinutes,
             minimumNoticeMinutes: settings.minimumNoticeMinutes,
           },
+          availableForWork: settings.availableForWork,
           rules: rules.map((r) => ({
             dayOfWeek: r.dayOfWeek,
             startTime: toHHMM(r.startTime),
@@ -349,6 +356,58 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
           err,
           'Failed to update expert timezone',
           'Failed to update timezone'
+        );
+      }
+    }
+  );
+
+  /**
+   * PUT /api/experts/:expertProfileId/work-availability
+   * Pause or resume new work. The flag flip and its audit row commit together; only an
+   * actual change drops the Redis slot cache and enqueues the DB cache rebuild, so a repeated
+   * write is a no-op end to end.
+   */
+  fastify.put(
+    '/api/experts/:expertProfileId/work-availability',
+    { preHandler: [requireInternalAuth] },
+    async (request, reply) => {
+      const params = parseOrReply(paramsSchema, request.params, reply, 'Invalid path parameters');
+      if (!params.ok) return reply;
+
+      const body = parseOrReply(
+        workAvailabilityBodySchema,
+        request.body,
+        reply,
+        'Invalid request body'
+      );
+      if (!body.ok) return reply;
+
+      const { expertProfileId } = params.data;
+      const { availableForWork, actorUserId } = body.data;
+
+      try {
+        if (!(await loadProfileOr404(expertProfileId, reply))) return reply;
+
+        const { changed } = await expertsRepository.setAvailableForWork({
+          expertProfileId,
+          availableForWork,
+          actorUserId: actorUserId ?? null,
+        });
+
+        if (changed) {
+          await invalidateExpertSlots(expertProfileId);
+          await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
+        }
+
+        return reply.send({ success: true, availableForWork, changed });
+      } catch (err: unknown) {
+        return replyServerError(
+          reply,
+          request.log,
+          expertProfileId,
+          err,
+          'Failed to update work availability',
+          'Failed to update work availability'
         );
       }
     }

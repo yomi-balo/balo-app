@@ -123,7 +123,7 @@ describe('loadExpertCalendar — query range timezone correctness (B2)', () => {
     vi.clearAllMocks();
     m.findTimezone.mockResolvedValue('Australia/Sydney');
     m.listCalendarForExpert.mockResolvedValue([]);
-    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true } });
+    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true }, availableForWork: true });
   });
 
   it('converts the LOCAL day key through the expert’s OWN zone, not a bare UTC-literal parse', async () => {
@@ -197,11 +197,32 @@ describe('loadExpertCalendar — query range timezone correctness (B2)', () => {
   });
 });
 
+describe('loadExpertCalendar — availableForWork (BAL-591)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.findTimezone.mockResolvedValue('Australia/Sydney');
+    m.listCalendarForExpert.mockResolvedValue([]);
+  });
+
+  it.each([true, false])('copies availableForWork=%s from the checklist snapshot', async (flag) => {
+    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true }, availableForWork: flag });
+    const { loadExpertCalendar } = await import('./load-expert-calendar');
+
+    const view = await loadExpertCalendar({
+      expertProfileId: EXPERT_PROFILE_ID,
+      userId: USER_ID,
+      weekStartDayKey: '2026-08-24',
+    });
+
+    expect(view.availableForWork).toBe(flag);
+  });
+});
+
 describe('loadExpertCalendar — href fails closed with owningRowFound (B7)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m.findTimezone.mockResolvedValue('Australia/Sydney');
-    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true } });
+    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true }, availableForWork: true });
   });
 
   it('a case meeting with owningRowFound=false gets href: null, even though contextId is populated', async () => {
@@ -312,7 +333,7 @@ describe('loadExpertCalendar — roomReady copy-through (BAL-581)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     m.findTimezone.mockResolvedValue('Australia/Sydney');
-    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true } });
+    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true }, availableForWork: true });
   });
 
   it('copies roomReady through unchanged, both true and false — never recomputed', async () => {
@@ -370,7 +391,7 @@ describe('loadExpertCalendar — two bounded windows replace the single stretche
     vi.clearAllMocks();
     m.findTimezone.mockResolvedValue('Australia/Sydney');
     m.listCalendarForExpert.mockResolvedValue([]);
-    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true } });
+    mockGetChecklistStatus.mockResolvedValue({ items: { calendar: true }, availableForWork: true });
   });
 
   it('a far-past visible week fetches the Agenda horizon as its OWN window, not by stretching the week’s', async () => {

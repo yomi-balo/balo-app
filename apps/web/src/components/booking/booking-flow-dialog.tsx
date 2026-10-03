@@ -35,6 +35,7 @@ import {
   FundingSetupPanel,
   HardFailurePanel,
   PartialFailurePanel,
+  ExpertUnavailablePanel,
   SessionExpiredPanel,
   bookingSwitchFailedCopy,
   type BookingBalancePanelProps,
@@ -53,7 +54,8 @@ type Phase =
   | 'error_partial'
   | 'error_session'
   | 'error_funding'
-  | 'error_balance';
+  | 'error_balance'
+  | 'error_unavailable';
 
 interface BookedSnapshot {
   engagementId: string;
@@ -268,6 +270,7 @@ type BalanceOutcome = { kind: 'balance' } & BalanceRefusal;
 type SubmitFailureOutcome =
   | { kind: 'stale_slot' }
   | { kind: 'impersonation_refused' }
+  | { kind: 'expert_unavailable' }
   | { kind: 'session_expired'; caseTitle: string | null }
   | { kind: 'partial'; engagementId: string; caseTitle: string }
   | { kind: 'company_fail_closed'; code: BookingFailureCode }
@@ -369,6 +372,10 @@ function resolveSubmitFailureOutcome(
   if (result.code === 'impersonation_refused') {
     return { kind: 'impersonation_refused' };
   }
+  // ⚠ BEFORE the partial arm: a meeting-hop refusal also carries the case, but no retry helps.
+  if (result.code === 'expert_unavailable') {
+    return { kind: 'expert_unavailable' };
+  }
   if (result.code === 'session_expired') {
     return { kind: 'session_expired', caseTitle: result.caseTitle ?? null };
   }
@@ -452,6 +459,7 @@ export function BookingFlowDialog(
     viewerEmailDomain,
     onMessage,
     productsTaxonomy = EMPTY_TAXONOMY,
+    scope,
   } = props;
   const isMobile = useIsMobile(768);
   const authModal = useAuthModal();
@@ -754,6 +762,10 @@ export function BookingFlowDialog(
       if (outcome.kind === 'impersonation_refused') {
         setHardFailure(IMPERSONATION_REFUSAL_PANEL);
         setPhase('error_hard');
+        return;
+      }
+      if (outcome.kind === 'expert_unavailable') {
+        setPhase('error_unavailable');
         return;
       }
       if (outcome.kind === 'session_expired') {
@@ -1093,6 +1105,8 @@ export function BookingFlowDialog(
                 expertFirstName={expert.firstName}
                 onSlotSelect={handleSlotSelect}
                 onMessage={onMessage}
+                scope={scope}
+                similarExpertsHref={expert.similarExpertsHref}
               />
             </motion.div>
           )}
@@ -1177,6 +1191,15 @@ export function BookingFlowDialog(
                   setPhase('confirm');
                   handleSubmit().catch(() => {});
                 }}
+              />
+            </motion.div>
+          )}
+          {phase === 'error_unavailable' && (
+            <motion.div key="error_unavailable" {...pageTransition}>
+              <ExpertUnavailablePanel
+                expertFirstName={expert.firstName}
+                similarExpertsHref={expert.similarExpertsHref}
+                onClose={onClose}
               />
             </motion.div>
           )}

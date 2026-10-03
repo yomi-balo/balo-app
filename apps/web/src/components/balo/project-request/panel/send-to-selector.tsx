@@ -14,7 +14,7 @@ export interface ProjectRequestExpert {
   /** R2 key / http URL for the avatar. */
   avatarKey: string | null;
   headline: string | null;
-  /** False when the expert isn't taking new projects — Direct is blocked for them. */
+  /** False when the expert isn't taking on new work — Direct is blocked for them. */
   availableForWork: boolean;
 }
 
@@ -23,7 +23,7 @@ interface ExpertUnavailableNoticeProps {
   onMatchInstead: () => void;
 }
 
-/** Inline notice for an expert who isn't taking new projects, with a way to get matched instead. */
+/** Inline notice for an expert who isn't taking on new work, with a way to get matched instead. */
 export function ExpertUnavailableNotice({
   firstName,
   onMatchInstead,
@@ -32,7 +32,7 @@ export function ExpertUnavailableNotice({
     <div className="border-warning/40 bg-warning/15 text-warning-strong mt-3 flex gap-2.5 rounded-lg border p-3">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
       <div className="min-w-0 text-xs">
-        <p className="font-semibold">{firstName} isn&apos;t taking new projects right now.</p>
+        <p className="font-semibold">{firstName} isn&apos;t taking on new work right now.</p>
         <p className="mt-0.5">
           Your brief is saved. We can match you with someone with similar experience instead.
         </p>
@@ -60,8 +60,8 @@ interface SendToSelectorProps {
 /**
  * Where the request goes — decided by the entry point, not picked from a list. A context-free
  * mount is a static "Find me an expert" block. An expert-bound mount pins the expert's card
- * (Direct) with a text toggle to get matched instead and back; an expert who isn't taking new
- * projects shows the unavailable notice in place of the toggle until the client switches.
+ * (Direct) with a text toggle to get matched instead and back; an expert who isn't taking on
+ * new work shows the unavailable notice in place of the toggle until the client switches.
  */
 export function SendToSelector({
   value,

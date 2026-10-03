@@ -96,8 +96,17 @@ export async function resolveBookingExpertDisplay(
   expertProfileId: string
 ): Promise<BookingExpertDisplay> {
   try {
-    const profile = await expertsRepository.findDisplayProfileById(expertProfileId);
-    if (profile === undefined) {
+    const [profile, eligibility] = await Promise.all([
+      expertsRepository.findDisplayProfileById(expertProfileId),
+      expertsRepository.findNewWorkEligibility(expertProfileId),
+    ]);
+    // Only a missing profile or a suspended/deleted owner falls back: an unlisted or paused
+    // expert still renders, because case and booking pages show them.
+    if (
+      profile === undefined ||
+      (!eligibility.eligible &&
+        (eligibility.reason === 'not_found' || eligibility.reason === 'owner_not_live'))
+    ) {
       return FALLBACK_EXPERT_DISPLAY;
     }
     const [expertUser, agency] = await Promise.all([

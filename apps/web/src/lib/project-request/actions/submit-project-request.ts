@@ -18,11 +18,13 @@ interface SubmitProjectRequestResult {
   success: boolean;
   projectRequestId?: string;
   error?: string;
+  /** Set when a `direct` request was refused because the expert cannot take new work. */
+  code?: 'expert_unavailable';
 }
 
 const GENERIC_ERROR = 'Something went wrong sending your request. Please try again.';
 const EXPERT_UNAVAILABLE_ERROR =
-  "This expert isn't taking new projects right now. Switch to matching and we'll find someone with similar experience.";
+  "This expert isn't taking on new work right now. Choose Get matched instead and we'll find someone with similar experience.";
 
 export const submitProjectRequestAction = withAuth(
   async (session, rawInput: RawProjectRequestInput): Promise<SubmitProjectRequestResult> => {
@@ -90,16 +92,14 @@ export const submitProjectRequestAction = withAuth(
       // A `direct` request to an expert who can't take new work is rejected here, not only in
       // the UI: the client's eligibility view can be stale or bypassed.
       if (input.sendTo === 'direct') {
-        const eligibility = await expertsRepository.findDirectRequestEligibility(
-          input.expertProfileId
-        );
+        const eligibility = await expertsRepository.findNewWorkEligibility(input.expertProfileId);
         if (!eligibility.eligible) {
-          log.warn('Project request rejected — expert not taking direct requests', {
+          log.warn('Project request rejected — expert not taking on new work', {
             userId: session.user.id,
             expertProfileId,
             reason: eligibility.reason,
           });
-          return { success: false, error: EXPERT_UNAVAILABLE_ERROR };
+          return { success: false, error: EXPERT_UNAVAILABLE_ERROR, code: 'expert_unavailable' };
         }
       }
 

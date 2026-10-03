@@ -39,6 +39,12 @@ interface AvailabilityShadingProps {
    *  "Try again" (balo-ui `layouts-states.md`: "Always include a retry action"). Stable — the
    *  hook memoises it with no dependencies — so a plain effect will not re-fire. */
   readonly onReloadChange?: (reload: () => void) => void;
+  /**
+   * The expert has paused new work. The grid is still the real open-hours grid (read with scope
+   * `existing_work`, since the default scope answers `paused` with no slots), but it is drawn as
+   * the shared hatch instead of the bookable wash.
+   */
+  readonly paused?: boolean;
 }
 
 interface MinuteRun {
@@ -74,7 +80,8 @@ function formatDaySummary(
   runs: readonly MinuteRun[],
   dayKey: string,
   todayDayKey: string | undefined,
-  coverageEndDayKey: string | undefined
+  coverageEndDayKey: string | undefined,
+  paused: boolean
 ): string {
   // Day keys are `yyyy-MM-dd`, zero-padded — lexicographic comparison IS calendar comparison.
   if (todayDayKey !== undefined && dayKey < todayDayKey) return 'Past';
@@ -85,7 +92,7 @@ function formatDaySummary(
   const parts = runs.map(
     (run) => `${formatMinuteOfDay(run.start)} to ${formatMinuteOfDay(run.end)}`
   );
-  return `Available ${parts.join(' and ')}`;
+  return `${paused ? 'Open hours while paused:' : 'Available'} ${parts.join(' and ')}`;
 }
 
 /**
@@ -123,8 +130,13 @@ export function AvailabilityShading({
   coverageEndDayKey,
   onViewChange,
   onReloadChange,
+  paused = false,
 }: Readonly<AvailabilityShadingProps>): React.JSX.Element | null {
-  const { view, reload } = useExpertAvailability(expertProfileId, days);
+  const { view, reload } = useExpertAvailability(
+    expertProfileId,
+    days,
+    paused ? 'existing_work' : 'new_work'
+  );
 
   useEffect(() => {
     onViewChange?.(view);
@@ -175,7 +187,11 @@ export function AvailabilityShading({
               {runs.map((run) => (
                 <span
                   key={`${run.start}-${run.end}`}
-                  className="bg-primary/8 dark:bg-primary/15 absolute"
+                  className={
+                    paused
+                      ? 'bg-paused-hatch border-paused-border absolute border-l-[3px]'
+                      : 'bg-primary/8 dark:bg-primary/15 absolute'
+                  }
                   style={{
                     left: `calc(${GUTTER_WIDTH_PX}px + (100% - ${GUTTER_WIDTH_PX}px) * ${dayIndex} / ${dayKeys.length})`,
                     width: `calc((100% - ${GUTTER_WIDTH_PX}px) * ${columnWidthPercent} / 100)`,
@@ -204,7 +220,8 @@ export function AvailabilityShading({
                 mergeRuns(runsByDay.get(dayKey) ?? []),
                 dayKey,
                 todayDayKey,
-                coverageEndDayKey
+                coverageEndDayKey,
+                paused
               )}
             </span>
           );

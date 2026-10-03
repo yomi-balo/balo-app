@@ -16,12 +16,17 @@ vi.mock('sonner', () => ({
 const { mockIsMobile } = vi.hoisted(() => ({ mockIsMobile: vi.fn(() => false) }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => mockIsMobile() }));
 
-const { mockOnSlotSelect } = vi.hoisted(() => ({ mockOnSlotSelect: vi.fn() }));
+const { mockOnSlotSelect, mockCalendarScope } = vi.hoisted(() => ({
+  mockOnSlotSelect: vi.fn(),
+  mockCalendarScope: { value: undefined as string | undefined },
+}));
 vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: (props: {
     onSlotSelect?: (s: { start: string; end: string; duration: 15 | 30 | 45 | 60 }) => void;
     emptyAction?: React.ReactNode;
+    scope?: string;
   }) => {
+    mockCalendarScope.value = props.scope;
     mockOnSlotSelect.mockImplementation(() =>
       props.onSlotSelect?.({
         start: '2026-06-05T09:00:00.000Z',
@@ -109,6 +114,11 @@ afterEach(() => {
 });
 
 describe('IntroCallBookingDialog', () => {
+  it('reads the slot grid as existing_work: an intro call on a submitted request survives a pause', () => {
+    renderDialog();
+    expect(mockCalendarScope.value).toBe('existing_work');
+  });
+
   it('opens to pick_time and advances to confirm on slot select', async () => {
     const user = userEvent.setup();
     renderDialog();

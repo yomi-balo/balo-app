@@ -17,6 +17,8 @@ describe('EXPERT_EVENTS', () => {
       'APPLICATION_ANONYMOUS_STARTED',
       'APPLICATION_AUTH_GATE_REACHED',
       'APPLICATION_DRAFT_FLUSHED',
+      'WORK_AVAILABILITY_CHANGED',
+      'WORK_AVAILABILITY_PAUSE_CANCELLED',
     ]);
   });
 
@@ -40,6 +42,10 @@ describe('EXPERT_EVENTS', () => {
       'expert_application_auth_gate_reached'
     );
     expect(EXPERT_EVENTS.APPLICATION_DRAFT_FLUSHED).toBe('expert_application_draft_flushed');
+    expect(EXPERT_EVENTS.WORK_AVAILABILITY_CHANGED).toBe('expert_work_availability_changed');
+    expect(EXPERT_EVENTS.WORK_AVAILABILITY_PAUSE_CANCELLED).toBe(
+      'expert_work_availability_pause_cancelled'
+    );
   });
 
   it('values follow the naming convention expert_{noun}(_{noun})*', () => {

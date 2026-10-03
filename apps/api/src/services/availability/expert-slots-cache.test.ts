@@ -1,15 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockComputeExpertSlots, mockRedisGet, mockRedisSet, mockGetRedis } = vi.hoisted(() => {
-  const redisGet = vi.fn();
-  const redisSet = vi.fn();
-  return {
-    mockComputeExpertSlots: vi.fn(),
-    mockRedisGet: redisGet,
-    mockRedisSet: redisSet,
-    mockGetRedis: vi.fn(() => ({ get: redisGet, set: redisSet })),
-  };
-});
+const { mockComputeExpertSlots, mockRedisGet, mockRedisSet, mockRedisDel, mockGetRedis } =
+  vi.hoisted(() => {
+    const redisGet = vi.fn();
+    const redisSet = vi.fn();
+    const redisDel = vi.fn();
+    return {
+      mockComputeExpertSlots: vi.fn(),
+      mockRedisGet: redisGet,
+      mockRedisSet: redisSet,
+      mockRedisDel: redisDel,
+      mockGetRedis: vi.fn(() => ({ get: redisGet, set: redisSet, del: redisDel })),
+    };
+  });
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -21,6 +24,7 @@ import {
   AVAILABILITY_BREAKER_TTL_SECONDS,
   AVAILABILITY_CACHE_DEADLINE_MS,
   getExpertSlots,
+  invalidateExpertSlots,
 } from './expert-slots-cache.js';
 
 const BREAKER_KEY = 'availability:breaker:v1:66666666-6666-4666-8666-666666666666';
@@ -46,6 +50,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockRedisGet.mockResolvedValue(null);
   mockRedisSet.mockResolvedValue('OK');
+  mockRedisDel.mockResolvedValue(2);
   mockComputeExpertSlots.mockResolvedValue(OK_RESULT);
 });
 
@@ -260,6 +265,35 @@ describe('getExpertSlots — Redis that never answers', () => {
       await vi.advanceTimersByTimeAsync(AVAILABILITY_CACHE_DEADLINE_MS + 1);
 
       expect((await pending).status).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('invalidateExpertSlots', () => {
+  it('deletes the grid key and the breaker key for that expert in one call', async () => {
+    await invalidateExpertSlots(EXPERT_PROFILE_ID);
+
+    expect(mockRedisDel).toHaveBeenCalledTimes(1);
+    expect(mockRedisDel).toHaveBeenCalledWith(AVAILABILITY_KEY, BREAKER_KEY);
+  });
+
+  it('never throws when Redis rejects', async () => {
+    mockRedisDel.mockRejectedValue(new Error('redis down'));
+
+    await expect(invalidateExpertSlots(EXPERT_PROFILE_ID)).resolves.toBeUndefined();
+  });
+
+  it('never throws, and gives up after the deadline, when Redis never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      mockRedisDel.mockReturnValue(new Promise(() => {}));
+
+      const pending = invalidateExpertSlots(EXPERT_PROFILE_ID);
+      await vi.advanceTimersByTimeAsync(AVAILABILITY_CACHE_DEADLINE_MS + 1);
+
+      await expect(pending).resolves.toBeUndefined();
     } finally {
       vi.useRealTimers();
     }

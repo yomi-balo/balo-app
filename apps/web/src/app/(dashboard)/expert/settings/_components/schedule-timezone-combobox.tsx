@@ -77,6 +77,8 @@ interface ScheduleTimezoneComboboxProps {
   value: string;
   onChange: (tz: string) => void;
   disabled?: boolean;
+  /** Id of the note explaining why the trigger is inert. */
+  pausedNoteId?: string;
 }
 
 /**
@@ -88,6 +90,7 @@ export function ScheduleTimezoneCombobox({
   value,
   onChange,
   disabled,
+  pausedNoteId,
 }: Readonly<ScheduleTimezoneComboboxProps>): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const { popular, all } = useMemo(buildOptions, []);
@@ -129,6 +132,7 @@ export function ScheduleTimezoneCombobox({
           type="button"
           variant="link"
           disabled={disabled}
+          aria-describedby={disabled ? pausedNoteId : undefined}
           className="h-auto min-h-11 px-1 py-1.5 text-[13px] sm:min-h-0"
         >
           Change timezone

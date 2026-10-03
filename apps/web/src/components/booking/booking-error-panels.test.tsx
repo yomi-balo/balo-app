@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import {
   BookingBalancePanel,
+  ExpertUnavailablePanel,
   FundingSetupPanel,
   bookingSwitchFailedCopy,
   caseSavedCopy,
@@ -367,4 +368,43 @@ describe('BookingBalancePanel — words that must never appear', () => {
       expect(container.querySelector('a')).toBeNull();
     }
   );
+});
+
+describe('ExpertUnavailablePanel', () => {
+  it('names the expert by first name, offers an introduction, and closes', async () => {
+    const onClose = vi.fn();
+    render(<ExpertUnavailablePanel expertFirstName="Priya" onClose={onClose} />);
+    expect(screen.getByText("Priya isn't taking on new work right now.")).toBeInTheDocument();
+    expect(
+      screen.getByText('We can introduce you to someone with similar experience.')
+    ).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to "This expert" and never offers a retry', () => {
+    render(<ExpertUnavailablePanel expertFirstName={null} onClose={vi.fn()} />);
+    expect(screen.getByText("This expert isn't taking on new work right now.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  it('leads with "Find a similar expert" when a search link is supplied, keeping Close', () => {
+    render(
+      <ExpertUnavailablePanel
+        expertFirstName="Priya"
+        similarExpertsHref="/experts?vertical=salesforce"
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('link', { name: 'Find a similar expert' })).toHaveAttribute(
+      'href',
+      '/experts?vertical=salesforce'
+    );
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('shows no similar-expert link when none is supplied', () => {
+    render(<ExpertUnavailablePanel expertFirstName="Priya" onClose={vi.fn()} />);
+    expect(screen.queryByRole('link', { name: 'Find a similar expert' })).not.toBeInTheDocument();
+  });
 });

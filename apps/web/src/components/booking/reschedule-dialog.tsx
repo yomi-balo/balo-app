@@ -332,6 +332,7 @@ export function RescheduleDialog({
           expertProfileId={expertProfileId}
           mode="selectable"
           viewerType="client"
+          scope="existing_work"
           fixedDurationMinutes={fixedDurationMinutes}
           onSlotSelect={handleSlotSelect}
         />

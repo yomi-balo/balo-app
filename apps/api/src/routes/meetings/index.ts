@@ -18,6 +18,9 @@
  *     → authorizeMeetingBooking(...)            → 404 / 400
  *     → lookupBookingReplay(key, window)        → `conflict` ⇒ 409 idempotency_key_conflict;
  *                                                 `match` SKIPS the guards below
+ *     → checkExpertBookingEligibility(...)      → 409 expert_unavailable (owner suspended or
+ *                                                 deleted; never on a replay, never when the
+ *                                                 context names no expert)
  *     → checkCaseBookingFunding(...)            → 409 account_on_hold / booking_unfunded /
  *                                                 booking_reserved, 503 booking_funding_unavailable
  *                                                 (Case only, never on a replay — BAL-474)
@@ -156,6 +159,7 @@ import type { z } from 'zod';
 import { requireAuth } from '../../lib/require-auth.js';
 import { parseBodyOr400, resolveUserId } from '../../lib/route-helpers.js';
 import { authorizeMeetingBooking } from '../../services/meetings/authorize-meeting-booking.js';
+import { checkExpertBookingEligibility } from '../../services/meetings/expert-booking-eligibility.js';
 import {
   checkCaseBookingFunding,
   type CaseBookingFundingCode,
@@ -281,6 +285,20 @@ async function resolveBookingInput(
     return null;
   }
   const replaying = replay.kind === 'match';
+
+  // BAL-591 — an expert whose owner is suspended or deleted is not bookable on any context. A
+  // paused expert is NOT refused here: see `checkExpertBookingEligibility`. A replay is already
+  // booked and is never re-checked.
+  if (!replaying && authorized.expertProfileId !== null) {
+    const eligibility = await checkExpertBookingEligibility({
+      contextType,
+      expertProfileId: authorized.expertProfileId,
+    });
+    if (!eligibility.ok) {
+      reply.code(409).send({ error: 'expert_unavailable' });
+      return null;
+    }
+  }
 
   // BAL-474 (D6.1 / D6.5) — a Case booking against a hold, an unfunded balance or a reservation is
   // refused before any write. A replay is already booked and is never re-checked; only a Case books

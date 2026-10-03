@@ -14,6 +14,8 @@ const {
   mockTransaction,
   mockGetQueue,
   mockQueueAdd,
+  mockSetAvailableForWork,
+  mockInvalidateExpertSlots,
 } = vi.hoisted(() => ({
   mockFindProfileById: vi.fn(),
   mockFindResolverSettings: vi.fn(),
@@ -26,6 +28,12 @@ const {
   mockTransaction: vi.fn(),
   mockGetQueue: vi.fn(),
   mockQueueAdd: vi.fn(),
+  mockSetAvailableForWork: vi.fn(),
+  mockInvalidateExpertSlots: vi.fn(),
+}));
+
+vi.mock('../../services/availability/expert-slots-cache.js', () => ({
+  invalidateExpertSlots: mockInvalidateExpertSlots,
 }));
 
 vi.mock('@balo/db', () => ({
@@ -33,6 +41,7 @@ vi.mock('@balo/db', () => ({
     findProfileById: mockFindProfileById,
     findResolverSettings: mockFindResolverSettings,
     updateProfile: mockUpdateProfile,
+    setAvailableForWork: mockSetAvailableForWork,
   },
   usersRepository: {
     updateTimezone: mockUpdateTimezone,
@@ -210,6 +219,7 @@ describe('experts schedule API routes', () => {
         bufferBeforeMinutes: 15,
         bufferAfterMinutes: 30,
         minimumNoticeMinutes: 120,
+        availableForWork: false,
       });
       mockListRules.mockResolvedValue([
         { dayOfWeek: 1, startTime: '09:00:00', endTime: '12:00:00' },
@@ -231,6 +241,7 @@ describe('experts schedule API routes', () => {
           bufferAfterMinutes: 30,
           minimumNoticeMinutes: 120,
         },
+        availableForWork: false,
         rules: [
           { dayOfWeek: 1, startTime: '09:00', endTime: '12:00' },
           { dayOfWeek: 1, startTime: '13:00', endTime: '17:00' },
@@ -244,6 +255,7 @@ describe('experts schedule API routes', () => {
         bufferBeforeMinutes: 0,
         bufferAfterMinutes: 0,
         minimumNoticeMinutes: 0,
+        availableForWork: true,
       });
       mockListRules.mockResolvedValue([]);
 
@@ -257,6 +269,7 @@ describe('experts schedule API routes', () => {
       const body = res.json();
       expect(body.timezone).toBe('UTC');
       expect(body.rules).toEqual([]);
+      expect(body.availableForWork).toBe(true);
       expect(body.bookingSettings).toEqual({
         bufferBeforeMinutes: 0,
         bufferAfterMinutes: 0,
@@ -554,6 +567,102 @@ describe('experts schedule API routes', () => {
         })
       );
       expectRebuildEnqueued();
+    });
+  });
+
+  // ── PUT /api/experts/:expertProfileId/work-availability ────────
+
+  describe('PUT /api/experts/:id/work-availability', () => {
+    const put = (
+      payload: Record<string, unknown>,
+      headers: Record<string, string> = AUTH_HEADERS,
+      id = EXPERT_UUID
+    ): Promise<{ statusCode: number; json: () => unknown }> =>
+      app.inject({
+        method: 'PUT',
+        url: `/api/experts/${id}/work-availability`,
+        headers,
+        payload,
+      }) as unknown as Promise<{ statusCode: number; json: () => unknown }>;
+
+    beforeEach(() => {
+      mockFindProfileById.mockResolvedValue(PROFILE);
+      mockSetAvailableForWork.mockResolvedValue({ changed: true });
+    });
+
+    it('returns 401 without the internal key', async () => {
+      const res = await put({ availableForWork: false }, { 'content-type': 'application/json' });
+      expect(res.statusCode).toBe(401);
+      expect(mockSetAvailableForWork).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a non-uuid path param', async () => {
+      const res = await put({ availableForWork: false }, AUTH_HEADERS, 'not-a-uuid');
+      expect(res.statusCode).toBe(400);
+    });
+
+    it.each([
+      ['a missing flag', {}],
+      ['a non-boolean flag', { availableForWork: 'no' }],
+      ['a non-uuid actor', { availableForWork: false, actorUserId: 'nope' }],
+    ])('returns 400 for %s', async (_label, payload) => {
+      const res = await put(payload);
+      expect(res.statusCode).toBe(400);
+      expect(mockSetAvailableForWork).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 for an unknown profile and writes nothing', async () => {
+      mockFindProfileById.mockResolvedValue(undefined);
+      const res = await put({ availableForWork: false });
+      expect(res.statusCode).toBe(404);
+      expect(mockSetAvailableForWork).not.toHaveBeenCalled();
+      expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
+      expect(mockQueueAdd).not.toHaveBeenCalled();
+    });
+
+    it('a change writes with the actor, drops the slot cache, then enqueues the rebuild', async () => {
+      const res = await put({ availableForWork: false, actorUserId: ACTOR_UUID });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ success: true, availableForWork: false, changed: true });
+      expect(mockSetAvailableForWork).toHaveBeenCalledWith({
+        expertProfileId: EXPERT_UUID,
+        availableForWork: false,
+        actorUserId: ACTOR_UUID,
+      });
+      expect(mockInvalidateExpertSlots).toHaveBeenCalledWith(EXPERT_UUID);
+      expectRebuildEnqueued();
+      expect(mockInvalidateExpertSlots.mock.invocationCallOrder[0]).toBeLessThan(
+        mockQueueAdd.mock.invocationCallOrder[0] ?? 0
+      );
+    });
+
+    it('records a null actor when none is supplied', async () => {
+      await put({ availableForWork: true });
+      expect(mockSetAvailableForWork).toHaveBeenCalledWith(
+        expect.objectContaining({ actorUserId: null })
+      );
+    });
+
+    it('an unchanged write neither drops the cache nor enqueues', async () => {
+      mockSetAvailableForWork.mockResolvedValue({ changed: false });
+
+      const res = await put({ availableForWork: false });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ success: true, availableForWork: false, changed: false });
+      expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
+      expect(mockQueueAdd).not.toHaveBeenCalled();
+    });
+
+    it('returns 500 with a fixed message when the write throws', async () => {
+      mockSetAvailableForWork.mockRejectedValue(new Error('db down: secret detail'));
+
+      const res = await put({ availableForWork: false });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: 'Failed to update work availability' });
+      expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
     });
   });
 });

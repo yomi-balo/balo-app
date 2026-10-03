@@ -101,6 +101,11 @@ export interface ExpertProfileView {
   consultationCount: number;
   certCount: number;
   availableForWork: boolean;
+  /**
+   * The expert's vertical (e.g. Salesforce). Names the paused booking card's "similar {vertical}
+   * experience" line and scopes its "Find a similar expert" search link.
+   */
+  vertical: { name: string; slug: string };
   /** Derived from the visibility gate (approved + searchable) — always true here. */
   baloVerified: boolean;
   /**

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { CalendarDays } from 'lucide-react';
+import { CalendarDays, Pause } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useRefreshOnFocus } from '@/hooks/use-refresh-on-focus';
@@ -25,6 +25,7 @@ import { WeekNav } from './week-nav';
 import { WeekGrid } from './week-grid';
 import { AgendaList } from './agenda-list';
 import { AvailabilityShading } from './availability-shading';
+import { useCalendarPaused } from './use-calendar-paused';
 import { TimezoneChip } from './timezone-chip';
 import { NoCalendarConnectedEmptyState, NothingScheduledEmptyState } from './calendar-empty-states';
 
@@ -95,6 +96,41 @@ function shadingRequestWindow(
     beyondHorizon,
     isPastWeek: false,
   };
+}
+
+/** `'24 Aug – 30 Aug, 2026'` for the visible week, in UTC so a day key never shifts. */
+function weekRangeLabel(weekStartDayKey: string): string {
+  const weekEndDayKey = addDaysToDayKey(weekStartDayKey, 6);
+  const formatDayKey = (dayKey: string): string => {
+    const [year, month, day] = dayKey.split('-').map(Number);
+    if (year === undefined || month === undefined || day === undefined) return dayKey;
+    return new Intl.DateTimeFormat('en-AU', {
+      day: 'numeric',
+      month: 'short',
+      timeZone: 'UTC',
+    }).format(new Date(Date.UTC(year, month - 1, day)));
+  };
+  const yearLabel = new Intl.DateTimeFormat('en-AU', { year: 'numeric', timeZone: 'UTC' }).format(
+    new Date(`${weekEndDayKey}T00:00:00.000Z`)
+  );
+  return `${formatDayKey(weekStartDayKey)} – ${formatDayKey(weekEndDayKey)}, ${yearLabel}`;
+}
+
+/**
+ * The minute spans the shading paints, for `WeekGrid`'s `gridRange` union. Emits the same
+ * fragments `AvailabilityShading` paints: a cross-midnight slot is clipped at local midnight and
+ * continues from 0 on the next day (see the note above `shadingMinuteSpans`).
+ */
+function shadingSpansFor(
+  availabilityView: AvailabilityView | null,
+  timezone: string
+): { startMinutes: number; endMinutes: number }[] {
+  if (availabilityView?.kind !== 'ready') return [];
+  return availabilityView.slots.flatMap((slot) => {
+    const span = zonedMeetingSpan(slot.start, slot.end, timezone);
+    if (!span.crossesMidnight) return [span];
+    return [span, { startMinutes: 0, endMinutes: zonedMinutesOfDay(slot.end, timezone) }];
+  });
 }
 
 /**
@@ -307,7 +343,11 @@ export function CalendarShell({
    * ⚠ `shadingMounted` is conjoined because `availabilityView` is only reset to `null` in an
    * effect — for the one render in which the child unmounts it can still hold a stale `ready`.
    */
-  const availabilityVisibleToClients = shadingMounted && availabilityView?.kind === 'ready';
+  // `paused` as the shading read it back (a pause made after this page rendered) counts too.
+  const paused = useCalendarPaused(view.availableForWork, availabilityView, view);
+  // A paused expert's hours are NOT visible to clients, so the hatch never makes that claim.
+  const availabilityVisibleToClients =
+    shadingMounted && availabilityView?.kind === 'ready' && !paused;
 
   // The shading child unmounts whenever it falls out of scope (past week, or Agenda). Reset the
   // lifted `availabilityView` in step, or the page keeps rendering a note built from the LAST
@@ -321,22 +361,10 @@ export function CalendarShell({
     }
   }, [shadingMounted]);
 
-  const rangeLabel = useMemo(() => {
-    const weekEndDayKey = addDaysToDayKey(initialWeekStartDayKey, 6);
-    const formatDayKey = (dayKey: string): string => {
-      const [year, month, day] = dayKey.split('-').map(Number);
-      if (year === undefined || month === undefined || day === undefined) return dayKey;
-      return new Intl.DateTimeFormat('en-AU', {
-        day: 'numeric',
-        month: 'short',
-        timeZone: 'UTC',
-      }).format(new Date(Date.UTC(year, month - 1, day)));
-    };
-    const yearLabel = new Intl.DateTimeFormat('en-AU', { year: 'numeric', timeZone: 'UTC' }).format(
-      new Date(`${weekEndDayKey}T00:00:00.000Z`)
-    );
-    return `${formatDayKey(initialWeekStartDayKey)} – ${formatDayKey(weekEndDayKey)}, ${yearLabel}`;
-  }, [initialWeekStartDayKey]);
+  const rangeLabel = useMemo(
+    () => weekRangeLabel(initialWeekStartDayKey),
+    [initialWeekStartDayKey]
+  );
 
   // One extra day of lookback (the day BEFORE the visible week) so a meeting starting on the
   // previous week's last day but crossing local midnight into the visible Monday is included —
@@ -381,14 +409,10 @@ export function CalendarShell({
   // the negative height but left a visible band floating outside the grid. Reuses `zonedMeetingSpan`
   // exactly as `week-grid.tsx` already does for meetings, so there is ONE definition of "clipped at
   // local midnight" feeding both the paint and the range.
-  const shadingMinuteSpans = useMemo(() => {
-    if (availabilityView?.kind !== 'ready') return [];
-    return availabilityView.slots.flatMap((slot) => {
-      const span = zonedMeetingSpan(slot.start, slot.end, view.timezone);
-      if (!span.crossesMidnight) return [span];
-      return [span, { startMinutes: 0, endMinutes: zonedMinutesOfDay(slot.end, view.timezone) }];
-    });
-  }, [availabilityView, view.timezone]);
+  const shadingMinuteSpans = useMemo(
+    () => shadingSpansFor(availabilityView, view.timezone),
+    [availabilityView, view.timezone]
+  );
 
   // `null` while `resolvedView` has not resolved yet — the skeleton branch below renders instead.
   let bodyContent: React.ReactNode = null;
@@ -437,6 +461,7 @@ export function CalendarShell({
                     coverageEndDayKey={addDaysToDayKey(todayKey, (days ?? 1) - 1)}
                     onViewChange={setAvailabilityView}
                     onReloadChange={handleAvailabilityReloadChange}
+                    paused={paused}
                   />
                 )
               : undefined
@@ -493,6 +518,8 @@ export function CalendarShell({
         </Button>
       </div>
 
+      {paused && <PausedBanner />}
+
       {resolvedView === null ? (
         // ⚠ H7 — the ONE extra tick before `viewMode` resolves (see the comment above
         // `resolvedView`). No flash of the wrong view: neither the switcher (it needs a definite
@@ -516,105 +543,165 @@ export function CalendarShell({
             <NoCalendarConnectedEmptyState href={CONNECT_CALENDAR_HREF} />
           ) : (
             <div>
-              {/* ⚠ `text-warning`, NOT `text-warning-foreground` (C2). In `globals.css`'s `.dark`
-                  block `--warning-foreground` is byte-identical to `--background`, so over this
-                  10% tint the text painted background-coloured — invisible. `-foreground` is only
-                  legible over SOLID `bg-warning`; all eight repo precedents for the tint use
-                  `text-warning` with a `border-warning/30` edge.
-                  ⚠ COPY IS NEUTRAL (A5): `hasConnectedCalendar` is one boolean
-                  (`checklist.items.calendar`) that cannot tell "never connected" from
-                  "credential revoked", so it must not assert either — "Reconnect your calendar"
-                  was addressed at an expert who may never have connected one, while the
-                  full-page state on the SAME signal correctly says "Connect". */}
-              {!view.hasConnectedCalendar && (
-                <p className="text-warning border-warning/30 bg-warning/10 mb-3 rounded-md border px-3 py-2 text-sm">
-                  Balo isn&apos;t connected to your calendar right now.{' '}
-                  <Link
-                    href={CONNECT_CALENDAR_HREF}
-                    className="font-medium underline"
-                    onClick={handleBannerConnectClick}
-                  >
-                    Set up your calendar connection
-                  </Link>{' '}
-                  to keep availability shading accurate. Your existing bookings are unaffected.
-                </p>
-              )}
-              {availabilityView?.kind === 'not_published' && (
-                <p className="text-muted-foreground mb-3 text-sm">
-                  Availability shading appears once your profile is live.
-                </p>
-              )}
-              {availabilityView?.kind === 'not_configured' && (
-                <p className="text-muted-foreground mb-3 text-sm">
-                  <Link
-                    href={SET_AVAILABILITY_HREF}
-                    className="underline"
-                    onClick={handleSetAvailabilityClick}
-                  >
-                    Set your availability
-                  </Link>{' '}
-                  to see shading here.
-                </p>
-              )}
-              {view.hasConnectedCalendar && availabilityView?.kind === 'unavailable' && (
-                <p className="text-warning border-warning/30 bg-warning/10 mb-3 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm">
-                  <span>
-                    Your calendar connection needs attention — availability shown may be out of
-                    date.
-                  </span>
-                  <AvailabilityRetryButton onRetry={handleAvailabilityReload} />
-                </p>
-              )}
-              {availabilityView?.kind === 'empty_window' && (
-                <p className="text-muted-foreground mb-3 text-sm">
-                  No bookable time in this window right now.
-                </p>
-              )}
-              {/* Both gated on `resolvedView === 'week'` — Agenda has no shading concept at all,
-                  and these two are computed directly from the visible week (not from
-                  `availabilityView`, which already resets to `null` off Week), so nothing else
-                  hides them there (BAL-498 fix round 2, N4). */}
-              {resolvedView === 'week' && beyondHorizon && (
-                <p className="text-muted-foreground mb-3 text-sm">
-                  Availability shading covers the next {MAX_AVAILABILITY_WINDOW_DAYS} days. Later
-                  weeks show your bookings only.
-                </p>
-              )}
-              {resolvedView === 'week' && isPastWeek && (
-                <p className="text-muted-foreground mb-3 text-sm">
-                  This week is in the past, so availability shading isn&apos;t shown — only your
-                  bookings.
-                </p>
-              )}
-              {/* R4 — the FOURTH state. Loading previously rendered nothing at all, so the grid
-                  painted unshaded with no indication and the wash popped in later; the four-states
-                  rule applies to this sub-surface too. */}
-              {availabilityView?.kind === 'loading' && (
-                <p className="text-muted-foreground mb-3 text-sm">Loading your available hours…</p>
-              )}
-              {availabilityView?.kind === 'ready' && (
-                <p className="text-muted-foreground mb-3 text-sm">
-                  Shaded time is what clients can still book — your booked meetings sit on top.
-                </p>
-              )}
-              {availabilityView?.kind === 'error' && (
-                <p
-                  role="alert"
-                  className="text-destructive mb-3 flex flex-wrap items-center gap-2 text-sm"
-                >
-                  <span>
-                    We couldn&apos;t load your availability shading. Your calendar itself is
-                    unaffected.
-                  </span>
-                  <AvailabilityRetryButton onRetry={handleAvailabilityReload} />
-                </p>
-              )}
+              <ShadingNotes
+                hasConnectedCalendar={view.hasConnectedCalendar}
+                availabilityView={availabilityView}
+                paused={paused}
+                isWeekView={resolvedView === 'week'}
+                beyondHorizon={beyondHorizon}
+                isPastWeek={isPastWeek}
+                onReload={handleAvailabilityReload}
+                onBannerConnectClick={handleBannerConnectClick}
+                onSetAvailabilityClick={handleSetAvailabilityClick}
+              />
 
               {bodyContent}
             </div>
           )}
         </>
       )}
+    </div>
+  );
+}
+
+interface ShadingNotesProps {
+  readonly hasConnectedCalendar: boolean;
+  readonly availabilityView: AvailabilityView | null;
+  readonly paused: boolean;
+  readonly isWeekView: boolean;
+  readonly beyondHorizon: boolean;
+  readonly isPastWeek: boolean;
+  readonly onReload: () => void;
+  readonly onBannerConnectClick: () => void;
+  readonly onSetAvailabilityClick: () => void;
+}
+
+/**
+ * The inline notes above the grid: calendar-connection warning, one note per shading state, and
+ * the beyond-horizon / past-week disclosures. Pure rendering of the shell's lifted state.
+ */
+function ShadingNotes({
+  hasConnectedCalendar,
+  availabilityView,
+  paused,
+  isWeekView,
+  beyondHorizon,
+  isPastWeek,
+  onReload,
+  onBannerConnectClick,
+  onSetAvailabilityClick,
+}: Readonly<ShadingNotesProps>): React.JSX.Element {
+  return (
+    <>
+      {/* ⚠ `text-warning`, NOT `text-warning-foreground` (C2). In `globals.css`'s `.dark`
+          block `--warning-foreground` is byte-identical to `--background`, so over this
+          10% tint the text painted background-coloured — invisible. `-foreground` is only
+          legible over SOLID `bg-warning`; all eight repo precedents for the tint use
+          `text-warning` with a `border-warning/30` edge.
+          ⚠ COPY IS NEUTRAL (A5): `hasConnectedCalendar` is one boolean
+          (`checklist.items.calendar`) that cannot tell "never connected" from
+          "credential revoked", so it must not assert either — "Reconnect your calendar"
+          was addressed at an expert who may never have connected one, while the
+          full-page state on the SAME signal correctly says "Connect". */}
+      {!hasConnectedCalendar && (
+        <p className="text-warning border-warning/30 bg-warning/10 mb-3 rounded-md border px-3 py-2 text-sm">
+          Balo isn&apos;t connected to your calendar right now.{' '}
+          <Link
+            href={CONNECT_CALENDAR_HREF}
+            className="font-medium underline"
+            onClick={onBannerConnectClick}
+          >
+            Set up your calendar connection
+          </Link>{' '}
+          to keep availability shading accurate. Your existing bookings are unaffected.
+        </p>
+      )}
+      {availabilityView?.kind === 'not_published' && (
+        <p className="text-muted-foreground mb-3 text-sm">
+          Availability shading appears once your profile is live.
+        </p>
+      )}
+      {availabilityView?.kind === 'not_configured' && (
+        <p className="text-muted-foreground mb-3 text-sm">
+          <Link href={SET_AVAILABILITY_HREF} className="underline" onClick={onSetAvailabilityClick}>
+            Set your availability
+          </Link>{' '}
+          to see shading here.
+        </p>
+      )}
+      {hasConnectedCalendar && availabilityView?.kind === 'unavailable' && (
+        <p className="text-warning border-warning/30 bg-warning/10 mb-3 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm">
+          <span>
+            Your calendar connection needs attention — availability shown may be out of date.
+          </span>
+          <AvailabilityRetryButton onRetry={onReload} />
+        </p>
+      )}
+      {availabilityView?.kind === 'empty_window' && (
+        <p className="text-muted-foreground mb-3 text-sm">
+          No bookable time in this window right now.
+        </p>
+      )}
+      {/* Both gated on `isWeekView` — Agenda has no shading concept at all,
+          and these two are computed directly from the visible week (not from
+          `availabilityView`, which already resets to `null` off Week), so nothing else
+          hides them there (BAL-498 fix round 2, N4). */}
+      {isWeekView && beyondHorizon && (
+        <p className="text-muted-foreground mb-3 text-sm">
+          Availability shading covers the next {MAX_AVAILABILITY_WINDOW_DAYS} days. Later weeks show
+          your bookings only.
+        </p>
+      )}
+      {isWeekView && isPastWeek && (
+        <p className="text-muted-foreground mb-3 text-sm">
+          This week is in the past, so availability shading isn&apos;t shown — only your bookings.
+        </p>
+      )}
+      {/* R4 — the FOURTH state. Loading previously rendered nothing at all, so the grid
+          painted unshaded with no indication and the wash popped in later; the four-states
+          rule applies to this sub-surface too. */}
+      {availabilityView?.kind === 'loading' && (
+        <p className="text-muted-foreground mb-3 text-sm">Loading your available hours…</p>
+      )}
+      {availabilityView?.kind === 'ready' && (
+        <p className="text-muted-foreground mb-3 text-sm">
+          {paused
+            ? "Hatched time is your open hours. Nothing is bookable while you're paused — your booked meetings sit on top."
+            : 'Shaded time is what clients can still book — your booked meetings sit on top.'}
+        </p>
+      )}
+      {availabilityView?.kind === 'error' && (
+        <p role="alert" className="text-destructive mb-3 flex flex-wrap items-center gap-2 text-sm">
+          <span>
+            We couldn&apos;t load your availability shading. Your calendar itself is unaffected.
+          </span>
+          <AvailabilityRetryButton onRetry={onReload} />
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * BAL-591 — shown while the expert has paused new work. Existing meetings stay on the calendar
+ * and joinable; the way back to turning availability on is the Schedule tab.
+ */
+function PausedBanner(): React.JSX.Element {
+  return (
+    <div
+      role="status"
+      className="bg-paused-hatch border-paused-border mb-4 flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3"
+    >
+      <div className="bg-paused-border/60 text-foreground/70 flex size-[30px] shrink-0 items-center justify-center rounded-lg">
+        <Pause className="size-[15px]" aria-hidden="true" />
+      </div>
+      <p className="text-foreground min-w-[220px] flex-1 text-[13.5px] leading-normal">
+        <strong className="font-semibold">You&apos;re paused.</strong> No new consultations will be
+        booked. Meetings you already have stay on your calendar.
+      </p>
+      <Button asChild variant="outline" className="min-h-11 sm:min-h-9">
+        <Link href={EDIT_AVAILABILITY_HREF}>Go to Schedule</Link>
+      </Button>
     </div>
   );
 }

@@ -65,6 +65,8 @@ export interface ExpertSearchResult {
   rate: number | null;
   /** earliest_available_at ISO 8601; null when gate OFF + no cache */
   nextAvailableAt: string | null;
+  /** expert_profiles.available_for_work: false while the expert has paused new work. */
+  availableForWork: boolean;
   /** expert_languages join (name, flagEmoji) */
   languages: ExpertSearchLanguage[];
   /** { name, logoUrl } or null */

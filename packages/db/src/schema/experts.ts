@@ -93,7 +93,7 @@ export const expertProfiles = pgTable(
     // ⚠ WHY `decided_at` AND NOT JUST `approved_at`. `approved_at` is the pre-existing
     // "when without who" defect ADR-1030 was written to fix, and it cannot express a DECLINE at
     // all. It is KEPT and still written on the approve arm — `findPublicProfileByUsername`,
-    // `isPubliclyVisible`, `platform-lookup.ts` and `deriveExpertChecklist` all read it, and
+    // `findPublicVisibility`, `platform-lookup.ts` and `deriveExpertChecklist` all read it, and
     // BAL-549 does not touch searchability (out of scope). `decided_at` is the decision-grain
     // timestamp for BOTH arms; on an approve the two are written with the SAME `Date` instance.
     //

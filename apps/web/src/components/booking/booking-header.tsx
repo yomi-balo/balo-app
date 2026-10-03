@@ -95,7 +95,7 @@ export function BookingHeader({
                 aria-hidden="true"
               />
               <span className="text-muted-foreground text-xs font-medium">
-                {expert.availableForWork ? 'Available now' : 'Booking anyway'}
+                {expert.availableForWork ? 'Available now' : 'Not taking on new work'}
               </span>
             </span>
           </div>

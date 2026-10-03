@@ -32,6 +32,8 @@ interface ScheduleTimezoneLineProps {
   timezone: string;
   onChange: (tz: string) => void;
   disabled?: boolean;
+  /** Id of the note explaining why the change control is inert. */
+  pausedNoteId?: string;
 }
 
 /** "Hours are set in {zone} — currently {Ddd h:mm AM}" with a "Change timezone" link. */
@@ -39,6 +41,7 @@ export function ScheduleTimezoneLine({
   timezone,
   onChange,
   disabled,
+  pausedNoteId,
 }: Readonly<ScheduleTimezoneLineProps>): React.JSX.Element {
   const now = useMinuteClock();
   const clock = now ? formatWallClock(timezone, now) : '';
@@ -58,7 +61,12 @@ export function ScheduleTimezoneLine({
           </>
         )}
       </p>
-      <ScheduleTimezoneCombobox value={timezone} onChange={onChange} disabled={disabled} />
+      <ScheduleTimezoneCombobox
+        value={timezone}
+        onChange={onChange}
+        disabled={disabled}
+        pausedNoteId={pausedNoteId}
+      />
     </div>
   );
 }

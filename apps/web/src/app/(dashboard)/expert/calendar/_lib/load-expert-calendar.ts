@@ -143,6 +143,8 @@ export const loadExpertCalendar = cache(async function loadExpertCalendar(
     timezone: resolvedTimezone,
     meetings: meetingViews,
     hasConnectedCalendar: checklist.items.calendar,
+    // From the same session-scoped snapshot the checklist already read — no second query.
+    availableForWork: checklist.availableForWork,
   };
 });
 
