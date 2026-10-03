@@ -363,9 +363,9 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
 
   /**
    * PUT /api/experts/:expertProfileId/work-availability
-   * Pause or resume new work. The flag flip and its audit row commit together; only an
-   * actual change drops the Redis slot cache and enqueues the DB cache rebuild, so a repeated
-   * write is a no-op end to end.
+   * Pause or resume new work. The flag flip and its audit row commit together; every
+   * successful write, changed or not, drops the Redis slot cache and enqueues the DB cache
+   * rebuild (both idempotent), so a retry after a post-commit failure still heals the caches.
    */
   fastify.put(
     '/api/experts/:expertProfileId/work-availability',
@@ -394,10 +394,8 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
           actorUserId: actorUserId ?? null,
         });
 
-        if (changed) {
-          await invalidateExpertSlots(expertProfileId);
-          await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
-        }
+        await invalidateExpertSlots(expertProfileId);
+        await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true, availableForWork, changed });
       } catch (err: unknown) {

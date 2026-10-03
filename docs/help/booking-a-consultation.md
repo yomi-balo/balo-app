@@ -24,7 +24,8 @@ right now" instead of open times, and you can't start a new case with them. You 
 - **Send them a message**, which still reaches them.
 
 If you already have an open case with that expert, you can still book follow-up consultations on
-it.
+it. Book it from that case's page, using **Book with {name} again** or **Book a consultation**,
+which opens the next open time on the case.
 
 ## Questions?
 

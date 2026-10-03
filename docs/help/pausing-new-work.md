@@ -28,7 +28,7 @@ Your profile stays visible and clients can still message you. While you're pause
 - **Upcoming consultations and active projects.** Everything already booked or underway goes
   ahead exactly as planned, and you can join, reschedule and deliver as usual.
 - **Open cases.** Clients you're already working with can book follow-up consultations on a case
-  that's still open.
+  that's still open, booked from that case's page.
 - **Requests already sent to you.** Intro and discovery calls on a project request you've already
   received can still be booked.
 - **Messages.** Clients can still send you a message.

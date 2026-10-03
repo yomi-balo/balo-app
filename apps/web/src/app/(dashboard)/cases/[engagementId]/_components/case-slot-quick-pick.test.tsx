@@ -16,6 +16,7 @@ const { mockDialogProps, mockRefresh } = vi.hoisted(() => ({
   mockDialogProps: vi.fn(),
   mockRefresh: vi.fn(),
 }));
+vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn() } }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: mockRefresh }) }));
 vi.mock('@/components/booking', () => ({
   BookingFlowDialog: (props: BookingFlowDialogProps) => {
@@ -228,5 +229,91 @@ describe('CaseSlotQuickPick — refreshing the case surface after booking', () =
     await waitFor(() =>
       expect(screen.queryByTestId('booking-dialog-stub')).not.toBeInTheDocument()
     );
+  });
+});
+
+describe('CaseSlotQuickPick — an external follow-up request', () => {
+  const SLOT_BODY = okAvailabilityBody({
+    slots: [
+      { start: '2026-06-05T09:00:00.000Z', end: '2026-06-05T10:00:00.000Z', maxDuration: 60 },
+    ],
+  });
+
+  it('opens the existing_work dialog on the first slot once availability settles', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />);
+
+    await waitFor(() => {
+      const props = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps | undefined;
+      expect(props?.scope).toBe('existing_work');
+      expect(props?.entry).toMatchObject({
+        mode: 'fixed_case',
+        presetSlot: { startIso: '2026-06-05T09:00:00.000Z', durationMinutes: 60 },
+      });
+    });
+  });
+
+  it('opens nothing without a request', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} />);
+    await screen.findAllByRole('button');
+    expect(mockDialogProps).not.toHaveBeenCalled();
+  });
+
+  it('says so when the read succeeded but there is no open time to offer', async () => {
+    const { toast } = await import('sonner');
+    fetchMock.mockResolvedValue(jsonResponse(200, okAvailabilityBody({ slots: [] })));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />);
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith('Amara has no open times right now.')
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(mockDialogProps).not.toHaveBeenCalled();
+  });
+
+  it('a failed read is an error toast with a retry, never "no open times"', async () => {
+    const { toast } = await import('sonner');
+    vi.mocked(toast.info).mockClear();
+    vi.mocked(toast.error).mockClear();
+    fetchMock.mockResolvedValue(jsonResponse(503, {}));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.info).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load Amara's times. Try again.",
+      expect.objectContaining({ action: expect.objectContaining({ label: 'Try again' }) })
+    );
+    expect(mockDialogProps).not.toHaveBeenCalled();
+  });
+
+  it('the retry re-reads availability and opens the dialog once slots arrive', async () => {
+    const { toast } = await import('sonner');
+    vi.mocked(toast.error).mockClear();
+    fetchMock.mockResolvedValueOnce(jsonResponse(503, {}));
+    fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    const options = vi.mocked(toast.error).mock.calls[0]?.[1] as unknown as {
+      action: { onClick: () => void };
+    };
+    options.action.onClick();
+    await waitFor(() => {
+      const props = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps | undefined;
+      expect(props?.entry).toMatchObject({
+        presetSlot: { startIso: '2026-06-05T09:00:00.000Z' },
+      });
+    });
+  });
+
+  it.each([
+    ['book_again', 'book_again'],
+    ['case_nudge', 'case_nudge'],
+  ] as const)('attributes a %s request to the dialog source %s', async (source, expected) => {
+    fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source }} />);
+    await waitFor(() => {
+      const props = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps | undefined;
+      expect(props?.source).toBe(expected);
+    });
   });
 });

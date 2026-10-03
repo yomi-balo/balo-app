@@ -38,6 +38,7 @@ const PARTY: CasePartyView = {
   avatarUrl: null,
   initials: 'AO',
   bookAgainHref: '/experts/amara-okafor',
+  availableForWork: true,
   ratingAverage: 4.3,
   ratingCount: 2,
 };
@@ -270,5 +271,46 @@ describe('CasePartyCard — the earnings block is passed, never derived', () => 
       },
     });
     expect(container.textContent ?? '').toContain('A$');
+  });
+});
+
+describe('CasePartyCard — the open-case follow-up for a paused expert (BAL-591)', () => {
+  it('books in-page and tracks the click instead of linking to the profile', async () => {
+    const user = userEvent.setup();
+    const onBookFollowUp = vi.fn();
+    const followUpRequest = { seq: 3, source: 'book_again' } as const;
+    renderCard({ onBookFollowUp, followUpRequest });
+
+    expect(screen.queryByRole('link', { name: BOOK_AGAIN })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: BOOK_AGAIN }));
+
+    expect(onBookFollowUp).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASE_ACTION_CLICKED, {
+      action: 'book_another',
+      lens: 'client',
+    });
+    expect(mockQuickPickProps).toHaveBeenCalledWith(
+      expect.objectContaining({ openRequest: followUpRequest })
+    );
+  });
+
+  it('still offers the in-page CTA when the expert has no username (it never uses the href)', async () => {
+    const user = userEvent.setup();
+    const onBookFollowUp = vi.fn();
+    renderCard({
+      party: { ...PARTY, bookAgainHref: null },
+      onBookFollowUp,
+    });
+    await user.click(screen.getByRole('button', { name: BOOK_AGAIN }));
+    expect(onBookFollowUp).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the profile link when no in-page handler is given (closed case or available expert)', () => {
+    renderCard();
+    expect(screen.getByRole('link', { name: BOOK_AGAIN })).toHaveAttribute(
+      'href',
+      '/experts/amara-okafor?book=1&src=book_again'
+    );
+    expect(screen.queryByRole('button', { name: BOOK_AGAIN })).not.toBeInTheDocument();
   });
 });

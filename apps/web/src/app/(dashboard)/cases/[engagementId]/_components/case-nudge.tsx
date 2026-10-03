@@ -60,6 +60,10 @@ interface CaseNudgeProps {
   counterpartyLabel: string;
   /** `/experts/{username}`, or `null` ⇒ the booking CTA does not render. */
   bookAgainHref: string | null;
+  /** BAL-591 — set for an open case with a paused expert: the CTA books in-page (existing work)
+   *  instead of linking to a profile that would refuse a new booking. Independent of
+   *  `bookAgainHref`, which only the link path needs. */
+  onBookFollowUp?: () => void;
   onMarkResolved: () => void;
   onDismissAsk: () => void;
   /** Server-resolved — the same value as the row-hosted `canReschedule` for this meeting, so
@@ -82,6 +86,7 @@ export function CaseNudge({
   lens,
   counterpartyLabel,
   bookAgainHref,
+  onBookFollowUp,
   onMarkResolved,
   onDismissAsk,
   canReschedule,
@@ -179,13 +184,30 @@ export function CaseNudge({
         // ⚠ ONLY A LIVE DESTINATION RENDERS. `expert_profiles.username` is NULLABLE, so a null
         // href means NO button rather than a link to `/experts/null`. And only a CLIENT can
         // book, so the expert lens never has one.
-        lens === 'client' && bookAgainHref !== null ? (
-          <Button asChild size="sm">
-            <a href={bookAgainHref}>Book a consultation</a>
-          </Button>
-        ) : undefined
+        renderBookConsultationCta(lens, bookAgainHref, onBookFollowUp)
       }
     />
+  );
+}
+
+function renderBookConsultationCta(
+  lens: 'client' | 'expert',
+  bookAgainHref: string | null,
+  onBookFollowUp: (() => void) | undefined
+): React.JSX.Element | undefined {
+  if (lens !== 'client') return undefined;
+  if (onBookFollowUp !== undefined) {
+    return (
+      <Button type="button" size="sm" onClick={onBookFollowUp}>
+        Book a consultation
+      </Button>
+    );
+  }
+  if (bookAgainHref === null) return undefined;
+  return (
+    <Button asChild size="sm">
+      <a href={bookAgainHref}>Book a consultation</a>
+    </Button>
   );
 }
 

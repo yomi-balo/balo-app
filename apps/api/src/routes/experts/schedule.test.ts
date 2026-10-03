@@ -644,15 +644,15 @@ describe('experts schedule API routes', () => {
       );
     });
 
-    it('an unchanged write neither drops the cache nor enqueues', async () => {
+    it('an unchanged write still drops the slot cache and enqueues the rebuild', async () => {
       mockSetAvailableForWork.mockResolvedValue({ changed: false });
 
       const res = await put({ availableForWork: false });
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ success: true, availableForWork: false, changed: false });
-      expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
-      expect(mockQueueAdd).not.toHaveBeenCalled();
+      expect(mockInvalidateExpertSlots).toHaveBeenCalledWith(EXPERT_UUID);
+      expectRebuildEnqueued();
     });
 
     it('returns 500 with a fixed message when the write throws', async () => {

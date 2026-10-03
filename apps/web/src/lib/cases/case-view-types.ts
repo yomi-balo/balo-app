@@ -201,6 +201,12 @@ export interface CasePartyView {
    */
   bookAgainHref: string | null;
   /**
+   * The counterparty expert's "Available for new work" switch (BAL-591). `false` only on the
+   * client lens for a paused expert; the expert lens hardcodes `true`. Decides whether the
+   * open-case follow-up CTAs book in-page instead of linking to the profile.
+   */
+  availableForWork: boolean;
+  /**
    * The counterparty expert's average rating (BAL-422), or `null`.
    *
    * ⚠⚠ CLIENT LENS ONLY, AND THAT IS AN INVARIANT, NOT A DEFAULT. On the expert lens the

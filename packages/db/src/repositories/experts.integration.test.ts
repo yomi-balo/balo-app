@@ -992,6 +992,21 @@ describe('expertsRepository.findNewWorkEligibility', () => {
     });
   });
 
+  it('owner_not_live, not not_searchable, for a suspended owner whose profile is not searchable', async () => {
+    const user = await userFactory();
+    const expert = await searchExpertFactory({
+      userId: user.id,
+      username: uniq('suspended-unsearchable'),
+      searchable: false,
+    });
+    await db.update(users).set({ status: 'suspended' }).where(eq(users.id, user.id));
+
+    expect(await expertsRepository.findNewWorkEligibility(expert.id)).toEqual({
+      eligible: false,
+      reason: 'owner_not_live',
+    });
+  });
+
   it('not_approved for a draft, even when searchable', async () => {
     const draft = await expertDraftFactory();
     await setSearchableDirectly(draft.id, true);

@@ -11,7 +11,7 @@ import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
 import type { BookingFlowExpert } from '@/components/booking';
 import { CaseEarningsBlock } from './case-earnings-block';
-import { CaseSlotQuickPick } from './case-slot-quick-pick';
+import { CaseSlotQuickPick, type FollowUpRequest } from './case-slot-quick-pick';
 
 /**
  * BAL-421 — the rail's counterparty card. ONE component for both lenses, because the two
@@ -53,6 +53,14 @@ interface CasePartyCardProps {
    * carries no email, by design) — it originates in the page's `getCurrentUser()` read.
    */
   viewerEmailDomain: string | null;
+  /**
+   * BAL-591 — set only when the case is OPEN and the expert has paused new work. The profile
+   * suppresses booking for a paused expert, so the CTA asks the case's own quick-pick dialog
+   * (`scope="existing_work"`) to open instead of linking out.
+   */
+  onBookFollowUp?: () => void;
+  /** Raised by `onBookFollowUp`'s owner; forwarded to `CaseSlotQuickPick`. */
+  followUpRequest?: FollowUpRequest;
 }
 
 export function CasePartyCard({
@@ -67,16 +75,26 @@ export function CasePartyCard({
   consultationCount,
   openedAtIso,
   viewerEmailDomain,
+  onBookFollowUp,
+  followUpRequest,
 }: Readonly<CasePartyCardProps>): React.JSX.Element {
   const onBookAnother = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'book_another', lens });
   }, [lens]);
 
+  const handleBookFollowUp = useCallback(() => {
+    onBookAnother();
+    onBookFollowUp?.();
+  }, [onBookAnother, onBookFollowUp]);
+
   const avatarSrc = getAvatarUrl(party.avatarUrl, 'thumbnail');
 
   // BAL-400 — the quick-pick's `BookingFlowExpert`, built from the party view's already-loaded
-  // fields. `verified`/`availableForWork` have no equivalent on `CasePartyView` (this card
-  // never showed either), so they default rather than triggering a second read.
+  // fields. `verified` has no equivalent on `CasePartyView`, so it defaults rather than
+  // triggering a second read. `availableForWork` is `true` DELIBERATELY even though
+  // `CasePartyView` now carries it: the strip reads `existing_work` availability, where a pause
+  // does not apply, so wiring the real value here would wrongly suppress follow-ups on a paused
+  // expert's open case.
   const quickPickExpert: BookingFlowExpert = {
     expertProfileId,
     name: party.name,
@@ -116,17 +134,27 @@ export function CasePartyCard({
       {/*
         ⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `bookAgainHref` is
         `/experts/{username}` and `expert_profiles.username` is NULLABLE, so a null username
-        means NO button rather than a link to `/experts/null`. The expert lens never has one:
-        only a client can book.
+        means NO link rather than one to `/experts/null`. The in-page path (`onBookFollowUp`)
+        never uses the href, so it renders regardless. The expert lens never has either: only a
+        client can book.
       */}
-      {party.bookAgainHref !== null && (
+      {(onBookFollowUp !== undefined || party.bookAgainHref !== null) && (
         <div className="mt-4">
-          <Button asChild className="min-h-11 w-full gap-2">
-            <Link href={`${party.bookAgainHref}?book=1&src=book_again`} onClick={onBookAnother}>
+          {onBookFollowUp !== undefined ? (
+            <Button type="button" className="min-h-11 w-full gap-2" onClick={handleBookFollowUp}>
               <Video className="h-4 w-4" aria-hidden="true" />
               Book with {counterpartyFirstName} again
-            </Link>
-          </Button>
+            </Button>
+          ) : (
+            party.bookAgainHref !== null && (
+              <Button asChild className="min-h-11 w-full gap-2">
+                <Link href={`${party.bookAgainHref}?book=1&src=book_again`} onClick={onBookAnother}>
+                  <Video className="h-4 w-4" aria-hidden="true" />
+                  Book with {counterpartyFirstName} again
+                </Link>
+              </Button>
+            )
+          )}
           {!isOpen && (
             <p className="text-muted-foreground mt-2 text-center text-xs leading-relaxed">
               Starts a new case — this one stays as it is.
@@ -146,6 +174,7 @@ export function CasePartyCard({
           expertProfileId={expertProfileId}
           expert={quickPickExpert}
           viewerEmailDomain={viewerEmailDomain}
+          openRequest={followUpRequest}
         />
       )}
 

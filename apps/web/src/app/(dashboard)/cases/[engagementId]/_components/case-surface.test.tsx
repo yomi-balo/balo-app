@@ -81,6 +81,16 @@ vi.mock('@/components/booking/reschedule-dialog', () => ({
     ) : null,
 }));
 
+// BAL-591 — the quick-pick strip fetches availability on its own; stubbed to expose the
+// `openRequest` counter the surface bumps for an in-page follow-up booking.
+vi.mock('./case-slot-quick-pick', () => ({
+  CaseSlotQuickPick: (props: Readonly<{ openRequest?: { seq: number; source: string } }>) => (
+    <div data-testid="quick-pick-stub">
+      request: {String(props.openRequest?.seq)} source: {props.openRequest?.source}
+    </div>
+  ),
+}));
+
 // BAL-411 — a minimal stand-in for `ProposeTimesDialog`, the SAME reason `RescheduleDialog` is
 // stubbed: the real component calls `useIsMobile` (→ `window.matchMedia`, unavailable in jsdom)
 // and fetches availability — out of scope for a composition test.
@@ -288,6 +298,7 @@ const BASE = {
     avatarUrl: null,
     initials: 'AO',
     bookAgainHref: '/experts/amara-okafor',
+    availableForWork: true,
     ratingAverage: 4.3,
     ratingCount: 2,
   },
@@ -1577,5 +1588,48 @@ describe('CaseSurface — the People card disclosure is lens-accurate (BAL-573)'
     expect(screen.getByText(PEOPLE_CARD_NARROW_DISCLOSURE)).toBeInTheDocument();
     expect(screen.queryByText(/past consultations/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/whole case/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('CaseSurface — follow-ups for a paused expert (BAL-591)', () => {
+  const PAUSED_PARTY = { ...BASE.party, availableForWork: false };
+
+  it('OPEN + paused: both CTAs book in-page by asking the quick-pick, never linking out', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface view={clientView({ party: PAUSED_PARTY, nudge: { kind: 'nothing_booked' } })} />
+    );
+    expect(screen.queryByRole('link', { name: 'Book with Amara again' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Book a consultation' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 0');
+
+    await user.click(screen.getByRole('button', { name: 'Book with Amara again' }));
+    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent(
+      'request: 1 source: book_again'
+    );
+    await user.click(screen.getByRole('button', { name: 'Book a consultation' }));
+    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent(
+      'request: 2 source: case_nudge'
+    );
+  });
+
+  it('CLOSED + paused keeps the profile links (a new case lands on the paused card)', () => {
+    render(
+      <CaseSurface
+        view={clientView({
+          party: PAUSED_PARTY,
+          nudge: { kind: 'nothing_booked' },
+          header: { ...BASE.header, isOpen: false },
+        })}
+      />
+    );
+    expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Book a consultation' })).toBeInTheDocument();
+  });
+
+  it('OPEN + available keeps the profile links', () => {
+    render(<CaseSurface view={clientView({ nudge: { kind: 'nothing_booked' } })} />);
+    expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Book a consultation' })).toBeInTheDocument();
   });
 });

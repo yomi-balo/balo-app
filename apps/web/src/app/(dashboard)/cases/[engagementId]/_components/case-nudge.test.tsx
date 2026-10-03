@@ -1257,3 +1257,49 @@ describe('CaseNudge — R6-C7: the live client body', () => {
     );
   });
 });
+
+describe('CaseNudge — the nothing-booked CTA for a paused expert on an open case (BAL-591)', () => {
+  it('books in-page through the handler instead of linking to the profile', async () => {
+    const user = userEvent.setup();
+    const onBookFollowUp = vi.fn();
+    render(
+      <CaseNudge
+        {...BASE}
+        onBookFollowUp={onBookFollowUp}
+        nudge={{ kind: 'nothing_booked' }}
+        lens="client"
+      />
+    );
+    expect(screen.queryByRole('link', { name: 'Book a consultation' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Book a consultation' }));
+    expect(onBookFollowUp).toHaveBeenCalledTimes(1);
+  });
+
+  it('still offers the in-page CTA with a null bookAgainHref (the href is link-path only)', async () => {
+    const user = userEvent.setup();
+    const onBookFollowUp = vi.fn();
+    render(
+      <CaseNudge
+        {...BASE}
+        bookAgainHref={null}
+        onBookFollowUp={onBookFollowUp}
+        nudge={{ kind: 'nothing_booked' }}
+        lens="client"
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Book a consultation' }));
+    expect(onBookFollowUp).toHaveBeenCalledTimes(1);
+  });
+
+  it('never offers the in-page CTA on the expert lens', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        onBookFollowUp={vi.fn()}
+        nudge={{ kind: 'nothing_booked' }}
+        lens="expert"
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Book a consultation' })).not.toBeInTheDocument();
+  });
+});

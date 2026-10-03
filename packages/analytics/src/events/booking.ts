@@ -83,6 +83,8 @@ export type BookingSource =
   | 'search'
   | 'case_quick_pick'
   | 'book_again'
+  /** The case surface's nudge "Book a consultation" CTA, booking in-page for a paused expert. */
+  | 'case_nudge'
   | 'home_spotlight';
 
 /** Whether the confirm step renders the case chooser or a FIXED case (D4a #3). */

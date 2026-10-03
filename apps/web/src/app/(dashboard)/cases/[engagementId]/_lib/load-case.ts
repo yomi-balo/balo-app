@@ -477,13 +477,17 @@ async function resolveCounterparty(
   profile: Awaited<ReturnType<typeof expertsRepository.findDisplayProfileById>>,
   clientCompanyName: string
 ): Promise<CounterpartyLabels> {
-  const [expertUser, agency] = await Promise.all([
+  const [expertUser, agency, resolverSettings] = await Promise.all([
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
     profile?.agencyId == null
       ? Promise.resolve(undefined)
       : agenciesRepository.getSummaryById(profile.agencyId),
+    // CLIENT LENS ONLY: the expert's own pause switch is never read for the expert lens.
+    lens === 'client' && profile !== undefined
+      ? expertsRepository.findResolverSettings(profile.id)
+      : Promise.resolve(null),
   ]);
 
   const firstName = expertUser?.firstName ?? null;
@@ -521,6 +525,8 @@ async function resolveCounterparty(
         avatarUrl: expertUser?.avatarUrl ?? null,
         initials: initialsOf(expertPerson),
         bookAgainHref: username === null ? null : '/experts/' + username,
+        // An unreadable profile reads as available, so the CTA keeps today's profile link.
+        availableForWork: resolverSettings?.availableForWork ?? true,
         // BAL-422 — already parsed to a number by `findDisplayProfileById`.
         ratingAverage: profile?.ratingAverage ?? null,
         ratingCount: profile?.ratingCount ?? 0,
@@ -547,6 +553,7 @@ async function resolveCounterparty(
       // ⚠ NO expert-side CTA. "Book another" is the CLIENT's action (only a client can book),
       // and every other expert-side forward action the design considered has no destination.
       bookAgainHref: null,
+      availableForWork: true,
       // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). The counterparty here is the
       // client COMPANY; the expert does not score the client, and companies carry no rating
       // aggregate in the first place. Hardcoded, not derived — do not "wire" these.
