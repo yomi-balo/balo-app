@@ -120,6 +120,22 @@ describe('checkExpertBookingEligibility (real Postgres)', () => {
     expect(first).toEqual({ ok: false, reason: 'owner_not_live' });
   });
 
+  it('refuses a suspended expert who is also not searchable on a non-case context', async () => {
+    const { expertProfileId, userId } = await seedExpert();
+    await db
+      .update(expertProfiles)
+      .set({ searchable: false })
+      .where(eq(expertProfiles.id, expertProfileId));
+    await db.update(users).set({ status: 'suspended' }).where(eq(users.id, userId));
+
+    expect(
+      await checkExpertBookingEligibility({
+        contextType: 'project_discovery',
+        expertProfileId,
+      })
+    ).toEqual({ ok: false, reason: 'owner_not_live' });
+  });
+
   it('refuses an unknown expert profile as not_found on all five contexts', async () => {
     const verdicts = await verdictsFor(randomUUID());
 

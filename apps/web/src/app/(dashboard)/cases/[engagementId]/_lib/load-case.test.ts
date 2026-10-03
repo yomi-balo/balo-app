@@ -54,6 +54,7 @@ const m = {
   listActionItems: vi.fn(),
   findCompany: vi.fn(),
   findProfile: vi.fn(),
+  findResolverSettings: vi.fn(),
   listMessagesPage: vi.fn(),
   listConversationFiles: vi.fn(),
   sumEarnings: vi.fn(),
@@ -84,7 +85,10 @@ vi.mock('@balo/db', () => ({
   creditSessionsRepository: {
     sumExpertEarningsForEngagement: (...a: unknown[]) => m.sumEarnings(...a),
   },
-  expertsRepository: { findDisplayProfileById: (...a: unknown[]) => m.findProfile(...a) },
+  expertsRepository: {
+    findDisplayProfileById: (...a: unknown[]) => m.findProfile(...a),
+    findResolverSettings: (...a: unknown[]) => m.findResolverSettings(...a),
+  },
   meetingContextsRepository: { listMeetingsForContext: (...a: unknown[]) => m.listMeetings(...a) },
   meetingFilesRepository: { listByMeeting: (...a: unknown[]) => m.listMeetingFiles(...a) },
   meetingGuestsRepository: {
@@ -229,6 +233,7 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.listActionItems.mockResolvedValue([]);
   m.findCompany.mockResolvedValue({ id: COMPANY_ID, name: 'Northwind Industrial' });
   m.findProfile.mockResolvedValue(FAT_PROFILE);
+  m.findResolverSettings.mockResolvedValue({ availableForWork: true });
   m.listMessagesPage.mockResolvedValue({ messages: [], hasEarlier: false });
   m.listConversationFiles.mockResolvedValue([]);
   m.sumEarnings.mockResolvedValue({
@@ -591,12 +596,26 @@ describe('loadCase — the counterparty, per lens', () => {
       avatarUrl: null,
       initials: 'AO',
       bookAgainHref: '/experts/amara',
+      availableForWork: true,
       // ⚠ BAL-422 — the client lens carries the delivering expert's REAL aggregate. Note
       // this is a `toEqual`, so it ALSO pins that `rateCents` (on FAT_PROFILE) never
       // reaches the party view: the exhaustive shape is the concealment assertion.
       ratingAverage: 4.3,
       ratingCount: 2,
     });
+  });
+
+  it('CLIENT lens carries the expert pause switch; the expert lens never reads it', async () => {
+    m.findResolverSettings.mockResolvedValue({ availableForWork: false });
+    const client = await loadOrThrow();
+    expect(client.party.availableForWork).toBe(false);
+
+    m.findResolverSettings.mockClear();
+    seed({ access: { lens: 'expert' } });
+    m.findResolverSettings.mockResolvedValue({ availableForWork: false });
+    const expert = await loadOrThrow();
+    expect(expert.party.availableForWork).toBe(true);
+    expect(m.findResolverSettings).not.toHaveBeenCalled();
   });
 
   /** ⚠ NULL MEANS NO REVIEWS — never coalesced to 0, which would fabricate a bad score. */
@@ -673,6 +692,7 @@ describe('loadCase — the counterparty, per lens', () => {
       avatarUrl: null,
       initials: 'NI',
       bookAgainHref: null,
+      availableForWork: true,
       // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). FAT_PROFILE carries 4.3/2 and
       // NEITHER value survives this branch — the expert is not scoring the client, and the
       // delivering expert's own rating must not ride along onto the company card either.

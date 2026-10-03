@@ -132,6 +132,7 @@ const BASE = {
     avatarUrl: null,
     initials: 'AO',
     bookAgainHref: null,
+    availableForWork: true,
     ratingAverage: null,
     ratingCount: 0,
   },

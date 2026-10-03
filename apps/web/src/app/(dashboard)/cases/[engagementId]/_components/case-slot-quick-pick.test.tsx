@@ -16,6 +16,7 @@ const { mockDialogProps, mockRefresh } = vi.hoisted(() => ({
   mockDialogProps: vi.fn(),
   mockRefresh: vi.fn(),
 }));
+vi.mock('sonner', () => ({ toast: { info: vi.fn() } }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: mockRefresh }) }));
 vi.mock('@/components/booking', () => ({
   BookingFlowDialog: (props: BookingFlowDialogProps) => {
@@ -228,5 +229,44 @@ describe('CaseSlotQuickPick — refreshing the case surface after booking', () =
     await waitFor(() =>
       expect(screen.queryByTestId('booking-dialog-stub')).not.toBeInTheDocument()
     );
+  });
+});
+
+describe('CaseSlotQuickPick — an external follow-up request', () => {
+  const SLOT_BODY = okAvailabilityBody({
+    slots: [
+      { start: '2026-06-05T09:00:00.000Z', end: '2026-06-05T10:00:00.000Z', maxDuration: 60 },
+    ],
+  });
+
+  it('opens the existing_work dialog on the first slot once availability settles', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={1} />);
+
+    await waitFor(() => {
+      const props = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps | undefined;
+      expect(props?.scope).toBe('existing_work');
+      expect(props?.entry).toMatchObject({
+        mode: 'fixed_case',
+        presetSlot: { startIso: '2026-06-05T09:00:00.000Z', durationMinutes: 60 },
+      });
+    });
+  });
+
+  it('opens nothing without a request', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} />);
+    await screen.findAllByRole('button');
+    expect(mockDialogProps).not.toHaveBeenCalled();
+  });
+
+  it('says so when there is no open time to offer', async () => {
+    const { toast } = await import('sonner');
+    fetchMock.mockResolvedValue(jsonResponse(503, {}));
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={1} />);
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith('Amara has no open times right now.')
+    );
+    expect(mockDialogProps).not.toHaveBeenCalled();
   });
 });

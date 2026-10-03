@@ -129,6 +129,15 @@ export function CaseSurface({
   const [selection, setSelection] = useState<ConsultationActionSelection | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  // BAL-591 — an OPEN case with a paused expert books its follow-up in-page (the profile refuses
+  // new work), by asking the party card's quick-pick to open its `existing_work` dialog.
+  const [followUpRequest, setFollowUpRequest] = useState(0);
+  const handleBookFollowUp = useCallback(() => {
+    setFollowUpRequest((n) => n + 1);
+  }, []);
+  const bookFollowUpInPage =
+    view.lens === 'client' && view.header.isOpen && !view.party.availableForWork;
+
   // Keyed by `meetingId#slot` so a closed dialog can restore focus to the control that opened
   // it — the row's own `DropdownMenu` has already unmounted by then, so Radix's own
   // focus-return has nothing to fire into, and a row can now have TWO triggers (the kebab and
@@ -361,6 +370,7 @@ export function CaseSurface({
               lens={view.lens}
               counterpartyLabel={counterpartyFirstName}
               bookAgainHref={view.party.bookAgainHref}
+              onBookFollowUp={bookFollowUpInPage ? handleBookFollowUp : undefined}
               onMarkResolved={handleMarkResolved}
               onDismissAsk={handleDismissAsk}
               canReschedule={nudgeRow?.canReschedule ?? false}
@@ -524,6 +534,8 @@ export function CaseSurface({
                 consultationCount={view.header.consultationCount}
                 openedAtIso={view.header.openedAtIso}
                 viewerEmailDomain={viewerEmailDomain}
+                onBookFollowUp={bookFollowUpInPage ? handleBookFollowUp : undefined}
+                followUpRequest={followUpRequest}
               />
             </Reveal>
             <Reveal delay={0.2}>

@@ -157,6 +157,7 @@ const BASE = {
     avatarUrl: null,
     initials: 'AO',
     bookAgainHref: '/experts/amara',
+    availableForWork: true,
     ratingAverage: 4.3,
     ratingCount: 2,
   },

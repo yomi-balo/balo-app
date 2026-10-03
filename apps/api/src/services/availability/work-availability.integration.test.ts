@@ -265,7 +265,7 @@ describe('PUT /api/experts/:id/work-availability (real DB)', () => {
     expect(mockQueueAdd).toHaveBeenCalledTimes(1);
   });
 
-  it('repeating the same write is a no-op: no second audit row, no cache drop, no enqueue', async () => {
+  it('repeating the same write writes no second audit row but still drops the cache and enqueues', async () => {
     const { expertProfileId } = await seedBookableExpert();
     await put(expertProfileId, { availableForWork: false });
     vi.clearAllMocks();
@@ -274,8 +274,10 @@ describe('PUT /api/experts/:id/work-availability (real DB)', () => {
 
     expect(res.json()).toEqual({ success: true, availableForWork: false, changed: false });
     expect(await auditRows(expertProfileId)).toHaveLength(1);
-    expect(mockRedisDel).not.toHaveBeenCalled();
-    expect(mockQueueAdd).not.toHaveBeenCalled();
+    // A retry after a post-commit failure lands here with `changed:false`; the cache refresh
+    // must still run or `availability_cache` keeps the pre-toggle earliest time.
+    expect(mockRedisDel).toHaveBeenCalled();
+    expect(mockQueueAdd).toHaveBeenCalledTimes(1);
   });
 
   it('returns 404 for an unknown profile and writes nothing', async () => {

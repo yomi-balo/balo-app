@@ -53,6 +53,14 @@ interface CasePartyCardProps {
    * carries no email, by design) — it originates in the page's `getCurrentUser()` read.
    */
   viewerEmailDomain: string | null;
+  /**
+   * BAL-591 — set only when the case is OPEN and the expert has paused new work. The profile
+   * suppresses booking for a paused expert, so the CTA asks the case's own quick-pick dialog
+   * (`scope="existing_work"`) to open instead of linking out.
+   */
+  onBookFollowUp?: () => void;
+  /** Bumped by `onBookFollowUp`'s owner; forwarded to `CaseSlotQuickPick`. */
+  followUpRequest?: number;
 }
 
 export function CasePartyCard({
@@ -67,10 +75,17 @@ export function CasePartyCard({
   consultationCount,
   openedAtIso,
   viewerEmailDomain,
+  onBookFollowUp,
+  followUpRequest,
 }: Readonly<CasePartyCardProps>): React.JSX.Element {
   const onBookAnother = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'book_another', lens });
   }, [lens]);
+
+  const handleBookFollowUp = useCallback(() => {
+    onBookAnother();
+    onBookFollowUp?.();
+  }, [onBookAnother, onBookFollowUp]);
 
   const avatarSrc = getAvatarUrl(party.avatarUrl, 'thumbnail');
 
@@ -121,12 +136,19 @@ export function CasePartyCard({
       */}
       {party.bookAgainHref !== null && (
         <div className="mt-4">
-          <Button asChild className="min-h-11 w-full gap-2">
-            <Link href={`${party.bookAgainHref}?book=1&src=book_again`} onClick={onBookAnother}>
+          {onBookFollowUp === undefined ? (
+            <Button asChild className="min-h-11 w-full gap-2">
+              <Link href={`${party.bookAgainHref}?book=1&src=book_again`} onClick={onBookAnother}>
+                <Video className="h-4 w-4" aria-hidden="true" />
+                Book with {counterpartyFirstName} again
+              </Link>
+            </Button>
+          ) : (
+            <Button type="button" className="min-h-11 w-full gap-2" onClick={handleBookFollowUp}>
               <Video className="h-4 w-4" aria-hidden="true" />
               Book with {counterpartyFirstName} again
-            </Link>
-          </Button>
+            </Button>
+          )}
           {!isOpen && (
             <p className="text-muted-foreground mt-2 text-center text-xs leading-relaxed">
               Starts a new case — this one stays as it is.
@@ -146,6 +168,7 @@ export function CasePartyCard({
           expertProfileId={expertProfileId}
           expert={quickPickExpert}
           viewerEmailDomain={viewerEmailDomain}
+          openRequest={followUpRequest}
         />
       )}
 

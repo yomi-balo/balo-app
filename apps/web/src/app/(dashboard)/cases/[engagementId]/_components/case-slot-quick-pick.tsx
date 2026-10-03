@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Video } from 'lucide-react';
+import { toast } from 'sonner';
 import { useExpertAvailability } from '@/components/availability/use-expert-availability';
 import { SLOT_DURATION_LADDER, type SlotDurationMinutes } from '@balo/shared/availability';
 import { BookingFlowDialog, type BookingFlowExpert, type PresetSlot } from '@/components/booking';
@@ -38,6 +39,12 @@ export interface CaseSlotQuickPickProps {
    * "same company as you" disclosure is honest from this entry point too. `null` when unknown.
    */
   viewerEmailDomain: string | null;
+  /**
+   * A counter the case surface bumps when a follow-up CTA elsewhere on the page (the party
+   * card's "Book again", the nudge's "Book a consultation") asks this strip to open the booking
+   * dialog on the next available slot. `0` means nothing has been requested.
+   */
+  openRequest?: number;
 }
 
 /**
@@ -64,6 +71,7 @@ export function CaseSlotQuickPick({
   expertProfileId,
   expert,
   viewerEmailDomain,
+  openRequest = 0,
 }: Readonly<CaseSlotQuickPickProps>): React.JSX.Element | null {
   const { view, reload } = useExpertAvailability(
     expertProfileId,
@@ -89,17 +97,40 @@ export function CaseSlotQuickPick({
     reload();
   }, [router, reload]);
 
+  const pills =
+    view.kind === 'ready'
+      ? view.slots
+          .map((slot) => {
+            const duration = bestDurationFor(slot.maxDuration);
+            return duration === null ? null : { start: slot.start, duration };
+          })
+          .filter((s): s is { start: string; duration: SlotDurationMinutes } => s !== null)
+          .slice(0, QUICK_PICK_COUNT)
+      : [];
+
+  // Answers an external "book a follow-up" request once, on the first slot, as soon as the
+  // availability read settles. No slot to offer is said out loud rather than swallowed.
+  const handledRequestRef = useRef(0);
+  const [firstPill] = pills;
+  useEffect(() => {
+    if (openRequest === 0 || handledRequestRef.current === openRequest) return;
+    if (view.kind === 'loading') return;
+    handledRequestRef.current = openRequest;
+    if (firstPill === undefined) {
+      toast.info(`${expert.firstName ?? 'This expert'} has no open times right now.`);
+      return;
+    }
+    const start = new Date(firstPill.start);
+    setPresetSlot({
+      startIso: start.toISOString(),
+      endIso: new Date(start.getTime() + firstPill.duration * 60_000).toISOString(),
+      durationMinutes: firstPill.duration,
+    });
+  }, [openRequest, view.kind, firstPill, expert.firstName]);
+
   if (view.kind !== 'ready') {
     return null;
   }
-
-  const pills = view.slots
-    .map((slot) => {
-      const duration = bestDurationFor(slot.maxDuration);
-      return duration === null ? null : { start: slot.start, duration };
-    })
-    .filter((s): s is { start: string; duration: SlotDurationMinutes } => s !== null)
-    .slice(0, QUICK_PICK_COUNT);
 
   if (pills.length === 0) {
     return null;
