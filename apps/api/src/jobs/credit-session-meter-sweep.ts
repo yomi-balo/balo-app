@@ -570,12 +570,12 @@ async function handleSessionlessAttemptFailure(
     if (pastRetryWindow) {
       await exhaustSessionlessCaseMeeting({ meetingId, reason: 'error', trigger: 'backstop' });
     }
-  } catch (followUp) {
+  } catch (followUpError) {
     logger.error(
       {
         meetingId,
-        error: errorMessage(followUp),
-        stack: followUp instanceof Error ? followUp.stack : undefined,
+        error: errorMessage(followUpError),
+        stack: followUpError instanceof Error ? followUpError.stack : undefined,
       },
       'Sessionless-meeting backstop could not record its failure — the next tick retries'
     );

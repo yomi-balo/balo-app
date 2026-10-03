@@ -1873,15 +1873,29 @@ describe('creditSessionsRepository.hasUnsettledOverdraftForWallet', () => {
     );
   });
 
-  it('is true for an ENDED session whose settlement is still `processing` with a real overdraft', async () => {
+  it.each([
+    [
+      'is true for an ENDED session whose settlement is still `processing` with a real overdraft',
+      'processing' as const,
+      1000,
+      true,
+    ],
+    ['is false for an ENDED session that has SETTLED', 'settled' as const, 1000, false],
+    [
+      '⚠ is false for a `processing` settlement with NO overdraft — the amount conjunct, not just the status',
+      'processing' as const,
+      0,
+      false,
+    ],
+  ])('%s', async (_label, settlementStatus, overdraftSettledMinor, expected) => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx);
     await db
       .update(creditSessions)
-      .set({ status: 'ended', settlementStatus: 'processing', overdraftSettledMinor: 1000 })
+      .set({ status: 'ended', settlementStatus, overdraftSettledMinor })
       .where(eq(creditSessions.id, id));
     expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
-      true
+      expected
     );
   });
 
@@ -1898,21 +1912,10 @@ describe('creditSessionsRepository.hasUnsettledOverdraftForWallet', () => {
     );
   });
 
-  it('is false for an ENDED session that has SETTLED', async () => {
-    const ctx = await setup({ balanceMinor: 50_000 });
-    const id = await openOk(ctx);
-    await db
-      .update(creditSessions)
-      .set({ status: 'ended', settlementStatus: 'settled', overdraftSettledMinor: 1000 })
-      .where(eq(creditSessions.id, id));
-    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
-      false
-    );
-  });
-
   // ⚠ FIX ROUND 1 (F8) — arm (b)'s status list was unpinned beyond `failed`: narrowing it to
   // `['processing']` failed exactly one test, and removing ONLY `requires_action` failed none.
-  // The `overdraft_settled_minor > 0` conjunct was likewise unpinned. These two close both holes.
+  // The `overdraft_settled_minor > 0` conjunct was likewise unpinned. This test closes the status
+  // hole; the NO-overdraft `processing` row of the table above closes the amount one.
   it('⚠ is true for an ENDED session whose settlement is `requires_action` — an SCA challenge the client can still complete', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx);
@@ -1923,18 +1926,6 @@ describe('creditSessionsRepository.hasUnsettledOverdraftForWallet', () => {
     expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
     expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
       true
-    );
-  });
-
-  it('⚠ is false for a `processing` settlement with NO overdraft — the amount conjunct, not just the status', async () => {
-    const ctx = await setup({ balanceMinor: 50_000 });
-    const id = await openOk(ctx);
-    await db
-      .update(creditSessions)
-      .set({ status: 'ended', settlementStatus: 'processing', overdraftSettledMinor: 0 })
-      .where(eq(creditSessions.id, id));
-    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
-      false
     );
   });
 
