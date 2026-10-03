@@ -74,6 +74,7 @@ function clientView(
       bookAgainHref: '/experts/amara',
       ratingAverage: 4.3,
       ratingCount: 2,
+      availableForWork: true,
     },
     people: [{ name: 'Dana Reyes', isViewer: true }],
     counterpartyPartyLabel: 'CloudPeak Consulting',
