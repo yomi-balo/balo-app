@@ -27,6 +27,8 @@ import react from 'eslint-plugin-react';
  *   unicorn/prefer-global-this           — S7764, prefer `globalThis` over `window`
  *   unicorn/no-negated-condition         — S7735, "Unexpected negated condition" (else branch)
  *   unicorn/no-typeof-undefined          — S7741, compare with `undefined` directly (not `typeof`)
+ *   unicorn/catch-error-name             — S7718, name the catch parameter `error` (or `…Error`)
+ *   unicorn/prefer-set-has               — S7776, a membership-only array should be a `Set`
  *
  * All rules are syntactic, so no TypeScript type information
  * (parserOptions.project) is required — the bare parser is enough to parse TS/TSX.
@@ -70,6 +72,8 @@ export default [
       'unicorn/prefer-global-this': 'error',
       'unicorn/no-negated-condition': 'error',
       'unicorn/no-typeof-undefined': 'error',
+      'unicorn/catch-error-name': 'error',
+      'unicorn/prefer-set-has': 'error',
     },
   },
   {

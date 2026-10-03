@@ -146,7 +146,7 @@ function assertIdempotentMatch(existing: CreditLedgerEntry, input: ApplyLedgerEn
  * `creditLedgerRepository.postEntry`, which self-wraps in `db.transaction`.
  *
  * Algorithm (single txn):
- *  1. Advisory lock the wallet — serialize all concurrent same-wallet writes.
+ *  1. Advisory lock the wallet — serialize concurrent same-wallet writes across transactions.
  *  2. Idempotency no-op check — an existing key with a MATCHING payload returns
  *     `{ deduped: true }` WITHOUT inserting or touching the balance (the advisory lock
  *     serializes duplicates). An existing key with a DIFFERENT payload throws
@@ -164,6 +164,13 @@ function assertIdempotentMatch(existing: CreditLedgerEntry, input: ApplyLedgerEn
  *
  * A throw anywhere in 1–6 rolls back the ledger insert, balance update, AND audit row
  * together.
+ *
+ * ⚠ SEQUENTIAL WITHIN ONE TRANSACTION. The advisory lock is re-entrant for the transaction that
+ * holds it, so it does not serialize calls sharing one `tx`. Two such calls in flight at once
+ * (e.g. under `Promise.all`) both read the wallet in step 3 before either updates it in step 5:
+ * every ledger row is inserted, but the balance cache moves by only one of them. A caller that
+ * posts several entries in one transaction (the tick loops in `credit-sessions.ts`) must await
+ * each call before making the next.
  */
 export async function applyLedgerEntry(
   tx: DbTx,

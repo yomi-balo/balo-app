@@ -657,12 +657,12 @@ export interface SettleFromPresenceRepoResult {
  * still `pending` when its meeting terminates. Declared here, once, so the widening reads as
  * a decision rather than as a missing guard.
  */
-const SETTLE_FROM_PRESENCE_FROM: readonly CreditSessionStatus[] = [
+const SETTLE_FROM_PRESENCE_FROM: ReadonlySet<CreditSessionStatus> = new Set<CreditSessionStatus>([
   'pending',
   'active',
   'grace',
   'wrapped',
-];
+]);
 
 // ── BAL-474 (ADR-1040 Amendment 7 §C/§D) — the sessionless Case meeting IO ───────────────────
 
@@ -1745,7 +1745,7 @@ async function settleFromPresenceInTx(
       outcomeWritten: false,
     };
   }
-  if (!SETTLE_FROM_PRESENCE_FROM.includes(session.status)) {
+  if (!SETTLE_FROM_PRESENCE_FROM.has(session.status)) {
     throw new InvalidSessionTransitionError(session.status, 'ended');
   }
 

@@ -124,6 +124,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The TypeScript analyzer needs node_modules: without it the tsconfig `extends` chains and
+      # dependency types (e.g. Drizzle's Promise-returning query builders) don't resolve, and the
+      # type-aware rules report false positives such as S7503 on async methods that return a promise.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
       - name: Download unit coverage
         uses: actions/download-artifact@v4
         with:
