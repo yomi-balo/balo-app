@@ -66,6 +66,16 @@ export const AVAILABILITY_LEAD_GUARD_MINUTES = 3;
 
 export type AvailabilityStatus = 'ok' | 'not_configured' | 'no_slots' | 'unavailable';
 
+/**
+ * Which kind of work a slot grid is being read for. `new_work` (the default, and the fail-safe)
+ * feeds the pickers that open a NEW consultation; an expert who has paused new work answers it
+ * with `ExpertAvailabilityPausedResponse` and no slots. `existing_work` feeds the pickers that
+ * serve work already in flight (follow-ups on an open case, intro calls on a submitted request,
+ * reschedules, the calendar shading) and keeps serving the real grid while paused.
+ */
+export const AVAILABILITY_SCOPES = ['new_work', 'existing_work'] as const;
+export type AvailabilityScope = (typeof AVAILABILITY_SCOPES)[number];
+
 export interface AvailabilitySlotDto {
   /** UTC ISO-8601. */
   start: string;
@@ -93,6 +103,17 @@ export interface ExpertAvailabilityResponse {
    */
   days: number;
   slots: AvailabilitySlotDto[];
+}
+
+/**
+ * A `new_work` read of an expert who has paused new work. No slots, no expert timezone and no
+ * generation time: nothing was computed. `days` echoes the accepted look-ahead, as on the
+ * served grid.
+ */
+export interface ExpertAvailabilityPausedResponse {
+  expertProfileId: string;
+  status: 'paused';
+  days: number;
 }
 
 export interface ExpertAvailabilityUnavailableResponse {

@@ -48,6 +48,8 @@ interface AvailabilityMessageProps {
   title: string;
   body?: string;
   tone?: AvailabilityMessageTone;
+  /** Renders the shared paused hatch behind the message (an expert who paused new work). */
+  paused?: boolean;
   action?: ReactNode;
   actionLabel?: string;
   onAction?: () => void;
@@ -74,12 +76,17 @@ export function AvailabilityMessage({
   title,
   body,
   tone = 'muted',
+  paused = false,
   action,
   actionLabel,
   onAction,
 }: Readonly<AvailabilityMessageProps>): React.JSX.Element {
   return (
-    <div className="flex min-h-[280px] flex-col items-center justify-center px-6 py-8 text-center">
+    <div
+      className={`flex min-h-[280px] flex-col items-center justify-center px-6 py-8 text-center ${
+        paused ? 'bg-paused-hatch border-paused-border rounded-xl border' : ''
+      }`}
+    >
       <div
         className={`mb-3.5 flex h-11 w-11 items-center justify-center rounded-full ${TONE_BG_CLASS[tone]}`}
       >

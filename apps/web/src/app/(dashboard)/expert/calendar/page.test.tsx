@@ -62,6 +62,7 @@ function view(overrides: Partial<CalendarPageView> = {}): CalendarPageView {
     timezone: 'Australia/Sydney',
     meetings: [],
     hasConnectedCalendar: true,
+    availableForWork: true,
     ...overrides,
   };
 }

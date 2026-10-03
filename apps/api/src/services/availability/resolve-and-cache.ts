@@ -83,6 +83,14 @@ export async function resolveAndCacheAvailability(
       earliestAvailableAt: null,
     };
   }
+
+  // A paused expert advertises nothing: clear the search cache row without reading the vendor.
+  if (!settings.availableForWork) {
+    await calendarRepository.upsertAvailabilityCache(expertProfileId, null);
+    log.info({ expertProfileId }, 'Availability cache cleared — expert paused');
+    return { status: 'completed', earliestAvailableAt: null };
+  }
+
   const timezone = settings.timezone;
 
   // Precedence: explicit option > valid `RESOLVER_HORIZON_DAYS` env > default.
@@ -167,12 +175,20 @@ export async function resolveAndCacheAvailability(
     minimumNoticeMinutes: settings.minimumNoticeMinutes,
   });
 
-  await calendarRepository.upsertAvailabilityCache(expertProfileId, result.earliestAvailableAt);
+  // A pause can land while this rebuild is running (the per-expert job id dedups the enqueue
+  // it triggers), so the flag is re-read at the write: a stale compute must not re-advertise
+  // a slot for an expert who has just paused.
+  const latest = await expertsRepository.findResolverSettings(expertProfileId);
+  const pausedMidRebuild = latest !== null && !latest.availableForWork;
+  const earliestAvailableAt = pausedMidRebuild ? null : result.earliestAvailableAt;
+
+  await calendarRepository.upsertAvailabilityCache(expertProfileId, earliestAvailableAt);
 
   log.info(
     {
       expertProfileId,
-      earliestAvailableAt: result.earliestAvailableAt?.toISOString() ?? null,
+      earliestAvailableAt: earliestAvailableAt?.toISOString() ?? null,
+      pausedMidRebuild,
       ruleCount: rules.length,
       consultationCount: baloConsultations.length,
       busyBlockCount: busyBlocks.length,
@@ -181,7 +197,7 @@ export async function resolveAndCacheAvailability(
     'Availability cache rebuilt'
   );
 
-  return { status: 'completed', earliestAvailableAt: result.earliestAvailableAt };
+  return { status: 'completed', earliestAvailableAt };
 }
 
 function guardedNumber(n: unknown, fallback: number): number {

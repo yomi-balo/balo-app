@@ -9,7 +9,8 @@ import type { DbExecutor } from './db-executor';
 export type ScheduleAuditAction =
   | 'expert_schedule.updated'
   | 'expert_schedule.cleared'
-  | 'expert_timezone.changed';
+  | 'expert_timezone.changed'
+  | 'expert_work_availability.changed';
 
 /**
  * Record ONE schedule/timezone audit event inside the caller's transaction (pass

@@ -1,9 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
   agencies,
+  auditEvents,
+  availabilityOverrides,
+  availabilityRules,
   certifications,
   consultations,
   expertCertifications,
@@ -25,6 +28,8 @@ import {
   meetingFactory,
   searchExpertFactory,
   agencyFactory,
+  engagementFactory,
+  caseEngagementFactory,
 } from '../test/factories';
 import {
   EXPECTED_CONSULTATION_COUNT,
@@ -35,6 +40,9 @@ import { expertsRepository, isUniqueViolation } from './experts';
 import { referenceDataRepository } from './reference-data';
 import { reviewsRepository } from './reviews';
 import { usersRepository } from './users';
+import { auditEventsRepository } from './audit-events';
+import { availabilityRulesRepository } from './availability-rules';
+import { availabilityOverridesRepository } from './availability-overrides';
 
 // Unique-suffix helper so inline taxonomy rows never collide across tests
 // (slugs / language codes have unique indexes; transaction rollback resets
@@ -276,6 +284,7 @@ describe('expertsRepository.findResolverSettings', () => {
       bufferBeforeMinutes: 5,
       bufferAfterMinutes: 30,
       minimumNoticeMinutes: 1440,
+      availableForWork: true,
     });
   });
 
@@ -290,7 +299,21 @@ describe('expertsRepository.findResolverSettings', () => {
       bufferBeforeMinutes: 0,
       bufferAfterMinutes: 0,
       minimumNoticeMinutes: 0,
+      availableForWork: true,
     });
+  });
+
+  it('reports availableForWork=false for an expert who has paused new work', async () => {
+    const draft = await expertDraftFactory();
+    await expertsRepository.setAvailableForWork({
+      expertProfileId: draft.id,
+      availableForWork: false,
+      actorUserId: draft.userId,
+    });
+
+    const settings = await expertsRepository.findResolverSettings(draft.id);
+
+    expect(settings?.availableForWork).toBe(false);
   });
 
   it('returns null for an unknown profile id', async () => {
@@ -584,8 +607,8 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
    *
    * `searchable` and `approved_at` are PROFILE columns and `expert_profiles` has no
    * `deleted_at`, so soft-deleting the owning USER left this read fully passing: the profile
-   * stayed approved + searchable and kept resolving by username. `isPubliclyVisible` has
-   * always filtered the joined user row; this read did not. It was unreachable in practice —
+   * stayed approved + searchable and kept resolving by username. The slot route's visibility
+   * read always filtered the joined user row; this read did not. It was unreachable in practice —
    * until BAL-493 pointed the public front page's curated spotlight at exactly this method.
    *
    * The first assertion is the one that matters: it establishes the profile IS otherwise
@@ -611,14 +634,57 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     await expect(expertsRepository.findPublicProfileByUsername(username)).resolves.toBeUndefined();
   });
 
-  it('agrees with isPubliclyVisible on the soft-deleted-user case (one visibility rule, not two)', async () => {
+  it('agrees with findPublicVisibility on the soft-deleted-user case (one visibility rule, not two)', async () => {
     const username = uniq('soft-delete-parity');
     const expert = await searchExpertFactory({ username, searchable: true });
 
     await usersRepository.softDelete(expert.userId);
 
-    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(false);
+    expect(await expertsRepository.findPublicVisibility(expert.id)).toBeNull();
     await expect(expertsRepository.findPublicProfileByUsername(username)).resolves.toBeUndefined();
+  });
+
+  // BAL-591 Part B — a suspended or inactive owner is not live (`userRowIsLive`), so the
+  // profile 404s and drops off the front page's spotlight, which reads through this method.
+  it.each(['suspended', 'inactive'] as const)(
+    'returns undefined when the owning user is %s, and findPublicVisibility agrees',
+    async (status) => {
+      const username = uniq(`owner-${status}`);
+      const expert = await searchExpertFactory({ username, searchable: true });
+      await expect(expertsRepository.findPublicProfileByUsername(username)).resolves.toBeDefined();
+
+      await db.update(users).set({ status }).where(eq(users.id, expert.userId));
+
+      await expect(
+        expertsRepository.findPublicProfileByUsername(username)
+      ).resolves.toBeUndefined();
+      expect(await expertsRepository.findPublicVisibility(expert.id)).toBeNull();
+    }
+  );
+
+  it('stays visible while the expert has paused new work, reporting availableForWork=false', async () => {
+    const username = uniq('paused-visible');
+    const expert = await searchExpertFactory({ username, searchable: true });
+    await expertsRepository.setAvailableForWork({
+      expertProfileId: expert.id,
+      availableForWork: false,
+      actorUserId: expert.userId,
+    });
+
+    const result = await expertsRepository.findPublicProfileByUsername(username);
+
+    expect(result?.id).toBe(expert.id);
+    expect(result?.availableForWork).toBe(false);
+  });
+
+  it("eager-loads the expert's vertical name and slug", async () => {
+    const username = uniq('with-vertical');
+    await searchExpertFactory({ username, searchable: true });
+    const salesforce = await referenceDataRepository.getSalesforceVertical();
+
+    const result = await expertsRepository.findPublicProfileByUsername(username);
+
+    expect(result?.vertical).toEqual({ name: salesforce.name, slug: salesforce.slug });
   });
 
   it('eager-loads every relation and orders work history by sortOrder', async () => {
@@ -815,27 +881,42 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
   });
 });
 
-// ── isPubliclyVisible (BAL-236) ───────────────────────────────────────
+// ── findPublicVisibility (BAL-236 / BAL-591) ─────────────────────────────
 
-describe('expertsRepository.isPubliclyVisible', () => {
-  it('true for approved + searchable', async () => {
+describe('expertsRepository.findPublicVisibility', () => {
+  it('visible and available for approved + searchable with a live owner', async () => {
     const expert = await searchExpertFactory({ username: uniq('visible'), searchable: true });
 
-    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(true);
+    expect(await expertsRepository.findPublicVisibility(expert.id)).toEqual({
+      availableForWork: true,
+    });
   });
 
-  it('false when searchable is false', async () => {
+  it('stays visible while paused, reporting availableForWork=false', async () => {
+    const expert = await searchExpertFactory({ username: uniq('paused'), searchable: true });
+    await expertsRepository.setAvailableForWork({
+      expertProfileId: expert.id,
+      availableForWork: false,
+      actorUserId: expert.userId,
+    });
+
+    expect(await expertsRepository.findPublicVisibility(expert.id)).toEqual({
+      availableForWork: false,
+    });
+  });
+
+  it('null when searchable is false', async () => {
     // expertFactory approves but leaves searchable at its default (false).
     const expert = await expertFactory();
 
-    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(false);
+    expect(await expertsRepository.findPublicVisibility(expert.id)).toBeNull();
   });
 
-  it('false when approvedAt is null', async () => {
+  it('null when approvedAt is null', async () => {
     const draft = await expertDraftFactory();
     await setSearchableDirectly(draft.id, true);
 
-    expect(await expertsRepository.isPubliclyVisible(draft.id)).toBe(false);
+    expect(await expertsRepository.findPublicVisibility(draft.id)).toBeNull();
   });
 
   /**
@@ -843,41 +924,41 @@ describe('expertsRepository.isPubliclyVisible', () => {
    * `searchable` lives on the profile, so without this term a deleted person's live calendar
    * complement would keep being published by a public, unauthenticated endpoint.
    */
-  it('false once the owning user is soft-deleted, even with searchable still true', async () => {
+  it('null once the owning user is soft-deleted, even with searchable still true', async () => {
     const user = await userFactory();
     const expert = await searchExpertFactory({
       userId: user.id,
       username: uniq('visible-then-deleted'),
       searchable: true,
     });
-    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(true);
+    expect(await expertsRepository.findPublicVisibility(expert.id)).not.toBeNull();
 
     await usersRepository.softDelete(user.id);
 
-    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(false);
+    expect(await expertsRepository.findPublicVisibility(expert.id)).toBeNull();
   });
 
-  it('false for an unknown id', async () => {
-    expect(await expertsRepository.isPubliclyVisible('00000000-0000-4000-8000-000000000000')).toBe(
-      false
-    );
+  it('null for an unknown id', async () => {
+    expect(
+      await expertsRepository.findPublicVisibility('00000000-0000-4000-8000-000000000000')
+    ).toBeNull();
   });
 });
 
-// ── findDirectRequestEligibility (BAL-588) ───────────────────────────
+// ── findNewWorkEligibility (BAL-588 / BAL-591) ──────────────────────────
 
-describe('expertsRepository.findDirectRequestEligibility', () => {
+describe('expertsRepository.findNewWorkEligibility', () => {
   it('eligible for an approved, searchable, available expert with a live owner', async () => {
     const expert = await searchExpertFactory({ username: uniq('eligible'), searchable: true });
 
-    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+    expect(await expertsRepository.findNewWorkEligibility(expert.id)).toEqual({
       eligible: true,
     });
   });
 
   it('not_found for an unknown id', async () => {
     expect(
-      await expertsRepository.findDirectRequestEligibility('00000000-0000-4000-8000-000000000000')
+      await expertsRepository.findNewWorkEligibility('00000000-0000-4000-8000-000000000000')
     ).toEqual({ eligible: false, reason: 'not_found' });
   });
 
@@ -890,7 +971,7 @@ describe('expertsRepository.findDirectRequestEligibility', () => {
     });
     await usersRepository.softDelete(user.id);
 
-    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+    expect(await expertsRepository.findNewWorkEligibility(expert.id)).toEqual({
       eligible: false,
       reason: 'owner_not_live',
     });
@@ -905,7 +986,7 @@ describe('expertsRepository.findDirectRequestEligibility', () => {
     });
     await db.update(users).set({ status: 'suspended' }).where(eq(users.id, user.id));
 
-    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+    expect(await expertsRepository.findNewWorkEligibility(expert.id)).toEqual({
       eligible: false,
       reason: 'owner_not_live',
     });
@@ -915,7 +996,7 @@ describe('expertsRepository.findDirectRequestEligibility', () => {
     const draft = await expertDraftFactory();
     await setSearchableDirectly(draft.id, true);
 
-    expect(await expertsRepository.findDirectRequestEligibility(draft.id)).toEqual({
+    expect(await expertsRepository.findNewWorkEligibility(draft.id)).toEqual({
       eligible: false,
       reason: 'not_approved',
     });
@@ -924,7 +1005,7 @@ describe('expertsRepository.findDirectRequestEligibility', () => {
   it('not_searchable for an approved expert that is not searchable', async () => {
     const expert = await expertFactory();
 
-    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+    expect(await expertsRepository.findNewWorkEligibility(expert.id)).toEqual({
       eligible: false,
       reason: 'not_searchable',
     });
@@ -937,9 +1018,279 @@ describe('expertsRepository.findDirectRequestEligibility', () => {
       .set({ availableForWork: false })
       .where(eq(expertProfiles.id, expert.id));
 
-    expect(await expertsRepository.findDirectRequestEligibility(expert.id)).toEqual({
+    expect(await expertsRepository.findNewWorkEligibility(expert.id)).toEqual({
       eligible: false,
       reason: 'not_available',
+    });
+  });
+});
+
+// ── setAvailableForWork (BAL-591) ───────────────────────────────────
+
+const WORK_AVAILABILITY_ACTION = 'expert_work_availability.changed';
+
+async function workAvailabilityAuditRows(
+  expertProfileId: string
+): Promise<(typeof auditEvents.$inferSelect)[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, 'expert_profile'),
+        eq(auditEvents.entityId, expertProfileId),
+        eq(auditEvents.action, WORK_AVAILABILITY_ACTION)
+      )
+    );
+}
+
+async function availableForWorkOf(expertProfileId: string): Promise<boolean | undefined> {
+  const row = await db.query.expertProfiles.findFirst({
+    where: eq(expertProfiles.id, expertProfileId),
+    columns: { availableForWork: true },
+  });
+  return row?.availableForWork;
+}
+
+describe('expertsRepository.setAvailableForWork', () => {
+  it('pauses: flips the column and appends exactly one audit row with {from, to} and the actor', async () => {
+    const expert = await searchExpertFactory({ username: uniq('pause'), searchable: true });
+
+    const result = await expertsRepository.setAvailableForWork({
+      expertProfileId: expert.id,
+      availableForWork: false,
+      actorUserId: expert.userId,
+    });
+
+    expect(result).toEqual({ changed: true });
+    expect(await availableForWorkOf(expert.id)).toBe(false);
+    const rows = await workAvailabilityAuditRows(expert.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.metadata).toEqual({ from: true, to: false });
+    expect(rows[0]?.actorUserId).toBe(expert.userId);
+  });
+
+  it('a write to the value already held changes nothing and appends no audit row', async () => {
+    const expert = await searchExpertFactory({ username: uniq('noop'), searchable: true });
+
+    const result = await expertsRepository.setAvailableForWork({
+      expertProfileId: expert.id,
+      availableForWork: true,
+      actorUserId: expert.userId,
+    });
+
+    expect(result).toEqual({ changed: false });
+    expect(await availableForWorkOf(expert.id)).toBe(true);
+    expect(await workAvailabilityAuditRows(expert.id)).toHaveLength(0);
+  });
+
+  it('a repeated pause is idempotent: one audit row, not two', async () => {
+    const expert = await searchExpertFactory({ username: uniq('double'), searchable: true });
+    const input = { expertProfileId: expert.id, availableForWork: false, actorUserId: null };
+
+    await expect(expertsRepository.setAvailableForWork(input)).resolves.toEqual({ changed: true });
+    await expect(expertsRepository.setAvailableForWork(input)).resolves.toEqual({
+      changed: false,
+    });
+
+    expect(await workAvailabilityAuditRows(expert.id)).toHaveLength(1);
+  });
+
+  it('an unknown profile id changes nothing', async () => {
+    await expect(
+      expertsRepository.setAvailableForWork({
+        expertProfileId: randomUUID(),
+        availableForWork: false,
+        actorUserId: null,
+      })
+    ).resolves.toEqual({ changed: false });
+  });
+
+  it('pause then resume leaves weekly rules, date overrides and booking rules exactly as they were', async () => {
+    const expert = await searchExpertFactory({ username: uniq('roundtrip'), searchable: true });
+    await expertsRepository.updateProfile(expert.id, {
+      timezone: 'Australia/Sydney',
+      bookingBufferBeforeMinutes: 10,
+      bookingBufferAfterMinutes: 15,
+      bookingMinimumNoticeMinutes: 120,
+    });
+    await availabilityRulesRepository.replaceForExpert(expert.id, [
+      { dayOfWeek: 1, startTime: '09:00', endTime: '17:00' },
+      { dayOfWeek: 3, startTime: '10:00', endTime: '14:00' },
+    ]);
+    await availabilityOverridesRepository.create({
+      expertProfileId: expert.id,
+      startDate: '2099-01-10',
+      endDate: '2099-01-12',
+      label: 'Conference',
+    });
+
+    const snapshot = async (): Promise<unknown> => ({
+      settings: await expertsRepository.findResolverSettings(expert.id),
+      rules: await db
+        .select()
+        .from(availabilityRules)
+        .where(eq(availabilityRules.expertProfileId, expert.id)),
+      overrides: await db
+        .select()
+        .from(availabilityOverrides)
+        .where(eq(availabilityOverrides.expertProfileId, expert.id)),
+    });
+    const before = await snapshot();
+
+    await expertsRepository.setAvailableForWork({
+      expertProfileId: expert.id,
+      availableForWork: false,
+      actorUserId: expert.userId,
+    });
+    await expertsRepository.setAvailableForWork({
+      expertProfileId: expert.id,
+      availableForWork: true,
+      actorUserId: expert.userId,
+    });
+
+    expect(await snapshot()).toEqual(before);
+    const rows = await workAvailabilityAuditRows(expert.id);
+    expect(rows.map((r) => r.metadata)).toEqual(
+      expect.arrayContaining([
+        { from: true, to: false },
+        { from: false, to: true },
+      ])
+    );
+    expect(rows).toHaveLength(2);
+  });
+
+  it('joins a caller-supplied transaction: a rollback there undoes the flip and its audit row', async () => {
+    const expert = await searchExpertFactory({ username: uniq('caller-tx'), searchable: true });
+
+    await expect(
+      db.transaction(async (tx) => {
+        const result = await expertsRepository.setAvailableForWork(
+          { expertProfileId: expert.id, availableForWork: false, actorUserId: expert.userId },
+          tx
+        );
+        expect(result).toEqual({ changed: true });
+        throw new Error('caller rolls back');
+      })
+    ).rejects.toThrow('caller rolls back');
+
+    expect(await availableForWorkOf(expert.id)).toBe(true);
+    expect(await workAvailabilityAuditRows(expert.id)).toHaveLength(0);
+  });
+
+  it('rolls the column back when the audit insert fails (same transaction)', async () => {
+    const expert = await searchExpertFactory({ username: uniq('audit-fail'), searchable: true });
+    const spy = vi
+      .spyOn(auditEventsRepository, 'record')
+      .mockRejectedValueOnce(new Error('audit boom'));
+
+    await expect(
+      expertsRepository.setAvailableForWork({
+        expertProfileId: expert.id,
+        availableForWork: false,
+        actorUserId: expert.userId,
+      })
+    ).rejects.toThrow('audit boom');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+
+    expect(await availableForWorkOf(expert.id)).toBe(true);
+    expect(await workAvailabilityAuditRows(expert.id)).toHaveLength(0);
+  });
+
+  it('a paused expert is not eligible for new work (not_available)', async () => {
+    const expert = await searchExpertFactory({ username: uniq('paused-elig'), searchable: true });
+    await expertsRepository.setAvailableForWork({
+      expertProfileId: expert.id,
+      availableForWork: false,
+      actorUserId: expert.userId,
+    });
+
+    expect(await expertsRepository.findNewWorkEligibility(expert.id)).toEqual({
+      eligible: false,
+      reason: 'not_available',
+    });
+  });
+});
+
+// ── countWorkInFlight (BAL-591) ─────────────────────────────────────
+
+const HOUR_MS = 3_600_000;
+
+async function seedConsultation(
+  expertProfileId: string,
+  startAt: Date,
+  overrides: { status?: 'confirmed' | 'cancelled'; deletedAt?: Date | null } = {}
+): Promise<void> {
+  const endAt = new Date(startAt.getTime() + HOUR_MS);
+  const { meeting } = await meetingFactory({
+    contexts: [],
+    values: { scheduledStart: startAt, scheduledEnd: endAt },
+  });
+  await db.insert(consultations).values({
+    meetingId: meeting.id,
+    expertProfileId,
+    startAt,
+    endAt,
+    status: overrides.status ?? 'confirmed',
+    deletedAt: overrides.deletedAt ?? null,
+  });
+}
+
+describe('expertsRepository.countWorkInFlight', () => {
+  const NOW = new Date('2026-10-03T00:00:00.000Z');
+
+  it('counts only future, confirmed, live consultations and active, live projects of THIS expert', async () => {
+    const expert = await expertDraftFactory();
+    const other = await expertDraftFactory();
+
+    // Counted: two upcoming confirmed consultations (one starting exactly at `now`).
+    await seedConsultation(expert.id, NOW);
+    await seedConsultation(expert.id, new Date(NOW.getTime() + 48 * HOUR_MS));
+    // Not counted: past, cancelled, soft-deleted, another expert's.
+    await seedConsultation(expert.id, new Date(NOW.getTime() - 48 * HOUR_MS));
+    await seedConsultation(expert.id, new Date(NOW.getTime() + 24 * HOUR_MS), {
+      status: 'cancelled',
+    });
+    await seedConsultation(expert.id, new Date(NOW.getTime() + 72 * HOUR_MS), {
+      deletedAt: new Date(),
+    });
+    await seedConsultation(other.id, new Date(NOW.getTime() + 24 * HOUR_MS));
+
+    // Counted: one active project.
+    await engagementFactory({ expertProfileId: expert.id });
+    // Not counted: completed, cancelled, soft-deleted, a case, another expert's.
+    await engagementFactory({
+      expertProfileId: expert.id,
+      projectValues: { deliveryStatus: 'completed' },
+    });
+    await engagementFactory({
+      expertProfileId: expert.id,
+      projectValues: { deliveryStatus: 'cancelled' },
+    });
+    await engagementFactory({ expertProfileId: expert.id, values: { deletedAt: new Date() } });
+    await caseEngagementFactory({ expertProfileId: expert.id });
+    await engagementFactory({ expertProfileId: other.id });
+
+    expect(await expertsRepository.countWorkInFlight(expert.id, NOW)).toEqual({
+      upcomingConsultations: 2,
+      activeProjects: 1,
+    });
+  });
+
+  it('both zero when nothing is in flight', async () => {
+    const expert = await expertDraftFactory();
+
+    expect(await expertsRepository.countWorkInFlight(expert.id, NOW)).toEqual({
+      upcomingConsultations: 0,
+      activeProjects: 0,
+    });
+  });
+
+  it('both zero for an unknown profile id', async () => {
+    expect(await expertsRepository.countWorkInFlight(randomUUID(), NOW)).toEqual({
+      upcomingConsultations: 0,
+      activeProjects: 0,
     });
   });
 });

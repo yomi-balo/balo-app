@@ -67,6 +67,11 @@ export interface ExpertSearchResultDTO {
   rate: number | null;
   /** ISO 8601; `null` when gate OFF + no cache. */
   nextAvailableAt: string | null;
+  /**
+   * False when the expert has paused new work. A paused expert stays searchable (their profile
+   * and existing work carry on) but takes no new bookings, requests or invites.
+   */
+  availableForWork: boolean;
   languages: ExpertSearchLanguageDTO[];
   agency: ExpertSearchAgencyDTO | null;
   distinctions: ExpertSearchDistinctionsDTO;

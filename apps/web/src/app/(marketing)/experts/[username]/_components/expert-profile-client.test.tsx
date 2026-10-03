@@ -1,6 +1,6 @@
 import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, within } from '@/test/utils';
+import { render, screen, act, within, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
@@ -57,6 +57,7 @@ vi.mock('next/navigation', () => ({
 // job) — stub a rejection so it resolves to its (already-tested) error state instantly, never
 // a real network attempt.
 beforeEach(() => {
+  globalThis.localStorage.clear();
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('not mocked in this test file')));
 });
 afterEach(() => {
@@ -104,6 +105,7 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
     consultationCount: 124,
     certCount: 2,
     availableForWork: true,
+    vertical: { name: 'Salesforce', slug: 'salesforce' },
     baloVerified: true,
     topRated: false,
     // BAL-422 — the DEFAULT fixture is UNRATED, so every existing assertion in this file
@@ -170,6 +172,7 @@ function makeSparseView(): ExpertProfileView {
     consultationCount: 0,
     certCount: 0,
     availableForWork: false,
+    vertical: { name: 'Salesforce', slug: 'salesforce' },
     competencies: [],
     certifications: [],
     languages: [],
@@ -340,8 +343,79 @@ describe('ExpertProfileClient — sparse profile', () => {
       />
     );
     expect(screen.getByText('Rate on request')).toBeInTheDocument();
-    // "Currently unavailable" appears in the hero pill and the booking card.
-    expect(screen.getAllByText('Currently unavailable').length).toBeGreaterThan(0);
+    // The hero pill reads the same as the booking card's availability copy.
+    // Hero pill and booking card.
+    expect(screen.getAllByText('Not taking on new work right now')).toHaveLength(2);
+    expect(screen.queryByText('Currently unavailable')).not.toBeInTheDocument();
+  });
+
+  describe('paused expert (BAL-591)', () => {
+    function renderPaused(extra: Partial<React.ComponentProps<typeof ExpertProfileClient>> = {}) {
+      return render(
+        <ExpertProfileClient
+          view={makeView({ availableForWork: false })}
+          portraitUrl={null}
+          isLoggedIn
+          projectTaxonomies={EMPTY_TAXONOMIES}
+          {...bookingProps}
+          {...extra}
+        />
+      );
+    }
+
+    it('replaces the Book CTA with the paused alternatives, the search link scoped to the top expertise', () => {
+      renderPaused();
+      expect(
+        screen.queryByRole('button', { name: /book a consultation/i })
+      ).not.toBeInTheDocument();
+      const link = screen.getByRole('link', { name: /find a similar expert/i });
+      const href = link.getAttribute('href') ?? '';
+      expect(href.startsWith('/experts?')).toBe(true);
+      const params = new URLSearchParams(href.split('?')[1]);
+      expect(params.getAll('products')).toEqual(['s1']);
+      expect(params.get('timeframe')).toBe('week');
+      expect(params.get('sort')).toBe('soonest');
+    });
+
+    it('"Get matched for a project" opens the project panel and fires match_project', async () => {
+      const user = userEvent.setup();
+      renderPaused();
+      await user.click(screen.getByRole('button', { name: /get matched for a project/i }));
+
+      expect(
+        await screen.findByRole('heading', { name: /start a project with anil pilania/i })
+      ).toBeInTheDocument();
+      expect(mockTrack).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+        expert_id: 'expert-1',
+        cta: 'match_project',
+      });
+      // The panel opened on Match: its autosaved draft carries that routing.
+      await waitFor(() =>
+        expect(globalThis.localStorage.getItem('balo:project-draft:expert-1')).toContain(
+          '"routing":"match"'
+        )
+      );
+    });
+
+    it('"Get matched" opens the auth modal for a signed-out visitor', async () => {
+      const user = userEvent.setup();
+      renderPaused({ isLoggedIn: false, bookingContext: null });
+      await user.click(screen.getByRole('button', { name: /get matched for a project/i }));
+      expect(mockAuthModalOpen).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('ignores the ?book=1 deep link: no booking wrapper opens', () => {
+      renderPaused({ autoOpenBooking: true, autoOpenBookingSource: 'search' });
+      expect(screen.queryByText('Book a consultation with Anil Pilania')).not.toBeInTheDocument();
+    });
+
+    it('keeps messaging live', async () => {
+      const user = userEvent.setup();
+      renderPaused();
+      await user.click(screen.getByRole('button', { name: /send anil a message/i }));
+      expect(mockToast).toHaveBeenCalledWith('Coming soon', expect.anything());
+    });
   });
 
   // Axe runs on the sparse variant: it renders nearly the entire presentational
@@ -524,7 +598,8 @@ describe('ExpertProfileClient — CTA handlers', () => {
     if (startProject) await user.click(startProject);
     await user.click(await screen.findByRole('button', { name: /describe it yourself/i }));
 
-    expect(await screen.findByText(/isn't taking new projects right now/i)).toBeInTheDocument();
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/isn't taking on new work right now/i)).toBeInTheDocument();
   });
 
   /**

@@ -67,6 +67,7 @@ const STATUS: ChecklistStatus = {
   completedCount: 5,
   allComplete: false,
   rateCents: 313,
+  availableForWork: true,
   calendarNeedsReconnect: false,
 };
 

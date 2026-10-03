@@ -309,6 +309,7 @@ export function IntroCallBookingDialog({
                 expertFirstName={expertFirstName}
                 onSlotSelect={handleSlotSelect}
                 onMessage={onMessage}
+                scope="existing_work"
               />
             </motion.div>
           )}

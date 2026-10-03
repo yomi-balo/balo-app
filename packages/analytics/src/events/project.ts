@@ -390,9 +390,12 @@ export interface ProjectEventMap {
     entry_point: ProjectRequestEntryPoint;
     expert_id: string;
   };
+  // `profile_data`: the panel mounted already knowing the expert is unavailable.
+  // `submit_rejected`: a Direct submit was refused because the expert became unavailable.
   [PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN]: {
     expert_id: string;
     entry_point: ProjectRequestEntryPoint;
+    trigger: 'profile_data' | 'submit_rejected';
   };
 }
 

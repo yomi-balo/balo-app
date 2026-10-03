@@ -79,6 +79,7 @@ const settings = (overrides: Partial<Record<string, unknown>> = {}) => ({
   bufferBeforeMinutes: 15,
   bufferAfterMinutes: 30,
   minimumNoticeMinutes: 120,
+  availableForWork: true,
   ...overrides,
 });
 
@@ -146,9 +147,47 @@ describe('resolveAndCacheAvailability', () => {
     expect(result).toEqual({ status: 'completed', earliestAvailableAt: earliest });
   });
 
+  it('writes null when the expert paused while the rebuild was computing', async () => {
+    mockFindResolverSettings
+      .mockResolvedValueOnce(settings({ availableForWork: true }))
+      .mockResolvedValueOnce(settings({ availableForWork: false }));
+    mockResolve.mockReturnValue({ earliestAvailableAt: new Date('2026-06-01T10:00:00.000Z') });
+
+    const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+    expect(mockFindResolverSettings).toHaveBeenCalledTimes(2);
+    expect(mockUpsertCache).toHaveBeenCalledTimes(1);
+    expect(mockUpsertCache).toHaveBeenCalledWith(EXPERT_ID, null);
+    expect(result).toEqual({ status: 'completed', earliestAvailableAt: null });
+  });
+
+  it('keeps the computed slot when the profile vanishes at the re-read', async () => {
+    const earliest = new Date('2026-06-01T10:00:00.000Z');
+    mockFindResolverSettings.mockResolvedValueOnce(settings()).mockResolvedValueOnce(null);
+    mockResolve.mockReturnValue({ earliestAvailableAt: earliest });
+
+    await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+    expect(mockUpsertCache).toHaveBeenCalledWith(EXPERT_ID, earliest);
+  });
+
   // ⚠ round-2 fix #11 — `status` is what a caller (the BullMQ worker) must branch on to tell
   // a genuine rebuild apart from a skip; `earliestAvailableAt: null` alone is ambiguous with
   // "this expert genuinely has no open slot".
+  it('clears the cache row and reads nothing else when the expert has paused new work', async () => {
+    mockFindResolverSettings.mockResolvedValue(settings({ availableForWork: false }));
+
+    const result = await resolveAndCacheAvailability(EXPERT_ID, { now: NOW });
+
+    expect(result).toEqual({ status: 'completed', earliestAvailableAt: null });
+    expect(mockUpsertCache).toHaveBeenCalledTimes(1);
+    expect(mockUpsertCache).toHaveBeenCalledWith(EXPERT_ID, null);
+    expect(mockListRules).not.toHaveBeenCalled();
+    expect(mockListConsultations).not.toHaveBeenCalled();
+    expect(mockListUpcoming).not.toHaveBeenCalled();
+    expect(mockResolve).not.toHaveBeenCalled();
+  });
+
   it('returns status "skipped" and warns when findResolverSettings is null (missing profile or timezone)', async () => {
     mockFindResolverSettings.mockResolvedValue(null);
 

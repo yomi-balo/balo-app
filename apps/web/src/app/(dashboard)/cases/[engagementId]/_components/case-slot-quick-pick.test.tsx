@@ -106,6 +106,29 @@ describe('CaseSlotQuickPick', () => {
     expect(pills).toHaveLength(3);
   });
 
+  it('reads the grid as existing_work and mounts the wrapper the same way (a follow-up on an open case)', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        okAvailabilityBody({
+          slots: [
+            { start: '2026-06-05T09:00:00.000Z', end: '2026-06-05T10:00:00.000Z', maxDuration: 60 },
+          ],
+        })
+      )
+    );
+    render(<CaseSlotQuickPick {...DEFAULT_PROPS} />);
+    const [pill] = await screen.findAllByRole('button');
+    if (pill) await user.click(pill);
+
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('scope')).toBe(
+      'existing_work'
+    );
+    const lastCall = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps;
+    expect(lastCall.scope).toBe('existing_work');
+  });
+
   it('opens the wrapper directly at the fixed case with the tapped slot pre-filled', async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue(

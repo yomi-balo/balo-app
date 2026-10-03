@@ -96,6 +96,7 @@ function buildRow(overrides: Partial<ExpertSearchRow> = {}): ExpertSearchRow {
     bio: null,
     rateCents: 250,
     earliestAvailableAt: new Date('2026-06-03T09:30:00.000Z'),
+    availableForWork: true,
     isSalesforceMvp: false,
     isSalesforceCta: false,
     isCertifiedTrainer: false,

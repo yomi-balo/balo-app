@@ -40,6 +40,7 @@ const baseDto: ExpertSearchResultDTO = {
   countryCode: 'CA',
   rate: 3.13,
   nextAvailableAt: '2026-06-03T09:00:00Z',
+  availableForWork: true,
   languages: [{ name: 'English', flagEmoji: '🇬🇧' }],
   agency: { name: 'MIDCAI', logoUrl: null },
   distinctions: { isSalesforceMvp: true, isSalesforceCta: false, isCertifiedTrainer: false },

@@ -28,6 +28,11 @@ export interface ChecklistStatus {
    * connected at all (that is setup, covered by `items.calendar`).
    */
   calendarNeedsReconnect: boolean;
+  /**
+   * BAL-591 — the "Available for new work" switch, from the same snapshot. Not a checklist item:
+   * a paused expert still counts as set up, so the dashboard only softens its availability row.
+   */
+  availableForWork: boolean;
 }
 
 /**
@@ -120,5 +125,6 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     allComplete: derivation.allComplete,
     rateCents: snapshot.rateCents,
     calendarNeedsReconnect: calendarConnectionNeedsReconnect(snapshot.inputs.calendarConnections),
+    availableForWork: snapshot.availableForWork,
   };
 });

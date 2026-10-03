@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { track } from '@/lib/analytics';
-import { SCHEDULE_EVENTS } from '@balo/analytics/events';
+import { SCHEDULE_EVENTS, EXPERT_EVENTS } from '@balo/analytics/events';
 import { toast } from 'sonner';
 import type { ScheduleLoadResult } from '../_actions/get-schedule';
 
@@ -23,7 +23,11 @@ vi.mock('./calendar-connections-section', () => ({
 // section, with its own fetch (a failed calendar fetch must not take it down), so it needs
 // its own stub here.
 vi.mock('./date-overrides-card', () => ({
-  DateOverridesCard: () => <div data-testid="date-overrides-card-stub">time off</div>,
+  DateOverridesCard: (props: { disabled?: boolean }) => (
+    <div data-testid="date-overrides-card-stub" data-disabled={String(props.disabled === true)}>
+      time off
+    </div>
+  ),
 }));
 
 // Stub the Radix-heavy timezone combobox (rendered by the header's timezone line) so we can
@@ -59,7 +63,9 @@ vi.mock('./booking-rules-section', () => ({
   BookingRulesSection: ({
     settings,
     onChange,
+    disabled,
   }: {
+    disabled?: boolean;
     settings: {
       bufferBeforeMinutes: number;
       bufferAfterMinutes: number;
@@ -73,7 +79,11 @@ vi.mock('./booking-rules-section', () => ({
   }) => (
     <div>
       <span>Booking rules</span>
-      <button type="button" onClick={() => onChange({ ...settings, bufferBeforeMinutes: 30 })}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange({ ...settings, bufferBeforeMinutes: 30 })}
+      >
         stub-change-buffer
       </button>
     </div>
@@ -84,6 +94,7 @@ const mockGetSchedule = vi.fn();
 const mockSaveSchedule = vi.fn();
 const mockClearSchedule = vi.fn();
 const mockUpdateTimezone = vi.fn();
+const mockSetWorkAvailability = vi.fn();
 
 vi.mock('../_actions/get-schedule', () => ({
   getScheduleAction: (...args: unknown[]) => mockGetSchedule(...args),
@@ -96,6 +107,10 @@ vi.mock('../_actions/clear-schedule', () => ({
 }));
 vi.mock('../_actions/update-schedule-timezone', () => ({
   updateScheduleTimezoneAction: (...args: unknown[]) => mockUpdateTimezone(...args),
+}));
+
+vi.mock('../_actions/set-work-availability', () => ({
+  setWorkAvailabilityAction: (...args: unknown[]) => mockSetWorkAvailability(...args),
 }));
 
 vi.mock('motion/react', () => {
@@ -132,6 +147,8 @@ function loadResult(overrides: Partial<ScheduleLoadResult> = {}): ScheduleLoadRe
       { dayOfWeek: 1, startTime: '09:00', endTime: '17:00' },
       { dayOfWeek: 2, startTime: '09:00', endTime: '17:00' },
     ],
+    availableForWork: true,
+    workInFlight: { upcomingConsultations: 2, activeProjects: 1 },
     ...overrides,
   };
 }
@@ -153,6 +170,7 @@ describe('ScheduleTab', () => {
     mockSaveSchedule.mockResolvedValue({ success: true });
     mockClearSchedule.mockResolvedValue({ success: true });
     mockUpdateTimezone.mockResolvedValue({ success: true });
+    mockSetWorkAvailability.mockResolvedValue({ success: true });
   });
 
   it('renders the ready editor after loading a schedule', async () => {
@@ -228,6 +246,14 @@ describe('ScheduleTab', () => {
     expect(within(card).getByRole('button', { name: 'Save schedule' })).toBeInTheDocument();
     // The footnote is the only calendar explainer — nothing repeats it outside the card.
     expect(screen.queryByText(/We automatically hide any times/)).not.toBeInTheDocument();
+  });
+
+  it('shows a status-card-shaped skeleton while loading', () => {
+    mockGetSchedule.mockReturnValue(new Promise(() => undefined));
+    render(<ScheduleTab />);
+
+    expect(screen.getByText('Loading your availability status')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Availability for new work' })).toBeNull();
   });
 
   it('shows a loading skeleton inside the Availability card, with no timezone line or actions', () => {
@@ -643,4 +669,177 @@ describe('ScheduleTab', () => {
       screen.getByRole('combobox', { name: 'Wednesday range 1 start time' })
     ).toHaveTextContent('10:00 AM');
   }, 15000);
+
+  // ── BAL-591 — Available for new work ──────────────────────────
+
+  describe('available for new work', () => {
+    const pausedResult = (): ScheduleLoadResult => loadResult({ availableForWork: false });
+
+    it('mounts the status card above Availability, on and without a Paused pill', async () => {
+      render(<ScheduleTab />);
+      await screen.findByText('Weekly hours');
+
+      const status = screen.getByRole('region', { name: 'Availability for new work' });
+      const availability = screen.getByRole('region', { name: 'Availability' });
+      expect(
+        status.compareDocumentPosition(availability) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(within(status).getByRole('switch', { name: 'Available for new work' })).toBeChecked();
+      expect(within(status).queryByText('Paused')).not.toBeInTheDocument();
+    });
+
+    it('writes nothing until the pause is confirmed, and cancelling tracks pause_cancelled', async () => {
+      const user = userEvent.setup();
+      render(<ScheduleTab />);
+      await screen.findByText('Weekly hours');
+
+      await user.click(screen.getByRole('switch', { name: 'Available for new work' }));
+      const dialog = await screen.findByRole('alertdialog', { name: 'Pause new work?' });
+      expect(
+        within(dialog).getByText(
+          'Your 2 upcoming consultations and 1 active project carry on as normal, and your calendar keeps syncing.'
+        )
+      ).toBeInTheDocument();
+      expect(mockSetWorkAvailability).not.toHaveBeenCalled();
+
+      await user.click(within(dialog).getByRole('button', { name: 'Keep me available' }));
+
+      expect(mockSetWorkAvailability).not.toHaveBeenCalled();
+      expect(track).toHaveBeenCalledWith(EXPERT_EVENTS.WORK_AVAILABILITY_PAUSE_CANCELLED, {});
+      expect(screen.getByRole('switch', { name: 'Available for new work' })).toBeChecked();
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
+    it('pauses on confirm: writes, toasts, tracks the change and not a cancel', async () => {
+      const user = userEvent.setup();
+      render(<ScheduleTab />);
+      await screen.findByText('Weekly hours');
+
+      await user.click(screen.getByRole('switch', { name: 'Available for new work' }));
+      await user.click(await screen.findByRole('button', { name: 'Pause new work' }));
+
+      await waitFor(() =>
+        expect(mockSetWorkAvailability).toHaveBeenCalledWith({ availableForWork: false })
+      );
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("You're paused"));
+      expect(track).toHaveBeenCalledWith(EXPERT_EVENTS.WORK_AVAILABILITY_CHANGED, {
+        available_for_work: false,
+      });
+      expect(track).not.toHaveBeenCalledWith(EXPERT_EVENTS.WORK_AVAILABILITY_PAUSE_CANCELLED, {});
+      expect(screen.getByRole('switch', { name: 'Available for new work' })).not.toBeChecked();
+      expect(screen.getByText('Paused')).toBeInTheDocument();
+    });
+
+    it('reverts the switch, toasts an error and tracks nothing when the pause fails', async () => {
+      mockSetWorkAvailability.mockResolvedValue({ success: false, error: 'Nope' });
+      const user = userEvent.setup();
+      render(<ScheduleTab />);
+      await screen.findByText('Weekly hours');
+
+      await user.click(screen.getByRole('switch', { name: 'Available for new work' }));
+      await user.click(await screen.findByRole('button', { name: 'Pause new work' }));
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Nope'));
+      expect(screen.getByRole('switch', { name: 'Available for new work' })).toBeChecked();
+      expect(track).not.toHaveBeenCalledWith(EXPERT_EVENTS.WORK_AVAILABILITY_CHANGED, {
+        available_for_work: false,
+      });
+    });
+
+    it('dims the Availability controls when paused: disabled, values kept, each described by the note', async () => {
+      mockGetSchedule.mockResolvedValue(pausedResult());
+      render(<ScheduleTab />);
+      await screen.findByText('Weekly hours');
+
+      const noteCopy =
+        'Your hours are kept exactly as they are and come back when you turn on availability.';
+      const note = screen.getByText(noteCopy);
+      expect(note.closest('[class*="opacity-"]')).toBeNull();
+      for (const control of [
+        screen.getByRole('switch', { name: 'Monday availability' }),
+        screen.getByRole('combobox', { name: 'Monday range 1 start time' }),
+        screen.getByRole('combobox', { name: 'Monday range 1 end time' }),
+        screen.getByRole('button', { name: 'Add range to Monday' }),
+        screen.getByRole('button', { name: 'Save schedule' }),
+        screen.getByRole('button', { name: 'Clear schedule' }),
+      ]) {
+        expect(control).toHaveAccessibleDescription(expect.stringContaining(noteCopy));
+      }
+      for (const day of ['Monday', 'Tuesday', 'Saturday']) {
+        expect(screen.getByRole('switch', { name: `${day} availability` })).toBeDisabled();
+      }
+      // Values are never cleared.
+      expect(screen.getByRole('switch', { name: 'Monday availability' })).toBeChecked();
+      const start = screen.getByRole('combobox', { name: 'Monday range 1 start time' });
+      expect(start).toBeDisabled();
+      expect(start).toHaveTextContent('9:00 AM');
+      expect(screen.getByRole('button', { name: 'stub-change-buffer' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Save schedule' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Clear schedule' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Add range to Monday' })).toBeDisabled();
+      // Time off stays editable while paused (BAL-591 decision 15).
+      expect(screen.getByTestId('date-overrides-card-stub')).toHaveAttribute(
+        'data-disabled',
+        'false'
+      );
+    });
+
+    it('keeps the calendar connections interactive and explains the sync while paused', async () => {
+      mockGetSchedule.mockResolvedValue(pausedResult());
+      render(<ScheduleTab />);
+      await screen.findByText('Weekly hours');
+
+      expect(screen.getByTestId('calendar-connections-section-stub')).toBeInTheDocument();
+      expect(
+        screen.getByText(/Still syncing while you're paused, so the consultations/)
+      ).toBeInTheDocument();
+    });
+
+    it('swaps the client preview for the paused message and never mounts the availability calendar', async () => {
+      mockGetSchedule.mockResolvedValue(pausedResult());
+      render(<ScheduleTab />);
+      await screen.findByText('Weekly hours');
+
+      const preview = screen.getByRole('region', { name: 'What clients see' });
+      expect(within(preview).getByText("Nothing bookable while you're paused")).toBeInTheDocument();
+      expect(screen.queryByTestId('availability-preview-stub')).not.toBeInTheDocument();
+    });
+
+    it('shows the paused preview even with no rules saved, with the empty state inert', async () => {
+      mockGetSchedule.mockResolvedValue(loadResult({ rules: [], availableForWork: false }));
+      render(<ScheduleTab />);
+      await screen.findByText('Set your weekly hours');
+
+      expect(screen.getByText("Nothing bookable while you're paused")).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Use these hours' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Set them up myself' })).toBeDisabled();
+      expect(screen.getByText('Turn on availability to set your hours.')).toBeInTheDocument();
+      expect(screen.queryByText(/kept exactly as they are/)).not.toBeInTheDocument();
+    });
+
+    it('resumes with no dialog: writes at once, re-enables controls with prior values', async () => {
+      mockGetSchedule.mockResolvedValue(pausedResult());
+      const user = userEvent.setup();
+      render(<ScheduleTab />);
+      await screen.findByText('Weekly hours');
+
+      await user.click(screen.getByRole('switch', { name: 'Available for new work' }));
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(mockSetWorkAvailability).toHaveBeenCalledWith({ availableForWork: true })
+      );
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith("You're available for new work again")
+      );
+      expect(track).toHaveBeenCalledWith(EXPERT_EVENTS.WORK_AVAILABILITY_CHANGED, {
+        available_for_work: true,
+      });
+      expect(screen.getByRole('switch', { name: 'Monday availability' })).toBeEnabled();
+      expect(screen.getByRole('combobox', { name: 'Monday range 1 start time' })).toHaveTextContent(
+        '9:00 AM'
+      );
+      expect(screen.getByTestId('availability-preview-stub')).toBeInTheDocument();
+    });
+  });
 });

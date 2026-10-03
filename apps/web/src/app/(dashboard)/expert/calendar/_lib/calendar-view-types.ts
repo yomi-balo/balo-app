@@ -38,4 +38,6 @@ export interface CalendarPageView {
   readonly meetings: readonly CalendarMeetingView[];
   /** Empty state (a) precedence — keyed on the checklist item, never on meeting count. */
   readonly hasConnectedCalendar: boolean;
+  /** `expert_profiles.available_for_work` — false means the expert has paused new work. */
+  readonly availableForWork: boolean;
 }

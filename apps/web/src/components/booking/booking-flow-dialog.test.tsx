@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { act, render, screen } from '@/test/utils';
+import { act, render, screen, within } from '@/test/utils';
 import { toast } from 'sonner';
 import { track } from '@/lib/analytics';
 import type { BookConsultationResult } from '@/lib/booking/actions/types';
@@ -42,12 +42,17 @@ vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => mockIsMobile() }));
 // Step 1's calendar is embedded "as shipped" (D3) — mocked here so this file can drive slot
 // selection deterministically without exercising the calendar's own (separately tested) fetch
 // state machine.
-const { mockOnSlotSelect } = vi.hoisted(() => ({ mockOnSlotSelect: vi.fn() }));
+const { mockOnSlotSelect, mockCalendarScope } = vi.hoisted(() => ({
+  mockOnSlotSelect: vi.fn(),
+  mockCalendarScope: { value: undefined as string | undefined },
+}));
 vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: (props: {
     onSlotSelect?: (s: { start: string; end: string; duration: 15 | 30 | 45 | 60 }) => void;
     emptyAction?: React.ReactNode;
+    scope?: string;
   }) => {
+    mockCalendarScope.value = props.scope;
     mockOnSlotSelect.mockImplementation(() =>
       props.onSlotSelect?.({
         start: '2026-06-05T09:00:00.000Z',
@@ -171,6 +176,41 @@ function successResult(overrides: Partial<Extract<BookConsultationResult, { ok: 
     ...overrides,
   };
 }
+
+describe('BookingFlowDialog — slot scope and unavailable header (BAL-591)', () => {
+  function renderFlow(
+    props: Partial<React.ComponentProps<typeof BookingFlowDialog>> = {}
+  ): ReturnType<typeof render> {
+    return render(
+      <BookingFlowDialog
+        open
+        onClose={vi.fn()}
+        expert={EXPERT}
+        source="profile"
+        entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+        {...props}
+      />
+    );
+  }
+
+  it('leaves the scope unset (new_work) for the profile consultation flow', () => {
+    renderFlow();
+    expect(mockCalendarScope.value).toBeUndefined();
+  });
+
+  it('forwards an explicit scope to the slot grid', () => {
+    renderFlow({ scope: 'existing_work' });
+    expect(mockCalendarScope.value).toBe('existing_work');
+  });
+
+  it('labels a stale link to a paused expert "Not taking on new work", not "Booking anyway"', () => {
+    renderFlow({ expert: { ...EXPERT, availableForWork: false } });
+    expect(screen.getByText('Not taking on new work')).toBeInTheDocument();
+    expect(screen.queryByText('Booking anyway')).not.toBeInTheDocument();
+  });
+});
 
 describe('BookingFlowDialog — wrapper shell', () => {
   it('renders a Dialog on desktop', () => {
@@ -570,6 +610,36 @@ describe('BookingFlowDialog — failure panels + idempotent retry', () => {
      * pre-flight for a reason that has nothing to do with expiry. Offering it "Sign in" would
      * sign the staff member in as themselves and end the impersonation.
      */
+    it.each([
+      ['stage:case (paused, before any write)', { stage: 'case' as const }],
+      [
+        'stage:meeting (owner not live, case already written)',
+        { stage: 'meeting' as const, engagementId: 'eng-1', caseTitle: 'Migration planning' },
+      ],
+    ])(
+      'expert_unavailable at %s renders its own panel: no retry, no partial-failure copy',
+      async (_label, extra) => {
+        const user = userEvent.setup();
+        await submitWith(user, { ok: false, code: 'expert_unavailable', ...extra });
+
+        expect(
+          await screen.findByText("Amara isn't taking on new work right now.")
+        ).toBeInTheDocument();
+        expect(
+          screen.getByText('We can introduce you to someone with similar experience.')
+        ).toBeInTheDocument();
+        const panel = screen
+          .getByText("Amara isn't taking on new work right now.")
+          .closest('div')?.parentElement;
+        expect(panel).not.toBeNull();
+        expect(
+          within(panel as HTMLElement).getByRole('button', { name: 'Close' })
+        ).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Try again/i })).not.toBeInTheDocument();
+        expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+      }
+    );
+
     it('an impersonation refusal names its own reason, with no sign-in and no retry', async () => {
       const user = userEvent.setup();
       await submitWith(user, {

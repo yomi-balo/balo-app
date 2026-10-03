@@ -1,6 +1,7 @@
 'use client';
 
-import { AlertCircle, AlertTriangle, Loader2, LogIn, Wallet } from 'lucide-react';
+import Link from 'next/link';
+import { AlertCircle, AlertTriangle, Loader2, LogIn, Pause, Search, Wallet } from 'lucide-react';
 import { TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
 import { Button } from '@/components/ui/button';
 import {
@@ -52,6 +53,50 @@ export function HardFailurePanel({
           Try again
         </Button>
       )}
+    </div>
+  );
+}
+
+/**
+ * The expert cannot take this booking (they paused new work, or the account is no longer live).
+ * One panel for every reason, so it never says which. Not destructive-toned: nothing is wrong
+ * with the client's request. No retry, since the answer cannot change by trying again.
+ */
+export function ExpertUnavailablePanel({
+  expertFirstName,
+  similarExpertsHref,
+  onClose,
+}: Readonly<{
+  expertFirstName: string | null;
+  similarExpertsHref?: string;
+  onClose: () => void;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-col items-center gap-4 px-6 py-12 text-center">
+      <span className="bg-paused-hatch border-paused-border flex h-14 w-14 items-center justify-center rounded-xl border">
+        <Pause className="text-muted-foreground h-6 w-6" aria-hidden="true" />
+      </span>
+      <div className="max-w-[320px] space-y-1.5">
+        <h2 className="text-foreground text-lg font-semibold">
+          {expertFirstName ?? 'This expert'} isn&apos;t taking on new work right now.
+        </h2>
+        <p className="text-muted-foreground text-sm leading-relaxed">
+          We can introduce you to someone with similar experience.
+        </p>
+      </div>
+      <div className="flex flex-col items-center gap-2">
+        {similarExpertsHref !== undefined && (
+          <Button asChild>
+            <Link href={similarExpertsHref}>
+              <Search className="h-4 w-4" aria-hidden="true" />
+              Find a similar expert
+            </Link>
+          </Button>
+        )}
+        <Button variant="outline" onClick={onClose}>
+          Close
+        </Button>
+      </div>
     </div>
   );
 }

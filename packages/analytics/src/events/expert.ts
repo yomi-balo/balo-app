@@ -15,6 +15,9 @@ export const EXPERT_EVENTS = {
   APPLICATION_ANONYMOUS_STARTED: 'expert_application_anonymous_started',
   APPLICATION_AUTH_GATE_REACHED: 'expert_application_auth_gate_reached',
   APPLICATION_DRAFT_FLUSHED: 'expert_application_draft_flushed',
+  // BAL-591 — the Schedule tab's "Available for new work" toggle.
+  WORK_AVAILABILITY_CHANGED: 'expert_work_availability_changed',
+  WORK_AVAILABILITY_PAUSE_CANCELLED: 'expert_work_availability_pause_cancelled',
 } as const;
 
 /** The outcome of replaying an anonymous sessionStorage draft (BAL-502 §22.9). Kept
@@ -74,6 +77,10 @@ export interface ExpertEventMap {
     outcome: DraftFlushOutcome;
     steps_flushed: number;
   };
+  [EXPERT_EVENTS.WORK_AVAILABILITY_CHANGED]: {
+    available_for_work: boolean;
+  };
+  [EXPERT_EVENTS.WORK_AVAILABILITY_PAUSE_CANCELLED]: Record<string, never>;
 }
 
 // -- Server events (fire from server actions via trackServerAndFlush) ------------------

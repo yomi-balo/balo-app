@@ -286,4 +286,18 @@ describe('DateOverridesCard', () => {
 
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it('stays editable: Time off is never disabled, dimmed or described by a paused note', async () => {
+    mockGet.mockResolvedValue({ overrides: [CHRISTMAS], expertProfileId: 'profile-1' });
+    render(<DateOverridesCard />);
+
+    expect(await screen.findByText('Fri, 25 Dec 2026')).toBeInTheDocument();
+    const card = screen.getByRole('region', { name: 'Time off' });
+    expect(card).not.toHaveAttribute('aria-describedby');
+    expect(card).not.toHaveClass('opacity-70');
+    expect(within(card).getByRole('button', { name: /add time off/i })).toBeEnabled();
+    expect(
+      within(card).getByRole('button', { name: /Remove time off: Fri, 25 Dec 2026/ })
+    ).toBeEnabled();
+  });
 });

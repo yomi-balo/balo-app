@@ -1,17 +1,38 @@
 'use server';
 import 'server-only';
 
+import { expertsRepository } from '@balo/db';
 import { withAuth } from '@/lib/auth/with-auth';
 import { log, errorMessage } from '@/lib/logging';
 import { internalApiFetch } from '../_lib/internal-api';
-import type { ScheduleData } from '../_types/schedule';
+import type { ScheduleApiResponse, WorkInFlight } from '../_types/schedule';
 
 /**
  * GET response: the wire-contract schedule plus the session-derived expertProfileId,
  * which the client tab uses only as the `expert_id` analytics dimension.
  */
-export interface ScheduleLoadResult extends ScheduleData {
+export interface ScheduleLoadResult extends ScheduleApiResponse {
   expertProfileId: string;
+  workInFlight: WorkInFlight;
+}
+
+const NO_WORK_IN_FLIGHT: WorkInFlight = { upcomingConsultations: 0, activeProjects: 0 };
+
+/**
+ * The pause dialog's "carries on as normal" counts are informational, so a failed count must
+ * not fail the schedule tab: it falls back to zeros, which the dialog words as the both-zero copy.
+ */
+async function loadWorkInFlight(expertProfileId: string, userId: string): Promise<WorkInFlight> {
+  try {
+    return await expertsRepository.countWorkInFlight(expertProfileId, new Date());
+  } catch (err: unknown) {
+    log.warn('Failed to count work in flight; falling back to zeros', {
+      userId,
+      expertProfileId,
+      error: errorMessage(err),
+    });
+    return NO_WORK_IN_FLIGHT;
+  }
 }
 
 /**
@@ -28,12 +49,15 @@ export const getScheduleAction = withAuth(async (session): Promise<ScheduleLoadR
   const expertProfileId = session.user.expertProfileId;
 
   try {
-    const schedule = await internalApiFetch<ScheduleData>(
-      `/api/experts/${expertProfileId}/schedule`,
-      {},
-      'schedule-api'
-    );
-    return { ...schedule, expertProfileId };
+    const [schedule, workInFlight] = await Promise.all([
+      internalApiFetch<ScheduleApiResponse>(
+        `/api/experts/${expertProfileId}/schedule`,
+        {},
+        'schedule-api'
+      ),
+      loadWorkInFlight(expertProfileId, session.user.id),
+    ]);
+    return { ...schedule, expertProfileId, workInFlight };
   } catch (err: unknown) {
     log.error('Failed to fetch expert schedule', {
       userId: session.user.id,

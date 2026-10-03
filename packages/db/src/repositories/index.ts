@@ -54,6 +54,12 @@ export type {
   ApplicationReviewFilter,
   ApplicationReviewRow,
   ApplicationReviewList,
+  // BAL-591 — the one "eligible for new work" read, the pause switch's input, and the pause
+  // dialog's in-flight counts.
+  NewWorkEligibility,
+  NewWorkIneligibleReason,
+  SetAvailableForWorkInput,
+  WorkInFlightCounts,
 } from './experts';
 // BAL-549 — the schema-derived unions the decision surfaces name. `ExpertDeclineReason` is
 // pinned at compile time to `@balo/shared/experts`' client-safe restatement; `ApplicationStatus`

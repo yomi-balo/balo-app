@@ -3,6 +3,7 @@ import { expertsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import type {
   AvailabilitySlotDto,
+  ExpertAvailabilityPausedResponse,
   ExpertAvailabilityResponse,
   ExpertAvailabilityUnavailableResponse,
 } from '@balo/shared/availability';
@@ -55,7 +56,12 @@ export async function availabilityRoute(fastify: FastifyInstance): Promise<void>
     async (
       request,
       reply
-    ): Promise<ExpertAvailabilityResponse | ExpertAvailabilityUnavailableResponse | undefined> => {
+    ): Promise<
+      | ExpertAvailabilityResponse
+      | ExpertAvailabilityPausedResponse
+      | ExpertAvailabilityUnavailableResponse
+      | undefined
+    > => {
       const paramsParsed = availabilityParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
         reply
@@ -80,16 +86,32 @@ export async function availabilityRoute(fastify: FastifyInstance): Promise<void>
       }
 
       const { expertProfileId } = paramsParsed.data;
-      const { days } = queryParsed.data;
+      const { days, scope } = queryParsed.data;
       const now = new Date();
 
       try {
         // ⚠ THE FIRST READ, DELIBERATELY (plan §3.3). An enumeration probe against a random
         // uuid costs exactly one indexed PK lookup — no vendor round-trip, no four-way fan-out.
-        const visible = await expertsRepository.isPubliclyVisible(expertProfileId);
+        const visible = await expertsRepository.findPublicVisibility(expertProfileId);
         if (!visible) {
           reply.header('Cache-Control', 'no-store').status(404).send({ error: 'not_found' });
           return undefined;
+        }
+
+        // The pause is read live on every request, so no cached grid can outlive it. Only a
+        // `new_work` read is answered with the pause; `existing_work` keeps serving the grid
+        // that follow-ups, intro calls and reschedules depend on. Nothing is computed here.
+        if (!visible.availableForWork && scope === 'new_work') {
+          log.info(
+            { expertProfileId, status: 'paused', days, scope },
+            'Expert availability served'
+          );
+          reply.header('Cache-Control', 'no-store');
+          return {
+            expertProfileId,
+            status: 'paused',
+            days,
+          } satisfies ExpertAvailabilityPausedResponse;
         }
 
         const result = await getExpertSlots(expertProfileId, now);

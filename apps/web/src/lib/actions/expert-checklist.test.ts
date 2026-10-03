@@ -71,6 +71,7 @@ function completeSnapshot(overrides: Record<string, unknown> = {}) {
     },
     currentSearchable: false,
     rateCents: 313,
+    availableForWork: true,
     ...overrides,
   };
 }
@@ -255,6 +256,21 @@ describe('getChecklistStatus', () => {
       );
       const status = await getChecklistStatus();
       expect(status.calendarNeedsReconnect).toBe(false);
+    });
+  });
+
+  describe('BAL-591 — availableForWork', () => {
+    it('carries the snapshot flag through, true by default', async () => {
+      const status = await getChecklistStatus();
+      expect(status.availableForWork).toBe(true);
+    });
+
+    it('is false for a paused expert, who is still fully set up', async () => {
+      mockLoadInputs.mockResolvedValue(completeSnapshot({ availableForWork: false }));
+      const status = await getChecklistStatus();
+      expect(status.availableForWork).toBe(false);
+      expect(status.allComplete).toBe(true);
+      expect(status.completedCount).toBe(6);
     });
   });
 

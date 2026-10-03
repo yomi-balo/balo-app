@@ -38,3 +38,14 @@ export interface ScheduleData {
   bookingSettings: BookingSettings;
   rules: ScheduleRule[];
 }
+
+/** GET `/schedule` response: the schedule plus the "Available for new work" switch. */
+export interface ScheduleApiResponse extends ScheduleData {
+  availableForWork: boolean;
+}
+
+/** What carries on while paused, for the pause confirmation's "carries on as normal" line. */
+export interface WorkInFlight {
+  upcomingConsultations: number;
+  activeProjects: number;
+}

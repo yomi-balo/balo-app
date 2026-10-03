@@ -94,6 +94,7 @@ function pageView(overrides: Partial<CalendarPageView> = {}): CalendarPageView {
     timezone: 'Australia/Sydney',
     meetings: [],
     hasConnectedCalendar: true,
+    availableForWork: true,
     ...overrides,
   };
 }
@@ -389,7 +390,7 @@ describe('CalendarShell — availability note branches', () => {
     render(<CalendarShell view={pageView()} initialWeekStartDayKey={partialWeek} />);
 
     expect(screen.getByText(/Availability shading covers the next 14 days/i)).toBeInTheDocument();
-    expect(mockUseExpertAvailability).toHaveBeenCalledWith('expert-1', 14);
+    expect(mockUseExpertAvailability).toHaveBeenCalledWith('expert-1', 14, 'new_work');
   });
 
   it('a week entirely in the PAST never mounts the shading child, and shows a past-week note instead of an unexplained unshaded grid (N3)', () => {
@@ -1019,5 +1020,118 @@ describe('CalendarShell — focus-triggered refresh (BAL-513 fix round 2, F7)', 
     );
 
     expect(screen.queryByRole('button', { name: /Join/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('CalendarShell — paused for new work (BAL-591)', () => {
+  const readyView: AvailabilityView = {
+    kind: 'ready',
+    expertTimezone: 'Australia/Sydney',
+    days: 7,
+    slots: [
+      { start: '2026-08-24T23:00:00.000Z', end: '2026-08-25T07:00:00.000Z', maxDuration: 60 },
+    ],
+  };
+
+  it('shows no banner while available', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+    expect(screen.queryByText("You're paused.")).not.toBeInTheDocument();
+  });
+
+  it('shows the paused banner with a Go to Schedule link when paused', () => {
+    render(
+      <CalendarShell
+        view={pageView({ availableForWork: false })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+
+    const banner = screen.getByRole('status');
+    expect(banner).toHaveTextContent(
+      "You're paused. No new consultations will be booked. Meetings you already have stay on your calendar."
+    );
+    expect(within(banner).getByRole('link', { name: 'Go to Schedule' })).toHaveAttribute(
+      'href',
+      '/expert/settings?tab=schedule'
+    );
+  });
+
+  it('reads the shading with scope existing_work when paused, new_work otherwise', () => {
+    render(
+      <CalendarShell
+        view={pageView({ availableForWork: false })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+    expect(mockUseExpertAvailability).toHaveBeenCalledWith(
+      'expert-1',
+      expect.any(Number),
+      'existing_work'
+    );
+  });
+
+  it('draws the open hours hatched and says they are not bookable', () => {
+    mockAvailabilityView = readyView;
+    const { container } = render(
+      <CalendarShell
+        view={pageView({ availableForWork: false })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+
+    expect(container.querySelector('.bg-paused-hatch.absolute')).not.toBeNull();
+    expect(container.querySelector('.bg-primary\\/8')).toBeNull();
+    expect(
+      screen.getByText(/Hatched time is your open hours\. Nothing is bookable while you're paused/)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Shaded time is what clients can still book/)
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not claim the hours are visible to clients while paused', () => {
+    mockAvailabilityView = readyView;
+    const { container } = render(
+      <CalendarShell
+        view={pageView({ availableForWork: false })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+    expect(
+      container.querySelector('[aria-describedby^="calendar-availability-summary-"]')
+    ).toBeNull();
+  });
+
+  it('keeps booked meetings joinable while paused', () => {
+    const upcoming = meeting({
+      meetingId: 'soon-1',
+      scheduledStart: new Date(FIXED_NOW.getTime() + 2 * 60_000).toISOString(),
+      scheduledEnd: new Date(FIXED_NOW.getTime() + 32 * 60_000).toISOString(),
+    });
+    render(
+      <CalendarShell
+        view={pageView({ availableForWork: false, meetings: [upcoming] })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Join/i })).toBeInTheDocument();
+  });
+
+  it('treats a paused answer from the availability read as paused, even if the page rendered available', () => {
+    mockAvailabilityView = { kind: 'paused' };
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    expect(screen.getByRole('link', { name: 'Go to Schedule' })).toBeInTheDocument();
+  });
+
+  it('uses the normal shaded wash and note when available', () => {
+    mockAvailabilityView = readyView;
+    const { container } = render(
+      <CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />
+    );
+
+    expect(container.querySelector('.bg-paused-hatch')).toBeNull();
+    expect(screen.getByText(/Shaded time is what clients can still book/)).toBeInTheDocument();
   });
 });

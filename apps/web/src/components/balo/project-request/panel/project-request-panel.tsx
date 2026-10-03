@@ -37,6 +37,7 @@ import {
 } from './send-to-selector';
 import { ReviewSummary } from './review-summary';
 import { useProjectRouting } from './use-project-routing';
+import { useExpertUnavailableOverride } from './use-expert-unavailable-override';
 import { GenerationErrorBanner } from './generation-error-banner';
 import { useAiBriefFlow } from './use-ai-brief-flow';
 import { initialStepFor, type ProjectRequestSeed } from './project-seed';
@@ -100,6 +101,13 @@ export interface ProjectRequestPanelProps {
    * mounts) → unchanged, authenticated behaviour.
    */
   onAuthRequired?: () => void;
+  /**
+   * BAL-591 — the routing this open starts on, applied ONCE PER OPEN for an expert-bound mount
+   * (the public profile's paused card opens on `match`). Omitted → the draft's own routing, which
+   * defaults to Direct. A programmatic default, so it fires no `ROUTING_SWITCHED`; the server
+   * still guards Direct regardless of what the panel opens on.
+   */
+  initialRouting?: ProjectRouting;
 }
 
 /** Mutable steps for the stepper (the readonly `as const` tuple isn't assignable). */
@@ -204,7 +212,7 @@ function boundExpertId(
 }
 
 /**
- * The review step's "expert isn't taking new projects" notice — rendered only while Direct is
+ * The review step's "expert isn't taking on new work" notice — rendered only while Direct is
  * blocked for a named expert.
  */
 function unavailableNoticeFor(
@@ -245,7 +253,7 @@ function resolveStepper(
  *  - **Expert-bound** (`expertProfileId` + `expert` supplied): routing defaults
  *    to Direct, the selector/copy bind to the expert, submit sends `direct`. A
  *    text toggle switches to Match and back without touching any field; Direct
- *    is blocked while the expert isn't taking new projects.
+ *    is blocked while the expert isn't taking on new work.
  *  - **Context-free** (no expert): routing is always Match, the selector is a
  *    static block, submit sends `match`.
  *
@@ -263,6 +271,7 @@ export function ProjectRequestPanel({
   seed,
   resumeDraft,
   onAuthRequired,
+  initialRouting,
 }: Readonly<ProjectRequestPanelProps>): React.JSX.Element {
   // A mount is expert-bound only when it has both the id and the display data, so the draft key,
   // the routing and the submit all agree on whether a recipient card is on screen.
@@ -366,13 +375,17 @@ export function ProjectRequestPanel({
   // Done screen uses the snapshot (draft is cleared on success).
   const doneCopy = getRoutingCopy(submittedRouting, expertFirstName);
 
+  const { effectiveExpert, unavailableTrigger, markUnavailable, resetOverride } =
+    useExpertUnavailableOverride(expert);
+
   const { directBlocked, changeRouting, matchInsteadFromReview, submitButtonRef } =
     useProjectRouting({
       open,
       step,
       routing,
       expertProfileId: boundExpertProfileId,
-      expertAvailableForWork: expert?.availableForWork,
+      expertAvailableForWork: effectiveExpert?.availableForWork,
+      unavailableTrigger,
       entryPoint,
       setRouting: (r) => setField('routing', r),
     });
@@ -407,6 +420,10 @@ export function ProjectRequestPanel({
     setStep(openStep);
     setError(null);
     setShowValidation(false);
+    resetOverride();
+    if (initialRouting !== undefined && boundExpertProfileId !== undefined) {
+      setField('routing', initialRouting);
+    }
     // Fires for every mount mode; `expert_id` is included only when the mount is expert-bound.
     track(
       PROJECT_EVENTS.PROJECT_DRAWER_OPENED,
@@ -427,6 +444,10 @@ export function ProjectRequestPanel({
     entryPoint,
     projectTaxonomies,
     handleRetryTaxonomies,
+    initialRouting,
+    boundExpertProfileId,
+    setField,
+    resetOverride,
   ]);
 
   // `step_viewed` on every step change while open, for every mount mode (BAL-582 D2). Skips the
@@ -634,6 +655,13 @@ export function ProjectRequestPanel({
     const result = await submitProjectRequestAction(payload);
     setSubmitting(false);
 
+    if (!result.success && result.code === 'expert_unavailable') {
+      // Not an error to dismiss: the unavailable notice renders in the form and on review, with
+      // "Get matched instead" as the way forward.
+      markUnavailable();
+      return;
+    }
+
     if (!result.success) {
       const message = result.error ?? 'Something went wrong. Please try again.';
       setError(message);
@@ -658,6 +686,7 @@ export function ProjectRequestPanel({
     setStep('done');
     if (result.projectRequestId !== undefined) onSubmitted?.(result.projectRequestId);
   }, [
+    markUnavailable,
     routing,
     boundExpertProfileId,
     expertProfileId,
@@ -702,7 +731,7 @@ export function ProjectRequestPanel({
       budgetHint={directBlocked ? MATCH_COPY.budgetHint : copy.budgetHint}
       routing={routing}
       onRoutingChange={changeRouting}
-      expert={expert}
+      expert={effectiveExpert}
       titleInputRef={titleInputRef}
       title={title}
       onTitleChange={(v) => setField('title', v)}
@@ -807,7 +836,7 @@ export function ProjectRequestPanel({
           onRetryGenerate={handleRetryGenerate}
           onWriteItMyself={handleWriteItMyself}
           draft={draft}
-          expert={expert}
+          expert={effectiveExpert}
           tagNameMap={tagNameMap}
           productNameMap={productNameMap}
           onEditReview={() => setStep('manual')}
@@ -896,7 +925,7 @@ interface ProjectRequestDrawerBodyProps {
   isAiPath: boolean;
   onDismissRegenerateFailure: () => void;
   reviewReassurance: string;
-  /** Shown after the review summary when Direct is blocked (the expert isn't taking new projects). */
+  /** Shown after the review summary when Direct is blocked (the expert isn't taking on new work). */
   unavailableNotice?: React.ReactNode;
   uploading: boolean;
   error: string | null;

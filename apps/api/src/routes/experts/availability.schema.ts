@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  AVAILABILITY_SCOPES,
   DEFAULT_AVAILABILITY_WINDOW_DAYS,
   MAX_AVAILABILITY_WINDOW_DAYS,
 } from '@balo/shared/availability';
@@ -20,6 +21,9 @@ export const availabilityQuerySchema = z.object({
     // clamp do it on their own side; `ExpertAvailabilityCalendar` does.
     .max(MAX_AVAILABILITY_WINDOW_DAYS)
     .default(DEFAULT_AVAILABILITY_WINDOW_DAYS),
+  // `new_work` is the fail-safe default: a caller that omits the scope never receives the grid
+  // of an expert who has paused new work.
+  scope: z.enum(AVAILABILITY_SCOPES).default('new_work'),
 });
 
 export type AvailabilityQuery = z.infer<typeof availabilityQuerySchema>;

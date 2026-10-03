@@ -6,6 +6,7 @@ import {
   auditEventsRepository,
   caseEngagementsRepository,
   companiesRepository,
+  expertsRepository,
   meetingsRepository,
   partyMembershipsRepository,
   referenceDataRepository,
@@ -700,6 +701,22 @@ async function resolveCase(
     return { ok: true, resolved: planned.plan.resolved };
   }
 
+  // A pause blocks only OPENING a case. An attach to an open case is existing work and passes;
+  // the API still refuses a suspended or deleted owner on that arm. Runs before `writeCase`.
+  if (planned.plan.kind === 'create') {
+    const eligibility = await expertsRepository.findNewWorkEligibility(
+      planned.plan.expertProfileId
+    );
+    if (!eligibility.eligible) {
+      log.info('Booking refused — expert is not available for new work', {
+        userId,
+        expertProfileId: planned.plan.expertProfileId,
+        reason: eligibility.reason,
+      });
+      return caseFailure('case', 'expert_unavailable');
+    }
+  }
+
   const subject = planFundingSubject(planned.plan);
   const funding = await enforceBookingFunding({
     actorUserId: userId,
@@ -829,6 +846,11 @@ async function mapMeetingHopFailure(params: {
 
   if (booked.code === 'window_not_available') {
     return { ok: false, stage: 'meeting', code: 'slot_unavailable', engagementId, caseTitle };
+  }
+  // Owner liveness (suspended or deleted), refused by the API on every booking path. The case
+  // row already exists, so the title rides along; no retry can change the answer.
+  if (booked.code === 'expert_unavailable') {
+    return { ok: false, stage: 'meeting', code: 'expert_unavailable', engagementId, caseTitle };
   }
   if (booked.code === 'idempotency_key_conflict') {
     return {

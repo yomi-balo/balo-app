@@ -642,6 +642,87 @@ describe('ExpertAvailabilityCalendar', () => {
     expect(document.body.textContent?.toLowerCase()).not.toContain('no availability');
   });
 
+  describe('paused (BAL-591)', () => {
+    const PAUSED_BODY = { expertProfileId: EXPERT_ID, status: 'paused', days: 14 };
+
+    it('renders the paused panel instead of a calendar, and no slots', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, PAUSED_BODY));
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          daysAhead={14}
+        />
+      );
+      expect(await screen.findByText('Not taking on new work right now')).toBeInTheDocument();
+      expect(screen.queryByRole('grid')).not.toBeInTheDocument();
+      expect(screen.queryByText(/look further ahead/i)).not.toBeInTheDocument();
+    });
+
+    it('the owner preview explains what clients see, and offers no Try again', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, PAUSED_BODY));
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          mode="preview"
+          viewerType="expert"
+          viewerTimezone="UTC"
+          daysAhead={14}
+        />
+      );
+      expect(
+        await screen.findByText(/clients see this message instead of your times/i)
+      ).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+    });
+
+    it('prefers pausedAction over emptyAction on the paused state', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, PAUSED_BODY));
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          emptyAction={<span>empty action</span>}
+          pausedAction={<span>paused action</span>}
+        />
+      );
+      expect(await screen.findByText('paused action')).toBeInTheDocument();
+      expect(screen.queryByText('empty action')).not.toBeInTheDocument();
+    });
+
+    it('does not report paused as an empty state', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, PAUSED_BODY));
+      render(<ExpertAvailabilityCalendar expertProfileId={EXPERT_ID} viewerTimezone="UTC" />);
+      await screen.findByText('Not taking on new work right now');
+      expect(track).not.toHaveBeenCalledWith('availability_empty_state_shown', expect.anything());
+    });
+
+    it('requests scope=new_work by default and forwards an explicit scope', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const { unmount } = render(
+        <ExpertAvailabilityCalendar expertProfileId={EXPERT_ID} viewerTimezone="UTC" />
+      );
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('scope')).toBe(
+        'new_work'
+      );
+      unmount();
+      fetchMock.mockClear();
+
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          scope="existing_work"
+        />
+      );
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('scope')).toBe(
+        'existing_work'
+      );
+    });
+  });
+
   it('error renders its own copy with a Try again that re-issues the fetch', async () => {
     fetchMock.mockResolvedValue(jsonResponse(500, { error: 'availability_failed' }));
     const user = userEvent.setup();

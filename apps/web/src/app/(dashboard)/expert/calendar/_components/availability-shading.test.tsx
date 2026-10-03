@@ -13,8 +13,12 @@ import type { AvailabilityView } from '@/components/availability/use-expert-avai
 
 let mockView: AvailabilityView = { kind: 'loading' };
 vi.mock('@/components/availability/use-expert-availability', () => ({
-  useExpertAvailability: () => ({ view: mockView, reload: vi.fn() }),
+  useExpertAvailability: (...args: unknown[]) => {
+    mockHook(...args);
+    return { view: mockView, reload: vi.fn() };
+  },
 }));
+const mockHook = vi.fn();
 
 const DAY_KEYS = ['2026-08-24', '2026-08-25'];
 const GRID_RANGE = { start: 0, end: 1440 };
@@ -235,6 +239,74 @@ describe('AvailabilityShading — the four explained-absence states render NOTHI
       />
     );
 
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('AvailabilityShading — paused for new work (BAL-591)', () => {
+  const PAUSED_READY: AvailabilityView = {
+    kind: 'ready',
+    expertTimezone: 'Australia/Sydney',
+    days: 7,
+    slots: [
+      { start: '2026-08-23T23:00:00.000Z', end: '2026-08-24T07:00:00.000Z', maxDuration: 60 },
+    ],
+  };
+
+  function renderShading(paused: boolean | undefined): { container: HTMLElement } {
+    mockView = PAUSED_READY;
+    return render(
+      <AvailabilityShading
+        expertProfileId="expert-1"
+        days={7}
+        scheduleTimezone="Australia/Sydney"
+        dayKeys={DAY_KEYS}
+        gridRange={GRID_RANGE}
+        paused={paused}
+      />
+    );
+  }
+
+  it('reads the grid with scope existing_work when paused', () => {
+    mockHook.mockClear();
+    renderShading(true);
+    expect(mockHook).toHaveBeenCalledWith('expert-1', 7, 'existing_work');
+  });
+
+  it('reads with scope new_work by default', () => {
+    mockHook.mockClear();
+    renderShading(undefined);
+    expect(mockHook).toHaveBeenCalledWith('expert-1', 7, 'new_work');
+  });
+
+  it('paints the open hours with the shared hatch and says they are paused to screen readers', () => {
+    const { container } = renderShading(true);
+
+    const hatch = container.querySelector('.bg-paused-hatch');
+    expect(hatch).not.toBeNull();
+    expect(container.querySelector('.bg-primary\\/8')).toBeNull();
+    expect(screen.getByText(/Open hours while paused: 9:00 AM to 5:00 PM/)).toBeInTheDocument();
+    expect(screen.queryByText(/Available 9:00 AM/)).not.toBeInTheDocument();
+  });
+
+  it('paints the normal wash when not paused', () => {
+    const { container } = renderShading(false);
+    expect(container.querySelector('.bg-paused-hatch')).toBeNull();
+    expect(container.querySelector('.bg-primary\\/8')).not.toBeNull();
+    expect(screen.getByText(/Available 9:00 AM to 5:00 PM/)).toBeInTheDocument();
+  });
+
+  it('renders nothing for a paused read (the shell draws the banner)', () => {
+    mockView = { kind: 'paused' };
+    const { container } = render(
+      <AvailabilityShading
+        expertProfileId="expert-1"
+        days={7}
+        scheduleTimezone="Australia/Sydney"
+        dayKeys={DAY_KEYS}
+        gridRange={GRID_RANGE}
+      />
+    );
     expect(container).toBeEmptyDOMElement();
   });
 });

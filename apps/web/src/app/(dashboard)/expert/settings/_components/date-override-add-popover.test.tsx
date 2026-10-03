@@ -588,4 +588,15 @@ describe('DateOverrideAddPopover', () => {
       expert_profile_id: EXPERT_ID,
     });
   });
+
+  it('keeps the "Add time off" trigger enabled', () => {
+    render(
+      <DateOverrideAddPopover
+        onCreate={vi.fn()}
+        onCheckConflicts={vi.fn()}
+        expertProfileId={EXPERT_ID}
+      />
+    );
+    expect(screen.getByRole('button', { name: /add time off/i })).toBeEnabled();
+  });
 });

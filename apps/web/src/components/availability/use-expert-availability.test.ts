@@ -60,6 +60,47 @@ describe('useExpertAvailability', () => {
     await waitFor(() => expect(result.current.view).toEqual({ kind }));
   });
 
+  describe('scope (BAL-591)', () => {
+    function requestedUrl(): URL {
+      const [url] = fetchMock.mock.calls[0] ?? [];
+      return new URL(String(url));
+    }
+
+    it('sends scope=new_work by default (the fail-safe)', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      renderHook(() => useExpertAvailability(EXPERT_ID, 14));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(requestedUrl().searchParams.get('scope')).toBe('new_work');
+    });
+
+    it('sends the requested scope', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      renderHook(() => useExpertAvailability(EXPERT_ID, 14, 'existing_work'));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(requestedUrl().searchParams.get('scope')).toBe('existing_work');
+    });
+
+    it('refetches when the scope changes', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const { rerender } = renderHook(
+        ({ scope }: { scope: 'new_work' | 'existing_work' }) =>
+          useExpertAvailability(EXPERT_ID, 14, scope),
+        { initialProps: { scope: 'new_work' as 'new_work' | 'existing_work' } }
+      );
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      rerender({ scope: 'existing_work' });
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    });
+
+    it('maps a 200 paused body to the paused view, without the slot-body validation', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, { expertProfileId: EXPERT_ID, status: 'paused', days: 14 })
+      );
+      const { result } = renderHook(() => useExpertAvailability(EXPERT_ID, 14));
+      await waitFor(() => expect(result.current.view).toEqual({ kind: 'paused' }));
+    });
+  });
+
   it('rejects a body with an unrecognised status as error (isAvailabilityOkBody guard)', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, okBody({ status: 'garbage' })));
     const { result } = renderHook(() => useExpertAvailability(EXPERT_ID, 14));

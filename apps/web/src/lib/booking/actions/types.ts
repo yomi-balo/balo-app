@@ -103,6 +103,14 @@ export type BookingFailureCode =
    * expired, and no retry can change it.
    */
   | 'impersonation_refused'
+  /**
+   * The expert cannot take this booking: they have paused new work (a NEW case only) or the
+   * account behind the profile is suspended or deleted (every booking). Nothing was written.
+   *
+   * ⚠ ONE CODE FOR EVERY REFUSAL, so the panel never tells a client which reason applied.
+   * The panel offers a way to someone else, never a retry.
+   */
+  | 'expert_unavailable'
   | 'booking_failed';
 
 /**

@@ -24,6 +24,7 @@ const mockLogInfo = vi.fn();
 const mockLogWarn = vi.fn();
 const mockLogError = vi.fn();
 const mockEnforceBookingFunding = vi.fn();
+const mockFindNewWorkEligibility = vi.fn();
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/auth/session', () => ({
@@ -41,6 +42,9 @@ vi.mock('@balo/db', () => ({
     findByBookingIdempotencyKey: (...args: unknown[]) => mockFindByBookingIdempotencyKey(...args),
     create: (...args: unknown[]) => mockCreate(...args),
     listOpenForCompanyAndExpert: (...args: unknown[]) => mockListOpenForCompanyAndExpert(...args),
+  },
+  expertsRepository: {
+    findNewWorkEligibility: (...args: unknown[]) => mockFindNewWorkEligibility(...args),
   },
   companiesRepository: {
     findNameById: (...args: unknown[]) => mockFindNameById(...args),
@@ -188,6 +192,7 @@ beforeEach(() => {
   });
   mockListOpenForCompanyAndExpert.mockResolvedValue({ openCases: [], resolvedCaseCount: 0 });
   mockEnforceBookingFunding.mockResolvedValue({ ok: true });
+  mockFindNewWorkEligibility.mockResolvedValue({ eligible: true });
 });
 
 describe('bookConsultationAction', () => {
@@ -639,6 +644,69 @@ describe('bookConsultationAction', () => {
     const replayed = await bookConsultationAction(NEW_CASE_INPUT);
     expect(replayed).toMatchObject({ ok: true });
     expect(mockCountByActorAndActionSince).not.toHaveBeenCalled();
+  });
+
+  describe('new-work eligibility (BAL-591)', () => {
+    it.each(['not_available', 'owner_not_live', 'not_found'])(
+      'a NEW case against an ineligible expert (%s) is refused before any write or funding read',
+      async (reason) => {
+        mockFindNewWorkEligibility.mockResolvedValue({ eligible: false, reason });
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+        expect(result).toEqual({ ok: false, stage: 'case', code: 'expert_unavailable' });
+        expect(mockFindNewWorkEligibility).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+        expect(mockCreate).not.toHaveBeenCalled();
+        expect(mockEnforceBookingFunding).not.toHaveBeenCalled();
+        expect(mockPostBookMeeting).not.toHaveBeenCalled();
+        expect(mockLogInfo).toHaveBeenCalledWith(
+          'Booking refused — expert is not available for new work',
+          expect.objectContaining({ expertProfileId: EXPERT_PROFILE_ID, reason })
+        );
+      }
+    );
+
+    it('a follow-up on an OPEN case is never checked against the pause and reaches the meeting hop', async () => {
+      mockFindNewWorkEligibility.mockResolvedValue({ eligible: false, reason: 'not_available' });
+      const result = await bookConsultationAction(EXISTING_CASE_INPUT);
+      expect(result).toMatchObject({ ok: true });
+      expect(mockFindNewWorkEligibility).not.toHaveBeenCalled();
+      expect(mockPostBookMeeting).toHaveBeenCalledTimes(1);
+    });
+
+    it('a retried create whose case already exists resolves as existing and skips the check', async () => {
+      mockFindNewWorkEligibility.mockResolvedValue({ eligible: false, reason: 'not_available' });
+      mockFindByBookingIdempotencyKey.mockResolvedValue({
+        id: ENGAGEMENT_ID,
+        companyId: COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        title: 'Already created case',
+      });
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+      expect(result).toMatchObject({ ok: true });
+      expect(mockFindNewWorkEligibility).not.toHaveBeenCalled();
+    });
+
+    it('an eligible expert opens the case as before', async () => {
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('maps the API refusing the owner at the meeting hop to expert_unavailable, keeping the case', async () => {
+      mockPostBookMeeting.mockResolvedValue({
+        ok: false,
+        status: 409,
+        code: 'expert_unavailable',
+      });
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+      expect(result).toEqual({
+        ok: false,
+        stage: 'meeting',
+        code: 'expert_unavailable',
+        engagementId: ENGAGEMENT_ID,
+        caseTitle: 'Need help with a flow',
+      });
+      expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+    });
   });
 
   it('hop-2 failure returns stage:meeting with engagementId, does NOT soft-delete, does NOT publish', async () => {

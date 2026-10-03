@@ -351,19 +351,20 @@ describe('ProjectRequestPanel', () => {
     expect(timeline).toHaveAttribute('placeholder', ' ');
   });
 
-  describe('expert not taking new projects', () => {
+  describe('expert not taking on new work', () => {
     it('shows the notice on the form with no toggle, and tracks it once', async () => {
       const user = userEvent.setup();
       renderPanel({ expert: UNAVAILABLE_EXPERT });
       await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
 
-      expect(screen.getByText("Priya isn't taking new projects right now.")).toBeInTheDocument();
+      expect(screen.getByText("Priya isn't taking on new work right now.")).toBeInTheDocument();
       expect(
         screen.queryByRole('button', { name: 'Get matched with someone else instead' })
       ).not.toBeInTheDocument();
       expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN, {
         expert_id: EXPERT_PROFILE_ID,
         entry_point: 'profile',
+        trigger: 'profile_data',
       });
     });
 
@@ -397,12 +398,12 @@ describe('ProjectRequestPanel', () => {
       );
       await user.click(screen.getByRole('button', { name: /^review/i }));
 
-      expect(screen.getByText("Priya isn't taking new projects right now.")).toBeInTheDocument();
+      expect(screen.getByText("Priya isn't taking on new work right now.")).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /send to priya/i })).toBeDisabled();
 
       await user.click(screen.getByRole('button', { name: 'Get matched instead' }));
 
-      expect(screen.queryByText(/isn't taking new projects/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/isn't taking on new work/i)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Find me an expert' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Find me an expert' })).toHaveFocus();
       expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ROUTING_SWITCHED, {
@@ -424,9 +425,9 @@ describe('ProjectRequestPanel', () => {
       await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
       await user.click(screen.getByRole('button', { name: 'Get matched instead' }));
 
-      expect(screen.queryByText(/isn't taking new projects/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/isn't taking on new work/i)).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Send to Priya instead' }));
-      expect(screen.getByText("Priya isn't taking new projects right now.")).toBeInTheDocument();
+      expect(screen.getByText("Priya isn't taking on new work right now.")).toBeInTheDocument();
     });
   });
 
@@ -670,6 +671,73 @@ describe('ProjectRequestPanel', () => {
     expect(mockToast.error).toHaveBeenCalledWith('Something went wrong.');
     expect(screen.getByRole('button', { name: /send to priya/i })).toBeInTheDocument();
     expect(screen.queryByText(/request sent to priya/i)).not.toBeInTheDocument();
+  });
+
+  describe('a Direct submit refused because the expert became unavailable (BAL-591)', () => {
+    const UNAVAILABLE_RESULT = {
+      success: false,
+      error: "This expert isn't taking on new work right now.",
+      code: 'expert_unavailable',
+    };
+
+    it('shows the unavailable notice on review, no error banner or toast, and tracks submit_rejected', async () => {
+      mockSubmit.mockResolvedValue(UNAVAILABLE_RESULT);
+      const user = await advanceToReview();
+
+      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+      expect(
+        await screen.findByText("Priya isn't taking on new work right now.")
+      ).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(mockToast.error).not.toHaveBeenCalled();
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN, {
+        expert_id: EXPERT_PROFILE_ID,
+        entry_point: 'profile',
+        trigger: 'submit_rejected',
+      });
+      expect(screen.getByRole('button', { name: /send to priya/i })).toBeDisabled();
+    });
+
+    it('"Get matched instead" then submits as match and succeeds', async () => {
+      mockSubmit.mockResolvedValueOnce(UNAVAILABLE_RESULT);
+      const user = await advanceToReview();
+      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(await screen.findByRole('button', { name: 'Get matched instead' }));
+      await user.click(screen.getByRole('button', { name: 'Find me an expert' }));
+
+      await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(2));
+      expect(mockSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ sendTo: 'match' }));
+      expect(await screen.findByText(/we're finding your expert/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('initialRouting (BAL-591)', () => {
+    it('opens an expert-bound panel on Match without a routing-switched event', async () => {
+      const user = userEvent.setup();
+      renderPanel({ initialRouting: 'match' });
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+
+      expect(screen.getByText('Find me an expert')).toBeInTheDocument();
+      expect(mockTrack).not.toHaveBeenCalledWith(
+        PROJECT_EVENTS.PROJECT_ROUTING_SWITCHED,
+        expect.anything()
+      );
+    });
+
+    it('defaults to Direct when omitted', async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
+    });
+
+    it('is ignored on a context-free mount', async () => {
+      const user = userEvent.setup();
+      renderPanel({ expert: undefined, expertProfileId: undefined, initialRouting: 'direct' });
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      expect(screen.getByText('Find me an expert')).toBeInTheDocument();
+    });
   });
 
   it('fires PROJECT_DRAWER_OPENED exactly once on open', () => {

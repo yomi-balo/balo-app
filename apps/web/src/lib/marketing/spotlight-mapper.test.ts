@@ -20,6 +20,7 @@ const VIEW: ExpertProfileView = {
   consultationCount: 42,
   certCount: 3,
   availableForWork: true,
+  vertical: { name: 'Salesforce', slug: 'salesforce' },
   baloVerified: true,
   topRated: false,
   ratingAverage: 4.8,

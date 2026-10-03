@@ -291,6 +291,7 @@ export function ProposeTimesDialog({
           expertProfileId={expertProfileId}
           mode="selectable"
           viewerType="expert"
+          scope="existing_work"
           fixedDurationMinutes={fixedDurationMinutes}
           onSlotSelect={handleSlotSelect}
         />

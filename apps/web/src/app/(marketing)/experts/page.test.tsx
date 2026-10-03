@@ -33,6 +33,7 @@ function makeExpert(overrides: Partial<ExpertSearchResultDTO> = {}): ExpertSearc
     countryCode: 'CA',
     rate: 3.13,
     nextAvailableAt: null,
+    availableForWork: true,
     languages: [],
     agency: null,
     distinctions: { isSalesforceMvp: false, isSalesforceCta: false, isCertifiedTrainer: false },

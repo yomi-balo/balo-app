@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 
-const { mockIsPubliclyVisible, mockGetExpertSlots, mockCheckRateLimit } = vi.hoisted(() => ({
-  mockIsPubliclyVisible: vi.fn(),
+const { mockFindPublicVisibility, mockGetExpertSlots, mockCheckRateLimit } = vi.hoisted(() => ({
+  mockFindPublicVisibility: vi.fn(),
   mockGetExpertSlots: vi.fn(),
   mockCheckRateLimit: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
-  expertsRepository: { isPubliclyVisible: mockIsPubliclyVisible },
+  expertsRepository: { findPublicVisibility: mockFindPublicVisibility },
 }));
 
 vi.mock('../../services/availability/expert-slots-cache.js', () => ({
@@ -66,7 +66,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 60 });
-    mockIsPubliclyVisible.mockResolvedValue(true);
+    mockFindPublicVisibility.mockResolvedValue({ availableForWork: true });
     mockGetExpertSlots.mockResolvedValue(OK_RESULT);
   });
 
@@ -95,7 +95,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
   it('400 on a non-uuid expertProfileId', async () => {
     const res = await inject('not-a-uuid');
     expect(res.statusCode).toBe(400);
-    expect(mockIsPubliclyVisible).not.toHaveBeenCalled();
+    expect(mockFindPublicVisibility).not.toHaveBeenCalled();
   });
 
   /**
@@ -119,8 +119,8 @@ describe('GET /experts/:expertProfileId/availability', () => {
 
   // ── Visibility gate ─────────────────────────────────────────
 
-  it('404 when isPubliclyVisible is false, asserting no vendor call was made', async () => {
-    mockIsPubliclyVisible.mockResolvedValue(false);
+  it('404 when findPublicVisibility is null, asserting no vendor call was made', async () => {
+    mockFindPublicVisibility.mockResolvedValue(null);
     const res = await inject(EXPERT_ID);
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'not_found' });
@@ -136,6 +136,55 @@ describe('GET /experts/:expertProfileId/availability', () => {
     });
     const res = await inject(EXPERT_ID);
     expect(res.statusCode).toBe(404);
+  });
+
+  // ── Paused expert (BAL-591) ─────────────────────────────────
+
+  describe('an expert who has paused new work', () => {
+    beforeEach(() => {
+      mockFindPublicVisibility.mockResolvedValue({ availableForWork: false });
+    });
+
+    it.each([
+      ['no scope — the fail-safe default', ''],
+      ['scope=new_work', '?scope=new_work'],
+    ])('200 paused, no-store and no compute on %s', async (_label, query) => {
+      const res = await inject(EXPERT_ID, query);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.json()).toEqual({
+        expertProfileId: EXPERT_ID,
+        status: 'paused',
+        days: DEFAULT_AVAILABILITY_WINDOW_DAYS,
+      });
+      expect(mockGetExpertSlots).not.toHaveBeenCalled();
+    });
+
+    it('echoes the validated days on a paused answer', async () => {
+      const res = await inject(EXPERT_ID, '?days=5&scope=new_work');
+      expect((res.json() as { days: number }).days).toBe(5);
+    });
+
+    it('scope=existing_work still serves the real grid', async () => {
+      const res = await inject(EXPERT_ID, '?scope=existing_work');
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['cache-control']).toBe('public, max-age=60');
+      const body = res.json() as { status: string; slots: unknown[] };
+      expect(body.status).toBe('ok');
+      expect(body.slots.length).toBeGreaterThan(0);
+      expect(mockGetExpertSlots).toHaveBeenCalledTimes(1);
+    });
+
+    it('400 on an unknown scope', async () => {
+      const res = await inject(EXPERT_ID, '?scope=everything');
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  it('an unpaused expert is served the grid under the default scope', async () => {
+    const res = await inject(EXPERT_ID);
+    expect((res.json() as { status: string }).status).toBe('ok');
+    expect(mockGetExpertSlots).toHaveBeenCalledTimes(1);
   });
 
   // ── 200 shapes ──────────────────────────────────────────────
@@ -273,7 +322,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
     const res = await inject(EXPERT_ID);
     expect(res.statusCode).toBe(429);
     expect(res.headers['retry-after']).toBe('42');
-    expect(mockIsPubliclyVisible).not.toHaveBeenCalled();
+    expect(mockFindPublicVisibility).not.toHaveBeenCalled();
   });
 
   it('503 when the limiter Redis throws (fail-closed)', async () => {
@@ -281,7 +330,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
     const res = await inject(EXPERT_ID);
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: 'rate_limit_unavailable' });
-    expect(mockIsPubliclyVisible).not.toHaveBeenCalled();
+    expect(mockFindPublicVisibility).not.toHaveBeenCalled();
   });
 
   /**
@@ -311,7 +360,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
 
       expect(res.statusCode).toBe(503);
       expect(res.json()).toEqual({ error: 'rate_limit_unavailable' });
-      expect(mockIsPubliclyVisible).not.toHaveBeenCalled();
+      expect(mockFindPublicVisibility).not.toHaveBeenCalled();
       expect(mockGetExpertSlots).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

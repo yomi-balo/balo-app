@@ -8,6 +8,10 @@ interface ScheduleEmptyStateProps {
   onUseDefaults: () => void;
   /** Opens the editor with an empty week to set up from scratch. */
   onSetUp: () => void;
+  /** Paused for new work: both entry points are inert. */
+  disabled?: boolean;
+  /** Id of the note explaining why both entry points are inert. */
+  pausedNoteId?: string;
 }
 
 /**
@@ -18,6 +22,8 @@ interface ScheduleEmptyStateProps {
 export function ScheduleEmptyState({
   onUseDefaults,
   onSetUp,
+  disabled,
+  pausedNoteId,
 }: Readonly<ScheduleEmptyStateProps>): React.JSX.Element {
   return (
     <div className="flex flex-col gap-4">
@@ -39,10 +45,21 @@ export function ScheduleEmptyState({
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2.5">
-          <Button type="button" onClick={onUseDefaults}>
+          <Button
+            type="button"
+            onClick={onUseDefaults}
+            disabled={disabled}
+            aria-describedby={disabled ? pausedNoteId : undefined}
+          >
             Use these hours
           </Button>
-          <Button type="button" variant="outline" onClick={onSetUp}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onSetUp}
+            disabled={disabled}
+            aria-describedby={disabled ? pausedNoteId : undefined}
+          >
             Set them up myself
           </Button>
         </div>

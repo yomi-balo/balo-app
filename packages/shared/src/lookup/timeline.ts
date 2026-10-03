@@ -208,6 +208,8 @@ export const AUDIT_ACTION_SENTENCES: Record<string, (m: Record<string, unknown>)
     `Searchable again (${expertSearchabilitySourceLabel(readString(m, 'source'))})`,
   'expert_profile.searchability_revoked': (m) =>
     `Removed from search (${expertSearchabilitySourceLabel(readString(m, 'source'))})`,
+  'expert_work_availability.changed': (m) =>
+    m.to === false ? 'Paused new work' : 'Available for new work again',
 
   'company.join_mode_changed': (m) =>
     `Domain join mode changed from ${readString(m, 'from')} to ${readString(m, 'to')}`,

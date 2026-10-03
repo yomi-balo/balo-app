@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockListCapabilityEligibleCompanies = vi.fn();
 const mockListOpenForCompanyAndExpert = vi.fn();
 const mockFindDisplayProfileById = vi.fn();
+const mockFindNewWorkEligibility = vi.fn();
 const mockFindDisplayById = vi.fn();
 const mockGetSummaryById = vi.fn();
 const mockLogWarn = vi.fn();
@@ -19,6 +20,7 @@ vi.mock('@balo/db', () => ({
   },
   expertsRepository: {
     findDisplayProfileById: (...args: unknown[]) => mockFindDisplayProfileById(...args),
+    findNewWorkEligibility: (...args: unknown[]) => mockFindNewWorkEligibility(...args),
   },
   usersRepository: {
     findDisplayById: (...args: unknown[]) => mockFindDisplayById(...args),
@@ -62,6 +64,7 @@ beforeEach(() => {
     avatarUrl: null,
   });
   mockGetSummaryById.mockResolvedValue(undefined);
+  mockFindNewWorkEligibility.mockResolvedValue({ eligible: true });
 });
 
 describe('loadBookingContext', () => {
@@ -191,5 +194,23 @@ describe('loadBookingContext', () => {
       'Booking expert display read failed; degrading to a neutral label',
       expect.objectContaining({ expertProfileId: EXPERT_PROFILE_ID })
     );
+  });
+
+  describe.each([
+    ['owner_not_live', true],
+    ['not_found', true],
+    ['not_available', false],
+    ['not_searchable', false],
+  ] as const)('expert eligibility %s', (reason, fallsBack) => {
+    it(fallsBack ? 'falls back to the neutral label' : 'still shows the expert', async () => {
+      mockListCapabilityEligibleCompanies.mockResolvedValue([
+        { companyId: 'c1', companyName: 'A' },
+        { companyId: 'c2', companyName: 'B' },
+      ]);
+      mockFindNewWorkEligibility.mockResolvedValue({ eligible: false, reason });
+      const result = await loadBookingContext(EXPERT_PROFILE_ID, USER_ID);
+      if (result.arm !== 'choose_company') throw new Error('expected choose_company arm');
+      expect(result.expert.firstName).toBe(fallsBack ? null : 'Dana');
+    });
   });
 });

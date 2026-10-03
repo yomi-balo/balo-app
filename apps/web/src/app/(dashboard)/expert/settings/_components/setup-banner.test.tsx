@@ -23,6 +23,7 @@ function statusWithOpen(...open: ItemKey[]): ChecklistStatus {
     completedCount,
     allComplete: completedCount === CHECKLIST_ITEMS.length,
     rateCents: 10000,
+    availableForWork: true,
     calendarNeedsReconnect: false,
   };
 }

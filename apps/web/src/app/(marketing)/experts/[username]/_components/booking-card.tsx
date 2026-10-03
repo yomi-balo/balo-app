@@ -1,7 +1,17 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { Video, Briefcase, MessageCircle, ChevronRight, ShieldCheck, Heart } from 'lucide-react';
+import Link from 'next/link';
+import {
+  Video,
+  Briefcase,
+  MessageCircle,
+  ChevronRight,
+  ShieldCheck,
+  Heart,
+  Pause,
+  Search,
+} from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
@@ -11,8 +21,16 @@ interface BookingCardProps {
   /** Dollars per minute, or null → "Rate on request". */
   rate: number | null;
   availableForWork: boolean;
+  /** First name for the paused notice and message link. */
+  firstName: string;
+  /** The expert's vertical name ("Salesforce"), for the paused notice's "similar … experience". */
+  verticalName: string;
+  /** Expert-search link behind the paused card's primary "Find a similar expert". */
+  similarExpertsHref: string;
   onBook: () => void;
   onStartProject: () => void;
+  /** Paused only: opens the project panel already on Match. */
+  onGetMatched: () => void;
   onMessage: () => void;
 }
 
@@ -44,8 +62,12 @@ export function BookingCard({
   expertId,
   rate,
   availableForWork,
+  firstName,
+  verticalName,
+  similarExpertsHref,
   onBook,
   onStartProject,
+  onGetMatched,
   onMessage,
 }: Readonly<BookingCardProps>): React.JSX.Element {
   const impressionFired = useRef(false);
@@ -53,10 +75,16 @@ export function BookingCard({
   useEffect(() => {
     if (impressionFired.current) return;
     impressionFired.current = true;
-    for (const cta of ['book', 'project', 'message'] as const) {
+    const ctas = availableForWork
+      ? (['book', 'project', 'message'] as const)
+      : (['find_similar', 'match_project', 'message'] as const);
+    for (const cta of ctas) {
       track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_IMPRESSION, { expert_id: expertId, cta });
     }
-  }, [expertId]);
+    if (!availableForWork) {
+      track(EXPERT_PROFILE_EVENTS.BOOKING_UNAVAILABLE_SHOWN, { expert_id: expertId });
+    }
+  }, [expertId, availableForWork]);
 
   return (
     <div className="relative z-30 order-first flex flex-col gap-3.5 min-[820px]:sticky min-[820px]:top-28 min-[820px]:order-none">
@@ -94,56 +122,126 @@ export function BookingCard({
               </>
             ) : (
               <>
-                <span className="bg-muted-foreground/50 h-2 w-2 rounded-full" />
+                <span className="bg-paused-border h-2 w-2 rounded-full" />
                 <span className="text-muted-foreground text-[13px] font-medium">
-                  Currently unavailable
+                  Not taking on new work right now
                 </span>
               </>
             )}
           </div>
 
-          {/* Primary CTA */}
-          <button
-            type="button"
-            onClick={onBook}
-            className="from-primary flex w-full items-center justify-center gap-2 rounded-[11px] bg-gradient-to-r to-violet-600 px-4 py-3.5 text-[15px] font-semibold text-white shadow-sm transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-violet-500/50 focus-visible:outline-none dark:to-violet-500"
-          >
-            <Video className="h-4 w-4" /> Book a consultation
-          </button>
+          {availableForWork ? (
+            <>
+              {/* Primary CTA */}
+              <button
+                type="button"
+                onClick={onBook}
+                className="from-primary flex w-full items-center justify-center gap-2 rounded-[11px] bg-gradient-to-r to-violet-600 px-4 py-3.5 text-[15px] font-semibold text-white shadow-sm transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-violet-500/50 focus-visible:outline-none dark:to-violet-500"
+              >
+                <Video className="h-4 w-4" /> Book a consultation
+              </button>
 
-          {/* Divider */}
-          <div className="my-4 flex items-center gap-3">
-            <span className="bg-border/60 h-px flex-1" />
-            <span className="text-muted-foreground/70 text-xs font-medium">or</span>
-            <span className="bg-border/60 h-px flex-1" />
-          </div>
+              {/* Divider */}
+              <div className="my-4 flex items-center gap-3">
+                <span className="bg-border/60 h-px flex-1" />
+                <span className="text-muted-foreground/70 text-xs font-medium">or</span>
+                <span className="bg-border/60 h-px flex-1" />
+              </div>
 
-          {/* Secondary CTA — project */}
-          <button
-            type="button"
-            onClick={onStartProject}
-            className="border-border flex w-full items-center gap-3 rounded-[11px] border px-3.5 py-3.5 text-left transition-colors hover:border-violet-500/40 hover:bg-violet-500/5 focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:outline-none"
-          >
-            <span className="flex h-9.5 w-9.5 shrink-0 items-center justify-center rounded-[10px] border border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-400">
-              <Briefcase className="h-4 w-4" />
-            </span>
-            <span className="flex-1">
-              <span className="text-foreground block text-sm font-semibold">Start a project</span>
-              <span className="text-muted-foreground/70 block text-xs">
-                Get a scoped proposal for larger work
-              </span>
-            </span>
-            <ChevronRight className="text-muted-foreground/70 h-4 w-4" />
-          </button>
+              {/* Secondary CTA — project */}
+              <button
+                type="button"
+                onClick={onStartProject}
+                className="border-border flex w-full items-center gap-3 rounded-[11px] border px-3.5 py-3.5 text-left transition-colors hover:border-violet-500/40 hover:bg-violet-500/5 focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:outline-none"
+              >
+                <span className="flex h-9.5 w-9.5 shrink-0 items-center justify-center rounded-[10px] border border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-400">
+                  <Briefcase className="h-4 w-4" />
+                </span>
+                <span className="flex-1">
+                  <span className="text-foreground block text-sm font-semibold">
+                    Start a project
+                  </span>
+                  <span className="text-muted-foreground/70 block text-xs">
+                    Get a scoped proposal for larger work
+                  </span>
+                </span>
+                <ChevronRight className="text-muted-foreground/70 h-4 w-4" />
+              </button>
 
-          {/* Message link */}
-          <button
-            type="button"
-            onClick={onMessage}
-            className="text-muted-foreground hover:text-foreground mt-3 flex w-full items-center justify-center gap-2 rounded-[10px] py-2.5 text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:outline-none"
-          >
-            <MessageCircle className="h-4 w-4" /> Send a message first
-          </button>
+              {/* Message link */}
+              <button
+                type="button"
+                onClick={onMessage}
+                className="text-muted-foreground hover:text-foreground mt-3 flex w-full items-center justify-center gap-2 rounded-[10px] py-2.5 text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:outline-none"
+              >
+                <MessageCircle className="h-4 w-4" /> Send a message first
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Paused — never a disabled Book button; the primary slot offers alternatives. */}
+              <div className="bg-paused-hatch border-paused-border mb-3.5 flex items-start gap-2.5 rounded-[11px] border px-3.5 py-3">
+                <span className="bg-paused-border flex h-7 w-7 shrink-0 items-center justify-center rounded-lg">
+                  <Pause className="text-muted-foreground h-3.5 w-3.5" aria-hidden="true" />
+                </span>
+                <div>
+                  <p className="text-foreground text-[13.5px] leading-snug font-semibold">
+                    {firstName} isn&apos;t taking on new work right now.
+                  </p>
+                  <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-normal">
+                    We can introduce you to someone with similar {verticalName} experience.
+                  </p>
+                </div>
+              </div>
+
+              <Link
+                href={similarExpertsHref}
+                onClick={() =>
+                  track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+                    expert_id: expertId,
+                    cta: 'find_similar',
+                  })
+                }
+                className="from-primary flex w-full items-center justify-center gap-2 rounded-[11px] bg-gradient-to-r to-violet-600 px-4 py-3.5 text-[15px] font-semibold text-white shadow-sm transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-violet-500/50 focus-visible:outline-none dark:to-violet-500"
+              >
+                <Search className="h-4 w-4" aria-hidden="true" /> Find a similar expert
+              </Link>
+
+              <div className="my-4 flex items-center gap-3">
+                <span className="bg-border/60 h-px flex-1" />
+                <span className="text-muted-foreground/70 text-xs font-medium">or</span>
+                <span className="bg-border/60 h-px flex-1" />
+              </div>
+
+              <button
+                type="button"
+                onClick={onGetMatched}
+                className="border-border flex w-full items-center gap-3 rounded-[11px] border px-3.5 py-3.5 text-left transition-colors hover:border-violet-500/40 hover:bg-violet-500/5 focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:outline-none"
+              >
+                <span className="flex h-9.5 w-9.5 shrink-0 items-center justify-center rounded-[10px] border border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-400">
+                  <Briefcase className="h-4 w-4" />
+                </span>
+                <span className="flex-1">
+                  <span className="text-foreground block text-sm font-semibold">
+                    Get matched for a project
+                  </span>
+                  <span className="text-muted-foreground/70 block text-xs">
+                    Our team introduces a matched expert, usually within a day.
+                  </span>
+                </span>
+                <ChevronRight className="text-muted-foreground/70 h-4 w-4" />
+              </button>
+
+              {/* Message link */}
+              <button
+                type="button"
+                onClick={onMessage}
+                className="text-muted-foreground hover:text-foreground mt-3 flex w-full items-center justify-center gap-2 rounded-[10px] py-2.5 text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:outline-none"
+              >
+                <MessageCircle className="h-4 w-4" /> Send {firstName} a message
+              </button>
+            </>
+          )}
         </div>
       </Card>
 

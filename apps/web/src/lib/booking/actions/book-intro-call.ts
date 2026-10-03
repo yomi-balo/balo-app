@@ -182,7 +182,7 @@ function mapBookingFailure(
     log.warn('Intro call booking failed — slot no longer available', ctx);
     return { ok: false, code: 'slot_unavailable' };
   }
-  if (booked.code === 'context_not_found') {
+  if (booked.code === 'context_not_found' || booked.code === 'expert_unavailable') {
     return { ok: false, code: 'not_permitted' };
   }
   if (booked.code === 'context_type_mismatch' || booked.code === 'invalid_request') {

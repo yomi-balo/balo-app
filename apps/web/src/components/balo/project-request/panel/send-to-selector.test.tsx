@@ -98,14 +98,14 @@ describe('SendToSelector — expert-bound', () => {
   });
 });
 
-describe('SendToSelector — expert not taking new projects', () => {
+describe('SendToSelector — expert not taking on new work', () => {
   const UNAVAILABLE = { ...EXPERT, availableForWork: false };
 
   it('shows the notice on Direct and hides the toggle', () => {
     render(
       <SendToSelector value="direct" onChange={vi.fn()} expert={UNAVAILABLE} helperText={HELPER} />
     );
-    expect(screen.getByText("Priya isn't taking new projects right now.")).toBeInTheDocument();
+    expect(screen.getByText("Priya isn't taking on new work right now.")).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Get matched with someone else instead' })
     ).not.toBeInTheDocument();
@@ -145,7 +145,7 @@ describe('SendToSelector — expert not taking new projects', () => {
     render(
       <SendToSelector value="match" onChange={vi.fn()} expert={UNAVAILABLE} helperText="Match." />
     );
-    expect(screen.queryByText(/isn't taking new projects/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/isn't taking on new work/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send to Priya instead' })).toBeInTheDocument();
   });
 
@@ -162,7 +162,7 @@ describe('ExpertUnavailableNotice', () => {
     const user = userEvent.setup();
     const onMatchInstead = vi.fn();
     render(<ExpertUnavailableNotice firstName="Priya" onMatchInstead={onMatchInstead} />);
-    expect(screen.getByText("Priya isn't taking new projects right now.")).toBeInTheDocument();
+    expect(screen.getByText("Priya isn't taking on new work right now.")).toBeInTheDocument();
     expect(
       screen.getByText(
         'Your brief is saved. We can match you with someone with similar experience instead.'

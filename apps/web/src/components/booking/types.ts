@@ -1,3 +1,4 @@
+import type { AvailabilityScope } from '@balo/shared/availability';
 import type { EligibleCompany } from '@balo/shared/credit';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import type { BookingSource } from '@/lib/analytics';
@@ -55,6 +56,8 @@ export interface BookingFlowExpert {
   partyLabel: string;
   verified: boolean;
   availableForWork: boolean;
+  /** Expert-search link offered when this expert is paused; absent where no vertical is known. */
+  similarExpertsHref?: string;
 }
 
 /** The case entry point 3 (D4a #3) fixes — no chooser, no company resolution. */
@@ -104,4 +107,10 @@ export interface BookingFlowDialogProps {
    * taxonomy.
    */
   productsTaxonomy?: ProductTaxonomy;
+  /**
+   * Which kind of work the Step 1 slot grid is read for. Omit (`new_work`) on the profile's
+   * consultation flow; the case page passes `existing_work` so a follow-up on an open case still
+   * sees real slots while the expert has paused new work.
+   */
+  scope?: AvailabilityScope;
 }

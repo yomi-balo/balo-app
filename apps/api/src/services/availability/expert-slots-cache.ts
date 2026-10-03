@@ -238,3 +238,25 @@ export async function getExpertSlots(
     inflight.delete(expertProfileId);
   }
 }
+
+/**
+ * Drops the cached grid and the negative-cache breaker marker for one expert, so the next read
+ * recomputes. Never throws: the pause is read live on every availability request, so a Redis
+ * failure here costs freshness of an already-correct answer, not correctness.
+ */
+export async function invalidateExpertSlots(expertProfileId: string): Promise<void> {
+  try {
+    await withDeadline(
+      () => getRedis().del(cacheKey(expertProfileId), breakerKey(expertProfileId)),
+      {
+        deadlineMs: AVAILABILITY_CACHE_DEADLINE_MS,
+        label: `availability cache del ${expertProfileId}`,
+      }
+    );
+  } catch (error) {
+    log.warn(
+      { expertProfileId, error: error instanceof Error ? error.message : String(error) },
+      'Availability cache invalidation failed'
+    );
+  }
+}

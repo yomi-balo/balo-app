@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AvailabilitySlotDto } from '@balo/shared/availability';
+import type { AvailabilityScope, AvailabilitySlotDto } from '@balo/shared/availability';
 
 /**
  * BAL-236 — the fetch state machine for the public availability endpoint.
@@ -21,6 +21,7 @@ export type AvailabilityView =
   | { kind: 'not_configured' }
   | { kind: 'empty_window'; days: number } // status 'no_slots'
   | { kind: 'unavailable' } // 503 — calendar unreachable, retryable
+  | { kind: 'paused' } // 200 `paused` — the expert has paused new work (scope `new_work` only)
   | { kind: 'not_published' } // 404 — profile not approved+searchable
   | { kind: 'error' }; // network / 4xx / 5xx
 
@@ -70,9 +71,24 @@ function isAvailabilityOkBody(value: unknown): value is AvailabilityOkBody {
   return Array.isArray(body.slots) && body.slots.every(isSlotDto);
 }
 
+/** The `paused` body carries no slots, so it is recognised before the slot-bearing allow-list. */
+function isPausedBody(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { status?: unknown }).status === 'paused'
+  );
+}
+
+/**
+ * `scope` says which kind of work the grid is read for. `new_work` (the default and the
+ * fail-safe) answers `paused` for an expert who has paused new work; `existing_work` always
+ * serves the real grid (follow-ups, intro calls, reschedules).
+ */
 export function useExpertAvailability(
   expertProfileId: string,
-  days: number
+  days: number,
+  scope: AvailabilityScope = 'new_work'
 ): { view: AvailabilityView; reload: () => void } {
   const [view, setView] = useState<AvailabilityView>({ kind: 'loading' });
   const [nonce, setNonce] = useState(0);
@@ -102,6 +118,7 @@ export function useExpertAvailability(
      */
     const url = new URL(`${API_BASE}/experts/${encodeURIComponent(expertProfileId)}/availability`);
     url.searchParams.set('days', String(days));
+    url.searchParams.set('scope', scope);
 
     /**
      * ⚠ EVERY COMMIT IS GUARDED BY `signal.aborted`. `AbortController` cancels the *request*,
@@ -137,6 +154,10 @@ export function useExpertAvailability(
           return;
         }
         const body: unknown = await res.json();
+        if (isPausedBody(body)) {
+          commit({ kind: 'paused' });
+          return;
+        }
         if (!isAvailabilityOkBody(body)) {
           commit({ kind: 'error' });
           return;
@@ -180,7 +201,7 @@ export function useExpertAvailability(
       clearTimeout(timer);
       controller.abort();
     };
-  }, [expertProfileId, days, nonce]);
+  }, [expertProfileId, days, scope, nonce]);
 
   return { view, reload };
 }

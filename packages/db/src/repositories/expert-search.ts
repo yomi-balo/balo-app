@@ -12,6 +12,7 @@ import {
   verticals,
 } from '../schema';
 import { consultationCountExpression } from './_shared/consultation-count';
+import { expertOwnerIsLive } from './_shared/expert-owner-live';
 
 // ── Public types ─────────────────────────────────────────────────
 
@@ -51,6 +52,11 @@ export interface ExpertSearchRow {
   bio: string | null;
   rateCents: number | null;
   earliestAvailableAt: Date | null;
+  /**
+   * BAL-591 — the expert's "Available for new work" switch. A paused expert stays searchable;
+   * consumers that target new work (the project invite picker) render them as unavailable.
+   */
+  availableForWork: boolean;
   isSalesforceMvp: boolean;
   isSalesforceCta: boolean;
   isCertifiedTrainer: boolean;
@@ -123,7 +129,10 @@ function availabilityGatePredicates(now: Date): SQL[] {
 /**
  * Build the array of WHERE conditions for a search. Pure — no DB access, no
  * `process.env`. Composition rules:
- *   - Base visibility: vertical + searchable + approved (always).
+ *   - Base visibility: vertical + searchable + approved + a live owner (always). Owner
+ *     liveness is `expertOwnerIsLive`, the same fragment the public profile and slot route
+ *     use, so a soft-deleted, suspended or inactive owner is absent from results, the
+ *     zero-results recount and (via `facetEligibilityConditions`) facet totals.
  *   - Filters: OR-within a facet (via `inArray` inside one `exists`), AND-across
  *     facets (each facet contributes one `exists` term combined by the caller's
  *     `and(...)`). Empty facet arrays are skipped (no invalid `IN ()`).
@@ -134,13 +143,15 @@ function availabilityGatePredicates(now: Date): SQL[] {
  *   - Full-text match (only when `q` present): strict FTS @@ OR trigram fuzzy on
  *     headline OR trigram fuzzy on any product name.
  *
- * NOTE: `expert_profiles` has NO `deleted_at` column — do NOT filter it here.
+ * NOTE: `expert_profiles` has NO `deleted_at` column — do NOT filter it here. The owner's
+ * soft delete lives on `users` and is covered by `expertOwnerIsLive`.
  */
 export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL[] {
   const conditions: SQL[] = [
     eq(expertProfiles.verticalId, params.verticalId),
     eq(expertProfiles.searchable, true),
     isNotNull(expertProfiles.approvedAt),
+    expertOwnerIsLive,
   ];
 
   // OR-within / AND-across facet filters via correlated EXISTS.
@@ -376,8 +387,8 @@ const languagesJsonExpression = sql<{ name: string; flagEmoji: string | null }[]
 // ── Internal: visibility predicate for facet counts ──────────────
 
 /**
- * Base eligibility predicate for facet counts: visibility + (optional) gate.
- * Selection-INDEPENDENT — never narrowed by `q` or facet selections.
+ * Base eligibility predicate for facet counts: visibility (incl. a live owner) + (optional)
+ * gate. Selection-INDEPENDENT — never narrowed by `q` or facet selections.
  */
 function facetEligibilityConditions(
   verticalId: string,
@@ -388,6 +399,7 @@ function facetEligibilityConditions(
     eq(expertProfiles.verticalId, verticalId),
     eq(expertProfiles.searchable, true),
     isNotNull(expertProfiles.approvedAt),
+    expertOwnerIsLive,
   ];
   if (availabilityGateEnabled) {
     conditions.push(...availabilityGatePredicates(now));
@@ -413,6 +425,7 @@ interface SearchSelectRow {
   bio: string | null;
   rateCents: number | null;
   earliestAvailableAt: Date | null;
+  availableForWork: boolean;
   isSalesforceMvp: boolean;
   isSalesforceCta: boolean;
   isCertifiedTrainer: boolean;
@@ -507,6 +520,7 @@ export const expertSearchRepository = {
         bio: expertProfiles.bio,
         rateCents: expertProfiles.rateCents,
         earliestAvailableAt: sql<Date | null>`ac.earliest_available_at`,
+        availableForWork: expertProfiles.availableForWork,
         isSalesforceMvp: expertProfiles.isSalesforceMvp,
         isSalesforceCta: expertProfiles.isSalesforceCta,
         isCertifiedTrainer: expertProfiles.isCertifiedTrainer,
@@ -564,6 +578,7 @@ export const expertSearchRepository = {
       bio: r.bio,
       rateCents: r.rateCents,
       earliestAvailableAt: r.earliestAvailableAt ? new Date(r.earliestAvailableAt) : null,
+      availableForWork: r.availableForWork,
       isSalesforceMvp: r.isSalesforceMvp,
       isSalesforceCta: r.isSalesforceCta,
       isCertifiedTrainer: r.isCertifiedTrainer,

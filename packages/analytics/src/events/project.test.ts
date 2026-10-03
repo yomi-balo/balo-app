@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { PROJECT_EVENTS, PROJECT_SERVER_EVENTS } from './project';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import { PROJECT_EVENTS, PROJECT_SERVER_EVENTS, type ProjectEventMap } from './project';
 
 describe('PROJECT_EVENTS.BILLING_REMINDER_SENT (BAL-324)', () => {
   it('maps to the feature-prefixed snake_case event name', () => {
@@ -70,6 +70,12 @@ describe('PROJECT_EVENTS routing switch / expert unavailable (BAL-588)', () => {
   it('follows the {feature}_{noun}_{past_tense_verb} convention', () => {
     expect(PROJECT_EVENTS.PROJECT_ROUTING_SWITCHED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
     expect(PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+  });
+
+  it('expert_unavailable_shown carries which surface raised the notice', () => {
+    expectTypeOf<
+      ProjectEventMap[typeof PROJECT_EVENTS.PROJECT_EXPERT_UNAVAILABLE_SHOWN]['trigger']
+    >().toEqualTypeOf<'profile_data' | 'submit_rejected'>();
   });
 });
 
