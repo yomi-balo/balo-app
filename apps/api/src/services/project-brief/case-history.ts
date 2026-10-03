@@ -7,7 +7,7 @@ import {
 import { CASE_HISTORY_MAX_TRANSCRIPTS } from './config.js';
 
 /**
- * case-history (BAL-589, D7a) — THE FEE-CONCEALMENT BOUNDARY for the case→project brief path.
+ * case-history (BAL-589) — THE FEE-CONCEALMENT BOUNDARY for the case→project brief path.
  *
  * ⚠⚠ THIS MODULE IS THE INPUT BUILDER THE INVARIANT `case-brief-input-carries-no-money.test.ts`
  * PINS. It reads ONLY conversation message bodies and meeting transcript text — never a credit
@@ -68,11 +68,40 @@ async function buildMessages(
 }
 
 /**
+ * One meeting's narrowed transcript line, or `undefined` if it has neither a non-empty summary
+ * nor a non-empty canonical transcript. Split out of {@link buildTranscripts} so
+ * the newest ≤ {@link CASE_HISTORY_MAX_TRANSCRIPTS} meetings resolve concurrently via
+ * `Promise.all` instead of one `await` per loop iteration.
+ */
+async function buildTranscriptLine(
+  meeting: { id: string; scheduledStart: Date },
+  ref: { id: string } | undefined
+): Promise<CaseHistoryTranscript | undefined> {
+  if (ref === undefined) return undefined;
+
+  const summary = await transcriptArtifactsRepository.findByTranscriptAndKind(ref.id, 'summary');
+  if (summary !== undefined) {
+    if (summary.content.trim().length === 0) return undefined;
+    return { heldAt: meeting.scheduledStart, source: 'summary', text: summary.content };
+  }
+
+  const transcript = await transcriptsRepository.findById(ref.id);
+  if (transcript === undefined) return undefined;
+  const text = transcript.canonical.segments.map((segment) => segment.text).join(' ');
+  if (text.trim().length === 0) return undefined;
+  return { heldAt: meeting.scheduledStart, source: 'transcript', text };
+}
+
+/**
  * The case's newest {@link CASE_HISTORY_MAX_TRANSCRIPTS} meetings' transcript text, narrowed to
  * `heldAt` / `source` / `text`. `scheduledStart` is read for ORDERING ONLY — it is never part
  * of the narrowed shape. For each meeting's transcript, the `summary` artifact is preferred;
  * absent one, the canonical segment text is joined instead. `durationMs`, `startMs` and
  * `endMs` are never read.
+ *
+ * ⚠ The per-meeting reads run via `Promise.all`, not an `await` inside the loop.
+ * `Promise.all` preserves input order in its resolved array regardless of resolution order, so
+ * the newest-first ordering `renderCaseHistory` relies on survives unchanged.
  */
 async function buildTranscripts(engagementId: string): Promise<CaseHistoryTranscript[]> {
   const meetings = await meetingContextsRepository.listMeetingsForContext('case', engagementId);
@@ -87,26 +116,10 @@ async function buildTranscripts(engagementId: string): Promise<CaseHistoryTransc
     newest.map((meeting) => meeting.id)
   );
 
-  const out: CaseHistoryTranscript[] = [];
-  for (const meeting of newest) {
-    const ref = refsByMeetingId.get(meeting.id);
-    if (ref === undefined) continue;
-
-    const summary = await transcriptArtifactsRepository.findByTranscriptAndKind(ref.id, 'summary');
-    if (summary !== undefined) {
-      if (summary.content.trim().length > 0) {
-        out.push({ heldAt: meeting.scheduledStart, source: 'summary', text: summary.content });
-      }
-      continue;
-    }
-
-    const transcript = await transcriptsRepository.findById(ref.id);
-    if (transcript === undefined) continue;
-    const text = transcript.canonical.segments.map((segment) => segment.text).join(' ');
-    if (text.trim().length === 0) continue;
-    out.push({ heldAt: meeting.scheduledStart, source: 'transcript', text });
-  }
-  return out;
+  const lines = await Promise.all(
+    newest.map((meeting) => buildTranscriptLine(meeting, refsByMeetingId.get(meeting.id)))
+  );
+  return lines.filter((line): line is CaseHistoryTranscript => line !== undefined);
 }
 
 /**

@@ -16,11 +16,11 @@ export interface CaseSource {
 }
 
 /**
- * The worker's case gate (D6) plus the D7a history build. Re-checks the case against the ROW's
+ * The worker's case gate plus the history build. Re-checks the case against the ROW's
  * `company_id` — never a payload, there is none — exactly as Gate 3 re-checks document keys for
  * the documents arm.
  *
- * Both open and closed cases are eligible (D2); conversion never mutates the case.
+ * Both open and closed cases are eligible; conversion never mutates the case.
  */
 export async function loadCaseSource(row: ProjectBriefParse, parseId: string): Promise<CaseSource> {
   const engagementId = row.sourceEngagementId;
@@ -32,7 +32,7 @@ export async function loadCaseSource(row: ProjectBriefParse, parseId: string): P
   }
 
   const caseRow = await caseEngagementsRepository.findByEngagementId(engagementId);
-  if (caseRow === undefined || caseRow.companyId !== row.companyId) {
+  if (caseRow?.companyId !== row.companyId) {
     log.warn({ parseId, caseId: engagementId }, 'Project brief parse — case gate failed');
     throw new ProjectBriefParseError('case_unavailable', 'The case is unavailable for this parse');
   }

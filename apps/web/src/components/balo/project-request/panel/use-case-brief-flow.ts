@@ -7,6 +7,7 @@ import type { ProjectBriefDraftPatch } from '@/lib/project-request/actions/get-p
 import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
 import {
   useProjectBriefGeneration,
+  reportUnexpectedBriefError,
   type BriefGenerationPhase,
 } from './use-project-brief-generation';
 import { useProgressiveReveal } from './use-progressive-reveal';
@@ -47,7 +48,7 @@ export interface UseCaseBriefFlowResult {
   failureReason: ProjectBriefFailureReason | null;
   /** The progressively-revealed HTML while `phase === 'revealing'`; `null` otherwise. */
   revealedHtml: string | null;
-  /** True once at least one case brief has landed successfully — persisted (fix round F5), so
+  /** True once at least one case brief has landed successfully — persisted, so
    *  this reads `true` again after a reload too, not only within the mount that generated it. */
   hasAiDraft: boolean;
   hasEditsSinceGenerate: boolean;
@@ -60,10 +61,10 @@ export interface UseCaseBriefFlowResult {
 }
 
 /**
- * S5 — a case mount is RESUMING (not fresh) when its draft already carries a brief or any
+ * A case mount is RESUMING (not fresh) when its draft already carries a brief or any
  * document. Resuming means no prefill and no auto-generate.
  *
- * ⚠ FIX ROUND F1 — reads {@link allDraftDocuments}, not `draft.documents` alone, so a draft
+ * ⚠ Reads {@link allDraftDocuments}, not `draft.documents` alone, so a draft
  * that only holds a case-file selection (never an upload) is correctly treated as resuming too.
  */
 function isResumingCaseDraft(
@@ -73,9 +74,8 @@ function isResumingCaseDraft(
 }
 
 /**
- * FIX ROUND F11 — de-nested (was a nested ternary). FIX ROUND F4 — `willAutoStart` forces
- * `'generating'` from the very first render, before the auto-start effect has run `start()` for
- * real.
+ * `willAutoStart` forces `'generating'` from the very first render, before the auto-start
+ * effect has run `start()` for real.
  */
 function resolveCaseBriefPhase(
   generationPhase: BriefGenerationPhase,
@@ -90,9 +90,9 @@ function resolveCaseBriefPhase(
 
 /**
  * BAL-589 — the case-history sibling of `useAiBriefFlow`: drafts a brief from the bound case's
- * messages and call transcripts instead of uploaded documents (D6), auto-starting once per open
- * (S5) rather than waiting for a user click, and revealing the finished result progressively
- * (D5) instead of landing it all at once.
+ * messages and call transcripts instead of uploaded documents, auto-starting once per open
+ * rather than waiting for a user click, and revealing the finished result progressively
+ * instead of landing it all at once.
  *
  * INERT by construction when `sourceCase` is `undefined` — every effect and handler below
  * no-ops on that branch, so the panel can call this hook UNCONDITIONALLY on every mount mode
@@ -123,7 +123,7 @@ export function useCaseBriefFlow({
   const failureTrackedRef = useRef(false);
   const openAutoStartedRef = useRef(false);
 
-  // ⚠ FIX ROUND F5 — `hasAiDraft`/`hasEditsSinceGenerate` are DERIVED from the PERSISTED
+  // ⚠ `hasAiDraft`/`hasEditsSinceGenerate` are DERIVED from the PERSISTED
   // `draft.caseBriefSnapshot`, not mount-scoped hook state, so a reload still knows a brief
   // landed (and still diffs edits against it) instead of resetting to "no AI draft" every time.
   const { title, descriptionHtml, tagIds, productIds, caseBriefSnapshot } = draft;
@@ -137,7 +137,7 @@ export function useCaseBriefFlow({
   const hasEditsSinceGenerate =
     caseBriefSnapshot !== null && snapshotsDiffer(caseBriefSnapshot, currentSnapshot);
 
-  // ⚠⚠ FIX ROUND F4 — true on a case mount that WILL auto-start a generation on THIS render,
+  // ⚠⚠ True on a case mount that WILL auto-start a generation on THIS render,
   // computed synchronously (not from the auto-start effect below) so the very FIRST render
   // already reports `phase: 'generating'` — see the `phase` computation further down. Without
   // this, the first paint showed the plain (empty) editor for one frame before the effect's
@@ -149,7 +149,7 @@ export function useCaseBriefFlow({
     (patch: ProjectBriefDraftPatch) => {
       if (!isFlowActiveRef.current) return;
 
-      // S3 — title/products keep the case prefill unless the field is empty; description and
+      // Title/products keep the case prefill unless the field is empty; description and
       // tags are always written (a redraft replaces them outright).
       const current = draftRef.current;
       const nextTitle = current.title.trim() === '' ? patch.title : current.title;
@@ -161,7 +161,7 @@ export function useCaseBriefFlow({
       setField('tagIds', patch.tagIds);
       if (current.productIds.length === 0) setField('productIds', patch.productIds);
 
-      // ⚠ FIX ROUND F5 — persisted, so it survives a reload (replaces local `hasAiDraft` state).
+      // ⚠ Persisted, so it survives a reload (replaces local `hasAiDraft` state).
       setField('caseBriefSnapshot', {
         title: nextTitle.trim(),
         descriptionHtml: patch.descriptionHtml,
@@ -226,14 +226,16 @@ export function useCaseBriefFlow({
     const sourceCaseNow = sourceCaseRef.current;
     if (sourceCaseNow === undefined) return;
     generateStartedAtRef.current = Date.now();
-    // ⚠ FIX ROUND F5 — starting a NEW run (auto-start or redraft) clears the snapshot; a run
+    // ⚠ Starting a NEW run (auto-start or redraft) clears the snapshot; a run
     // that fails leaves it cleared (only a SUCCESS writes a fresh one), so `hasAiDraft` correctly
     // reads `false` for the duration of — and after a failed — every run but the first idle one.
     setField('caseBriefSnapshot', null);
-    startGeneration({ kind: 'case', caseId: sourceCaseNow.id });
+    // ⚠ See `use-ai-brief-flow.ts`'s `handleGenerateClick`: `start` resolves on a
+    // terminal phase for every EXPECTED failure; this `.catch` only reports a bug that escaped it.
+    startGeneration({ kind: 'case', caseId: sourceCaseNow.id }).catch(reportUnexpectedBriefError);
   }, [startGeneration, setField]);
 
-  // S5 — auto-start exactly once per open, unless the draft is already resuming a brief.
+  // Auto-start exactly once per open, unless the draft is already resuming a brief.
   useEffect(() => {
     if (!open) {
       openAutoStartedRef.current = false;

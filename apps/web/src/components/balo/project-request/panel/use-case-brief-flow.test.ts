@@ -13,7 +13,10 @@ vi.mock('server-only', () => ({}));
  * variable the mocked hook reads fresh on every render.
  */
 const captured: { onSucceeded?: (patch: ProjectBriefDraftPatch) => void } = {};
-const mockStart = vi.fn();
+// `start` is `Promise<void>`; the hook's real `start()` resolves rather than
+// rejects on every EXPECTED failure, so the mock does too by default (`.catch` on its result
+// must have something to call `.catch` on).
+const mockStart = vi.fn().mockResolvedValue(undefined);
 const mockDismissFailure = vi.fn();
 const mockCancel = vi.fn();
 
@@ -36,6 +39,9 @@ vi.mock('./use-project-brief-generation', () => ({
       cancel: mockCancel,
     };
   },
+  // No call-site in this suite asserts on this directly; an inline stub is enough to keep
+  // `use-case-brief-flow.ts`'s `.catch(reportUnexpectedBriefError)` from calling `undefined`.
+  reportUnexpectedBriefError: vi.fn(),
 }));
 
 // This flow's own progressive-reveal mechanics are `use-progressive-reveal.ts`'s own suite's
@@ -123,7 +129,7 @@ describe('useCaseBriefFlow', () => {
     });
   });
 
-  describe('auto-start (S5)', () => {
+  describe('auto-start', () => {
     it('starts exactly once per open, with {kind: "case", caseId}', () => {
       const { view } = renderFlow();
       expect(mockStart).toHaveBeenCalledTimes(1);
@@ -184,8 +190,8 @@ describe('useCaseBriefFlow', () => {
     });
   });
 
-  // ── F4 — no idle flash before auto-start ───────────────────────────────────────────────────
-  describe('the idle flash before auto-start (F4)', () => {
+  // No idle flash before auto-start.
+  describe('the idle flash before auto-start', () => {
     it('reports `generating` from the very first render of a fresh case mount', () => {
       // `useProjectBriefGeneration` is mocked to a static `genState` that never flips on its
       // own — so this can ONLY read `'generating'` if `willAutoStart` drives it, proving the
@@ -208,8 +214,8 @@ describe('useCaseBriefFlow', () => {
     });
   });
 
-  // ── F5 — hasAiDraft/hasEditsSinceGenerate are PERSISTED, not mount-scoped ──────────────────
-  describe('the persisted snapshot survives a remount (F5)', () => {
+  // hasAiDraft/hasEditsSinceGenerate are PERSISTED, not mount-scoped.
+  describe('the persisted snapshot survives a remount', () => {
     it('hasAiDraft reads true on a FRESH mount when the draft already carries a snapshot', () => {
       const persistedDraft = {
         ...DRAFT,
@@ -255,7 +261,7 @@ describe('useCaseBriefFlow', () => {
 
       expect(setField).toHaveBeenCalledWith('descriptionHtml', PATCH.descriptionHtml);
       expect(setField).toHaveBeenCalledWith('tagIds', PATCH.tagIds);
-      // ⚠ FIX ROUND F5 — `hasAiDraft` is now DERIVED from the persisted `caseBriefSnapshot`,
+      // ⚠ `hasAiDraft` is DERIVED from the persisted `caseBriefSnapshot`,
       // which this bare `vi.fn()` setField never writes back into `draft`; assert the WRITE
       // instead of the (unchanged, in this harness) derived read.
       expect(setField).toHaveBeenCalledWith(
@@ -414,7 +420,7 @@ describe('useCaseBriefFlow', () => {
       expect(mockStart).toHaveBeenCalledWith({ kind: 'case', caseId: SOURCE_CASE.id });
     });
 
-    // ── F5 — the snapshot is cleared the INSTANT a new run starts, not only on failure ────────
+    // The snapshot is cleared the INSTANT a new run starts, not only on failure.
     it('starting a redraft clears the persisted snapshot immediately — a failed redraft then submits as manual', () => {
       const view = renderConnectedFlow({
         ...DRAFT,

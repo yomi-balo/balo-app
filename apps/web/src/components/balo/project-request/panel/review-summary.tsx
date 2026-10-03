@@ -111,7 +111,7 @@ export function ReviewSummary({
   const routingLabel = directToNamedExpert
     ? `Going to ${expertName}`
     : "We'll match you with an expert";
-  // ⚠ FIX ROUND F1 — every document the request carries: the uploader's own PLUS every
+  // ⚠ Every document the request carries: the uploader's own PLUS every
   // case-file copy, which `draft.documents` alone never holds.
   const documents = allDraftDocuments(draft);
 

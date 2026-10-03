@@ -130,7 +130,7 @@ describe('ReviewSummary', () => {
     expect(screen.queryByText(/Linked to case:/)).not.toBeInTheDocument();
   });
 
-  // ── F1 — case-file selections are listed alongside uploads, never dropped ─────────────────
+  // Case-file selections are listed alongside uploads, never dropped.
   it('lists case-file selections in the Documents block alongside uploads', () => {
     render(
       <ReviewSummary

@@ -33,6 +33,17 @@ const HEADING_STEPS_MS = [0, 5_000, 15_000] as const;
 
 export type BriefGenerationPhase = 'idle' | 'generating' | 'failed';
 
+/**
+ * The ONE place a caller reports a `start()` rejection that reached it anyway.
+ * `start()` resolves on every EXPECTED failure itself (enqueue failure, a thrown action, a poll
+ * error — all land on the `failed` phase); a caller's `.catch()` only exists to report a bug that
+ * let a rejection escape that handling, so it reports and does nothing else (no UI state — the
+ * phase is already wrong if this ever fires).
+ */
+export function reportUnexpectedBriefError(error: unknown): void {
+  Sentry.captureException(error);
+}
+
 export interface UseProjectBriefGenerationOptions {
   onSucceeded: (draft: ProjectBriefDraftPatch) => void;
 }
@@ -86,7 +97,7 @@ export function useProjectBriefGeneration(
   const pollCountRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   /**
-   * ⚠⚠ FIX ROUND F3 — THE RUN TOKEN. Bumped by every `start()` AND every `cancel()`. `cancel()`
+   * ⚠⚠ THE RUN TOKEN. Bumped by every `start()` AND every `cancel()`. `cancel()`
    * only invalidates an ALREADY-INSTALLED interval (via `parseIdRef`) — it does nothing about a
    * `start()` whose action call is still in flight, because that run has not reached the point
    * where it sets `parseIdRef` yet. Without this, closing the drawer mid-start and reopening it
@@ -114,7 +125,7 @@ export function useProjectBriefGeneration(
 
   /** @see UseProjectBriefGenerationResult.cancel */
   const cancel = useCallback(() => {
-    // ⚠ FIX ROUND F3 — invalidates any `start()` whose action call is still in flight too (not
+    // ⚠ Invalidates any `start()` whose action call is still in flight too (not
     // just an already-installed interval, which `parseIdRef` below still covers).
     runTokenRef.current += 1;
     clearPolling();
@@ -129,7 +140,7 @@ export function useProjectBriefGeneration(
 
   const start = useCallback(
     async (source: BriefSource) => {
-      // ⚠ FIX ROUND F3 — THE RUN TOKEN, captured at issue time. See the ref's own docblock.
+      // ⚠ THE RUN TOKEN, captured at issue time. See the ref's own docblock.
       runTokenRef.current += 1;
       const myRunToken = runTokenRef.current;
       clearPolling();
@@ -147,10 +158,10 @@ export function useProjectBriefGeneration(
             ? await startProjectBriefParseAction({ documents: source.documents })
             : await startCaseBriefParseAction({ caseId: source.caseId });
       } catch (error) {
-        // ⚠ FIX ROUND F3 — a `cancel()` or a NEWER `start()` superseded this run while the action
+        // ⚠ A `cancel()` or a NEWER `start()` superseded this run while the action
         // above was in flight; a stale run must install neither a terminal phase nor an interval.
         if (runTokenRef.current !== myRunToken) return;
-        // ⚠⚠ FIX ROUND F3 (ORIGINAL) — THE PERMANENT SPINNER. This await can THROW, not just
+        // ⚠⚠ THE PERMANENT SPINNER. This await can THROW, not just
         // resolve unsuccessfully: `withAuth` throws on an expired session, and the repository
         // write throws on a DB error. Without this catch `phase` stayed `'generating'` forever —
         // no interval had been created yet, so `MAX_POLLS` could never rescue it, and the
@@ -166,7 +177,7 @@ export function useProjectBriefGeneration(
         return;
       }
 
-      // ⚠ FIX ROUND F3 — same bail, for the non-throwing path: a cancel/newer-start superseded
+      // ⚠ Same bail, for the non-throwing path: a cancel/newer-start superseded
       // this run while the action above was in flight.
       if (runTokenRef.current !== myRunToken) return;
 

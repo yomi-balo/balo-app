@@ -483,7 +483,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     };
   },
 
-  // BAL-589 (D19) — the `sourceCase` branch names the client COMPANY, matching the
+  // BAL-589 — the `sourceCase` branch names the client COMPANY, matching the
   // `project-request-submitted-admin` precedent just below: the submitting person is not on the
   // payload, so the party is the correct attribution for this prospective-feel copy.
   'project-request-submitted': (data) => {

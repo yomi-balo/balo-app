@@ -251,7 +251,7 @@ export type CaseEarningsView =
 // ── convert to project (BAL-589) ─────────────────────────────────────────────────────────
 
 /**
- * BAL-589 (D10) — what the "Convert to project" mount needs: the case's own live product ids
+ * BAL-589 — what the "Convert to project" mount needs: the case's own live product ids
  * (prefill) and whether the delivering expert can take a new DIRECT project request.
  *
  * ⚠⚠ `expertAvailableForWork` IS THE REAL `expertsRepository.findNewWorkEligibility`
@@ -492,7 +492,7 @@ export type CaseSurfaceView =
        */
       rating: EndOfCallRatingView | null;
       /**
-       * BAL-589 (D10) — the "Convert to project" mount's prefill + eligibility data.
+       * BAL-589 — the "Convert to project" mount's prefill + eligibility data.
        * ⚠ STRUCTURALLY ABSENT FROM THE EXPERT ARM (the `earnings` precedent) — only a client
        * can convert a case to a project, so there is no optional field for a bug to populate
        * on the expert side.

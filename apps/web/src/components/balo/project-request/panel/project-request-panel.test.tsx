@@ -88,7 +88,7 @@ vi.mock('@/components/balo/document-uploader', async () => {
       initialDocuments?: readonly MockDoc[];
       onDocumentsChange: (docs: MockDoc[]) => void;
       onRequireAuth?: () => void;
-      /** BAL-589 fix round F1 — captured so a panel-level test can assert the WIRING (the value
+      /** BAL-589 — captured so a panel-level test can assert the WIRING (the value
        *  the panel computes and passes down); the cap it ENFORCES is `document-uploader.test.tsx`'s
        *  own job. */
       maxDocuments?: number;
@@ -2064,7 +2064,7 @@ describe('ProjectRequestPanel', () => {
       expect(screen.getByLabelText(/project title/i)).toHaveValue(CASE_SOURCE.title);
     });
 
-    // ── F1 — case-file copies are no longer dropped when a file is also uploaded ─────────────
+    // Case-file copies are no longer dropped when a file is also uploaded.
     it('selecting two case files, then uploading one, submits all three documents', async () => {
       mockStartCaseBrief.mockResolvedValue({ success: true, parseId: 'case-parse-1' });
       mockGetBrief.mockResolvedValue({
@@ -2204,7 +2204,7 @@ describe('ProjectRequestPanel', () => {
       );
       expect(screen.getByText('AI draft')).toBeInTheDocument();
       // Title/products were already prefilled from the case — the patch's own title never
-      // overwrites them (S3).
+      // overwrites them.
       expect(screen.getByLabelText(/project title/i)).toHaveValue(CASE_SOURCE.title);
     }, 8000);
 

@@ -120,22 +120,14 @@ describe('useProjectDraft — default routing + autosave key', () => {
     expect(result.current.draft.title).toBe('x');
   });
 
-  it('keeps a stored expert-bound "direct" as direct', () => {
-    seed({ routing: 'direct' });
+  it.each([
+    ['direct', 'direct'],
+    ['match', 'match'],
+    ['bogus', 'direct'],
+  ])('resolves a stored expert-bound routing of %s to %s', (stored, expected) => {
+    seed({ routing: stored });
     const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
-    expect(result.current.draft.routing).toBe('direct');
-  });
-
-  it('keeps a stored expert-bound "match" as match', () => {
-    seed({ routing: 'match' });
-    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
-    expect(result.current.draft.routing).toBe('match');
-  });
-
-  it('falls back to direct for an expert-bound draft with a corrupt routing', () => {
-    seed({ routing: 'bogus' });
-    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
-    expect(result.current.draft.routing).toBe('direct');
+    expect(result.current.draft.routing).toBe(expected);
   });
 
   it('uses the byte-identical expert-bound key for an expert-bound mount', async () => {
@@ -424,7 +416,7 @@ describe('useProjectDraft — case draft key (BAL-589)', () => {
     expect(result.current.draft.caseFileSelections).toEqual({});
   });
 
-  // ── F2 — setField also accepts an updater, applied against the LATEST draft value ─────────
+  // setField also accepts an updater, applied against the LATEST draft value.
   it('setField applies an updater against the latest value, not a stale snapshot', async () => {
     const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY, CASE_ID));
     act(() => result.current.setField('caseFileSelections', { 'conversation:f1': COPIED_DOC }));
@@ -440,7 +432,7 @@ describe('useProjectDraft — case draft key (BAL-589)', () => {
     });
   });
 
-  // ── F5 — caseBriefSnapshot persists hasAiDraft/hasEditsSinceGenerate across a reload ───────
+  // caseBriefSnapshot persists hasAiDraft/hasEditsSinceGenerate across a reload.
   const SNAPSHOT = {
     title: 'Drafted title',
     descriptionHtml: '<p>Drafted body</p>',
@@ -474,7 +466,7 @@ describe('useProjectDraft — case draft key (BAL-589)', () => {
   });
 });
 
-// ── F1 — allDraftDocuments combines uploads + case-file selections ──────────────────────────
+// allDraftDocuments combines uploads + case-file selections.
 describe('allDraftDocuments', () => {
   const UPLOADED_DOC = {
     r2Key: 'project-documents/c/u/upload-1',

@@ -131,7 +131,7 @@ async function resolveMeetingFile(
 }
 
 /**
- * BAL-589 (D9) — copy ONE case file (conversation or meeting) into the requester's
+ * BAL-589 — copy ONE case file (conversation or meeting) into the requester's
  * `project-documents/{companyId}/{userId}/{uuid}` prefix, so selecting a case file in the
  * "Convert to project" panel never makes the client re-upload it.
  *

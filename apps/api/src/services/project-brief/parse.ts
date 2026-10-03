@@ -213,7 +213,7 @@ async function loadDocumentsSource(
 }
 
 /**
- * The case arm (BAL-589): the case gate + D7a history build (`loadCaseSource`), then the
+ * The case arm (BAL-589): the case gate + history build (`loadCaseSource`), then the
  * from-case prompt. `files` is always `[]` — the case arm is text-only.
  */
 async function loadCaseParseSource(
@@ -236,7 +236,7 @@ async function loadCaseParseSource(
 }
 
 /**
- * Dispatch on the row's source (D6/D7): a case source (`source_engagement_id` set) takes the
+ * Dispatch on the row's source: a case source (`source_engagement_id` set) takes the
  * case arm; otherwise the documents arm. The CHECK `project_brief_parses_exactly_one_source`
  * guarantees these are exhaustive and mutually exclusive.
  */
@@ -343,11 +343,11 @@ async function isStillClaimable(parseId: string): Promise<boolean> {
  *  1. Load the row (idempotent no-op if already terminal).
  *  2. Load the live taxonomy (needed to render either arm's prompt).
  *  3. Load the parse source — the documents arm (Gate 3, the byte cap, the real read) or the
- *     case arm (the case gate + the D7a history build), dispatched on `source_engagement_id`.
+ *     case arm (the case gate + the history build), dispatched on `source_engagement_id`.
  *  4. Re-check the row is still claimable (W8 — never spend a paid call on a settled row).
  *  5. Call the model (multimodal for documents, text-only for a case; schema-bound either way).
  *  6. Usable-output floor.
- *  7. Slug → id mapping (D5) + the unmatched-label footnote.
+ *  7. Slug → id mapping + the unmatched-label footnote.
  *  8. Persist the outcome.
  *
  * Non-retryable classifications (mapped by the CALLER — `jobs/project-brief-parse.ts` — to
@@ -375,7 +375,7 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
   const tagChoices = buildTaxonomyChoices(tagGroups);
   const productChoices = buildTaxonomyChoices(productCats);
 
-  // ── The parse source (D6/D7) — documents or a case, never both (CHECK) ──────────────────
+  // ── The parse source — documents or a case, never both (CHECK) ──────────────────
   const source = await loadParseSource(row, parseId, tagChoices, productChoices);
 
   // ── The model call ────────────────────────────────────────────────────────────────────────

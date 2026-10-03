@@ -18,9 +18,9 @@ export type AuthorizeSourceCaseResult =
   | { ok: false; error: string };
 
 /**
- * BAL-589 (D11) — re-authorize a submit's `sourceCaseId` against the SESSION, exactly like
- * every other input `submitProjectRequestAction` checks: the client's own rendering gate (D3)
- * is never trusted as the real one. Extracted out of the action (orchestrator note, SonarCloud
+ * BAL-589 — re-authorize a submit's `sourceCaseId` against the SESSION, exactly like
+ * every other input `submitProjectRequestAction` checks: the client's own rendering gate
+ * is never trusted as the real one. Extracted out of the action (SonarCloud
  * cognitive-complexity gate) so the action's own control flow stays flat.
  *
  * A `sourceCaseId` of `undefined` is the ordinary (non-conversion) path and short-circuits to
@@ -33,7 +33,7 @@ export type AuthorizeSourceCaseResult =
  *   2. The gate's `companyId` (from the LOADED case row) must equal the session's ACTIVE
  *      company.
  *   3. For a `direct` submit, the case's own expert must equal the request's target expert
- *      (D11) — a case cannot be converted into a direct request to a DIFFERENT expert. A
+ *      — a case cannot be converted into a direct request to a DIFFERENT expert. A
  *      `match` submit skips this check (the "Get matched instead" fallback still carries
  *      provenance).
  */

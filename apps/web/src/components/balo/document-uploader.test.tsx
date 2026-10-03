@@ -238,8 +238,8 @@ describe('DocumentUploader', () => {
     });
   });
 
-  // ── F1 — maxDocuments: a case mount reserves slots for its own case-file selections ────────
-  describe('maxDocuments (BAL-589 fix round F1)', () => {
+  // maxDocuments: a case mount reserves slots for its own case-file selections.
+  describe('maxDocuments (BAL-589)', () => {
     it('defaults to MAX_DOCUMENTS (4) when omitted — unchanged for every other caller', () => {
       render(<DocumentUploader onDocumentsChange={vi.fn()} />);
       expect(

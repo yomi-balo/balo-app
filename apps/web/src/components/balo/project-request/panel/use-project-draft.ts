@@ -35,7 +35,7 @@ export interface ProjectDraft {
    * find the exact key to remove. Empty `{}` for every non-case mount and for a case mount with
    * no selections.
    *
-   * ⚠ FIX ROUND F1 — kept OUT of `documents`. `DocumentUploader` is uncontrolled (seeded once
+   * ⚠ Kept OUT of `documents`. `DocumentUploader` is uncontrolled (seeded once
    * from `initialDocuments`, and `onDocumentsChange` REPLACES its caller's list wholesale from
    * its own internal row state alone); a case copy added to `documents` from here was silently
    * dropped the next time the uploader published its own rows — e.g. the first time the client
@@ -44,7 +44,7 @@ export interface ProjectDraft {
    */
   caseFileSelections: Record<string, ProjectDocumentRef>;
   /**
-   * BAL-589 fix round F5 — the snapshot taken right after `useCaseBriefFlow`'s last successful
+   * BAL-589 — the snapshot taken right after `useCaseBriefFlow`'s last successful
    * generation, persisted so `hasAiDraft`/`hasEditsSinceGenerate` survive a reload instead of
    * resetting to "no AI draft" on every mount (they otherwise lived only in that hook's own,
    * mount-scoped state). `null` whenever no case brief has ever landed, a new run has just
@@ -93,10 +93,10 @@ const EMPTY_DRAFT_WITHOUT_ROUTING: DraftWithoutRouting = {
 };
 
 /**
- * BAL-589 fix round F1 — every document the request actually carries: the uploader-owned
+ * BAL-589 — every document the request actually carries: the uploader-owned
  * `documents` plus every case-file copy the client has selected. ONE helper so the submit
  * payload, the review summary, the analytics `document_count`, and `useCaseBriefFlow`'s own
- * resume check (S5) never drift from one another.
+ * resume check never drift from one another.
  */
 export function allDraftDocuments(
   draft: Pick<ProjectDraft, 'documents' | 'caseFileSelections'>
@@ -348,7 +348,7 @@ export type FreshDraftFields = Partial<
 >;
 
 /**
- * BAL-589 fix round F2 — `setField` also accepts an UPDATER, exactly like React's own `setState`
+ * BAL-589 — `setField` also accepts an UPDATER, exactly like React's own `setState`
  * overload: `(key, (prev) => next)` applies against the LATEST draft value for that field, even
  * when another `setField` call for the same key is still in flight (e.g. two case-file
  * selections resolving back-to-back). A plain `value` is applied as before.

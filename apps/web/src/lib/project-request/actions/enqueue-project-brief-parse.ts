@@ -52,7 +52,7 @@ function parseEnqueueResponse(parsed: Record<string, unknown>): { enqueued: true
  * `cases/[engagementId]/_actions/start-case-brief-parse.ts` — because each gate's authority is
  * specific to its own source and this module has no session or case to check either against.
  *
- * A case source shares the same {@link MAX_PARSES_PER_HOUR} budget as a documents source (D6) —
+ * A case source shares the same {@link MAX_PARSES_PER_HOUR} budget as a documents source —
  * one counter, keyed by `requestedByUserId` alone, regardless of which arm created the row.
  */
 export async function enqueueProjectBriefParse(

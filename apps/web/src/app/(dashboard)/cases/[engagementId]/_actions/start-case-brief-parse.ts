@@ -20,8 +20,8 @@ const DENIED = "You don't have permission to draft a project brief from this cas
 const WRONG_WORKSPACE = 'Switch to the workspace this case belongs to.';
 
 /**
- * BAL-589 — start a project-brief parse sourced from ONE case's message/transcript history
- * (D6), rather than uploaded documents. Client-only, both in rendering (D3) and here:
+ * BAL-589 — start a project-brief parse sourced from ONE case's message/transcript history,
+ * rather than uploaded documents. Client-only, both in rendering and here:
  *
  *   1. `authorizeClientCaseMutation` — the shared client-lens membership gate (onboarded
  *      session, tenancy re-run, `lens === 'client'`, `PARTICIPATE`). An expert-lens actor, or

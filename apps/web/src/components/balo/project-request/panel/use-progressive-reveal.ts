@@ -4,10 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
 
 /**
- * BAL-589 (D5) — BAL-254's AI brief delivers a finished draft, never a stream; this hook is
+ * BAL-589 — BAL-254's AI brief delivers a finished draft, never a stream; this hook is
  * what makes a case-mount's finished brief FEEL drafted. It reveals `html`'s top-level blocks
  * one at a time, client-side, over an already-complete string — there is no new streaming
- * transport (D5 is explicit: "No real streaming").
+ * transport ("No real streaming" is explicit).
  *
  * Splitting on `DOMParser`, never a regex (SonarCloud S5852 — a hand-rolled tag scan over
  * arbitrary HTML is a ReDoS surface; `DOMParser` is linear and exact).
@@ -50,7 +50,7 @@ export function useProgressiveReveal(html: string | null, runKey: number): Progr
   const reduce = useReducedMotion();
   const blocks = useMemo(() => (html === null ? [] : splitTopLevelBlocks(html)), [html]);
   const [visibleCount, setVisibleCount] = useState(0);
-  // ⚠⚠ FIX ROUND F6 — reset `visibleCount` DURING RENDER when `runKey` changes, not from inside
+  // ⚠⚠ Reset `visibleCount` DURING RENDER when `runKey` changes, not from inside
   // the effect below. A redraft lands a new `runKey` (usually with FEWER blocks) in the same
   // render that recomputes `blocks`; resetting only from the effect left `visibleCount` from the
   // PREVIOUS run on screen for one paint — e.g. a 3-block reveal collapsing to 1 block briefly

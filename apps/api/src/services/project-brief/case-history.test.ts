@@ -139,6 +139,44 @@ describe('buildCaseHistoryInput', () => {
     ]);
   });
 
+  it('each meeting pairs with its OWN ref under concurrent resolution', async () => {
+    // Two meetings, resolved via `Promise.all` rather than a sequential loop: this pins
+    // that meeting-2 never ends up reading meeting-1's transcript ref or vice versa.
+    findByContext.mockResolvedValue(undefined);
+    listMeetingsForContext.mockResolvedValue([
+      { id: 'meeting-1', scheduledStart: new Date('2026-01-01') },
+      { id: 'meeting-2', scheduledStart: new Date('2026-01-02') },
+    ]);
+    findByMeetingIds.mockResolvedValue(
+      new Map([
+        ['meeting-1', { id: 'transcript-1', status: 'completed', meetingId: 'meeting-1' }],
+        ['meeting-2', { id: 'transcript-2', status: 'completed', meetingId: 'meeting-2' }],
+      ])
+    );
+    findByTranscriptAndKind.mockImplementation((transcriptId: string) =>
+      Promise.resolve(
+        transcriptId === 'transcript-1' ? { content: 'Summary for meeting one.' } : undefined
+      )
+    );
+    findById.mockImplementation((transcriptId: string) =>
+      Promise.resolve(
+        transcriptId === 'transcript-2'
+          ? { id: 'transcript-2', canonical: canonicalWith('Raw text for meeting two.') }
+          : undefined
+      )
+    );
+
+    const result = await buildCaseHistoryInput({
+      engagementId: ENGAGEMENT_ID,
+      expertUserIds: [EXPERT_USER],
+    });
+
+    expect(result.transcripts).toEqual([
+      { heldAt: new Date('2026-01-02'), source: 'transcript', text: 'Raw text for meeting two.' },
+      { heldAt: new Date('2026-01-01'), source: 'summary', text: 'Summary for meeting one.' },
+    ]);
+  });
+
   it('⚠ reads only the newest CASE_HISTORY_MAX_TRANSCRIPTS (10) meetings', async () => {
     findByContext.mockResolvedValue(undefined);
     const meetings = Array.from({ length: 14 }, (_, i) => ({
@@ -230,7 +268,7 @@ describe('renderCaseHistory', () => {
     );
 
     expect(result.truncated).toBe(false); // it is the ONLY item — nothing else was dropped
-    expect(result.text.length).toBe(50);
+    expect(result.text).toHaveLength(50);
     expect(result.text.startsWith('[2026-01-01] Client:')).toBe(true);
   });
 
@@ -249,6 +287,6 @@ describe('renderCaseHistory', () => {
 
     expect(result.truncated).toBe(true);
     expect(result.text).not.toContain('older');
-    expect(result.text.length).toBe(50 + '[Earlier case history omitted]\n'.length);
+    expect(result.text).toHaveLength(50 + '[Earlier case history omitted]\n'.length);
   });
 });

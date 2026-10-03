@@ -92,7 +92,7 @@ function publishProjectRequestSubmitted(params: {
       tagIds,
       productIds,
       documentCount,
-      // BAL-589 (D14) — only the DIRECT publish carries this; the match publish is unchanged
+      // BAL-589 — only the DIRECT publish carries this; the match publish is unchanged
       // even when a case conversion is routed to match (the "Get matched instead" fallback).
       ...(sourceCase ? { sourceCase } : {}),
     }).catch(() => {
@@ -177,9 +177,9 @@ export const submitProjectRequestAction = withAuth(
       //    the session, never client-supplied.
       const expertProfileId = input.sendTo === 'direct' ? input.expertProfileId : null;
 
-      // 4b. BAL-589 — re-authorize a case conversion (D11). `sourceCaseId` is client input and
+      // 4b. BAL-589 — re-authorize a case conversion. `sourceCaseId` is client input and
       //     is checked against the session, exactly like every other input above — the
-      //     client's own gating (D3's render hint) is never trusted as the real gate.
+      //     client's own gating (the render hint) is never trusted as the real gate.
       const sourceCaseGate = await authorizeSourceCase({
         sourceCaseId: input.sourceCaseId,
         sendTo: input.sendTo,

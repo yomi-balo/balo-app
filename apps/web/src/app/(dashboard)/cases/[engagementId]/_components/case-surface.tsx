@@ -376,7 +376,7 @@ export function CaseSurface({
         <Reveal>
           <CaseHeader
             header={view.header}
-            // BAL-589 (D2/D3) — client lens only, on BOTH open and closed cases; a render
+            // BAL-589 — client lens only, on BOTH open and closed cases; a render
             // hint, never authorization (see `ConvertToProject`'s own docblock).
             action={view.lens === 'client' ? <ConvertToProject view={view} /> : undefined}
           />

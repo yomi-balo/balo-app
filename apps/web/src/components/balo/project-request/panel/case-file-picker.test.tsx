@@ -79,7 +79,7 @@ const COPIED_MEETING_DOC: ProjectDocumentRef = {
 
 /**
  * A REAL, state-backed harness. `onCaseFileSelectionsChange` is React's own `setState` updater
- * SIGNATURE (fix round F2), so passing the setter itself exercises the component's functional
+ * signature, so passing the setter itself exercises the component's functional
  * updates exactly as `ProjectRequestPanel` does (`setField('caseFileSelections', updater)`).
  */
 function renderPicker(
@@ -109,7 +109,7 @@ function renderPicker(
   return { view, getSelections: () => latestSelections };
 }
 
-/** Narrow by destructure + guard (fix round F10) — never `[n]!`. */
+/** Narrow by destructure + guard — never `[n]!`. */
 function nthCheckbox(index: number): HTMLElement {
   const checkboxes = screen.getAllByRole('checkbox');
   const checkbox = checkboxes[index];
@@ -162,7 +162,7 @@ describe('CaseFilePicker', () => {
     expect(screen.getAllByText('4-file limit reached')).toHaveLength(2);
   });
 
-  // ── F7 — the whole row is the hit target, not the bare 16px checkbox ──────────────────────
+  // The whole row is the hit target, not the bare 16px checkbox.
   it('clicking the FILE NAME (not just the checkbox) toggles selection', async () => {
     mockCopy.mockResolvedValue({ success: true, document: COPIED_CONVERSATION_DOC });
     const user = userEvent.setup();
@@ -255,7 +255,7 @@ describe('CaseFilePicker', () => {
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
-  // ── F2 — a functional update, so two quick selections resolving OUT OF ORDER both persist ──
+  // A functional update, so two quick selections resolving OUT OF ORDER both persist.
   it('two selections resolving out of order both persist in caseFileSelections', async () => {
     let resolveFirst: (value: unknown) => void = () => {};
     let resolveSecond: (value: unknown) => void = () => {};
@@ -296,7 +296,7 @@ describe('CaseFilePicker', () => {
     });
   });
 
-  // ── F18 — an in-flight copy reserves its slot BEFORE it resolves ──────────────────────────
+  // An in-flight copy reserves its slot BEFORE it resolves.
   it('at 3 documents, ticking two rows quickly disables the second row once the first is in flight', async () => {
     let resolveFirst: (value: unknown) => void = () => {};
     mockCopy.mockImplementationOnce(

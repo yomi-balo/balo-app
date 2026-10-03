@@ -129,7 +129,7 @@ describe('useProgressiveReveal', () => {
     expect(result.current.visibleHtml).toBe('<p>Second</p><p>Third</p>');
   });
 
-  // ── F6 — reset happens DURING RENDER, not from the effect ─────────────────────────────────
+  // Reset happens DURING RENDER, not from the effect.
   it('a redraft with FEWER blocks than the previous run starts from zero', async () => {
     const { result, rerender } = renderHook(
       ({ html, runKey }) => useProgressiveReveal(html, runKey),

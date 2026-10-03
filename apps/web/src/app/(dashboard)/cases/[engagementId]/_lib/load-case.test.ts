@@ -396,7 +396,7 @@ describe('loadCase — the lens is a DISCRIMINANT, not a flag', () => {
   });
 });
 
-// ── projectConversion (BAL-589 / D10) ──────────────────────────────────────────────────────
+// ── projectConversion (BAL-589) ──────────────────────────────────────────────────────────
 
 describe('loadCase — projectConversion (the "Convert to project" mount\'s prefill + gate)', () => {
   it("CLIENT arm carries the case's live products and the real eligibility answer", async () => {

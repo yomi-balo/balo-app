@@ -616,7 +616,7 @@ describe('CaseSurface — the lens is a discriminant all the way down', () => {
     expect(screen.getByText('You')).toBeInTheDocument();
   });
 
-  // BAL-589 (D2/D3) — the "Convert to project" header action: client lens only, open or
+  // BAL-589 — the "Convert to project" header action: client lens only, open or
   // closed. `ConvertToProject` itself proves the panel's props in its own test file.
   it('mounts "Convert to project" on the CLIENT lens, and never on the EXPERT lens', () => {
     const { unmount } = render(<CaseSurface view={clientView()} />);
@@ -628,7 +628,7 @@ describe('CaseSurface — the lens is a discriminant all the way down', () => {
     expect(screen.queryByTestId('convert-to-project-stub')).not.toBeInTheDocument();
   });
 
-  it('mounts "Convert to project" on a CLOSED client case too (D2) — the case is never mutated', () => {
+  it('mounts "Convert to project" on a CLOSED client case too — the case is never mutated', () => {
     render(
       <CaseSurface
         view={clientView({

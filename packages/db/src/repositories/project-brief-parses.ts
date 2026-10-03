@@ -42,7 +42,7 @@ export type CreateProjectBriefParseInput = {
   | {
       readonly source: 'documents';
       /**
-       * ⚠⚠ ALREADY SESSION-VALIDATED (Ruling A / §12 Gate 1). This repository does NOT and
+       * ⚠⚠ ALREADY SESSION-VALIDATED. This repository does NOT and
        * CANNOT check the keys — it has no session. The documents start action re-derives
        * `project-documents/{session.companyId}/{session.userId}/` for every key before calling
        * here, and this is the ONLY write path into `source_documents`. A second caller of

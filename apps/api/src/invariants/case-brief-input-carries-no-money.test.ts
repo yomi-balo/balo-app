@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { markersInCode, readRaw } from './_source-scan.js';
 
 /**
- * BAL-589 (D7 / D7a) — THE FEE-CONCEALMENT INVARIANT for the case→project brief path. A brief
+ * BAL-589 — THE FEE-CONCEALMENT INVARIANT for the case→project brief path. A brief
  * drafted from a case reads the case's conversation and call history, and MUST NOT be able to
  * see, and therefore MUST NOT be able to leak into a project request, anything money-shaped:
  * a credit session, a rate, Balo's margin, a currency, or a billed duration.
@@ -46,7 +46,7 @@ const FORBIDDEN_MONEY_NEEDLES = [
   'Ledger',
 ];
 
-describe('invariant: the case-brief input carries no money (BAL-589 D7)', () => {
+describe('invariant: the case-brief input carries no money (BAL-589)', () => {
   it('reads real, non-empty content for all three subject files (guards a vacuous pass)', () => {
     const historyRaw = readRaw(CASE_HISTORY_FILE);
     const sourceRaw = readRaw(CASE_SOURCE_FILE);

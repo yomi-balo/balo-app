@@ -171,8 +171,8 @@ describe('project-document storage', () => {
       expect(mockWarn).toHaveBeenCalled();
     });
 
-    // ── F13 — never log or throw the R2 key, only the source origin + message ────────────────
-    it('logs the source origin and error message on failure, never the keys (F13)', async () => {
+    // Never log or throw the R2 key, only the source origin + message.
+    it('logs the source origin and error message on failure, never the keys', async () => {
       mockSend.mockRejectedValue(new Error('R2 down'));
       await expect(copyCaseFileIntoProjectDocuments(SRC_CONVERSATION, DEST)).rejects.toThrow(
         'R2 down'
@@ -186,7 +186,7 @@ describe('project-document storage', () => {
       expect(context).not.toHaveProperty('destKey');
     });
 
-    it('tags a meeting-sourced failure with the meeting origin (F13)', async () => {
+    it('tags a meeting-sourced failure with the meeting origin', async () => {
       mockSend.mockRejectedValue(new Error('R2 down'));
       await expect(copyCaseFileIntoProjectDocuments(SRC_MEETING, DEST)).rejects.toThrow('R2 down');
       expect(mockWarn).toHaveBeenCalledWith('Failed to copy case file into project documents', {
@@ -195,7 +195,7 @@ describe('project-document storage', () => {
       });
     });
 
-    it('the guard errors never include the key (F13)', async () => {
+    it('the guard errors never include the key', async () => {
       const badSrc = `${PROJECT_DOCUMENT_PREFIX}other/x/y`;
       let srcError: unknown;
       try {

@@ -76,7 +76,7 @@ export interface GenerationErrorBannerProps {
   onDismiss?: () => void;
 }
 
-/** The ONE copy for a case-source failure, regardless of reason (D16). */
+/** The ONE copy for a case-source failure, regardless of reason. */
 const CASE_VARIANT_COPY: CopyEntry = {
   headline: "We couldn't draft a brief from this case — write it yourself below.",
   clause: '',

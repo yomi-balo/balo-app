@@ -94,7 +94,7 @@ interface DocumentUploaderProps {
    */
   onRequireAuth?: () => void;
   /**
-   * BAL-589 fix round F1 — the cap this INSTANCE enforces, defaulting to {@link MAX_DOCUMENTS}.
+   * BAL-589 — the cap this INSTANCE enforces, defaulting to {@link MAX_DOCUMENTS}.
    * A case mount reserves one slot per case-file copy already selected in `CaseFilePicker` (those
    * never become rows here — see `ProjectDraft.caseFileSelections`'s docblock) by passing
    * `MAX_DOCUMENTS - caseCopyCount`, so the shared cap is never exceeded across the two surfaces.

@@ -50,7 +50,7 @@ export function CaseHeader({
 }: Readonly<{
   header: CaseHeaderView;
   /** BAL-589 — the "Convert to project" button, top-right (design reference :972-986).
-   *  Optional: a render hint supplied by the caller (client lens only, D3) — this component
+   *  Optional: a render hint supplied by the caller (client lens only) — this component
    *  stays lens-agnostic and renders whatever it is given. */
   action?: React.ReactNode;
 }>): React.JSX.Element {

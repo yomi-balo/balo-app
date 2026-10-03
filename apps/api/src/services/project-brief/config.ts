@@ -16,14 +16,14 @@ export const PROJECT_BRIEF_MAX_OUTPUT_TOKENS = 4096;
 export const PROJECT_BRIEF_BUDGET_INPUT_TOKENS = 60_000;
 
 /**
- * BAL-589 (S7) — the case-source text cap. About 30k tokens, which stays under
+ * BAL-589 — the case-source text cap. About 30k tokens, which stays under
  * {@link PROJECT_BRIEF_BUDGET_INPUT_TOKENS} (60k) once the taxonomy lists and the system
  * prompt are added. Enforced by `renderCaseHistory` (`case-history.ts`), newest-first.
  */
 export const CASE_HISTORY_MAX_CHARS = 120_000;
 
 /**
- * BAL-589 (S7) — the newest-N meetings whose transcripts `case-history.ts` reads, bounding the
+ * BAL-589 — the newest-N meetings whose transcripts `case-history.ts` reads, bounding the
  * per-transcript reads so a long-running case cannot turn this worker into an N+1.
  */
 export const CASE_HISTORY_MAX_TRANSCRIPTS = 10;

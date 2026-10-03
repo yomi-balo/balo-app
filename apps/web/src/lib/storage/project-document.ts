@@ -104,7 +104,7 @@ export async function copyCaseFileIntoProjectDocuments(
       })
     );
   } catch (error) {
-    // ⚠ F13 — never log the R2 key; the origin + message are enough to debug.
+    // ⚠ Never log the R2 key; the origin + message are enough to debug.
     log.warn('Failed to copy case file into project documents', {
       sourceOrigin,
       error: error instanceof Error ? error.message : String(error),

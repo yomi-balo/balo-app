@@ -17,11 +17,11 @@ export interface CaseFilePickerProps {
   caseId: string;
   files: readonly CaseFileRowView[];
   /** The uploader's own (non-case-file) document count — combined with this picker's own
-   *  selection count for the shared {@link MAX_DOCUMENTS} cap (fix round F1). */
+   *  selection count for the shared {@link MAX_DOCUMENTS} cap. */
   uploadedDocumentCount: number;
   caseFileSelections: Record<string, ProjectDocumentRef>;
   /**
-   * ⚠ FIX ROUND F2 — an UPDATER, exactly like React's own `setState`, never a plain next value.
+   * ⚠ An UPDATER, exactly like React's own `setState`, never a plain next value.
    * Two quick selections each read the record as it was when THEIR OWN click started; applying
    * against a snapshot captured at render time let the second resolution silently overwrite the
    * first. An updater is applied against whatever is current at write time instead.
@@ -30,7 +30,7 @@ export interface CaseFilePickerProps {
     updater: (prev: Record<string, ProjectDocumentRef>) => Record<string, ProjectDocumentRef>
   ) => void;
   /**
-   * Fix round F18 — reports this picker's in-flight copy count on every change (including 0 on
+   * Reports this picker's in-flight copy count on every change (including 0 on
    * mount and on settle), so the panel can shrink the uploader's own `maxDocuments` by the same
    * amount a copy still in flight already reserves here.
    */
@@ -52,7 +52,7 @@ const INELIGIBLE_LABELS: Record<Exclude<CaseFileEligibility, 'eligible'>, string
 const GENERIC_ERROR = 'Could not attach this file. Please try again.';
 
 /**
- * BAL-589 (D9) — the "From this case" list above `DocumentUploader` on a case mount's manual
+ * BAL-589 — the "From this case" list above `DocumentUploader` on a case mount's manual
  * step. Every case file is LISTED (never hidden for being ineligible — the row stays, greyed,
  * with its reason) so the client always sees the file existed and why it can't be added, rather
  * than a silently shorter list.
@@ -77,7 +77,7 @@ export function CaseFilePicker({
 }: Readonly<CaseFilePickerProps>): React.JSX.Element | null {
   const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(new Set());
 
-  // Fix round F18 — tell the panel every time the in-flight count changes, so it can reserve
+  // Tell the panel every time the in-flight count changes, so it can reserve
   // the same slots on the uploader's `maxDocuments` that this picker already reserves below.
   useEffect(() => {
     onBusyCountChange?.(busyKeys.size);
@@ -117,7 +117,7 @@ export function CaseFilePicker({
           toast.error(result.error);
           return;
         }
-        // ⚠ FIX ROUND F2 — functional update: applies against whatever `caseFileSelections`
+        // ⚠ Functional update: applies against whatever `caseFileSelections`
         // is current AT WRITE TIME, so a second selection resolving before or after this one
         // can never clobber it.
         onCaseFileSelectionsChange((prev) => ({ ...prev, [key]: result.document }));
@@ -150,9 +150,8 @@ export function CaseFilePicker({
 
   if (files.length === 0) return null;
 
-  // Fix round F1 — the shared MAX_DOCUMENTS cap counts uploads AND case copies together.
-  // Fix round F18 — a copy still in flight reserves its slot too, so two quick selections can't
-  // both start past the cap.
+  // The shared MAX_DOCUMENTS cap counts uploads AND case copies together. A copy still in
+  // flight reserves its slot too, so two quick selections can't both start past the cap.
   const totalDocumentCount =
     uploadedDocumentCount + Object.keys(caseFileSelections).length + busyKeys.size;
 
@@ -173,7 +172,7 @@ export function CaseFilePicker({
           return (
             <li key={key}>
               {/*
-                ⚠ FIX ROUND F7 — the whole row is the label, min-h-11 (44px), so the hit target
+                ⚠ The whole row is the label, min-h-11 (44px), so the hit target
                 isn't the bare 16px checkbox. A disabled row shows a not-allowed cursor and
                 never toggles.
               */}

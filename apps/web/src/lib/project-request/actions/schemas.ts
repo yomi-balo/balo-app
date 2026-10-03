@@ -61,9 +61,9 @@ const baseProjectRequestFields = {
   productIds: z.array(z.string().uuid()).max(50).default([]),
   documents: z.array(documentRefSchema).max(MAX_DOCUMENTS).default([]),
   source: z.enum(['manual', 'ai', 'quickstart']).default('manual'),
-  // BAL-589 — present when this request converts a case (D4/D11). Re-authorized server-side
+  // BAL-589 — present when this request converts a case. Re-authorized server-side
   // against the session (never trusted at face value) before it reaches the repository.
-  sourceCaseId: z.string().uuid().optional(),
+  sourceCaseId: z.uuid().optional(),
   // Optional budget range in integer minor units (cents), fixed to AUD in the
   // action. Both nullable — either side may be omitted for a one-sided budget.
   budgetMinCents: z.number().int().nonnegative().nullable().default(null),

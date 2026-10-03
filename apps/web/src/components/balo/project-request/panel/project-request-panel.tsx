@@ -78,8 +78,8 @@ export type { ProjectRequestEntryPoint } from './use-project-draft';
 /**
  * BAL-589 — what a "Convert to project" mount (`convert-to-project.tsx`) hands the panel: the
  * case's own id/title (for the draft key, the audit provenance and the "Linked to case" copy),
- * its live product ids (prefill, D8) and its file rows (`CaseFilePicker`'s "From this case"
- * list). One object, not a bare `caseId` (plan S1) — so the title/products/files can never
+ * its live product ids (prefill) and its file rows (`CaseFilePicker`'s "From this case"
+ * list). One object, not a bare `caseId` — so the title/products/files can never
  * arrive without the id.
  */
 export interface ProjectRequestSourceCase {
@@ -105,7 +105,7 @@ interface CaseBriefBundle {
   onRetry: () => void;
   onDismissFailure: () => void;
   /** The uploader's own document count — `CaseFilePicker` combines it with its own selection
-   *  count for the shared cap (fix round F1). */
+   *  count for the shared cap. */
   uploadedDocumentCount: number;
   caseFileSelections: Record<string, ProjectDocumentRef>;
   onCaseFileSelectionsChange: (
@@ -172,8 +172,8 @@ export interface ProjectRequestPanelProps {
   /**
    * BAL-589 — present means this is a "Convert to project" mount, bound to the case's own
    * expert: `entryPoint` is `'case'`, the draft key is `balo:project-draft:case:{id}` (checked
-   * before the expert key), the mount opens straight at `manual` with no `start`/`upload` step
-   * (D4), and the manual step auto-drafts a brief from the case's history instead of offering a
+   * before the expert key), the mount opens straight at `manual` with no `start`/`upload` step,
+   * and the manual step auto-drafts a brief from the case's history instead of offering a
    * choice of entry path (`useCaseBriefFlow`).
    */
   sourceCase?: ProjectRequestSourceCase;
@@ -275,8 +275,8 @@ function getRoutingCopy(routing: ProjectRouting, firstName: string | undefined):
 }
 
 /**
- * BAL-589 (S2) — what `source`/`method` the submit actually records. A case mount's
- * `draft.source` stays `'manual'` forever (the case flow never sets it — S2), so this reads
+ * BAL-589 — what `source`/`method` the submit actually records. A case mount's
+ * `draft.source` stays `'manual'` forever (the case flow never sets it), so this reads
  * `caseBriefFlow.hasAiDraft` instead; every other mount keeps reading `draft.source` as before.
  */
 function resolveSubmitSource(
@@ -349,7 +349,7 @@ interface RegenerateDialogConfig {
 }
 
 /**
- * BAL-589 (D16) — the "replace my edits?" confirm dialog is shared chrome; only its copy and
+ * BAL-589 — the "replace my edits?" confirm dialog is shared chrome; only its copy and
  * the flow it drives differ between a case mount (`useCaseBriefFlow`'s redraft) and the AI
  * upload path (`useAiBriefFlow`'s regenerate). Extracted for the same complexity reason as
  * {@link buildCaseBriefBundle}.
@@ -651,7 +651,7 @@ export function ProjectRequestPanel({
     });
   }, [open, step, expertProfileId, entryPoint]);
 
-  // ⚠ F5 — closing the drawer does not unmount this component, so a parse that lands after the
+  // ⚠ Closing the drawer does not unmount this component, so a parse that lands after the
   // user has closed it, or after they have submitted, must write nothing. Computed ONCE and
   // shared by both brief flows below (rather than repeating the expression) so SonarCloud's
   // cognitive-complexity count sees one `&&`, not two.
@@ -837,7 +837,7 @@ export function ProjectRequestPanel({
       caseBriefFlow.hasAiDraft,
       draft.source
     );
-    // ⚠ FIX ROUND F1 — every document the request carries: the uploader's own PLUS every
+    // ⚠ Every document the request carries: the uploader's own PLUS every
     // case-file copy, which `draft.documents` alone never holds (see `allDraftDocuments`).
     const submittedDocuments = allDraftDocuments({
       documents: draft.documents,
@@ -1025,7 +1025,7 @@ export function ProjectRequestPanel({
   // `isGenerating`).
   const caseBriefWorking = isCaseBriefWorking(isCaseMount, caseBriefFlow.phase);
 
-  // BAL-589 (D16) — the "replace my edits?" confirm dialog is shared chrome; only its copy and
+  // BAL-589 — the "replace my edits?" confirm dialog is shared chrome; only its copy and
   // the flow it drives differ between a case mount (`useCaseBriefFlow`'s redraft) and the AI
   // upload path (`useAiBriefFlow`'s regenerate).
   const regenerateDialog = resolveRegenerateDialog(isCaseMount, caseBriefFlow, {
@@ -1662,7 +1662,7 @@ function ManualStepFields({
   caseBrief,
 }: Readonly<ManualStepFieldsProps>): React.JSX.Element {
   const timelineHintId = useId();
-  // Fix round F18 — copies the picker reports as in-flight reserve a slot too, shrinking the
+  // Copies the picker reports as in-flight reserve a slot too, shrinking the
   // uploader's own `maxDocuments` by the same amount the picker already reserves for them.
   const [busyCopyCount, setBusyCopyCount] = useState(0);
   return (
@@ -1814,9 +1814,9 @@ function ManualStepFields({
           onDocumentsChange={onDocumentsChange}
           onUploadingChange={onUploadingChange}
           onRequireAuth={onRequireAuth}
-          // ⚠ FIX ROUND F1 — on a case mount, every selected case-file copy reserves one of the
+          // ⚠ On a case mount, every selected case-file copy reserves one of the
           // shared MAX_DOCUMENTS slots even though it never joins this uploader's own rows.
-          // FIX ROUND F18 — a copy still in flight reserves its slot too.
+          // A copy still in flight reserves its slot too.
           maxDocuments={
             caseBrief
               ? MAX_DOCUMENTS - Object.keys(caseBrief.caseFileSelections).length - busyCopyCount
@@ -1875,31 +1875,36 @@ interface CaseBriefFieldProps {
 /**
  * An "editor-shaped" skeleton — a few pulsing bars the width of the real editor's text.
  *
- * ⚠ FIX ROUND F8 — the heading is now VISIBLE (not just `aria-label`), matching the AI-upload
- * path's own generating state (`GENERATING_HEADINGS`). The `aria-label` stays too: `role="status"`
- * computes its accessible name from the author, never from content, so dropping it would silence
- * screen readers.
+ * ⚠ The heading is VISIBLE (not just `aria-label`), matching the AI-upload
+ * path's own generating state (`GENERATING_HEADINGS`). The `aria-label` stays too: an accessible
+ * name is computed from the author, never from content, so dropping it would silence screen
+ * readers.
+ *
+ * ⚠ `<output>` (native), not `role="status"` (SonarCloud S6819 flags the ARIA
+ * role where a native element already carries it), matching `(call)/meetings/[meetingId]/call/
+ * loading.tsx`. `<output>` takes phrasing content only, so every child below is a `<span>`.
  */
 function CaseBriefSkeleton(): React.JSX.Element {
   return (
-    <div
-      className="border-border bg-card space-y-3 rounded-lg border p-4"
-      role="status"
+    <output
       aria-label="Drafting a brief from your case…"
+      className="border-border bg-card block space-y-3 rounded-lg border p-4"
     >
-      <p className="text-foreground text-sm font-semibold">Drafting a brief from your case…</p>
-      <div className="space-y-2">
-        <div className="bg-muted h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
-        <div className="bg-muted h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
-        <div className="bg-muted h-3.5 w-5/6 animate-pulse rounded" aria-hidden="true" />
-        <div className="bg-muted h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
-        <div className="bg-muted h-3.5 w-2/3 animate-pulse rounded" aria-hidden="true" />
-      </div>
-    </div>
+      <span className="text-foreground block text-sm font-semibold">
+        Drafting a brief from your case…
+      </span>
+      <span className="block space-y-2">
+        <span className="bg-muted block h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
+        <span className="bg-muted block h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
+        <span className="bg-muted block h-3.5 w-5/6 animate-pulse rounded" aria-hidden="true" />
+        <span className="bg-muted block h-3.5 w-full animate-pulse rounded" aria-hidden="true" />
+        <span className="bg-muted block h-3.5 w-2/3 animate-pulse rounded" aria-hidden="true" />
+      </span>
+    </output>
   );
 }
 
-/** FIX ROUND F4 — "Redraft from case" is live only once a case brief has actually landed and
+/** "Redraft from case" is live only once a case brief has actually landed and
  *  nothing is in flight; disabled the rest of the time (including the auto-start's own
  *  `generating` phase, before `hasAiDraft` is even relevant). */
 function canRedraftCaseBrief(hasAiDraft: boolean, phase: CaseBriefPhase): boolean {

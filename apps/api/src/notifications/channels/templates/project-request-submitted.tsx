@@ -60,7 +60,7 @@ interface ProjectRequestSubmittedEmailProps {
   readonly tagCount?: number;
   readonly productCount?: number;
   readonly documentCount?: number;
-  // BAL-589 — set only when the request was converted from a case (D19). Replaces the generic
+  // BAL-589 — set only when the request was converted from a case. Replaces the generic
   // hero subtext with "{clientName} wants to turn {sourceCaseTitle} into a project."
   readonly sourceCaseTitle?: string;
   readonly clientName?: string;

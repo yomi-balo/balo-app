@@ -22,7 +22,10 @@ vi.mock('@sentry/nextjs', () => ({
   captureException: (...args: unknown[]) => mockCaptureException(...args),
 }));
 
-import { useProjectBriefGeneration } from './use-project-brief-generation';
+import {
+  useProjectBriefGeneration,
+  reportUnexpectedBriefError,
+} from './use-project-brief-generation';
 
 const DOCS = [
   { r2Key: 'k', fileName: 'a.pdf', contentType: 'application/pdf' as const, sizeBytes: 10 },
@@ -346,7 +349,7 @@ describe('useProjectBriefGeneration', () => {
     });
   });
 
-  // ── F3 — cancel() doesn't invalidate a start() whose ACTION call is still pending ─────────
+  // cancel() doesn't invalidate a start() whose ACTION call is still pending.
   it('⚠ open, close (cancel), then reopen (start again) while the first start is pending leaves exactly one interval and no forced timed_out', async () => {
     let resolveFirstStart: (value: { success: true; parseId: string }) => void = () => {};
     mockStart
@@ -493,6 +496,15 @@ describe('useProjectBriefGeneration', () => {
 
       expect(onSucceeded).toHaveBeenCalledWith(draft);
       expect(result.current.phase).toBe('idle');
+    });
+  });
+
+  // The one caller-side reporting helper for a `start()` that rejects anyway.
+  describe('reportUnexpectedBriefError', () => {
+    it('reports to Sentry when a caller `.catch`es an unexpectedly rejecting `start`', () => {
+      const error = new Error('unexpected');
+      reportUnexpectedBriefError(error);
+      expect(mockCaptureException).toHaveBeenCalledWith(error);
     });
   });
 });

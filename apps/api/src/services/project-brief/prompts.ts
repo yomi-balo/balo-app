@@ -125,15 +125,15 @@ export function briefParsePrompt(input: {
 }
 
 /**
- * BAL-589 (D7b, fix round F12) — the untrusted-content guard for the case history. The history
+ * BAL-589 — the untrusted-content guard for the case history. The history
  * is TEXT, so unlike `UNTRUSTED_DOCUMENT_CLAUSE` it can be delimited directly (the transcript
  * pipeline's `UNTRUSTED_CONTENT_CLAUSE` precedent). This is NOT self-injection: the expert
  * writes case messages too, not only the client, so the content crosses a real trust boundary
- * and the delimiter framing alone is not load-bearing — `escapeCaseAngleBrackets` below (fix
- * round F17) escapes every `<` in the title and history text before either is wrapped, so
+ * and the delimiter framing alone is not load-bearing — `escapeCaseAngleBrackets` below
+ * escapes every `<` in the title and history text before either is wrapped, so
  * neither party can forge a section boundary.
  *
- * ⚠⚠ THE NEVER-PRICING CLAUSE (D7b) IS A REAL CONFIDENTIALITY CONTROL, NOT JUST HYGIENE. The
+ * ⚠⚠ THE NEVER-PRICING CLAUSE IS A REAL CONFIDENTIALITY CONTROL, NOT JUST HYGIENE. The
  * case history can legitimately mention the engagement's commercial terms — a client typed a
  * rate into a chat message, a call summary recapped billed minutes — but the brief this prompt
  * drafts is submitted as a project REQUEST, which reaches the EXPERT and, on the match-request
@@ -167,17 +167,18 @@ const FROM_CASE_SYSTEM_PROMPT =
   CASE_HISTORY_CLAUSE;
 
 /**
- * BAL-589 fix round F17 — escapes every `<` in client/expert-authored content before
+ * BAL-589 — escapes every `<` in client/expert-authored content before
  * `briefFromCasePrompt` wraps it, so no opening or closing tag (`<case-title>`,
  * `</case-history>`, or any other) is ever possible inside the data blocks, regardless of case
- * or Unicode. This REPLACES the fix-round-F12 case-folding neutraliser: that approach sliced the
- * original text using offsets measured on `text.toLowerCase()`, and some characters (for
- * example `İ`, U+0130) change length under case-folding, so the offsets drifted and a raw
- * `</case-history>` could survive. A plain, case-blind `<` escape has no such failure mode. No
- * regex (SonarCloud S5852) — `String.split('<').join('&lt;')` on a literal character.
+ * or Unicode. An earlier approach sliced the original text using offsets measured on
+ * `text.toLowerCase()`, but some characters (for example `İ`, U+0130) change length under
+ * case-folding, so the offsets drifted and a raw `</case-history>` could survive. A plain,
+ * case-blind `<` escape has no such failure mode. `replaceAll` with a literal (not a regex)
+ * string argument has no catastrophic-backtracking surface, so this is not the SonarCloud S5852
+ * pattern.
  */
 function escapeCaseAngleBrackets(text: string): string {
-  return text.split('<').join('&lt;');
+  return text.replaceAll('<', '&lt;');
 }
 
 /** v1 from-case prompt (BAL-589): the taxonomy lists + the case title + its rendered history. */

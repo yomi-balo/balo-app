@@ -675,7 +675,7 @@ export const loadCase = cache(
         ? creditSessionsRepository.sumExpertEarningsForEngagement(engagementId)
         : Promise.resolve(null),
       usersRepository.findDisplayById(userId),
-      // BAL-589 (D10) — CLIENT LENS ONLY, the `projectConversion` precedent's own mirror of
+      // BAL-589 — CLIENT LENS ONLY, the `projectConversion` precedent's own mirror of
       // the `earnings` read immediately above.
       resolveProjectConversionIfClient(lens, engagementId, expertProfileId),
     ]);
@@ -1150,7 +1150,7 @@ async function resolveExpertLensCapabilities(
 }
 
 /**
- * BAL-589 (D10) — CLIENT LENS ONLY: the "Convert to project" mount's prefill + eligibility
+ * BAL-589 — CLIENT LENS ONLY: the "Convert to project" mount's prefill + eligibility
  * data. `null` on the expert lens, where `CaseSurfaceView` has no `projectConversion` field to
  * put it in — mirrors `resolveExpertCapabilitiesIfNeeded`'s shape immediately below.
  *
