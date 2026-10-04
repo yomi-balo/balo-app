@@ -563,11 +563,7 @@ async function seed(): Promise<void> {
   await client.end();
 }
 
-(async () => {
-  try {
-    await seed();
-  } catch (err) {
-    console.error('Seed failed:', err);
-    process.exit(1);
-  }
-})();
+seed().catch((err: unknown) => {
+  console.error('Seed failed:', err);
+  process.exit(1);
+});

@@ -132,9 +132,11 @@ export async function seedProductAliasesForVertical(
     kind: row.kind,
   }));
 
-  for (const { productId, hint } of hintUpdates) {
-    await db.update(schema.products).set({ aiHint: hint }).where(eq(schema.products.id, productId));
-  }
+  await Promise.all(
+    hintUpdates.map(({ productId, hint }) =>
+      db.update(schema.products).set({ aiHint: hint }).where(eq(schema.products.id, productId))
+    )
+  );
 
   if (aliasValues.length > 0) {
     await db.insert(schema.productAliases).values(aliasValues).onConflictDoNothing();
