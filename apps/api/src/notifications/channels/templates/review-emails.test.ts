@@ -625,13 +625,16 @@ describe('docs/help/cases-index.md', () => {
   it('states the auto-close rule the notices state', () => {
     const doc = readCasesHelpDoc();
     expect(doc).toContain('no consultations, bookings or messages');
-    expect(doc).toContain('30 days without a consultation, a booking, or a message or file');
+    expect(doc).toContain(
+      '30 days without a consultation, a booking, a message or file, or an action item being ticked off'
+    );
   });
 
   it('names every kind of activity that restarts the 30 days', () => {
     const doc = readCasesHelpDoc();
     expect(doc).toContain('booking, rescheduling or cancelling a consultation');
     expect(doc).toContain('in the case chat or during a call');
+    expect(doc).toContain('marking an action item done or reopening it');
   });
 
   it('says booking again starts a new case', () => {
