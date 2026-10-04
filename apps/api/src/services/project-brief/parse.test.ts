@@ -506,6 +506,33 @@ describe('runProjectBriefParse', () => {
       expectPersistedResult({ productIds: ['prod-engagement'] });
     });
 
+    it('a resolvable label that does not fit under the product cap goes to the footnote', async () => {
+      const slugs = Array.from({ length: 50 }, (_, i) => `p${i}`);
+      getProductsForBriefMapping.mockResolvedValue([
+        {
+          category: { id: 'c1', name: 'Cat', slug: 'cat', sortOrder: 0 },
+          products: [
+            ...slugs.map((slug, i) => product(`id-${i}`, slug, `Product ${i}`)),
+            product('prod-extra', 'extra', 'Extra', [
+              { alias: 'Overflow Feature', kind: 'feature' },
+            ]),
+          ],
+        },
+      ]);
+      await runWithModelOutput({
+        productSlugs: slugs,
+        unmatchedProductLabels: ['Overflow Feature'],
+      });
+      const result = markSucceeded.mock.calls[0]?.[0].result;
+      expect(result.productIds).toHaveLength(50);
+      expect(result.productIds).not.toContain('prod-extra');
+      expect(result.unmatchedProductLabels).toEqual(['Overflow Feature']);
+      expect(logInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ aliasResolvedCount: 0, unmatchedProductCount: 1 }),
+        'Project brief parse succeeded'
+      );
+    });
+
     it('the success log carries the resolution and prompt-version keys', async () => {
       await runWithModelOutput({ unmatchedProductLabels: ['Journey Builder', 'Gong'] });
       expect(logInfo).toHaveBeenCalledWith(

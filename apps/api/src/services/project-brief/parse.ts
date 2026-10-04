@@ -419,7 +419,8 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
   const resolution = resolveLabelsToProducts(
     productMapping.unmatchedSlugs,
     value.unmatchedProductLabels,
-    productLabelIndex
+    productLabelIndex,
+    { selectedIds: new Set(productMapping.ids), maxIds: MAX_BRIEF_PRODUCT_SLUGS }
   );
   const liveProductIds = new Set(productChoices.map((c) => c.id));
   const productIds = [...new Set([...productMapping.ids, ...resolution.productIds])]

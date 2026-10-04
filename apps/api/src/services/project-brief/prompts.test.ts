@@ -59,6 +59,10 @@ describe('briefParsePrompt', () => {
       fileNames: [],
     });
     expect(rendered.promptVersion).toBe('v2');
+    expect(rendered.system).toContain(
+      'a short human label for any project type you recognised in the documents but could not match to a supplied slug, and for any product the product rules below say to report as unmatched'
+    );
+    expect(rendered.system).not.toContain('any concept');
     expect(rendered.user).toContain(
       '[Marketing Cloud]\nengagement — Engagement | Messaging | includes: Journey Builder | also called: ExactTarget'
     );
@@ -135,6 +139,10 @@ describe('briefFromCasePrompt (BAL-589)', () => {
   it('BAL-592: is prompt v2 with the grounding clause before the case-history clause', () => {
     const rendered = render();
     expect(rendered.promptVersion).toBe('v2');
+    expect(rendered.system).toContain(
+      'a short human label for any project type you recognised in the history but could not match to a supplied slug, and for any product the product rules below say to report as unmatched'
+    );
+    expect(rendered.system).not.toContain('any concept');
     const grounding = rendered.system.indexOf(TAXONOMY_GROUNDING_CLAUSE);
     expect(grounding).toBeGreaterThan(-1);
     expect(grounding).toBeLessThan(rendered.system.indexOf('The case history, between'));

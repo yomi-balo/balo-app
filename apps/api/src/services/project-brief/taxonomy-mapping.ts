@@ -190,11 +190,16 @@ export interface LabelResolution {
  * The ONLY path by which a model-authored product string becomes a product id: exact lookup of
  * its normalised form in `index`. A slug that missed the taxonomy is humanised first. Anything
  * that does not match is returned untouched so the footnote can still show it.
+ *
+ * `capacity` bounds the final id list: `selectedIds` (already chosen, they keep priority) plus the
+ * newly resolved ids never exceed `maxIds`. A match that would not fit is returned unresolved, as
+ * if it had not matched, so its original string still reaches the footnote.
  */
 export function resolveLabelsToProducts(
   unmatchedSlugs: readonly string[],
   labels: readonly string[],
-  index: ReadonlyMap<string, string>
+  index: ReadonlyMap<string, string>,
+  capacity?: { selectedIds: ReadonlySet<string>; maxIds: number }
 ): LabelResolution {
   const productIds = new Set<string>();
   const unresolvedSlugs: string[] = [];
@@ -204,6 +209,10 @@ export function resolveLabelsToProducts(
   const resolve = (key: string): boolean => {
     const id = index.get(normalizeTaxonomyLabel(key));
     if (id === undefined) return false;
+    if (capacity !== undefined && !capacity.selectedIds.has(id) && !productIds.has(id)) {
+      const total = capacity.selectedIds.size + productIds.size;
+      if (total >= capacity.maxIds) return false;
+    }
     productIds.add(id);
     resolvedCount += 1;
     return true;

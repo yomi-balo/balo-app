@@ -105,7 +105,8 @@ const SYSTEM_PROMPT =
   '"1. " numbered lists, and NOTHING ELSE: no images, no code fences, no tables, no block ' +
   'quotes, no horizontal rules, no raw HTML; project-type and product SLUGS selected ONLY from ' +
   'the supplied lists (never invent a slug, never emit an id); and a short human label for any ' +
-  'concept you recognised in the documents but could not match to a supplied slug. Write in the ' +
+  'project type you recognised in the documents but could not match to a supplied slug, and for ' +
+  'any product the product rules below say to report as unmatched. Write in the ' +
   "client's own words where possible. Never invent scope the documents do not support. Return " +
   'an empty list rather than a guess.' +
   TAXONOMY_GROUNDING_CLAUSE +
@@ -177,8 +178,9 @@ const FROM_CASE_SYSTEM_PROMPT =
   'use EXACTLY these four "##" headings, in this order: "## Problem", "## Resolved in the ' +
   'case", "## What\'s left", "## Likely scope". Also produce project-type and product SLUGS ' +
   'selected ONLY from the supplied lists (never invent a slug, never emit an id), and a short ' +
-  'human label for any concept you recognised in the history but could not match to a ' +
-  "supplied slug. Write in the client's own words where possible. Never invent scope the " +
+  'human label for any project type you recognised in the history but could not match to a ' +
+  'supplied slug, and for any product the product rules below say to report as unmatched. ' +
+  "Write in the client's own words where possible. Never invent scope the " +
   'history does not support. Return an empty list rather than a guess.' +
   TAXONOMY_GROUNDING_CLAUSE +
   CASE_HISTORY_CLAUSE;

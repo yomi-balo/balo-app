@@ -179,6 +179,19 @@ describe('product label resolution (BAL-592)', () => {
     expect(resolveLabelsToProducts([], ['Journey Builder'], live).productIds).toEqual([]);
   });
 
+  it('a match that would exceed the capacity is returned unresolved, selected ids keep priority', () => {
+    const result = resolveLabelsToProducts(
+      ['marketing-cloud'],
+      ['Pardot', 'Journey Builder'],
+      index,
+      { selectedIds: new Set(['p-shield']), maxIds: 2 }
+    );
+    expect(result.productIds).toEqual(['p-eng']);
+    expect(result.unresolvedSlugs).toEqual([]);
+    expect(result.unresolvedLabels).toEqual(['Pardot']);
+    expect(result.resolvedCount).toBe(2);
+  });
+
   it('skips a key that normalises to empty', () => {
     const idx = buildProductLabelIndex([{ slug: 'x', id: '1', name: '  ', includes: ['&'] }]);
     expect(idx.has('')).toBe(false);
