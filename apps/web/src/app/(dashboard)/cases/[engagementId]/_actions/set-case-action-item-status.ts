@@ -81,11 +81,7 @@ export async function setCaseActionItemStatusAction(input: {
     }
 
     const actionItem = await actionItemsRepository.findById(actionItemId);
-    if (
-      actionItem === undefined ||
-      actionItem.engagementId !== engagementId ||
-      actionItem.deletedAt !== null
-    ) {
+    if (actionItem?.engagementId !== engagementId || actionItem.deletedAt !== null) {
       return { success: false, error: ACTION_ITEM_GONE };
     }
 

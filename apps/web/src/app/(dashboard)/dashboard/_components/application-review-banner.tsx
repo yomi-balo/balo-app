@@ -24,21 +24,22 @@ export function ApplicationReviewBanner({
 }: Readonly<{ submittedOn: string | null; email: string }>): React.JSX.Element {
   const submitted = submittedOn === null ? '' : `Submitted on ${submittedOn}. `;
   return (
-    <div
-      role="status"
-      className="bg-primary/5 border-primary/20 mb-6 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between"
-    >
-      <div className="flex items-start gap-2.5">
+    <div className="bg-primary/5 border-primary/20 mb-6 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* `<output>` is the native element for the `status` role. It holds phrasing content only,
+          so the message lines are block spans, and the CTA sits outside the status text. */}
+      <output className="flex items-start gap-2.5">
         <Clock className="text-primary mt-0.5 size-[15px] shrink-0" aria-hidden="true" />
-        <div>
-          <p className="text-foreground text-sm font-semibold">{APPLICATION_REVIEW_TITLE}</p>
-          <p className="text-muted-foreground text-[13px]">
+        <span className="block">
+          <span className="text-foreground block text-sm font-semibold">
+            {APPLICATION_REVIEW_TITLE}
+          </span>
+          <span className="text-muted-foreground block text-[13px]">
             {submitted}We&apos;ll email you at{' '}
             <span className="text-foreground font-medium">{email}</span> as soon as there&apos;s a
             decision — usually within 2–3 business days.
-          </p>
-        </div>
-      </div>
+          </span>
+        </span>
+      </output>
       <Button asChild size="sm" variant="outline" className="min-h-11 shrink-0">
         <Link
           href={APPLICATION_REVIEW_HREF}

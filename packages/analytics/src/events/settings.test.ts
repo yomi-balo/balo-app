@@ -39,7 +39,7 @@ describe('SETTINGS_SECTIONS', () => {
   });
 
   it('has 4 entries with no duplicates', () => {
-    expect(SETTINGS_SECTIONS.length).toBe(4);
+    expect(SETTINGS_SECTIONS).toHaveLength(4);
     expect(new Set(SETTINGS_SECTIONS).size).toBe(4);
   });
 });

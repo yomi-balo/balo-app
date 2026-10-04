@@ -27,7 +27,7 @@ const saveDraftInputSchema = z.object({
     'terms',
   ]),
   data: z.unknown(),
-  expertProfileId: z.string().uuid().optional(),
+  expertProfileId: z.uuid().optional(),
 });
 
 type SaveDraftInput = z.infer<typeof saveDraftInputSchema>;

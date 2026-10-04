@@ -3,8 +3,8 @@ import type {
   ApplicationWithRelations,
   ProductsByCategory,
   CertificationsByCategory,
+  SupportType,
 } from '@balo/db';
-import type { SupportType } from '@balo/db';
 import { projectRangeLabel } from '@balo/shared/experts';
 import { formatPeriod } from '@/lib/expert-profile/profile-view';
 import { RichText } from '@/components/balo/project-request/rich-text';
