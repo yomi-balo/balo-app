@@ -21,7 +21,8 @@ import { ProfilePreviewPanel } from './profile-preview-panel';
 import { saveProfileAction } from '../_actions/save-profile';
 import { saveCountryAction } from '../_actions/save-country';
 import { updateNameAction } from '@/lib/auth/actions/update-name';
-import { personNameSchema } from '@/lib/auth/name-schema';
+import { changedNameFields, personNameSchema } from '@/lib/auth/name-schema';
+import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 import type { ProfileSettingsData } from '@balo/db';
 
 // ── Form schema ──────────────────────────────────────────────────
@@ -216,10 +217,19 @@ export function ProfileTab({
         toast.error(failed.error ?? 'Failed to save profile');
       } else {
         toast.success('Profile saved');
+        // The name as it was before this save — read before `reset` replaces the defaults.
+        const previousName = {
+          firstName: form.formState.defaultValues?.firstName,
+          lastName: form.formState.defaultValues?.lastName,
+        };
         // Reset dirty state with the saved values (the name as stored — trimmed)
         form.reset(nameEdit === null ? values : { ...values, ...nameEdit });
         setSavedCountryCode(countryCode);
         if (nameEdit !== null) {
+          track(SETTINGS_EVENTS.NAME_UPDATED, {
+            surface: 'expert_profile',
+            fields_changed: changedNameFields(previousName, nameEdit),
+          });
           // The session cookie now carries the new name; re-render the shell (sidebar, menu).
           router.refresh();
         }

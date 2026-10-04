@@ -11,6 +11,7 @@ describe('SETTINGS_EVENTS', () => {
       'BILLING_MANDATE_ARMED',
       'BILLING_CARD_SAVED',
       'BILLING_CARD_REMOVED',
+      'NAME_UPDATED',
     ]);
   });
 
@@ -22,6 +23,7 @@ describe('SETTINGS_EVENTS', () => {
     expect(SETTINGS_EVENTS.BILLING_MANDATE_ARMED).toBe('settings_billing_mandate_armed');
     expect(SETTINGS_EVENTS.BILLING_CARD_SAVED).toBe('settings_billing_card_saved');
     expect(SETTINGS_EVENTS.BILLING_CARD_REMOVED).toBe('settings_billing_card_removed');
+    expect(SETTINGS_EVENTS.NAME_UPDATED).toBe('settings_name_updated');
   });
 
   it('values follow the naming convention {feature}_{noun}_{past_tense_verb}', () => {

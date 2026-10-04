@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { updateNameAction } from '@/lib/auth/actions/update-name';
-import { PERSON_NAME_MAX, personNameSchema } from '@/lib/auth/name-schema';
+import { PERSON_NAME_MAX, changedNameFields, personNameSchema } from '@/lib/auth/name-schema';
+import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 
 const SAVE_FAILURE_MESSAGE = "We couldn't save your name — please try again.";
 const SAVE_SUCCESS_MESSAGE = 'Name updated.';
@@ -70,6 +71,10 @@ export function AccountNameSection({
         toast.error(result.error ?? SAVE_FAILURE_MESSAGE);
         return;
       }
+      track(SETTINGS_EVENTS.NAME_UPDATED, {
+        surface: 'account',
+        fields_changed: changedNameFields(saved, parsed.data),
+      });
       setSaved(parsed.data);
       setDraft(parsed.data);
       toast.success(SAVE_SUCCESS_MESSAGE);
@@ -79,7 +84,7 @@ export function AccountNameSection({
     } finally {
       setPending(false);
     }
-  }, [draft, router]);
+  }, [draft, router, saved]);
 
   const handleSaveClick = useCallback((): void => {
     runSave().catch(() => undefined);

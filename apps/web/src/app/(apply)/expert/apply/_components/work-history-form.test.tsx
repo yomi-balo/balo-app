@@ -66,9 +66,9 @@ beforeEach(() => {
 });
 
 describe('WorkHistoryForm — responsibilities', () => {
-  it('edits responsibilities in the shared rich-text editor, light variant', () => {
+  it('edits responsibilities in the shared rich-text editor, minimal variant (no links)', () => {
     renderForm('<p>Led delivery</p>');
-    expect(editor()).toHaveAttribute('data-variant', 'light');
+    expect(editor()).toHaveAttribute('data-variant', 'minimal');
     expect(editor()).toHaveValue('<p>Led delivery</p>');
   });
 

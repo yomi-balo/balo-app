@@ -1678,7 +1678,6 @@ export const expertsRepository = {
     });
   },
 
-  /** Submit application: transition from draft to submitted */
   /**
    * The user's application that is AWAITING A DECISION (`submitted` or `under_review`), or
    * `undefined` — what the dashboard's "under review" banner needs, and nothing more. Projects
@@ -1697,11 +1696,14 @@ export const expertsRepository = {
           inArray(expertProfiles.applicationStatus, ['submitted', 'under_review'])
         )
       )
-      .orderBy(desc(expertProfiles.submittedAt))
+      // NULLS LAST: Postgres sorts NULL first under DESC, which would let a row with no
+      // submission time outrank a real one.
+      .orderBy(sql`${expertProfiles.submittedAt} DESC NULLS LAST`)
       .limit(1);
     return row;
   },
 
+  /** Submit application: transition from draft to submitted */
   async submitApplication(expertProfileId: string): Promise<ExpertProfile> {
     const [profile] = await db
       .update(expertProfiles)

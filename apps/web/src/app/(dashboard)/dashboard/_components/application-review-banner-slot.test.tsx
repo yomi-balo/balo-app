@@ -25,6 +25,8 @@ describe('ApplicationReviewBannerSlot', () => {
     await renderSlot();
     expect(mockFindPending).toHaveBeenCalledWith('u-1');
     expect(screen.getByText('Your expert application is under review')).toBeInTheDocument();
+    // Formatted on the server, never in the browser's timezone.
+    expect(screen.getByRole('status')).toHaveTextContent('Submitted on October 3, 2026.');
   });
 
   it('renders nothing when there is no pending application', async () => {

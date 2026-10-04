@@ -236,7 +236,8 @@ export function WorkHistoryForm({
         {/* The editor is a contenteditable region named by `ariaLabel`, so this label is visual. */}
         <p className="text-sm leading-none font-medium">Responsibilities</p>
         <RichTextEditor
-          variant="light"
+          // No Link: these render on the public profile, where an off-platform link is unwanted.
+          variant="minimal"
           value={responsibilities}
           onChange={setResponsibilities}
           ariaLabel="Responsibilities"

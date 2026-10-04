@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
+import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 import { calculateClientRate, centsToDollars } from '@/lib/utils/currency';
 import type { ProfileSettingsData } from '@balo/db';
 import type { UseFormReturn } from 'react-hook-form';
@@ -415,6 +416,7 @@ describe('ProfileTab — save', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Profile saved'));
     expect(updateNameAction).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalledWith(SETTINGS_EVENTS.NAME_UPDATED, expect.anything());
     expect(refresh).not.toHaveBeenCalled();
   });
 
@@ -431,6 +433,10 @@ describe('ProfileTab — save', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Profile saved'));
     expect(updateNameAction).toHaveBeenCalledWith({ firstName: 'Maya', lastName: 'Doe' });
+    expect(track).toHaveBeenCalledWith(SETTINGS_EVENTS.NAME_UPDATED, {
+      surface: 'expert_profile',
+      fields_changed: ['first_name'],
+    });
     expect(saveProfileAction).toHaveBeenCalled();
     expect(refresh).toHaveBeenCalled();
     expect(form()).toHaveAttribute('data-dirty', 'false');

@@ -301,21 +301,6 @@ async function readMoneyBlock(
 }
 
 /**
- * Did anybody on the client side EVER join this meeting? `summarisePresence`'s
- * `clientSideEverPresent`, from the presence rows — the only reliable record. `missed_call` means
- * only that the delivering expert never joined, and a credit session is no proxy either way: it
- * opens when the call page mints a join grant (before any Daily connection), and a client-side
- * guest is present without one.
- *
- * Presence can only change the copy on a `missed_call` (the not-held body and the money line), so
- * every other outcome is `null` without a read. NOT gated on context type — every context renders
- * the not-held panel — nor on a credit session existing.
- *
- * NEVER throws. A failed read is `null` — UNKNOWN, never "absent" — so the page keeps the copy
- * that names the expert rather than telling a client who waited that nobody turned up. The
- * meeting id comes from the already-authorised access gate (`meeting_presence` has no RLS).
- */
-/**
  * Has THIS client already rated THIS expert on THIS case? One indexed read, and it is what keeps
  * two pieces of copy true: the dialog's "we'll send you a short review link" and the post-resolve
  * confirmation. `resolveReviewAsk` skips the token in exactly this case, so promising the email
@@ -383,6 +368,21 @@ async function resolveRecapToggleGrain(input: {
   return allowed ? 'case' : null;
 }
 
+/**
+ * Did anybody on the client side EVER join this meeting? `summarisePresence`'s
+ * `clientSideEverPresent`, from the presence rows — the only reliable record. `missed_call` means
+ * only that the delivering expert never joined, and a credit session is no proxy either way: it
+ * opens when the call page mints a join grant (before any Daily connection), and a client-side
+ * guest is present without one.
+ *
+ * Presence can only change the copy on a `missed_call` (the not-held body and the money line), so
+ * every other outcome is `null` without a read. NOT gated on context type — every context renders
+ * the not-held panel — nor on a credit session existing.
+ *
+ * NEVER throws. A failed read is `null` — UNKNOWN, never "absent" — so the page keeps the copy
+ * that names the expert rather than telling a client who waited that nobody turned up. The
+ * meeting id comes from the already-authorised access gate (`meeting_presence` has no RLS).
+ */
 async function readClientSideEverPresent(
   meeting: Pick<Meeting, 'id' | 'outcome'>,
   userId: string
@@ -494,7 +494,7 @@ export const loadRecap = cache(
     );
 
     // Independent reads, run together — no waterfall.
-    const [title, artifactContents, fileRows, recordings, labels, moneyBlock, rating] =
+    const [title, artifactContents, fileRows, recordings, labels, moneyBlock, rating, toggleGrain] =
       await Promise.all([
         resolveTitle(contextType, subject.contextId, caseRow),
         readArtifactContents(transcript?.id),
@@ -516,6 +516,15 @@ export const loadRecap = cache(
           engagementId: subject.contextId,
           userId,
           now,
+        }),
+        resolveRecapToggleGrain({
+          isCase,
+          closedAt: caseRow?.closedAt,
+          itemCount: actionItems.length,
+          userId,
+          lens,
+          engagementId: subject.contextId,
+          companyId,
         }),
       ]);
 
@@ -562,16 +571,6 @@ export const loadRecap = cache(
       openActionItemCount: countOpenActionItems(actionItems),
       totalActionItemCount: actionItems.length,
     };
-
-    const toggleGrain = await resolveRecapToggleGrain({
-      isCase,
-      closedAt: caseRow?.closedAt,
-      itemCount: actionItems.length,
-      userId,
-      lens,
-      engagementId: subject.contextId,
-      companyId,
-    });
 
     const panel = isEngagementGrain
       ? mapRecapActionItems({

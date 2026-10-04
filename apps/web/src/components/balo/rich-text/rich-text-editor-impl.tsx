@@ -69,8 +69,8 @@ function featuresFor(variant: RichTextEditorVariant): VariantFeatureSet {
       horizontalRule: fullHas('hr'),
     };
   }
-  if (variant === 'light') {
-    // Milestone descriptions: Bold, Italic, bullet list, Link ONLY.
+  if (variant === 'light' || variant === 'minimal') {
+    // Milestone descriptions: Bold, Italic, bullet list, Link. `minimal` drops the Link.
     return {
       bold: true,
       italic: true,
@@ -78,7 +78,7 @@ function featuresFor(variant: RichTextEditorVariant): VariantFeatureSet {
       h3: false,
       bulletList: true,
       orderedList: false,
-      link: true,
+      link: variant === 'light',
       blockquote: false,
       horizontalRule: false,
     };
@@ -282,8 +282,9 @@ interface ToolbarProps {
 }
 
 /**
- * The persistent toolbar for `standard` (full locked set) and `light` (Bold,
- * Italic, bullet list, Link). The `full` variant renders NO persistent toolbar —
+ * The persistent toolbar for `standard` (full locked set), `light` (Bold, Italic,
+ * bullet list, Link) and `minimal` (`light` without Link). The `full` variant renders NO
+ * persistent toolbar —
  * it uses the bubble menu + slash command instead.
  */
 function Toolbar({ editor, features }: Readonly<ToolbarProps>): React.JSX.Element {
@@ -363,10 +364,11 @@ const COLLAPSE_TEXT_THRESHOLD = 160;
  * `rich-text-editor.tsx` wrapper) so it never ships in the initial bundle.
  * Emits sanitisable HTML on every change; the parent debounces it into autosave.
  *
- * Three variants:
+ * Four variants:
  *  - `standard` (default): persistent locked toolbar (Bold, Italic | H2, H3 |
  *    Bullet, Numbered | Link). Unchanged.
  *  - `light`: minimal persistent toolbar (Bold, Italic, bullet list, Link).
+ *  - `minimal`: `light` without Link.
  *  - `full`: NO persistent toolbar — selection bubble menu + `/` slash command,
  *    plus optional collapse-on-blur (~3 lines + "Show full overview").
  */

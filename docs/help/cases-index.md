@@ -86,10 +86,11 @@ here and in Calendar as they arrive.
 
 ## When does a case close on its own?
 
-When a case goes 30 days without a consultation, a booking, or a message or file, Balo closes it
-to keep your list tidy. Any of these restarts the 30 days: a completed consultation;
-booking, rescheduling or cancelling a consultation (even if the call is later missed); or a
-message or file shared by either side, in the case chat or during a call. A case that's had none
+When a case goes 30 days without a consultation, a booking, a message or file, or an action item
+being ticked off, Balo closes it to keep your list tidy. Any of these restarts the 30 days: a
+completed consultation; booking, rescheduling or cancelling a consultation (even if the call is
+later missed); a message or file shared by either side, in the case chat or during a call; or
+marking an action item done or reopening it. A case that's had none
 of them closes 30 days after it opened. It moves to **Resolved** as "Closed automatically", and
 everything in it stays readable. A case never closes while a consultation is booked ahead or a
 call on it can still be joined. The expert delivering the case and the client company's owner

@@ -777,7 +777,7 @@ export const loadCase = cache(
     const invitableMeetingIds = derivedStates
       .filter((row) => caseConsultationIsUpcoming(row.state))
       .map((row) => row.meetingId);
-    const [guestCountRows, caseScopeDomains, rating] = await Promise.all([
+    const [guestCountRows, caseScopeDomains, rating, mayToggleActionItems] = await Promise.all([
       invitableMeetingIds.length === 0
         ? Promise.resolve<Array<{ meetingId: string; count: number }>>([])
         : meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds),
@@ -800,6 +800,15 @@ export const loadCase = cache(
             .then((rows) => rows.map((row) => row.domain))
         : Promise.resolve<string[]>([]),
       readClosedCaseRating({ lens, closedAt: caseRow.closedAt, engagementId, userId, now }),
+      // Rides this batch rather than awaiting on its own after it.
+      resolveMayToggleActionItems({
+        isOpen: caseRow.closedAt === null,
+        itemCount: actionItems.length,
+        userId,
+        lens,
+        engagementId,
+        companyId,
+      }),
     ]);
     const guestCountByMeetingId = new Map(guestCountRows.map((row) => [row.meetingId, row.count]));
 
@@ -865,15 +874,6 @@ export const loadCase = cache(
     const mayCancelAsClient =
       clientParticipatesOnAnUpcomingMeeting && someUpcomingMeetingIsCancellable;
     const mayInviteAsClient = clientParticipatesOnAnUpcomingMeeting;
-
-    const mayToggleActionItems = await resolveMayToggleActionItems({
-      isOpen,
-      itemCount: actionItems.length,
-      userId,
-      lens,
-      engagementId,
-      companyId,
-    });
 
     // Reused by both `mapCaseConsultations` and the expert return arm below; extracted to its
     // own function to keep `loadCase` under SonarCloud's cognitive-complexity ceiling.

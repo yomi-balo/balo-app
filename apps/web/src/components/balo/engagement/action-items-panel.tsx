@@ -43,9 +43,8 @@ import type { ActionItemNodeView, ActionItemsPanelView } from '@/lib/engagement/
 import { createActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/create-action-item';
 import { updateActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/update-action-item';
 import { assignActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/assign-action-item';
-import { setActionItemStatusAction } from '@/app/(dashboard)/engagements/[id]/_actions/set-action-item-status';
 import { removeActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/remove-action-item';
-import { setCaseActionItemStatusAction } from '@/app/(dashboard)/cases/[engagementId]/_actions/set-case-action-item-status';
+import { useSetActionItemStatus } from './use-set-action-item-status';
 import type { ActionItemActionResult } from '@/app/(dashboard)/engagements/[id]/_actions/action-item-action-shared';
 
 type AssigneeParty = 'client' | 'expert' | null;
@@ -114,6 +113,8 @@ export function ActionItemsPanel({
 }: Readonly<ActionItemsPanelProps>): React.JSX.Element | null {
   const { engagementId, canWrite, toggleGrain, clientCompanyName, expertPartyShort } = view;
   const router = useRouter();
+  // `null` grain renders a read-only checkbox, so the fallback is never called.
+  const setActionItemStatus = useSetActionItemStatus(engagementId, toggleGrain ?? 'project');
   const [isPending, startTransition] = useTransition();
   const [editTarget, setEditTarget] = useState<ActionItemNodeView | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ActionItemNodeView | null>(null);
@@ -197,17 +198,12 @@ export function ActionItemsPanel({
   const runToggle = useCallback(
     (node: ActionItemNodeView): void => {
       const status = node.status === 'open' ? 'done' : 'open';
-      const setStatus =
-        toggleGrain === 'case' ? setCaseActionItemStatusAction : setActionItemStatusAction;
       startTransition(async () => {
         applyOptimistic({ kind: 'toggle', id: node.id, status });
-        settle(
-          await setStatus({ engagementId, actionItemId: node.id, status }),
-          status === 'done' ? 'Marked done' : 'Reopened'
-        );
+        await setActionItemStatus(node.id, status);
       });
     },
-    [applyOptimistic, engagementId, settle, toggleGrain]
+    [applyOptimistic, setActionItemStatus]
   );
 
   const runAssign = useCallback(

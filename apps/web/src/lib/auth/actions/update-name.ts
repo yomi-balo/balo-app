@@ -17,9 +17,12 @@ export const updateNameAction = withAuth(
     }
 
     try {
-      await usersRepository.update(session.user.id, {
+      // Writes the name and its `user.name_changed` audit row together (a no-op when unchanged).
+      await usersRepository.updateName({
+        userId: session.user.id,
         firstName: parsed.data.firstName,
         lastName: parsed.data.lastName,
+        actorImpersonatorUserId: session.user.impersonatorUserId,
       });
 
       // Re-fetch session to update cookie with new name

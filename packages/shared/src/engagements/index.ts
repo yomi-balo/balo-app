@@ -62,7 +62,7 @@
  *        ) → Map<engagementId, Date | null>
  *
  * All three are BATCHED — a per-engagement call over a sweep candidate list is a textbook
- * N+1 — and both return an entry for EVERY requested id, so "absent" never has to be
+ * N+1 — and all three return an entry for EVERY requested id, so "absent" never has to be
  * distinguished from "none".
  *
  * ⚠ THE SWEEP MUST CALL ALL THREE READS — and does: BAL-572's hourly `case-inactivity-sweep`

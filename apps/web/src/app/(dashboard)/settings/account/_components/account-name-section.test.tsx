@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { toast } from 'sonner';
+import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 
 const mockUpdateNameAction = vi.fn();
 vi.mock('@/lib/auth/actions/update-name', () => ({
@@ -64,6 +65,10 @@ describe('AccountNameSection', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Name updated.'));
     expect(mockUpdateNameAction).toHaveBeenCalledWith({ firstName: 'Maya', lastName: 'Reyes' });
+    expect(track).toHaveBeenCalledWith(SETTINGS_EVENTS.NAME_UPDATED, {
+      surface: 'account',
+      fields_changed: ['first_name'],
+    });
     expect(mockRefresh).toHaveBeenCalled();
     expect(first).toHaveValue('Maya');
     expect(saveButton()).toBeDisabled();
@@ -118,6 +123,7 @@ describe('AccountNameSection', () => {
     await user.click(saveButton());
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Something went wrong.'));
+    expect(track).not.toHaveBeenCalled();
     expect(screen.getByLabelText('First name')).toHaveValue('Danax');
     expect(saveButton()).toBeEnabled();
     expect(mockRefresh).not.toHaveBeenCalled();

@@ -2,6 +2,7 @@ import 'server-only';
 
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
+import { formatSubmittedDate } from '@/lib/expert/application-derived-data';
 import { ApplicationReviewBanner } from './application-review-banner';
 
 /**
@@ -17,7 +18,12 @@ export async function ApplicationReviewBannerSlot({
   try {
     const pending = await expertsRepository.findPendingApplicationByUserId(userId);
     if (pending === undefined) return null;
-    return <ApplicationReviewBanner submittedAt={pending.submittedAt} email={email} />;
+    return (
+      <ApplicationReviewBanner
+        submittedOn={pending.submittedAt === null ? null : formatSubmittedDate(pending.submittedAt)}
+        email={email}
+      />
+    );
   } catch (error) {
     log.warn('Failed to read pending expert application for the dashboard banner', {
       userId,

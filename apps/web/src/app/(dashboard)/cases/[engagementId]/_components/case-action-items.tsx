@@ -1,23 +1,21 @@
 'use client';
 
 import { useCallback, useOptimistic, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
 import { Check, CircleCheck } from 'lucide-react';
-import { toast } from 'sonner';
 import { Checkbox } from '@/components/ui/checkbox';
 import { SectionHead } from '@/components/balo/section/section-states';
 import { cn } from '@/lib/utils';
 import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
 import type { CaseActionItemsView } from '@/lib/cases/case-view-types';
-import { setCaseActionItemStatusAction } from '../_actions/set-case-action-item-status';
+import { useSetActionItemStatus } from '@/components/balo/engagement/use-set-action-item-status';
 
 type ToggleItem = (item: ActionItemNodeView) => void;
 
 /**
  * BAL-421 — action items, grouped Yours / Theirs / Unassigned, lens-relative.
  *
- * Marking an item done (or reopening it) is the ONE write offered here, through
- * `setCaseActionItemStatusAction`; the checkbox is live only when `canToggle` (case open AND the
+ * Marking an item done (or reopening it) is the ONE write offered here, through the shared
+ * `useSetActionItemStatus` runner (case grain); the checkbox is live only when `canToggle` (case open AND the
  * viewer holds `mayToggleCaseActionItems`), otherwise it renders as a static status mark. Add /
  * assign / edit / remove stay project-only — their actions gate through the project loader.
  *
@@ -34,7 +32,7 @@ export function CaseActionItems({
   actionItems,
 }: Readonly<{ engagementId: string; actionItems: CaseActionItemsView }>): React.JSX.Element {
   const { yours, theirs, unassigned, counterpartyLabel, totalCount, canToggle } = actionItems;
-  const router = useRouter();
+  const setActionItemStatus = useSetActionItemStatus(engagementId, 'case');
   const [isPending, startTransition] = useTransition();
 
   const [optimisticStatus, applyOptimisticStatus] = useOptimistic(
@@ -60,21 +58,10 @@ export function CaseActionItems({
       const status = item.status === 'open' ? 'done' : 'open';
       startTransition(async () => {
         applyOptimisticStatus({ id: item.id, status });
-        const result = await setCaseActionItemStatusAction({
-          engagementId,
-          actionItemId: item.id,
-          status,
-        });
-        if (result.success) {
-          toast.success(status === 'done' ? 'Marked done' : 'Reopened');
-        } else {
-          toast.error(result.error);
-        }
-        // Reconcile on BOTH outcomes — the RSC payload snaps the list back to server truth.
-        router.refresh();
+        await setActionItemStatus(item.id, status);
       });
     },
-    [applyOptimisticStatus, engagementId, router]
+    [applyOptimisticStatus, setActionItemStatus]
   );
 
   const onToggle = canToggle ? toggle : undefined;

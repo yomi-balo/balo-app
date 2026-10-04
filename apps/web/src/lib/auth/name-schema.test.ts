@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PERSON_NAME_MAX, personNameSchema } from './name-schema';
+import { PERSON_NAME_MAX, changedNameFields, personNameSchema } from './name-schema';
 
 describe('personNameSchema', () => {
   it('accepts a first and last name, trimmed', () => {
@@ -25,5 +25,31 @@ describe('personNameSchema', () => {
       personNameSchema.safeParse({ firstName: 'a'.repeat(PERSON_NAME_MAX), lastName: 'Reyes' })
         .success
     ).toBe(true);
+  });
+});
+
+describe('changedNameFields', () => {
+  it('names each part that changed, comparing trimmed values', () => {
+    expect(
+      changedNameFields(
+        { firstName: 'Ada', lastName: 'Lovelace' },
+        { firstName: 'Augusta', lastName: 'King' }
+      )
+    ).toEqual(['first_name', 'last_name']);
+    expect(
+      changedNameFields(
+        { firstName: 'Ada', lastName: 'Lovelace' },
+        { firstName: ' Ada ', lastName: 'King' }
+      )
+    ).toEqual(['last_name']);
+  });
+
+  it('treats a missing previous part as empty', () => {
+    expect(
+      changedNameFields(
+        { firstName: 'Ada', lastName: null },
+        { firstName: 'Ada', lastName: 'King' }
+      )
+    ).toEqual(['last_name']);
   });
 });

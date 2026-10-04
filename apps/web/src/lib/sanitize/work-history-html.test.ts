@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeResponsibilitiesHtml } from './work-history-html';
 
 describe('sanitizeResponsibilitiesHtml', () => {
-  it('keeps the light editor’s formatting', () => {
+  it('keeps the minimal editor’s formatting', () => {
     const html = '<p><strong>Led</strong> <em>delivery</em></p><ul><li>CPQ</li></ul>';
     expect(sanitizeResponsibilitiesHtml(html)).toBe(html);
   });
@@ -15,14 +15,12 @@ describe('sanitizeResponsibilitiesHtml', () => {
     ).toBe('<p>Ran CPQ</p>');
   });
 
-  it('hardens links and drops unsafe schemes', () => {
+  it('reduces every link to its text — nothing on a public profile is clickable', () => {
     expect(
       sanitizeResponsibilitiesHtml(
-        '<p><a href="https://example.com">site</a> <a href="javascript:alert(1)">bad</a></p>'
+        '<p>Book me at <a href="https://example.com">example.com</a> or <a href="javascript:alert(1)">here</a></p>'
       )
-    ).toBe(
-      '<p><a href="https://example.com" rel="noopener noreferrer nofollow" target="_blank">site</a> <a rel="noopener noreferrer nofollow" target="_blank">bad</a></p>'
-    );
+    ).toBe('<p>Book me at example.com or here</p>');
   });
 
   it('turns legacy plain text into escaped paragraphs', () => {

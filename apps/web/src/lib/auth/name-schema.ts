@@ -23,3 +23,14 @@ export const personNameSchema = z.object({
 
 /** The longest a single name part may be — mirrors the schema for `maxLength` on inputs. */
 export const PERSON_NAME_MAX = 50;
+
+/** Which part(s) of a name changed, as analytics field names — trimmed comparison. */
+export function changedNameFields(
+  before: Readonly<{ firstName?: string | null; lastName?: string | null }>,
+  after: Readonly<{ firstName: string; lastName: string }>
+): Array<'first_name' | 'last_name'> {
+  const fields: Array<'first_name' | 'last_name'> = [];
+  if ((before.firstName ?? '').trim() !== after.firstName.trim()) fields.push('first_name');
+  if ((before.lastName ?? '').trim() !== after.lastName.trim()) fields.push('last_name');
+  return fields;
+}

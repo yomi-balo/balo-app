@@ -1,7 +1,9 @@
+'use client';
+
 import Link from 'next/link';
 import { Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { formatSubmittedDate } from '@/lib/expert/application-derived-data';
+import { track, EXPERT_EVENTS } from '@/lib/analytics';
 
 export const APPLICATION_REVIEW_TITLE = 'Your expert application is under review';
 export const APPLICATION_REVIEW_CTA = 'View your application';
@@ -12,14 +14,15 @@ export const APPLICATION_REVIEW_HREF = '/expert/apply/review';
  * a decision. Copy follows the applicant review page and the submission confirmation ("We'll
  * email you … within 2–3 business days"), phrased so it stays true however long the review takes.
  * Informational, so primary-toned rather than the amber of an action-needed banner, and not
- * dismissible: it leaves on its own once the application is decided.
+ * dismissible: it leaves on its own once the application is decided. A client leaf only for the
+ * CTA's click event; `submittedOn` arrives already formatted by the server so the date never
+ * differs between the server render and the browser's timezone.
  */
 export function ApplicationReviewBanner({
-  submittedAt,
+  submittedOn,
   email,
-}: Readonly<{ submittedAt: Date | null; email: string }>): React.JSX.Element {
-  const submitted =
-    submittedAt === null ? '' : `Submitted on ${formatSubmittedDate(submittedAt)}. `;
+}: Readonly<{ submittedOn: string | null; email: string }>): React.JSX.Element {
+  const submitted = submittedOn === null ? '' : `Submitted on ${submittedOn}. `;
   return (
     <div
       role="status"
@@ -37,7 +40,12 @@ export function ApplicationReviewBanner({
         </div>
       </div>
       <Button asChild size="sm" variant="outline" className="min-h-11 shrink-0">
-        <Link href={APPLICATION_REVIEW_HREF}>{APPLICATION_REVIEW_CTA}</Link>
+        <Link
+          href={APPLICATION_REVIEW_HREF}
+          onClick={() => track(EXPERT_EVENTS.APPLICATION_REVIEW_BANNER_CLICKED, {})}
+        >
+          {APPLICATION_REVIEW_CTA}
+        </Link>
       </Button>
     </div>
   );
