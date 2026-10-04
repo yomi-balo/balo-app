@@ -646,6 +646,11 @@ export const usersRepository = {
    * The actor is the user themself. Under staff impersonation, `actorImpersonatorUserId` adds
    * `actorImpersonating` / `actorImpersonatorUserId` to the metadata — audit integrity only,
    * omitted when absent (the `expert-searchability` precedent).
+   *
+   * ⚠ PII IN THE AUDIT TRAIL. `metadata.from` / `metadata.to` hold the names VERBATIM. Fine while
+   * `users` rows are only soft-deleted, but any personal-data ERASURE path must also scrub the
+   * `user.name_changed` rows in `audit_events` (entity_type 'user', entity_id = the user) — erasing
+   * `users.first_name` / `last_name` alone leaves every past name here.
    */
   updateName: async (input: {
     userId: string;

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { WORK_HISTORY_HTML_ALLOWED_TAGS } from './allowed-tags';
 import { sanitizeResponsibilitiesHtml } from './work-history-html';
 
 describe('sanitizeResponsibilitiesHtml', () => {
@@ -21,6 +22,25 @@ describe('sanitizeResponsibilitiesHtml', () => {
         '<p>Book me at <a href="https://example.com">example.com</a> or <a href="javascript:alert(1)">here</a></p>'
       )
     ).toBe('<p>Book me at example.com or here</p>');
+  });
+
+  it('turns headings into paragraphs and numbered lists into bullets — never orphan items', () => {
+    expect(sanitizeResponsibilitiesHtml('<h2>Hire me</h2><ol><li>One</li></ol><h3>Now</h3>')).toBe(
+      '<p>Hire me</p><ul><li>One</li></ul><p>Now</p>'
+    );
+  });
+
+  it('allows exactly the shared work-history list, so editor and sanitiser cannot drift', () => {
+    expect([...WORK_HISTORY_HTML_ALLOWED_TAGS].sort((a, b) => a.localeCompare(b))).toEqual([
+      'b',
+      'br',
+      'em',
+      'i',
+      'li',
+      'p',
+      'strong',
+      'ul',
+    ]);
   });
 
   it('turns legacy plain text into escaped paragraphs', () => {

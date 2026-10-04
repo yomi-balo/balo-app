@@ -77,6 +77,12 @@ vi.mock('./profile-form', () => ({
       >
         stub clear last
       </button>
+      <button
+        type="button"
+        onClick={() => props.form.setValue('firstName', 'Jane ', { shouldDirty: true })}
+      >
+        stub pad first
+      </button>
       <span data-testid="last-name-error">
         {props.form.formState.errors.lastName?.message ?? ''}
       </span>
@@ -439,6 +445,22 @@ describe('ProfileTab — save', () => {
     });
     expect(saveProfileAction).toHaveBeenCalled();
     expect(refresh).toHaveBeenCalled();
+    expect(form()).toHaveAttribute('data-dirty', 'false');
+  });
+
+  it('treats a whitespace-only name edit as no change: no name save, refresh or event', async () => {
+    const user = userEvent.setup();
+    renderTab(313);
+
+    await user.click(screen.getByRole('button', { name: 'stub pad first' }));
+    expect(form()).toHaveAttribute('data-dirty', 'true');
+    await user.click(screen.getByRole('button', { name: 'stub save' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Profile saved'));
+    expect(updateNameAction).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalledWith(SETTINGS_EVENTS.NAME_UPDATED, expect.anything());
+    // The field settles back to the stored, trimmed name.
     expect(form()).toHaveAttribute('data-dirty', 'false');
   });
 

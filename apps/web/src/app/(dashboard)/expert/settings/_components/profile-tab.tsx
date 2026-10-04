@@ -54,7 +54,8 @@ export type ProfileFormData = z.infer<typeof profileFormSchema>;
 
 /**
  * The name to save on this Save: the validated (trimmed) name when it was edited, `null` when it
- * was not touched, or `'invalid'` after flagging the offending field(s) on the form. Validated
+ * was not touched or only its surrounding whitespace changed, or `'invalid'` after flagging the
+ * offending field(s) on the form. Validated
  * only when edited, so an account stored without a last name can still save its headline.
  */
 function resolveNameEdit(
@@ -69,7 +70,9 @@ function resolveNameEdit(
     lastName: form.getValues('lastName'),
   });
   if (parsed.success) {
-    return parsed.data;
+    // Dirty but equal once trimmed ("Ada " → "Ada") is no change: nothing to save or report.
+    const changed = changedNameFields(form.formState.defaultValues ?? {}, parsed.data);
+    return changed.length === 0 ? null : parsed.data;
   }
   for (const issue of parsed.error.issues) {
     const [field] = issue.path;
@@ -223,7 +226,11 @@ export function ProfileTab({
           lastName: form.formState.defaultValues?.lastName,
         };
         // Reset dirty state with the saved values (the name as stored — trimmed)
-        form.reset(nameEdit === null ? values : { ...values, ...nameEdit });
+        form.reset({
+          ...values,
+          firstName: values.firstName.trim(),
+          lastName: values.lastName.trim(),
+        });
         setSavedCountryCode(countryCode);
         if (nameEdit !== null) {
           track(SETTINGS_EVENTS.NAME_UPDATED, {
