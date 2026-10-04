@@ -8,10 +8,10 @@ vi.mock('@/lib/auth/live-user', async () => (await import('@/test/live-user-doub
 
 vi.mock('server-only', () => ({}));
 
-const mockUpdate = vi.fn();
+const mockUpdateName = vi.fn();
 vi.mock('@balo/db', () => ({
   usersRepository: {
-    update: (...args: unknown[]) => mockUpdate(...args),
+    updateName: (...args: unknown[]) => mockUpdateName(...args),
   },
 }));
 
@@ -30,7 +30,7 @@ import { updateNameAction } from './update-name';
 describe('updateNameAction — allowUnonboarded opt-out (BAL-365)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUpdate.mockResolvedValue({});
+    mockUpdateName.mockResolvedValue({ changed: true });
     mockSave.mockResolvedValue(undefined);
     // Un-onboarded session: the onboarding name step must still run.
     mockSessionObj = {
@@ -39,13 +39,33 @@ describe('updateNameAction — allowUnonboarded opt-out (BAL-365)', () => {
     };
   });
 
-  it('runs while un-onboarded: updates the name and returns success', async () => {
-    const result = await updateNameAction({ firstName: 'Ada', lastName: 'Lovelace' });
+  it('runs while un-onboarded: updates the name through the audited write and returns success', async () => {
+    const result = await updateNameAction({ firstName: ' Ada ', lastName: 'Lovelace' });
     expect(result).toEqual({ success: true });
-    expect(mockUpdate).toHaveBeenCalledWith('user-1', {
+    expect(mockUpdateName).toHaveBeenCalledWith({
+      userId: 'user-1',
       firstName: 'Ada',
       lastName: 'Lovelace',
+      actorImpersonatorUserId: undefined,
     });
+  });
+
+  it('hands the impersonating staff member to the audit write', async () => {
+    mockSessionObj = {
+      user: {
+        id: 'user-1',
+        onboardingCompleted: true,
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        isImpersonating: true,
+        impersonatorUserId: 'staff-1',
+      },
+      save: mockSave,
+    };
+    await updateNameAction({ firstName: 'Augusta', lastName: 'Lovelace' });
+    expect(mockUpdateName).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', actorImpersonatorUserId: 'staff-1' })
+    );
   });
 
   it('re-saves the session cookie with the new name', async () => {
@@ -57,6 +77,6 @@ describe('updateNameAction — allowUnonboarded opt-out (BAL-365)', () => {
   it('rejects invalid input without writing', async () => {
     const result = await updateNameAction({ firstName: '', lastName: 'Lovelace' });
     expect(result.success).toBe(false);
-    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockUpdateName).not.toHaveBeenCalled();
   });
 });

@@ -46,3 +46,23 @@ export const PROPOSAL_OVERVIEW_ALLOWED_TAGS = [
 ] as const;
 
 export type ProposalOverviewAllowedTag = (typeof PROPOSAL_OVERVIEW_ALLOWED_TAGS)[number];
+
+/**
+ * The NARROW allow-list for a work-history entry's responsibilities — exactly what the `minimal`
+ * editor variant produces: paragraphs, line breaks, bold, italic and bullet lists. No headings,
+ * no ordered lists, and NO `a`: the text renders on the public expert profile, where a crafted
+ * request must not be able to plant a heading or a clickable off-platform link.
+ *
+ * CLIENT-SAFE like the two lists above, and the SINGLE SOURCE for both the `minimal` editor's
+ * node/mark set and the server sanitiser (`sanitizeResponsibilitiesHtml`).
+ */
+export const WORK_HISTORY_HTML_ALLOWED_TAGS = [
+  'p',
+  'br',
+  'strong',
+  'b',
+  'em',
+  'i',
+  'ul',
+  'li',
+] as const;

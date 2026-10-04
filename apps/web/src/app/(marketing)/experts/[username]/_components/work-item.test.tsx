@@ -11,7 +11,7 @@ const currentRole: WorkHistoryView = {
   periodLabel: 'Apr 2025 — Present',
   durationLabel: '',
   isCurrent: true,
-  responsibilities: 'Founded the firm and lead every engagement.',
+  responsibilitiesHtml: '<p>Founded the firm and lead every engagement.</p>',
 };
 
 const pastRole: WorkHistoryView = {
@@ -20,7 +20,7 @@ const pastRole: WorkHistoryView = {
   periodLabel: 'Nov 2017 — Apr 2020',
   durationLabel: '2 yrs 5 mos',
   isCurrent: false,
-  responsibilities: 'Owned delivery across ~25 projects a year.',
+  responsibilitiesHtml: '<p>Owned delivery across ~25 projects a year.</p>',
 };
 
 describe('WorkItem', () => {
@@ -62,8 +62,22 @@ describe('WorkItem', () => {
     expect(screen.getByRole('button', { name: 'View less' })).toBeInTheDocument();
   });
 
+  it('renders the responsibilities with their rich-text formatting', () => {
+    render(
+      <WorkItem
+        item={{
+          ...currentRole,
+          responsibilitiesHtml: '<ul><li><strong>Led</strong> every engagement</li></ul>',
+        }}
+        isLast
+      />
+    );
+    expect(screen.getByRole('listitem')).toHaveTextContent('Led every engagement');
+    expect(screen.getByText('Led').tagName).toBe('STRONG');
+  });
+
   it('renders no toggle when there are no responsibilities', () => {
-    render(<WorkItem item={{ ...pastRole, responsibilities: null }} isLast />);
+    render(<WorkItem item={{ ...pastRole, responsibilitiesHtml: null }} isLast />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 

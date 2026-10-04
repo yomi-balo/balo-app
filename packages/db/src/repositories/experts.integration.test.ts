@@ -1653,6 +1653,65 @@ describe('expertsRepository.findUserIdByProfileId', () => {
   });
 });
 
+// ── findPendingApplicationByUserId ───────────────────────────────────
+
+describe('expertsRepository.findPendingApplicationByUserId', () => {
+  it('returns the submission time of a submitted application', async () => {
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+    const submitted = await expertsRepository.submitApplication(draft.id);
+
+    const result = await expertsRepository.findPendingApplicationByUserId(user.id);
+
+    expect(result).toEqual({ submittedAt: submitted.submittedAt });
+  });
+
+  it('counts an application staff have moved to under_review as still pending', async () => {
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+    await expertsRepository.submitApplication(draft.id);
+    await db
+      .update(expertProfiles)
+      .set({ applicationStatus: 'under_review' })
+      .where(eq(expertProfiles.id, draft.id));
+
+    const result = await expertsRepository.findPendingApplicationByUserId(user.id);
+
+    expect(result?.submittedAt).toBeInstanceOf(Date);
+  });
+
+  it('returns undefined for a draft that was never submitted', async () => {
+    const user = await userFactory();
+    await expertDraftFactory({ userId: user.id });
+
+    expect(await expertsRepository.findPendingApplicationByUserId(user.id)).toBeUndefined();
+  });
+
+  it.each(['approved', 'rejected'] as const)(
+    'returns undefined once the application is %s',
+    async (status) => {
+      const user = await userFactory();
+      const draft = await expertDraftFactory({ userId: user.id });
+      await expertsRepository.submitApplication(draft.id);
+      await db
+        .update(expertProfiles)
+        .set({ applicationStatus: status })
+        .where(eq(expertProfiles.id, draft.id));
+
+      expect(await expertsRepository.findPendingApplicationByUserId(user.id)).toBeUndefined();
+    }
+  );
+
+  it("never returns another user's pending application", async () => {
+    const applicant = await userFactory();
+    const other = await userFactory();
+    const draft = await expertDraftFactory({ userId: applicant.id });
+    await expertsRepository.submitApplication(draft.id);
+
+    expect(await expertsRepository.findPendingApplicationByUserId(other.id)).toBeUndefined();
+  });
+});
+
 // ── findUserIdsByProfileIds ──────────────────────────────────────────
 
 describe('expertsRepository.findUserIdsByProfileIds', () => {

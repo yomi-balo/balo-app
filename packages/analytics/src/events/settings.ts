@@ -52,7 +52,16 @@ export const SETTINGS_EVENTS = {
    * was on a card-backed mode that the removal transaction moved to `notify_only`.
    */
   BILLING_CARD_REMOVED: 'settings_billing_card_removed',
+  /**
+   * A user saved a change to their own first/last name. `surface` is where: the personal Account
+   * page or Expert Settings → Profile. `fields_changed` names which part(s) changed — never the
+   * name itself (no PII).
+   */
+  NAME_UPDATED: 'settings_name_updated',
 } as const;
+
+/** Where a name change was saved. */
+export type SettingsNameSurface = 'account' | 'expert_profile';
 
 export interface SettingsEventMap {
   [SETTINGS_EVENTS.SECTION_VIEWED]: { section: SettingsSection };
@@ -64,4 +73,8 @@ export interface SettingsEventMap {
   [SETTINGS_EVENTS.BILLING_MANDATE_ARMED]: { mode: 'auto_topup' | 'keep_going' };
   [SETTINGS_EVENTS.BILLING_CARD_SAVED]: { intent: 'add' | 'change' };
   [SETTINGS_EVENTS.BILLING_CARD_REMOVED]: { mode_reconciled: boolean };
+  [SETTINGS_EVENTS.NAME_UPDATED]: {
+    surface: SettingsNameSurface;
+    fields_changed: Array<'first_name' | 'last_name'>;
+  };
 }

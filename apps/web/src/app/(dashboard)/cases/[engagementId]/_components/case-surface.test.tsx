@@ -256,6 +256,9 @@ vi.mock('../_actions/mark-case-thread-read', () => ({
 vi.mock('../_actions/request-case-file-upload', () => ({ requestCaseFileUploadAction: vi.fn() }));
 vi.mock('../_actions/confirm-case-file-upload', () => ({ confirmCaseFileUploadAction: vi.fn() }));
 vi.mock('../_actions/get-case-file-download', () => ({ getCaseFileDownloadAction: vi.fn() }));
+vi.mock('../_actions/set-case-action-item-status', () => ({
+  setCaseActionItemStatusAction: vi.fn(),
+}));
 
 // `RatingBlock` (mounted via `EngagementRatingCard`) imports this action directly;
 // out of scope for this composition test, the same reason the four dialogs above are stubbed.
@@ -299,8 +302,8 @@ const BASE = {
     theirs: [],
     unassigned: [],
     counterpartyLabel: 'Amara',
-    doneCount: 0,
     totalCount: 0,
+    canToggle: false,
   },
   files: [],
   filesTruncated: false,
@@ -1019,7 +1022,6 @@ describe('CaseSurface — the conditional regions', () => {
           actionItems: {
             ...BASE.actionItems,
             unassigned: [ACTION_ITEM],
-            doneCount: 0,
             totalCount: 1,
           },
         })}

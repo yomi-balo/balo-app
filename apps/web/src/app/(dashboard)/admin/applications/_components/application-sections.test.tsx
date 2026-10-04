@@ -169,6 +169,33 @@ describe('ApplicationSections', () => {
     expect(screen.queryByText('Current')).toBeNull();
   });
 
+  it('renders rich-text responsibilities with their formatting, and strips anything unsafe', () => {
+    const { container } = render(
+      <ApplicationSections
+        application={application({
+          workHistory: [
+            {
+              id: 'w1',
+              role: 'Lead Consultant',
+              company: 'Northwind',
+              startedAt: new Date('2017-11-01T00:00:00.000Z'),
+              endedAt: new Date('2020-04-01T00:00:00.000Z'),
+              isCurrent: false,
+              responsibilities:
+                '<ul><li><strong>Owned</strong> the CPQ rollout</li></ul><script>alert(1)</script>',
+            } as unknown as ApplicationWithRelations['workHistory'][number],
+          ],
+        })}
+        productsByCategory={[]}
+        supportTypes={[]}
+        certificationsByCategory={[]}
+      />
+    );
+    expect(screen.getByRole('listitem')).toHaveTextContent('Owned the CPQ rollout');
+    expect(screen.getByText('Owned').tagName).toBe('STRONG');
+    expect(container.querySelector('script')).toBeNull();
+  });
+
   it('renders the tenure but no responsibilities paragraph when the applicant left it blank', () => {
     const { container } = render(
       <ApplicationSections

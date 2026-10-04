@@ -43,8 +43,8 @@ import type { ActionItemNodeView, ActionItemsPanelView } from '@/lib/engagement/
 import { createActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/create-action-item';
 import { updateActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/update-action-item';
 import { assignActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/assign-action-item';
-import { setActionItemStatusAction } from '@/app/(dashboard)/engagements/[id]/_actions/set-action-item-status';
 import { removeActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/remove-action-item';
+import { useSetActionItemStatus } from './use-set-action-item-status';
 import type { ActionItemActionResult } from '@/app/(dashboard)/engagements/[id]/_actions/action-item-action-shared';
 
 type AssigneeParty = 'client' | 'expert' | null;
@@ -101,9 +101,9 @@ function labelForParty(
  * Models on `ExpertMilestoneRail`: `useOptimistic` + `useTransition`, Sonner toast +
  * `router.refresh()` on BOTH outcomes, shadcn primitives, dark-mode tokens. Receives ONLY
  * the serialisable `ActionItemsPanelView` (never `@balo/db`) so the client-bundle posture
- * holds. Affordances (add / toggle done / assign to a side / edit body + due / remove)
- * render only when `canWrite` (a live, active engagement); otherwise the list renders
- * read-only. All four states: loading (pending disables controls), empty (an invitation
+ * holds. Affordances (add / assign to a side / edit body + due / remove) render only when
+ * `canWrite` (a live, active engagement); the done checkbox is live whenever `toggleGrain`
+ * is set, which also covers a case recap (status toggle only). All four states: loading (pending disables controls), empty (an invitation
  * when writable — nothing when a read-only list is empty), error (toast the returned copy
  * verbatim), success (toast own copy + refresh). Assignee is named by PARTY; due dates are
  * stated as helpful facts, never as a countdown.
@@ -111,8 +111,10 @@ function labelForParty(
 export function ActionItemsPanel({
   view,
 }: Readonly<ActionItemsPanelProps>): React.JSX.Element | null {
-  const { engagementId, canWrite, clientCompanyName, expertPartyShort } = view;
+  const { engagementId, canWrite, toggleGrain, clientCompanyName, expertPartyShort } = view;
   const router = useRouter();
+  // `null` grain renders a read-only checkbox, so the fallback is never called.
+  const setActionItemStatus = useSetActionItemStatus(engagementId, toggleGrain ?? 'project');
   const [isPending, startTransition] = useTransition();
   const [editTarget, setEditTarget] = useState<ActionItemNodeView | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ActionItemNodeView | null>(null);
@@ -198,13 +200,10 @@ export function ActionItemsPanel({
       const status = node.status === 'open' ? 'done' : 'open';
       startTransition(async () => {
         applyOptimistic({ kind: 'toggle', id: node.id, status });
-        settle(
-          await setActionItemStatusAction({ engagementId, actionItemId: node.id, status }),
-          status === 'done' ? 'Marked done' : 'Reopened'
-        );
+        await setActionItemStatus(node.id, status);
       });
     },
-    [applyOptimistic, engagementId, settle]
+    [applyOptimistic, setActionItemStatus]
   );
 
   const runAssign = useCallback(
@@ -319,19 +318,7 @@ export function ActionItemsPanel({
           <ul className="divide-border mt-4 divide-y">
             {optimistic.map((node) => (
               <li key={node.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-                {canWrite ? (
-                  <Checkbox
-                    className="mt-0.5"
-                    checked={node.status === 'done'}
-                    disabled={isPending}
-                    onCheckedChange={() => runToggle(node)}
-                    aria-label={
-                      node.status === 'done'
-                        ? `Reopen action item: ${node.body}`
-                        : `Mark done: ${node.body}`
-                    }
-                  />
-                ) : (
+                {toggleGrain === null ? (
                   <>
                     <span
                       className={cn(
@@ -346,6 +333,18 @@ export function ActionItemsPanel({
                     </span>
                     <span className="sr-only">{node.status === 'done' ? 'Done' : 'Open'}</span>
                   </>
+                ) : (
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={node.status === 'done'}
+                    disabled={isPending}
+                    onCheckedChange={() => runToggle(node)}
+                    aria-label={
+                      node.status === 'done'
+                        ? `Reopen action item: ${node.body}`
+                        : `Mark done: ${node.body}`
+                    }
+                  />
                 )}
 
                 <div className="min-w-0 flex-1">

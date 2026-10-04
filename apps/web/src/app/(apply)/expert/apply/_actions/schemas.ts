@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { responsibilitiesFieldSchema } from '@/lib/expert-profile/work-history-responsibilities';
 
 // ── Shared field schemas (single source of truth) ────────────────
 // Each strict field is factored into a named const so the strict (submit + client
@@ -26,16 +27,16 @@ const isSalesforceCtaField = z.boolean();
 const isCertifiedTrainerField = z.boolean();
 
 const languageItem = z.object({
-  languageId: z.string().uuid(),
+  languageId: z.uuid(),
   proficiency: z.enum(['beginner', 'intermediate', 'advanced', 'native']),
 });
 
-const industryIdItem = z.string().uuid();
-const productIdItem = z.string().uuid();
+const industryIdItem = z.uuid();
+const productIdItem = z.uuid();
 
 const ratingItem = z.object({
-  productId: z.string().uuid(),
-  supportTypeId: z.string().uuid(),
+  productId: z.uuid(),
+  supportTypeId: z.uuid(),
   proficiency: z.number().int().min(0).max(10),
 });
 
@@ -107,10 +108,10 @@ export const certificationsStepSchema = z.object({
   certifications: z
     .array(
       z.object({
-        certificationId: z.string().uuid(),
+        certificationId: z.uuid(),
         earnedAt: z.string().optional().or(z.literal('')),
         expiresAt: z.string().optional().or(z.literal('')),
-        credentialUrl: z.string().url('Please enter a valid URL').optional().or(z.literal('')),
+        credentialUrl: z.url('Please enter a valid URL').optional().or(z.literal('')),
       })
     )
     .max(100, 'Too many certifications'),
@@ -120,13 +121,14 @@ export const certificationsStepSchema = z.object({
 
 const workHistoryEntrySchema = z
   .object({
-    id: z.string().uuid().optional(), // existing entry ID for edits
+    id: z.uuid().optional(), // existing entry ID for edits
     role: z.string().min(1, 'Role is required'),
     company: z.string().min(1, 'Company is required'),
     startedAt: z.string().min(1, 'Start date is required'),
     endedAt: z.string().optional().or(z.literal('')),
     isCurrent: z.boolean(),
-    responsibilities: z.string().max(1000).optional().or(z.literal('')),
+    // Rich-text HTML (or a legacy plain-text value) — bounded by VISIBLE length; sanitised on persist.
+    responsibilities: responsibilitiesFieldSchema.optional(),
   })
   .refine(
     (data) => {
@@ -147,7 +149,7 @@ export const workHistoryStepSchema = z.object({
 // both its strict and draft schemas are permissive: an incidental autosave of the
 // (empty) agency data must never fail validation. `save-draft` treats `'agency'` as a
 // no-op write.
-export const agencyStepSchema = z.object({}).passthrough();
+export const agencyStepSchema = z.looseObject({});
 
 // ── Step 6: Terms ────────────────────────────────────────────────
 

@@ -2,15 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
+import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 import { calculateClientRate, centsToDollars } from '@/lib/utils/currency';
 import type { ProfileSettingsData } from '@balo/db';
+import type { UseFormReturn } from 'react-hook-form';
+import type { ProfileFormData } from './profile-tab';
 
 // ── Mocks ────────────────────────────────────────────────────────
 
-const { refresh, saveProfileAction, saveCountryAction } = vi.hoisted(() => ({
+const { refresh, saveProfileAction, saveCountryAction, updateNameAction } = vi.hoisted(() => ({
   refresh: vi.fn(),
   saveProfileAction: vi.fn(),
   saveCountryAction: vi.fn(),
+  updateNameAction: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -22,8 +26,10 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 // The save actions `import 'server-only'` — must be mocked or the import throws.
 vi.mock('../_actions/save-profile', () => ({ saveProfileAction }));
 vi.mock('../_actions/save-country', () => ({ saveCountryAction }));
+vi.mock('@/lib/auth/actions/update-name', () => ({ updateNameAction }));
 
 interface StubFormProps {
+  form: UseFormReturn<ProfileFormData>;
   countryCode: string;
   onCountryChange: (code: string) => void;
   initialPhone: string | null;
@@ -59,6 +65,27 @@ vi.mock('./profile-form', () => ({
       <button type="button" onClick={props.onReset}>
         stub reset
       </button>
+      <button
+        type="button"
+        onClick={() => props.form.setValue('firstName', '  Maya ', { shouldDirty: true })}
+      >
+        stub rename first
+      </button>
+      <button
+        type="button"
+        onClick={() => props.form.setValue('lastName', '', { shouldDirty: true })}
+      >
+        stub clear last
+      </button>
+      <button
+        type="button"
+        onClick={() => props.form.setValue('firstName', 'Jane ', { shouldDirty: true })}
+      >
+        stub pad first
+      </button>
+      <span data-testid="last-name-error">
+        {props.form.formState.errors.lastName?.message ?? ''}
+      </span>
     </div>
   ),
 }));
@@ -71,6 +98,8 @@ vi.mock('./profile-preview-panel', () => ({
     expert,
   }: {
     expert: {
+      name: string;
+      initials: string;
       rate: number | null;
       rating: number | null;
       ratingCount: number;
@@ -78,6 +107,7 @@ vi.mock('./profile-preview-panel', () => ({
     };
   }) => (
     <div data-testid="preview-panel">
+      <div data-testid="preview-name">{`${expert.name}|${expert.initials}`}</div>
       <div data-testid="preview-rate">{String(expert.rate)}</div>
       <div data-testid="preview-rating">{String(expert.rating)}</div>
       <div data-testid="preview-review-count">{String(expert.ratingCount)}</div>
@@ -162,6 +192,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   saveProfileAction.mockResolvedValue({ success: true });
   saveCountryAction.mockResolvedValue({ success: true });
+  updateNameAction.mockResolvedValue({ success: true });
 });
 
 // ── Tests ────────────────────────────────────────────────────────
@@ -381,6 +412,102 @@ describe('ProfileTab — save', () => {
       expect(toast.error).toHaveBeenCalledWith('Failed to save profile. Please try again.')
     );
     expect(form()).toHaveAttribute('data-saving', 'false');
+  });
+
+  it('does not touch the name when it was not edited', async () => {
+    const user = userEvent.setup();
+    renderTab(313);
+
+    await user.click(screen.getByRole('button', { name: 'stub save' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Profile saved'));
+    expect(updateNameAction).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalledWith(SETTINGS_EVENTS.NAME_UPDATED, expect.anything());
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('saves an edited name trimmed, then refreshes so the shell shows it', async () => {
+    const user = userEvent.setup();
+    renderTab(313);
+
+    await user.click(screen.getByRole('button', { name: 'stub rename first' }));
+    expect(form()).toHaveAttribute('data-dirty', 'true');
+    // The preview follows the edit before it is saved.
+    expect(screen.getAllByTestId('preview-name')[0]).toHaveTextContent('Maya Doe|MD');
+
+    await user.click(screen.getByRole('button', { name: 'stub save' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Profile saved'));
+    expect(updateNameAction).toHaveBeenCalledWith({ firstName: 'Maya', lastName: 'Doe' });
+    expect(track).toHaveBeenCalledWith(SETTINGS_EVENTS.NAME_UPDATED, {
+      surface: 'expert_profile',
+      fields_changed: ['first_name'],
+    });
+    expect(saveProfileAction).toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalled();
+    expect(form()).toHaveAttribute('data-dirty', 'false');
+  });
+
+  it('treats a whitespace-only name edit as no change: no name save, refresh or event', async () => {
+    const user = userEvent.setup();
+    renderTab(313);
+
+    await user.click(screen.getByRole('button', { name: 'stub pad first' }));
+    expect(form()).toHaveAttribute('data-dirty', 'true');
+    await user.click(screen.getByRole('button', { name: 'stub save' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Profile saved'));
+    expect(updateNameAction).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalledWith(SETTINGS_EVENTS.NAME_UPDATED, expect.anything());
+    // The field settles back to the stored, trimmed name.
+    expect(form()).toHaveAttribute('data-dirty', 'false');
+  });
+
+  it('refuses an edited name that breaks the rule, shows why, and saves nothing', async () => {
+    const user = userEvent.setup();
+    renderTab(313);
+
+    await user.click(screen.getByRole('button', { name: 'stub clear last' }));
+    await user.click(screen.getByRole('button', { name: 'stub save' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('last-name-error')).toHaveTextContent('Last name is required')
+    );
+    expect(updateNameAction).not.toHaveBeenCalled();
+    expect(saveProfileAction).not.toHaveBeenCalled();
+  });
+
+  it('still saves the rest of the profile for an account stored without a last name', async () => {
+    const user = userEvent.setup();
+    const profile = makeProfile(313);
+    render(
+      <ProfileTab
+        initialProfile={{ ...profile, user: { ...profile.user, lastName: null } }}
+        referenceData={REFERENCE_DATA}
+        initialPhone={null}
+        phoneVerifiedAt={null}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'stub save' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Profile saved'));
+    expect(saveProfileAction).toHaveBeenCalled();
+    expect(updateNameAction).not.toHaveBeenCalled();
+  });
+
+  it('keeps the name unsaved and reports it when the name save fails', async () => {
+    updateNameAction.mockResolvedValue({ success: false, error: 'Something went wrong.' });
+    const user = userEvent.setup();
+    renderTab(313);
+
+    await user.click(screen.getByRole('button', { name: 'stub rename first' }));
+    await user.click(screen.getByRole('button', { name: 'stub save' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Something went wrong.'));
+    expect(form()).toHaveAttribute('data-dirty', 'true');
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it('does not save when the form fails validation', async () => {

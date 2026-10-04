@@ -20,8 +20,10 @@ export const RICH_TEXT_CONTENT_CLASS =
  *    enabled node/mark set is the widened `PROPOSAL_OVERVIEW_ALLOWED_TAGS`.
  *  - `light` — the milestone-description editor: a minimal persistent mini-toolbar
  *    (Bold, Italic, bullet list, Link only — no headings/ordered list).
+ *  - `minimal` — `light` WITHOUT Link (Bold, Italic, bullet list). For text that renders on a
+ *    public marketplace surface, where a clickable off-platform link is unwanted.
  */
-export type RichTextEditorVariant = 'standard' | 'full' | 'light';
+export type RichTextEditorVariant = 'standard' | 'full' | 'light' | 'minimal';
 
 export interface RichTextEditorProps {
   /** Current HTML value (from the draft). */

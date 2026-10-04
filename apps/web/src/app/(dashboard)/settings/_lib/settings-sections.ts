@@ -51,6 +51,13 @@ export const SETTINGS_SECTION_ORDER: readonly SettingsSectionMeta[] = [
   },
 ];
 
+/**
+ * The personal Account page. It lives under `/settings` (the nav registry's `account` entry) but
+ * is NOT a workspace Settings section — it belongs to the person, in either workspace — so it has
+ * no tab and the section tab bar does not render on it.
+ */
+export const ACCOUNT_SETTINGS_HREF = '/settings/account';
+
 /** The section keys as a Set — membership test, never a bare object index (no proto hazard). */
 const SECTION_KEYS = new Set<string>(SETTINGS_SECTION_ORDER.map((section) => section.key));
 

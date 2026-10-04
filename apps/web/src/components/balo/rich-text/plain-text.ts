@@ -67,3 +67,40 @@ export function normalizeLinkUrl(raw: string): string | null {
   // No scheme → default to https.
   return `https://${trimmed}`;
 }
+
+/**
+ * True when `value` is editor-emitted HTML. The editor always opens a document with a block
+ * element, so the first tag is enough — a plain-text value that merely CONTAINS `<` ("a <b> c",
+ * "<3") is not mistaken for markup.
+ */
+export function isRichTextHtml(value: string): boolean {
+  return /^<(?:p|h2|h3|ul|ol|blockquote)[\s>]/i.test(value.trimStart());
+}
+
+function escapeHtmlText(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+/**
+ * A field that USED to be a plain-text textarea, as rich-text HTML: editor HTML passes through
+ * untouched; legacy plain text is escaped and each non-blank line becomes a paragraph, so a
+ * pre-existing value keeps its line breaks in the editor and the viewer. Blank input → `''`.
+ *
+ * Safe to run on every read: the output is valid input to the editor, the viewer and the server
+ * sanitiser alike. It does NOT sanitise — editor HTML is returned as-is.
+ */
+export function toRichTextHtml(value: string | null | undefined): string {
+  if (value === null || value === undefined || value.trim() === '') return '';
+  if (isRichTextHtml(value)) return value;
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .map((line) => `<p>${escapeHtmlText(line)}</p>`)
+    .join('');
+}

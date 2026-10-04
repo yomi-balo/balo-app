@@ -1,21 +1,23 @@
 'use client';
 
+import { useCallback, useOptimistic, useTransition } from 'react';
 import { Check, CircleCheck } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
 import { SectionHead } from '@/components/balo/section/section-states';
 import { cn } from '@/lib/utils';
 import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
 import type { CaseActionItemsView } from '@/lib/cases/case-view-types';
+import { useSetActionItemStatus } from '@/components/balo/engagement/use-set-action-item-status';
+
+type ToggleItem = (item: ActionItemNodeView) => void;
 
 /**
  * BAL-421 — action items, grouped Yours / Theirs / Unassigned, lens-relative.
  *
- * ⚠⚠ READ-ONLY ON THIS SURFACE, AND THAT IS HONESTY RATHER THAN CAUTION. All five mutating
- * action-item Server Actions live under `engagements/[id]/_actions/` and gate through
- * `projectEngagementsRepository.findWithMilestones`, whose query filters
- * `engagement_type = 'project'` — so a CASE id can never resolve and every toggle / assign /
- * edit would toast "This engagement could not be found" on EVERY click. A panel whose controls
- * always error is worse than a panel that does not offer them. Case-grain equivalents are a
- * second ticket's worth of authorization surface.
+ * Marking an item done (or reopening it) is the ONE write offered here, through the shared
+ * `useSetActionItemStatus` runner (case grain); the checkbox is live only when `canToggle` (case open AND the
+ * viewer holds `mayToggleCaseActionItems`), otherwise it renders as a static status mark. Add /
+ * assign / edit / remove stay project-only — their actions gate through the project loader.
  *
  * ⚠⚠ THE UNASSIGNED GROUP RENDERS EVEN WHEN THE OTHER TWO ARE EMPTY, AND IT IS NOT AN
  * AFTERTHOUGHT — it is where `ai_extracted` items land, i.e. a TRIAGE QUEUE. Hiding it would
@@ -26,9 +28,43 @@ import type { CaseActionItemsView } from '@/lib/cases/case-view-types';
  * they come from, so the section reads as ready rather than broken.
  */
 export function CaseActionItems({
+  engagementId,
   actionItems,
-}: Readonly<{ actionItems: CaseActionItemsView }>): React.JSX.Element {
-  const { yours, theirs, unassigned, counterpartyLabel, doneCount, totalCount } = actionItems;
+}: Readonly<{ engagementId: string; actionItems: CaseActionItemsView }>): React.JSX.Element {
+  const { yours, theirs, unassigned, counterpartyLabel, totalCount, canToggle } = actionItems;
+  const setActionItemStatus = useSetActionItemStatus(engagementId, 'case');
+  const [isPending, startTransition] = useTransition();
+
+  const [optimisticStatus, applyOptimisticStatus] = useOptimistic(
+    new Map<string, 'open' | 'done'>(),
+    (current, patch: { id: string; status: 'open' | 'done' }) =>
+      new Map(current).set(patch.id, patch.status)
+  );
+
+  const withStatus = (items: readonly ActionItemNodeView[]): ActionItemNodeView[] =>
+    items.map((item) => {
+      const status = optimisticStatus.get(item.id);
+      return status === undefined ? item : { ...item, status };
+    });
+  const yoursItems = withStatus(yours);
+  const theirsItems = withStatus(theirs);
+  const unassignedItems = withStatus(unassigned);
+  const doneCount = [...yoursItems, ...theirsItems, ...unassignedItems].filter(
+    (item) => item.status === 'done'
+  ).length;
+
+  const toggle = useCallback<ToggleItem>(
+    (item) => {
+      const status = item.status === 'open' ? 'done' : 'open';
+      startTransition(async () => {
+        applyOptimisticStatus({ id: item.id, status });
+        await setActionItemStatus(item.id, status);
+      });
+    },
+    [applyOptimisticStatus, setActionItemStatus]
+  );
+
+  const onToggle = canToggle ? toggle : undefined;
 
   return (
     <section className="bg-card border-border rounded-xl border px-5 py-4">
@@ -43,9 +79,20 @@ export function CaseActionItems({
         </p>
       ) : (
         <>
-          <ItemGroup label="Yours" items={yours} />
-          <ItemGroup label={`${counterpartyLabel}'s`} items={theirs} />
-          <ItemGroup label="Unassigned" items={unassigned} muted />
+          <ItemGroup label="Yours" items={yoursItems} onToggle={onToggle} pending={isPending} />
+          <ItemGroup
+            label={`${counterpartyLabel}'s`}
+            items={theirsItems}
+            onToggle={onToggle}
+            pending={isPending}
+          />
+          <ItemGroup
+            label="Unassigned"
+            items={unassignedItems}
+            onToggle={onToggle}
+            pending={isPending}
+            muted
+          />
         </>
       )}
     </section>
@@ -55,8 +102,17 @@ export function CaseActionItems({
 function ItemGroup({
   label,
   items,
+  onToggle,
+  pending,
   muted = false,
-}: Readonly<{ label: string; items: readonly ActionItemNodeView[]; muted?: boolean }>) {
+}: Readonly<{
+  label: string;
+  items: readonly ActionItemNodeView[];
+  /** Present iff the viewer may toggle — absent renders the static status mark. */
+  onToggle: ToggleItem | undefined;
+  pending: boolean;
+  muted?: boolean;
+}>) {
   if (items.length === 0) {
     return null;
   }
@@ -74,17 +130,31 @@ function ItemGroup({
         {/* ⚠ KEYED ON THE ITEM ID, NEVER ON AN ARRAY INDEX (SonarCloud S6479). */}
         {items.map((item) => (
           <li key={item.id} className="flex items-start gap-2">
-            <span
-              aria-hidden="true"
-              className={cn(
-                'mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded',
-                item.status === 'done' ? 'bg-success' : 'border-border border-[1.5px]'
-              )}
-            >
-              {item.status === 'done' && (
-                <Check size={9} strokeWidth={3.5} className="text-background" />
-              )}
-            </span>
+            {onToggle === undefined ? (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded',
+                  item.status === 'done' ? 'bg-success' : 'border-border border-[1.5px]'
+                )}
+              >
+                {item.status === 'done' && (
+                  <Check size={9} strokeWidth={3.5} className="text-background" />
+                )}
+              </span>
+            ) : (
+              <Checkbox
+                className="mt-0.5"
+                checked={item.status === 'done'}
+                disabled={pending}
+                onCheckedChange={() => onToggle(item)}
+                aria-label={
+                  item.status === 'done'
+                    ? `Reopen action item: ${item.body}`
+                    : `Mark done: ${item.body}`
+                }
+              />
+            )}
             <span
               className={cn(
                 'text-xs leading-snug',
@@ -92,7 +162,9 @@ function ItemGroup({
               )}
             >
               {item.body}
-              <span className="sr-only">{item.status === 'done' ? ' (done)' : ' (open)'}</span>
+              {onToggle === undefined && (
+                <span className="sr-only">{item.status === 'done' ? ' (done)' : ' (open)'}</span>
+              )}
             </span>
           </li>
         ))}

@@ -1312,3 +1312,82 @@ describe('BAL-568 — liveness is read live, not cached', () => {
     );
   });
 });
+
+describe('usersRepository.updateName', () => {
+  async function nameAudits(userId: string) {
+    return db
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.entityId, userId), eq(auditEvents.action, 'user.name_changed')));
+  }
+
+  it('updates the name and records one user.name_changed row, from → to', async () => {
+    const user = await userFactory({ firstName: 'Ada', lastName: 'Lovelace' });
+
+    expect(
+      await usersRepository.updateName({ userId: user.id, firstName: 'Augusta', lastName: 'King' })
+    ).toEqual({ changed: true });
+
+    const [row] = await db
+      .select({ firstName: users.firstName, lastName: users.lastName })
+      .from(users)
+      .where(eq(users.id, user.id));
+    expect(row).toEqual({ firstName: 'Augusta', lastName: 'King' });
+
+    const audits = await nameAudits(user.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      actorUserId: user.id,
+      entityType: 'user',
+      metadata: {
+        from: { firstName: 'Ada', lastName: 'Lovelace' },
+        to: { firstName: 'Augusta', lastName: 'King' },
+      },
+    });
+    expect(audits[0]?.metadata).not.toHaveProperty('actorImpersonating');
+  });
+
+  it('writes nothing and records nothing when the name is unchanged', async () => {
+    const user = await userFactory({ firstName: 'Ada', lastName: 'Lovelace' });
+
+    expect(
+      await usersRepository.updateName({ userId: user.id, firstName: 'Ada', lastName: 'Lovelace' })
+    ).toEqual({ changed: false });
+    expect(await nameAudits(user.id)).toHaveLength(0);
+  });
+
+  it('records a first-time name (from null), e.g. at onboarding', async () => {
+    const user = await userFactory({ firstName: null, lastName: null });
+
+    await usersRepository.updateName({ userId: user.id, firstName: 'Ada', lastName: 'Lovelace' });
+
+    const [audit] = await nameAudits(user.id);
+    expect(audit?.metadata).toMatchObject({ from: { firstName: null, lastName: null } });
+  });
+
+  it('marks a change made under staff impersonation, naming the staff member', async () => {
+    const user = await userFactory({ firstName: 'Ada', lastName: 'Lovelace' });
+    const staff = await userFactory();
+
+    await usersRepository.updateName({
+      userId: user.id,
+      firstName: 'Augusta',
+      lastName: 'Lovelace',
+      actorImpersonatorUserId: staff.id,
+    });
+
+    const [audit] = await nameAudits(user.id);
+    expect(audit).toMatchObject({
+      actorUserId: user.id,
+      metadata: { actorImpersonating: true, actorImpersonatorUserId: staff.id },
+    });
+  });
+
+  it('throws for a missing user and records nothing', async () => {
+    const missing = randomUUID();
+    await expect(
+      usersRepository.updateName({ userId: missing, firstName: 'Ada', lastName: 'Lovelace' })
+    ).rejects.toThrow('updateName: user row not found');
+    expect(await nameAudits(missing)).toHaveLength(0);
+  });
+});

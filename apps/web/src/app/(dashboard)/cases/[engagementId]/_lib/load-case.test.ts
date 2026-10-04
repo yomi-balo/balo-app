@@ -133,6 +133,13 @@ vi.mock('@/lib/authz', () => ({
   hasCapability: (...a: unknown[]) => mockHasCapability(...a),
 }));
 
+// The done-toggle holder set has its own suite; mocked here so it neither needs the authz
+// module's constants nor perturbs the per-axis call counts asserted below.
+const mockMayToggle = vi.fn();
+vi.mock('@/lib/cases/may-toggle-case-action-items', () => ({
+  mayToggleCaseActionItems: (...a: unknown[]) => mockMayToggle(...a),
+}));
+
 const mockIsRealtimeConfigured = vi.fn();
 vi.mock('@/lib/realtime/ably-server', () => ({
   isRealtimeConfigured: () => mockIsRealtimeConfigured(),
@@ -233,6 +240,7 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   mockResolveCaseAccess.mockResolvedValue(access(over.access));
   mockHasEngagementCapability.mockResolvedValue(true);
   mockHasCapability.mockResolvedValue(true);
+  mockMayToggle.mockResolvedValue(true);
   mockIsRealtimeConfigured.mockReturnValue(true);
   m.findCase.mockResolvedValue({ ...OPEN_CASE, ...over.caseRow });
   m.listMeetings.mockResolvedValue([meeting('m1')]);
@@ -1245,14 +1253,43 @@ describe('loadCase — action items are bucketed relative to the LENS', () => {
     expect(view.actionItems.theirs.map((node) => node.id)).toEqual(['a-client']);
   });
 
-  it('counts done against total across every bucket', async () => {
+  it('counts the total across every bucket', async () => {
     m.listActionItems.mockResolvedValue([
       item('a1', 'client', 'done'),
       item('a2', 'expert', 'done'),
       item('a3', null),
     ]);
     const view = await loadOrThrow();
-    expect(view.actionItems).toMatchObject({ doneCount: 2, totalCount: 3 });
+    expect(view.actionItems).toMatchObject({ totalCount: 3 });
+  });
+
+  it('makes the done toggle live on an OPEN case when the viewer holds the act right', async () => {
+    m.listActionItems.mockResolvedValue([item('a1', 'client')]);
+    const view = await loadOrThrow();
+    expect(view.actionItems.canToggle).toBe(true);
+    expect(mockMayToggle).toHaveBeenCalledWith(
+      { id: USER_ID },
+      { lens: 'client', engagementId: ENGAGEMENT_ID, companyId: COMPANY_ID }
+    );
+  });
+
+  it('honours a false act-right answer', async () => {
+    m.listActionItems.mockResolvedValue([item('a1', 'client')]);
+    mockMayToggle.mockResolvedValue(false);
+    expect((await loadOrThrow()).actionItems.canToggle).toBe(false);
+  });
+
+  it('a CLOSED case is never toggleable and resolves no act-right read', async () => {
+    seed({ caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' } });
+    m.listActionItems.mockResolvedValue([item('a1', 'client')]);
+    expect((await loadOrThrow()).actionItems.canToggle).toBe(false);
+    expect(mockMayToggle).not.toHaveBeenCalled();
+  });
+
+  it('an item-less case resolves no act-right read', async () => {
+    m.listActionItems.mockResolvedValue([]);
+    expect((await loadOrThrow()).actionItems.canToggle).toBe(false);
+    expect(mockMayToggle).not.toHaveBeenCalled();
   });
 
   it('addresses the counterparty by FIRST name on the client lens', async () => {

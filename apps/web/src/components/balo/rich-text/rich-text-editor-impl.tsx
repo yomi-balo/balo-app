@@ -21,7 +21,10 @@ import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Button } from '@/components/ui/button';
-import { PROPOSAL_OVERVIEW_ALLOWED_TAGS } from '@/lib/sanitize/allowed-tags';
+import {
+  PROPOSAL_OVERVIEW_ALLOWED_TAGS,
+  WORK_HISTORY_HTML_ALLOWED_TAGS,
+} from '@/lib/sanitize/allowed-tags';
 import { normalizeLinkUrl, plainTextLength } from './plain-text';
 import {
   RICH_TEXT_CONTENT_CLASS,
@@ -32,13 +35,13 @@ import { createSlashCommandExtension } from './slash-command';
 import { BubbleMenuControls } from './bubble-menu-controls';
 
 /**
- * The widened overview allow-list is the single source the `full` editor's
- * node/mark set is derived from (so the editor can never emit a tag the server
- * sanitiser strips). `has(tag)` membership-tests it; the `standard`/`light`
- * variants use their own narrower hand-projected sets (see `VARIANT_TAGS`).
+ * The `full` and `minimal` editors derive their node/mark set from an allow-list — the widened
+ * proposal-overview list and the narrow work-history list respectively — so neither can emit a
+ * tag its server sanitiser strips (nor offer one the sanitiser would drop). The
+ * `standard`/`light` variants use their own hand-projected sets below.
  */
-const OVERVIEW_TAGS = new Set<string>(PROPOSAL_OVERVIEW_ALLOWED_TAGS);
-const fullHas = (tag: string): boolean => OVERVIEW_TAGS.has(tag);
+const OVERVIEW_TAGS: ReadonlySet<string> = new Set<string>(PROPOSAL_OVERVIEW_ALLOWED_TAGS);
+const WORK_HISTORY_TAGS: ReadonlySet<string> = new Set<string>(WORK_HISTORY_HTML_ALLOWED_TAGS);
 
 /** Which formatting nodes/marks each variant enables (toolbar + schema gate). */
 type VariantFeatureSet = {
@@ -53,21 +56,29 @@ type VariantFeatureSet = {
   horizontalRule: boolean;
 };
 
+/** A variant's node/mark set, read straight off an allow-list (the single source). */
+function featuresFromTags(tags: ReadonlySet<string>): VariantFeatureSet {
+  return {
+    bold: tags.has('strong'),
+    italic: tags.has('em'),
+    h2: tags.has('h2'),
+    h3: tags.has('h3'),
+    bulletList: tags.has('ul'),
+    orderedList: tags.has('ol'),
+    link: tags.has('a'),
+    blockquote: tags.has('blockquote'),
+    horizontalRule: tags.has('hr'),
+  };
+}
+
 function featuresFor(variant: RichTextEditorVariant): VariantFeatureSet {
   if (variant === 'full') {
-    // Derived from PROPOSAL_OVERVIEW_ALLOWED_TAGS (single source) — Bold, Italic,
-    // H2, H3, bullet list, numbered list, Link, blockquote, horizontal rule.
-    return {
-      bold: fullHas('strong'),
-      italic: fullHas('em'),
-      h2: fullHas('h2'),
-      h3: fullHas('h3'),
-      bulletList: fullHas('ul'),
-      orderedList: fullHas('ol'),
-      link: fullHas('a'),
-      blockquote: fullHas('blockquote'),
-      horizontalRule: fullHas('hr'),
-    };
+    // Bold, Italic, H2, H3, bullet list, numbered list, Link, blockquote, horizontal rule.
+    return featuresFromTags(OVERVIEW_TAGS);
+  }
+  if (variant === 'minimal') {
+    // Work-history responsibilities: Bold, Italic, bullet list — no Link, no headings.
+    return featuresFromTags(WORK_HISTORY_TAGS);
   }
   if (variant === 'light') {
     // Milestone descriptions: Bold, Italic, bullet list, Link ONLY.
@@ -282,8 +293,9 @@ interface ToolbarProps {
 }
 
 /**
- * The persistent toolbar for `standard` (full locked set) and `light` (Bold,
- * Italic, bullet list, Link). The `full` variant renders NO persistent toolbar —
+ * The persistent toolbar for `standard` (full locked set), `light` (Bold, Italic,
+ * bullet list, Link) and `minimal` (`light` without Link). The `full` variant renders NO
+ * persistent toolbar —
  * it uses the bubble menu + slash command instead.
  */
 function Toolbar({ editor, features }: Readonly<ToolbarProps>): React.JSX.Element {
@@ -363,10 +375,11 @@ const COLLAPSE_TEXT_THRESHOLD = 160;
  * `rich-text-editor.tsx` wrapper) so it never ships in the initial bundle.
  * Emits sanitisable HTML on every change; the parent debounces it into autosave.
  *
- * Three variants:
+ * Four variants:
  *  - `standard` (default): persistent locked toolbar (Bold, Italic | H2, H3 |
  *    Bullet, Numbered | Link). Unchanged.
  *  - `light`: minimal persistent toolbar (Bold, Italic, bullet list, Link).
+ *  - `minimal`: `light` without Link.
  *  - `full`: NO persistent toolbar — selection bubble menu + `/` slash command,
  *    plus optional collapse-on-blur (~3 lines + "Show full overview").
  */

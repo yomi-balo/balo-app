@@ -110,6 +110,7 @@ const EMPTY_ACTION_ITEMS: ActionItemsPanelView = {
   engagementId: 'e1',
   items: [],
   canWrite: false,
+  toggleGrain: null,
   viewerParty: 'client',
   clientCompanyName: 'Northwind Industrial',
   expertPartyShort: 'CloudPeak',

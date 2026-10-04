@@ -26,6 +26,8 @@ import type {
 } from '@balo/db';
 import type { SupportType } from '@balo/db';
 import { projectRangeLabel } from '@balo/shared/experts';
+import { RichTextViewer } from '@/components/balo/rich-text-editor';
+import { isDescriptionEmpty, toRichTextHtml } from '@/components/balo/rich-text/plain-text';
 import {
   buildProductCategoryMap,
   buildProductNamesByCategory,
@@ -739,17 +741,17 @@ export function ApplicationReview({
                     {formatDate(entry.startedAt)} —{' '}
                     {entry.isCurrent ? 'Present' : formatDate(entry.endedAt)}
                   </div>
-                  {entry.responsibilities && (
-                    <p
-                      className="mt-3 pt-3 text-[13px] leading-relaxed"
-                      style={{
-                        color: colors.textSecondary,
-                        borderTop: `1px solid ${colors.borderSubtle}`,
-                      }}
-                    >
-                      {entry.responsibilities}
-                    </p>
-                  )}
+                  {entry.responsibilities &&
+                    !isDescriptionEmpty(toRichTextHtml(entry.responsibilities)) && (
+                      // Rich text since the field became an editor; legacy plain text is
+                      // converted to paragraphs. The viewer re-parses through the editor schema.
+                      <div
+                        className="mt-3 pt-3"
+                        style={{ borderTop: `1px solid ${colors.borderSubtle}` }}
+                      >
+                        <RichTextViewer value={toRichTextHtml(entry.responsibilities)} />
+                      </div>
+                    )}
                 </Card>
               ))}
             </div>

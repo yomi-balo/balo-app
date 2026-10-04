@@ -181,6 +181,23 @@ describe('RichTextEditorImpl — light variant', () => {
   });
 });
 
+describe('RichTextEditorImpl — minimal variant', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('is the light toolbar without Link: Bold, Italic, Bullet list only', async () => {
+    setup('<p>x</p>', { variant: 'minimal' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Bold' })).toBeInTheDocument());
+    for (const label of ['Bold', 'Italic', 'Bullet list']) {
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+    }
+    for (const label of ['Insert link', 'Heading 2', 'Heading 3', 'Numbered list']) {
+      expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
+    }
+  });
+});
+
 describe('RichTextEditorImpl — full variant', () => {
   beforeEach(() => {
     vi.clearAllMocks();

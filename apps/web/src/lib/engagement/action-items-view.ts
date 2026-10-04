@@ -47,6 +47,12 @@ export interface ActionItemsPanelView {
    * a caller that WRAPS it must not emit a wrapper for a view that will render nothing.
    */
   canWrite: boolean;
+  /**
+   * Which status action the done checkbox calls, or `null` for a read-only checkbox. Separate from
+   * `canWrite` because a case can toggle status without the rest of the write surface:
+   * `'project'` → `setActionItemStatusAction`, `'case'` → `setCaseActionItemStatusAction`.
+   */
+  toggleGrain: 'project' | 'case' | null;
   /** = `ctx.lens` — drives default self-assign framing + copy. */
   viewerParty: EngagementLens;
   /** Assign-control label for the client side (from `deriveEngagementParties`). */
@@ -142,6 +148,7 @@ export function mapActionItemsToView(
     engagementId: engagement.id,
     items,
     canWrite: engagement.status === 'active',
+    toggleGrain: engagement.status === 'active' ? 'project' : null,
     viewerParty: ctx.lens,
     clientCompanyName: parties.clientCompanyName,
     expertPartyShort: parties.expertPartyShort,

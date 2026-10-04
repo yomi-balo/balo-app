@@ -21,6 +21,9 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/set-action-item-status', ()
 vi.mock('@/app/(dashboard)/engagements/[id]/_actions/remove-action-item', () => ({
   removeActionItemAction: vi.fn(),
 }));
+vi.mock('@/app/(dashboard)/cases/[engagementId]/_actions/set-case-action-item-status', () => ({
+  setCaseActionItemStatusAction: vi.fn(),
+}));
 
 const refreshMock = vi.fn();
 vi.mock('next/navigation', () => ({
@@ -37,6 +40,7 @@ import { updateActionItemAction } from '@/app/(dashboard)/engagements/[id]/_acti
 import { assignActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/assign-action-item';
 import { setActionItemStatusAction } from '@/app/(dashboard)/engagements/[id]/_actions/set-action-item-status';
 import { removeActionItemAction } from '@/app/(dashboard)/engagements/[id]/_actions/remove-action-item';
+import { setCaseActionItemStatusAction } from '@/app/(dashboard)/cases/[engagementId]/_actions/set-case-action-item-status';
 import { ActionItemsPanel } from './action-items-panel';
 
 function makeNode(over: Partial<ActionItemNodeView> = {}): ActionItemNodeView {
@@ -58,6 +62,7 @@ function makeView(over: Partial<ActionItemsPanelView> = {}): ActionItemsPanelVie
     engagementId: 'eng-1',
     items: [makeNode()],
     canWrite: true,
+    toggleGrain: 'project',
     viewerParty: 'expert',
     clientCompanyName: 'Northwind Industrial',
     expertPartyShort: 'Priya',
@@ -117,7 +122,7 @@ describe('ActionItemsPanel', () => {
   });
 
   it('read-only (not writable) renders items but no controls', () => {
-    render(<ActionItemsPanel view={makeView({ canWrite: false })} />);
+    render(<ActionItemsPanel view={makeView({ canWrite: false, toggleGrain: null })} />);
     expect(screen.getByText('Send the migration plan')).toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Add$/ })).not.toBeInTheDocument();
@@ -206,6 +211,29 @@ describe('ActionItemsPanel', () => {
       status: 'open',
     });
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Reopened'));
+  });
+
+  it('a CASE recap (toggleGrain case, not writable) toggles via the CASE action and offers nothing else', async () => {
+    vi.mocked(setCaseActionItemStatusAction).mockResolvedValue({
+      success: true,
+      actionItemId: 'ai-1',
+    });
+    const user = userEvent.setup();
+    render(<ActionItemsPanel view={makeView({ canWrite: false, toggleGrain: 'case' })} />);
+
+    expect(screen.queryByRole('button', { name: /^Add$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /edit action item/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remove action item/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: /mark done/i }));
+
+    expect(setCaseActionItemStatusAction).toHaveBeenCalledWith({
+      engagementId: 'eng-1',
+      actionItemId: 'ai-1',
+      status: 'done',
+    });
+    expect(setActionItemStatusAction).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Marked done'));
   });
 
   it('assigns an item to the client side from the assignee menu', async () => {

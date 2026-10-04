@@ -639,6 +639,65 @@ export const usersRepository = {
   },
 
   /**
+   * Change a user's first + last name and audit it (`user.name_changed`, from → to) in ONE
+   * transaction. The row is locked first, so the recorded `from` is the value actually replaced.
+   * An unchanged name writes nothing and records nothing.
+   *
+   * The actor is the user themself. Under staff impersonation, `actorImpersonatorUserId` adds
+   * `actorImpersonating` / `actorImpersonatorUserId` to the metadata — audit integrity only,
+   * omitted when absent (the `expert-searchability` precedent).
+   *
+   * ⚠ PII IN THE AUDIT TRAIL. `metadata.from` / `metadata.to` hold the names VERBATIM. Fine while
+   * `users` rows are only soft-deleted, but any personal-data ERASURE path must also scrub the
+   * `user.name_changed` rows in `audit_events` (entity_type 'user', entity_id = the user) — erasing
+   * `users.first_name` / `last_name` alone leaves every past name here.
+   */
+  updateName: async (input: {
+    userId: string;
+    firstName: string;
+    lastName: string;
+    actorImpersonatorUserId?: string;
+  }): Promise<{ changed: boolean }> => {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ firstName: users.firstName, lastName: users.lastName })
+        .from(users)
+        .where(and(eq(users.id, input.userId), isNull(users.deletedAt)))
+        .for('update');
+      if (current === undefined) throw new Error('updateName: user row not found');
+      if (current.firstName === input.firstName && current.lastName === input.lastName) {
+        return { changed: false };
+      }
+
+      await tx
+        .update(users)
+        .set({ firstName: input.firstName, lastName: input.lastName, updatedAt: new Date() })
+        .where(eq(users.id, input.userId));
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: 'user.name_changed',
+          entityType: 'user',
+          entityId: input.userId,
+          metadata: {
+            from: { firstName: current.firstName, lastName: current.lastName },
+            to: { firstName: input.firstName, lastName: input.lastName },
+            ...(input.actorImpersonatorUserId === undefined
+              ? {}
+              : {
+                  actorImpersonating: true,
+                  actorImpersonatorUserId: input.actorImpersonatorUserId,
+                }),
+          },
+        },
+        tx
+      );
+      return { changed: true };
+    });
+  },
+
+  /**
    * Set the user's timezone ONLY. Executor-aware so it can ride the schedule
    * editor's transaction (BAL-234): the expert-side timezone change writes
    * `expert_profiles.timezone` (resolver SSOT) and this (`users.timezone`) in the

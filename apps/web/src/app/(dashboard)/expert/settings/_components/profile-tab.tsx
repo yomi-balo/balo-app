@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, type UseFormReturn } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { ChevronDown, ChevronUp } from 'lucide-react';
@@ -20,11 +20,18 @@ import { ProfileForm } from './profile-form';
 import { ProfilePreviewPanel } from './profile-preview-panel';
 import { saveProfileAction } from '../_actions/save-profile';
 import { saveCountryAction } from '../_actions/save-country';
+import { updateNameAction } from '@/lib/auth/actions/update-name';
+import { changedNameFields, personNameSchema } from '@/lib/auth/name-schema';
+import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 import type { ProfileSettingsData } from '@balo/db';
 
 // ── Form schema ──────────────────────────────────────────────────
 
+// The name is validated against `personNameSchema` only when it is being changed (see
+// `handleSave`): an account created without a last name must still be able to save its headline.
 const profileFormSchema = z.object({
+  firstName: z.string(),
+  lastName: z.string(),
   headline: z.string().max(100),
   bio: z.string().max(1000),
   username: z
@@ -44,6 +51,37 @@ const profileFormSchema = z.object({
 });
 
 export type ProfileFormData = z.infer<typeof profileFormSchema>;
+
+/**
+ * The name to save on this Save: the validated (trimmed) name when it was edited, `null` when it
+ * was not touched or only its surrounding whitespace changed, or `'invalid'` after flagging the
+ * offending field(s) on the form. Validated
+ * only when edited, so an account stored without a last name can still save its headline.
+ */
+function resolveNameEdit(
+  form: UseFormReturn<ProfileFormData>
+): z.infer<typeof personNameSchema> | null | 'invalid' {
+  const { dirtyFields } = form.formState;
+  if (dirtyFields.firstName !== true && dirtyFields.lastName !== true) {
+    return null;
+  }
+  const parsed = personNameSchema.safeParse({
+    firstName: form.getValues('firstName'),
+    lastName: form.getValues('lastName'),
+  });
+  if (parsed.success) {
+    // Dirty but equal once trimmed ("Ada " → "Ada") is no change: nothing to save or report.
+    const changed = changedNameFields(form.formState.defaultValues ?? {}, parsed.data);
+    return changed.length === 0 ? null : parsed.data;
+  }
+  for (const issue of parsed.error.issues) {
+    const [field] = issue.path;
+    if (field === 'firstName' || field === 'lastName') {
+      form.setError(field, { message: issue.message });
+    }
+  }
+  return 'invalid';
+}
 
 // ── Props ─────────────────────────────────────────────────────────
 
@@ -75,6 +113,8 @@ export function ProfileTab({
   const form = useForm<ProfileFormData>({
     resolver: zodResolver(profileFormSchema),
     defaultValues: {
+      firstName: initialProfile.user.firstName ?? '',
+      lastName: initialProfile.user.lastName ?? '',
       headline: initialProfile.headline ?? '',
       bio: initialProfile.bio ?? '',
       username: initialProfile.username ?? '',
@@ -87,8 +127,9 @@ export function ProfileTab({
   });
 
   const watchedValues = form.watch();
-  const firstName = initialProfile.user.firstName ?? '';
-  const lastName = initialProfile.user.lastName ?? '';
+  // The preview and the photo's initials follow the name as it is typed, like the headline.
+  const firstName = watchedValues.firstName.trim();
+  const lastName = watchedValues.lastName.trim();
   const fullName = [firstName, lastName].filter(Boolean).join(' ') || 'Expert';
   const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
 
@@ -146,6 +187,9 @@ export function ProfileTab({
     const valid = await form.trigger();
     if (!valid) return;
 
+    const nameEdit = resolveNameEdit(form);
+    if (nameEdit === 'invalid') return;
+
     setIsSaving(true);
     try {
       const values = form.getValues();
@@ -165,6 +209,10 @@ export function ProfileTab({
         promises.push(saveCountryAction({ countryCode: countryCode || null }));
       }
 
+      if (nameEdit !== null) {
+        promises.push(updateNameAction(nameEdit));
+      }
+
       const results = await Promise.all(promises);
       const failed = results.find((r) => !r.success);
 
@@ -172,9 +220,26 @@ export function ProfileTab({
         toast.error(failed.error ?? 'Failed to save profile');
       } else {
         toast.success('Profile saved');
-        // Reset dirty state with current values
-        form.reset(values);
+        // The name as it was before this save — read before `reset` replaces the defaults.
+        const previousName = {
+          firstName: form.formState.defaultValues?.firstName,
+          lastName: form.formState.defaultValues?.lastName,
+        };
+        // Reset dirty state with the saved values (the name as stored — trimmed)
+        form.reset({
+          ...values,
+          firstName: values.firstName.trim(),
+          lastName: values.lastName.trim(),
+        });
         setSavedCountryCode(countryCode);
+        if (nameEdit !== null) {
+          track(SETTINGS_EVENTS.NAME_UPDATED, {
+            surface: 'expert_profile',
+            fields_changed: changedNameFields(previousName, nameEdit),
+          });
+          // The session cookie now carries the new name; re-render the shell (sidebar, menu).
+          router.refresh();
+        }
       }
     } catch {
       toast.error('Failed to save profile. Please try again.');
@@ -224,8 +289,6 @@ export function ProfileTab({
 
       <ProfileForm
         form={form}
-        firstName={firstName}
-        lastName={lastName}
         avatarUrl={avatarUrl}
         expertProfileId={initialProfile.id}
         allLanguages={referenceData.languages}

@@ -43,6 +43,13 @@ vi.mock('./_components/company-up-next-slot', () => ({
 vi.mock('./_components/expert-up-next-slot', () => ({
   ExpertUpNextSlot: () => <div data-testid="expert-up-next-slot" />,
 }));
+const mockApplicationReviewBannerSlot = vi.fn();
+vi.mock('./_components/application-review-banner-slot', () => ({
+  ApplicationReviewBannerSlot: (props: { userId: string; email: string }) => {
+    mockApplicationReviewBannerSlot(props);
+    return <div data-testid="application-review-banner-slot" />;
+  },
+}));
 vi.mock('./_components/up-next-card-skeleton', () => ({
   UpNextCardSkeleton: () => <div data-testid="skeleton" />,
 }));
@@ -81,6 +88,21 @@ describe('DashboardPage — company branch', () => {
     expect(precedes(upNext, wallet)).toBe(true);
     expect(precedes(wallet, promo)).toBe(true);
     expect(precedes(promo, metricGrid)).toBe(true);
+  });
+
+  it('mounts the under-review banner slot for the actor, above Up next', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
+    mockRequireUser.mockResolvedValue({ id: 'u-1', email: 'dana@northwind.test' });
+    mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
+
+    render(await DashboardPage());
+
+    const banner = screen.getByTestId('application-review-banner-slot');
+    expect(mockApplicationReviewBannerSlot).toHaveBeenCalledWith({
+      userId: 'u-1',
+      email: 'dana@northwind.test',
+    });
+    expect(precedes(banner, screen.getByTestId('company-up-next-slot'))).toBe(true);
   });
 
   it('does not render the expert dashboard when activeMode is client', async () => {

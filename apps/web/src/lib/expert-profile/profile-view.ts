@@ -2,6 +2,7 @@ import type { PublicExpertProfile } from '@balo/db';
 import { publicDisplayRatePerMinute } from '@balo/shared/pricing';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { deriveInitials } from '@/lib/search/expert-card-mapper';
+import { sanitizeResponsibilitiesHtml } from '@/lib/sanitize/work-history-html';
 import type {
   AgencyView,
   CertView,
@@ -108,7 +109,8 @@ function mapWorkHistory(workHistory: PublicExpertProfile['workHistory']): WorkHi
     periodLabel: formatPeriod(wh.startedAt, wh.endedAt, wh.isCurrent),
     durationLabel: wh.isCurrent ? '' : formatDuration(wh.startedAt, wh.endedAt),
     isCurrent: wh.isCurrent,
-    responsibilities: wh.responsibilities,
+    // Sanitised HERE, on the server, so the client card injects only safe HTML.
+    responsibilitiesHtml: sanitizeResponsibilitiesHtml(wh.responsibilities) || null,
   }));
 }
 

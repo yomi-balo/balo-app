@@ -305,7 +305,7 @@ export function CaseSurface({
    *  mounts), not a close-then-reopen. */
   const handleMoveFromCancel = useCallback(
     (verb: 'reschedule' | 'propose') => {
-      if (selection === null || selection.verb !== 'cancel') return;
+      if (selection?.verb !== 'cancel') return;
       const { meetingId, scheduledStartIso, scheduledMinutes, ordinal, source } = selection;
       setSelection({ verb, source, meetingId, scheduledStartIso, scheduledMinutes, ordinal });
     },
@@ -557,7 +557,7 @@ export function CaseSurface({
               />
             </Reveal>
             <Reveal delay={0.2}>
-              <CaseActionItems actionItems={view.actionItems} />
+              <CaseActionItems engagementId={view.engagementId} actionItems={view.actionItems} />
             </Reveal>
             <Reveal delay={0.25}>
               <CaseFilesCard

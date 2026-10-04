@@ -182,8 +182,9 @@ export interface CaseActionItemsView {
   unassigned: ActionItemNodeView[];
   /** The other party's short label, for the "Theirs" group heading. */
   counterpartyLabel: string;
-  doneCount: number;
   totalCount: number;
+  /** The case is open AND the viewer holds `mayToggleCaseActionItems` — the checkbox is live. */
+  canToggle: boolean;
 }
 
 // ── parties ──────────────────────────────────────────────────────────────────────────────

@@ -6,6 +6,8 @@ import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
+import { responsibilitiesFieldSchema } from '@/lib/expert-profile/work-history-responsibilities';
+import { sanitizeResponsibilitiesHtml } from '@/lib/sanitize/work-history-html';
 
 const dateFormatRegex = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -18,7 +20,8 @@ const saveWorkHistorySchema = z.object({
         startedAt: z.string().regex(dateFormatRegex, 'Invalid date format'),
         endedAt: z.string().regex(dateFormatRegex, 'Invalid date format').optional(),
         isCurrent: z.boolean(),
-        responsibilities: z.string().max(1000).optional(),
+        // Rich-text HTML (or a legacy plain-text value) — sanitised before persist.
+        responsibilities: responsibilitiesFieldSchema.optional(),
       })
     )
     .max(50),
@@ -49,7 +52,13 @@ export const saveWorkHistoryAction = withAuth(
         return { success: false, error: 'Expert profile required' };
       }
 
-      await expertsRepository.syncWorkHistory(session.user.expertProfileId, validated.entries);
+      await expertsRepository.syncWorkHistory(
+        session.user.expertProfileId,
+        validated.entries.map((entry) => ({
+          ...entry,
+          responsibilities: sanitizeResponsibilitiesHtml(entry.responsibilities),
+        }))
+      );
 
       log.info('Work history saved', {
         expertProfileId: session.user.expertProfileId,

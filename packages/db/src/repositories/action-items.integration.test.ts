@@ -491,3 +491,132 @@ describe('actionItemsRepository — the CASE widening is INTENDED (BAL-417 / R4)
     expect(created.body).toBe('Send the flow export');
   });
 });
+
+describe('actionItemsRepository.latestStatusChangeAtForEngagements (case-inactivity anchor)', () => {
+  /**
+   * Insert one audit row with an EXPLICIT `created_at`. Every write in a test shares one
+   * transaction, so `now()` — and therefore every repo-written audit row — carries the same
+   * timestamp; ordering assertions need stamps the test controls.
+   */
+  async function auditAt(
+    actionItemId: string,
+    action: string,
+    createdAt: Date,
+    actorUserId: string
+  ): Promise<void> {
+    await db.insert(auditEvents).values({
+      actorUserId,
+      action,
+      entityType: 'action_item',
+      entityId: actionItemId,
+      metadata: {},
+      createdAt,
+    });
+  }
+
+  it('returns an empty Map for an empty input', async () => {
+    const result = await actionItemsRepository.latestStatusChangeAtForEngagements([]);
+    expect(result.size).toBe(0);
+  });
+
+  it('returns an entry for EVERY id — null for a case nobody has ticked anything on', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const { engagement: untouched } = await caseEngagementFactory();
+    await actionItemFactory({ engagementId: engagement.id });
+
+    const result = await actionItemsRepository.latestStatusChangeAtForEngagements([
+      engagement.id,
+      untouched.id,
+    ]);
+    expect([...result.entries()]).toEqual([
+      [engagement.id, null],
+      [untouched.id, null],
+    ]);
+  });
+
+  it('a complete through the repository counts', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const user = await userFactory();
+    const { actionItem } = await actionItemFactory({ engagementId: engagement.id });
+    await actionItemsRepository.complete({ actionItemId: actionItem.id, userId: user.id });
+
+    const [completed] = (await auditEventsForEntity(actionItem.id)).filter(
+      (event) => event.action === 'action_item.completed'
+    );
+    const result = await actionItemsRepository.latestStatusChangeAtForEngagements([engagement.id]);
+    expect(result.get(engagement.id)?.getTime()).toBe(completed?.createdAt.getTime());
+  });
+
+  it('takes the NEWEST complete or reopen across every item on the case', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const user = await userFactory();
+    const { actionItem: first } = await actionItemFactory({ engagementId: engagement.id });
+    const { actionItem: second } = await actionItemFactory({ engagementId: engagement.id });
+    const newest = new Date('2026-09-20T10:00:00.000Z');
+    await auditAt(first.id, 'action_item.completed', new Date('2026-09-01T10:00:00.000Z'), user.id);
+    await auditAt(second.id, 'action_item.reopened', newest, user.id);
+    await auditAt(
+      second.id,
+      'action_item.completed',
+      new Date('2026-09-10T10:00:00.000Z'),
+      user.id
+    );
+
+    const result = await actionItemsRepository.latestStatusChangeAtForEngagements([engagement.id]);
+    expect(result.get(engagement.id)?.getTime()).toBe(newest.getTime());
+  });
+
+  it.each(['action_item.created', 'action_item.assigned', 'action_item.edited'])(
+    'ignores %s — only a status change is activity',
+    async (action) => {
+      const { engagement } = await caseEngagementFactory();
+      const user = await userFactory();
+      const { actionItem } = await actionItemFactory({ engagementId: engagement.id });
+      await auditAt(actionItem.id, action, new Date('2026-09-20T10:00:00.000Z'), user.id);
+
+      const result = await actionItemsRepository.latestStatusChangeAtForEngagements([
+        engagement.id,
+      ]);
+      expect(result.get(engagement.id)).toBeNull();
+    }
+  );
+
+  it('ignores a status change on a soft-removed item', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const user = await userFactory();
+    const { actionItem } = await actionItemFactory({
+      engagementId: engagement.id,
+      values: { deletedAt: new Date('2026-09-21T00:00:00.000Z') },
+    });
+    await auditAt(
+      actionItem.id,
+      'action_item.completed',
+      new Date('2026-09-20T10:00:00.000Z'),
+      user.id
+    );
+
+    const result = await actionItemsRepository.latestStatusChangeAtForEngagements([engagement.id]);
+    expect(result.get(engagement.id)).toBeNull();
+  });
+
+  it('never leaks one case’s activity into another', async () => {
+    const { engagement: ticked } = await caseEngagementFactory();
+    const { engagement: other } = await caseEngagementFactory();
+    const user = await userFactory();
+    const { actionItem } = await actionItemFactory({ engagementId: ticked.id });
+    await actionItemFactory({ engagementId: other.id });
+    await auditAt(
+      actionItem.id,
+      'action_item.completed',
+      new Date('2026-09-20T10:00:00.000Z'),
+      user.id
+    );
+
+    const result = await actionItemsRepository.latestStatusChangeAtForEngagements([
+      ticked.id,
+      other.id,
+    ]);
+    expect(result.get(ticked.id)).not.toBeNull();
+    expect(result.get(other.id)).toBeNull();
+  });
+});

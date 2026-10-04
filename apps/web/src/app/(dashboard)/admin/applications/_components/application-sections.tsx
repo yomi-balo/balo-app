@@ -3,10 +3,12 @@ import type {
   ApplicationWithRelations,
   ProductsByCategory,
   CertificationsByCategory,
+  SupportType,
 } from '@balo/db';
-import type { SupportType } from '@balo/db';
 import { projectRangeLabel } from '@balo/shared/experts';
 import { formatPeriod } from '@/lib/expert-profile/profile-view';
+import { RichText } from '@/components/balo/project-request/rich-text';
+import { sanitizeResponsibilitiesHtml } from '@/lib/sanitize/work-history-html';
 import {
   buildProductCategoryMap,
   buildProductNamesByCategory,
@@ -306,16 +308,30 @@ export function ApplicationSections({
                   <Clock className="size-3" aria-hidden="true" />
                   {formatPeriod(entry.startedAt, entry.endedAt, entry.isCurrent)}
                 </p>
-                {entry.responsibilities !== null && entry.responsibilities.length > 0 && (
-                  <p className="text-foreground border-border mt-3 border-t pt-3 text-[13px] leading-relaxed">
-                    {entry.responsibilities}
-                  </p>
-                )}
+                <ResponsibilitiesBlock value={entry.responsibilities} />
               </div>
             ))}
           </div>
         </section>
       )}
     </div>
+  );
+}
+
+/**
+ * A work-history entry's responsibilities as the applicant formatted them. Rich text since the
+ * field became an editor; legacy plain text arrives as escaped paragraphs. `RichText` re-sanitises
+ * before it injects.
+ */
+function ResponsibilitiesBlock({
+  value,
+}: Readonly<{ value: string | null }>): React.JSX.Element | null {
+  const html = sanitizeResponsibilitiesHtml(value);
+  if (html === '') return null;
+  return (
+    <RichText
+      html={html}
+      className="text-foreground border-border mt-3 border-t pt-3 text-[13px] [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+    />
   );
 }

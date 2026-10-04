@@ -487,7 +487,59 @@ describe('saveDraftAction', () => {
         data: { entries },
         expertProfileId: PROFILE_ID,
       });
-      expect(mockSyncWorkHistory).toHaveBeenCalledWith(PROFILE_ID, entries);
+      // A legacy plain-text value is persisted as escaped paragraph HTML.
+      expect(mockSyncWorkHistory).toHaveBeenCalledWith(PROFILE_ID, [
+        { ...entries[0], responsibilities: '<p>Led projects.</p>' },
+      ]);
+    });
+
+    const ENTRY = {
+      role: 'Senior Consultant',
+      company: 'Acme Corp',
+      startedAt: '2020-01-01',
+      endedAt: '2023-06-01',
+      isCurrent: false,
+    };
+
+    async function saveResponsibilities(responsibilities: string): Promise<unknown> {
+      return saveDraftAction({
+        step: 'work-history',
+        data: { entries: [{ ...ENTRY, responsibilities }] },
+        expertProfileId: PROFILE_ID,
+      });
+    }
+
+    function persistedResponsibilities(): unknown {
+      const [, persisted] = mockSyncWorkHistory.mock.calls[0] as [
+        string,
+        Array<{ responsibilities: string }>,
+      ];
+      return persisted[0]?.responsibilities;
+    }
+
+    it('keeps the editor formatting and strips anything outside the allow-list', async () => {
+      await saveResponsibilities(
+        '<ul><li><strong>Led</strong> delivery</li></ul><script>alert(1)</script><p onclick="x()">Ran CPQ</p>'
+      );
+      expect(persistedResponsibilities()).toBe(
+        '<ul><li><strong>Led</strong> delivery</li></ul><p>Ran CPQ</p>'
+      );
+    });
+
+    it("stores nothing for the editor's empty document", async () => {
+      await saveResponsibilities('<p></p>');
+      expect(persistedResponsibilities()).toBe('');
+    });
+
+    it('bounds the VISIBLE text, not the markup: 1,000 characters of bold text is allowed', async () => {
+      await saveResponsibilities(`<p><strong>${'a'.repeat(1000)}</strong></p>`);
+      expect(mockSyncWorkHistory).toHaveBeenCalled();
+    });
+
+    it('refuses more than 1,000 visible characters and writes nothing', async () => {
+      const result = await saveResponsibilities(`<p>${'a'.repeat(1001)}</p>`);
+      expect(result).toMatchObject({ success: false });
+      expect(mockSyncWorkHistory).not.toHaveBeenCalled();
     });
   });
 

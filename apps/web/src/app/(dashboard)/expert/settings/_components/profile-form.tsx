@@ -33,6 +33,7 @@ import { PhotoUpload } from './photo-upload';
 import { UsernameInput } from './username-input';
 import { SettingsCard, SettingsEyebrow, SettingsStatusPill } from './settings-card';
 import type { ProfileFormData } from './profile-tab';
+import { PERSON_NAME_MAX } from '@/lib/auth/name-schema';
 
 const HEADLINE_MAX = 100;
 const BIO_MAX = 1000;
@@ -75,28 +76,41 @@ function CharCounter({
   );
 }
 
-// ── Read-only name field ──────────────────────────────────────────
+// ── Name field ────────────────────────────────────────────────────
 
-function ReadOnlyNameField({
+function NameField({
+  form,
+  name,
   label,
-  value,
-  hintId,
-}: Readonly<{ label: string; value: string; hintId: string }>): React.JSX.Element {
+  autoComplete,
+}: Readonly<{
+  form: UseFormReturn<ProfileFormData>;
+  name: 'firstName' | 'lastName';
+  label: string;
+  autoComplete: 'given-name' | 'family-name';
+}>): React.JSX.Element {
   const id = useId();
+  const errorId = useId();
+  const error = form.formState.errors[name]?.message;
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id} className={cn(FIELD_LABEL_CLASS, 'gap-1')}>
+      <Label htmlFor={id} className={FIELD_LABEL_CLASS}>
         {label}
-        <span className="text-muted-foreground font-normal">&middot; read-only</span>
       </Label>
       <Input
         id={id}
-        value={value}
-        readOnly
-        title="Contact support to change your name"
-        aria-describedby={hintId}
-        className={cn('bg-muted text-muted-foreground cursor-default', IDENTITY_CONTROL_HEIGHT)}
+        autoComplete={autoComplete}
+        maxLength={PERSON_NAME_MAX}
+        aria-invalid={error !== undefined}
+        aria-describedby={error === undefined ? undefined : errorId}
+        className={IDENTITY_CONTROL_HEIGHT}
+        {...form.register(name, { onChange: () => form.clearErrors(name) })}
       />
+      {error !== undefined && (
+        <p id={errorId} className="text-destructive-strong text-xs">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -232,8 +246,6 @@ function ContactFields({
 
 interface ProfileFormProps {
   form: UseFormReturn<ProfileFormData>;
-  firstName: string;
-  lastName: string;
   avatarUrl: string | null;
   expertProfileId: string;
   allLanguages: Array<{
@@ -262,8 +274,6 @@ interface ProfileFormProps {
 
 export function ProfileForm({
   form,
-  firstName,
-  lastName,
   avatarUrl,
   expertProfileId,
   allLanguages,
@@ -288,7 +298,6 @@ export function ProfileForm({
   const reduceMotion = useReducedMotion();
 
   const identityId = useId();
-  const nameHintId = useId();
   const usernameId = useId();
   const publicProfileId = useId();
   const headlineId = useId();
@@ -306,7 +315,9 @@ export function ProfileForm({
 
   const industryOptions = allIndustries.map((i) => ({ id: i.id, label: i.name }));
 
-  const initials = `${firstName?.charAt(0) ?? ''}${lastName?.charAt(0) ?? ''}`.toUpperCase();
+  const firstName = form.watch('firstName') ?? '';
+  const lastName = form.watch('lastName') ?? '';
+  const initials = `${firstName.trim().charAt(0)}${lastName.trim().charAt(0)}`.toUpperCase();
 
   return (
     <div className="flex min-w-0 flex-col gap-[22px]">
@@ -323,12 +334,9 @@ export function ProfileForm({
         <SettingsEyebrow id={identityId}>Identity</SettingsEyebrow>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <ReadOnlyNameField label="First name" value={firstName} hintId={nameHintId} />
-          <ReadOnlyNameField label="Last name" value={lastName} hintId={nameHintId} />
+          <NameField form={form} name="firstName" label="First name" autoComplete="given-name" />
+          <NameField form={form} name="lastName" label="Last name" autoComplete="family-name" />
         </div>
-        <span id={nameHintId} className="sr-only">
-          Contact support to change your name.
-        </span>
 
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={usernameId} className={FIELD_LABEL_CLASS}>

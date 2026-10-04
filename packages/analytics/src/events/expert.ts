@@ -18,6 +18,8 @@ export const EXPERT_EVENTS = {
   // BAL-591 — the Schedule tab's "Available for new work" toggle.
   WORK_AVAILABILITY_CHANGED: 'expert_work_availability_changed',
   WORK_AVAILABILITY_PAUSE_CANCELLED: 'expert_work_availability_pause_cancelled',
+  // The client dashboard's "under review" banner — its "View your application" CTA.
+  APPLICATION_REVIEW_BANNER_CLICKED: 'expert_application_review_banner_clicked',
 } as const;
 
 /** The outcome of replaying an anonymous sessionStorage draft (BAL-502 §22.9). Kept
@@ -81,6 +83,7 @@ export interface ExpertEventMap {
     available_for_work: boolean;
   };
   [EXPERT_EVENTS.WORK_AVAILABILITY_PAUSE_CANCELLED]: Record<string, never>;
+  [EXPERT_EVENTS.APPLICATION_REVIEW_BANNER_CLICKED]: Record<string, never>;
 }
 
 // -- Server events (fire from server actions via trackServerAndFlush) ------------------

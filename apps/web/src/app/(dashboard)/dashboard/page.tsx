@@ -15,6 +15,7 @@ import { DashboardWalletSlot } from './_components/dashboard-wallet-slot';
 import { CompanyUpNextSlot } from './_components/company-up-next-slot';
 import { ExpertUpNextSlot } from './_components/expert-up-next-slot';
 import { UpNextCardSkeleton } from './_components/up-next-card-skeleton';
+import { ApplicationReviewBannerSlot } from './_components/application-review-banner-slot';
 import { resolveUpNextFooterLinks } from './_lib/up-next-footer-links';
 import { log } from '@/lib/logging';
 import type { UpNextFooterLink } from './_lib/up-next-view-types';
@@ -78,6 +79,12 @@ async function renderCompanyDashboard(
           Welcome back. Here is an overview of your activity.
         </p>
       </div>
+
+      {/* An expert applicant awaiting a decision lands here (no expert workspace until approved).
+          Streams in on its own; a failed read renders nothing rather than blocking the page. */}
+      <Suspense fallback={null}>
+        <ApplicationReviewBannerSlot userId={actor.id} email={actor.email} />
+      </Suspense>
 
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Suspense fallback={<UpNextCardSkeleton />}>

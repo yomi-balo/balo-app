@@ -140,7 +140,7 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
         periodLabel: 'Apr 2025 — Present',
         durationLabel: '',
         isCurrent: true,
-        responsibilities: 'Leading the architecture practice.',
+        responsibilitiesHtml: '<p>Leading the architecture practice.</p>',
       },
       {
         role: 'Senior Developer',
@@ -148,7 +148,7 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
         periodLabel: 'Nov 2017 — Apr 2020',
         durationLabel: '2 yrs 5 mos',
         isCurrent: false,
-        responsibilities: null,
+        responsibilitiesHtml: null,
       },
     ],
     ...overrides,

@@ -19,6 +19,7 @@ describe('EXPERT_EVENTS', () => {
       'APPLICATION_DRAFT_FLUSHED',
       'WORK_AVAILABILITY_CHANGED',
       'WORK_AVAILABILITY_PAUSE_CANCELLED',
+      'APPLICATION_REVIEW_BANNER_CLICKED',
     ]);
   });
 
@@ -45,6 +46,9 @@ describe('EXPERT_EVENTS', () => {
     expect(EXPERT_EVENTS.WORK_AVAILABILITY_CHANGED).toBe('expert_work_availability_changed');
     expect(EXPERT_EVENTS.WORK_AVAILABILITY_PAUSE_CANCELLED).toBe(
       'expert_work_availability_pause_cancelled'
+    );
+    expect(EXPERT_EVENTS.APPLICATION_REVIEW_BANNER_CLICKED).toBe(
+      'expert_application_review_banner_clicked'
     );
   });
 

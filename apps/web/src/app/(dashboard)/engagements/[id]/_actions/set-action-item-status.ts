@@ -35,7 +35,8 @@ export interface SetActionItemStatusInput {
  * then `complete` or `reopen` under the repo's lock — an illegal transition (double
  * complete / reopen) throws `InvalidActionItemTransitionError`, mapped to the friendly
  * `STATUS_CHANGED` race copy by the runner. Fires `ACTION_ITEM_COMPLETED` (with the
- * actor lens + whether the item was ai_extracted) or `ACTION_ITEM_REOPENED`.
+ * actor lens + whether the item was ai_extracted) or `ACTION_ITEM_REOPENED` (with the actor
+ * lens), both tagged `engagement_type: 'project'`.
  */
 export async function setActionItemStatusAction(
   input: SetActionItemStatusInput
@@ -67,6 +68,7 @@ export async function setActionItemStatusAction(
         });
         trackServerAndFlush(ACTION_ITEM_SERVER_EVENTS.COMPLETED, {
           engagement_id: engagement.id,
+          engagement_type: 'project',
           action_item_id: updated.id,
           completed_by_role: lens,
           was_ai_extracted: actionItem.source === 'ai_extracted',
@@ -86,7 +88,9 @@ export async function setActionItemStatusAction(
       });
       trackServerAndFlush(ACTION_ITEM_SERVER_EVENTS.REOPENED, {
         engagement_id: engagement.id,
+        engagement_type: 'project',
         action_item_id: updated.id,
+        reopened_by_role: lens,
         distinct_id: user.id,
       });
       log.info('Action item reopened', {
