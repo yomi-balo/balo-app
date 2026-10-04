@@ -77,6 +77,7 @@ const PATCH: ProjectBriefDraftPatch = {
   productIds: ['p1'],
   unmatchedTagLabels: [],
   unmatchedProductLabels: [],
+  promptVersion: 'v2',
 };
 
 function renderFlow(isFlowActive: boolean, draft: ProjectDraft = DRAFT) {
@@ -287,6 +288,39 @@ describe('useAiBriefFlow — capturedAiState / clearAiState / restoreAiState (th
       },
       unmatchedLabels: { tags: [], products: [] },
       editedFields: [],
+      promptVersion: 'v2',
+    });
+  });
+
+  it('exposes the suggested products with the prompt version, and clearAiState drops them', () => {
+    const { view } = renderConnectedFlow(DRAFT);
+    expect(view.result.current.flow.aiProductSuggestion).toBeNull();
+
+    act(() => captured.onSucceeded?.(PATCH));
+    expect(view.result.current.flow.aiProductSuggestion).toEqual({
+      productIds: PATCH.productIds,
+      promptVersion: 'v2',
+    });
+
+    act(() => view.result.current.flow.clearAiState());
+    expect(view.result.current.flow.aiProductSuggestion).toBeNull();
+  });
+
+  it('has no suggestion when the parse row recorded no prompt version', () => {
+    const { view } = renderConnectedFlow(DRAFT);
+    act(() => captured.onSucceeded?.({ ...PATCH, promptVersion: null }));
+    expect(view.result.current.flow.aiProductSuggestion).toBeNull();
+  });
+
+  it('restoreAiState brings the suggestion back with the snapshot', () => {
+    const { view } = renderConnectedFlow(DRAFT);
+    act(() => captured.onSucceeded?.(PATCH));
+    const captured1 = view.result.current.flow.capturedAiState;
+    act(() => view.result.current.flow.clearAiState());
+    act(() => view.result.current.flow.restoreAiState(captured1));
+    expect(view.result.current.flow.aiProductSuggestion).toEqual({
+      productIds: PATCH.productIds,
+      promptVersion: 'v2',
     });
   });
 

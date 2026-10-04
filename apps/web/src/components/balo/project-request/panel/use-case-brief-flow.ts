@@ -11,6 +11,7 @@ import {
   type BriefGenerationPhase,
 } from './use-project-brief-generation';
 import { useProgressiveReveal } from './use-progressive-reveal';
+import type { AiProductSuggestion } from './ai-product-metrics';
 import { snapshotsDiffer, type AiFieldSnapshot } from './use-ai-brief-flow';
 import {
   allDraftDocuments,
@@ -54,6 +55,9 @@ export interface UseCaseBriefFlowResult {
    *  this reads `true` again after a reload too, not only within the mount that generated it. */
   hasAiDraft: boolean;
   hasEditsSinceGenerate: boolean;
+  /** BAL-592 — the products the AI parse applied to this case request; `null` when the case's own
+   *  products were kept or no parse landed. */
+  aiProductSuggestion: AiProductSuggestion | null;
   regenerateConfirmOpen: boolean;
   setRegenerateConfirmOpen: (open: boolean) => void;
   handleRedraftClick: () => void;
@@ -111,6 +115,7 @@ export function useCaseBriefFlow({
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
   const [revealRunKey, setRevealRunKey] = useState(0);
   const [revealHtml, setRevealHtml] = useState<string | null>(null);
+  const [aiProductSuggestion, setAiProductSuggestion] = useState<AiProductSuggestion | null>(null);
 
   const isFlowActiveRef = useRef(isFlowActive);
   isFlowActiveRef.current = isFlowActive;
@@ -173,7 +178,15 @@ export function useCaseBriefFlow({
       if (current.title.trim() === '') setField('title', patch.title);
       setField('descriptionHtml', patch.descriptionHtml);
       setField('tagIds', patch.tagIds);
-      if (current.productIds.length === 0) setField('productIds', patch.productIds);
+      if (current.productIds.length === 0) {
+        setField('productIds', patch.productIds);
+        if (patch.promptVersion !== null) {
+          setAiProductSuggestion({
+            productIds: patch.productIds,
+            promptVersion: patch.promptVersion,
+          });
+        }
+      }
 
       // ⚠ Persisted, so it survives a reload (replaces local `hasAiDraft` state).
       setField('caseBriefSnapshot', {
@@ -281,6 +294,7 @@ export function useCaseBriefFlow({
     if (draftRef.current.productIds.length === 0) {
       setField('productIds', [...sourceCaseNow.productIds]);
     }
+    setAiProductSuggestion(null);
     runGenerate();
     // `sourceCase`/`draft` are read through refs (fresh at the instant this effect first runs
     // for a given `open`); only `open` itself should re-trigger it.
@@ -321,6 +335,7 @@ export function useCaseBriefFlow({
     revealedHtml: phase === 'revealing' ? reveal.visibleHtml : null,
     hasAiDraft,
     hasEditsSinceGenerate,
+    aiProductSuggestion,
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleRedraftClick,

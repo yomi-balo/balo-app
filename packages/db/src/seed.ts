@@ -2,6 +2,15 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { eq } from 'drizzle-orm';
 import * as schema from './schema';
+import {
+  PRODUCT_CATEGORIES,
+  SALESFORCE_PRODUCT_ALIASES,
+} from './reference-data/salesforce-taxonomy';
+import {
+  seedProductAliasesForVertical,
+  seedTaxonomyForVertical,
+  slugify,
+} from './reference-data/taxonomy-seed';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
@@ -11,16 +20,6 @@ if (!connectionString) {
 
 const client = postgres(connectionString, { max: 1 });
 const db = drizzle(client, { schema });
-
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[()]/g, '')
-    .replace(/[&/]/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-}
 
 // ──────────────────────────────────────────────────────
 // Seed data definitions (compact format)
@@ -74,51 +73,6 @@ const PROJECT_TAG_GROUPS: Array<[string, string, string[]]> = [
       'Quality Assurance / Testing Support',
     ],
   ],
-];
-
-/** [categoryName, categorySlug, productNames[]] */
-const PRODUCT_CATEGORIES: Array<[string, string, string[]]> = [
-  ['AI', 'ai', ['Agentforce']],
-  ['Data Cloud', 'data-cloud', ['Data Cloud']],
-  ['Sales Cloud', 'sales-cloud', ['CPQ', 'Sales Cloud']],
-  [
-    'Service Cloud',
-    'service-cloud',
-    ['Digital Engagement', 'Field Service', 'Service Cloud', 'Voice'],
-  ],
-  [
-    'Marketing Cloud',
-    'marketing-cloud',
-    ['Account Engagement', 'Engagement', 'Intelligence', 'Loyalty Management', 'Personalisation'],
-  ],
-  ['Slack', 'slack', ['Slack']],
-  ['Experience Cloud', 'experience-cloud', ['Experience Cloud']],
-  ['Commerce Cloud', 'commerce-cloud', ['B2B Commerce', 'B2C Commerce', 'Order Management']],
-  [
-    'Platform',
-    'platform',
-    ['AppExchange', 'Heroku', 'Hyperforce', 'Salesforce Platform', 'Security', 'Shield'],
-  ],
-  ['Tableau', 'tableau', ['CRM Analytics', 'Tableau']],
-  ['Mulesoft', 'mulesoft', ['MuleSoft']],
-  [
-    'Industry Clouds',
-    'industry-clouds',
-    [
-      'Communications Cloud',
-      'Consumer Goods Cloud',
-      'Education Cloud',
-      'Energy & Utilities Cloud',
-      'Financial Services Cloud',
-      'Government Cloud',
-      'Health Cloud',
-      'Manufacturing Cloud',
-      'Media Cloud',
-      'Nonprofit Cloud',
-      'OmniStudio',
-    ],
-  ],
-  ['Net Zero Cloud', 'net-zero-cloud', ['Net Zero Cloud']],
 ];
 
 /**
@@ -347,52 +301,6 @@ const INDUSTRIES = [
 // ──────────────────────────────────────────────────────
 
 /**
- * Seed categories → products → support types for ONE vertical. Used for BOTH
- * Salesforce and the mock `acme` vertical — proving the seeder hardcodes no
- * vertical-specific taxonomy. Idempotent (onConflictDoNothing on the composite
- * (vertical_id, slug) uniques).
- */
-async function seedTaxonomyForVertical(
-  verticalId: string,
-  categories: Array<[string, string, string[]]>,
-  supportTypes: Array<[string, string]>
-): Promise<void> {
-  // Categories.
-  await db
-    .insert(schema.categories)
-    .values(categories.map(([name, slug], i) => ({ name, slug, verticalId, sortOrder: i })))
-    .onConflictDoNothing();
-
-  const catRows = await db
-    .select()
-    .from(schema.categories)
-    .where(eq(schema.categories.verticalId, verticalId));
-  const catMap = Object.fromEntries(catRows.map((c) => [c.slug, c.id]));
-
-  // Products.
-  const productValues = categories.flatMap(([, catSlug, names]) =>
-    names.map((name, i) => ({
-      name,
-      slug: slugify(name),
-      verticalId,
-      categoryId: catMap[catSlug],
-      sortOrder: i,
-    }))
-  );
-  if (productValues.length > 0) {
-    await db.insert(schema.products).values(productValues).onConflictDoNothing();
-  }
-
-  // Support types (vertical-scoped).
-  if (supportTypes.length > 0) {
-    await db
-      .insert(schema.supportTypes)
-      .values(supportTypes.map(([name, slug], i) => ({ name, slug, verticalId, sortOrder: i })))
-      .onConflictDoNothing();
-  }
-}
-
-/**
  * Seed project-type tag groups → tags for ONE vertical (BAL-259). Mirrors
  * `seedTaxonomyForVertical`: insert groups, fetch ids by slug, insert tags with
  * the group id. Tag slugs via `slugify()`; sortOrder from array index.
@@ -582,16 +490,20 @@ async function seed(): Promise<void> {
   //    SAME generic seeder — no vertical-specific code path.
   console.log('  Seeding Salesforce taxonomy...');
   await seedTaxonomyForVertical(
+    db,
     sfId,
     PRODUCT_CATEGORIES,
     SUPPORT_TYPES_BY_VERTICAL.salesforce ?? []
   );
 
+  console.log('  Seeding Salesforce product aliases and hints...');
+  await seedProductAliasesForVertical(db, sfId, SALESFORCE_PRODUCT_ALIASES);
+
   console.log('  Seeding Salesforce project tags...');
   await seedProjectTagsForVertical(sfId, PROJECT_TAG_GROUPS);
 
   console.log('  Seeding Acme (mock) taxonomy...');
-  await seedTaxonomyForVertical(acmeId, ACME_CATEGORIES, SUPPORT_TYPES_BY_VERTICAL.acme ?? []);
+  await seedTaxonomyForVertical(db, acmeId, ACME_CATEGORIES, SUPPORT_TYPES_BY_VERTICAL.acme ?? []);
 
   console.log('  Seeding Acme (mock) experts...');
   await seedAcmeExperts(acmeId);
@@ -651,11 +563,7 @@ async function seed(): Promise<void> {
   await client.end();
 }
 
-(async () => {
-  try {
-    await seed();
-  } catch (err) {
-    console.error('Seed failed:', err);
-    process.exit(1);
-  }
-})();
+seed().catch((err: unknown) => {
+  console.error('Seed failed:', err);
+  process.exit(1);
+});

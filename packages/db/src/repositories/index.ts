@@ -89,6 +89,8 @@ export { companyBillingRepository, ensureClientBillingGateConfirmed } from './co
 export type { CompanyBillingDetails, NewCompanyBillingDetails } from '../schema';
 export type {
   ProductsByCategory,
+  BriefMappingProduct,
+  ProductsForBriefMapping,
   CertificationsByCategory,
   ProjectTagsByGroup,
 } from './reference-data';

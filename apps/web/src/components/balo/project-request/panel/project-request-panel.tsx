@@ -55,6 +55,7 @@ import { useProjectRouting } from './use-project-routing';
 import { useExpertUnavailableOverride } from './use-expert-unavailable-override';
 import { GenerationErrorBanner } from './generation-error-banner';
 import { useAiBriefFlow } from './use-ai-brief-flow';
+import { aiProductSubmitProperties, resolveAiProductSuggestion } from './ai-product-metrics';
 import {
   useCaseBriefFlow,
   type CaseBriefPhase,
@@ -666,6 +667,7 @@ export function ProjectRequestPanel({
     isUploadFailed,
     unmatchedLabels,
     hasEditsSinceGenerate: aiHasEditsSinceGenerate,
+    aiProductSuggestion,
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleSelectAi,
@@ -898,6 +900,15 @@ export function ProjectRequestPanel({
         draft.source,
         aiHasEditsSinceGenerate
       ),
+      ...aiProductSubmitProperties(
+        resolveAiProductSuggestion(
+          isCaseMount,
+          caseBriefFlow.aiProductSuggestion,
+          draft.source,
+          aiProductSuggestion
+        ),
+        productIds
+      ),
     });
     // Snapshot routing for the done screen BEFORE clearing the draft (clear resets
     // routing to the computed default), so Match submits keep their done copy.
@@ -929,6 +940,8 @@ export function ProjectRequestPanel({
     caseBriefFlow.hasAiDraft,
     caseBriefFlow.hasEditsSinceGenerate,
     aiHasEditsSinceGenerate,
+    aiProductSuggestion,
+    caseBriefFlow.aiProductSuggestion,
     clearDraft,
     onSubmitted,
     onAuthRequired,

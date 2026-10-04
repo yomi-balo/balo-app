@@ -168,6 +168,17 @@ export interface ProjectEventMap {
      * BAL-254 AI flow when `method === 'ai'`, and `false` when no AI draft ever landed.
      */
     brief_edited?: boolean;
+    /**
+     * BAL-592 — present only when the submitted products were prefilled by an AI brief parse in
+     * this panel session; omitted otherwise. Counts and the prompt version only — never names or
+     * labels. `ai_products_kept` = |suggested ∩ submitted|, `products_added` = |submitted −
+     * suggested|, `products_removed` = |suggested − submitted|.
+     */
+    ai_products_suggested?: number;
+    ai_products_kept?: number;
+    products_added?: number;
+    products_removed?: number;
+    brief_prompt_version?: string;
   };
   [PROJECT_EVENTS.PROJECT_REQUEST_CREATED]: {
     request_id: string;

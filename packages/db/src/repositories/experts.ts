@@ -1151,7 +1151,8 @@ export const expertsRepository = {
         industries: { with: { industry: true } },
         workHistory: { orderBy: (wh, { asc }) => [asc(wh.sortOrder)] },
         certifications: { with: { certification: true } },
-        competencies: { with: { product: true, supportType: true } },
+        // `aiHint` is internal prompt text (BAL-592); this read reaches a client component.
+        competencies: { with: { product: { columns: { aiHint: false } }, supportType: true } },
       },
     });
   },
@@ -1217,7 +1218,8 @@ export const expertsRepository = {
         agency: {
           columns: { id: true, name: true, slug: true, logoUrl: true },
         },
-        competencies: { with: { product: true, supportType: true } },
+        // `aiHint` is internal prompt text (BAL-592); this read reaches a client component.
+        competencies: { with: { product: { columns: { aiHint: false } }, supportType: true } },
         certifications: { with: { certification: true } },
         languages: { with: { language: true } },
         industries: { with: { industry: true } },

@@ -180,15 +180,22 @@ export interface ProjectBriefParseSourceDocument {
  * Model HTML is never trusted: the server converts this deterministically and the output
  * always passes through the existing `sanitizeProjectHtml` boundary before it reaches a client.
  *
- * ⚠ `tagIds` / `productIds` HOLD LIVE TAXONOMY IDS THE **SERVER** RESOLVED (D5). The model
- * emits slugs; an unrecognised slug is DROPPED. An id can therefore never originate from the
- * model — which matters because submit REJECTS unknown ids rather than dropping them.
+ * ⚠ `tagIds` / `productIds` HOLD LIVE TAXONOMY IDS THE **SERVER** RESOLVED (D5, amended by
+ * BAL-592). Every id comes from a Balo-owned row — never from model output — which matters
+ * because submit REJECTS unknown ids rather than dropping them. The model emits slugs; a slug
+ * that matches a live taxonomy row maps to that row's id. For PRODUCTS ONLY, a slug that missed
+ * the taxonomy and a model-reported unmatched product label are each then used as a LOOKUP KEY:
+ * an exact match of its `normalizeTaxonomyLabel` form against the active product names and
+ * `product_aliases` in the same vertical yields that product's id. No fuzzy, substring or partial
+ * matching; a key that resolves to nothing (or to more than one product) is not an id. Tags use
+ * slugs alone.
  *
  * ⚠ `unmatched*Labels` ARE DERIVED SERVER-SIDE FROM TWO SOURCES (BAL-254 W4), in this order:
  * (1) the slugs that ACTUALLY failed to map, de-slugged into a short label, and (2) the model's
- * own "I saw this but could not match it" labels. Source 1 is what makes a hallucinated or
- * stale slug visible instead of silently dropped; source 2 is what covers a concept the model
- * recognised without emitting any slug for it. Bounded to `MAX_UNMATCHED_LABELS` ×
+ * own "I saw this but could not match it" labels — for products, only those of either source
+ * that the lookup above did NOT resolve. Source 1 is what makes a hallucinated or stale slug
+ * visible instead of silently dropped; source 2 is what covers a concept the model recognised
+ * without emitting any slug for it. Bounded to `MAX_UNMATCHED_LABELS` ×
  * `MAX_UNMATCHED_LABEL_LENGTH`, de-duplicated case-insensitively, and DISPLAY-ONLY — they reach
  * a human as inert React text and never enter the submitted request.
  */

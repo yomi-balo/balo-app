@@ -1,35 +1,91 @@
-import type { ProjectTagsByGroup, ProductsByCategory } from '@balo/db';
-import { MAX_UNMATCHED_LABELS, MAX_UNMATCHED_LABEL_LENGTH } from '@balo/shared/project-requests';
+import type { ProjectTagsByGroup, ProductsForBriefMapping } from '@balo/db';
+import {
+  MAX_UNMATCHED_LABELS,
+  MAX_UNMATCHED_LABEL_LENGTH,
+  normalizeTaxonomyLabel,
+} from '@balo/shared/project-requests';
 
 /**
- * BAL-254 (D5) — the model returns taxonomy SLUGS, never UUIDs; this module maps slug → id.
- * PURE — no DB, no I/O. An unrecognised slug is DROPPED, never guessed at: a hallucinated uuid
- * reaching `tagIds`/`productIds` would detonate `submit-project-request.ts`'s "Some of your
- * selections are no longer available" and fail the whole submit.
+ * BAL-254 (D5, amended by BAL-592) — the model returns taxonomy SLUGS, never UUIDs; this module
+ * maps slug → id. PURE — no DB, no I/O. An unrecognised slug is DROPPED by {@link mapSlugsToIds},
+ * never guessed at: a hallucinated uuid reaching `tagIds`/`productIds` would detonate
+ * `submit-project-request.ts`'s "Some of your selections are no longer available" and fail the
+ * whole submit.
+ *
+ * Ids originate only from Balo-owned rows. A model slug or label is a LOOKUP KEY: for products,
+ * {@link resolveLabelsToProducts} may turn one into an id by exact match of its normalised form
+ * against the live product names and aliases. Tags have no such path.
  */
 export interface TaxonomyChoice {
   readonly slug: string;
   readonly id: string;
   readonly name: string;
+  /** The heading this choice is listed under (tag group or product category). */
+  readonly group?: string;
+  /** Internal, prompt-only product hint. */
+  readonly hint?: string;
+  /** Features the product includes (`feature` aliases). */
+  readonly includes?: readonly string[];
+  /** Other names the product is known by (`alt_name` aliases). */
+  readonly alsoCalled?: readonly string[];
 }
 
-/** Flatten a grouped taxonomy read (tags-by-group OR products-by-category) into choices. */
-export function buildTaxonomyChoices(
-  groups: readonly ProjectTagsByGroup[] | readonly ProductsByCategory[]
-): TaxonomyChoice[] {
+/** Flatten a tags-by-group read into choices. */
+export function buildTaxonomyChoices(groups: readonly ProjectTagsByGroup[]): TaxonomyChoice[] {
   const choices: TaxonomyChoice[] = [];
-  for (const group of groups) {
-    const items = 'tags' in group ? group.tags : group.products;
-    for (const item of items) {
-      choices.push({ slug: item.slug, id: item.id, name: item.name });
+  for (const { group, tags } of groups) {
+    for (const tag of tags) {
+      choices.push({ slug: tag.slug, id: tag.id, name: tag.name, group: group.name });
     }
   }
   return choices;
 }
 
-/** Render `slug — name` lines, one per choice, for the prompt's taxonomy list. */
+/** Flatten the brief-mapping product read, carrying each product's hint and aliases. */
+export function buildProductChoices(groups: readonly ProductsForBriefMapping[]): TaxonomyChoice[] {
+  const choices: TaxonomyChoice[] = [];
+  for (const { category, products } of groups) {
+    for (const product of products) {
+      const includes = product.aliases.filter((a) => a.kind === 'feature').map((a) => a.alias);
+      const alsoCalled = product.aliases.filter((a) => a.kind === 'alt_name').map((a) => a.alias);
+      choices.push({
+        slug: product.slug,
+        id: product.id,
+        name: product.name,
+        group: category.name,
+        ...(product.aiHint === null ? {} : { hint: product.aiHint }),
+        includes,
+        alsoCalled,
+      });
+    }
+  }
+  return choices;
+}
+
+/**
+ * Render the prompt's taxonomy list: a `[group]` header line whenever the group changes, then
+ * one `slug — name | hint | includes: … | also called: …` line per choice. Empty or absent
+ * segments are omitted.
+ */
 export function renderTaxonomyChoices(choices: readonly TaxonomyChoice[]): string {
-  return choices.map((choice) => `${choice.slug} — ${choice.name}`).join('\n');
+  const lines: string[] = [];
+  let currentGroup: string | undefined;
+  for (const choice of choices) {
+    if (choice.group !== undefined && choice.group !== currentGroup) {
+      lines.push(`[${choice.group}]`);
+      currentGroup = choice.group;
+    }
+    const segments = [`${choice.slug} — ${choice.name}`];
+    if (choice.hint !== undefined && choice.hint.length > 0) segments.push(choice.hint);
+    if (choice.includes !== undefined && choice.includes.length > 0) {
+      segments.push(`includes: ${choice.includes.join(', ')}`);
+    }
+    if (choice.alsoCalled !== undefined && choice.alsoCalled.length > 0) {
+      segments.push(`also called: ${choice.alsoCalled.join(', ')}`);
+    }
+    lines.push(segments.join(' | '));
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -99,6 +155,79 @@ function humanizeSlug(slug: string): string {
 }
 
 /**
+ * Lookup index for {@link resolveLabelsToProducts}: the normalised product name, every `includes`
+ * entry and every `alsoCalled` entry → product id. Built only from the live choices, so an
+ * inactive product's aliases can never enter it. A key claimed by two or more distinct products
+ * is AMBIGUOUS and is removed — it resolves to nothing rather than to a guess.
+ */
+export function buildProductLabelIndex(
+  choices: readonly TaxonomyChoice[]
+): ReadonlyMap<string, string> {
+  const index = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const choice of choices) {
+    const keys = [choice.name, ...(choice.includes ?? []), ...(choice.alsoCalled ?? [])];
+    for (const raw of keys) {
+      const key = normalizeTaxonomyLabel(raw);
+      if (key.length === 0) continue;
+      const existing = index.get(key);
+      if (existing !== undefined && existing !== choice.id) ambiguous.add(key);
+      else index.set(key, choice.id);
+    }
+  }
+  for (const key of ambiguous) index.delete(key);
+  return index;
+}
+
+export interface LabelResolution {
+  productIds: string[];
+  unresolvedSlugs: string[];
+  unresolvedLabels: string[];
+  resolvedCount: number;
+}
+
+/**
+ * The ONLY path by which a model-authored product string becomes a product id: exact lookup of
+ * its normalised form in `index`. A slug that missed the taxonomy is humanised first. Anything
+ * that does not match is returned untouched so the footnote can still show it.
+ *
+ * `capacity` bounds the final id list: `selectedIds` (already chosen, they keep priority) plus the
+ * newly resolved ids never exceed `maxIds`. A match that would not fit is returned unresolved, as
+ * if it had not matched, so its original string still reaches the footnote.
+ */
+export function resolveLabelsToProducts(
+  unmatchedSlugs: readonly string[],
+  labels: readonly string[],
+  index: ReadonlyMap<string, string>,
+  capacity?: { selectedIds: ReadonlySet<string>; maxIds: number }
+): LabelResolution {
+  const productIds = new Set<string>();
+  const unresolvedSlugs: string[] = [];
+  const unresolvedLabels: string[] = [];
+  let resolvedCount = 0;
+
+  const resolve = (key: string): boolean => {
+    const id = index.get(normalizeTaxonomyLabel(key));
+    if (id === undefined) return false;
+    if (capacity !== undefined && !capacity.selectedIds.has(id) && !productIds.has(id)) {
+      const total = capacity.selectedIds.size + productIds.size;
+      if (total >= capacity.maxIds) return false;
+    }
+    productIds.add(id);
+    resolvedCount += 1;
+    return true;
+  };
+
+  for (const slug of unmatchedSlugs) {
+    if (!resolve(humanizeSlug(slug))) unresolvedSlugs.push(slug);
+  }
+  for (const label of labels) {
+    if (!resolve(label)) unresolvedLabels.push(label);
+  }
+  return { productIds: [...productIds], unresolvedSlugs, unresolvedLabels, resolvedCount };
+}
+
+/**
  * The review step's "we saw these but they are not in the list" footnote (BAL-254 W4).
  *
  * TWO SOURCES, AND BOTH ARE REAL — this is a UNION, deliberately:
@@ -114,8 +243,10 @@ function humanizeSlug(slug: string): string {
  * case-insensitively, each entry bounded to {@link MAX_UNMATCHED_LABEL_LENGTH}, and the whole
  * list to {@link MAX_UNMATCHED_LABELS}.
  *
- * ⚠ DISPLAY-ONLY. These are model-authored, untrusted strings that reach a human as inert React
- * text; they are never submitted, never re-fed to a model, and never become tag/product ids.
+ * ⚠ DISPLAY-ONLY, except products. These are model-authored, untrusted strings that reach a
+ * human as inert React text. A product label or slug may become an id ONLY through
+ * {@link resolveLabelsToProducts}, before this function sees it; what reaches here is what failed
+ * that lookup. Tag labels never become ids.
  */
 export function deriveUnmatchedLabels(
   unmatchedSlugs: readonly string[],
