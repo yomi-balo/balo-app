@@ -2,7 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../client';
-import { auditEvents, expertProfiles, users, type ExpertProfile } from '../schema';
+import {
+  auditEvents,
+  expertCompetency,
+  expertProfiles,
+  products,
+  supportTypes,
+  users,
+  type ExpertProfile,
+} from '../schema';
 import { agencyFactory, expertDraftFactory, userFactory } from '../test/factories';
 import {
   expertsRepository,
@@ -658,6 +666,50 @@ describe('findApplicationWithRelations', () => {
     expect(app?.profile).toHaveProperty('headline');
     expect(app?.profile).toHaveProperty('submittedAt');
     expect(app?.profile).toHaveProperty('declineReason');
+  });
+
+  /**
+   * BAL-592 — `products.ai_hint` is internal prompt text. Both competency hydrations that
+   * reach a client component (this applicant read and the expert settings read) exclude it.
+   */
+  it('never projects a competency product’s internal aiHint', async () => {
+    const profile = await seedPendingApplication();
+    const hint = 'Internal prompt-only hint for BAL-592.';
+    const [product] = await db
+      .insert(products)
+      .values({
+        verticalId: profile.verticalId,
+        name: 'Hinted Product',
+        slug: `hinted-${randomUUID()}`,
+        aiHint: hint,
+      })
+      .returning();
+    const [supportType] = await db
+      .insert(supportTypes)
+      .values({
+        verticalId: profile.verticalId,
+        name: 'Hinted Support',
+        slug: `hinted-st-${randomUUID()}`,
+      })
+      .returning();
+    if (product === undefined || supportType === undefined) throw new Error('seed failed');
+    await db.insert(expertCompetency).values({
+      expertProfileId: profile.id,
+      productId: product.id,
+      supportTypeId: supportType.id,
+    });
+
+    const app = await expertsRepository.findApplicationWithRelations(profile.id);
+    const [appCompetency] = app?.competencies ?? [];
+    expect(appCompetency?.product.id).toBe(product.id);
+    expect(appCompetency?.product).not.toHaveProperty('aiHint');
+
+    const settings = await expertsRepository.findProfileForSettings(profile.id);
+    const [settingsCompetency] = settings?.competencies ?? [];
+    expect(settingsCompetency?.product.id).toBe(product.id);
+    expect(settingsCompetency?.product).not.toHaveProperty('aiHint');
+
+    expect(JSON.stringify([app, settings])).not.toContain(hint);
   });
 });
 

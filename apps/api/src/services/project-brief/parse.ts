@@ -4,6 +4,7 @@ import {
   isSessionOwnedProjectDocumentKey,
   MAX_PARSE_DOCUMENT_BYTES,
   MAX_PARSE_INPUT_BYTES,
+  MAX_BRIEF_PRODUCT_SLUGS,
 } from '@balo/shared/project-requests';
 import { createLogger } from '@balo/shared/logging';
 import { getR2ObjectBytes, headR2ObjectSize } from '../../lib/storage/r2.js';
@@ -21,9 +22,12 @@ import {
   type RenderedBriefPrompt,
 } from './prompts.js';
 import {
+  buildProductChoices,
+  buildProductLabelIndex,
   buildTaxonomyChoices,
   deriveUnmatchedLabels,
   mapSlugsToIds,
+  resolveLabelsToProducts,
   type TaxonomyChoice,
 } from './taxonomy-mapping.js';
 import { projectBriefNoopResult, projectBriefCaseNoopResult } from './noop-fallback.js';
@@ -359,10 +363,11 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
   const vertical = await referenceDataRepository.getSalesforceVertical();
   const [tagGroups, productCats] = await Promise.all([
     referenceDataRepository.getProjectTagsByVertical(vertical.id),
-    referenceDataRepository.getProductsByVertical(vertical.id),
+    referenceDataRepository.getProductsForBriefMapping(vertical.id),
   ]);
   const tagChoices = buildTaxonomyChoices(tagGroups);
-  const productChoices = buildTaxonomyChoices(productCats);
+  const productChoices = buildProductChoices(productCats);
+  const productLabelIndex = buildProductLabelIndex(productChoices);
 
   // ── The parse source — documents or a case, never both (CHECK) ──────────────────
   const source = await loadParseSource(row, parseId, tagChoices, productChoices);
@@ -396,7 +401,7 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
     throw new ProjectBriefParseError('empty_extraction', 'Model output below the usable floor');
   }
 
-  // ── Slug → id mapping (D5) ────────────────────────────────────────────────────────────────
+  // ── Slug → id mapping (D5; products also resolve by alias, BAL-592) ──────────────────────
   const tagMapping = mapSlugsToIds(value.tagSlugs, tagChoices);
   const productMapping = mapSlugsToIds(value.productSlugs, productChoices);
 
@@ -409,9 +414,20 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
     tagMapping.unmatchedSlugs,
     value.unmatchedTagLabels
   );
-  const unmatchedProductLabels = deriveUnmatchedLabels(
+  // Products only: a missed slug or model-reported label that exactly matches a live product name
+  // or alias becomes that product's id; only what still failed reaches the footnote.
+  const resolution = resolveLabelsToProducts(
     productMapping.unmatchedSlugs,
-    value.unmatchedProductLabels
+    value.unmatchedProductLabels,
+    productLabelIndex
+  );
+  const liveProductIds = new Set(productChoices.map((c) => c.id));
+  const productIds = [...new Set([...productMapping.ids, ...resolution.productIds])]
+    .filter((id) => liveProductIds.has(id))
+    .slice(0, MAX_BRIEF_PRODUCT_SLUGS);
+  const unmatchedProductLabels = deriveUnmatchedLabels(
+    resolution.unresolvedSlugs,
+    resolution.unresolvedLabels
   );
 
   if (usage.inputTokens !== null && usage.inputTokens > PROJECT_BRIEF_BUDGET_INPUT_TOKENS) {
@@ -427,7 +443,7 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
       title: value.title,
       descriptionMarkdown: value.descriptionMarkdown,
       tagIds: tagMapping.ids,
-      productIds: productMapping.ids,
+      productIds,
       unmatchedTagLabels,
       unmatchedProductLabels,
     },
@@ -441,6 +457,9 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
       modelId: audit.modelId,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      aliasResolvedCount: resolution.resolvedCount,
+      unmatchedProductCount: unmatchedProductLabels.length,
+      promptVersion: audit.promptVersion,
     },
     'Project brief parse succeeded'
   );

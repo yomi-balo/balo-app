@@ -3,6 +3,7 @@ import { db } from '../client';
 import {
   verticals,
   products,
+  productAliases,
   categories,
   supportTypes,
   certifications,
@@ -13,6 +14,7 @@ import {
   projectTags,
   type Vertical,
   type Product,
+  type ProductAliasKind,
   type Category,
   type SupportType,
   type Certification,
@@ -30,6 +32,21 @@ type ReferenceFieldKeys = 'id' | 'name' | 'slug' | 'sortOrder';
 export interface ProductsByCategory {
   category: Pick<Category, ReferenceFieldKeys>;
   products: Pick<Product, ReferenceFieldKeys>[];
+}
+
+/**
+ * BAL-592 — a product as the AI brief parse sees it: the reference fields plus its internal
+ * prompt hint and its live aliases. ⚠ `aiHint` is internal and must never reach a client.
+ */
+export interface BriefMappingProduct extends Pick<Product, ReferenceFieldKeys> {
+  aiHint: string | null;
+  aliases: { alias: string; kind: ProductAliasKind }[];
+}
+
+/** BAL-592 — `ProductsByCategory`'s grouping, with {@link BriefMappingProduct} rows. */
+export interface ProductsForBriefMapping {
+  category: Pick<Category, ReferenceFieldKeys>;
+  products: BriefMappingProduct[];
 }
 
 export interface CertificationsByCategory {
@@ -84,6 +101,56 @@ export const referenceDataRepository = {
         name: p.name,
         slug: p.slug,
         sortOrder: p.sortOrder,
+      })),
+    }));
+  },
+
+  /**
+   * BAL-592 — the AI brief parse's product taxonomy: `getProductsByVertical`'s grouping and
+   * filters (active categories of the vertical, their active products, both by `sortOrder`; a
+   * product with no category is absent), plus each product's `aiHint` and its live aliases
+   * (soft-deleted ones excluded), ordered by alias.
+   *
+   * ⚠ SERVER-ONLY, BRIEF-PARSE-ONLY. A separate method rather than a widened
+   * `getProductsByVertical` because that method's result flows to client components (the public
+   * expert application among them), and `aiHint` is internal. Explicit `columns` at both levels,
+   * so a future column cannot ride along unnoticed.
+   */
+  async getProductsForBriefMapping(verticalId: string): Promise<ProductsForBriefMapping[]> {
+    const rows = await db.query.categories.findMany({
+      columns: { id: true, name: true, slug: true, sortOrder: true },
+      where: and(eq(categories.verticalId, verticalId), eq(categories.isActive, true)),
+      with: {
+        products: {
+          columns: { id: true, name: true, slug: true, sortOrder: true, aiHint: true },
+          where: and(eq(products.verticalId, verticalId), eq(products.isActive, true)),
+          orderBy: [asc(products.sortOrder)],
+          with: {
+            aliases: {
+              columns: { alias: true, kind: true },
+              where: isNull(productAliases.deletedAt),
+              orderBy: [asc(productAliases.alias)],
+            },
+          },
+        },
+      },
+      orderBy: [asc(categories.sortOrder)],
+    });
+
+    return rows.map((cat) => ({
+      category: {
+        id: cat.id,
+        name: cat.name,
+        slug: cat.slug,
+        sortOrder: cat.sortOrder,
+      },
+      products: cat.products.map((p) => ({
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        sortOrder: p.sortOrder,
+        aiHint: p.aiHint,
+        aliases: p.aliases.map((a) => ({ alias: a.alias, kind: a.kind })),
       })),
     }));
   },

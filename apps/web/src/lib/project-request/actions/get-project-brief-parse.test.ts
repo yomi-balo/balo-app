@@ -112,6 +112,7 @@ describe('getProjectBriefParseAction', () => {
         unmatchedProductLabels: [],
       },
       failureReason: null,
+      promptVersion: 'v2',
       completedAt: new Date(),
       createdAt: new Date(),
     };
@@ -155,6 +156,19 @@ describe('getProjectBriefParseAction', () => {
     expect(result.draft.tagIds).toEqual(['live-tag']);
     expect(result.draft.productIds).toEqual(['live-product']);
     expect(result.draft.unmatchedTagLabels).toEqual(['sandbox refresh']);
+  });
+
+  it("succeeded: the patch carries the row's prompt version, or null when none was recorded", async () => {
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+    mockFindForOwner.mockResolvedValue(succeededRow('A description.'));
+    const withVersion = await getProjectBriefParseAction({ parseId: PARSE_ID });
+    if (withVersion.status !== 'succeeded') throw new Error('expected succeeded');
+    expect(withVersion.draft.promptVersion).toBe('v2');
+
+    mockFindForOwner.mockResolvedValue({ ...succeededRow('A description.'), promptVersion: null });
+    const without = await getProjectBriefParseAction({ parseId: PARSE_ID });
+    if (without.status !== 'succeeded') throw new Error('expected succeeded');
+    expect(without.draft.promptVersion).toBeNull();
   });
 
   it('succeeded: raw HTML stored in the markdown reaches the client as inert ESCAPED TEXT', async () => {

@@ -85,6 +85,7 @@ const PATCH: ProjectBriefDraftPatch = {
   productIds: ['p3'],
   unmatchedTagLabels: [],
   unmatchedProductLabels: [],
+  promptVersion: 'v2',
 };
 
 interface FlowProps {
@@ -293,6 +294,42 @@ describe('useCaseBriefFlow', () => {
 
       expect(setField).toHaveBeenCalledWith('title', PATCH.title);
       expect(setField).toHaveBeenCalledWith('productIds', PATCH.productIds);
+    });
+
+    it('records no AI product suggestion when the case already had products', () => {
+      const { view } = renderFlow({ draft: { ...DRAFT, title: 'T', productIds: ['mine'] } });
+      act(() => captured.onSucceeded?.(PATCH));
+      expect(view.result.current.aiProductSuggestion).toBeNull();
+    });
+
+    it('records the AI product suggestion with its prompt version when the patch products were applied', () => {
+      const { view } = renderFlow({ sourceCase: { id: 'case-2', title: '', productIds: [] } });
+      expect(view.result.current.aiProductSuggestion).toBeNull();
+      act(() => captured.onSucceeded?.(PATCH));
+      expect(view.result.current.aiProductSuggestion).toEqual({
+        productIds: PATCH.productIds,
+        promptVersion: 'v2',
+      });
+    });
+
+    it('records no suggestion when the patch has no prompt version', () => {
+      const { view } = renderFlow({ sourceCase: { id: 'case-2', title: '', productIds: [] } });
+      act(() => captured.onSucceeded?.({ ...PATCH, promptVersion: null }));
+      expect(view.result.current.aiProductSuggestion).toBeNull();
+    });
+
+    it('a redraft keeps the earlier applied suggestion', () => {
+      const sourceCase = { id: 'case-2', title: '', productIds: [] };
+      const { view } = renderFlow({ sourceCase });
+      act(() => captured.onSucceeded?.(PATCH));
+      view.rerender({
+        sourceCase,
+        open: true,
+        isFlowActive: true,
+        draft: { ...DRAFT, productIds: PATCH.productIds },
+      });
+      act(() => captured.onSucceeded?.({ ...PATCH, productIds: ['p9'] }));
+      expect(view.result.current.aiProductSuggestion?.productIds).toEqual(PATCH.productIds);
     });
 
     it('tracks CASE_BRIEF_EVENTS.GENERATED with success: true', () => {

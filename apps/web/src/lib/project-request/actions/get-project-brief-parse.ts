@@ -27,6 +27,8 @@ export interface ProjectBriefDraftPatch {
   /** Display-only, component state ONLY — never persisted into `ProjectDraft`. */
   unmatchedTagLabels: string[];
   unmatchedProductLabels: string[];
+  /** BAL-592 — the prompt version that produced this parse; `null` on a row that never recorded one. */
+  promptVersion: string | null;
 }
 
 export type ProjectBriefParsePollResult =
@@ -142,6 +144,7 @@ export const getProjectBriefParseAction = withAuth(
           productIds,
           unmatchedTagLabels: [...state.result.unmatchedTagLabels],
           unmatchedProductLabels: [...state.result.unmatchedProductLabels],
+          promptVersion: row.promptVersion,
         },
       };
     } catch (error) {

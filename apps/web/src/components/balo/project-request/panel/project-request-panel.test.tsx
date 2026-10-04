@@ -905,6 +905,7 @@ describe('ProjectRequestPanel', () => {
       productIds: ['33333333-3333-3333-3333-333333333333'],
       unmatchedTagLabels: ['sandbox refresh'],
       unmatchedProductLabels: [],
+      promptVersion: 'v2',
     };
 
     /**
@@ -1046,6 +1047,34 @@ describe('ProjectRequestPanel', () => {
 
       await waitFor(() => {
         expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ source: 'ai' }));
+      });
+    }, 8000);
+
+    it('an AI-generated submit carries the AI product counts and the prompt version', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+      await waitFor(() => {
+        expect(mockTrack).toHaveBeenCalledWith(
+          PROJECT_EVENTS.PROJECT_REQUEST_SUBMITTED,
+          expect.objectContaining({
+            method: 'ai',
+            ai_products_suggested: 1,
+            ai_products_kept: 1,
+            products_added: 0,
+            products_removed: 0,
+            brief_prompt_version: 'v2',
+          })
+        );
       });
     }, 8000);
 

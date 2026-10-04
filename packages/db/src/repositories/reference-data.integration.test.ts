@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
   verticals,
   categories,
   products,
+  productAliases,
   supportTypes,
   projectTagGroups,
   projectTags,
+  type ProductAliasKind,
 } from '../schema';
+import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { referenceDataRepository } from './reference-data';
 
 // Inline-seeding helpers. The integration global-setup seeds ONLY the Salesforce
@@ -197,6 +201,265 @@ describe('referenceDataRepository.getProductsByVertical', () => {
     expect(coreGroup!.products.map((p) => p.name).sort()).toEqual(['P1', 'P2']);
     // No category from the other vertical.
     expect(grouped.some((g) => g.category.id === otherCat!.id)).toBe(false);
+  });
+});
+
+// ── getProductsForBriefMapping + product_aliases constraints (BAL-592) ──────
+
+async function createCategory(
+  verticalId: string,
+  name: string,
+  opts: { isActive?: boolean; sortOrder?: number } = {}
+): Promise<{ id: string; slug: string }> {
+  const slug = uniq('cat');
+  const [row] = await db
+    .insert(categories)
+    .values({
+      verticalId,
+      name,
+      slug,
+      isActive: opts.isActive ?? true,
+      sortOrder: opts.sortOrder ?? 0,
+    })
+    .returning();
+  if (row === undefined) throw new Error('createCategory: insert returned no row');
+  return { id: row.id, slug };
+}
+
+async function createProduct(
+  verticalId: string,
+  categoryId: string | null,
+  name: string,
+  opts: { isActive?: boolean; sortOrder?: number; aiHint?: string } = {}
+): Promise<{ id: string; slug: string }> {
+  const slug = uniq('prod');
+  const [row] = await db
+    .insert(products)
+    .values({
+      verticalId,
+      categoryId,
+      name,
+      slug,
+      isActive: opts.isActive ?? true,
+      sortOrder: opts.sortOrder ?? 0,
+      aiHint: opts.aiHint ?? null,
+    })
+    .returning();
+  if (row === undefined) throw new Error('createProduct: insert returned no row');
+  return { id: row.id, slug };
+}
+
+async function createAlias(
+  product: { id: string },
+  verticalId: string,
+  alias: string,
+  kind: ProductAliasKind,
+  opts: { deletedAt?: Date | null } = {}
+): Promise<void> {
+  await db.insert(productAliases).values({
+    productId: product.id,
+    verticalId,
+    alias,
+    kind,
+    deletedAt: opts.deletedAt ?? null,
+  });
+}
+
+describe('referenceDataRepository.getProductsForBriefMapping', () => {
+  it('returns each active product with its hint and its live aliases, ordered by alias', async () => {
+    const v = await createVertical();
+    const cat = await createCategory(v.id, 'Marketing Cloud');
+    const hinted = await createProduct(v.id, cat.id, 'Engagement', {
+      sortOrder: 0,
+      aiHint: 'Email, SMS and journeys.',
+    });
+    const plain = await createProduct(v.id, cat.id, 'Intelligence', { sortOrder: 1 });
+    await createAlias(hinted, v.id, 'Journey Builder', 'feature');
+    await createAlias(hinted, v.id, 'ExactTarget', 'alt_name');
+    await createAlias(hinted, v.id, 'Retired Name', 'alt_name', { deletedAt: new Date() });
+
+    const grouped = await referenceDataRepository.getProductsForBriefMapping(v.id);
+
+    // Exact shape: the explicit `columns` allow-list admits nothing else (no `description`,
+    // no timestamps, no alias ids).
+    expect(grouped).toEqual([
+      {
+        category: { id: cat.id, name: 'Marketing Cloud', slug: cat.slug, sortOrder: 0 },
+        products: [
+          {
+            id: hinted.id,
+            name: 'Engagement',
+            slug: hinted.slug,
+            sortOrder: 0,
+            aiHint: 'Email, SMS and journeys.',
+            aliases: [
+              { alias: 'ExactTarget', kind: 'alt_name' },
+              { alias: 'Journey Builder', kind: 'feature' },
+            ],
+          },
+          {
+            id: plain.id,
+            name: 'Intelligence',
+            slug: plain.slug,
+            sortOrder: 1,
+            aiHint: null,
+            aliases: [],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('excludes inactive products, inactive categories, uncategorised products and other verticals', async () => {
+    const v = await createVertical();
+    const other = await createVertical();
+    const activeCat = await createCategory(v.id, 'Active', { sortOrder: 0 });
+    const inactiveCat = await createCategory(v.id, 'Inactive', { isActive: false, sortOrder: 1 });
+    const kept = await createProduct(v.id, activeCat.id, 'Kept');
+    const inactive = await createProduct(v.id, activeCat.id, 'Inactive', { isActive: false });
+    const inInactiveCat = await createProduct(v.id, inactiveCat.id, 'Hidden By Category');
+    const uncategorised = await createProduct(v.id, null, 'Uncategorised');
+    await createAlias(inactive, v.id, 'Inactive Alias', 'feature');
+    await createAlias(inInactiveCat, v.id, 'Category Alias', 'feature');
+    await createAlias(uncategorised, v.id, 'Orphan Alias', 'feature');
+    const otherCat = await createCategory(other.id, 'Other');
+    await createProduct(other.id, otherCat.id, 'Elsewhere');
+
+    const grouped = await referenceDataRepository.getProductsForBriefMapping(v.id);
+
+    expect(grouped.map((g) => g.category.id)).toEqual([activeCat.id]);
+    expect(grouped.flatMap((g) => g.products.map((p) => p.id))).toEqual([kept.id]);
+    expect(grouped.flatMap((g) => g.products.flatMap((p) => p.aliases))).toEqual([]);
+  });
+
+  it('excludes a product whose own vertical differs from its category’s vertical', async () => {
+    const v = await createVertical();
+    const other = await createVertical();
+    const cat = await createCategory(v.id, 'Core');
+    const kept = await createProduct(v.id, cat.id, 'Kept');
+    await createProduct(other.id, cat.id, 'Mismatched');
+
+    const grouped = await referenceDataRepository.getProductsForBriefMapping(v.id);
+
+    expect(grouped.flatMap((g) => g.products.map((p) => p.id))).toEqual([kept.id]);
+  });
+
+  it('returns an empty array for a vertical with no categories', async () => {
+    const v = await createVertical();
+    expect(await referenceDataRepository.getProductsForBriefMapping(v.id)).toEqual([]);
+  });
+});
+
+/** The savepoint handle `expectConstraintViolation` hands a probe. */
+type ProbeTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+describe('product_aliases / products.ai_hint constraints', () => {
+  it('rejects a case-variant duplicate alias in the same vertical (23505)', async () => {
+    const v = await createVertical();
+    const cat = await createCategory(v.id, 'Core');
+    const first = await createProduct(v.id, cat.id, 'First');
+    const second = await createProduct(v.id, cat.id, 'Second');
+    await createAlias(first, v.id, 'Journey Builder', 'feature');
+
+    await expectConstraintViolation(
+      '23505',
+      (tx) =>
+        tx.insert(productAliases).values({
+          productId: second.id,
+          verticalId: v.id,
+          alias: 'JOURNEY builder',
+          kind: 'alt_name',
+        }),
+      'product_alias_vertical_alias_unique_idx'
+    );
+  });
+
+  it('allows the same alias in another vertical, and again once the live one is soft-deleted', async () => {
+    const v = await createVertical();
+    const other = await createVertical();
+    const product = await createProduct(v.id, (await createCategory(v.id, 'Core')).id, 'P');
+    const otherProduct = await createProduct(
+      other.id,
+      (await createCategory(other.id, 'Core')).id,
+      'Q'
+    );
+    await createAlias(product, v.id, 'Shared Name', 'alt_name', { deletedAt: new Date() });
+    await createAlias(product, v.id, 'Shared Name', 'alt_name');
+    await createAlias(otherProduct, other.id, 'Shared Name', 'alt_name');
+
+    const rows = await db
+      .select({ id: productAliases.id })
+      .from(productAliases)
+      .where(eq(productAliases.alias, 'Shared Name'));
+    expect(rows).toHaveLength(3);
+  });
+
+  it('rejects an alias whose vertical is not its product’s vertical (composite FK, 23503)', async () => {
+    const v = await createVertical();
+    const other = await createVertical();
+    const product = await createProduct(v.id, (await createCategory(v.id, 'Core')).id, 'P');
+
+    await expectConstraintViolation(
+      '23503',
+      (tx) =>
+        tx.insert(productAliases).values({
+          productId: product.id,
+          verticalId: other.id,
+          alias: 'Mismatch',
+          kind: 'feature',
+        }),
+      'product_alias_product_vertical_fk'
+    );
+  });
+
+  it('cascades a hard-deleted product to its aliases', async () => {
+    const v = await createVertical();
+    const product = await createProduct(v.id, (await createCategory(v.id, 'Core')).id, 'P');
+    await createAlias(product, v.id, 'Goes With It', 'feature');
+
+    await db.delete(products).where(eq(products.id, product.id));
+
+    const rows = await db
+      .select({ id: productAliases.id })
+      .from(productAliases)
+      .where(eq(productAliases.productId, product.id));
+    expect(rows).toEqual([]);
+  });
+
+  it('enforces product_alias_shape: 1–80 chars, no angle brackets or line breaks (23514)', async () => {
+    const v = await createVertical();
+    const product = await createProduct(v.id, (await createCategory(v.id, 'Core')).id, 'P');
+    const insertAlias = (alias: string) => (tx: ProbeTx) =>
+      tx
+        .insert(productAliases)
+        .values({ productId: product.id, verticalId: v.id, alias, kind: 'feature' });
+
+    await expectConstraintViolation('23514', insertAlias('Bad <tag>'), 'product_alias_shape');
+    await expectConstraintViolation('23514', insertAlias('Bad > tag'), 'product_alias_shape');
+    await expectConstraintViolation('23514', insertAlias('Line\nbreak'), 'product_alias_shape');
+    await expectConstraintViolation('23514', insertAlias('Line\rbreak'), 'product_alias_shape');
+    await expectConstraintViolation('23514', insertAlias('x'.repeat(81)), 'product_alias_shape');
+    await expectConstraintViolation('23514', insertAlias(''), 'product_alias_shape');
+
+    // The boundary itself is accepted.
+    await createAlias(product, v.id, 'x'.repeat(80), 'feature');
+  });
+
+  it('enforces product_ai_hint_shape: NULL or 1–240 chars, no angle brackets or line breaks (23514)', async () => {
+    const v = await createVertical();
+    const product = await createProduct(v.id, (await createCategory(v.id, 'Core')).id, 'P');
+    const setHint = (aiHint: string) => (tx: ProbeTx) =>
+      tx.update(products).set({ aiHint }).where(eq(products.id, product.id));
+
+    await expectConstraintViolation('23514', setHint('y'.repeat(241)), 'product_ai_hint_shape');
+    await expectConstraintViolation('23514', setHint('a <b> c'), 'product_ai_hint_shape');
+    await expectConstraintViolation('23514', setHint(''), 'product_ai_hint_shape');
+
+    await db
+      .update(products)
+      .set({ aiHint: 'y'.repeat(240) })
+      .where(eq(products.id, product.id));
+    await db.update(products).set({ aiHint: null }).where(eq(products.id, product.id));
   });
 });
 

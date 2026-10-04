@@ -1417,3 +1417,16 @@ export const billingEmailSourceEnum = pgEnum('billing_email_source', ['seeded', 
  * `meeting-files.ts` house rule) — so a future ADD VALUE migration has nothing to trip on.
  */
 export const internalNoteEntityTypeEnum = pgEnum('internal_note_entity_type', ['project_request']);
+
+/**
+ * BAL-592 — what a `product_aliases` row says about its product (`schema/verticals.ts`).
+ * `feature` = something the product INCLUDES (a module, tool or capability, e.g. Journey Builder
+ * → Engagement); `alt_name` = another name the product itself is CALLED (an abbreviation, a former
+ * or newer brand, e.g. ExactTarget → Engagement). The prompt renders the two as separate
+ * "includes" and "also called" segments; resolution treats them alike.
+ *
+ * APPEND-ONLY, and absent from every column default, CHECK and index predicate, so a later
+ * `ALTER TYPE … ADD VALUE` has nothing to trip on (memory
+ * `reference_enum_default_same_tx_migration_hazard`).
+ */
+export const productAliasKindEnum = pgEnum('product_alias_kind', ['feature', 'alt_name']);

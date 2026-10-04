@@ -10,6 +10,7 @@ import {
 } from './use-project-brief-generation';
 import { projectFunnelDimensions } from './funnel-dimensions';
 import type { ProjectDraft } from './use-project-draft';
+import type { AiProductSuggestion } from './ai-product-metrics';
 
 /**
  * The four AI-owned fields, snapshotted immediately after a successful generate. Exported
@@ -46,6 +47,8 @@ export interface AiGeneratedState {
   snapshot: AiFieldSnapshot;
   unmatchedLabels: { tags: string[]; products: string[] };
   editedFields: readonly string[];
+  /** BAL-592 — the prompt version of the generation that produced `snapshot`. */
+  promptVersion: string | null;
 }
 
 export interface UseAiBriefFlowOptions {
@@ -73,6 +76,8 @@ export interface UseAiBriefFlowResult {
   isUploadFailed: boolean;
   unmatchedLabels: { tags: string[]; products: string[] };
   hasEditsSinceGenerate: boolean;
+  /** BAL-592 — the products this panel session's AI parse prefilled; `null` before any parse. */
+  aiProductSuggestion: AiProductSuggestion | null;
   regenerateConfirmOpen: boolean;
   setRegenerateConfirmOpen: (open: boolean) => void;
   handleSelectAi: () => void;
@@ -136,6 +141,7 @@ export function useAiBriefFlow({
   const [unmatchedLabels, setUnmatchedLabels] = useState<{ tags: string[]; products: string[] }>(
     NO_UNMATCHED
   );
+  const [lastPromptVersion, setLastPromptVersion] = useState<string | null>(null);
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
   const isRegenerateRef = useRef(false);
   const generateStartedAtRef = useRef<number | null>(null);
@@ -165,10 +171,17 @@ export function useAiBriefFlow({
           snapshot: lastGeneratedSnapshot,
           unmatchedLabels,
           editedFields: [...editedFieldsFiredRef.current],
+          promptVersion: lastPromptVersion,
         };
+
+  const aiProductSuggestion: AiProductSuggestion | null =
+    lastGeneratedSnapshot === null || lastPromptVersion === null
+      ? null
+      : { productIds: lastGeneratedSnapshot.productIds, promptVersion: lastPromptVersion };
 
   const clearAiState = useCallback(() => {
     setLastGeneratedSnapshot(null);
+    setLastPromptVersion(null);
     setUnmatchedLabels(NO_UNMATCHED);
     editedFieldsFiredRef.current = new Set();
   }, []);
@@ -176,11 +189,13 @@ export function useAiBriefFlow({
   const restoreAiState = useCallback((state: AiGeneratedState | null) => {
     if (state === null) {
       setLastGeneratedSnapshot(null);
+      setLastPromptVersion(null);
       setUnmatchedLabels(NO_UNMATCHED);
       editedFieldsFiredRef.current = new Set();
       return;
     }
     setLastGeneratedSnapshot(state.snapshot);
+    setLastPromptVersion(state.promptVersion);
     setUnmatchedLabels(state.unmatchedLabels);
     editedFieldsFiredRef.current = new Set(state.editedFields);
   }, []);
@@ -211,6 +226,7 @@ export function useAiBriefFlow({
         tagIds: patch.tagIds,
         productIds: patch.productIds,
       });
+      setLastPromptVersion(patch.promptVersion);
       editedFieldsFiredRef.current = new Set();
 
       const durationMs =
@@ -366,6 +382,7 @@ export function useAiBriefFlow({
     isUploadFailed: briefGeneration.phase === 'failed',
     unmatchedLabels,
     hasEditsSinceGenerate,
+    aiProductSuggestion,
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleSelectAi,

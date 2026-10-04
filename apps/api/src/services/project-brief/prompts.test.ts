@@ -6,6 +6,7 @@ import {
   PROJECT_BRIEF_PROMPT_ID,
   PROJECT_BRIEF_FROM_CASE_PROMPT_ID,
   PROMPT_VERSION,
+  TAXONOMY_GROUNDING_CLAUSE,
 } from './prompts.js';
 import {
   MAX_BRIEF_TITLE_LENGTH,
@@ -39,6 +40,31 @@ describe('briefParsePrompt', () => {
     expect(rendered.user).toContain('<document>notes.png</document>');
     expect(rendered.promptId).toBe(PROJECT_BRIEF_PROMPT_ID);
     expect(rendered.promptVersion).toBe(PROMPT_VERSION);
+  });
+
+  it('BAL-592: is prompt v2, grouped, with the grounding clause before the untrusted clause', () => {
+    const rendered = briefParsePrompt({
+      tagChoices: [],
+      productChoices: [
+        {
+          slug: 'engagement',
+          id: '1',
+          name: 'Engagement',
+          group: 'Marketing Cloud',
+          hint: 'Messaging',
+          includes: ['Journey Builder'],
+          alsoCalled: ['ExactTarget'],
+        },
+      ],
+      fileNames: [],
+    });
+    expect(rendered.promptVersion).toBe('v2');
+    expect(rendered.user).toContain(
+      '[Marketing Cloud]\nengagement — Engagement | Messaging | includes: Journey Builder | also called: ExactTarget'
+    );
+    const grounding = rendered.system.indexOf(TAXONOMY_GROUNDING_CLAUSE);
+    expect(grounding).toBeGreaterThan(-1);
+    expect(grounding).toBeLessThan(rendered.system.indexOf('The attached documents'));
   });
 
   it('the system prompt states the untrusted-content clause, filenames included', () => {
@@ -104,6 +130,14 @@ describe('briefFromCasePrompt (BAL-589)', () => {
     const rendered = render();
     expect(rendered.promptId).toBe(PROJECT_BRIEF_FROM_CASE_PROMPT_ID);
     expect(rendered.promptVersion).toBe(PROMPT_VERSION);
+  });
+
+  it('BAL-592: is prompt v2 with the grounding clause before the case-history clause', () => {
+    const rendered = render();
+    expect(rendered.promptVersion).toBe('v2');
+    const grounding = rendered.system.indexOf(TAXONOMY_GROUNDING_CLAUSE);
+    expect(grounding).toBeGreaterThan(-1);
+    expect(grounding).toBeLessThan(rendered.system.indexOf('The case history, between'));
   });
 
   it('includes the taxonomy lists, the case title, and the rendered history, each delimited', () => {

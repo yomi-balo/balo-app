@@ -13,7 +13,7 @@ const markSucceeded = vi.fn();
 const markFailed = vi.fn();
 const getSalesforceVertical = vi.fn();
 const getProjectTagsByVertical = vi.fn();
-const getProductsByVertical = vi.fn();
+const getProductsForBriefMapping = vi.fn();
 const getR2ObjectBytes = vi.fn();
 const headR2ObjectSize = vi.fn();
 
@@ -37,7 +37,7 @@ vi.mock('@balo/db', () => ({
   referenceDataRepository: {
     getSalesforceVertical: (...args: unknown[]) => getSalesforceVertical(...args),
     getProjectTagsByVertical: (...args: unknown[]) => getProjectTagsByVertical(...args),
-    getProductsByVertical: (...args: unknown[]) => getProductsByVertical(...args),
+    getProductsForBriefMapping: (...args: unknown[]) => getProductsForBriefMapping(...args),
   },
   caseEngagementsRepository: {
     findByEngagementId: (...args: unknown[]) => findByEngagementId(...args),
@@ -69,8 +69,10 @@ vi.mock('../../lib/storage/r2.js', () => ({
   headR2ObjectSize: (...args: unknown[]) => headR2ObjectSize(...args),
 }));
 
+const { logInfo } = vi.hoisted(() => ({ logInfo: vi.fn() }));
+
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  createLogger: () => ({ warn: vi.fn(), info: logInfo, error: vi.fn(), debug: vi.fn() }),
 }));
 
 const OWNER_COMPANY = '11111111-1111-1111-1111-111111111111';
@@ -174,7 +176,7 @@ beforeEach(() => {
       tags: [{ id: 'tag-id-1', name: 'Data Migration', slug: 'data-migration', sortOrder: 0 }],
     },
   ]);
-  getProductsByVertical.mockResolvedValue([]);
+  getProductsForBriefMapping.mockResolvedValue([]);
   getR2ObjectBytes.mockResolvedValue(new Uint8Array([1, 2, 3]));
   headR2ObjectSize.mockResolvedValue(3);
   getMemberRole.mockResolvedValue('member');
@@ -442,6 +444,79 @@ describe('runProjectBriefParse', () => {
         }),
       })
     );
+  });
+
+  // ── BAL-592 — deterministic product resolution ────────────────────────────────────────────
+  describe('product alias resolution', () => {
+    const product = (
+      id: string,
+      slug: string,
+      name: string,
+      aliases: { alias: string; kind: 'feature' | 'alt_name' }[] = []
+    ): Record<string, unknown> => ({ id, slug, name, sortOrder: 0, aiHint: null, aliases });
+
+    beforeEach(() => {
+      getProductsForBriefMapping.mockResolvedValue([
+        {
+          category: {
+            id: 'c1',
+            name: 'Marketing Cloud',
+            slug: 'marketing-cloud-cat',
+            sortOrder: 0,
+          },
+          products: [
+            product('prod-engagement', 'engagement', 'Engagement', [
+              { alias: 'Journey Builder', kind: 'feature' },
+              { alias: 'Marketing Cloud', kind: 'alt_name' },
+              { alias: 'Shared Name', kind: 'alt_name' },
+            ]),
+            product('prod-pardot', 'pardot', 'Pardot', [
+              { alias: 'Shared Name', kind: 'alt_name' },
+            ]),
+          ],
+        },
+      ]);
+    });
+
+    it('AC1: a model-reported label that is an included feature becomes the product id and leaves the footnote', async () => {
+      await runWithModelOutput({ productSlugs: [], unmatchedProductLabels: ['Journey Builder'] });
+      expectPersistedResult({ productIds: ['prod-engagement'], unmatchedProductLabels: [] });
+    });
+
+    it('AC2: a slug that missed the taxonomy resolves through its humanised alias', async () => {
+      await runWithModelOutput({ productSlugs: ['marketing-cloud'] });
+      expectPersistedResult({ productIds: ['prod-engagement'], unmatchedProductLabels: [] });
+    });
+
+    it('AC5: an unknown label stays in the footnote and adds no id', async () => {
+      await runWithModelOutput({ unmatchedProductLabels: ['Gong'] });
+      expectPersistedResult({ productIds: [], unmatchedProductLabels: ['Gong'] });
+    });
+
+    it('an ambiguous alias shared by two products never resolves', async () => {
+      await runWithModelOutput({ unmatchedProductLabels: ['Shared Name'] });
+      expectPersistedResult({ productIds: [], unmatchedProductLabels: ['Shared Name'] });
+    });
+
+    it('a resolved id and a slug-selected id for the same product collapse to one', async () => {
+      await runWithModelOutput({
+        productSlugs: ['engagement'],
+        unmatchedProductLabels: ['Journey Builder'],
+      });
+      expectPersistedResult({ productIds: ['prod-engagement'] });
+    });
+
+    it('the success log carries the resolution and prompt-version keys', async () => {
+      await runWithModelOutput({ unmatchedProductLabels: ['Journey Builder', 'Gong'] });
+      expect(logInfo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          aliasResolvedCount: 1,
+          unmatchedProductCount: 1,
+          promptVersion: 'v1',
+        }),
+        'Project brief parse succeeded'
+      );
+    });
   });
 
   // ── BAL-589 — the case arm ────────────────────────────────────────────────────────────────

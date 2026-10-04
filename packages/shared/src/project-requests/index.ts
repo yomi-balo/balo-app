@@ -30,6 +30,10 @@ export * from './brief-parse';
 // persisted row and cannot import from `apps/web`. See `document-key.ts`'s docblock.
 export * from './document-key';
 
+// BAL-592 — the single taxonomy-label normaliser. Here because `apps/api`'s brief-parse resolver
+// and `packages/db`'s seed-integrity test must agree on it, and neither may import the other.
+export * from './taxonomy-label';
+
 /**
  * The relationship statuses a track can actually be declined FROM — i.e. exactly the sources
  * whose `RELATIONSHIP_STATUS_TRANSITIONS` entry carries a `'declined'` edge. NOT `accepted`
