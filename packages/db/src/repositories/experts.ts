@@ -1679,6 +1679,29 @@ export const expertsRepository = {
   },
 
   /** Submit application: transition from draft to submitted */
+  /**
+   * The user's application that is AWAITING A DECISION (`submitted` or `under_review`), or
+   * `undefined` — what the dashboard's "under review" banner needs, and nothing more. Projects
+   * `submittedAt` only: never the bare row, which carries `decline_note` and payout identifiers.
+   * The newest submission wins if a user ever holds more than one (one profile per vertical).
+   */
+  async findPendingApplicationByUserId(
+    userId: string
+  ): Promise<{ submittedAt: Date | null } | undefined> {
+    const [row] = await db
+      .select({ submittedAt: expertProfiles.submittedAt })
+      .from(expertProfiles)
+      .where(
+        and(
+          eq(expertProfiles.userId, userId),
+          inArray(expertProfiles.applicationStatus, ['submitted', 'under_review'])
+        )
+      )
+      .orderBy(desc(expertProfiles.submittedAt))
+      .limit(1);
+    return row;
+  },
+
   async submitApplication(expertProfileId: string): Promise<ExpertProfile> {
     const [profile] = await db
       .update(expertProfiles)

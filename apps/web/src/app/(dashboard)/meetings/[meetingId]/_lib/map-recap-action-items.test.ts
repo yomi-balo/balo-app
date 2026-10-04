@@ -26,6 +26,7 @@ const BASE = {
   clientCompanyName: 'Northwind Industrial',
   expertPartyShort: 'CloudPeak',
   canWrite: true,
+  toggleGrain: null,
   now: NOW,
 };
 
@@ -36,6 +37,14 @@ describe('mapRecapActionItems', () => {
     // never resolve there. `load-recap.test.ts` pins that decision.
     expect(mapRecapActionItems({ ...BASE, actionItems: [] }).canWrite).toBe(true);
     expect(mapRecapActionItems({ ...BASE, actionItems: [], canWrite: false }).canWrite).toBe(false);
+  });
+
+  it('passes toggleGrain straight through — the caller resolves the case capability', () => {
+    expect(mapRecapActionItems({ ...BASE, actionItems: [] }).toggleGrain).toBeNull();
+    expect(
+      mapRecapActionItems({ ...BASE, actionItems: [], canWrite: false, toggleGrain: 'case' })
+        .toggleGrain
+    ).toBe('case');
   });
 
   it('maps party labels prospectively, naming the party and never a person', () => {

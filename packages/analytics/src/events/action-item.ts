@@ -27,6 +27,9 @@ export type ActionItemAssigneeRole = 'client' | 'expert' | 'unassigned';
 /** The actor's lens on the engagement (admin = the platform observer, actor label 'Balo'). */
 export type ActionItemActorRole = 'client' | 'expert' | 'admin';
 
+/** Which engagement product the item belongs to — the status toggle exists on both. */
+export type ActionItemEngagementType = 'project' | 'case';
+
 export interface ActionItemServerEventMap {
   [ACTION_ITEM_SERVER_EVENTS.CREATED]: {
     engagement_id: string;
@@ -45,6 +48,7 @@ export interface ActionItemServerEventMap {
   };
   [ACTION_ITEM_SERVER_EVENTS.COMPLETED]: {
     engagement_id: string;
+    engagement_type: ActionItemEngagementType;
     action_item_id: string;
     completed_by_role: ActionItemActorRole;
     was_ai_extracted: boolean;
@@ -52,7 +56,9 @@ export interface ActionItemServerEventMap {
   };
   [ACTION_ITEM_SERVER_EVENTS.REOPENED]: {
     engagement_id: string;
+    engagement_type: ActionItemEngagementType;
     action_item_id: string;
+    reopened_by_role: ActionItemActorRole;
     distinct_id: string;
   };
   [ACTION_ITEM_SERVER_EVENTS.EDITED]: {

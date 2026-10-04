@@ -19,11 +19,12 @@ import {
   type CaseEngagementRow,
   type Meeting,
 } from '@balo/db';
-import type { RecapContextType } from '@balo/analytics/events';
+import type { RecapContextType, RecapLens } from '@balo/analytics/events';
 import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
 import { formatLongUtc } from '@/lib/format/utc-date';
 import { log } from '@/lib/logging';
 import { fetchSessionMoneyBlock } from '@/lib/api/session-money-block';
+import { mayToggleCaseActionItems } from '@/lib/cases/may-toggle-case-action-items';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 import { readRatingCard } from '@/lib/reviews/read-rating-card';
 import { durationMinutesOf } from '@/lib/meetings/meeting-duration';
@@ -314,6 +315,74 @@ async function readMoneyBlock(
  * that names the expert rather than telling a client who waited that nobody turned up. The
  * meeting id comes from the already-authorised access gate (`meeting_presence` has no RLS).
  */
+/**
+ * Has THIS client already rated THIS expert on THIS case? One indexed read, and it is what keeps
+ * two pieces of copy true: the dialog's "we'll send you a short review link" and the post-resolve
+ * confirmation. `resolveReviewAsk` skips the token in exactly this case, so promising the email
+ * regardless would be a promise the platform does not keep. `undefined` for any other viewer.
+ */
+async function readExistingReview(input: {
+  isCase: boolean;
+  lens: RecapLens;
+  engagementId: string;
+  userId: string;
+  expertProfileId: string | null;
+}): Promise<Awaited<ReturnType<typeof reviewsRepository.findLive>> | undefined> {
+  if (!input.isCase || input.lens !== 'client' || input.expertProfileId === null) {
+    return undefined;
+  }
+  return reviewsRepository.findLive(input.engagementId, input.userId, input.expertProfileId);
+}
+
+/** The client's rating card on a CLOSED case only — the expert arm carries no `resolve`. */
+async function readClosedCaseRating(input: {
+  isCase: boolean;
+  lens: RecapLens;
+  closedAt: Date | null | undefined;
+  engagementId: string;
+  userId: string;
+  now: Date;
+}): ReturnType<typeof readRatingCard> {
+  if (
+    input.lens !== 'client' ||
+    !input.isCase ||
+    input.closedAt === null ||
+    input.closedAt === undefined
+  ) {
+    return null;
+  }
+  return readRatingCard({
+    engagementId: input.engagementId,
+    viewerUserId: input.userId,
+    requireHeldConsultation: true,
+    now: input.now,
+  });
+}
+
+/**
+ * `'case'` when the done checkbox is live on this recap: a case context, still OPEN, with items,
+ * and the viewer holds `mayToggleCaseActionItems`. Those cheap terms are checked first, so no
+ * other recap resolves a capability read.
+ */
+async function resolveRecapToggleGrain(input: {
+  isCase: boolean;
+  closedAt: Date | null | undefined;
+  itemCount: number;
+  userId: string;
+  lens: RecapLens;
+  engagementId: string;
+  companyId: string;
+}): Promise<'case' | null> {
+  if (!input.isCase || input.closedAt !== null || input.itemCount === 0) {
+    return null;
+  }
+  const allowed = await mayToggleCaseActionItems(
+    { id: input.userId },
+    { lens: input.lens, engagementId: input.engagementId, companyId: input.companyId }
+  );
+  return allowed ? 'case' : null;
+}
+
 async function readClientSideEverPresent(
   meeting: Pick<Meeting, 'id' | 'outcome'>,
   userId: string
@@ -398,13 +467,13 @@ export const loadRecap = cache(
       isCase
         ? meetingContextsRepository.listMeetingsForContext('case', subject.contextId)
         : Promise.resolve<Meeting[]>([]),
-      // Has THIS viewer already rated THIS expert on THIS engagement? One indexed read, and it
-      // is what keeps two pieces of copy true: the dialog's "we'll send you a short review link"
-      // and the post-resolve confirmation. `resolveReviewAsk` skips the token in exactly this
-      // case, so promising the email regardless would be a promise the platform does not keep.
-      isCase && lens === 'client' && expertProfileId !== null
-        ? reviewsRepository.findLive(subject.contextId, userId, expertProfileId)
-        : Promise.resolve(undefined),
+      readExistingReview({
+        isCase,
+        lens,
+        engagementId: subject.contextId,
+        userId,
+        expertProfileId,
+      }),
       readClientSideEverPresent(meeting, userId),
     ]);
 
@@ -440,15 +509,14 @@ export const loadRecap = cache(
         session === undefined
           ? Promise.resolve(null)
           : readMoneyBlock(session.id, meetingId, userId),
-        // Client lens, closed case only — the expert arm carries no `resolve`.
-        lens === 'client' && isCase && caseRow?.closedAt != null
-          ? readRatingCard({
-              engagementId: subject.contextId,
-              viewerUserId: userId,
-              requireHeldConsultation: true,
-              now,
-            })
-          : Promise.resolve(null),
+        readClosedCaseRating({
+          isCase,
+          lens,
+          closedAt: caseRow?.closedAt,
+          engagementId: subject.contextId,
+          userId,
+          now,
+        }),
       ]);
 
     const artifacts = resolveArtifacts({
@@ -495,6 +563,16 @@ export const loadRecap = cache(
       totalActionItemCount: actionItems.length,
     };
 
+    const toggleGrain = await resolveRecapToggleGrain({
+      isCase,
+      closedAt: caseRow?.closedAt,
+      itemCount: actionItems.length,
+      userId,
+      lens,
+      engagementId: subject.contextId,
+      companyId,
+    });
+
     const panel = isEngagementGrain
       ? mapRecapActionItems({
           engagementId: subject.contextId,
@@ -502,19 +580,12 @@ export const loadRecap = cache(
           lens,
           clientCompanyName,
           expertPartyShort: labels.expertPartyShort,
-          // ⚠⚠ READ-ONLY ON THIS SURFACE, AND THAT IS HONESTY RATHER THAN CAUTION. Every
-          // action-item MUTATION gates through `gateEngagementParticipant` ⇒
-          // `projectEngagementsRepository.findWithMilestones`, whose query filters
-          // `engagement_type = 'project'`, so a CASE id can never resolve and toggle / assign /
-          // edit / remove would toast "This engagement could not be found" on EVERY click. A
-          // panel whose controls always error is worse than a panel that does not offer them.
-          // The other three engagement-grain contexts have no producer at all today, so the
-          // rule is stated once for all of them rather than split. Making the gate case-aware is
-          // the follow-up that turns this back on — and whoever does it owes this surface a
-          // SUPPRESSED ADD ROW: the panel's add-path writes an ENGAGEMENT-grain item with
-          // `meeting_id = NULL`, which this MEETING-scoped list would not show, so a writable
-          // recap would make a just-added item vanish on submit.
+          // Add / assign / edit / remove gate through the project-only
+          // `gateEngagementParticipant`, so they stay off here; and the add row would write a
+          // `meeting_id = NULL` item this MEETING-scoped list never shows. See
+          // `mapRecapActionItems`. Only the done checkbox is live, on an open case.
           canWrite: false,
+          toggleGrain,
           now,
         })
       : null;

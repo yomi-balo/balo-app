@@ -6,6 +6,8 @@ import {
   validateDescription,
   normalizeLinkUrl,
   DESCRIPTION_MAX_TEXT,
+  isRichTextHtml,
+  toRichTextHtml,
 } from './plain-text';
 
 describe('htmlToPlainText', () => {
@@ -70,5 +72,47 @@ describe('normalizeLinkUrl', () => {
 
   it('rejects empty input', () => {
     expect(normalizeLinkUrl('   ')).toBeNull();
+  });
+});
+
+describe('isRichTextHtml', () => {
+  it.each(['<p>x</p>', '  <ul><li>x</li></ul>', '<h2>x</h2>', '<ol><li>x</li></ol>', '<P>x</P>'])(
+    'recognises editor HTML: %s',
+    (value) => {
+      expect(isRichTextHtml(value)).toBe(true);
+    }
+  );
+
+  it.each(['Led projects.', 'a <b> c', '<3 Salesforce', '<pre>x</pre>', ''])(
+    'treats %s as plain text',
+    (value) => {
+      expect(isRichTextHtml(value)).toBe(false);
+    }
+  );
+});
+
+describe('toRichTextHtml', () => {
+  it('passes editor HTML through untouched', () => {
+    expect(toRichTextHtml('<p><strong>Led</strong></p>')).toBe('<p><strong>Led</strong></p>');
+  });
+
+  it('turns each non-blank line of legacy plain text into a paragraph', () => {
+    expect(toRichTextHtml('Led delivery\n\n  Ran CPQ  \r\nTrained admins')).toBe(
+      '<p>Led delivery</p><p>Ran CPQ</p><p>Trained admins</p>'
+    );
+  });
+
+  it('escapes legacy plain text so it can never become markup', () => {
+    expect(toRichTextHtml(`a <script>x</script> & "b" 'c'`)).toBe(
+      '<p>a &lt;script&gt;x&lt;/script&gt; &amp; &quot;b&quot; &#39;c&#39;</p>'
+    );
+  });
+
+  it.each([null, undefined, '', '   \n  '])('returns an empty string for %s', (value) => {
+    expect(toRichTextHtml(value)).toBe('');
+  });
+
+  it('keeps the visible text of legacy plain text intact', () => {
+    expect(htmlToPlainText(toRichTextHtml('A & B <C>'))).toBe('A & B <C>');
   });
 });

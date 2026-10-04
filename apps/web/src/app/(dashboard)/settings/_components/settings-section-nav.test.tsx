@@ -112,6 +112,12 @@ describe('SettingsSectionNav', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
+  it('renders nothing on the personal Account page — it is not a workspace section', () => {
+    pathname = '/settings/account';
+    render(<SettingsSectionNav showTeamSection />);
+    expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
+  });
+
   it('has no accessibility violations', async () => {
     const { container } = render(<SettingsSectionNav showTeamSection />);
     expect(await axe(container)).toHaveNoViolations();

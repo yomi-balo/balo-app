@@ -21,6 +21,7 @@ const NO_OPTIONAL_ANCHORS = {
   lastCompletedConsultationAt: null,
   lastSchedulingActivityAt: null,
   lastChatActivityAt: null,
+  lastActionItemActivityAt: null,
 };
 
 /** {@link NO_OPTIONAL_ANCHORS} plus nothing booked ahead, for `isCaseInactive` inputs. */
@@ -50,6 +51,7 @@ describe('caseInactivityAnchor', () => {
         lastCompletedConsultationAt: last,
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
       }).getTime()
     ).toBe(last.getTime());
   });
@@ -62,6 +64,7 @@ describe('caseInactivityAnchor', () => {
         lastCompletedConsultationAt: null,
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
       }).getTime()
     ).toBe(created.getTime());
   });
@@ -74,6 +77,7 @@ describe('caseInactivityAnchor', () => {
         caseCreatedAt: daysAgo(90),
         lastCompletedConsultationAt: daysAgo(20),
         lastChatActivityAt: chat,
+        lastActionItemActivityAt: null,
       }).getTime()
     ).toBe(chat.getTime());
   });
@@ -86,6 +90,7 @@ describe('caseInactivityAnchor', () => {
         caseCreatedAt: daysAgo(90),
         lastCompletedConsultationAt: consultation,
         lastChatActivityAt: daysAgo(20),
+        lastActionItemActivityAt: null,
       }).getTime()
     ).toBe(consultation.getTime());
   });
@@ -97,6 +102,7 @@ describe('caseInactivityAnchor', () => {
         ...NO_OPTIONAL_ANCHORS,
         caseCreatedAt: daysAgo(90),
         lastChatActivityAt: chat,
+        lastActionItemActivityAt: null,
       }).getTime()
     ).toBe(chat.getTime());
   });
@@ -120,14 +126,40 @@ describe('caseInactivityAnchor', () => {
         lastCompletedConsultationAt: daysAgo(20),
         lastSchedulingActivityAt: scheduling,
         lastChatActivityAt: daysAgo(10),
+        lastActionItemActivityAt: null,
       }).getTime()
     ).toBe(scheduling.getTime());
+  });
+
+  it('action-item activity only → the action-item activity', () => {
+    const toggled = daysAgo(12);
+    expect(
+      caseInactivityAnchor({
+        ...NO_OPTIONAL_ANCHORS,
+        caseCreatedAt: daysAgo(90),
+        lastActionItemActivityAt: toggled,
+      }).getTime()
+    ).toBe(toggled.getTime());
+  });
+
+  it('action-item activity NEWER than every other anchor → the action-item activity', () => {
+    const toggled = daysAgo(1);
+    expect(
+      caseInactivityAnchor({
+        caseCreatedAt: daysAgo(90),
+        lastCompletedConsultationAt: daysAgo(20),
+        lastSchedulingActivityAt: daysAgo(15),
+        lastChatActivityAt: daysAgo(10),
+        lastActionItemActivityAt: toggled,
+      }).getTime()
+    ).toBe(toggled.getTime());
   });
 
   it.each([
     'lastCompletedConsultationAt',
     'lastSchedulingActivityAt',
     'lastChatActivityAt',
+    'lastActionItemActivityAt',
   ] as const)('%s OLDER than the case creation → the creation (creation is the floor)', (key) => {
     const created = daysAgo(10);
     expect(
@@ -150,6 +182,7 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: null,
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: null,
       },
       expected: true,
@@ -162,6 +195,7 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: null,
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: null,
       },
       expected: false,
@@ -174,6 +208,7 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: daysAgo(31),
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: null,
       },
       expected: true,
@@ -186,6 +221,7 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: daysAgo(5),
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: null,
       },
       expected: false,
@@ -198,6 +234,7 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: daysAgo(40),
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: daysAhead(1),
       },
       expected: false,
@@ -210,6 +247,7 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: daysAgo(40),
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: daysAgo(2),
       },
       expected: true,
@@ -222,6 +260,7 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: null,
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: null,
       },
       expected: true,
@@ -234,6 +273,7 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: null,
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: null,
         thresholdDays: 7,
       },
@@ -247,10 +287,48 @@ describe('isCaseInactive', () => {
         lastCompletedConsultationAt: null,
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: null,
         thresholdDays: 7,
       },
       expected: false,
+    },
+  ]);
+});
+
+describe('isCaseInactive — action-item activity (marking done or reopening)', () => {
+  itDecides([
+    {
+      name: 'consultation 40 days ago, an item ticked 5 days ago → active',
+      input: {
+        ...NO_ACTIVITY,
+        now: NOW,
+        caseCreatedAt: daysAgo(90),
+        lastCompletedConsultationAt: daysAgo(40),
+        lastActionItemActivityAt: daysAgo(5),
+      },
+      expected: false,
+    },
+    {
+      name: 'consultation 40 days ago, an item ticked 31 days ago → inactive',
+      input: {
+        ...NO_ACTIVITY,
+        now: NOW,
+        caseCreatedAt: daysAgo(90),
+        lastCompletedConsultationAt: daysAgo(40),
+        lastActionItemActivityAt: daysAgo(31),
+      },
+      expected: true,
+    },
+    {
+      name: 'an item ticked exactly 30 days ago → inactive (INCLUSIVE >=)',
+      input: {
+        ...NO_ACTIVITY,
+        now: NOW,
+        caseCreatedAt: daysAgo(90),
+        lastActionItemActivityAt: daysAgo(30),
+      },
+      expected: true,
     },
   ]);
 });
@@ -264,6 +342,7 @@ describe('isCaseInactive — chat activity (messages, files and in-call uploads)
         now: NOW,
         caseCreatedAt: daysAgo(90),
         lastChatActivityAt: daysAgo(5),
+        lastActionItemActivityAt: null,
       },
       expected: false,
     },
@@ -275,6 +354,7 @@ describe('isCaseInactive — chat activity (messages, files and in-call uploads)
         caseCreatedAt: daysAgo(90),
         lastCompletedConsultationAt: daysAgo(40),
         lastChatActivityAt: daysAgo(31),
+        lastActionItemActivityAt: null,
       },
       expected: true,
     },
@@ -286,6 +366,7 @@ describe('isCaseInactive — chat activity (messages, files and in-call uploads)
         caseCreatedAt: daysAgo(90),
         lastCompletedConsultationAt: daysAgo(5),
         lastChatActivityAt: daysAgo(40),
+        lastActionItemActivityAt: null,
       },
       expected: false,
     },
@@ -296,6 +377,7 @@ describe('isCaseInactive — chat activity (messages, files and in-call uploads)
         now: NOW,
         caseCreatedAt: daysAgo(90),
         lastChatActivityAt: daysAgo(30),
+        lastActionItemActivityAt: null,
       },
       expected: true,
     },
@@ -306,6 +388,7 @@ describe('isCaseInactive — chat activity (messages, files and in-call uploads)
         now: NOW,
         caseCreatedAt: daysAgo(90),
         lastChatActivityAt: daysAhead(1),
+        lastActionItemActivityAt: null,
       },
       expected: false,
     },
@@ -316,6 +399,7 @@ describe('isCaseInactive — chat activity (messages, files and in-call uploads)
         now: NOW,
         caseCreatedAt: daysAgo(90),
         lastChatActivityAt: daysAgo(40),
+        lastActionItemActivityAt: null,
         nextScheduledConsultationAt: daysAhead(1),
       },
       expected: false,
@@ -327,6 +411,7 @@ describe('isCaseInactive — chat activity (messages, files and in-call uploads)
         now: NOW,
         caseCreatedAt: daysAgo(90),
         lastChatActivityAt: daysAgo(5),
+        lastActionItemActivityAt: null,
         thresholdDays: 3,
       },
       expected: true,
@@ -374,6 +459,7 @@ describe('isCaseInactive — scheduling activity (booking, reschedule, cancellat
         caseCreatedAt: daysAgo(90),
         lastSchedulingActivityAt: daysAgo(40),
         lastChatActivityAt: daysAgo(5),
+        lastActionItemActivityAt: null,
       },
       expected: false,
     },
@@ -385,6 +471,7 @@ describe('isCaseInactive — scheduling activity (booking, reschedule, cancellat
         caseCreatedAt: daysAgo(90),
         lastSchedulingActivityAt: daysAgo(5),
         lastChatActivityAt: daysAgo(40),
+        lastActionItemActivityAt: null,
       },
       expected: false,
     },

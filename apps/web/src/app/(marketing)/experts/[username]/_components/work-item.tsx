@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { WorkHistoryView } from '@/components/expert/profile';
+import { RICH_TEXT_CONTENT_CLASS } from '@/components/balo/rich-text/types';
 import { cn } from '@/lib/utils';
 
 interface WorkItemProps {
@@ -14,13 +15,14 @@ interface WorkItemProps {
 /**
  * One role in the work timeline. Current roles default to expanded with an
  * accent dot + "Current" badge; past roles show their duration label and start
- * collapsed. `responsibilities` expands/collapses via a max-height transition.
+ * collapsed. The responsibilities expand/collapse via a height transition; they are rich text,
+ * sanitised by the server-side mapper (`profile-view.ts`) before they reach this component.
  */
 export function WorkItem({ item, isLast }: Readonly<WorkItemProps>): React.JSX.Element {
   const reduce = useReducedMotion();
   const [open, setOpen] = useState(item.isCurrent);
   const toggle = useCallback(() => setOpen((prev) => !prev), []);
-  const hasDetail = item.responsibilities !== null && item.responsibilities.trim().length > 0;
+  const hasDetail = item.responsibilitiesHtml !== null;
 
   return (
     <div className="flex items-stretch gap-4">
@@ -67,9 +69,14 @@ export function WorkItem({ item, isLast }: Readonly<WorkItemProps>): React.JSX.E
                 transition={reduce ? { duration: 0 } : { duration: 0.3, ease: 'easeInOut' }}
                 className="overflow-hidden"
               >
-                <p className="text-muted-foreground mt-3 text-sm leading-relaxed">
-                  {item.responsibilities}
-                </p>
+                <div
+                  className={cn(
+                    'text-muted-foreground mt-3 text-sm leading-relaxed [&_p:first-child]:mt-0 [&_p:last-child]:mb-0',
+                    RICH_TEXT_CONTENT_CLASS
+                  )}
+                  // Sanitised server-side by `sanitizeResponsibilitiesHtml` in the profile mapper.
+                  dangerouslySetInnerHTML={{ __html: item.responsibilitiesHtml ?? '' }}
+                />
               </motion.div>
               <button
                 type="button"

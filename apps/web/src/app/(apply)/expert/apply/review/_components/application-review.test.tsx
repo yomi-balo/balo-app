@@ -45,6 +45,12 @@ vi.mock('motion/react', async () => {
   };
 });
 
+// The real viewer is Tiptap behind `next/dynamic`; it has its own suite. This stub shows the HTML
+// it is handed, which is what this page decides.
+vi.mock('@/components/balo/rich-text-editor', () => ({
+  RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
+}));
+
 import { ApplicationReview } from './application-review';
 
 // ── Fixtures ─────────────────────────────────────────────────────
@@ -226,6 +232,11 @@ describe('ApplicationReview', () => {
     expect(screen.getByText('Lead Consultant')).toBeInTheDocument();
     expect(screen.getByText('Acme Corp')).toBeInTheDocument();
     expect(screen.getByText('Current')).toBeInTheDocument();
+  });
+
+  it('renders responsibilities through the rich-text viewer, legacy plain text as a paragraph', () => {
+    renderReview();
+    expect(screen.getByTestId('rt-viewer')).toHaveTextContent('<p>Led Salesforce delivery.</p>');
   });
 
   it('falls back to "Other" category when a product is not in reference data', () => {

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useTheme } from 'next-themes';
 import { useLogout } from './use-logout';
 import {
@@ -14,7 +15,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from '@/components/ui/dropdown-menu';
-import { User, Settings, Sun, Moon, Monitor, LogOut } from 'lucide-react';
+import { User, Sun, Moon, Monitor, LogOut } from 'lucide-react';
 import { useSidebarOptional } from './sidebar-context';
 
 interface UserMenuProps {
@@ -61,13 +62,12 @@ export function UserMenu({
         <DropdownMenuSeparator />
 
         <DropdownMenuGroup>
-          <DropdownMenuItem>
-            <User className="mr-2 h-4 w-4" />
-            Profile
-          </DropdownMenuItem>
-          <DropdownMenuItem>
-            <Settings className="mr-2 h-4 w-4" />
-            Settings
+          {/* The same destination as the nav registry's `account` entry. */}
+          <DropdownMenuItem asChild>
+            <Link href="/settings/account">
+              <User className="mr-2 h-4 w-4" />
+              Account
+            </Link>
           </DropdownMenuItem>
         </DropdownMenuGroup>
 

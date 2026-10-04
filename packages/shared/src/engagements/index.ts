@@ -7,7 +7,7 @@
  * A case is inactive when BOTH hold:
  *   1. it has NO upcoming scheduled consultation (a booked future consultation
  *      always keeps a case open, however old every anchor below is), AND
- *   2. `now - anchor >= thresholdDays`, where the anchor is the LATEST of four
+ *   2. `now - anchor >= thresholdDays`, where the anchor is the LATEST of five
  *      instants, a `null` one being ignored:
  *        - the CASE'S CREATION — always present, so it is the FLOOR;
  *        - the last COMPLETED consultation;
@@ -15,14 +15,16 @@
  *          cancellation of a case consultation, even if that call was later
  *          cancelled or missed;
  *        - the last CHAT activity — the newest message or file from either party,
- *          in the case chat or uploaded during a case call.
+ *          in the case chat or uploaded during a case call;
+ *        - the last ACTION-ITEM activity — the newest time anyone marked one of the
+ *          case's action items done or reopened it.
  *
  * PURE and dependency-free (no @balo/db, no I/O) so it is bundle-safe and
  * exhaustively unit-testable — deliberately NOT placed next to `AUTO_ACCEPT_DAYS`
  * in `@balo/db`, which carries the documented client-bundle footgun
  * (repositories/project-engagements.ts).
  *
- * ⚠ THE ACTIVITY INPUTS ARE PARAMETERS, NOT QUERIES — this module stays PURE. Two
+ * ⚠ THE ACTIVITY INPUTS ARE PARAMETERS, NOT QUERIES — this module stays PURE. Three
  * batched `@balo/db` reads supply every anchor except creation:
  *
  *   1. The consultation seam. BAL-418 shipped the link — `meeting_contexts`
@@ -51,11 +53,19 @@
  *          engagementIds
  *        ) → Map<engagementId, Date | null>
  *
- * Both are BATCHED — a per-engagement call over a sweep candidate list is a textbook
+ *   3. The action-item read, which supplies `lastActionItemActivityAt` from the
+ *      action-item audit trail (`action_item.completed`, `action_item.reopened`) on
+ *      the case's live items — a human toggle only, never AI extraction:
+ *
+ *        actionItemsRepository.latestStatusChangeAtForEngagements(
+ *          engagementIds
+ *        ) → Map<engagementId, Date | null>
+ *
+ * All three are BATCHED — a per-engagement call over a sweep candidate list is a textbook
  * N+1 — and both return an entry for EVERY requested id, so "absent" never has to be
  * distinguished from "none".
  *
- * ⚠ THE SWEEP MUST CALL BOTH READS — and does: BAL-572's hourly `case-inactivity-sweep`
+ * ⚠ THE SWEEP MUST CALL ALL THREE READS — and does: BAL-572's hourly `case-inactivity-sweep`
  * (`apps/api`), per the note above. `caseEngagementsRepository.listOpenCreatedBefore`
  * returns only the SQL-expressible SUPERSET (creation-anchored, activity-blind — a
  * superset because creation is the anchor's floor); this function refines it, and it
@@ -106,19 +116,25 @@ export interface CaseInactivityInput {
    * the chat read's Map value. REQUIRED: an omitted field would quietly mean "none".
    */
   lastChatActivityAt: Date | null;
+  /**
+   * The newest time an action item on the case was marked done or reopened — the action-item
+   * read's Map value. REQUIRED: an omitted field would quietly mean "none".
+   */
+  lastActionItemActivityAt: Date | null;
   /** From the consultation seam's Map entry. */
   nextScheduledConsultationAt: Date | null;
   /** Defaults to `CASE_INACTIVITY_DAYS`. */
   thresholdDays?: number;
 }
 
-/** The four instants the inactivity clock can run from. */
+/** The five instants the inactivity clock can run from. */
 export type CaseInactivityAnchorInput = Pick<
   CaseInactivityInput,
   | 'caseCreatedAt'
   | 'lastCompletedConsultationAt'
   | 'lastSchedulingActivityAt'
   | 'lastChatActivityAt'
+  | 'lastActionItemActivityAt'
 >;
 
 /** The latest of `floor` and every non-null candidate; a tie keeps the earlier argument. */
@@ -134,10 +150,11 @@ function latestOf(floor: Date, ...candidates: Array<Date | null>): Date {
 
 /**
  * The instant the inactivity clock runs from: the LATEST of the case's creation, its
- * last completed consultation, its last scheduling action and its last chat activity.
+ * last completed consultation, its last scheduling action, its last chat activity and
+ * its last action-item status change.
  *
- * ONE `latestOf` over all four, with creation as the floor. Never a `??` chain — it lets
- * an older anchor mask a newer one — and never the latest of the three optional anchors
+ * ONE `latestOf` over all five, with creation as the floor. Never a `??` chain — it lets
+ * an older anchor mask a newer one — and never the latest of the optional anchors
  * with `?? caseCreatedAt` afterwards, which drops the floor: an anchor older than the
  * case never pulls the clock back before creation (the safe direction). An anchor later
  * than `now` yields a negative elapsed time, so the case reads as active (also safe).
@@ -147,7 +164,8 @@ export function caseInactivityAnchor(input: CaseInactivityAnchorInput): Date {
     input.caseCreatedAt,
     input.lastCompletedConsultationAt,
     input.lastSchedulingActivityAt,
-    input.lastChatActivityAt
+    input.lastChatActivityAt,
+    input.lastActionItemActivityAt
   );
 }
 

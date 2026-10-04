@@ -45,6 +45,7 @@ import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { hasCapability } from '@/lib/authz';
 import { hasEngagementCapability } from '@/lib/authz/engagement';
 import { resolveCaseAccess, type CaseAccess } from '@/lib/cases/resolve-case-access';
+import { mayToggleCaseActionItems } from '@/lib/cases/may-toggle-case-action-items';
 import { resolveActorLabel } from '@/lib/cases/actor-attribution';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { deriveConsultationOrdinal } from '@/lib/meetings/derive-consultation-ordinal';
@@ -381,7 +382,8 @@ function buildActionItems(
   clientCompanyName: string,
   expertPartyShort: string,
   counterpartyLabel: string,
-  nowMs: number
+  nowMs: number,
+  canToggle: boolean
 ): CaseActionItemsView {
   const yours: ActionItemNodeView[] = [];
   const theirs: ActionItemNodeView[] = [];
@@ -408,8 +410,8 @@ function buildActionItems(
     theirs,
     unassigned,
     counterpartyLabel,
-    doneCount: items.filter((item) => item.status === 'done').length,
     totalCount: items.length,
+    canToggle,
   };
 }
 
@@ -797,12 +799,7 @@ export const loadCase = cache(
             .listByParty('company', companyId)
             .then((rows) => rows.map((row) => row.domain))
         : Promise.resolve<string[]>([]),
-      // Gated for every close reason: a case can be closed from the case surface without a
-      // held consultation, so `requireHeldConsultation` is unconditional rather than keyed on
-      // `closeReason`. Client lens only — the expert arm carries no `rating`.
-      lens === 'client' && caseRow.closedAt !== null
-        ? readRatingCard({ engagementId, viewerUserId: userId, requireHeldConsultation: true, now })
-        : Promise.resolve(null),
+      readClosedCaseRating({ lens, closedAt: caseRow.closedAt, engagementId, userId, now }),
     ]);
     const guestCountByMeetingId = new Map(guestCountRows.map((row) => [row.meetingId, row.count]));
 
@@ -868,6 +865,15 @@ export const loadCase = cache(
     const mayCancelAsClient =
       clientParticipatesOnAnUpcomingMeeting && someUpcomingMeetingIsCancellable;
     const mayInviteAsClient = clientParticipatesOnAnUpcomingMeeting;
+
+    const mayToggleActionItems = await resolveMayToggleActionItems({
+      isOpen,
+      itemCount: actionItems.length,
+      userId,
+      lens,
+      engagementId,
+      companyId,
+    });
 
     // Reused by both `mapCaseConsultations` and the expert return arm below; extracted to its
     // own function to keep `loadCase` under SonarCloud's cognitive-complexity ceiling.
@@ -1001,7 +1007,8 @@ export const loadCase = cache(
         clientCompanyName,
         labels.expertPartyShort,
         labels.counterpartyFirstName,
-        now.getTime()
+        now.getTime(),
+        mayToggleActionItems
       ),
       files: fileResult.files,
       filesTruncated: fileResult.truncated,
@@ -1188,6 +1195,51 @@ function projectConversionOrEmpty(
   value: CaseProjectConversionView | null
 ): CaseProjectConversionView {
   return value ?? EMPTY_PROJECT_CONVERSION;
+}
+
+/**
+ * The CLIENT's own rating card on a CLOSED case; `null` on the expert lens (its arm carries no
+ * `rating`) or while the case is open. Gated for every close reason: a case can be closed from
+ * the case surface without a held consultation, so `requireHeldConsultation` is unconditional.
+ */
+function readClosedCaseRating(input: {
+  lens: 'client' | 'expert';
+  closedAt: Date | null;
+  engagementId: string;
+  userId: string;
+  now: Date;
+}): ReturnType<typeof readRatingCard> {
+  if (input.lens !== 'client' || input.closedAt === null) {
+    return Promise.resolve(null);
+  }
+  return readRatingCard({
+    engagementId: input.engagementId,
+    viewerUserId: input.userId,
+    requireHeldConsultation: true,
+    now: input.now,
+  });
+}
+
+/**
+ * Whether the viewer may mark this case's action items done (`mayToggleCaseActionItems`). An
+ * open case with at least one item is checked first, so a closed or item-less case resolves no
+ * capability read.
+ */
+async function resolveMayToggleActionItems(input: {
+  isOpen: boolean;
+  itemCount: number;
+  userId: string;
+  lens: 'client' | 'expert';
+  engagementId: string;
+  companyId: string;
+}): Promise<boolean> {
+  if (!input.isOpen || input.itemCount === 0) {
+    return false;
+  }
+  return mayToggleCaseActionItems(
+    { id: input.userId },
+    { lens: input.lens, engagementId: input.engagementId, companyId: input.companyId }
+  );
 }
 
 async function resolveExpertCapabilitiesIfNeeded(

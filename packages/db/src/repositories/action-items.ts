@@ -1,8 +1,18 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, max } from 'drizzle-orm';
 import { db } from '../client';
-import { actionItems, type ActionItem, type Engagement, type NewActionItem } from '../schema';
+import {
+  actionItems,
+  auditEvents,
+  type ActionItem,
+  type Engagement,
+  type NewActionItem,
+} from '../schema';
 import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
-import { recordActionItemAudit, type ActionItemAuditAction } from './_shared/action-item-audit';
+import {
+  recordActionItemAudit,
+  type ActionItemAuditAction,
+  type ActionItemAuditEntityType,
+} from './_shared/action-item-audit';
 
 /** Action-item status, derived from the schema column (single source of truth). */
 export type ActionItemStatus = ActionItem['status'];
@@ -32,6 +42,14 @@ export function isAllowedActionItemTransition(
 ): boolean {
   return ACTION_ITEM_STATUS_TRANSITIONS[from].includes(to);
 }
+
+const ACTION_ITEM_AUDIT_ENTITY_TYPE: ActionItemAuditEntityType = 'action_item';
+
+/** The audit actions that are a status change — what the case-inactivity anchor counts. */
+const ACTION_ITEM_STATUS_AUDIT_ACTIONS = [
+  'action_item.completed',
+  'action_item.reopened',
+] as const satisfies readonly ActionItemAuditAction[];
 
 /** Thrown when a complete/reopen is attempted on an already-terminal (same) status. */
 export class InvalidActionItemTransitionError extends Error {
@@ -430,5 +448,57 @@ export const actionItemsRepository = {
       .from(actionItems)
       .where(and(eq(actionItems.meetingId, meetingId), isNull(actionItems.deletedAt)))
       .orderBy(asc(actionItems.createdAt), asc(actionItems.id));
+  },
+
+  /**
+   * The case-inactivity sweep's ACTION-ITEM ANCHOR: per engagement, the newest instant anyone
+   * marked one of its LIVE action items done or reopened it — `MAX(audit_events.created_at)`
+   * over `action_item.completed` / `action_item.reopened` rows. Read from the audit trail, not
+   * `action_items.updated_at`, so only a human status change counts: AI extraction, an assign or
+   * an edit, and any future bulk update leave the clock alone.
+   *
+   * Joins `action_items` (`action_item_engagement_idx`) to `audit_events` on
+   * `(entity_type, entity_id)` (`audit_events_entity_idx`) — `audit_events` has no
+   * `engagement_id` column (it lives in `metadata`), so the item row is the bridge.
+   *
+   * Returns an entry for EVERY requested id (`null` when nothing matches), so the sweep never
+   * has to tell "absent" from "none". An empty input returns an empty Map WITHOUT touching the
+   * DB. Callers pass ids from a system-scoped read, never a request-supplied id.
+   */
+  async latestStatusChangeAtForEngagements(
+    engagementIds: readonly string[]
+  ): Promise<Map<string, Date | null>> {
+    const result = new Map<string, Date | null>();
+    for (const engagementId of engagementIds) {
+      result.set(engagementId, null);
+    }
+    if (result.size === 0) {
+      return result;
+    }
+
+    const rows = await db
+      .select({
+        engagementId: actionItems.engagementId,
+        // `max()` over a column maps through that column, so this is a real `Date`.
+        lastStatusChangeAt: max(auditEvents.createdAt),
+      })
+      .from(actionItems)
+      .innerJoin(
+        auditEvents,
+        and(
+          eq(auditEvents.entityType, ACTION_ITEM_AUDIT_ENTITY_TYPE),
+          eq(auditEvents.entityId, actionItems.id),
+          inArray(auditEvents.action, [...ACTION_ITEM_STATUS_AUDIT_ACTIONS])
+        )
+      )
+      .where(
+        and(inArray(actionItems.engagementId, [...result.keys()]), isNull(actionItems.deletedAt))
+      )
+      .groupBy(actionItems.engagementId);
+
+    for (const row of rows) {
+      result.set(row.engagementId, row.lastStatusChangeAt);
+    }
+    return result;
   },
 };

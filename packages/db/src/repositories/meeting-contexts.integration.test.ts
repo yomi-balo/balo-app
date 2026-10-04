@@ -13,6 +13,7 @@ import {
   type NewMeeting,
 } from '../schema';
 import {
+  actionItemFactory,
   caseEngagementFactory,
   conversationFileFactory,
   conversationMessageFactory,
@@ -30,6 +31,7 @@ import {
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { findProjectionForMeeting } from './_shared/consultation-projection';
 import { MEETING_SCHEDULING_AUDIT_ACTIONS } from './_shared/meeting-audit';
+import { actionItemsRepository } from './action-items';
 import { conversationsRepository } from './conversations';
 import { meetingsRepository } from './meetings';
 import {
@@ -1249,7 +1251,9 @@ describe('meetingContextsRepository.engagementIdsWithLiveCaseMeeting (the live-m
  *       (completed + scheduling anchors, next upcoming consultation)
  *     conversationsRepository.latestChatActivityAtForEngagements(ids)
  *       (messages, case-chat files, in-call uploads)
- *       ──feed──▶   isCaseInactive({ caseCreatedAt, ...anchors, lastChatActivityAt, now })
+ *     actionItemsRepository.latestStatusChangeAtForEngagements(ids)
+ *       (an action item marked done or reopened)
+ *       ──feed──▶   isCaseInactive({ caseCreatedAt, ...anchors, now })
  *       ──minus──▶  meetingContextsRepository.engagementIdsWithLiveCaseMeeting(ids, floor)
  *
  * ⚠ THIS IS A COMPOSITION TEST, NOT A SWEEP. Auto-close is WINDOW MATH, not a consumer of
@@ -1272,11 +1276,16 @@ describe('meetingContextsRepository.engagementIdsWithLiveCaseMeeting (the live-m
  * expectation vacuous.
  */
 describe('case inactivity composition (BAL-417 × BAL-418)', () => {
-  /** Every input the two reads supply for one case, taken ONLY from their Maps. */
+  /** Every input the three reads supply for one case, taken ONLY from their Maps. */
   async function anchorsFor(
     engagementId: string,
     now: Date
-  ): Promise<ConsultationTimestamps & { lastChatActivityAt: Date | null }> {
+  ): Promise<
+    ConsultationTimestamps & {
+      lastChatActivityAt: Date | null;
+      lastActionItemActivityAt: Date | null;
+    }
+  > {
     const anchors = await meetingContextsRepository.consultationTimestampsForEngagements(
       [engagementId],
       now
@@ -1290,7 +1299,12 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
     if (lastChatActivityAt === undefined) {
       throw new Error(`latestChatActivityAtForEngagements dropped ${engagementId}`);
     }
-    return { ...timestamps, lastChatActivityAt };
+    const toggles = await actionItemsRepository.latestStatusChangeAtForEngagements([engagementId]);
+    const lastActionItemActivityAt = toggles.get(engagementId);
+    if (lastActionItemActivityAt === undefined) {
+      throw new Error(`latestStatusChangeAtForEngagements dropped ${engagementId}`);
+    }
+    return { ...timestamps, lastChatActivityAt, lastActionItemActivityAt };
   }
 
   /** Resolve every anchor for one case and apply the rule, exactly as the sweep does. */
@@ -1409,6 +1423,7 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
         nextScheduledConsultationAt: null,
         lastSchedulingActivityAt: null,
         lastChatActivityAt: null,
+        lastActionItemActivityAt: null,
       })
     ).toBe(true);
     // …while the composed answer, on the same row, is the correct one.
@@ -1573,6 +1588,47 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
     await messageDaysAgo(kase, 40);
 
     expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+  });
+
+  /** Mark an action item on the case done `days` before `NOW` (the audit row is the anchor). */
+  async function itemTickedDaysAgo(
+    kase: { engagementId: string; userId: string },
+    days: number
+  ): Promise<void> {
+    const { actionItem } = await actionItemFactory({ engagementId: kase.engagementId });
+    await db.insert(auditEvents).values({
+      actorUserId: kase.userId,
+      action: 'action_item.completed',
+      entityType: 'action_item',
+      entityId: actionItem.id,
+      metadata: { engagementId: kase.engagementId },
+      createdAt: daysAgo(days),
+    });
+  }
+
+  it('12a — last completed 40d ago, an action item ticked 5d ago ⇒ ACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(60);
+    await endedCaseMeeting(kase.engagementId, 40, 'completed');
+    await itemTickedDaysAgo(kase, 5);
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(false);
+    // The tick alone holds it: null it out and the same case reads inactive.
+    const anchors = await anchorsFor(kase.engagementId, NOW);
+    expect(
+      isCaseInactive({
+        now: NOW,
+        caseCreatedAt: kase.createdAt,
+        ...anchors,
+        lastActionItemActivityAt: null,
+      })
+    ).toBe(true);
+  });
+
+  it('12b — an action item ticked 31d ago, nothing newer ⇒ INACTIVE', async () => {
+    const kase = await caseCreatedDaysAgo(60);
+    await itemTickedDaysAgo(kase, 31);
+
+    expect(await inactive(kase.engagementId, kase.createdAt, NOW)).toBe(true);
   });
 
   it('13 — last message EXACTLY 30d ago ⇒ INACTIVE (the boundary is inclusive)', async () => {

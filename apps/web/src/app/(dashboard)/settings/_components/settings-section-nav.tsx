@@ -6,7 +6,11 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 import type { SettingsSection } from '@/lib/analytics';
-import { SETTINGS_SECTION_ORDER, resolveActiveSection } from '../_lib/settings-sections';
+import {
+  ACCOUNT_SETTINGS_HREF,
+  SETTINGS_SECTION_ORDER,
+  resolveActiveSection,
+} from '../_lib/settings-sections';
 
 interface SettingsSectionNavProps {
   readonly showTeamSection: boolean;
@@ -40,7 +44,7 @@ interface SettingsSectionNavProps {
  */
 export function SettingsSectionNav({
   showTeamSection,
-}: Readonly<SettingsSectionNavProps>): React.JSX.Element {
+}: Readonly<SettingsSectionNavProps>): React.JSX.Element | null {
   const pathname = usePathname();
   const active = resolveActiveSection(pathname);
   const visible = SETTINGS_SECTION_ORDER.filter(
@@ -54,6 +58,11 @@ export function SettingsSectionNav({
     lastFired.current = active;
     track(SETTINGS_EVENTS.SECTION_VIEWED, { section: active });
   }, [active, isVisible]);
+
+  // The personal Account page is not a workspace section — no tab bar above it.
+  if (pathname === ACCOUNT_SETTINGS_HREF) {
+    return null;
+  }
 
   return (
     <nav aria-label="Settings sections" className="mx-auto w-full max-w-3xl">

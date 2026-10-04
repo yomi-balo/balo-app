@@ -45,7 +45,11 @@ export interface WorkHistoryView {
   /** e.g. "5 yrs" / "2 yrs 5 mos" — empty string for the current role. */
   durationLabel: string;
   isCurrent: boolean;
-  responsibilities: string | null;
+  /**
+   * The responsibilities as SANITISED rich-text HTML (`sanitizeResponsibilitiesHtml`, run by the
+   * server-side mapper) — safe to inject. `null` when the entry has none.
+   */
+  responsibilitiesHtml: string | null;
 }
 
 /**

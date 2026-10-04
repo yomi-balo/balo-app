@@ -56,6 +56,11 @@ vi.mock('@balo/db', () => ({
   requestExpertRelationshipsRepository: { findById: (...a: unknown[]) => m.findRelationship(...a) },
 }));
 
+const mockMayToggle = vi.fn();
+vi.mock('@/lib/cases/may-toggle-case-action-items', () => ({
+  mayToggleCaseActionItems: (...a: unknown[]) => mockMayToggle(...a),
+}));
+
 const mockFetchMoneyBlock = vi.fn();
 vi.mock('@/lib/api/session-money-block', () => ({
   fetchSessionMoneyBlock: (...a: unknown[]) => mockFetchMoneyBlock(...a),
@@ -189,6 +194,7 @@ function seedRecapMocks(seed: RecapMockSeed = {}): void {
   m.presenceFacts.mockResolvedValue(new Map());
   mockFetchMoneyBlock.mockResolvedValue(null);
   mockReadRatingCard.mockResolvedValue(null);
+  mockMayToggle.mockResolvedValue(true);
 }
 
 describe('loadRecap', () => {
@@ -772,11 +778,10 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     expect(view?.header.status.label).toBe('Completed');
   });
 
-  it('builds the action-items panel ONLY for engagement-grain contexts, READ-ONLY', async () => {
+  it('builds the action-items panel ONLY for engagement-grain contexts, with no add/edit surface', async () => {
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
-    // Every action-item MUTATION gates through `projectEngagementsRepository.findWithMilestones`,
-    // which filters engagement_type = 'project' - so a CASE id can never resolve and every
-    // control would toast "This engagement could not be found". A read-only panel is honest.
+    // Add / assign / edit / remove gate through `projectEngagementsRepository.findWithMilestones`,
+    // which filters engagement_type = 'project' - so a CASE id can never resolve there.
     expect(view?.actionItems?.canWrite).toBe(false);
     expect(view?.actionItems?.engagementId).toBe(ENGAGEMENT_ID);
 
@@ -790,6 +795,47 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     expect(requestView?.actionItems).toBeNull();
     expect(requestView?.header.title).toBe('Intro about CPQ');
     expect(requestView?.header.eyebrow).toBe('Intro call');
+  });
+
+  describe('the done toggle on a case recap', () => {
+    const ITEM = {
+      id: 'ai-1',
+      body: 'Send the plan',
+      status: 'open',
+      assigneeParty: null,
+      dueAt: null,
+    };
+
+    it('is live (case grain) on an OPEN case when the viewer holds the act right', async () => {
+      m.listActionItems.mockResolvedValue([ITEM]);
+      const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+      expect(view?.actionItems?.toggleGrain).toBe('case');
+      expect(mockMayToggle).toHaveBeenCalledWith(
+        { id: USER_ID },
+        { lens: 'client', engagementId: ENGAGEMENT_ID, companyId: COMPANY_ID }
+      );
+    });
+
+    it('honours a false act-right answer', async () => {
+      m.listActionItems.mockResolvedValue([ITEM]);
+      mockMayToggle.mockResolvedValue(false);
+      const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+      expect(view?.actionItems?.toggleGrain).toBeNull();
+    });
+
+    it('is off on a CLOSED case and resolves no act-right read', async () => {
+      m.listActionItems.mockResolvedValue([ITEM]);
+      m.findCase.mockResolvedValue({ ...OPEN_CASE, closedAt: new Date('2026-07-30T00:00:00Z') });
+      const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+      expect(view?.actionItems?.toggleGrain).toBeNull();
+      expect(mockMayToggle).not.toHaveBeenCalled();
+    });
+
+    it('resolves no act-right read when the meeting has no items', async () => {
+      const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+      expect(view?.actionItems?.toggleGrain).toBeNull();
+      expect(mockMayToggle).not.toHaveBeenCalled();
+    });
   });
 
   it('titles a project_discovery from its request', async () => {

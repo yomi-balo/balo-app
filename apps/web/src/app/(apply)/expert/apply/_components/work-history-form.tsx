@@ -6,7 +6,14 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-// Textarea rendered as native HTML element below
+import { RichTextEditor } from '@/components/balo/rich-text-editor';
+import { isDescriptionEmpty, toRichTextHtml } from '@/components/balo/rich-text/plain-text';
+import { cn } from '@/lib/utils';
+import {
+  RESPONSIBILITIES_MAX_TEXT,
+  RESPONSIBILITIES_TOO_LONG,
+  responsibilitiesTextLength,
+} from '@/lib/expert-profile/work-history-responsibilities';
 import {
   Select,
   SelectContent,
@@ -77,7 +84,11 @@ export function WorkHistoryForm({
   const [endMonth, setEndMonth] = useState(endParsed.month);
   const [endYear, setEndYear] = useState(endParsed.year);
   const [isCurrent, setIsCurrent] = useState(initialData?.isCurrent ?? false);
-  const [responsibilities, setResponsibilities] = useState(initialData?.responsibilities ?? '');
+  // Seeded as HTML: an entry saved before the field became rich text holds plain text.
+  const [responsibilities, setResponsibilities] = useState(() =>
+    toRichTextHtml(initialData?.responsibilities)
+  );
+  const responsibilitiesLength = responsibilitiesTextLength(responsibilities);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const currentYear = new Date().getFullYear();
@@ -88,6 +99,9 @@ export function WorkHistoryForm({
     if (!role.trim()) newErrors.role = 'Role is required';
     if (!company.trim()) newErrors.company = 'Company is required';
     if (!startMonth || !startYear) newErrors.startedAt = 'Start date is required';
+    if (responsibilitiesLength > RESPONSIBILITIES_MAX_TEXT) {
+      newErrors.responsibilities = RESPONSIBILITIES_TOO_LONG;
+    }
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -104,7 +118,8 @@ export function WorkHistoryForm({
       startedAt,
       endedAt,
       isCurrent,
-      responsibilities: responsibilities.trim(),
+      // The editor's empty document is `<p></p>` — store nothing rather than an empty paragraph.
+      responsibilities: isDescriptionEmpty(responsibilities) ? '' : responsibilities,
     });
   };
 
@@ -218,16 +233,30 @@ export function WorkHistoryForm({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="wh-responsibilities">Responsibilities</Label>
-        <textarea
-          id="wh-responsibilities"
-          className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring flex min-h-[120px] w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-          placeholder="Describe your key responsibilities and Salesforce-related achievements..."
-          maxLength={1000}
+        {/* The editor is a contenteditable region named by `ariaLabel`, so this label is visual. */}
+        <p className="text-sm leading-none font-medium">Responsibilities</p>
+        <RichTextEditor
+          variant="light"
           value={responsibilities}
-          onChange={(e) => setResponsibilities(e.target.value)}
+          onChange={setResponsibilities}
+          ariaLabel="Responsibilities"
+          placeholder="Describe your key responsibilities and Salesforce-related achievements..."
         />
-        <p className="text-muted-foreground text-right text-xs">{responsibilities.length}/1000</p>
+        <div className="flex items-start gap-3">
+          {errors.responsibilities && (
+            <p className="text-destructive text-sm">{errors.responsibilities}</p>
+          )}
+          <p
+            className={cn(
+              'ml-auto shrink-0 text-xs tabular-nums',
+              responsibilitiesLength > RESPONSIBILITIES_MAX_TEXT
+                ? 'text-destructive'
+                : 'text-muted-foreground'
+            )}
+          >
+            {responsibilitiesLength}/{RESPONSIBILITIES_MAX_TEXT}
+          </p>
+        </div>
       </div>
 
       <div className="mt-4 flex justify-end gap-3">

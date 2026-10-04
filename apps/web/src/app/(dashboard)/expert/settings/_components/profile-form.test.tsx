@@ -160,6 +160,8 @@ const INDUSTRIES = [
 ];
 
 const DEFAULTS: ProfileFormData = {
+  firstName: 'Jane',
+  lastName: 'Doe',
   headline: '',
   bio: '',
   username: 'jane-doe',
@@ -177,8 +179,6 @@ function Harness({ defaults, ...overrides }: Readonly<HarnessProps>): React.JSX.
   return (
     <ProfileForm
       form={form}
-      firstName="Jane"
-      lastName="Doe"
       avatarUrl={null}
       expertProfileId="profile-1"
       allLanguages={LANGUAGES}
@@ -259,18 +259,32 @@ describe('ProfileForm — photo', () => {
 // ── Identity ─────────────────────────────────────────────────────
 
 describe('ProfileForm — identity', () => {
-  it('shows first and last name read-only, with how to change them', () => {
+  it('shows first and last name as editable fields with name autocomplete', () => {
     render(<Harness />);
 
-    const first = within(identityCard()).getByLabelText(/First name/);
-    const last = within(identityCard()).getByLabelText(/Last name/);
+    const first = within(identityCard()).getByLabelText('First name');
+    const last = within(identityCard()).getByLabelText('Last name');
     expect(first).toHaveValue('Jane');
     expect(last).toHaveValue('Doe');
-    expect(first).toHaveAttribute('readonly');
-    expect(last).toHaveAttribute('readonly');
-    expect(first).toHaveAccessibleDescription('Contact support to change your name.');
-    expect(first).toHaveAttribute('title', 'Contact support to change your name');
-    expect(within(identityCard()).getAllByText('· read-only')).toHaveLength(2);
+    expect(first).not.toHaveAttribute('readonly');
+    expect(last).not.toHaveAttribute('readonly');
+    expect(first).toHaveAttribute('autocomplete', 'given-name');
+    expect(last).toHaveAttribute('autocomplete', 'family-name');
+    expect(first).toHaveAttribute('maxlength', '50');
+    expect(screen.queryByText(/contact support/i)).not.toBeInTheDocument();
+  });
+
+  it('writes a name edit into the form, enabling Reset, and the initials follow it', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    const first = within(identityCard()).getByLabelText('First name');
+    await user.clear(first);
+    await user.type(first, 'Maya');
+
+    expect(first).toHaveValue('Maya');
+    expect(screen.getByRole('button', { name: 'Reset changes' })).toBeEnabled();
+    expect(screen.getByTestId('photo-upload')).toHaveAttribute('data-initials', 'MD');
   });
 
   it('labels the username field and writes edits into the form', async () => {

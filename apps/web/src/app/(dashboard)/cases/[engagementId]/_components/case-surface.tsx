@@ -557,7 +557,7 @@ export function CaseSurface({
               />
             </Reveal>
             <Reveal delay={0.2}>
-              <CaseActionItems actionItems={view.actionItems} />
+              <CaseActionItems engagementId={view.engagementId} actionItems={view.actionItems} />
             </Reveal>
             <Reveal delay={0.25}>
               <CaseFilesCard

@@ -21,6 +21,7 @@ const {
   mockClose,
   mockConsultationTimestamps,
   mockLatestChatActivity,
+  mockLatestStatusChange,
   mockEngagementIdsWithLiveCaseMeeting,
   mockListMeetingsForContext,
   mockFindOwnerUserId,
@@ -39,6 +40,7 @@ const {
   mockClose: vi.fn(),
   mockConsultationTimestamps: vi.fn(),
   mockLatestChatActivity: vi.fn(),
+  mockLatestStatusChange: vi.fn(),
   mockEngagementIdsWithLiveCaseMeeting: vi.fn(),
   mockListMeetingsForContext: vi.fn(),
   mockFindOwnerUserId: vi.fn(),
@@ -92,6 +94,9 @@ vi.mock('@balo/db', () => ({
   },
   conversationsRepository: {
     latestChatActivityAtForEngagements: mockLatestChatActivity,
+  },
+  actionItemsRepository: {
+    latestStatusChangeAtForEngagements: mockLatestStatusChange,
   },
   companiesRepository: {
     findOwnerUserIdByCompanyId: mockFindOwnerUserId,
@@ -166,7 +171,10 @@ function neverConsultedMap(ids: readonly string[]): Map<string, ConsultationEntr
   return new Map(ids.map((id) => [id, { ...NO_SEAM_ACTIVITY }]));
 }
 
-/** Every requested id answers "no chat activity" — the chat read's legitimate `null`. */
+/**
+ * Every requested id answers `null` — the chat read's (and the action-item read's) legitimate
+ * "no activity".
+ */
 function noChatMap(ids: readonly string[]): Map<string, Date | null> {
   return new Map(ids.map((id) => [id, null]));
 }
@@ -191,6 +199,7 @@ beforeEach(() => {
   mockListOpenCreatedBefore.mockResolvedValue([]);
   mockConsultationTimestamps.mockImplementation(async (ids: string[]) => neverConsultedMap(ids));
   mockLatestChatActivity.mockImplementation(async (ids: string[]) => noChatMap(ids));
+  mockLatestStatusChange.mockImplementation(async (ids: string[]) => noChatMap(ids));
   mockEngagementIdsWithLiveCaseMeeting.mockResolvedValue(new Set());
   mockListMeetingsForContext.mockResolvedValue([]);
   mockFindOwnerUserId.mockResolvedValue('owner-1');
@@ -380,13 +389,32 @@ describe('case-inactivity sweep — the core close', () => {
     );
   });
 
-  it('no candidates means no seam call and no chat call', async () => {
+  it('an action-item Map miss is skipped and warned, never defaulted', async () => {
+    mockListOpenCreatedBefore.mockResolvedValue([caseRow({ id: 'missing-ai-1' })]);
+    mockLatestStatusChange.mockResolvedValue(new Map());
+
+    const result = await runCaseInactivitySweep(NOW);
+
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(result.closed).toBe(0);
+    expect(result.foundInactive).toBe(0);
+    expect(mockLog.warn).toHaveBeenCalledTimes(1);
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      { engagementId: 'missing-ai-1' },
+      'Case inactivity sweep: action-item Map miss — candidate skipped, lastActionItemActivityAt never defaulted'
+    );
+  });
+
+  it('no candidates means no seam, chat or action-item call', async () => {
     mockListOpenCreatedBefore.mockResolvedValue([]);
 
     const result = await runCaseInactivitySweep(NOW);
 
     expect(mockConsultationTimestamps).not.toHaveBeenCalled();
     expect(mockLatestChatActivity).not.toHaveBeenCalled();
+    expect(mockLatestStatusChange).not.toHaveBeenCalled();
+    expect(result.heldByActionItemActivity).toBe(0);
     expect(result.candidates).toBe(0);
     expect(result.heldByChatActivity).toBe(0);
     expect(result.heldByRecentScheduling).toBe(0);
@@ -439,6 +467,83 @@ describe('case-inactivity sweep — chat activity holds a case open', () => {
     expect(result.foundInactive).toBe(0);
     expect(result.heldByChatActivity).toBe(0);
     expect(result.heldByRecentScheduling).toBe(0);
+  });
+});
+
+describe('case-inactivity sweep — action-item activity holds a case open', () => {
+  /** One candidate whose only activity is an action-item status change `lastToggleAt`. */
+  function oneTickedCase(seam: Partial<ConsultationEntry>, lastToggleAt: Date): void {
+    oneCase(seam, null);
+    mockLatestStatusChange.mockImplementation(
+      async (ids: string[]) => new Map(ids.map((id) => [id, lastToggleAt]))
+    );
+  }
+
+  it('consultation 40d + an item ticked 2d ago: no close, heldByActionItemActivity 1', async () => {
+    oneTickedCase({ lastCompletedConsultationAt: daysAgo(40) }, daysAgo(2));
+
+    const result = await runCaseInactivitySweep(NOW);
+
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(result.foundInactive).toBe(0);
+    expect(result.heldByActionItemActivity).toBe(1);
+    expect(result.heldByChatActivity).toBe(0);
+    expect(result.heldByRecentScheduling).toBe(0);
+  });
+
+  it('an item ticked 31d ago, nothing newer: closes', async () => {
+    oneTickedCase({ lastCompletedConsultationAt: daysAgo(40) }, daysAgo(31));
+
+    const result = await runCaseInactivitySweep(NOW);
+
+    expect(mockClose).toHaveBeenCalledWith({ engagementId: 'eng-1', reason: 'auto_inactive' });
+    expect(result.heldByActionItemActivity).toBe(0);
+  });
+
+  it('chat 2d + an item ticked 2d ago: held, but by neither alone — both counters 0', async () => {
+    oneTickedCase({}, daysAgo(2));
+    mockLatestChatActivity.mockImplementation(
+      async (ids: string[]) => new Map(ids.map((id) => [id, daysAgo(2)]))
+    );
+
+    const result = await runCaseInactivitySweep(NOW);
+
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(result.heldByActionItemActivity).toBe(0);
+    expect(result.heldByChatActivity).toBe(0);
+  });
+
+  it('calls the action-item read with the same ids as the seam, chunked at 500', async () => {
+    const rows = Array.from({ length: 501 }, (_, i) => caseRow({ id: `eng-${i}` }));
+    mockListOpenCreatedBefore.mockResolvedValue(rows);
+
+    await runCaseInactivitySweep(NOW);
+
+    const seamChunks = (
+      mockConsultationTimestamps.mock.calls.slice(0, 2) as [string[], Date][]
+    ).map(([ids]) => ids);
+    const calls = mockLatestStatusChange.mock.calls.slice(0, 2) as unknown[][];
+    expect(calls.map((args) => args.length)).toEqual([1, 1]);
+    expect(calls.map(([ids]) => ids)).toEqual(seamChunks);
+  });
+
+  it('the re-check re-reads action-item activity and drops a case ticked in between', async () => {
+    mockListOpenCreatedBefore.mockResolvedValue([caseRow({ id: 'eng-1' })]);
+    let reads = 0;
+    mockLatestStatusChange.mockImplementation(async (ids: string[]) => {
+      reads += 1;
+      const value = reads === 1 ? null : new Date(NOW.getTime() + 60_000);
+      return new Map(ids.map((id) => [id, value]));
+    });
+
+    const result = await runCaseInactivitySweep(NOW);
+
+    expect(mockLatestStatusChange).toHaveBeenCalledTimes(2);
+    expect(mockLatestStatusChange).toHaveBeenLastCalledWith(['eng-1']);
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(result.foundInactive).toBe(1);
+    expect(result.skippedOnRecheck).toBe(1);
   });
 });
 
@@ -867,6 +972,7 @@ describe('case-inactivity sweep — a batch-pass read failure', () => {
     ],
     ['the seam', () => mockConsultationTimestamps.mockRejectedValue(new Error('boom'))],
     ['the chat read', () => mockLatestChatActivity.mockRejectedValue(new Error('boom'))],
+    ['the action-item read', () => mockLatestStatusChange.mockRejectedValue(new Error('boom'))],
     [
       'the live-meeting exclusion',
       () => mockEngagementIdsWithLiveCaseMeeting.mockRejectedValue(new Error('boom')),
@@ -915,8 +1021,9 @@ describe('case-inactivity sweep — the summary log', () => {
    * return (after the live-meeting exclusion) — the path a production tick almost always takes.
    * The all-active early return is pinned by the one-case chat and scheduling tests above.
    */
-  it('reports both sole-holder counters in the result, the summary log and job.log, on a tick that also closes', async () => {
+  it('reports every sole-holder counter in the result, the summary log and job.log, on a tick that also closes', async () => {
     mockListOpenCreatedBefore.mockResolvedValue([
+      caseRow({ id: 'action-item-held' }),
       caseRow({ id: 'chat-held' }),
       caseRow({ id: 'scheduling-held' }),
       caseRow({ id: 'scheduling-held-2' }),
@@ -938,25 +1045,35 @@ describe('case-inactivity sweep — the summary log', () => {
       async (ids: string[]) =>
         new Map(ids.map((id) => [id, id === 'chat-held' ? daysAgo(3) : null]))
     );
+    mockLatestStatusChange.mockImplementation(
+      async (ids: string[]) =>
+        new Map(ids.map((id) => [id, id === 'action-item-held' ? daysAgo(3) : null]))
+    );
     const messages: string[] = [];
 
     const result = await runCaseInactivitySweep(NOW, (m) => messages.push(m));
 
     expect(result).toMatchObject({
-      candidates: 4,
+      candidates: 5,
       foundInactive: 1,
       heldByChatActivity: 1,
       heldByRecentScheduling: 2,
+      heldByActionItemActivity: 1,
       closed: 1,
     });
     expect(mockClose).toHaveBeenCalledTimes(1);
     expect(mockClose).toHaveBeenCalledWith({ engagementId: 'closes', reason: 'auto_inactive' });
     expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({ heldByChatActivity: 1, heldByRecentScheduling: 2 }),
+      expect.objectContaining({
+        heldByChatActivity: 1,
+        heldByRecentScheduling: 2,
+        heldByActionItemActivity: 1,
+      }),
       'Case inactivity sweep complete'
     );
     const summary = messages.join('\n');
     expect(summary).toContain('1 held by chat activity');
     expect(summary).toContain('2 held by recent scheduling');
+    expect(summary).toContain('1 held by action-item activity');
   });
 });

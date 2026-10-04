@@ -4,6 +4,7 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { responsibilitiesPreview } from '@/lib/expert-profile/work-history-responsibilities';
 
 interface WorkHistoryEntry {
   id?: string;
@@ -49,6 +50,7 @@ export function WorkHistoryCard({
   onEdit,
   onDelete,
 }: Readonly<WorkHistoryCardProps>): React.JSX.Element {
+  const preview = responsibilitiesPreview(entry.responsibilities);
   return (
     <motion.div
       initial={{ y: 20, opacity: 0 }}
@@ -99,8 +101,9 @@ export function WorkHistoryCard({
           </Badge>
         )}
       </div>
-      {entry.responsibilities && (
-        <p className="text-muted-foreground mt-3 line-clamp-2 text-sm">{entry.responsibilities}</p>
+      {/* A two-line preview, so the visible text only — never the raw rich-text markup. */}
+      {preview !== '' && (
+        <p className="text-muted-foreground mt-3 line-clamp-2 text-sm">{preview}</p>
       )}
     </motion.div>
   );

@@ -1,5 +1,6 @@
 import { Worker, type Job } from 'bullmq';
 import {
+  actionItemsRepository,
   agenciesRepository,
   CaseAlreadyClosedError,
   caseEngagementsRepository,
@@ -34,12 +35,13 @@ import { MEETING_TOKEN_TTL_AFTER_END_MS } from '../services/meetings/meeting-liv
  * THE FIRST PRODUCTION CALLER of `@balo/shared/engagements`'s `isCaseInactive` — see that
  * module's own docblock for the rule (no upcoming consultation AND the anchor is ≥30 days old,
  * where the anchor is the LATEST of the case's creation, its last COMPLETED consultation, its
- * last booking, reschedule or cancellation, and its last chat activity — a message or file from
- * either party, in the case chat or uploaded during a case call).
+ * last booking, reschedule or cancellation, its last chat activity — a message or file from
+ * either party, in the case chat or uploaded during a case call — and the last time anyone marked
+ * one of its action items done or reopened it).
  *
  * TICK: `caseEngagementsRepository.listOpenCreatedBefore(now − 30d)` (oldest first) →
  * `partition` (the seam (consultations + scheduling) + the chat read (messages, files, in-call
- * uploads) → `isCaseInactive` → the live-meeting exclusion) → the eligible set, capped at
+ * uploads) + the action-item read (done / reopen) → `isCaseInactive` → the live-meeting exclusion) → the eligible set, capped at
  * `MAX_CASE_CLOSES_PER_TICK` oldest-first → per case: RE-CHECK (`partition`, one id) →
  * `close()` → `trackServer` → the post-commit notice.
  *
@@ -63,17 +65,18 @@ import { MEETING_TOKEN_TTL_AFTER_END_MS } from '../services/meetings/meeting-liv
  * for that one case — accepted on the same terms (milliseconds on an hourly tick, and a new case
  * recovers it). This is NOT an in-transaction re-evaluation and never should be.
  *
- * ⚠ A MAP MISS IN EITHER READ IS SKIPPED AND WARNED, NEVER DEFAULTED. Both
- * `consultationTimestampsForEngagements` and `latestChatActivityAtForEngagements` return an
- * entry for every requested id; an id either Map lacks is a BUG, not a gap. Constructing
- * all-null seam anchors — `lastCompletedConsultationAt`, `nextScheduledConsultationAt` and
- * `lastSchedulingActivityAt`, which has no Map of its own and rides the seam's entry — or a
- * `null` `lastChatActivityAt` for it would collapse the rule toward "created ≥ 30 days ago" and
+ * ⚠ A MAP MISS IN ANY READ IS SKIPPED AND WARNED, NEVER DEFAULTED.
+ * `consultationTimestampsForEngagements`, `latestChatActivityAtForEngagements` and
+ * `latestStatusChangeAtForEngagements` each return an entry for every requested id; an id any
+ * Map lacks is a BUG, not a gap. Constructing all-null seam anchors — `lastCompletedConsultationAt`,
+ * `nextScheduledConsultationAt` and `lastSchedulingActivityAt`, which has no Map of its own and
+ * rides the seam's entry — or a `null` `lastChatActivityAt` / `lastActionItemActivityAt` for it
+ * would collapse the rule toward "created ≥ 30 days ago" and
  * could auto-close a case with a consultation yesterday, a booking tomorrow or a message this
- * morning. An all-null entry or a `null` chat value a read ACTUALLY RETURNS is legitimate (a case
- * with no activity anchors on its creation). The chat check is `=== undefined` — never `?? null`,
- * which is the default this forbids, and never a truthiness check, which would skip every
- * never-messaged case forever.
+ * morning. An all-null entry or a `null` chat / action-item value a read ACTUALLY RETURNS is
+ * legitimate (a case with no activity anchors on its creation). The chat and action-item checks
+ * are `=== undefined` — never `?? null`, which is the default this forbids, and never a
+ * truthiness check, which would skip every never-messaged or never-ticked case forever.
  *
  * ⚠ THE CLIENT `recipientId`. `companiesRepository.findOwnerUserIdByCompanyId`, the
  * non-throwing id-only read `auto-accept-sweep.ts` and `review-nudge-sweep.ts` already use. An
@@ -139,8 +142,8 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 }
 
 /**
- * One batched read, chunked at `CANDIDATE_CHUNK_SIZE` and merged into one Map. Both anchor
- * reads (the seam and the chat read) go through it. An empty input issues no call at all:
+ * One batched read, chunked at `CANDIDATE_CHUNK_SIZE` and merged into one Map. All three anchor
+ * reads (the seam, the chat read and the action-item read) go through it. An empty input issues no call at all:
  * chunking an empty array yields zero chunks.
  */
 async function batchedRead<V>(
@@ -156,30 +159,36 @@ async function batchedRead<V>(
   return result;
 }
 
-/** The two anchors whose sole holds are counted. */
-type CountedAnchor = 'lastChatActivityAt' | 'lastSchedulingActivityAt';
+/** The anchors whose sole holds are counted. */
+type CountedAnchor = 'lastChatActivityAt' | 'lastSchedulingActivityAt' | 'lastActionItemActivityAt';
 
 /**
  * True when `input` — already ACTIVE — would be inactive with `key` nulled: that anchor ALONE
- * holds the case open. A case held by both counted anchors at once is held solely by neither.
+ * holds the case open. A case held by two counted anchors at once is held solely by neither.
  */
 function heldSolelyBy(input: CaseInactivityInput, key: CountedAnchor): boolean {
   return isCaseInactive({ ...input, [key]: null });
 }
 
+/** The three batched anchor reads, keyed by engagement id. */
+interface AnchorReads {
+  timestamps: ReadonlyMap<string, ConsultationTimestamps>;
+  chat: ReadonlyMap<string, Date | null>;
+  actionItems: ReadonlyMap<string, Date | null>;
+}
+
 /**
  * `isCaseInactive`'s input for one candidate, every anchor taken from its read's Map: creation
  * from the row; the completed, upcoming and scheduling anchors from the SAME seam entry; chat
- * from the chat read. A miss in EITHER Map is warned and returns `undefined` (skip) — see the
- * module docblock's Map-miss paragraph.
+ * from the chat read; action-item activity from the action-item read. A miss in ANY Map is warned
+ * and returns `undefined` (skip) — see the module docblock's Map-miss paragraph.
  */
 function anchorInputFor(
   row: CaseEngagementRow,
-  timestamps: ReadonlyMap<string, ConsultationTimestamps>,
-  chat: ReadonlyMap<string, Date | null>,
+  reads: AnchorReads,
   now: Date
 ): CaseInactivityInput | undefined {
-  const entry = timestamps.get(row.id);
+  const entry = reads.timestamps.get(row.id);
   if (entry === undefined) {
     logger.warn(
       { engagementId: row.id },
@@ -187,11 +196,19 @@ function anchorInputFor(
     );
     return undefined;
   }
-  const lastChatActivityAt = chat.get(row.id);
+  const lastChatActivityAt = reads.chat.get(row.id);
   if (lastChatActivityAt === undefined) {
     logger.warn(
       { engagementId: row.id },
       'Case inactivity sweep: chat-activity Map miss — candidate skipped, lastChatActivityAt never defaulted'
+    );
+    return undefined;
+  }
+  const lastActionItemActivityAt = reads.actionItems.get(row.id);
+  if (lastActionItemActivityAt === undefined) {
+    logger.warn(
+      { engagementId: row.id },
+      'Case inactivity sweep: action-item Map miss — candidate skipped, lastActionItemActivityAt never defaulted'
     );
     return undefined;
   }
@@ -202,32 +219,34 @@ function anchorInputFor(
     nextScheduledConsultationAt: entry.nextScheduledConsultationAt,
     lastSchedulingActivityAt: entry.lastSchedulingActivityAt,
     lastChatActivityAt,
+    lastActionItemActivityAt,
   };
 }
 
-/** `evaluateAnchors`' answer: the rows inactive by anchors, plus the two sole-holder counters. */
+/** `evaluateAnchors`' answer: the rows inactive by anchors, plus the sole-holder counters. */
 interface AnchorEvaluation {
   inactiveRows: CaseEngagementRow[];
   heldByChatActivity: number;
   heldByRecentScheduling: number;
+  heldByActionItemActivity: number;
 }
 
 /**
- * `isCaseInactive` over every candidate. An ACTIVE case also feeds the two sole-holder counters
- * (`heldSolelyBy`): the ones that would be inactive with only their chat anchor, or only their
- * scheduling anchor, nulled.
+ * `isCaseInactive` over every candidate. An ACTIVE case also feeds the sole-holder counters
+ * (`heldSolelyBy`): the ones that would be inactive with only their chat anchor, only their
+ * scheduling anchor, or only their action-item anchor nulled.
  */
 function evaluateAnchors(
   rows: readonly CaseEngagementRow[],
-  timestamps: ReadonlyMap<string, ConsultationTimestamps>,
-  chat: ReadonlyMap<string, Date | null>,
+  reads: AnchorReads,
   now: Date
 ): AnchorEvaluation {
   const inactiveRows: CaseEngagementRow[] = [];
   let heldByChatActivity = 0;
   let heldByRecentScheduling = 0;
+  let heldByActionItemActivity = 0;
   for (const row of rows) {
-    const input = anchorInputFor(row, timestamps, chat, now);
+    const input = anchorInputFor(row, reads, now);
     if (input === undefined) {
       continue;
     }
@@ -241,8 +260,11 @@ function evaluateAnchors(
     if (heldSolelyBy(input, 'lastSchedulingActivityAt')) {
       heldByRecentScheduling += 1;
     }
+    if (heldSolelyBy(input, 'lastActionItemActivityAt')) {
+      heldByActionItemActivity += 1;
+    }
   }
-  return { inactiveRows, heldByChatActivity, heldByRecentScheduling };
+  return { inactiveRows, heldByChatActivity, heldByRecentScheduling, heldByActionItemActivity };
 }
 
 /**
@@ -285,12 +307,12 @@ async function excludeLiveMeetings(
 interface PartitionResult {
   /**
    * Inactive by the seam (consultations + scheduling) + the chat read (messages, files, in-call
-   * uploads) + `isCaseInactive`, AND not held by a live meeting.
+   * uploads) + the action-item read (done / reopen) + `isCaseInactive`, AND not held by a live meeting.
    */
   eligible: CaseEngagementRow[];
   /**
    * Inactive by the seam (consultations + scheduling) + the chat read (messages, files, in-call
-   * uploads) + `isCaseInactive`, BEFORE the live-meeting exclusion.
+   * uploads) + the action-item read (done / reopen) + `isCaseInactive`, BEFORE the live-meeting exclusion.
    */
   foundInactive: number;
   /**
@@ -304,7 +326,7 @@ interface PartitionResult {
   heldByLiveMeeting: number;
   /**
    * Active, and would be inactive with ONLY `lastChatActivityAt` nulled — a message or file (case
-   * chat or in-call upload) is the sole holder. A case held by both chat and scheduling counts in
+   * chat or in-call upload) is the sole holder. A case also held by another anchor counts in
    * neither counter.
    */
   heldByChatActivity: number;
@@ -314,13 +336,18 @@ interface PartitionResult {
    * not ended, it is neither upcoming nor completed, so its booking is what holds the case.
    */
   heldByRecentScheduling: number;
+  /**
+   * Active, and would be inactive with ONLY `lastActionItemActivityAt` nulled — someone marking an
+   * action item done or reopening it is the sole holder.
+   */
+  heldByActionItemActivity: number;
 }
 
 /**
- * Both anchor reads → `isCaseInactive` → the live-meeting exclusion — ONE function, shared by the
+ * All three anchor reads → `isCaseInactive` → the live-meeting exclusion — ONE function, shared by the
  * batch pass and the per-case re-check (same function, one id), so the re-check re-reads the
- * seam AND the chat read. NEVER constructs anchors for a Map miss in either read; such a row is
- * skipped and warned.
+ * seam, the chat read AND the action-item read. NEVER constructs anchors for a Map miss in any
+ * read; such a row is skipped and warned.
  *
  * The exclusion read only ever sees the subset already flagged inactive by anchors — a case the
  * anchors already hold open has no need to ask whether a meeting also holds it open.
@@ -333,6 +360,7 @@ async function partition(rows: readonly CaseEngagementRow[], now: Date): Promise
       heldByLiveMeeting: 0,
       heldByChatActivity: 0,
       heldByRecentScheduling: 0,
+      heldByActionItemActivity: 0,
     };
   }
 
@@ -343,13 +371,12 @@ async function partition(rows: readonly CaseEngagementRow[], now: Date): Promise
   const chat = await batchedRead(ids, (idChunk) =>
     conversationsRepository.latestChatActivityAtForEngagements(idChunk)
   );
-
-  const { inactiveRows, heldByChatActivity, heldByRecentScheduling } = evaluateAnchors(
-    rows,
-    timestamps,
-    chat,
-    now
+  const actionItems = await batchedRead(ids, (idChunk) =>
+    actionItemsRepository.latestStatusChangeAtForEngagements(idChunk)
   );
+
+  const { inactiveRows, heldByChatActivity, heldByRecentScheduling, heldByActionItemActivity } =
+    evaluateAnchors(rows, { timestamps, chat, actionItems }, now);
 
   if (inactiveRows.length === 0) {
     return {
@@ -358,6 +385,7 @@ async function partition(rows: readonly CaseEngagementRow[], now: Date): Promise
       heldByLiveMeeting: 0,
       heldByChatActivity,
       heldByRecentScheduling,
+      heldByActionItemActivity,
     };
   }
 
@@ -369,6 +397,7 @@ async function partition(rows: readonly CaseEngagementRow[], now: Date): Promise
     heldByLiveMeeting,
     heldByChatActivity,
     heldByRecentScheduling,
+    heldByActionItemActivity,
   };
 }
 
@@ -439,8 +468,8 @@ type CloseOutcome = 'closed' | 'alreadyClosed' | 'failed' | 'skippedOnRecheck';
  *
  * `CaseAlreadyClosedError` is a benign race (another tick, or a client closing it between the
  * batch read and this call) and counts as `alreadyClosed` — no publish, no track. Any OTHER
- * close error, and any error thrown while re-reading this one row's anchors (the seam and the
- * chat read) or its live-meeting exclusion, counts as `failed`, is logged at `error`, and the
+ * close error, and any error thrown while re-reading this one row's anchors (the seam, the
+ * chat read and the action-item read) or its live-meeting exclusion, counts as `failed`, is logged at `error`, and the
  * loop continues. A notice failure never un-counts the close: `outcome` stays `'closed'` and
  * `noticeFailed` is reported separately. The re-check's own hold counters are ignored; only the
  * batch pass reports them.
@@ -511,7 +540,7 @@ export interface CaseInactivitySweepResult {
   candidates: number;
   /**
    * Inactive by the seam (consultations + scheduling) + the chat read (messages, files, in-call
-   * uploads) + `isCaseInactive`, BEFORE the live-meeting exclusion.
+   * uploads) + the action-item read (done / reopen) + `isCaseInactive`, BEFORE the live-meeting exclusion.
    */
   foundInactive: number;
   /**
@@ -524,15 +553,20 @@ export interface CaseInactivitySweepResult {
   heldByLiveMeeting: number;
   /**
    * Active only because of a message or file (case chat or in-call upload) — inactive with that
-   * one anchor nulled. SOLE holders: a case also held by scheduling counts in neither counter.
+   * one anchor nulled. SOLE holders: a case also held by another anchor counts in neither counter.
    */
   heldByChatActivity: number;
   /**
    * Active only because of a recent booking, reschedule or cancellation — inactive with that one
    * anchor nulled. Includes a call running now (neither upcoming nor completed, so its booking is
-   * the sole holder). SOLE holders: a case also held by chat counts in neither counter.
+   * the sole holder). SOLE holders: a case also held by another anchor counts in neither counter.
    */
   heldByRecentScheduling: number;
+  /**
+   * Active only because someone marked an action item done or reopened it — inactive with that
+   * one anchor nulled. SOLE holders, like the two counters above.
+   */
+  heldByActionItemActivity: number;
   /** Eligible in the batch pass, but no longer eligible at the per-case re-check. */
   skippedOnRecheck: number;
   /** Actually closed this tick (regardless of whether its notice also succeeded). */
@@ -552,7 +586,8 @@ export interface CaseInactivitySweepResult {
 
 /**
  * The batch pass: the candidate superset (`listOpenCreatedBefore`), then `partition` over all of
- * it. A throw from any of its reads (the superset, the seam, the chat read or the exclusion)
+ * it. A throw from any of its reads (the superset, the seam, the chat read, the action-item
+ * read or the exclusion)
  * aborts the tick before anything closes, so it fails closed. It is logged here at `error`, under
  * this module's context and mirrored to `job.log`, then RETHROWN so BullMQ still records the job
  * as failed. The worker has no `failed` listener, and a tick that throws never reaches the
@@ -594,6 +629,7 @@ export async function runCaseInactivitySweep(
     heldByLiveMeeting,
     heldByChatActivity,
     heldByRecentScheduling,
+    heldByActionItemActivity,
   } = await readBatch(now, log);
 
   let toProcess = eligible;
@@ -641,6 +677,7 @@ export async function runCaseInactivitySweep(
     heldByLiveMeeting,
     heldByChatActivity,
     heldByRecentScheduling,
+    heldByActionItemActivity,
     skippedOnRecheck,
     closed,
     alreadyClosed,
@@ -654,6 +691,7 @@ export async function runCaseInactivitySweep(
     `case inactivity sweep: ${result.candidates} candidates, ${result.foundInactive} inactive, ` +
       `${result.heldByLiveMeeting} held by live meeting, ${result.heldByChatActivity} held by ` +
       `chat activity, ${result.heldByRecentScheduling} held by recent scheduling, ` +
+      `${result.heldByActionItemActivity} held by action-item activity, ` +
       `${result.skippedOnRecheck} skipped on ` +
       `recheck, ${result.closed} closed, ${result.alreadyClosed} already closed, ` +
       `${result.failed} failed, ${result.noticeFailed} notice failed, ${result.deferred} deferred`

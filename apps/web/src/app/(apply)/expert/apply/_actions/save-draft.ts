@@ -3,6 +3,7 @@ import 'server-only';
 import { withAuth, type AuthenticatedSession } from '@/lib/auth/with-auth';
 import { expertsRepository, referenceDataRepository, isUniqueViolation } from '@balo/db';
 import { log } from '@/lib/logging';
+import { sanitizeResponsibilitiesHtml } from '@/lib/sanitize/work-history-html';
 import { trackServerAndFlush, EXPERT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { z } from 'zod';
 import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
@@ -248,7 +249,13 @@ async function dispatchNonProfileStep(
     }
     case 'work-history': {
       const data = parsed as WorkHistoryStepData;
-      await expertsRepository.syncWorkHistory(profileId, data.entries ?? []);
+      await expertsRepository.syncWorkHistory(
+        profileId,
+        (data.entries ?? []).map((entry) => ({
+          ...entry,
+          responsibilities: sanitizeResponsibilitiesHtml(entry.responsibilities),
+        }))
+      );
       return;
     }
   }

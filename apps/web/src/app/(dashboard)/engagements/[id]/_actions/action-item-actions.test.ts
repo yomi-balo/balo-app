@@ -465,6 +465,7 @@ describe('setActionItemStatusAction', () => {
     expect(mockReopen).not.toHaveBeenCalled();
     expect(mockTrack).toHaveBeenCalledWith('action_item_completed', {
       engagement_id: ENGAGEMENT_ID,
+      engagement_type: 'project',
       action_item_id: ACTION_ITEM_ID,
       completed_by_role: 'expert',
       was_ai_extracted: true,
@@ -478,7 +479,9 @@ describe('setActionItemStatusAction', () => {
     expect(mockComplete).not.toHaveBeenCalled();
     expect(mockTrack).toHaveBeenCalledWith('action_item_reopened', {
       engagement_id: ENGAGEMENT_ID,
+      engagement_type: 'project',
       action_item_id: ACTION_ITEM_ID,
+      reopened_by_role: 'expert',
       distinct_id: 'user-1',
     });
   });

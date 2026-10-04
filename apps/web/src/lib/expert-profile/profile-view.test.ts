@@ -305,6 +305,8 @@ describe('mapProfileToView — work history formatting', () => {
       periodLabel: 'Apr 2025 — Present',
       durationLabel: '',
       isCurrent: true,
+      // Legacy plain text arrives as escaped, sanitised paragraph HTML.
+      responsibilitiesHtml: '<p>Lead.</p>',
     });
   });
 
@@ -324,6 +326,7 @@ describe('mapProfileToView — work history formatting', () => {
       })
     );
     expect(view.workHistory[0]?.periodLabel).toBe('Apr 2020 — Apr 2025');
+    expect(view.workHistory[0]?.responsibilitiesHtml).toBeNull();
     expect(view.workHistory[0]?.durationLabel).toBe('5 yrs');
   });
 });

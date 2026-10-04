@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { responsibilitiesFieldSchema } from '@/lib/expert-profile/work-history-responsibilities';
 
 // ── Shared field schemas (single source of truth) ────────────────
 // Each strict field is factored into a named const so the strict (submit + client
@@ -126,7 +127,8 @@ const workHistoryEntrySchema = z
     startedAt: z.string().min(1, 'Start date is required'),
     endedAt: z.string().optional().or(z.literal('')),
     isCurrent: z.boolean(),
-    responsibilities: z.string().max(1000).optional().or(z.literal('')),
+    // Rich-text HTML (or a legacy plain-text value) — bounded by VISIBLE length; sanitised on persist.
+    responsibilities: responsibilitiesFieldSchema.optional(),
   })
   .refine(
     (data) => {
