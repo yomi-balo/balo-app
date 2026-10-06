@@ -12,8 +12,6 @@ import {
   type StartProjectBriefParseResult,
 } from '@/lib/project-request/actions/enqueue-project-brief-parse';
 
-export type { StartProjectBriefParseResult };
-
 const inputSchema = z.object({ caseId: z.uuid() }).strict();
 
 const DENIED = "You don't have permission to draft a project brief from this case.";

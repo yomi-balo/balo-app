@@ -14,7 +14,10 @@ import {
   type StartProjectBriefParseResult,
 } from './enqueue-project-brief-parse';
 
-export type { StartProjectBriefParseResult };
+// ⚠ Re-export WITH a `from` clause. A bare `export type { X };` in a `'use server'` file is
+// compiled by Next into `registerServerReference(X, …)` against a binding that type erasure
+// removed — a ReferenceError at module load that takes down EVERY action on the page.
+export type { StartProjectBriefParseResult } from './enqueue-project-brief-parse';
 
 const startProjectBriefParseInputSchema = z.object({
   documents: z.array(documentRefSchema).min(1).max(MAX_DOCUMENTS),

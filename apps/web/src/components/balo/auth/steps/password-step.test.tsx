@@ -27,6 +27,11 @@ vi.mock('@/lib/stripe/setup-intent-return', () => ({
   forgetSetupIntent: (...args: unknown[]) => mockForgetSetupIntent(...args),
 }));
 
+const mockCaptureException = vi.fn();
+vi.mock('@sentry/nextjs', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+}));
+
 import { PasswordStep } from './password-step';
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -111,5 +116,27 @@ describe('PasswordStep — BAL-529 fix-round-1 F5', () => {
       active_mode: 'client',
       platform_role: 'user',
     });
+  });
+});
+
+describe('PasswordStep — a rejected sign-in action', () => {
+  it('reports the rejection and shows an error instead of silently resetting', async () => {
+    const thrown = new Error('An unexpected response was received from the server.');
+    mockSignInAction.mockRejectedValue(thrown);
+    const props = makeProps();
+
+    render(<PasswordStep {...props} />);
+    await submit();
+
+    expect(mockCaptureException).toHaveBeenCalledWith(thrown, {
+      tags: { auth_action: 'sign_in' },
+    });
+    expect(props.onError).toHaveBeenCalledWith('Something went wrong. Please try again.');
+    expect(track).toHaveBeenCalledWith(AUTH_EVENTS.LOGIN_FAILED, {
+      method: 'email',
+      error_message: 'Something went wrong. Please try again.',
+    });
+    expect(props.onSuccess).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /sign in/i })).toBeEnabled();
   });
 });

@@ -11,6 +11,7 @@ import { InputFloating } from '@/components/enhanced/input-floating';
 import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from '../auth-header';
+import { reportAuthActionFailure } from '../report-auth-action-failure';
 import { forgotPasswordAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS } from '@/lib/analytics';
 import { forgotPasswordSchema, type ForgotPasswordFormData } from '../schemas';
@@ -34,13 +35,17 @@ export function ForgotStep({ email, onBack }: Readonly<ForgotStepProps>): React.
 
   const onSubmit = async (data: ForgotPasswordFormData): Promise<void> => {
     setFormError(null);
-    const result = await forgotPasswordAction(data);
-    if (result.success) {
-      track(AUTH_EVENTS.PASSWORD_RESET_REQUESTED, {});
-      setSubmittedEmail(data.email);
-      setIsSuccess(true);
-    } else {
-      setFormError(result.error);
+    try {
+      const result = await forgotPasswordAction(data);
+      if (result.success) {
+        track(AUTH_EVENTS.PASSWORD_RESET_REQUESTED, {});
+        setSubmittedEmail(data.email);
+        setIsSuccess(true);
+      } else {
+        setFormError(result.error);
+      }
+    } catch (error) {
+      setFormError(reportAuthActionFailure(error, 'forgot_password'));
     }
   };
 

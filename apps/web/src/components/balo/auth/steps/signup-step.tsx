@@ -12,6 +12,7 @@ import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from '../auth-header';
 import { SocialAuthButtons } from '../social-auth-buttons';
 import { AuthDivider } from '../auth-divider';
+import { reportAuthActionFailure } from '../report-auth-action-failure';
 import { signUpAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 import { buildOnboardingUrl } from '@/lib/auth/onboarding-return-to';
@@ -79,6 +80,10 @@ export function SignupStep({
         });
         onError(result.error);
       }
+    } catch (error) {
+      const message = reportAuthActionFailure(error, 'sign_up');
+      track(AUTH_EVENTS.SIGNUP_FAILED, { method: 'email', error_message: message });
+      onError(message);
     } finally {
       setIsSubmitting(false);
     }

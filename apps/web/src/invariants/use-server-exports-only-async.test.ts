@@ -23,8 +23,9 @@ import { hasUseServerDirective } from './_source-scan';
  * finds both regardless of reachability, which is exactly the property the build lacks.
  *
  * WHAT IS STILL ALLOWED, deliberately:
- *   - `export type` / `export interface` — erased at compile time; the rule is about VALUE
- *     exports. Most action files in this repo export their input/result types this way.
+ *   - `export type X = …` / `export interface X` / `export type { X } from '…'` — erased at
+ *     compile time; the rule is about VALUE exports. Most action files in this repo export
+ *     their input/result types this way.
  *   - `export const fooAction = withAuth(async (…) => …)` and friends — the initializer
  *     resolves to an async function, which is what the rule asks for. Dozens of shipped
  *     actions do this.
@@ -37,6 +38,16 @@ import { hasUseServerDirective } from './_source-scan';
  * If this test fails: move the constant into a plain module that does NOT carry the
  * `'use server'` directive, and import it. For review copy that module is
  * `@/lib/reviews/messages`.
+ *
+ * ⚠⚠ IT ALSO FLAGS A TYPE-ONLY EXPORT LIST WITH NO `from` CLAUSE — `export type { X };` or
+ * `export { type X };` re-exporting a type the file imported. Next's server-action transform
+ * reads that list as action exports and emits `registerServerReference(X, …)` against a
+ * binding type erasure already removed. This is WORSE than the literal case: `next build`,
+ * `tsc` and every unit test pass, and the module throws `ReferenceError: X is not defined` at
+ * LOAD — failing every Server Action bundled for the page, not just that file's. BAL-589
+ * shipped it in the two brief-parse start actions and took email sign-up / sign-in down on the
+ * home page. The `from` form compiles to nothing (checked against the built server chunks), so
+ * the fix is `export type { X } from './where-it-lives';` — or no re-export at all.
  */
 
 /**
@@ -129,6 +140,47 @@ function isWrappedLiteralValueExport(line: string, next: string | undefined): bo
   );
 }
 
+/**
+ * The export-list statement opening at `lines[index]`, joined onto one line — prettier wraps
+ * a long list one specifier per line, and the `from` clause sits after the closing brace.
+ * `null` when the line does not open an export list.
+ */
+function readExportList(lines: readonly string[], index: number): string | null {
+  const first = lines[index]?.trim();
+  if (first === undefined) return null;
+  if (!first.startsWith('export type {') && !first.startsWith('export {')) return null;
+
+  let statement = first;
+  for (let next = index + 1; !statement.includes('}') && next < lines.length; next++) {
+    statement += ` ${lines[next]?.trim() ?? ''}`;
+  }
+  return statement;
+}
+
+/**
+ * `export type { X };` / `export { type X };` with NO `from` clause — the shape Next compiles
+ * into a server reference to an erased binding. `export { fooAction };` (a local async
+ * function, no `type`) is a legitimate action export and is not flagged.
+ */
+function isLocalTypeExportList(statement: string): boolean {
+  const open = statement.indexOf('{');
+  const close = statement.indexOf('}');
+  if (open === -1 || close === -1) return false;
+  if (
+    statement
+      .slice(close + 1)
+      .trim()
+      .startsWith('from ')
+  )
+    return false;
+
+  if (statement.startsWith('export type {')) return true;
+  return statement
+    .slice(open + 1, close)
+    .split(',')
+    .some((specifier) => specifier.trim().startsWith('type '));
+}
+
 interface Violation {
   readonly file: string;
   readonly line: number;
@@ -143,11 +195,16 @@ function findViolations(): Violation[] {
 
     const lines = stripCommentLines(source);
     lines.forEach((line, index) => {
-      if (isLiteralValueExport(line) || isWrappedLiteralValueExport(line, lines[index + 1])) {
+      const exportList = readExportList(lines, index);
+      if (
+        isLiteralValueExport(line) ||
+        isWrappedLiteralValueExport(line, lines[index + 1]) ||
+        (exportList !== null && isLocalTypeExportList(exportList))
+      ) {
         violations.push({
           file: path.relative(SRC_DIR, file),
           line: index + 1,
-          text: line.trim(),
+          text: exportList ?? line.trim(),
         });
       }
     });
@@ -166,12 +223,30 @@ describe("'use server' modules export only async functions", () => {
     expect(serverActionFiles.length).toBeGreaterThan(50);
   });
 
-  it('no `use server` module exports a literal value', () => {
+  it('no `use server` module exports a literal value or a from-less type export list', () => {
     const violations = findViolations();
     const rendered = violations.map((v) => `${v.file}:${v.line} → ${v.text}`).join('\n');
     expect(rendered, `\`'use server'\` files may export only async functions:\n${rendered}`).toBe(
       ''
     );
+  });
+
+  it('detects the BAL-589 from-less type export list, inline and prettier-wrapped (non-vacuity)', () => {
+    const read = (source: string): string => readExportList(source.split('\n'), 0) ?? '';
+
+    expect(isLocalTypeExportList(read('export type { StartProjectBriefParseResult };'))).toBe(true);
+    expect(isLocalTypeExportList(read('export { type StartProjectBriefParseResult };'))).toBe(true);
+    expect(isLocalTypeExportList(read('export type {\n  ResultA,\n  ResultB,\n};'))).toBe(true);
+
+    // …and does NOT flag the shapes that legitimately ship today.
+    expect(isLocalTypeExportList(read("export type { SubmitEoiResult } from './core';"))).toBe(
+      false
+    );
+    expect(
+      isLocalTypeExportList(read("export type {\n  AcceptProposalResult,\n} from './core';"))
+    ).toBe(false);
+    expect(isLocalTypeExportList(read('export { saveDraftAction };'))).toBe(false);
+    expect(readExportList(['export type SaveResult = { ok: true };'], 0)).toBeNull();
   });
 
   it('detects the PR #191 shape, both inline and prettier-wrapped (non-vacuity)', () => {

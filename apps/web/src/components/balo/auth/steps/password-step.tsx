@@ -9,6 +9,7 @@ import { Form, FormField, FormItem, FormControl, FormMessage } from '@/component
 import { InputPassword } from '@/components/enhanced/input-password';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from '../auth-header';
+import { reportAuthActionFailure } from '../report-auth-action-failure';
 import { signInAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 import { forgetSetupIntent } from '@/lib/stripe/setup-intent-return';
@@ -86,6 +87,10 @@ export function PasswordStep({
         });
         onError(result.error);
       }
+    } catch (error) {
+      const message = reportAuthActionFailure(error, 'sign_in');
+      track(AUTH_EVENTS.LOGIN_FAILED, { method: 'email', error_message: message });
+      onError(message);
     } finally {
       setIsSubmitting(false);
     }
