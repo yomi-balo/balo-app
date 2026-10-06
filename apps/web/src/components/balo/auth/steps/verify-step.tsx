@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from '../auth-header';
 import { VerificationCodeInput } from '../verification-code-input';
+import { reportAuthActionFailure } from '../report-auth-action-failure';
 import { verifyEmailAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 import { buildOnboardingUrl } from '@/lib/auth/onboarding-return-to';
@@ -68,6 +69,10 @@ export function VerifyStep({
         onError(result.error);
         setCode('');
       }
+    } catch (error) {
+      track(AUTH_EVENTS.VERIFICATION_CODE_SUBMITTED, { success: false });
+      onError(reportAuthActionFailure(error, 'verify_email'));
+      setCode('');
     } finally {
       setIsSubmitting(false);
     }
