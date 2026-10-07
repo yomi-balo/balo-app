@@ -5,6 +5,7 @@ import { assertNoShowFloorOverrideUnsetInProduction } from './config/billing-flo
 import { assertAppUrlSetInProduction } from './lib/app-url.js';
 import { readCalendarSmtpConfig } from './notifications/channels/calendar-smtp-config.js';
 import { isDailyApiKeyConfigured } from './services/daily/client.js';
+import { alertMissingConfigAtBoot } from './lib/sentry-alert.js';
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -36,23 +37,19 @@ try {
 
   try {
     await startWorkers(app.log);
-  } catch (workerErr) {
-    app.log.error(workerErr, 'BullMQ workers failed to start (server continues)');
+  } catch (error) {
+    app.log.error(error, 'BullMQ workers failed to start (server continues)');
   }
 
   // BAL-581 — the Daily REST key. ⚠ NEVER A THROW (lines above reserve throws for MONEY config):
   // crash-looping Railway over a vendor secret takes every route down to protect one integration.
-  // Production: `log.error` + an explicit `Sentry.captureMessage` — a Pino line never reaches Sentry
-  // on its own (`Sentry.init` has no pino integration). Elsewhere: a warning (dev often runs keyless).
+  // Routed through `alertMissingConfigAtBoot` (BAL-583) — the same production-error-plus-Sentry /
+  // elsewhere-warn posture, one definition instead of a copy per vendor secret.
   if (!isDailyApiKeyConfigured()) {
-    const message =
-      'DAILY_API_KEY is not set — every Daily call room provision will fail: bookings commit with no room, nobody can join them, and the venue repair job skips every pass until it is set';
-    if (process.env.NODE_ENV === 'production') {
-      app.log.error(message);
-      Sentry.captureMessage(message, { level: 'error' });
-    } else {
-      app.log.warn(message);
-    }
+    alertMissingConfigAtBoot(
+      app.log,
+      'DAILY_API_KEY is not set — every Daily call room provision will fail: bookings commit with no room, nobody can join them, and the venue repair job skips every pass until it is set'
+    );
   }
 
   // BAL-134 — ⚠ A WARNING, NOT AN ASSERTION, AND BOTH HALVES OF THAT ARE DELIBERATE.
@@ -91,23 +88,22 @@ try {
     }
   }
 
-  // BAL-134 — THE SYMMETRIC WARNING, and it is arguably the more urgent of the two. Unset,
-  // `POST /webhooks/daily` answers `503` to EVERY delivery, so presence degrades from
-  // sub-second webhooks to ≤60s sweep reconciliation on a MONEY input — and the only party who
-  // can see it happening is Daily, whose retries eventually disable the webhook altogether.
-  // Nothing on Balo's side logs a thing, because nothing arrives.
-  //
-  // ⚠ A WARNING, NOT AN ASSERTION, for the same reason as above: throwing would crash-loop
-  // Railway on a missing vendor secret and take down every route to protect one integration.
+  // BAL-583 — mirrors BAL-581's posture exactly, through the same helper: NEVER a throw
+  // (crash-looping Railway over a vendor secret takes every route down to protect one
+  // integration); production gets `log.error` + `Sentry.captureMessage`, everywhere else a
+  // `warn`. Unset, `POST /webhooks/daily` answers `503` to EVERY delivery — including Daily's
+  // own signed verification ping — so the webhook subscription can never be created or
+  // re-activated, and presence degrades to ≤60s sweep-only reconciliation.
   if (!process.env.DAILY_WEBHOOK_SECRET) {
-    app.log.warn(
-      'DAILY_WEBHOOK_SECRET is not set — POST /webhooks/daily will 503 EVERY delivery, silently degrading meeting presence to sweep-only reconciliation until Daily disables the webhook'
+    alertMissingConfigAtBoot(
+      app.log,
+      "DAILY_WEBHOOK_SECRET is not set — POST /webhooks/daily answers 503 to every delivery and to Daily's verification ping, so the Daily webhook subscription cannot be created or re-activated and meeting presence falls back to sweep-only reconciliation"
     );
   }
 
-  // BAL-473 — the same posture as the Daily secret above: a WARNING, never a throw (throwing
-  // would crash-loop Railway on a missing vendor secret and take down every route to protect
-  // one integration).
+  // BAL-473 — never a throw (throwing would crash-loop Railway on a missing vendor secret and
+  // take down every route to protect one integration). Unlike the Daily secrets above, which
+  // alert in production, this one stays a warn-only boot check in every environment.
   if (!process.env.MUX_WEBHOOK_SECRET) {
     app.log.warn(
       'MUX_WEBHOOK_SECRET is not set — POST /webhooks/mux will 503 EVERY delivery, so no meeting recording will ever reach `ready` and no Daily source will ever be cleaned up'
@@ -122,8 +118,8 @@ try {
     try {
       const { shutdownServerAnalytics } = await import('@balo/analytics/server');
       await shutdownServerAnalytics();
-    } catch (err) {
-      app.log.error(err, 'Failed to flush PostHog events on shutdown');
+    } catch (error) {
+      app.log.error(error, 'Failed to flush PostHog events on shutdown');
     }
     await app.close();
     process.exit(0);
@@ -131,7 +127,7 @@ try {
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
-} catch (err) {
-  app.log.error(err);
+} catch (error) {
+  app.log.error(error);
   process.exit(1);
 }

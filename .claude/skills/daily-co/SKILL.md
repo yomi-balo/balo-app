@@ -154,9 +154,36 @@ Verified against `docs.daily.co/reference/rest-api/webhooks` (fetched **2026-08-
 whole scheme lives in one module — `apps/api/src/services/daily/webhook-signature.ts` — so a
 vendor correction costs one file plus its test.
 
-**Registration is a one-off per-environment OPS step, not application code.** `POST /v1/webhooks`
-with the delivery URL; the response's **`hmac` field is the signing secret** and is what goes into
-`DAILY_WEBHOOK_SECRET`. Nothing at runtime creates or rotates a webhook.
+**Registration is a one-off per-environment OPS step, not application code.** Nothing at runtime
+creates or rotates a webhook.
+
+**Registration runbook (BAL-583):**
+
+1. Generate our own secret: `openssl rand -base64 32`.
+2. Set `DAILY_WEBHOOK_SECRET` on the target environment, deploy, and confirm the boot error is
+   gone.
+3. `POST /v1/webhooks` with `{ url, eventTypes: [...HANDLED_DAILY_EVENT_TYPES], hmac: <same secret>, retryType: "exponential" }`.
+   We supply our own `hmac` — the secret must already be set from step 2, because an endpoint
+   can't verify a ping signed with a secret it hasn't been given yet. `retryType` is **required**;
+   never rely on the default (`circuit-breaker`).
+4. `GET /v1/webhooks` and check `state: ACTIVE`, `retryType: exponential`, and the full
+   `eventTypes` list.
+
+An **update** (e.g. the `eventTypes` change below) or a **re-activate** re-sends the same
+`{"test":"test"}` ping, signed with the webhook's current `hmac` (the one passed in that request,
+if any) — so the deployed `DAILY_WEBHOOK_SECRET` must match it. A `FAILED` webhook is re-activated
+with `POST /v1/webhooks/:uuid`. The endpoint only returns `200` to a **verified** ping — see
+**Verification** below.
+
+⚠ Zero-gap secret rotation (dual-secret overlap, so an update signed with a new `hmac` still
+verifies against the old one) is **not supported** — note only, out of scope here.
+
+Daily's delivery contract is set by the subscription's `retryType`, and Daily treats every
+non-200 the same — the status code never changes what it does. `circuit-breaker` (Daily's
+default): each message is tried once, no per-message retry; 3 consecutive failures (reset by any
+success) flip the webhook to `FAILED` and Daily stops sending until it is re-activated.
+`exponential` (what Balo registers, per the runbook above): a failed message is retried at most 5
+times with backoff up to 15 min, then deleted; it never circuit-breaks.
 
 **Verification:**
 
@@ -179,7 +206,8 @@ with the delivery URL; the response's **`hmac` field is the signing secret** and
   delivery cannot be replayed forever. The timestamp being _inside_ the signed string is what
   binds it to the body.
 - The failure reason is a **`log.warn` field**; the wire gets `400` and nothing else. A missing
-  secret is a **`503`** (an outage), never a `400` — a `400` tells Daily to stop retrying.
+  secret is a **`503`** (an outage, Sentry-alerted once per process) — never a `400`: a `400` is
+  for a body that can never verify, not for our own misconfiguration.
 
 **Events Balo consumes:** `participant.joined` / `participant.left` (the presence writer) and
 `meeting.ended` (closes every open interval for the room); the three recording arms
@@ -189,7 +217,8 @@ the two batch arms `batch-processor.job-finished` / `batch-processor.error` (see
 
 ⚠ The subscription enumerates its `eventTypes` explicitly (`POST /v1/webhooks`), so **a new arm
 in `HANDLED_DAILY_EVENT_TYPES` does nothing until the per-environment subscription is
-updated** — a silent, all-green failure.
+updated** — a silent, all-green failure. That update itself triggers the `{"test":"test"}`
+verification ping (see the registration runbook above).
 
 **Idempotency:** the event's **`id` attribute is the key**, persisted in `daily_webhook_events`
 (append-only, unique on `event_id`, mirroring `stripe_webhook_events`). `processed_at` is stamped

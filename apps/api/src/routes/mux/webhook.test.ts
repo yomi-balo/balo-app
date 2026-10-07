@@ -15,7 +15,9 @@ const {
   mockTrackServer,
   mockWarn,
   mockErrorLog,
+  mockCaptureMessage,
 } = vi.hoisted(() => ({
+  mockCaptureMessage: vi.fn(),
   mockCheckRateLimit: vi.fn(),
   mockFindByEventId: vi.fn(),
   mockInsertReceived: vi.fn(),
@@ -67,6 +69,9 @@ vi.mock('../../lib/rate-limiter.js', async (importOriginal) => ({
   checkRateLimit: mockCheckRateLimit,
 }));
 vi.mock('../../lib/redis.js', () => ({ getRedis: () => ({}) }));
+// BAL-583 — Sentry wiring on the shared rate-limit-unavailable branch (`lib/webhook-request.js`)
+// is NEW; the real SDK must never run in a unit test.
+vi.mock('@sentry/node', () => ({ captureMessage: mockCaptureMessage }));
 // ⚠ `services/mux/webhook-signature.js` and `webhook-events.js` are DELIBERATELY NOT MOCKED —
 // the REAL verifier is what the 400 rows below mean, and the REAL Zod boundary is what makes
 // the unknown-type row meaningful.

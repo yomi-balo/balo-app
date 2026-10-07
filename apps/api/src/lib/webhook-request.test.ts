@@ -1,15 +1,26 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockCheckRateLimit } = vi.hoisted(() => ({ mockCheckRateLimit: vi.fn() }));
+const { mockCheckRateLimit, mockCaptureMessage } = vi.hoisted(() => ({
+  mockCheckRateLimit: vi.fn(),
+  mockCaptureMessage: vi.fn(),
+}));
 
 vi.mock('./rate-limiter.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./rate-limiter.js')>()),
   checkRateLimit: mockCheckRateLimit,
 }));
 vi.mock('./redis.js', () => ({ getRedis: () => ({}) }));
+// BAL-583 — Sentry wiring is NEW on this path; the real SDK must never run in a unit test.
+vi.mock('@sentry/node', () => ({ captureMessage: mockCaptureMessage }));
 
 import { decodeJsonBody, enforceWebhookIpRateLimit, enqueueBestEffort } from './webhook-request.js';
 import type { RateLimitConfig } from './rate-limiter.js';
+
+const MUX_CONFIG: RateLimitConfig = {
+  keyPrefix: 'ratelimit:mux-webhook:ip',
+  maxRequests: 2_000,
+  windowSeconds: 3600,
+};
 
 const CONFIG: RateLimitConfig = {
   keyPrefix: 'ratelimit:test-webhook:ip',
@@ -95,6 +106,85 @@ describe('enforceWebhookIpRateLimit', () => {
     expect(reply.code).toHaveBeenCalledWith(503);
     expect(reply.send).toHaveBeenCalledWith({ error: 'rate_limit_unavailable' });
     expect(log.error).toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-583 — this helper is VENDOR-NEUTRAL and shared by both webhook routes, so dedup is keyed
+ * per `config.keyPrefix` — a Mux capture must never suppress a Daily one. Each
+ * `it` `vi.resetModules()`s and dynamically re-imports this module so the dedup `Set` inside
+ * `lib/sentry-alert.js` (unmocked, no reset export by design) starts fresh per test.
+ */
+describe('enforceWebhookIpRateLimit — once-per-process Sentry (BAL-583)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+  });
+
+  it('captures ONCE across repeated failures on the SAME keyPrefix', async () => {
+    mockCheckRateLimit.mockRejectedValue(new Error('ECONNREFUSED'));
+    const { enforceWebhookIpRateLimit: freshEnforce } = await import('./webhook-request.js');
+    const reply = fakeReply();
+    const log = fakeLog();
+
+    const firstResult = await freshEnforce(
+      CONFIG,
+      '1.2.3.4',
+      reply as unknown as Parameters<typeof freshEnforce>[2],
+      log as unknown as Parameters<typeof freshEnforce>[3]
+    );
+    const secondResult = await freshEnforce(
+      CONFIG,
+      '1.2.3.4',
+      reply as unknown as Parameters<typeof freshEnforce>[2],
+      log as unknown as Parameters<typeof freshEnforce>[3]
+    );
+
+    expect(firstResult).toBe(true);
+    expect(secondResult).toBe(true);
+    expect(reply.code).toHaveBeenNthCalledWith(1, 503);
+    expect(reply.send).toHaveBeenNthCalledWith(1, { error: 'rate_limit_unavailable' });
+    expect(reply.code).toHaveBeenNthCalledWith(2, 503);
+    expect(reply.send).toHaveBeenNthCalledWith(2, { error: 'rate_limit_unavailable' });
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalledWith(
+      { error: 'ECONNREFUSED' },
+      "Webhook rate limit unavailable — failing CLOSED with 503; whether the delivery is redelivered depends on the vendor's retry policy"
+    );
+  });
+
+  it('a DIFFERENT keyPrefix (Mux) captures AGAIN — one vendor cannot suppress another', async () => {
+    mockCheckRateLimit.mockRejectedValue(new Error('ECONNREFUSED'));
+    const { enforceWebhookIpRateLimit: freshEnforce } = await import('./webhook-request.js');
+    const reply = fakeReply();
+    const log = fakeLog();
+
+    await freshEnforce(
+      CONFIG,
+      '1.2.3.4',
+      reply as unknown as Parameters<typeof freshEnforce>[2],
+      log as unknown as Parameters<typeof freshEnforce>[3]
+    );
+    await freshEnforce(
+      MUX_CONFIG,
+      '1.2.3.4',
+      reply as unknown as Parameters<typeof freshEnforce>[2],
+      log as unknown as Parameters<typeof freshEnforce>[3]
+    );
+
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(2);
+    const calls = mockCaptureMessage.mock.calls as [string, unknown][];
+    const [dailyCall] = calls;
+    const [muxCall] = calls.slice(1);
+    if (dailyCall === undefined || muxCall === undefined) {
+      throw new Error('expected two captures');
+    }
+    const [dailyMessage] = dailyCall;
+    const [muxMessage] = muxCall;
+    expect(dailyMessage).toContain(CONFIG.keyPrefix);
+    expect(dailyMessage).not.toContain('Daily');
+    expect(muxMessage).toContain(MUX_CONFIG.keyPrefix);
+    expect(muxMessage).not.toContain('Daily');
   });
 });
 

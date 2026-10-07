@@ -7,8 +7,10 @@
  *
  *   1. `DAILY_WEBHOOK_SECRET` unset → `log.error` + **`503`**. ⚠ NEVER process an unverified
  *      body. A missing secret is an OUTAGE (our configuration), not a bad request.
- *   2. Signature fails → `log.warn` (the REASON as a field, NEVER the body) + **`400`**. A
- *      `400` tells Daily not to retry a body that will never verify.
+ *   2. Signature fails → `log.warn` (the REASON as a field, NEVER the body) + **`400`** — a
+ *      signature that can never verify is refused outright, not a retry signal.
+ *   2b. A verified `{"test":"test"}` body is Daily's signed verification ping (BAL-583) — ack
+ *       `200` immediately, before the Zod envelope boundary; it is not an event.
  *   3. Parse with the Zod boundary. Unknown/unhandled type → record the marker, `200`.
  *   4. Fast replay short-circuit on a fully-processed event id — no transaction, no effect.
  *   5. ONE `db.transaction`: `insertReceived` → apply the effect → `markProcessed`.
@@ -43,6 +45,15 @@
  * `ready-to-download` ROOM FALLBACK is additionally gated on the payload's start instant, so a
  * stuck-slot reap's fresh segment cannot be mistaken for an orphaned earlier recording of the
  * same room (see `resolveRecordingByRoomFallback`).
+ *
+ * ── ⚠ THE DELIVERY CONTRACT (BAL-583) — THE CANONICAL STATEMENT; EVERYTHING ELSE POINTS HERE ──
+ *
+ * Daily's delivery contract is set by the subscription's `retryType`, and Daily treats every
+ * non-200 the same — the status code never changes what it does. `circuit-breaker` (Daily's
+ * default): each message is tried once, no per-message retry; 3 consecutive failures (reset by
+ * any success) flip the webhook to `FAILED` and Daily stops sending until it is re-activated.
+ * `exponential` (what Balo registers — see the runbook): a failed message is retried at most 5
+ * times with backoff up to 15 min, then deleted; it never circuit-breaks.
  */
 import {
   db,
@@ -67,7 +78,9 @@ import {
 } from '../../lib/webhook-request.js';
 import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
 import { type RateLimitConfig } from '../../lib/rate-limiter.js';
+import { captureMessageOnce } from '../../lib/sentry-alert.js';
 import {
+  isDailyVerificationPing,
   parseDailyWebhookEvent,
   type DailyWebhookEvent,
 } from '../../services/daily/webhook-events.js';
@@ -450,9 +463,11 @@ interface ApplyEffectResult {
  * `assertFiniteInstant` and THROWS — and `parseDailyWebhookEvent` deliberately returns an
  * INVALID DATE (not `null`) for a present-but-unparseable `end_ts`, so this is reachable from a
  * body Daily will happily keep sending. A throw here escapes `db.transaction`, ROLLS BACK the
- * `daily_webhook_events` marker and 500s, so Daily retries a permanently-unwritable body
- * forever and eventually DISABLES THE WEBHOOK — silently degrading presence, a money input, to
- * ≤60s sweep reconciliation. So: log it, write nothing, let the marker commit, and ack.
+ * `daily_webhook_events` marker and 500s on a body that will NEVER become writable: under
+ * `exponential` (what Balo registers) that gets retried ≤5 times over ~15 min then dropped;
+ * under `circuit-breaker` it counts toward the 3-consecutive-failure threshold that flips the
+ * webhook to `FAILED`. Either way, presence — a money input — degrades to ≤60s sweep
+ * reconciliation. So: log it, write nothing, let the marker commit, and ack.
  *
  * ⚠ BAL-473's `recording.started` arm carries the same hazard for `startedAt` and is guarded
  * the same way, for the same reason.
@@ -671,10 +686,12 @@ async function applyRecordingKindEffect(
  * thousand concurrent consultations from a single Daily IP, while still capping a flood at
  * ~5.5 requests/second.
  *
- * ⚠ FAILS CLOSED (`503`), AND THAT IS SAFE **ONLY BECAUSE DAILY RETRIES**. A `503` is the same
- * answer an unset secret gets and it means "not now, come back" — the delivery is not lost, and
- * the `daily_webhook_events` marker makes the retry idempotent. Failing OPEN would re-expose
- * the hashing cost during precisely the outage an attacker would pick.
+ * ⚠ FAILS CLOSED (`503`). Daily treats every non-200 alike: under `exponential` a `503` is just
+ * another non-200, retried ≤5 times over ~15 min then dropped; under `circuit-breaker` it
+ * counts toward the 3-consecutive-failure threshold that flips the webhook to `FAILED`. A `503`
+ * is right for a short blip, but a longer outage loses deliveries and only the sweep fallback
+ * covers them. Failing OPEN would re-expose the hashing cost during precisely the outage an
+ * attacker would pick.
  */
 const DAILY_WEBHOOK_IP_RATE_LIMIT: RateLimitConfig = {
   keyPrefix: 'ratelimit:daily-webhook:ip',
@@ -959,10 +976,15 @@ export async function dailyWebhookRoutes(fastify: FastifyInstance): Promise<void
 
     const secret = process.env.DAILY_WEBHOOK_SECRET;
     if (!secret) {
-      // ⚠ AN OUTAGE, NOT A BAD REQUEST. Answering 400 here would tell Daily to stop retrying
-      // deliveries that are perfectly valid and that we will be able to process the moment the
-      // variable is set.
+      // ⚠ AN OUTAGE OF OURS, NOT A BAD REQUEST — `503` is for our own ops/Sentry signal; Daily
+      // treats it like any other non-200 under its registered retry policy (see the module
+      // docblock). A `400` would be the wrong signal: it says the body itself is bad, not that
+      // we are unable to process it right now.
       log.error({}, 'DAILY_WEBHOOK_SECRET is not set — refusing to process an unverified body');
+      captureMessageOnce(
+        'daily-webhook:not-configured',
+        "DAILY_WEBHOOK_SECRET is not set — POST /webhooks/daily is answering 503 to every delivery and to Daily's verification ping, so the subscription cannot be created or re-activated"
+      );
       return reply.code(503).send({ error: 'webhook_not_configured' });
     }
 
@@ -980,11 +1002,22 @@ export async function dailyWebhookRoutes(fastify: FastifyInstance): Promise<void
       return reply.code(400).send({ error: 'invalid signature' });
     }
 
+    const decodedBody = decodeJsonBody(rawBody);
+    // BAL-583 — Daily's signed verification ping (`{"test":"test"}`), sent on webhook
+    // create/update/re-activate. Ack before the Zod envelope boundary: it is not an event and
+    // carries no `id` for the marker table to key on.
+    if (isDailyVerificationPing(decodedBody)) {
+      log.info({}, 'Daily webhook verification ping acknowledged');
+      return reply.code(200).send({ received: true });
+    }
+
     const receivedAt = new Date();
     // ⚠ THE JSON PARSE IS GUARDED EVEN THOUGH THE SIGNATURE ALREADY PASSED. A verified body is
-    // proof of ORIGIN, not of SHAPE — and an uncaught `SyntaxError` here would reach the app
-    // error handler as a `500`, which tells Daily to RETRY a body that can never parse.
-    const parsed = parseDailyWebhookEvent(decodeJsonBody(rawBody), receivedAt);
+    // proof of ORIGIN, not of SHAPE. Daily treats every non-200 alike — under `exponential` a
+    // `500` here buys nothing on a body that will never parse; under `circuit-breaker` it only
+    // burns toward the FAILED threshold — so a deliberate `400 invalid_payload` is the honest
+    // answer, not a `500`.
+    const parsed = parseDailyWebhookEvent(decodedBody, receivedAt);
     if (!parsed.ok) {
       log.warn({ reason: parsed.reason }, 'Daily webhook payload could not be parsed');
       return reply.code(400).send({ error: 'invalid_payload' });

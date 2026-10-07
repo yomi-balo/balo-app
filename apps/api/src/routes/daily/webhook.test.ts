@@ -30,6 +30,7 @@ const {
   mockEnqueueTranscriptSubmit,
   mockEnqueueTranscriptIngest,
   mockEnqueueRecordingCleanupSource,
+  mockCaptureMessage,
 } = vi.hoisted(() => ({
   mockCheckRateLimit: vi.fn(),
   mockFindByEventId: vi.fn(),
@@ -60,8 +61,11 @@ const {
   mockEnqueueTranscriptSubmit: vi.fn(),
   mockEnqueueTranscriptIngest: vi.fn(),
   mockEnqueueRecordingCleanupSource: vi.fn(),
+  mockCaptureMessage: vi.fn(),
 }));
 
+// BAL-583 — Sentry wiring is NEW on this path; the real SDK must never run in a unit test.
+vi.mock('@sentry/node', () => ({ captureMessage: mockCaptureMessage }));
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({
     debug: vi.fn(),
@@ -184,28 +188,40 @@ function signedHeaders(payload: string): Record<string, string> {
   };
 }
 
+/**
+ * BAL-583 — extracted so the once-per-process Sentry describe (which needs a FRESH module per
+ * `it`, via `vi.resetModules()` + a dynamic import) can build its own app from a freshly
+ * imported `dailyWebhookRoutes` without duplicating this registration.
+ */
+async function buildTestApp(
+  routes: (fastify: FastifyInstance) => Promise<void>
+): Promise<FastifyInstance> {
+  const app = Fastify({ logger: false });
+  // ⚠ THE PRODUCTION ERROR HANDLER, RESTATED — a bare Fastify instance echoes `error.message`
+  // into the body, which would assert a leak production does not have.
+  app.setErrorHandler((_error, _request, reply) => {
+    reply.status(500).send({ error: 'Internal Server Error' });
+  });
+  // ⚠ THE SAME SCOPED RAW-BODY REGISTRATION THE PLUGIN USES. Without it `request.rawBody` is
+  // undefined and every row below would pass for the wrong reason.
+  await app.register(rawBody, {
+    field: 'rawBody',
+    global: false,
+    encoding: false,
+    runFirst: true,
+    routes: [URL],
+  });
+  await app.register(routes);
+  await app.ready();
+  return app;
+}
+
 describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
   let app: FastifyInstance;
   const originalSecret = process.env.DAILY_WEBHOOK_SECRET;
 
   beforeAll(async () => {
-    app = Fastify({ logger: false });
-    // ⚠ THE PRODUCTION ERROR HANDLER, RESTATED — a bare Fastify instance echoes `error.message`
-    // into the body, which would assert a leak production does not have.
-    app.setErrorHandler((_error, _request, reply) => {
-      reply.status(500).send({ error: 'Internal Server Error' });
-    });
-    // ⚠ THE SAME SCOPED RAW-BODY REGISTRATION THE PLUGIN USES. Without it `request.rawBody` is
-    // undefined and every row below would pass for the wrong reason.
-    await app.register(rawBody, {
-      field: 'rawBody',
-      global: false,
-      encoding: false,
-      runFirst: true,
-      routes: [URL],
-    });
-    await app.register(dailyWebhookRoutes);
-    await app.ready();
+    app = await buildTestApp(dailyWebhookRoutes);
   });
 
   afterAll(async () => {
@@ -260,9 +276,9 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
   // ── CONFIGURATION AND SIGNATURE ─────────────────────────────────────────────────────────
 
   /**
-   * ⚠ A MISSING SECRET IS AN OUTAGE (OURS), NOT A BAD REQUEST. A `400` would tell Daily to stop
-   * retrying deliveries that are perfectly valid and that we will process the moment the
-   * variable is set.
+   * ⚠ A MISSING SECRET IS AN OUTAGE (OURS), NOT A BAD REQUEST — `503` is for our own ops/Sentry
+   * signal. A `400` would say the body itself is bad, which is false; we will process it the
+   * moment the variable is set.
    */
   it('⚠ 503 when DAILY_WEBHOOK_SECRET is unset — and NOTHING is processed', async () => {
     delete process.env.DAILY_WEBHOOK_SECRET;
@@ -275,7 +291,7 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     expect(mockErrorLog).toHaveBeenCalled();
   });
 
-  it('400 on a bad signature — Daily must not retry a body that will never verify', async () => {
+  it('400 on a bad signature — a body that can never verify is refused', async () => {
     const payload = body();
 
     const res = await call({
@@ -372,9 +388,11 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
    * `parseDailyWebhookEvent` deliberately returns an INVALID DATE (not `null`) for a
    * present-but-unparseable timestamp, so a body Daily will happily keep sending reaches
    * `closeAllOpen` → `assertFiniteInstant` → THROW. That throw escapes `db.transaction`, ROLLS
-   * BACK the `daily_webhook_events` marker and 500s — so Daily retries a permanently-unwritable
-   * body forever and eventually DISABLES THE WEBHOOK, silently degrading presence (a money
-   * input) to ≤60s sweep reconciliation. The join/leave arms were already safe; this one was not.
+   * BACK the `daily_webhook_events` marker and 500s on a body that will NEVER become writable:
+   * under `exponential` (what Balo registers) that's retried ≤5 times over ~15 min then
+   * dropped; under `circuit-breaker` it counts toward the 3-consecutive-failure threshold that
+   * flips the webhook to `FAILED`. Either way presence (a money input) degrades to ≤60s sweep
+   * reconciliation. The join/leave arms were already safe; this one was not.
    */
   it('⚠⚠ S5 — a `meeting.ended` with an unparseable end_ts acks 200 and commits its marker', async () => {
     const payload = body({
@@ -1312,9 +1330,10 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
   // ── ACK-AND-FORGET PATHS ────────────────────────────────────────────────────────────────
 
   /**
-   * ⚠ AN UNKNOWN TYPE MUST NEVER 500. Daily fires types Balo does not handle, and a `500` would
-   * flood the retry queue and eventually get the WEBHOOK DISABLED — taking the three types we
-   * DO care about down with it.
+   * ⚠ AN UNKNOWN TYPE MUST NEVER 500. Daily treats every non-200 alike: under `exponential`
+   * (what Balo registers) a `500` would be retried ≤5 times over ~15 min then dropped; under
+   * `circuit-breaker` it counts toward the 3-consecutive-failure threshold that flips the
+   * webhook to `FAILED` — either way, the types we DO care about go down with it.
    */
   it('⚠ an UNKNOWN event type records its marker and acks 200 with no effect', async () => {
     const payload = body({ type: 'room.created', id: 'evt_room' });
@@ -1474,8 +1493,10 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
   });
 
   /**
-   * ⚠ FAILS CLOSED, AND THAT IS SAFE **ONLY BECAUSE DAILY RETRIES**. A `503` keeps the delivery
-   * in the vendor's queue, and the marker table makes the retry idempotent.
+   * ⚠ FAILS CLOSED. Daily treats every non-200 alike: under `exponential` (what we register) it
+   * retries ≤5× over ~15 min then drops the message; under `circuit-breaker` it never retries
+   * and 3 consecutive failures flip the webhook to FAILED. A `503` is right for a short blip,
+   * but a longer outage loses deliveries and only the sweep fallback covers them.
    */
   it('⚠ 503 when the limiter is unavailable — the delivery is deferred, not processed unmetered', async () => {
     mockCheckRateLimit.mockRejectedValue(new Error('redis unreachable'));
@@ -1486,5 +1507,227 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: 'rate_limit_unavailable' });
     expect(mockInsertReceived).not.toHaveBeenCalled();
+  });
+
+  // ── BAL-583 — THE VERIFICATION PING ─────────────────────────────────────────────────────
+  describe('verification ping (BAL-583)', () => {
+    function pingBody(overrides: Record<string, unknown> = {}): string {
+      return JSON.stringify({ test: 'test', ...overrides });
+    }
+
+    it('signed ping → 200 {received:true}, with NO writes, reads or enqueues', async () => {
+      const payload = pingBody();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ received: true });
+      expect(mockFindByEventId).not.toHaveBeenCalled();
+      expect(mockInsertReceived).not.toHaveBeenCalled();
+      expect(mockMarkProcessed).not.toHaveBeenCalled();
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockResolvePresenceEffect).not.toHaveBeenCalled();
+      expect(mockFindByRoomName).not.toHaveBeenCalled();
+      expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
+      expect(mockEnqueueRecordingIngest).not.toHaveBeenCalled();
+      expect(mockEnqueueTranscriptSubmit).not.toHaveBeenCalled();
+      expect(mockEnqueueTranscriptIngest).not.toHaveBeenCalled();
+      expect(mockEnqueueRecordingCleanupSource).not.toHaveBeenCalled();
+      expect(mockCheckRateLimit).toHaveBeenCalledTimes(1);
+      expect(mockInfoLog).toHaveBeenCalledTimes(1);
+      expect(mockInfoLog).toHaveBeenCalledWith({}, 'Daily webhook verification ping acknowledged');
+    });
+
+    it('ping + bad signature → 400 {error: "invalid signature"}', async () => {
+      const payload = pingBody();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: { ...signedHeaders(payload), 'x-webhook-signature': 'deadbeef' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid signature' });
+    });
+
+    it('ping, no signature headers at all → 400', async () => {
+      const payload = pingBody();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: { 'content-type': 'application/json' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid signature' });
+    });
+
+    it('ping with a validly-signed but stale timestamp (outside the ±5 min window) → 400', async () => {
+      const payload = pingBody();
+      const staleAt = new Date(Date.now() - 10 * 60 * 1000);
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: {
+          ...signDailyWebhookForTest(Buffer.from(payload), SECRET, staleAt),
+          'content-type': 'application/json',
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid signature' });
+      expect(mockInfoLog).not.toHaveBeenCalledWith(
+        {},
+        'Daily webhook verification ping acknowledged'
+      );
+    });
+
+    it('ping, secret unset → 503 {error: "webhook_not_configured"}', async () => {
+      delete process.env.DAILY_WEBHOOK_SECRET;
+      const payload = pingBody();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: 'webhook_not_configured' });
+    });
+
+    it('a signed real event body with an extra `test: "test"` key is NOT the ping — processed normally', async () => {
+      const payload = body({ test: 'test' });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockInsertReceived).toHaveBeenCalledWith(
+        expect.objectContaining({ eventId: 'evt_1' }),
+        expect.anything()
+      );
+    });
+
+    it('`{"test":"nope"}` is NOT the ping — refused as an unparseable envelope, 400 invalid_payload', async () => {
+      const payload = pingBody({ test: 'nope' });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid_payload' });
+    });
+  });
+});
+
+/**
+ * BAL-583 — the runtime 503 paths must capture to Sentry ONCE PER PROCESS, never once per
+ * delivery. Each `it` here `vi.resetModules()`s and dynamically re-imports `./webhook.js`
+ * (which transitively re-imports the UNMOCKED `lib/sentry-alert.js`), so the dedup `Set` the
+ * helper owns starts fresh per test — the only way these assertions are independent of test
+ * order, since the module holds no reset export by design.
+ */
+describe('once-per-process Sentry (BAL-583)', () => {
+  const originalSecret = process.env.DAILY_WEBHOOK_SECRET;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    process.env.DAILY_WEBHOOK_SECRET = SECRET;
+    mockCheckRateLimit.mockResolvedValue({ allowed: true, remaining: 19_999, ttlSeconds: 3600 });
+  });
+
+  afterEach(() => {
+    if (originalSecret === undefined) {
+      delete process.env.DAILY_WEBHOOK_SECRET;
+    } else {
+      process.env.DAILY_WEBHOOK_SECRET = originalSecret;
+    }
+  });
+
+  it('secret unset: two deliveries both 503, Sentry captured ONCE', async () => {
+    delete process.env.DAILY_WEBHOOK_SECRET;
+    const { dailyWebhookRoutes: freshRoutes } = await import('./webhook.js');
+    const freshApp = await buildTestApp(freshRoutes);
+    try {
+      const payload = body();
+
+      const first = await freshApp.inject({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+      const second = await freshApp.inject({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(first.statusCode).toBe(503);
+      expect(second.statusCode).toBe(503);
+      expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+      expect(mockCaptureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('DAILY_WEBHOOK_SECRET'),
+        { level: 'error' }
+      );
+    } finally {
+      await freshApp.close();
+    }
+  });
+
+  it('limiter rejects: two deliveries both 503 rate_limit_unavailable, Sentry captured ONCE', async () => {
+    mockCheckRateLimit.mockRejectedValue(new Error('redis unreachable'));
+    const { dailyWebhookRoutes: freshRoutes } = await import('./webhook.js');
+    const freshApp = await buildTestApp(freshRoutes);
+    try {
+      const payload = body();
+
+      const first = await freshApp.inject({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+      const second = await freshApp.inject({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(first.statusCode).toBe(503);
+      expect(second.statusCode).toBe(503);
+      expect(first.json()).toEqual({ error: 'rate_limit_unavailable' });
+      expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+      expect(mockCaptureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('ratelimit:daily-webhook:ip'),
+        { level: 'error' }
+      );
+    } finally {
+      await freshApp.close();
+    }
   });
 });
