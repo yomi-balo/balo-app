@@ -712,8 +712,9 @@ export const meetingContextsRepository = {
    * THE FLOOR IS WHAT STOPS A STRANDED MEETING HOLDING A CASE FOREVER. A meeting whose
    * `scheduled_end` is at or before the floor cannot be joined and, because the TTL is at
    * least `LIFECYCLE_LOOKBACK_MS` (pinned in the inactivity sweep's test), is already outside
-   * the lifecycle sweep's lookback. It holds nothing, and the case closes on its other
-   * anchors.
+   * the lifecycle sweep's in-window lookback. It holds nothing, and the case closes on its other
+   * anchors. A strand past the floor is still repaired by the lifecycle sweep's stranded arm
+   * (`meetingsRepository.listStrandedLifecycleCandidates`); the floor itself does not change.
    *
    * Both `deleted_at`s are filtered, and only `context_type = 'case'` rows count. Rides
    * `meeting_context_reverse_idx`, then the `meetings` primary key.

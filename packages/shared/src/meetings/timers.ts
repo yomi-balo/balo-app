@@ -51,9 +51,10 @@ const MS_PER_MINUTE = 60_000;
 export const MEETING_OVERRUN_GRACE_MINUTES = 30;
 
 /**
- * How far back the lifecycle sweep still manages a meeting (by `scheduled_start`). A meeting
- * older than this is invisible to every terminal rule, so every ceiling must land inside it;
- * see {@link meetingTimersAreCoherent}.
+ * How far back the lifecycle sweep's in-window batch reaches (by `scheduled_start`). A meeting
+ * older than this is outside that batch; every non-terminal one is the stranded arm's
+ * (`listStrandedLifecycleCandidates`). Every ceiling must still land inside the window; see
+ * {@link meetingTimersAreCoherent}.
  */
 export const LIFECYCLE_LOOKBACK_MS = 24 * 60 * MS_PER_MINUTE;
 

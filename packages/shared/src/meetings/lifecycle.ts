@@ -328,6 +328,12 @@ export interface MeetingTerminalDecision {
   readonly outcome: MeetingTerminalOutcome | null;
   /** The overrun stop's ceiling arm; `null` for every other rule. */
   readonly arm: OverrunStopArm | null;
+  /**
+   * The instant this rule BECAME due: the same expression the predicate compares `now` against,
+   * so it is `<= now` whenever the rule fired. A sweep that reaches a meeting late (a stranded
+   * one) backdates its terminal write to this instant rather than to the tick that noticed.
+   */
+  readonly dueAt: Date;
 }
 
 /**
@@ -419,12 +425,17 @@ function emptyWindowStartMs(input: TerminalRuleInput): number {
   return Math.max(lastLeftMs, input.scheduledStart.getTime());
 }
 
+/** The instant an EMPTY room's idle window has fully elapsed (rules 1 and 4). */
+function emptyWindowDueAt(input: TerminalRuleInput): Date {
+  return new Date(emptyWindowStartMs(input) + input.timers.idleEndEmptyMs);
+}
+
 /** `true` when nobody is in the room and the idle window has fully elapsed. */
 function roomEmptyPastWindow(input: TerminalRuleInput): boolean {
   if (input.presence.anyOpen) {
     return false;
   }
-  return input.now.getTime() >= emptyWindowStartMs(input) + input.timers.idleEndEmptyMs;
+  return input.now.getTime() >= emptyWindowDueAt(input).getTime();
 }
 
 /** Rule 1 — IDLE END. The only rule that requires `in_progress`. */
@@ -440,8 +451,12 @@ function overrunStopApplies(input: TerminalRuleInput): boolean {
   if (input.status !== 'in_progress' || !input.presence.anyOpen) {
     return false;
   }
-  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
-  return input.now.getTime() >= ceiling.getTime();
+  return input.now.getTime() >= overrunStopDueAt(input).getTime();
+}
+
+/** Rule 6's due instant — {@link overrunStopCeiling} over the input's own facts. */
+function overrunStopDueAt(input: TerminalRuleInput): Date {
+  return overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
 }
 
 /**
@@ -454,21 +469,32 @@ function overrunStopApplies(input: TerminalRuleInput): boolean {
  * `meeting-settlement.ts` (BAL-474): the meeting's terminal path opens a session on behalf of the
  * booker when none exists, so a client who never joins IS charged the flat floor this rule's
  * shape (`no_show_client`) carries, and the expert who waited is paid it.
+ *
+ * `true` once rule 2's floor has passed, BEFORE the link-guest hold is considered.
  */
 function noShowDue(input: TerminalRuleInput): boolean {
-  const { presence, timers, now, scheduledStart } = input;
+  const dueAt = noShowDueAt(input);
+  return dueAt !== null && input.now.getTime() >= dueAt.getTime();
+}
+
+/**
+ * Rule 2's FLOOR instant, or `null` when its structural guards do not hold (so the rule can
+ * never fire). {@link noShowDecisionAt} lifts it to the ceiling while the link-guest hold applies.
+ */
+function noShowDueAt(input: TerminalRuleInput): Date | null {
+  const { presence, timers, scheduledStart } = input;
   if (
     input.status !== 'waiting_for_participants' ||
     !presence.expertOpen ||
     presence.clientSideEverPresent
   ) {
-    return false;
+    return null;
   }
   const clockStart = expertClockStart(scheduledStart, presence.expertFirstJoinedAt);
   if (clockStart === null) {
     // Unreachable: `expertOpen` implies an expert interval, which implies a first join. Guarded
     // rather than asserted — `noUncheckedIndexedAccess` discipline applied to a nullable.
-    return false;
+    return null;
   }
   // ⚠ TWO WALL-CLOCK GATES, AND THE SECOND IS **IMPLIED BY THE FIRST** as long as
   // `expertClockStart` is a `max` over `scheduledStart` — stated honestly rather than sold as
@@ -478,7 +504,7 @@ function noShowDue(input: TerminalRuleInput): boolean {
   // expert interval trips the no-show on a call that has not happened yet.
   const floorFromClock = clockStart.getTime() + timers.noShowFloorMs;
   const floorFromSchedule = scheduledStart.getTime() + timers.noShowFloorMs;
-  return now.getTime() >= floorFromClock && now.getTime() >= floorFromSchedule;
+  return new Date(Math.max(floorFromClock, floorFromSchedule));
 }
 
 /**
@@ -494,8 +520,23 @@ export function noShowHeldByLinkGuest(input: TerminalRuleInput): boolean {
   return input.now.getTime() < ceiling.getTime();
 }
 
+/**
+ * Rule 2's DECISION instant: the floor, or — while an admitted `link` guest holds the no-show —
+ * the later of the floor and {@link overrunStopCeiling}. The predicate and the decision's `dueAt`
+ * both read this one expression, so a held no-show that lapses at the ceiling records the
+ * ceiling, never a backdated floor (BAL-584's stranded `ended_at` reads `dueAt`).
+ * Equivalent to `noShowDue && !noShowHeldByLinkGuest`.
+ */
+function noShowDecisionAt(input: TerminalRuleInput): Date | null {
+  const dueAt = noShowDueAt(input);
+  if (dueAt === null || !input.admittedLinkGuestPresent) return dueAt;
+  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
+  return new Date(Math.max(dueAt.getTime(), ceiling.getTime()));
+}
+
 function noShowApplies(input: TerminalRuleInput): boolean {
-  return noShowDue(input) && !noShowHeldByLinkGuest(input);
+  const decisionAt = noShowDecisionAt(input);
+  return decisionAt !== null && input.now.getTime() >= decisionAt.getTime();
 }
 
 /**
@@ -510,17 +551,23 @@ function noShowApplies(input: TerminalRuleInput): boolean {
  * A `null` anchor is rule 5's meeting, never this one's — see the guard below.
  */
 function missedCallApplies(input: TerminalRuleInput): boolean {
-  const { presence, timers, now } = input;
+  const dueAt = missedCallDueAt(input);
+  return dueAt !== null && input.now.getTime() >= dueAt.getTime();
+}
+
+/** Rule 3's due instant, or `null` when its structural guards do not hold. */
+function missedCallDueAt(input: TerminalRuleInput): Date | null {
+  const { presence, timers } = input;
   if (!isPreInProgress(input.status) || presence.expertEverPresent) {
-    return false;
+    return null;
   }
   const anchor = venueAbsenceAnchor(input.scheduledStart, input.venueReadyAt);
   if (anchor === null) {
     // No room yet — rule 5's meeting, never this one's. THIS is the guard that stops Balo's
     // provisioning failure being recorded as the expert's no-show.
-    return false;
+    return null;
   }
-  return now.getTime() >= anchor.getTime() + timers.missedCallTerminationMs;
+  return new Date(anchor.getTime() + timers.missedCallTerminationMs);
 }
 
 /**
@@ -538,15 +585,19 @@ function missedCallApplies(input: TerminalRuleInput): boolean {
  * session ⇒ nothing to settle.
  */
 function venueUnavailableApplies(input: TerminalRuleInput): boolean {
+  const dueAt = venueUnavailableDueAt(input);
+  return dueAt !== null && input.now.getTime() >= dueAt.getTime();
+}
+
+/** Rule 5's due instant, or `null` when its structural guards do not hold. */
+function venueUnavailableDueAt(input: TerminalRuleInput): Date | null {
   if (!isPreInProgress(input.status) || input.presence.expertEverPresent) {
-    return false;
+    return null;
   }
   if (input.venueReadyAt !== null) {
-    return false;
+    return null;
   }
-  return (
-    input.now.getTime() >= input.scheduledStart.getTime() + input.timers.missedCallTerminationMs
-  );
+  return new Date(input.scheduledStart.getTime() + input.timers.missedCallTerminationMs);
 }
 
 /**
@@ -570,9 +621,10 @@ function venueUnavailableApplies(input: TerminalRuleInput): boolean {
  *   · `expertPresentMs < NO_SHOW_FLOOR_MS`. An expert who crossed the floor and THEN left
  *     matched nothing at all: rule 2 needs them still OPEN, rule 4 needed them BELOW the floor.
  *     The meeting sat non-terminal forever with a hold never released, and after 24h the sweep's
- *     lookback floor made it invisible to any future repair. Not exotic either — the reconciler
- *     closes a dropped-`left` at the SWEEP'S `now`, so a clean 14:30 abandonment recorded at
- *     15:00 crossed the floor and stranded.
+ *     lookback floor took it out of the in-window batch (the stranded arm, BAL-584, picks a
+ *     past-floor pre-live meeting up whether or not it holds an open interval). Not exotic
+ *     either — the reconciler closes a dropped-`left` at the SWEEP'S `now`, so a clean 14:30
+ *     abandonment recorded at 15:00 crossed the floor and stranded.
  *   · `!clientSideEverPresent`. A client who joined and left BEFORE the expert arrived (so the
  *     two were never simultaneously present and `markInProgress` never fired) left a
  *     `waiting_for_participants` meeting that rule 2 refused (a client HAD been present) and
@@ -590,6 +642,16 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
     return false;
   }
   return roomEmptyPastWindow(input) || expertGoneObserverRemainsPastCeiling(input);
+}
+
+/**
+ * Rule 4's due instant, per arm: the empty-room window when the room is empty, the ceiling on
+ * the ceiling arm. Only read once {@link abandonedWaitApplies} holds.
+ */
+function abandonedWaitDueAt(input: TerminalRuleInput): Date {
+  return input.presence.anyOpen
+    ? overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers)
+    : emptyWindowDueAt(input);
 }
 
 /**
@@ -638,8 +700,11 @@ function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean
  * Disjointness stops two rules firing. **TOTALITY stops ZERO rules firing**, and that is the
  * failure mode with teeth: a non-terminal meeting nothing can ever terminate is never settled,
  * its credit hold is never released, no human remains to press End, and after 24h the sweep's
- * `listLifecycleCandidates` lookback floor makes it invisible to any future repair. The
- * taxonomy stranded exactly that way twice before this was written down (see
+ * `listLifecycleCandidates` lookback floor takes it out of the in-window batch. The stranded arm
+ * (BAL-584) picks EVERY past-floor non-terminal meeting up, pre-live ones included and whatever
+ * their presence rows, so a meeting whose last interval the reconciler just closed stays selected
+ * until a rule falls due. This invariant is what makes that set drain itself. The taxonomy
+ * stranded exactly that way twice before this was written down (see
  * {@link abandonedWaitApplies}'s removed-guard block).
  *
  * **The invariant, stated so it can be executed rather than believed:** for every NON-TERMINAL
@@ -655,9 +720,14 @@ function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean
  * {@link overrunStopCeiling}, whatever the webhooks and the reconciler are doing, so it can no
  * longer stay open forever. A pre-`in_progress` room with the expert and an admitted `link` guest
  * open matches nothing until the ceiling ({@link noShowHeldByLinkGuest}), where rule 2 fires; if
- * the expert leaves first, rule 4's ceiling arm ends it at the ceiling, and if the room empties
- * first rule 4 ends it. The residual is a PRE-`in_progress` room the expert still holds
- * after a client left: it matches no rule (BAL-584 owns it, not this table).
+ * the expert leaves first while somebody else is still in the room, rule 4's ceiling arm ends it
+ * at the ceiling, and if the room empties first rule 4 ends it. The residual is a
+ * PRE-`in_progress` room the EXPERT still holds after a client left: it matches no rule. That is
+ * an ACCEPTED GAP (BAL-584 decision 3), not an oversight: while somebody is in the room Daily's
+ * platform-wide map lists it, so the stranded arm spends no per-room read on it. Once the room
+ * empties, whether through a delivered leave webhook or the reconciler closing the interval, the
+ * meeting is still selected and the rule that applies (rule 4 when the expert has been present)
+ * fires when due.
  * `lifecycle.test.ts` executes the invariant over a status × presence-shape matrix.
  *
  * ⚠ THE SEVENTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
@@ -670,25 +740,38 @@ function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean
  */
 export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDecision | null {
   if (idleEndApplies(input)) {
-    return { rule: 'idle_end', outcome: 'completed', arm: null };
+    return { rule: 'idle_end', outcome: 'completed', arm: null, dueAt: emptyWindowDueAt(input) };
   }
   if (overrunStopApplies(input)) {
-    return { rule: 'overrun_stop', outcome: 'completed', arm: 'hard_ceiling' };
+    return {
+      rule: 'overrun_stop',
+      outcome: 'completed',
+      arm: 'hard_ceiling',
+      dueAt: overrunStopDueAt(input),
+    };
   }
-  if (noShowApplies(input)) {
-    return { rule: 'no_show', outcome: 'no_show_client', arm: null };
+  const noShowAt = noShowDecisionAt(input);
+  if (noShowAt !== null && input.now.getTime() >= noShowAt.getTime()) {
+    return { rule: 'no_show', outcome: 'no_show_client', arm: null, dueAt: noShowAt };
   }
-  if (missedCallApplies(input)) {
-    return { rule: 'missed_call', outcome: 'missed_call', arm: null };
+  const missedCallAt = missedCallDueAt(input);
+  if (missedCallAt !== null && input.now.getTime() >= missedCallAt.getTime()) {
+    return { rule: 'missed_call', outcome: 'missed_call', arm: null, dueAt: missedCallAt };
   }
-  if (venueUnavailableApplies(input)) {
-    return { rule: 'venue_unavailable', outcome: 'venue_unavailable', arm: null };
+  const venueUnavailableAt = venueUnavailableDueAt(input);
+  if (venueUnavailableAt !== null && input.now.getTime() >= venueUnavailableAt.getTime()) {
+    return {
+      rule: 'venue_unavailable',
+      outcome: 'venue_unavailable',
+      arm: null,
+      dueAt: venueUnavailableAt,
+    };
   }
   if (abandonedWaitApplies(input)) {
     // ⚠ NO OUTCOME (D5/D9). BAL-412 resolves it from the presence rows, exactly as for a human
     // end. `meeting_outcome_requires_ended` is one-directional, so `ended` with a NULL outcome
     // is legal and is precisely what this path writes.
-    return { rule: 'abandoned_wait', outcome: null, arm: null };
+    return { rule: 'abandoned_wait', outcome: null, arm: null, dueAt: abandonedWaitDueAt(input) };
   }
   return null;
 }
@@ -711,6 +794,112 @@ export const MEETING_TERMINAL_PREDICATES: ReadonlyArray<{
   { rule: 'abandoned_wait', applies: abandonedWaitApplies },
   { rule: 'overrun_stop', applies: overrunStopApplies },
 ];
+
+// ── BACKDATING A LATE TERMINAL WRITE (BAL-584) ────────────────────────────────────────────
+
+/**
+ * The latest instant any presence interval records — the max over every finite `joinedAt` and
+ * `leftAt`. `null` when there is none. Non-finite endpoints are skipped exactly as
+ * {@link summarisePresence} skips them (an interval with either endpoint unusable is dropped
+ * whole), so the two readers of the same rows agree on which rows exist.
+ */
+export function latestPresenceInstant(
+  intervals: readonly LifecyclePresenceInterval[]
+): Date | null {
+  let latestMs: number | null = null;
+  for (const interval of intervals) {
+    const endpoints = finiteEndpoints(interval);
+    if (endpoints === null) {
+      continue;
+    }
+    latestMs = laterOf(latestMs, endpoints.joinedMs);
+    if (endpoints.leftMs !== null) {
+      latestMs = laterOf(latestMs, endpoints.leftMs);
+    }
+  }
+  return latestMs === null ? null : new Date(latestMs);
+}
+
+/**
+ * How far BEFORE a stored `joined_at` a recorded Daily leave may sit and still be taken as that
+ * interval's own. The stored `joined_at` comes from the webhook and Daily's `join_time` from its
+ * session history; the two clocks differ by seconds, so a leave inside this slack is the same
+ * visit, while one earlier belongs to a previous visit by the same claim.
+ */
+export const STRANDED_LEAVE_SKEW_MS = 60_000;
+
+/** What {@link strandedReconcileCloseAt} reads. */
+export interface StrandedReconcileCloseInput {
+  /** The stored interval's `joined_at`. */
+  readonly joinedAt: Date;
+  /** Daily's recorded leave for this interval's claim, or `null` when Daily has no entry. */
+  readonly recordedLeaveAt: Date | null;
+  readonly status: MeetingLifecycleStatus;
+  readonly scheduledStart: Date;
+  readonly scheduledEnd: Date;
+  readonly timers: MeetingTimers;
+  readonly now: Date;
+}
+
+/**
+ * The instant the reconciler closes ONE open interval of a STRANDED meeting at.
+ *
+ * A dropped `participant.left` leaves an interval open for days, and closing it at the tick that
+ * noticed would record all of those days as presence (and, on a pre-live meeting, settle a charge
+ * for them). So the close lands where the participant actually left:
+ *
+ *  - Daily's recorded leave, when it is no earlier than {@link STRANDED_LEAVE_SKEW_MS} before
+ *    `joinedAt` (an earlier one is a previous visit), capped at `now`;
+ *  - otherwise, when Daily does not know, the booked end: `min(now, scheduledEnd)`.
+ *
+ * For an `in_progress` meeting the instant is also capped at {@link overrunStopCeiling}, so better
+ * information never records more presence than the overrun-stop path would have.
+ *
+ * Never earlier than `joinedAt`; the presence writer's own clamps still apply on top.
+ */
+export function strandedReconcileCloseAt(input: StrandedReconcileCloseInput): Date {
+  const { joinedAt, recordedLeaveAt, status, scheduledStart, scheduledEnd, timers, now } = input;
+  const usable =
+    recordedLeaveAt !== null &&
+    recordedLeaveAt.getTime() >= joinedAt.getTime() - STRANDED_LEAVE_SKEW_MS;
+  const chosenMs = usable
+    ? Math.min(recordedLeaveAt.getTime(), now.getTime())
+    : Math.min(scheduledEnd.getTime(), now.getTime());
+  const cappedMs =
+    status === 'in_progress'
+      ? Math.min(chosenMs, overrunStopCeiling(scheduledStart, scheduledEnd, timers).getTime())
+      : chosenMs;
+  return new Date(Math.max(cappedMs, joinedAt.getTime()));
+}
+
+/** What {@link strandedEndedAt} reads. */
+export interface StrandedEndedAtInput {
+  /** The fired rule's {@link MeetingTerminalDecision.dueAt}. */
+  readonly dueAt: Date;
+  readonly now: Date;
+  /** {@link latestPresenceInstant} over the meeting's live intervals. */
+  readonly latestPresenceAt: Date | null;
+  readonly startedAt: Date | null;
+}
+
+/**
+ * The `ended_at` a STRANDED meeting's terminal write records: `min(now, max(dueAt,
+ * latestPresenceAt, startedAt))`, the instant the rule became due rather than the tick that
+ * noticed.
+ *
+ * ⚠ THE `max` FLOOR keeps `ended_at` from sitting before something the meeting already
+ * recorded: someone rejoined after the due instant, a close was clamped up to its `joined_at`,
+ * or `markInProgress` stamped `started_at` late. The `min(now, …)` cap is defensive — a due
+ * instant is `<= now` whenever its rule fired.
+ */
+export function strandedEndedAt(input: StrandedEndedAtInput): Date {
+  const floorMs = Math.max(
+    input.dueAt.getTime(),
+    input.latestPresenceAt?.getTime() ?? Number.NEGATIVE_INFINITY,
+    input.startedAt?.getTime() ?? Number.NEGATIVE_INFINITY
+  );
+  return new Date(Math.min(input.now.getTime(), floorMs));
+}
 
 // ── THE SERVER-COMPUTED WAITING PHASE (§7.1) ──────────────────────────────────────────────
 

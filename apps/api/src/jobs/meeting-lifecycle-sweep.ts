@@ -7,6 +7,7 @@ import {
   meetingsRepository,
   resolveMeetingContextOwner,
   type Meeting,
+  type MeetingPresence,
 } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { createLogger } from '@balo/shared/logging';
@@ -16,12 +17,15 @@ import {
   dailyParticipantIdFor,
   dailyRoomNameForMeeting,
   expertClockStart,
+  latestPresenceInstant,
   LIFECYCLE_LOOKBACK_MS,
   meetingVenueReadyAt,
   noShowHeldByLinkGuest,
   overrunStopCeiling,
   resolveTerminalRule,
   selectPrimaryMeetingContext,
+  strandedEndedAt,
+  strandedReconcileCloseAt,
   summarisePresence,
   venueAbsenceAnchor,
   type MeetingTerminalDecision,
@@ -64,7 +68,12 @@ import {
  *
  *   1. **RECONCILE** — leg 2 of D1. ONE `GET /presence` call for the whole platform, then per
  *      candidate: close every open interval whose participant the vendor does not confirm, and
- *      open one for a vendor participant Balo has none for (a dropped `participant.joined`).
+ *      open one for a vendor participant Balo has none for (a dropped `participant.joined`). A
+ *      candidate holding open intervals whose room the platform-wide map does not list gets ONE
+ *      validated per-room read instead (see {@link resolveRoomRoster}); a STRANDED candidate
+ *      (below the lookback floor) is close-only, and its closes land at Daily's RECORDED LEAVE
+ *      for the participant (one capped session-history read per candidate, see
+ *      {@link readStrandedLeaves}), never at the tick that noticed.
  *      ⚠ A pass that changed anything then RE-READS the meeting and runs
  *      `reconcileMeetingStatus`, so the FORWARD status transitions are repaired too — see
  *      `repairStatusAndReload` for the stranding that omitting this produced.
@@ -101,8 +110,11 @@ export const MEETING_LIFECYCLE_SWEEP_QUEUE = 'meeting-lifecycle-sweep';
 export const MEETING_LIFECYCLE_SWEEP_CRON = '* * * * *'; // every minute
 
 /**
- * ⚠ A LOOKBACK FLOOR, NOT A WINDOW. Anything older than this is a data-repair problem, not a
- * live meeting, and scanning it every minute forever would grow without bound. Defined in
+ * ⚠ A LOOKBACK FLOOR, NOT A WINDOW. It bounds the IN-WINDOW batch: scanning every non-terminal
+ * meeting ever created each minute would grow without bound. A non-terminal meeting older than
+ * the floor is the STRANDED arm's
+ * (`meetingsRepository.listStrandedLifecycleCandidates`, capped at
+ * {@link MEETING_STRANDED_BATCH_LIMIT}), which repairs it close-only. Defined in
  * `@balo/shared/meetings` (the timer coherence check bounds the overrun ceiling by it) and
  * re-exported here for `case-inactivity-sweep.test.ts`, which pins
  * `MEETING_TOKEN_TTL_AFTER_END_MS >= LIFECYCLE_LOOKBACK_MS`.
@@ -111,6 +123,46 @@ export { LIFECYCLE_LOOKBACK_MS };
 
 /** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
 export const MEETING_LIFECYCLE_BATCH_LIMIT = 200;
+
+/** The stranded arm's batch bound. ⚠ The sweep warns when it fills, same as the in-window one. */
+export const MEETING_STRANDED_BATCH_LIMIT = 50;
+
+/**
+ * ⚠ THE RECONCILER'S CLOSE CAP PER TICK. Every close is a dropped `participant.left`, so a tick
+ * that wants more than this is itself an anomaly (a vendor misread, not a thousand dropped
+ * webhooks). Closes past the cap wait for the next tick, and the sweep logs at `error` when it
+ * is hit. A terminal rule's own `closeAllOpen` is NOT counted: that close is the end of the
+ * meeting, not a reconciliation.
+ */
+export const MAX_RECONCILER_CLOSES_PER_TICK = 25;
+
+/**
+ * ⚠ THE PER-ROOM PRESENCE READ CAP PER TICK. `GET /rooms/:name/presence` sits in Daily's 20/s
+ * per-room tier, and Daily's platform-wide map never lists an EMPTY room, so every close of an
+ * empty room needs one of these reads. Candidates past the cap are UNKNOWN this tick (nothing
+ * is closed on a guess) and the sweep warns with the deferred count. 20 reads stay below the 25
+ * closes, so this cap fills first. Counted per READ, and a read of an empty room is up to two
+ * SEQUENTIAL calls (the presence list, then the room-exists check, see `getRoomPresence`), which
+ * stays far below Daily's 20/s tier.
+ */
+export const MAX_ROOM_PRESENCE_READS_PER_TICK = 20;
+
+/**
+ * ⚠ THE SESSION-HISTORY READ CAP PER TICK. `GET /meetings?room=` sits in Daily's analytics rate
+ * tier (~2/s, 50 per 30s), a far tighter tier than the 20/s the per-room presence read lives in,
+ * so it has its own cap. One read per STRANDED candidate that has an identity-bearing interval to
+ * close, never for an in-window candidate. 5 reads a tick is 5 per 60s: about 0.08/s against the
+ * ~2/s tier, and 5 of the 50-per-30s allowance, leaving the rest of the tier to everything else
+ * that reads `/meetings`. A strand backlog drains five meetings a minute, which is slower than
+ * the 50-row stranded batch but fine for a population that is rare. A candidate past the cap
+ * skips reconciliation AND its terminal rules for the tick (it stays selected, oldest first, and
+ * retries), and the sweep warns with the deferred count. A history read that FAILS is not a
+ * deferral: the closes fall back to the booked end and the terminal rules run.
+ */
+export const MAX_SESSION_HISTORY_READS_PER_TICK = 5;
+
+/** `scheduled_start − this` is where the session-history read starts looking. */
+const SESSION_HISTORY_LEAD_MS = 60 * 60 * 1000;
 
 /**
  * ⚠⚠ BAL-480 — THE CROSS-MEETING FAN-OUT BOUND, AND THE ONE THIS FEATURE ITSELF CREATES.
@@ -151,6 +203,10 @@ interface CandidateState {
   readonly expertPresentMs: number;
   /** An admitted `link` guest holds an open interval; see `noShowHeldByLinkGuest`. */
   readonly admittedLinkGuestPresent: boolean;
+  /** The latest instant any live interval records — the floor of a stranded `ended_at`. */
+  readonly latestPresenceAt: Date | null;
+  /** The intervals with no `leftAt`, in join order — the rows reconciliation may close. */
+  readonly openRows: readonly MeetingPresence[];
 }
 
 async function loadCandidateState(meeting: Meeting, now: Date): Promise<CandidateState> {
@@ -171,6 +227,8 @@ async function loadCandidateState(meeting: Meeting, now: Date): Promise<Candidat
     meeting,
     admittedLinkGuestPresent,
     facts: summarisePresence(intervals),
+    latestPresenceAt: latestPresenceInstant(intervals),
+    openRows: rows.filter((row) => row.leftAt === null),
     // ⚠ REPORTING ONLY — no terminal rule reads a DURATION. `computeMeetingClocks` is the one
     // definition of the two spans, and this number reaches the `meeting_waiting_abandoned` event
     // and the "Terminal rule fired" log line, never a decision. Rule 4 once compared it against
@@ -186,99 +244,168 @@ async function loadCandidateState(meeting: Meeting, now: Date): Promise<Candidat
 /**
  * What the Daily roster said about a meeting's room at the moment of a stop.
  *
- * `null` (the vendor read failed) and a whole-platform-empty roster (the sanity gate in
- * `reconcileMeeting`) are both `unknown`; an `[]` roster is a confirmed-empty room.
+ * `unknown` is every read that could not be trusted (a failed or rejected vendor call, an
+ * un-provisioned room, a spent cap); a read that returned zero participants is `empty`.
  */
 export type RoomOccupancy = 'occupied' | 'empty' | 'unknown';
 
+/**
+ * What the sweep learned about ONE candidate's room this tick.
+ *
+ * `unknown` — nothing trustworthy; reconciliation is skipped. `platform` — the room is a key in
+ * Daily's platform-wide map (or the candidate holds nothing open, so nothing needs reading).
+ * `room` — a validated per-room read. `participants` are the Daily `userId`s (an id-less
+ * participant has none to give), while `vendorCount` is the RAW count, so a participant with no
+ * `userId` still makes the room occupied.
+ *
+ * ⚠ "CONFIRMED EMPTY" IS `source === 'room' && vendorCount === 0` AND NOTHING ELSE — the only
+ * read that licenses closing an interval that has no identity to match.
+ */
+export type RoomRosterRead =
+  | {
+      readonly source: 'unknown';
+      /**
+       * The read was skipped only because one of the sweep's own per-tick budgets (close, history
+       * read or per-room read) is spent: our own budget, not Daily.
+       */
+      readonly ownBudgetSpent?: true;
+    }
+  | {
+      readonly source: 'platform' | 'room';
+      readonly participants: readonly string[];
+      readonly vendorCount: number;
+    };
+
+const UNKNOWN_ROSTER: RoomRosterRead = { source: 'unknown' };
+const OWN_BUDGET_SPENT_ROSTER: RoomRosterRead = { source: 'unknown', ownBudgetSpent: true };
+
 /** @see RoomOccupancy */
-export function roomOccupancy(
-  roster: readonly string[] | null,
-  platformRosterEmpty: boolean
-): RoomOccupancy {
-  if (roster === null || platformRosterEmpty) {
+export function roomOccupancy(read: RoomRosterRead): RoomOccupancy {
+  if (read.source === 'unknown') {
     return 'unknown';
   }
-  return roster.length === 0 ? 'empty' : 'occupied';
+  return read.vendorCount === 0 ? 'empty' : 'occupied';
+}
+
+/** `in_window` candidates are reconciled both ways; `stranded` ones are close-only. */
+type SweepMode = 'in_window' | 'stranded';
+
+/**
+ * The per-tick budget for the reconciler's closes and the per-room reads, carried as ONE MUTABLE
+ * ACCUMULATOR and spent BEFORE each write or vendor call (the same shape as
+ * {@link RecordingEnsureBudget}). One instance spans both batches, so live meetings, processed
+ * first, get priority on both caps.
+ */
+interface ReconcileBudget {
+  closesSpent: number;
+  closesDeferred: number;
+  roomReadsSpent: number;
+  roomReadsDeferred: number;
+  historyReadsSpent: number;
+  historyReadsDeferred: number;
+}
+
+/** Everything a candidate needs that is the same for the whole tick. */
+interface SweepContext {
+  readonly platform: PlatformRosterRead;
+  readonly reader: PresenceReader;
+  readonly budget: ReconcileBudget;
+  readonly timers: MeetingTimers;
+  readonly now: Date;
 }
 
 /**
- * PASS 1 — reconcile ONE meeting against the vendor's roster.
+ * Resolve what Daily says about one candidate's room. The first matching step wins.
  *
- * ⚠ THE VENDOR ROSTER IS USED ONLY TO DECIDE **WHETHER** AN INTERVAL SHOULD BE OPEN OR CLOSED —
- * never to decide WHOSE it is. `party` is still derived server-side by `resolvePresenceEffect`
- * from Balo's own tables, because it is a billing input (see the presence writer's docblock).
+ * ⚠⚠ `unknown` IS NOT "THE ROOM IS EMPTY", AND CONFLATING THE TWO WOULD BE THE WORST BUG IN THIS
+ * FILE. A Daily outage, a `429`, a body this platform cannot interpret, a spent cap or an
+ * un-provisioned meeting all yield no roster, and reading that as an empty room would close
+ * EVERY open interval on EVERY live meeting in one tick. Reconciliation is skipped instead; the
+ * terminal rules still run and a later tick with a real roster repairs what drifted.
+ *
+ * ⚠ DAILY'S PLATFORM-WIDE MAP NEVER LISTS AN EMPTY ROOM, so an absent room is not thereby known
+ * to be empty, and a whole-map-empty answer is no longer a reason to stop: a candidate that
+ * holds open intervals and is absent from the map gets ONE validated `getRoomPresence`. Only
+ * that read returning zero participants is confirmed empty. It is made only when the
+ * platform-wide read itself succeeded, so an outage never fans out into per-room calls.
  */
-async function reconcileMeeting(
-  state: CandidateState,
-  roster: readonly string[] | null,
-  platformRosterEmpty: boolean,
-  now: Date
-): Promise<{ closed: number; opened: number }> {
-  const { meeting } = state;
-  // ⚠⚠ `null` MEANS **UNKNOWN**, NOT "THE ROOM IS EMPTY", AND CONFLATING THE TWO WOULD BE THE
-  // WORST BUG IN THIS FILE. A Daily outage, a `429`, or an un-provisioned meeting all yield no
-  // roster — and treating that as an empty room would close EVERY open interval on EVERY live
-  // meeting on the platform in one tick, truncating every billable span at once. Reconciliation
-  // is SKIPPED instead; the terminal rules still run, and the next tick with a real roster
-  // repairs whatever drifted.
-  if (roster === null) {
-    return { closed: 0, opened: 0 };
+async function resolveRoomRoster(
+  meeting: Meeting,
+  open: readonly MeetingPresence[],
+  mode: SweepMode,
+  ctx: SweepContext
+): Promise<RoomRosterRead> {
+  const openCount = open.length;
+  const { platform, reader, budget } = ctx;
+  const roomName = meeting.dailyRoomName;
+  if (!platform.rosterAvailable || roomName === null) {
+    return UNKNOWN_ROSTER;
   }
-  const vendorIds = new Set(roster);
-  const open = await meetingPresenceRepository.listOpen(meeting.id);
-
-  // ⚠⚠ THE SANITY GATE — the second half of the same hazard, and the half a THROWN error does
-  // not cover. `rosterAvailable` only catches a vendor call that REJECTED. A `200` whose body
-  // this platform cannot interpret the way it expects yields a well-formed EMPTY map with
-  // `rosterAvailable === true`, and then every candidate resolves to `[]` = "confirmed empty":
-  // every open interval on the platform closes in one tick, ~5 minutes later `idleEndApplies`
-  // ends every `in_progress` meeting, and `tearDownRoom` DELETES DAILY ROOMS OUT FROM UNDER
-  // PEOPLE WHO ARE STILL TALKING. Balo holding open intervals while the vendor claims NOBODY is
-  // in ANY room on the whole platform is not a state worth acting on — it is evidence the read
-  // is wrong. Treat it as UNKNOWN, exactly as the outage path does.
-  //
-  // ⚠ THE COST OF THE GATE, STATED HONESTLY RATHER THAN GLOSSED. It fires only when the vendor
-  // reports ZERO ROOMS platform-wide — not when a room is present and confirmed empty, which is
-  // the ordinary "everyone left" answer and still reconciles normally. So the one thing it
-  // genuinely defers is repairing a stale interval while NOBODY IS ON ANY BALO CALL AT ALL, and
-  // that state lifts the moment any room anywhere has an occupant: the next tick reconciles
-  // normally and the stale interval closes then. A deferred repair on a fully idle platform is
-  // strictly better than a mass teardown of live rooms on a misread body.
-  if (platformRosterEmpty && open.length > 0) {
+  const listed = platform.rooms.get(roomName);
+  if (listed !== undefined) {
+    return { source: 'platform', participants: listed.userIds, vendorCount: listed.count };
+  }
+  if (openCount === 0) {
+    // Nothing is open, so there is nothing to close and no read to spend.
+    return { source: 'platform', participants: [], vendorCount: 0 };
+  }
+  if (roomName !== dailyRoomNameForMeeting(meeting.id)) {
+    // The stamped name is a pure function of `meetings.id`; a divergence means this row points
+    // at a room it may not own, and a per-room read of it could not be trusted to close anything.
     logger.warn(
-      { meetingId: meeting.id, openIntervals: open.length },
-      'Daily reported NO participants in ANY room platform-wide while Balo holds open intervals — treating the roster as UNKNOWN and skipping reconciliation'
+      { meetingId: meeting.id, roomName },
+      'Stamped Daily room name disagrees with the derived one — treating the room as UNKNOWN and skipping the per-room read'
     );
-    return { closed: 0, opened: 0 };
+    return UNKNOWN_ROSTER;
   }
-
-  let closed = 0;
-  for (const row of open) {
-    const claim = claimFor(row.userId, row.meetingGuestId);
-    // ⚠ AN INTERVAL WITH NO IDENTITY CANNOT BE RECONCILED — there is nothing to match against
-    // the roster. It is `observer` by construction (the unmappable-participant path), so it
-    // bills nothing either way, and closing it on a guess would be worse than leaving it.
-    if (claim === null || vendorIds.has(claim)) {
-      continue;
-    }
-    // ⚠ BUILT FROM THE STORED ROW, NOT RE-DERIVED. `close` matches on IDENTITY only, so the
-    // party derivation a full `resolvePresenceEffect` would run — the participation gate plus a
-    // delivery-identity read, per interval, per candidate, every minute — buys the write
-    // nothing and could only introduce disagreement. See `closePresenceEffectForRow`.
-    const effect = closePresenceEffectForRow(meeting, row, now);
-    const outcome = await applyPresenceEffect(db, effect);
-    if (outcome === 'closed') {
-      closed += 1;
-      // ⚠ EACH ONE IS A DROPPED `participant.left` WEBHOOK. The RATE is the health signal for
-      // the whole presence model — this is the only place it is visible.
-      logger.warn(
-        { meetingId: meeting.id, participantId: claim, openedAt: row.joinedAt.toISOString() },
-        'Reconciler closed an interval the vendor roster does not confirm — a dropped webhook'
-      );
-    }
+  if (
+    mode === 'stranded' &&
+    budget.historyReadsSpent >= MAX_SESSION_HISTORY_READS_PER_TICK &&
+    open.some((row) => claimFor(row.userId, row.meetingGuestId) !== null)
+  ) {
+    // A confirmed-empty answer would lead straight to a session-history read, and that budget is
+    // spent: do not spend a room read on a candidate that cannot be repaired this tick.
+    budget.historyReadsDeferred += 1;
+    return OWN_BUDGET_SPENT_ROSTER;
   }
+  if (budget.closesSpent >= MAX_RECONCILER_CLOSES_PER_TICK) {
+    // A read here could only feed a close, and the close cap is already spent.
+    budget.closesDeferred += openCount;
+    return OWN_BUDGET_SPENT_ROSTER;
+  }
+  if (budget.roomReadsSpent >= MAX_ROOM_PRESENCE_READS_PER_TICK) {
+    budget.roomReadsDeferred += 1;
+    return OWN_BUDGET_SPENT_ROSTER;
+  }
+  budget.roomReadsSpent += 1;
+  try {
+    const participants = await reader.getRoomPresence(roomName);
+    return {
+      source: 'room',
+      participants: participants.flatMap((participant) =>
+        typeof participant.userId === 'string' ? [participant.userId] : []
+      ),
+      vendorCount: participants.length,
+    };
+  } catch (error) {
+    logger.warn(
+      { meetingId: meeting.id, roomName, error: errorMessage(error) },
+      'Daily per-room presence read failed — treating the room as UNKNOWN and skipping reconciliation'
+    );
+    return UNKNOWN_ROSTER;
+  }
+}
 
+/**
+ * The OPEN half of reconciliation: open an interval for every vendor participant Balo holds none
+ * for (a dropped `participant.joined`). In-window candidates only — see {@link reconcileMeeting}.
+ */
+async function openMissingParticipants(
+  meeting: Meeting,
+  open: readonly MeetingPresence[],
+  vendorIds: ReadonlySet<string>,
+  now: Date
+): Promise<number> {
   let opened = 0;
   const openClaims = new Set(
     open.flatMap((row) => {
@@ -304,13 +431,241 @@ async function reconcileMeeting(
       );
     }
   }
+  return opened;
+}
 
-  return { closed, opened };
+/** What {@link strandedLeavesFor} resolved for one stranded candidate. */
+type StrandedLeaves =
+  | { readonly kind: 'leaves'; readonly leaves: ReadonlyMap<string, Date> }
+  /** Our own close or history-read budget is spent: the candidate is skipped entirely this tick. */
+  | { readonly kind: 'deferred' };
+
+const NO_LEAVES: StrandedLeaves = { kind: 'leaves', leaves: new Map() };
+
+/**
+ * The recorded leaves a stranded candidate's closes need, behind two short-circuits that make no
+ * history read: nothing closable, and every closable interval identity-less (they bill nothing
+ * and take the booked-end fallback). Otherwise ONE capped read.
+ *
+ * ⚠ A STRANDED CLOSE LANDS WHERE THE PARTICIPANT LEFT, not at the tick that noticed. The read
+ * counts against neither the close cap nor the per-room read cap.
+ *
+ * ⚠ ONLY OUR OWN BUDGET DEFERS A CANDIDATE. A failing or unparseable history read falls back to
+ * the booked end (`NO_LEAVES`), because a persistently failing endpoint must never stall
+ * termination. A spent close cap or history-read cap is our own budget, so it defers the
+ * candidate: neither a close nor a terminal rule runs this tick.
+ *
+ * ⚠ A SESSION DAILY STILL CALLS `ongoing` IS NOT UNKNOWN. This runs only for a room confirmed
+ * empty (an occupied room never reaches it), so an `ongoing` session there is Daily's
+ * finalisation lag; the reader returns that session's recorded leave when it has a finite
+ * duration, and the booked end applies when it has none.
+ */
+async function strandedLeavesFor(
+  meeting: Meeting,
+  closable: readonly MeetingPresence[],
+  ctx: SweepContext
+): Promise<StrandedLeaves> {
+  const { budget, reader } = ctx;
+  const roomName = meeting.dailyRoomName;
+  if (closable.length === 0 || roomName === null) {
+    return NO_LEAVES;
+  }
+  if (budget.closesSpent >= MAX_RECONCILER_CLOSES_PER_TICK) {
+    budget.closesDeferred += closable.length;
+    return { kind: 'deferred' };
+  }
+  const claims = closable.flatMap((row) => {
+    const claim = claimFor(row.userId, row.meetingGuestId);
+    return claim === null ? [] : [claim];
+  });
+  if (claims.length === 0) {
+    return NO_LEAVES;
+  }
+  if (budget.historyReadsSpent >= MAX_SESSION_HISTORY_READS_PER_TICK) {
+    budget.historyReadsDeferred += 1;
+    return { kind: 'deferred' };
+  }
+  budget.historyReadsSpent += 1;
+  try {
+    const history = await reader.getRoomSessionLeaves(roomName, {
+      since: new Date(meeting.scheduledStart.getTime() - SESSION_HISTORY_LEAD_MS),
+    });
+    return { kind: 'leaves', leaves: history.leaves };
+  } catch (error) {
+    logger.warn(
+      { meetingId: meeting.id, roomName, error: errorMessage(error) },
+      'Daily session-history read failed — closing the stranded intervals at the booked end'
+    );
+    return NO_LEAVES;
+  }
+}
+
+/**
+ * What {@link reconcileMeeting} did. `verdict` is `reconciled` normally and `deferred` when a
+ * stranded candidate is skipped outright on one of the sweep's own per-tick budgets.
+ */
+interface ReconcileOutcome {
+  closed: number;
+  opened: number;
+  verdict: 'reconciled' | 'deferred';
+}
+
+const NOTHING_RECONCILED: ReconcileOutcome = { closed: 0, opened: 0, verdict: 'reconciled' };
+
+/**
+ * PASS 1 — reconcile ONE meeting against the vendor's roster.
+ *
+ * ⚠ THE VENDOR ROSTER IS USED ONLY TO DECIDE **WHETHER** AN INTERVAL SHOULD BE OPEN OR CLOSED —
+ * never to decide WHOSE it is. `party` is still derived server-side by `resolvePresenceEffect`
+ * from Balo's own tables, because it is a billing input (see the presence writer's docblock).
+ *
+ * ⚠ A STRANDED MEETING IS CLOSE-ONLY. The OPEN half would reach `reconcileMeetingStatus`, whose
+ * forward transitions (`markInProgress`, `startBillingIfDue`) must never run on a meeting that
+ * fell behind the lookback floor. Its closes land at {@link strandedReconcileCloseAt}: Daily's
+ * recorded leave for the participant, else the booked end. Closing at the tick instant would
+ * record days of presence and, pre-live, settle a charge for them. When the recorded leaves
+ * cannot be read, the closes fall back to the booked end; only a spent history-read budget skips
+ * the candidate (see {@link strandedLeavesFor}).
+ */
+async function reconcileMeeting(
+  state: CandidateState,
+  open: readonly MeetingPresence[],
+  read: RoomRosterRead,
+  mode: SweepMode,
+  ctx: SweepContext
+): Promise<ReconcileOutcome> {
+  if (read.source === 'unknown') {
+    return NOTHING_RECONCILED;
+  }
+  if (mode === 'stranded' && read.source === 'platform') {
+    // ⚠ A ROOM THE PLATFORM LISTS IS REAL OCCUPANCY, not a strand to repair: no history read and
+    // no closes. The terminal rules run on the occupancy as read.
+    return NOTHING_RECONCILED;
+  }
+  const { meeting } = state;
+  const { now } = ctx;
+  const vendorIds = new Set(read.participants);
+  const confirmedEmpty = read.source === 'room' && read.vendorCount === 0;
+
+  const closable = closableIntervals(open, vendorIds, confirmedEmpty);
+
+  const resolved: StrandedLeaves =
+    mode === 'stranded' ? await strandedLeavesFor(meeting, closable, ctx) : NO_LEAVES;
+  if (resolved.kind === 'deferred') {
+    return { closed: 0, opened: 0, verdict: 'deferred' };
+  }
+  const { leaves } = resolved;
+
+  const { closed, closeCapSkipped } = await closeWithinBudget(meeting, closable, mode, leaves, ctx);
+
+  if (mode === 'stranded') {
+    // ⚠ A ROW SKIPPED ON OUR OWN CLOSE CAP DEFERS THE CANDIDATE, but the closes that landed stand
+    // and are reported, so a meeting with more open rows than the cap still progresses each tick.
+    return { closed, opened: 0, verdict: closeCapSkipped ? 'deferred' : 'reconciled' };
+  }
+
+  const opened = await openMissingParticipants(meeting, open, vendorIds, now);
+  return { closed, opened, verdict: 'reconciled' };
+}
+
+/**
+ * The open intervals the roster does not confirm.
+ *
+ * ⚠ AN INTERVAL WITH NO IDENTITY CANNOT BE RECONCILED AGAINST A ROSTER — there is nothing to
+ * match. It is `observer` by construction, so it bills nothing either way, and closing it on
+ * a guess would be worse than leaving it. The ONE exception is a confirmed-empty room: with
+ * nobody in it, no roster entry could be this interval's, so it is closed by identity-less
+ * match (one row per call).
+ */
+function closableIntervals(
+  open: readonly MeetingPresence[],
+  vendorIds: ReadonlySet<string>,
+  confirmedEmpty: boolean
+): MeetingPresence[] {
+  return open.filter((row) => {
+    const claim = claimFor(row.userId, row.meetingGuestId);
+    return claim === null ? confirmedEmpty : !vendorIds.has(claim);
+  });
+}
+
+/**
+ * Closes `closable` while the per-tick close cap allows; a row past the cap waits for the next
+ * tick (`closeCapSkipped`). An in-window close lands at the tick instant, a stranded one at
+ * {@link strandedCloseInstant}.
+ */
+async function closeWithinBudget(
+  meeting: Meeting,
+  closable: readonly MeetingPresence[],
+  mode: SweepMode,
+  leaves: ReadonlyMap<string, Date>,
+  ctx: SweepContext
+): Promise<{ closed: number; closeCapSkipped: boolean }> {
+  const { budget, now } = ctx;
+  let closed = 0;
+  let closeCapSkipped = false;
+  for (const row of closable) {
+    const claim = claimFor(row.userId, row.meetingGuestId);
+    if (budget.closesSpent >= MAX_RECONCILER_CLOSES_PER_TICK) {
+      budget.closesDeferred += 1;
+      closeCapSkipped = true;
+      continue;
+    }
+    budget.closesSpent += 1;
+    const closeAt =
+      mode === 'stranded' ? strandedCloseInstant(meeting, row, claim, leaves, ctx) : now;
+    if (await closeStaleInterval(meeting, row, claim, closeAt)) {
+      closed += 1;
+    }
+  }
+  return { closed, closeCapSkipped };
+}
+
+/** Where a stranded close lands: {@link strandedReconcileCloseAt} over the claim's recorded leave. */
+function strandedCloseInstant(
+  meeting: Meeting,
+  row: MeetingPresence,
+  claim: string | null,
+  leaves: ReadonlyMap<string, Date>,
+  ctx: SweepContext
+): Date {
+  return strandedReconcileCloseAt({
+    joinedAt: row.joinedAt,
+    recordedLeaveAt: claim === null ? null : (leaves.get(claim) ?? null),
+    status: meeting.status,
+    scheduledStart: meeting.scheduledStart,
+    scheduledEnd: meeting.scheduledEnd,
+    timers: ctx.timers,
+    now: ctx.now,
+  });
+}
+
+/** Closes one interval the roster does not confirm; `true` when the write closed it. */
+async function closeStaleInterval(
+  meeting: Meeting,
+  row: MeetingPresence,
+  claim: string | null,
+  closeAt: Date
+): Promise<boolean> {
+  // ⚠ BUILT FROM THE STORED ROW, NOT RE-DERIVED. `close` matches on IDENTITY only, so the
+  // party derivation a full `resolvePresenceEffect` would run — the participation gate plus a
+  // delivery-identity read, per interval, per candidate, every minute — buys the write
+  // nothing and could only introduce disagreement. See `closePresenceEffectForRow`.
+  const effect = closePresenceEffectForRow(meeting, row, closeAt);
+  if ((await applyPresenceEffect(db, effect)) !== 'closed') {
+    return false;
+  }
+  // ⚠ EACH ONE IS A DROPPED `participant.left` WEBHOOK. The RATE is the health signal for
+  // the whole presence model — this is the only place it is visible.
+  logger.warn(
+    { meetingId: meeting.id, participantId: claim, openedAt: row.joinedAt.toISOString() },
+    'Reconciler closed an interval the vendor roster does not confirm — a dropped webhook'
+  );
+  return true;
 }
 
 /**
  * Rebuild the Daily `user_id` CLAIM for one stored interval, so it can be compared against the
- * vendor roster. ⚠ `null` for an interval with no identity — see {@link reconcileMeeting}.
+ * vendor roster. ⚠ `null` for an interval with no identity — see `reconcileMeeting`.
  */
 function claimFor(userId: string | null, meetingGuestId: string | null): string | null {
   // ⚠ THROUGH `dailyParticipantIdFor`, THE SHARED ENCODER — never a second `${tag}${id}`
@@ -370,12 +725,21 @@ function logSessionlessSettlement(
   }
 }
 
-/** PASS 2 — evaluate the six terminal rules and, on a match, end the meeting. */
+/**
+ * PASS 2 — evaluate the six terminal rules and, on a match, end the meeting.
+ *
+ * ⚠ `ended_at` IS `now` FOR AN IN-WINDOW MEETING, AND THE INSTANT THE RULE BECAME DUE FOR A
+ * STRANDED ONE ({@link strandedEndedAt}). A meeting that sat past the lookback floor for days
+ * would otherwise record every one of those days as call time, because `endMeeting` closes the
+ * open intervals at the `endedAt` it is handed. The settlement ceiling, the meeting-ended
+ * analytics and the overrun stop's `minutes_past_scheduled_end` all read this one instant.
+ */
 async function terminateIfDue(
   state: CandidateState,
   timers: MeetingTimers,
   now: Date,
-  occupancy: RoomOccupancy
+  occupancy: RoomOccupancy,
+  mode: SweepMode
 ): Promise<MeetingTerminalDecision | null> {
   const ruleInput = {
     status: state.meeting.status,
@@ -400,10 +764,11 @@ async function terminateIfDue(
     }
     return null;
   }
+  let dueAt = decision.dueAt;
 
   if (decision.rule === 'venue_unavailable') {
     // ⚠⚠ BAL-581 — CONFIRM ON A FRESH ROW. Candidates are read once per tick, and a
-    // roomless meeting skips reconciliation (`roomRosterFor` returns `null`), so its snapshot is
+    // roomless meeting skips reconciliation (its roster is `unknown`), so its snapshot is
     // never re-read by anything else. A repair whose `setVenue` lands after the batch read —
     // with a client already admitted to the fresh room — must not be ended `venue_unavailable`
     // on a stale "not ready" read, and its fresh room must not go undeleted below.
@@ -426,7 +791,18 @@ async function terminateIfDue(
       // The next tick decides from fresh state — a repair landed, or the meeting moved on.
       return null;
     }
+    dueAt = confirmed.dueAt;
   }
+
+  const endedAt =
+    mode === 'stranded'
+      ? strandedEndedAt({
+          dueAt,
+          now,
+          latestPresenceAt: state.latestPresenceAt,
+          startedAt: state.meeting.startedAt,
+        })
+      : now;
 
   const ended = await meetingsRepository.endMeeting({
     id: state.meeting.id,
@@ -435,7 +811,7 @@ async function terminateIfDue(
     // WHICH rule fired is answered by `outcome` plus the `meeting.ended` audit row's
     // `terminalRule` (`idle_end` and `overrun_stop` share `outcome='completed'`).
     endedBy: 'system_idle',
-    endedAt: now,
+    endedAt,
     terminalRule: { rule: decision.rule, arm: decision.arm },
     // ⚠ NULL ACTOR — the ADR-1030 system-actor exemption. An unattributed audit row, never a
     // fabricated actor.
@@ -459,7 +835,7 @@ async function terminateIfDue(
   );
 
   emitRuleAnalytics(state, decision, ended.meeting, {
-    now,
+    endedAt,
     occupancy,
     closedIntervals: ended.closedIntervals,
   });
@@ -467,7 +843,7 @@ async function terminateIfDue(
     meeting: ended.meeting,
     endedBy: 'system_idle',
     actorUserId: null,
-    now,
+    now: endedAt,
   });
 
   // ⚠⚠ BAL-412 (ADR-1044 §7) → BAL-474 (ADR-1040 Amendment 7 §C) — SETTLEMENT, FOR EVERY RULE.
@@ -542,7 +918,11 @@ function emitRuleAnalytics(
   state: CandidateState,
   decision: MeetingTerminalDecision,
   endedMeeting: Meeting,
-  stop: { readonly now: Date; readonly occupancy: RoomOccupancy; readonly closedIntervals: number }
+  stop: {
+    readonly endedAt: Date;
+    readonly occupancy: RoomOccupancy;
+    readonly closedIntervals: number;
+  }
 ): void {
   if (decision.rule === 'abandoned_wait') {
     trackServer(MEETING_SERVER_EVENTS.MEETING_WAITING_ABANDONED, {
@@ -574,7 +954,7 @@ function emitRuleAnalytics(
       meeting_id: endedMeeting.id,
       room_occupancy: stop.occupancy,
       minutes_past_scheduled_end: Math.floor(
-        (stop.now.getTime() - endedMeeting.scheduledEnd.getTime()) / 60_000
+        (stop.endedAt.getTime() - endedMeeting.scheduledEnd.getTime()) / 60_000
       ),
       open_intervals_closed: stop.closedIntervals,
       distinct_id: endedMeeting.id,
@@ -809,32 +1189,72 @@ async function needsRecordingEnsure(state: CandidateState): Promise<boolean> {
   return dailyFailures < MAX_DAILY_FAILURES_PER_MEETING;
 }
 
+/**
+ * The stranded arm's reload after a reconciliation: the fresh row and its presence, and NOTHING
+ * else. ⚠ DELIBERATELY NOT {@link repairStatusAndReload} — that runs `reconcileMeetingStatus`, whose
+ * `markInProgress` and `startBillingIfDue` transitions must never fire on a stranded meeting.
+ */
+async function reloadStranded(meetingId: string, now: Date): Promise<CandidateState | null> {
+  const fresh = await meetingsRepository.findById(meetingId);
+  return fresh === undefined ? null : loadCandidateState(fresh, now);
+}
+
 /** One candidate, fully processed. ⚠ EVERY CALL SITE WRAPS THIS IN ITS OWN TRY/CATCH. */
 async function processCandidate(
   meeting: Meeting,
-  roster: readonly string[] | null,
-  platformRosterEmpty: boolean,
-  timers: MeetingTimers,
-  now: Date
+  mode: SweepMode,
+  ctx: SweepContext
 ): Promise<{ terminated: boolean; closed: number; opened: number; needsRecordingEnsure: boolean }> {
+  const { now, timers } = ctx;
   const initial = await loadCandidateState(meeting, now);
-  const { closed, opened } = await reconcileMeeting(initial, roster, platformRosterEmpty, now);
+  const open = initial.openRows;
+  const rosterRead = await resolveRoomRoster(meeting, open, mode, ctx);
+  if (mode === 'stranded' && rosterRead.source === 'unknown' && rosterRead.ownBudgetSpent) {
+    return { terminated: false, closed: 0, opened: 0, needsRecordingEnsure: false };
+  }
+  const { closed, opened, verdict } = await reconcileMeeting(initial, open, rosterRead, mode, ctx);
+  const read = rosterRead;
+
+  if (read.source !== 'unknown' && closed + opened > 0) {
+    // An unknown read never changes anything, so `roster_source` is never `unknown`.
+    trackServer(MEETING_SERVER_EVENTS.MEETING_PRESENCE_RECONCILED, {
+      meeting_id: meeting.id,
+      intervals_closed: closed,
+      intervals_opened: opened,
+      roster_source: read.source,
+      stranded: mode === 'stranded',
+      distinct_id: meeting.id,
+    });
+  }
+
+  if (verdict === 'deferred') {
+    // ⚠ A PER-TICK BUDGET OF OUR OWN IS SPENT (close, history read or per-room read): the candidate
+    // stays selected and retries next tick, with no terminal rule run on a roster it could not
+    // finish reconciling. Closes that already landed are still reported.
+    return { terminated: false, closed, opened, needsRecordingEnsure: false };
+  }
 
   // ⚠ RE-READ AFTER RECONCILIATION. The terminal rules branch on `anyOpen`, `lastLeftAt` AND
   // `status`, all of which the pass above may have just changed — evaluating them against the
   // PRE-reconciliation snapshot would delay every idle end and every abandoned wait by a full
   // tick, and would leave a webhook-dropped meeting permanently unterminable (above).
-  const state = closed + opened > 0 ? await repairStatusAndReload(meeting.id, now) : initial;
+  let state: CandidateState | null = initial;
+  if (closed + opened > 0) {
+    state =
+      mode === 'in_window'
+        ? await repairStatusAndReload(meeting.id, now)
+        : await reloadStranded(meeting.id, now);
+  }
   if (state === null) {
     return { terminated: false, closed, opened, needsRecordingEnsure: false };
   }
 
-  const decision = await terminateIfDue(
-    state,
-    timers,
-    now,
-    roomOccupancy(roster, platformRosterEmpty)
-  );
+  const decision = await terminateIfDue(state, timers, now, roomOccupancy(read), mode);
+  if (mode === 'stranded') {
+    // ⚠ NOTHING ELSE RUNS FOR A STRAND — no absence reminders (the promise is long past) and no
+    // recording-ensure budget (the meeting is not live).
+    return { terminated: decision !== null, closed, opened, needsRecordingEnsure: false };
+  }
   if (decision !== null) {
     return { terminated: true, closed, opened, needsRecordingEnsure: false };
   }
@@ -848,8 +1268,24 @@ async function processCandidate(
   };
 }
 
+/**
+ * `items` rotated to start at index `floor(now / 60s) mod items.length`, wrapping round. The
+ * sweep runs every minute, so the offset advances by one per tick and each item is at the head
+ * once in any `items.length` consecutive ticks. Pure: the input is not mutated.
+ */
+export function rotateForTick<T>(items: readonly T[], now: Date): T[] {
+  if (items.length === 0) {
+    return [];
+  }
+  const offset = Math.floor(now.getTime() / 60_000) % items.length;
+  return [...items.slice(offset), ...items.slice(0, offset)];
+}
+
 export interface MeetingLifecycleSweepResult {
+  /** The in-window batch plus the stranded batch. */
   scanned: number;
+  /** How many of {@link scanned} came from the stranded batch. */
+  stranded: number;
   terminated: number;
   intervalsClosed: number;
   intervalsOpened: number;
@@ -872,9 +1308,10 @@ export interface MeetingLifecycleSweepResult {
  * ⚠ NO SILENT CAPS. A full batch means meetings were DROPPED from this tick, and the sweep is the
  * only layer that can say so — `@balo/db` has no business logging a business event.
  */
-function warnIfBatchFilled(candidates: readonly Meeting[]): void {
-  if (candidates.length === MEETING_LIFECYCLE_BATCH_LIMIT) {
-    // The batch is ranked by status before age, so the FIRST row is not the oldest — take the minimum.
+function warnIfBatchFilled(candidates: readonly Meeting[], limit: number, message: string): void {
+  if (candidates.length === limit) {
+    // The in-window batch is ranked by status before age, so the FIRST row is not the oldest —
+    // take the minimum.
     const oldest = candidates.reduce<Date | undefined>(
       (min, meeting) =>
         min === undefined || meeting.scheduledStart.getTime() < min.getTime()
@@ -882,19 +1319,21 @@ function warnIfBatchFilled(candidates: readonly Meeting[]): void {
           : min,
       undefined
     );
-    logger.warn(
-      {
-        limit: MEETING_LIFECYCLE_BATCH_LIMIT,
-        oldestScheduledStart: oldest?.toISOString(),
-      },
-      'Meeting lifecycle batch FILLED — meetings were dropped from this tick'
-    );
+    logger.warn({ limit, oldestScheduledStart: oldest?.toISOString() }, message);
   }
+}
+
+/** One room of the platform-wide presence read — see {@link readPlatformRoster}. */
+interface ListedRoom {
+  /** The Daily `userId`s; a participant with no `userId` has none to contribute. */
+  readonly userIds: readonly string[];
+  /** The RAW participant count, so an id-less participant still makes the room occupied. */
+  readonly count: number;
 }
 
 /** What one platform-wide presence read yields — see {@link readPlatformRoster}. */
 interface PlatformRosterRead {
-  readonly roster: Record<string, string[]>;
+  readonly rooms: ReadonlyMap<string, ListedRoom>;
   /** `false` ONLY when the vendor call REJECTED. A parseable-but-empty `200` is `true`. */
   readonly rosterAvailable: boolean;
 }
@@ -902,49 +1341,41 @@ interface PlatformRosterRead {
 /**
  * ⚠ ONE `GET /presence` FOR THE WHOLE PLATFORM, not one per room. The skill names this Daily's
  * recommended "current state" endpoint, and a per-room call per candidate would multiply a 20/s
- * rate-limit tier by the batch size.
+ * rate-limit tier by the batch size. The per-room fallback ({@link resolveRoomRoster}) exists
+ * only for a room this map does not list, and only when this read succeeded.
  *
- * ⚠ A VENDOR FAILURE DEGRADES TO AN EMPTY ROSTER RATHER THAN ABORTING THE TICK — and the empty
- * roster is treated as UNKNOWN, not as "the rooms are empty": `reconcileMeeting` is skipped
- * entirely so a Daily outage can never close every interval on the platform at once.
+ * ⚠ A VENDOR FAILURE DEGRADES TO AN UNAVAILABLE ROSTER RATHER THAN ABORTING THE TICK — and an
+ * unavailable roster is UNKNOWN, not "the rooms are empty": every candidate's roster is
+ * `unknown`, reconciliation is skipped entirely, and a Daily outage can never close every
+ * interval on the platform at once. The terminal rules still run.
  * ⚠ AN UNPARSEABLE 200 LANDS HERE TOO: `getAllPresence` validates the body with Zod and THROWS on
  * a shape it does not recognise, precisely so a vendor contract change takes the outage path
  * rather than degrading silently into a confident-looking empty map.
  */
 async function readPlatformRoster(presenceReader: PresenceReader): Promise<PlatformRosterRead> {
-  let roster: Record<string, string[]> = {};
   try {
     const presence = await presenceReader.getAllPresence();
-    roster = Object.fromEntries(
-      Object.entries(presence).map(([room, participants]) => [
-        room,
-        participants.flatMap((participant) =>
-          typeof participant.userId === 'string' ? [participant.userId] : []
-        ),
-      ])
-    );
+    return {
+      rooms: new Map(
+        Object.entries(presence).map(([room, participants]) => [
+          room,
+          {
+            userIds: participants.flatMap((participant) =>
+              typeof participant.userId === 'string' ? [participant.userId] : []
+            ),
+            count: participants.length,
+          },
+        ])
+      ),
+      rosterAvailable: true,
+    };
   } catch (error) {
     logger.error(
       { error: errorMessage(error) },
       'Daily presence read failed — skipping reconciliation this tick (terminal rules still run)'
     );
-    return { roster, rosterAvailable: false };
+    return { rooms: new Map(), rosterAvailable: false };
   }
-  return { roster, rosterAvailable: true };
-}
-
-/**
- * ⚠ `null` WHEN THE ROSTER IS UNKNOWN — a vendor failure, or an un-provisioned meeting with no
- * room name. Never `[]`, which would mean "confirmed empty". See {@link reconcileMeeting}.
- */
-function roomRosterFor(
-  meeting: Meeting,
-  roster: Record<string, string[]>,
-  rosterAvailable: boolean
-): readonly string[] | null {
-  return rosterAvailable && meeting.dailyRoomName !== null
-    ? (roster[meeting.dailyRoomName] ?? [])
-    : null;
 }
 
 /**
@@ -978,6 +1409,47 @@ async function spendRecordingEnsureBudget(
   }
 }
 
+/**
+ * The stranded read, isolated: a fault here must not take the in-window batch down with it, and
+ * the in-window arm has already been read.
+ */
+async function listStrandedCandidates(floor: Date): Promise<Meeting[]> {
+  try {
+    return await meetingsRepository.listStrandedLifecycleCandidates({
+      scheduledStartBefore: floor,
+      limit: MEETING_STRANDED_BATCH_LIMIT,
+    });
+  } catch (error) {
+    logger.error(
+      { error: errorMessage(error) },
+      'Stranded lifecycle read failed — strands are skipped this tick'
+    );
+    return [];
+  }
+}
+
+/** The tick-end warnings for the two reconciler caps — no silent caps. */
+function warnIfReconcilerCapsFilled(budget: ReconcileBudget): void {
+  if (budget.roomReadsDeferred > 0) {
+    logger.warn(
+      { limit: MAX_ROOM_PRESENCE_READS_PER_TICK, deferred: budget.roomReadsDeferred },
+      'Per-room presence read cap FILLED — the remaining candidates are UNKNOWN this tick and retry on the next'
+    );
+  }
+  if (budget.historyReadsDeferred > 0) {
+    logger.warn(
+      { limit: MAX_SESSION_HISTORY_READS_PER_TICK, deferred: budget.historyReadsDeferred },
+      'Session-history read cap FILLED — the remaining stranded candidates are skipped this tick and retry on the next'
+    );
+  }
+  if (budget.closesDeferred > 0) {
+    logger.error(
+      { limit: MAX_RECONCILER_CLOSES_PER_TICK, deferred: budget.closesDeferred },
+      'Reconciler close cap FILLED — a mass close is itself an anomaly; remaining closes wait for the next tick'
+    );
+  }
+}
+
 /** The sweep body (exported for unit testing without a Redis-backed Worker). */
 export async function runMeetingLifecycleSweep(
   now: Date,
@@ -985,40 +1457,73 @@ export async function runMeetingLifecycleSweep(
   presenceReader: PresenceReader = dailyPresenceReader
 ): Promise<MeetingLifecycleSweepResult> {
   const timers = resolveMeetingTimers();
+  const floor = new Date(now.getTime() - LIFECYCLE_LOOKBACK_MS);
   const candidates = await meetingsRepository.listLifecycleCandidates({
     statuses: ['scheduled', 'waiting_for_participants', 'in_progress'],
-    scheduledStartAfter: new Date(now.getTime() - LIFECYCLE_LOOKBACK_MS),
+    scheduledStartAfter: floor,
     limit: MEETING_LIFECYCLE_BATCH_LIMIT,
   });
+  warnIfBatchFilled(
+    candidates,
+    MEETING_LIFECYCLE_BATCH_LIMIT,
+    'Meeting lifecycle batch FILLED — meetings were dropped from this tick'
+  );
 
-  warnIfBatchFilled(candidates);
+  const stranded = await listStrandedCandidates(floor);
+  warnIfBatchFilled(
+    stranded,
+    MEETING_STRANDED_BATCH_LIMIT,
+    'Stranded lifecycle batch FILLED — strands were dropped from this tick'
+  );
 
   const result: MeetingLifecycleSweepResult = {
-    scanned: candidates.length,
+    scanned: candidates.length + stranded.length,
+    stranded: stranded.length,
     terminated: 0,
     intervalsClosed: 0,
     intervalsOpened: 0,
     recordingEnsures: 0,
   };
-  if (candidates.length === 0) {
+  // ⚠ ONLY WHEN BOTH BATCHES ARE EMPTY — an empty in-window batch must not skip the stranded arm.
+  if (result.scanned === 0) {
     return result;
   }
 
   // The ONE platform-wide presence read, and its outage degrade — see `readPlatformRoster`.
-  const { roster, rosterAvailable } = await readPlatformRoster(presenceReader);
-
-  // ⚠ "THE VENDOR SAYS NOBODY IS IN ANY ROOM ON THE WHOLE PLATFORM." Legal, and on an idle
-  // platform even true — but it is ALSO what an unexpected-but-parseable body looks like, and
-  // acting on it closes every interval everywhere at once. `reconcileMeeting` treats it as
-  // UNKNOWN for any candidate that actually holds open intervals; see the gate there.
-  const platformRosterEmpty = rosterAvailable && Object.keys(roster).length === 0;
-
+  const ctx: SweepContext = {
+    platform: await readPlatformRoster(presenceReader),
+    reader: presenceReader,
+    budget: {
+      closesSpent: 0,
+      closesDeferred: 0,
+      roomReadsSpent: 0,
+      roomReadsDeferred: 0,
+      historyReadsSpent: 0,
+      historyReadsDeferred: 0,
+    },
+    timers,
+    now,
+  };
   const recordingEnsureBudget: RecordingEnsureBudget = { enqueued: 0, deferred: 0 };
 
-  for (const meeting of candidates) {
+  // ⚠ LIVE MEETINGS FIRST: both batches share one budget, so a strand backlog can never starve a
+  // live call of its reconciliation.
+  //
+  // ⚠ THE STRANDED BATCH IS PROCESSED FROM A ROTATING OFFSET (`rotateForTick`). A strand whose
+  // room stays UNKNOWN (a persistent per-room 404, a candidate the sweep keeps deferring) spends
+  // per-tick budget every tick, and in a fixed oldest-first order the few at the head would
+  // starve every younger strand of repair AND termination. Rotating puts each candidate at the
+  // head once in any `stranded.length` consecutive ticks, so every strand makes progress.
+  // RESIDUAL: more than `MEETING_STRANDED_BATCH_LIMIT` strands that never terminate fill the
+  // batch and the younger ones are never selected; the batch-filled warning above and
+  // BAL-586's `meeting.stranded` alert cover that.
+  const tagged: ReadonlyArray<{ meeting: Meeting; mode: SweepMode }> = [
+    ...candidates.map((meeting) => ({ meeting, mode: 'in_window' as const })),
+    ...rotateForTick(stranded, now).map((meeting) => ({ meeting, mode: 'stranded' as const })),
+  ];
+  for (const { meeting, mode } of tagged) {
     try {
-      const roomRoster = roomRosterFor(meeting, roster, rosterAvailable);
-      const outcome = await processCandidate(meeting, roomRoster, platformRosterEmpty, timers, now);
+      const outcome = await processCandidate(meeting, mode, ctx);
       result.terminated += outcome.terminated ? 1 : 0;
       result.intervalsClosed += outcome.closed;
       result.intervalsOpened += outcome.opened;
@@ -1039,6 +1544,7 @@ export async function runMeetingLifecycleSweep(
       "recording-ensure fan-out cap FILLED — self-heal deferred to later ticks to stay inside Daily's ~1/s recording-start tier"
     );
   }
+  warnIfReconcilerCapsFilled(ctx.budget);
 
   logger.info(result, 'Meeting lifecycle sweep complete');
   return result;
@@ -1051,7 +1557,7 @@ export function startMeetingLifecycleSweepWorker(): Worker {
     async (job: Job) => {
       const result = await runMeetingLifecycleSweep(new Date(), (m) => job.log(m));
       await job.log(
-        `meeting lifecycle sweep: ${result.scanned} scanned, ${result.terminated} terminated, ${result.intervalsClosed} intervals closed, ${result.intervalsOpened} opened, ${result.recordingEnsures} recording-ensures attempted`
+        `meeting lifecycle sweep: ${result.scanned} scanned (${result.stranded} stranded), ${result.terminated} terminated, ${result.intervalsClosed} intervals closed, ${result.intervalsOpened} opened, ${result.recordingEnsures} recording-ensures attempted`
       );
     },
     {

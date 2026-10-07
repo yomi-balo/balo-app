@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import {
   dailyRoomNameForMeeting,
   DEFAULT_MEETING_TIMERS,
@@ -50,6 +50,7 @@ import {
   CalendarRangeTooWideError,
   MAX_CALENDAR_RANGE_DAYS,
   type StrandedLiveMeeting,
+  strandedLifecycleCandidatesQuery,
 } from './meetings';
 
 /**
@@ -857,9 +858,9 @@ describe('meetingsRepository.listLifecycleCandidates', () => {
     await meetingsRepository.cancel(cancelledSeed.meeting.id, SYSTEM_CANCEL_AUDIT);
     const deleted = await lifecycleMeeting('waiting_for_participants', -20);
     await meetingsRepository.softDelete(deleted);
-    // ⚠ THE LOOKBACK FLOOR IS THE ONLY THING BOUNDING THE SCAN. A meeting three days stale is
-    // a data-repair problem, not a live meeting — and without the floor the sweep's cost grows
-    // without limit forever.
+    // ⚠ THE LOOKBACK FLOOR IS THE ONLY THING BOUNDING THIS READ. A meeting three days stale is
+    // not a live meeting (the stranded arm reads it separately) — and without the floor the
+    // in-window read's cost grows without limit forever.
     const ancient = await lifecycleMeeting('waiting_for_participants', -3 * 24 * 60);
     const live = await lifecycleMeeting('in_progress', -5);
 
@@ -908,6 +909,234 @@ describe('meetingsRepository.listLifecycleCandidates', () => {
         limit: 0,
       })
     ).resolves.toEqual([]);
+  });
+});
+
+/**
+ * BAL-584 — the lifecycle sweep's STRANDED arm. Every date is derived from one `now` computed
+ * inside the test, so no fixture is tied to a calendar day.
+ */
+describe('meetingsRepository.listStrandedLifecycleCandidates (BAL-584)', () => {
+  const MINUTE_MS = 60_000;
+  const STATUSES = ['in_progress', 'scheduled', 'waiting_for_participants'] as const;
+
+  /** A meeting whose `scheduled_start` is `startOffsetMs` from `floor`, one hour long. */
+  async function meetingAt(
+    status: 'in_progress' | 'scheduled' | 'waiting_for_participants' | 'ended' | 'cancelled',
+    floor: Date,
+    startOffsetMs: number,
+    extra: Partial<NewMeeting> = {}
+  ): Promise<string> {
+    const start = new Date(floor.getTime() + startOffsetMs);
+    const { meeting } = await meetingFactory({
+      values: {
+        status,
+        scheduledStart: start,
+        scheduledEnd: new Date(start.getTime() + HOUR_MS),
+        ...(status === 'ended' ? { endedBy: 'expert_host', endedAt: start } : {}),
+        ...extra,
+      },
+    });
+    return meeting.id;
+  }
+
+  /** One presence interval on the meeting: open by default, optionally closed and/or soft-deleted. */
+  async function intervalOn(
+    meetingId: string,
+    opts: { closed?: boolean; softDeleted?: boolean } = {}
+  ): Promise<void> {
+    const user = await userFactory();
+    const joinedAt = new Date(Date.now() - 5 * MINUTE_MS);
+    await db.insert(meetingPresence).values({
+      meetingId,
+      userId: user.id,
+      party: 'client',
+      joinedAt,
+      ...(opts.closed === true ? { leftAt: new Date(joinedAt.getTime() + MINUTE_MS) } : {}),
+      ...(opts.softDeleted === true ? { deletedAt: new Date() } : {}),
+    });
+  }
+
+  /** Floor 24h back from a `now` computed here, exactly as the sweep derives it. */
+  function floorFromNow(): Date {
+    const now = new Date();
+    return new Date(now.getTime() - DAY_MS);
+  }
+
+  it('INCLUDES an in_progress meeting past the floor whether or not anything is open', async () => {
+    const floor = floorFromNow();
+    const bare = await meetingAt('in_progress', floor, -3 * DAY_MS);
+    const withOpen = await meetingAt('in_progress', floor, -2 * DAY_MS);
+    await intervalOn(withOpen);
+
+    const ids = (
+      await meetingsRepository.listStrandedLifecycleCandidates({
+        scheduledStartBefore: floor,
+        limit: 50,
+      })
+    ).map((row) => row.id);
+
+    expect(ids).toEqual([bare, withOpen]);
+  });
+
+  it.each(['scheduled', 'waiting_for_participants'] as const)(
+    'INCLUDES a pre-live %s meeting past the floor whatever its presence rows: none, closed only, soft-deleted open only, or an open one',
+    async (status) => {
+      const floor = floorFromNow();
+      const bare = await meetingAt(status, floor, -4 * DAY_MS);
+      const closedOnly = await meetingAt(status, floor, -3 * DAY_MS);
+      await intervalOn(closedOnly, { closed: true });
+      const softDeletedOpen = await meetingAt(status, floor, -2 * DAY_MS);
+      await intervalOn(softDeletedOpen, { softDeleted: true });
+      const held = await meetingAt(status, floor, -DAY_MS / 2);
+      await intervalOn(held);
+
+      const rows = await meetingsRepository.listStrandedLifecycleCandidates({
+        scheduledStartBefore: floor,
+        limit: 50,
+      });
+
+      expect(rows.map((row) => row.id)).toEqual([bare, closedOnly, softDeletedOpen, held]);
+      expect(rows.every((row) => row.status === status)).toBe(true);
+    }
+  );
+
+  it('EXCLUDES terminal statuses and soft-deleted meetings, even with an open interval', async () => {
+    const floor = floorFromNow();
+    const ended = await meetingAt('ended', floor, -2 * DAY_MS);
+    await intervalOn(ended);
+    const cancelled = await meetingAt('cancelled', floor, -2 * DAY_MS);
+    await intervalOn(cancelled);
+    const deletedInProgress = await meetingAt('in_progress', floor, -2 * DAY_MS, {
+      deletedAt: new Date(),
+    });
+    const deletedHeld = await meetingAt('waiting_for_participants', floor, -2 * DAY_MS, {
+      deletedAt: new Date(),
+    });
+    await intervalOn(deletedHeld);
+    const live = await meetingAt('in_progress', floor, -2 * DAY_MS);
+
+    const ids = (
+      await meetingsRepository.listStrandedLifecycleCandidates({
+        scheduledStartBefore: floor,
+        limit: 50,
+      })
+    ).map((row) => row.id);
+
+    expect(ids).toEqual([live]);
+    expect(ids).not.toContain(ended);
+    expect(ids).not.toContain(cancelled);
+    expect(ids).not.toContain(deletedInProgress);
+    expect(ids).not.toContain(deletedHeld);
+  });
+
+  it("is DISJOINT from listLifecycleCandidates: a start exactly AT the floor is the in-window read's, one millisecond before it is the stranded arm's", async () => {
+    const floor = floorFromNow();
+    const atFloor = await meetingAt('in_progress', floor, 0);
+    const justBefore = await meetingAt('in_progress', floor, -1);
+    const inWindow = await meetingAt('in_progress', floor, 10 * MINUTE_MS);
+    const heldInWindow = await meetingAt('waiting_for_participants', floor, HOUR_MS);
+    await intervalOn(heldInWindow);
+
+    const stranded = (
+      await meetingsRepository.listStrandedLifecycleCandidates({
+        scheduledStartBefore: floor,
+        limit: 50,
+      })
+    ).map((row) => row.id);
+    const inWindowIds = (
+      await meetingsRepository.listLifecycleCandidates({
+        statuses: [...STATUSES],
+        scheduledStartAfter: floor,
+        limit: 50,
+      })
+    ).map((row) => row.id);
+
+    expect(stranded).toEqual([justBefore]);
+    expect(inWindowIds).toEqual(expect.arrayContaining([atFloor, inWindow, heldInWindow]));
+    expect(inWindowIds).not.toContain(justBefore);
+    expect(stranded.filter((id) => inWindowIds.includes(id))).toEqual([]);
+  });
+
+  it('orders by scheduled_start ASC, then id ASC, across statuses', async () => {
+    const floor = floorFromNow();
+    const sharedStart = -2 * DAY_MS;
+    const tieA = await meetingAt('in_progress', floor, sharedStart);
+    const tieB = await meetingAt('in_progress', floor, sharedStart);
+    const oldest = await meetingAt('in_progress', floor, -4 * DAY_MS);
+    const heldNewer = await meetingAt('scheduled', floor, -DAY_MS / 2);
+    await intervalOn(heldNewer);
+    const heldMiddle = await meetingAt('waiting_for_participants', floor, -3 * DAY_MS);
+    await intervalOn(heldMiddle);
+
+    const ids = (
+      await meetingsRepository.listStrandedLifecycleCandidates({
+        scheduledStartBefore: floor,
+        limit: 50,
+      })
+    ).map((row) => row.id);
+
+    expect(ids).toEqual([oldest, heldMiddle, ...[tieA, tieB].sort(compareStrings), heldNewer]);
+  });
+
+  it('honours the batch limit, keeping the OLDEST rows — the bound the caller must warn about when it fills', async () => {
+    const floor = floorFromNow();
+    const oldest = await meetingAt('in_progress', floor, -4 * DAY_MS);
+    const second = await meetingAt('in_progress', floor, -3 * DAY_MS);
+    await meetingAt('in_progress', floor, -2 * DAY_MS);
+
+    const rows = await meetingsRepository.listStrandedLifecycleCandidates({
+      scheduledStartBefore: floor,
+      limit: 2,
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([oldest, second]);
+  });
+
+  it('short-circuits a non-positive limit without querying', async () => {
+    const floor = floorFromNow();
+    await meetingAt('in_progress', floor, -2 * DAY_MS);
+
+    await expect(
+      meetingsRepository.listStrandedLifecycleCandidates({ scheduledStartBefore: floor, limit: 0 })
+    ).resolves.toEqual([]);
+    await expect(
+      meetingsRepository.listStrandedLifecycleCandidates({ scheduledStartBefore: floor, limit: -1 })
+    ).resolves.toEqual([]);
+  });
+
+  /**
+   * ⚠ THE INDEX IS THE POINT OF THE SHAPE, AND IT ONLY MATTERS AT PRODUCTION SKEW: almost every
+   * meeting ever created is terminal and long past the floor. The test seeds that distribution
+   * set-based (thousands of `ended` meetings), runs ANALYZE so the planner sees it, and asserts
+   * both arms reach the candidates through the composite `(status, scheduled_start)` index — never
+   * through the status-free `meeting_scheduled_start_idx`, which would walk every old meeting on
+   * every tick.
+   */
+  it('EXPLAIN — at a skewed distribution both stranded arms ride the composite status index', async () => {
+    const floor = floorFromNow();
+    const floorIso = floor.toISOString();
+    await db.execute(sql`
+      INSERT INTO meetings (status, scheduled_start, scheduled_end, started_at, ended_at, ended_by)
+      SELECT 'ended',
+             ${floorIso}::timestamptz - (g || ' minutes')::interval - interval '1 day',
+             ${floorIso}::timestamptz - (g || ' minutes')::interval - interval '23 hours',
+             ${floorIso}::timestamptz - (g || ' minutes')::interval - interval '1 day',
+             ${floorIso}::timestamptz - (g || ' minutes')::interval - interval '23 hours',
+             'expert_host'
+      FROM generate_series(1, 3000) AS g
+    `);
+    const held = await meetingAt('waiting_for_participants', floor, -3 * DAY_MS);
+    const live = await meetingAt('in_progress', floor, -2 * DAY_MS);
+    await db.execute(sql`ANALYZE meetings`);
+
+    const query = strandedLifecycleCandidatesQuery({ scheduledStartBefore: floor, limit: 50 });
+    const rows = await db.execute<Record<string, string>>(sql`EXPLAIN ${query}`);
+    const plan = Array.from(rows, (row) => row['QUERY PLAN']).join('\n');
+
+    expect(plan.match(/meeting_status_scheduled_start_idx/g)).toHaveLength(2);
+    expect(plan).not.toContain('meeting_scheduled_start_idx');
+    expect((await query).map((row) => row.id)).toEqual([held, live]);
   });
 });
 

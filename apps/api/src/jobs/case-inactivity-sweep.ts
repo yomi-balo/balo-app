@@ -50,8 +50,9 @@ import { MEETING_TOKEN_TTL_AFTER_END_MS } from '../services/meetings/meeting-liv
  * `assertMeetingJoinable`'s window. `TTL` is `MEETING_TOKEN_TTL_AFTER_END_MS`
  * (`services/meetings/meeting-liveness.ts`), IMPORTED, never re-declared — mint and this floor
  * must agree forever, or a case could close while the api would still admit a join to it. The
- * TTL must stay `>= LIFECYCLE_LOOKBACK_MS` (`meeting-lifecycle-sweep.ts`) so every meeting that
- * sweep still manages is covered; the test pins the inequality.
+ * TTL must stay `>= LIFECYCLE_LOOKBACK_MS` (`meeting-lifecycle-sweep.ts`) so every IN-WINDOW
+ * meeting that sweep manages is covered (a stranded meeting past the floor is that sweep's
+ * stranded arm, not covered by this floor); the test pins the inequality.
  *
  * ⚠⚠ CHECK-THEN-ACT, NOT AN IN-TRANSACTION RE-EVALUATION. The anchors and the exclusion are
  * re-read for each case just before `close()`, OUTSIDE its transaction, reusing `partition` with
