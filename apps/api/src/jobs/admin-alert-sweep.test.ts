@@ -39,6 +39,8 @@ const {
   mockTranscriptCaptureWithheldSource,
   mockCalendarSubscriptionLapse,
   mockMeetingUnprovisioned,
+  mockMeetingStranded,
+  mockSessionPresenceStuck,
 } = vi.hoisted(() => ({
   mockExpertApplicationPending: vi.fn(),
   mockReceivableOpen: vi.fn(),
@@ -48,6 +50,8 @@ const {
   mockTranscriptCaptureWithheldSource: vi.fn(),
   mockCalendarSubscriptionLapse: vi.fn(),
   mockMeetingUnprovisioned: vi.fn(),
+  mockMeetingStranded: vi.fn(),
+  mockSessionPresenceStuck: vi.fn(),
 }));
 
 vi.mock('./admin-alert-finders.js', () => ({
@@ -61,6 +65,9 @@ vi.mock('./admin-alert-finders.js', () => ({
     calendarSubscriptionLapse: mockCalendarSubscriptionLapse,
     // BAL-581 — the eighth finder kind, and the second on the 1m cadence set.
     meetingUnprovisioned: mockMeetingUnprovisioned,
+    // BAL-586 — `meeting.stranded` (5m) and `session.presence_stuck` (1m).
+    meetingStranded: mockMeetingStranded,
+    sessionPresenceStuck: mockSessionPresenceStuck,
   },
 }));
 
@@ -88,6 +95,8 @@ beforeEach(() => {
     mockTranscriptCaptureWithheldSource,
     mockCalendarSubscriptionLapse,
     mockMeetingUnprovisioned,
+    mockMeetingStranded,
+    mockSessionPresenceStuck,
   ]) {
     mock.mockResolvedValue(EMPTY_OUTCOME);
   }
@@ -105,13 +114,16 @@ describe('runAdminAlertSweep', () => {
     expect(mockSessionSettledNoLedgerCredit).toHaveBeenCalledTimes(1);
     // BAL-581 — the eighth finder kind, also 1m.
     expect(mockMeetingUnprovisioned).toHaveBeenCalledTimes(1);
+    // BAL-586 — `session.presence_stuck`, also 1m.
+    expect(mockSessionPresenceStuck).toHaveBeenCalledTimes(1);
     // 5m / 15m finders never called on a 1m tick.
+    expect(mockMeetingStranded).not.toHaveBeenCalled();
     expect(mockRecordingFailed).not.toHaveBeenCalled();
     expect(mockTranscriptFailed).not.toHaveBeenCalled();
     expect(mockTranscriptCaptureWithheldSource).not.toHaveBeenCalled();
     expect(mockCalendarSubscriptionLapse).not.toHaveBeenCalled();
 
-    expect(mockReconcileKind).toHaveBeenCalledTimes(4);
+    expect(mockReconcileKind).toHaveBeenCalledTimes(5);
     const kindsCalled = mockReconcileKind.mock.calls.map(([input]) => input.kind);
     expect(new Set(kindsCalled)).toEqual(
       new Set([
@@ -119,6 +131,7 @@ describe('runAdminAlertSweep', () => {
         'receivable.open',
         'session.settled_no_ledger_credit',
         'meeting.unprovisioned',
+        'session.presence_stuck',
       ])
     );
   });
@@ -128,7 +141,10 @@ describe('runAdminAlertSweep', () => {
     expect(mockRecordingFailed).toHaveBeenCalledTimes(1);
     expect(mockTranscriptFailed).toHaveBeenCalledTimes(1);
     expect(mockTranscriptCaptureWithheldSource).toHaveBeenCalledTimes(1);
-    expect(mockReconcileKind).toHaveBeenCalledTimes(3);
+    // BAL-586 — `meeting.stranded` is 5m.
+    expect(mockMeetingStranded).toHaveBeenCalledTimes(1);
+    expect(mockReconcileKind).toHaveBeenCalledTimes(4);
+    expect(mockSessionPresenceStuck).not.toHaveBeenCalled();
     expect(mockExpertApplicationPending).not.toHaveBeenCalled();
     expect(mockCalendarSubscriptionLapse).not.toHaveBeenCalled();
     expect(mockMeetingUnprovisioned).not.toHaveBeenCalled();
@@ -137,6 +153,8 @@ describe('runAdminAlertSweep', () => {
   it('calls reconcileKind once for the 15m cadence', async () => {
     await runAdminAlertSweep('15m', NOW);
     expect(mockCalendarSubscriptionLapse).toHaveBeenCalledTimes(1);
+    expect(mockMeetingStranded).not.toHaveBeenCalled();
+    expect(mockSessionPresenceStuck).not.toHaveBeenCalled();
     expect(mockReconcileKind).toHaveBeenCalledTimes(1);
     expect(mockReconcileKind.mock.calls[0]?.[0].kind).toBe('calendar.subscription_lapse');
     expect(mockMeetingUnprovisioned).not.toHaveBeenCalled();
@@ -159,8 +177,8 @@ describe('runAdminAlertSweep', () => {
     const result = await runAdminAlertSweep('1m', NOW);
 
     expect(result.failures).toBe(1);
-    // The other three 1m kinds still reconciled.
-    expect(mockReconcileKind).toHaveBeenCalledTimes(3);
+    // The other four 1m kinds still reconciled.
+    expect(mockReconcileKind).toHaveBeenCalledTimes(4);
     const kindsCalled = mockReconcileKind.mock.calls.map(([input]) => input.kind);
     expect(kindsCalled).not.toContain('receivable.open');
   });
