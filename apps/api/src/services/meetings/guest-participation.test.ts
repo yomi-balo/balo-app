@@ -26,6 +26,9 @@ const {
   mockPublishGuestRemovedCalendarWithdrawal,
   mockEjectParticipants,
   mockCalendarListLiveByMeeting,
+  mockVouchLinkGuest,
+  mockDeliveringExpertUserId,
+  mockReconcileMeetingStatus,
 } = vi.hoisted(() => ({
   mockAuthorizeMeetingParticipation: vi.fn(),
   mockHasEngagementCapability: vi.fn(),
@@ -53,6 +56,9 @@ const {
   mockEjectParticipants: vi.fn(),
   /** ⚠ THE CALENDAR-EVENTS repository, NOT the guests one — two different `listLiveByMeeting`s. */
   mockCalendarListLiveByMeeting: vi.fn(),
+  mockVouchLinkGuest: vi.fn(),
+  mockDeliveringExpertUserId: vi.fn(),
+  mockReconcileMeetingStatus: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -71,6 +77,7 @@ vi.mock('@balo/db', () => ({
     revoke: mockRevoke,
     decideAdmission: mockDecideAdmission,
     rotateToken: mockRotateToken,
+    vouchLinkGuest: mockVouchLinkGuest,
   },
   meetingCalendarEventsRepository: { listLiveByMeeting: mockCalendarListLiveByMeeting },
   partyDomainsRepository: { listByParty: mockListDomainsByParty },
@@ -92,7 +99,15 @@ vi.mock('@balo/analytics/server', () => ({
     GUEST_JOINED: 'guest_joined',
     GUEST_LINK_RESENT: 'guest_link_resent',
     GUEST_REMOVED: 'guest_removed',
+    GUEST_VOUCHED: 'guest_vouched',
   },
+}));
+vi.mock('./delivering-party.js', () => ({
+  deliveringExpertUserId: mockDeliveringExpertUserId,
+}));
+vi.mock('./presence-writer.js', () => ({
+  presenceWindowFor: () => ({ notAfter: new Date('2026-09-08T11:00:00.000Z') }),
+  reconcileMeetingStatus: mockReconcileMeetingStatus,
 }));
 vi.mock('../../notifications/index.js', () => ({
   notificationEvents: { publish: mockPublish },
@@ -136,6 +151,7 @@ import {
   publishBestEffort,
   removeGuest,
   resendGuestJoinLink,
+  vouchForLinkGuest,
   type InviteGuestInput,
 } from './guest-participation.js';
 
@@ -148,6 +164,7 @@ const ENGAGEMENT_ID = '44444444-4444-4444-8444-444444444444';
 const EXPERT_PROFILE_ID = '88888888-8888-4888-8888-888888888888';
 const AGENCY_ID = '99999999-9999-4999-8999-999999999999';
 const GUEST_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const EXPERT_USER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const ADMIN_A = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 const SCHEDULED_START = new Date('2026-09-01T10:00:00.000Z');
@@ -277,6 +294,9 @@ beforeEach(() => {
   mockRevoke.mockResolvedValue(undefined);
   mockDecideAdmission.mockResolvedValue(undefined);
   mockRotateToken.mockResolvedValue(undefined);
+  mockVouchLinkGuest.mockResolvedValue(undefined);
+  mockDeliveringExpertUserId.mockResolvedValue(EXPERT_USER_ID);
+  mockReconcileMeetingStatus.mockResolvedValue(null);
 
   mockListDomainsByParty.mockResolvedValue([]);
   mockListAdminUserIds.mockResolvedValue([]);
@@ -2364,5 +2384,209 @@ describe('removeGuest — the cancel/removal race (BAL-476)', () => {
     expect(mockPublishGuestRemovedCalendarWithdrawal).not.toHaveBeenCalled();
     expect(mockRevoke).toHaveBeenCalledTimes(1);
     expect(mockTrackServer).toHaveBeenCalledWith('guest_removed', expect.anything());
+  });
+});
+
+describe('vouchForLinkGuest — BAL-579', () => {
+  const LINK_GUEST = {
+    id: GUEST_ID,
+    meetingId: MEETING_ID,
+    party: 'client',
+    inviteChannel: 'link',
+    admission: 'pending',
+    email: 'Typed@Lobby.example',
+  };
+
+  function vouched(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      guest: { id: GUEST_ID, admission: 'pre_admitted' },
+      previousAdmission: 'pending',
+      presenceReclassified: false,
+      ...overrides,
+    };
+  }
+
+  function vouch(email = 'Colleague@Northwind.example'): ReturnType<typeof vouchForLinkGuest> {
+    return vouchForLinkGuest({
+      meetingId: MEETING_ID,
+      guestId: GUEST_ID,
+      actorUserId: USER_ID,
+      email,
+    });
+  }
+
+  beforeEach(() => {
+    mockFindLiveById.mockResolvedValue(LINK_GUEST);
+    mockVouchLinkGuest.mockResolvedValue(vouched());
+  });
+
+  it('stores the VOUCHER-supplied canonical address and domain, never the lobby one', async () => {
+    await expect(vouch()).resolves.toEqual({ ok: true, id: GUEST_ID, admission: 'pre_admitted' });
+
+    expect(mockVouchLinkGuest).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      guestId: GUEST_ID,
+      voucherUserId: USER_ID,
+      email: 'colleague@northwind.example',
+      emailDomain: 'northwind.example',
+      at: expect.any(Date),
+      presenceWindow: { notAfter: new Date('2026-09-08T11:00:00.000Z') },
+    });
+  });
+
+  it('reports an admitted row as admitted', async () => {
+    mockFindLiveById.mockResolvedValue({ ...LINK_GUEST, admission: 'admitted' });
+    mockVouchLinkGuest.mockResolvedValue(
+      vouched({ guest: { id: GUEST_ID, admission: 'admitted' }, previousAdmission: 'admitted' })
+    );
+
+    await expect(vouch()).resolves.toEqual({ ok: true, id: GUEST_ID, admission: 'admitted' });
+  });
+
+  it('refuses a closed meeting before any read of the row', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      gateOk({ meeting: meetingRow({ status: 'ended' }) })
+    );
+
+    await expect(vouch()).resolves.toEqual({ ok: false, code: 'meeting_not_open_for_guests' });
+    expect(mockFindLiveById).not.toHaveBeenCalled();
+    expect(mockVouchLinkGuest).not.toHaveBeenCalled();
+  });
+
+  it('passes a tenancy-gate refusal through, with no write', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
+
+    await expect(vouch()).resolves.toEqual({ ok: false, code: 'meeting_not_found' });
+    expect(mockVouchLinkGuest).not.toHaveBeenCalled();
+  });
+
+  it('⚠ an expert-side actor gets guest_not_found and nothing is written', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'expert' }));
+
+    await expect(vouch()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockFindLiveById).not.toHaveBeenCalled();
+    expect(mockVouchLinkGuest).not.toHaveBeenCalled();
+  });
+
+  it('⚠ the delivering expert holding a client membership gets guest_not_found', async () => {
+    mockDeliveringExpertUserId.mockResolvedValue(USER_ID);
+
+    await expect(vouch()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockDeliveringExpertUserId).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+    expect(mockVouchLinkGuest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: 'a missing row', row: undefined },
+    { label: 'an email-channel row', row: { ...LINK_GUEST, inviteChannel: 'email' } },
+    { label: 'a denied row', row: { ...LINK_GUEST, admission: 'denied' } },
+    { label: 'a pre-admitted row', row: { ...LINK_GUEST, admission: 'pre_admitted' } },
+  ])('answers guest_not_found for $label', async ({ row }) => {
+    mockFindLiveById.mockResolvedValue(row);
+
+    await expect(vouch()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockVouchLinkGuest).not.toHaveBeenCalled();
+  });
+
+  it('applies the seat cap on a pending row', async () => {
+    mockCountLiveByMeeting.mockResolvedValue(8);
+
+    await expect(vouch()).resolves.toEqual({ ok: false, code: 'participant_cap_reached' });
+    expect(mockVouchLinkGuest).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the seat cap on an admitted row, which already holds a seat', async () => {
+    mockCountLiveByMeeting.mockResolvedValue(8);
+    mockFindLiveById.mockResolvedValue({ ...LINK_GUEST, admission: 'admitted' });
+    mockVouchLinkGuest.mockResolvedValue(
+      vouched({ guest: { id: GUEST_ID, admission: 'admitted' }, previousAdmission: 'admitted' })
+    );
+
+    await expect(vouch()).resolves.toMatchObject({ ok: true });
+    expect(mockCountLiveByMeeting).not.toHaveBeenCalled();
+  });
+
+  it('maps a 23505 to guest_already_invited', async () => {
+    mockVouchLinkGuest.mockRejectedValue(Object.assign(new Error('dup'), { code: '23505' }));
+
+    await expect(vouch()).resolves.toEqual({ ok: false, code: 'guest_already_invited' });
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('rethrows any other repository failure', async () => {
+    mockVouchLinkGuest.mockRejectedValue(new Error('connection lost'));
+
+    await expect(vouch()).rejects.toThrow('connection lost');
+  });
+
+  it('maps a lost race (undefined) to guest_not_found', async () => {
+    mockVouchLinkGuest.mockResolvedValue(undefined);
+
+    await expect(vouch()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockReconcileMeetingStatus).not.toHaveBeenCalled();
+  });
+
+  it('reconciles the meeting only when presence was reclassified', async () => {
+    await vouch();
+    expect(mockReconcileMeetingStatus).not.toHaveBeenCalled();
+
+    mockVouchLinkGuest.mockResolvedValue(vouched({ presenceReclassified: true }));
+    await vouch();
+    expect(mockReconcileMeetingStatus).toHaveBeenCalledTimes(1);
+    expect(mockReconcileMeetingStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: MEETING_ID }),
+      expect.any(Date)
+    );
+  });
+
+  it('a reconcile failure does not undo the committed vouch', async () => {
+    mockVouchLinkGuest.mockResolvedValue(vouched({ presenceReclassified: true }));
+    mockReconcileMeetingStatus.mockRejectedValue(new Error('redis down'));
+
+    await expect(vouch()).resolves.toMatchObject({ ok: true });
+  });
+
+  it('tracks guest_vouched with booleans only, never an address', async () => {
+    mockVouchLinkGuest.mockResolvedValue(vouched({ presenceReclassified: true }));
+
+    await vouch();
+
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_vouched', {
+      previous_admission: 'pending',
+      in_call: true,
+      email_changed: true,
+      distinct_id: USER_ID,
+    });
+  });
+
+  it('publishes no notification and no calendar invite', async () => {
+    await vouch();
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockPublishGuestAddedCalendarInvites).not.toHaveBeenCalled();
+  });
+});
+
+describe('listGuests — canVouch (BAL-579)', () => {
+  it('is true for a client-side member who is not the delivering expert', async () => {
+    await expect(
+      listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID })
+    ).resolves.toMatchObject({ ok: true, canVouch: true });
+  });
+
+  it.each([
+    {
+      label: 'an expert-side viewer',
+      gate: gateOk({ side: 'expert' }),
+      expertUserId: EXPERT_USER_ID,
+    },
+    { label: 'the delivering expert on the client side', gate: gateOk(), expertUserId: USER_ID },
+  ])('is false for $label', async ({ gate, expertUserId }) => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gate);
+    mockDeliveringExpertUserId.mockResolvedValue(expertUserId);
+
+    await expect(
+      listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID })
+    ).resolves.toMatchObject({ ok: true, canVouch: false });
   });
 });

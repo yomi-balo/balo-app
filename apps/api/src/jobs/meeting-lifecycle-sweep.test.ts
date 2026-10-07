@@ -6,6 +6,7 @@ const {
   mockEndMeeting,
   mockListByMeeting,
   mockListOpen,
+  mockHasLinkGuest,
   mockListContexts,
   mockResolveOwner,
   mockResolvePresenceEffect,
@@ -32,6 +33,7 @@ const {
   mockEndMeeting: vi.fn(),
   mockListByMeeting: vi.fn(),
   mockListOpen: vi.fn(),
+  mockHasLinkGuest: vi.fn(),
   mockListContexts: vi.fn(),
   mockResolveOwner: vi.fn(),
   mockResolvePresenceEffect: vi.fn(),
@@ -67,7 +69,11 @@ vi.mock('@balo/db', () => ({
     findById: mockFindMeetingById,
     endMeeting: mockEndMeeting,
   },
-  meetingPresenceRepository: { listByMeeting: mockListByMeeting, listOpen: mockListOpen },
+  meetingPresenceRepository: {
+    listByMeeting: mockListByMeeting,
+    listOpen: mockListOpen,
+    hasOpenAdmittedLinkGuest: mockHasLinkGuest,
+  },
   meetingContextsRepository: { listByMeeting: mockListContexts },
   // BAL-480 — MANDATORY: `needsRecordingEnsure` calls `findCapturingForMeeting` directly. A
   // vitest factory mock throws on any export the import graph touches but the factory omits, so
@@ -206,6 +212,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockListCandidates.mockResolvedValue([]);
     mockListByMeeting.mockResolvedValue([]);
     mockListOpen.mockResolvedValue([]);
+    mockHasLinkGuest.mockResolvedValue(false);
     mockListContexts.mockResolvedValue([
       { meetingId: MEETING_ID, contextType: 'case', contextId: 'ctx-1' },
     ]);
@@ -925,6 +932,66 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     } else if (rowSpec.event !== undefined) {
       expect(mockTrackServer).toHaveBeenCalledWith(rowSpec.event, expect.anything());
     }
+  });
+
+  describe('BAL-579 — no-show held by an admitted link guest', () => {
+    const EXPERT_OPEN = { party: 'expert', joinedAt: START, leftAt: null, meetingGuestId: null };
+    const LINK_GUEST_OPEN = {
+      party: 'observer',
+      joinedAt: at(2),
+      leftAt: null,
+      meetingGuestId: 'guest-1',
+    };
+
+    it('holds the no-show: no end, no room delete, no settlement, one info log', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([EXPERT_OPEN, LINK_GUEST_OPEN]);
+      mockHasLinkGuest.mockResolvedValue(true);
+
+      const result = await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+      expect(result.terminated).toBe(0);
+      expect(mockEndMeeting).not.toHaveBeenCalled();
+      expect(mockDeleteRoom).not.toHaveBeenCalled();
+      expect(mockSettleSessionlessCaseMeeting).not.toHaveBeenCalled();
+      expect(mockInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, ceiling: expect.any(Date) }),
+        'No-show held — an admitted link guest is with the expert'
+      );
+    });
+
+    it('fires the no-show once the link guest is not an admitted one', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([EXPERT_OPEN, LINK_GUEST_OPEN]);
+      mockHasLinkGuest.mockResolvedValue(false);
+
+      const result = await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+      expect(result.terminated).toBe(1);
+      expect(mockEndMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'no_show_client' })
+      );
+    });
+
+    it('fires the no-show at the overrun ceiling even with the guest present', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([EXPERT_OPEN, LINK_GUEST_OPEN]);
+      mockHasLinkGuest.mockResolvedValue(true);
+
+      const result = await runMeetingLifecycleSweep(at(24 * 60), () => {}, EMPTY_READER);
+
+      expect(result.terminated).toBe(1);
+    });
+
+    it('costs no extra query when no open observer interval belongs to a guest', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([EXPERT_OPEN]);
+
+      await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+      expect(mockHasLinkGuest).not.toHaveBeenCalled();
+      expect(mockEndMeeting).toHaveBeenCalled();
+    });
   });
 
   /**

@@ -59,6 +59,14 @@ export const inviteGuestsBodySchema = z.object({
 
 export type InviteGuestsBody = z.infer<typeof inviteGuestsBodySchema>;
 
+/**
+ * The voucher supplies the colleague's work email. ⚠ STRICT: the lobby row's self-declared
+ * address is never adopted, and no other field is honoured.
+ */
+export const vouchGuestBodySchema = z.object({ email: guestEmail }).strict();
+
+export type VouchGuestBody = z.infer<typeof vouchGuestBodySchema>;
+
 /** `:meetingId` alone — the list and invite routes. */
 export const meetingIdParamsSchema = z.object({
   meetingId: z.string().uuid(),

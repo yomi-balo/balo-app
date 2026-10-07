@@ -108,12 +108,14 @@ interface PanelFakes {
   readonly decideAdmission: ReturnType<typeof vi.fn>;
   readonly resendLink: ReturnType<typeof vi.fn>;
   readonly removeGuest: ReturnType<typeof vi.fn>;
+  readonly vouchGuest: ReturnType<typeof vi.fn>;
 }
 
 function fakes(
   options: {
     guests?: readonly GuestForViewer[];
     canHost?: boolean;
+    canVouch?: boolean;
     failLoad?: boolean;
     /** BAL-476 — the viewer's own SERVER-resolved side. Defaults to the fixtures' party. */
     viewerSide?: 'client' | 'expert';
@@ -127,6 +129,7 @@ function fakes(
           data: {
             guests: options.guests ?? [],
             canHost: options.canHost ?? false,
+            canVouch: options.canVouch ?? false,
             viewerSide: options.viewerSide ?? 'client',
             participantCount: 3,
             participantCap: 10,
@@ -139,8 +142,10 @@ function fakes(
   const decideAdmission = vi.fn().mockResolvedValue({ success: true });
   const resendLink = vi.fn().mockResolvedValue({ success: true });
   const removeGuest = vi.fn().mockResolvedValue({ success: true });
+  const vouchGuest = vi.fn().mockResolvedValue({ success: true });
 
   return {
+    vouchGuest,
     loadGuests,
     inviteGuests,
     decideAdmission,
@@ -154,6 +159,7 @@ function fakes(
       decideAdmission,
       resendLink,
       removeGuest,
+      vouchGuest,
       files: {
         list: vi.fn(),
         requestUpload: vi.fn(),
@@ -1230,5 +1236,103 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
     await screen.findByRole('button', { name: 'Remove Dana Okoro' });
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('PeoplePanel — vouching (BAL-579)', () => {
+  it('shows a vouch-capable non-host the knock with Vouch and NO Admit or Deny', async () => {
+    renderPanel(fakes({ guests: [KNOCKER], canHost: false, canVouch: true }));
+
+    expect(await screen.findByRole('button', { name: 'Vouch for Taylor Wu' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^admit/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^deny/i })).not.toBeInTheDocument();
+  });
+
+  it('shows no Vouch control when the server said canVouch is false', async () => {
+    renderPanel(fakes({ guests: [KNOCKER], canHost: true, canVouch: false }));
+
+    await screen.findByRole('button', { name: 'Admit Taylor Wu' });
+    expect(screen.queryByRole('button', { name: /vouch/i })).not.toBeInTheDocument();
+  });
+
+  it('tells a vouch-only viewer to vouch only if they recognise the person', async () => {
+    renderPanel(fakes({ guests: [KNOCKER], canHost: false, canVouch: true }));
+
+    expect(await screen.findByText(/Vouch only if you recognise them/)).toBeInTheDocument();
+    expect(screen.queryByText(/admit them only if you're expecting them/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the admit wording for a host', async () => {
+    renderPanel(fakes({ guests: [KNOCKER], canHost: true, canVouch: true }));
+
+    expect(await screen.findByText(/admit them only if you're expecting them/)).toBeInTheDocument();
+  });
+
+  it('offers Vouch beside Admit and Deny to somebody who may do both', async () => {
+    renderPanel(fakes({ guests: [KNOCKER], canHost: true, canVouch: true }));
+
+    expect(await screen.findByRole('button', { name: 'Vouch for Taylor Wu' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Admit Taylor Wu' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deny Taylor Wu' })).toBeInTheDocument();
+  });
+
+  it('offers Vouch on an admitted link guest who has not arrived', async () => {
+    const admitted = guest({
+      id: 'k2',
+      name: 'Sam Lee',
+      displayName: 'Sam Lee',
+      admission: 'admitted',
+      inviteChannel: 'link',
+    });
+    renderPanel(fakes({ guests: [admitted], canVouch: true }));
+
+    expect(await screen.findByRole('button', { name: 'Vouch for Sam Lee' })).toBeInTheDocument();
+  });
+
+  it('offers Vouch on a link guest who is in the call', async () => {
+    const guestId = '11111111-2222-4333-8444-555555555555';
+    dailyState.participantIds = ['local-session', 'guest-session'];
+    dailyState.participants = {
+      'local-session': { user_name: 'You', owner: false },
+      'guest-session': {
+        user_name: 'Sam Lee',
+        owner: false,
+        user_id: `g${guestId.replaceAll('-', '')}`,
+      },
+    };
+    const inCall = guest({
+      id: guestId,
+      name: 'Sam Lee',
+      displayName: 'Sam Lee',
+      admission: 'admitted',
+      inviteChannel: 'link',
+    });
+    renderPanel(fakes({ guests: [inCall], canVouch: true }));
+
+    expect(await screen.findByRole('button', { name: 'Vouch for Sam Lee' })).toBeInTheDocument();
+  });
+
+  it('vouches through the dialog with the typed email, then toasts, tracks and refetches', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [KNOCKER], canHost: false, canVouch: true });
+    renderPanel(fake);
+
+    await user.click(await screen.findByRole('button', { name: 'Vouch for Taylor Wu' }));
+    await user.type(screen.getByLabelText('Their work email'), 'taylor@northwind.example');
+    fake.loadGuests.mockClear();
+    await user.click(screen.getByRole('button', { name: 'Vouch' }));
+
+    await waitFor(() =>
+      expect(fake.vouchGuest).toHaveBeenCalledWith('knock-1', 'taylor@northwind.example')
+    );
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Taylor Wu is in as your colleague.')
+    );
+    expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_VOUCHED, {
+      ...MEETING_PROPS,
+      outcome: 'ok',
+    });
+    await waitFor(() => expect(fake.loadGuests).toHaveBeenCalled());
+    expect(screen.queryByLabelText('Their work email')).not.toBeInTheDocument();
   });
 });

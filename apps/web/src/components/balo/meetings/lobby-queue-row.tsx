@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import type { GuestRosterRow } from '@/lib/meetings/guest-roster';
+import { VOUCH_COPY } from '@/lib/meetings/guests-copy';
 import { MeetingAvatar } from './meeting-avatar';
 
 /**
@@ -38,6 +39,13 @@ export interface LobbyQueueRowProps {
    * fact, racing the poll that may already have removed the row.
    */
   readonly onDecide: (guestId: string, decision: 'admit' | 'deny', displayName: string) => void;
+  /**
+   * BAL-579 — ⚠ THE SERVER'S `canHost` VERDICT. Admit / Deny render only when it is true: a client
+   * member who may vouch but not host sees the knock and a Vouch button, never a decision pair.
+   */
+  readonly canHost: boolean;
+  /** BAL-579 — opens the vouch dialog for this row. Only called when `row.canVouch`. */
+  readonly onVouch: (guestId: string, displayName: string) => void;
   /** ⚠ PER-ROW, never panel-wide: one slow decision must not freeze the whole queue. */
   readonly isPending: boolean;
 }
@@ -45,6 +53,8 @@ export interface LobbyQueueRowProps {
 export function LobbyQueueRow({
   row,
   onDecide,
+  canHost,
+  onVouch,
   isPending,
 }: Readonly<LobbyQueueRowProps>): React.JSX.Element {
   const { guest, isUnverified } = row;
@@ -56,6 +66,11 @@ export function LobbyQueueRow({
   const deny = useCallback(
     () => onDecide(guest.id, 'deny', guest.displayName),
     [guest.id, guest.displayName, onDecide]
+  );
+
+  const vouch = useCallback(
+    () => onVouch(guest.id, guest.displayName),
+    [guest.id, guest.displayName, onVouch]
   );
 
   return (
@@ -114,14 +129,16 @@ export function LobbyQueueRow({
             on; a sighted host reading "Deny Taylor Wu" on a 360px panel loses the row to
             wrapping. Both audiences get what they need from one control.
           */}
-          <button
-            type="button"
-            onClick={deny}
-            aria-label={`Deny ${guest.displayName}`}
-            className="border-border text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center rounded-lg border px-2.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
-          >
-            Deny
-          </button>
+          {canHost ? (
+            <button
+              type="button"
+              onClick={deny}
+              aria-label={`Deny ${guest.displayName}`}
+              className="border-border text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center rounded-lg border px-2.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            >
+              Deny
+            </button>
+          ) : null}
           {/*
             ⚠⚠ ADMIT AND DENY CARRY **EQUAL** WEIGHT — both outlined, neither filled. A filled
             primary Admit is a recommendation, and this surface must not recommend letting an
@@ -130,14 +147,26 @@ export function LobbyQueueRow({
             opposite, louder. Admit keeps the primary TEXT colour so the two are still
             instantly distinguishable at a glance.
           */}
-          <button
-            type="button"
-            onClick={admit}
-            aria-label={`Admit ${guest.displayName}`}
-            className="border-primary/60 text-primary hover:bg-primary/10 focus-visible:ring-ring inline-flex min-h-11 items-center rounded-lg border px-2.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
-          >
-            Admit
-          </button>
+          {canHost ? (
+            <button
+              type="button"
+              onClick={admit}
+              aria-label={`Admit ${guest.displayName}`}
+              className="border-primary/60 text-primary hover:bg-primary/10 focus-visible:ring-ring inline-flex min-h-11 items-center rounded-lg border px-2.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            >
+              Admit
+            </button>
+          ) : null}
+          {row.canVouch ? (
+            <button
+              type="button"
+              onClick={vouch}
+              aria-label={`${VOUCH_COPY.button} for ${guest.displayName}`}
+              className="border-primary/60 text-primary hover:bg-primary/10 focus-visible:ring-ring inline-flex min-h-11 items-center rounded-lg border px-2.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            >
+              {VOUCH_COPY.button}
+            </button>
+          ) : null}
         </div>
       )}
     </li>

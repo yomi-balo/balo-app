@@ -29,6 +29,7 @@ describe('MEETING_PANEL_EVENTS (client)', () => {
       'JOIN_LINK_COPIED',
       'LINK_RESENT',
       'GUEST_REMOVED',
+      'GUEST_VOUCHED',
       'FILE_SHARED',
       'FILE_DOWNLOADED',
       'MESSAGE_SENT',
@@ -43,6 +44,7 @@ describe('MEETING_PANEL_EVENTS (client)', () => {
     expect(MEETING_PANEL_EVENTS.JOIN_LINK_COPIED).toBe('meeting_panel_join_link_copied');
     expect(MEETING_PANEL_EVENTS.LINK_RESENT).toBe('meeting_panel_link_resent');
     expect(MEETING_PANEL_EVENTS.GUEST_REMOVED).toBe('meeting_panel_guest_removed');
+    expect(MEETING_PANEL_EVENTS.GUEST_VOUCHED).toBe('meeting_panel_guest_vouched');
     expect(MEETING_PANEL_EVENTS.FILE_SHARED).toBe('meeting_panel_file_shared');
     expect(MEETING_PANEL_EVENTS.FILE_DOWNLOADED).toBe('meeting_panel_file_downloaded');
     expect(MEETING_PANEL_EVENTS.MESSAGE_SENT).toBe('meeting_panel_message_sent');

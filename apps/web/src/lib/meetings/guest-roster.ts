@@ -80,6 +80,14 @@ export interface GuestRosterRow {
    * control, because Deny already produces the same practical outcome and reads correctly there.
    */
   readonly canRemove: boolean;
+  /**
+   * BAL-579 — may the viewer VOUCH for this guest? A `link` row the viewer's side can vouch for
+   * (the server's `canVouch` verdict) that is still waiting or already admitted.
+   *
+   * ⚠ A transmitted fact plus the row's own channel and admission — not a re-implementation of the
+   * route's gate, which re-checks and answers `guest_not_found` to every refusal.
+   */
+  readonly canVouch: boolean;
 }
 
 export interface GuestRoster {
@@ -101,6 +109,8 @@ export interface BuildGuestRosterInput {
   readonly presentGuestIds: ReadonlySet<string>;
   /** ⚠ THE SERVER'S VERDICT, off the GET response. Never re-derived in the browser. */
   readonly canHost: boolean;
+  /** BAL-579 — ⚠ THE SERVER'S `canVouch` VERDICT, off the same GET response. Never re-derived. */
+  readonly canVouch: boolean;
   /** BAL-476 — the viewer's own side, off the same GET response. See {@link GuestRosterRow.canRemove}. */
   readonly viewerSide: MeetingGuestSide;
   /** `Date.now()` at render, passed in so this stays pure and testable. */
@@ -143,16 +153,36 @@ export function buildGuestRoster(input: BuildGuestRosterInput): GuestRoster {
     const canRemove =
       guest.inviteChannel === 'link' ? input.canHost : guest.party === input.viewerSide;
 
+    const canVouch =
+      isUnverified &&
+      input.canVouch &&
+      (guest.admission === 'pending' || guest.admission === 'admitted');
+
     if (guest.admission === 'pending') {
-      // ⚠ THE SERVER'S VERDICT GATES THE WHOLE SECTION. A non-host is not shown the queue.
-      if (input.canHost) {
-        waiting.push({ guest, state: 'waiting', isUnverified, canResendLink: false, canRemove });
+      // ⚠ THE SERVER'S VERDICTS GATE THE WHOLE SECTION. Somebody who may neither host nor vouch is
+      // not shown the queue.
+      if (input.canHost || input.canVouch) {
+        waiting.push({
+          guest,
+          state: 'waiting',
+          isUnverified,
+          canResendLink: false,
+          canRemove,
+          canVouch,
+        });
       }
       continue;
     }
 
     if (input.presentGuestIds.has(guest.id)) {
-      inCall.push({ guest, state: 'in_call', isUnverified, canResendLink: false, canRemove });
+      inCall.push({
+        guest,
+        state: 'in_call',
+        isUnverified,
+        canResendLink: false,
+        canRemove,
+        canVouch,
+      });
       continue;
     }
 
@@ -163,11 +193,19 @@ export function buildGuestRoster(input: BuildGuestRosterInput): GuestRoster {
         isUnverified,
         canResendLink: canResend(guest, input.nowMs),
         canRemove,
+        canVouch,
       });
       continue;
     }
 
-    invited.push({ guest, state: 'invited', isUnverified, canResendLink: false, canRemove });
+    invited.push({
+      guest,
+      state: 'invited',
+      isUnverified,
+      canResendLink: false,
+      canRemove,
+      canVouch,
+    });
   }
 
   return { inCall, invited, notArrived, waiting };

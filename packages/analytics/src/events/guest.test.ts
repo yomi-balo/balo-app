@@ -49,6 +49,8 @@ describe('GUEST_SERVER_EVENTS', () => {
       // ICU localeCompare and code-unit order, so this position is not collation-sensitive.
       'GUEST_REENTRY_REQUESTED',
       'GUEST_REMOVED',
+      // `GUEST_VOUCHED` sorts last under both orders (`R` < `V`).
+      'GUEST_VOUCHED',
     ]);
   });
 
@@ -64,6 +66,7 @@ describe('GUEST_SERVER_EVENTS', () => {
     expect(GUEST_SERVER_EVENTS.GUEST_RECAP_VIEWED).toBe('guest_recap_viewed');
     expect(GUEST_SERVER_EVENTS.GUEST_REENTRY_REQUESTED).toBe('guest_reentry_requested');
     expect(GUEST_SERVER_EVENTS.GUEST_REMOVED).toBe('guest_removed');
+    expect(GUEST_SERVER_EVENTS.GUEST_VOUCHED).toBe('guest_vouched');
   });
 
   it('uses snake_case event values', () => {

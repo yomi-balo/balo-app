@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
+const redirectMock = vi.hoisted(() => vi.fn());
+const resolveRedirect = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({ redirect: redirectMock }));
+vi.mock('@/lib/authz/lobby-member-redirect', () => ({
+  resolveLobbyMemberRedirect: resolveRedirect,
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 vi.mock('@/app/join/_actions/claim-lobby-place', () => ({
   claimLobbyPlaceAction: vi.fn(),
@@ -53,6 +59,7 @@ async function renderLobbyPage(meetingId: string): Promise<HTMLElement> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolveRedirect.mockResolvedValue(null);
   globalThis.sessionStorage.clear();
 });
 
@@ -154,5 +161,38 @@ describe('⚠ LobbyPage — a malformed meeting id', () => {
     await renderLobbyPage(MEETING_ID);
 
     expect(screen.getByRole('button', { name: /ask to join/i })).toBeInTheDocument();
+  });
+});
+
+describe('LobbyPage — signed-in participant redirect (BAL-579)', () => {
+  it('redirects when the resolver names a member target', async () => {
+    resolveRedirect.mockResolvedValue(`/meetings/${MEETING_ID}/call`);
+
+    await renderLobbyPage(MEETING_ID);
+
+    expect(resolveRedirect).toHaveBeenCalledWith(MEETING_ID);
+    expect(redirectMock).toHaveBeenCalledWith(`/meetings/${MEETING_ID}/call`);
+  });
+
+  it('renders the same lobby markup for a non-participant as for an anonymous visitor', async () => {
+    // Anonymous and non-participant both resolve to a null target, so the page must not tell
+    // them apart.
+    resolveRedirect.mockResolvedValueOnce(null);
+    const anonymous = await renderLobbyPage(MEETING_ID);
+    const anonymousMarkup = anonymous.innerHTML;
+    anonymous.remove();
+
+    resolveRedirect.mockResolvedValueOnce(null);
+    const nonParticipant = await renderLobbyPage(MEETING_ID);
+
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(nonParticipant.innerHTML).toBe(anonymousMarkup);
+    expect(screen.getByRole('button', { name: /ask to join/i })).toBeInTheDocument();
+  });
+
+  it('does not consult the resolver for a malformed id', async () => {
+    await renderLobbyPage('not-a-uuid');
+
+    expect(resolveRedirect).not.toHaveBeenCalled();
   });
 });

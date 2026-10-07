@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { JoinUnavailableNotice } from '@/components/balo/meetings/join-notice-card';
+import { resolveLobbyMemberRedirect } from '@/lib/authz/lobby-member-redirect';
 import { LobbyClient } from './lobby-client';
 
 // No `node:crypto` and no Drizzle here (see below), but the segment stays on Node for
@@ -28,8 +30,8 @@ interface LobbyPageProps {
 /**
  * BAL-132 (Decision 8 + Decision 9) — the ANONYMOUS lobby landing at `/join/m/<meetingId>`.
  *
- * ⚠⚠ THIS PAGE PERFORMS **ZERO DATABASE READS**, AND THAT IS THE ACCEPTANCE CRITERION OF THE
- * FILE — not an optimisation. It renders a BYTE-IDENTICAL card for a real meeting, a
+ * ⚠⚠ AN ANONYMOUS VISITOR TRIGGERS **ZERO DATABASE READS**, AND THAT IS THE ACCEPTANCE
+ * CRITERION OF THE FILE — not an optimisation. The card is BYTE-IDENTICAL for a real meeting, a
  * cancelled one, an ended one, a soft-deleted one, and a meeting id that never existed.
  *
  * Rendering "Design review with CloudPeak" to an anonymous holder of a GUESSED uuid is a
@@ -38,12 +40,18 @@ interface LobbyPageProps {
  * by a POST, after the visitor has identified themselves — and `apps/api` collapses every
  * answer into one literal anyway.
  *
+ * ⚠⚠ BAL-579: A SIGNED-IN PARTICIPANT IS REDIRECTED to `/meetings/{id}/call` instead of knocking
+ * as a stranger. The check (`resolveLobbyMemberRedirect`) reads nothing without a session, and a
+ * signed-in NON-participant gets the same card as an anonymous visitor, so the page is still no
+ * oracle: only somebody already entitled to see the meeting learns anything, and what they learn
+ * is that they are being sent to it.
+ *
  * This is the same one-card property `/join/[token]` enforces (`page.test.tsx` asserts the
  * rendered-markup set has size 1), applied PRE-EMPTIVELY rather than after a lookup.
  *
- * ⚠ IT ALSO MAKES THE FILE TRIVIALLY SATISFY `join-link-never-writes.test.ts`, which scans
- * everything under `app/join` except `_actions/`: a page with no repository reference cannot
- * reference a participation mutator.
+ * ⚠ THE PAGE ITSELF HOLDS NO REPOSITORY REFERENCE — the participation read lives behind
+ * `resolveLobbyMemberRedirect` — so `join-link-never-writes.test.ts`, which scans everything
+ * under `app/join` except `_actions/`, still finds no participation mutator here.
  *
  * ⚠⚠ THE ROUTE IS PUBLIC FOR FREE, BUT IT WAS **NOT** REDACTION-COVERED FOR FREE — and an
  * earlier version of this note claimed it was, "verified, not assumed". It was neither.
@@ -100,6 +108,10 @@ export default async function LobbyPage({
   if (!meetingIdSchema.safeParse(meetingId).success) {
     return <JoinUnavailableNotice />;
   }
+
+  // ⚠ OUTSIDE ANY try/catch: `redirect()` throws by design. The resolver never throws itself.
+  const memberTarget = await resolveLobbyMemberRedirect(meetingId);
+  if (memberTarget !== null) redirect(memberTarget);
 
   return <LobbyClient meetingId={meetingId} />;
 }

@@ -20,6 +20,7 @@ const MEMBER: MeetingMemberPanelRegistration = {
     data: {
       guests: [],
       canHost: false,
+      canVouch: false,
       viewerSide: 'client' as const,
       participantCount: 1,
       participantCap: 10,
@@ -34,6 +35,7 @@ const MEMBER: MeetingMemberPanelRegistration = {
   decideAdmission: async () => ({ success: true }),
   resendLink: async () => ({ success: true }),
   removeGuest: async () => ({ success: true }),
+  vouchGuest: async () => ({ success: true }),
   files: {
     list: async () => ({ success: true, files: [] }),
     requestUpload: async () => ({ success: true, presignedUrl: 'x', key: 'y' }),

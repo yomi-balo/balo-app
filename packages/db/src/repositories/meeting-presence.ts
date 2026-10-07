@@ -598,6 +598,33 @@ export const meetingPresenceRepository = {
   },
 
   /**
+   * `true` while an ADMITTED, live `link` guest holds an open presence interval on this meeting.
+   *
+   * The lifecycle sweep's hold on the no-show rule. Keyed on `invite_channel = 'link'` alone, so
+   * staff and expert-side colleagues (observers too, but never `link` rows) cannot set it.
+   * Projects nothing: no guest column leaves this query.
+   */
+  async hasOpenAdmittedLinkGuest(meetingId: string, exec: DbExecutor = db): Promise<boolean> {
+    const [row] = await exec
+      .select({ one: sql<number>`1` })
+      .from(meetingPresence)
+      .innerJoin(meetingGuests, eq(meetingGuests.id, meetingPresence.meetingGuestId))
+      .where(
+        and(
+          eq(meetingPresence.meetingId, meetingId),
+          isNull(meetingPresence.leftAt),
+          isNull(meetingPresence.deletedAt),
+          eq(meetingGuests.inviteChannel, 'link'),
+          eq(meetingGuests.admission, 'admitted'),
+          isNull(meetingGuests.deletedAt),
+          isNull(meetingGuests.revokedAt)
+        )
+      )
+      .limit(1);
+    return row !== undefined;
+  },
+
+  /**
    * Every LIVE presence interval for a meeting, in join order. Queryable AFTER the meeting
    * ends — the rows are the durable billing input (BAL-412), not ephemeral room state.
    */

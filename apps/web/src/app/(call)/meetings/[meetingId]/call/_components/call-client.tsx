@@ -43,6 +43,7 @@ import { inviteMeetingGuestsAction } from '../_actions/invite-meeting-guests';
 import { decideGuestAdmissionAction } from '../_actions/decide-guest-admission';
 import { resendGuestLinkAction } from '../_actions/resend-guest-link';
 import { removeGuestAction } from '../_actions/remove-guest';
+import { vouchGuestAction } from '../_actions/vouch-guest';
 import { createMeetingRealtimeTokenAction } from '../_actions/create-meeting-realtime-token';
 import { fetchMeetingThreadAction } from '../_actions/fetch-meeting-thread';
 import { postMeetingMessageAction } from '../_actions/post-meeting-message';
@@ -506,6 +507,7 @@ export function CallClient({
         decideGuestAdmissionAction({ meetingId, guestId, decision }),
       resendLink: (guestId) => resendGuestLinkAction({ meetingId, guestId }),
       removeGuest: (guestId) => removeGuestAction({ meetingId, guestId }),
+      vouchGuest: (guestId, email) => vouchGuestAction({ meetingId, guestId, email }),
       files: {
         list: () => listMeetingFilesAction({ meetingId }),
         requestUpload: (input) => requestMeetingFileUploadAction({ meetingId, ...input }),

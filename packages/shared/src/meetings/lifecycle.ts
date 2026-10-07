@@ -356,6 +356,12 @@ export interface TerminalRuleInput {
    * never the row: this module stays clock-, env- and DB-free.
    */
   readonly venueReadyAt: Date | null;
+  /**
+   * `true` while an ADMITTED `link` guest holds an open presence interval. Holds the no-show rule
+   * (see {@link noShowHeldByLinkGuest}) until the overrun ceiling. Required, so every caller must
+   * answer it.
+   */
+  readonly admittedLinkGuestPresent: boolean;
 }
 
 /**
@@ -449,7 +455,7 @@ function overrunStopApplies(input: TerminalRuleInput): boolean {
  * booker when none exists, so a client who never joins IS charged the flat floor this rule's
  * shape (`no_show_client`) carries, and the expert who waited is paid it.
  */
-function noShowApplies(input: TerminalRuleInput): boolean {
+function noShowDue(input: TerminalRuleInput): boolean {
   const { presence, timers, now, scheduledStart } = input;
   if (
     input.status !== 'waiting_for_participants' ||
@@ -473,6 +479,22 @@ function noShowApplies(input: TerminalRuleInput): boolean {
   const floorFromClock = clockStart.getTime() + timers.noShowFloorMs;
   const floorFromSchedule = scheduledStart.getTime() + timers.noShowFloorMs;
   return now.getTime() >= floorFromClock && now.getTime() >= floorFromSchedule;
+}
+
+/**
+ * `true` when rule 2 is due but is HELD: an admitted `link` guest is present with the expert, so
+ * the call is a hand-off in progress rather than an abandoned one. The hold lapses at
+ * {@link overrunStopCeiling}, the hard stop that bounds every meeting; an emptied room ends via
+ * rule 4. The hold starts no billing.
+ */
+export function noShowHeldByLinkGuest(input: TerminalRuleInput): boolean {
+  if (!input.admittedLinkGuestPresent || !noShowDue(input)) return false;
+  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
+  return input.now.getTime() < ceiling.getTime();
+}
+
+function noShowApplies(input: TerminalRuleInput): boolean {
+  return noShowDue(input) && !noShowHeldByLinkGuest(input);
 }
 
 /**
@@ -612,7 +634,9 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  * ⚠ AND WHAT IS LEFT, NAMED RATHER THAN LEFT AS A GAP: a room somebody is STILL IN matches
  * nothing but #2 until the ceiling. An occupied `in_progress` meeting is bounded by #6 at
  * {@link overrunStopCeiling}, whatever the webhooks and the reconciler are doing, so it can no
- * longer stay open forever. The residual is a PRE-`in_progress` room the expert still holds
+ * longer stay open forever. A pre-`in_progress` room with the expert and an admitted `link` guest
+ * open matches nothing until the ceiling ({@link noShowHeldByLinkGuest}); rule 4 ends it if it
+ * empties first. The residual is a PRE-`in_progress` room the expert still holds
  * after a client left: it matches no rule (BAL-584 owns it, not this table).
  * `lifecycle.test.ts` executes the invariant over a status × presence-shape matrix.
  *

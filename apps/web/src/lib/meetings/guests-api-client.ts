@@ -149,6 +149,11 @@ export interface GuestsListResponse {
   guests: GuestForViewer[];
   canHost: boolean;
   /**
+   * BAL-579 — the server's per-actor verdict on whether the viewer may vouch for a link guest.
+   * ⚠ NEVER RE-DERIVED CLIENT-SIDE, same rule as `canHost`.
+   */
+  canVouch: boolean;
+  /**
    * BAL-476 — the viewer's own resolved side, computed SERVER-side from the tenancy gate.
    * ⚠ NEVER RE-DERIVED CLIENT-SIDE, same rule as `canHost`.
    */
@@ -203,6 +208,24 @@ export async function decideMeetingGuestAdmission(
   return callGuestsApi<{ id: string }>(
     `/meetings/${meetingId}/guests/${guestId}/${decision}`,
     'POST'
+  );
+}
+
+/**
+ * BAL-579 — `POST /meetings/:meetingId/guests/:guestId/vouch`: a client member vouches for a
+ * lobby guest, supplying the colleague's work email.
+ *
+ * ⚠ NO EMAIL IN ANY LOG LINE — `callGuestsApi` logs the path and method only.
+ */
+export async function vouchMeetingGuest(
+  meetingId: string,
+  guestId: string,
+  email: string
+): Promise<GuestsApiResult<{ id: string; admission: 'pre_admitted' | 'admitted' }>> {
+  return callGuestsApi<{ id: string; admission: 'pre_admitted' | 'admitted' }>(
+    `/meetings/${meetingId}/guests/${guestId}/vouch`,
+    'POST',
+    { email }
   );
 }
 

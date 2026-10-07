@@ -93,6 +93,12 @@ export interface MeetingGuestsPayload {
    */
   readonly canHost: boolean;
   /**
+   * BAL-579 — the server's per-actor verdict on vouching for a `link` guest (client side, and not
+   * the delivering expert). ⚠ Transmitted, never re-derived in this tier — same rule as
+   * `canHost`. It gates a button only; the route re-checks.
+   */
+  readonly canVouch: boolean;
+  /**
    * BAL-476 — the viewer's OWN resolved side, computed SERVER-side from
    * `authorizeMeetingParticipation`'s verdict and transmitted, exactly like `canHost`.
    *
@@ -161,6 +167,14 @@ export type DecideAdmissionActionResult =
  * `'failed'` in every single case — a PostHog breakdown with one bucket.
  */
 export type RemoveGuestActionResult =
+  | { readonly success: true }
+  | { readonly success: false; readonly error: string };
+
+/**
+ * BAL-579 — the vouch's answer. ⚠ NO `outcome` FIELD, like {@link RemoveGuestActionResult}: every
+ * refusal is a plain failure to the panel, and analytics only needs ok / failed.
+ */
+export type VouchActionResult =
   | { readonly success: true }
   | { readonly success: false; readonly error: string };
 
@@ -369,6 +383,8 @@ export interface MeetingMemberPanelRegistration {
   readonly resendLink: (guestId: string) => Promise<ResendLinkActionResult>;
   /** BAL-476 (R3) — revoke a same-party guest's access, and eject them if they are in the room. */
   readonly removeGuest: (guestId: string) => Promise<RemoveGuestActionResult>;
+  /** BAL-579 — vouch for a lobby guest, naming their work email. */
+  readonly vouchGuest: (guestId: string, email: string) => Promise<VouchActionResult>;
   readonly files: MeetingFilePanelActions;
   /**
    * BAL-437 — ⚠⚠ `null` ⇒ **NO CHAT SLOT AT ALL.** Resolved SERVER-SIDE in the RSC, not in the

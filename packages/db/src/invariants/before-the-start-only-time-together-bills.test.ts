@@ -404,6 +404,7 @@ describe('INVARIANT: before the scheduled start only time together bills; from t
         presence,
         timers: DEFAULT_MEETING_TIMERS,
         venueReadyAt: clock('09:00'),
+        admittedLinkGuestPresent: false,
       };
       expect(resolveTerminalRule({ ...base, now: clock('10:14') })).toBeNull();
       expect(resolveTerminalRule({ ...base, now: clock('10:15') })).toMatchObject({
@@ -423,6 +424,7 @@ describe('INVARIANT: before the scheduled start only time together bills; from t
         presence,
         timers: DEFAULT_MEETING_TIMERS,
         venueReadyAt: clock('09:00'),
+        admittedLinkGuestPresent: false,
       };
       expect(resolveTerminalRule({ ...base, now: clock('09:59') })).toBeNull();
       expect(resolveTerminalRule({ ...base, now: clock('10:04') })).toBeNull();

@@ -118,3 +118,22 @@ export function guestActionCopyFor(input: {
     : undefined;
   return known ?? GUEST_ACTION_COPY.request_failed;
 }
+
+/**
+ * BAL-579 — the in-call vouch flow's own copy. Failures reuse {@link GUEST_ACTION_COPY}.
+ *
+ * ⚠ GENDER-NEUTRAL ("they", the person's name). The body states the consequence plainly — time
+ * with the expert starts counting — because that is what the voucher is agreeing to.
+ */
+export const VOUCH_COPY = {
+  /** Draft, pending MJ — the queue note for somebody who may vouch but not admit. */
+  queueDisclosure:
+    "These people used the meeting link. Balo hasn't checked who they are. Vouch only if you recognise them.",
+  button: 'Vouch',
+  title: (name: string): string => `Vouch for ${name}?`,
+  body: "They'll join as your colleague, and time with the expert counts toward this consultation from now on. Only vouch for someone you recognise.",
+  field: 'Their work email',
+  confirm: 'Vouch',
+  cancel: 'Cancel',
+  success: (name: string): string => `${name} is in as your colleague.`,
+} as const;

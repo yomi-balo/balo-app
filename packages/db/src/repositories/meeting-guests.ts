@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, inArray, isNull, ne, sql, type SQL } from 'drizzle-orm';
-import { canonicalGuestEmail } from '@balo/shared/meetings';
+import { canonicalGuestEmail, presencePartyForGuest } from '@balo/shared/meetings';
 import { db } from '../client';
 import { meetingGuests, meetings } from '../schema';
 import type {
@@ -12,6 +12,7 @@ import type {
   MeetingParticipationRole,
 } from '../schema';
 import { auditEventsRepository } from './audit-events';
+import { meetingPresenceRepository, type PresenceWindow } from './meeting-presence';
 import { extendGuestExpiryForMeetingTx } from './_shared/guest-expiry';
 
 const ENTITY_TYPE = 'meeting_guest';
@@ -69,6 +70,25 @@ export interface DecideMeetingGuestAdmissionInput {
   decision: MeetingGuestAdmissionDecision;
   /** ATTRIBUTION — the host who admitted or denied. */
   deciderUserId: string;
+}
+
+export interface VouchLinkGuestInput {
+  meetingId: string;
+  guestId: string;
+  /** ATTRIBUTION — the client member vouching. Becomes the row's `invited_by_id`. */
+  voucherUserId: string;
+  /** ⚠ CANONICAL (`canonicalGuestEmail`), supplied by the voucher — never the self-declared lobby address. */
+  email: string;
+  emailDomain: string | null;
+  at: Date;
+  presenceWindow: PresenceWindow;
+}
+
+export interface VouchLinkGuestResult {
+  guest: MeetingGuest;
+  previousAdmission: Extract<MeetingGuestAdmission, 'pending' | 'admitted'>;
+  /** `true` when an open non-client presence interval was closed and reopened as `client`. */
+  presenceReclassified: boolean;
 }
 
 /**
@@ -842,6 +862,112 @@ export const meetingGuestsRepository = {
       );
 
       return row;
+    });
+  },
+
+  /**
+   * A client member vouches for a `link` guest: the row is rewritten IN PLACE as a client-party
+   * `email` guest attributed to the voucher, in ONE transaction with its audit row.
+   *
+   * · `pending` becomes `pre_admitted`; an `admitted` row stays `admitted`, keeping the host's stamp.
+   * · The address is the CALLER's canonical one — the self-declared lobby address is never adopted,
+   *   because an `email` row's address reads as verified.
+   * · An open presence interval whose party is not `client` is closed at `at` and reopened as the
+   *   party derived from the NEW channel, so billing starts at the vouch instant and never earlier.
+   * · A lost race (row no longer a live, unexpired `link` row awaiting or past admission) returns
+   *   `undefined` and writes nothing.
+   *
+   * ⚠ `23505` (another live client row already holds the address) is NOT caught — it propagates and
+   * aborts the transaction, so nothing is half-written.
+   * ⚠ The audit metadata carries no email, name or `token_hash`.
+   */
+  vouchLinkGuest: async (input: VouchLinkGuestInput): Promise<VouchLinkGuestResult | undefined> => {
+    return db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(meetingGuests)
+        .where(
+          and(
+            eq(meetingGuests.id, input.guestId),
+            eq(meetingGuests.meetingId, input.meetingId),
+            eq(meetingGuests.inviteChannel, 'link'),
+            eq(meetingGuests.party, 'client'),
+            inArray(meetingGuests.admission, ['pending', 'admitted']),
+            isNull(meetingGuests.deletedAt),
+            isNull(meetingGuests.revokedAt),
+            gt(meetingGuests.expiresAt, sql`now()`)
+          )
+        )
+        .for('update');
+      if (locked === undefined) {
+        return undefined;
+      }
+
+      const previousAdmission = locked.admission === 'admitted' ? 'admitted' : 'pending';
+      const [row] = await tx
+        .update(meetingGuests)
+        .set({
+          inviteChannel: 'email',
+          invitedById: input.voucherUserId,
+          email: input.email,
+          emailDomain: input.emailDomain,
+          admission: previousAdmission === 'pending' ? 'pre_admitted' : 'admitted',
+          updatedAt: sql`now()`,
+        })
+        .where(eq(meetingGuests.id, locked.id))
+        .returning();
+      if (row === undefined) {
+        return undefined;
+      }
+
+      const identity = { userId: null, meetingGuestId: row.id };
+      const open = await meetingPresenceRepository.findOpen(input.meetingId, identity, tx);
+      const party = presencePartyForGuest({ party: 'client', inviteChannel: 'email' });
+      let presenceReclassified = false;
+      if (open !== undefined && open.party !== party) {
+        const closed = await meetingPresenceRepository.close(
+          {
+            meetingId: input.meetingId,
+            ...identity,
+            leftAt: input.at,
+            window: input.presenceWindow,
+          },
+          tx
+        );
+        // A lost close (a leave or an end committed first) opens nothing.
+        if (closed !== undefined) {
+          await meetingPresenceRepository.open(
+            {
+              meetingId: input.meetingId,
+              ...identity,
+              party,
+              joinedAt: input.at,
+              window: input.presenceWindow,
+            },
+            tx
+          );
+          presenceReclassified = true;
+        }
+      }
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.voucherUserId,
+          action: 'meeting_guest.vouched',
+          entityType: ENTITY_TYPE,
+          entityId: row.id,
+          metadata: {
+            meetingId: row.meetingId,
+            fromChannel: 'link',
+            previousAdmission,
+            admission: row.admission,
+            presenceReclassified,
+          },
+        },
+        tx
+      );
+
+      return { guest: row, previousAdmission, presenceReclassified };
     });
   },
 

@@ -15,6 +15,8 @@ import {
 
 const DAY_MS = 86_400_000;
 
+const PRESENCE_WINDOW = { notAfter: new Date(Date.now() + 30 * DAY_MS) };
+
 /** A distinct 64-char hex hash per call — the shape `apps/api`'s mint produces. */
 let hashSeq = 0;
 function tokenHash(): string {
@@ -3404,5 +3406,214 @@ describe('meeting_presence — the BAL-408 guest identity (D7)', () => {
       .where(eq(meetingPresence.id, interval.id));
     expect(after?.meetingGuestId).toBeNull();
     expect(after?.party).toBe('client');
+  });
+});
+
+describe('meetingGuestsRepository.vouchLinkGuest (BAL-579)', () => {
+  const at = new Date();
+
+  async function linkGuest(
+    admission: 'pending' | 'admitted',
+    meetingId?: string
+  ): Promise<{ guest: MeetingGuest; meetingId: string }> {
+    const seeded = await meetingGuestFactory({
+      ...(meetingId === undefined ? {} : { meetingId }),
+      values: {
+        inviteChannel: 'link',
+        invitedById: null,
+        admission,
+        email: `self-declared${(hashSeq += 1)}@attacker.test`,
+        emailDomain: 'attacker.test',
+        ...(admission === 'admitted' ? { admissionDecidedAt: new Date() } : {}),
+      },
+    });
+    return { guest: seeded.guest, meetingId: seeded.meetingId };
+  }
+
+  function vouch(
+    voucher: string,
+    seeded: { guest: MeetingGuest; meetingId: string },
+    email = 'colleague@northwind.test'
+  ): ReturnType<typeof meetingGuestsRepository.vouchLinkGuest> {
+    return meetingGuestsRepository.vouchLinkGuest({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      voucherUserId: voucher,
+      email,
+      emailDomain: 'northwind.test',
+      at,
+      presenceWindow: PRESENCE_WINDOW,
+    });
+  }
+
+  it('moves a pending link row to a pre_admitted email row, adopting the voucher address, with one audit row', async () => {
+    const voucher = await userFactory();
+    const seeded = await linkGuest('pending');
+
+    const result = await vouch(voucher.id, seeded);
+
+    expect(result?.previousAdmission).toBe('pending');
+    expect(result?.presenceReclassified).toBe(false);
+    expect(result?.guest).toMatchObject({
+      id: seeded.guest.id,
+      inviteChannel: 'email',
+      invitedById: voucher.id,
+      admission: 'pre_admitted',
+      email: 'colleague@northwind.test',
+      emailDomain: 'northwind.test',
+      party: 'client',
+      participationRole: 'guest',
+      name: seeded.guest.name,
+      accessScope: seeded.guest.accessScope,
+      tokenHash: seeded.guest.tokenHash,
+    });
+    expect(result?.guest.admissionDecidedAt).toBeNull();
+
+    const audits = await guestAuditRows(seeded.guest.id, 'meeting_guest.vouched');
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(voucher.id);
+    expect(audits[0]?.metadata).toEqual({
+      meetingId: seeded.meetingId,
+      fromChannel: 'link',
+      previousAdmission: 'pending',
+      admission: 'pre_admitted',
+      presenceReclassified: false,
+    });
+  });
+
+  it('keeps an admitted row admitted with the host decision stamp', async () => {
+    const voucher = await userFactory();
+    const seeded = await linkGuest('admitted');
+
+    const result = await vouch(voucher.id, seeded);
+
+    expect(result?.previousAdmission).toBe('admitted');
+    expect(result?.guest.admission).toBe('admitted');
+    expect(result?.guest.admissionDecidedAt).toEqual(seeded.guest.admissionDecidedAt);
+  });
+
+  it('closes an open observer interval at `at` and reopens it as client', async () => {
+    const voucher = await userFactory();
+    const seeded = await linkGuest('admitted');
+    await db.insert(meetingPresence).values({
+      meetingId: seeded.meetingId,
+      meetingGuestId: seeded.guest.id,
+      party: 'observer',
+      joinedAt: new Date(at.getTime() - 60_000),
+    });
+
+    const result = await vouch(voucher.id, seeded);
+
+    expect(result?.presenceReclassified).toBe(true);
+    const rows = await db
+      .select()
+      .from(meetingPresence)
+      .where(eq(meetingPresence.meetingGuestId, seeded.guest.id))
+      .orderBy(asc(meetingPresence.joinedAt));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ party: 'observer', leftAt: at });
+    expect(rows[1]).toMatchObject({ party: 'client', joinedAt: at, leftAt: null });
+    const audits = await guestAuditRows(seeded.guest.id, 'meeting_guest.vouched');
+    expect(audits[0]?.metadata).toMatchObject({ presenceReclassified: true });
+  });
+
+  it('leaves an already-client interval alone', async () => {
+    const voucher = await userFactory();
+    const seeded = await linkGuest('admitted');
+    await db.insert(meetingPresence).values({
+      meetingId: seeded.meetingId,
+      meetingGuestId: seeded.guest.id,
+      party: 'client',
+      joinedAt: new Date(at.getTime() - 60_000),
+    });
+
+    const result = await vouch(voucher.id, seeded);
+
+    expect(result?.presenceReclassified).toBe(false);
+    const rows = await db
+      .select()
+      .from(meetingPresence)
+      .where(eq(meetingPresence.meetingGuestId, seeded.guest.id));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('opens no client interval when the guest has no open interval', async () => {
+    const voucher = await userFactory();
+    const seeded = await linkGuest('admitted');
+    await db.insert(meetingPresence).values({
+      meetingId: seeded.meetingId,
+      meetingGuestId: seeded.guest.id,
+      party: 'observer',
+      joinedAt: new Date(at.getTime() - 120_000),
+      leftAt: new Date(at.getTime() - 60_000),
+    });
+
+    const result = await vouch(voucher.id, seeded);
+
+    expect(result?.presenceReclassified).toBe(false);
+    const rows = await db
+      .select()
+      .from(meetingPresence)
+      .where(eq(meetingPresence.meetingGuestId, seeded.guest.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.party).toBe('observer');
+  });
+
+  it('returns undefined and writes nothing for a lost race, a non-link row and a foreign meeting', async () => {
+    const voucher = await userFactory();
+    const winner = await linkGuest('pending');
+    await vouch(voucher.id, winner);
+    // The row is `email` now, so a second vouch finds nothing.
+    await expect(vouch(voucher.id, winner, 'other@northwind.test')).resolves.toBeUndefined();
+
+    const emailRow = await meetingGuestFactory();
+    await expect(
+      vouch(voucher.id, { guest: emailRow.guest, meetingId: emailRow.meetingId })
+    ).resolves.toBeUndefined();
+
+    const link = await linkGuest('pending');
+    const other = await meetingFactory();
+    await expect(
+      vouch(voucher.id, { guest: link.guest, meetingId: other.meeting.id })
+    ).resolves.toBeUndefined();
+    expect(await guestAuditActions(link.guest.id)).toEqual([]);
+  });
+
+  it('refuses a denied, revoked or expired link row', async () => {
+    const voucher = await userFactory();
+    const revoked = await meetingGuestFactory({
+      values: {
+        inviteChannel: 'link',
+        invitedById: null,
+        admission: 'pending',
+        revokedAt: new Date(),
+      },
+    });
+    const expired = await meetingGuestFactory({
+      values: {
+        inviteChannel: 'link',
+        invitedById: null,
+        admission: 'pending',
+        expiresAt: new Date(Date.now() - 1000),
+      },
+    });
+    for (const seeded of [revoked, expired]) {
+      await expect(
+        vouch(voucher.id, { guest: seeded.guest, meetingId: seeded.meetingId })
+      ).resolves.toBeUndefined();
+    }
+  });
+
+  it('rejects with 23505 when another live client row holds the address (last statement)', async () => {
+    const voucher = await userFactory();
+    const seeded = await linkGuest('pending');
+    await meetingGuestFactory({
+      meetingId: seeded.meetingId,
+      values: { email: 'taken@northwind.test' },
+    });
+
+    await expect(vouch(voucher.id, seeded, 'taken@northwind.test')).rejects.toMatchObject({
+      code: '23505',
+    });
   });
 });
