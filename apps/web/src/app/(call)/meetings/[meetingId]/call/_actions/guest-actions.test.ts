@@ -292,6 +292,8 @@ describe('decideGuestAdmissionAction', () => {
       success: false,
       error: GUEST_ACTION_COPY.unauthenticated,
       outcome: 'failed',
+      status: 401,
+      code: 'unauthenticated',
     });
     expect(mockDecideMeetingGuestAdmission).not.toHaveBeenCalled();
     expect(log.error).toHaveBeenCalledTimes(1);
@@ -345,6 +347,8 @@ describe('decideGuestAdmissionAction', () => {
       success: false,
       error: GUEST_ACTION_COPY.guest_not_pending,
       outcome: 'already_decided',
+      status: 409,
+      code: 'guest_not_pending',
     });
     expect(log.warn).toHaveBeenCalled();
     expect(log.error).not.toHaveBeenCalled();
@@ -402,6 +406,18 @@ describe('decideGuestAdmissionAction', () => {
     expect(containsEmailAddress(leaked)).toBe(true);
   });
 
+  it('⚠ an api refusal surfaces its status and code verbatim on the failure result', async () => {
+    mockDecideMeetingGuestAdmission.mockResolvedValue({ ok: false, status: 503, code: 'x' });
+
+    const result = await decideGuestAdmissionAction({
+      meetingId: MEETING_ID,
+      guestId: GUEST_ID,
+      decision: 'deny',
+    });
+
+    expect(result).toMatchObject({ success: false, outcome: 'failed', status: 503, code: 'x' });
+  });
+
   it('rejects an unknown decision before the hop', async () => {
     await expect(
       decideGuestAdmissionAction({
@@ -437,7 +453,12 @@ describe('resendGuestLinkAction', () => {
 
     const result = await resendGuestLinkAction({ meetingId: MEETING_ID, guestId: GUEST_ID });
 
-    expect(result).toEqual({ success: false, error: GUEST_ACTION_COPY.unauthenticated });
+    expect(result).toEqual({
+      success: false,
+      error: GUEST_ACTION_COPY.unauthenticated,
+      status: 401,
+      code: 'unauthenticated',
+    });
     expect(mockResendMeetingGuestLink).not.toHaveBeenCalled();
     expect(log.error).toHaveBeenCalledTimes(1);
   });
@@ -468,6 +489,14 @@ describe('resendGuestLinkAction', () => {
     expect(containsEmailAddress(loggedText())).toBe(false);
   });
 
+  it('⚠ an api refusal surfaces its status and code verbatim on the failure result', async () => {
+    mockResendMeetingGuestLink.mockResolvedValue({ ok: false, status: 503, code: 'x' });
+
+    await expect(
+      resendGuestLinkAction({ meetingId: MEETING_ID, guestId: GUEST_ID })
+    ).resolves.toMatchObject({ success: false, status: 503, code: 'x' });
+  });
+
   it('maps `guest_link_not_resendable` to its own sentence', async () => {
     mockResendMeetingGuestLink.mockResolvedValue({
       ok: false,
@@ -480,6 +509,8 @@ describe('resendGuestLinkAction', () => {
     ).resolves.toEqual({
       success: false,
       error: GUEST_ACTION_COPY.guest_link_not_resendable,
+      status: 409,
+      code: 'guest_link_not_resendable',
     });
   });
 
@@ -561,6 +592,8 @@ describe('removeGuestAction', () => {
     await expect(removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID })).resolves.toEqual({
       success: false,
       error: GUEST_ACTION_COPY.unauthenticated,
+      status: 401,
+      code: 'unauthenticated',
     });
     expect(mockRemoveMeetingGuest).not.toHaveBeenCalled();
     expect(log.error).toHaveBeenCalledTimes(1);
@@ -569,7 +602,12 @@ describe('removeGuestAction', () => {
   it('refuses a malformed id without reaching the api', async () => {
     await expect(
       removeGuestAction({ meetingId: 'not-a-uuid', guestId: GUEST_ID })
-    ).resolves.toEqual({ success: false, error: 'Invalid request.' });
+    ).resolves.toEqual({
+      success: false,
+      error: 'Invalid request.',
+      status: 400,
+      code: 'invalid_request',
+    });
     expect(mockRemoveMeetingGuest).not.toHaveBeenCalled();
   });
 
@@ -583,6 +621,8 @@ describe('removeGuestAction', () => {
     await expect(removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID })).resolves.toEqual({
       success: false,
       error: copy,
+      status,
+      code,
     });
   });
 
@@ -604,7 +644,12 @@ describe('removeGuestAction', () => {
 
     const result = await removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID });
 
-    expect(Object.keys(result).sort((a, b) => a.localeCompare(b))).toEqual(['error', 'success']);
+    expect(Object.keys(result).sort((a, b) => a.localeCompare(b))).toEqual([
+      'code',
+      'error',
+      'status',
+      'success',
+    ]);
   });
 
   it('⚠ no address, name or token reaches any log line, on either arm', async () => {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSessionId } from '@daily-co/daily-react';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { Check, Link2, Mail, ShieldCheck, UserMinus, UserPlus } from 'lucide-react';
 import { MAX_LOBBY_QUEUE } from '@balo/shared/meetings';
@@ -198,6 +199,8 @@ export function PeoplePanel({
               ...meetingProps,
               decision,
               outcome: result.outcome,
+              status: result.status,
+              code: result.code,
             });
             // ⚠⚠ A RACE IS NOT A FAILURE. `already_decided` means the other host's decision
             // stands — the outcome this host wanted has happened either way, so it is an
@@ -207,6 +210,10 @@ export function PeoplePanel({
           // ⚠ REFETCH ON BOTH ARMS. After a race the local list is stale by definition, and
           // after a success the queue and the seat count have both moved.
           await refetch();
+        })
+        .catch((error: unknown) => {
+          Sentry.captureException(error);
+          report('error', GUEST_ACTION_COPY.request_failed);
         })
         .finally(() => markPending(guestId, false));
     },
@@ -222,6 +229,7 @@ export function PeoplePanel({
           track(MEETING_PANEL_EVENTS.LINK_RESENT, {
             ...meetingProps,
             outcome: result.success ? 'ok' : 'failed',
+            ...(result.success ? {} : { status: result.status, code: result.code }),
           });
           if (result.success) {
             report('success', `A fresh link is on its way to ${displayName}.`);
@@ -229,6 +237,10 @@ export function PeoplePanel({
             report('error', result.error);
           }
           await refetch();
+        })
+        .catch((error: unknown) => {
+          Sentry.captureException(error);
+          report('error', GUEST_ACTION_COPY.request_failed);
         })
         .finally(() => markPending(guestId, false));
     },
@@ -627,6 +639,17 @@ function PeoplePanelFooter({
    * follows for its own opener.
    */
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * ⚠ FOCUS FOLLOWS THE EXPLICIT INTENT, NOT THE PAGE LOAD. The field only exists because the
+   * person just pressed "Add people", so on the closed-to-open transition focus moves into it
+   * and a keyboard user is not left hunting for the field the button revealed, mid-call. Focus
+   * is returned to "Add people" on cancel; see `closeComposer`.
+   */
+  useEffect(() => {
+    if (isAdding) inputRef.current?.focus();
+  }, [isAdding]);
 
   useEffect(
     () => () => {
@@ -676,6 +699,10 @@ function PeoplePanelFooter({
             : result.error
         );
         return undefined;
+      })
+      .catch((error: unknown) => {
+        Sentry.captureException(error);
+        report('error', GUEST_ACTION_COPY.request_failed);
       })
       .finally(() => setIsSending(false));
   }, [email, isSending, panels, meetingProps, onInvited, report, closeComposer]);
@@ -727,19 +754,7 @@ function PeoplePanelFooter({
               onChange={(event) => setEmail(event.target.value)}
               onKeyDown={onKeyDown}
               placeholder="Enter an email address"
-              /*
-                ⚠ AUTOFOCUS IS CORRECT HERE AND NOWHERE NEARBY. It is not a page-load autofocus
-                (the usual reason the attribute is a smell) — the field only exists because the
-                person just pressed "Add people", so focus is following an explicit intent. The
-                alternative is a keyboard user pressing a button and then hunting for the field
-                it revealed, mid-call. Focus is returned to "Add people" on cancel; see
-                `closeComposer`.
-
-                ⚠ NO `eslint-disable` HERE: `jsx-a11y/no-autofocus` is NOT configured in this
-                repo, and a disable comment for an unknown rule is itself a warning under
-                `--max-warnings 0`.
-              */
-              autoFocus
+              ref={inputRef}
               className="text-foreground placeholder:text-muted-foreground min-h-11 flex-1 bg-transparent text-sm outline-none"
             />
           </div>

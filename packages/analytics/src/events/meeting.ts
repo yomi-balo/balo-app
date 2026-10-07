@@ -35,6 +35,8 @@ export const MEETING_SERVER_EVENTS = {
   MEETING_WAITING_ABANDONED: 'meeting_waiting_abandoned',
   /** The Balo-ops salvage alert actually PUBLISHED — not merely that it was scheduled. */
   MEETING_EXPERT_ABSENT_ALERT: 'meeting_expert_absent_alert',
+  /** The client-absent nudge actually PUBLISHED, once per promise — not merely that it was scheduled. */
+  MEETING_CLIENT_ABSENT_NUDGED: 'meeting_client_absent_nudged',
   /** Nobody delivering ever turned up and the meeting was terminated as a missed call. */
   MEETING_MISSED_CALL: 'meeting_missed_call',
   /**
@@ -231,6 +233,23 @@ export interface MeetingServerEventMap {
      * alert is anchored on `venueAbsenceAnchor`, not the bare start).
      */
     minutes_past_start: number;
+    distinct_id: string;
+  };
+
+  /**
+   * The client-absent nudge PUBLISHED, once per promise (the guard's `attempts <= 1`).
+   *
+   * ⚠ EMITTED WHEN IT ACTUALLY PUBLISHES, NOT WHEN IT IS SCHEDULED — the fire-time guard skips
+   * it whenever the client turned up or the expert left. No PII: `distinct_id` is the meeting id.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_CLIENT_ABSENT_NUDGED]: {
+    meeting_id: string;
+    /** Size of the rebuilt recipient set the nudge was published to. */
+    recipient_count: number;
+    /** Whether the meeting's booker is in that set (as an admin or as a live participant). */
+    included_booking_member: boolean;
+    /** Whether the booker was ADDED beyond the admins (a non-admin who still participates). */
+    booker_added_beyond_admins: boolean;
     distinct_id: string;
   };
 

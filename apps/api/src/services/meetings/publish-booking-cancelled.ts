@@ -26,22 +26,23 @@
  * resolved context and the owning company, so it can make that read itself:
  *
  *   · CLIENT-initiated  ⇒ `recipientId` = the acting user (their own confirmation);
- *                         `recipientUserIds` OMITTED, so the fan-out rule delivers nothing and
- *                         nobody is told twice. The EXPERT side is reached by the shipped
+ *                         `recipientUserIds` = the meeting's BOOKER alone, and only when a
+ *                         colleague (not the booker) cancelled and the booker still holds
+ *                         `participate`; otherwise OMITTED. The list never contains the actor, so
+ *                         the actor's confirmation and the booker's colleague notice are disjoint
+ *                         and nobody is told twice. The EXPERT side is reached by the shipped
  *                         single-recipient `recipient: 'expert'` rule.
  *   · EXPERT/ADMIN-initiated ⇒ `recipientId` OMITTED (the client rule skips);
- *                         `recipientUserIds` = the CLIENT company's live `MANAGE_MEMBERS`
- *                         holders. The expert still gets their own confirmation from the
+ *                         `recipientUserIds` = the CLIENT company's owner/admins plus the
+ *                         meeting's booker while they still hold `participate`
+ *                         (`clientPartyRecipientsRepository.resolveClientPartyRecipients`, the
+ *                         one definition `meeting-absence.ts` and the reschedule proposal also
+ *                         use). The expert still gets their own confirmation from the
  *                         unconditioned expert rule.
  *
- * ⚠ THE NARROWING IS STATED RATHER THAN HIDDEN, and it is the same one `meeting-absence.ts`
- * records for its client nudge: `partyMembershipsRepository` exposes no `listMemberUserIds`, so
- * the widest set reachable without adding an un-integration-tested repository method is the
- * `MANAGE_MEMBERS` holders. Consequence, plainly: a plain `member` who booked the consultation
- * is not emailed directly, only their owner/admin. A follow-up ticket should add a live-member
- * listing (with its integration test) and widen this one call — the same follow-up
- * `meeting-absence.ts` already asks for. The role set is derived from `@balo/shared/authz`'s map
- * INSIDE the repository, never from a `role ===` here.
+ * ⚠ THE SET IS NOT EVERY LIVE MEMBER: a plain `member` who did not book the consultation is not
+ * emailed. A guest or delegate with no user row is unreachable by construction. The role
+ * meaning comes from `@balo/shared/authz` INSIDE the repository, never from a `role ===` here.
  *
  * ⚠ COUNTERPARTY CONTACT CONCEALMENT (ADR-1044 §3). No address is ever assembled here: the
  * engine resolves recipients from IDs and the email adapter fetches the address from the `users`
@@ -57,9 +58,9 @@
 import {
   agenciesRepository,
   caseEngagementsRepository,
+  clientPartyRecipientsRepository,
   companiesRepository,
   expertsRepository,
-  partyMembershipsRepository,
   usersRepository,
 } from '@balo/db';
 import {
@@ -185,17 +186,45 @@ function buildActorLabel(
 }
 
 /**
- * The CLIENT-side recipients for an expert- or admin-initiated cancel. Empty on the client arm
- * (the actor is already named by `recipientId`, and telling them twice is noise).
+ * The booker of a CLIENT-initiated cancel, when a colleague cancelled: the booker is told who
+ * cancelled their consultation. Empty when the booker is unresolvable, is the actor (already
+ * confirmed by `recipientId`; telling them twice is noise), or no longer holds `participate`.
+ */
+async function resolveBookerToTell(
+  meetingId: string,
+  companyId: string,
+  actorUserId: string
+): Promise<string[]> {
+  const bookerUserId = await clientPartyRecipientsRepository.findMeetingBookerUserId(meetingId);
+  if (bookerUserId === null || bookerUserId === actorUserId) {
+    return [];
+  }
+  const stillParticipates = await clientPartyRecipientsRepository.bookerStillParticipatesInCompany(
+    companyId,
+    bookerUserId
+  );
+  return stillParticipates ? [bookerUserId] : [];
+}
+
+/**
+ * The CLIENT-side recipients other than the actor: on an expert/admin cancel the company's
+ * owner/admins plus the booker; on a client cancel the booker alone, and only when a colleague
+ * cancelled.
  */
 async function resolveCounterpartyRecipients(
   cancelledBy: CancelActorRole,
-  companyId: string
+  meetingId: string,
+  companyId: string,
+  actorUserId: string
 ): Promise<string[]> {
   if (cancelledBy === 'client') {
-    return [];
+    return resolveBookerToTell(meetingId, companyId, actorUserId);
   }
-  return partyMembershipsRepository.listAdminUserIds('company', companyId);
+  const { recipientUserIds } = await clientPartyRecipientsRepository.resolveClientPartyRecipients({
+    meetingId,
+    companyId,
+  });
+  return recipientUserIds;
 }
 
 /**
@@ -241,19 +270,22 @@ export async function publishBookingCancelled(
     }
   );
 
-  const recipientUserIds = await resolveCounterpartyRecipients(cancelledBy, companyId).catch(
-    (error: unknown) => {
-      log.error(
-        {
-          meetingId,
-          engagementId,
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'Failed to resolve booking.cancelled counterparty recipients — the expert is still notified'
-      );
-      return [] as string[];
-    }
-  );
+  const recipientUserIds = await resolveCounterpartyRecipients(
+    cancelledBy,
+    meetingId,
+    companyId,
+    actorUserId
+  ).catch((error: unknown) => {
+    log.error(
+      {
+        meetingId,
+        engagementId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Failed to resolve booking.cancelled counterparty recipients — the expert is still notified'
+    );
+    return [] as string[];
+  });
 
   if (cancelledBy !== 'client' && recipientUserIds.length === 0) {
     // ⚠ NOT a silent send. Both client-side channels fan out from this list, so an empty one
@@ -262,7 +294,7 @@ export async function publishBookingCancelled(
     // makes "the client was not reached" legible in the log.
     log.warn(
       { meetingId, engagementId, companyId, cancelledBy },
-      'No live MANAGE_MEMBERS holder on the client company — the client side of this cancellation reaches nobody'
+      'No live recipient on the client company — the client side of this cancellation reaches nobody'
     );
   }
 

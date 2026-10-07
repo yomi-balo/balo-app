@@ -192,6 +192,38 @@ function readCancelReason(value: unknown): BookingCancelledReason {
 }
 
 /**
+ * The CLIENT-side `booking.cancelled` email, shared by `booking-cancelled-client` (the acting
+ * client and the expert/admin fan-out) and `booking-cancelled-client-colleague` (the booker told
+ * about another member's cancel, who must not read "You cancelled"). `recipientIsActor` is
+ * passed only by the colleague key.
+ */
+function bookingCancelledClientTemplate(
+  data: Record<string, unknown>,
+  recipientIsActor?: boolean
+): TemplateOutput {
+  const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+  const engagementId = (data.engagementId as string) ?? '';
+  const cancelledBy = readCancelledBy(data.cancelledBy);
+  const reason = readCancelReason(data.reason);
+  return {
+    component: React.createElement(BookingCancelledClientEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      counterpartyLabel: expertParty,
+      cancelledByLabel: (data.cancelledByLabel as string) ?? expertParty,
+      caseTitle: (data.caseTitle as string) ?? 'your case',
+      scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+      durationMinutes: numberCount(data.durationMinutes),
+      cancelledBy,
+      reason,
+      caseUrl: `${BASE_URL}/cases/${engagementId}`,
+      baseUrl: BASE_URL,
+      ...(recipientIsActor === undefined ? {} : { recipientIsActor }),
+    }),
+    subject: bookingCancelledSubject('client', expertParty, cancelledBy, reason, recipientIsActor),
+  };
+}
+
+/**
  * BAL-412 (F16, ADR-1044 §7) — THE ONE EXTRA SENTENCE A `no_show_client` RECEIPT CARRIES.
  *
  * ⚠ WITHOUT IT THE NO-SHOW RECEIPT IS THE ORDINARY RECEIPT. `missed_call` (the expert never
@@ -2045,27 +2077,12 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // (`cancelledByLabel`) is assembled by the publisher, person-with-"@ party".
   // ⚠ `holdReleased` IS DELIBERATELY NOT PASSED. The email never mentions the hold — that line
   // is in-app only (the ticket: no money moved, and an email implies something went wrong).
-  'booking-cancelled-client': (data) => {
-    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
-    const engagementId = (data.engagementId as string) ?? '';
-    const cancelledBy = readCancelledBy(data.cancelledBy);
-    const reason = readCancelReason(data.reason);
-    return {
-      component: React.createElement(BookingCancelledClientEmail, {
-        firstName: (data.recipientName as string) ?? 'there',
-        counterpartyLabel: expertParty,
-        cancelledByLabel: (data.cancelledByLabel as string) ?? expertParty,
-        caseTitle: (data.caseTitle as string) ?? 'your case',
-        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
-        durationMinutes: numberCount(data.durationMinutes),
-        cancelledBy,
-        reason,
-        caseUrl: `${BASE_URL}/cases/${engagementId}`,
-        baseUrl: BASE_URL,
-      }),
-      subject: bookingCancelledSubject('client', expertParty, cancelledBy, reason),
-    };
-  },
+  'booking-cancelled-client': (data) => bookingCancelledClientTemplate(data),
+
+  // The BOOKER, told that a COLLEAGUE cancelled (`cancelledBy: 'client'`, but the recipient is not
+  // the actor). Same copy as above with the actor inference switched off, so the booker reads who
+  // cancelled rather than "You cancelled".
+  'booking-cancelled-client-colleague': (data) => bookingCancelledClientTemplate(data, false),
 
   // BAL-410 — the EXPERT half. Prospective copy names the client COMPANY.
   'booking-cancelled-expert': (data) => {

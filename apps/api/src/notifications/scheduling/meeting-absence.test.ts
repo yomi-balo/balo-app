@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockMeetingFindById,
   mockListByMeeting,
-  mockListAdminUserIds,
+  mockResolveRecipients,
   mockScheduleNotification,
   mockTrackServer,
   mockWarn,
@@ -12,7 +12,7 @@ const {
 } = vi.hoisted(() => ({
   mockMeetingFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
-  mockListAdminUserIds: vi.fn(),
+  mockResolveRecipients: vi.fn(),
   mockScheduleNotification: vi.fn(),
   mockTrackServer: vi.fn(),
   mockWarn: vi.fn(),
@@ -26,11 +26,14 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockMeetingFindById },
   meetingPresenceRepository: { listByMeeting: mockListByMeeting },
-  partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
+  clientPartyRecipientsRepository: { resolveClientPartyRecipients: mockResolveRecipients },
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
-  MEETING_SERVER_EVENTS: { MEETING_EXPERT_ABSENT_ALERT: 'meeting_expert_absent_alert' },
+  MEETING_SERVER_EVENTS: {
+    MEETING_EXPERT_ABSENT_ALERT: 'meeting_expert_absent_alert',
+    MEETING_CLIENT_ABSENT_NUDGED: 'meeting_client_absent_nudged',
+  },
 }));
 vi.mock('./schedule.js', () => ({ scheduleNotification: mockScheduleNotification }));
 // R6F-13 — the closed-case read behind both client-nudge guards.
@@ -286,7 +289,11 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
     vi.clearAllMocks();
     mockMeetingFindById.mockResolvedValue(meeting());
     mockListByMeeting.mockResolvedValue(EXPERT_WAITING);
-    mockListAdminUserIds.mockResolvedValue(['user-a', 'user-b']);
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: ['user-a', 'user-b'],
+      includedBookingMember: false,
+      bookerAddedBeyondAdmins: false,
+    });
     // An ACTIVE case by default — nothing was closed.
     mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
   });
@@ -299,16 +306,77 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
   });
 
   /**
-   * ⚠ THE RECIPIENT LIST IS **REBUILT** FROM LIVE MEMBERSHIP, never inherited. A member who left
+   * ⚠ THE RECIPIENT LIST IS **REBUILT** FROM LIVE STATE, never inherited. An admin who left
    * the company between schedule and fire must not be nudged, and one who joined should be.
    */
-  it('⚠ REBUILDS recipientUserIds from live membership, discarding the stored value', async () => {
+  it('⚠ REBUILDS recipientUserIds from the live resolver, discarding the stored value', async () => {
     const result = await meetingClientAbsentRecheck(
       row({ companyId: COMPANY_ID, recipientUserIds: ['stale-user'] })
     );
 
     expect(result.publish && result.payload.recipientUserIds).toEqual(['user-a', 'user-b']);
-    expect(mockListAdminUserIds).toHaveBeenCalledWith('company', COMPANY_ID);
+    expect(mockResolveRecipients).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      companyId: COMPANY_ID,
+    });
+  });
+
+  describe('⚠ meeting_client_absent_nudged emission', () => {
+    it("emits once, with the resolver's count and booker flag, on the first publish attempt", async () => {
+      mockResolveRecipients.mockResolvedValue({
+        recipientUserIds: ['user-a', 'user-b', 'booker'],
+        includedBookingMember: true,
+        bookerAddedBeyondAdmins: true,
+      });
+
+      const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }, 1));
+
+      expect(result.publish).toBe(true);
+      expect(mockTrackServer).toHaveBeenCalledTimes(1);
+      expect(mockTrackServer).toHaveBeenCalledWith('meeting_client_absent_nudged', {
+        meeting_id: MEETING_ID,
+        recipient_count: 3,
+        included_booking_member: true,
+        booker_added_beyond_admins: true,
+        distinct_id: MEETING_ID,
+      });
+    });
+
+    it('emits booker_added_beyond_admins false when the booker is an admin already in the set', async () => {
+      mockResolveRecipients.mockResolvedValue({
+        recipientUserIds: ['user-a', 'user-b'],
+        includedBookingMember: true,
+        bookerAddedBeyondAdmins: false,
+      });
+
+      await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }, 1));
+
+      expect(mockTrackServer).toHaveBeenCalledWith(
+        'meeting_client_absent_nudged',
+        expect.objectContaining({
+          included_booking_member: true,
+          booker_added_beyond_admins: false,
+        })
+      );
+    });
+
+    it('does not emit again on a re-claimed attempt (attempts > 1), though it still publishes', async () => {
+      const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }, 2));
+
+      expect(result.publish).toBe(true);
+      expect(mockTrackServer).not.toHaveBeenCalled();
+    });
+
+    it('does not emit when the guard skips', async () => {
+      mockResolveRecipients.mockResolvedValue({
+        recipientUserIds: [],
+        includedBookingMember: false,
+      });
+
+      await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+
+      expect(mockTrackServer).not.toHaveBeenCalled();
+    });
   });
 
   it('SKIPS when a client-side participant arrived', async () => {
@@ -321,6 +389,7 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
       publish: false,
       reason: 'client_joined_before_nudge',
     });
+    expect(mockTrackServer).not.toHaveBeenCalled();
   });
 
   /**
@@ -373,7 +442,7 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
       publish: false,
       reason: 'malformed_payload',
     });
-    expect(mockListAdminUserIds).not.toHaveBeenCalled();
+    expect(mockResolveRecipients).not.toHaveBeenCalled();
   });
 
   it('⚠ a BLANK company id is treated the same as a missing one', async () => {
@@ -385,7 +454,7 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
 
   /** ⚠ SAME REASONING ONE STEP LATER: a resolved list of nobody is a skip, not a send. */
   it('⚠ SKIPS when the owning company has no live recipient', async () => {
-    mockListAdminUserIds.mockResolvedValue([]);
+    mockResolveRecipients.mockResolvedValue({ recipientUserIds: [], includedBookingMember: false });
 
     await expect(meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }))).resolves.toEqual({
       publish: false,
@@ -403,7 +472,10 @@ describe('R6F-13 / D17.5 — the client nudge is skipped whenever the case is no
     vi.clearAllMocks();
     mockMeetingFindById.mockResolvedValue(meeting());
     mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(0), leftAt: null }]);
-    mockListAdminUserIds.mockResolvedValue(['user-a']);
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: ['user-a'],
+      includedBookingMember: false,
+    });
   });
 
   it.each([
@@ -422,7 +494,7 @@ describe('R6F-13 / D17.5 — the client nudge is skipped whenever the case is no
 
     expect(result).toEqual({ publish: false, reason: 'case_closed' });
     expect(mockResolveSubject).toHaveBeenCalledWith(MEETING_ID, { requireActive: false });
-    expect(mockListAdminUserIds).not.toHaveBeenCalled();
+    expect(mockResolveRecipients).not.toHaveBeenCalled();
   });
 
   it('an ACTIVE case is nudged, and a meeting that is not a Case (no subject) is unaffected', async () => {
@@ -690,7 +762,10 @@ describe('BAL-410 D3 — an armed promise self-skips once its meeting is CANCELL
   beforeEach(() => {
     vi.clearAllMocks();
     mockListByMeeting.mockResolvedValue([]);
-    mockListAdminUserIds.mockResolvedValue(['user-a']);
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: ['user-a'],
+      includedBookingMember: false,
+    });
   });
 
   it('the EXPERT-absent alert, armed on a LIVE meeting, skips once it is cancelled at fire time', async () => {
@@ -729,6 +804,6 @@ describe('BAL-410 D3 — an armed promise self-skips once its meeting is CANCELL
     });
     // ⚠ AND THE MEMBERSHIP READ NEVER RUNS — the terminal check short-circuits before it, so a
     // cancelled meeting costs no recipient resolution at all.
-    expect(mockListAdminUserIds).not.toHaveBeenCalled();
+    expect(mockResolveRecipients).not.toHaveBeenCalled();
   });
 });

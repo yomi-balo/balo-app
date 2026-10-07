@@ -6,7 +6,12 @@ import { z } from 'zod';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { decideMeetingGuestAdmission } from '@/lib/meetings/guests-api-client';
-import { GUEST_ACTION_COPY, guestActionCopyFor } from '@/lib/meetings/guests-copy';
+import {
+  GUEST_ACTION_COPY,
+  GUEST_ACTION_INVALID_REQUEST,
+  GUEST_ACTION_UNAUTHENTICATED,
+  guestActionCopyFor,
+} from '@/lib/meetings/guests-copy';
 import type { DecideAdmissionActionResult } from '@/lib/meetings/meeting-panels';
 
 const inputSchema = z.object({
@@ -51,12 +56,22 @@ export async function decideGuestAdmissionAction(input: {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return { success: false, error: GUEST_ACTION_COPY.unauthenticated, outcome: 'failed' };
+    return {
+      success: false,
+      error: GUEST_ACTION_COPY.unauthenticated,
+      outcome: 'failed',
+      ...GUEST_ACTION_UNAUTHENTICATED,
+    };
   }
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {
-    return { success: false, error: 'Invalid request.', outcome: 'failed' };
+    return {
+      success: false,
+      error: 'Invalid request.',
+      outcome: 'failed',
+      ...GUEST_ACTION_INVALID_REQUEST,
+    };
   }
   const { meetingId, guestId, decision } = parsed.data;
 
@@ -77,6 +92,8 @@ export async function decideGuestAdmissionAction(input: {
       success: false,
       error: guestActionCopyFor(result),
       outcome: alreadyDecided ? 'already_decided' : 'failed',
+      status: result.status,
+      code: result.code,
     };
   }
 

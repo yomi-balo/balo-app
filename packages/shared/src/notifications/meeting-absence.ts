@@ -83,15 +83,14 @@ export interface MeetingClientAbsentPayload {
    * `engine/resolver.ts`. The `meeting_party_participants` recipient kind reads exactly this
    * field.
    *
-   * ⚠ REBUILT AT FIRE TIME by the recheck: a member who left the company between schedule and
+   * ⚠ REBUILT AT FIRE TIME by the recheck: an admin who left the company between schedule and
    * fire must not be nudged, and one who joined should be. It is seeded EMPTY at schedule time
    * for that reason — the stored value is never the one that sends.
    *
-   * ⚠ TODAY IT IS THE COMPANY'S OWNER/ADMIN MEMBERS, NOT EVERY MEMBER. Stated rather than
-   * implied: `partyMembershipsRepository` has no live-member listing, so the widest reachable
-   * set is the `MANAGE_MEMBERS` holders — the same fan-out `meeting.guest_added` uses. A plain
-   * `member` who booked the consultation is reached through their owner/admin, not directly.
-   * See `resolveClientRecipients` in `apps/api` for the follow-up.
+   * ⚠ THE COMPANY'S OWNER/ADMINS PLUS THE MEETING'S BOOKER, NOT EVERY MEMBER. The booker (the
+   * `meeting.booked` audit actor) is included only while they still hold `participate` on the
+   * company; a plain `member` who did not book the consultation is not nudged. See
+   * `clientPartyRecipientsRepository.resolveClientPartyRecipients` in `@balo/db`.
    */
   recipientUserIds: string[];
   /**

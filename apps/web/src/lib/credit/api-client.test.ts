@@ -480,3 +480,52 @@ describe('callSessionApi (BAL-519 cooldown parsing)', () => {
     expect(result).not.toHaveProperty('companies');
   });
 });
+
+describe('callSessionApi (the per-method body rule)', () => {
+  const originalApiUrl = process.env.API_URL;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.API_URL = 'http://api.test';
+    mockConsumeApiAccountRefusal.mockResolvedValue(null);
+    mockLoggedFetch.mockResolvedValue(jsonResponse({}));
+  });
+  afterEach(() => {
+    process.env.API_URL = originalApiUrl;
+  });
+
+  function lastInit(): { method: string; body?: string; headers: Record<string, string> } {
+    return mockLoggedFetch.mock.calls.at(-1)?.[1] as {
+      method: string;
+      body?: string;
+      headers: Record<string, string>;
+    };
+  }
+
+  it('⚠ a bodyless POST sends `{}` under the JSON content type — the pair must agree', async () => {
+    await callSessionApi('/admin/sessions/x/redrive', 'POST');
+
+    const init = lastInit();
+    expect(init.method).toBe('POST');
+    // `undefined` here is `Content-Length: 0` on the wire, which Fastify answers with a 400.
+    expect(init.body).toBe('{}');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(init.headers.Authorization).toBe('Bearer tok');
+  });
+
+  it('a POST with a body sends its JSON', async () => {
+    await callSessionApi('/sessions', 'POST', { companyId: 'c1' });
+
+    expect(lastInit().body).toBe('{"companyId":"c1"}');
+    expect(lastInit().headers['Content-Type']).toBe('application/json');
+  });
+
+  it('a GET sends neither a body nor a JSON content type', async () => {
+    await callSessionApi('/sessions/x/statement', 'GET');
+
+    const init = lastInit();
+    expect(init.body).toBeUndefined();
+    expect(init.headers['Content-Type']).toBeUndefined();
+    expect(init.headers.Authorization).toBe('Bearer tok');
+  });
+});

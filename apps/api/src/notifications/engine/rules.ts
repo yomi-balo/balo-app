@@ -67,6 +67,10 @@ function emailAndInApp(
   ];
 }
 
+/** The publisher resolved at least one fan-out recipient into `payload.recipientUserIds`. */
+const hasPartyRecipients: NonNullable<NotificationRule['condition']> = (ctx) =>
+  Array.isArray(ctx.payload.recipientUserIds) && ctx.payload.recipientUserIds.length > 0;
+
 /** Creator FYI fires only when the creator differs from the owner (recipientId). */
 const creatorIsDistinctMember: NonNullable<NotificationRule['condition']> = (ctx) =>
   typeof ctx.payload.creatorUserId === 'string' &&
@@ -442,15 +446,21 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   //   · `expert` — the delivering expert, UNCONDITIONED (resolved from `payload.expertProfileId`
   //     via `resolver.ts`'s `data.expert` hydration). Reached on every arm: it is the
   //     counterparty notice on a client cancel and the actor's own confirmation otherwise.
-  //   · `meeting_party_participants` — the CLIENT company's live members, conditioned on the
-  //     publisher-resolved `payload.recipientUserIds`, which is populated ONLY on the
-  //     expert/admin arms. Renders the CLIENT template, because these recipients are the client
-  //     side. ⚠ The list is resolved by the PUBLISHER (`publish-booking-cancelled.ts`), never
-  //     hydrated here — that is what keeps a membership read out of the notification engine
-  //     (the shipped BAL-408 contract).
+  //   · `meeting_party_participants` — the CLIENT-side members the publisher resolved into
+  //     `payload.recipientUserIds`, in TWO arms that are exclusive on `cancelledBy`:
+  //       - expert/admin cancel → the company's owner/admins plus the booker, rendering the
+  //         CLIENT template (these recipients were not the actor);
+  //       - client cancel → the BOOKER alone, when a colleague (not the booker) cancelled,
+  //         rendering `booking-cancelled-client-colleague` so the booker is not told "you
+  //         cancelled".
+  //     ⚠ The list is resolved by the PUBLISHER (`publish-booking-cancelled.ts`), never hydrated
+  //     here — that is what keeps a membership read out of the notification engine (the shipped
+  //     BAL-408 contract).
   //
-  // The two client-side arms are MUTUALLY EXCLUSIVE by construction — the publisher sets exactly
-  // one of `recipientId` / `recipientUserIds` — so nobody is told twice.
+  // The two fan-out arms are MUTUALLY EXCLUSIVE on `cancelledBy`, and the `client` arm (the
+  // actor, via `recipientId`) and the colleague arm (the booker, via `recipientUserIds`) address
+  // DISJOINT users by construction — the publisher never lists the actor — so nobody is told
+  // twice.
   //
   // NO SMS. The ticket asks for it under 2h, but `recipientPhoneVerified` reads `ctx.data.user`,
   // which `resolver.ts` hydrates ONLY from `payload.userId` — a field no booking payload carries.
@@ -467,8 +477,12 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     ...emailAndInApp(
       'meeting_party_participants',
       'booking-cancelled-client',
-      (ctx) =>
-        Array.isArray(ctx.payload.recipientUserIds) && ctx.payload.recipientUserIds.length > 0
+      (ctx) => hasPartyRecipients(ctx) && ctx.payload.cancelledBy !== 'client'
+    ),
+    ...emailAndInApp(
+      'meeting_party_participants',
+      'booking-cancelled-client-colleague',
+      (ctx) => hasPartyRecipients(ctx) && ctx.payload.cancelledBy === 'client'
     ),
   ],
   // ── BAL-411 — the expert-initiated reschedule proposal ─────────────────────────────────

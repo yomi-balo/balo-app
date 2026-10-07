@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import * as Sentry from '@sentry/nextjs';
 import { MEETING_PANEL_EVENTS, track, type MeetingPanelRemovalState } from '@/lib/analytics';
+import { GUEST_ACTION_COPY } from '@/lib/meetings/guests-copy';
 import type { GuestRosterState } from '@/lib/meetings/guest-roster';
 import type { MeetingMemberPanelRegistration } from '@/lib/meetings/meeting-panels';
 import { MeetingConfirmDialog } from './meeting-overlay';
@@ -195,6 +197,7 @@ export function useGuestRemoval(input: UseGuestRemovalInput): UseGuestRemovalRes
           ...meetingProps,
           state,
           outcome: result.success ? 'ok' : 'failed',
+          ...(result.success ? {} : { status: result.status, code: result.code }),
         });
         if (result.success) {
           report('success', copy.success(displayName));
@@ -207,6 +210,10 @@ export function useGuestRemoval(input: UseGuestRemovalInput): UseGuestRemovalRes
         // ⚠ REFETCH ON BOTH ARMS. After a lost race the local list is stale by definition, which
         // is what converges two removers onto the same roster within one poll cycle.
         await refetch();
+      })
+      .catch((error: unknown) => {
+        Sentry.captureException(error);
+        report('error', GUEST_ACTION_COPY.request_failed);
       })
       .finally(() => {
         setIsRemoving(false);

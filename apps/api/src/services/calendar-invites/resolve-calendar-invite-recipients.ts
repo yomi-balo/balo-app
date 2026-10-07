@@ -1,12 +1,10 @@
 import {
-  auditEventsRepository,
+  clientPartyRecipientsRepository,
   meetingContextsRepository,
   meetingGuestsRepository,
-  partyMembershipsRepository,
   resolveMeetingContextOwner,
   type MeetingCalendarDeliveryMode,
 } from '@balo/db';
-import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { guestIsAdmittedForRead, selectPrimaryMeetingContext } from '@balo/shared/meetings';
 import { deliveringExpertUserId } from '../meetings/delivering-party.js';
 import type {
@@ -21,9 +19,6 @@ import type {
  * is an id.
  */
 
-const BOOKED_AUDIT_ACTION = 'meeting.booked';
-const BOOKED_AUDIT_ENTITY_TYPE = 'meeting';
-
 /**
  * Does the booker STILL hold `participate` on the company that owns this meeting? A departed
  * booker receives nothing — see `resolveCalendarPartyMemberUserIds`'s docblock.
@@ -36,14 +31,10 @@ async function bookerStillParticipates(meetingId: string, bookerUserId: string):
   const owner = await resolveMeetingContextOwner(primary.context);
   if (owner === undefined) return false;
 
-  const role = await partyMembershipsRepository.getMemberRole(
-    'company',
+  return clientPartyRecipientsRepository.bookerStillParticipatesInCompany(
     owner.companyId,
     bookerUserId
   );
-  if (role === undefined) return false;
-
-  return roleHasCapability(role, CAPABILITIES.PARTICIPATE);
 }
 
 /**
@@ -72,17 +63,15 @@ export async function resolveCalendarPartyMemberUserIds(input: {
     return userId === null ? [] : [userId];
   }
 
-  const audit = await auditEventsRepository.findLatestByEntityAndAction({
-    entityType: BOOKED_AUDIT_ENTITY_TYPE,
-    entityId: input.meetingId,
-    action: BOOKED_AUDIT_ACTION,
-  });
-  if (audit === undefined || audit.actorUserId === null) {
+  const bookerUserId = await clientPartyRecipientsRepository.findMeetingBookerUserId(
+    input.meetingId
+  );
+  if (bookerUserId === null) {
     return [];
   }
 
-  const stillParticipates = await bookerStillParticipates(input.meetingId, audit.actorUserId);
-  return stillParticipates ? [audit.actorUserId] : [];
+  const stillParticipates = await bookerStillParticipates(input.meetingId, bookerUserId);
+  return stillParticipates ? [bookerUserId] : [];
 }
 
 /**

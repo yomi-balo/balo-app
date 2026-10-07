@@ -6,7 +6,12 @@ import { z } from 'zod';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resendMeetingGuestLink } from '@/lib/meetings/guests-api-client';
-import { GUEST_ACTION_COPY, guestActionCopyFor } from '@/lib/meetings/guests-copy';
+import {
+  GUEST_ACTION_COPY,
+  GUEST_ACTION_INVALID_REQUEST,
+  GUEST_ACTION_UNAUTHENTICATED,
+  guestActionCopyFor,
+} from '@/lib/meetings/guests-copy';
 import type { ResendLinkActionResult } from '@/lib/meetings/meeting-panels';
 
 const inputSchema = z.object({ meetingId: z.uuid(), guestId: z.uuid() });
@@ -44,12 +49,16 @@ export async function resendGuestLinkAction(input: {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return { success: false, error: GUEST_ACTION_COPY.unauthenticated };
+    return {
+      success: false,
+      error: GUEST_ACTION_COPY.unauthenticated,
+      ...GUEST_ACTION_UNAUTHENTICATED,
+    };
   }
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {
-    return { success: false, error: 'Invalid request.' };
+    return { success: false, error: 'Invalid request.', ...GUEST_ACTION_INVALID_REQUEST };
   }
   const { meetingId, guestId } = parsed.data;
 
@@ -61,7 +70,12 @@ export async function resendGuestLinkAction(input: {
       status: result.status,
       code: result.code,
     });
-    return { success: false, error: guestActionCopyFor(result) };
+    return {
+      success: false,
+      error: guestActionCopyFor(result),
+      status: result.status,
+      code: result.code,
+    };
   }
 
   // ⚠ A CREDENTIAL WAS ISSUED. `apps/api` logs the authoritative line; this one records that

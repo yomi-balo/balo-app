@@ -19,8 +19,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  clientPartyRecipientsRepository,
   meetingsRepository,
-  partyMembershipsRepository,
   rescheduleProposalsRepository,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
@@ -87,11 +87,12 @@ export const rescheduleProposalUnansweredRecheck: ScheduledRecheck = async (row)
     return { publish: false, reason: 'proposal_stale' };
   }
 
-  // ⚠ REBUILT FROM LIVE MEMBERSHIP, NEVER INHERITED (`meeting-absence.ts`'s own rule). The
-  // widest set reachable without an untested new repository method is the company's
-  // MANAGE_MEMBERS holders — the same `meeting.client_absent` residual, recorded there and
-  // inherited here rather than re-litigated.
-  const recipientUserIds = await partyMembershipsRepository.listAdminUserIds('company', companyId);
+  // ⚠ REBUILT FROM LIVE STATE, NEVER INHERITED (`meeting-absence.ts`'s own rule): the company's
+  // current owner/admins plus the meeting's booker while they still hold `participate` on it.
+  const { recipientUserIds } = await clientPartyRecipientsRepository.resolveClientPartyRecipients({
+    meetingId,
+    companyId,
+  });
   if (recipientUserIds.length === 0) {
     log.warn(
       { proposalId, meetingId, companyId },

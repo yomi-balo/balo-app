@@ -5,6 +5,7 @@ import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
 import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
+import { jsonBodyInit } from '@/lib/api/json-body-init';
 
 /**
  * Server-only web→api clients for the credit surface. TWO distinct hops share this module,
@@ -365,6 +366,9 @@ function readCooldownSeconds(body: Record<string, unknown>): number | undefined 
  * Call a credit-session api route with the viewer's Bearer token. Never throws — a
  * transport error, a non-2xx, or an unauthenticated session all resolve to a typed
  * `{ ok: false }` the action layer maps to a friendly, non-leaking message.
+ *
+ * The body rule is per method (`jsonBodyInit`): a bodyless POST sends `{}` under the JSON
+ * content type, and a GET sends neither.
  */
 export async function callSessionApi<T>(
   path: string,
@@ -377,14 +381,12 @@ export async function callSessionApi<T>(
   }
 
   try {
+    const init = jsonBodyInit(method, body);
     const response = await loggedFetch(`${getApiUrl()}${path}`, {
       service: 'balo-api',
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${auth.accessToken}`,
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: { ...init.headers, Authorization: `Bearer ${auth.accessToken}` },
+      ...(init.body === undefined ? {} : { body: init.body }),
     });
 
     const parsed = safeParse(await response.text());

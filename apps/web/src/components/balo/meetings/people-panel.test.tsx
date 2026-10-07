@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import type { GuestForViewer } from '@balo/shared/meetings';
 import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
@@ -34,6 +35,7 @@ vi.mock('motion/react', async () => {
   return createMotionStub();
 });
 
+vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn() }));
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
@@ -452,6 +454,8 @@ describe('PeoplePanel — admit and deny', () => {
       success: false,
       error: 'Someone else already decided this.',
       outcome: 'already_decided',
+      status: 409,
+      code: 'guest_not_pending',
     });
 
     renderPanel(fake);
@@ -461,7 +465,57 @@ describe('PeoplePanel — admit and deny', () => {
       expect(toast.info).toHaveBeenCalledWith('Someone else already decided this.')
     );
     expect(toast.error).not.toHaveBeenCalled();
+    expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_DECIDED, {
+      ...MEETING_PROPS,
+      decision: 'deny',
+      outcome: 'already_decided',
+      status: 409,
+      code: 'guest_not_pending',
+    });
     await waitFor(() => expect(fake.loadGuests).toHaveBeenCalledTimes(2));
+  });
+
+  it('records a refusal`s status and code on the failed decision event', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [KNOCKER], canHost: true });
+    fake.decideAdmission.mockResolvedValue({
+      success: false,
+      error: 'Something went wrong.',
+      outcome: 'failed',
+      status: 503,
+      code: 'service_unavailable',
+    });
+
+    renderPanel(fake);
+    await user.click(await screen.findByRole('button', { name: 'Admit Taylor Wu' }));
+
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_DECIDED, {
+        ...MEETING_PROPS,
+        decision: 'admit',
+        outcome: 'failed',
+        status: 503,
+        code: 'service_unavailable',
+      })
+    );
+  });
+
+  it('⚠ a REJECTED decision reports to Sentry, shows the generic failure, and clears the row`s pending state', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [KNOCKER], canHost: true });
+    const boom = new Error('action transport down');
+    fake.decideAdmission.mockRejectedValue(boom);
+
+    renderPanel(fake);
+    await user.click(await screen.findByRole('button', { name: 'Admit Taylor Wu' }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "We couldn't reach the call service. Try again in a moment."
+      )
+    );
+    expect(Sentry.captureException).toHaveBeenCalledWith(boom);
+    await waitFor(() => expect(screen.queryByTestId('queue-row-spinner')).toBeNull());
   });
 
   it('records the outcome on the analytics event, taken from the result not from the copy', async () => {
@@ -540,6 +594,70 @@ describe('PeoplePanel — the re-send affordance', () => {
     // say WHOSE, which is the one thing the host needs confirmed.
     expect(toast.success).toHaveBeenCalledWith('A fresh link is on its way to Taylor Wu.');
   });
+
+  it('⚠ a REJECTED re-send reports to Sentry, shows the generic failure, and clears the pending state', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [stranded], canHost: true });
+    const boom = new Error('action transport down');
+    fake.resendLink.mockRejectedValue(boom);
+
+    renderPanel(fake);
+    const button = await screen.findByRole('button', {
+      name: 'Re-send the join link to Taylor Wu',
+    });
+    await user.click(button);
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "We couldn't reach the call service. Try again in a moment."
+      )
+    );
+    expect(Sentry.captureException).toHaveBeenCalledWith(boom);
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it('records the outcome only, with no status or code, when the re-send succeeds', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [stranded], canHost: true });
+
+    renderPanel(fake);
+    await user.click(
+      await screen.findByRole('button', { name: 'Re-send the join link to Taylor Wu' })
+    );
+
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.LINK_RESENT, {
+        ...MEETING_PROPS,
+        outcome: 'ok',
+      })
+    );
+  });
+
+  it('records a refusal`s status and code on the failed re-send event, and toasts the error', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [stranded], canHost: true });
+    fake.resendLink.mockResolvedValue({
+      success: false,
+      error: 'That link can no longer be re-sent.',
+      status: 409,
+      code: 'guest_link_not_resendable',
+    });
+
+    renderPanel(fake);
+    await user.click(
+      await screen.findByRole('button', { name: 'Re-send the join link to Taylor Wu' })
+    );
+
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.LINK_RESENT, {
+        ...MEETING_PROPS,
+        outcome: 'failed',
+        status: 409,
+        code: 'guest_link_not_resendable',
+      })
+    );
+    expect(toast.error).toHaveBeenCalledWith('That link can no longer be re-sent.');
+  });
 });
 
 describe('PeoplePanel — the footer', () => {
@@ -570,6 +688,35 @@ describe('PeoplePanel — the footer', () => {
     // ⚠ NAMES THE ADDRESS. This is the host's OWN typed input echoed back — not a concealed
     // field, and the only confirmation that it went where they meant.
     expect(toast.success).toHaveBeenCalledWith('Invite sent to sam@northwind.example.');
+  });
+
+  it('moves focus into the email field when the composer opens', async () => {
+    const user = userEvent.setup();
+    renderPanel(fakes({ canHost: true }));
+
+    await user.click(await screen.findByRole('button', { name: /add people/i }));
+
+    expect(screen.getByLabelText(/email address to invite/i)).toHaveFocus();
+  });
+
+  it('⚠ a REJECTED invite reports to Sentry, shows the generic failure, and re-enables Send', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ canHost: true });
+    const boom = new Error('action transport down');
+    fake.inviteGuests.mockRejectedValue(boom);
+
+    renderPanel(fake);
+    await user.click(await screen.findByRole('button', { name: /add people/i }));
+    await user.type(screen.getByLabelText(/email address to invite/i), 'sam@northwind.example');
+    await user.click(screen.getByRole('button', { name: /send invite/i }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "We couldn't reach the call service. Try again in a moment."
+      )
+    );
+    expect(Sentry.captureException).toHaveBeenCalledWith(boom);
+    await waitFor(() => expect(screen.getByRole('button', { name: /send invite/i })).toBeEnabled());
   });
 
   it('⚠ an "already on the list" refusal carries an ACTIONABLE next step', async () => {
@@ -808,6 +955,8 @@ describe('PeoplePanel — ⚠⚠ §16, announcing through the frame`s ONE live r
       success: false,
       error: 'Someone else already decided this.',
       outcome: 'already_decided',
+      status: 409,
+      code: 'guest_not_pending',
     });
 
     renderPanel(fake);
@@ -1056,6 +1205,8 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
     fake.removeGuest.mockResolvedValue({
       success: false,
       error: 'That person is no longer in the list.',
+      status: 404,
+      code: 'guest_not_found',
     });
     renderPanel(fake);
 
@@ -1072,8 +1223,32 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
       ...MEETING_PROPS,
       state: 'in_call',
       outcome: 'failed',
+      status: 404,
+      code: 'guest_not_found',
     });
     await waitFor(() => expect(fake.loadGuests.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('⚠ a REJECTED removal reports to Sentry, shows the generic failure, and resets the dialog button', async () => {
+    const user = userEvent.setup();
+    putInCall();
+    const fake = fakes({ guests: [inCallGuest], viewerSide: 'client' });
+    const boom = new Error('action transport down');
+    fake.removeGuest.mockRejectedValue(boom);
+    renderPanel(fake);
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove from call' }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "We couldn't reach the call service. Try again in a moment."
+      )
+    );
+    expect(Sentry.captureException).toHaveBeenCalledWith(boom);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove from call' })).toBeEnabled()
+    );
   });
 
   it('⚠ Cancel dismisses without removing anything', async () => {

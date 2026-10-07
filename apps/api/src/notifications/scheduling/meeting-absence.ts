@@ -38,7 +38,7 @@ import { randomUUID } from 'node:crypto';
 import {
   meetingPresenceRepository,
   meetingsRepository,
-  partyMembershipsRepository,
+  clientPartyRecipientsRepository,
   type Meeting,
 } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
@@ -243,8 +243,11 @@ export const meetingExpertAbsentRecheck: ScheduledRecheck = async (row) => {
  * marks the row `published` — a promise recorded as kept that reached nobody. A `skipped` row
  * carries its reason and is legible; a `published` row that sent nothing is not.
  *
- * ⚠ THE RECIPIENT LIST IS **REBUILT** FROM LIVE MEMBERSHIP, not inherited. A member who left
- * the company between schedule and fire must not be nudged, and one who joined should be.
+ * ⚠ THE RECIPIENT LIST IS **REBUILT** FROM LIVE STATE, not inherited: the company's current
+ * owner/admins plus the meeting's booker while they still hold `participate` on it. An admin who
+ * left between schedule and fire must not be nudged, and one who joined should be. The owning
+ * company is resolved ONCE when the nudge is armed and travels on the payload; the guard
+ * deliberately does not re-read the meeting's context.
  */
 export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
   const meetingId = meetingIdFrom(row.payload);
@@ -286,7 +289,8 @@ export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
   // ⚠ AND AN EMPTY RESOLVED LIST IS A SKIP FOR THE SAME REASON, NOT A SILENT SEND. Both
   // channels fan out from `recipientUserIds`, so an empty list delivers nothing; recording that
   // as `published` would be a lie in the one table anybody would check.
-  const recipientUserIds = await resolveClientRecipients(companyId);
+  const { recipientUserIds, includedBookingMember, bookerAddedBeyondAdmins } =
+    await clientPartyRecipientsRepository.resolveClientPartyRecipients({ meetingId, companyId });
   if (recipientUserIds.length === 0) {
     log.warn(
       { meetingId, companyId },
@@ -295,32 +299,30 @@ export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
     return { publish: false, reason: 'no_recipients' };
   }
 
+  // ⚠ KEYED ON THE ROW'S OWN ATTEMPT COUNTER, SO ONE PROMISE EMITS AT MOST ONE EVENT — the same
+  // `attempts <= 1` rule, and the same bounded residual, as the expert-absent alert above.
+  if (row.attempts <= 1) {
+    trackServer(MEETING_SERVER_EVENTS.MEETING_CLIENT_ABSENT_NUDGED, {
+      meeting_id: meetingId,
+      recipient_count: recipientUserIds.length,
+      included_booking_member: includedBookingMember,
+      booker_added_beyond_admins: bookerAddedBeyondAdmins,
+      // ⚠ THE MEETING ID — there is no acting human on a nudge about an absence.
+      distinct_id: meetingId,
+    });
+  }
+
   log.info(
-    { meetingId, recipientCount: recipientUserIds.length },
+    {
+      meetingId,
+      recipientCount: recipientUserIds.length,
+      includedBookingMember,
+      bookerAddedBeyondAdmins,
+    },
     'Expert is waiting alone — publishing the client nudge'
   );
   return { publish: true, payload: { ...row.payload, recipientUserIds } };
 };
-
-/**
- * WHO ON THE CLIENT SIDE IS NUDGED.
- *
- * ⚠⚠ THE COMPANY'S OWNER/ADMIN MEMBERS, AND THAT NARROWING IS STATED RATHER THAN HIDDEN. The
- * plan says "the client company's live members"; there is no `listMemberUserIds` on
- * `partyMembershipsRepository` today, and `meetings` carries no booker column, so the widest
- * set reachable without adding an un-integration-tested repository method is the
- * `MANAGE_MEMBERS` holders — which is exactly the fan-out `meeting.guest_added` already uses
- * (`resolveSamePartyRecipients`). The consequence, plainly: a plain `member` who booked the
- * consultation is NOT nudged directly, only their owner/admin. **A follow-up ticket should add
- * a live-member listing (with its integration test) and widen this one call.** The role set is
- * derived from `@balo/shared/authz`'s map inside the repository, never from a `role ===` here.
- *
- * ⚠ AND A GUEST OR DELEGATE WITH NO USER ROW IS UNREACHABLE BY CONSTRUCTION — the same
- * structural block that defers SMS (D13). Recorded on the payload's docblock, not discovered.
- */
-async function resolveClientRecipients(companyId: string): Promise<string[]> {
-  return partyMembershipsRepository.listAdminUserIds('company', companyId);
-}
 
 export interface ScheduleExpertAbsentAlertInput {
   readonly meetingId: string;
