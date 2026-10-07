@@ -167,7 +167,7 @@ describe('waitingCopyFor — the expert waits (R2, Option A whole)', () => {
     const { body } = copy('client', 'near', { ...FACTS, noShowHeld: true });
 
     expect(body).toBe(
-      "Someone from Dana's side joined with the meeting link, so this won't settle as a no-show while they're here."
+      "Someone joined with the meeting link, so this won't settle as a no-show while they're here."
     );
     expect(body).not.toContain('minute');
     expect(body).not.toContain('15');

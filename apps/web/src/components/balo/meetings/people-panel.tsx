@@ -125,6 +125,11 @@ export interface PeoplePanelProps {
   readonly onAnnounce: (message: string) => void;
 }
 
+function noop(): void {
+  // A failed roster refresh is recovered by the poll. It must not surface as a failed action
+  // right after that action's own success toast, and it must not go unhandled.
+}
+
 export function PeoplePanel({
   panels,
   onClose,
@@ -214,7 +219,7 @@ export function PeoplePanel({
           }
           // ⚠ REFETCH ON BOTH ARMS. After a race the local list is stale by definition, and
           // after a success the queue and the seat count have both moved.
-          await refetch();
+          await refetch().catch(noop);
         })
         .catch(() => report('error', GUEST_ACTION_COPY.request_failed))
         .finally(() => markPending(guestId, false));
@@ -237,7 +242,7 @@ export function PeoplePanel({
           } else {
             report('error', result.error);
           }
-          await refetch();
+          await refetch().catch(noop);
         })
         .catch(() => report('error', GUEST_ACTION_COPY.request_failed))
         .finally(() => markPending(guestId, false));
@@ -758,7 +763,7 @@ function PeoplePanelFooter({
           });
           report('success', `Invite sent to ${trimmed}.`);
           closeComposer();
-          return onInvited();
+          return onInvited().catch(noop);
         }
         track(MEETING_PANEL_EVENTS.GUESTS_INVITED, {
           ...meetingProps,

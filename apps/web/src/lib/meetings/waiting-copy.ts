@@ -277,7 +277,7 @@ const CLIENT_ABSENT: Record<WaitingPhase, CopyBuilder> = {
     // Draft, pending MJ. ⚠ When held, the body must NOT name the floor: the no-show is not
     // what happens while that guest is here.
     body: noShowHeld
-      ? `Someone from ${counterpartyFirstName}'s side joined with the meeting link, so this won't settle as a no-show while they're here.`
+      ? "Someone joined with the meeting link, so this won't settle as a no-show while they're here."
       : `Still counting. If ${counterpartyFirstName} doesn't arrive, this settles as a no-show ${floorPhrase(noShowFloorMinutes, 'mark')}.`,
   }),
   /**
