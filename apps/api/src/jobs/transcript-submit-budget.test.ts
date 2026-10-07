@@ -31,8 +31,13 @@ describe('transcript-submit-budget', () => {
   });
 
   it('the budget covers the worst-case timeline: every attempt times out, with every backoff wait', () => {
-    const worstCaseMs =
-      SUBMIT_ATTEMPTS * DAILY_REQUEST_TIMEOUT_MS + BACKOFF_DELAY_MS + 2 * BACKOFF_DELAY_MS;
+    // Walk the timeline attempt by attempt: each attempt runs to its timeout, then (unless it
+    // was the last) BullMQ waits `BACKOFF_DELAY_MS × 2^(attempt−1)` before the next one.
+    let worstCaseMs = 0;
+    for (let attempt = 1; attempt <= SUBMIT_ATTEMPTS; attempt += 1) {
+      worstCaseMs += DAILY_REQUEST_TIMEOUT_MS;
+      if (attempt < SUBMIT_ATTEMPTS) worstCaseMs += BACKOFF_DELAY_MS * 2 ** (attempt - 1);
+    }
     expect(worstCaseMs).toBe(60_000);
     expect(TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS).toBeGreaterThanOrEqual(worstCaseMs);
   });

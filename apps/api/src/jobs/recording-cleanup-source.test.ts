@@ -75,7 +75,11 @@ function readyRow(overrides: Record<string, unknown> = {}): Record<string, unkno
 }
 
 describe('recording-cleanup-source job — enqueue', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // clearAllMocks keeps implementations; drop the fake-dedup `queueAdd` a test may install.
+    queueAdd.mockReset();
+  });
 
   it('enqueues with jobId keyed on the recordingId', async () => {
     await enqueueRecordingCleanupSource({ recordingId: RECORDING_ID });
