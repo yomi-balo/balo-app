@@ -1469,16 +1469,22 @@ export interface BookingCancelledPayload {
   /**
    * The CLIENT-side actor's user id → recipient 'client'. Present ONLY on a client-initiated
    * cancel (it IS the acting user); absent on the expert/admin arms, where the client side is
-   * reached through `recipientUserIds` instead. Absent ⇒ the `client` rule skips.
+   * reached through `recipientUserIds` instead. Absent ⇒ the `client` rule skips. Disjoint from
+   * `recipientUserIds` by construction, so nobody is told twice.
    */
   recipientId?: string;
   /**
    * → recipient 'meeting_party_participants'. ⚠ RESOLVED BY THE PUBLISHER, never hydrated by
    * `engine/resolver.ts` — that is what keeps a membership read out of the notification engine
-   * (the shipped BAL-408 contract). Populated ONLY on the expert/admin arms, with the CLIENT
-   * company's live `MANAGE_MEMBERS` holders, which is how "Cancelled by expert → client →
-   * email + in-app" is delivered without inventing a new recipient kind. Empty/absent ⇒ the
-   * fan-out rule delivers nothing.
+   * (the shipped BAL-408 contract). Never contains the acting user. Two shapes, selected by
+   * `cancelledBy`:
+   *  · expert/admin cancel → the CLIENT company's owner/admins plus the meeting's booker while
+   *    they still hold `participate` (`clientPartyRecipientsRepository.resolveClientPartyRecipients`
+   *    in `@balo/db`), rendering `booking-cancelled-client` — how "Cancelled by expert → client →
+   *    email + in-app" is delivered without inventing a new recipient kind;
+   *  · client cancel → the booker alone, when a colleague cancelled and the booker still
+   *    participates, rendering `booking-cancelled-client-colleague`.
+   * Empty/absent ⇒ the fan-out rules deliver nothing.
    */
   recipientUserIds?: string[];
   /** → recipient 'expert'; `engine/resolver.ts` hydrates `data.expert` off THIS field name. */

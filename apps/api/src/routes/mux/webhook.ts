@@ -38,7 +38,9 @@ import { type RateLimitConfig } from '../../lib/rate-limiter.js';
 import { parseMuxWebhookEvent, type MuxWebhookEvent } from '../../services/mux/webhook-events.js';
 import { verifyMuxWebhookSignature } from '../../services/mux/webhook-signature.js';
 import { enqueueRecordingCleanupSource } from '../../jobs/recording-cleanup-source.js';
+import { TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS } from '../../jobs/transcript-submit-budget.js';
 import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
+import { captureMessageOnce } from '../../lib/sentry-alert.js';
 
 const log = createLogger('mux-webhook-route');
 
@@ -259,6 +261,10 @@ export async function muxWebhookRoutes(fastify: FastifyInstance): Promise<void> 
       // ⚠ AN OUTAGE, NOT A BAD REQUEST. A 400 would tell Mux to stop retrying deliveries that
       // are perfectly valid and that we will process the moment the variable is set.
       log.error({}, 'MUX_WEBHOOK_SECRET is not set — refusing to process an unverified body');
+      captureMessageOnce(
+        'mux-webhook:not-configured',
+        'MUX_WEBHOOK_SECRET is not set — POST /webhooks/mux answers 503 to every delivery, so no recording reaches ready'
+      );
       return reply.code(503).send({ error: 'webhook_not_configured' });
     }
 
@@ -333,8 +339,14 @@ export async function muxWebhookRoutes(fastify: FastifyInstance): Promise<void> 
           seconds_since_meeting_end: secondsSinceMeetingEnd,
           distinct_id: effect.meeting.id,
         });
+        // Delayed past the transcript-submit retry budget so submit stamps before cleanup's
+        // first gate read — DOOR 3 in `recording-cleanup-source.ts`.
         await enqueueBestEffort(
-          () => enqueueRecordingCleanupSource({ recordingId: effect.recording.id }),
+          () =>
+            enqueueRecordingCleanupSource({
+              recordingId: effect.recording.id,
+              delayMs: TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS,
+            }),
           {
             meetingId: effect.meeting.id,
             recordingId: effect.recording.id,

@@ -142,6 +142,17 @@ export type MeetingPanelMessageOutcome = 'ok' | 'rejected' | 'failed';
  */
 export type MeetingPanelReactionEmoji = MeetingReactionEmoji;
 
+/**
+ * The api's own facts about a refused action, present ONLY on a non-`ok` outcome. `status` is
+ * the HTTP status (`0` = transport), a number and never prose. `code` is the api's FIXED literal
+ * (`guests-api-client.ts`), or `unauthenticated` / `invalid_request` for a local failure; never
+ * prose, never PII.
+ */
+export interface MeetingPanelFailureFacts {
+  status?: number;
+  code?: string;
+}
+
 export interface MeetingPanelEventMap {
   [MEETING_PANEL_EVENTS.OPENED]: {
     meeting_id?: string;
@@ -158,7 +169,7 @@ export interface MeetingPanelEventMap {
     meeting_id?: string;
     decision: MeetingPanelAdmissionDecision;
     outcome: MeetingPanelDecisionOutcome;
-  };
+  } & MeetingPanelFailureFacts;
   [MEETING_PANEL_EVENTS.GUESTS_INVITED]: {
     meeting_id?: string;
     outcome: MeetingPanelInviteOutcome;
@@ -171,7 +182,7 @@ export interface MeetingPanelEventMap {
   [MEETING_PANEL_EVENTS.LINK_RESENT]: {
     meeting_id?: string;
     outcome: MeetingPanelOutcome;
-  };
+  } & MeetingPanelFailureFacts;
   /**
    * ⚠ A STATE AND AN OUTCOME AND NOTHING ELSE — never the person's name, address, email domain,
    * `meeting_guests.id` or Daily participant id (see this file's header).
@@ -181,12 +192,12 @@ export interface MeetingPanelEventMap {
     context_type?: string;
     state: MeetingPanelRemovalState;
     outcome: MeetingPanelOutcome;
-  };
+  } & MeetingPanelFailureFacts;
   [MEETING_PANEL_EVENTS.GUEST_VOUCHED]: {
     meeting_id?: string;
     context_type?: string;
     outcome: MeetingPanelOutcome;
-  };
+  } & MeetingPanelFailureFacts;
   [MEETING_PANEL_EVENTS.FILE_SHARED]: {
     meeting_id?: string;
     outcome: MeetingPanelFileOutcome;

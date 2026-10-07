@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSessionId } from '@daily-co/daily-react';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { Check, Link2, Mail, ShieldCheck, UserMinus, UserPlus } from 'lucide-react';
 import { MAX_LOBBY_QUEUE } from '@balo/shared/meetings';
@@ -211,6 +212,8 @@ export function PeoplePanel({
               ...meetingProps,
               decision,
               outcome: result.outcome,
+              status: result.status,
+              code: result.code,
             });
             // ⚠⚠ A RACE IS NOT A FAILURE. `already_decided` means the other host's decision
             // stands — the outcome this host wanted has happened either way, so it is an
@@ -221,7 +224,10 @@ export function PeoplePanel({
           // after a success the queue and the seat count have both moved.
           await refetch().catch(noop);
         })
-        .catch(() => report('error', GUEST_ACTION_COPY.request_failed))
+        .catch((error: unknown) => {
+          Sentry.captureException(error);
+          report('error', GUEST_ACTION_COPY.request_failed);
+        })
         .finally(() => markPending(guestId, false));
     },
     [panels, markPending, refetch, meetingProps, report]
@@ -236,6 +242,7 @@ export function PeoplePanel({
           track(MEETING_PANEL_EVENTS.LINK_RESENT, {
             ...meetingProps,
             outcome: result.success ? 'ok' : 'failed',
+            ...(result.success ? {} : { status: result.status, code: result.code }),
           });
           if (result.success) {
             report('success', `A fresh link is on its way to ${displayName}.`);
@@ -244,7 +251,10 @@ export function PeoplePanel({
           }
           await refetch().catch(noop);
         })
-        .catch(() => report('error', GUEST_ACTION_COPY.request_failed))
+        .catch((error: unknown) => {
+          Sentry.captureException(error);
+          report('error', GUEST_ACTION_COPY.request_failed);
+        })
         .finally(() => markPending(guestId, false));
     },
     [panels, markPending, refetch, meetingProps, report]
@@ -262,7 +272,12 @@ export function PeoplePanel({
   const submitVouch = useCallback(
     (email: string) =>
       vouchTargetId === undefined
-        ? Promise.resolve({ success: false, error: GUEST_ACTION_COPY.guest_not_found } as const)
+        ? Promise.resolve({
+            success: false,
+            error: GUEST_ACTION_COPY.guest_not_found,
+            status: 404,
+            code: 'guest_not_found',
+          } as const)
         : vouchGuest(vouchTargetId, email),
     [vouchGuest, vouchTargetId]
   );
@@ -724,14 +739,16 @@ function PeoplePanelFooter({
    * follows for its own opener.
    */
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
   /**
-   * ⚠ FOCUS FOLLOWS "ADD PEOPLE" INTO THE FIELD IT REVEALS. Not a page-load autofocus: the field
-   * only exists because the person just asked for it, and a keyboard user mid-call should not
-   * have to hunt for it. Done after commit, because the input does not exist until then.
+   * ⚠ FOCUS FOLLOWS THE EXPLICIT INTENT, NOT THE PAGE LOAD. The field only exists because the
+   * person just pressed "Add people", so on the closed-to-open transition focus moves into it
+   * and a keyboard user is not left hunting for the field the button revealed, mid-call. Focus
+   * is returned to "Add people" on cancel; see `closeComposer`.
    */
-  const emailInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
-    if (isAdding) emailInputRef.current?.focus();
+    if (isAdding) inputRef.current?.focus();
   }, [isAdding]);
 
   useEffect(
@@ -783,7 +800,10 @@ function PeoplePanelFooter({
         );
         return undefined;
       })
-      .catch(() => report('error', GUEST_ACTION_COPY.request_failed))
+      .catch((error: unknown) => {
+        Sentry.captureException(error);
+        report('error', GUEST_ACTION_COPY.request_failed);
+      })
       .finally(() => setIsSending(false));
   }, [email, isSending, panels, meetingProps, onInvited, report, closeComposer]);
 
@@ -834,7 +854,7 @@ function PeoplePanelFooter({
               onChange={(event) => setEmail(event.target.value)}
               onKeyDown={onKeyDown}
               placeholder="Enter an email address"
-              ref={emailInputRef}
+              ref={inputRef}
               className="text-foreground placeholder:text-muted-foreground min-h-11 flex-1 bg-transparent text-sm outline-none"
             />
           </div>

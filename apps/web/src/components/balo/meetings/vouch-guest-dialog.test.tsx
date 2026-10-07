@@ -76,9 +76,12 @@ describe('VouchGuestDialog', () => {
 
   it('reports a failure, tracks it, and stays open', async () => {
     const user = userEvent.setup();
-    const onVouch = vi
-      .fn()
-      .mockResolvedValue({ success: false, error: "They're already on the list." });
+    const onVouch = vi.fn().mockResolvedValue({
+      success: false,
+      error: "They're already on the list.",
+      status: 409,
+      code: 'guest_already_invited',
+    });
     const { report, onOpenChange, onVouched } = setup({ onVouch });
 
     await user.type(screen.getByLabelText('Their work email'), 'dana@northwind.example');
@@ -90,6 +93,8 @@ describe('VouchGuestDialog', () => {
     expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_VOUCHED, {
       ...MEETING_PROPS,
       outcome: 'failed',
+      status: 409,
+      code: 'guest_already_invited',
     });
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(onVouched).toHaveBeenCalled();

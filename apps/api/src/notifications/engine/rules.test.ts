@@ -13,7 +13,8 @@ function expectEmailAndInAppPair(
   clientTemplate: string,
   expertTemplate: string,
   // BAL-410 — `booking.cancelled` adds a THIRD recipient arm (the client-side party fan-out),
-  // so the total is 6 rather than 4. Defaulted, so both shipped callers are unchanged.
+  // so the total is 8 rather than 4 (the fan-out arm and its colleague twin). Defaulted, so
+  // both shipped callers are unchanged.
   expectedRuleCount = 4
 ): void {
   const rules = notificationRules[event];
@@ -160,7 +161,7 @@ describe('notificationRules', () => {
       'booking.cancelled',
       'booking-cancelled-client',
       'booking-cancelled-expert',
-      6
+      8
     );
   });
 
@@ -175,29 +176,87 @@ describe('notificationRules', () => {
    * by the PUBLISHER (`payload.recipientUserIds`), never hydrated in the engine, which is what
    * keeps a membership read out of the notification engine (the shipped BAL-408 contract).
    */
-  it('booking.cancelled: a meeting_party_participants fan-out renders the CLIENT template on both channels', () => {
+  it('booking.cancelled: each meeting_party_participants arm renders on both channels — the client template and its colleague twin', () => {
     const rules = notificationRules['booking.cancelled']!;
     const fanout = rules.filter((r) => r.recipient === 'meeting_party_participants');
 
-    expect(fanout).toHaveLength(2);
-    expect(fanout.every((r) => r.template === 'booking-cancelled-client')).toBe(true);
-    expect(fanout.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
-      'email',
-      'in-app',
-    ]);
+    expect(fanout).toHaveLength(4);
+    for (const template of ['booking-cancelled-client', 'booking-cancelled-client-colleague']) {
+      expect(
+        fanout
+          .filter((r) => r.template === template)
+          .map((r) => r.channel)
+          .sort((a, b) => a.localeCompare(b))
+      ).toEqual(['email', 'in-app']);
+    }
   });
 
-  it('booking.cancelled: the fan-out arm fires ONLY on a non-empty publisher-resolved list', () => {
-    const rules = notificationRules['booking.cancelled']!;
-    const fanout = rules.filter((r) => r.recipient === 'meeting_party_participants');
-    const base = { event: 'booking.cancelled', data: {} };
+  /** The `booking.cancelled` rule set; throws rather than letting a missing set pass vacuously. */
+  function bookingCancelledRules() {
+    const rules = notificationRules['booking.cancelled'];
+    if (rules === undefined) throw new Error('booking.cancelled has no rules');
+    return rules;
+  }
 
-    for (const rule of fanout) {
-      expect(rule.condition).toBeDefined();
-      expect(rule.condition!({ ...base, payload: { recipientUserIds: ['user-1'] } })).toBe(true);
-      expect(rule.condition!({ ...base, payload: { recipientUserIds: [] } })).toBe(false);
-      expect(rule.condition!({ ...base, payload: {} })).toBe(false);
+  /** The `meeting_party_participants` templates that fire for a payload, as a sorted set. */
+  function firedFanoutTemplates(payload: Record<string, unknown>): string[] {
+    const ctx = { event: 'booking.cancelled', data: {}, payload };
+    return [
+      ...new Set(
+        bookingCancelledRules()
+          .filter(
+            (r) =>
+              r.recipient === 'meeting_party_participants' &&
+              (r.condition === undefined || r.condition(ctx))
+          )
+          .map((r) => r.template)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+  }
+
+  it.each([
+    ['client', ['user-1'], ['booking-cancelled-client-colleague']],
+    ['client', [], []],
+    ['expert', ['user-1'], ['booking-cancelled-client']],
+    ['expert', [], []],
+    ['admin', ['user-1'], ['booking-cancelled-client']],
+    ['admin', [], []],
+  ])(
+    'booking.cancelled: cancelledBy=%s with list %j fires the fan-out templates %j',
+    (cancelledBy, recipientUserIds, expected) => {
+      expect(firedFanoutTemplates({ cancelledBy, recipientUserIds })).toEqual(expected);
     }
+  );
+
+  it('booking.cancelled: the fan-out fires nothing when the publisher resolved no list at all', () => {
+    expect(firedFanoutTemplates({ cancelledBy: 'expert' })).toEqual([]);
+    expect(firedFanoutTemplates({ cancelledBy: 'client' })).toEqual([]);
+  });
+
+  /**
+   * ⚠⚠ NOBODY IS TOLD TWICE. A client cancel carries BOTH `recipientId` (the actor) and
+   * `recipientUserIds` (the booker, never the actor). The actor must get exactly the client
+   * pair, the booker exactly the colleague pair — and no fan-out recipient may ever receive the
+   * actor's "You cancelled" template.
+   */
+  it('⚠ booking.cancelled: a client cancel with a booker list fires the actor pair once and the colleague pair once — never the client template on the fan-out', () => {
+    const ctx = {
+      event: 'booking.cancelled',
+      data: {},
+      payload: { cancelledBy: 'client', recipientId: 'actor-A', recipientUserIds: ['booker-B'] },
+    };
+    const fired = bookingCancelledRules()
+      .filter((r) => r.condition === undefined || r.condition(ctx))
+      .map((r) => `${r.recipient}:${r.template}:${r.channel}`);
+
+    expect(fired.sort((a, b) => a.localeCompare(b))).toEqual([
+      'client:booking-cancelled-client:email',
+      'client:booking-cancelled-client:in-app',
+      'expert:booking-cancelled-expert:email',
+      'expert:booking-cancelled-expert:in-app',
+      'meeting_party_participants:booking-cancelled-client-colleague:email',
+      'meeting_party_participants:booking-cancelled-client-colleague:in-app',
+    ]);
   });
 
   /**

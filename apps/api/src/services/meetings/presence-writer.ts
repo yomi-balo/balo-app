@@ -345,9 +345,11 @@ export type PresenceWriteOutcome = 'opened' | 'closed' | 'noop' | 'invalid_times
  * ⚠⚠ AN INVALID TIMESTAMP IS CAUGHT HERE AND ANSWERED, NOT THROWN, and that is the whole point
  * of the `invalid_timestamp` outcome (edge case 22). `InvalidPresenceTimestampError` is the
  * obligation `computeMeetingClocks` assigns to BAL-134 BY NAME — but letting it escape would
- * roll back the webhook's transaction INCLUDING THE MARKER, so Daily would retry the same
- * un-writable body forever. Answering instead lets the marker commit with no effect, and the
- * route acks `200`: the body will never be writable, so a retry is pure noise.
+ * roll back the webhook's transaction INCLUDING THE MARKER, and a throw here would 500: Daily
+ * treats that like any non-200, so it would redeliver the same un-writable body (≤5 retries with
+ * backoff, under `exponential`) or count it toward `FAILED` (under `circuit-breaker`). Answering
+ * instead lets the marker commit with no effect, and the route acks `200`: the body will never
+ * be writable, so a retry buys nothing.
  *
  * ⚠ `close()` RETURNING `undefined` IS `'noop'`, NEVER AN ERROR. A duplicate `participant.left`
  * matches zero rows (the repository's compare-and-set is FIRST-CLOSE-WINS, so a later write can

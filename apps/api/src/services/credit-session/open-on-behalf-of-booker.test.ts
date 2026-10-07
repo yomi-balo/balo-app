@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockResolveSubject,
-  mockFindLatest,
+  mockFindBooker,
   mockMeetingFindById,
   mockEnsureForCompany,
   mockOpen,
@@ -11,7 +11,7 @@ const {
   DB,
 } = vi.hoisted(() => ({
   mockResolveSubject: vi.fn(),
-  mockFindLatest: vi.fn(),
+  mockFindBooker: vi.fn(),
   mockMeetingFindById: vi.fn(),
   mockEnsureForCompany: vi.fn(),
   mockOpen: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 vi.mock('@balo/db', () => ({
   db: DB,
-  auditEventsRepository: { findLatestByEntityAndAction: mockFindLatest },
+  clientPartyRecipientsRepository: { findMeetingBookerUserId: mockFindBooker },
   meetingsRepository: { findById: mockMeetingFindById },
   creditWalletsRepository: { ensureForCompany: mockEnsureForCompany },
   creditSessionsRepository: { open: mockOpen },
@@ -55,7 +55,7 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveSubject.mockResolvedValue(SUBJECT);
-    mockFindLatest.mockResolvedValue({ actorUserId: 'booker-1', createdAt: START, metadata: {} });
+    mockFindBooker.mockResolvedValue('booker-1');
     mockMeetingFindById.mockResolvedValue({
       id: MEETING_ID,
       scheduledStart: START,
@@ -67,23 +67,13 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
   });
 
   describe('resolveMeetingBooker', () => {
-    it('is the actor of the LATEST `meeting.booked` audit row for the meeting', async () => {
+    it("delegates to the repository's one definition of the booker (the `meeting.booked` actor)", async () => {
       await expect(resolveMeetingBooker(MEETING_ID)).resolves.toBe('booker-1');
-      expect(mockFindLatest).toHaveBeenCalledWith({
-        entityType: 'meeting',
-        entityId: MEETING_ID,
-        action: 'meeting.booked',
-      });
+      expect(mockFindBooker).toHaveBeenCalledWith(MEETING_ID);
     });
 
-    it.each([
-      ['no row at all', undefined],
-      [
-        'a NULL actor (seeded / system-booked)',
-        { actorUserId: null, createdAt: START, metadata: {} },
-      ],
-    ])('is null for %s — never a fabricated actor', async (_label, row) => {
-      mockFindLatest.mockResolvedValue(row);
+    it('is null when the repository resolves no booker — never a fabricated actor', async () => {
+      mockFindBooker.mockResolvedValue(null);
       await expect(resolveMeetingBooker(MEETING_ID)).resolves.toBeNull();
     });
   });
@@ -98,7 +88,7 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
         onBehalfOfUserId: 'present-member-1',
       });
       expect(result.ok && result.open.initiatingMemberId).toBe('present-member-1');
-      expect(mockFindLatest).not.toHaveBeenCalled();
+      expect(mockFindBooker).not.toHaveBeenCalled();
     });
 
     it('⚠ R6F-16 — the present member is attributed only after a LIVE-membership check against the engagement’s company', async () => {
@@ -122,7 +112,7 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
         onBehalfOfUserId: 'removed-member-1',
       });
       expect(result.ok && result.open.initiatingMemberId).toBe('booker-1');
-      expect(mockFindLatest).toHaveBeenCalledTimes(1);
+      expect(mockFindBooker).toHaveBeenCalledTimes(1);
     });
 
     it('with no `onBehalfOfUserId` no membership read runs at all', async () => {
@@ -143,7 +133,7 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
         attended: true,
       });
       expect(result.ok && result.open.initiatingMemberId).toBe('booker-1');
-      expect(mockFindLatest).toHaveBeenCalledTimes(1);
+      expect(mockFindBooker).toHaveBeenCalledTimes(1);
     });
 
     it('builds the tolerant, presence-sourced input on the booker, with the wallet PROVISIONED on `db` first', async () => {
@@ -212,12 +202,12 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
           attended: true,
         })
       ).resolves.toEqual({ ok: false, code: 'meeting_not_bookable', companyId: null });
-      expect(mockFindLatest).not.toHaveBeenCalled();
+      expect(mockFindBooker).not.toHaveBeenCalled();
       expect(mockEnsureForCompany).not.toHaveBeenCalled();
     });
 
     it('⚠ a NULL or missing booker is a REFUSAL — and no wallet is provisioned for it', async () => {
-      mockFindLatest.mockResolvedValue({ actorUserId: null, createdAt: START, metadata: {} });
+      mockFindBooker.mockResolvedValue(null);
       await expect(
         resolveOnBehalfOpenInput({
           meetingId: MEETING_ID,
@@ -298,7 +288,7 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
           code: 'case_closed_before_start',
           companyId: 'company-1',
         });
-        expect(mockFindLatest).not.toHaveBeenCalled();
+        expect(mockFindBooker).not.toHaveBeenCalled();
         expect(mockEnsureForCompany).not.toHaveBeenCalled();
       });
 
@@ -341,7 +331,7 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
         })
       ).resolves.toEqual({ ok: false, code: 'expert_invited_guest', companyId: 'company-1' });
       expect(guard).toHaveBeenCalledWith(SUBJECT);
-      expect(mockFindLatest).not.toHaveBeenCalled();
+      expect(mockFindBooker).not.toHaveBeenCalled();
       expect(mockEnsureForCompany).not.toHaveBeenCalled();
     });
 
@@ -448,7 +438,7 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
     );
 
     it('a subject / booker refusal is passed through without touching the repository', async () => {
-      mockFindLatest.mockResolvedValue(undefined);
+      mockFindBooker.mockResolvedValue(null);
       await expect(openSessionOnBehalfOfBooker(INPUT)).resolves.toEqual({
         ok: false,
         code: 'booker_unattributable',

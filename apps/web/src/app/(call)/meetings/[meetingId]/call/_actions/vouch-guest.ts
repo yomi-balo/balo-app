@@ -6,7 +6,12 @@ import { z } from 'zod';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { vouchMeetingGuest } from '@/lib/meetings/guests-api-client';
-import { GUEST_ACTION_COPY, guestActionCopyFor } from '@/lib/meetings/guests-copy';
+import {
+  GUEST_ACTION_COPY,
+  GUEST_ACTION_INVALID_REQUEST,
+  GUEST_ACTION_UNAUTHENTICATED,
+  guestActionCopyFor,
+} from '@/lib/meetings/guests-copy';
 import type { VouchActionResult } from '@/lib/meetings/meeting-panels';
 
 const inputSchema = z.object({
@@ -41,12 +46,20 @@ export async function vouchGuestAction(input: {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return { success: false, error: GUEST_ACTION_COPY.unauthenticated };
+    return {
+      success: false,
+      error: GUEST_ACTION_COPY.unauthenticated,
+      ...GUEST_ACTION_UNAUTHENTICATED,
+    };
   }
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {
-    return { success: false, error: 'Enter a valid work email address.' };
+    return {
+      success: false,
+      error: 'Enter a valid work email address.',
+      ...GUEST_ACTION_INVALID_REQUEST,
+    };
   }
   const { meetingId, guestId, email } = parsed.data;
 
@@ -60,7 +73,12 @@ export async function vouchGuestAction(input: {
     } else {
       log.error(line, context);
     }
-    return { success: false, error: guestActionCopyFor(result) };
+    return {
+      success: false,
+      error: guestActionCopyFor(result),
+      status: result.status,
+      code: result.code,
+    };
   }
 
   log.info('Guest vouched from the in-call panel', {

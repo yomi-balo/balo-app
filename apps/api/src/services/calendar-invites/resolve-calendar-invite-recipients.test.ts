@@ -1,26 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  mockFindLatestByEntityAndAction,
+  mockFindBooker,
+  mockBookerStillParticipates,
   mockListByMeetingContexts,
   mockListLiveByMeetingGuests,
-  mockGetMemberRole,
   mockResolveMeetingContextOwner,
   mockDeliveringExpertUserId,
 } = vi.hoisted(() => ({
-  mockFindLatestByEntityAndAction: vi.fn(),
+  mockFindBooker: vi.fn(),
+  mockBookerStillParticipates: vi.fn(),
   mockListByMeetingContexts: vi.fn(),
   mockListLiveByMeetingGuests: vi.fn(),
-  mockGetMemberRole: vi.fn(),
   mockResolveMeetingContextOwner: vi.fn(),
   mockDeliveringExpertUserId: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
-  auditEventsRepository: { findLatestByEntityAndAction: mockFindLatestByEntityAndAction },
+  clientPartyRecipientsRepository: {
+    findMeetingBookerUserId: mockFindBooker,
+    bookerStillParticipatesInCompany: mockBookerStillParticipates,
+  },
   meetingContextsRepository: { listByMeeting: mockListByMeetingContexts },
   meetingGuestsRepository: { listLiveByMeeting: mockListLiveByMeetingGuests },
-  partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
   resolveMeetingContextOwner: mockResolveMeetingContextOwner,
 }));
 vi.mock('../meetings/delivering-party.js', () => ({
@@ -43,94 +45,56 @@ beforeEach(() => {
     companyId: 'company-1',
     expertProfileId: 'expert-profile-1',
   });
-  mockGetMemberRole.mockResolvedValue('member');
+  mockBookerStillParticipates.mockResolvedValue(true);
 });
 
 describe('resolveCalendarPartyMemberUserIds — client', () => {
-  it('resolves the booker from the meeting.booked audit actor', async () => {
-    mockFindLatestByEntityAndAction.mockResolvedValue({ actorUserId: 'booker-1' });
+  const clientInput = {
+    meetingId: MEETING_ID,
+    party: 'client',
+    expertProfileId: null,
+  } as const;
 
-    const ids = await resolveCalendarPartyMemberUserIds({
-      meetingId: MEETING_ID,
-      party: 'client',
-      expertProfileId: null,
-    });
+  it('resolves the booker through the shared repository definition', async () => {
+    mockFindBooker.mockResolvedValue('booker-1');
+
+    const ids = await resolveCalendarPartyMemberUserIds(clientInput);
 
     expect(ids).toEqual(['booker-1']);
-    expect(mockFindLatestByEntityAndAction).toHaveBeenCalledWith({
-      entityType: 'meeting',
-      entityId: MEETING_ID,
-      action: 'meeting.booked',
-    });
-    // F15 (fix round 1, R14) — pin the EXACT argument order: `getMemberRole` is checked against
-    // the OWNING company and the BOOKER, never (say) the booker id for both, which the previous
-    // `mockGetMemberRole.mockResolvedValue('member')` default would have let survive silently.
-    expect(mockGetMemberRole).toHaveBeenCalledWith('company', 'company-1', 'booker-1');
+    expect(mockFindBooker).toHaveBeenCalledWith(MEETING_ID);
+    // Pin the EXACT argument order: participation is checked against the OWNING company and the
+    // BOOKER, never (say) the booker id for both.
+    expect(mockBookerStillParticipates).toHaveBeenCalledWith('company-1', 'booker-1');
   });
 
-  it('a null actor (seeded meeting) ⇒ []', async () => {
-    mockFindLatestByEntityAndAction.mockResolvedValue({ actorUserId: null });
+  it('no resolvable booker (no audit row, or a NULL actor) ⇒ [] with no participation check', async () => {
+    mockFindBooker.mockResolvedValue(null);
 
-    const ids = await resolveCalendarPartyMemberUserIds({
-      meetingId: MEETING_ID,
-      party: 'client',
-      expertProfileId: null,
-    });
-
-    expect(ids).toEqual([]);
+    await expect(resolveCalendarPartyMemberUserIds(clientInput)).resolves.toEqual([]);
+    expect(mockBookerStillParticipates).not.toHaveBeenCalled();
   });
 
-  it('no audit row at all ⇒ []', async () => {
-    mockFindLatestByEntityAndAction.mockResolvedValue(undefined);
+  it('a booker who no longer participates on the owning company ⇒ []', async () => {
+    mockFindBooker.mockResolvedValue('booker-1');
+    mockBookerStillParticipates.mockResolvedValue(false);
 
-    const ids = await resolveCalendarPartyMemberUserIds({
-      meetingId: MEETING_ID,
-      party: 'client',
-      expertProfileId: null,
-    });
-
-    expect(ids).toEqual([]);
+    await expect(resolveCalendarPartyMemberUserIds(clientInput)).resolves.toEqual([]);
   });
 
-  it('a booker who no longer holds participate on the owning company ⇒ []', async () => {
-    mockFindLatestByEntityAndAction.mockResolvedValue({ actorUserId: 'booker-1' });
-    mockGetMemberRole.mockResolvedValue(undefined);
-
-    const ids = await resolveCalendarPartyMemberUserIds({
-      meetingId: MEETING_ID,
-      party: 'client',
-      expertProfileId: null,
-    });
-
-    expect(ids).toEqual([]);
-  });
-
-  it('a booker whose role has no participate capability ⇒ []', async () => {
-    mockFindLatestByEntityAndAction.mockResolvedValue({ actorUserId: 'booker-1' });
-    // No such role exists in the shipped map, so it resolves to no capabilities — the
-    // membership axis denies without needing a bespoke fixture role.
-    mockGetMemberRole.mockResolvedValue('unknown-role');
-
-    const ids = await resolveCalendarPartyMemberUserIds({
-      meetingId: MEETING_ID,
-      party: 'client',
-      expertProfileId: null,
-    });
-
-    expect(ids).toEqual([]);
-  });
-
-  it('no resolvable primary context ⇒ []', async () => {
-    mockFindLatestByEntityAndAction.mockResolvedValue({ actorUserId: 'booker-1' });
+  it('no resolvable primary context ⇒ [] with no participation call', async () => {
+    mockFindBooker.mockResolvedValue('booker-1');
     mockListByMeetingContexts.mockResolvedValue([]);
 
-    const ids = await resolveCalendarPartyMemberUserIds({
-      meetingId: MEETING_ID,
-      party: 'client',
-      expertProfileId: null,
-    });
+    await expect(resolveCalendarPartyMemberUserIds(clientInput)).resolves.toEqual([]);
+    expect(mockBookerStillParticipates).not.toHaveBeenCalled();
+  });
 
-    expect(ids).toEqual([]);
+  it('an owner that does not resolve ⇒ [] with no participation call', async () => {
+    mockFindBooker.mockResolvedValue('booker-1');
+    mockResolveMeetingContextOwner.mockResolvedValue(undefined);
+
+    await expect(resolveCalendarPartyMemberUserIds(clientInput)).resolves.toEqual([]);
+    expect(mockBookerStillParticipates).not.toHaveBeenCalled();
   });
 });
 
@@ -194,7 +158,7 @@ describe('resolveCalendarInviteRecipients', () => {
   });
 
   it('client party: booker + guests, deliveryMode is irrelevant on this side', async () => {
-    mockFindLatestByEntityAndAction.mockResolvedValue({ actorUserId: 'booker-1' });
+    mockFindBooker.mockResolvedValue('booker-1');
     mockListLiveByMeetingGuests.mockResolvedValue([
       { id: 'guest-1', party: 'client', admission: 'admitted' },
     ]);

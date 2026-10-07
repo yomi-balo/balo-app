@@ -27,6 +27,8 @@ import {
   Wallet,
   Video,
   VideoOff,
+  PhoneOff,
+  Gauge,
   Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -65,6 +67,10 @@ const KIND_ICONS: Readonly<Record<string, LucideIcon>> = {
   'calendar.amend_failed': CalendarX,
   // BAL-581 — a call room that never got a Daily room to join.
   'meeting.unprovisioned': VideoOff,
+  // BAL-586 — a live meeting nobody ended, past its scheduled end.
+  'meeting.stranded': PhoneOff,
+  // BAL-586 — a presence session overrunning its estimate or never settled.
+  'session.presence_stuck': Gauge,
   'sweep.failed': AlertOctagon,
 };
 

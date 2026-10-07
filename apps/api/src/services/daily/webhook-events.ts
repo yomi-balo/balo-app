@@ -18,10 +18,11 @@
  *   · the INSTANT   — the event's own `joined_at` / `left_at` if present, else the envelope's
  *     `event_ts` (unix seconds).
  *
- * ⚠ AN UNKNOWN TYPE IS A FIRST-CLASS OUTCOME, NOT AN ERROR. Daily fires event types Balo does
- * not handle, and a `500` on one of those would flood the vendor's retry queue and eventually
- * get the webhook DISABLED — taking the three types we DO care about down with it. Unknown
- * types record their marker and ack `200`.
+ * ⚠ AN UNKNOWN TYPE IS A FIRST-CLASS OUTCOME, NOT AN ERROR. Daily treats every non-200 alike:
+ * under `exponential` (what Balo registers) a `500` here would be retried ≤5 times over ~15 min
+ * then dropped; under `circuit-breaker` it counts toward the 3-consecutive-failure threshold
+ * that flips the webhook to `FAILED`. Either way, an unknown type must ack `200` — it records
+ * its marker and moves on.
  *
  * ⚠ THE ENVELOPE'S `id` IS THE IDEMPOTENCY KEY and is REQUIRED. Without it the
  * `daily_webhook_events` marker cannot do its job (D2), and a replayed `participant.joined`
@@ -61,6 +62,19 @@ export const HANDLED_DAILY_EVENT_TYPES = [
 ] as const;
 
 export type HandledDailyEventType = (typeof HANDLED_DAILY_EVENT_TYPES)[number];
+
+/**
+ * BAL-583 — Daily's signed verification ping, sent on webhook create/update/re-activate as
+ * `{"test":"test"}`, HMAC-signed exactly like a real delivery and requiring a `200` within 8s.
+ * `.strict()` so an extra key — a real event that happens to carry `test: 'test'` as one field
+ * among others — is NOT mistaken for the ping.
+ */
+const verificationPingSchema = z.object({ test: z.literal('test') }).strict();
+
+/** `true` only for Daily's exact signed ping body — see {@link verificationPingSchema}. */
+export function isDailyVerificationPing(body: unknown): boolean {
+  return verificationPingSchema.safeParse(body).success;
+}
 
 /**
  * The delivery envelope, common to every Daily event.

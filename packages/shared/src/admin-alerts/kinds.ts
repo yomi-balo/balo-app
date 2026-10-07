@@ -2,13 +2,14 @@ import type { AdminAlertDetail } from './detail';
 import type { AdminAlertGroup, AdminAlertCadence } from './groups';
 
 /**
- * BAL-548 / ADR-1055 — the kind registry: THE thirteen-row table (thirteen registered kinds,
+ * BAL-548 / ADR-1055 — the kind registry: THE fifteen-row table (fifteen registered kinds,
  * one of which — `sweep.failed` — has no finder) that a `packages/db` invariant
  * (`admin-alert-kinds-have-exactly-one-writer.test.ts`) value-imports to prove every kind has
  * EXACTLY one writer: a finder XOR a `raise()` call site.
  *
- * ⚠ EIGHT FINDER KINDS, FOUR EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
- * `calendar.subscription_lapse` is ONE kind consuming THREE finder reads.
+ * ⚠ TEN FINDER KINDS, FOUR EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
+ * `calendar.subscription_lapse` is ONE kind consuming THREE finder reads;
+ * `session.presence_stuck` is ONE kind consuming TWO (overrunning and unsettled).
  */
 export const ADMIN_ALERT_KIND_KEYS = [
   'expert.application_pending',
@@ -23,6 +24,8 @@ export const ADMIN_ALERT_KIND_KEYS = [
   'calendar.subscription_lapse',
   'calendar.amend_failed',
   'meeting.unprovisioned',
+  'meeting.stranded',
+  'session.presence_stuck',
   'sweep.failed',
 ] as const;
 
@@ -233,6 +236,20 @@ export const ADMIN_ALERT_KINDS: Readonly<Record<AdminAlertKind, AdminAlertKindMe
     closes:
       "Closes itself once the meeting's call room is ready, or when the meeting is cancelled or ends without one",
     target: targetMeeting,
+  },
+  'meeting.stranded': {
+    group: 'meetings',
+    finder: 'meetingStranded',
+    cadence: '5m',
+    closes: 'Closes itself when the meeting ends or is cancelled',
+    target: targetMeeting,
+  },
+  'session.presence_stuck': {
+    group: 'money',
+    finder: 'sessionPresenceStuck',
+    cadence: '1m',
+    closes: 'Closes itself once the session settles or is cancelled',
+    target: targetMeetingViaTargetId,
   },
   'sweep.failed': {
     group: 'platform',

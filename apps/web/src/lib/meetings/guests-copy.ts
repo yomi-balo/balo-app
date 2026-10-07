@@ -1,4 +1,5 @@
 import { MAX_MEETING_PARTICIPANTS } from '@balo/shared/meetings';
+import type { GuestActionFailureFacts } from './meeting-panels';
 
 /**
  * BAL-436 — the api's FIXED ERROR LITERALS mapped to user-facing copy, in ONE place.
@@ -118,6 +119,18 @@ export function guestActionCopyFor(input: {
     : undefined;
   return known ?? GUEST_ACTION_COPY.request_failed;
 }
+
+/** The failure facts of an action rejected for want of an onboarded session. */
+export const GUEST_ACTION_UNAUTHENTICATED: GuestActionFailureFacts = {
+  status: 401,
+  code: 'unauthenticated',
+};
+
+/** The failure facts of an action rejected for malformed input before any api hop. */
+export const GUEST_ACTION_INVALID_REQUEST: GuestActionFailureFacts = {
+  status: 400,
+  code: 'invalid_request',
+};
 
 /**
  * BAL-579 — the in-call vouch flow's own copy. Failures reuse {@link GUEST_ACTION_COPY}.

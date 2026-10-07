@@ -59,6 +59,26 @@ export interface BookingCancelledEmailProps {
   readonly reason: BookingCancelledReason;
   readonly caseUrl: string;
   readonly baseUrl: string;
+  /**
+   * Overrides the "this recipient cancelled it themselves" inference. `false` renders the
+   * non-actor copy for a client-side recipient who shares `cancelledBy: 'client'` with the actor
+   * but is a colleague (the booker told about another member's cancel). Absent: inferred from
+   * `recipient` × `cancelledBy`.
+   */
+  readonly recipientIsActor?: boolean;
+}
+
+/** Did this recipient cancel it themselves? The explicit override wins over the inference. */
+function recipientActedThemselves(
+  recipient: BookingCancelledRecipient,
+  cancelledBy: BookingCancelledInitiator,
+  recipientIsActor?: boolean
+): boolean {
+  return (
+    recipientIsActor ??
+    ((recipient === 'client' && cancelledBy === 'client') ||
+      (recipient === 'expert' && cancelledBy === 'expert'))
+  );
 }
 
 /**
@@ -72,11 +92,8 @@ export interface BookingCancelledEmailProps {
  */
 function introFor(props: Readonly<BookingCancelledEmailProps>, window: string): string {
   const { recipient, cancelledBy, reason, counterpartyLabel, cancelledByLabel } = props;
-  const actedThemselves =
-    (recipient === 'client' && cancelledBy === 'client') ||
-    (recipient === 'expert' && cancelledBy === 'expert');
 
-  if (actedThemselves) {
+  if (recipientActedThemselves(recipient, cancelledBy, props.recipientIsActor)) {
     return `You cancelled the consultation with ${counterpartyLabel} on ${window}.`;
   }
   if (reason === 'expert_time_off') {
@@ -115,12 +132,10 @@ export function bookingCancelledSubject(
   recipient: BookingCancelledRecipient,
   counterpartyLabel: string,
   cancelledBy: BookingCancelledInitiator = 'client',
-  reason: BookingCancelledReason = 'requested'
+  reason: BookingCancelledReason = 'requested',
+  recipientIsActor?: boolean
 ): string {
-  const actedThemselves =
-    (recipient === 'client' && cancelledBy === 'client') ||
-    (recipient === 'expert' && cancelledBy === 'expert');
-  if (actedThemselves) {
+  if (recipientActedThemselves(recipient, cancelledBy, recipientIsActor)) {
     return `You cancelled your consultation with ${counterpartyLabel}`;
   }
   if (reason === 'expert_time_off') {
@@ -151,7 +166,7 @@ function expertCopy(subject: string) {
 
 export function BookingCancelledEmail(props: Readonly<BookingCancelledEmailProps>) {
   // ⚠ `cancelledBy` AND `reason` MUST THREAD THROUGH HERE TOO: this `subject` becomes the
-  // email's hidden PREVIEW TEXT (`previewText={copy.subject}` below). Omitting either would
+  // email's hidden PREVIEW TEXT (`previewText={copy.subject}` below). Omitting any of them would
   // silently fall back to the signature's defaults, showing the correct visible subject and
   // body while leaking a mis-attributed preheader into the inbox list — the exact regression
   // `booking-rescheduled.tsx` records for its own `initiatedBy`.
@@ -159,7 +174,8 @@ export function BookingCancelledEmail(props: Readonly<BookingCancelledEmailProps
     props.recipient,
     props.counterpartyLabel,
     props.cancelledBy,
-    props.reason
+    props.reason,
+    props.recipientIsActor
   );
   const copy = props.recipient === 'client' ? clientCopy(subject) : expertCopy(subject);
   return (

@@ -248,6 +248,48 @@ describe('Retry-After', () => {
   });
 });
 
+describe('⚠⚠ per-method body rule (the production regression guard)', () => {
+  it.each([
+    ['admit', () => decideMeetingGuestAdmission(MEETING_ID, GUEST_ID, 'admit')],
+    ['deny', () => decideMeetingGuestAdmission(MEETING_ID, GUEST_ID, 'deny')],
+    ['resend', () => resendMeetingGuestLink(MEETING_ID, GUEST_ID)],
+  ])(
+    'a bodyless %s POST sends `{}` under the JSON content type — the pair must agree',
+    async (_name, call) => {
+      mockLoggedFetch.mockResolvedValue(response(200, { id: GUEST_ID }));
+
+      await call();
+
+      const init = lastInit();
+      expect(init.method).toBe('POST');
+      // ⚠ `undefined` here is `Content-Length: 0` on the wire, and Fastify answers
+      // `400 FST_ERR_CTP_EMPTY_JSON_BODY` before the handler runs.
+      expect(init.body).toBe('{}');
+      expect(init.headers['Content-Type']).toBe('application/json');
+    }
+  );
+
+  it('the roster GET carries NEITHER a body nor a JSON content type', async () => {
+    await getMeetingGuests(MEETING_ID);
+
+    const init = lastInit();
+    expect(init.method).toBe('GET');
+    expect(init.body).toBeUndefined();
+    expect(init.headers['Content-Type']).toBeUndefined();
+  });
+
+  it('the invite POST declares the JSON content type over its body', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      response(201, { guests: [], participantCount: 1, participantCap: 10 })
+    );
+
+    await inviteMeetingGuests(MEETING_ID, ['a@x.example'], 'in_call');
+
+    expect(lastInit().headers['Content-Type']).toBe('application/json');
+    expect(lastInit().body).toBeDefined();
+  });
+});
+
 describe('inviteMeetingGuests', () => {
   it.each(['in_call', 'case_surface', 'booking_confirm'] as const)(
     '⚠⚠ NEVER sends `party` or `accessScope`, and forwards entryPoint=%s VERBATIM — never defaulted',
@@ -344,6 +386,9 @@ describe('removeMeetingGuest', () => {
     expect(init.headers.Authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
     // ⚠ NO BODY — the route takes its ids from the path.
     expect(init.body).toBeUndefined();
+    // ⚠ AND NO JSON CONTENT TYPE: Fastify runs the JSON parser on a DELETE that declares one,
+    // and a zero-length body is a 400 before the handler.
+    expect(init.headers['Content-Type']).toBeUndefined();
     expect(result).toEqual({ ok: true, data: {} });
   });
 

@@ -16,6 +16,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import type { ReservableCaseBooking } from '@balo/shared/credit';
+import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import {
   assertMeetingTransition,
   DAILY_ROOM_NAME_PREFIX,
@@ -191,6 +192,34 @@ export interface UnprovisionedScheduledMeeting {
   readonly createdAt: Date;
   /** `daily_room_name IS NOT NULL` — a stamped-but-mismatched room vs one never created. */
   readonly roomNameStamped: boolean;
+}
+
+/** BAL-586 — {@link meetingsRepository.listStrandedLive}'s input. */
+export interface ListStrandedLiveInput {
+  /** Inclusive. Meetings whose `scheduled_end` is at or before this are in scope. */
+  scheduledEndBefore: Date;
+  /**
+   * Inclusive. An `in_progress` meeting with an open presence interval is returned only when
+   * `GREATEST(scheduled_end, scheduled_start + MAX_SESSION_MINUTES) <= liveCeilingBefore`.
+   * The caller passes `now − overrunStopGraceMs − <slack past the forced stop>`.
+   */
+  liveCeilingBefore: Date;
+  /** Hard bound. ⚠ The CALLER must `log.warn` when the result length equals it. */
+  limit: number;
+}
+
+/** BAL-586 — one live meeting past its scheduled end, with its open presence interval summary. */
+export interface StrandedLiveMeeting {
+  readonly meetingId: string;
+  readonly status: 'scheduled' | 'waiting_for_participants' | 'in_progress';
+  readonly scheduledStart: Date;
+  readonly scheduledEnd: Date;
+  /** Presence intervals with `left_at IS NULL` and not soft-deleted. */
+  readonly openIntervalCount: number;
+  /** The open intervals whose party is not `observer` — the ones a presence session bills. */
+  readonly openBillableIntervalCount: number;
+  /** Earliest `joined_at` among the open intervals; null iff `openIntervalCount` is 0. */
+  readonly oldestOpenJoinedAt: Date | null;
 }
 
 /** BAL-134 — the terminal transition's input (§4.3). */
@@ -1667,6 +1696,86 @@ export const meetingsRepository = {
       )
       .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
       .limit(input.limit);
+  },
+
+  /**
+   * BAL-586 — meetings still in a LIVE status (`scheduled`, `waiting_for_participants`,
+   * `in_progress`) whose `scheduled_end` is at or before `scheduledEndBefore`, oldest-scheduled-end
+   * first: the `meeting.stranded` admin-alert finder's read. The status set is the one the
+   * lifecycle sweep reads. There is deliberately NO lookback floor — a stranded meeting stays
+   * visible however old it is.
+   *
+   * `scheduled_end` has no index. The redundant `scheduled_start < scheduledEndBefore` bound is
+   * implied by the `scheduled_start < scheduled_end` CHECK; it exists to give
+   * `meeting_status_scheduled_start_idx` a range to scan, with `scheduled_end` a residual filter.
+   *
+   * A call that is legitimately still running is NOT stranded: an `in_progress` meeting with an
+   * open interval additionally needs `GREATEST(scheduled_end, scheduled_start +
+   * MAX_SESSION_MINUTES) <= liveCeilingBefore`. That is the SQL mirror of `overrunStopCeiling`
+   * (`@balo/shared/meetings`, `lifecycle.ts`) — the instant the lifecycle sweep force-stops it —
+   * and `meetings.integration.test.ts` pins the two in agreement. It lives in the WHERE so the
+   * batch limit cannot be starved by rows the finder would discard.
+   *
+   * The open-interval counts and oldest join come from correlated subqueries on
+   * `meeting_presence` (`left_at IS NULL AND deleted_at IS NULL`, riding
+   * `meeting_presence_open_idx`).
+   *
+   * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`** — the same no-silent-caps
+   * rule as {@link meetingsRepository.listLifecycleCandidates}. A `limit <= 0` returns `[]`
+   * without a query.
+   */
+  async listStrandedLive(input: ListStrandedLiveInput): Promise<StrandedLiveMeeting[]> {
+    if (input.limit <= 0) return [];
+    const openInterval = and(
+      eq(meetingPresence.meetingId, meetings.id),
+      isNull(meetingPresence.leftAt),
+      isNull(meetingPresence.deletedAt)
+    );
+    const rows = await db
+      .select({
+        meetingId: meetings.id,
+        status: meetings.status,
+        scheduledStart: meetings.scheduledStart,
+        scheduledEnd: meetings.scheduledEnd,
+        openIntervalCount: sql<number>`(SELECT count(*)::int FROM ${meetingPresence} WHERE ${openInterval})`,
+        openBillableIntervalCount: sql<number>`(SELECT count(*)::int FROM ${meetingPresence} WHERE ${openInterval} AND ${meetingPresence.party} <> 'observer')`,
+        oldestOpenJoinedAt: sql<Date | null>`(SELECT min(${meetingPresence.joinedAt}) FROM ${meetingPresence} WHERE ${openInterval})`,
+      })
+      .from(meetings)
+      .where(
+        and(
+          inArray(meetings.status, [...END_MEETING_FROM]),
+          lte(meetings.scheduledEnd, input.scheduledEndBefore),
+          lt(meetings.scheduledStart, input.scheduledEndBefore),
+          isNull(meetings.deletedAt),
+          or(
+            ne(meetings.status, 'in_progress'),
+            notExists(
+              db
+                .select({ one: sql`1` })
+                .from(meetingPresence)
+                .where(openInterval)
+            ),
+            sql`GREATEST(${meetings.scheduledEnd}, ${meetings.scheduledStart} + ${MAX_SESSION_MINUTES}::int * interval '1 minute') <= ${input.liveCeilingBefore.toISOString()}::timestamptz`
+          )
+        )
+      )
+      .orderBy(asc(meetings.scheduledEnd), asc(meetings.id))
+      .limit(input.limit);
+    return rows.flatMap((row) =>
+      row.status === 'scheduled' ||
+      row.status === 'waiting_for_participants' ||
+      row.status === 'in_progress'
+        ? [
+            {
+              ...row,
+              status: row.status,
+              oldestOpenJoinedAt:
+                row.oldestOpenJoinedAt === null ? null : new Date(row.oldestOpenJoinedAt),
+            },
+          ]
+        : []
+    );
   },
 
   /**

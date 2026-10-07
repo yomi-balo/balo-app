@@ -77,6 +77,14 @@ import { stripComments } from '@balo/shared/testing';
  *       every possible WHERE-clause defect, and limitations (a)-(c) above apply to it exactly as
  *       they apply to the `.orderBy(` extractor.
  *
+ * ⚠ A RAW `sql` TEMPLATE `ORDER BY` IS NOW FENCED TOO (it was a blind spot until BAL-586: a
+ * correlated sub-select ordered by `ORDER BY ${auditEvents.createdAt} DESC LIMIT 1` inside a `sql`
+ * template never reaches the `.orderBy(` extractor). Every `ORDER BY` in a source file's `sql`
+ * text whose clause names an `auditEvents.` column must list `createdAt` and `seq`, both with an
+ * EXPLICIT and identical `ASC`/`DESC`, and must not name `auditEvents.id`. The scan is textual:
+ * it reads from `ORDER BY` to the closing backtick, so an `ORDER BY` over an aliased table
+ * (`alias(auditEvents, …)`) is not seen, which is limitation (a)'s aliasing hole again.
+ *
  * ⚠ THIS FILE IS NAMED BY PATH FROM `schema/audit-events.ts`'s `seq` docblock. If it moves,
  * update that docblock's path too — it forward-references this exact file.
  *
@@ -296,6 +304,29 @@ const AUDIT_SEQ_COMPARISON_SITES: AuditComparisonSite[] = AUDIT_COMPARISON_SITES
   site.argText.includes('auditEvents.seq')
 );
 
+interface AuditRawOrderBySite {
+  readonly file: string;
+  readonly clause: string;
+}
+
+/**
+ * Every `ORDER BY` clause inside a raw `sql` template, from every audit-mentioning file, that
+ * names an `auditEvents.` column. The clause runs from the `ORDER BY` keyword to the closing
+ * backtick of its template (so a trailing `LIMIT 1)` rides along harmlessly).
+ */
+const AUDIT_RAW_ORDERBY_SITES: AuditRawOrderBySite[] = AUDIT_MENTIONING_FILES.flatMap((file) => {
+  const clauses: AuditRawOrderBySite[] = [];
+  let cursor = file.source.indexOf('ORDER BY ');
+  while (cursor !== -1) {
+    const end = file.source.indexOf('`', cursor);
+    if (end === -1) break;
+    const clause = normalize(file.source.slice(cursor, end));
+    if (clause.includes('auditEvents.')) clauses.push({ file: file.displayPath, clause });
+    cursor = file.source.indexOf('ORDER BY ', end);
+  }
+  return clauses;
+});
+
 describe('INVARIANT: the audit trail ordering contract (BAL-426) — created_at then seq, same direction, never id', () => {
   // ── Vacuity guards ─────────────────────────────────────────────────
 
@@ -377,6 +408,36 @@ describe('INVARIANT: the audit trail ordering contract (BAL-426) — created_at 
         'and never one without the other. A mismatched pair (e.g. `desc(createdAt), ' +
         'asc(seq)`) pasted into a `DESC … LIMIT 1` reader silently returns the EARLIEST row of ' +
         'a same-transaction tie instead of the latest.'
+    ).toEqual([]);
+  });
+
+  // ── BAL-586 — the raw `sql` template ORDER BY fence ─────────────────
+
+  it('resolves at least one raw sql ORDER BY over auditEvents (positive control)', () => {
+    expect(
+      AUDIT_RAW_ORDERBY_SITES.filter((site) =>
+        site.file.endsWith('repositories/credit-sessions.ts')
+      ).length,
+      'No raw `sql` ORDER BY over auditEvents was found in repositories/credit-sessions.ts ' +
+        "(listPresenceAlertLabels' newest-marker-guard sub-select). If it moved or the extractor " +
+        'broke, the raw-sql assertion below would pass vacuously.'
+    ).toBeGreaterThan(0);
+  });
+
+  it('every raw sql ORDER BY over auditEvents pairs createdAt and seq in the SAME explicit direction, never id', () => {
+    const offenders = AUDIT_RAW_ORDERBY_SITES.filter(({ clause }) => {
+      const asc =
+        clause.includes('${auditEvents.createdAt} ASC') &&
+        clause.includes('${auditEvents.seq} ASC');
+      const desc =
+        clause.includes('${auditEvents.createdAt} DESC') &&
+        clause.includes('${auditEvents.seq} DESC');
+      return !(asc !== desc) || clause.includes('${auditEvents.id}');
+    });
+    expect(
+      offenders.map((site) => `${site.file}: ${site.clause}`),
+      'A raw `sql` ORDER BY over audit_events does not follow the BAL-426 contract: ' +
+        '`created_at` then `seq`, both with the same explicit ASC/DESC, never `id`.'
     ).toEqual([]);
   });
 

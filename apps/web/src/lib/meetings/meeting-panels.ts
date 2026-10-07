@@ -145,17 +145,28 @@ export type InviteMeetingGuestsResult =
     };
 
 /**
+ * The api's own facts about a refused guest action, carried on every failure arm.
+ * `status` is the HTTP status, or the local action's own (`401` / `400`); `0` means transport.
+ * `code` is a fixed literal: the api's, or `unauthenticated` / `invalid_request` for a local
+ * failure. Never prose, never PII.
+ */
+export interface GuestActionFailureFacts {
+  readonly status: number;
+  readonly code: string;
+}
+
+/**
  * ⚠⚠ `already_decided` IS NOT A FAILURE — it is the two-hosts race answer (`409
  * guest_not_pending`). The panel renders it as an INFORMATIONAL toast plus a refetch, never
  * as an error: the outcome the host wanted has happened, just not by their click.
  */
 export type DecideAdmissionActionResult =
   | { readonly success: true }
-  | {
+  | ({
       readonly success: false;
       readonly error: string;
       readonly outcome: Exclude<MeetingPanelDecisionOutcome, 'ok'>;
-    };
+    } & GuestActionFailureFacts);
 
 /**
  * BAL-476 (R3/R7) — the removal's answer.
@@ -164,11 +175,15 @@ export type DecideAdmissionActionResult =
  * shape, not `DecideAdmissionActionResult`'s. `removeGuest` reuses the plain `guest_not_found`
  * literal for a LOST RACE on purpose (its own comment: "a distinct code would only describe our
  * own timing"), so the client has nothing to split on and an `outcome` dimension here would be
- * `'failed'` in every single case — a PostHog breakdown with one bucket.
+ * `'failed'` in every single case — a PostHog breakdown with one bucket. `status` and `code` are
+ * the api's own facts about the refusal, not an outcome dimension.
  */
 export type RemoveGuestActionResult =
   | { readonly success: true }
-  | { readonly success: false; readonly error: string };
+  | ({
+      readonly success: false;
+      readonly error: string;
+    } & GuestActionFailureFacts);
 
 /**
  * BAL-579 — the vouch's answer. ⚠ NO `outcome` FIELD, like {@link RemoveGuestActionResult}: every
@@ -176,11 +191,17 @@ export type RemoveGuestActionResult =
  */
 export type VouchActionResult =
   | { readonly success: true }
-  | { readonly success: false; readonly error: string };
+  | ({
+      readonly success: false;
+      readonly error: string;
+    } & GuestActionFailureFacts);
 
 export type ResendLinkActionResult =
   | { readonly success: true }
-  | { readonly success: false; readonly error: string };
+  | ({
+      readonly success: false;
+      readonly error: string;
+    } & GuestActionFailureFacts);
 
 /** BAL-423's shipped file actions, re-stated as the shape the panel is handed. */
 export type ListMeetingFilesActionResult =

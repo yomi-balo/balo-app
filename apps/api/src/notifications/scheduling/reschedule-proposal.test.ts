@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockMeetingFindById,
   mockFindPendingForAnswer,
-  mockListAdminUserIds,
+  mockResolveRecipients,
   mockScheduleNotification,
 } = vi.hoisted(() => ({
   mockMeetingFindById: vi.fn(),
   mockFindPendingForAnswer: vi.fn(),
-  mockListAdminUserIds: vi.fn(),
+  mockResolveRecipients: vi.fn(),
   mockScheduleNotification: vi.fn(),
 }));
 
@@ -18,7 +18,7 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockMeetingFindById },
   rescheduleProposalsRepository: { findPendingForAnswer: mockFindPendingForAnswer },
-  partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
+  clientPartyRecipientsRepository: { resolveClientPartyRecipients: mockResolveRecipients },
 }));
 vi.mock('./schedule.js', () => ({ scheduleNotification: mockScheduleNotification }));
 // `@balo/shared/meetings`'s `resolveRescheduleRefusal` is NOT mocked — the real allow-list is
@@ -99,7 +99,10 @@ describe('rescheduleProposalUnansweredRecheck — T-API-RECHECK-1', () => {
       status: 'scheduled',
       scheduledStart: ORIGINAL_START,
     });
-    mockListAdminUserIds.mockResolvedValue(['admin-1']);
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: ['admin-1'],
+      includedBookingMember: false,
+    });
   });
 
   it('skips malformed_payload on a missing proposalId', async () => {
@@ -172,22 +175,29 @@ describe('rescheduleProposalUnansweredRecheck — T-API-RECHECK-1', () => {
     expect(result).toEqual({ publish: false, reason: 'proposal_stale' });
   });
 
-  it('skips no_recipients when the company has no live admin holder', async () => {
-    mockListAdminUserIds.mockResolvedValue([]);
+  it('skips no_recipients when the company has no live recipient', async () => {
+    mockResolveRecipients.mockResolvedValue({ recipientUserIds: [], includedBookingMember: false });
     const result = await rescheduleProposalUnansweredRecheck(row());
     expect(result).toEqual({ publish: false, reason: 'no_recipients' });
   });
 
   it('publishes with the SPREAD payload + rebuilt recipients — correlationId survives', async () => {
-    mockListAdminUserIds.mockResolvedValue(['admin-1', 'admin-2']);
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: ['admin-1', 'booker-1'],
+      includedBookingMember: true,
+    });
     const result = await rescheduleProposalUnansweredRecheck(row());
     expect(result).toEqual({
       publish: true,
       payload: expect.objectContaining({
         correlationId: CORRELATION_ID,
         proposalId: PROPOSAL_ID,
-        recipientUserIds: ['admin-1', 'admin-2'],
+        recipientUserIds: ['admin-1', 'booker-1'],
       }),
+    });
+    expect(mockResolveRecipients).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      companyId: COMPANY_ID,
     });
   });
 });

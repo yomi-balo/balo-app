@@ -7,7 +7,9 @@ const {
   mockFindCase,
   mockFindUserDisplay,
   mockGetAgencySummary,
-  mockListAdminUserIds,
+  mockResolveRecipients,
+  mockFindBooker,
+  mockBookerParticipates,
   mockPublish,
 } = vi.hoisted(() => ({
   mockFindCompanyName: vi.fn(),
@@ -15,7 +17,9 @@ const {
   mockFindCase: vi.fn(),
   mockFindUserDisplay: vi.fn(),
   mockGetAgencySummary: vi.fn(),
-  mockListAdminUserIds: vi.fn(),
+  mockResolveRecipients: vi.fn(),
+  mockFindBooker: vi.fn(),
+  mockBookerParticipates: vi.fn(),
   mockPublish: vi.fn(),
 }));
 
@@ -25,7 +29,11 @@ vi.mock('@balo/db', () => ({
   caseEngagementsRepository: { findByEngagementId: mockFindCase },
   usersRepository: { findDisplayById: mockFindUserDisplay },
   agenciesRepository: { getSummaryById: mockGetAgencySummary },
-  partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
+  clientPartyRecipientsRepository: {
+    resolveClientPartyRecipients: mockResolveRecipients,
+    findMeetingBookerUserId: mockFindBooker,
+    bookerStillParticipatesInCompany: mockBookerParticipates,
+  },
 }));
 vi.mock('../../notifications/index.js', () => ({
   notificationEvents: { publish: mockPublish },
@@ -44,6 +52,7 @@ const ACTOR_USER_ID = '66666666-6666-4666-8666-666666666666';
 const AUDIT_ID = '77777777-7777-4777-8777-777777777777';
 const CLIENT_ADMIN_A = '88888888-8888-4888-8888-888888888888';
 const CLIENT_ADMIN_B = '99999999-9999-4999-8999-999999999999';
+const BOOKER_USER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 const log = {
   error: vi.fn(),
@@ -95,7 +104,14 @@ beforeEach(() => {
       : { id, firstName: 'Dana', lastName: 'Okoro' }
   );
   mockGetAgencySummary.mockResolvedValue(undefined);
-  mockListAdminUserIds.mockResolvedValue([CLIENT_ADMIN_A, CLIENT_ADMIN_B]);
+  mockResolveRecipients.mockResolvedValue({
+    recipientUserIds: [CLIENT_ADMIN_A, CLIENT_ADMIN_B],
+    includedBookingMember: false,
+    bookerAddedBeyondAdmins: false,
+  });
+  // By default the booker IS the actor, so a client cancel tells nobody else.
+  mockFindBooker.mockResolvedValue(ACTOR_USER_ID);
+  mockBookerParticipates.mockResolvedValue(true);
   mockPublish.mockResolvedValue(undefined);
 });
 
@@ -150,12 +166,66 @@ describe('publishBookingCancelled — the correlationId', () => {
 // ── Recipient shape — A1, the AC gap this closes ──────────────────────────────
 
 describe('publishBookingCancelled — who gets told', () => {
-  it('CLIENT arm: `recipientId` is the actor, and NO fan-out list (nobody told twice)', async () => {
+  it('CLIENT arm, booker IS the actor: `recipientId` only — no list and no participation read (nobody told twice)', async () => {
     await publishBookingCancelled(input({ cancelledBy: 'client' }), log);
 
     expect(published().recipientId).toBe(ACTOR_USER_ID);
     expect(published()).not.toHaveProperty('recipientUserIds');
-    expect(mockListAdminUserIds).not.toHaveBeenCalled();
+    expect(mockBookerParticipates).not.toHaveBeenCalled();
+    expect(mockResolveRecipients).not.toHaveBeenCalled();
+  });
+
+  describe('CLIENT arm, a COLLEAGUE cancelled', () => {
+    it('⚠ tells the booker as well: `recipientId` is the actor AND `recipientUserIds` is [booker]', async () => {
+      mockFindBooker.mockResolvedValue(BOOKER_USER_ID);
+
+      await publishBookingCancelled(input({ cancelledBy: 'client' }), log);
+
+      expect(published().recipientId).toBe(ACTOR_USER_ID);
+      expect(published().recipientUserIds).toEqual([BOOKER_USER_ID]);
+      expect(mockFindBooker).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockBookerParticipates).toHaveBeenCalledWith(COMPANY_ID, BOOKER_USER_ID);
+      // The admin fan-out resolver is never consulted on this arm.
+      expect(mockResolveRecipients).not.toHaveBeenCalled();
+    });
+
+    it('a DEPARTED booker is not told', async () => {
+      mockFindBooker.mockResolvedValue(BOOKER_USER_ID);
+      mockBookerParticipates.mockResolvedValue(false);
+
+      await publishBookingCancelled(input({ cancelledBy: 'client' }), log);
+
+      expect(published().recipientId).toBe(ACTOR_USER_ID);
+      expect(published()).not.toHaveProperty('recipientUserIds');
+    });
+
+    it('an unresolvable booker (seeded / system booking) is nobody to tell', async () => {
+      mockFindBooker.mockResolvedValue(null);
+
+      await publishBookingCancelled(input({ cancelledBy: 'client' }), log);
+
+      expect(published()).not.toHaveProperty('recipientUserIds');
+      expect(mockBookerParticipates).not.toHaveBeenCalled();
+    });
+
+    it('a FAILING booker read still publishes the actor’s confirmation, and logs', async () => {
+      mockFindBooker.mockRejectedValue(new Error('connection terminated'));
+
+      await publishBookingCancelled(input({ cancelledBy: 'client' }), log);
+
+      expect(published().recipientId).toBe(ACTOR_USER_ID);
+      expect(published()).not.toHaveProperty('recipientUserIds');
+      expect(log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID }),
+        expect.stringContaining('the expert is still notified')
+      );
+    });
+
+    it('an empty client list is not the "reaches nobody" warning (the actor was told)', async () => {
+      await publishBookingCancelled(input({ cancelledBy: 'client' }), log);
+
+      expect(log.warn).not.toHaveBeenCalled();
+    });
   });
 
   it.each(['expert', 'admin'])(
@@ -168,14 +238,29 @@ describe('publishBookingCancelled — who gets told', () => {
 
       expect(published()).not.toHaveProperty('recipientId');
       expect(published().recipientUserIds).toEqual([CLIENT_ADMIN_A, CLIENT_ADMIN_B]);
-      expect(mockListAdminUserIds).toHaveBeenCalledWith('company', COMPANY_ID);
+      expect(mockFindBooker).not.toHaveBeenCalled();
+      expect(mockResolveRecipients).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        companyId: COMPANY_ID,
+      });
     }
   );
+
+  it('⚠ the fan-out includes the booking member the resolver appends after the admins', async () => {
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: [CLIENT_ADMIN_A, CLIENT_ADMIN_B, 'booker-user'],
+      includedBookingMember: true,
+    });
+
+    await publishBookingCancelled(input({ cancelledBy: 'expert' }), log);
+
+    expect(published().recipientUserIds).toEqual([CLIENT_ADMIN_A, CLIENT_ADMIN_B, 'booker-user']);
+  });
 
   it('⚠ WARNS loudly when the client company has no live member to reach', async () => {
     // Both client-side channels fan out from this list; an empty one delivers nothing, and a
     // silent send is the one shape a promise must never take.
-    mockListAdminUserIds.mockResolvedValue([]);
+    mockResolveRecipients.mockResolvedValue({ recipientUserIds: [], includedBookingMember: false });
 
     await publishBookingCancelled(input({ cancelledBy: 'expert' }), log);
 
@@ -188,7 +273,7 @@ describe('publishBookingCancelled — who gets told', () => {
   });
 
   it('a FAILING recipient read degrades to no fan-out, and still publishes for the expert', async () => {
-    mockListAdminUserIds.mockRejectedValue(new Error('connection terminated'));
+    mockResolveRecipients.mockRejectedValue(new Error('connection terminated'));
 
     await publishBookingCancelled(input({ cancelledBy: 'expert' }), log);
 
