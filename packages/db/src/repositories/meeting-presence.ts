@@ -709,7 +709,7 @@ export const meetingPresenceRepository = {
         leftAt: row.leftAt,
         meetingGuestId: row.meetingGuestId,
       })),
-      input.resolveExpertProfileId ?? (async () => null)
+      input.resolveExpertProfileId ?? (() => Promise.resolve(null))
     );
 
     return {

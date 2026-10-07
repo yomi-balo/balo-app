@@ -335,7 +335,7 @@ function parseGuestParams(
   return parsed.data;
 }
 
-export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void> {
+export function meetingGuestRoutes(fastify: FastifyInstance): Promise<void> {
   /**
    * POST /meetings/:meetingId/guests — invite one or more guests.
    *
@@ -697,4 +697,5 @@ export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void
   );
 
   log.info('Registered meeting guest routes');
+  return Promise.resolve();
 }

@@ -1050,7 +1050,7 @@ export function startMeetingLifecycleSweepWorker(): Worker {
     MEETING_LIFECYCLE_SWEEP_QUEUE,
     async (job: Job) => {
       const result = await runMeetingLifecycleSweep(new Date(), (m) => job.log(m));
-      job.log(
+      await job.log(
         `meeting lifecycle sweep: ${result.scanned} scanned, ${result.terminated} terminated, ${result.intervalsClosed} intervals closed, ${result.intervalsOpened} opened, ${result.recordingEnsures} recording-ensures attempted`
       );
     },

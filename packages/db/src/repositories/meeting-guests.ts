@@ -1616,8 +1616,8 @@ export const meetingGuestsRepository = {
    */
   linkConvertedUser: async (input: LinkConvertedUserInput): Promise<ConvertedGuestLink[]> => {
     const trimmed = input.verifiedEmail.trim();
-    for (let i = 0; i < trimmed.length; i++) {
-      const code = trimmed.charCodeAt(i);
+    for (const char of trimmed) {
+      const code = char.codePointAt(0) ?? 0;
       if (code > 0x7e || code < 0x20) return [];
     }
     const email = canonicalGuestEmail(input.verifiedEmail);

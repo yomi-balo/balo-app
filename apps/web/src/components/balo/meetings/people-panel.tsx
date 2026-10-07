@@ -216,6 +216,7 @@ export function PeoplePanel({
           // after a success the queue and the seat count have both moved.
           await refetch();
         })
+        .catch(() => report('error', GUEST_ACTION_COPY.request_failed))
         .finally(() => markPending(guestId, false));
     },
     [panels, markPending, refetch, meetingProps, report]
@@ -238,6 +239,7 @@ export function PeoplePanel({
           }
           await refetch();
         })
+        .catch(() => report('error', GUEST_ACTION_COPY.request_failed))
         .finally(() => markPending(guestId, false));
     },
     [panels, markPending, refetch, meetingProps, report]
@@ -717,6 +719,15 @@ function PeoplePanelFooter({
    * follows for its own opener.
    */
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
+  /**
+   * ⚠ FOCUS FOLLOWS "ADD PEOPLE" INTO THE FIELD IT REVEALS. Not a page-load autofocus: the field
+   * only exists because the person just asked for it, and a keyboard user mid-call should not
+   * have to hunt for it. Done after commit, because the input does not exist until then.
+   */
+  const emailInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (isAdding) emailInputRef.current?.focus();
+  }, [isAdding]);
 
   useEffect(
     () => () => {
@@ -767,6 +778,7 @@ function PeoplePanelFooter({
         );
         return undefined;
       })
+      .catch(() => report('error', GUEST_ACTION_COPY.request_failed))
       .finally(() => setIsSending(false));
   }, [email, isSending, panels, meetingProps, onInvited, report, closeComposer]);
 
@@ -817,19 +829,7 @@ function PeoplePanelFooter({
               onChange={(event) => setEmail(event.target.value)}
               onKeyDown={onKeyDown}
               placeholder="Enter an email address"
-              /*
-                ⚠ AUTOFOCUS IS CORRECT HERE AND NOWHERE NEARBY. It is not a page-load autofocus
-                (the usual reason the attribute is a smell) — the field only exists because the
-                person just pressed "Add people", so focus is following an explicit intent. The
-                alternative is a keyboard user pressing a button and then hunting for the field
-                it revealed, mid-call. Focus is returned to "Add people" on cancel; see
-                `closeComposer`.
-
-                ⚠ NO `eslint-disable` HERE: `jsx-a11y/no-autofocus` is NOT configured in this
-                repo, and a disable comment for an unknown rule is itself a warning under
-                `--max-warnings 0`.
-              */
-              autoFocus
+              ref={emailInputRef}
               className="text-foreground placeholder:text-muted-foreground min-h-11 flex-1 bg-transparent text-sm outline-none"
             />
           </div>
