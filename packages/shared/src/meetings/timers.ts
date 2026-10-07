@@ -52,7 +52,7 @@ export const MEETING_OVERRUN_GRACE_MINUTES = 30;
 
 /**
  * How far back the lifecycle sweep's in-window batch reaches (by `scheduled_start`). A meeting
- * older than this is outside that batch; one that still holds presence is the stranded arm's
+ * older than this is outside that batch; every non-terminal one is the stranded arm's
  * (`listStrandedLifecycleCandidates`). Every ceiling must still land inside the window; see
  * {@link meetingTimersAreCoherent}.
  */

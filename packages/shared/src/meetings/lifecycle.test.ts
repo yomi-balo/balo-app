@@ -12,6 +12,7 @@ import {
   resolveTerminalRule,
   resolveWaitingPhase,
   strandedEndedAt,
+  STRANDED_LEAVE_SKEW_MS,
   strandedReconcileCloseAt,
   summarisePresence,
   venueAbsenceAnchor,
@@ -838,32 +839,77 @@ describe('latestPresenceInstant (BAL-584)', () => {
 });
 
 describe('strandedReconcileCloseAt (BAL-584)', () => {
+  const NOW = at(3 * 24 * 60);
   const base = {
-    scheduledStart: START,
+    joinedAt: at(2),
+    status: 'waiting_for_participants' as const,
+    scheduledStart: at(0),
     scheduledEnd: at(60),
     timers: DEFAULT_MEETING_TIMERS,
+    now: NOW,
   };
+  /** max(start+60, start+240) + 30 for a 60-minute booking. */
+  const CEILING = overrunStopCeiling(base.scheduledStart, base.scheduledEnd, base.timers);
 
-  it('an in_progress strand past its ceiling closes AT the ceiling', () => {
-    expect(
-      strandedReconcileCloseAt({ ...base, status: 'in_progress', now: at(3 * 24 * 60) })
-    ).toEqual(at(270));
+  it("closes at Daily's recorded leave", () => {
+    expect(strandedReconcileCloseAt({ ...base, recordedLeaveAt: at(20) })).toEqual(at(20));
   });
 
-  it('an in_progress meeting before its ceiling closes at now', () => {
-    expect(strandedReconcileCloseAt({ ...base, status: 'in_progress', now: at(100) })).toEqual(
-      at(100)
+  it('a leave later than now is capped at now', () => {
+    expect(strandedReconcileCloseAt({ ...base, recordedLeaveAt: at(4 * 24 * 60) })).toEqual(NOW);
+  });
+
+  it('a leave inside the skew allowance before joined_at is the same visit and is floored at joined_at', () => {
+    expect(
+      strandedReconcileCloseAt({
+        ...base,
+        recordedLeaveAt: new Date(at(2).getTime() - STRANDED_LEAVE_SKEW_MS),
+      })
+    ).toEqual(at(2));
+  });
+
+  it('a leave earlier than the skew allowance is a previous visit, so the booked end applies', () => {
+    expect(
+      strandedReconcileCloseAt({
+        ...base,
+        recordedLeaveAt: new Date(at(2).getTime() - STRANDED_LEAVE_SKEW_MS - 1),
+      })
+    ).toEqual(at(60));
+  });
+
+  it('with no recorded leave, closes at the booked end', () => {
+    expect(strandedReconcileCloseAt({ ...base, recordedLeaveAt: null })).toEqual(at(60));
+  });
+
+  it('with no recorded leave and a booked end still ahead, closes at now', () => {
+    expect(strandedReconcileCloseAt({ ...base, recordedLeaveAt: null, now: at(30) })).toEqual(
+      at(30)
     );
   });
 
-  it.each(['scheduled', 'waiting_for_participants'] as const)(
-    'a pre-live %s strand closes at now',
-    (status) => {
-      expect(strandedReconcileCloseAt({ ...base, status, now: at(3 * 24 * 60) })).toEqual(
-        at(3 * 24 * 60)
-      );
-    }
-  );
+  it('is never earlier than joined_at', () => {
+    expect(strandedReconcileCloseAt({ ...base, joinedAt: at(90), recordedLeaveAt: null })).toEqual(
+      at(90)
+    );
+  });
+
+  it('⚠ an in_progress close is capped at the overrun ceiling when the recorded leave is past it', () => {
+    const late = new Date(CEILING.getTime() + 5 * MINUTE);
+    expect(
+      strandedReconcileCloseAt({ ...base, status: 'in_progress', recordedLeaveAt: late })
+    ).toEqual(CEILING);
+  });
+
+  it('an in_progress close before the ceiling is untouched by the cap', () => {
+    expect(
+      strandedReconcileCloseAt({ ...base, status: 'in_progress', recordedLeaveAt: at(20) })
+    ).toEqual(at(20));
+  });
+
+  it('a pre-live close is not capped at the ceiling', () => {
+    const late = new Date(CEILING.getTime() + 5 * MINUTE);
+    expect(strandedReconcileCloseAt({ ...base, recordedLeaveAt: late })).toEqual(late);
+  });
 });
 
 describe('strandedEndedAt (BAL-584)', () => {

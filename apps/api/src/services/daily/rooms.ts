@@ -417,8 +417,17 @@ const dailyPresenceResponseSchema = z.record(z.string(), z.array(dailyPresencePa
  * (BAL-584): a `200` carries `{ "total_count": number, "data": [{ "room", "id", "userId",
  * "userName", "mtgSessionId", "joinTime", "duration" }] }` — camelCase `userId`, ISO `joinTime`,
  * and the same participant fields the global map carries plus `room`. The reference documents
- * `limit`, `userId` and `userName` query parameters but NO pagination, and it does not say what
- * an empty or missing room returns.
+ * `limit`, `userId` and `userName` query parameters but NO pagination.
+ *
+ * ⚠⚠ AN EMPTY ROOM AND A MISSING ROOM ARE BYTE-IDENTICAL HERE. Verified 2026-10-08 against the
+ * dev domain: `GET /rooms/<nonexistent>/presence` answers `200 {"total_count":0,"data":[]}`, the
+ * same body a REAL empty room gets, while `GET /rooms/<nonexistent>` answers `404
+ * {"error":"not-found","info":"room <name> not found"}` and an existing room answers `200
+ * {name, ...}`. A misconfigured key or domain would therefore make every candidate look
+ * confirmed-empty, so {@link getRoomPresence} confirms the room exists under this key
+ * ({@link dailyRoomExistsResponseSchema}) before it returns `[]`. A 404 on the derived-name room
+ * is UNKNOWN by design: a live call whose room was deleted out from under it is bounded by
+ * `overrun_stop`, not closed early.
  *
  * ⚠⚠ PARSED, NOT CAST, and for the same reason as {@link dailyPresenceResponseSchema} — only
  * more so: an EMPTY answer from this schema is what lets the sweep close a meeting's intervals
@@ -432,6 +441,12 @@ const dailyRoomPresenceResponseSchema = z.object({
 });
 
 /**
+ * Daily's `GET /rooms/{room_name}` body, read ONLY to confirm the room exists under this key: the
+ * `name` it echoes must equal the name asked for. Everything else in the body is stripped.
+ */
+const dailyRoomExistsResponseSchema = z.object({ name: z.string() });
+
+/**
  * ACTIVE PARTICIPANTS ACROSS EVERY ROOM, in ONE call — leg 2 of D1's presence model, and the
  * reason the dropped-`participant.left` over-bill is bounded by one sweep tick rather than
  * being unbounded.
@@ -443,6 +458,9 @@ const dailyRoomPresenceResponseSchema = z.object({
  * known to be empty (Daily never lists an empty room): when the candidate holds open intervals
  * the sweep makes ONE {@link getRoomPresence} read for it, capped per tick
  * (`MAX_ROOM_PRESENCE_READS_PER_TICK`), and ONLY when this global read itself succeeded.
+ *
+ * ⚠ IT SAYS WHO IS PRESENT, NOT WHEN ANYBODY LEFT: a stranded close takes its instant from
+ * {@link getRoomSessionLeaves}, never from this map.
  *
  * ⚠ NEVER TRUSTED AS AN IDENTITY ORACLE. What comes back is a vendor's claim about who is in a
  * room; the reconciler uses it ONLY to decide whether an interval Balo already opened should be
@@ -493,9 +511,18 @@ function roomPresenceContractViolation(path: string, detail: string): DailyApiEr
  * and THROWS, so the caller's outage path leaves the intervals alone: a non-2xx (including a
  * 404, which `dailyRequest` already throws), a missing API key, a body that fails the schema, a
  * `total_count` that disagrees with the rows returned (the reference documents no pagination,
- * so a short list must not read as a short room), and any row naming a different room.
+ * so a short list must not read as a short room), any row naming a different room, and, for a
+ * zero-participant answer, a room that `GET /rooms/{name}` does not confirm (see
+ * {@link dailyRoomPresenceResponseSchema}: Daily answers `200` with an empty list for a room that
+ * does not exist). With at least one participant the room demonstrably exists and no second
+ * call is made.
  *
- * Counts toward Daily's 20/s per-room read tier; the sweep caps it per tick.
+ * ⚠ THIS ANSWERS "WHO IS IN THE ROOM NOW", NEVER "WHEN DID THEY LEAVE". A stranded close needs
+ * the latter, which only Daily's session history holds: {@link getRoomSessionLeaves}.
+ *
+ * A read is therefore one call, or two sequential ones for an empty room. The sweep caps READS
+ * per tick (`MAX_ROOM_PRESENCE_READS_PER_TICK`); sequential calls stay far below Daily's 20/s
+ * tier.
  */
 export async function getRoomPresence(roomName: string): Promise<DailyPresenceParticipant[]> {
   const path = `/rooms/${encodeURIComponent(roomName)}/presence`;
@@ -511,7 +538,162 @@ export async function getRoomPresence(roomName: string): Promise<DailyPresencePa
   if (data.some((participant) => participant.room !== undefined && participant.room !== roomName)) {
     throw roomPresenceContractViolation(path, 'a row names a different room');
   }
+  if (data.length === 0) {
+    await requireRoomExists(roomName);
+  }
   return data;
+}
+
+/** Throws unless `GET /rooms/{name}` confirms the room exists under this key; a 404 throws from `dailyRequest`. */
+async function requireRoomExists(roomName: string): Promise<void> {
+  const path = `/rooms/${encodeURIComponent(roomName)}`;
+  const parsed = dailyRoomExistsResponseSchema.safeParse(await dailyRequest<unknown>('GET', path));
+  if (!parsed.success || parsed.data.name !== roomName) {
+    throw roomPresenceContractViolation(path, 'the room is not confirmed to exist');
+  }
+}
+
+/**
+ * Daily's `GET /meetings?room=<name>&timeframe_start=<unix s>&limit=<n>` body: one entry per
+ * SESSION in the room, each with its participants' recorded attendance.
+ *
+ * ⚠ VERIFIED 2026-10-08 against the dev domain and https://docs.daily.co/reference/rest-api/meetings/list-meetings
+ * (BAL-584): `200 { "total_count": n, "data": [{ "id", "room", "start_time": <unix s>, "duration":
+ * <s>, "ongoing": bool, "max_participants", "participants": [{ "user_id", "participant_id",
+ * "user_name", "join_time": <unix s>, "duration": <s> }] }] }`. `user_id` is the token claim
+ * (nullable) and is the same string `dailyParticipantIdFor` mints (`u`/`g` plus 32 hex), so
+ * it matches a stored interval's claim directly. On the incident room `join_time + duration`
+ * reproduced the two leaves the ticket's investigation recovered. A nonexistent room answers
+ * `200 {"total_count":0,"data":[]}`: "no record", not an error. The reference documents
+ * `timeframe_start`, `timeframe_end`, `limit` and cursor pagination but NOT a default page size,
+ * so the read sends an explicit `limit` and refuses a `total_count` that disagrees with the rows
+ * returned.
+ *
+ * ⚠ `user_name` IS PII AND IS DELIBERATELY ABSENT FROM THIS SCHEMA: Zod strips unknown keys, so
+ * the display name can never reach a used field or a log line.
+ */
+const dailyMeetingSessionsResponseSchema = z.object({
+  total_count: z.number().int().nonnegative(),
+  data: z.array(
+    z.object({
+      room: z.string().optional(),
+      ongoing: z.boolean().optional(),
+      participants: z
+        .array(
+          z.object({
+            user_id: z.string().nullish(),
+            join_time: z.number().optional(),
+            duration: z.number().optional(),
+          })
+        )
+        .default([]),
+    })
+  ),
+});
+
+/** The explicit page size of {@link getRoomSessionLeaves}; one room has a handful of sessions. */
+const SESSION_HISTORY_LIMIT = 100;
+
+/** What {@link getRoomSessionLeaves} reads out of one room's session history. */
+export interface RoomSessionHistory {
+  /** Each claim's latest recorded leave. */
+  readonly leaves: ReadonlyMap<string, Date>;
+  /** Every claim that appears as a participant of a session Daily still reports as `ongoing`. */
+  readonly ongoingClaims: ReadonlySet<string>;
+}
+
+/**
+ * Each participant's LATEST RECORDED LEAVE in one room, from Daily's session history, keyed by
+ * the Daily `user_id` claim. The leave is `join_time + duration` (both seconds) of the
+ * participant's session entry; when the same claim appears in several sessions the latest wins.
+ * `ongoingClaims` names the claims that appear in an `ongoing` session, whose recorded leave (if
+ * any) cannot be trusted as final.
+ *
+ * It exists for the lifecycle sweep's STRANDED reconciler closes: a dropped `participant.left`
+ * webhook leaves an interval open for days, and closing it at the tick instant would record every
+ * one of those days as presence. `/meetings` sits in Daily's analytics rate tier (~2/s, 50 per
+ * 30s), which is why the sweep makes at most `MAX_SESSION_HISTORY_READS_PER_TICK` of these reads.
+ *
+ * `since` bounds the read (`timeframe_start`), so a room reused over weeks answers only the
+ * sessions that can matter.
+ *
+ * ⚠⚠ THROWS, NEVER DEGRADES: a body that fails the schema, a `total_count` that disagrees with
+ * the rows returned (truncated) or a session naming a different room is UNKNOWN to the caller,
+ * which falls back to the booked end rather than guessing. A participant with no `user_id`, no finite
+ * `join_time` or no finite `duration` (an ongoing session's participant still counting) is
+ * skipped: it has no leave to report.
+ */
+export async function getRoomSessionLeaves(
+  roomName: string,
+  options: { since: Date }
+): Promise<RoomSessionHistory> {
+  const timeframeStart = Math.floor(options.since.getTime() / 1000);
+  const path = `/meetings?room=${encodeURIComponent(roomName)}&timeframe_start=${timeframeStart}&limit=${SESSION_HISTORY_LIMIT}`;
+  const parsed = dailyMeetingSessionsResponseSchema.safeParse(
+    await dailyRequest<unknown>('GET', path)
+  );
+  if (!parsed.success) {
+    throw sessionHistoryContractViolation(path, 'unrecognised shape');
+  }
+  const { total_count: totalCount, data } = parsed.data;
+  if (totalCount !== data.length) {
+    throw sessionHistoryContractViolation(path, 'total_count disagrees with the sessions returned');
+  }
+  if (data.some((session) => session.room !== undefined && session.room !== roomName)) {
+    throw sessionHistoryContractViolation(path, 'a session names a different room');
+  }
+  return collectSessionHistory(data);
+}
+
+/** Folds validated sessions into each claim's latest leave and the claims still in an ongoing session. */
+function collectSessionHistory(
+  data: z.infer<typeof dailyMeetingSessionsResponseSchema>['data']
+): RoomSessionHistory {
+  const leaves = new Map<string, Date>();
+  const ongoingClaims = new Set<string>();
+  for (const session of data) {
+    for (const participant of session.participants) {
+      const claim = participant.user_id;
+      if (typeof claim === 'string' && session.ongoing === true) {
+        ongoingClaims.add(claim);
+      }
+      const leftAt = recordedLeaveOf(participant);
+      if (typeof claim !== 'string' || leftAt === null) {
+        continue;
+      }
+      const known = leaves.get(claim);
+      if (known === undefined || leftAt.getTime() > known.getTime()) {
+        leaves.set(claim, leftAt);
+      }
+    }
+  }
+  return { leaves, ongoingClaims };
+}
+
+/** `join_time + duration` (both seconds) as an instant, or `null` when either is missing or non-finite. */
+function recordedLeaveOf(participant: {
+  readonly join_time?: number | undefined;
+  readonly duration?: number | undefined;
+}): Date | null {
+  const { join_time: joinTime, duration } = participant;
+  if (
+    joinTime === undefined ||
+    duration === undefined ||
+    !Number.isFinite(joinTime) ||
+    !Number.isFinite(duration)
+  ) {
+    return null;
+  }
+  return new Date((joinTime + duration) * 1000);
+}
+
+function sessionHistoryContractViolation(path: string, detail: string): DailyApiError {
+  return new DailyApiError(
+    'GET',
+    path,
+    RESPONSE_CONTRACT_VIOLATION_STATUS,
+    `Daily GET ${path} returned a body this platform cannot trust (${detail}); refusing to derive a leave time from it`
+  );
 }
 
 /**
@@ -528,11 +710,16 @@ export interface RoomTeardown {
 export interface PresenceReader {
   getAllPresence(): Promise<Record<string, DailyPresenceParticipant[]>>;
   getRoomPresence(roomName: string): Promise<DailyPresenceParticipant[]>;
+  getRoomSessionLeaves(roomName: string, options: { since: Date }): Promise<RoomSessionHistory>;
 }
 
 /** The live implementations. Tests substitute their own object literals. */
 export const dailyRoomTeardown: RoomTeardown = { deleteRoom };
-export const dailyPresenceReader: PresenceReader = { getAllPresence, getRoomPresence };
+export const dailyPresenceReader: PresenceReader = {
+  getAllPresence,
+  getRoomPresence,
+  getRoomSessionLeaves,
+};
 
 // ── BAL-476 (R4) — PER-PARTICIPANT EJECT ──────────────────────────────────────────────────
 

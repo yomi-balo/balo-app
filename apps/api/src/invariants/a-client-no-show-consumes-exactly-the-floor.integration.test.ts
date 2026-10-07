@@ -206,6 +206,8 @@ const fakePresenceReader: PresenceReader = {
   // reports for a room nobody is in.
   getRoomPresence: async (roomName) =>
     [...(vendorRooms.get(roomName) ?? [])].map((userId) => ({ userId })),
+  // Daily has no session history for these rooms; nothing here is a stranded close.
+  getRoomSessionLeaves: async () => ({ leaves: new Map(), ongoingClaims: new Set() }),
 };
 
 // ── Time ─────────────────────────────────────────────────────────────────────────────

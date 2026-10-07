@@ -980,10 +980,15 @@ describe('meetingsRepository.listStrandedLifecycleCandidates (BAL-584)', () => {
   });
 
   it.each(['scheduled', 'waiting_for_participants'] as const)(
-    'INCLUDES a %s meeting past the floor that holds an open interval',
+    'INCLUDES a pre-live %s meeting past the floor whatever its presence rows: none, closed only, soft-deleted open only, or an open one',
     async (status) => {
       const floor = floorFromNow();
-      const held = await meetingAt(status, floor, -2 * DAY_MS);
+      const bare = await meetingAt(status, floor, -4 * DAY_MS);
+      const closedOnly = await meetingAt(status, floor, -3 * DAY_MS);
+      await intervalOn(closedOnly, { closed: true });
+      const softDeletedOpen = await meetingAt(status, floor, -2 * DAY_MS);
+      await intervalOn(softDeletedOpen, { softDeleted: true });
+      const held = await meetingAt(status, floor, -DAY_MS / 2);
       await intervalOn(held);
 
       const rows = await meetingsRepository.listStrandedLifecycleCandidates({
@@ -991,27 +996,8 @@ describe('meetingsRepository.listStrandedLifecycleCandidates (BAL-584)', () => {
         limit: 50,
       });
 
-      expect(rows.map((row) => row.id)).toEqual([held]);
-      expect(rows[0]?.status).toBe(status);
-    }
-  );
-
-  it.each(['scheduled', 'waiting_for_participants'] as const)(
-    'EXCLUDES a pre-live %s meeting past the floor with nothing open, only closed rows, or only soft-deleted open rows',
-    async (status) => {
-      const floor = floorFromNow();
-      await meetingAt(status, floor, -2 * DAY_MS);
-      const closedOnly = await meetingAt(status, floor, -2 * DAY_MS);
-      await intervalOn(closedOnly, { closed: true });
-      const softDeletedOpen = await meetingAt(status, floor, -2 * DAY_MS);
-      await intervalOn(softDeletedOpen, { softDeleted: true });
-
-      await expect(
-        meetingsRepository.listStrandedLifecycleCandidates({
-          scheduledStartBefore: floor,
-          limit: 50,
-        })
-      ).resolves.toEqual([]);
+      expect(rows.map((row) => row.id)).toEqual([bare, closedOnly, softDeletedOpen, held]);
+      expect(rows.every((row) => row.status === status)).toBe(true);
     }
   );
 
@@ -1120,16 +1106,14 @@ describe('meetingsRepository.listStrandedLifecycleCandidates (BAL-584)', () => {
   });
 
   /**
-   * ⚠ THE INDEXES ARE THE POINT OF THE SHAPE, AND THEY ONLY MATTER AT PRODUCTION SKEW: almost every
+   * ⚠ THE INDEX IS THE POINT OF THE SHAPE, AND IT ONLY MATTERS AT PRODUCTION SKEW: almost every
    * meeting ever created is terminal and long past the floor. The test seeds that distribution
-   * set-based (thousands of `ended` meetings with CLOSED presence rows, plus a few real candidates),
-   * runs ANALYZE so the planner sees it, and asserts the plan reaches the candidates through the
-   * composite `(status, scheduled_start)` index and an open-only partial presence index — never
-   * through the status-free `meeting_scheduled_start_idx`, which would walk every old meeting on every
-   * tick. `meeting_presence_one_open_per_user_idx` carries the same `left_at IS NULL AND
-   * deleted_at IS NULL` predicate as `meeting_presence_open_idx`, so either bounds the presence side.
+   * set-based (thousands of `ended` meetings), runs ANALYZE so the planner sees it, and asserts
+   * both arms reach the candidates through the composite `(status, scheduled_start)` index — never
+   * through the status-free `meeting_scheduled_start_idx`, which would walk every old meeting on
+   * every tick.
    */
-  it('EXPLAIN — at a skewed distribution the stranded statement rides the composite status index and an open-only presence index', async () => {
+  it('EXPLAIN — at a skewed distribution both stranded arms ride the composite status index', async () => {
     const floor = floorFromNow();
     const floorIso = floor.toISOString();
     await db.execute(sql`
@@ -1142,24 +1126,17 @@ describe('meetingsRepository.listStrandedLifecycleCandidates (BAL-584)', () => {
              'expert_host'
       FROM generate_series(1, 3000) AS g
     `);
-    await db.execute(sql`
-      INSERT INTO meeting_presence (meeting_id, party, joined_at, left_at)
-      SELECT id, 'client', scheduled_start, scheduled_start + interval '5 minutes'
-      FROM meetings WHERE status = 'ended' AND scheduled_start < ${floorIso}::timestamptz
-    `);
-    const held = await meetingAt('waiting_for_participants', floor, -2 * DAY_MS);
-    await intervalOn(held);
-    await meetingAt('in_progress', floor, -2 * DAY_MS);
-    await db.execute(sql`ANALYZE meetings, meeting_presence`);
+    const held = await meetingAt('waiting_for_participants', floor, -3 * DAY_MS);
+    const live = await meetingAt('in_progress', floor, -2 * DAY_MS);
+    await db.execute(sql`ANALYZE meetings`);
 
     const query = strandedLifecycleCandidatesQuery({ scheduledStartBefore: floor, limit: 50 });
     const rows = await db.execute<Record<string, string>>(sql`EXPLAIN ${query}`);
     const plan = Array.from(rows, (row) => row['QUERY PLAN']).join('\n');
 
-    expect(plan).toContain('meeting_status_scheduled_start_idx');
-    expect(plan).toMatch(/meeting_presence_open_idx|meeting_presence_one_open_per_user_idx/);
+    expect(plan.match(/meeting_status_scheduled_start_idx/g)).toHaveLength(2);
     expect(plan).not.toContain('meeting_scheduled_start_idx');
-    expect((await query).map((row) => row.id).sort()).toHaveLength(2);
+    expect((await query).map((row) => row.id)).toEqual([held, live]);
   });
 });
 

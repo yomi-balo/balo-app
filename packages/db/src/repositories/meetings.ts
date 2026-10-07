@@ -167,7 +167,7 @@ export interface ListLifecycleCandidatesInput {
 
 /**
  * BAL-584 — the lifecycle sweep's STRANDED arm: meetings that fell behind the in-window read's
- * lookback floor but still hold something the sweep must release.
+ * lookback floor but are still non-terminal, so the sweep must still decide them.
  */
 export interface ListStrandedLifecycleCandidatesInput {
   /**
@@ -189,13 +189,15 @@ export interface ListStrandedLifecycleCandidatesInput {
  * `ended`/`cancelled`, so the `status` equality is what keeps each arm bounded:
  *  - `status = 'in_progress'` rides `meeting_status_scheduled_start_idx` on `(status,
  *    scheduled_start)` under its `deleted_at IS NULL` predicate.
- *  - `status IN ('scheduled','waiting_for_participants')` does the same, and additionally needs an
- *    open live presence row. That subquery's filter (`left_at IS NULL AND deleted_at IS NULL`) is
- *    the predicate of `meeting_presence_open_idx`, so only open rows are ever visited.
+ *  - `status IN ('scheduled','waiting_for_participants')` rides the same index. It has NO
+ *    open-interval requirement: a pre-live meeting whose last interval the reconciler just closed
+ *    must stay selected until `abandoned_wait` falls due, or it would never reach a terminal state.
+ *    By the rule table's TOTALITY a pre-live meeting with nothing open always matches a rule once
+ *    its windows elapse, so the set drains itself.
  * Status literals at QUERY time are always safe; the house restriction is on index predicates and CHECKs.
  */
 export function strandedLifecycleCandidatesQuery(input: ListStrandedLifecycleCandidatesInput) {
-  const arm = (statusPredicate: SQL, extra?: SQL) =>
+  const arm = (statusPredicate: SQL) =>
     db
       .select()
       .from(meetings)
@@ -203,26 +205,14 @@ export function strandedLifecycleCandidatesQuery(input: ListStrandedLifecycleCan
         and(
           statusPredicate,
           lt(meetings.scheduledStart, input.scheduledStartBefore),
-          isNull(meetings.deletedAt),
-          extra
+          isNull(meetings.deletedAt)
         )
       )
       .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
       .limit(input.limit);
 
   return arm(eq(meetings.status, 'in_progress'))
-    .unionAll(
-      arm(
-        inArray(meetings.status, ['scheduled', 'waiting_for_participants']),
-        inArray(
-          meetings.id,
-          db
-            .select({ id: meetingPresence.meetingId })
-            .from(meetingPresence)
-            .where(and(isNull(meetingPresence.leftAt), isNull(meetingPresence.deletedAt)))
-        )
-      )
-    )
+    .unionAll(arm(inArray(meetings.status, ['scheduled', 'waiting_for_participants'])))
     .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
     .limit(input.limit);
 }
@@ -1729,10 +1719,12 @@ export const meetingsRepository = {
    * Predicate, all under `deleted_at IS NULL`:
    *  - `in_progress` — always. The call was live and nothing ended it; the sweep decides from
    *    the clocks whether it is over.
-   *  - `scheduled` / `waiting_for_participants` — ONLY while an open, live presence interval
-   *    exists (`left_at IS NULL AND deleted_at IS NULL`). A pre-live meeting with nothing open
-   *    holds no billing clock and is not this arm's business, so the arm does not grow with
-   *    every meeting that was merely never joined.
+   *  - `scheduled` / `waiting_for_participants` — always, with no open-interval requirement. The
+   *    sweep's first stranded tick closes a pre-live meeting's last open interval, and
+   *    `abandoned_wait` only falls due `idleEndEmptyMs` later; a selection keyed on an open
+   *    interval would drop the meeting in between and strand it non-terminal forever. The rule
+   *    table's TOTALITY makes the set drain itself, and never-joined meetings already end in
+   *    window (`missed_call` / `venue_unavailable`).
    *
    * Oldest `scheduled_start` first, `id` as the tiebreak, so a capped batch drops the same tail
    * every tick rather than a random one.

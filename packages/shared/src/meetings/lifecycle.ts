@@ -580,7 +580,7 @@ function venueUnavailableDueAt(input: TerminalRuleInput): Date | null {
  *     matched nothing at all: rule 2 needs them still OPEN, rule 4 needed them BELOW the floor.
  *     The meeting sat non-terminal forever with a hold never released, and after 24h the sweep's
  *     lookback floor took it out of the in-window batch (the stranded arm, BAL-584, picks a
- *     past-floor pre-live meeting up only while it still holds an open interval). Not exotic
+ *     past-floor pre-live meeting up whether or not it holds an open interval). Not exotic
  *     either — the reconciler closes a dropped-`left` at the SWEEP'S `now`, so a clean 14:30
  *     abandonment recorded at 15:00 crossed the floor and stranded.
  *   · `!clientSideEverPresent`. A client who joined and left BEFORE the expert arrived (so the
@@ -633,11 +633,11 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  * failure mode with teeth: a non-terminal meeting nothing can ever terminate is never settled,
  * its credit hold is never released, no human remains to press End, and after 24h the sweep's
  * `listLifecycleCandidates` lookback floor takes it out of the in-window batch. The stranded arm
- * (BAL-584) picks a past-floor meeting up only while it holds an open interval; a pre-live
- * meeting past the floor with every interval closed is in neither batch. That is reachable after a
- * sweep outage of more than 24h, or when a held pre-live room (below) is still occupied at the
- * floor and its last leave then arrives by webhook. The taxonomy stranded exactly that way twice
- * before this was written down (see {@link abandonedWaitApplies}'s removed-guard block).
+ * (BAL-584) picks EVERY past-floor non-terminal meeting up, pre-live ones included and whatever
+ * their presence rows, so a meeting whose last interval the reconciler just closed stays selected
+ * until a rule falls due. This invariant is what makes that set drain itself. The taxonomy
+ * stranded exactly that way twice before this was written down (see
+ * {@link abandonedWaitApplies}'s removed-guard block).
  *
  * **The invariant, stated so it can be executed rather than believed:** for every NON-TERMINAL
  * status, once the ROOM IS EMPTY and every window has elapsed, SOME rule fires.
@@ -650,12 +650,12 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  * ⚠ AND WHAT IS LEFT, NAMED RATHER THAN LEFT AS A GAP: a room somebody is STILL IN matches
  * nothing but #2 until the ceiling. An occupied `in_progress` meeting is bounded by #6 at
  * {@link overrunStopCeiling}, whatever the webhooks and the reconciler are doing, so it can no
- * longer stay open forever. The residual is a PRE-`in_progress` room the expert still holds
- * after a client left: it matches no rule. That is an ACCEPTED GAP (BAL-584 decision 3), not an
- * oversight: while the expert is in the room Daily's platform-wide map lists it, so the stranded
- * arm spends no per-room read on it. If the room empties inside the window, or the reconciler
- * closes the interval, only rule 4 applies (the expert has been present). If a delivered leave
- * webhook empties it after the floor, nothing re-selects it (see TOTALITY above).
+ * longer stay open forever. The residual is a PRE-`in_progress` room that is still OCCUPIED, for
+ * example one the expert holds after a client left: it matches no rule. That is an ACCEPTED GAP
+ * (BAL-584 decision 3), not an oversight: while somebody is in the room Daily's platform-wide map
+ * lists it, so the stranded arm spends no per-room read on it. Once the room empties, whether
+ * through a delivered leave webhook or the reconciler closing the interval, the meeting is still
+ * selected and the rule that applies (rule 4 when the expert has been present) fires when due.
  * `lifecycle.test.ts` executes the invariant over a status × presence-shape matrix.
  *
  * ⚠ THE SEVENTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
@@ -748,8 +748,20 @@ export function latestPresenceInstant(
   return latestMs === null ? null : new Date(latestMs);
 }
 
+/**
+ * How far BEFORE a stored `joined_at` a recorded Daily leave may sit and still be taken as that
+ * interval's own. The stored `joined_at` comes from the webhook and Daily's `join_time` from its
+ * session history; the two clocks differ by seconds, so a leave inside this slack is the same
+ * visit, while one earlier belongs to a previous visit by the same claim.
+ */
+export const STRANDED_LEAVE_SKEW_MS = 60_000;
+
 /** What {@link strandedReconcileCloseAt} reads. */
 export interface StrandedReconcileCloseInput {
+  /** The stored interval's `joined_at`. */
+  readonly joinedAt: Date;
+  /** Daily's recorded leave for this interval's claim, or `null` when Daily has no entry. */
+  readonly recordedLeaveAt: Date | null;
   readonly status: MeetingLifecycleStatus;
   readonly scheduledStart: Date;
   readonly scheduledEnd: Date;
@@ -758,21 +770,34 @@ export interface StrandedReconcileCloseInput {
 }
 
 /**
- * The instant the reconciler closes a STRANDED meeting's open intervals at.
+ * The instant the reconciler closes ONE open interval of a STRANDED meeting at.
  *
- * `in_progress` → `min(now, overrunStopCeiling)`: an `in_progress` meeting with an interval
- * still open at the ceiling would have been stopped there by rule 6, so no interval on it can
- * legitimately run past the ceiling. Capping here stops a confirmed-empty read recording
- * roughly `now` (about a day past the booked end) and so recording MORE than the unknown-read
- * path, which ends at the ceiling. Any other status → `now`: a pre-live strand has no ceiling,
- * and the presence writer's own `scheduled_end + 24h` clamp still applies to it.
+ * A dropped `participant.left` leaves an interval open for days, and closing it at the tick that
+ * noticed would record all of those days as presence (and, on a pre-live meeting, settle a charge
+ * for them). So the close lands where the participant actually left:
+ *
+ *  - Daily's recorded leave, when it is no earlier than {@link STRANDED_LEAVE_SKEW_MS} before
+ *    `joinedAt` (an earlier one is a previous visit), capped at `now`;
+ *  - otherwise, when Daily does not know, the booked end: `min(now, scheduledEnd)`.
+ *
+ * For an `in_progress` meeting the instant is also capped at {@link overrunStopCeiling}, so better
+ * information never records more presence than the overrun-stop path would have.
+ *
+ * Never earlier than `joinedAt`; the presence writer's own clamps still apply on top.
  */
 export function strandedReconcileCloseAt(input: StrandedReconcileCloseInput): Date {
-  if (input.status !== 'in_progress') {
-    return input.now;
-  }
-  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
-  return ceiling.getTime() < input.now.getTime() ? ceiling : input.now;
+  const { joinedAt, recordedLeaveAt, status, scheduledStart, scheduledEnd, timers, now } = input;
+  const usable =
+    recordedLeaveAt !== null &&
+    recordedLeaveAt.getTime() >= joinedAt.getTime() - STRANDED_LEAVE_SKEW_MS;
+  const chosenMs = usable
+    ? Math.min(recordedLeaveAt.getTime(), now.getTime())
+    : Math.min(scheduledEnd.getTime(), now.getTime());
+  const cappedMs =
+    status === 'in_progress'
+      ? Math.min(chosenMs, overrunStopCeiling(scheduledStart, scheduledEnd, timers).getTime())
+      : chosenMs;
+  return new Date(Math.max(cappedMs, joinedAt.getTime()));
 }
 
 /** What {@link strandedEndedAt} reads. */
