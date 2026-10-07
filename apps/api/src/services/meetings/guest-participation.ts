@@ -912,7 +912,7 @@ export async function listGuests(input: {
   if (!authorized.ok) return { ok: false, code: authorized.code };
 
   // Three independent reads — one round trip's latency, not three (the async-waterfall rule).
-  const [rows, canHost, seatCount, canVouch] = await Promise.all([
+  const [rows, canHost, seatCount] = await Promise.all([
     meetingGuestsRepository.listLiveByMeeting(input.meetingId),
     hasEngagementCapability(
       { id: input.actorUserId },
@@ -921,8 +921,12 @@ export async function listGuests(input: {
     ),
     // ⚠ THE SAME FUNCTION `inviteGuests` GATES ON. See the docblock.
     participantCount(input.meetingId),
-    actorMayVouch(authorized, input.actorUserId),
   ]);
+
+  // Only a `link` row can be vouched for, so a roster without one skips the delivery-identity read.
+  const canVouch =
+    rows.some((row) => row.inviteChannel === 'link') &&
+    (await actorMayVouch(authorized, input.actorUserId));
 
   return {
     ok: true,
@@ -1665,82 +1669,18 @@ export async function vouchForLinkGuest(input: {
   }
 
   const guest = await meetingGuestsRepository.findLiveById(input.meetingId, input.guestId);
-  if (
-    guest === undefined ||
-    guest.inviteChannel !== 'link' ||
-    (guest.admission !== 'pending' && guest.admission !== 'admitted')
-  ) {
-    log.warn(
-      {
-        meetingId: input.meetingId,
-        guestId: input.guestId,
-        actorUserId: input.actorUserId,
-        reason: guest === undefined ? 'no_guest' : 'not_a_vouchable_link_row',
-      },
-      'Guest vouch refused'
-    );
-    return { ok: false, code: 'guest_not_found' };
-  }
-
-  // An admitted row already holds a seat; only a pending one consumes a new seat.
-  if (guest.admission === 'pending') {
-    const currentCount = await participantCount(input.meetingId);
-    if (currentCount >= MAX_MEETING_PARTICIPANTS) {
-      log.info(
-        {
-          meetingId: input.meetingId,
-          guestId: input.guestId,
-          actorUserId: input.actorUserId,
-          currentCount,
-        },
-        'Guest vouch refused — participant cap reached'
-      );
-      return { ok: false, code: 'participant_cap_reached' };
-    }
-  }
+  const refusal = await vouchRefusal(input, guest);
+  if (refusal !== null) return { ok: false, code: refusal };
+  if (guest === undefined) return { ok: false, code: 'guest_not_found' };
 
   const email = canonicalGuestEmail(input.email);
   const at = new Date();
-  let vouched: Awaited<ReturnType<typeof meetingGuestsRepository.vouchLinkGuest>>;
-  try {
-    vouched = await meetingGuestsRepository.vouchLinkGuest({
-      meetingId: input.meetingId,
-      guestId: input.guestId,
-      voucherUserId: input.actorUserId,
-      email,
-      emailDomain: extractEmailDomain(email),
-      at,
-      presenceWindow: presenceWindowFor(authorized.meeting),
-    });
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      log.warn(
-        { meetingId: input.meetingId, guestId: input.guestId, actorUserId: input.actorUserId },
-        'Guest vouch refused — another live client guest already holds that address'
-      );
-      return { ok: false, code: 'guest_already_invited' };
-    }
-    throw error;
-  }
-  if (vouched === undefined) {
-    // Lost a race: the row left `pending`/`admitted` or stopped being a live `link` row.
-    return { ok: false, code: 'guest_not_found' };
-  }
+  const committed = await commitVouch(input, email, at, authorized.meeting);
+  if (!committed.ok) return committed;
+  const { vouched } = committed;
 
   if (vouched.presenceReclassified) {
-    try {
-      await reconcileMeetingStatus(authorized.meeting, at);
-    } catch (error) {
-      log.error(
-        {
-          meetingId: input.meetingId,
-          guestId: input.guestId,
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        },
-        'Meeting status reconcile failed after a guest vouch — the meter sweep recovers it'
-      );
-    }
+    await reconcileAfterVouchBestEffort(authorized.meeting, input, at);
   }
 
   trackServer(GUEST_SERVER_EVENTS.GUEST_VOUCHED, {
@@ -1765,4 +1705,102 @@ export async function vouchForLinkGuest(input: {
     id: vouched.guest.id,
     admission: vouched.guest.admission === 'admitted' ? 'admitted' : 'pre_admitted',
   };
+}
+
+type VouchInput = Parameters<typeof vouchForLinkGuest>[0];
+
+/**
+ * Why a live row cannot be vouched for, or `null` when it can. Only a `link` row that is still
+ * `pending` or `admitted` qualifies; a `pending` one also needs a free seat (an `admitted` row
+ * already holds its seat).
+ */
+async function vouchRefusal(
+  input: VouchInput,
+  guest: MeetingGuest | undefined
+): Promise<GuestServiceErrorCode | null> {
+  if (
+    guest?.inviteChannel !== 'link' ||
+    (guest.admission !== 'pending' && guest.admission !== 'admitted')
+  ) {
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        guestId: input.guestId,
+        actorUserId: input.actorUserId,
+        reason: guest === undefined ? 'no_guest' : 'not_a_vouchable_link_row',
+      },
+      'Guest vouch refused'
+    );
+    return 'guest_not_found';
+  }
+  if (guest.admission !== 'pending') return null;
+
+  const currentCount = await participantCount(input.meetingId);
+  if (currentCount < MAX_MEETING_PARTICIPANTS) return null;
+  log.info(
+    {
+      meetingId: input.meetingId,
+      guestId: input.guestId,
+      actorUserId: input.actorUserId,
+      currentCount,
+    },
+    'Guest vouch refused — participant cap reached'
+  );
+  return 'participant_cap_reached';
+}
+
+/** The vouch write, with the address-clash `23505` and the lost race mapped to their literals. */
+async function commitVouch(
+  input: VouchInput,
+  email: string,
+  at: Date,
+  meeting: Meeting
+): Promise<
+  | {
+      ok: true;
+      vouched: NonNullable<Awaited<ReturnType<typeof meetingGuestsRepository.vouchLinkGuest>>>;
+    }
+  | { ok: false; code: GuestServiceErrorCode }
+> {
+  try {
+    const vouched = await meetingGuestsRepository.vouchLinkGuest({
+      meetingId: input.meetingId,
+      guestId: input.guestId,
+      voucherUserId: input.actorUserId,
+      email,
+      emailDomain: extractEmailDomain(email),
+      at,
+      presenceWindow: presenceWindowFor(meeting),
+    });
+    // `undefined`: lost a race — the row left `pending`/`admitted` or stopped being a live `link` row.
+    return vouched === undefined ? { ok: false, code: 'guest_not_found' } : { ok: true, vouched };
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    log.warn(
+      { meetingId: input.meetingId, guestId: input.guestId, actorUserId: input.actorUserId },
+      'Guest vouch refused — another live client guest already holds that address'
+    );
+    return { ok: false, code: 'guest_already_invited' };
+  }
+}
+
+/** Moves the meeting to `in_progress` and starts billing; the meter sweep recovers a failure. */
+async function reconcileAfterVouchBestEffort(
+  meeting: Meeting,
+  input: VouchInput,
+  at: Date
+): Promise<void> {
+  try {
+    await reconcileMeetingStatus(meeting, at);
+  } catch (error) {
+    log.error(
+      {
+        meetingId: input.meetingId,
+        guestId: input.guestId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Meeting status reconcile failed after a guest vouch — the meter sweep recovers it'
+    );
+  }
 }

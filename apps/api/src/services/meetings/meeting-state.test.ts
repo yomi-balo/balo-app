@@ -10,6 +10,7 @@ const {
   mockFindCompanyName,
   mockWarn,
   mockOmitGuestRows,
+  mockHasOpenAdmittedLinkGuest,
 } = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockFindById: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockFindCompanyName: vi.fn(),
   mockWarn: vi.fn(),
   mockOmitGuestRows: vi.fn(),
+  mockHasOpenAdmittedLinkGuest: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -30,6 +32,7 @@ vi.mock('@balo/db', () => ({
   meetingPresenceRepository: {
     listByMeeting: mockListByMeeting,
     omitExpertInvitedGuestRows: mockOmitGuestRows,
+    hasOpenAdmittedLinkGuest: mockHasOpenAdmittedLinkGuest,
   },
   usersRepository: { findNamesByIds: mockFindNamesByIds },
   companiesRepository: { findNameById: mockFindCompanyName },
@@ -101,6 +104,7 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
     mockAuthorizeParticipation.mockResolvedValue({ ok: true, side: 'expert', meeting: meeting() });
     mockFindById.mockResolvedValue(meeting());
     mockListByMeeting.mockResolvedValue([]);
+    mockHasOpenAdmittedLinkGuest.mockResolvedValue(false);
     // BAL-474 (R6-C3) — an ACTIVE case by default: nothing was closed.
     mockResolveSubject.mockResolvedValue({
       engagementId: 'engagement-1',
@@ -226,6 +230,7 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
       'clocks',
       'endedBy',
       'noShowFloorMinutes',
+      'noShowHeld',
       'outcome',
       'phase',
       'presence',
@@ -552,6 +557,84 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
    * set `MEETING_NO_SHOW_FLOOR_MINUTES`. **A test that only asserted `15` would pass against that
    * bug**, which is why the override case is the one that carries the weight.
    */
+  describe('noShowHeld', () => {
+    const expertAlone = [{ party: 'expert', joinedAt: START, leftAt: null }];
+    const withLinkGuest = [
+      ...expertAlone,
+      { party: 'observer', joinedAt: at(1), leftAt: null, meetingGuestId: 'guest-1' },
+    ];
+
+    it('is true BEFORE the floor when the expert waits with an admitted link guest and no client was ever present', async () => {
+      mockListByMeeting.mockResolvedValue(withLinkGuest);
+      mockHasOpenAdmittedLinkGuest.mockResolvedValue(true);
+
+      const result = await stateAt(12);
+
+      expect(result.ok && result.state.noShowHeld).toBe(true);
+      expect(mockHasOpenAdmittedLinkGuest).toHaveBeenCalledWith(MEETING_ID);
+    });
+
+    it('is false when the open guest observer is not an admitted link guest', async () => {
+      mockListByMeeting.mockResolvedValue(withLinkGuest);
+
+      const result = await stateAt(12);
+
+      expect(result.ok && result.state.noShowHeld).toBe(false);
+      expect(mockHasOpenAdmittedLinkGuest).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs no query when the expert waits alone', async () => {
+      mockListByMeeting.mockResolvedValue(expertAlone);
+
+      const result = await stateAt(12);
+
+      expect(result.ok && result.state.noShowHeld).toBe(false);
+      expect(mockHasOpenAdmittedLinkGuest).not.toHaveBeenCalled();
+    });
+
+    it('is false past the overrun ceiling, where the hold lapses', async () => {
+      mockListByMeeting.mockResolvedValue(withLinkGuest);
+      mockHasOpenAdmittedLinkGuest.mockResolvedValue(true);
+
+      const result = await stateAt(60 * 24);
+
+      expect(result.ok && result.state.noShowHeld).toBe(false);
+    });
+
+    it.each([
+      {
+        label: 'the expert is not in the room',
+        rows: [{ party: 'observer', joinedAt: at(1), leftAt: null }],
+        status: 'waiting_for_participants',
+      },
+      {
+        label: 'a client-side participant has been present',
+        rows: [...expertAlone, { party: 'client', joinedAt: at(1), leftAt: at(2) }],
+        status: 'waiting_for_participants',
+      },
+      { label: 'the meeting is in progress', rows: expertAlone, status: 'in_progress' },
+      { label: 'the meeting has ended', rows: expertAlone, status: 'ended' },
+    ])('is false with NO extra query when $label', async ({ rows, status }) => {
+      mockListByMeeting.mockResolvedValue(rows);
+      mockFindById.mockResolvedValue(meeting({ status }));
+
+      const result = await stateAt(12);
+
+      expect(result.ok && result.state.noShowHeld).toBe(false);
+      expect(mockHasOpenAdmittedLinkGuest).not.toHaveBeenCalled();
+    });
+
+    it('degrades to false and warns when the read fails', async () => {
+      mockListByMeeting.mockResolvedValue(withLinkGuest);
+      mockHasOpenAdmittedLinkGuest.mockRejectedValue(new Error('db down'));
+
+      const result = await stateAt(12);
+
+      expect(result.ok && result.state.noShowHeld).toBe(false);
+      expect(mockWarn).toHaveBeenCalled();
+    });
+  });
+
   describe('noShowFloorMinutes', () => {
     it('⚠⚠ reflects an ENV OVERRIDE, not the 15-minute default', async () => {
       const overridden: MeetingTimers = { ...DEFAULT_MEETING_TIMERS, noShowFloorMs: 25 * MINUTE };

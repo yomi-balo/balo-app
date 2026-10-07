@@ -22,6 +22,7 @@ const {
   mockWarn,
   mockErrorLog,
   mockInfo,
+  mockDebug,
   mockSettleSessionlessCaseMeeting,
   mockEnqueueRecordingEnsure,
   mockEnqueueRecordingStop,
@@ -49,6 +50,7 @@ const {
   mockWarn: vi.fn(),
   mockErrorLog: vi.fn(),
   mockInfo: vi.fn(),
+  mockDebug: vi.fn(),
   mockSettleSessionlessCaseMeeting: vi.fn(),
   mockEnqueueRecordingEnsure: vi.fn(),
   mockEnqueueRecordingStop: vi.fn(),
@@ -60,7 +62,7 @@ const {
 const MOCK_MAX_DAILY_FAILURES = vi.hoisted(() => 7);
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: mockInfo, warn: mockWarn, error: mockErrorLog }),
+  createLogger: () => ({ debug: mockDebug, info: mockInfo, warn: mockWarn, error: mockErrorLog }),
 }));
 vi.mock('@balo/db', () => ({
   db: {},
@@ -954,7 +956,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       expect(mockEndMeeting).not.toHaveBeenCalled();
       expect(mockDeleteRoom).not.toHaveBeenCalled();
       expect(mockSettleSessionlessCaseMeeting).not.toHaveBeenCalled();
-      expect(mockInfo).toHaveBeenCalledWith(
+      expect(mockDebug).toHaveBeenCalledWith(
         expect.objectContaining({ meetingId: MEETING_ID, ceiling: expect.any(Date) }),
         'No-show held — an admitted link guest is with the expert'
       );
@@ -981,6 +983,30 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       const result = await runMeetingLifecycleSweep(at(24 * 60), () => {}, EMPTY_READER);
 
       expect(result.terminated).toBe(1);
+    });
+
+    it('ends a pre-in_progress room the expert left while a link guest stays, at the ceiling and not before', async () => {
+      const expertGone = {
+        party: 'expert',
+        joinedAt: START,
+        leftAt: at(10),
+        meetingGuestId: null,
+      };
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([expertGone, LINK_GUEST_OPEN]);
+      mockHasLinkGuest.mockResolvedValue(true);
+
+      const before = await runMeetingLifecycleSweep(at(269), () => {}, EMPTY_READER);
+      expect(before.terminated).toBe(0);
+
+      const atCeiling = await runMeetingLifecycleSweep(at(270), () => {}, EMPTY_READER);
+      expect(atCeiling.terminated).toBe(1);
+      expect(mockEndMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: null,
+          terminalRule: { rule: 'abandoned_wait', arm: null },
+        })
+      );
     });
 
     it('costs no extra query when no open observer interval belongs to a guest', async () => {

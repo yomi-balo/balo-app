@@ -38,7 +38,6 @@ describe('StepBooked', () => {
     expect(screen.getByText(/Added to your case/)).toBeInTheDocument();
   });
 
-  // ⚠ D2a — the copy must NEVER claim the client's own calendar was updated.
   it('points a hand-off at "Invite a colleague" (draft copy, pending MJ)', () => {
     renderStep();
 
@@ -49,6 +48,7 @@ describe('StepBooked', () => {
     ).toBeInTheDocument();
   });
 
+  // ⚠ D2a — the copy must NEVER claim the client's own calendar was updated.
   it('never says the client calendar was updated', () => {
     const { container } = renderStep();
     const text = container.textContent ?? '';

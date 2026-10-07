@@ -636,6 +636,7 @@ export function CallClient({
     if (snapshot === null) return UNKNOWN_WAITING_FACTS;
     return {
       noShowFloorMinutes: snapshot.noShowFloorMinutes,
+      noShowHeld: snapshot.noShowHeld,
       outcome: snapshot.outcome,
       expertPresenceObserved:
         snapshot.expertPresenceOpen ?? snapshot.clocks.expertFirstJoinedAt !== null,

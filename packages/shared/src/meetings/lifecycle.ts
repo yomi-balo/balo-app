@@ -484,8 +484,9 @@ function noShowDue(input: TerminalRuleInput): boolean {
 /**
  * `true` when rule 2 is due but is HELD: an admitted `link` guest is present with the expert, so
  * the call is a hand-off in progress rather than an abandoned one. The hold lapses at
- * {@link overrunStopCeiling}, the hard stop that bounds every meeting; an emptied room ends via
- * rule 4. The hold starts no billing.
+ * {@link overrunStopCeiling}, the hard stop that bounds every meeting: with the expert still
+ * present rule 2 fires at the ceiling, with the expert gone rule 4's ceiling arm fires, and an
+ * emptied room ends via rule 4. The hold starts no billing.
  */
 export function noShowHeldByLinkGuest(input: TerminalRuleInput): boolean {
   if (!input.admittedLinkGuestPresent || !noShowDue(input)) return false;
@@ -550,17 +551,19 @@ function venueUnavailableApplies(input: TerminalRuleInput): boolean {
 
 /**
  * Rule 4 — ABANDONED WAIT (D9). The expert turned up, the consultation never started, and the
- * room is now EMPTY.
+ * room is now EMPTY — or, at the overrun ceiling, the expert has left and somebody else is still
+ * in it ({@link expertGoneObserverRemainsPastCeiling}).
  *
- * ⚠⚠ THIS RULE IS THE TAXONOMY'S CATCH-ALL FOR A PRE-`in_progress` EMPTY ROOM, AND ITS THREE
- * GUARDS ARE EXACTLY THE THREE THAT KEEP IT DISJOINT — no more:
+ * ⚠⚠ THIS RULE IS THE TAXONOMY'S CATCH-ALL FOR A PRE-`in_progress` ROOM THE EXPERT IS NO LONGER
+ * IN, AND ITS THREE GUARDS ARE EXACTLY THE THREE THAT KEEP IT DISJOINT — no more:
  *
  *   · a PRE-`in_progress` status, so rule 1 (which owns `in_progress`) cannot also fire;
  *   · `expertEverPresent`, so rules 3 and 5 (which both require the expert NEVER joined)
  *     cannot also fire. Without it a client-only no-show would terminate at `lastLeftAt +
  *     5min` instead of at the `MISSED_CALL_TERMINATION_MS` threshold, silently re-labelling a
  *     `missed_call`, or with no room ever provisioned, a `venue_unavailable`;
- *   · an EMPTY room, so rule 2 (which requires an OPEN expert interval) cannot also fire.
+ *   · NO OPEN EXPERT INTERVAL — an empty room on the empty-room arm, a closed expert interval
+ *     on the ceiling arm — so rule 2 (which requires an OPEN expert interval) cannot also fire.
  *
  * ⚠ THE TWO GUARDS THAT WERE REMOVED, AND WHY EACH WAS A STRANDING HOLE — do not put them back:
  *
@@ -586,7 +589,23 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
   if (!input.presence.expertEverPresent) {
     return false;
   }
-  return roomEmptyPastWindow(input);
+  return roomEmptyPastWindow(input) || expertGoneObserverRemainsPastCeiling(input);
+}
+
+/**
+ * Rule 4's CEILING ARM: the expert LEFT and ANY non-expert interval is still open — an observer
+ * such as an admitted `link` guest, or a client who arrived after the expert left — so the room
+ * is not empty and the empty-room arm cannot fire.
+ * Without this arm that meeting matched no rule at all. Fires from {@link overrunStopCeiling}.
+ * Disjoint from rule 2 (needs `expertOpen`) and rules 3 and 5 (need the expert never present).
+ */
+function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean {
+  const { presence } = input;
+  if (presence.expertOpen || !presence.anyOpen) {
+    return false;
+  }
+  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
+  return input.now.getTime() >= ceiling.getTime();
 }
 
 /**
@@ -600,8 +619,8 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  *     end is scoped to reached-`in_progress`-then-empty, never 'is empty'".
  *   · #3 vs #2 and #4 — #3 requires the expert NEVER joined; both others require they DID.
  *     *Disjoint by presence.*
- *   · #2 vs #4 — #2 requires an OPEN expert interval, #4 requires an EMPTY ROOM.
- *     *Disjoint by presence.*
+ *   · #2 vs #4 — #2 requires an OPEN expert interval; #4 requires an EMPTY ROOM (empty-room
+ *     arm) or a CLOSED expert interval (ceiling arm). *Disjoint by presence.*
  *   · #5 vs everything (BAL-581) — #5 by status, exactly like #3 (both require pre-`in_progress`
  *     and the expert NEVER joined); #5 vs #3 is disjoint by VENUE — #3 requires a READY venue,
  *     #5 requires its ABSENCE. #5 vs #2/#4 is disjoint by presence, same as #3.
@@ -635,8 +654,9 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  * nothing but #2 until the ceiling. An occupied `in_progress` meeting is bounded by #6 at
  * {@link overrunStopCeiling}, whatever the webhooks and the reconciler are doing, so it can no
  * longer stay open forever. A pre-`in_progress` room with the expert and an admitted `link` guest
- * open matches nothing until the ceiling ({@link noShowHeldByLinkGuest}); rule 4 ends it if it
- * empties first. The residual is a PRE-`in_progress` room the expert still holds
+ * open matches nothing until the ceiling ({@link noShowHeldByLinkGuest}), where rule 2 fires; if
+ * the expert leaves first, rule 4's ceiling arm ends it at the ceiling, and if the room empties
+ * first rule 4 ends it. The residual is a PRE-`in_progress` room the expert still holds
  * after a client left: it matches no rule (BAL-584 owns it, not this table).
  * `lifecycle.test.ts` executes the invariant over a status × presence-shape matrix.
  *

@@ -2568,6 +2568,45 @@ describe('vouchForLinkGuest — BAL-579', () => {
 });
 
 describe('listGuests — canVouch (BAL-579)', () => {
+  beforeEach(() => {
+    mockListLiveByMeeting.mockResolvedValue([
+      {
+        id: GUEST_ID,
+        email: 'x@lobby.example',
+        emailDomain: null,
+        name: 'Dana',
+        party: 'client',
+        participationRole: 'guest',
+        accessScope: 'meeting',
+        admission: 'pending',
+        inviteChannel: 'link',
+        admissionDecidedAt: null,
+      },
+    ]);
+  });
+
+  it('skips the delivery-identity read when the roster has no link row', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      {
+        id: GUEST_ID,
+        email: 'x@lobby.example',
+        emailDomain: null,
+        name: 'Dana',
+        party: 'client',
+        participationRole: 'guest',
+        accessScope: 'meeting',
+        admission: 'pending',
+        inviteChannel: 'email',
+        admissionDecidedAt: null,
+      },
+    ]);
+
+    await expect(
+      listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID })
+    ).resolves.toMatchObject({ ok: true, canVouch: false });
+    expect(mockDeliveringExpertUserId).not.toHaveBeenCalled();
+  });
+
   it('is true for a client-side member who is not the delivering expert', async () => {
     await expect(
       listGuests({ meetingId: MEETING_ID, actorUserId: USER_ID })

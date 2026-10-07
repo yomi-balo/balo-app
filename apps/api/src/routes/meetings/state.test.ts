@@ -56,6 +56,7 @@ const STATE = {
   endedBy: null,
   viewerRole: 'expert',
   phase: 'near',
+  noShowHeld: false,
   clocks: {
     expertPresentMs: 300_000,
     billableMs: 0,
@@ -160,6 +161,7 @@ describe('GET /meetings/:meetingId/state (BAL-134 §7.1)', () => {
 
     expect(res.json()).toMatchObject({
       noShowFloorMinutes: 15,
+      noShowHeld: false,
       presence: { expertOpen: true },
     });
   });

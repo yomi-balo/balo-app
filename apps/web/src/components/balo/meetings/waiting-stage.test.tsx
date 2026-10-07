@@ -38,6 +38,7 @@ vi.mock('motion/react', async () => {
  */
 const FACTS: WaitingFacts = {
   noShowFloorMinutes: 15,
+  noShowHeld: false,
   outcome: null,
   expertPresenceObserved: true,
   caseClosure: null,

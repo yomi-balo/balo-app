@@ -390,7 +390,7 @@ async function terminateIfDue(
   const decision = resolveTerminalRule(ruleInput);
   if (decision === null) {
     if (noShowHeldByLinkGuest(ruleInput)) {
-      logger.info(
+      logger.debug(
         {
           meetingId: state.meeting.id,
           ceiling: overrunStopCeiling(ruleInput.scheduledStart, ruleInput.scheduledEnd, timers),

@@ -380,7 +380,7 @@ export function PeoplePanel({
                   key={identity.sessionId}
                   row={row}
                   isPending={pendingGuestIds.has(row.guest.id)}
-                  action={joinActions(vouchActionFor(row), removeActionFor(row))}
+                  action={joinActions(vouchActionFor(row), removeActionFor(row), undefined)}
                 />
               );
             }
@@ -592,6 +592,28 @@ function ResendLinkButton({
 }
 
 /**
+ * BAL-579 — lays up to three row actions side by side, or returns the one that exists. ⚠ ABSENT,
+ * never an empty wrapper, when none does. Fixed slots rather than a spread array, so every child is
+ * an explicit expression and needs no list key.
+ */
+function joinActions(
+  first: React.JSX.Element | undefined,
+  second: React.JSX.Element | undefined,
+  third: React.JSX.Element | undefined
+): React.JSX.Element | undefined {
+  const count = [first, second, third].filter((action) => action !== undefined).length;
+  if (count === 0) return undefined;
+  if (count === 1) return first ?? second ?? third;
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      {first}
+      {second}
+      {third}
+    </div>
+  );
+}
+
+/**
  * BAL-476 — the "Admitted · not yet arrived" row's action slot: Re-send, Remove, both, or
  * NOTHING.
  *
@@ -600,19 +622,6 @@ function ResendLinkButton({
  * ⚠ BOTH IN ONE `flex shrink-0 items-center gap-1.5` GROUP when they coexist, which is the
  * pattern `LobbyQueueRow` already uses for its Deny/Admit pair.
  */
-/**
- * BAL-579 — lays two row actions side by side, or returns the one that exists. ⚠ ABSENT, never an
- * empty wrapper, when neither does.
- */
-function joinActions(
-  ...actions: ReadonlyArray<React.JSX.Element | undefined>
-): React.JSX.Element | undefined {
-  const present = actions.filter((action): action is React.JSX.Element => action !== undefined);
-  const [only] = present;
-  if (present.length <= 1) return only;
-  return <div className="flex shrink-0 items-center gap-1.5">{present}</div>;
-}
-
 function notArrivedActionFor(
   row: GuestRosterRow,
   onResend: (guestId: string, displayName: string) => void,

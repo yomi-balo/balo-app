@@ -1118,6 +1118,64 @@ describe('PresenceFacts', () => {
   });
 });
 
+describe('rule 4 ceiling arm — the expert left while an observer stays', () => {
+  const OBSERVER_REMAINS: readonly LifecyclePresenceInterval[] = [
+    { party: 'expert', joinedAt: at(0), leftAt: at(10) },
+    { party: 'observer', joinedAt: at(2), leftAt: null },
+  ];
+  const CEILING_MIN = 270;
+
+  const SHAPES = (['scheduled', 'waiting_for_participants'] as const).flatMap((status) =>
+    [false, true].map((admittedLinkGuestPresent) => ({ status, admittedLinkGuestPresent }))
+  );
+
+  function inputAt(
+    status: 'scheduled' | 'waiting_for_participants',
+    admittedLinkGuestPresent: boolean,
+    nowMinutes: number
+  ): TerminalRuleInput {
+    return {
+      status,
+      scheduledStart: START,
+      scheduledEnd: at(60),
+      presence: summarisePresence(OBSERVER_REMAINS),
+      timers: DEFAULT_MEETING_TIMERS,
+      now: at(nowMinutes),
+      venueReadyAt: at(-1440),
+      admittedLinkGuestPresent,
+    };
+  }
+
+  it.each(SHAPES)(
+    '$status linkGuest=$admittedLinkGuestPresent: abandoned_wait fires at the ceiling, not before, and is disjoint',
+    ({ status, admittedLinkGuestPresent }) => {
+      expect(resolveTerminalRule(inputAt(status, admittedLinkGuestPresent, CEILING_MIN - 1))).toBe(
+        null
+      );
+      const atCeiling = inputAt(status, admittedLinkGuestPresent, CEILING_MIN);
+      expect(resolveTerminalRule(atCeiling)).toEqual({
+        rule: 'abandoned_wait',
+        outcome: null,
+        arm: null,
+      });
+      expect(MEETING_TERMINAL_PREDICATES.filter((entry) => entry.applies(atCeiling))).toHaveLength(
+        1
+      );
+    }
+  );
+
+  it('does not fire while the expert is still open', () => {
+    const input: TerminalRuleInput = {
+      ...inputAt('waiting_for_participants', false, CEILING_MIN),
+      presence: summarisePresence([
+        { party: 'expert', joinedAt: at(0), leftAt: null },
+        { party: 'observer', joinedAt: at(2), leftAt: null },
+      ]),
+    };
+    expect(resolveTerminalRule(input)?.rule).not.toBe('abandoned_wait');
+  });
+});
+
 describe('no-show held by an admitted link guest', () => {
   const base: TerminalRuleInput = {
     status: 'waiting_for_participants',

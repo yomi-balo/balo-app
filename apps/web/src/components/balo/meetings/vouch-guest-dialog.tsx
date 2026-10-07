@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useId, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
 import { GUEST_ACTION_COPY, VOUCH_COPY } from '@/lib/meetings/guests-copy';
@@ -19,6 +19,10 @@ import { MeetingDialog } from './meeting-overlay';
  *
  * ⚠ NO ADDRESS, NAME OR GUEST ID REACHES ANALYTICS — an outcome and the meeting context only.
  */
+
+function noop(): void {
+  // A failed roster refresh is recovered by the poll; it must neither surface nor go unhandled.
+}
 
 export interface VouchGuestDialogProps {
   readonly open: boolean;
@@ -47,6 +51,12 @@ export function VouchGuestDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const errorId = useId();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const focusField = useCallback((event: Event): void => {
+    event.preventDefault();
+    inputRef.current?.focus();
+  }, []);
 
   const handleOpenChange = useCallback(
     (next: boolean): void => {
@@ -91,7 +101,7 @@ export function VouchGuestDialog({
           setIsSubmitting(false);
           // The roster refresh runs after either outcome and never reports: a failed refresh
           // must not read as a failed vouch, and the poll recovers it.
-          void onVouched();
+          onVouched().catch(noop);
         });
     },
     [email, isSubmitting, onVouch, meetingProps, report, guestName, handleOpenChange, onVouched]
@@ -110,6 +120,7 @@ export function VouchGuestDialog({
       onOpenChange={handleOpenChange}
       title={VOUCH_COPY.title(guestName)}
       description={VOUCH_COPY.body}
+      onOpenAutoFocus={focusField}
     >
       <form onSubmit={submit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
@@ -119,8 +130,8 @@ export function VouchGuestDialog({
           <input
             id={fieldId}
             type="email"
+            ref={inputRef}
             required
-            autoFocus
             autoComplete="off"
             placeholder="name@company.com"
             aria-invalid={errorMessage === null ? undefined : true}
