@@ -30,13 +30,17 @@ export async function internalApiFetch<T>(
 
   const url = `${API_BASE_URL}${path}`;
 
+  // The JSON content type goes out only with a body: over an empty body (a bodyless DELETE) the
+  // api's JSON parser answers 400 before the handler runs.
+  const hasBody = options.body !== undefined && options.body !== null;
+
   const response = await loggedFetch(url, {
     ...options,
     service,
     headers: {
-      'Content-Type': 'application/json',
-      'x-internal-api-key': API_KEY,
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       ...options.headers,
+      'x-internal-api-key': API_KEY,
     },
   });
 

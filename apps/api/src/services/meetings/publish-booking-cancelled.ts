@@ -30,18 +30,16 @@
  *                         nobody is told twice. The EXPERT side is reached by the shipped
  *                         single-recipient `recipient: 'expert'` rule.
  *   · EXPERT/ADMIN-initiated ⇒ `recipientId` OMITTED (the client rule skips);
- *                         `recipientUserIds` = the CLIENT company's live `MANAGE_MEMBERS`
- *                         holders. The expert still gets their own confirmation from the
+ *                         `recipientUserIds` = the CLIENT company's owner/admins plus the
+ *                         meeting's booker while they still hold `participate`
+ *                         (`clientPartyRecipientsRepository.resolveClientPartyRecipients`, the
+ *                         one definition `meeting-absence.ts` and the reschedule proposal also
+ *                         use). The expert still gets their own confirmation from the
  *                         unconditioned expert rule.
  *
- * ⚠ THE NARROWING IS STATED RATHER THAN HIDDEN, and it is the same one `meeting-absence.ts`
- * records for its client nudge: `partyMembershipsRepository` exposes no `listMemberUserIds`, so
- * the widest set reachable without adding an un-integration-tested repository method is the
- * `MANAGE_MEMBERS` holders. Consequence, plainly: a plain `member` who booked the consultation
- * is not emailed directly, only their owner/admin. A follow-up ticket should add a live-member
- * listing (with its integration test) and widen this one call — the same follow-up
- * `meeting-absence.ts` already asks for. The role set is derived from `@balo/shared/authz`'s map
- * INSIDE the repository, never from a `role ===` here.
+ * ⚠ THE SET IS NOT EVERY LIVE MEMBER: a plain `member` who did not book the consultation is not
+ * emailed. A guest or delegate with no user row is unreachable by construction. The role
+ * meaning comes from `@balo/shared/authz` INSIDE the repository, never from a `role ===` here.
  *
  * ⚠ COUNTERPARTY CONTACT CONCEALMENT (ADR-1044 §3). No address is ever assembled here: the
  * engine resolves recipients from IDs and the email adapter fetches the address from the `users`
@@ -57,9 +55,9 @@
 import {
   agenciesRepository,
   caseEngagementsRepository,
+  clientPartyRecipientsRepository,
   companiesRepository,
   expertsRepository,
-  partyMembershipsRepository,
   usersRepository,
 } from '@balo/db';
 import {
@@ -190,12 +188,17 @@ function buildActorLabel(
  */
 async function resolveCounterpartyRecipients(
   cancelledBy: CancelActorRole,
+  meetingId: string,
   companyId: string
 ): Promise<string[]> {
   if (cancelledBy === 'client') {
     return [];
   }
-  return partyMembershipsRepository.listAdminUserIds('company', companyId);
+  const { recipientUserIds } = await clientPartyRecipientsRepository.resolveClientPartyRecipients({
+    meetingId,
+    companyId,
+  });
+  return recipientUserIds;
 }
 
 /**
@@ -241,19 +244,21 @@ export async function publishBookingCancelled(
     }
   );
 
-  const recipientUserIds = await resolveCounterpartyRecipients(cancelledBy, companyId).catch(
-    (error: unknown) => {
-      log.error(
-        {
-          meetingId,
-          engagementId,
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'Failed to resolve booking.cancelled counterparty recipients — the expert is still notified'
-      );
-      return [] as string[];
-    }
-  );
+  const recipientUserIds = await resolveCounterpartyRecipients(
+    cancelledBy,
+    meetingId,
+    companyId
+  ).catch((error: unknown) => {
+    log.error(
+      {
+        meetingId,
+        engagementId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Failed to resolve booking.cancelled counterparty recipients — the expert is still notified'
+    );
+    return [] as string[];
+  });
 
   if (cancelledBy !== 'client' && recipientUserIds.length === 0) {
     // ⚠ NOT a silent send. Both client-side channels fan out from this list, so an empty one
@@ -262,7 +267,7 @@ export async function publishBookingCancelled(
     // makes "the client was not reached" legible in the log.
     log.warn(
       { meetingId, engagementId, companyId, cancelledBy },
-      'No live MANAGE_MEMBERS holder on the client company — the client side of this cancellation reaches nobody'
+      'No live recipient on the client company — the client side of this cancellation reaches nobody'
     );
   }
 

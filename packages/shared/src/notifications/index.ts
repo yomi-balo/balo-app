@@ -1476,9 +1476,10 @@ export interface BookingCancelledPayload {
    * → recipient 'meeting_party_participants'. ⚠ RESOLVED BY THE PUBLISHER, never hydrated by
    * `engine/resolver.ts` — that is what keeps a membership read out of the notification engine
    * (the shipped BAL-408 contract). Populated ONLY on the expert/admin arms, with the CLIENT
-   * company's live `MANAGE_MEMBERS` holders, which is how "Cancelled by expert → client →
-   * email + in-app" is delivered without inventing a new recipient kind. Empty/absent ⇒ the
-   * fan-out rule delivers nothing.
+   * company's owner/admins plus the meeting's booker while they still hold `participate`
+   * (`clientPartyRecipientsRepository.resolveClientPartyRecipients` in `@balo/db`), which is how
+   * "Cancelled by expert → client → email + in-app" is delivered without inventing a new
+   * recipient kind. Empty/absent ⇒ the fan-out rule delivers nothing.
    */
   recipientUserIds?: string[];
   /** → recipient 'expert'; `engine/resolver.ts` hydrates `data.expert` off THIS field name. */

@@ -195,6 +195,7 @@ export function useGuestRemoval(input: UseGuestRemovalInput): UseGuestRemovalRes
           ...meetingProps,
           state,
           outcome: result.success ? 'ok' : 'failed',
+          ...(result.success ? {} : { status: result.status, code: result.code }),
         });
         if (result.success) {
           report('success', copy.success(displayName));

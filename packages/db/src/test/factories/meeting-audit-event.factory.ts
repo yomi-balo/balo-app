@@ -10,11 +10,13 @@ interface MeetingAuditEventFactoryInput {
    * row the test writes, and the case-inactivity seam reads exactly this column.
    */
   createdAt: Date;
+  /** The acting user; defaults to NULL (a seeded or system write). */
+  actorUserId?: string | null;
 }
 
 /**
  * Seeds ONE meeting audit row (`entity_type = 'meeting'`, `entity_id = meetingId`) with a
- * controlled `createdAt` and a NULL actor.
+ * controlled `createdAt` and, unless `actorUserId` is passed, a NULL actor.
  *
  * Inserts DIRECTLY via `db`: `auditEventsRepository.record` takes no `createdAt`. Metadata is
  * left NULL — nothing that reads these rows for a timestamp reads their metadata.
@@ -28,7 +30,7 @@ export async function meetingAuditEventFactory(
   const [row] = await db
     .insert(auditEvents)
     .values({
-      actorUserId: null,
+      actorUserId: input.actorUserId ?? null,
       action: input.action,
       entityType: 'meeting',
       entityId: input.meetingId,

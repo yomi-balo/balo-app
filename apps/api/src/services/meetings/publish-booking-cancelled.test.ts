@@ -7,7 +7,7 @@ const {
   mockFindCase,
   mockFindUserDisplay,
   mockGetAgencySummary,
-  mockListAdminUserIds,
+  mockResolveRecipients,
   mockPublish,
 } = vi.hoisted(() => ({
   mockFindCompanyName: vi.fn(),
@@ -15,7 +15,7 @@ const {
   mockFindCase: vi.fn(),
   mockFindUserDisplay: vi.fn(),
   mockGetAgencySummary: vi.fn(),
-  mockListAdminUserIds: vi.fn(),
+  mockResolveRecipients: vi.fn(),
   mockPublish: vi.fn(),
 }));
 
@@ -25,7 +25,7 @@ vi.mock('@balo/db', () => ({
   caseEngagementsRepository: { findByEngagementId: mockFindCase },
   usersRepository: { findDisplayById: mockFindUserDisplay },
   agenciesRepository: { getSummaryById: mockGetAgencySummary },
-  partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
+  clientPartyRecipientsRepository: { resolveClientPartyRecipients: mockResolveRecipients },
 }));
 vi.mock('../../notifications/index.js', () => ({
   notificationEvents: { publish: mockPublish },
@@ -95,7 +95,10 @@ beforeEach(() => {
       : { id, firstName: 'Dana', lastName: 'Okoro' }
   );
   mockGetAgencySummary.mockResolvedValue(undefined);
-  mockListAdminUserIds.mockResolvedValue([CLIENT_ADMIN_A, CLIENT_ADMIN_B]);
+  mockResolveRecipients.mockResolvedValue({
+    recipientUserIds: [CLIENT_ADMIN_A, CLIENT_ADMIN_B],
+    includedBookingMember: false,
+  });
   mockPublish.mockResolvedValue(undefined);
 });
 
@@ -155,7 +158,7 @@ describe('publishBookingCancelled — who gets told', () => {
 
     expect(published().recipientId).toBe(ACTOR_USER_ID);
     expect(published()).not.toHaveProperty('recipientUserIds');
-    expect(mockListAdminUserIds).not.toHaveBeenCalled();
+    expect(mockResolveRecipients).not.toHaveBeenCalled();
   });
 
   it.each(['expert', 'admin'])(
@@ -168,14 +171,28 @@ describe('publishBookingCancelled — who gets told', () => {
 
       expect(published()).not.toHaveProperty('recipientId');
       expect(published().recipientUserIds).toEqual([CLIENT_ADMIN_A, CLIENT_ADMIN_B]);
-      expect(mockListAdminUserIds).toHaveBeenCalledWith('company', COMPANY_ID);
+      expect(mockResolveRecipients).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        companyId: COMPANY_ID,
+      });
     }
   );
+
+  it('⚠ the fan-out includes the booking member the resolver appends after the admins', async () => {
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: [CLIENT_ADMIN_A, CLIENT_ADMIN_B, 'booker-user'],
+      includedBookingMember: true,
+    });
+
+    await publishBookingCancelled(input({ cancelledBy: 'expert' }), log);
+
+    expect(published().recipientUserIds).toEqual([CLIENT_ADMIN_A, CLIENT_ADMIN_B, 'booker-user']);
+  });
 
   it('⚠ WARNS loudly when the client company has no live member to reach', async () => {
     // Both client-side channels fan out from this list; an empty one delivers nothing, and a
     // silent send is the one shape a promise must never take.
-    mockListAdminUserIds.mockResolvedValue([]);
+    mockResolveRecipients.mockResolvedValue({ recipientUserIds: [], includedBookingMember: false });
 
     await publishBookingCancelled(input({ cancelledBy: 'expert' }), log);
 
@@ -188,7 +205,7 @@ describe('publishBookingCancelled — who gets told', () => {
   });
 
   it('a FAILING recipient read degrades to no fan-out, and still publishes for the expert', async () => {
-    mockListAdminUserIds.mockRejectedValue(new Error('connection terminated'));
+    mockResolveRecipients.mockRejectedValue(new Error('connection terminated'));
 
     await publishBookingCancelled(input({ cancelledBy: 'expert' }), log);
 

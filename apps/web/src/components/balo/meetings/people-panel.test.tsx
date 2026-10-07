@@ -452,6 +452,8 @@ describe('PeoplePanel — admit and deny', () => {
       success: false,
       error: 'Someone else already decided this.',
       outcome: 'already_decided',
+      status: 409,
+      code: 'guest_not_pending',
     });
 
     renderPanel(fake);
@@ -461,7 +463,39 @@ describe('PeoplePanel — admit and deny', () => {
       expect(toast.info).toHaveBeenCalledWith('Someone else already decided this.')
     );
     expect(toast.error).not.toHaveBeenCalled();
+    expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_DECIDED, {
+      ...MEETING_PROPS,
+      decision: 'deny',
+      outcome: 'already_decided',
+      status: 409,
+      code: 'guest_not_pending',
+    });
     await waitFor(() => expect(fake.loadGuests).toHaveBeenCalledTimes(2));
+  });
+
+  it('records a refusal`s status and code on the failed decision event', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [KNOCKER], canHost: true });
+    fake.decideAdmission.mockResolvedValue({
+      success: false,
+      error: 'Something went wrong.',
+      outcome: 'failed',
+      status: 503,
+      code: 'service_unavailable',
+    });
+
+    renderPanel(fake);
+    await user.click(await screen.findByRole('button', { name: 'Admit Taylor Wu' }));
+
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_DECIDED, {
+        ...MEETING_PROPS,
+        decision: 'admit',
+        outcome: 'failed',
+        status: 503,
+        code: 'service_unavailable',
+      })
+    );
   });
 
   it('records the outcome on the analytics event, taken from the result not from the copy', async () => {
@@ -539,6 +573,49 @@ describe('PeoplePanel — the re-send affordance', () => {
     // ⚠ NAMES THE PERSON — with several stranded rows, "A fresh link is on its way." does not
     // say WHOSE, which is the one thing the host needs confirmed.
     expect(toast.success).toHaveBeenCalledWith('A fresh link is on its way to Taylor Wu.');
+  });
+
+  it('records the outcome only, with no status or code, when the re-send succeeds', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [stranded], canHost: true });
+
+    renderPanel(fake);
+    await user.click(
+      await screen.findByRole('button', { name: 'Re-send the join link to Taylor Wu' })
+    );
+
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.LINK_RESENT, {
+        ...MEETING_PROPS,
+        outcome: 'ok',
+      })
+    );
+  });
+
+  it('records a refusal`s status and code on the failed re-send event, and toasts the error', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [stranded], canHost: true });
+    fake.resendLink.mockResolvedValue({
+      success: false,
+      error: 'That link can no longer be re-sent.',
+      status: 409,
+      code: 'guest_link_not_resendable',
+    });
+
+    renderPanel(fake);
+    await user.click(
+      await screen.findByRole('button', { name: 'Re-send the join link to Taylor Wu' })
+    );
+
+    await waitFor(() =>
+      expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.LINK_RESENT, {
+        ...MEETING_PROPS,
+        outcome: 'failed',
+        status: 409,
+        code: 'guest_link_not_resendable',
+      })
+    );
+    expect(toast.error).toHaveBeenCalledWith('That link can no longer be re-sent.');
   });
 });
 
@@ -808,6 +885,8 @@ describe('PeoplePanel — ⚠⚠ §16, announcing through the frame`s ONE live r
       success: false,
       error: 'Someone else already decided this.',
       outcome: 'already_decided',
+      status: 409,
+      code: 'guest_not_pending',
     });
 
     renderPanel(fake);
@@ -1056,6 +1135,8 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
     fake.removeGuest.mockResolvedValue({
       success: false,
       error: 'That person is no longer in the list.',
+      status: 404,
+      code: 'guest_not_found',
     });
     renderPanel(fake);
 
@@ -1072,6 +1153,8 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
       ...MEETING_PROPS,
       state: 'in_call',
       outcome: 'failed',
+      status: 404,
+      code: 'guest_not_found',
     });
     await waitFor(() => expect(fake.loadGuests.mock.calls.length).toBeGreaterThanOrEqual(2));
   });

@@ -6,6 +6,7 @@ import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
 import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
+import { jsonBodyInit, type ApiMethod } from '@/lib/api/json-body-init';
 
 /**
  * BAL-436 — the SERVER-ONLY web→api client for the four guest-roster operations.
@@ -87,12 +88,16 @@ function readRetryAfter(response: Response): number | undefined {
 /**
  * One call to a guest route, with the viewer's Bearer resolved server-side.
  *
+ * ⚠ THE BODY RULE IS PER METHOD (`jsonBodyInit`): GET and DELETE send no body and no JSON
+ * content type; POST always sends a JSON body (`{}` when the caller has none). A JSON content
+ * type over an empty body is a 400 from the api's parser before the handler runs.
+ *
  * ⚠ FAILS CLOSED on a missing user or a missing access token. The api re-verifies the token
  * regardless, so this is a first, cheap gate rather than the boundary.
  */
 async function callGuestsApi<T>(
   path: string,
-  method: 'GET' | 'POST' | 'DELETE',
+  method: Extract<ApiMethod, 'GET' | 'POST' | 'DELETE'>,
   body?: unknown
 ): Promise<GuestsApiResult<T>> {
   const session = await getSession();
@@ -102,14 +107,12 @@ async function callGuestsApi<T>(
   }
 
   try {
+    const init = jsonBodyInit(method, body);
     const response = await loggedFetch(`${getApiUrl()}${path}`, {
       service: 'balo-api',
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: { ...init.headers, Authorization: `Bearer ${accessToken}` },
+      ...(init.body === undefined ? {} : { body: init.body }),
     });
 
     const parsed = safeParse(await response.text());

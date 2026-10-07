@@ -33,7 +33,7 @@
  * booked.
  */
 import {
-  auditEventsRepository,
+  clientPartyRecipientsRepository,
   creditSessionsRepository,
   creditWalletsRepository,
   db,
@@ -48,9 +48,6 @@ import { createLogger } from '@balo/shared/logging';
 import { resolveCaseBillingSubject, type CaseBillingSubject } from './case-billing-subject.js';
 
 const log = createLogger('credit-session');
-
-/** The audit action `meetingsRepository.create` writes, in the SAME transaction as the meeting. */
-const MEETING_BOOKED_ACTION = 'meeting.booked';
 
 /** The two on-behalf labels — a `client` open acts as the member and never comes through here. */
 export type OnBehalfOpenedBy = 'guest' | 'system';
@@ -98,14 +95,10 @@ export type ResolveOnBehalfOpenResult =
  * The meeting's booker — the actor of its `meeting.booked` audit row, or `null` when none was
  * recorded or the actor is NULL (seeded / system-booked). Single writer: `recordMeetingBooked`
  * inside `meetingsRepository.create`; reschedules update the same row and never re-write it.
+ * Delegates to the one definition, `clientPartyRecipientsRepository.findMeetingBookerUserId`.
  */
 export async function resolveMeetingBooker(meetingId: string): Promise<string | null> {
-  const booked = await auditEventsRepository.findLatestByEntityAndAction({
-    entityType: 'meeting',
-    entityId: meetingId,
-    action: MEETING_BOOKED_ACTION,
-  });
-  return booked?.actorUserId ?? null;
+  return clientPartyRecipientsRepository.findMeetingBookerUserId(meetingId);
 }
 
 /** The user, if (and only if) they are a live member of the company; otherwise `undefined`. */

@@ -198,6 +198,8 @@ export function PeoplePanel({
               ...meetingProps,
               decision,
               outcome: result.outcome,
+              status: result.status,
+              code: result.code,
             });
             // ⚠⚠ A RACE IS NOT A FAILURE. `already_decided` means the other host's decision
             // stands — the outcome this host wanted has happened either way, so it is an
@@ -222,6 +224,7 @@ export function PeoplePanel({
           track(MEETING_PANEL_EVENTS.LINK_RESENT, {
             ...meetingProps,
             outcome: result.success ? 'ok' : 'failed',
+            ...(result.success ? {} : { status: result.status, code: result.code }),
           });
           if (result.success) {
             report('success', `A fresh link is on its way to ${displayName}.`);

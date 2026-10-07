@@ -4,7 +4,7 @@ import 'server-only';
 
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { partyMembershipsRepository } from '@balo/db';
+import { clientPartyRecipientsRepository } from '@balo/db';
 import { RESCHEDULE_PROPOSAL_MAX_OPTIONS } from '@balo/shared/meetings';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import { hasEngagementCapability } from '@/lib/authz/engagement';
@@ -231,21 +231,23 @@ export async function proposeRescheduleAction(
           expertPersonLabel: 'Your expert',
         };
       }),
-      partyMembershipsRepository.listAdminUserIds('company', companyId).catch((error: unknown) => {
-        log.error('Failed to resolve reschedule_proposal.sent recipients', {
-          meetingId,
-          engagementId,
-          error: errorMessage(error),
-        });
-        return [] as string[];
-      }),
+      clientPartyRecipientsRepository
+        .resolveClientPartyRecipients({ meetingId, companyId })
+        .then((resolved) => resolved.recipientUserIds)
+        .catch((error: unknown) => {
+          log.error('Failed to resolve reschedule_proposal.sent recipients', {
+            meetingId,
+            engagementId,
+            error: errorMessage(error),
+          });
+          return [] as string[];
+        }),
     ]);
 
     // Item 7 — a `published` row that reached nobody is the worst possible shape (the
     // `scheduling/reschedule-proposal.ts` recheck's own rule, mirrored here at the FIRST
     // publish): skip rather than publish-and-lie when the client company resolved zero live
-    // admin/owner recipients (a DB error already degrades to `[]` above; no live owner/admin at
-    // all does too).
+    // recipients — no owner/admin and no live booker (a DB error already degrades to `[]` above).
     if (recipientUserIds.length === 0) {
       log.warn(
         'Reschedule proposal has no live recipient on the client company — skipping the publish rather than recording a delivery that reached nobody',

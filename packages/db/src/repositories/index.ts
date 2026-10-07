@@ -414,6 +414,10 @@ export type {
   PartyJoinSettings,
 } from './party-memberships';
 export {
+  clientPartyRecipientsRepository,
+  type ClientPartyRecipients,
+} from './client-party-recipients';
+export {
   partyJoinRequestsRepository,
   PARTY_JOIN_REQUEST_STATUS_TRANSITIONS,
   isAllowedJoinRequestTransition,

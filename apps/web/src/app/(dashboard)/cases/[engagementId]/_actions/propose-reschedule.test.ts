@@ -22,10 +22,12 @@ vi.mock('server-only', () => ({}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 const mockFindWithContexts = vi.fn();
-const mockListAdminUserIds = vi.fn();
+const mockResolveRecipients = vi.fn();
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findWithContexts: (...a: unknown[]) => mockFindWithContexts(...a) },
-  partyMembershipsRepository: { listAdminUserIds: (...a: unknown[]) => mockListAdminUserIds(...a) },
+  clientPartyRecipientsRepository: {
+    resolveClientPartyRecipients: (...a: unknown[]) => mockResolveRecipients(...a),
+  },
 }));
 
 const mockRequireOnboardedUser = vi.fn();
@@ -112,7 +114,10 @@ beforeEach(() => {
   mockAuthorizeCaseMutation.mockResolvedValue(gateOk());
   mockHasEngagementCapability.mockResolvedValue(true);
   mockFindWithContexts.mockResolvedValue(meetingWithContexts());
-  mockListAdminUserIds.mockResolvedValue(['admin-1']);
+  mockResolveRecipients.mockResolvedValue({
+    recipientUserIds: ['admin-1'],
+    includedBookingMember: false,
+  });
   mockResolveNotificationLabels.mockResolvedValue({
     clientCompanyName: 'Northwind Industrial',
     expertPartyLabel: 'CloudPeak',
@@ -279,6 +284,33 @@ describe('proposeRescheduleAction — the write and its publish', () => {
     );
   });
 
+  it("publishes to the resolver's recipients, booker included, resolved by meeting and company", async () => {
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: ['admin-1', 'booker-1'],
+      includedBookingMember: true,
+    });
+    await proposeRescheduleAction(PROPOSE_INPUT);
+    expect(mockResolveRecipients).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      companyId: COMPANY_ID,
+    });
+    expect(mockPublishNotificationEvent).toHaveBeenCalledWith(
+      'reschedule_proposal.sent',
+      expect.objectContaining({ recipientUserIds: ['admin-1', 'booker-1'] })
+    );
+  });
+
+  it('logs and skips the publish when the recipient resolver rejects', async () => {
+    mockResolveRecipients.mockRejectedValue(new Error('db down'));
+    const result = await proposeRescheduleAction(PROPOSE_INPUT);
+    expect(result.success).toBe(true);
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to resolve reschedule_proposal.sent recipients',
+      expect.objectContaining({ meetingId: MEETING_ID, error: 'db down' })
+    );
+    expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+  });
+
   // Item 5 — `hoursToStart` must be the EXACT fractional value, never `hoursBetween`'s
   // rounded one. `rules.ts` gates the <2h SMS arm on `hoursToStart < 2`; a real "1h50m before
   // the call" propose (1.8333h) must NOT round up to 2 and silently disarm SMS in exactly the
@@ -301,7 +333,7 @@ describe('proposeRescheduleAction — the write and its publish', () => {
   // Item 7 — a `published` row that reaches nobody is the worst possible shape. Mirrors the
   // `scheduling/reschedule-proposal.ts` recheck's own rule at the FIRST publish.
   it('skips the publish and warns when the client company has zero live recipients', async () => {
-    mockListAdminUserIds.mockResolvedValue([]);
+    mockResolveRecipients.mockResolvedValue({ recipientUserIds: [], includedBookingMember: false });
     const result = await proposeRescheduleAction(PROPOSE_INPUT);
     expect(result.success).toBe(true);
     expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
