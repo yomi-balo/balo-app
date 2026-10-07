@@ -49,6 +49,9 @@ Daily cloud recording
                             └─ recording-cleanup-source ──▶ DELETE /recordings/:id on Daily
 ```
 
+`video.asset.ready` enqueues `recording-cleanup-source` with a `delay` of the transcript-submit retry budget
+(~75s, BAL-520), not immediately.
+
 The Daily source is **never** deleted before `ready` — it is the only thing a failed ingest can
 retry from (BAL-473 D4).
 

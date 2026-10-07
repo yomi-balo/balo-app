@@ -415,7 +415,9 @@ anywhere (`rooms.ts` sends only `enable_recording`), so this is inert today.
 `"Failed to download: 403 Forbidden"` and permanently loses that segment's transcript.
 `recording-cleanup-source` therefore withholds deletion while
 `transcript_job_submitted_at IS NOT NULL AND transcript_job_finished_at IS NULL`, and both batch
-terminal arms re-enqueue it.
+terminal arms re-enqueue it. The Mux-triggered first enqueue is also DELAYED by
+`TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS` (~75s) so an unstamped in-flight submit can't be raced (BAL-520,
+DOOR 3); the batch re-drive is immediate.
 
 ### Plan tier
 
