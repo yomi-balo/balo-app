@@ -78,6 +78,7 @@ import Fastify, {
 } from 'fastify';
 import rawBody from 'fastify-raw-body';
 import { signMuxWebhookForTest } from '../../services/mux/webhook-signature.js';
+import { TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS } from '../../jobs/transcript-submit-budget.js';
 import { muxWebhookRoutes } from './webhook.js';
 
 // ⚠⚠ FIX ROUND 1 (F9) — CONTAINS `!`, a character outside BOTH the base64 and base64url
@@ -264,7 +265,10 @@ describe('POST /webhooks/mux (BAL-473 §8)', () => {
       }),
       expect.anything()
     );
-    expect(mockEnqueueRecordingCleanupSource).toHaveBeenCalledWith({ recordingId: RECORDING_ID });
+    expect(mockEnqueueRecordingCleanupSource).toHaveBeenCalledWith({
+      recordingId: RECORDING_ID,
+      delayMs: TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS,
+    });
     expect(mockTrackServer).toHaveBeenCalledWith(
       'recording_ready',
       expect.objectContaining({

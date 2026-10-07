@@ -38,6 +38,7 @@ import { type RateLimitConfig } from '../../lib/rate-limiter.js';
 import { parseMuxWebhookEvent, type MuxWebhookEvent } from '../../services/mux/webhook-events.js';
 import { verifyMuxWebhookSignature } from '../../services/mux/webhook-signature.js';
 import { enqueueRecordingCleanupSource } from '../../jobs/recording-cleanup-source.js';
+import { TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS } from '../../jobs/transcript-submit-budget.js';
 import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
 
 const log = createLogger('mux-webhook-route');
@@ -333,8 +334,14 @@ export async function muxWebhookRoutes(fastify: FastifyInstance): Promise<void> 
           seconds_since_meeting_end: secondsSinceMeetingEnd,
           distinct_id: effect.meeting.id,
         });
+        // Delayed past the transcript-submit retry budget so submit stamps before cleanup's
+        // first gate read — DOOR 3 in `recording-cleanup-source.ts`.
         await enqueueBestEffort(
-          () => enqueueRecordingCleanupSource({ recordingId: effect.recording.id }),
+          () =>
+            enqueueRecordingCleanupSource({
+              recordingId: effect.recording.id,
+              delayMs: TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS,
+            }),
           {
             meetingId: effect.meeting.id,
             recordingId: effect.recording.id,
