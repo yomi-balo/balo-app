@@ -254,7 +254,8 @@ export async function proposeRescheduleAction(
         { meetingId, engagementId, companyId, proposalId: result.data.proposalId }
       );
     } else {
-      // Fire-and-forget by contract — `publishNotificationEvent` never throws.
+      // Fire-and-forget: the action does not wait on the publish, and a rejection is logged
+      // rather than left unhandled.
       publishNotificationEvent('reschedule_proposal.sent', {
         correlationId: result.data.proposalId,
         proposalId: result.data.proposalId,
@@ -278,6 +279,12 @@ export async function proposeRescheduleAction(
         // property.
         hoursToStart: (meeting.scheduledStart.getTime() - nowMs) / 3_600_000,
         expiresAtIso: result.data.expiresAtIso,
+      }).catch((error: unknown) => {
+        log.error('Failed to publish reschedule_proposal.sent', {
+          meetingId,
+          engagementId,
+          error: errorMessage(error),
+        });
       });
     }
 

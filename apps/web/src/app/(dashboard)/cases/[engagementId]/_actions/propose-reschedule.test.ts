@@ -110,6 +110,7 @@ const WITHDRAW_INPUT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPublishNotificationEvent.mockResolvedValue(undefined);
   mockRequireOnboardedUser.mockResolvedValue({ id: USER_ID });
   mockAuthorizeCaseMutation.mockResolvedValue(gateOk());
   mockHasEngagementCapability.mockResolvedValue(true);
@@ -262,6 +263,24 @@ describe('proposeRescheduleAction — the write and its publish', () => {
       ],
     });
     expect(revalidatePath).toHaveBeenCalledWith(`/cases/${ENGAGEMENT_ID}`);
+  });
+
+  it('⚠ a rejected publish is logged and the action still succeeds', async () => {
+    mockPublishNotificationEvent.mockRejectedValue(new Error('queue down'));
+
+    const result = await proposeRescheduleAction(PROPOSE_INPUT);
+
+    expect(result.success).toBe(true);
+    await vi.waitFor(() =>
+      expect(log.error).toHaveBeenCalledWith(
+        'Failed to publish reschedule_proposal.sent',
+        expect.objectContaining({
+          meetingId: MEETING_ID,
+          engagementId: ENGAGEMENT_ID,
+          error: 'queue down',
+        })
+      )
+    );
   });
 
   it('publishes reschedule_proposal.sent keyed on the proposalId, with the resolved labels', async () => {
