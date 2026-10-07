@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { HANDLED_DAILY_EVENT_TYPES, parseDailyWebhookEvent } from './webhook-events.js';
+import {
+  HANDLED_DAILY_EVENT_TYPES,
+  isDailyVerificationPing,
+  parseDailyWebhookEvent,
+} from './webhook-events.js';
 
 const ROOM = 'balo-22222222222242228222222222222222';
 const RECEIVED_AT = new Date('2026-08-14T10:05:00.000Z');
@@ -153,9 +157,10 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1 / BAL-473 §7.3)', () => {
   });
 
   /**
-   * ⚠ AN UNKNOWN TYPE IS A FIRST-CLASS OUTCOME, NOT AN ERROR. Daily fires types Balo does not
-   * handle; a failure on one would flood the retry queue and eventually get the WEBHOOK
-   * DISABLED, taking the three handled types down with it.
+   * ⚠ AN UNKNOWN TYPE IS A FIRST-CLASS OUTCOME, NOT AN ERROR. Daily treats every non-200 alike:
+   * under `exponential` (what Balo registers) it retries ≤5 times over ~15 min then drops the
+   * message; under `circuit-breaker` it never retries and 3 consecutive failures flip the
+   * webhook to `FAILED`.
    */
   it('⚠ an unknown type is `unhandled`, not a parse failure', () => {
     const result = parseDailyWebhookEvent(envelope({ type: 'room.created' }), RECEIVED_AT);
@@ -675,5 +680,29 @@ describe('parseDailyWebhookEvent — batch-processor.job-finished / .error (BAL-
       kind: 'batch-processor.job-finished',
       batchJobId: 'not-a-uuid-at-all',
     });
+  });
+});
+
+describe('isDailyVerificationPing (BAL-583)', () => {
+  it('true for the exact ping body', () => {
+    expect(isDailyVerificationPing({ test: 'test' })).toBe(true);
+  });
+
+  it('false when an extra key rides along — `.strict()` refuses it', () => {
+    expect(isDailyVerificationPing({ test: 'test', id: 'evt_1' })).toBe(false);
+  });
+
+  it('false for the wrong literal value', () => {
+    expect(isDailyVerificationPing({ test: 'nope' })).toBe(false);
+  });
+
+  it('false for a bare string, an array, and a number', () => {
+    expect(isDailyVerificationPing('test')).toBe(false);
+    expect(isDailyVerificationPing([])).toBe(false);
+    expect(isDailyVerificationPing(1)).toBe(false);
+  });
+
+  it('false for null', () => {
+    expect(isDailyVerificationPing(null)).toBe(false);
   });
 });

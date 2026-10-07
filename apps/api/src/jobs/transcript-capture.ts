@@ -53,14 +53,13 @@ import {
   type MeetingEngagementResolution,
 } from '../services/meetings/resolve-meeting-engagement.js';
 import { enqueueTranscriptPipeline } from './transcript-pipeline.js';
+import { SUBMIT_ATTEMPTS, BACKOFF_DELAY_MS } from './transcript-submit-budget.js';
 
 const log = createLogger('transcript-capture');
 
 export const TRANSCRIPT_CAPTURE_QUEUE = 'transcript-capture';
 
-const SUBMIT_ATTEMPTS = 3;
 const INGEST_ATTEMPTS = 5;
-const BACKOFF_DELAY_MS = 10_000;
 
 /** ⚠ A WARN, not a refusal — truncating a transcript is worse than a fat Redis job. It is the
  *  signal that the payload-size arithmetic in plan §9 has stopped holding. */

@@ -32,6 +32,12 @@ export interface EnqueueRecordingCleanupSourceInput {
    * {@link recordingCleanupSourceJobId}.
    */
   dedupeToken?: string;
+  /**
+   * BAL-520 — OPT-IN BullMQ `delay`, supplied ONLY by the Mux `video.asset.ready` call site with
+   * `TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS` (see DOOR 3 in `handleCleanup`). NEVER inferred from
+   * `dedupeToken === undefined`: the §7.4 re-drive omits it and stays immediate.
+   */
+  delayMs?: number;
 }
 
 /**
@@ -83,10 +89,18 @@ export function recordingCleanupSourceJobId(recordingId: string, dedupeToken?: s
  * jobId keyed on the row by default (the Mux-triggered first enqueue); keyed on the row PLUS
  * `dedupeToken` when the caller supplies one (the §7.4 re-drive). See
  * {@link recordingCleanupSourceJobId}.
+ *
+ * `delay` does not change dedup — a delayed job still occupies its jobId; the re-drive's
+ * write-keyed jobId is disjoint.
  */
 export async function enqueueRecordingCleanupSource(
   input: EnqueueRecordingCleanupSourceInput
 ): Promise<void> {
+  if (input.delayMs !== undefined && (!Number.isFinite(input.delayMs) || input.delayMs < 0)) {
+    throw new Error(
+      'enqueueRecordingCleanupSource `delayMs` must be a finite, non-negative number'
+    );
+  }
   await getQueue(RECORDING_CLEANUP_SOURCE_QUEUE).add(
     'cleanup',
     { recordingId: input.recordingId } satisfies RecordingCleanupSourceJobData,
@@ -94,6 +108,7 @@ export async function enqueueRecordingCleanupSource(
       jobId: recordingCleanupSourceJobId(input.recordingId, input.dedupeToken),
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
+      ...(input.delayMs === undefined ? {} : { delay: input.delayMs }),
     }
   );
 }
@@ -147,25 +162,30 @@ async function handleCleanup(job: Job<RecordingCleanupSourceJobData>): Promise<v
   // R2's residual reached through a different door; it costs that segment's transcript, not
   // correctness. Submit HAS RUN here — the stamp is what failed.
   //
-  // ⚠⚠ FIX ROUND 3 — DOOR 3, EASY TO CONFLATE WITH DOOR 2 BUT THE TIMING IS THE OPPOSITE: DOOR 2
-  // is submit having ALREADY RUN and its stamp failing; this door is cleanup racing ahead of
-  // submit BEFORE submit's first attempt has run AT ALL. The submit job and this cleanup job are
-  // independently enqueued off two DIFFERENT vendor signals racing with no ordering guarantee
-  // (Mux transcode vs. Daily's `ready-to-download`) — nothing sequences "submit must run before
-  // cleanup's first attempt". If Mux's `video.asset.ready` fires first — submit is still
-  // retrying its own backoff window on a 429/5xx, or the segment is simply short enough that Mux
-  // finishes transcoding sooner — THIS gate reads `submitted_at IS NULL` not because a stamp
-  // failed but because no submission was ever ATTEMPTED yet, so it returns FALSE and cleanup
-  // proceeds. When the submit job finally runs, `handleSubmit`'s own
-  // `dailyRecordingId === null || sourceDeletedAt !== null` gate (`transcript-capture.ts`)
-  // correctly refuses to call Daily and skips with reason `no_daily_source` — a CLEAN, LOGGED
-  // no-op from THAT job's point of view, but a SILENT transcript loss for the segment: nothing
-  // on either side raises, retries, or alerts. THE CHEAPEST MITIGATION, FOR A FOLLOW-UP TICKET,
-  // NOT IMPLEMENTED HERE: a `delay` on the Mux-triggered first `enqueueRecordingCleanupSource`
-  // call (`routes/mux/webhook.ts`) at least as long as the submit job's own retry budget
-  // (`SUBMIT_ATTEMPTS` attempts, exponential backoff starting at `BACKOFF_DELAY_MS` —
-  // `transcript-capture.ts`) — giving submit a real chance to stamp `submitted_at` before
-  // cleanup ever runs its first check, without weakening the gate itself.
+  // ⚠⚠ DOOR 3, EASY TO CONFLATE WITH DOOR 2 BUT THE TIMING IS THE OPPOSITE: DOOR 2 is submit
+  // having ALREADY RUN and its stamp failing; this door is cleanup reaching this gate while
+  // submit has NOT RUN yet (or is still inside its retry window), so `submitted_at` is still
+  // NULL, the gate reads FALSE, and cleanup would proceed. When submit finally runs,
+  // `handleSubmit`'s own `dailyRecordingId === null || sourceDeletedAt !== null` gate refuses
+  // to call Daily and skips with reason `no_daily_source` — a clean, logged no-op from THAT
+  // job's point of view, but a SILENT transcript loss for the segment.
+  //
+  // MITIGATION (BAL-520): the Mux-triggered enqueue (`routes/mux/webhook.ts`) is DELAYED by
+  // `TRANSCRIPT_SUBMIT_RETRY_BUDGET_MS` (`transcript-submit-budget.ts`), so submit has stamped
+  // `submitted_at` or exhausted its attempts before this gate first reads. The gate itself is
+  // unchanged, and the §7.4 re-drive (`routes/daily/webhook.ts`) is NOT delayed.
+  //
+  // ORDERING: when submit is enqueued at all, it is enqueued in the same `ready-to-download`
+  // handler (after the ingest enqueue), before Mux's `ready` can arrive. The race is submit NOT
+  // YET STAMPED, not unordered enqueues.
+  //
+  // RESIDUALS, STATED NOT FIXED — the delay does not cover: (a) queue wait before submit
+  // attempt 1 (`transcript-capture` runs `concurrency: 5`, shared with `ingest`); (b) the
+  // worker being down; (c) a failed best-effort submit enqueue (`routes/daily/webhook.ts`) —
+  // submit never runs, so no delay helps. Each still ends in `no_daily_source`, as do DOOR 2 and
+  // a genuinely absent source. (d) Redis data loss while the bare job sits delayed (~75s) with
+  // no submit stamped leaks the source; the DOOR 1 query cannot see it (`submitted_at` is NULL).
+  // Storage-only — a general stuck-row sweep (BAL-509) is the natural owner.
   //
   // ⚠ FIX ROUND 1 (M9) — DOOR 4, NOT REACHABLE TODAY BUT UNGUARDED THE MOMENT ONE SHIPS:
   // `routes/daily/webhook.ts`'s batch-processor arm resolves the recording row, then does

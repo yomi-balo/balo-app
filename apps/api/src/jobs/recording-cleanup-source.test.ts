@@ -75,7 +75,11 @@ function readyRow(overrides: Record<string, unknown> = {}): Record<string, unkno
 }
 
 describe('recording-cleanup-source job — enqueue', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // clearAllMocks keeps implementations; drop the fake-dedup `queueAdd` a test may install.
+    queueAdd.mockReset();
+  });
 
   it('enqueues with jobId keyed on the recordingId', async () => {
     await enqueueRecordingCleanupSource({ recordingId: RECORDING_ID });
@@ -159,6 +163,85 @@ describe('recording-cleanup-source job — enqueue', () => {
     // `jobsInFlight` (the Mux-triggered job's bare jobId), so the fake dedup let it through
     // rather than silently swallowing it.
     expect(jobsInFlight.has(reDriveJobId)).toBe(true);
+  });
+
+  it('BAL-520 — delayMs is forwarded as the BullMQ `delay`, leaving the jobId and retry options untouched', async () => {
+    await enqueueRecordingCleanupSource({ recordingId: RECORDING_ID, delayMs: 75_000 });
+
+    expect(queueAdd).toHaveBeenCalledWith(
+      'cleanup',
+      { recordingId: RECORDING_ID },
+      {
+        jobId: `recording-cleanup-source--${RECORDING_ID}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 30_000 },
+        delay: 75_000,
+      }
+    );
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    'BAL-520 — rejects an invalid delayMs (%s) without enqueueing',
+    async (delayMs) => {
+      await expect(
+        enqueueRecordingCleanupSource({ recordingId: RECORDING_ID, delayMs })
+      ).rejects.toThrow('delayMs');
+      expect(queueAdd).not.toHaveBeenCalled();
+    }
+  );
+
+  it("⚠⚠ BAL-520 — a re-drive during the Mux job's delay window is accepted and executes; the later delayed bare job is a no-op", async () => {
+    // BullMQ dedups a jobId against a job in ANY state, `delayed` included.
+    const jobStates = new Map<string, string>();
+    queueAdd.mockImplementation(
+      async (_name: string, _data: unknown, opts: { jobId: string; delay?: number }) => {
+        if (jobStates.has(opts.jobId)) {
+          return undefined;
+        }
+        jobStates.set(opts.jobId, opts.delay === undefined ? 'waiting' : 'delayed');
+        return { id: opts.jobId };
+      }
+    );
+    const bareJobId = recordingCleanupSourceJobId(RECORDING_ID);
+    const reDriveJobId = recordingCleanupSourceJobId(RECORDING_ID, 'batch-job-1');
+
+    await enqueueRecordingCleanupSource({ recordingId: RECORDING_ID, delayMs: 75_000 });
+    expect(jobStates.get(bareJobId)).toBe('delayed');
+
+    await enqueueRecordingCleanupSource({ recordingId: RECORDING_ID, dedupeToken: 'batch-job-1' });
+    expect(jobStates.get(reDriveJobId)).toBe('waiting');
+    expect(queueAdd).toHaveBeenLastCalledWith(
+      'cleanup',
+      { recordingId: RECORDING_ID },
+      {
+        jobId: reDriveJobId,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 30_000 },
+      }
+    );
+
+    const callsBeforeReplay = queueAdd.mock.results.length;
+    await enqueueRecordingCleanupSource({ recordingId: RECORDING_ID, delayMs: 75_000 });
+    await expect(queueAdd.mock.results[callsBeforeReplay]?.value).resolves.toBeUndefined();
+    expect([...jobStates.keys()]).toEqual([bareJobId, reDriveJobId]);
+
+    startRecordingCleanupSourceWorker();
+    deleteRecording.mockResolvedValue('deleted');
+    markSourceDeleted.mockResolvedValue({ id: RECORDING_ID });
+
+    // The re-drive runs first, while the bare job is still delayed.
+    findById.mockResolvedValue(
+      readyRow({ transcriptJobSubmittedAt: new Date(), transcriptJobFinishedAt: new Date() })
+    );
+    await wired.processor?.({ data: { recordingId: RECORDING_ID } });
+    expect(deleteRecording).toHaveBeenCalledTimes(1);
+    expect(deleteRecording).toHaveBeenCalledWith(DAILY_RECORDING_ID);
+    expect(markSourceDeleted).toHaveBeenCalledWith(expect.objectContaining({ id: RECORDING_ID }));
+
+    // The delayed bare job then fires against an already-stamped row.
+    findById.mockResolvedValue(readyRow({ sourceDeletedAt: new Date() }));
+    await wired.processor?.({ data: { recordingId: RECORDING_ID } });
+    expect(deleteRecording).toHaveBeenCalledTimes(1);
   });
 });
 
