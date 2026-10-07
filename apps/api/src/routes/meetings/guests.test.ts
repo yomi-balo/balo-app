@@ -6,6 +6,7 @@ const {
   mockRemoveGuest,
   mockDecideGuestAdmission,
   mockResendGuestJoinLink,
+  mockVouchForLinkGuest,
   mockCheckRateLimit,
 } = vi.hoisted(() => ({
   mockInviteGuests: vi.fn(),
@@ -13,6 +14,7 @@ const {
   mockRemoveGuest: vi.fn(),
   mockDecideGuestAdmission: vi.fn(),
   mockResendGuestJoinLink: vi.fn(),
+  mockVouchForLinkGuest: vi.fn(),
   mockCheckRateLimit: vi.fn(),
 }));
 
@@ -32,6 +34,7 @@ vi.mock('../../services/meetings/guest-participation.js', () => ({
   removeGuest: mockRemoveGuest,
   decideGuestAdmission: mockDecideGuestAdmission,
   resendGuestJoinLink: mockResendGuestJoinLink,
+  vouchForLinkGuest: mockVouchForLinkGuest,
 }));
 // The invite window is Redis-backed (`POST /meetings`'s pattern). Mocked at the limiter, not
 // at ioredis, so the assertions below read as "which window refused" rather than as Redis
@@ -167,9 +170,11 @@ describe('meeting guest routes (BAL-408)', () => {
       ok: true,
       guests: [{ id: GUEST_ID, name: 'Dana', displayName: 'Dana', party: 'client' }],
       canHost: false,
+      canVouch: true,
       participantCount: 3,
       participantCap: 10,
     });
+    mockVouchForLinkGuest.mockResolvedValue({ ok: true, id: GUEST_ID, admission: 'pre_admitted' });
     mockRemoveGuest.mockResolvedValue({ ok: true });
     mockDecideGuestAdmission.mockResolvedValue({
       ok: true,
@@ -258,19 +263,38 @@ describe('meeting guest routes (BAL-408)', () => {
       expect(JSON.stringify(args)).not.toContain('"party"');
     });
 
-    it('200s the party-scoped roster with `canHost`', async () => {
+    it('200s the party-scoped roster with `canHost` and `canVouch`', async () => {
       const res = await call({ method: 'GET', url: GUESTS_URL, headers: AUTH_HEADERS });
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
         guests: [{ id: GUEST_ID, name: 'Dana', displayName: 'Dana', party: 'client' }],
         canHost: false,
+        canVouch: true,
         participantCount: 3,
         participantCap: 10,
       });
       expect(mockListGuests).toHaveBeenCalledWith({
         meetingId: MEETING_ID,
         actorUserId: USER_ID,
+      });
+    });
+
+    it('200s a vouch with `{ id, admission }` and forwards the voucher-supplied email', async () => {
+      const res = await call({
+        method: 'POST',
+        url: `${GUEST_URL}/vouch`,
+        headers: AUTH_HEADERS,
+        payload: { email: 'colleague@northwind.example' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ id: GUEST_ID, admission: 'pre_admitted' });
+      expect(mockVouchForLinkGuest).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        guestId: GUEST_ID,
+        actorUserId: USER_ID,
+        email: 'colleague@northwind.example',
       });
     });
 
@@ -755,6 +779,62 @@ describe('meeting guest routes (BAL-408)', () => {
       expect(mockRemoveGuest).not.toHaveBeenCalled();
       expect(mockDecideGuestAdmission).not.toHaveBeenCalled();
       expect(mockResendGuestJoinLink).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /guests/:guestId/vouch', () => {
+    const VOUCH_ERRORS = ERROR_STATUS.filter((entry) =>
+      [
+        'meeting_not_found',
+        'guest_not_found',
+        'meeting_not_open_for_guests',
+        'participant_cap_reached',
+        'guest_already_invited',
+      ].includes(entry.code)
+    );
+
+    function postVouch(payload: InjectOptions['payload']): Promise<LightMyRequestResponse> {
+      return call({ method: 'POST', url: `${GUEST_URL}/vouch`, headers: AUTH_HEADERS, payload });
+    }
+
+    it.each(VOUCH_ERRORS)('maps "$code" to $status', async ({ code, status }) => {
+      mockVouchForLinkGuest.mockResolvedValue({ ok: false, code });
+
+      const res = await postVouch({ email: 'colleague@northwind.example' });
+
+      expect(res.statusCode).toBe(status);
+      expect(res.json()).toEqual({ error: code });
+    });
+
+    it.each([
+      { label: 'a missing email', payload: {} },
+      { label: 'a malformed email', payload: { email: 'not-an-email' } },
+      { label: 'an unknown key', payload: { email: 'a@northwind.example', party: 'expert' } },
+    ])('400s $label without touching the service', async ({ payload }) => {
+      const res = await postVouch(payload);
+
+      expect(res.statusCode).toBe(400);
+      expect(mockVouchForLinkGuest).not.toHaveBeenCalled();
+    });
+
+    it('401s without a bearer token', async () => {
+      const res = await call({
+        method: 'POST',
+        url: `${GUEST_URL}/vouch`,
+        payload: { email: 'colleague@northwind.example' },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(mockVouchForLinkGuest).not.toHaveBeenCalled();
+    });
+
+    it('re-throws an unexpected failure as a 500 that leaks nothing', async () => {
+      mockVouchForLinkGuest.mockRejectedValue(new Error('boom dana@secret.example'));
+
+      const res = await postVouch({ email: 'colleague@northwind.example' });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('dana@secret.example');
     });
   });
 

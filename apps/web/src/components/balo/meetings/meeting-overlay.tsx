@@ -185,6 +185,8 @@ export interface MeetingDialogProps {
   readonly title: string;
   readonly description?: string;
   readonly children: React.ReactNode;
+  /** Radix `onOpenAutoFocus`: lets a dialog with a form send initial focus to its field. */
+  readonly onOpenAutoFocus?: (event: Event) => void;
 }
 
 /**
@@ -198,6 +200,7 @@ export function MeetingDialog({
   title,
   description,
   children,
+  onOpenAutoFocus,
 }: Readonly<MeetingDialogProps>): React.JSX.Element {
   const container = useMeetingFrameElement();
 
@@ -206,6 +209,7 @@ export function MeetingDialog({
       <Dialog.Portal container={container}>
         <Dialog.Overlay className={SCRIM_CLASSES} />
         <Dialog.Content
+          onOpenAutoFocus={onOpenAutoFocus}
           className={cn(
             PANEL_CLASSES,
             PANEL_ENTER_SHEET,

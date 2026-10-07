@@ -20,6 +20,8 @@ import {
   latestPresenceInstant,
   LIFECYCLE_LOOKBACK_MS,
   meetingVenueReadyAt,
+  noShowHeldByLinkGuest,
+  overrunStopCeiling,
   resolveTerminalRule,
   selectPrimaryMeetingContext,
   strandedEndedAt,
@@ -199,6 +201,8 @@ interface CandidateState {
   readonly meeting: Meeting;
   readonly facts: PresenceFacts;
   readonly expertPresentMs: number;
+  /** An admitted `link` guest holds an open interval; see `noShowHeldByLinkGuest`. */
+  readonly admittedLinkGuestPresent: boolean;
   /** The latest instant any live interval records — the floor of a stranded `ended_at`. */
   readonly latestPresenceAt: Date | null;
   /** The intervals with no `leftAt`, in join order — the rows reconciliation may close. */
@@ -212,8 +216,16 @@ async function loadCandidateState(meeting: Meeting, now: Date): Promise<Candidat
     joinedAt: row.joinedAt,
     leftAt: row.leftAt,
   }));
+  // The extra read is paid only when an open observer interval belongs to a guest, so a healthy
+  // meeting costs no extra query.
+  const mayHaveLinkGuest = rows.some(
+    (row) => row.leftAt === null && row.meetingGuestId !== null && row.party === 'observer'
+  );
+  const admittedLinkGuestPresent =
+    mayHaveLinkGuest && (await meetingPresenceRepository.hasOpenAdmittedLinkGuest(meeting.id));
   return {
     meeting,
+    admittedLinkGuestPresent,
     facts: summarisePresence(intervals),
     latestPresenceAt: latestPresenceInstant(intervals),
     openRows: rows.filter((row) => row.leftAt === null),
@@ -729,7 +741,7 @@ async function terminateIfDue(
   occupancy: RoomOccupancy,
   mode: SweepMode
 ): Promise<MeetingTerminalDecision | null> {
-  const decision = resolveTerminalRule({
+  const ruleInput = {
     status: state.meeting.status,
     scheduledStart: state.meeting.scheduledStart,
     scheduledEnd: state.meeting.scheduledEnd,
@@ -737,8 +749,19 @@ async function terminateIfDue(
     timers,
     now,
     venueReadyAt: meetingVenueReadyAt(state.meeting),
-  });
+    admittedLinkGuestPresent: state.admittedLinkGuestPresent,
+  };
+  const decision = resolveTerminalRule(ruleInput);
   if (decision === null) {
+    if (noShowHeldByLinkGuest(ruleInput)) {
+      logger.debug(
+        {
+          meetingId: state.meeting.id,
+          ceiling: overrunStopCeiling(ruleInput.scheduledStart, ruleInput.scheduledEnd, timers),
+        },
+        'No-show held — an admitted link guest is with the expert'
+      );
+    }
     return null;
   }
   let dueAt = decision.dueAt;
@@ -762,6 +785,7 @@ async function terminateIfDue(
       timers,
       now,
       venueReadyAt: meetingVenueReadyAt(fresh),
+      admittedLinkGuestPresent: state.admittedLinkGuestPresent,
     });
     if (confirmed === null || confirmed.rule !== 'venue_unavailable') {
       // The next tick decides from fresh state — a repair landed, or the meeting moved on.

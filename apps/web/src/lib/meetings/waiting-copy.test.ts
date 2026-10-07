@@ -41,6 +41,7 @@ const PHASES = [
  */
 const FACTS: WaitingFacts = {
   noShowFloorMinutes: 15,
+  noShowHeld: false,
   outcome: null,
   expertPresenceObserved: true,
   caseClosure: null,
@@ -158,6 +159,23 @@ describe('waitingCopyFor — the expert waits (R2, Option A whole)', () => {
     });
     expect(copy('client', 'near', { ...FACTS, noShowFloorMinutes: 20 }).body).toContain(
       'the 20-minute mark'
+    );
+  });
+
+  // Draft copy, pending MJ.
+  it('near, when the no-show is held by a link guest, names the guest and NOT the floor', () => {
+    const { body } = copy('client', 'near', { ...FACTS, noShowHeld: true });
+
+    expect(body).toBe(
+      "Someone joined with the meeting link, so this won't settle as a no-show while they're here."
+    );
+    expect(body).not.toContain('minute');
+    expect(body).not.toContain('15');
+  });
+
+  it('near, when not held, is unchanged', () => {
+    expect(copy('client', 'near', { ...FACTS, noShowHeld: false }).body).toContain(
+      'this settles as a no-show'
     );
   });
 
@@ -481,6 +499,7 @@ describe('UNKNOWN_WAITING_FACTS', () => {
   it('⚠ every unknown is the answer that makes the copy claim LESS', () => {
     expect(UNKNOWN_WAITING_FACTS).toEqual({
       noShowFloorMinutes: null,
+      noShowHeld: false,
       outcome: null,
       expertPresenceObserved: false,
       caseClosure: null,

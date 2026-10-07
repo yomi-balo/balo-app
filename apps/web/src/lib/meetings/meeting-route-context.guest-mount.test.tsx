@@ -117,6 +117,7 @@ const EXPECTED_EMPTY_SHAPE = {
   waitingPhase: 'pre-start',
   waitingFacts: {
     noShowFloorMinutes: null,
+    noShowHeld: false,
     outcome: null,
     expertPresenceObserved: false,
     caseClosure: null,

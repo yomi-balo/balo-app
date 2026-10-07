@@ -4,6 +4,7 @@ import {
   GUEST_ACTION_COPY,
   guestActionCopyFor,
   rateLimitedCopy,
+  VOUCH_COPY,
   type GuestActionErrorCode,
 } from './guests-copy';
 
@@ -139,5 +140,19 @@ describe('rateLimitedCopy', () => {
     expect(guestActionCopyFor({ status: 429, code: 'rate_limited', retryAfterSeconds: 120 })).toBe(
       rateLimitedCopy(120)
     );
+  });
+});
+
+describe('VOUCH_COPY (BAL-579)', () => {
+  it('names the person in the title and the success line', () => {
+    expect(VOUCH_COPY.title('Dana')).toBe('Vouch for Dana?');
+    expect(VOUCH_COPY.success('Dana')).toBe('Dana is in as your colleague.');
+  });
+
+  it('states the billing consequence and the recognition condition', () => {
+    expect(VOUCH_COPY.body).toContain('time with the expert counts');
+    expect(VOUCH_COPY.body).toContain('Only vouch for someone you recognise');
+    expect(VOUCH_COPY.button).toBe('Vouch');
+    expect(VOUCH_COPY.field).toBe('Their work email');
   });
 });

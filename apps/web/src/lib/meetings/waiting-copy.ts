@@ -89,6 +89,11 @@ export interface WaitingFacts {
    */
   readonly noShowFloorMinutes: number | null;
   /**
+   * BAL-579 — the server says the no-show is held while a lobby guest is with the expert.
+   * ⚠ `false` is the quiet answer: the `near` copy then reads exactly as it did.
+   */
+  readonly noShowHeld: boolean;
+  /**
    * The settled outcome as the server labelled it, or `null`.
    *
    * ⚠⚠ `null` IS A REAL, COMMON ANSWER, NOT AN ABSENCE — both human end paths and the abandoned
@@ -128,6 +133,7 @@ export interface CaseClosureFacts {
  */
 export const UNKNOWN_WAITING_FACTS: WaitingFacts = {
   noShowFloorMinutes: null,
+  noShowHeld: false,
   outcome: null,
   expertPresenceObserved: false,
   caseClosure: null,
@@ -266,9 +272,13 @@ const CLIENT_ABSENT: Record<WaitingPhase, CopyBuilder> = {
     title: `Waiting for ${counterpartyFirstName} to join`,
     body: `Your time is being counted. Nothing for you to do.`,
   }),
-  near: ({ counterpartyFirstName, noShowFloorMinutes }) => ({
+  near: ({ counterpartyFirstName, noShowFloorMinutes, noShowHeld }) => ({
     title: `Waiting for ${counterpartyFirstName} to join`,
-    body: `Still counting. If ${counterpartyFirstName} doesn't arrive, this settles as a no-show ${floorPhrase(noShowFloorMinutes, 'mark')}.`,
+    // Draft, pending MJ. ⚠ When held, the body must NOT name the floor: the no-show is not
+    // what happens while that guest is here.
+    body: noShowHeld
+      ? "Someone joined with the meeting link, so this won't settle as a no-show while they're here."
+      : `Still counting. If ${counterpartyFirstName} doesn't arrive, this settles as a no-show ${floorPhrase(noShowFloorMinutes, 'mark')}.`,
   }),
   /**
    * ⚠⚠ **A TERMINAL STATUS IS NOT EVIDENCE OF A NO-SHOW.** `resolveWaitingPhase` returns

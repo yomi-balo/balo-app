@@ -12,7 +12,7 @@ import {
   type GuestRoster,
   type GuestRosterRow,
 } from '@/lib/meetings/guest-roster';
-import { GUEST_ACTION_COPY } from '@/lib/meetings/guests-copy';
+import { GUEST_ACTION_COPY, VOUCH_COPY } from '@/lib/meetings/guests-copy';
 import { guestIdFromParticipantClaim } from '@/lib/meetings/present-guest-ids';
 import type {
   MeetingGuestsPayload,
@@ -21,6 +21,7 @@ import type {
 import { MeetingSidePanel } from './meeting-side-panel';
 import { PeoplePanelRow, PresentParticipantRow } from './people-panel-row';
 import { LobbyQueueRow } from './lobby-queue-row';
+import { VouchGuestDialog } from './vouch-guest-dialog';
 import { PanelErrorCard, PanelSkeletonRows } from './panel-states';
 import { useGuestRosterPoll } from './use-guest-roster-poll';
 import { useDailyIdentities } from './use-daily-identities';
@@ -125,6 +126,11 @@ export interface PeoplePanelProps {
   readonly onAnnounce: (message: string) => void;
 }
 
+function noop(): void {
+  // A failed roster refresh is recovered by the poll. It must not surface as a failed action
+  // right after that action's own success toast, and it must not go unhandled.
+}
+
 export function PeoplePanel({
   panels,
   onClose,
@@ -136,6 +142,11 @@ export function PeoplePanel({
   const { identities, presentGuestIds, probes } = useDailyIdentities();
   const { payload, status, refetch } = useGuestRosterPoll({ panels, onSeatsChange });
   const [pendingGuestIds, setPendingGuestIds] = useState<ReadonlySet<string>>(new Set());
+  const [vouchTarget, setVouchTarget] = useState<{
+    readonly guestId: string;
+    readonly displayName: string;
+  } | null>(null);
+  const { vouchGuest } = panels;
 
   const roster = useMemo<GuestRoster>(
     () =>
@@ -143,6 +154,8 @@ export function PeoplePanel({
         guests: payload?.guests ?? [],
         presentGuestIds,
         canHost: payload?.canHost ?? false,
+        // ⚠ THE SERVER'S VERDICT, transmitted and never re-derived.
+        canVouch: payload?.canVouch ?? false,
         // ⚠ THE FALLBACK GATES NOTHING. It is only reachable BEFORE the first poll resolves, and
         // at that point `guests` is `[]`, so no row exists for it to mis-label. Once a payload
         // arrives the server's own value is used, always.
@@ -209,7 +222,7 @@ export function PeoplePanel({
           }
           // ⚠ REFETCH ON BOTH ARMS. After a race the local list is stale by definition, and
           // after a success the queue and the seat count have both moved.
-          await refetch();
+          await refetch().catch(noop);
         })
         .catch((error: unknown) => {
           Sentry.captureException(error);
@@ -236,7 +249,7 @@ export function PeoplePanel({
           } else {
             report('error', result.error);
           }
-          await refetch();
+          await refetch().catch(noop);
         })
         .catch((error: unknown) => {
           Sentry.captureException(error);
@@ -245,6 +258,39 @@ export function PeoplePanel({
         .finally(() => markPending(guestId, false));
     },
     [panels, markPending, refetch, meetingProps, report]
+  );
+
+  const requestVouch = useCallback((guestId: string, displayName: string): void => {
+    setVouchTarget({ guestId, displayName });
+  }, []);
+
+  const closeVouch = useCallback((open: boolean): void => {
+    if (!open) setVouchTarget(null);
+  }, []);
+
+  const vouchTargetId = vouchTarget?.guestId;
+  const submitVouch = useCallback(
+    (email: string) =>
+      vouchTargetId === undefined
+        ? Promise.resolve({
+            success: false,
+            error: GUEST_ACTION_COPY.guest_not_found,
+            status: 404,
+            code: 'guest_not_found',
+          } as const)
+        : vouchGuest(vouchTargetId, email),
+    [vouchGuest, vouchTargetId]
+  );
+
+  const vouchActionFor = useCallback(
+    (row: GuestRosterRow): React.JSX.Element | undefined =>
+      row.canVouch ? (
+        <VouchGuestButton
+          displayName={row.guest.displayName}
+          onClick={() => requestVouch(row.guest.id, row.guest.displayName)}
+        />
+      ) : undefined,
+    [requestVouch]
   );
 
   const { requestRemoval, confirmDialog } = useGuestRemoval({
@@ -288,6 +334,12 @@ export function PeoplePanel({
   useQueueArrivalAnnouncement(roster.waiting, onAnnounce, payload !== null);
 
   const tileCount = identities.length;
+  // ⚠ SELECTED BY THE SERVER'S VERDICTS, never a view or lens: somebody who may vouch but not
+  // admit is not told to "admit only if you're expecting them".
+  const queueDisclosure =
+    (payload?.canVouch ?? false) && !(payload?.canHost ?? false)
+      ? VOUCH_COPY.queueDisclosure
+      : QUEUE_DISCLOSURE;
 
   /**
    * ⚠⚠ **THE `link` ROW KEEPS ITS BADGE AFTER IT WALKS IN.** `roster.inCall` carries the
@@ -350,7 +402,7 @@ export function PeoplePanel({
                   key={identity.sessionId}
                   row={row}
                   isPending={pendingGuestIds.has(row.guest.id)}
-                  action={removeActionFor(row)}
+                  action={joinActions(vouchActionFor(row), removeActionFor(row), undefined)}
                 />
               );
             }
@@ -373,7 +425,7 @@ export function PeoplePanel({
             note={
               <>
                 <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span>{QUEUE_DISCLOSURE}</span>
+                <span>{queueDisclosure}</span>
               </>
             }
             footNote={
@@ -387,6 +439,8 @@ export function PeoplePanel({
                 key={row.guest.id}
                 row={row}
                 onDecide={onDecide}
+                canHost={payload?.canHost ?? false}
+                onVouch={requestVouch}
                 isPending={pendingGuestIds.has(row.guest.id)}
               />
             ))}
@@ -419,7 +473,7 @@ export function PeoplePanel({
                 // ⚠ ABSENT, NOT AN EMPTY WRAPPER, when the row has neither affordance — the
                 // panel's slot rule ("an unregistered slot renders NOTHING"). An unconditional
                 // `<div>` here rendered an empty flex box on every row that could offer neither.
-                action={notArrivedActionFor(row, onResend, removeActionFor)}
+                action={notArrivedActionFor(row, onResend, removeActionFor, vouchActionFor)}
               />
             ))}
           </PanelSection>
@@ -433,6 +487,17 @@ export function PeoplePanel({
       {/* ⚠ ONE instance for the whole panel — the FOURTH caller of `MeetingConfirmDialog`,
           never a fourth copy of the markup. */}
       {confirmDialog}
+      {vouchTarget === null ? null : (
+        <VouchGuestDialog
+          open
+          onOpenChange={closeVouch}
+          guestName={vouchTarget.displayName}
+          onVouch={submitVouch}
+          report={report}
+          onVouched={refetch}
+          meetingProps={meetingProps}
+        />
+      )}
     </MeetingSidePanel>
   );
 }
@@ -549,6 +614,28 @@ function ResendLinkButton({
 }
 
 /**
+ * BAL-579 — lays up to three row actions side by side, or returns the one that exists. ⚠ ABSENT,
+ * never an empty wrapper, when none does. Fixed slots rather than a spread array, so every child is
+ * an explicit expression and needs no list key.
+ */
+function joinActions(
+  first: React.JSX.Element | undefined,
+  second: React.JSX.Element | undefined,
+  third: React.JSX.Element | undefined
+): React.JSX.Element | undefined {
+  const count = [first, second, third].filter((action) => action !== undefined).length;
+  if (count === 0) return undefined;
+  if (count === 1) return first ?? second ?? third;
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      {first}
+      {second}
+      {third}
+    </div>
+  );
+}
+
+/**
  * BAL-476 — the "Admitted · not yet arrived" row's action slot: Re-send, Remove, both, or
  * NOTHING.
  *
@@ -560,18 +647,31 @@ function ResendLinkButton({
 function notArrivedActionFor(
   row: GuestRosterRow,
   onResend: (guestId: string, displayName: string) => void,
-  removeActionFor: (row: GuestRosterRow) => React.JSX.Element | undefined
+  removeActionFor: (row: GuestRosterRow) => React.JSX.Element | undefined,
+  vouchActionFor: (row: GuestRosterRow) => React.JSX.Element | undefined
 ): React.JSX.Element | undefined {
-  const remove = removeActionFor(row);
-  if (!row.canResendLink) return remove;
+  const resend = row.canResendLink ? (
+    <ResendLinkButton
+      displayName={row.guest.displayName}
+      onClick={() => onResend(row.guest.id, row.guest.displayName)}
+    />
+  ) : undefined;
+  return joinActions(vouchActionFor(row), resend, removeActionFor(row));
+}
+
+function VouchGuestButton({
+  displayName,
+  onClick,
+}: Readonly<{ displayName: string; onClick: () => void }>): React.JSX.Element {
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
-      <ResendLinkButton
-        displayName={row.guest.displayName}
-        onClick={() => onResend(row.guest.id, row.guest.displayName)}
-      />
-      {remove}
-    </div>
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`${VOUCH_COPY.button} for ${displayName}`}
+      className="border-primary/60 text-primary hover:bg-primary/10 focus-visible:ring-ring inline-flex min-h-11 shrink-0 items-center rounded-lg border px-2.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
+    >
+      {VOUCH_COPY.button}
+    </button>
   );
 }
 
@@ -680,7 +780,7 @@ function PeoplePanelFooter({
           });
           report('success', `Invite sent to ${trimmed}.`);
           closeComposer();
-          return onInvited();
+          return onInvited().catch(noop);
         }
         track(MEETING_PANEL_EVENTS.GUESTS_INVITED, {
           ...meetingProps,

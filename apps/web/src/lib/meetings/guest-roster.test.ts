@@ -32,6 +32,7 @@ function build(
   options: {
     present?: readonly string[];
     canHost?: boolean;
+    canVouch?: boolean;
     nowMs?: number;
     viewerSide?: MeetingGuestSide;
   } = {}
@@ -40,6 +41,7 @@ function build(
     guests,
     presentGuestIds: new Set(options.present ?? []),
     canHost: options.canHost ?? true,
+    canVouch: options.canVouch ?? false,
     viewerSide: options.viewerSide ?? 'client',
     nowMs: options.nowMs ?? NOW,
   });
@@ -383,5 +385,60 @@ describe('buildGuestRoster — canRemove is channel-first (BAL-476)', () => {
     const byId = new Map(roster.invited.map((row) => [row.guest.id, row.canRemove]));
     expect(byId.get('link-1')).toBe(true);
     expect(byId.get('email-1')).toBe(false);
+  });
+});
+
+describe('buildGuestRoster — vouching (BAL-579)', () => {
+  it('shows a waiting link row to a vouch-capable non-host, with canVouch set', () => {
+    const roster = build([guest({ id: 'g1', admission: 'pending', inviteChannel: 'link' })], {
+      canHost: false,
+      canVouch: true,
+    });
+
+    expect(roster.waiting.map((row) => row.guest.id)).toEqual(['g1']);
+    expect(roster.waiting[0]?.canVouch).toBe(true);
+  });
+
+  it('keeps the queue hidden from somebody who may neither host nor vouch', () => {
+    const roster = build([guest({ id: 'g1', admission: 'pending', inviteChannel: 'link' })], {
+      canHost: false,
+      canVouch: false,
+    });
+
+    expect(roster.waiting).toEqual([]);
+  });
+
+  it('marks an admitted link row as vouchable wherever it sits, in the call or not', () => {
+    const roster = build(
+      [
+        guest({ id: 'g1', admission: 'admitted', inviteChannel: 'link' }),
+        guest({ id: 'g2', admission: 'admitted', inviteChannel: 'link' }),
+      ],
+      { present: ['g1'], canVouch: true }
+    );
+
+    expect(roster.inCall[0]?.canVouch).toBe(true);
+    expect(roster.notArrived[0]?.canVouch).toBe(true);
+  });
+
+  it('never marks an email row vouchable, and never without the server verdict', () => {
+    const roster = build(
+      [
+        guest({ id: 'g1', admission: 'pre_admitted', inviteChannel: 'email' }),
+        guest({ id: 'g2', admission: 'admitted', inviteChannel: 'link' }),
+      ],
+      { canVouch: false }
+    );
+
+    expect(roster.invited[0]?.canVouch).toBe(false);
+    expect(roster.notArrived[0]?.canVouch).toBe(false);
+  });
+
+  it('marks an email row not vouchable even with the verdict true', () => {
+    const roster = build([guest({ id: 'g1', admission: 'pre_admitted', inviteChannel: 'email' })], {
+      canVouch: true,
+    });
+
+    expect(roster.invited[0]?.canVouch).toBe(false);
   });
 });

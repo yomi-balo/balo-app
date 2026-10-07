@@ -33,6 +33,7 @@ import {
   computeMeetingClocks,
   expertPresentFromStartMs,
   meetingVenueReadyAt,
+  overrunStopCeiling,
   resolveWaitingPhase,
   summarisePresence,
   type MeetingClocks,
@@ -41,6 +42,7 @@ import {
   type MeetingTimers,
   type MeetingViewerRole,
   type MeetingWaitingPhase,
+  type TerminalRuleInput,
 } from '@balo/shared/meetings';
 import { resolveCaseBillingSubject } from '../credit-session/case-billing-subject.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
@@ -91,6 +93,13 @@ export interface MeetingStateView {
   readonly viewerRole: MeetingViewerRole;
   /** ⚠ SERVER-COMPUTED. See the module docblock. */
   readonly phase: MeetingWaitingPhase;
+  /**
+   * `true` when the no-show WILL be held for an admitted `link` guest: the expert is in the room, no
+   * client-side participant has ever been, a lobby guest is with them, and the overrun ceiling has not
+   * passed. Deliberately not floor-gated: the expert's waiting copy must not announce a floor charge
+   * from the first nudge. ⚠ SERVER-COMPUTED.
+   */
+  readonly noShowHeld: boolean;
   /**
    * The two clocks over presence CLAMPED to the scheduled start (BAL-134's R10 rule, applied at read
    * time since BAL-474 Rule A stores presence at its true instants) — bit-for-bit what this route always
@@ -231,6 +240,50 @@ async function readCaseClosure(input: {
 }
 
 /**
+ * {@link MeetingStateView.noShowHeld} — the no-show WILL be held (not floor-gated, so the waiting copy is
+ * right from the first nudge). The gates are cheapest-first and run BEFORE the read: only a
+ * pre-`in_progress` meeting with the expert open and no client-side presence ever can be held, so every
+ * other poll costs no query. Never throws into the poll: a failed read degrades to `false`.
+ */
+async function readNoShowHeld(
+  input: Omit<TerminalRuleInput, 'admittedLinkGuestPresent'> & {
+    readonly meetingId: string;
+    /** An open `observer` interval belonging to a guest row — the only shape a link guest can have. */
+    readonly openGuestObserver: boolean;
+  }
+): Promise<boolean> {
+  const { presence, status } = input;
+  if (
+    (status !== 'scheduled' && status !== 'waiting_for_participants') ||
+    !presence.expertOpen ||
+    presence.clientSideEverPresent ||
+    !input.openGuestObserver
+  ) {
+    return false;
+  }
+  try {
+    const admittedLinkGuestPresent = await meetingPresenceRepository.hasOpenAdmittedLinkGuest(
+      input.meetingId
+    );
+    return (
+      admittedLinkGuestPresent &&
+      input.now.getTime() <
+        overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers).getTime()
+    );
+  } catch (error) {
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'No-show hold read failed — rendering the ordinary waiting copy'
+    );
+    return false;
+  }
+}
+
+/**
  * Milliseconds → the WHOLE MINUTES the wire carries.
  *
  * ⚠⚠ FLOORED AT `1`, AND THAT GUARD IS LOAD-BEARING RATHER THAN DEFENSIVE DECORATION. The web
@@ -320,6 +373,21 @@ export async function getMeetingState(input: GetMeetingStateInput): Promise<GetM
       presence.expertOpen && (clientOpen || now.getTime() >= meeting.scheduledStart.getTime()),
   };
 
+  const venueReadyAt = meetingVenueReadyAt(meeting);
+  const noShowHeld = await readNoShowHeld({
+    meetingId,
+    openGuestObserver: rows.some(
+      (row) => row.leftAt === null && row.meetingGuestId !== null && row.party === 'observer'
+    ),
+    status,
+    scheduledStart: meeting.scheduledStart,
+    scheduledEnd: meeting.scheduledEnd,
+    presence,
+    timers,
+    now,
+    venueReadyAt,
+  });
+
   return {
     ok: true,
     state: {
@@ -335,8 +403,9 @@ export async function getMeetingState(input: GetMeetingStateInput): Promise<GetM
         now,
         // BAL-581 — the same anchor the terminal rules and the ops alert use, so `near`'s
         // "flagged to the Balo team" renders exactly when that alert fires.
-        venueReadyAt: meetingVenueReadyAt(meeting),
+        venueReadyAt,
       }),
+      noShowHeld,
       clocks,
       billingClock,
       caseClosure,

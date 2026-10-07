@@ -38,6 +38,16 @@ describe('StepBooked', () => {
     expect(screen.getByText(/Added to your case/)).toBeInTheDocument();
   });
 
+  it('points a hand-off at "Invite a colleague" (draft copy, pending MJ)', () => {
+    renderStep();
+
+    expect(
+      screen.getByText(
+        'Passing this call to a colleague? Choose "Invite a colleague" on the case so they get their own join link.'
+      )
+    ).toBeInTheDocument();
+  });
+
   // ⚠ D2a — the copy must NEVER claim the client's own calendar was updated.
   it('never says the client calendar was updated', () => {
     const { container } = renderStep();

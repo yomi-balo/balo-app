@@ -49,6 +49,10 @@ function consultationCountPhrase(count: number): string {
   return count === 1 ? '1 consultation' : `${count} consultations`;
 }
 
+/** Client-only hand-off pointer: a forwarded join link lands in the lobby, an invite does not. */
+export const HAND_OFF_LINE =
+  'Passing this call to a colleague? Open the case and choose "Invite a colleague" so they get their own join link — this one is just for you.';
+
 function bodyLines(props: Readonly<BookingConfirmedEmailProps>): string[] {
   const { recipient, counterpartyLabel, caseTitle, isNewCase, priorConsultationCount, guestCount } =
     props;
@@ -71,6 +75,10 @@ function bodyLines(props: Readonly<BookingConfirmedEmailProps>): string[] {
         ? '1 guest has also been invited and will get their own join link.'
         : `${guestCount} guests have also been invited and will each get their own join link.`
     );
+  }
+
+  if (recipient === 'client') {
+    lines.push(HAND_OFF_LINE);
   }
 
   // The `provisioned: false` line's promise holds: a provisioning failure is captured to

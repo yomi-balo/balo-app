@@ -74,12 +74,14 @@ import {
   listGuests,
   removeGuest,
   resendGuestJoinLink,
+  vouchForLinkGuest,
   type GuestServiceErrorCode,
 } from '../../services/meetings/guest-participation.js';
 import {
   inviteGuestsBodySchema,
   meetingGuestParamsSchema,
   meetingIdParamsSchema,
+  vouchGuestBodySchema,
 } from './guests.schema.js';
 
 const log = createLogger('meeting-guests-route');
@@ -333,7 +335,7 @@ function parseGuestParams(
   return parsed.data;
 }
 
-export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void> {
+export function meetingGuestRoutes(fastify: FastifyInstance): Promise<void> {
   /**
    * POST /meetings/:meetingId/guests — invite one or more guests.
    *
@@ -422,6 +424,7 @@ export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void
     reply.code(200).send({
       guests: result.guests,
       canHost: result.canHost,
+      canVouch: result.canVouch,
       // BAL-476 — the viewer's own side, server-resolved. See `ListGuestsResult`.
       viewerSide: result.viewerSide,
       participantCount: result.participantCount,
@@ -568,6 +571,60 @@ export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void
   }
 
   /**
+   * POST /meetings/:meetingId/guests/:guestId/vouch — a client member vouches for a knocked
+   * `link` guest. `200 { id, admission }`.
+   *
+   * ⚠ Body is `{ email }`, strict: the voucher names the colleague's work email; the lobby
+   * row's self-declared address is never adopted. Every refusal short of a closed meeting, the
+   * seat cap or an address clash answers `404 guest_not_found`.
+   */
+  fastify.post(
+    '/meetings/:meetingId/guests/:guestId/vouch',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const userId = resolveUserId(req, reply);
+      if (userId === null) return;
+
+      const params = parseGuestParams(req.params, reply);
+      if (params === null) return;
+
+      const body = parseBodyOr400(vouchGuestBodySchema, req, reply);
+      if (body === null) return;
+
+      try {
+        const result = await vouchForLinkGuest({
+          meetingId: params.meetingId,
+          guestId: params.guestId,
+          actorUserId: userId,
+          email: body.email,
+        });
+        if (!result.ok) {
+          sendGuestError(reply, result.code, {
+            route: 'vouch',
+            meetingId: params.meetingId,
+            guestId: params.guestId,
+            userId,
+          });
+          return;
+        }
+        reply.code(200).send({ id: result.id, admission: result.admission });
+      } catch (error) {
+        log.error(
+          {
+            meetingId: params.meetingId,
+            guestId: params.guestId,
+            userId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          },
+          'Guest vouch failed'
+        );
+        throw error;
+      }
+    }
+  );
+
+  /**
    * BAL-436 — POST /meetings/:meetingId/guests/:guestId/resend-link
    *
    * Re-issue a stranded guest's join credential. `200 { id, expiresAt }`.
@@ -640,4 +697,5 @@ export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void
   );
 
   log.info('Registered meeting guest routes');
+  return Promise.resolve();
 }

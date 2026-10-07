@@ -68,6 +68,8 @@ import {
 import { dailyParticipantEjector } from '../daily/rooms.js';
 import { mintGuestInviteToken } from '../../lib/guest-token.js';
 import { hasEngagementCapability } from './authorize-engagement-host.js';
+import { deliveringExpertUserId } from './delivering-party.js';
+import { presenceWindowFor, reconcileMeetingStatus } from './presence-writer.js';
 import {
   authorizeMeetingParticipation,
   type AuthorizeMeetingParticipationResult,
@@ -146,6 +148,11 @@ export type ListGuestsResult =
       guests: GuestForViewer[];
       canHost: boolean;
       /**
+       * Whether the viewer may vouch for a `link` guest: a client-side member who is not the
+       * delivering expert. SERVER-COMPUTED by the same `actorMayVouch` the vouch gate uses.
+       */
+      canVouch: boolean;
+      /**
        * BAL-476 — the viewer's own resolved side, straight off the tenancy gate
        * (`authorized.side`). ⚠ SERVER-COMPUTED, NEVER RE-DERIVED CLIENT-SIDE. Same shape and same
        * provenance as `canHost`.
@@ -164,6 +171,10 @@ export type ListGuestsResult =
   | { ok: false; code: GuestServiceErrorCode };
 
 export type RemoveGuestResult = { ok: true } | { ok: false; code: GuestServiceErrorCode };
+
+export type VouchGuestResult =
+  | { ok: true; id: string; admission: 'pre_admitted' | 'admitted' }
+  | { ok: false; code: GuestServiceErrorCode };
 
 export type DecideAdmissionResult =
   | { ok: true; id: string; admission: 'admitted' | 'denied'; decidedAt: string }
@@ -317,6 +328,19 @@ async function authorizeMutation(
     return { ok: false, code: 'meeting_not_open_for_guests' };
   }
   return { ok: true, authorized };
+}
+
+/**
+ * Whether the actor may vouch for a lobby guest: a CLIENT-side participant who is not the
+ * delivering expert. Delivery identity wins over membership, mirroring `partyForUser`'s
+ * delivery-first order, so an expert who also holds a client membership never vouches.
+ */
+async function actorMayVouch(
+  authorized: Extract<AuthorizeMeetingParticipationResult, { ok: true }>,
+  actorUserId: string
+): Promise<boolean> {
+  if (authorized.side !== 'client') return false;
+  return (await deliveringExpertUserId(authorized.expertProfileId)) !== actorUserId;
 }
 
 /**
@@ -899,6 +923,11 @@ export async function listGuests(input: {
     participantCount(input.meetingId),
   ]);
 
+  // Only a `link` row can be vouched for, so a roster without one skips the delivery-identity read.
+  const canVouch =
+    rows.some((row) => row.inviteChannel === 'link') &&
+    (await actorMayVouch(authorized, input.actorUserId));
+
   return {
     ok: true,
     guests: rows.map((row: MeetingGuestPublic) =>
@@ -925,6 +954,7 @@ export async function listGuests(input: {
       )
     ),
     canHost,
+    canVouch,
     viewerSide: authorized.side,
     participantCount: seatCount,
     participantCap: MAX_MEETING_PARTICIPANTS,
@@ -1600,4 +1630,177 @@ export async function resendGuestJoinLink(input: {
   );
 
   return { ok: true, id: rotated.id, expiresAt: rotated.expiresAt.toISOString() };
+}
+
+/**
+ * A client member vouches for a knocked `link` guest: the row becomes a client-party `email`
+ * guest, and an in-call guest's presence moves from `observer` to `client` so billing starts.
+ *
+ * ⚠ THE VOUCHER SUPPLIES THE ADDRESS. A `link` row's address is self-declared and hidden from
+ * every viewer; adopting it would make an attacker-controlled string read as verified once the
+ * row is `email`. The stored value is `canonicalGuestEmail(input.email)`.
+ *
+ * ⚠ EVERY REFUSAL AFTER THE TENANCY GATE ANSWERS `guest_not_found`, the literal `removeGuest`
+ * uses, so a non-eligible actor learns nothing about the row.
+ *
+ * ⚠ NO NOTIFICATION AND NO CALENDAR INVITE: the guest already holds a credential.
+ */
+export async function vouchForLinkGuest(input: {
+  meetingId: string;
+  guestId: string;
+  actorUserId: string;
+  email: string;
+}): Promise<VouchGuestResult> {
+  const gate = await authorizeMutation(input.meetingId, input.actorUserId);
+  if (!gate.ok) return { ok: false, code: gate.code };
+  const { authorized } = gate;
+
+  if (!(await actorMayVouch(authorized, input.actorUserId))) {
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        guestId: input.guestId,
+        actorUserId: input.actorUserId,
+        reason: authorized.side === 'client' ? 'delivering_expert' : 'not_client_side',
+      },
+      'Guest vouch denied'
+    );
+    return { ok: false, code: 'guest_not_found' };
+  }
+
+  const guest = await meetingGuestsRepository.findLiveById(input.meetingId, input.guestId);
+  const refusal = await vouchRefusal(input, guest);
+  if (refusal !== null) return { ok: false, code: refusal };
+  if (guest === undefined) return { ok: false, code: 'guest_not_found' };
+
+  const email = canonicalGuestEmail(input.email);
+  const at = new Date();
+  const committed = await commitVouch(input, email, at, authorized.meeting);
+  if (!committed.ok) return committed;
+  const { vouched } = committed;
+
+  if (vouched.presenceReclassified) {
+    await reconcileAfterVouchBestEffort(authorized.meeting, input, at);
+  }
+
+  trackServer(GUEST_SERVER_EVENTS.GUEST_VOUCHED, {
+    previous_admission: vouched.previousAdmission,
+    in_call: vouched.presenceReclassified,
+    email_changed: canonicalGuestEmail(guest.email) !== email,
+    distinct_id: input.actorUserId,
+  });
+  log.info(
+    {
+      meetingId: input.meetingId,
+      guestId: input.guestId,
+      actorUserId: input.actorUserId,
+      previousAdmission: vouched.previousAdmission,
+      presenceReclassified: vouched.presenceReclassified,
+    },
+    'Link guest vouched'
+  );
+
+  return {
+    ok: true,
+    id: vouched.guest.id,
+    admission: vouched.guest.admission === 'admitted' ? 'admitted' : 'pre_admitted',
+  };
+}
+
+type VouchInput = Parameters<typeof vouchForLinkGuest>[0];
+
+/**
+ * Why a live row cannot be vouched for, or `null` when it can. Only a `link` row that is still
+ * `pending` or `admitted` qualifies; a `pending` one also needs a free seat (an `admitted` row
+ * already holds its seat).
+ */
+async function vouchRefusal(
+  input: VouchInput,
+  guest: MeetingGuest | undefined
+): Promise<GuestServiceErrorCode | null> {
+  if (
+    guest?.inviteChannel !== 'link' ||
+    (guest.admission !== 'pending' && guest.admission !== 'admitted')
+  ) {
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        guestId: input.guestId,
+        actorUserId: input.actorUserId,
+        reason: guest === undefined ? 'no_guest' : 'not_a_vouchable_link_row',
+      },
+      'Guest vouch refused'
+    );
+    return 'guest_not_found';
+  }
+  if (guest.admission !== 'pending') return null;
+
+  const currentCount = await participantCount(input.meetingId);
+  if (currentCount < MAX_MEETING_PARTICIPANTS) return null;
+  log.info(
+    {
+      meetingId: input.meetingId,
+      guestId: input.guestId,
+      actorUserId: input.actorUserId,
+      currentCount,
+    },
+    'Guest vouch refused — participant cap reached'
+  );
+  return 'participant_cap_reached';
+}
+
+/** The vouch write, with the address-clash `23505` and the lost race mapped to their literals. */
+async function commitVouch(
+  input: VouchInput,
+  email: string,
+  at: Date,
+  meeting: Meeting
+): Promise<
+  | {
+      ok: true;
+      vouched: NonNullable<Awaited<ReturnType<typeof meetingGuestsRepository.vouchLinkGuest>>>;
+    }
+  | { ok: false; code: GuestServiceErrorCode }
+> {
+  try {
+    const vouched = await meetingGuestsRepository.vouchLinkGuest({
+      meetingId: input.meetingId,
+      guestId: input.guestId,
+      voucherUserId: input.actorUserId,
+      email,
+      emailDomain: extractEmailDomain(email),
+      at,
+      presenceWindow: presenceWindowFor(meeting),
+    });
+    // `undefined`: lost a race — the row left `pending`/`admitted` or stopped being a live `link` row.
+    return vouched === undefined ? { ok: false, code: 'guest_not_found' } : { ok: true, vouched };
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    log.warn(
+      { meetingId: input.meetingId, guestId: input.guestId, actorUserId: input.actorUserId },
+      'Guest vouch refused — another live client guest already holds that address'
+    );
+    return { ok: false, code: 'guest_already_invited' };
+  }
+}
+
+/** Moves the meeting to `in_progress` and starts billing; the meter sweep recovers a failure. */
+async function reconcileAfterVouchBestEffort(
+  meeting: Meeting,
+  input: VouchInput,
+  at: Date
+): Promise<void> {
+  try {
+    await reconcileMeetingStatus(meeting, at);
+  } catch (error) {
+    log.error(
+      {
+        meetingId: input.meetingId,
+        guestId: input.guestId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Meeting status reconcile failed after a guest vouch — the meter sweep recovers it'
+    );
+  }
 }

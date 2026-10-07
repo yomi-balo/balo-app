@@ -119,6 +119,11 @@ export const GUEST_SERVER_EVENTS = {
   GUEST_REENTRY_REQUESTED: 'guest_reentry_requested',
   /** A guest's access was revoked. */
   GUEST_REMOVED: 'guest_removed',
+  /**
+   * A client member vouched for a `link` guest, re-resolving the row as a client-party `email`
+   * guest. Distinct from `GUEST_CONVERTED_TO_MEMBER` (a guest becoming a user).
+   */
+  GUEST_VOUCHED: 'guest_vouched',
 } as const;
 
 /**
@@ -166,6 +171,16 @@ export interface GuestServerEventMap {
     /** Whether the guest had ever opened their link — did revocation actually take anything away? */
     had_joined: boolean;
     /** The REMOVER's user id. */
+    distinct_id: string;
+  };
+  [GUEST_SERVER_EVENTS.GUEST_VOUCHED]: {
+    /** The admission state the row held before the vouch. */
+    previous_admission: 'pending' | 'admitted';
+    /** Whether an open presence interval was reclassified to the client party. */
+    in_call: boolean;
+    /** Whether the voucher's address differs from the one on file; a boolean, never an address. */
+    email_changed: boolean;
+    /** The VOUCHER's user id. */
     distinct_id: string;
   };
   [GUEST_SERVER_EVENTS.GUEST_ADMITTED]: {

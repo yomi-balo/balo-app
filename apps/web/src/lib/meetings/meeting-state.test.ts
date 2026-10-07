@@ -122,6 +122,12 @@ describe('parseMeetingState — the optional server facts (BAL-134)', () => {
     expect(parsed?.expertPresenceOpen).toBe(false);
   });
 
+  it('⚠ noShowHeld defaults to false when an older api omits it, and parses true when sent', () => {
+    expect(parseMeetingState(WIRE)?.noShowHeld).toBe(false);
+    expect(parseMeetingState({ ...WIRE, noShowHeld: true })?.noShowHeld).toBe(true);
+    expect(parseMeetingState({ ...WIRE, noShowHeld: 'yes' })).toBeNull();
+  });
+
   it('⚠ a malformed optional field fails the parse rather than being quietly dropped', () => {
     expect(parseMeetingState({ ...WIRE, noShowFloorMinutes: 0 })).toBeNull();
     expect(parseMeetingState({ ...WIRE, noShowFloorMinutes: -5 })).toBeNull();

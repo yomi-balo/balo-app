@@ -2030,3 +2030,64 @@ describe('meetingPresenceRepository.hasOwnClientInterval (BAL-474, D6.4)', () =>
     expect(await meetingPresenceRepository.hasOwnClientInterval(meeting.id, member.id)).toBe(false);
   });
 });
+
+describe('meetingPresenceRepository.hasOpenAdmittedLinkGuest (BAL-579)', () => {
+  async function guestWithInterval(
+    guestValues: Parameters<typeof meetingGuestFactory>[0] extends infer O
+      ? O extends { values?: infer V }
+        ? V
+        : never
+      : never,
+    interval: { left?: boolean; deleted?: boolean } = {}
+  ): Promise<string> {
+    const seeded = await meetingGuestFactory({ values: guestValues });
+    await db.insert(meetingPresence).values({
+      meetingId: seeded.meetingId,
+      meetingGuestId: seeded.guest.id,
+      party: 'observer',
+      joinedAt: at(0),
+      leftAt: interval.left === true ? at(5) : null,
+      deletedAt: interval.deleted === true ? at(6) : null,
+    });
+    return seeded.meetingId;
+  }
+
+  const ADMITTED_LINK = {
+    inviteChannel: 'link',
+    invitedById: null,
+    admission: 'admitted',
+    admissionDecidedAt: at(0),
+  } as const;
+
+  it('is true only for an open interval of an admitted, live link guest', async () => {
+    const meetingId = await guestWithInterval(ADMITTED_LINK);
+    expect(await meetingPresenceRepository.hasOpenAdmittedLinkGuest(meetingId)).toBe(true);
+  });
+
+  it.each([
+    ['a closed interval', ADMITTED_LINK, { left: true }],
+    ['a soft-deleted interval', ADMITTED_LINK, { deleted: true }],
+    [
+      'a pending link guest',
+      { ...ADMITTED_LINK, admission: 'pending', admissionDecidedAt: null },
+      {},
+    ],
+    ['a revoked link guest', { ...ADMITTED_LINK, revokedAt: at(1) }, {}],
+    ['an email-channel guest', { admission: 'admitted', admissionDecidedAt: at(0) }, {}],
+  ] as const)('is false for %s', async (_label, guestValues, interval) => {
+    const meetingId = await guestWithInterval(guestValues, interval);
+    expect(await meetingPresenceRepository.hasOpenAdmittedLinkGuest(meetingId)).toBe(false);
+  });
+
+  it('is false for an observer staff user and for another meeting', async () => {
+    const { meeting } = await meetingFactory();
+    const staff = await userFactory();
+    await db
+      .insert(meetingPresence)
+      .values({ meetingId: meeting.id, userId: staff.id, party: 'observer', joinedAt: at(0) });
+    expect(await meetingPresenceRepository.hasOpenAdmittedLinkGuest(meeting.id)).toBe(false);
+
+    await guestWithInterval(ADMITTED_LINK);
+    expect(await meetingPresenceRepository.hasOpenAdmittedLinkGuest(meeting.id)).toBe(false);
+  });
+});

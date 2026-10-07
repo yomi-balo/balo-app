@@ -362,6 +362,12 @@ export interface TerminalRuleInput {
    * never the row: this module stays clock-, env- and DB-free.
    */
   readonly venueReadyAt: Date | null;
+  /**
+   * `true` while an ADMITTED `link` guest holds an open presence interval. Holds the no-show rule
+   * (see {@link noShowHeldByLinkGuest}) until the overrun ceiling. Required, so every caller must
+   * answer it.
+   */
+  readonly admittedLinkGuestPresent: boolean;
 }
 
 /**
@@ -463,15 +469,17 @@ function overrunStopDueAt(input: TerminalRuleInput): Date {
  * `meeting-settlement.ts` (BAL-474): the meeting's terminal path opens a session on behalf of the
  * booker when none exists, so a client who never joins IS charged the flat floor this rule's
  * shape (`no_show_client`) carries, and the expert who waited is paid it.
+ *
+ * `true` once rule 2's floor has passed, BEFORE the link-guest hold is considered.
  */
-function noShowApplies(input: TerminalRuleInput): boolean {
+function noShowDue(input: TerminalRuleInput): boolean {
   const dueAt = noShowDueAt(input);
   return dueAt !== null && input.now.getTime() >= dueAt.getTime();
 }
 
 /**
- * Rule 2's due instant, or `null` when its structural guards do not hold (so the rule can
- * never fire). The predicate and the decision's `dueAt` both read this one expression.
+ * Rule 2's FLOOR instant, or `null` when its structural guards do not hold (so the rule can
+ * never fire). {@link noShowDecisionAt} lifts it to the ceiling while the link-guest hold applies.
  */
 function noShowDueAt(input: TerminalRuleInput): Date | null {
   const { presence, timers, scheduledStart } = input;
@@ -497,6 +505,38 @@ function noShowDueAt(input: TerminalRuleInput): Date | null {
   const floorFromClock = clockStart.getTime() + timers.noShowFloorMs;
   const floorFromSchedule = scheduledStart.getTime() + timers.noShowFloorMs;
   return new Date(Math.max(floorFromClock, floorFromSchedule));
+}
+
+/**
+ * `true` when rule 2 is due but is HELD: an admitted `link` guest is present with the expert, so
+ * the call is a hand-off in progress rather than an abandoned one. The hold lapses at
+ * {@link overrunStopCeiling}, the hard stop that bounds every meeting: with the expert still
+ * present rule 2 fires at the ceiling, with the expert gone rule 4's ceiling arm fires, and an
+ * emptied room ends via rule 4. The hold starts no billing.
+ */
+export function noShowHeldByLinkGuest(input: TerminalRuleInput): boolean {
+  if (!input.admittedLinkGuestPresent || !noShowDue(input)) return false;
+  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
+  return input.now.getTime() < ceiling.getTime();
+}
+
+/**
+ * Rule 2's DECISION instant: the floor, or — while an admitted `link` guest holds the no-show —
+ * the later of the floor and {@link overrunStopCeiling}. The predicate and the decision's `dueAt`
+ * both read this one expression, so a held no-show that lapses at the ceiling records the
+ * ceiling, never a backdated floor (BAL-584's stranded `ended_at` reads `dueAt`).
+ * Equivalent to `noShowDue && !noShowHeldByLinkGuest`.
+ */
+function noShowDecisionAt(input: TerminalRuleInput): Date | null {
+  const dueAt = noShowDueAt(input);
+  if (dueAt === null || !input.admittedLinkGuestPresent) return dueAt;
+  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
+  return new Date(Math.max(dueAt.getTime(), ceiling.getTime()));
+}
+
+function noShowApplies(input: TerminalRuleInput): boolean {
+  const decisionAt = noShowDecisionAt(input);
+  return decisionAt !== null && input.now.getTime() >= decisionAt.getTime();
 }
 
 /**
@@ -562,17 +602,19 @@ function venueUnavailableDueAt(input: TerminalRuleInput): Date | null {
 
 /**
  * Rule 4 — ABANDONED WAIT (D9). The expert turned up, the consultation never started, and the
- * room is now EMPTY.
+ * room is now EMPTY — or, at the overrun ceiling, the expert has left and somebody else is still
+ * in it ({@link expertGoneObserverRemainsPastCeiling}).
  *
- * ⚠⚠ THIS RULE IS THE TAXONOMY'S CATCH-ALL FOR A PRE-`in_progress` EMPTY ROOM, AND ITS THREE
- * GUARDS ARE EXACTLY THE THREE THAT KEEP IT DISJOINT — no more:
+ * ⚠⚠ THIS RULE IS THE TAXONOMY'S CATCH-ALL FOR A PRE-`in_progress` ROOM THE EXPERT IS NO LONGER
+ * IN, AND ITS THREE GUARDS ARE EXACTLY THE THREE THAT KEEP IT DISJOINT — no more:
  *
  *   · a PRE-`in_progress` status, so rule 1 (which owns `in_progress`) cannot also fire;
  *   · `expertEverPresent`, so rules 3 and 5 (which both require the expert NEVER joined)
  *     cannot also fire. Without it a client-only no-show would terminate at `lastLeftAt +
  *     5min` instead of at the `MISSED_CALL_TERMINATION_MS` threshold, silently re-labelling a
  *     `missed_call`, or with no room ever provisioned, a `venue_unavailable`;
- *   · an EMPTY room, so rule 2 (which requires an OPEN expert interval) cannot also fire.
+ *   · NO OPEN EXPERT INTERVAL — an empty room on the empty-room arm, a closed expert interval
+ *     on the ceiling arm — so rule 2 (which requires an OPEN expert interval) cannot also fire.
  *
  * ⚠ THE TWO GUARDS THAT WERE REMOVED, AND WHY EACH WAS A STRANDING HOLE — do not put them back:
  *
@@ -599,7 +641,33 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
   if (!input.presence.expertEverPresent) {
     return false;
   }
-  return roomEmptyPastWindow(input);
+  return roomEmptyPastWindow(input) || expertGoneObserverRemainsPastCeiling(input);
+}
+
+/**
+ * Rule 4's due instant, per arm: the empty-room window when the room is empty, the ceiling on
+ * the ceiling arm. Only read once {@link abandonedWaitApplies} holds.
+ */
+function abandonedWaitDueAt(input: TerminalRuleInput): Date {
+  return input.presence.anyOpen
+    ? overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers)
+    : emptyWindowDueAt(input);
+}
+
+/**
+ * Rule 4's CEILING ARM: the expert LEFT and ANY non-expert interval is still open — an observer
+ * such as an admitted `link` guest, or a client who arrived after the expert left — so the room
+ * is not empty and the empty-room arm cannot fire.
+ * Without this arm that meeting matched no rule at all. Fires from {@link overrunStopCeiling}.
+ * Disjoint from rule 2 (needs `expertOpen`) and rules 3 and 5 (need the expert never present).
+ */
+function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean {
+  const { presence } = input;
+  if (presence.expertOpen || !presence.anyOpen) {
+    return false;
+  }
+  const ceiling = overrunStopCeiling(input.scheduledStart, input.scheduledEnd, input.timers);
+  return input.now.getTime() >= ceiling.getTime();
 }
 
 /**
@@ -613,8 +681,8 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  *     end is scoped to reached-`in_progress`-then-empty, never 'is empty'".
  *   · #3 vs #2 and #4 — #3 requires the expert NEVER joined; both others require they DID.
  *     *Disjoint by presence.*
- *   · #2 vs #4 — #2 requires an OPEN expert interval, #4 requires an EMPTY ROOM.
- *     *Disjoint by presence.*
+ *   · #2 vs #4 — #2 requires an OPEN expert interval; #4 requires an EMPTY ROOM (empty-room
+ *     arm) or a CLOSED expert interval (ceiling arm). *Disjoint by presence.*
  *   · #5 vs everything (BAL-581) — #5 by status, exactly like #3 (both require pre-`in_progress`
  *     and the expert NEVER joined); #5 vs #3 is disjoint by VENUE — #3 requires a READY venue,
  *     #5 requires its ABSENCE. #5 vs #2/#4 is disjoint by presence, same as #3.
@@ -650,12 +718,16 @@ function abandonedWaitApplies(input: TerminalRuleInput): boolean {
  * ⚠ AND WHAT IS LEFT, NAMED RATHER THAN LEFT AS A GAP: a room somebody is STILL IN matches
  * nothing but #2 until the ceiling. An occupied `in_progress` meeting is bounded by #6 at
  * {@link overrunStopCeiling}, whatever the webhooks and the reconciler are doing, so it can no
- * longer stay open forever. The residual is a PRE-`in_progress` room that is still OCCUPIED, for
- * example one the expert holds after a client left: it matches no rule. That is an ACCEPTED GAP
- * (BAL-584 decision 3), not an oversight: while somebody is in the room Daily's platform-wide map
- * lists it, so the stranded arm spends no per-room read on it. Once the room empties, whether
- * through a delivered leave webhook or the reconciler closing the interval, the meeting is still
- * selected and the rule that applies (rule 4 when the expert has been present) fires when due.
+ * longer stay open forever. A pre-`in_progress` room with the expert and an admitted `link` guest
+ * open matches nothing until the ceiling ({@link noShowHeldByLinkGuest}), where rule 2 fires; if
+ * the expert leaves first while somebody else is still in the room, rule 4's ceiling arm ends it
+ * at the ceiling, and if the room empties first rule 4 ends it. The residual is a
+ * PRE-`in_progress` room the EXPERT still holds after a client left: it matches no rule. That is
+ * an ACCEPTED GAP (BAL-584 decision 3), not an oversight: while somebody is in the room Daily's
+ * platform-wide map lists it, so the stranded arm spends no per-room read on it. Once the room
+ * empties, whether through a delivered leave webhook or the reconciler closing the interval, the
+ * meeting is still selected and the rule that applies (rule 4 when the expert has been present)
+ * fires when due.
  * `lifecycle.test.ts` executes the invariant over a status × presence-shape matrix.
  *
  * ⚠ THE SEVENTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
@@ -678,7 +750,7 @@ export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDe
       dueAt: overrunStopDueAt(input),
     };
   }
-  const noShowAt = noShowDueAt(input);
+  const noShowAt = noShowDecisionAt(input);
   if (noShowAt !== null && input.now.getTime() >= noShowAt.getTime()) {
     return { rule: 'no_show', outcome: 'no_show_client', arm: null, dueAt: noShowAt };
   }
@@ -699,7 +771,7 @@ export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDe
     // ⚠ NO OUTCOME (D5/D9). BAL-412 resolves it from the presence rows, exactly as for a human
     // end. `meeting_outcome_requires_ended` is one-directional, so `ended` with a NULL outcome
     // is legal and is precisely what this path writes.
-    return { rule: 'abandoned_wait', outcome: null, arm: null, dueAt: emptyWindowDueAt(input) };
+    return { rule: 'abandoned_wait', outcome: null, arm: null, dueAt: abandonedWaitDueAt(input) };
   }
   return null;
 }

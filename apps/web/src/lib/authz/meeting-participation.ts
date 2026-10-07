@@ -28,9 +28,11 @@ import { log } from '@/lib/logging';
  * precedence table, or a second owning-party switch in this file, stop — the rule is not here
  * and must not become so.
  *
- * ⚠ ITS ONE CONSUMER IS `resolveInCallDrawdown`. It is deliberately NOT a general web
- * participation seam yet; a second consumer should re-read the engagement-arm note below
- * before adopting it.
+ * ⚠ ITS CONSUMERS ARE `resolveInCallDrawdown` AND THE LOBBY'S MEMBER REDIRECT
+ * (`lobby-member-redirect.ts`). It is deliberately NOT a general web participation seam; a
+ * further consumer should re-read the engagement-arm note below before adopting it. For a
+ * request-grain context the expert arm answers `false`, so that expert sees today's lobby —
+ * harmless.
  *
  * ⚠ NOTHING HERE AUTHORIZES A MONEY READ ON ITS OWN. A `true` says "this actor takes part in
  * this meeting". The in-call drawdown gate ALSO requires live membership of

@@ -42,6 +42,7 @@ function snapshotOf(overrides: SnapshotOverrides = {}): MeetingStateSnapshot {
     outcome: null,
     endedBy: null,
     viewerRole: overrides.viewerRole ?? 'expert',
+    noShowHeld: false,
     phase: overrides.phase ?? 'running',
     clocks: {
       expertPresentMs: overrides.expertPresentMs ?? 720_000,

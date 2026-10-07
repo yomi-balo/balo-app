@@ -76,6 +76,13 @@ const stateSchema = z.object({
   viewerRole: z.enum(VIEWER_ROLE_LABELS),
   /** ⚠⚠ SERVER-COMPUTED. See the module docblock. */
   phase: z.enum(PHASE_LABELS),
+  /**
+   * BAL-579 — the server's verdict that the no-show settlement is being held because a lobby
+   * guest admitted by the host is with the expert. ⚠ `.default(false)`: an api that predates the
+   * field must not fail the whole parse and blank every live call; `false` is the answer that
+   * keeps today's sentence.
+   */
+  noShowHeld: z.boolean().default(false),
   clocks: z.object({
     expertPresentMs: z.number().finite().nonnegative(),
     billableMs: z.number().finite().nonnegative(),
@@ -161,7 +168,7 @@ const stateSchema = z.object({
 });
 
 /** The body exactly as the api sends it — instants still ISO strings. */
-export type MeetingStateWire = z.infer<typeof stateSchema>;
+export type MeetingStateWire = z.input<typeof stateSchema>;
 
 /** The parsed mirror the UI renders. ⚠ Instants are `Date`s; durations are milliseconds. */
 export interface MeetingStateSnapshot {
@@ -171,6 +178,8 @@ export interface MeetingStateSnapshot {
   /** ⚠ THE GATE'S OWN VERDICT about which side the viewer is on — never a lens. */
   readonly viewerRole: MeetingViewerRole;
   readonly phase: MeetingWaitingPhase;
+  /** BAL-579 — see the schema field. */
+  readonly noShowHeld: boolean;
   readonly clocks: {
     readonly expertPresentMs: number;
     readonly billableMs: number;

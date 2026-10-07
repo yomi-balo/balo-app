@@ -9,6 +9,7 @@ import {
   isTerminalMeetingStatus,
   latestPresenceInstant,
   overrunStopCeiling,
+  noShowHeldByLinkGuest,
   resolveTerminalRule,
   resolveWaitingPhase,
   strandedEndedAt,
@@ -274,6 +275,7 @@ function inputFor(row: TerminalRow): TerminalRuleInput {
     timers: DEFAULT_MEETING_TIMERS,
     now: at(row.nowMinutes),
     venueReadyAt: venueReadyAtFor(row),
+    admittedLinkGuestPresent: false,
   };
 }
 
@@ -1019,7 +1021,14 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
 
   const MATRIX = NON_TERMINAL.flatMap((status) =>
     EMPTY_ROOM_SHAPES.flatMap((shape) =>
-      VENUE_SHAPES.map((venue) => ({ status, ...shape, ...venue }))
+      VENUE_SHAPES.flatMap((venue) =>
+        [false, true].map((admittedLinkGuestPresent) => ({
+          status,
+          ...shape,
+          ...venue,
+          admittedLinkGuestPresent,
+        }))
+      )
     )
   );
 
@@ -1027,8 +1036,8 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
   const LONG_AFTER = 24 * 60;
 
   it.each(MATRIX)(
-    '⚠⚠ $status + $label + $venueLabel past every window MUST terminate — a rule-less non-terminal meeting is unrecoverable',
-    ({ status, intervals, venueReadyAt }) => {
+    '⚠⚠ $status + $label + $venueLabel + linkGuest=$admittedLinkGuestPresent past every window MUST terminate — a rule-less non-terminal meeting is unrecoverable',
+    ({ status, intervals, venueReadyAt, admittedLinkGuestPresent }) => {
       const input: TerminalRuleInput = {
         status,
         scheduledStart: START,
@@ -1037,6 +1046,7 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
         timers: DEFAULT_MEETING_TIMERS,
         now: at(LONG_AFTER),
         venueReadyAt,
+        admittedLinkGuestPresent,
       };
 
       expect(summarisePresence(intervals).anyOpen).toBe(false);
@@ -1061,6 +1071,7 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
       presence: summarisePresence(occupied),
       timers: DEFAULT_MEETING_TIMERS,
       venueReadyAt: at(-1440),
+      admittedLinkGuestPresent: false,
     };
 
     expect(resolveTerminalRule({ ...base, status: 'in_progress', now: at(269) })).toBeNull();
@@ -1099,6 +1110,7 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
         timers: DEFAULT_MEETING_TIMERS,
         now: at(LONG_AFTER),
         venueReadyAt: at(-1440),
+        admittedLinkGuestPresent: false,
       };
       expect(resolveTerminalRule(input)?.rule).not.toBe('overrun_stop');
     }
@@ -1283,5 +1295,112 @@ describe('PresenceFacts', () => {
       'expertOpen',
       'lastLeftAt',
     ]);
+  });
+});
+
+describe('rule 4 ceiling arm — the expert left while an observer stays', () => {
+  const OBSERVER_REMAINS: readonly LifecyclePresenceInterval[] = [
+    { party: 'expert', joinedAt: at(0), leftAt: at(10) },
+    { party: 'observer', joinedAt: at(2), leftAt: null },
+  ];
+  const CEILING_MIN = 270;
+
+  const SHAPES = (['scheduled', 'waiting_for_participants'] as const).flatMap((status) =>
+    [false, true].map((admittedLinkGuestPresent) => ({ status, admittedLinkGuestPresent }))
+  );
+
+  function inputAt(
+    status: 'scheduled' | 'waiting_for_participants',
+    admittedLinkGuestPresent: boolean,
+    nowMinutes: number
+  ): TerminalRuleInput {
+    return {
+      status,
+      scheduledStart: START,
+      scheduledEnd: at(60),
+      presence: summarisePresence(OBSERVER_REMAINS),
+      timers: DEFAULT_MEETING_TIMERS,
+      now: at(nowMinutes),
+      venueReadyAt: at(-1440),
+      admittedLinkGuestPresent,
+    };
+  }
+
+  it.each(SHAPES)(
+    '$status linkGuest=$admittedLinkGuestPresent: abandoned_wait fires at the ceiling, not before, and is disjoint',
+    ({ status, admittedLinkGuestPresent }) => {
+      expect(
+        resolveTerminalRule(inputAt(status, admittedLinkGuestPresent, CEILING_MIN - 1))
+      ).toBeNull();
+      const atCeiling = inputAt(status, admittedLinkGuestPresent, CEILING_MIN);
+      // dueAt is the CEILING, not the empty-room window: a stranded end must not backdate it.
+      expect(resolveTerminalRule(atCeiling)).toEqual({
+        rule: 'abandoned_wait',
+        outcome: null,
+        arm: null,
+        dueAt: at(CEILING_MIN),
+      });
+      expect(MEETING_TERMINAL_PREDICATES.filter((entry) => entry.applies(atCeiling))).toHaveLength(
+        1
+      );
+    }
+  );
+
+  it('does not fire while the expert is still open', () => {
+    const input: TerminalRuleInput = {
+      ...inputAt('waiting_for_participants', false, CEILING_MIN),
+      presence: summarisePresence([
+        { party: 'expert', joinedAt: at(0), leftAt: null },
+        { party: 'observer', joinedAt: at(2), leftAt: null },
+      ]),
+    };
+    expect(resolveTerminalRule(input)?.rule).not.toBe('abandoned_wait');
+  });
+});
+
+describe('no-show held by an admitted link guest', () => {
+  const base: TerminalRuleInput = {
+    status: 'waiting_for_participants',
+    scheduledStart: START,
+    scheduledEnd: at(60),
+    presence: summarisePresence([{ party: 'expert', joinedAt: at(0), leftAt: null }]),
+    timers: DEFAULT_MEETING_TIMERS,
+    now: at(30),
+    venueReadyAt: at(-1440),
+    admittedLinkGuestPresent: false,
+  };
+  const ceiling = overrunStopCeiling(START, at(60), DEFAULT_MEETING_TIMERS);
+
+  it('fires no_show when no link guest is present, due at the floor', () => {
+    expect(resolveTerminalRule(base)).toMatchObject({
+      rule: 'no_show',
+      dueAt: new Date(START.getTime() + DEFAULT_MEETING_TIMERS.noShowFloorMs),
+    });
+    expect(noShowHeldByLinkGuest(base)).toBe(false);
+  });
+
+  it('holds no_show while an admitted link guest is present before the ceiling', () => {
+    const held = { ...base, admittedLinkGuestPresent: true };
+    expect(resolveTerminalRule(held)).toBeNull();
+    expect(noShowHeldByLinkGuest(held)).toBe(true);
+  });
+
+  it('fires no_show again at the ceiling', () => {
+    const before = {
+      ...base,
+      admittedLinkGuestPresent: true,
+      now: new Date(ceiling.getTime() - 1),
+    };
+    const atCeiling = { ...base, admittedLinkGuestPresent: true, now: ceiling };
+    expect(resolveTerminalRule(before)).toBeNull();
+    // dueAt is the CEILING, never the floor: a held no-show must not be backdated to minute 15.
+    expect(resolveTerminalRule(atCeiling)).toMatchObject({ rule: 'no_show', dueAt: ceiling });
+    expect(noShowHeldByLinkGuest(atCeiling)).toBe(false);
+  });
+
+  it('is not held before no_show is due', () => {
+    expect(noShowHeldByLinkGuest({ ...base, admittedLinkGuestPresent: true, now: at(5) })).toBe(
+      false
+    );
   });
 });

@@ -6,6 +6,10 @@ import { Button } from '@/components/ui/button';
 import { formatSlotDateTime } from './format';
 import { downloadIcsEvent } from './ics';
 
+/** Draft copy, pending MJ approval. Points a hand-off at the per-person invite, not a forward. */
+export const HANDOFF_LINE =
+  'Passing this call to a colleague? Choose "Invite a colleague" on the case so they get their own join link.';
+
 export interface StepBookedProps {
   engagementId: string;
   caseTitle: string;
@@ -76,6 +80,7 @@ export function StepBooked({
             ? 'The join link is on its way to your email.'
             : "Your time is held, but your call room isn't ready yet — our team has been alerted. Check the case for the latest."}
         </p>
+        <p className="text-muted-foreground text-sm leading-relaxed">{HANDOFF_LINE}</p>
         {guestsInvited > 0 && (
           <p className="text-muted-foreground text-sm leading-relaxed">
             {guestsInvited} guest{guestsInvited === 1 ? '' : 's'} invited — they&apos;ll get the

@@ -8,6 +8,7 @@ const {
   mockDecideMeetingGuestAdmission,
   mockResendMeetingGuestLink,
   mockRemoveMeetingGuest,
+  mockVouchMeetingGuest,
 } = vi.hoisted(() => ({
   mockRequireUser: vi.fn(),
   mockRequireOnboardedUser: vi.fn(),
@@ -16,6 +17,7 @@ const {
   mockDecideMeetingGuestAdmission: vi.fn(),
   mockResendMeetingGuestLink: vi.fn(),
   mockRemoveMeetingGuest: vi.fn(),
+  mockVouchMeetingGuest: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -29,6 +31,7 @@ vi.mock('@/lib/meetings/guests-api-client', () => ({
   decideMeetingGuestAdmission: mockDecideMeetingGuestAdmission,
   resendMeetingGuestLink: mockResendMeetingGuestLink,
   removeMeetingGuest: mockRemoveMeetingGuest,
+  vouchMeetingGuest: mockVouchMeetingGuest,
 }));
 
 import { log } from '@/lib/logging';
@@ -39,6 +42,7 @@ import { inviteMeetingGuestsAction } from './invite-meeting-guests';
 import { decideGuestAdmissionAction } from './decide-guest-admission';
 import { resendGuestLinkAction } from './resend-guest-link';
 import { removeGuestAction } from './remove-guest';
+import { vouchGuestAction } from './vouch-guest';
 
 /**
  * BAL-436 — the four in-call guest Server Actions.
@@ -75,6 +79,7 @@ beforeEach(() => {
     data: {
       guests: [],
       canHost: true,
+      canVouch: true,
       viewerSide: 'client',
       participantCount: 3,
       participantCap: 10,
@@ -90,6 +95,10 @@ beforeEach(() => {
     data: { id: GUEST_ID, expiresAt: '2026-09-08T11:00:00.000Z' },
   });
   mockRemoveMeetingGuest.mockResolvedValue({ ok: true, data: {} });
+  mockVouchMeetingGuest.mockResolvedValue({
+    ok: true,
+    data: { id: GUEST_ID, admission: 'pre_admitted' },
+  });
 });
 
 describe('getMeetingGuestsAction — ⚠ the READ, and it must stay read-only', () => {
@@ -669,4 +678,133 @@ describe('removeGuestAction', () => {
     expect(infoCalls[0]?.[1]).toEqual({ meetingId: MEETING_ID, guestId: GUEST_ID });
     expect(containsEmailAddress(JSON.stringify(vi.mocked(log.info).mock.calls))).toBe(false);
   });
+});
+
+describe('vouchGuestAction (BAL-579)', () => {
+  it('⚠ MUTATING ⇒ `requireOnboardedUser()`, and forwards the trimmed address', async () => {
+    const result = await vouchGuestAction({
+      meetingId: MEETING_ID,
+      guestId: GUEST_ID,
+      email: `  ${EMAIL} `,
+    });
+
+    expect(mockRequireOnboardedUser).toHaveBeenCalledTimes(1);
+    expect(mockVouchMeetingGuest).toHaveBeenCalledWith(MEETING_ID, GUEST_ID, EMAIL);
+    expect(result).toEqual({ success: true });
+    expect(log.info).toHaveBeenCalledWith(
+      'Guest vouched from the in-call panel',
+      expect.objectContaining({ meetingId: MEETING_ID, guestId: GUEST_ID })
+    );
+  });
+
+  it('a rejected session returns the fixed copy, logs once, and never hops', async () => {
+    mockRequireOnboardedUser.mockRejectedValue(new Error('no session'));
+
+    const result = await vouchGuestAction({
+      meetingId: MEETING_ID,
+      guestId: GUEST_ID,
+      email: EMAIL,
+    });
+
+    expect(result).toEqual({
+      success: false,
+      error: GUEST_ACTION_COPY.unauthenticated,
+      status: 401,
+      code: 'unauthenticated',
+    });
+    expect(mockVouchMeetingGuest).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('survives a non-Error rejection and a non-string meetingId', async () => {
+    mockRequireOnboardedUser.mockRejectedValue('no session');
+
+    await vouchGuestAction({
+      meetingId: 12345 as unknown as string,
+      guestId: GUEST_ID,
+      email: EMAIL,
+    });
+
+    expect(vi.mocked(log.error).mock.calls[0]?.[1]).toMatchObject({
+      meetingId: undefined,
+      error: 'no session',
+      stack: undefined,
+    });
+  });
+
+  it.each([
+    ['a bad email', { meetingId: MEETING_ID, guestId: GUEST_ID, email: 'not-an-email' }],
+    ['a bad guest id', { meetingId: MEETING_ID, guestId: 'nope', email: EMAIL }],
+  ])('rejects %s before the hop', async (_label, input) => {
+    const result = await vouchGuestAction(input);
+
+    expect(result).toMatchObject({ success: false, status: 400, code: 'invalid_request' });
+    expect(mockVouchMeetingGuest).not.toHaveBeenCalled();
+  });
+
+  it.each(['guest_not_found', 'guest_already_invited'])(
+    'logs the expected refusal `%s` at WARN with the mapped copy',
+    async (code) => {
+      mockVouchMeetingGuest.mockResolvedValue({ ok: false, status: 409, code });
+
+      const result = await vouchGuestAction({
+        meetingId: MEETING_ID,
+        guestId: GUEST_ID,
+        email: EMAIL,
+      });
+
+      expect(result).toEqual({
+        success: false,
+        error: GUEST_ACTION_COPY[code as keyof typeof GUEST_ACTION_COPY],
+        status: 409,
+        code,
+      });
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(log.error).not.toHaveBeenCalled();
+    }
+  );
+
+  it('logs any other refusal at ERROR', async () => {
+    mockVouchMeetingGuest.mockResolvedValue({ ok: false, status: 0, code: 'request_failed' });
+
+    await vouchGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID, email: EMAIL });
+
+    expect(log.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ never writes the typed address to any log line', async () => {
+    await vouchGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID, email: EMAIL });
+    mockVouchMeetingGuest.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'guest_already_invited',
+    });
+    await vouchGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID, email: EMAIL });
+
+    expect(loggedText()).not.toContain(EMAIL);
+    expect(containsEmailAddress(loggedText())).toBe(false);
+  });
+});
+
+describe('getMeetingGuestsAction — canVouch (BAL-579)', () => {
+  it.each([true, false])(
+    'passes the server canVouch verdict through unchanged (%s)',
+    async (canVouch) => {
+      mockGetMeetingGuests.mockResolvedValue({
+        ok: true,
+        data: {
+          guests: [],
+          canHost: false,
+          canVouch,
+          viewerSide: 'client',
+          participantCount: 1,
+          participantCap: 10,
+        },
+      });
+
+      const result = await getMeetingGuestsAction({ meetingId: MEETING_ID });
+
+      expect(result).toMatchObject({ success: true, data: { canVouch } });
+    }
+  );
 });

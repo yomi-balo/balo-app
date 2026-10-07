@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@react-email/render';
 import { getEmailTemplate } from './index.js';
+import { HAND_OFF_LINE } from './booking-confirmed.js';
 
 function clean(html: string): string {
   return html
     .replaceAll('<!-- -->', '')
     .replaceAll('&amp;', '&')
     .replaceAll('&#x27;', "'")
-    .replaceAll('&#39;', "'");
+    .replaceAll('&#39;', "'")
+    .replaceAll('&quot;', '"');
 }
 
 /**
@@ -101,6 +103,13 @@ describe('getEmailTemplate — booking-confirmed-client', () => {
     expect(withoutGuests).not.toContain('guest');
   });
 
+  it('points hand-offs to "Invite a colleague" (client only, pending MJ copy approval)', async () => {
+    const text = textOf(
+      await render(getEmailTemplate('booking-confirmed-client', BASE_DATA).component)
+    );
+    expect(text).toContain(HAND_OFF_LINE);
+  });
+
   it('carries no email address but support@getbalo.com, no rate/total figure, and no calendar claim', async () => {
     const html = clean(
       await render(getEmailTemplate('booking-confirmed-client', BASE_DATA).component)
@@ -123,6 +132,13 @@ describe('getEmailTemplate — booking-confirmed-client', () => {
 });
 
 describe('getEmailTemplate — booking-confirmed-expert', () => {
+  it('does not carry the client hand-off line', async () => {
+    const text = textOf(
+      await render(getEmailTemplate('booking-confirmed-expert', BASE_DATA).component)
+    );
+    expect(text).not.toContain('Invite a colleague');
+  });
+
   it('names the client company and links to the case', async () => {
     const out = getEmailTemplate('booking-confirmed-expert', BASE_DATA);
     expect(out.subject).toBe('Northwind Industrial booked a consultation with you');

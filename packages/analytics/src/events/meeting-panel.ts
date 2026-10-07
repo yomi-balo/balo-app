@@ -29,6 +29,7 @@ export const MEETING_PANEL_EVENTS = {
   LINK_RESENT: 'meeting_panel_link_resent',
   // ── BAL-476 (R3) — the in-call Remove control ───────────────────────────────────────
   GUEST_REMOVED: 'meeting_panel_guest_removed',
+  GUEST_VOUCHED: 'meeting_panel_guest_vouched',
   FILE_SHARED: 'meeting_panel_file_shared',
   FILE_DOWNLOADED: 'meeting_panel_file_downloaded',
   // ── BAL-437 — the chat slot and the reaction control ────────────────────────────────
@@ -190,6 +191,11 @@ export interface MeetingPanelEventMap {
     meeting_id?: string;
     context_type?: string;
     state: MeetingPanelRemovalState;
+    outcome: MeetingPanelOutcome;
+  } & MeetingPanelFailureFacts;
+  [MEETING_PANEL_EVENTS.GUEST_VOUCHED]: {
+    meeting_id?: string;
+    context_type?: string;
     outcome: MeetingPanelOutcome;
   } & MeetingPanelFailureFacts;
   [MEETING_PANEL_EVENTS.FILE_SHARED]: {

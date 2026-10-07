@@ -26,6 +26,7 @@ import {
   inviteMeetingGuests,
   removeMeetingGuest,
   resendMeetingGuestLink,
+  vouchMeetingGuest,
 } from './guests-api-client';
 
 /**
@@ -454,5 +455,32 @@ describe('removeMeetingGuest', () => {
     expect(fields.path).toBe(`/meetings/${MEETING_ID}/guests/${GUEST_ID}`);
     expect(containsEmailAddress(JSON.stringify(fields))).toBe(false);
     expect(JSON.stringify(fields)).not.toContain(ACCESS_TOKEN);
+  });
+});
+
+describe('vouchMeetingGuest (BAL-579)', () => {
+  it('POSTs the colleague email to the vouch path with the viewer Bearer', async () => {
+    mockLoggedFetch.mockResolvedValue(response(200, { id: GUEST_ID, admission: 'pre_admitted' }));
+
+    const result = await vouchMeetingGuest(MEETING_ID, GUEST_ID, 'dana@northwind.example');
+
+    expect(mockLoggedFetch.mock.calls.at(-1)?.[0]).toBe(
+      `http://api.test/meetings/${MEETING_ID}/guests/${GUEST_ID}/vouch`
+    );
+    const init = lastInit();
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+    expect(JSON.parse(init.body ?? '{}')).toEqual({ email: 'dana@northwind.example' });
+    expect(result).toEqual({ ok: true, data: { id: GUEST_ID, admission: 'pre_admitted' } });
+  });
+
+  it('maps a 409 to its fixed literal', async () => {
+    mockLoggedFetch.mockResolvedValue(response(409, { error: 'guest_already_invited' }));
+
+    await expect(vouchMeetingGuest(MEETING_ID, GUEST_ID, 'a@b.example')).resolves.toEqual({
+      ok: false,
+      status: 409,
+      code: 'guest_already_invited',
+    });
   });
 });
