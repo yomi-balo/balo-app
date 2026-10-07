@@ -14,6 +14,7 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from 'drizzle-orm';
 import type { ReservableCaseBooking } from '@balo/shared/credit';
 import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
@@ -156,11 +157,64 @@ export interface ListLifecycleCandidatesInput {
   statuses: readonly MeetingStatus[];
   /**
    * A LOOKBACK FLOOR — never scan all history. Production passes `now − 24h`; anything older
-   * is a data-repair problem, not a live meeting.
+   * is the stranded arm's ({@link meetingsRepository.listStrandedLifecycleCandidates}), which
+   * repairs it under its own bound.
    */
   scheduledStartAfter: Date;
   /** Hard batch bound. ⚠ The CALLER must `log.warn` when the batch FILLS (no silent caps). */
   limit: number;
+}
+
+/**
+ * BAL-584 — the lifecycle sweep's STRANDED arm: meetings that fell behind the in-window read's
+ * lookback floor but are still non-terminal, so the sweep must still decide them.
+ */
+export interface ListStrandedLifecycleCandidatesInput {
+  /**
+   * STRICT upper bound on `scheduled_start`. The caller passes the SAME floor it hands
+   * {@link ListLifecycleCandidatesInput.scheduledStartAfter}, which is inclusive there, so the two
+   * batches are disjoint and a meeting is never processed twice in one tick.
+   */
+  scheduledStartBefore: Date;
+  /** Hard batch bound. ⚠ The CALLER must `log.warn` when the batch FILLS (no silent caps). */
+  limit: number;
+}
+
+/**
+ * The stranded read as an un-awaited Drizzle select — exported so the integration test can
+ * `EXPLAIN` the exact statement the repository runs. Not re-exported from the package index.
+ *
+ * Two arms under one `UNION ALL`, each with its own selective predicate, `ORDER BY` and `LIMIT`,
+ * then an outer `ORDER BY scheduled_start, id LIMIT`. Almost every historical meeting is
+ * `ended`/`cancelled`, so the `status` equality is what keeps each arm bounded:
+ *  - `status = 'in_progress'` rides `meeting_status_scheduled_start_idx` on `(status,
+ *    scheduled_start)` under its `deleted_at IS NULL` predicate.
+ *  - `status IN ('scheduled','waiting_for_participants')` rides the same index. It has NO
+ *    open-interval requirement: a pre-live meeting whose last interval the reconciler just closed
+ *    must stay selected until `abandoned_wait` falls due, or it would never reach a terminal state.
+ *    By the rule table's TOTALITY a pre-live meeting with nothing open always matches a rule once
+ *    its windows elapse, so the set drains itself.
+ * Status literals at QUERY time are always safe; the house restriction is on index predicates and CHECKs.
+ */
+export function strandedLifecycleCandidatesQuery(input: ListStrandedLifecycleCandidatesInput) {
+  const arm = (statusPredicate: SQL) =>
+    db
+      .select()
+      .from(meetings)
+      .where(
+        and(
+          statusPredicate,
+          lt(meetings.scheduledStart, input.scheduledStartBefore),
+          isNull(meetings.deletedAt)
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .limit(input.limit);
+
+  return arm(eq(meetings.status, 'in_progress'))
+    .unionAll(arm(inArray(meetings.status, ['scheduled', 'waiting_for_participants'])))
+    .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+    .limit(input.limit);
 }
 
 /**
@@ -1655,6 +1709,36 @@ export const meetingsRepository = {
         asc(meetings.id)
       )
       .limit(input.limit);
+  },
+
+  /**
+   * BAL-584 — the sweep's STRANDED arm: non-terminal meetings whose `scheduled_start` is BEFORE
+   * the lookback floor ({@link listLifecycleCandidates} reads the other side of it) and which
+   * still need releasing.
+   *
+   * Predicate, all under `deleted_at IS NULL`:
+   *  - `in_progress` — always. The call was live and nothing ended it; the sweep decides from
+   *    the clocks whether it is over.
+   *  - `scheduled` / `waiting_for_participants` — always, with no open-interval requirement. The
+   *    sweep's first stranded tick closes a pre-live meeting's last open interval, and
+   *    `abandoned_wait` only falls due `idleEndEmptyMs` later; a selection keyed on an open
+   *    interval would drop the meeting in between and strand it non-terminal forever. The rule
+   *    table's TOTALITY makes the set drain itself, and never-joined meetings already end in
+   *    window (`missed_call` / `venue_unavailable`).
+   *
+   * Oldest `scheduled_start` first, `id` as the tiebreak, so a capped batch drops the same tail
+   * every tick rather than a random one.
+   *
+   * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`** — the no-silent-caps
+   * rule. A `limit <= 0` returns `[]` without a query.
+   */
+  async listStrandedLifecycleCandidates(
+    input: ListStrandedLifecycleCandidatesInput
+  ): Promise<Meeting[]> {
+    if (input.limit <= 0) {
+      return [];
+    }
+    return strandedLifecycleCandidatesQuery(input);
   },
 
   /**

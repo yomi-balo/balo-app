@@ -11,6 +11,8 @@ import {
   deleteRoom,
   ejectParticipants,
   getAllPresence,
+  getRoomPresence,
+  getRoomSessionLeaves,
   DAILY_EJECT_MAX_IDS,
 } from './rooms.js';
 
@@ -445,7 +447,8 @@ describe('getAllPresence (BAL-134)', () => {
 
   /**
    * ⚠ AN EMPTY MAP IS A LEGITIMATE, WELL-FORMED ANSWER — nobody is on any call. It is returned
-   * faithfully; deciding whether to ACT on it is the sweep's sanity gate, not this function's.
+   * faithfully; what it licenses is the sweep's decision (an absent room still needs a per-room
+   * read before anything is closed), not this function's.
    */
   it('answers an empty map for an empty body', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, {})));
@@ -469,6 +472,324 @@ describe('getAllPresence (BAL-134)', () => {
   });
 });
 
+describe('getRoomPresence (BAL-584)', () => {
+  const USER_ID = 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d';
+
+  function stubBody(body: unknown): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('parses the documented body and GETs the URL-encoded per-room path', async () => {
+    const fetchMock = stubBody({
+      total_count: 1,
+      data: [
+        {
+          room: ROOM,
+          id: 'sess-1',
+          userId: USER_ID,
+          userName: 'Dana',
+          mtgSessionId: 'mtg-1',
+          joinTime: '2026-10-07T01:00:00.000Z',
+          duration: 2312,
+        },
+      ],
+    });
+
+    await expect(getRoomPresence(ROOM)).resolves.toEqual([
+      { room: ROOM, id: 'sess-1', userId: USER_ID, joinTime: '2026-10-07T01:00:00.000Z' },
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${DAILY_API_BASE}/rooms/${ROOM}/presence`);
+    expect(init.method).toBe('GET');
+  });
+
+  /**
+   * Routes by URL: the presence path answers `presence`, the bare room path answers `roomResponse`
+   * (a ready `Response`, so a test can make it a 404 or an unparseable body).
+   */
+  function stubRoutes(
+    presence: unknown,
+    roomResponse: (name: string) => Response
+  ): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/presence')) {
+        return jsonResponse(200, presence);
+      }
+      return roomResponse(decodeURIComponent(url.slice(`${DAILY_API_BASE}/rooms/`.length)));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  const EMPTY = { total_count: 0, data: [] };
+
+  it('URL-encodes the room name into the path', async () => {
+    const fetchMock = stubRoutes(EMPTY, (name) => jsonResponse(200, { name }));
+
+    await getRoomPresence('balo room/1');
+
+    const urls = fetchMock.mock.calls.map(([url]) => url);
+    expect(urls).toEqual([
+      `${DAILY_API_BASE}/rooms/balo%20room%2F1/presence`,
+      `${DAILY_API_BASE}/rooms/balo%20room%2F1`,
+    ]);
+  });
+
+  it('answers [] for an empty presence list once GET /rooms/:name confirms the room exists', async () => {
+    const fetchMock = stubRoutes(EMPTY, (name) => jsonResponse(200, { name, privacy: 'private' }));
+
+    await expect(getRoomPresence(ROOM)).resolves.toEqual([]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [roomUrl, roomInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(roomUrl).toBe(`${DAILY_API_BASE}/rooms/${ROOM}`);
+    expect(roomInit.method).toBe('GET');
+  });
+
+  it('⚠⚠ THROWS for an empty presence list when the room does not exist (Daily answers 200 [] for it)', async () => {
+    stubRoutes(EMPTY, () => jsonResponse(404, { error: 'not-found', info: 'room not found' }));
+
+    await expect(getRoomPresence(ROOM)).rejects.toMatchObject({
+      name: 'DailyApiError',
+      status: 404,
+      path: `/rooms/${ROOM}`,
+    });
+  });
+
+  it.each([
+    ['a name that is not the one asked for', { name: 'balo-other' }],
+    ['a body with no name', { privacy: 'private' }],
+    ['a body that is not an object', ['not', 'a', 'room']],
+  ])(
+    '⚠⚠ THROWS for an empty presence list when the room check returns %s',
+    async (_label, body) => {
+      stubRoutes(EMPTY, () => jsonResponse(200, body));
+
+      await expect(getRoomPresence(ROOM)).rejects.toMatchObject({
+        name: 'DailyApiError',
+        status: 0,
+        path: `/rooms/${ROOM}`,
+        body: expect.stringContaining('cannot trust'),
+      });
+    }
+  );
+
+  it('does NOT call the room endpoint when the presence list is non-empty', async () => {
+    const fetchMock = stubRoutes({ total_count: 1, data: [{ userId: USER_ID }] }, () => {
+      throw new Error('the room endpoint must not be called');
+    });
+
+    await expect(getRoomPresence(ROOM)).resolves.toEqual([{ userId: USER_ID }]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a row that omits `room`', async () => {
+    stubBody({ total_count: 1, data: [{ userId: USER_ID }] });
+
+    await expect(getRoomPresence(ROOM)).resolves.toEqual([{ userId: USER_ID }]);
+  });
+
+  /**
+   * ⚠⚠ EVERY ONE OF THESE MUST THROW: an empty-looking return from this function is the licence
+   * to close intervals with no identity match, so a body that cannot be trusted has to take the
+   * UNKNOWN path instead.
+   */
+  it.each([
+    ['a body that is not an object', ['not', 'an', 'envelope']],
+    ['a missing data array', { total_count: 0 }],
+    ['a non-array data', { total_count: 0, data: 'nonsense' }],
+    ['a negative total_count', { total_count: -1, data: [] }],
+    ['a non-integer total_count', { total_count: 0.5, data: [] }],
+    ['a total_count above the rows returned (truncation)', { total_count: 3, data: [{}] }],
+    ['a total_count below the rows returned', { total_count: 0, data: [{ userId: USER_ID }] }],
+    [
+      'a row naming a different room',
+      { total_count: 1, data: [{ room: 'balo-other', userId: USER_ID }] },
+    ],
+  ])('⚠⚠ THROWS on %s', async (_label, body) => {
+    stubBody(body);
+
+    await expect(getRoomPresence(ROOM)).rejects.toMatchObject({
+      name: 'DailyApiError',
+      path: `/rooms/${ROOM}/presence`,
+      body: expect.stringContaining('cannot trust'),
+    });
+  });
+
+  it('propagates a 404 rather than reading a missing room as empty', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(404, { error: 'not-found', info: 'no such room' }))
+    );
+
+    await expect(getRoomPresence(ROOM)).rejects.toBeInstanceOf(DailyApiError);
+    await expect(getRoomPresence(ROOM)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('getRoomSessionLeaves (BAL-584)', () => {
+  const EXPERT = 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d';
+  const CLIENT = 'u9a8b7c6d5e4f4a3b8c2d1e0f9a8b7c6d';
+  /** The incident room's shape: two participants whose recorded leaves land seconds apart. */
+  const JOIN_SECONDS = 1_760_000_000;
+  const SINCE = new Date((JOIN_SECONDS - 3600) * 1000);
+
+  function session(
+    participants: ReadonlyArray<Record<string, unknown>>,
+    overrides: Record<string, unknown> = {}
+  ): Record<string, unknown> {
+    return {
+      id: 'mtg-1',
+      room: ROOM,
+      start_time: JOIN_SECONDS,
+      duration: 200,
+      ongoing: false,
+      participants,
+      ...overrides,
+    };
+  }
+
+  function stubSessions(data: unknown[], totalCount = data.length): ReturnType<typeof vi.fn> {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { total_count: totalCount, data }));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('maps each user_id to join_time + duration, and never reads user_name', async () => {
+    stubSessions([
+      session([
+        {
+          user_id: EXPERT,
+          participant_id: 'p1',
+          user_name: 'Dana',
+          join_time: JOIN_SECONDS,
+          duration: 178,
+        },
+        {
+          user_id: CLIENT,
+          participant_id: 'p2',
+          user_name: 'Sam',
+          join_time: JOIN_SECONDS + 2,
+          duration: 186,
+        },
+      ]),
+    ]);
+
+    const { leaves } = await getRoomSessionLeaves(ROOM, { since: SINCE });
+
+    expect([...leaves.entries()]).toEqual([
+      [EXPERT, new Date((JOIN_SECONDS + 178) * 1000)],
+      [CLIENT, new Date((JOIN_SECONDS + 188) * 1000)],
+    ]);
+  });
+
+  it('the LATEST recorded leave wins when a claim appears in several sessions', async () => {
+    stubSessions([
+      session([{ user_id: EXPERT, join_time: JOIN_SECONDS, duration: 600 }]),
+      session([{ user_id: EXPERT, join_time: JOIN_SECONDS + 5000, duration: 60 }], { id: 'mtg-2' }),
+      session([{ user_id: EXPERT, join_time: JOIN_SECONDS + 100, duration: 10 }], { id: 'mtg-3' }),
+    ]);
+
+    const { leaves } = await getRoomSessionLeaves(ROOM, { since: SINCE });
+
+    expect(leaves.get(EXPERT)).toEqual(new Date((JOIN_SECONDS + 5060) * 1000));
+  });
+
+  it('skips a participant with no user_id, no join_time or no finite duration', async () => {
+    stubSessions([
+      session(
+        [
+          { user_id: null, join_time: JOIN_SECONDS, duration: 10 },
+          { join_time: JOIN_SECONDS, duration: 10 },
+          { user_id: EXPERT, join_time: JOIN_SECONDS },
+          { user_id: CLIENT, duration: 10 },
+        ],
+        { ongoing: true }
+      ),
+    ]);
+
+    const { leaves } = await getRoomSessionLeaves(ROOM, { since: SINCE });
+
+    expect(leaves).toEqual(new Map());
+  });
+
+  it('answers an empty history for a room Daily has no record of', async () => {
+    stubSessions([]);
+
+    await expect(getRoomSessionLeaves(ROOM, { since: SINCE })).resolves.toEqual({
+      leaves: new Map(),
+    });
+  });
+
+  it('⚠ an ONGOING session contributes a departed participant’s leave when it has a duration, and none when it has not', async () => {
+    stubSessions([
+      session(
+        [
+          { user_id: EXPERT, join_time: JOIN_SECONDS, duration: 90 },
+          { user_id: CLIENT, join_time: JOIN_SECONDS },
+        ],
+        { ongoing: true }
+      ),
+    ]);
+
+    const { leaves } = await getRoomSessionLeaves(ROOM, { since: SINCE });
+
+    expect([...leaves.entries()]).toEqual([[EXPERT, new Date((JOIN_SECONDS + 90) * 1000)]]);
+  });
+
+  it('URL-encodes the room and carries the time window and an explicit limit', async () => {
+    const fetchMock = stubSessions([], 0);
+
+    await getRoomSessionLeaves('balo room/1', { since: SINCE });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `${DAILY_API_BASE}/meetings?room=balo%20room%2F1&timeframe_start=${JOIN_SECONDS - 3600}&limit=100`
+    );
+    expect(init.method).toBe('GET');
+  });
+
+  it.each([
+    ['a body that is not an envelope', ['nope']],
+    ['a missing data array', { total_count: 0 }],
+    [
+      'a non-numeric join_time',
+      { total_count: 1, data: [session([{ user_id: EXPERT, join_time: 'noon' }])] },
+    ],
+    [
+      'a total_count above the sessions returned (truncation)',
+      { total_count: 3, data: [session([])] },
+    ],
+    [
+      'a session naming a different room',
+      { total_count: 1, data: [session([], { room: 'balo-other' })] },
+    ],
+  ])('⚠⚠ THROWS on %s', async (_label, body) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, body)));
+
+    await expect(getRoomSessionLeaves(ROOM, { since: SINCE })).rejects.toMatchObject({
+      name: 'DailyApiError',
+      status: 0,
+      body: expect.stringContaining('cannot trust'),
+    });
+  });
+
+  it('propagates a non-2xx', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(429, { error: 'rate-limit' })));
+
+    await expect(getRoomSessionLeaves(ROOM, { since: SINCE })).rejects.toMatchObject({
+      status: 429,
+    });
+  });
+});
+
 describe('the BAL-134 ports', () => {
   it('dailyRoomTeardown satisfies RoomTeardown with the live deleteRoom', () => {
     expect(dailyRoomTeardown.deleteRoom).toBe(deleteRoom);
@@ -476,6 +797,8 @@ describe('the BAL-134 ports', () => {
 
   it('dailyPresenceReader satisfies PresenceReader with the live getAllPresence', () => {
     expect(dailyPresenceReader.getAllPresence).toBe(getAllPresence);
+    expect(dailyPresenceReader.getRoomPresence).toBe(getRoomPresence);
+    expect(dailyPresenceReader.getRoomSessionLeaves).toBe(getRoomSessionLeaves);
   });
 });
 

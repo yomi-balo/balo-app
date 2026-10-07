@@ -30,6 +30,8 @@ describe('MEETING_SERVER_EVENTS', () => {
       'MEETING_MISSED_CALL',
       // `MEETING_O…` sorts after `MISSED` (`M` < `O`) and before `PROVISION` (`O` < `P`).
       'MEETING_OVERRUN_STOPPED',
+      // BAL-584 (1). `MEETING_PRE…` < `MEETING_PRO…` because `E` < `O`.
+      'MEETING_PRESENCE_RECONCILED',
       'MEETING_PROVISION_FAILED',
       'MEETING_PROVISIONED',
       'MEETING_STARTED',
@@ -52,6 +54,7 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(MEETING_SERVER_EVENTS.MEETING_ENDED).toBe('meeting_ended');
     expect(MEETING_SERVER_EVENTS.MEETING_END_REFUSED).toBe('meeting_end_refused');
     expect(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED).toBe('meeting_calendar_projected');
+    expect(MEETING_SERVER_EVENTS.MEETING_PRESENCE_RECONCILED).toBe('meeting_presence_reconciled');
   });
 
   /**

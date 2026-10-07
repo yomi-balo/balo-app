@@ -565,8 +565,9 @@ function strandedLead(status: string, overdue: string): string {
 
 /**
  * BAL-586 — meetings still in a live status an hour past their `scheduled_end`. No lookback
- * floor: unlike the lifecycle sweep, a stranded meeting stays visible however old it is, and
- * `Past sweep lookback` tells the operator when the sweep itself has stopped looking at it. An
+ * floor: unlike the lifecycle sweep's in-window batch, a stranded meeting stays visible however
+ * old it is, and `Past sweep lookback` tells the operator the meeting has left that in-window batch
+ * and is now the lifecycle sweep's stranded arm's, which keeps repairing it. An
  * occupied `in_progress` call additionally waits for the lifecycle sweep's forced stop
  * (`overrunStopCeiling`) plus {@link MEETING_STRANDED_PAST_STOP_MS}, so a call that is legitimately
  * still running never alerts; the repository applies that in SQL. Rows self-close when the
