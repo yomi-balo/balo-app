@@ -65,6 +65,13 @@ export const MEETING_SERVER_EVENTS = {
    * delivery slice (BAL-475), and without this event it is visible only in logs.
    */
   MEETING_CALENDAR_PROJECTED: 'meeting_calendar_projected',
+  /**
+   * BAL-584 — the lifecycle sweep's presence reconciler CHANGED a meeting's intervals (closed
+   * or opened at least one). Fires once per changed meeting per tick, never when nothing moved.
+   * Measures how often the webhook path alone leaves a room's roster wrong, and how many of
+   * those repairs are stranded meetings.
+   */
+  MEETING_PRESENCE_RECONCILED: 'meeting_presence_reconciled',
 } as const;
 
 /**
@@ -347,6 +354,27 @@ export interface MeetingServerEventMap {
      */
     delivery: 'provider_event' | 'ics' | 'skipped' | 'failed';
     /** The BOOKING actor — the same `distinct_id` `meeting_provisioned` carries. */
+    distinct_id: string;
+  };
+
+  /**
+   * BAL-584 — see {@link MEETING_SERVER_EVENTS.MEETING_PRESENCE_RECONCILED}.
+   *
+   * ⚠ NO PII. Ids, two counts, two closed labels and a boolean.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_PRESENCE_RECONCILED]: {
+    meeting_id: string;
+    intervals_closed: number;
+    intervals_opened: number;
+    /**
+     * Where the roster the reconciler acted on came from: `platform` — Daily's platform-wide
+     * presence map; `room` — a validated per-room read made because the room was absent from it.
+     * An unreadable roster changes nothing, so it never reaches this event.
+     */
+    roster_source: 'platform' | 'room';
+    /** `true` when the meeting was past the sweep's in-window lookback (the stranded arm). */
+    stranded: boolean;
+    /** The MEETING id — the sweep has no acting user. */
     distinct_id: string;
   };
 }

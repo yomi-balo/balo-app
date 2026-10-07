@@ -202,6 +202,10 @@ const fakePresenceReader: PresenceReader = {
         .filter(([, participants]) => participants.size > 0)
         .map(([room, participants]) => [room, [...participants].map((userId) => ({ userId }))])
     ),
+  // The per-room read answers from the same map: an emptied room is `[]`, which is what Daily
+  // reports for a room nobody is in.
+  getRoomPresence: async (roomName) =>
+    [...(vendorRooms.get(roomName) ?? [])].map((userId) => ({ userId })),
 };
 
 // ── Time ─────────────────────────────────────────────────────────────────────────────

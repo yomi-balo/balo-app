@@ -251,7 +251,7 @@ describe('case-inactivity sweep — module constants', () => {
 });
 
 describe('case-inactivity sweep — the live-meeting exclusion floor', () => {
-  it('TTL is at least LIFECYCLE_LOOKBACK_MS, so every meeting the lifecycle sweep still manages is covered', () => {
+  it("TTL is at least LIFECYCLE_LOOKBACK_MS, so every IN-WINDOW meeting is covered (strands are the stranded arm's)", () => {
     expect(MEETING_TOKEN_TTL_AFTER_END_MS).toBeGreaterThanOrEqual(LIFECYCLE_LOOKBACK_MS);
   });
 

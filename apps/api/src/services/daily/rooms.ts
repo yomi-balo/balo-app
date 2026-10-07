@@ -383,16 +383,24 @@ export interface DailyPresenceParticipant {
   joinTime?: string;
 }
 
+/** One participant, as BOTH of Daily's presence endpoints describe them. */
+const dailyPresenceParticipantSchema = z.object({
+  userId: z.string().optional(),
+  id: z.string().optional(),
+  joinTime: z.string().optional(),
+});
+
 /**
  * Daily's `GET /presence` body: active participants grouped by room name.
  *
- * ⚠⚠ PARSED, NOT CAST — the ONE place in this file a vendor body is validated, and it is here
- * because this payload drives a DESTRUCTIVE decision. `dailyRequest` ends in a bare `as T`, so
- * a body of an unexpected SHAPE would type-check as an empty map and reach the sweep as
- * "confirmed: nobody is in any room", which closes every open interval on the platform and, ~5
- * minutes later, deletes live Daily rooms. A `safeParse` failure THROWS instead, so an
- * unrecognised body takes the same outage path as an unreachable vendor: reconciliation is
- * skipped, the terminal rules still run, and nothing is truncated.
+ * ⚠⚠ PARSED, NOT CAST — one of the two vendor bodies in this file that are validated (see also
+ * {@link dailyRoomPresenceResponseSchema}), and it is here because this payload drives a
+ * DESTRUCTIVE decision. `dailyRequest` ends in a bare `as T`, so a body of an unexpected SHAPE
+ * would type-check as an empty map and reach the sweep as "nobody is in any room", which would
+ * fan every candidate with an open interval out into per-room reads. A `safeParse` failure
+ * THROWS instead, so an unrecognised body takes the same outage path as an unreachable vendor:
+ * reconciliation is skipped, no per-room read is made, the terminal rules still run, and
+ * nothing is truncated.
  *
  * ⚠ THE SHAPE IS THE VERIFIED ONE AND MUST NOT BE "FIXED". The GLOBAL `GET /presence` really
  * is a MAP KEYED BY ROOM NAME (not the per-room endpoint's `{ total_count, data }` envelope),
@@ -400,26 +408,41 @@ export interface DailyPresenceParticipant {
  * against Daily's live reference. Unknown keys are stripped by Zod's default, which is right:
  * nothing downstream may read a field this schema has not named.
  */
-const dailyPresenceResponseSchema = z.record(
-  z.string(),
-  z.array(
-    z.object({
-      userId: z.string().optional(),
-      id: z.string().optional(),
-      joinTime: z.string().optional(),
-    })
-  )
-);
+const dailyPresenceResponseSchema = z.record(z.string(), z.array(dailyPresenceParticipantSchema));
+
+/**
+ * Daily's `GET /rooms/{room_name}/presence` body: `{ total_count, data: [...] }`.
+ *
+ * ⚠ VERIFIED 2026-10-07 against https://docs.daily.co/reference/rest-api/rooms/get-room-presence
+ * (BAL-584): a `200` carries `{ "total_count": number, "data": [{ "room", "id", "userId",
+ * "userName", "mtgSessionId", "joinTime", "duration" }] }` — camelCase `userId`, ISO `joinTime`,
+ * and the same participant fields the global map carries plus `room`. The reference documents
+ * `limit`, `userId` and `userName` query parameters but NO pagination, and it does not say what
+ * an empty or missing room returns.
+ *
+ * ⚠⚠ PARSED, NOT CAST, and for the same reason as {@link dailyPresenceResponseSchema} — only
+ * more so: an EMPTY answer from this schema is what lets the sweep close a meeting's intervals
+ * without any identity match. So {@link getRoomPresence} also refuses a `total_count` that
+ * disagrees with the rows it was handed (a truncated list would read as "fewer people than
+ * there are") and a row that names a DIFFERENT room. Unknown keys are stripped.
+ */
+const dailyRoomPresenceResponseSchema = z.object({
+  total_count: z.number().int().nonnegative(),
+  data: z.array(dailyPresenceParticipantSchema.extend({ room: z.string().optional() })),
+});
 
 /**
  * ACTIVE PARTICIPANTS ACROSS EVERY ROOM, in ONE call — leg 2 of D1's presence model, and the
  * reason the dropped-`participant.left` over-bill is bounded by one sweep tick rather than
  * being unbounded.
  *
- * ⚠ PLATFORM-WIDE, NOT PER-ROOM, AND THAT IS DELIBERATE. The skill names `GET /presence` as
- * Daily's recommended "current state" endpoint, and a per-room call per candidate meeting would
+ * ⚠ PLATFORM-WIDE FIRST, AND THAT IS DELIBERATE. The skill names `GET /presence` as Daily's
+ * recommended "current state" endpoint, and a per-room call per candidate meeting would
  * multiply a 20/s rate-limit tier by the size of the sweep batch. The sweep filters the answer
- * down to the rooms it is reconciling.
+ * down to the rooms it is reconciling. A room that is ABSENT from this map is not thereby
+ * known to be empty (Daily never lists an empty room): when the candidate holds open intervals
+ * the sweep makes ONE {@link getRoomPresence} read for it, capped per tick
+ * (`MAX_ROOM_PRESENCE_READS_PER_TICK`), and ONLY when this global read itself succeeded.
  *
  * ⚠ NEVER TRUSTED AS AN IDENTITY ORACLE. What comes back is a vendor's claim about who is in a
  * room; the reconciler uses it ONLY to decide whether an interval Balo already opened should be
@@ -431,8 +454,9 @@ export async function getAllPresence(): Promise<Record<string, DailyPresencePart
   const body = await dailyRequest<unknown>('GET', '/presence');
   const parsed = dailyPresenceResponseSchema.safeParse(body ?? {});
   if (!parsed.success) {
-    // ⚠ THROW, DO NOT DEGRADE. The caller's outage path treats a rejection as UNKNOWN; an
-    // empty-looking return would be treated as CONFIRMED EMPTY. See the schema's docblock.
+    // ⚠ THROW, DO NOT DEGRADE. The caller's outage path treats a rejection as UNKNOWN and makes
+    // no per-room reads; an empty-looking return would instead send every candidate with an open
+    // interval on to one. See the schema's docblock.
     throw new DailyApiError(
       'GET',
       '/presence',
@@ -450,6 +474,46 @@ export async function getAllPresence(): Promise<Record<string, DailyPresencePart
   return rooms;
 }
 
+/** Thrown (as a {@link DailyApiError}) when a per-room presence body cannot be trusted. */
+function roomPresenceContractViolation(path: string, detail: string): DailyApiError {
+  return new DailyApiError(
+    'GET',
+    path,
+    RESPONSE_CONTRACT_VIOLATION_STATUS,
+    `Daily GET ${path} returned a body this platform cannot trust (${detail}); refusing to read it as an empty room`
+  );
+}
+
+/**
+ * ONE ROOM'S ACTIVE PARTICIPANTS — the per-room fallback for a room {@link getAllPresence} does
+ * not list.
+ *
+ * ⚠⚠ A RETURNED `[]` IS A VALIDATED "NOBODY IS IN THIS ROOM", and it is the ONLY thing that
+ * licenses closing a meeting's intervals without an identity match. Everything else is UNKNOWN
+ * and THROWS, so the caller's outage path leaves the intervals alone: a non-2xx (including a
+ * 404, which `dailyRequest` already throws), a missing API key, a body that fails the schema, a
+ * `total_count` that disagrees with the rows returned (the reference documents no pagination,
+ * so a short list must not read as a short room), and any row naming a different room.
+ *
+ * Counts toward Daily's 20/s per-room read tier; the sweep caps it per tick.
+ */
+export async function getRoomPresence(roomName: string): Promise<DailyPresenceParticipant[]> {
+  const path = `/rooms/${encodeURIComponent(roomName)}/presence`;
+  const body = await dailyRequest<unknown>('GET', path);
+  const parsed = dailyRoomPresenceResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    throw roomPresenceContractViolation(path, 'unrecognised shape');
+  }
+  const { total_count: totalCount, data } = parsed.data;
+  if (totalCount !== data.length) {
+    throw roomPresenceContractViolation(path, 'total_count disagrees with the rows returned');
+  }
+  if (data.some((participant) => participant.room !== undefined && participant.room !== roomName)) {
+    throw roomPresenceContractViolation(path, 'a row names a different room');
+  }
+  return data;
+}
+
 /**
  * The teardown seam, mirroring {@link RoomProvisioner}.
  *
@@ -463,11 +527,12 @@ export interface RoomTeardown {
 /** The reconciliation seam, for the same reason. */
 export interface PresenceReader {
   getAllPresence(): Promise<Record<string, DailyPresenceParticipant[]>>;
+  getRoomPresence(roomName: string): Promise<DailyPresenceParticipant[]>;
 }
 
 /** The live implementations. Tests substitute their own object literals. */
 export const dailyRoomTeardown: RoomTeardown = { deleteRoom };
-export const dailyPresenceReader: PresenceReader = { getAllPresence };
+export const dailyPresenceReader: PresenceReader = { getAllPresence, getRoomPresence };
 
 // ── BAL-476 (R4) — PER-PARTICIPANT EJECT ──────────────────────────────────────────────────
 

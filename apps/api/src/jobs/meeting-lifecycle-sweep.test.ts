@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockListCandidates,
+  mockListStranded,
   mockFindMeetingById,
   mockEndMeeting,
   mockListByMeeting,
-  mockListOpen,
   mockListContexts,
   mockResolveOwner,
   mockResolvePresenceEffect,
@@ -28,10 +28,10 @@ const {
   mockCountFailedByStage,
 } = vi.hoisted(() => ({
   mockListCandidates: vi.fn(),
+  mockListStranded: vi.fn(),
   mockFindMeetingById: vi.fn(),
   mockEndMeeting: vi.fn(),
   mockListByMeeting: vi.fn(),
-  mockListOpen: vi.fn(),
   mockListContexts: vi.fn(),
   mockResolveOwner: vi.fn(),
   mockResolvePresenceEffect: vi.fn(),
@@ -64,10 +64,11 @@ vi.mock('@balo/db', () => ({
   db: {},
   meetingsRepository: {
     listLifecycleCandidates: mockListCandidates,
+    listStrandedLifecycleCandidates: mockListStranded,
     findById: mockFindMeetingById,
     endMeeting: mockEndMeeting,
   },
-  meetingPresenceRepository: { listByMeeting: mockListByMeeting, listOpen: mockListOpen },
+  meetingPresenceRepository: { listByMeeting: mockListByMeeting },
   meetingContextsRepository: { listByMeeting: mockListContexts },
   // BAL-480 — MANDATORY: `needsRecordingEnsure` calls `findCapturingForMeeting` directly. A
   // vitest factory mock throws on any export the import graph touches but the factory omits, so
@@ -86,6 +87,7 @@ vi.mock('@balo/analytics/server', () => ({
     // BAL-581 — MANDATORY: without this the venue arm calls `trackServer(undefined, …)`.
     MEETING_VENUE_UNAVAILABLE: 'meeting_venue_unavailable',
     MEETING_OVERRUN_STOPPED: 'meeting_overrun_stopped',
+    MEETING_PRESENCE_RECONCILED: 'meeting_presence_reconciled',
   },
 }));
 // ⚠⚠ THE FULL MODULE SURFACE, NOT JUST THE TWO FUNCTIONS THIS FILE HAPPENS TO ASSERT ON.
@@ -117,7 +119,7 @@ vi.mock('../notifications/scheduling/meeting-absence.js', () => ({
 }));
 vi.mock('../services/daily/rooms.js', () => ({
   dailyRoomTeardown: { deleteRoom: mockDeleteRoom },
-  dailyPresenceReader: { getAllPresence: vi.fn() },
+  dailyPresenceReader: { getAllPresence: vi.fn(), getRoomPresence: vi.fn() },
 }));
 // BAL-473 — MANDATORY: `meeting-lifecycle-sweep.ts` now imports `enqueueRecordingEnsure` /
 // `enqueueRecordingStop` from `./recording-capture.js`, which in turn imports `../lib/queue.js`
@@ -148,13 +150,17 @@ import {
   DEFAULT_MEETING_TIMERS,
 } from '@balo/shared/meetings';
 import {
+  MAX_RECONCILER_CLOSES_PER_TICK,
   MAX_RECORDING_ENSURES_PER_SWEEP_TICK,
+  MAX_ROOM_PRESENCE_READS_PER_TICK,
   MEETING_LIFECYCLE_BATCH_LIMIT,
   MEETING_LIFECYCLE_SWEEP_CRON,
+  MEETING_STRANDED_BATCH_LIMIT,
   roomOccupancy,
   runMeetingLifecycleSweep,
 } from './meeting-lifecycle-sweep.js';
 import type { PresenceReader } from '../services/daily/rooms.js';
+import { DailyApiError } from '../services/daily/errors.js';
 
 const MEETING_ID = '22222222-2222-4222-8222-222222222222';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -187,15 +193,45 @@ function meeting(overrides: Record<string, unknown> = {}) {
     joinUrl: `https://balo.daily.co/${ROOM}`,
     createdAt: at(-1440),
     venueProvisionedAt: at(-1440),
+    startedAt: null,
     endedAt: null,
     outcome: null,
     ...overrides,
   };
 }
 
-/** A presence reader port that answers a fixed roster — no network, no Daily account. */
-function reader(rooms: Record<string, Array<{ userId?: string }>>): PresenceReader {
-  return { getAllPresence: async () => rooms };
+type Participants = Array<{ userId?: string }>;
+
+/** A stored presence row — an OPEN interval (`leftAt: null`) unless overridden. */
+function presenceRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'row-1',
+    userId: USER_ID,
+    meetingGuestId: null,
+    party: 'client',
+    joinedAt: START,
+    leftAt: null,
+    ...overrides,
+  };
+}
+
+/**
+ * A per-room read that THROWS — the default, so a test that reaches a per-room read it did not
+ * stub reads as UNKNOWN (today's outcome) rather than as a confirmed-empty room.
+ */
+const UNSTUBBED_ROOM_READ = async (): Promise<Participants> => {
+  throw new Error('per-room read not stubbed');
+};
+
+/**
+ * A presence reader port that answers a fixed platform-wide roster and, optionally, a per-room
+ * read — no network, no Daily account.
+ */
+function reader(
+  rooms: Record<string, Participants>,
+  getRoomPresence: PresenceReader['getRoomPresence'] = UNSTUBBED_ROOM_READ
+): PresenceReader {
+  return { getAllPresence: async () => rooms, getRoomPresence };
 }
 
 const EMPTY_READER = reader({});
@@ -204,8 +240,8 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListCandidates.mockResolvedValue([]);
+    mockListStranded.mockResolvedValue([]);
     mockListByMeeting.mockResolvedValue([]);
-    mockListOpen.mockResolvedValue([]);
     mockListContexts.mockResolvedValue([
       { meetingId: MEETING_ID, contextType: 'case', contextId: 'ctx-1' },
     ]);
@@ -243,8 +279,8 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     const getAllPresence = vi.fn();
 
     await expect(
-      runMeetingLifecycleSweep(at(30), () => {}, { getAllPresence })
-    ).resolves.toMatchObject({ scanned: 0, terminated: 0 });
+      runMeetingLifecycleSweep(at(30), () => {}, { getAllPresence, getRoomPresence: vi.fn() })
+    ).resolves.toMatchObject({ scanned: 0, stranded: 0, terminated: 0 });
     expect(getAllPresence).not.toHaveBeenCalled();
   });
 
@@ -308,9 +344,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
   it('⚠ closes an open interval the vendor roster does not confirm, and WARNS about it', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
     mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
-    mockListOpen.mockResolvedValue([
-      { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'client', joinedAt: START },
-    ]);
+    mockListByMeeting.mockResolvedValue([presenceRow()]);
 
     const result = await runMeetingLifecycleSweep(at(30), () => {}, reader({ [ROOM]: [] }));
 
@@ -330,14 +364,8 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
   it('⚠⚠ builds the CLOSE effect from the stored row — never through the party derivation', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
     mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
-    const row = {
-      id: 'row-1',
-      userId: USER_ID,
-      meetingGuestId: null,
-      party: 'client',
-      joinedAt: START,
-    };
-    mockListOpen.mockResolvedValue([row]);
+    const row = presenceRow();
+    mockListByMeeting.mockResolvedValue([row]);
 
     await runMeetingLifecycleSweep(at(30), () => {}, reader({ [ROOM]: [] }));
 
@@ -351,15 +379,15 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
 
   it('leaves an interval alone when the vendor CONFIRMS the participant', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
-    mockListOpen.mockResolvedValue([
-      { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'client', joinedAt: START },
-    ]);
+    mockListByMeeting.mockResolvedValue([presenceRow()]);
 
-    const result = await runMeetingLifecycleSweep(at(30), () => {}, {
-      getAllPresence: async () => ({
+    const result = await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      reader({
         [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
-      }),
-    });
+      })
+    );
 
     expect(result.intervalsClosed).toBe(0);
   });
@@ -369,11 +397,13 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
     mockApplyPresenceEffect.mockResolvedValue('opened');
 
-    const result = await runMeetingLifecycleSweep(at(30), () => {}, {
-      getAllPresence: async () => ({
+    const result = await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      reader({
         [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
-      }),
-    });
+      })
+    );
 
     expect(result.intervalsOpened).toBe(1);
   });
@@ -411,14 +441,16 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       { party: 'client', joinedAt: at(2), leftAt: null },
     ]);
 
-    await runMeetingLifecycleSweep(at(30), () => {}, {
-      getAllPresence: async () => ({
+    await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      reader({
         [ROOM]: [
           { userId: dailyParticipantIdFor('user', USER_ID) },
           { userId: dailyParticipantIdFor('user', OTHER_USER_ID) },
         ],
-      }),
-    });
+      })
+    );
 
     // ⚠ THE RE-READ ROW, not the batch snapshot — `processCandidate` used to reuse the stale one.
     expect(mockFindMeetingById).toHaveBeenCalledWith(MEETING_ID);
@@ -441,11 +473,13 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockApplyPresenceEffect.mockResolvedValue('opened');
     mockReconcileMeetingStatus.mockResolvedValue('waiting_for_participants');
 
-    await runMeetingLifecycleSweep(at(30), () => {}, {
-      getAllPresence: async () => ({
+    await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      reader({
         [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
-      }),
-    });
+      })
+    );
 
     expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
   });
@@ -466,11 +500,13 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       { party: 'client', joinedAt: at(2), leftAt: at(20) },
     ]);
 
-    const result = await runMeetingLifecycleSweep(at(30), () => {}, {
-      getAllPresence: async () => ({
+    const result = await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      reader({
         [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
-      }),
-    });
+      })
+    );
 
     // Only reachable via `in_progress` — a `scheduled` meeting whose expert HAS been present
     // matches the abandoned wait instead, which carries a NULL outcome.
@@ -481,18 +517,20 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
   it('does NOT re-read or re-transition when reconciliation changed nothing', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
     mockListByMeeting.mockResolvedValue([
-      { party: 'expert', joinedAt: START, leftAt: null },
-      { party: 'client', joinedAt: at(1), leftAt: null },
-    ]);
-    mockListOpen.mockResolvedValue([
-      { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'expert', joinedAt: START },
+      presenceRow({ party: 'expert' }),
+      presenceRow({ id: 'row-2', userId: OTHER_USER_ID, joinedAt: at(1) }),
     ]);
 
-    await runMeetingLifecycleSweep(at(20), () => {}, {
-      getAllPresence: async () => ({
-        [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
-      }),
-    });
+    await runMeetingLifecycleSweep(
+      at(20),
+      () => {},
+      reader({
+        [ROOM]: [
+          { userId: dailyParticipantIdFor('user', USER_ID) },
+          { userId: dailyParticipantIdFor('user', OTHER_USER_ID) },
+        ],
+      })
+    );
 
     expect(mockFindMeetingById).not.toHaveBeenCalled();
     expect(mockReconcileMeetingStatus).not.toHaveBeenCalled();
@@ -503,11 +541,13 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockApplyPresenceEffect.mockResolvedValue('opened');
     mockFindMeetingById.mockResolvedValue(undefined);
 
-    const result = await runMeetingLifecycleSweep(at(30), () => {}, {
-      getAllPresence: async () => ({
+    const result = await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      reader({
         [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
-      }),
-    });
+      })
+    );
 
     expect(result.terminated).toBe(0);
     expect(mockEndMeeting).not.toHaveBeenCalled();
@@ -526,18 +566,20 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
   it('⚠⚠ BAL-480 — the level trigger fires with NO repair on this tick', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
     mockListByMeeting.mockResolvedValue([
-      { party: 'expert', joinedAt: START, leftAt: null },
-      { party: 'client', joinedAt: at(1), leftAt: null },
-    ]);
-    mockListOpen.mockResolvedValue([
-      { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'client', joinedAt: at(1) },
+      presenceRow({ id: 'row-0', userId: OTHER_USER_ID, party: 'expert' }),
+      presenceRow({ joinedAt: at(1) }),
     ]);
 
-    await runMeetingLifecycleSweep(at(20), () => {}, {
-      getAllPresence: async () => ({
-        [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
-      }),
-    });
+    await runMeetingLifecycleSweep(
+      at(20),
+      () => {},
+      reader({
+        [ROOM]: [
+          { userId: dailyParticipantIdFor('user', USER_ID) },
+          { userId: dailyParticipantIdFor('user', OTHER_USER_ID) },
+        ],
+      })
+    );
 
     expect(mockReconcileMeetingStatus).not.toHaveBeenCalled();
     expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith({
@@ -714,59 +756,154 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     );
   });
 
-  // ── ⚠⚠ S1 — THE PLATFORM-WIDE-EMPTY SANITY GATE ────────────────────────────────────────
+  // ── ⚠⚠ THE PER-ROOM FALLBACK (BAL-584) — a room Daily's platform-wide map does not list ──
+
+  const OPEN_ROW = presenceRow();
+  const UNMAPPED_ROW = presenceRow({ id: 'row-unmapped', userId: null, party: 'observer' });
 
   /**
-   * ⚠⚠ THE `rosterAvailable` GUARD ONLY COVERS A **THROWN** `getAllPresence`. A `200` whose body
-   * this platform cannot interpret the way it expects yields a well-formed EMPTY map with
-   * `rosterAvailable === true` — and then every candidate resolves to `[]` = "confirmed empty",
-   * every open interval on the platform closes in one tick, ~5 minutes later `idleEndApplies`
-   * ends every `in_progress` meeting, and `tearDownRoom` DELETES DAILY ROOMS OUT FROM UNDER
-   * PEOPLE WHO ARE STILL TALKING.
+   * ⚠⚠ THE INCIDENT SHAPE. Daily's platform-wide map never lists an EMPTY room, so once nobody is
+   * on any Balo call the map is `{}` — exactly when a stale interval needs closing. An empty map
+   * therefore proves nothing about any one room, and the per-room read is what confirms it.
    */
-  it('⚠⚠ S1 — a platform-wide EMPTY roster does not close intervals; it is UNKNOWN', async () => {
+  it('⚠⚠ global `{}` + per-room confirmed empty closes the interval THIS tick', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
-    mockListOpen.mockResolvedValue([
-      { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'client', joinedAt: START },
-    ]);
+    mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
+    mockListByMeeting.mockResolvedValue([OPEN_ROW]);
+    const getRoomPresence = vi.fn().mockResolvedValue([]);
 
-    const result = await runMeetingLifecycleSweep(at(30), () => {}, EMPTY_READER);
+    const result = await runMeetingLifecycleSweep(at(30), () => {}, reader({}, getRoomPresence));
 
-    expect(result.intervalsClosed).toBe(0);
-    expect(mockApplyPresenceEffect).not.toHaveBeenCalled();
-    expect(mockWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ meetingId: MEETING_ID, openIntervals: 1 }),
-      expect.stringContaining('NO participants in ANY room')
-    );
+    expect(result.intervalsClosed).toBe(1);
+    expect(getRoomPresence).toHaveBeenCalledTimes(1);
+    expect(getRoomPresence).toHaveBeenCalledWith(ROOM);
+  });
+
+  it.each([
+    ['a thrown error', new Error('daily is down')],
+    ['a 404', new DailyApiError('GET', `/rooms/${ROOM}/presence`, 404, 'not found')],
+    [
+      'a contract violation',
+      new DailyApiError('GET', `/rooms/${ROOM}/presence`, 0, 'body cannot be trusted'),
+    ],
+  ])(
+    '⚠⚠ a per-room read that fails (%s) is UNKNOWN — nothing closes, it warns, and a terminal rule still fires',
+    async (_label, failure) => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+      mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
+      mockListByMeeting.mockResolvedValue([
+        presenceRow({ id: 'row-0', userId: OTHER_USER_ID, party: 'expert' }),
+        OPEN_ROW,
+      ]);
+      mockEndMeeting.mockResolvedValue({
+        meeting: meeting({ status: 'ended' }),
+        closedIntervals: 2,
+      });
+
+      // Past the overrun ceiling, so rule 6 fires on the unknown roster.
+      const result = await runMeetingLifecycleSweep(
+        at(270),
+        () => {},
+        reader({}, vi.fn().mockRejectedValue(failure))
+      );
+
+      expect(result.intervalsClosed).toBe(0);
+      expect(mockApplyPresenceEffect).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, roomName: ROOM, error: failure.message }),
+        expect.stringContaining('per-room presence read failed')
+      );
+      expect(result.terminated).toBe(1);
+      expect(mockTrackServer).toHaveBeenCalledWith(
+        'meeting_overrun_stopped',
+        expect.objectContaining({ room_occupancy: 'unknown' })
+      );
+    }
+  );
+
+  describe('no per-room read is made when it cannot matter', () => {
+    it.each([
+      ['the room is listed in the platform-wide map', { [ROOM]: [{ userId: 'someone' }] }],
+      ['the room is listed in the platform-wide map as EMPTY', { [ROOM]: [] }],
+    ])('%s', async (_label, rooms) => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+      mockListByMeeting.mockResolvedValue([OPEN_ROW]);
+      const getRoomPresence = vi.fn();
+
+      await runMeetingLifecycleSweep(at(30), () => {}, reader(rooms, getRoomPresence));
+
+      expect(getRoomPresence).not.toHaveBeenCalled();
+    });
+
+    it('the platform-wide read FAILED — every roster is unknown, so no fan-out', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+      mockListByMeeting.mockResolvedValue([OPEN_ROW]);
+      const getRoomPresence = vi.fn();
+
+      await runMeetingLifecycleSweep(at(30), () => {}, {
+        getAllPresence: async () => {
+          throw new Error('daily is down');
+        },
+        getRoomPresence,
+      });
+
+      expect(getRoomPresence).not.toHaveBeenCalled();
+    });
+
+    it('the candidate holds NOTHING open — there is nothing to close', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+      mockListByMeeting.mockResolvedValue([]);
+      const getRoomPresence = vi.fn();
+
+      await runMeetingLifecycleSweep(at(30), () => {}, reader({}, getRoomPresence));
+
+      expect(getRoomPresence).not.toHaveBeenCalled();
+    });
+
+    it('⚠ the stamped room name disagrees with the derived one — UNKNOWN, nothing closes, and it warns', async () => {
+      const foreignRoom = 'balo-someone-elses-room';
+      mockListCandidates.mockResolvedValue([
+        meeting({ status: 'in_progress', dailyRoomName: foreignRoom }),
+      ]);
+      mockListByMeeting.mockResolvedValue([OPEN_ROW]);
+      const getRoomPresence = vi.fn().mockResolvedValue([]);
+
+      const result = await runMeetingLifecycleSweep(at(30), () => {}, reader({}, getRoomPresence));
+
+      expect(getRoomPresence).not.toHaveBeenCalled();
+      expect(result.intervalsClosed).toBe(0);
+      expect(mockApplyPresenceEffect).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        { meetingId: MEETING_ID, roomName: foreignRoom },
+        expect.stringContaining('disagrees with the derived one')
+      );
+    });
+
+    it('the meeting has no room name', async () => {
+      mockListCandidates.mockResolvedValue([
+        meeting({ status: 'in_progress', dailyRoomName: null, joinUrl: null }),
+      ]);
+      mockListByMeeting.mockResolvedValue([OPEN_ROW]);
+      const getRoomPresence = vi.fn();
+
+      await runMeetingLifecycleSweep(at(30), () => {}, reader({}, getRoomPresence));
+
+      expect(getRoomPresence).not.toHaveBeenCalled();
+    });
   });
 
   /**
-   * ⚠ THE GATE DISTINGUISHES "NO ROOMS AT ALL" FROM "THIS ROOM IS CONFIRMED EMPTY". The second
-   * is the ordinary everyone-left answer and MUST still reconcile — otherwise the gate would
-   * disable the reconciler's whole reason for existing.
+   * ⚠ A ROOM LISTED IN THE PLATFORM-WIDE MAP, EVEN AS `[]`, IS A CONFIRMED ANSWER for that room:
+   * it reconciles from the map, with no per-room read.
    */
   it('⚠ a room the vendor lists as EMPTY still reconciles — that is a confirmed answer', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
     mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
-    mockListOpen.mockResolvedValue([
-      { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'client', joinedAt: START },
-    ]);
+    mockListByMeeting.mockResolvedValue([OPEN_ROW]);
 
     const result = await runMeetingLifecycleSweep(at(30), () => {}, reader({ [ROOM]: [] }));
 
     expect(result.intervalsClosed).toBe(1);
-  });
-
-  it('a platform-wide empty roster still reconciles a candidate that holds NOTHING open', async () => {
-    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
-    mockListOpen.mockResolvedValue([]);
-
-    await runMeetingLifecycleSweep(at(30), () => {}, EMPTY_READER);
-
-    expect(mockWarn).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining('NO participants in ANY room')
-    );
   });
 
   /**
@@ -777,18 +914,20 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
    */
   it('⚠⚠ a VENDOR FAILURE skips reconciliation entirely — it never reads as "the room is empty"', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
-    mockListOpen.mockResolvedValue([
-      { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'client', joinedAt: START },
-    ]);
+    mockListByMeeting.mockResolvedValue([OPEN_ROW]);
 
+    const getRoomPresence = vi.fn();
     const result = await runMeetingLifecycleSweep(at(30), () => {}, {
       getAllPresence: async () => {
         throw new Error('daily is down');
       },
+      getRoomPresence,
     });
 
     expect(result.intervalsClosed).toBe(0);
     expect(mockApplyPresenceEffect).not.toHaveBeenCalled();
+    // ⚠ AN OUTAGE NEVER FANS OUT INTO PER-ROOM READS.
+    expect(getRoomPresence).not.toHaveBeenCalled();
     expect(mockErrorLog).toHaveBeenCalledWith(
       expect.objectContaining({ error: 'daily is down' }),
       expect.stringContaining('skipping reconciliation')
@@ -796,19 +935,57 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
   });
 
   /**
-   * ⚠ AN INTERVAL WITH NO IDENTITY CANNOT BE RECONCILED — there is nothing to match against the
-   * roster. It is `observer` by construction, so it bills nothing either way, and closing it on
-   * a guess would be worse than leaving it.
+   * ⚠ AN INTERVAL WITH NO IDENTITY CANNOT BE RECONCILED AGAINST A ROSTER — there is nothing to
+   * match. It is `observer` by construction, so it bills nothing either way, and closing it on
+   * a guess would be worse than leaving it. A room LISTED in the platform-wide map (even as
+   * `[]`) is not a confirmed-empty read.
    */
-  it('⚠ leaves an UNMAPPED interval (both identity columns null) alone', async () => {
+  it('⚠ leaves an UNMAPPED interval (both identity columns null) alone when the room is listed in the GLOBAL map, even as `[]`', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
-    mockListOpen.mockResolvedValue([
-      { id: 'row-1', userId: null, meetingGuestId: null, party: 'observer', joinedAt: START },
-    ]);
+    mockListByMeeting.mockResolvedValue([UNMAPPED_ROW]);
 
     const result = await runMeetingLifecycleSweep(at(30), () => {}, reader({ [ROOM]: [] }));
 
     expect(result.intervalsClosed).toBe(0);
+    expect(mockApplyPresenceEffect).not.toHaveBeenCalled();
+  });
+
+  it('⚠ a validated-empty per-room read closes an UNMAPPED interval — nobody is in the room to be it', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
+    mockListByMeeting.mockResolvedValue([UNMAPPED_ROW]);
+
+    const result = await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      reader({}, vi.fn().mockResolvedValue([]))
+    );
+
+    expect(result.intervalsClosed).toBe(1);
+    expect(mockClosePresenceEffectForRow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: MEETING_ID }),
+      UNMAPPED_ROW,
+      at(30)
+    );
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ participantId: null }),
+      expect.stringContaining('dropped webhook')
+    );
+  });
+
+  /** ⚠ AN ID-LESS PARTICIPANT STILL MAKES THE ROOM OCCUPIED — `vendorCount` is the RAW count. */
+  it('⚠ a per-room read with one id-less participant never closes an UNMAPPED interval', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([UNMAPPED_ROW]);
+
+    const result = await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      reader({}, vi.fn().mockResolvedValue([{}]))
+    );
+
+    expect(result.intervalsClosed).toBe(0);
+    expect(mockApplyPresenceEffect).not.toHaveBeenCalled();
   });
 
   // ── PASS 2 — THE FIVE TERMINAL RULES ────────────────────────────────────────────────────
@@ -1492,20 +1669,16 @@ describe('overrun_stop — the Arm B hard ceiling (BAL-585)', () => {
   /** scheduledEnd = start+60, so the ceiling is max(start+60, start+240) + 30 = start+270. */
   const CEILING_MINUTES = 270;
   const TWO_OPEN = [
-    { party: 'expert', joinedAt: START, leftAt: null },
-    { party: 'client', joinedAt: at(2), leftAt: null },
-  ];
-  const OPEN_ROWS = [
-    { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'expert', joinedAt: START },
-    { id: 'row-2', userId: OTHER_USER_ID, meetingGuestId: null, party: 'client', joinedAt: at(2) },
+    presenceRow({ party: 'expert' }),
+    presenceRow({ id: 'row-2', userId: OTHER_USER_ID, joinedAt: at(2) }),
   ];
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockListStranded.mockResolvedValue([]);
     mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
     mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
     mockListByMeeting.mockResolvedValue(TWO_OPEN);
-    mockListOpen.mockResolvedValue([]);
     mockListContexts.mockResolvedValue([]);
     mockEndMeeting.mockResolvedValue({
       meeting: meeting({ status: 'ended' }),
@@ -1528,9 +1701,10 @@ describe('overrun_stop — the Arm B hard ceiling (BAL-585)', () => {
     expect(mockTrackServer).not.toHaveBeenCalled();
   });
 
-  it('INCIDENT SHAPE — a whole-platform-empty roster still ends the meeting at the ceiling, occupancy unknown', async () => {
+  it('INCIDENT SHAPE — an unreadable per-room roster still ends the meeting at the ceiling, occupancy unknown', async () => {
     const now = at(CEILING_MINUTES);
-
+    // Global `{}` plus a per-room read that throws (`EMPTY_READER`'s default): nothing is
+    // confirmed, so nothing closes by the reconciler and the ceiling is what stops the call.
     const result = await runMeetingLifecycleSweep(now, () => {}, EMPTY_READER);
 
     expect(result.terminated).toBe(1);
@@ -1560,11 +1734,11 @@ describe('overrun_stop — the Arm B hard ceiling (BAL-585)', () => {
   });
 
   it('a roster that confirms both claims reports the room as occupied', async () => {
-    mockListOpen.mockResolvedValue(OPEN_ROWS);
-
-    const result = await runMeetingLifecycleSweep(at(CEILING_MINUTES), () => {}, {
-      getAllPresence: async () => ({ [ROOM]: BOTH_CLAIMS.map((userId) => ({ userId })) }),
-    });
+    const result = await runMeetingLifecycleSweep(
+      at(CEILING_MINUTES),
+      () => {},
+      reader({ [ROOM]: BOTH_CLAIMS.map((userId) => ({ userId })) })
+    );
 
     expect(result.terminated).toBe(1);
     expect(mockTrackServer).toHaveBeenCalledWith(
@@ -1578,6 +1752,7 @@ describe('overrun_stop — the Arm B hard ceiling (BAL-585)', () => {
       getAllPresence: async () => {
         throw new Error('daily is down');
       },
+      getRoomPresence: vi.fn(),
     });
 
     expect(result.terminated).toBe(1);
@@ -1609,14 +1784,486 @@ describe('overrun_stop — the Arm B hard ceiling (BAL-585)', () => {
   });
 });
 
+describe('the stranded arm and the reconciler caps (BAL-584)', () => {
+  /** scheduledEnd = start+60, so the ceiling is max(start+60, start+240) + 30 = start+270. */
+  const CEILING_MINUTES = 270;
+  const IDLE_END_MINUTES = DEFAULT_MEETING_TIMERS.idleEndEmptyMs / MINUTE;
+  /** Three days after the booking — far behind the 24h lookback floor. */
+  const STRAND_NOW = at(3 * 24 * 60);
+  const OPEN_PAIR = [
+    presenceRow({ party: 'expert' }),
+    presenceRow({ id: 'row-2', userId: OTHER_USER_ID, joinedAt: at(2) }),
+  ];
+  const CLOSED_AT_CEILING = OPEN_PAIR.map((row) => ({ ...row, leftAt: at(CEILING_MINUTES) }));
+
+  /** A meeting whose stamped room is derived from its OWN id, so it reads as venue-ready. */
+  function ownRoomMeeting(id: string, overrides: Record<string, unknown> = {}) {
+    const room = dailyRoomNameForMeeting(id);
+    return meeting({
+      id,
+      dailyRoomName: room,
+      joinUrl: `https://balo.daily.co/${room}`,
+      ...overrides,
+    });
+  }
+
+  function openRows(prefix: string, count: number) {
+    return Array.from({ length: count }, (_unused, index) =>
+      presenceRow({ id: `${prefix}-${index}`, userId: `${prefix}-user-${index}` })
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListCandidates.mockResolvedValue([]);
+    mockListStranded.mockResolvedValue([]);
+    mockFindMeetingById.mockResolvedValue(meeting({ status: 'in_progress' }));
+    mockListByMeeting.mockResolvedValue(OPEN_PAIR);
+    mockListContexts.mockResolvedValue([]);
+    mockEndMeeting.mockResolvedValue({ meeting: meeting({ status: 'ended' }), closedIntervals: 2 });
+    mockDeleteRoom.mockResolvedValue('deleted');
+    mockApplyPresenceEffect.mockResolvedValue('closed');
+    mockClosePresenceEffectForRow.mockReturnValue({ action: 'close' });
+    mockReconcileMeetingStatus.mockResolvedValue(null);
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'not_a_case_meeting',
+    });
+    mockFindCapturingForMeeting.mockResolvedValue(undefined);
+    mockCountFailedByStage.mockResolvedValue(0);
+  });
+
+  it('pins the three bounds', () => {
+    expect(MAX_RECONCILER_CLOSES_PER_TICK).toBe(25);
+    expect(MAX_ROOM_PRESENCE_READS_PER_TICK).toBe(20);
+    expect(MEETING_STRANDED_BATCH_LIMIT).toBe(50);
+  });
+
+  // ── The two reads ────────────────────────────────────────────────────────────────────────
+
+  it('reads the stranded batch strictly BEFORE the same floor the in-window read starts from', async () => {
+    await runMeetingLifecycleSweep(STRAND_NOW, () => {}, EMPTY_READER);
+
+    const floor = new Date(STRAND_NOW.getTime() - 24 * 60 * MINUTE);
+    expect(mockListCandidates).toHaveBeenCalledWith({
+      statuses: ['scheduled', 'waiting_for_participants', 'in_progress'],
+      scheduledStartAfter: floor,
+      limit: MEETING_LIFECYCLE_BATCH_LIMIT,
+    });
+    expect(mockListStranded).toHaveBeenCalledWith({
+      scheduledStartBefore: floor,
+      limit: MEETING_STRANDED_BATCH_LIMIT,
+    });
+  });
+
+  it('⚠ a FULL stranded batch warns, naming the oldest start it reached', async () => {
+    mockListStranded.mockResolvedValue(
+      Array.from({ length: MEETING_STRANDED_BATCH_LIMIT }, (_unused, index) =>
+        ownRoomMeeting(`strand-${index}`, { status: 'scheduled' })
+      )
+    );
+
+    await runMeetingLifecycleSweep(STRAND_NOW, () => {}, EMPTY_READER);
+
+    expect(mockWarn).toHaveBeenCalledWith(
+      { limit: MEETING_STRANDED_BATCH_LIMIT, oldestScheduledStart: START.toISOString() },
+      'Stranded lifecycle batch FILLED — strands were dropped from this tick'
+    );
+    expect(mockListCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: MEETING_LIFECYCLE_BATCH_LIMIT })
+    );
+  });
+
+  it('⚠ an EMPTY in-window batch does not skip the stranded arm', async () => {
+    mockListStranded.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    const getAllPresence = vi.fn().mockResolvedValue({});
+
+    const result = await runMeetingLifecycleSweep(STRAND_NOW, () => {}, {
+      getAllPresence,
+      getRoomPresence: UNSTUBBED_ROOM_READ,
+    });
+
+    expect(result).toMatchObject({ scanned: 1, stranded: 1, terminated: 1 });
+    expect(getAllPresence).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failing stranded read is logged and does not take the in-window batch down', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+    mockListStranded.mockRejectedValue(new Error('planner timeout'));
+    mockListByMeeting.mockResolvedValue([]);
+
+    const result = await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+
+    expect(result).toMatchObject({ scanned: 1, stranded: 0, terminated: 1 });
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      { error: 'planner timeout' },
+      'Stranded lifecycle read failed — strands are skipped this tick'
+    );
+  });
+
+  // ── ⚠⚠ THE 2132522b SHAPE ─────────────────────────────────────────────────────────────────
+
+  /**
+   * ⚠⚠ A call that ended three days ago with both `participant.left` webhooks dropped. Daily's
+   * map is `{}` (it never lists an empty room) and the per-room read confirms nobody is there.
+   * Both intervals close AT THE OVERRUN CEILING, not at the tick that noticed, and `idle_end`
+   * ends the meeting at the ceiling plus the idle window — about 4.5h recorded, not three days.
+   */
+  it('⚠⚠ a stranded in_progress call, confirmed empty, closes at the ceiling and ends idle_end backdated', async () => {
+    mockListStranded.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValueOnce(OPEN_PAIR).mockResolvedValueOnce(CLOSED_AT_CEILING);
+    const getRoomPresence = vi.fn().mockResolvedValue([]);
+
+    const result = await runMeetingLifecycleSweep(
+      STRAND_NOW,
+      () => {},
+      reader({}, getRoomPresence)
+    );
+
+    expect(result).toMatchObject({ stranded: 1, intervalsClosed: 2, terminated: 1 });
+    for (const row of OPEN_PAIR) {
+      expect(mockClosePresenceEffectForRow).toHaveBeenCalledWith(
+        expect.objectContaining({ id: MEETING_ID }),
+        row,
+        at(CEILING_MINUTES)
+      );
+    }
+    const endedAt = at(CEILING_MINUTES + IDLE_END_MINUTES);
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endedAt,
+        terminalRule: expect.objectContaining({ rule: 'idle_end' }),
+      })
+    );
+    expect(mockEmitMeetingEnded).toHaveBeenCalledWith(expect.objectContaining({ now: endedAt }));
+    // The settlement keeps the REAL tick instant — its ceiling already reads `meeting.endedAt`.
+    expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ now: STRAND_NOW })
+    );
+  });
+
+  /** ⚠ BAL-585 addendum — the late `overrun_stop` close must also stop at the instant it was due. */
+  it('⚠ the same shape with a per-room 404 ends overrun_stop on the first stranded tick, backdated to the ceiling', async () => {
+    mockListStranded.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    const notFound = new DailyApiError('GET', `/rooms/${ROOM}/presence`, 404, 'not found');
+
+    const result = await runMeetingLifecycleSweep(
+      STRAND_NOW,
+      () => {},
+      reader({}, vi.fn().mockRejectedValue(notFound))
+    );
+
+    expect(result).toMatchObject({ intervalsClosed: 0, terminated: 1 });
+    expect(mockEndMeeting).toHaveBeenCalledWith({
+      id: MEETING_ID,
+      outcome: 'completed',
+      endedBy: 'system_idle',
+      endedAt: at(CEILING_MINUTES),
+      actorUserId: null,
+      terminalRule: { rule: 'overrun_stop', arm: 'hard_ceiling' },
+    });
+    expect(mockTrackServer).toHaveBeenCalledWith('meeting_overrun_stopped', {
+      meeting_id: MEETING_ID,
+      room_occupancy: 'unknown',
+      // Measured to the EFFECTIVE stop, not to the tick that noticed.
+      minutes_past_scheduled_end: CEILING_MINUTES - 60,
+      open_intervals_closed: 2,
+      distinct_id: MEETING_ID,
+    });
+  });
+
+  it('an in-window termination is NOT backdated — `ended_at` stays the tick instant', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue(OPEN_PAIR);
+
+    await runMeetingLifecycleSweep(at(CEILING_MINUTES + 7), () => {}, EMPTY_READER);
+
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ endedAt: at(CEILING_MINUTES + 7) })
+    );
+  });
+
+  it('a pre-live strand reconciler close lands at the tick instant — no ceiling applies', async () => {
+    mockListStranded.mockResolvedValue([meeting({ status: 'waiting_for_participants' })]);
+    mockListByMeeting
+      .mockResolvedValueOnce([OPEN_PAIR[0]])
+      .mockResolvedValueOnce([{ ...OPEN_PAIR[0], leftAt: STRAND_NOW }]);
+
+    await runMeetingLifecycleSweep(STRAND_NOW, () => {}, reader({}, vi.fn().mockResolvedValue([])));
+
+    expect(mockClosePresenceEffectForRow).toHaveBeenCalledWith(
+      expect.anything(),
+      OPEN_PAIR[0],
+      STRAND_NOW
+    );
+  });
+
+  // ── Close-only, no arming ────────────────────────────────────────────────────────────────
+
+  it('⚠ a stranded candidate never opens an interval and never repairs status, even when the vendor lists an unknown participant', async () => {
+    mockListStranded.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([OPEN_PAIR[0]]);
+
+    const result = await runMeetingLifecycleSweep(
+      STRAND_NOW,
+      () => {},
+      reader({
+        [ROOM]: [
+          { userId: dailyParticipantIdFor('user', USER_ID) },
+          { userId: dailyParticipantIdFor('user', OTHER_USER_ID) },
+        ],
+      })
+    );
+
+    expect(result.intervalsOpened).toBe(0);
+    expect(mockResolvePresenceEffect).not.toHaveBeenCalled();
+    expect(mockReconcileMeetingStatus).not.toHaveBeenCalled();
+  });
+
+  it.each(['scheduled', 'waiting_for_participants'])(
+    '⚠ a stranded %s candidate whose interval closes never runs the status repair',
+    async (status) => {
+      mockListStranded.mockResolvedValue([meeting({ status })]);
+      mockListByMeeting
+        .mockResolvedValueOnce([OPEN_PAIR[0]])
+        .mockResolvedValueOnce([{ ...OPEN_PAIR[0], leftAt: STRAND_NOW }]);
+
+      const result = await runMeetingLifecycleSweep(
+        STRAND_NOW,
+        () => {},
+        reader({}, vi.fn().mockResolvedValue([]))
+      );
+
+      // The close happened, so the post-reconcile reload ran — and it is not the status repair.
+      expect(result.intervalsClosed).toBe(1);
+      expect(mockFindMeetingById).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockReconcileMeetingStatus).not.toHaveBeenCalled();
+    }
+  );
+
+  it('⚠ a stranded candidate arms no absence reminder and spends no recording-ensure budget', async () => {
+    // Pre-live, expert never present, past the start: an in-window candidate would arm the ops alert.
+    mockListStranded.mockResolvedValue([meeting({ status: 'scheduled' })]);
+    mockListByMeeting.mockResolvedValue([]);
+
+    await runMeetingLifecycleSweep(at(3), () => {}, EMPTY_READER);
+
+    expect(mockScheduleExpertAbsent).not.toHaveBeenCalled();
+    expect(mockScheduleClientAbsent).not.toHaveBeenCalled();
+  });
+
+  it('⚠ a live-looking stranded call never reaches the recordings table or the ensure queue', async () => {
+    mockListStranded.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([OPEN_PAIR[0]]);
+
+    const result = await runMeetingLifecycleSweep(
+      at(100),
+      () => {},
+      reader({ [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }] })
+    );
+
+    expect(result.terminated).toBe(0);
+    expect(result.recordingEnsures).toBe(0);
+    expect(mockFindCapturingForMeeting).not.toHaveBeenCalled();
+    expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
+  });
+
+  // ── The caps ─────────────────────────────────────────────────────────────────────────────
+
+  it('⚠ 26 closable intervals across an in-window and a stranded candidate → exactly 25 close, the in-window first; the next tick closes the last', async () => {
+    const strandRows = openRows('strand', 6);
+    mockListCandidates.mockResolvedValue([ownRoomMeeting('win', { status: 'in_progress' })]);
+    mockListStranded.mockResolvedValue([ownRoomMeeting('strand', { status: 'in_progress' })]);
+    mockFindMeetingById.mockImplementation(async (id: string) =>
+      ownRoomMeeting(id, { status: 'in_progress' })
+    );
+    mockListByMeeting.mockImplementation(async (id: string) =>
+      id === 'win' ? openRows('win', 20) : strandRows
+    );
+    const getRoomPresence = vi.fn().mockResolvedValue([]);
+
+    const tick = await runMeetingLifecycleSweep(at(100), () => {}, reader({}, getRoomPresence));
+
+    expect(tick.intervalsClosed).toBe(MAX_RECONCILER_CLOSES_PER_TICK);
+    expect(mockApplyPresenceEffect).toHaveBeenCalledTimes(MAX_RECONCILER_CLOSES_PER_TICK);
+    const closedMeetingIds = mockClosePresenceEffectForRow.mock.calls.map(
+      ([closedMeeting]) => (closedMeeting as { id: string }).id
+    );
+    expect(closedMeetingIds.slice(0, 20)).toEqual(Array.from({ length: 20 }, () => 'win'));
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      { limit: MAX_RECONCILER_CLOSES_PER_TICK, deferred: 1 },
+      expect.stringContaining('Reconciler close cap FILLED')
+    );
+
+    // The next tick: only the deferred row is left, and it closes.
+    vi.clearAllMocks();
+    mockListCandidates.mockResolvedValue([ownRoomMeeting('win', { status: 'in_progress' })]);
+    mockListStranded.mockResolvedValue([ownRoomMeeting('strand', { status: 'in_progress' })]);
+    mockListByMeeting.mockImplementation(async (id: string) =>
+      id === 'strand' ? strandRows.slice(5) : []
+    );
+    mockApplyPresenceEffect.mockResolvedValue('closed');
+    mockClosePresenceEffectForRow.mockReturnValue({ action: 'close' });
+
+    const next = await runMeetingLifecycleSweep(at(101), () => {}, reader({}, getRoomPresence));
+
+    expect(next.intervalsClosed).toBe(1);
+    expect(mockApplyPresenceEffect).toHaveBeenCalledTimes(1);
+    expect(mockErrorLog).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('close cap FILLED')
+    );
+  });
+
+  it('⚠ once the close cap is spent, a later absent-room candidate makes NO per-room read and its open intervals are deferred', async () => {
+    mockListCandidates.mockResolvedValue([
+      ownRoomMeeting('first', { status: 'in_progress' }),
+      ownRoomMeeting('second', { status: 'in_progress' }),
+    ]);
+    mockFindMeetingById.mockImplementation(async (id: string) =>
+      ownRoomMeeting(id, { status: 'in_progress' })
+    );
+    mockListByMeeting.mockImplementation(async (id: string) =>
+      id === 'first' ? openRows('first', MAX_RECONCILER_CLOSES_PER_TICK) : openRows('second', 3)
+    );
+    const getRoomPresence = vi.fn().mockResolvedValue([]);
+
+    const result = await runMeetingLifecycleSweep(at(100), () => {}, reader({}, getRoomPresence));
+
+    expect(getRoomPresence).toHaveBeenCalledTimes(1);
+    expect(getRoomPresence).toHaveBeenCalledWith(dailyRoomNameForMeeting('first'));
+    expect(result.intervalsClosed).toBe(MAX_RECONCILER_CLOSES_PER_TICK);
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      { limit: MAX_RECONCILER_CLOSES_PER_TICK, deferred: 3 },
+      expect.stringContaining('Reconciler close cap FILLED')
+    );
+  });
+
+  it('⚠ 21 absent-room candidates → 20 per-room reads, the 21st is UNKNOWN this tick, and the cap warns', async () => {
+    const total = MAX_ROOM_PRESENCE_READS_PER_TICK + 1;
+    mockListCandidates.mockResolvedValue(
+      Array.from({ length: total }, (_unused, index) =>
+        ownRoomMeeting(`absent-${index}`, { status: 'in_progress' })
+      )
+    );
+    mockFindMeetingById.mockImplementation(async (id: string) =>
+      ownRoomMeeting(id, { status: 'in_progress' })
+    );
+    mockListByMeeting.mockImplementation(async (id: string) => openRows(id, 1));
+    const getRoomPresence = vi.fn().mockResolvedValue([]);
+
+    const result = await runMeetingLifecycleSweep(at(100), () => {}, reader({}, getRoomPresence));
+
+    expect(getRoomPresence).toHaveBeenCalledTimes(MAX_ROOM_PRESENCE_READS_PER_TICK);
+    expect(result.intervalsClosed).toBe(MAX_ROOM_PRESENCE_READS_PER_TICK);
+    expect(mockWarn).toHaveBeenCalledWith(
+      { limit: MAX_ROOM_PRESENCE_READS_PER_TICK, deferred: 1 },
+      expect.stringContaining('Per-room presence read cap FILLED')
+    );
+  });
+
+  // ── The analytics event ──────────────────────────────────────────────────────────────────
+
+  it.each<{
+    label: string;
+    mode: 'in_window' | 'stranded';
+    rooms: Record<string, Participants>;
+    source: string;
+  }>([
+    {
+      label: 'a per-room read, in-window',
+      mode: 'in_window',
+      rooms: {},
+      source: 'room',
+    },
+    {
+      label: 'the platform-wide map, in-window',
+      mode: 'in_window',
+      rooms: { [ROOM]: [] },
+      source: 'platform',
+    },
+    {
+      label: 'a per-room read, stranded',
+      mode: 'stranded',
+      rooms: {},
+      source: 'room',
+    },
+    {
+      label: 'the platform-wide map, stranded',
+      mode: 'stranded',
+      rooms: { [ROOM]: [] },
+      source: 'platform',
+    },
+  ])(
+    'emits meeting_presence_reconciled once for a changed candidate — $label',
+    async ({ mode, rooms, source }) => {
+      const candidates = [meeting({ status: 'in_progress' })];
+      (mode === 'stranded' ? mockListStranded : mockListCandidates).mockResolvedValue(candidates);
+      mockListByMeeting.mockResolvedValue([OPEN_PAIR[0]]);
+
+      await runMeetingLifecycleSweep(
+        at(100),
+        () => {},
+        reader(rooms, vi.fn().mockResolvedValue([]))
+      );
+
+      const calls = mockTrackServer.mock.calls.filter(
+        ([event]) => event === 'meeting_presence_reconciled'
+      );
+      expect(calls).toEqual([
+        [
+          'meeting_presence_reconciled',
+          {
+            meeting_id: MEETING_ID,
+            intervals_closed: 1,
+            intervals_opened: 0,
+            roster_source: source,
+            stranded: mode === 'stranded',
+            distinct_id: MEETING_ID,
+          },
+        ],
+      ]);
+    }
+  );
+
+  it('emits nothing when the reconciler changed nothing', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([OPEN_PAIR[0]]);
+
+    await runMeetingLifecycleSweep(
+      at(100),
+      () => {},
+      reader({ [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }] })
+    );
+
+    expect(mockTrackServer).not.toHaveBeenCalledWith(
+      'meeting_presence_reconciled',
+      expect.anything()
+    );
+  });
+});
+
 describe('roomOccupancy', () => {
   it.each([
-    { roster: null, platformEmpty: false, expected: 'unknown' },
-    { roster: ['a'], platformEmpty: true, expected: 'unknown' },
-    { roster: [], platformEmpty: false, expected: 'empty' },
-    { roster: ['a'], platformEmpty: false, expected: 'occupied' },
-  ])('roster $roster, platform empty $platformEmpty -> $expected', (row) => {
-    expect(roomOccupancy(row.roster, row.platformEmpty)).toBe(row.expected);
+    { label: 'unknown', read: { source: 'unknown' }, expected: 'unknown' },
+    {
+      label: 'a validated empty room read',
+      read: { source: 'room', participants: [], vendorCount: 0 },
+      expected: 'empty',
+    },
+    {
+      label: 'a platform-map room with listed ids',
+      read: { source: 'platform', participants: ['a'], vendorCount: 1 },
+      expected: 'occupied',
+    },
+    {
+      // ⚠ THE RAW COUNT, NOT THE FILTERED IDS — an id-less participant still occupies the room.
+      label: 'a room whose only participant has no id',
+      read: { source: 'room', participants: [], vendorCount: 1 },
+      expected: 'occupied',
+    },
+  ] as const)('$label -> $expected', ({ read, expected }) => {
+    expect(roomOccupancy(read)).toBe(expected);
   });
 });
 

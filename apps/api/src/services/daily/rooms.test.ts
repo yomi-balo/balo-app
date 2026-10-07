@@ -11,6 +11,7 @@ import {
   deleteRoom,
   ejectParticipants,
   getAllPresence,
+  getRoomPresence,
   DAILY_EJECT_MAX_IDS,
 } from './rooms.js';
 
@@ -445,7 +446,8 @@ describe('getAllPresence (BAL-134)', () => {
 
   /**
    * ⚠ AN EMPTY MAP IS A LEGITIMATE, WELL-FORMED ANSWER — nobody is on any call. It is returned
-   * faithfully; deciding whether to ACT on it is the sweep's sanity gate, not this function's.
+   * faithfully; what it licenses is the sweep's decision (an absent room still needs a per-room
+   * read before anything is closed), not this function's.
    */
   it('answers an empty map for an empty body', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, {})));
@@ -469,6 +471,100 @@ describe('getAllPresence (BAL-134)', () => {
   });
 });
 
+describe('getRoomPresence (BAL-584)', () => {
+  const USER_ID = 'u0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d';
+
+  function stubBody(body: unknown): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('parses the documented body and GETs the URL-encoded per-room path', async () => {
+    const fetchMock = stubBody({
+      total_count: 1,
+      data: [
+        {
+          room: ROOM,
+          id: 'sess-1',
+          userId: USER_ID,
+          userName: 'Dana',
+          mtgSessionId: 'mtg-1',
+          joinTime: '2026-10-07T01:00:00.000Z',
+          duration: 2312,
+        },
+      ],
+    });
+
+    await expect(getRoomPresence(ROOM)).resolves.toEqual([
+      { room: ROOM, id: 'sess-1', userId: USER_ID, joinTime: '2026-10-07T01:00:00.000Z' },
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${DAILY_API_BASE}/rooms/${ROOM}/presence`);
+    expect(init.method).toBe('GET');
+  });
+
+  it('URL-encodes the room name into the path', async () => {
+    const fetchMock = stubBody({ total_count: 0, data: [] });
+
+    await getRoomPresence('balo room/1');
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe(`${DAILY_API_BASE}/rooms/balo%20room%2F1/presence`);
+  });
+
+  it('answers [] for a validated empty room', async () => {
+    stubBody({ total_count: 0, data: [] });
+
+    await expect(getRoomPresence(ROOM)).resolves.toEqual([]);
+  });
+
+  it('accepts a row that omits `room`', async () => {
+    stubBody({ total_count: 1, data: [{ userId: USER_ID }] });
+
+    await expect(getRoomPresence(ROOM)).resolves.toEqual([{ userId: USER_ID }]);
+  });
+
+  /**
+   * ⚠⚠ EVERY ONE OF THESE MUST THROW: an empty-looking return from this function is the licence
+   * to close intervals with no identity match, so a body that cannot be trusted has to take the
+   * UNKNOWN path instead.
+   */
+  it.each([
+    ['a body that is not an object', ['not', 'an', 'envelope']],
+    ['a missing data array', { total_count: 0 }],
+    ['a non-array data', { total_count: 0, data: 'nonsense' }],
+    ['a negative total_count', { total_count: -1, data: [] }],
+    ['a non-integer total_count', { total_count: 0.5, data: [] }],
+    ['a total_count above the rows returned (truncation)', { total_count: 3, data: [{}] }],
+    ['a total_count below the rows returned', { total_count: 0, data: [{ userId: USER_ID }] }],
+    [
+      'a row naming a different room',
+      { total_count: 1, data: [{ room: 'balo-other', userId: USER_ID }] },
+    ],
+  ])('⚠⚠ THROWS on %s', async (_label, body) => {
+    stubBody(body);
+
+    await expect(getRoomPresence(ROOM)).rejects.toMatchObject({
+      name: 'DailyApiError',
+      path: `/rooms/${ROOM}/presence`,
+      body: expect.stringContaining('cannot trust'),
+    });
+  });
+
+  it('propagates a 404 rather than reading a missing room as empty', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(404, { error: 'not-found', info: 'no such room' }))
+    );
+
+    await expect(getRoomPresence(ROOM)).rejects.toBeInstanceOf(DailyApiError);
+    await expect(getRoomPresence(ROOM)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
 describe('the BAL-134 ports', () => {
   it('dailyRoomTeardown satisfies RoomTeardown with the live deleteRoom', () => {
     expect(dailyRoomTeardown.deleteRoom).toBe(deleteRoom);
@@ -476,6 +572,7 @@ describe('the BAL-134 ports', () => {
 
   it('dailyPresenceReader satisfies PresenceReader with the live getAllPresence', () => {
     expect(dailyPresenceReader.getAllPresence).toBe(getAllPresence);
+    expect(dailyPresenceReader.getRoomPresence).toBe(getRoomPresence);
   });
 });
 

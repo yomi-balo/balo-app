@@ -7,9 +7,12 @@ import {
   expertClockStart,
   isLegalMeetingTransition,
   isTerminalMeetingStatus,
+  latestPresenceInstant,
   overrunStopCeiling,
   resolveTerminalRule,
   resolveWaitingPhase,
+  strandedEndedAt,
+  strandedReconcileCloseAt,
   summarisePresence,
   venueAbsenceAnchor,
   type LifecyclePresenceInterval,
@@ -766,6 +769,137 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
   });
 });
 
+describe('MeetingTerminalDecision.dueAt (BAL-584)', () => {
+  const FIRED_ROWS = TERMINAL_ROWS.filter((row) => row.expected !== null);
+
+  it.each(FIRED_ROWS)('⚠ dueAt is the exact threshold the rule fires at: $label', (row) => {
+    const input = inputFor(row);
+    const decision = resolveTerminalRule(input);
+    if (decision === null) {
+      throw new Error('a fired row must resolve a decision');
+    }
+    expect(decision.dueAt.getTime()).toBeLessThanOrEqual(input.now.getTime());
+    const atDue = resolveTerminalRule({ ...input, now: decision.dueAt });
+    expect(atDue?.rule).toBe(decision.rule);
+    const justBefore = resolveTerminalRule({
+      ...input,
+      now: new Date(decision.dueAt.getTime() - 1),
+    });
+    expect(justBefore).toBeNull();
+  });
+
+  it('the overrun stop is due at overrunStopCeiling', () => {
+    const decision = resolveTerminalRule({
+      status: 'in_progress',
+      scheduledStart: START,
+      scheduledEnd: at(60),
+      presence: summarisePresence([{ party: 'expert', joinedAt: at(0), leftAt: null }]),
+      timers: DEFAULT_MEETING_TIMERS,
+      now: at(500),
+      venueReadyAt: VENUE_READY_AT_BOOKING,
+    });
+    expect(decision?.rule).toBe('overrun_stop');
+    expect(decision?.dueAt).toEqual(overrunStopCeiling(START, at(60), DEFAULT_MEETING_TIMERS));
+  });
+});
+
+describe('latestPresenceInstant (BAL-584)', () => {
+  it('is null with no intervals', () => {
+    expect(latestPresenceInstant([])).toBeNull();
+  });
+
+  it('is the max over every join and leave, whatever the order', () => {
+    expect(
+      latestPresenceInstant([
+        { party: 'client', joinedAt: at(40), leftAt: null },
+        { party: 'expert', joinedAt: at(0), leftAt: at(30) },
+      ])
+    ).toEqual(at(40));
+    expect(
+      latestPresenceInstant([
+        { party: 'expert', joinedAt: at(0), leftAt: at(90) },
+        { party: 'client', joinedAt: at(40), leftAt: at(50) },
+      ])
+    ).toEqual(at(90));
+  });
+
+  it('skips an interval with a non-finite endpoint, whole', () => {
+    expect(
+      latestPresenceInstant([
+        { party: 'expert', joinedAt: at(0), leftAt: at(10) },
+        { party: 'client', joinedAt: at(5), leftAt: new Date(Number.NaN) },
+        { party: 'client', joinedAt: new Date(Number.NaN), leftAt: at(500) },
+      ])
+    ).toEqual(at(10));
+    expect(
+      latestPresenceInstant([{ party: 'client', joinedAt: new Date(Number.NaN), leftAt: null }])
+    ).toBeNull();
+  });
+});
+
+describe('strandedReconcileCloseAt (BAL-584)', () => {
+  const base = {
+    scheduledStart: START,
+    scheduledEnd: at(60),
+    timers: DEFAULT_MEETING_TIMERS,
+  };
+
+  it('an in_progress strand past its ceiling closes AT the ceiling', () => {
+    expect(
+      strandedReconcileCloseAt({ ...base, status: 'in_progress', now: at(3 * 24 * 60) })
+    ).toEqual(at(270));
+  });
+
+  it('an in_progress meeting before its ceiling closes at now', () => {
+    expect(strandedReconcileCloseAt({ ...base, status: 'in_progress', now: at(100) })).toEqual(
+      at(100)
+    );
+  });
+
+  it.each(['scheduled', 'waiting_for_participants'] as const)(
+    'a pre-live %s strand closes at now',
+    (status) => {
+      expect(strandedReconcileCloseAt({ ...base, status, now: at(3 * 24 * 60) })).toEqual(
+        at(3 * 24 * 60)
+      );
+    }
+  );
+});
+
+describe('strandedEndedAt (BAL-584)', () => {
+  const now = at(1000);
+
+  it('is the due instant when nothing recorded is later', () => {
+    expect(
+      strandedEndedAt({ dueAt: at(270), now, latestPresenceAt: at(200), startedAt: at(5) })
+    ).toEqual(at(270));
+  });
+
+  it('is floored at the latest presence instant', () => {
+    expect(
+      strandedEndedAt({ dueAt: at(270), now, latestPresenceAt: at(300), startedAt: at(5) })
+    ).toEqual(at(300));
+  });
+
+  it('is floored at started_at', () => {
+    expect(
+      strandedEndedAt({ dueAt: at(270), now, latestPresenceAt: null, startedAt: at(400) })
+    ).toEqual(at(400));
+  });
+
+  it('is capped at now', () => {
+    expect(
+      strandedEndedAt({ dueAt: at(2000), now, latestPresenceAt: null, startedAt: null })
+    ).toEqual(now);
+  });
+
+  it('is the due instant when there is no presence and no start', () => {
+    expect(
+      strandedEndedAt({ dueAt: at(270), now, latestPresenceAt: null, startedAt: null })
+    ).toEqual(at(270));
+  });
+});
+
 // ── ⚠⚠ TOTALITY (C2) ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -774,7 +908,7 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
  * Disjointness stops TWO rules firing. Totality stops ZERO firing — and zero is the failure
  * with teeth: a non-terminal meeting nothing can terminate is never settled, its credit hold is
  * never released, no human remains to press End, and after 24 h the sweep's
- * `listLifecycleCandidates` lookback floor hides it from every future repair. The taxonomy
+ * `listLifecycleCandidates` lookback floor takes it out of the in-window batch. The taxonomy
  * stranded that way on TWO distinct routes before this test existed (rule 4's removed
  * `expertPresentMs < floor` and `!clientSideEverPresent` guards).
  *
