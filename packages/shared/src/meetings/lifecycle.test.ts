@@ -1149,9 +1149,9 @@ describe('rule 4 ceiling arm — the expert left while an observer stays', () =>
   it.each(SHAPES)(
     '$status linkGuest=$admittedLinkGuestPresent: abandoned_wait fires at the ceiling, not before, and is disjoint',
     ({ status, admittedLinkGuestPresent }) => {
-      expect(resolveTerminalRule(inputAt(status, admittedLinkGuestPresent, CEILING_MIN - 1))).toBe(
-        null
-      );
+      expect(
+        resolveTerminalRule(inputAt(status, admittedLinkGuestPresent, CEILING_MIN - 1))
+      ).toBeNull();
       const atCeiling = inputAt(status, admittedLinkGuestPresent, CEILING_MIN);
       expect(resolveTerminalRule(atCeiling)).toEqual({
         rule: 'abandoned_wait',
