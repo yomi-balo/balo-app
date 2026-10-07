@@ -16,6 +16,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import type { ReservableCaseBooking } from '@balo/shared/credit';
+import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import {
   assertMeetingTransition,
   DAILY_ROOM_NAME_PREFIX,
@@ -197,6 +198,12 @@ export interface UnprovisionedScheduledMeeting {
 export interface ListStrandedLiveInput {
   /** Inclusive. Meetings whose `scheduled_end` is at or before this are in scope. */
   scheduledEndBefore: Date;
+  /**
+   * Inclusive. An `in_progress` meeting with an open presence interval is returned only when
+   * `GREATEST(scheduled_end, scheduled_start + MAX_SESSION_MINUTES) <= liveCeilingBefore`.
+   * The caller passes `now − overrunStopGraceMs − <slack past the forced stop>`.
+   */
+  liveCeilingBefore: Date;
   /** Hard bound. ⚠ The CALLER must `log.warn` when the result length equals it. */
   limit: number;
 }
@@ -209,6 +216,8 @@ export interface StrandedLiveMeeting {
   readonly scheduledEnd: Date;
   /** Presence intervals with `left_at IS NULL` and not soft-deleted. */
   readonly openIntervalCount: number;
+  /** The open intervals whose party is not `observer` — the ones a presence session bills. */
+  readonly openBillableIntervalCount: number;
   /** Earliest `joined_at` among the open intervals; null iff `openIntervalCount` is 0. */
   readonly oldestOpenJoinedAt: Date | null;
 }
@@ -1700,7 +1709,14 @@ export const meetingsRepository = {
    * implied by the `scheduled_start < scheduled_end` CHECK; it exists to give
    * `meeting_status_scheduled_start_idx` a range to scan, with `scheduled_end` a residual filter.
    *
-   * The open-interval count and oldest join come from correlated subqueries on
+   * A call that is legitimately still running is NOT stranded: an `in_progress` meeting with an
+   * open interval additionally needs `GREATEST(scheduled_end, scheduled_start +
+   * MAX_SESSION_MINUTES) <= liveCeilingBefore`. That is the SQL mirror of `overrunStopCeiling`
+   * (`@balo/shared/meetings`, `lifecycle.ts`) — the instant the lifecycle sweep force-stops it —
+   * and `meetings.integration.test.ts` pins the two in agreement. It lives in the WHERE so the
+   * batch limit cannot be starved by rows the finder would discard.
+   *
+   * The open-interval counts and oldest join come from correlated subqueries on
    * `meeting_presence` (`left_at IS NULL AND deleted_at IS NULL`, riding
    * `meeting_presence_open_idx`).
    *
@@ -1722,6 +1738,7 @@ export const meetingsRepository = {
         scheduledStart: meetings.scheduledStart,
         scheduledEnd: meetings.scheduledEnd,
         openIntervalCount: sql<number>`(SELECT count(*)::int FROM ${meetingPresence} WHERE ${openInterval})`,
+        openBillableIntervalCount: sql<number>`(SELECT count(*)::int FROM ${meetingPresence} WHERE ${openInterval} AND ${meetingPresence.party} <> 'observer')`,
         oldestOpenJoinedAt: sql<Date | null>`(SELECT min(${meetingPresence.joinedAt}) FROM ${meetingPresence} WHERE ${openInterval})`,
       })
       .from(meetings)
@@ -1730,7 +1747,17 @@ export const meetingsRepository = {
           inArray(meetings.status, [...END_MEETING_FROM]),
           lte(meetings.scheduledEnd, input.scheduledEndBefore),
           lt(meetings.scheduledStart, input.scheduledEndBefore),
-          isNull(meetings.deletedAt)
+          isNull(meetings.deletedAt),
+          or(
+            ne(meetings.status, 'in_progress'),
+            notExists(
+              db
+                .select({ one: sql`1` })
+                .from(meetingPresence)
+                .where(openInterval)
+            ),
+            sql`GREATEST(${meetings.scheduledEnd}, ${meetings.scheduledStart} + ${MAX_SESSION_MINUTES}::int * interval '1 minute') <= ${input.liveCeilingBefore.toISOString()}::timestamptz`
+          )
         )
       )
       .orderBy(asc(meetings.scheduledEnd), asc(meetings.id))

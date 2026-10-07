@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import {
   dailyRoomNameForMeeting,
+  DEFAULT_MEETING_TIMERS,
+  overrunStopCeiling,
   isMeetingVenueReady,
   type MeetingClocks,
 } from '@balo/shared/meetings';
@@ -1145,8 +1147,15 @@ describe('meetingsRepository.listStrandedLive (BAL-586)', () => {
     return meeting.id;
   }
 
-  function list(limit = 50): Promise<StrandedLiveMeeting[]> {
-    return meetingsRepository.listStrandedLive({ scheduledEndBefore: CUTOFF, limit });
+  /** Far enough ahead that the live-ceiling term never excludes anything unless a test sets it. */
+  const NO_CEILING = new Date('2040-01-01T00:00:00.000Z');
+
+  function list(limit = 50, liveCeilingBefore = NO_CEILING): Promise<StrandedLiveMeeting[]> {
+    return meetingsRepository.listStrandedLive({
+      scheduledEndBefore: CUTOFF,
+      liveCeilingBefore,
+      limit,
+    });
   }
 
   it('returns a live meeting ended at the cutoff (inclusive) and excludes one a minute later', async () => {
@@ -1215,6 +1224,64 @@ describe('meetingsRepository.listStrandedLive (BAL-586)', () => {
     const row = (await list()).find((r) => r.meetingId === id);
     expect(row?.openIntervalCount).toBe(2);
     expect(row?.oldestOpenJoinedAt).toEqual(earliestOpen);
+  });
+
+  it('counts open observers apart from billable intervals', async () => {
+    const id = await meetingEndingAt(new Date(CUTOFF.getTime() - MINUTE_MS));
+    await presentOn(id, 'client');
+    await presentOn(id, 'observer');
+    await presentOn(id, 'observer');
+
+    const row = (await list()).find((r) => r.meetingId === id);
+    expect(row?.openIntervalCount).toBe(3);
+    expect(row?.openBillableIntervalCount).toBe(1);
+  });
+
+  describe('the live-call ceiling', () => {
+    const TIMERS = DEFAULT_MEETING_TIMERS;
+
+    /** `liveCeilingBefore` that sits exactly on this meeting's forced-stop instant's pre-slack form. */
+    function ceilingFor(start: Date, end: Date): Date {
+      return new Date(overrunStopCeiling(start, end, TIMERS).getTime() - TIMERS.overrunStopGraceMs);
+    }
+
+    async function occupiedInProgress(start: Date, end: Date): Promise<string> {
+      const { meeting } = await meetingFactory({
+        values: { status: 'in_progress', scheduledStart: start, scheduledEnd: end },
+      });
+      await presentOn(meeting.id, 'client');
+      return meeting.id;
+    }
+
+    it.each([
+      ['a booking shorter than the meter limit', 60],
+      ['a booking longer than the meter limit', 6 * 60],
+    ])('agrees with overrunStopCeiling at the boundary for %s', async (_label, bookedMinutes) => {
+      const start = new Date(CUTOFF.getTime() - 20 * HOUR_MS);
+      const end = new Date(start.getTime() + bookedMinutes * MINUTE_MS);
+      const id = await occupiedInProgress(start, end);
+      const boundary = ceilingFor(start, end);
+
+      expect((await list(50, boundary)).map((r) => r.meetingId)).toContain(id);
+      expect(
+        (await list(50, new Date(boundary.getTime() - 1))).map((r) => r.meetingId)
+      ).not.toContain(id);
+    });
+
+    it('applies only to an in_progress meeting with an open interval', async () => {
+      const start = new Date(CUTOFF.getTime() - 3 * HOUR_MS);
+      const end = new Date(start.getTime() + HOUR_MS);
+      const emptyInProgress = await meetingEndingAt(end, { status: 'in_progress' });
+      const waitingOccupied = await meetingEndingAt(end, { status: 'waiting_for_participants' });
+      await presentOn(waitingOccupied, 'client');
+      const occupied = await occupiedInProgress(start, end);
+      const early = new Date(start.getTime() - DAY_MS);
+
+      const ids = (await list(50, early)).map((r) => r.meetingId);
+      expect(ids).toContain(emptyInProgress);
+      expect(ids).toContain(waitingOccupied);
+      expect(ids).not.toContain(occupied);
+    });
   });
 
   it('reports zero open intervals and a null oldest join when nobody is connected', async () => {

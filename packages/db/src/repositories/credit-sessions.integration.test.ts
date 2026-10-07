@@ -47,6 +47,7 @@ import {
   SettlementDrawDivergedError,
   SettlementRefusedError,
   PRESENCE_SETTLEMENT_EXHAUSTED_ACTION,
+  PRESENCE_SETTLEMENT_EXHAUSTION_CLEARED_ACTION,
   SESSION_OPENED_ON_BEHALF_ACTION,
   SESSIONLESS_CASE_MEETING_MARKED_ACTION,
   type OpenAndSettleFromPresenceInput,
@@ -4138,6 +4139,80 @@ describe('creditSessionsRepository.findPresenceSettlementCandidates / markPresen
     const candidates = await creditSessionsRepository.findPresenceSettlementCandidates(CUTOFF, 1);
     expect(candidates).toHaveLength(1);
     expect(candidates.map((r) => r.id)).toEqual([newerId]);
+  });
+
+  describe('the effective exhaustion marker (exhausted vs cleared, newest wins)', () => {
+    const CUTOFF_AT = meterAt(60);
+
+    async function markExhausted(id: string, meetingId: string): Promise<void> {
+      await creditSessionsRepository.markPresenceSettlementExhausted({
+        sessionId: id,
+        meetingId,
+        guard: 'figure_exceeds_bound',
+        error: 'x',
+      });
+    }
+
+    async function clearExhaustion(id: string): Promise<void> {
+      await db.insert(auditEvents).values({
+        actorUserId: null,
+        action: PRESENCE_SETTLEMENT_EXHAUSTION_CLEARED_ACTION,
+        entityType: 'credit_session',
+        entityId: id,
+        metadata: { by: 'ops', reason: 'fix deployed', ticket: 'BAL-586' },
+      });
+    }
+
+    async function state(id: string): Promise<{ candidate: boolean; exhausted: boolean }> {
+      const candidates = await creditSessionsRepository.findPresenceSettlementCandidates(CUTOFF_AT);
+      const label = (await creditSessionsRepository.listPresenceAlertLabels([id])).get(id);
+      return {
+        candidate: candidates.some((r) => r.id === id),
+        exhausted: label?.settlementExhausted === true,
+      };
+    }
+
+    it('marked: excluded from candidates and labelled exhausted', async () => {
+      const { id, meetingId } = await unsettled();
+      await markExhausted(id, meetingId);
+      expect(await state(id)).toEqual({ candidate: false, exhausted: true });
+    });
+
+    it('marked then cleared: a candidate again and not labelled exhausted', async () => {
+      const { id, meetingId } = await unsettled();
+      await markExhausted(id, meetingId);
+      await clearExhaustion(id);
+      expect(await state(id)).toEqual({ candidate: true, exhausted: false });
+      const label = (await creditSessionsRepository.listPresenceAlertLabels([id])).get(id);
+      expect(label?.exhaustionGuard).toBeNull();
+    });
+
+    it('marked, cleared, re-marked: excluded again', async () => {
+      const { id, meetingId } = await unsettled();
+      await markExhausted(id, meetingId);
+      await clearExhaustion(id);
+      await markExhausted(id, meetingId);
+      expect(await state(id)).toEqual({ candidate: false, exhausted: true });
+    });
+
+    it('a tie on created_at is decided by seq, in both orders', async () => {
+      const tied = new Date('2027-01-01T00:00:00.000Z');
+      const pin = async (id: string): Promise<void> => {
+        await db.update(auditEvents).set({ createdAt: tied }).where(eq(auditEvents.entityId, id));
+      };
+
+      const clearedLater = await unsettled();
+      await markExhausted(clearedLater.id, clearedLater.meetingId);
+      await clearExhaustion(clearedLater.id);
+      await pin(clearedLater.id);
+      expect(await state(clearedLater.id)).toEqual({ candidate: true, exhausted: false });
+
+      const markedLater = await unsettled();
+      await clearExhaustion(markedLater.id);
+      await markExhausted(markedLater.id, markedLater.meetingId);
+      await pin(markedLater.id);
+      expect(await state(markedLater.id)).toEqual({ candidate: false, exhausted: true });
+    });
   });
 
   it('once a marked row settles it is absent from both reads, so session.presence_stuck closes', async () => {

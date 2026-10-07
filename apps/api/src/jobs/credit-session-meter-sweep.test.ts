@@ -162,22 +162,10 @@ vi.mock('../services/credit-session/index.js', () => ({
   settleSessionFromPresence: mockSettleSessionFromPresence,
 }));
 
-// BAL-586 — importing the finders module (for its threshold constant) needs its two heavy
-// transitive imports stubbed, exactly as `admin-alert-finders.test.ts` does.
-vi.mock('./calendar-subscription-monitor.js', () => ({
-  SUBSCRIPTION_EXPIRY_ALERT_MS: 48 * 60 * 60 * 1000,
-  SUBSCRIPTION_UNCONFIRMED_GRACE_MS: 2 * 60 * 60 * 1000,
-}));
-vi.mock('../config/meeting-timers.js', () => ({
-  resolveMeetingTimers: () => ({ missedCallTerminationMs: 10 * 60_000 }),
-}));
-
 import {
-  PRESENCE_SETTLEMENT_GRACE_MINUTES,
   runSessionMeterSweep,
   startCreditSessionMeterSweepWorker,
 } from './credit-session-meter-sweep.js';
-import { PRESENCE_UNSETTLED_ALERT_MS } from './admin-alert-finders.js';
 
 const NOW = new Date('2026-07-16T12:00:00.000Z');
 
@@ -190,12 +178,6 @@ function activeSession(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
-
-describe('presence-unsettled alert threshold', () => {
-  it("exceeds the backstop's own retry grace, so the alert never fires before pass 6 has had its chance", () => {
-    expect(PRESENCE_UNSETTLED_ALERT_MS).toBeGreaterThan(PRESENCE_SETTLEMENT_GRACE_MINUTES * 60_000);
-  });
-});
 
 describe('runSessionMeterSweep', () => {
   beforeEach(() => {

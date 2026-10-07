@@ -15,6 +15,7 @@ import {
   type AdminAlertDetail,
 } from '@balo/shared/admin-alerts';
 import { LIFECYCLE_LOOKBACK_MS } from '@balo/shared/meetings';
+import { PRESENCE_UNSETTLED_ALERT_MS } from './presence-settlement-timing.js';
 import { resolveWebhookBaseUrl } from '../services/calendar/webhook-url.js';
 import {
   SUBSCRIPTION_EXPIRY_ALERT_MS,
@@ -120,15 +121,13 @@ export const TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS = TRANSCRIPT_SOURCE_WI
 export const MEETING_UNPROVISIONED_GRACE_MS = 3 * MS_PER_MINUTE;
 /** BAL-586 — how long past its `scheduled_end` a still-live meeting waits before it alerts. */
 export const MEETING_STRANDED_AFTER_END_MS = 60 * MS_PER_MINUTE;
+/**
+ * BAL-586 — how long past `overrunStopCeiling` an occupied `in_progress` meeting waits before it
+ * alerts: two lifecycle sweeps, so a call the sweep is about to force-stop never alerts.
+ */
+export const MEETING_STRANDED_PAST_STOP_MS = 10 * MS_PER_MINUTE;
 /** BAL-586 — connected minutes past the estimate before a presence session alerts as overrunning. */
 export const PRESENCE_OVERRUN_MARGIN_MINUTES = 30;
-/**
- * BAL-586 — how long a meeting must have been ended, with its presence session still unsettled,
- * before it alerts. ⚠ MUST EXCEED the meter sweep's `PRESENCE_SETTLEMENT_GRACE_MINUTES` (the
- * backstop's own retry grace), or the alert would fire on sessions the backstop has not yet had a
- * chance to settle; `credit-session-meter-sweep.test.ts` pins the inequality.
- */
-export const PRESENCE_UNSETTLED_ALERT_MS = 30 * MS_PER_MINUTE;
 /** BAL-586 — where the `session.presence_stuck` evidence sends an operator for a refused session. */
 export const PRESENCE_SETTLEMENT_EXHAUSTED_RUNBOOK = 'docs/ops/presence-settlement-exhausted.md';
 
@@ -533,44 +532,80 @@ async function meetingUnprovisioned(
 
 // ── meeting.stranded ─────────────────────────────────────────────────────
 
-/** `1 participant still shows` / `2 participants still show` — subject and verb agree. */
-function participantsStillShow(count: number): string {
-  return count === 1 ? '1 participant still shows' : `${String(count)} participants still show`;
+/** `1 participant still shows` / `2 participants still show`, naming observers when present. */
+function participantsStillShow(count: number, observers: number): string {
+  const subject = count === 1 ? '1 participant' : `${String(count)} participants`;
+  const observerWord = observers === 1 ? 'observer' : 'observers';
+  const observerNote = observers === 0 ? '' : ` (incl. ${String(observers)} ${observerWord})`;
+  return `${subject}${observerNote} ${count === 1 ? 'still shows' : 'still show'}`;
 }
 
-/** The status enum as prose: `waiting_for_participants` → `waiting for participants`. */
-function humanizeStatus(status: string): string {
-  return status.replaceAll('_', ' ');
+/** `1 h 5 min`, `2 h`, `45 min`, `3 days` — a coarse duration for operator prose. */
+function humanizeDuration(ms: number): string {
+  const totalMinutes = Math.max(0, Math.floor(ms / MS_PER_MINUTE));
+  const days = Math.floor(totalMinutes / (24 * 60));
+  if (days >= 1) return days === 1 ? '1 day' : `${String(days)} days`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${String(minutes)} min`;
+  return minutes === 0 ? `${String(hours)} h` : `${String(hours)} h ${String(minutes)} min`;
+}
+
+/** The status-specific lead of a stranded meeting's evidence, e.g. `Still in progress 1 h after …`. */
+function strandedLead(status: string, overdue: string): string {
+  switch (status) {
+    case 'scheduled':
+      return `Never started and is still marked scheduled ${overdue} after its scheduled end`;
+    case 'waiting_for_participants':
+      return `Still waiting for participants ${overdue} after its scheduled end`;
+    default:
+      return `Still in progress ${overdue} after its scheduled end`;
+  }
 }
 
 /**
  * BAL-586 — meetings still in a live status an hour past their `scheduled_end`. No lookback
  * floor: unlike the lifecycle sweep, a stranded meeting stays visible however old it is, and
- * `Past sweep lookback` tells the operator when the sweep itself has stopped looking at it. Rows
- * self-close when the meeting ends or is cancelled.
+ * `Past sweep lookback` tells the operator when the sweep itself has stopped looking at it. An
+ * occupied `in_progress` call additionally waits for the lifecycle sweep's forced stop
+ * (`overrunStopCeiling`) plus {@link MEETING_STRANDED_PAST_STOP_MS}, so a call that is legitimately
+ * still running never alerts; the repository applies that in SQL. Rows self-close when the
+ * meeting ends or is cancelled.
  */
 async function meetingStranded(ctx: AdminAlertFinderContext): Promise<AdminAlertFinderOutcome> {
+  const timers = resolveMeetingTimers();
+  const nowMs = ctx.now.getTime();
   const rows = await meetingsRepository.listStrandedLive({
-    scheduledEndBefore: new Date(ctx.now.getTime() - MEETING_STRANDED_AFTER_END_MS),
+    scheduledEndBefore: new Date(nowMs - MEETING_STRANDED_AFTER_END_MS),
+    liveCeilingBefore: new Date(nowMs - timers.overrunStopGraceMs - MEETING_STRANDED_PAST_STOP_MS),
     limit: ctx.limit,
   });
   const batchFilled = rows.length === ctx.limit;
-  const lookbackFloor = ctx.now.getTime() - LIFECYCLE_LOOKBACK_MS;
+  const lookbackFloor = nowMs - LIFECYCLE_LOOKBACK_MS;
   const endAction =
     'Until an admin end action exists, the delivering expert or a client principal can end it from the meeting page.';
 
   const findings: AdminAlertFinding[] = rows.map((row) => {
-    const connected =
-      row.openIntervalCount > 0 && row.oldestOpenJoinedAt !== null
-        ? `Still ${humanizeStatus(row.status)} past its scheduled end, and ${participantsStillShow(row.openIntervalCount)} as connected (since ${formatDateTimeShortUtc(row.oldestOpenJoinedAt)}). Any presence session on it is still drawing credit every minute.`
-        : `Still ${humanizeStatus(row.status)} past its scheduled end with nobody connected; it was never moved to ended.`;
+    const lead = strandedLead(row.status, humanizeDuration(nowMs - row.scheduledEnd.getTime()));
+    const occupied = row.openIntervalCount > 0 && row.oldestOpenJoinedAt !== null;
+    const observers = row.openIntervalCount - row.openBillableIntervalCount;
+    const drawing =
+      row.openBillableIntervalCount > 0
+        ? ' Any presence session on it is still drawing credit every minute.'
+        : '';
+    const state = occupied
+      ? `${lead}, and ${participantsStillShow(row.openIntervalCount, observers)} as connected (since ${formatDateTimeShortUtc(row.oldestOpenJoinedAt ?? ctx.now)}).${drawing}`
+      : `${lead}; nobody is connected and it was never moved to ended.`;
     return {
       entityType: 'meeting',
       entityId: row.meetingId,
       detail: {
-        title: 'Live meeting was never ended',
+        title:
+          occupied && row.status === 'in_progress'
+            ? 'Live meeting ran past its forced stop'
+            : 'Live meeting was never ended',
         entityLabel: `Meeting ${formatDateTimeShortUtc(row.scheduledStart)}`,
-        evidence: `${connected} ${endAction}`,
+        evidence: `${state} ${endAction}`,
         facts: [
           ['Status', row.status],
           [
@@ -604,14 +639,16 @@ const PRESENCE_ARM_ORDER: readonly PresenceStuckArm[] = ['overrunning', 'unsettl
 async function sessionPresenceStuck(
   ctx: AdminAlertFinderContext
 ): Promise<AdminAlertFinderOutcome> {
-  const overrunning = await creditSessionsRepository.listPresenceOverrunning({
-    marginMinutes: PRESENCE_OVERRUN_MARGIN_MINUTES,
-    limit: ctx.limit,
-  });
-  const unsettled = await creditSessionsRepository.findPresenceUnsettled(
-    new Date(ctx.now.getTime() - PRESENCE_UNSETTLED_ALERT_MS),
-    ctx.limit
-  );
+  const [overrunning, unsettled] = await Promise.all([
+    creditSessionsRepository.listPresenceOverrunning({
+      marginMinutes: PRESENCE_OVERRUN_MARGIN_MINUTES,
+      limit: ctx.limit,
+    }),
+    creditSessionsRepository.findPresenceUnsettled(
+      new Date(ctx.now.getTime() - PRESENCE_UNSETTLED_ALERT_MS),
+      ctx.limit
+    ),
+  ]);
   const batchFilled = overrunning.length === ctx.limit || unsettled.length === ctx.limit;
 
   const armsBySession = new Map<string, Set<PresenceStuckArm>>();

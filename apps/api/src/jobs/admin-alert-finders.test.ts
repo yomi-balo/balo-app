@@ -98,10 +98,11 @@ import {
   TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS,
   MEETING_UNPROVISIONED_GRACE_MS,
   MEETING_STRANDED_AFTER_END_MS,
+  MEETING_STRANDED_PAST_STOP_MS,
   PRESENCE_OVERRUN_MARGIN_MINUTES,
-  PRESENCE_UNSETTLED_ALERT_MS,
   PRESENCE_SETTLEMENT_EXHAUSTED_RUNBOOK,
 } from './admin-alert-finders.js';
+import { PRESENCE_UNSETTLED_ALERT_MS } from './presence-settlement-timing.js';
 
 const NOW = new Date('2026-09-08T12:00:00.000Z');
 const LIMIT = 200;
@@ -575,22 +576,39 @@ describe('meetingStranded', () => {
     scheduledStart: new Date('2026-09-08T09:00:00.000Z'),
     scheduledEnd: new Date('2026-09-08T10:00:00.000Z'),
     openIntervalCount: 2,
+    openBillableIntervalCount: 2,
     oldestOpenJoinedAt: new Date('2026-09-08T09:05:00.000Z'),
     ...overrides,
   });
+  const emptyRow = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+    strandedRow({
+      openIntervalCount: 0,
+      openBillableIntervalCount: 0,
+      oldestOpenJoinedAt: null,
+      ...overrides,
+    });
 
-  it('reads with now minus the stranded threshold and reports batchFilled at the limit', async () => {
+  async function evidenceOf(row: Record<string, unknown>): Promise<string | undefined> {
+    mockListStrandedLive.mockResolvedValue([row]);
+    const { findings } = await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT });
+    return findings[0]?.detail.evidence;
+  }
+
+  it('passes the end cutoff and the forced-stop ceiling cutoff, and reports batchFilled at the limit', async () => {
     mockListStrandedLive.mockResolvedValue(
       Array.from({ length: LIMIT }, (_, i) => strandedRow({ meetingId: `m${i}` }))
     );
 
     const outcome = await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT });
 
+    // The mocked timers carry overrunStopGraceMs = 30 min.
     expect(mockListStrandedLive).toHaveBeenCalledWith({
       scheduledEndBefore: new Date(NOW.getTime() - MEETING_STRANDED_AFTER_END_MS),
+      liveCeilingBefore: new Date(NOW.getTime() - 30 * 60_000 - MEETING_STRANDED_PAST_STOP_MS),
       limit: LIMIT,
     });
     expect(MEETING_STRANDED_AFTER_END_MS).toBe(60 * 60_000);
+    expect(MEETING_STRANDED_PAST_STOP_MS).toBe(10 * 60_000);
     expect(PRESENCE_OVERRUN_MARGIN_MINUTES).toBe(30);
     expect(PRESENCE_UNSETTLED_ALERT_MS).toBe(30 * 60_000);
     expect(outcome.batchFilled).toBe(true);
@@ -603,14 +621,14 @@ describe('meetingStranded', () => {
     expect(outcome.batchFilled).toBe(false);
   });
 
-  it('describes open intervals and the credit still drawing', async () => {
+  it('an occupied in_progress meeting is a forced-stop overrun that is still drawing credit', async () => {
     mockListStrandedLive.mockResolvedValue([strandedRow()]);
     const [finding] = (await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT }))
       .findings;
 
     expect(finding).toMatchObject({ entityType: 'meeting', entityId: 'm1' });
-    expect(finding?.detail.title).toBe('Live meeting was never ended');
-    expect(finding?.detail.evidence).toContain('Still in progress past its scheduled end');
+    expect(finding?.detail.title).toBe('Live meeting ran past its forced stop');
+    expect(finding?.detail.evidence).toContain('Still in progress 2 h after its scheduled end');
     expect(finding?.detail.evidence).toContain('2 participants still show as connected');
     expect(finding?.detail.evidence).toContain('still drawing credit every minute');
     expect(finding?.detail.evidence).toContain('Until an admin end action exists');
@@ -618,30 +636,66 @@ describe('meetingStranded', () => {
     expect(finding?.detail.facts).toContainEqual(['Past sweep lookback', 'no']);
   });
 
-  it('describes an empty meeting, singular wording, and a start past the sweep lookback', async () => {
+  it('words each status by what it is, with a humanized overdue duration', async () => {
+    expect(await evidenceOf(emptyRow({ status: 'scheduled' }))).toContain(
+      'Never started and is still marked scheduled 2 h after its scheduled end; nobody is connected'
+    );
+    expect(await evidenceOf(emptyRow({ status: 'waiting_for_participants' }))).toContain(
+      'Still waiting for participants 2 h after its scheduled end'
+    );
+    expect(
+      await evidenceOf(
+        emptyRow({
+          scheduledStart: new Date('2026-09-05T09:00:00.000Z'),
+          scheduledEnd: new Date('2026-09-05T10:00:00.000Z'),
+        })
+      )
+    ).toContain('Still in progress 3 days after its scheduled end');
+    expect(
+      await evidenceOf(emptyRow({ scheduledEnd: new Date('2026-09-08T10:55:00.000Z') }))
+    ).toContain('Still in progress 1 h 5 min after its scheduled end');
+  });
+
+  it('an unoccupied meeting keeps the never-ended title and says nobody is connected', async () => {
+    mockListStrandedLive.mockResolvedValue([emptyRow()]);
+    const [finding] = (await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT }))
+      .findings;
+    expect(finding?.detail.title).toBe('Live meeting was never ended');
+    expect(finding?.detail.evidence).toContain('nobody is connected');
+    expect(finding?.detail.evidence).not.toContain('drawing credit');
+    expect(finding?.detail.evidence).toContain('Until an admin end action exists');
+  });
+
+  it('a past-lookback start is flagged', async () => {
     mockListStrandedLive.mockResolvedValue([
-      strandedRow({
-        meetingId: 'm2',
-        openIntervalCount: 0,
-        oldestOpenJoinedAt: null,
+      emptyRow({
         scheduledStart: new Date('2026-09-05T09:00:00.000Z'),
         scheduledEnd: new Date('2026-09-05T10:00:00.000Z'),
       }),
-      strandedRow({ meetingId: 'm3', openIntervalCount: 1 }),
-      strandedRow({
-        meetingId: 'm4',
-        status: 'waiting_for_participants',
-        openIntervalCount: 0,
-        oldestOpenJoinedAt: null,
-      }),
     ]);
     const { findings } = await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT });
-
-    expect(findings[0]?.detail.evidence).toContain('with nobody connected');
-    expect(findings[2]?.detail.evidence).toContain('Still waiting for participants past');
-    expect(findings[0]?.detail.evidence).toContain('Until an admin end action exists');
     expect(findings[0]?.detail.facts).toContainEqual(['Past sweep lookback', 'yes']);
-    expect(findings[1]?.detail.evidence).toContain('1 participant still shows as connected');
+  });
+
+  it('agrees singular subject and verb', async () => {
+    const evidence = await evidenceOf(
+      strandedRow({ openIntervalCount: 1, openBillableIntervalCount: 1 })
+    );
+    expect(evidence).toContain('1 participant still shows as connected');
+  });
+
+  it('names observers and drops the credit claim when only observers are connected', async () => {
+    const mixed = await evidenceOf(
+      strandedRow({ openIntervalCount: 3, openBillableIntervalCount: 1 })
+    );
+    expect(mixed).toContain('3 participants (incl. 2 observers) still show as connected');
+    expect(mixed).toContain('still drawing credit every minute');
+
+    const observersOnly = await evidenceOf(
+      strandedRow({ openIntervalCount: 1, openBillableIntervalCount: 0 })
+    );
+    expect(observersOnly).toContain('1 participant (incl. 1 observer) still shows as connected');
+    expect(observersOnly).not.toContain('drawing credit');
   });
 });
 

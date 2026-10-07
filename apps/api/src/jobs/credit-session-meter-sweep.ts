@@ -24,6 +24,7 @@ import {
   settleSessionFromPresence,
 } from '../services/credit-session/index.js';
 import { isReleasedSettlementCode } from '../services/credit-session/released-settlement-codes.js';
+import { PRESENCE_SETTLEMENT_GRACE_MINUTES } from './presence-settlement-timing.js';
 import { startBillingIfDue } from '../services/credit-session/start-billing.js';
 import {
   SESSIONLESS_BACKSTOP_BATCH_LIMIT,
@@ -109,13 +110,6 @@ const STUCK_SETTLEMENT_MINUTES = 10;
  * legitimate in-flight finalize.
  */
 const PAYOUT_RECONCILE_GRACE_MINUTES = 5;
-/**
- * BAL-412 (plan §4.3) — how far behind `now` a meeting's `ended_at` must be before the presence
- * durability backstop picks up its unsettled session. Mirrors `PAYOUT_RECONCILE_GRACE_MINUTES`'s
- * posture: small enough to recover quickly, large enough to never race the µs-window between a
- * terminal path's `endMeeting` commit and its own best-effort `settleSessionlessCaseMeeting` call.
- */
-export const PRESENCE_SETTLEMENT_GRACE_MINUTES = 2;
 /** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
 const PRESENCE_SETTLEMENT_BATCH_LIMIT = 100;
 /**

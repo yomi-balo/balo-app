@@ -129,6 +129,17 @@ export const PRESENCE_SETTLEMENT_EXHAUSTED_ACTION =
   'credit_session.presence_settlement_exhausted' as const;
 
 /**
+ * The append-only COUNTER-marker an operator inserts by hand (see
+ * `docs/ops/presence-settlement-exhausted.md`) to return a repaired session to the backstop:
+ * `entity_type 'credit_session'`, `entity_id` the session, `metadata { by, reason, ticket }`.
+ * The effective-marker predicate (`exhaustionMarkerFor`) treats a session as exhausted only when
+ * its newest row among this action and {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} is the latter.
+ * No repository writer exists: it is a manual act, not an app path.
+ */
+export const PRESENCE_SETTLEMENT_EXHAUSTION_CLEARED_ACTION =
+  'credit_session.presence_settlement_exhaustion_cleared' as const;
+
+/**
  * BAL-474 (ADR-1040 Amendment 7 §B) — how `open()` treats the funding gates.
  *
  *   `gated`              — the shipped behaviour, byte-identical: an open receivable, an in-flight
@@ -900,16 +911,38 @@ async function readPastScheduledEnd(
   return row === undefined ? null : now.getTime() >= row.scheduledEnd.getTime();
 }
 
-/** The correlated sub-select matching a session's {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} marker. */
+/**
+ * THE ONE "effective exhaustion marker" predicate, as a correlated sub-select over
+ * `credit_sessions`. A session counts as exhausted only while the NEWEST row among its
+ * {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} and {@link PRESENCE_SETTLEMENT_EXHAUSTION_CLEARED_ACTION}
+ * rows (ordered `created_at` then `seq`, BAL-426) is an `exhausted` row: an exhausted row with no
+ * cleared row after it. Consumed by `findPresenceSettlementCandidates` and
+ * `listPresenceAlertLabels`; `findPresenceUnsettled` is deliberately marker-unaware.
+ */
 function exhaustionMarkerFor() {
+  const marker = alias(auditEvents, 'exhaustion_marker');
+  const cleared = alias(auditEvents, 'exhaustion_cleared');
   return db
     .select({ one: sql`1` })
-    .from(auditEvents)
+    .from(marker)
     .where(
       and(
-        eq(auditEvents.entityType, SESSION_AUDIT_ENTITY_TYPE),
-        eq(auditEvents.entityId, creditSessions.id),
-        eq(auditEvents.action, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION)
+        eq(marker.entityType, SESSION_AUDIT_ENTITY_TYPE),
+        eq(marker.entityId, creditSessions.id),
+        eq(marker.action, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(cleared)
+            .where(
+              and(
+                eq(cleared.entityType, SESSION_AUDIT_ENTITY_TYPE),
+                eq(cleared.entityId, creditSessions.id),
+                eq(cleared.action, PRESENCE_SETTLEMENT_EXHAUSTION_CLEARED_ACTION),
+                sql`(${cleared.createdAt}, ${cleared.seq}) > (${marker.createdAt}, ${marker.seq})`
+              )
+            )
+        )
       )
     );
 }
@@ -3431,7 +3464,7 @@ export const creditSessionsRepository = {
 
   /**
    * The durability backstop's PASS-6 candidate read: {@link findPresenceUnsettled}'s predicate and
-   * order, minus every session carrying a {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} marker.
+   * order, minus every session with an EFFECTIVE exhaustion marker (`exhaustionMarkerFor`).
    *
    * ⚠ A permanently refused settlement keeps `billing_finalized_at NULL` forever, so on
    * the unfiltered read it would sit at the head of the oldest-first batch on every tick and, once
@@ -3495,7 +3528,8 @@ export const creditSessionsRepository = {
    * BAL-586 — the `session.presence_stuck` finder's display labels for the given sessions, keyed
    * by session id. One query: session + company + meeting (both soft-delete guards), the credit
    * drawn so far (the `session_consume` ledger rows only — rides `credit_ledger_session_idx`) and
-   * whether the newest {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} marker exists, with its guard.
+   * whether an EFFECTIVE exhaustion marker stands (see `exhaustionMarkerFor`), with the newest
+   * exhausted row's guard.
    * A missing or soft-deleted session is simply absent from the Map; an empty input returns an
    * empty Map without a query.
    */
@@ -3518,7 +3552,7 @@ export const creditSessionsRepository = {
         settlementExhausted: sql<boolean>`${exists(exhaustionMarkerFor())}`,
         exhaustionGuard: sql<
           string | null
-        >`(SELECT ${auditEvents.metadata}->>'guard' FROM ${auditEvents} WHERE ${auditEvents.entityType} = ${SESSION_AUDIT_ENTITY_TYPE} AND ${auditEvents.entityId} = ${creditSessions.id} AND ${auditEvents.action} = ${PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} ORDER BY ${auditEvents.createdAt} DESC LIMIT 1)`,
+        >`(SELECT ${auditEvents.metadata}->>'guard' FROM ${auditEvents} WHERE ${auditEvents.entityType} = ${SESSION_AUDIT_ENTITY_TYPE} AND ${auditEvents.entityId} = ${creditSessions.id} AND ${auditEvents.action} = ${PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} ORDER BY ${auditEvents.createdAt} DESC, ${auditEvents.seq} DESC LIMIT 1)`,
       })
       .from(creditSessions)
       .innerJoin(companies, eq(companies.id, creditSessions.companyId))
@@ -3533,6 +3567,7 @@ export const creditSessionsRepository = {
     for (const row of rows) {
       labels.set(row.sessionId, {
         ...row,
+        exhaustionGuard: row.settlementExhausted ? row.exhaustionGuard : null,
         meetingScheduledStart: new Date(row.meetingScheduledStart),
         meetingEndedAt: row.meetingEndedAt === null ? null : new Date(row.meetingEndedAt),
       });
