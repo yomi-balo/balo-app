@@ -19,6 +19,9 @@ import type { MeetingAuditAction } from './_shared/meeting-audit';
  * A booking with no resolvable booker (no audit row, a NULL actor from a seeded or system
  * booking) resolves to the admins alone.
  *
+ * `bookerAddedBeyondAdmins` distinguishes the booker the rule ADDS from one the admin set already
+ * contained, so a consumer can measure how much the widening reaches.
+ *
  * The role→capability meaning comes from `@balo/shared/authz`; no role string is read here.
  */
 
@@ -29,6 +32,8 @@ export interface ClientPartyRecipients {
   readonly recipientUserIds: string[];
   /** True when the booker is part of `recipientUserIds` (as an admin or as a live participant). */
   readonly includedBookingMember: boolean;
+  /** True only when the booker was APPENDED: not an admin, and still holds `participate`. */
+  readonly bookerAddedBeyondAdmins: boolean;
 }
 
 /**
@@ -65,15 +70,31 @@ async function resolveClientPartyRecipients(input: {
     findMeetingBookerUserId(input.meetingId),
   ]);
   if (bookerUserId === null) {
-    return { recipientUserIds: adminUserIds, includedBookingMember: false };
+    return {
+      recipientUserIds: adminUserIds,
+      includedBookingMember: false,
+      bookerAddedBeyondAdmins: false,
+    };
   }
   if (adminUserIds.includes(bookerUserId)) {
-    return { recipientUserIds: adminUserIds, includedBookingMember: true };
+    return {
+      recipientUserIds: adminUserIds,
+      includedBookingMember: true,
+      bookerAddedBeyondAdmins: false,
+    };
   }
   if (await bookerStillParticipatesInCompany(input.companyId, bookerUserId)) {
-    return { recipientUserIds: [...adminUserIds, bookerUserId], includedBookingMember: true };
+    return {
+      recipientUserIds: [...adminUserIds, bookerUserId],
+      includedBookingMember: true,
+      bookerAddedBeyondAdmins: true,
+    };
   }
-  return { recipientUserIds: adminUserIds, includedBookingMember: false };
+  return {
+    recipientUserIds: adminUserIds,
+    includedBookingMember: false,
+    bookerAddedBeyondAdmins: false,
+  };
 }
 
 export const clientPartyRecipientsRepository = {

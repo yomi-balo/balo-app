@@ -1167,6 +1167,40 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('booking-cancelled-client-colleague', () => {
+    const BASE = {
+      expertPartyLabel: 'CloudPeak',
+      cancelledByLabel: 'Dana Okoro @ Northwind Industrial',
+      engagementId: 'engagement-123',
+      cancelledBy: 'client',
+    };
+
+    it('⚠ names the colleague who cancelled, never "You cancelled", and deep-links to the case', () => {
+      const result = getInAppTemplate('booking-cancelled-client-colleague', BASE);
+      expect(result).toEqual({
+        title: 'Consultation cancelled',
+        body: 'Dana Okoro @ Northwind Industrial cancelled your consultation. Nothing was charged.',
+        actionUrl: '/cases/engagement-123',
+      });
+    });
+
+    it('appends the credit line when the hold was released', () => {
+      const result = getInAppTemplate('booking-cancelled-client-colleague', {
+        ...BASE,
+        holdReleased: true,
+      });
+      expect(result.body).toBe(
+        'Dana Okoro @ Northwind Industrial cancelled your consultation. Nothing was charged, and the credit we were holding is back in your balance.'
+      );
+    });
+
+    it('leaves the plain client key reading "You cancelled" for the acting client', () => {
+      expect(getInAppTemplate('booking-cancelled-client', BASE).body).toBe(
+        'You cancelled your consultation with CloudPeak. Nothing was charged.'
+      );
+    });
+  });
+
   describe('booking-cancelled-expert (BAL-410)', () => {
     const BASE = {
       clientCompanyName: 'Northwind Industrial',

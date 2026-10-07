@@ -292,6 +292,7 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
     mockResolveRecipients.mockResolvedValue({
       recipientUserIds: ['user-a', 'user-b'],
       includedBookingMember: false,
+      bookerAddedBeyondAdmins: false,
     });
     // An ACTIVE case by default — nothing was closed.
     mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
@@ -325,6 +326,7 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
       mockResolveRecipients.mockResolvedValue({
         recipientUserIds: ['user-a', 'user-b', 'booker'],
         includedBookingMember: true,
+        bookerAddedBeyondAdmins: true,
       });
 
       const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }, 1));
@@ -335,8 +337,27 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
         meeting_id: MEETING_ID,
         recipient_count: 3,
         included_booking_member: true,
+        booker_added_beyond_admins: true,
         distinct_id: MEETING_ID,
       });
+    });
+
+    it('emits booker_added_beyond_admins false when the booker is an admin already in the set', async () => {
+      mockResolveRecipients.mockResolvedValue({
+        recipientUserIds: ['user-a', 'user-b'],
+        includedBookingMember: true,
+        bookerAddedBeyondAdmins: false,
+      });
+
+      await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }, 1));
+
+      expect(mockTrackServer).toHaveBeenCalledWith(
+        'meeting_client_absent_nudged',
+        expect.objectContaining({
+          included_booking_member: true,
+          booker_added_beyond_admins: false,
+        })
+      );
     });
 
     it('does not emit again on a re-claimed attempt (attempts > 1), though it still publishes', async () => {

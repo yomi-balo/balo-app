@@ -17,6 +17,9 @@ import { clientPartyRecipientsRepository } from './client-party-recipients';
 const T0 = new Date('2026-01-01T00:00:00.000Z');
 const T1 = new Date('2026-01-02T00:00:00.000Z');
 
+/** Order-insensitive comparison of user-id sets. */
+const byId = (a: string, b: string): number => a.localeCompare(b);
+
 async function seedCompany(): Promise<{ companyId: string; ownerId: string; adminId: string }> {
   const company = await companyFactory();
   const owner = await userFactory();
@@ -50,8 +53,9 @@ describe('clientPartyRecipientsRepository.resolveClientPartyRecipients', () => {
     });
 
     expect(result.includedBookingMember).toBe(true);
+    expect(result.bookerAddedBeyondAdmins).toBe(true);
     expect(result.recipientUserIds).toHaveLength(3);
-    expect(result.recipientUserIds.slice(0, 2).sort()).toEqual([ownerId, adminId].sort());
+    expect(result.recipientUserIds.slice(0, 2).sort(byId)).toEqual([ownerId, adminId].sort(byId));
     expect(result.recipientUserIds[2]).toBe(booker.id);
   });
 
@@ -65,7 +69,8 @@ describe('clientPartyRecipientsRepository.resolveClientPartyRecipients', () => {
     });
 
     expect(result.includedBookingMember).toBe(true);
-    expect([...result.recipientUserIds].sort()).toEqual([ownerId, adminId].sort());
+    expect(result.bookerAddedBeyondAdmins).toBe(false);
+    expect([...result.recipientUserIds].sort(byId)).toEqual([ownerId, adminId].sort(byId));
   });
 
   it('excludes a booker whose membership was soft-removed', async () => {
@@ -85,7 +90,8 @@ describe('clientPartyRecipientsRepository.resolveClientPartyRecipients', () => {
     });
 
     expect(result.includedBookingMember).toBe(false);
-    expect([...result.recipientUserIds].sort()).toEqual([ownerId, adminId].sort());
+    expect(result.bookerAddedBeyondAdmins).toBe(false);
+    expect([...result.recipientUserIds].sort(byId)).toEqual([ownerId, adminId].sort(byId));
   });
 
   it('returns the admins only when the meeting has no meeting.booked row', async () => {
@@ -98,7 +104,8 @@ describe('clientPartyRecipientsRepository.resolveClientPartyRecipients', () => {
     });
 
     expect(result.includedBookingMember).toBe(false);
-    expect([...result.recipientUserIds].sort()).toEqual([ownerId, adminId].sort());
+    expect(result.bookerAddedBeyondAdmins).toBe(false);
+    expect([...result.recipientUserIds].sort(byId)).toEqual([ownerId, adminId].sort(byId));
   });
 
   it('returns the admins only when the meeting.booked row has a NULL actor', async () => {
@@ -111,7 +118,8 @@ describe('clientPartyRecipientsRepository.resolveClientPartyRecipients', () => {
     });
 
     expect(result.includedBookingMember).toBe(false);
-    expect([...result.recipientUserIds].sort()).toEqual([ownerId, adminId].sort());
+    expect(result.bookerAddedBeyondAdmins).toBe(false);
+    expect([...result.recipientUserIds].sort(byId)).toEqual([ownerId, adminId].sort(byId));
   });
 
   it('returns the booker alone when the company has no admins', async () => {
@@ -125,7 +133,11 @@ describe('clientPartyRecipientsRepository.resolveClientPartyRecipients', () => {
       companyId: company.id,
     });
 
-    expect(result).toEqual({ recipientUserIds: [booker.id], includedBookingMember: true });
+    expect(result).toEqual({
+      recipientUserIds: [booker.id],
+      includedBookingMember: true,
+      bookerAddedBeyondAdmins: true,
+    });
   });
 });
 

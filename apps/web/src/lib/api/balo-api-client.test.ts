@@ -146,6 +146,31 @@ describe('postBaloApiJson', () => {
     expect(result).toEqual({ ok: true, data: { ok: true } });
   });
 
+  it('⚠ a bodyless caller sends `{}` under the JSON content type — the pair must agree', async () => {
+    mockLoggedFetch.mockResolvedValue(response(200, {}));
+
+    await postBaloApiJson('/x', undefined, (p) => p, 'Widget');
+
+    const init = mockLoggedFetch.mock.calls.at(-1)?.[1] as {
+      method: string;
+      body?: string;
+      headers: Record<string, string>;
+    };
+    expect(init.method).toBe('POST');
+    // `undefined` here is `Content-Length: 0` on the wire, which Fastify answers with a 400.
+    expect(init.body).toBe('{}');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(init.headers.Authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+  });
+
+  it('a caller with a body sends its JSON', async () => {
+    mockLoggedFetch.mockResolvedValue(response(200, {}));
+
+    await postBaloApiJson('/x', { a: 1 }, (p) => p, 'Widget');
+
+    expect((mockLoggedFetch.mock.calls.at(-1)?.[1] as { body?: string }).body).toBe('{"a":1}');
+  });
+
   // ── BAL-568 — the api's account-refusal marker ─────────────────────────────────────────
 
   it('⚠ surfaces the refusal code on a marked 401, and records it exactly once', async () => {

@@ -145,6 +145,39 @@ describe('getEmailTemplate — booking-cancelled-client', () => {
   });
 });
 
+describe('getEmailTemplate — booking-cancelled-client-colleague', () => {
+  // The BOOKER, told that a colleague cancelled: `cancelledBy` is `'client'` (the actor's side)
+  // but this recipient is NOT the actor, so no "You cancelled" copy anywhere.
+  const COLLEAGUE_DATA = { ...BASE_DATA, cancelledBy: 'client' };
+
+  it('⚠ names the colleague in the subject, opening and preview text — never "You cancelled"', async () => {
+    const out = getEmailTemplate('booking-cancelled-client-colleague', COLLEAGUE_DATA);
+    expect(out.subject).toBe('Your consultation with CloudPeak was cancelled');
+
+    const html = clean(await render(out.component));
+    const text = textOf(html);
+    expect(text).toContain('Dana Okoro @ Northwind Industrial cancelled the consultation on');
+    expect(html).toContain('Your consultation with CloudPeak was cancelled');
+    expect(text).not.toContain('You cancelled');
+    expect(html).not.toContain('You cancelled');
+  });
+
+  it('is unchanged for the acting client: the plain client key still reads "You cancelled"', async () => {
+    const out = getEmailTemplate('booking-cancelled-client', COLLEAGUE_DATA);
+    expect(out.subject).toBe('You cancelled your consultation with CloudPeak');
+    expect(textOf(await render(out.component))).toContain('You cancelled the consultation');
+  });
+
+  it('bookingCancelledSubject honours an explicit recipientIsActor=false on the client arm', () => {
+    expect(bookingCancelledSubject('client', 'CloudPeak', 'client', 'requested', false)).toBe(
+      'Your consultation with CloudPeak was cancelled'
+    );
+    expect(bookingCancelledSubject('client', 'CloudPeak', 'client', 'requested')).toBe(
+      'You cancelled your consultation with CloudPeak'
+    );
+  });
+});
+
 describe('getEmailTemplate — booking-cancelled-expert', () => {
   it('names the client COMPANY and says the slot is open again', async () => {
     const out = getEmailTemplate('booking-cancelled-expert', BASE_DATA);
@@ -158,7 +191,11 @@ describe('getEmailTemplate — booking-cancelled-expert', () => {
 // ── The invariants, over EVERY combination ────────────────────────────────────
 
 describe('booking-cancelled — the invariants, over every recipient × initiator × reason', () => {
-  const RECIPIENTS = ['booking-cancelled-client', 'booking-cancelled-expert'] as const;
+  const RECIPIENTS = [
+    'booking-cancelled-client',
+    'booking-cancelled-client-colleague',
+    'booking-cancelled-expert',
+  ] as const;
   const INITIATORS = ['client', 'expert', 'admin'] as const;
   const REASONS = ['requested', 'expert_time_off'] as const;
 

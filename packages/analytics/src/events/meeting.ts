@@ -248,6 +248,8 @@ export interface MeetingServerEventMap {
     recipient_count: number;
     /** Whether the meeting's booker is in that set (as an admin or as a live participant). */
     included_booking_member: boolean;
+    /** Whether the booker was ADDED beyond the admins (a non-admin who still participates). */
+    booker_added_beyond_admins: boolean;
     distinct_id: string;
   };
 

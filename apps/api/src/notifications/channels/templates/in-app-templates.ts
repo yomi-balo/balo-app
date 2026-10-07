@@ -108,6 +108,38 @@ function resolveClientCancelOpening(
 }
 
 /**
+ * BAL-410 — the client-side `booking.cancelled` notice. `cancelledByClient` selects the
+ * "You cancelled" opening: true only for the acting client, never for the colleague key.
+ *
+ * ⚠⚠ THIS IS THE **ONLY** SURFACE THAT MENTIONS THE HOLD, AND ONLY WHEN ONE WAS ACTUALLY
+ * RELEASED. The ticket: "Hold released → client → in-app only. Not email — no money moved, and
+ * an email implies something went wrong." `holdReleased` is `false` in the overwhelmingly
+ * common case (nobody joined early), so the line is APPENDED rather than always present —
+ * claiming a release that did not happen would be a money statement that is simply untrue.
+ */
+function bookingCancelledClientNotice(
+  data: Record<string, unknown>,
+  cancelledByClient: boolean
+): InAppOutput {
+  const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+  const cancelledByLabel = (data.cancelledByLabel as string) ?? expertParty;
+  const engagementId = data.engagementId as string | undefined;
+  const timeOff = data.reason === 'expert_time_off';
+  const opening = resolveClientCancelOpening(cancelledByClient, timeOff, {
+    expertParty,
+    cancelledByLabel,
+  });
+  return {
+    title: 'Consultation cancelled',
+    body:
+      data.holdReleased === true
+        ? `${opening} Nothing was charged, and the credit we were holding is back in your balance.`
+        : `${opening} Nothing was charged.`,
+    actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+  };
+}
+
+/**
  * BAL-412 (F16, ADR-1044 §7) — the IN-APP half of the no-show notice; the email half is
  * `noShowClientSentence` in `./index.ts`.
  *
@@ -313,32 +345,14 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   },
 
   // BAL-410 — the CLIENT half of `booking.cancelled`. ⚠ ALSO what the `meeting_party_participants`
-  // fan-out arm renders: those recipients ARE the client side.
-  //
-  // ⚠⚠ THIS IS THE **ONLY** SURFACE THAT MENTIONS THE HOLD, AND ONLY WHEN ONE WAS ACTUALLY
-  // RELEASED. The ticket: "Hold released → client → in-app only. Not email — no money moved, and
-  // an email implies something went wrong." `holdReleased` is `false` in the overwhelmingly
-  // common case (nobody joined early), so the line is APPENDED rather than always present —
-  // claiming a release that did not happen would be a money statement that is simply untrue.
-  'booking-cancelled-client': (data) => {
-    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
-    const cancelledByLabel = (data.cancelledByLabel as string) ?? expertParty;
-    const engagementId = data.engagementId as string | undefined;
-    const cancelledByClient = data.cancelledBy === 'client';
-    const timeOff = data.reason === 'expert_time_off';
-    const opening = resolveClientCancelOpening(cancelledByClient, timeOff, {
-      expertParty,
-      cancelledByLabel,
-    });
-    return {
-      title: 'Consultation cancelled',
-      body:
-        data.holdReleased === true
-          ? `${opening} Nothing was charged, and the credit we were holding is back in your balance.`
-          : `${opening} Nothing was charged.`,
-      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
-    };
-  },
+  // fan-out arm renders for an expert/admin cancel: those recipients ARE the client side. The hold
+  // line lives in `bookingCancelledClientNotice`.
+  'booking-cancelled-client': (data) =>
+    bookingCancelledClientNotice(data, data.cancelledBy === 'client'),
+
+  // The BOOKER, told that a COLLEAGUE cancelled: the client-side copy with the "you cancelled"
+  // opening switched off.
+  'booking-cancelled-client-colleague': (data) => bookingCancelledClientNotice(data, false),
 
   // BAL-410 — the EXPERT half. Prospective copy names the client COMPANY; retrospective copy
   // names the person who cancelled. ⚠ NO hold language on this side at all — the hold is the

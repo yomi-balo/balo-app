@@ -289,7 +289,7 @@ export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
   // ⚠ AND AN EMPTY RESOLVED LIST IS A SKIP FOR THE SAME REASON, NOT A SILENT SEND. Both
   // channels fan out from `recipientUserIds`, so an empty list delivers nothing; recording that
   // as `published` would be a lie in the one table anybody would check.
-  const { recipientUserIds, includedBookingMember } =
+  const { recipientUserIds, includedBookingMember, bookerAddedBeyondAdmins } =
     await clientPartyRecipientsRepository.resolveClientPartyRecipients({ meetingId, companyId });
   if (recipientUserIds.length === 0) {
     log.warn(
@@ -306,13 +306,19 @@ export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
       meeting_id: meetingId,
       recipient_count: recipientUserIds.length,
       included_booking_member: includedBookingMember,
+      booker_added_beyond_admins: bookerAddedBeyondAdmins,
       // ⚠ THE MEETING ID — there is no acting human on a nudge about an absence.
       distinct_id: meetingId,
     });
   }
 
   log.info(
-    { meetingId, recipientCount: recipientUserIds.length, includedBookingMember },
+    {
+      meetingId,
+      recipientCount: recipientUserIds.length,
+      includedBookingMember,
+      bookerAddedBeyondAdmins,
+    },
     'Expert is waiting alone — publishing the client nudge'
   );
   return { publish: true, payload: { ...row.payload, recipientUserIds } };

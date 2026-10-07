@@ -26,8 +26,11 @@
  * resolved context and the owning company, so it can make that read itself:
  *
  *   · CLIENT-initiated  ⇒ `recipientId` = the acting user (their own confirmation);
- *                         `recipientUserIds` OMITTED, so the fan-out rule delivers nothing and
- *                         nobody is told twice. The EXPERT side is reached by the shipped
+ *                         `recipientUserIds` = the meeting's BOOKER alone, and only when a
+ *                         colleague (not the booker) cancelled and the booker still holds
+ *                         `participate`; otherwise OMITTED. The list never contains the actor, so
+ *                         the actor's confirmation and the booker's colleague notice are disjoint
+ *                         and nobody is told twice. The EXPERT side is reached by the shipped
  *                         single-recipient `recipient: 'expert'` rule.
  *   · EXPERT/ADMIN-initiated ⇒ `recipientId` OMITTED (the client rule skips);
  *                         `recipientUserIds` = the CLIENT company's owner/admins plus the
@@ -183,16 +186,39 @@ function buildActorLabel(
 }
 
 /**
- * The CLIENT-side recipients for an expert- or admin-initiated cancel. Empty on the client arm
- * (the actor is already named by `recipientId`, and telling them twice is noise).
+ * The booker of a CLIENT-initiated cancel, when a colleague cancelled: the booker is told who
+ * cancelled their consultation. Empty when the booker is unresolvable, is the actor (already
+ * confirmed by `recipientId`; telling them twice is noise), or no longer holds `participate`.
+ */
+async function resolveBookerToTell(
+  meetingId: string,
+  companyId: string,
+  actorUserId: string
+): Promise<string[]> {
+  const bookerUserId = await clientPartyRecipientsRepository.findMeetingBookerUserId(meetingId);
+  if (bookerUserId === null || bookerUserId === actorUserId) {
+    return [];
+  }
+  const stillParticipates = await clientPartyRecipientsRepository.bookerStillParticipatesInCompany(
+    companyId,
+    bookerUserId
+  );
+  return stillParticipates ? [bookerUserId] : [];
+}
+
+/**
+ * The CLIENT-side recipients other than the actor: on an expert/admin cancel the company's
+ * owner/admins plus the booker; on a client cancel the booker alone, and only when a colleague
+ * cancelled.
  */
 async function resolveCounterpartyRecipients(
   cancelledBy: CancelActorRole,
   meetingId: string,
-  companyId: string
+  companyId: string,
+  actorUserId: string
 ): Promise<string[]> {
   if (cancelledBy === 'client') {
-    return [];
+    return resolveBookerToTell(meetingId, companyId, actorUserId);
   }
   const { recipientUserIds } = await clientPartyRecipientsRepository.resolveClientPartyRecipients({
     meetingId,
@@ -247,7 +273,8 @@ export async function publishBookingCancelled(
   const recipientUserIds = await resolveCounterpartyRecipients(
     cancelledBy,
     meetingId,
-    companyId
+    companyId,
+    actorUserId
   ).catch((error: unknown) => {
     log.error(
       {

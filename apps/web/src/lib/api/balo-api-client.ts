@@ -6,6 +6,7 @@ import { getSession } from '@/lib/auth/session';
 import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
 import { isAccessTokenExpired } from '@/lib/auth/access-token';
 import { isAccountRefusalCode } from '@balo/shared/authz';
+import { jsonBodyInit } from './json-body-init';
 
 /**
  * Fix round 1 item 9 — THE ONE FETCH+AUTH+ERROR-MAPPING SHAPE, extracted from
@@ -135,6 +136,9 @@ interface BaloApiCall<T> {
  *
  * ⚠ FAILS CLOSED on a missing user or a missing access token. The api re-verifies the token
  * regardless, so this is a first, cheap gate rather than the boundary.
+ *
+ * ⚠ A BODYLESS CALLER SENDS `{}`: `JSON.stringify(undefined)` is `undefined`, which would put a
+ * JSON content type over an empty body, a 400 from the api's parser (`jsonBodyInit`).
  */
 export async function postBaloApiJson<T>(
   path: string,
@@ -175,14 +179,12 @@ async function callBaloApi<T>(
   }
 
   try {
+    const init = jsonBodyInit('POST', body);
     const response = await loggedFetch(`${getApiUrl()}${path}`, {
       service: 'balo-api',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(body),
+      headers: { ...init.headers, Authorization: `Bearer ${accessToken}` },
+      ...(init.body === undefined ? {} : { body: init.body }),
     });
 
     const parsedBody = safeParse(await response.text());
