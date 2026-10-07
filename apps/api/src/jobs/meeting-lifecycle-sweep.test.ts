@@ -162,6 +162,7 @@ import {
   MEETING_LIFECYCLE_SWEEP_CRON,
   MEETING_STRANDED_BATCH_LIMIT,
   roomOccupancy,
+  rotateForTick,
   runMeetingLifecycleSweep,
 } from './meeting-lifecycle-sweep.js';
 import type { PresenceReader } from '../services/daily/rooms.js';
@@ -228,12 +229,11 @@ const UNSTUBBED_ROOM_READ = async (): Promise<Participants> => {
   throw new Error('per-room read not stubbed');
 };
 
-/** What the session-history read answers: the recorded leaves and the claims in ongoing sessions. */
+/** What the session-history read answers: the recorded leaves. */
 function history(
-  leaves: ReadonlyMap<string, Date> = new Map(),
-  ongoing: readonly string[] = []
+  leaves: ReadonlyMap<string, Date> = new Map()
 ): Awaited<ReturnType<PresenceReader['getRoomSessionLeaves']>> {
-  return { leaves, ongoingClaims: new Set(ongoing) };
+  return { leaves };
 }
 
 /** The session-history read when Daily has no record: no recorded leaves. */
@@ -1812,8 +1812,13 @@ describe('the stranded arm and the reconciler caps (BAL-584)', () => {
   /** scheduledEnd = start+60, so the ceiling is max(start+60, start+240) + 30 = start+270. */
   const CEILING_MINUTES = 270;
   const IDLE_END_MINUTES = DEFAULT_MEETING_TIMERS.idleEndEmptyMs / MINUTE;
-  /** Three days after the booking — far behind the 24h lookback floor. */
-  const STRAND_NOW = at(3 * 24 * 60);
+  /**
+   * About three days after the booking — far behind the 24h lookback floor. The minute is a
+   * multiple of 42 (the least common multiple of the 2-, 6- and 21-candidate backlogs below), so
+   * `rotateForTick` starts every one of those batches at index 0 and the batches are processed in
+   * the order they are listed.
+   */
+  const STRAND_NOW = new Date(Math.ceil(at(3 * 24 * 60).getTime() / MINUTE / 42) * 42 * MINUTE);
   const OPEN_PAIR = [
     presenceRow({ party: 'expert' }),
     presenceRow({ id: 'row-2', userId: OTHER_USER_ID, joinedAt: at(2) }),
@@ -2051,12 +2056,10 @@ describe('the stranded arm and the reconciler caps (BAL-584)', () => {
     );
   });
 
-  it('⚠⚠ a claim in an ONGOING session contradicts the empty room: nothing closes, the room reads unknown, and the terminal rules still run', async () => {
+  it('⚠⚠ a claim only in an ONGOING session with a recorded duration closes at that leave, never defers, and the meeting ends by the normal rule', async () => {
     mockListStranded.mockResolvedValue([meeting({ status: 'in_progress' })]);
-    mockListByMeeting.mockResolvedValue(OPEN_PAIR);
-    const getRoomSessionLeaves = vi
-      .fn()
-      .mockResolvedValue(history(RECORDED_LEAVES, [dailyParticipantIdFor('user', USER_ID)]));
+    mockListByMeeting.mockResolvedValueOnce(OPEN_PAIR).mockResolvedValueOnce(CLOSED_AT_LEAVES);
+    const getRoomSessionLeaves = vi.fn().mockResolvedValue(history(RECORDED_LEAVES));
 
     const result = await runMeetingLifecycleSweep(
       STRAND_NOW,
@@ -2064,23 +2067,40 @@ describe('the stranded arm and the reconciler caps (BAL-584)', () => {
       reader({}, vi.fn().mockResolvedValue([]), getRoomSessionLeaves)
     );
 
-    expect(result).toMatchObject({ intervalsClosed: 0, terminated: 1 });
-    expect(mockApplyPresenceEffect).not.toHaveBeenCalled();
-    expect(mockClosePresenceEffectForRow).not.toHaveBeenCalled();
-    expect(mockWarn).toHaveBeenCalledWith(
-      { meetingId: MEETING_ID, roomName: ROOM },
-      expect.stringContaining('ongoing session')
+    expect(result).toMatchObject({ intervalsClosed: 2, terminated: 1 });
+    expect(mockClosePresenceEffectForRow).toHaveBeenCalledWith(
+      expect.anything(),
+      OPEN_PAIR[0],
+      EXPERT_LEAVE
+    );
+    expect(mockClosePresenceEffectForRow).toHaveBeenCalledWith(
+      expect.anything(),
+      OPEN_PAIR[1],
+      CLIENT_LEAVE
     );
     expect(mockEndMeeting).toHaveBeenCalledWith(
       expect.objectContaining({
-        endedAt: at(CEILING_MINUTES),
-        terminalRule: expect.objectContaining({ rule: 'overrun_stop' }),
+        terminalRule: expect.objectContaining({ rule: 'idle_end' }),
       })
     );
-    expect(mockTrackServer).toHaveBeenCalledWith(
-      'meeting_overrun_stopped',
-      expect.objectContaining({ room_occupancy: 'unknown' })
+  });
+
+  it('⚠⚠ a claim only in an ONGOING session with NO duration closes at the booked end and never defers', async () => {
+    mockListStranded.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting
+      .mockResolvedValueOnce(OPEN_PAIR)
+      .mockResolvedValueOnce(OPEN_PAIR.map((row) => ({ ...row, leftAt: at(60) })));
+
+    const result = await runMeetingLifecycleSweep(
+      STRAND_NOW,
+      () => {},
+      reader({}, vi.fn().mockResolvedValue([]), async () => history())
     );
+
+    expect(result).toMatchObject({ intervalsClosed: 2, terminated: 1 });
+    for (const row of OPEN_PAIR) {
+      expect(mockClosePresenceEffectForRow).toHaveBeenCalledWith(expect.anything(), row, at(60));
+    }
   });
 
   describe('the history-read cap', () => {
@@ -2145,6 +2165,219 @@ describe('the stranded arm and the reconciler caps (BAL-584)', () => {
         expect.objectContaining({ id: sixthId, endedAt: at(30 + IDLE_END_MINUTES) })
       );
     });
+  });
+
+  describe('every per-tick budget of the sweep is the sweep’s own, for a stranded candidate', () => {
+    it('⚠⚠ a stranded backlog past the history cap makes NO per-room read and ends nothing past the cap', async () => {
+      const total = MAX_ROOM_PRESENCE_READS_PER_TICK + 1;
+      const lastId = `strand-${total - 1}`;
+      mockListStranded.mockResolvedValue(
+        Array.from({ length: total }, (_unused, index) =>
+          ownRoomMeeting(`strand-${index}`, { status: 'in_progress' })
+        )
+      );
+      mockFindMeetingById.mockImplementation(async (id: string) =>
+        ownRoomMeeting(id, { status: 'in_progress' })
+      );
+      mockListByMeeting.mockImplementation(async (id: string) => openRows(id, 1));
+      const getRoomPresence = vi.fn().mockResolvedValue([]);
+      const getRoomSessionLeaves = vi.fn().mockResolvedValue(history());
+
+      const result = await runMeetingLifecycleSweep(
+        STRAND_NOW,
+        () => {},
+        reader({}, getRoomPresence, getRoomSessionLeaves)
+      );
+
+      expect(getRoomSessionLeaves).toHaveBeenCalledTimes(MAX_SESSION_HISTORY_READS_PER_TICK);
+      expect(getRoomPresence).toHaveBeenCalledTimes(getRoomSessionLeaves.mock.calls.length);
+      expect(result.terminated).toBe(MAX_SESSION_HISTORY_READS_PER_TICK);
+      expect(mockEndMeeting).toHaveBeenCalledTimes(MAX_SESSION_HISTORY_READS_PER_TICK);
+      expect(mockEndMeeting).not.toHaveBeenCalledWith(expect.objectContaining({ id: lastId }));
+      expect(mockWarn).toHaveBeenCalledWith(
+        {
+          limit: MAX_SESSION_HISTORY_READS_PER_TICK,
+          deferred: total - MAX_SESSION_HISTORY_READS_PER_TICK,
+        },
+        expect.stringContaining('Session-history read cap FILLED')
+      );
+    });
+
+    it('⚠⚠ a close budget with room for 3 of 5 closable rows closes 3, ends nothing, and the other 2 close on the next tick at their recorded leaves', async () => {
+      const second = ownRoomMeeting('second', { status: 'in_progress' });
+      const firstRows = MAX_RECONCILER_CLOSES_PER_TICK - 3;
+      mockListStranded.mockResolvedValue([
+        ownRoomMeeting('first', { status: 'in_progress' }),
+        second,
+      ]);
+      mockFindMeetingById.mockImplementation(async (id: string) =>
+        ownRoomMeeting(id, { status: 'in_progress' })
+      );
+      mockListByMeeting.mockImplementation(async (id: string) =>
+        id === 'first' ? openRows('first', firstRows) : openRows('second', 5)
+      );
+      const secondRows = openRows('second', 5);
+
+      const result = await runMeetingLifecycleSweep(
+        STRAND_NOW,
+        () => {},
+        reader({}, vi.fn().mockResolvedValue([]))
+      );
+
+      expect(result.intervalsClosed).toBe(MAX_RECONCILER_CLOSES_PER_TICK);
+      for (const row of secondRows.slice(0, 3)) {
+        expect(mockClosePresenceEffectForRow).toHaveBeenCalledWith(
+          expect.anything(),
+          row,
+          expect.anything()
+        );
+      }
+      for (const row of secondRows.slice(3)) {
+        expect(mockClosePresenceEffectForRow).not.toHaveBeenCalledWith(
+          expect.anything(),
+          row,
+          expect.anything()
+        );
+      }
+      expect(mockEndMeeting).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'second' }));
+
+      // The next tick: a fresh budget; the two rows still open close at their recorded leaves.
+      vi.clearAllMocks();
+      mockListCandidates.mockResolvedValue([]);
+      mockListStranded.mockResolvedValue([second]);
+      mockFindMeetingById.mockResolvedValue(second);
+      const remaining = secondRows.slice(3);
+      const leaves = new Map(
+        remaining.map((row, index) => [
+          dailyParticipantIdFor('user', `second-user-${index + 3}`),
+          at(30 + index),
+        ])
+      );
+      mockListByMeeting
+        .mockResolvedValueOnce(remaining)
+        .mockResolvedValue(secondRows.map((row) => ({ ...row, leftAt: at(31) })));
+      mockEndMeeting.mockResolvedValue({
+        meeting: meeting({ status: 'ended' }),
+        closedIntervals: 2,
+      });
+      mockApplyPresenceEffect.mockResolvedValue('closed');
+      mockClosePresenceEffectForRow.mockReturnValue({ action: 'close' });
+      mockSettleSessionlessCaseMeeting.mockResolvedValue({
+        kind: 'not_billable',
+        reason: 'not_a_case_meeting',
+      });
+
+      const next = await runMeetingLifecycleSweep(
+        STRAND_NOW,
+        () => {},
+        reader({}, vi.fn().mockResolvedValue([]), vi.fn().mockResolvedValue(history(leaves)))
+      );
+
+      expect(next).toMatchObject({ intervalsClosed: 2, terminated: 1 });
+      remaining.forEach((row, index) => {
+        expect(mockClosePresenceEffectForRow).toHaveBeenCalledWith(second, row, at(30 + index));
+      });
+      expect(mockEndMeeting).toHaveBeenCalledWith(expect.objectContaining({ id: 'second' }));
+    });
+
+    it('⚠⚠ once in-window candidates fill the per-room read cap, an absent-room stranded candidate is deferred with history budget to spare', async () => {
+      mockListCandidates.mockResolvedValue(
+        Array.from({ length: MAX_ROOM_PRESENCE_READS_PER_TICK }, (_unused, index) =>
+          ownRoomMeeting(`live-${index}`, { status: 'in_progress' })
+        )
+      );
+      mockListStranded.mockResolvedValue([ownRoomMeeting('strand', { status: 'in_progress' })]);
+      mockFindMeetingById.mockImplementation(async (id: string) =>
+        ownRoomMeeting(id, { status: 'in_progress' })
+      );
+      mockListByMeeting.mockImplementation(async (id: string) => openRows(id, 1));
+      const getRoomPresence = vi.fn().mockResolvedValue([]);
+      const getRoomSessionLeaves = vi.fn().mockResolvedValue(history());
+
+      await runMeetingLifecycleSweep(
+        STRAND_NOW,
+        () => {},
+        reader({}, getRoomPresence, getRoomSessionLeaves)
+      );
+
+      expect(getRoomPresence).toHaveBeenCalledTimes(MAX_ROOM_PRESENCE_READS_PER_TICK);
+      expect(getRoomSessionLeaves).not.toHaveBeenCalled();
+      expect(mockEndMeeting).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'strand' }));
+      expect(mockFindMeetingById).not.toHaveBeenCalledWith('strand');
+      expect(mockWarn).toHaveBeenCalledWith(
+        { limit: MAX_ROOM_PRESENCE_READS_PER_TICK, deferred: 1 },
+        expect.stringContaining('Per-room presence read cap FILLED')
+      );
+    });
+
+    it('⚠⚠ a platform-listed stranded room takes no history read and no close, and the terminal rules run on its real occupancy', async () => {
+      mockListStranded.mockResolvedValue([meeting({ status: 'in_progress' })]);
+      mockListByMeeting.mockResolvedValue(OPEN_PAIR);
+      const getRoomSessionLeaves = vi.fn().mockResolvedValue(history(RECORDED_LEAVES));
+
+      const result = await runMeetingLifecycleSweep(
+        STRAND_NOW,
+        () => {},
+        reader(
+          { [ROOM]: [{ userId: 'u-someone-else' }] },
+          vi.fn().mockResolvedValue([]),
+          getRoomSessionLeaves
+        )
+      );
+
+      expect(getRoomSessionLeaves).not.toHaveBeenCalled();
+      expect(mockClosePresenceEffectForRow).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ intervalsClosed: 0, terminated: 1 });
+      expect(mockEndMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({
+          terminalRule: expect.objectContaining({ rule: 'overrun_stop' }),
+        })
+      );
+    });
+  });
+
+  it('⚠⚠ strands that spend the history budget every tick and never end cannot starve a younger one: it is repaired and ended within one rotation', async () => {
+    const total = MAX_ROOM_PRESENCE_READS_PER_TICK + 1;
+    const neverEnding = new Set(
+      Array.from(
+        { length: MAX_SESSION_HISTORY_READS_PER_TICK },
+        (_unused, index) => `strand-${index}`
+      )
+    );
+    const behind = `strand-${MAX_SESSION_HISTORY_READS_PER_TICK + 5}`;
+    const strands = Array.from({ length: total }, (_unused, index) =>
+      ownRoomMeeting(`strand-${index}`, { status: 'in_progress' })
+    );
+    const ended = new Set<string>();
+    mockListStranded.mockImplementation(async () =>
+      strands.filter((strand) => !ended.has(strand.id))
+    );
+    mockFindMeetingById.mockImplementation(async (id: string) =>
+      ownRoomMeeting(id, { status: 'in_progress' })
+    );
+    mockListByMeeting.mockImplementation(async (id: string) => openRows(id, 1));
+    mockEndMeeting.mockImplementation(async ({ id }: { id: string }) => {
+      if (neverEnding.has(id)) {
+        return undefined;
+      }
+      ended.add(id);
+      return { meeting: meeting({ status: 'ended' }), closedIntervals: 1 };
+    });
+    const sweepReader = reader(
+      {},
+      vi.fn().mockResolvedValue([]),
+      vi.fn().mockResolvedValue(history())
+    );
+
+    for (let tick = 0; tick < total && !ended.has(behind); tick += 1) {
+      await runMeetingLifecycleSweep(
+        new Date(STRAND_NOW.getTime() + tick * MINUTE),
+        () => {},
+        sweepReader
+      );
+    }
+
+    expect(ended.has(behind)).toBe(true);
   });
 
   it('⚠ an IN-WINDOW candidate never makes a history read', async () => {
@@ -2220,10 +2453,7 @@ describe('the stranded arm and the reconciler caps (BAL-584)', () => {
     );
   });
 
-  describe.each([
-    ['a roster-known candidate', true],
-    ['an absent-room candidate', false],
-  ])('⚠⚠ once the close cap is spent, %s that is stranded', (_label, listedOnPlatform) => {
+  describe('⚠⚠ once the close cap is spent, an absent-room candidate that is stranded', () => {
     function secondMeeting() {
       return ownRoomMeeting('second', { status: 'in_progress' });
     }
@@ -2240,7 +2470,7 @@ describe('the stranded arm and the reconciler caps (BAL-584)', () => {
       mockListByMeeting.mockImplementation(async (id: string) =>
         id === 'first' ? openRows('first', MAX_RECONCILER_CLOSES_PER_TICK) : openRows('second', 2)
       );
-      const platform = listedOnPlatform ? { [second.dailyRoomName]: [{ userId: 'u-else' }] } : {};
+      const platform = {};
 
       await runMeetingLifecycleSweep(
         STRAND_NOW,
@@ -2583,12 +2813,6 @@ describe('the stranded arm and the reconciler caps (BAL-584)', () => {
       rooms: {},
       source: 'room',
     },
-    {
-      label: 'the platform-wide map, stranded',
-      mode: 'stranded',
-      rooms: { [ROOM]: [] },
-      source: 'platform',
-    },
   ])(
     'emits meeting_presence_reconciled once for a changed candidate — $label',
     async ({ mode, rooms, source }) => {
@@ -2635,6 +2859,34 @@ describe('the stranded arm and the reconciler caps (BAL-584)', () => {
       'meeting_presence_reconciled',
       expect.anything()
     );
+  });
+});
+
+describe('rotateForTick', () => {
+  const ITEMS = ['a', 'b', 'c', 'd'] as const;
+  const atMinute = (minute: number): Date => new Date(minute * 60_000);
+
+  it('returns an empty list for no items', () => {
+    expect(rotateForTick([], atMinute(7))).toEqual([]);
+  });
+
+  it('keeps the order at offset 0', () => {
+    expect(rotateForTick(ITEMS, atMinute(8))).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('starts at floor(now / 60s) mod length and wraps round, within the same minute', () => {
+    expect(rotateForTick(ITEMS, new Date(atMinute(6).getTime() + 59_999))).toEqual([
+      'c',
+      'd',
+      'a',
+      'b',
+    ]);
+  });
+
+  it('an offset equal to the length is offset 0, and the input is never mutated', () => {
+    const input = [...ITEMS];
+    expect(rotateForTick(input, atMinute(4))).toEqual(['a', 'b', 'c', 'd']);
+    expect(input).toEqual(['a', 'b', 'c', 'd']);
   });
 });
 

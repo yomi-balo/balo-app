@@ -577,7 +577,6 @@ const dailyMeetingSessionsResponseSchema = z.object({
   data: z.array(
     z.object({
       room: z.string().optional(),
-      ongoing: z.boolean().optional(),
       participants: z
         .array(
           z.object({
@@ -598,16 +597,15 @@ const SESSION_HISTORY_LIMIT = 100;
 export interface RoomSessionHistory {
   /** Each claim's latest recorded leave. */
   readonly leaves: ReadonlyMap<string, Date>;
-  /** Every claim that appears as a participant of a session Daily still reports as `ongoing`. */
-  readonly ongoingClaims: ReadonlySet<string>;
 }
 
 /**
  * Each participant's LATEST RECORDED LEAVE in one room, from Daily's session history, keyed by
  * the Daily `user_id` claim. The leave is `join_time + duration` (both seconds) of the
  * participant's session entry; when the same claim appears in several sessions the latest wins.
- * `ongoingClaims` names the claims that appear in an `ongoing` session, whose recorded leave (if
- * any) cannot be trusted as final.
+ * A session Daily still reports as `ongoing` is read like any other: a participant entry with a
+ * finite `join_time` and `duration` contributes its leave, because a room the caller has already
+ * confirmed empty can only be showing Daily's finalisation lag.
  *
  * It exists for the lifecycle sweep's STRANDED reconciler closes: a dropped `participant.left`
  * webhook leaves an interval open for days, and closing it at the tick instant would record every
@@ -620,7 +618,7 @@ export interface RoomSessionHistory {
  * ⚠⚠ THROWS, NEVER DEGRADES: a body that fails the schema, a `total_count` that disagrees with
  * the rows returned (truncated) or a session naming a different room is UNKNOWN to the caller,
  * which falls back to the booked end rather than guessing. A participant with no `user_id`, no finite
- * `join_time` or no finite `duration` (an ongoing session's participant still counting) is
+ * `join_time` or no finite `duration` (a participant Daily is still counting) is
  * skipped: it has no leave to report.
  */
 export async function getRoomSessionLeaves(
@@ -645,18 +643,14 @@ export async function getRoomSessionLeaves(
   return collectSessionHistory(data);
 }
 
-/** Folds validated sessions into each claim's latest leave and the claims still in an ongoing session. */
+/** Folds validated sessions into each claim's latest recorded leave. */
 function collectSessionHistory(
   data: z.infer<typeof dailyMeetingSessionsResponseSchema>['data']
 ): RoomSessionHistory {
   const leaves = new Map<string, Date>();
-  const ongoingClaims = new Set<string>();
   for (const session of data) {
     for (const participant of session.participants) {
       const claim = participant.user_id;
-      if (typeof claim === 'string' && session.ongoing === true) {
-        ongoingClaims.add(claim);
-      }
       const leftAt = recordedLeaveOf(participant);
       if (typeof claim !== 'string' || leftAt === null) {
         continue;
@@ -667,7 +661,7 @@ function collectSessionHistory(
       }
     }
   }
-  return { leaves, ongoingClaims };
+  return { leaves };
 }
 
 /** `join_time + duration` (both seconds) as an instant, or `null` when either is missing or non-finite. */

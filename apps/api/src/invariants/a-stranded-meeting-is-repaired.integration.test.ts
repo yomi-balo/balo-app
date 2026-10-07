@@ -153,10 +153,7 @@ const fakePresenceReader: PresenceReader = {
     }
     return [...(vendorRooms.get(roomName) ?? [])].map((userId) => ({ userId }));
   },
-  getRoomSessionLeaves: async () => ({
-    leaves: new Map(roomRead.leaves),
-    ongoingClaims: new Set(),
-  }),
+  getRoomSessionLeaves: async () => ({ leaves: new Map(roomRead.leaves) }),
 };
 
 const noop = (): void => {};

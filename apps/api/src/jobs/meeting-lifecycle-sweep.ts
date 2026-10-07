@@ -252,8 +252,11 @@ export type RoomOccupancy = 'occupied' | 'empty' | 'unknown';
 export type RoomRosterRead =
   | {
       readonly source: 'unknown';
-      /** The read was skipped only because the close cap is spent: our own budget, not Daily. */
-      readonly closeCapSpent?: true;
+      /**
+       * The read was skipped only because one of the sweep's own per-tick budgets (close, history
+       * read or per-room read) is spent: our own budget, not Daily.
+       */
+      readonly ownBudgetSpent?: true;
     }
   | {
       readonly source: 'platform' | 'room';
@@ -262,7 +265,7 @@ export type RoomRosterRead =
     };
 
 const UNKNOWN_ROSTER: RoomRosterRead = { source: 'unknown' };
-const CLOSE_CAP_SPENT_ROSTER: RoomRosterRead = { source: 'unknown', closeCapSpent: true };
+const OWN_BUDGET_SPENT_ROSTER: RoomRosterRead = { source: 'unknown', ownBudgetSpent: true };
 
 /** @see RoomOccupancy */
 export function roomOccupancy(read: RoomRosterRead): RoomOccupancy {
@@ -316,9 +319,11 @@ interface SweepContext {
  */
 async function resolveRoomRoster(
   meeting: Meeting,
-  openCount: number,
+  open: readonly MeetingPresence[],
+  mode: SweepMode,
   ctx: SweepContext
 ): Promise<RoomRosterRead> {
+  const openCount = open.length;
   const { platform, reader, budget } = ctx;
   const roomName = meeting.dailyRoomName;
   if (!platform.rosterAvailable || roomName === null) {
@@ -341,14 +346,24 @@ async function resolveRoomRoster(
     );
     return UNKNOWN_ROSTER;
   }
+  if (
+    mode === 'stranded' &&
+    budget.historyReadsSpent >= MAX_SESSION_HISTORY_READS_PER_TICK &&
+    open.some((row) => claimFor(row.userId, row.meetingGuestId) !== null)
+  ) {
+    // A confirmed-empty answer would lead straight to a session-history read, and that budget is
+    // spent: do not spend a room read on a candidate that cannot be repaired this tick.
+    budget.historyReadsDeferred += 1;
+    return OWN_BUDGET_SPENT_ROSTER;
+  }
   if (budget.closesSpent >= MAX_RECONCILER_CLOSES_PER_TICK) {
     // A read here could only feed a close, and the close cap is already spent.
     budget.closesDeferred += openCount;
-    return CLOSE_CAP_SPENT_ROSTER;
+    return OWN_BUDGET_SPENT_ROSTER;
   }
   if (budget.roomReadsSpent >= MAX_ROOM_PRESENCE_READS_PER_TICK) {
     budget.roomReadsDeferred += 1;
-    return UNKNOWN_ROSTER;
+    return OWN_BUDGET_SPENT_ROSTER;
   }
   budget.roomReadsSpent += 1;
   try {
@@ -410,8 +425,6 @@ async function openMissingParticipants(
 /** What {@link strandedLeavesFor} resolved for one stranded candidate. */
 type StrandedLeaves =
   | { readonly kind: 'leaves'; readonly leaves: ReadonlyMap<string, Date> }
-  /** Reconciliation is UNKNOWN for this candidate: nothing is closed, the terminal rules run. */
-  | { readonly kind: 'unknown' }
   /** Our own close or history-read budget is spent: the candidate is skipped entirely this tick. */
   | { readonly kind: 'deferred' };
 
@@ -428,8 +441,12 @@ const NO_LEAVES: StrandedLeaves = { kind: 'leaves', leaves: new Map() };
  * ⚠ ONLY OUR OWN BUDGET DEFERS A CANDIDATE. A failing or unparseable history read falls back to
  * the booked end (`NO_LEAVES`), because a persistently failing endpoint must never stall
  * termination. A spent close cap or history-read cap is our own budget, so it defers the
- * candidate: neither a close nor a terminal rule runs this tick. A claim found in an `ongoing` session contradicts the confirmed-empty room,
- * so that is UNKNOWN too.
+ * candidate: neither a close nor a terminal rule runs this tick.
+ *
+ * ⚠ A SESSION DAILY STILL CALLS `ongoing` IS NOT UNKNOWN. This runs only for a room confirmed
+ * empty (an occupied room never reaches it), so an `ongoing` session there is Daily's
+ * finalisation lag; the reader returns that session's recorded leave when it has a finite
+ * duration, and the booked end applies when it has none.
  */
 async function strandedLeavesFor(
   meeting: Meeting,
@@ -461,13 +478,6 @@ async function strandedLeavesFor(
     const history = await reader.getRoomSessionLeaves(roomName, {
       since: new Date(meeting.scheduledStart.getTime() - SESSION_HISTORY_LEAD_MS),
     });
-    if (claims.some((claim) => history.ongoingClaims.has(claim))) {
-      logger.warn(
-        { meetingId: meeting.id, roomName },
-        'Daily session history lists a closable participant in an ongoing session of a room confirmed empty — treating the room as UNKNOWN and skipping reconciliation'
-      );
-      return { kind: 'unknown' };
-    }
     return { kind: 'leaves', leaves: history.leaves };
   } catch (error) {
     logger.warn(
@@ -479,15 +489,16 @@ async function strandedLeavesFor(
 }
 
 /**
- * What {@link reconcileMeeting} did. `verdict` is `reconciled` normally, `unknown` when this
- * candidate's room must be treated as UNKNOWN for the rest of the tick, and `deferred` when a
- * stranded candidate is skipped outright on our own close or history-read budget.
+ * What {@link reconcileMeeting} did. `verdict` is `reconciled` normally and `deferred` when a
+ * stranded candidate is skipped outright on one of the sweep's own per-tick budgets.
  */
 interface ReconcileOutcome {
   closed: number;
   opened: number;
-  verdict: 'reconciled' | 'unknown' | 'deferred';
+  verdict: 'reconciled' | 'deferred';
 }
+
+const NOTHING_RECONCILED: ReconcileOutcome = { closed: 0, opened: 0, verdict: 'reconciled' };
 
 /**
  * PASS 1 — reconcile ONE meeting against the vendor's roster.
@@ -512,73 +523,132 @@ async function reconcileMeeting(
   ctx: SweepContext
 ): Promise<ReconcileOutcome> {
   if (read.source === 'unknown') {
-    return { closed: 0, opened: 0, verdict: 'reconciled' };
+    return NOTHING_RECONCILED;
+  }
+  if (mode === 'stranded' && read.source === 'platform') {
+    // ⚠ A ROOM THE PLATFORM LISTS IS REAL OCCUPANCY, not a strand to repair: no history read and
+    // no closes. The terminal rules run on the occupancy as read.
+    return NOTHING_RECONCILED;
   }
   const { meeting } = state;
-  const { budget, now } = ctx;
+  const { now } = ctx;
   const vendorIds = new Set(read.participants);
   const confirmedEmpty = read.source === 'room' && read.vendorCount === 0;
 
-  // ⚠ AN INTERVAL WITH NO IDENTITY CANNOT BE RECONCILED AGAINST A ROSTER — there is nothing to
-  // match. It is `observer` by construction, so it bills nothing either way, and closing it on
-  // a guess would be worse than leaving it. The ONE exception is a confirmed-empty room: with
-  // nobody in it, no roster entry could be this interval's, so it is closed by identity-less
-  // match (one row per call).
-  const closable = open.filter((row) => {
-    const claim = claimFor(row.userId, row.meetingGuestId);
-    return claim === null ? confirmedEmpty : !vendorIds.has(claim);
-  });
+  const closable = closableIntervals(open, vendorIds, confirmedEmpty);
 
   const resolved: StrandedLeaves =
     mode === 'stranded' ? await strandedLeavesFor(meeting, closable, ctx) : NO_LEAVES;
-  if (resolved.kind !== 'leaves') {
-    return { closed: 0, opened: 0, verdict: resolved.kind };
+  if (resolved.kind === 'deferred') {
+    return { closed: 0, opened: 0, verdict: 'deferred' };
   }
   const { leaves } = resolved;
 
-  let closed = 0;
-  for (const row of closable) {
-    const claim = claimFor(row.userId, row.meetingGuestId);
-    if (budget.closesSpent >= MAX_RECONCILER_CLOSES_PER_TICK) {
-      budget.closesDeferred += 1;
-      continue;
-    }
-    budget.closesSpent += 1;
-    const closeAt =
-      mode === 'stranded'
-        ? strandedReconcileCloseAt({
-            joinedAt: row.joinedAt,
-            recordedLeaveAt: claim === null ? null : (leaves.get(claim) ?? null),
-            status: meeting.status,
-            scheduledStart: meeting.scheduledStart,
-            scheduledEnd: meeting.scheduledEnd,
-            timers: ctx.timers,
-            now,
-          })
-        : now;
-    // ⚠ BUILT FROM THE STORED ROW, NOT RE-DERIVED. `close` matches on IDENTITY only, so the
-    // party derivation a full `resolvePresenceEffect` would run — the participation gate plus a
-    // delivery-identity read, per interval, per candidate, every minute — buys the write
-    // nothing and could only introduce disagreement. See `closePresenceEffectForRow`.
-    const effect = closePresenceEffectForRow(meeting, row, closeAt);
-    const outcome = await applyPresenceEffect(db, effect);
-    if (outcome === 'closed') {
-      closed += 1;
-      // ⚠ EACH ONE IS A DROPPED `participant.left` WEBHOOK. The RATE is the health signal for
-      // the whole presence model — this is the only place it is visible.
-      logger.warn(
-        { meetingId: meeting.id, participantId: claim, openedAt: row.joinedAt.toISOString() },
-        'Reconciler closed an interval the vendor roster does not confirm — a dropped webhook'
-      );
-    }
-  }
+  const { closed, closeCapSkipped } = await closeWithinBudget(meeting, closable, mode, leaves, ctx);
 
   if (mode === 'stranded') {
-    return { closed, opened: 0, verdict: 'reconciled' };
+    // ⚠ A ROW SKIPPED ON OUR OWN CLOSE CAP DEFERS THE CANDIDATE, but the closes that landed stand
+    // and are reported, so a meeting with more open rows than the cap still progresses each tick.
+    return { closed, opened: 0, verdict: closeCapSkipped ? 'deferred' : 'reconciled' };
   }
 
   const opened = await openMissingParticipants(meeting, open, vendorIds, now);
   return { closed, opened, verdict: 'reconciled' };
+}
+
+/**
+ * The open intervals the roster does not confirm.
+ *
+ * ⚠ AN INTERVAL WITH NO IDENTITY CANNOT BE RECONCILED AGAINST A ROSTER — there is nothing to
+ * match. It is `observer` by construction, so it bills nothing either way, and closing it on
+ * a guess would be worse than leaving it. The ONE exception is a confirmed-empty room: with
+ * nobody in it, no roster entry could be this interval's, so it is closed by identity-less
+ * match (one row per call).
+ */
+function closableIntervals(
+  open: readonly MeetingPresence[],
+  vendorIds: ReadonlySet<string>,
+  confirmedEmpty: boolean
+): MeetingPresence[] {
+  return open.filter((row) => {
+    const claim = claimFor(row.userId, row.meetingGuestId);
+    return claim === null ? confirmedEmpty : !vendorIds.has(claim);
+  });
+}
+
+/**
+ * Closes `closable` while the per-tick close cap allows; a row past the cap waits for the next
+ * tick (`closeCapSkipped`). An in-window close lands at the tick instant, a stranded one at
+ * {@link strandedCloseInstant}.
+ */
+async function closeWithinBudget(
+  meeting: Meeting,
+  closable: readonly MeetingPresence[],
+  mode: SweepMode,
+  leaves: ReadonlyMap<string, Date>,
+  ctx: SweepContext
+): Promise<{ closed: number; closeCapSkipped: boolean }> {
+  const { budget, now } = ctx;
+  let closed = 0;
+  let closeCapSkipped = false;
+  for (const row of closable) {
+    const claim = claimFor(row.userId, row.meetingGuestId);
+    if (budget.closesSpent >= MAX_RECONCILER_CLOSES_PER_TICK) {
+      budget.closesDeferred += 1;
+      closeCapSkipped = true;
+      continue;
+    }
+    budget.closesSpent += 1;
+    const closeAt =
+      mode === 'stranded' ? strandedCloseInstant(meeting, row, claim, leaves, ctx) : now;
+    if (await closeStaleInterval(meeting, row, claim, closeAt)) {
+      closed += 1;
+    }
+  }
+  return { closed, closeCapSkipped };
+}
+
+/** Where a stranded close lands: {@link strandedReconcileCloseAt} over the claim's recorded leave. */
+function strandedCloseInstant(
+  meeting: Meeting,
+  row: MeetingPresence,
+  claim: string | null,
+  leaves: ReadonlyMap<string, Date>,
+  ctx: SweepContext
+): Date {
+  return strandedReconcileCloseAt({
+    joinedAt: row.joinedAt,
+    recordedLeaveAt: claim === null ? null : (leaves.get(claim) ?? null),
+    status: meeting.status,
+    scheduledStart: meeting.scheduledStart,
+    scheduledEnd: meeting.scheduledEnd,
+    timers: ctx.timers,
+    now: ctx.now,
+  });
+}
+
+/** Closes one interval the roster does not confirm; `true` when the write closed it. */
+async function closeStaleInterval(
+  meeting: Meeting,
+  row: MeetingPresence,
+  claim: string | null,
+  closeAt: Date
+): Promise<boolean> {
+  // ⚠ BUILT FROM THE STORED ROW, NOT RE-DERIVED. `close` matches on IDENTITY only, so the
+  // party derivation a full `resolvePresenceEffect` would run — the participation gate plus a
+  // delivery-identity read, per interval, per candidate, every minute — buys the write
+  // nothing and could only introduce disagreement. See `closePresenceEffectForRow`.
+  const effect = closePresenceEffectForRow(meeting, row, closeAt);
+  if ((await applyPresenceEffect(db, effect)) !== 'closed') {
+    return false;
+  }
+  // ⚠ EACH ONE IS A DROPPED `participant.left` WEBHOOK. The RATE is the health signal for
+  // the whole presence model — this is the only place it is visible.
+  logger.warn(
+    { meetingId: meeting.id, participantId: claim, openedAt: row.joinedAt.toISOString() },
+    'Reconciler closed an interval the vendor roster does not confirm — a dropped webhook'
+  );
+  return true;
 }
 
 /**
@@ -1114,18 +1184,12 @@ async function processCandidate(
   const { now, timers } = ctx;
   const initial = await loadCandidateState(meeting, now);
   const open = initial.openRows;
-  const rosterRead = await resolveRoomRoster(meeting, open.length, ctx);
-  if (mode === 'stranded' && rosterRead.source === 'unknown' && rosterRead.closeCapSpent) {
+  const rosterRead = await resolveRoomRoster(meeting, open, mode, ctx);
+  if (mode === 'stranded' && rosterRead.source === 'unknown' && rosterRead.ownBudgetSpent) {
     return { terminated: false, closed: 0, opened: 0, needsRecordingEnsure: false };
   }
   const { closed, opened, verdict } = await reconcileMeeting(initial, open, rosterRead, mode, ctx);
-  if (verdict === 'deferred') {
-    // ⚠ OUR OWN CLOSE OR HISTORY-READ BUDGET IS SPENT: the candidate stays selected and retries next tick,
-    // with neither reconciliation nor a terminal rule run on a roster it could not reconcile.
-    return { terminated: false, closed: 0, opened: 0, needsRecordingEnsure: false };
-  }
-  // ⚠ An UNKNOWN candidate reports an unknown room to the terminal rules for the rest of the tick.
-  const read = verdict === 'unknown' ? UNKNOWN_ROSTER : rosterRead;
+  const read = rosterRead;
 
   if (read.source !== 'unknown' && closed + opened > 0) {
     // An unknown read never changes anything, so `roster_source` is never `unknown`.
@@ -1137,6 +1201,13 @@ async function processCandidate(
       stranded: mode === 'stranded',
       distinct_id: meeting.id,
     });
+  }
+
+  if (verdict === 'deferred') {
+    // ⚠ A PER-TICK BUDGET OF OUR OWN IS SPENT (close, history read or per-room read): the candidate
+    // stays selected and retries next tick, with no terminal rule run on a roster it could not
+    // finish reconciling. Closes that already landed are still reported.
+    return { terminated: false, closed, opened, needsRecordingEnsure: false };
   }
 
   // ⚠ RE-READ AFTER RECONCILIATION. The terminal rules branch on `anyOpen`, `lastLeftAt` AND
@@ -1171,6 +1242,19 @@ async function processCandidate(
     opened,
     needsRecordingEnsure: await needsRecordingEnsure(state),
   };
+}
+
+/**
+ * `items` rotated to start at index `floor(now / 60s) mod items.length`, wrapping round. The
+ * sweep runs every minute, so the offset advances by one per tick and each item is at the head
+ * once in any `items.length` consecutive ticks. Pure: the input is not mutated.
+ */
+export function rotateForTick<T>(items: readonly T[], now: Date): T[] {
+  if (items.length === 0) {
+    return [];
+  }
+  const offset = Math.floor(now.getTime() / 60_000) % items.length;
+  return [...items.slice(offset), ...items.slice(0, offset)];
 }
 
 export interface MeetingLifecycleSweepResult {
@@ -1400,9 +1484,18 @@ export async function runMeetingLifecycleSweep(
 
   // ⚠ LIVE MEETINGS FIRST: both batches share one budget, so a strand backlog can never starve a
   // live call of its reconciliation.
+  //
+  // ⚠ THE STRANDED BATCH IS PROCESSED FROM A ROTATING OFFSET (`rotateForTick`). A strand whose
+  // room stays UNKNOWN (a persistent per-room 404, a candidate the sweep keeps deferring) spends
+  // per-tick budget every tick, and in a fixed oldest-first order the few at the head would
+  // starve every younger strand of repair AND termination. Rotating puts each candidate at the
+  // head once in any `stranded.length` consecutive ticks, so every strand makes progress.
+  // RESIDUAL: more than `MEETING_STRANDED_BATCH_LIMIT` strands that never terminate fill the
+  // batch and the younger ones are never selected; the batch-filled warning above and
+  // BAL-586's `meeting.stranded` alert cover that.
   const tagged: ReadonlyArray<{ meeting: Meeting; mode: SweepMode }> = [
     ...candidates.map((meeting) => ({ meeting, mode: 'in_window' as const })),
-    ...stranded.map((meeting) => ({ meeting, mode: 'stranded' as const })),
+    ...rotateForTick(stranded, now).map((meeting) => ({ meeting, mode: 'stranded' as const })),
   ];
   for (const { meeting, mode } of tagged) {
     try {

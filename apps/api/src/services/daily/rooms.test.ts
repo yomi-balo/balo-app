@@ -725,22 +725,23 @@ describe('getRoomSessionLeaves (BAL-584)', () => {
 
     await expect(getRoomSessionLeaves(ROOM, { since: SINCE })).resolves.toEqual({
       leaves: new Map(),
-      ongoingClaims: new Set(),
     });
   });
 
-  it('⚠ names the claims that appear in an ongoing session, and only those', async () => {
+  it('⚠ an ONGOING session contributes a departed participant’s leave when it has a duration, and none when it has not', async () => {
     stubSessions([
-      session([{ user_id: EXPERT, join_time: JOIN_SECONDS, duration: 60 }], { ongoing: false }),
-      session([{ user_id: CLIENT, join_time: JOIN_SECONDS }, { join_time: JOIN_SECONDS }], {
-        id: 'mtg-2',
-        ongoing: true,
-      }),
+      session(
+        [
+          { user_id: EXPERT, join_time: JOIN_SECONDS, duration: 90 },
+          { user_id: CLIENT, join_time: JOIN_SECONDS },
+        ],
+        { ongoing: true }
+      ),
     ]);
 
-    const { ongoingClaims } = await getRoomSessionLeaves(ROOM, { since: SINCE });
+    const { leaves } = await getRoomSessionLeaves(ROOM, { since: SINCE });
 
-    expect([...ongoingClaims]).toEqual([CLIENT]);
+    expect([...leaves.entries()]).toEqual([[EXPERT, new Date((JOIN_SECONDS + 90) * 1000)]]);
   });
 
   it('URL-encodes the room and carries the time window and an explicit limit', async () => {
