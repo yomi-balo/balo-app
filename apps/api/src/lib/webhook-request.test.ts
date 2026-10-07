@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockCheckRateLimit, mockCaptureMessage } = vi.hoisted(() => ({
   mockCheckRateLimit: vi.fn(),
@@ -111,17 +111,23 @@ describe('enforceWebhookIpRateLimit', () => {
 
 /**
  * BAL-583 — this helper is VENDOR-NEUTRAL and shared by both webhook routes, so dedup is keyed
- * per `config.keyPrefix` — a Mux capture must never suppress a Daily one. Each
- * `it` `vi.resetModules()`s and dynamically re-imports this module so the dedup `Set` inside
- * `lib/sentry-alert.js` (unmocked, no reset export by design) starts fresh per test.
+ * per `config.keyPrefix` — a Mux capture must never suppress a Daily one. A Redis outage is
+ * TRANSIENT, so the dedup is `captureMessageAtMostEvery` (at most once per hour per key), NOT
+ * `captureMessageOnce` — a second, later outage on the same keyPrefix must still reach Sentry.
+ * Each `it` `vi.resetModules()`s and dynamically re-imports this module so the dedup state
+ * inside `lib/sentry-alert.js` (unmocked, no reset export by design) starts fresh per test.
  */
-describe('enforceWebhookIpRateLimit — once-per-process Sentry (BAL-583)', () => {
+describe('enforceWebhookIpRateLimit — Sentry capture at most once per hour per key (BAL-583)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
   });
 
-  it('captures ONCE across repeated failures on the SAME keyPrefix', async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('captures ONCE across repeated failures on the SAME keyPrefix WITHIN the hour', async () => {
     mockCheckRateLimit.mockRejectedValue(new Error('ECONNREFUSED'));
     const { enforceWebhookIpRateLimit: freshEnforce } = await import('./webhook-request.js');
     const reply = fakeReply();
@@ -151,6 +157,36 @@ describe('enforceWebhookIpRateLimit — once-per-process Sentry (BAL-583)', () =
       { error: 'ECONNREFUSED' },
       "Webhook rate limit unavailable — failing CLOSED with 503; whether the delivery is redelivered depends on the vendor's retry policy"
     );
+  });
+
+  it('a SECOND outage on the SAME keyPrefix captures AGAIN once an hour has elapsed', async () => {
+    mockCheckRateLimit.mockRejectedValue(new Error('ECONNREFUSED'));
+    vi.useFakeTimers();
+    const { enforceWebhookIpRateLimit: freshEnforce } = await import('./webhook-request.js');
+    const reply = fakeReply();
+    const log = fakeLog();
+
+    const firstResult = await freshEnforce(
+      CONFIG,
+      '1.2.3.4',
+      reply as unknown as Parameters<typeof freshEnforce>[2],
+      log as unknown as Parameters<typeof freshEnforce>[3]
+    );
+    vi.setSystemTime(Date.now() + 60 * 60 * 1000 + 1);
+    const secondResult = await freshEnforce(
+      CONFIG,
+      '1.2.3.4',
+      reply as unknown as Parameters<typeof freshEnforce>[2],
+      log as unknown as Parameters<typeof freshEnforce>[3]
+    );
+
+    expect(firstResult).toBe(true);
+    expect(secondResult).toBe(true);
+    expect(reply.code).toHaveBeenNthCalledWith(1, 503);
+    expect(reply.send).toHaveBeenNthCalledWith(1, { error: 'rate_limit_unavailable' });
+    expect(reply.code).toHaveBeenNthCalledWith(2, 503);
+    expect(reply.send).toHaveBeenNthCalledWith(2, { error: 'rate_limit_unavailable' });
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(2);
   });
 
   it('a DIFFERENT keyPrefix (Mux) captures AGAIN — one vendor cannot suppress another', async () => {

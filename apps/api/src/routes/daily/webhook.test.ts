@@ -189,7 +189,7 @@ function signedHeaders(payload: string): Record<string, string> {
 }
 
 /**
- * BAL-583 — extracted so the once-per-process Sentry describe (which needs a FRESH module per
+ * BAL-583 — extracted so the 'Sentry capture dedup' describe (which needs a FRESH module per
  * `it`, via `vi.resetModules()` + a dynamic import) can build its own app from a freshly
  * imported `dailyWebhookRoutes` without duplicating this registration.
  */
@@ -1642,13 +1642,17 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
 });
 
 /**
- * BAL-583 — the runtime 503 paths must capture to Sentry ONCE PER PROCESS, never once per
- * delivery. Each `it` here `vi.resetModules()`s and dynamically re-imports `./webhook.js`
- * (which transitively re-imports the UNMOCKED `lib/sentry-alert.js`), so the dedup `Set` the
- * helper owns starts fresh per test — the only way these assertions are independent of test
- * order, since the module holds no reset export by design.
+ * BAL-583 — the runtime 503 paths must capture to Sentry at most once per DELIVERY STORM, never
+ * once per delivery. The two paths dedup differently: `DAILY_WEBHOOK_SECRET` unset is
+ * `captureMessageOnce` (ONCE PER PROCESS — config can't change without a restart), while the
+ * rate-limiter-unavailable path is `captureMessageAtMostEvery` (at most once per hour per
+ * `keyPrefix` — a Redis outage is transient and a later, separate one must still reach Sentry;
+ * see `lib/webhook-request.ts`). Each `it` here `vi.resetModules()`s and dynamically re-imports
+ * `./webhook.js` (which transitively re-imports the UNMOCKED `lib/sentry-alert.js`), so the
+ * dedup state the helper owns starts fresh per test — the only way these assertions are
+ * independent of test order, since the module holds no reset export by design.
  */
-describe('once-per-process Sentry (BAL-583)', () => {
+describe('Sentry capture dedup on the runtime 503 paths (BAL-583)', () => {
   const originalSecret = process.env.DAILY_WEBHOOK_SECRET;
 
   beforeEach(() => {
@@ -1698,7 +1702,7 @@ describe('once-per-process Sentry (BAL-583)', () => {
     }
   });
 
-  it('limiter rejects: two deliveries both 503 rate_limit_unavailable, Sentry captured ONCE', async () => {
+  it('limiter rejects: two deliveries both 503 rate_limit_unavailable, Sentry captured ONCE within the hour', async () => {
     mockCheckRateLimit.mockRejectedValue(new Error('redis unreachable'));
     const { dailyWebhookRoutes: freshRoutes } = await import('./webhook.js');
     const freshApp = await buildTestApp(freshRoutes);

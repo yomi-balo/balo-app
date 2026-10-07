@@ -599,3 +599,74 @@ describe('POST /webhooks/mux (BAL-473 §8)', () => {
     expect(mockInsertReceived).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * BAL-583 — a missing `MUX_WEBHOOK_SECRET` must capture to Sentry ONCE PER PROCESS, never once
+ * per delivery, same posture as the Daily route's equivalent describe in
+ * `routes/daily/webhook.test.ts`. `vi.resetModules()` + a dynamic import of `./webhook.js`
+ * (which transitively re-imports the UNMOCKED `lib/sentry-alert.js`) gives each `it` a fresh
+ * dedup `Set` — the only way these assertions are independent of test order, since the module
+ * holds no reset export by design.
+ */
+describe('once-per-process Sentry on webhook_not_configured (BAL-583)', () => {
+  const originalSecret = process.env.MUX_WEBHOOK_SECRET;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    delete process.env.MUX_WEBHOOK_SECRET;
+    mockCheckRateLimit.mockResolvedValue({ allowed: true, remaining: 1_999, ttlSeconds: 3600 });
+  });
+
+  afterEach(() => {
+    if (originalSecret === undefined) {
+      delete process.env.MUX_WEBHOOK_SECRET;
+    } else {
+      process.env.MUX_WEBHOOK_SECRET = originalSecret;
+    }
+  });
+
+  it('secret unset: two deliveries both 503, Sentry captured ONCE', async () => {
+    const { muxWebhookRoutes: freshRoutes } = await import('./webhook.js');
+    const freshApp = Fastify({ logger: false });
+    freshApp.setErrorHandler((_error, _request, reply) => {
+      reply.status(500).send({ error: 'Internal Server Error' });
+    });
+    await freshApp.register(rawBody, {
+      field: 'rawBody',
+      global: false,
+      encoding: false,
+      runFirst: true,
+      routes: [URL],
+    });
+    await freshApp.register(freshRoutes);
+    await freshApp.ready();
+
+    try {
+      const payload = body();
+
+      const first = await freshApp.inject({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+      const second = await freshApp.inject({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(first.statusCode).toBe(503);
+      expect(second.statusCode).toBe(503);
+      expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+      expect(mockCaptureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('MUX_WEBHOOK_SECRET'),
+        { level: 'error' }
+      );
+    } finally {
+      await freshApp.close();
+    }
+  });
+});

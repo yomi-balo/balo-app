@@ -150,9 +150,10 @@ Verified against Daily's REST error model and rate-limit tiers:
 
 ## Webhooks
 
-Verified against `docs.daily.co/reference/rest-api/webhooks` (fetched **2026-08-15**). Balo's
-whole scheme lives in one module — `apps/api/src/services/daily/webhook-signature.ts` — so a
-vendor correction costs one file plus its test.
+Verified against `docs.daily.co/reference/rest-api/webhooks` (fetched **2026-08-15**;
+re-verified **2026-10-07**). Balo's whole scheme lives in one module —
+`apps/api/src/services/daily/webhook-signature.ts` — so a vendor correction costs one file plus
+its test.
 
 **Registration is a one-off per-environment OPS step, not application code.** Nothing at runtime
 creates or rotates a webhook.
@@ -160,8 +161,8 @@ creates or rotates a webhook.
 **Registration runbook (BAL-583):**
 
 1. Generate our own secret: `openssl rand -base64 32`.
-2. Set `DAILY_WEBHOOK_SECRET` on the target environment, deploy, and confirm the boot error is
-   gone.
+2. Set `DAILY_WEBHOOK_SECRET` on the target environment, deploy, and confirm the boot alert is
+   gone (an error + Sentry in production, a warning elsewhere).
 3. `POST /v1/webhooks` with `{ url, eventTypes: [...HANDLED_DAILY_EVENT_TYPES], hmac: <same secret>, retryType: "exponential" }`.
    We supply our own `hmac` — the secret must already be set from step 2, because an endpoint
    can't verify a ping signed with a secret it hasn't been given yet. `retryType` is **required**;
@@ -180,8 +181,8 @@ verifies against the old one) is **not supported** — note only, out of scope h
 
 Daily's delivery contract is set by the subscription's `retryType`, and Daily treats every
 non-200 the same — the status code never changes what it does. `circuit-breaker` (Daily's
-default): each message is tried once, no per-message retry; 3 consecutive failures (reset by any
-success) flip the webhook to `FAILED` and Daily stops sending until it is re-activated.
+default): every message is tried at least once, no retry schedule; 3 consecutive failures (reset
+by any success) flip the webhook to `FAILED` and Daily stops sending until it is re-activated.
 `exponential` (what Balo registers, per the runbook above): a failed message is retried at most 5
 times with backoff up to 15 min, then deleted; it never circuit-breaks.
 
@@ -226,6 +227,13 @@ verification ping (see the registration runbook above).
 is not optional bookkeeping: a replayed `participant.joined` after its interval legitimately
 closed would open a second interval anchored in the past that nothing closes — a silent unbounded
 over-bill on a money path.
+
+⚠ Daily documents that, in rare cases, a duplicate delivery can carry a DIFFERENT `id` than the
+original — for `participant.joined` / `participant.left` specifically, Daily recommends
+deduplicating on `type` plus the payload's `session_id` instead. Balo's marker above is keyed only
+on `id`, so that case is NOT deduplicated today: a replayed `participant.joined` whose duplicate
+carries a fresh `id`, arriving after the original interval has legitimately closed, would open a
+second interval. Known gap, not fixed here.
 
 ## Recording (BAL-473)
 

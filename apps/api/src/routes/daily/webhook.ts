@@ -50,10 +50,10 @@
  *
  * Daily's delivery contract is set by the subscription's `retryType`, and Daily treats every
  * non-200 the same — the status code never changes what it does. `circuit-breaker` (Daily's
- * default): each message is tried once, no per-message retry; 3 consecutive failures (reset by
- * any success) flip the webhook to `FAILED` and Daily stops sending until it is re-activated.
- * `exponential` (what Balo registers — see the runbook): a failed message is retried at most 5
- * times with backoff up to 15 min, then deleted; it never circuit-breaks.
+ * default): every message is tried at least once, no retry schedule; 3 consecutive failures
+ * (reset by any success) flip the webhook to `FAILED` and Daily stops sending until it is
+ * re-activated. `exponential` (what Balo registers — see the runbook): a failed message is
+ * retried at most 5 times with backoff up to 15 min, then deleted; it never circuit-breaks.
  */
 import {
   db,

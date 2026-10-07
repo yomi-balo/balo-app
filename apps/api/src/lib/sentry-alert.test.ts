@@ -37,6 +37,56 @@ describe('captureMessageOnce (BAL-583)', () => {
   });
 });
 
+describe('captureMessageAtMostEvery (BAL-583)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('captures on the first call for a key', async () => {
+    const { captureMessageAtMostEvery } = await import('./sentry-alert.js');
+
+    captureMessageAtMostEvery('k1', 'first message', 1000);
+
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+    expect(mockCaptureMessage).toHaveBeenCalledWith('first message', { level: 'error' });
+  });
+
+  it('a second call for the SAME key WITHIN the interval is a no-op', async () => {
+    const { captureMessageAtMostEvery } = await import('./sentry-alert.js');
+
+    captureMessageAtMostEvery('k1', 'first message', 1000);
+    vi.setSystemTime(Date.now() + 500);
+    captureMessageAtMostEvery('k1', 'first message', 1000);
+
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a call AFTER the interval elapses captures again', async () => {
+    const { captureMessageAtMostEvery } = await import('./sentry-alert.js');
+
+    captureMessageAtMostEvery('k1', 'first message', 1000);
+    vi.setSystemTime(Date.now() + 1001);
+    captureMessageAtMostEvery('k1', 'first message', 1000);
+
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys are independent', async () => {
+    const { captureMessageAtMostEvery } = await import('./sentry-alert.js');
+
+    captureMessageAtMostEvery('k1', 'first message', 1000);
+    captureMessageAtMostEvery('k2', 'second message', 1000);
+
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('alertMissingConfigAtBoot (BAL-583)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

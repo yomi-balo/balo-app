@@ -101,11 +101,14 @@ try {
     );
   }
 
-  // BAL-473 — never a throw (throwing would crash-loop Railway on a missing vendor secret and
-  // take down every route to protect one integration). Unlike the Daily secrets above, which
-  // alert in production, this one stays a warn-only boot check in every environment.
+  // BAL-473 / BAL-583 — never a throw (throwing would crash-loop Railway on a missing vendor
+  // secret and take down every route to protect one integration). Routed through the SAME
+  // `alertMissingConfigAtBoot` posture as the Daily secrets above — a missing Mux webhook
+  // secret is just as silent an outage (every delivery 503s, nothing reaches `ready`), so it
+  // gets the same production-error-plus-Sentry / elsewhere-warn treatment, not a warn-only one.
   if (!process.env.MUX_WEBHOOK_SECRET) {
-    app.log.warn(
+    alertMissingConfigAtBoot(
+      app.log,
       'MUX_WEBHOOK_SECRET is not set — POST /webhooks/mux will 503 EVERY delivery, so no meeting recording will ever reach `ready` and no Daily source will ever be cleaned up'
     );
   }
