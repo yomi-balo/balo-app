@@ -39,6 +39,7 @@ import { parseMuxWebhookEvent, type MuxWebhookEvent } from '../../services/mux/w
 import { verifyMuxWebhookSignature } from '../../services/mux/webhook-signature.js';
 import { enqueueRecordingCleanupSource } from '../../jobs/recording-cleanup-source.js';
 import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
+import { captureMessageOnce } from '../../lib/sentry-alert.js';
 
 const log = createLogger('mux-webhook-route');
 
@@ -259,6 +260,10 @@ export async function muxWebhookRoutes(fastify: FastifyInstance): Promise<void> 
       // ⚠ AN OUTAGE, NOT A BAD REQUEST. A 400 would tell Mux to stop retrying deliveries that
       // are perfectly valid and that we will process the moment the variable is set.
       log.error({}, 'MUX_WEBHOOK_SECRET is not set — refusing to process an unverified body');
+      captureMessageOnce(
+        'mux-webhook:not-configured',
+        'MUX_WEBHOOK_SECRET is not set — POST /webhooks/mux answers 503 to every delivery, so no recording reaches ready'
+      );
       return reply.code(503).send({ error: 'webhook_not_configured' });
     }
 

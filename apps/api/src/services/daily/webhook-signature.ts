@@ -7,7 +7,10 @@
  *
  *     signature = HMAC-SHA256( base64-decoded secret , `${timestamp}.${rawBody}` )   → BASE64
  *     headers   = `x-webhook-timestamp` (unix SECONDS) + `x-webhook-signature`
- *     secret    = the `hmac` field Daily returns when the webhook is CREATED
+ *     secret    = OUR OWN generated base64 value, supplied as `hmac` on `POST /v1/webhooks`,
+ *                 and Daily signs every delivery with it. Omit `hmac` and Daily generates one,
+ *                 but returns it only AFTER the create-time ping, which this endpoint therefore
+ *                 can't verify — so Balo always supplies its own
  *
  * ⚠⚠ THE DIGEST IS BASE64, NOT HEX, AND THAT DISTINCTION IS LOAD-BEARING. An earlier draft of
  * this module computed a HEX digest — a scheme under which EVERY GENUINE DELIVERY FAILS
@@ -107,11 +110,12 @@ function signatureEquals(expected: string, provided: string): boolean {
 /**
  * Decode Daily's HMAC secret.
  *
- * ⚠ THE SECRET IS RETURNED BY DAILY BASE64-ENCODED when a webhook is created, and the HMAC is
- * computed over the DECODED BYTES. Treating the base64 TEXT as the key produces a signature
- * that never matches, on every delivery, with a perfectly healthy-looking `400` — so the
- * fallback below is deliberate: if the configured value is not valid base64, we use its raw
- * bytes rather than silently keying on a truncated decode.
+ * ⚠ THE SECRET IS OUR OWN BASE64-ENCODED VALUE, supplied as `hmac` when the webhook is created
+ * (or updated/re-activated) — never Daily's generated one — and the HMAC is computed
+ * over the DECODED BYTES. Treating the base64 TEXT as the key produces a signature that never
+ * matches, on every delivery, with a perfectly healthy-looking `400` — so the fallback below is
+ * deliberate: if the configured value is not valid base64, we use its raw bytes rather than
+ * silently keying on a truncated decode.
  */
 function secretKey(secret: string): Buffer {
   const decoded = Buffer.from(secret, 'base64');

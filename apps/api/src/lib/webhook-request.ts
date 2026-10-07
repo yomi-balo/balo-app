@@ -10,6 +10,15 @@ import type { createLogger } from '@balo/shared/logging';
 import { checkRateLimit, RATE_LIMIT_DEADLINE_MS, type RateLimitConfig } from './rate-limiter.js';
 import { getRedis } from './redis.js';
 import { withDeadline } from './with-deadline.js';
+import { captureMessageAtMostEvery } from './sentry-alert.js';
+
+/**
+ * A Redis outage is transient, unlike a missing vendor secret — it can recur within one
+ * process's lifetime, so this alert must NOT be `captureMessageOnce`'s once-per-process dedup
+ * (which would silence every outage after the first, forever). One hour per `keyPrefix` bounds
+ * Sentry noise during a prolonged outage while still re-alerting a later, separate one.
+ */
+const RATE_LIMIT_UNAVAILABLE_ALERT_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * BAL-473 FIX ROUND 1 (F1) — run a POST-COMMIT enqueue best-effort. Both webhook routes call
@@ -63,11 +72,12 @@ export function decodeJsonBody(rawBody: Buffer): unknown {
  * sent (either `503 rate_limited` or `503 rate_limit_unavailable`) and the caller must return
  * immediately without doing anything else. `false` ⇒ proceed.
  *
- * ⚠ FAILS CLOSED, AND THAT IS SAFE **ONLY BECAUSE BOTH VENDORS RETRY**. A `503` here means
- * "not now, come back" — the delivery is not lost, and the caller's own event-id marker table
- * makes the retry idempotent. Failing OPEN would re-expose the pre-signature hashing cost
- * during precisely the outage an attacker would pick — see `routes/daily/webhook.ts`'s original
- * docblock (BAL-134) for the full argument; this file only extracts the mechanism, not the
+ * ⚠ FAILS CLOSED. Each vendor's OWN retry policy decides whether this `503` is ever
+ * redelivered — Daily: see `routes/daily/webhook.ts`'s module docblock for the exact contract. A
+ * `503` is right for a short blip, but a longer outage loses deliveries and only the sweep
+ * fallback covers them. Failing OPEN would re-expose the pre-signature hashing cost during
+ * precisely the outage an attacker would pick — see `routes/daily/webhook.ts`'s original
+ * docblock (BAL-134) for the full CPU argument; this file only extracts the mechanism, not the
  * reasoning, so read it there for "why fail closed at all".
  */
 export async function enforceWebhookIpRateLimit(
@@ -85,14 +95,19 @@ export async function enforceWebhookIpRateLimit(
       return false;
     }
     // ⚠ NO `Retry-After` HEADER AND A `503`, NOT A `429` — the vendor's own retry policy
-    // governs, and `503` keeps the delivery in its retry queue instead of inviting it to give up.
+    // governs whether this is ever redelivered; a `503` is simply the honest "not now" answer.
     log.warn({ ip }, 'Webhook rate-limited — refusing before signature verification');
     reply.code(503).send({ error: 'rate_limited' });
     return true;
   } catch (error) {
     log.error(
       { error: error instanceof Error ? error.message : String(error) },
-      'Webhook rate limit unavailable — failing CLOSED (the vendor retries, so no delivery is lost)'
+      "Webhook rate limit unavailable — failing CLOSED with 503; whether the delivery is redelivered depends on the vendor's retry policy"
+    );
+    captureMessageAtMostEvery(
+      `webhook-rate-limit-unavailable:${config.keyPrefix}`,
+      `Webhook rate limit unavailable for ${config.keyPrefix} — failing closed with 503 until Redis recovers`,
+      RATE_LIMIT_UNAVAILABLE_ALERT_INTERVAL_MS
     );
     reply.code(503).send({ error: 'rate_limit_unavailable' });
     return true;
