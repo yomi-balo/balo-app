@@ -30,7 +30,6 @@ const {
   mockStartBillingIfDue,
   mockFindPendingBeyondJoinWindow,
   mockMarkPresenceExhausted,
-  mockCountExhausted,
   MockSettlementRefusedError,
   MockSettlementDrawDivergedError,
   capturedWorkerProcessor,
@@ -68,7 +67,6 @@ const {
   mockStartBillingIfDue: vi.fn(),
   mockFindPendingBeyondJoinWindow: vi.fn(),
   mockMarkPresenceExhausted: vi.fn(),
-  mockCountExhausted: vi.fn(),
   // Real classes (not importActual, which would pull in the db client) so `instanceof` classifies.
   MockSettlementRefusedError: class SettlementRefusedError extends Error {
     constructor(
@@ -110,7 +108,6 @@ vi.mock('@balo/db', () => ({
     findIdByMeetingId: mockFindIdByMeetingId,
     findPendingBeyondJoinWindow: mockFindPendingBeyondJoinWindow,
     markPresenceSettlementExhausted: mockMarkPresenceExhausted,
-    countPresenceSettlementExhausted: mockCountExhausted,
     cancel: mockCancel,
   },
   SettlementRefusedError: MockSettlementRefusedError,
@@ -165,10 +162,22 @@ vi.mock('../services/credit-session/index.js', () => ({
   settleSessionFromPresence: mockSettleSessionFromPresence,
 }));
 
+// BAL-586 — importing the finders module (for its threshold constant) needs its two heavy
+// transitive imports stubbed, exactly as `admin-alert-finders.test.ts` does.
+vi.mock('./calendar-subscription-monitor.js', () => ({
+  SUBSCRIPTION_EXPIRY_ALERT_MS: 48 * 60 * 60 * 1000,
+  SUBSCRIPTION_UNCONFIRMED_GRACE_MS: 2 * 60 * 60 * 1000,
+}));
+vi.mock('../config/meeting-timers.js', () => ({
+  resolveMeetingTimers: () => ({ missedCallTerminationMs: 10 * 60_000 }),
+}));
+
 import {
+  PRESENCE_SETTLEMENT_GRACE_MINUTES,
   runSessionMeterSweep,
   startCreditSessionMeterSweepWorker,
 } from './credit-session-meter-sweep.js';
+import { PRESENCE_UNSETTLED_ALERT_MS } from './admin-alert-finders.js';
 
 const NOW = new Date('2026-07-16T12:00:00.000Z');
 
@@ -182,6 +191,12 @@ function activeSession(overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe('presence-unsettled alert threshold', () => {
+  it("exceeds the backstop's own retry grace, so the alert never fires before pass 6 has had its chance", () => {
+    expect(PRESENCE_UNSETTLED_ALERT_MS).toBeGreaterThan(PRESENCE_SETTLEMENT_GRACE_MINUTES * 60_000);
+  });
+});
+
 describe('runSessionMeterSweep', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -191,7 +206,6 @@ describe('runSessionMeterSweep', () => {
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
     mockFindPresenceCandidates.mockResolvedValue([]);
-    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -462,36 +476,6 @@ describe('runSessionMeterSweep', () => {
         await runSessionMeterSweep(NOW);
         expect(mockSettleSessionFromPresence).toHaveBeenCalledTimes(1);
         expect(mockMarkPresenceExhausted).not.toHaveBeenCalled();
-      });
-
-      it('warns with the count when sessions are awaiting manual repair', async () => {
-        mockCountExhausted.mockResolvedValue(3);
-        await runSessionMeterSweep(NOW);
-        expect(mockLoggerWarn).toHaveBeenCalledWith(
-          { exhaustedCount: 3 },
-          expect.stringContaining('awaiting manual repair')
-        );
-      });
-
-      it('does not warn when none are awaiting repair', async () => {
-        await runSessionMeterSweep(NOW);
-        expect(mockCountExhausted).toHaveBeenCalledTimes(1);
-        expect(mockLoggerWarn).not.toHaveBeenCalledWith(
-          expect.anything(),
-          expect.stringContaining('awaiting manual repair')
-        );
-      });
-
-      it('a failing count is logged and does not abort the sweep', async () => {
-        installStatefulFinder(['s1']);
-        mockSettleSessionFromPresence.mockResolvedValueOnce({ ok: true });
-        mockCountExhausted.mockRejectedValue(new Error('count down'));
-        const result = await runSessionMeterSweep(NOW);
-        expect(result.presenceSettled).toBe(1);
-        expect(mockLoggerError).toHaveBeenCalledWith(
-          { error: 'count down' },
-          expect.stringContaining('Counting exhausted')
-        );
       });
 
       it('a failing marker write is logged and never aborts the batch; the row is retried', async () => {
@@ -781,7 +765,6 @@ describe('runSessionMeterSweep — the sessionless-meeting backstop (pass 5b, BA
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
     mockFindPresenceCandidates.mockResolvedValue([]);
-    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -1009,7 +992,6 @@ describe('runSessionMeterSweep — every pass is isolated (BAL-474, V4-F4)', () 
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
     mockFindPresenceCandidates.mockResolvedValue([]);
-    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -1069,7 +1051,6 @@ describe('runSessionMeterSweep — the billing-start pass (pass 0, BAL-474 Rule 
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
     mockFindPresenceCandidates.mockResolvedValue([]);
-    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);
@@ -1160,7 +1141,6 @@ describe('runSessionMeterSweep — the beyond-window release pass (pass 0b, BAL-
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
     mockFindPresenceCandidates.mockResolvedValue([]);
-    mockCountExhausted.mockResolvedValue(0);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockFindSessionlessEndedCaseMeetings.mockResolvedValue([]);

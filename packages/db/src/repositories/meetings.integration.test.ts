@@ -47,6 +47,7 @@ import {
   MeetingNotReschedulableError,
   CalendarRangeTooWideError,
   MAX_CALENDAR_RANGE_DAYS,
+  type StrandedLiveMeeting,
 } from './meetings';
 
 /**
@@ -1114,6 +1115,125 @@ describe('meetingsRepository.listUnprovisionedScheduled (BAL-581)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+/**
+ * BAL-586 — the read behind the `meeting.stranded` finder. Every meeting is anchored on one fixed
+ * `CUTOFF` (the finder's `now − 60m`), so each boundary is exact and independent of the host clock.
+ */
+describe('meetingsRepository.listStrandedLive (BAL-586)', () => {
+  const MINUTE_MS = 60_000;
+  const CUTOFF = new Date('2030-06-01T12:00:00.000Z');
+
+  async function meetingEndingAt(
+    scheduledEnd: Date,
+    values: Partial<{
+      status: 'scheduled' | 'waiting_for_participants' | 'in_progress' | 'ended' | 'cancelled';
+      deletedAt: Date;
+      endedAt: Date;
+    }> = {}
+  ): Promise<string> {
+    const { meeting } = await meetingFactory({
+      values: {
+        status: 'in_progress',
+        scheduledStart: new Date(scheduledEnd.getTime() - HOUR_MS),
+        scheduledEnd,
+        ...values,
+      },
+    });
+    return meeting.id;
+  }
+
+  function list(limit = 50): Promise<StrandedLiveMeeting[]> {
+    return meetingsRepository.listStrandedLive({ scheduledEndBefore: CUTOFF, limit });
+  }
+
+  it('returns a live meeting ended at the cutoff (inclusive) and excludes one a minute later', async () => {
+    const atCutoff = await meetingEndingAt(CUTOFF);
+    const justAfter = await meetingEndingAt(new Date(CUTOFF.getTime() + MINUTE_MS));
+
+    const ids = (await list()).map((row) => row.meetingId);
+    expect(ids).toContain(atCutoff);
+    expect(ids).not.toContain(justAfter);
+  });
+
+  it.each(['scheduled', 'waiting_for_participants', 'in_progress'] as const)(
+    'finds a %s meeting',
+    async (status) => {
+      const id = await meetingEndingAt(new Date(CUTOFF.getTime() - MINUTE_MS), { status });
+      const row = (await list()).find((r) => r.meetingId === id);
+      expect(row?.status).toBe(status);
+    }
+  );
+
+  it.each(['ended', 'cancelled'] as const)('does not find an %s meeting', async (status) => {
+    const id = await meetingEndingAt(new Date(CUTOFF.getTime() - MINUTE_MS), {
+      status,
+      endedAt: new Date(CUTOFF.getTime() - MINUTE_MS),
+    });
+    expect((await list()).map((r) => r.meetingId)).not.toContain(id);
+  });
+
+  it('does not find a soft-deleted meeting', async () => {
+    const id = await meetingEndingAt(new Date(CUTOFF.getTime() - MINUTE_MS), {
+      deletedAt: new Date(),
+    });
+    expect((await list()).map((r) => r.meetingId)).not.toContain(id);
+  });
+
+  it('has no lookback floor: a meeting scheduled three days ago is still returned', async () => {
+    const id = await meetingEndingAt(new Date(CUTOFF.getTime() - 3 * DAY_MS));
+    expect((await list()).map((r) => r.meetingId)).toContain(id);
+  });
+
+  it('counts only live open intervals and reports the oldest open join', async () => {
+    const id = await meetingEndingAt(new Date(CUTOFF.getTime() - MINUTE_MS));
+    await presentOn(id, 'expert', { closed: true });
+    await presentOn(id, 'client', { softDeleted: true });
+    await presentOn(id, 'client');
+    await presentOn(id, 'observer');
+
+    // The closed interval is the earliest overall, so a min taken over every row would be wrong.
+    const rows = await db.select().from(meetingPresence).where(eq(meetingPresence.meetingId, id));
+    const earliestOpen = new Date('2030-06-01T10:30:00.000Z');
+    const joinedAtFor = (row: (typeof rows)[number]): Date => {
+      if (row.leftAt !== null) return new Date('2030-06-01T09:00:00.000Z');
+      if (row.deletedAt !== null) return new Date('2030-06-01T09:30:00.000Z');
+      return row.party === 'client' ? earliestOpen : new Date('2030-06-01T11:00:00.000Z');
+    };
+    for (const row of rows) {
+      await db
+        .update(meetingPresence)
+        .set({
+          joinedAt: joinedAtFor(row),
+          ...(row.leftAt === null ? {} : { leftAt: new Date('2030-06-01T09:10:00.000Z') }),
+        })
+        .where(eq(meetingPresence.id, row.id));
+    }
+
+    const row = (await list()).find((r) => r.meetingId === id);
+    expect(row?.openIntervalCount).toBe(2);
+    expect(row?.oldestOpenJoinedAt).toEqual(earliestOpen);
+  });
+
+  it('reports zero open intervals and a null oldest join when nobody is connected', async () => {
+    const id = await meetingEndingAt(new Date(CUTOFF.getTime() - MINUTE_MS));
+    await presentOn(id, 'expert', { closed: true });
+
+    const row = (await list()).find((r) => r.meetingId === id);
+    expect(row?.openIntervalCount).toBe(0);
+    expect(row?.oldestOpenJoinedAt).toBeNull();
+  });
+
+  it('orders by scheduled end then id, and honours the limit', async () => {
+    const newer = await meetingEndingAt(new Date(CUTOFF.getTime() - MINUTE_MS));
+    const older = await meetingEndingAt(new Date(CUTOFF.getTime() - 5 * MINUTE_MS));
+
+    const rows = await list();
+    expect(rows.map((r) => r.meetingId)).toEqual([older, newer]);
+    expect(await list(1)).toHaveLength(1);
+    expect(await list(0)).toEqual([]);
   });
 });
 

@@ -1,7 +1,6 @@
 import {
   and,
   asc,
-  count,
   desc,
   eq,
   exists,
@@ -67,6 +66,7 @@ import {
   type CreditWallet,
   type ExpertProfile,
   type MeetingOutcome,
+  type MeetingStatus,
   type NewCreditSession,
 } from '../schema';
 import { acquireWalletLock } from './_shared/wallet-lock';
@@ -842,6 +842,31 @@ function assertSettlementFigures(
       `settleFromPresence: billingFloorMinutes must not exceed MAX_SESSION_MINUTES (${String(MAX_SESSION_MINUTES)}) — received ${String(input.billingFloorMinutes)}.`
     );
   }
+}
+
+/** BAL-586 — one presence session past its estimate (see `listPresenceOverrunning`). */
+export interface PresenceOverrunningSession {
+  readonly sessionId: string;
+  readonly meetingId: string;
+  readonly connectedMinutes: number;
+  readonly estimatedMinutes: number;
+}
+
+/** BAL-586 — the `session.presence_stuck` finder's display labels for one session. */
+export interface PresenceAlertLabel {
+  readonly sessionId: string;
+  readonly meetingId: string;
+  readonly companyName: string;
+  readonly connectedMinutes: number;
+  readonly estimatedMinutes: number;
+  readonly meetingScheduledStart: Date;
+  readonly meetingStatus: MeetingStatus;
+  readonly meetingEndedAt: Date | null;
+  /** Gross `session_consume` drawn so far, in minor units (client-side figure). */
+  readonly creditDrawnMinor: number;
+  readonly settlementExhausted: boolean;
+  /** The newest exhaustion marker's `guard`; null when unmarked. */
+  readonly exhaustionGuard: string | null;
 }
 
 /** The shared `WHERE` terms of the presence-unsettled reads (see `findPresenceUnsettled`). */
@@ -3388,6 +3413,8 @@ export const creditSessionsRepository = {
    * ⚠ This is the operator ALERT read: it includes sessions whose settlement was permanently
    * refused and marked exhausted. The backstop itself reads `findPresenceSettlementCandidates`.
    *
+   * ⚠ MUST NEVER filter the exhaustion marker — `session.presence_stuck`'s unsettled arm depends on it.
+   *
    * Ordered oldest-ended first and batch-bounded via `limit`. ⚠ The CALLER must `log.warn`
    * when the batch FILLS — a silent cap on a money backstop reads as "nothing was stranded".
    *
@@ -3410,7 +3437,8 @@ export const creditSessionsRepository = {
    * the unfiltered read it would sit at the head of the oldest-first batch on every tick and, once
    * `limit` such rows accumulate, starve every newer row behind them. The marker moves them out of
    * THIS read only; {@link findPresenceUnsettled} (the operator alert read) still returns them
-   * until they actually settle.
+   * until they actually settle — which is how a marked session surfaces as the
+   * `session.presence_stuck` admin alert.
    */
   async findPresenceSettlementCandidates(cutoff: Date, limit = 100): Promise<CreditSession[]> {
     return selectPresenceUnsettled(
@@ -3420,16 +3448,96 @@ export const creditSessionsRepository = {
   },
 
   /**
-   * How many presence sessions are unsettled AND marked exhausted — the ones pass 6 no longer
-   * reads. The interim operator signal: a marked session must not go silent.
+   * BAL-586 — presence sessions whose connected minutes have run past their estimate: the
+   * `session.presence_stuck` finder's OVERRUNNING arm. Threshold:
+   * `connected_minutes > LEAST(estimated_minutes + marginMinutes, MAX_SESSION_MINUTES - marginMinutes)`,
+   * so a long estimate cannot push the alert above the hard session cap.
+   *
+   * Meeting status is DELIBERATELY NOT filtered: a session whose meeting has since ended and has
+   * not settled stays in this read, so one session keeps one alert row across the meeting's end.
+   * Excludes `cancelled`, finalized and soft-deleted sessions and soft-deleted meetings; an
+   * INNER JOIN drops a NULL `meeting_id`. Rides `credit_sessions_presence_unsettled_idx`.
+   *
+   * Most-overrunning first. ⚠ The CALLER must `log.warn` when the result length equals `limit`.
+   * A `limit <= 0` returns `[]` without a query.
    */
-  async countPresenceSettlementExhausted(cutoff: Date, exec: DbExecutor = db): Promise<number> {
-    const [row] = await exec
-      .select({ total: count() })
+  async listPresenceOverrunning(input: {
+    marginMinutes: number;
+    limit: number;
+  }): Promise<PresenceOverrunningSession[]> {
+    if (input.limit <= 0) return [];
+    const margin = input.marginMinutes;
+    const rows = await db
+      .select({
+        sessionId: creditSessions.id,
+        meetingId: meetings.id,
+        connectedMinutes: creditSessions.connectedMinutes,
+        estimatedMinutes: creditSessions.estimatedMinutes,
+      })
       .from(creditSessions)
       .innerJoin(meetings, eq(meetings.id, creditSessions.meetingId))
-      .where(and(presenceUnsettledTerms(cutoff), exists(exhaustionMarkerFor())));
-    return row?.total ?? 0;
+      .where(
+        and(
+          eq(creditSessions.durationSource, 'presence'),
+          ne(creditSessions.status, 'cancelled'),
+          isNull(creditSessions.billingFinalizedAt),
+          isNull(creditSessions.deletedAt),
+          isNull(meetings.deletedAt),
+          sql`${creditSessions.connectedMinutes} > LEAST(${creditSessions.estimatedMinutes} + ${margin}::int, ${MAX_SESSION_MINUTES}::int - ${margin}::int)`
+        )
+      )
+      .orderBy(desc(creditSessions.connectedMinutes), asc(creditSessions.id))
+      .limit(input.limit);
+    return rows;
+  },
+
+  /**
+   * BAL-586 — the `session.presence_stuck` finder's display labels for the given sessions, keyed
+   * by session id. One query: session + company + meeting (both soft-delete guards), the credit
+   * drawn so far (the `session_consume` ledger rows only — rides `credit_ledger_session_idx`) and
+   * whether the newest {@link PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} marker exists, with its guard.
+   * A missing or soft-deleted session is simply absent from the Map; an empty input returns an
+   * empty Map without a query.
+   */
+  async listPresenceAlertLabels(
+    sessionIds: readonly string[]
+  ): Promise<Map<string, PresenceAlertLabel>> {
+    const labels = new Map<string, PresenceAlertLabel>();
+    if (sessionIds.length === 0) return labels;
+    const rows = await db
+      .select({
+        sessionId: creditSessions.id,
+        meetingId: meetings.id,
+        companyName: companies.name,
+        connectedMinutes: creditSessions.connectedMinutes,
+        estimatedMinutes: creditSessions.estimatedMinutes,
+        meetingScheduledStart: meetings.scheduledStart,
+        meetingStatus: meetings.status,
+        meetingEndedAt: meetings.endedAt,
+        creditDrawnMinor: sql<number>`(SELECT coalesce(sum(-${creditLedger.amountMinor}), 0)::int FROM ${creditLedger} WHERE ${creditLedger.sessionId} = ${creditSessions.id} AND ${eq(creditLedger.reason, 'session_consume')})`,
+        settlementExhausted: sql<boolean>`${exists(exhaustionMarkerFor())}`,
+        exhaustionGuard: sql<
+          string | null
+        >`(SELECT ${auditEvents.metadata}->>'guard' FROM ${auditEvents} WHERE ${auditEvents.entityType} = ${SESSION_AUDIT_ENTITY_TYPE} AND ${auditEvents.entityId} = ${creditSessions.id} AND ${auditEvents.action} = ${PRESENCE_SETTLEMENT_EXHAUSTED_ACTION} ORDER BY ${auditEvents.createdAt} DESC LIMIT 1)`,
+      })
+      .from(creditSessions)
+      .innerJoin(companies, eq(companies.id, creditSessions.companyId))
+      .innerJoin(meetings, eq(meetings.id, creditSessions.meetingId))
+      .where(
+        and(
+          inArray(creditSessions.id, [...sessionIds]),
+          isNull(creditSessions.deletedAt),
+          isNull(meetings.deletedAt)
+        )
+      );
+    for (const row of rows) {
+      labels.set(row.sessionId, {
+        ...row,
+        meetingScheduledStart: new Date(row.meetingScheduledStart),
+        meetingEndedAt: row.meetingEndedAt === null ? null : new Date(row.meetingEndedAt),
+      });
+    }
+    return labels;
   },
 
   /**

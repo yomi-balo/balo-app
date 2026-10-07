@@ -18,6 +18,10 @@ const {
   mockListActiveConnectionsWithoutSubscription,
   mockListConnectionAlertLabels,
   mockListUnprovisionedScheduled,
+  mockListStrandedLive,
+  mockListPresenceOverrunning,
+  mockFindPresenceUnsettled,
+  mockListPresenceAlertLabels,
 } = vi.hoisted(() => ({
   mockListPendingApplicationsForAlerts: vi.fn(),
   mockListOpen: vi.fn(),
@@ -30,17 +34,29 @@ const {
   mockListActiveConnectionsWithoutSubscription: vi.fn(),
   mockListConnectionAlertLabels: vi.fn(),
   mockListUnprovisionedScheduled: vi.fn(),
+  mockListStrandedLive: vi.fn(),
+  mockListPresenceOverrunning: vi.fn(),
+  mockFindPresenceUnsettled: vi.fn(),
+  mockListPresenceAlertLabels: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   expertsRepository: { listPendingApplicationsForAlerts: mockListPendingApplicationsForAlerts },
   creditReceivablesRepository: { listOpen: mockListOpen },
-  creditSessionsRepository: { findSettledMissingLedgerCredit: mockFindSettledMissingLedgerCredit },
+  creditSessionsRepository: {
+    findSettledMissingLedgerCredit: mockFindSettledMissingLedgerCredit,
+    listPresenceOverrunning: mockListPresenceOverrunning,
+    findPresenceUnsettled: mockFindPresenceUnsettled,
+    listPresenceAlertLabels: mockListPresenceAlertLabels,
+  },
   meetingRecordingsRepository: {
     listFailedSince: mockListFailedSinceRecordings,
     listWithheldTranscriptSourceSince: mockListWithheldTranscriptSourceSince,
   },
-  meetingsRepository: { listUnprovisionedScheduled: mockListUnprovisionedScheduled },
+  meetingsRepository: {
+    listUnprovisionedScheduled: mockListUnprovisionedScheduled,
+    listStrandedLive: mockListStrandedLive,
+  },
   transcriptsRepository: { listFailedSince: mockListFailedSinceTranscripts },
   calendarRepository: { listConnectionAlertLabels: mockListConnectionAlertLabels },
   calendarSubscriptionsRepository: {
@@ -81,6 +97,10 @@ import {
   TRANSCRIPT_FAILED_CUTOFF_MS,
   TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS,
   MEETING_UNPROVISIONED_GRACE_MS,
+  MEETING_STRANDED_AFTER_END_MS,
+  PRESENCE_OVERRUN_MARGIN_MINUTES,
+  PRESENCE_UNSETTLED_ALERT_MS,
+  PRESENCE_SETTLEMENT_EXHAUSTED_RUNBOOK,
 } from './admin-alert-finders.js';
 
 const NOW = new Date('2026-09-08T12:00:00.000Z');
@@ -99,6 +119,10 @@ beforeEach(() => {
   mockListActiveConnectionsWithoutSubscription.mockResolvedValue([]);
   mockListConnectionAlertLabels.mockResolvedValue(new Map());
   mockListUnprovisionedScheduled.mockResolvedValue([]);
+  mockListStrandedLive.mockResolvedValue([]);
+  mockListPresenceOverrunning.mockResolvedValue([]);
+  mockFindPresenceUnsettled.mockResolvedValue([]);
+  mockListPresenceAlertLabels.mockResolvedValue(new Map());
   delete process.env.APIROC_WEBHOOK_BASE_URL;
 });
 
@@ -541,5 +565,226 @@ describe('meetingUnprovisioned', () => {
     const values = finding?.detail.facts.map(([, value]) => value).join(' ') ?? '';
     expect(values).not.toContain('daily.co');
     expect(values).not.toContain('balo-');
+  });
+});
+
+describe('meetingStranded', () => {
+  const strandedRow = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    meetingId: 'm1',
+    status: 'in_progress',
+    scheduledStart: new Date('2026-09-08T09:00:00.000Z'),
+    scheduledEnd: new Date('2026-09-08T10:00:00.000Z'),
+    openIntervalCount: 2,
+    oldestOpenJoinedAt: new Date('2026-09-08T09:05:00.000Z'),
+    ...overrides,
+  });
+
+  it('reads with now minus the stranded threshold and reports batchFilled at the limit', async () => {
+    mockListStrandedLive.mockResolvedValue(
+      Array.from({ length: LIMIT }, (_, i) => strandedRow({ meetingId: `m${i}` }))
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT });
+
+    expect(mockListStrandedLive).toHaveBeenCalledWith({
+      scheduledEndBefore: new Date(NOW.getTime() - MEETING_STRANDED_AFTER_END_MS),
+      limit: LIMIT,
+    });
+    expect(MEETING_STRANDED_AFTER_END_MS).toBe(60 * 60_000);
+    expect(PRESENCE_OVERRUN_MARGIN_MINUTES).toBe(30);
+    expect(PRESENCE_UNSETTLED_ALERT_MS).toBe(30 * 60_000);
+    expect(outcome.batchFilled).toBe(true);
+    expect(outcome.findings).toHaveLength(LIMIT);
+  });
+
+  it('produces no findings for an empty read', async () => {
+    const outcome = await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT });
+    expect(outcome.findings).toEqual([]);
+    expect(outcome.batchFilled).toBe(false);
+  });
+
+  it('describes open intervals and the credit still drawing', async () => {
+    mockListStrandedLive.mockResolvedValue([strandedRow()]);
+    const [finding] = (await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT }))
+      .findings;
+
+    expect(finding).toMatchObject({ entityType: 'meeting', entityId: 'm1' });
+    expect(finding?.detail.title).toBe('Live meeting was never ended');
+    expect(finding?.detail.evidence).toContain('Still in progress past its scheduled end');
+    expect(finding?.detail.evidence).toContain('2 participants still show as connected');
+    expect(finding?.detail.evidence).toContain('still drawing credit every minute');
+    expect(finding?.detail.evidence).toContain('Until an admin end action exists');
+    expect(finding?.detail.facts).toContainEqual(['Open presence intervals', '2']);
+    expect(finding?.detail.facts).toContainEqual(['Past sweep lookback', 'no']);
+  });
+
+  it('describes an empty meeting, singular wording, and a start past the sweep lookback', async () => {
+    mockListStrandedLive.mockResolvedValue([
+      strandedRow({
+        meetingId: 'm2',
+        openIntervalCount: 0,
+        oldestOpenJoinedAt: null,
+        scheduledStart: new Date('2026-09-05T09:00:00.000Z'),
+        scheduledEnd: new Date('2026-09-05T10:00:00.000Z'),
+      }),
+      strandedRow({ meetingId: 'm3', openIntervalCount: 1 }),
+      strandedRow({
+        meetingId: 'm4',
+        status: 'waiting_for_participants',
+        openIntervalCount: 0,
+        oldestOpenJoinedAt: null,
+      }),
+    ]);
+    const { findings } = await ADMIN_ALERT_FINDERS.meetingStranded({ now: NOW, limit: LIMIT });
+
+    expect(findings[0]?.detail.evidence).toContain('with nobody connected');
+    expect(findings[2]?.detail.evidence).toContain('Still waiting for participants past');
+    expect(findings[0]?.detail.evidence).toContain('Until an admin end action exists');
+    expect(findings[0]?.detail.facts).toContainEqual(['Past sweep lookback', 'yes']);
+    expect(findings[1]?.detail.evidence).toContain('1 participant still shows as connected');
+  });
+});
+
+describe('sessionPresenceStuck', () => {
+  const label = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    sessionId: 's1',
+    meetingId: 'm1',
+    companyName: 'Northwind',
+    connectedMinutes: 100,
+    estimatedMinutes: 60,
+    meetingScheduledStart: new Date('2026-09-08T09:00:00.000Z'),
+    meetingStatus: 'in_progress',
+    meetingEndedAt: null,
+    creditDrawnMinor: 12_000,
+    settlementExhausted: false,
+    exhaustionGuard: null,
+    ...overrides,
+  });
+  const overrunRow = {
+    sessionId: 's1',
+    meetingId: 'm1',
+    connectedMinutes: 100,
+    estimatedMinutes: 60,
+  };
+  const unsettledRow = { id: 's1' };
+
+  it('passes the margin and the unsettled cutoff, and reports batchFilled when either arm fills', async () => {
+    mockListPresenceOverrunning.mockResolvedValue([]);
+    mockFindPresenceUnsettled.mockResolvedValue(
+      Array.from({ length: LIMIT }, (_, i) => ({ id: `s${i}` }))
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT });
+
+    expect(mockListPresenceOverrunning).toHaveBeenCalledWith({
+      marginMinutes: PRESENCE_OVERRUN_MARGIN_MINUTES,
+      limit: LIMIT,
+    });
+    expect(mockFindPresenceUnsettled).toHaveBeenCalledWith(
+      new Date(NOW.getTime() - PRESENCE_UNSETTLED_ALERT_MS),
+      LIMIT
+    );
+    expect(outcome.batchFilled).toBe(true);
+
+    mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockListPresenceOverrunning.mockResolvedValue(
+      Array.from({ length: LIMIT }, (_, i) => ({ ...overrunRow, sessionId: `s${i}` }))
+    );
+    expect(
+      (await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT })).batchFilled
+    ).toBe(true);
+
+    mockListPresenceOverrunning.mockResolvedValue([overrunRow]);
+    expect(
+      (await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT })).batchFilled
+    ).toBe(false);
+  });
+
+  it('produces one finding with the same entityId for the overrunning arm alone and for both arms', async () => {
+    mockListPresenceOverrunning.mockResolvedValue([overrunRow]);
+    mockListPresenceAlertLabels.mockResolvedValue(new Map([['s1', label()]]));
+    const overrunOnly = await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT });
+
+    mockFindPresenceUnsettled.mockResolvedValue([unsettledRow]);
+    mockListPresenceAlertLabels.mockResolvedValue(
+      new Map([
+        [
+          's1',
+          label({ meetingStatus: 'ended', meetingEndedAt: new Date('2026-09-08T10:00:00.000Z') }),
+        ],
+      ])
+    );
+    const both = await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT });
+
+    expect(overrunOnly.findings).toHaveLength(1);
+    expect(both.findings).toHaveLength(1);
+    expect(both.findings[0]?.entityId).toBe(overrunOnly.findings[0]?.entityId);
+    expect(mockListPresenceAlertLabels).toHaveBeenLastCalledWith(['s1']);
+    expect(overrunOnly.findings[0]?.detail.title).toBe(
+      "Northwind's consultation is still drawing credit past its estimate"
+    );
+    expect(overrunOnly.findings[0]?.detail.evidence).toBe(
+      '100 connected minutes against an estimate of 60'
+    );
+    expect(both.findings[0]?.detail.title).toBe("Northwind's consultation ended but never settled");
+    expect(both.findings[0]?.detail.evidence).toContain(
+      '100 connected minutes against an estimate of 60; the meeting ended'
+    );
+    expect(both.findings[0]).toMatchObject({ entityType: 'session', targetId: 'm1' });
+    expect(both.findings[0]?.detail.facts).toContainEqual(['Arms', 'overrunning, unsettled']);
+    expect(both.findings[0]?.detail.facts).toContainEqual(['Credit drawn', 'A$120.00']);
+  });
+
+  it('drops a session missing from the label hydration', async () => {
+    mockListPresenceOverrunning.mockResolvedValue([overrunRow]);
+    const outcome = await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT });
+    expect(outcome.findings).toEqual([]);
+  });
+
+  it('a refused session carries the guard and the runbook path', async () => {
+    mockFindPresenceUnsettled.mockResolvedValue([unsettledRow]);
+    mockListPresenceAlertLabels.mockResolvedValue(
+      new Map([
+        [
+          's1',
+          label({
+            settlementExhausted: true,
+            exhaustionGuard: 'figure_exceeds_bound',
+            meetingStatus: 'ended',
+            meetingEndedAt: new Date('2026-09-08T10:00:00.000Z'),
+          }),
+        ],
+      ])
+    );
+    const [finding] = (await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT }))
+      .findings;
+
+    expect(finding?.detail.title).toBe("Settlement refused for Northwind's consultation");
+    expect(finding?.detail.evidence).toContain('refused this session permanently');
+    expect(finding?.detail.evidence).toContain('figure_exceeds_bound');
+    expect(finding?.detail.evidence).toContain(PRESENCE_SETTLEMENT_EXHAUSTED_RUNBOOK);
+    expect(finding?.detail.facts).toContainEqual(['Settlement refused', 'figure_exceeds_bound']);
+  });
+
+  it('an unmarked session mentions neither refusal nor the runbook', async () => {
+    mockListPresenceOverrunning.mockResolvedValue([overrunRow]);
+    mockListPresenceAlertLabels.mockResolvedValue(new Map([['s1', label()]]));
+    const [finding] = (await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT }))
+      .findings;
+
+    expect(finding?.detail.evidence).not.toContain('refused');
+    expect(finding?.detail.evidence).not.toContain(PRESENCE_SETTLEMENT_EXHAUSTED_RUNBOOK);
+    expect(finding?.detail.facts.map(([key]) => key)).not.toContain('Settlement refused');
+  });
+
+  it('falls back to an unknown guard when the marker carries none', async () => {
+    mockFindPresenceUnsettled.mockResolvedValue([unsettledRow]);
+    mockListPresenceAlertLabels.mockResolvedValue(
+      new Map([['s1', label({ settlementExhausted: true, exhaustionGuard: null })]])
+    );
+    const [finding] = (await ADMIN_ALERT_FINDERS.sessionPresenceStuck({ now: NOW, limit: LIMIT }))
+      .findings;
+    expect(finding?.detail.evidence).toContain('unknown guard');
+    expect(finding?.detail.facts).toContainEqual(['Settlement refused', 'unknown guard']);
   });
 });

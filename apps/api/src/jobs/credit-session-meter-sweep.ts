@@ -115,7 +115,7 @@ const PAYOUT_RECONCILE_GRACE_MINUTES = 5;
  * posture: small enough to recover quickly, large enough to never race the µs-window between a
  * terminal path's `endMeeting` commit and its own best-effort `settleSessionlessCaseMeeting` call.
  */
-const PRESENCE_SETTLEMENT_GRACE_MINUTES = 2;
+export const PRESENCE_SETTLEMENT_GRACE_MINUTES = 2;
 /** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
 const PRESENCE_SETTLEMENT_BATCH_LIMIT = 100;
 /**
@@ -617,9 +617,8 @@ async function exhaustPresenceSettlement(
  * `findFinalizedMissingPayout` keys on `billing_finalized_at IS NOT NULL`, the exact opposite
  * half of the space. Pass 6's read is `findPresenceSettlementCandidates`: a meeting that has ENDED
  * with a `duration_source='presence'` session that never settled, minus sessions already marked
- * permanently refused. `findPresenceUnsettled` is the unfiltered read kept for the admin alert.
- * After the loop, `countPresenceSettlementExhausted` drives an interim warn so marked sessions
- * never go silent while they await manual repair.
+ * permanently refused. `findPresenceUnsettled` is the unfiltered read kept for the admin alert:
+ * marked sessions surface as `session.presence_stuck` (`admin-alert-finders.ts`) until they settle.
  *
  * `settleSessionFromPresence` is itself idempotent (the repository's row lock is the real
  * guard), so a row picked up here and settled by a racing terminal path in the same instant is a
@@ -686,23 +685,7 @@ async function runPresenceSettlementPass(
       );
     }
   }
-  await warnOnExhaustedPresenceSettlements(cutoff);
   return settled;
-}
-
-/** Interim signal for permanently refused sessions; never throws out of the sweep. */
-async function warnOnExhaustedPresenceSettlements(cutoff: Date): Promise<void> {
-  try {
-    const exhaustedCount = await creditSessionsRepository.countPresenceSettlementExhausted(cutoff);
-    if (exhaustedCount > 0) {
-      logger.warn(
-        { exhaustedCount },
-        'Presence sessions refused settlement and are awaiting manual repair'
-      );
-    }
-  } catch (error) {
-    logger.error({ error: errorMessage(error) }, 'Counting exhausted presence settlements failed');
-  }
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS,
   type AdminAlertDetail,
 } from '@balo/shared/admin-alerts';
+import { LIFECYCLE_LOOKBACK_MS } from '@balo/shared/meetings';
 import { resolveWebhookBaseUrl } from '../services/calendar/webhook-url.js';
 import {
   SUBSCRIPTION_EXPIRY_ALERT_MS,
@@ -24,7 +25,7 @@ import { formatAudMinor } from '../notifications/channels/templates/credit-forma
 import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
 
 /**
- * BAL-548 / ADR-1055 — the eight `admin_alerts` FINDER implementations, keyed by the NAME the
+ * BAL-548 / ADR-1055 — the ten `admin_alerts` FINDER implementations, keyed by the NAME the
  * registry (`@balo/shared/admin-alerts`) holds on each finder-kind's `finder` field.
  * `packages/shared` cannot hold these functions (it imports no db, by rule), so the registry
  * holds a NAME and this module holds the implementation.
@@ -117,6 +118,19 @@ export const TRANSCRIPT_FAILED_CUTOFF_MS = 15 * MS_PER_MINUTE;
 export const TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS = TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS;
 /** An in-flight booking-time provision (≤ 4 Daily calls, ≤ 40 s) must not flap a row open. */
 export const MEETING_UNPROVISIONED_GRACE_MS = 3 * MS_PER_MINUTE;
+/** BAL-586 — how long past its `scheduled_end` a still-live meeting waits before it alerts. */
+export const MEETING_STRANDED_AFTER_END_MS = 60 * MS_PER_MINUTE;
+/** BAL-586 — connected minutes past the estimate before a presence session alerts as overrunning. */
+export const PRESENCE_OVERRUN_MARGIN_MINUTES = 30;
+/**
+ * BAL-586 — how long a meeting must have been ended, with its presence session still unsettled,
+ * before it alerts. ⚠ MUST EXCEED the meter sweep's `PRESENCE_SETTLEMENT_GRACE_MINUTES` (the
+ * backstop's own retry grace), or the alert would fire on sessions the backstop has not yet had a
+ * chance to settle; `credit-session-meter-sweep.test.ts` pins the inequality.
+ */
+export const PRESENCE_UNSETTLED_ALERT_MS = 30 * MS_PER_MINUTE;
+/** BAL-586 — where the `session.presence_stuck` evidence sends an operator for a refused session. */
+export const PRESENCE_SETTLEMENT_EXHAUSTED_RUNBOOK = 'docs/ops/presence-settlement-exhausted.md';
 
 // ── expert.application_pending ──────────────────────────────────────────
 
@@ -517,6 +531,159 @@ async function meetingUnprovisioned(
   return { findings, batchFilled };
 }
 
+// ── meeting.stranded ─────────────────────────────────────────────────────
+
+/** `1 participant still shows` / `2 participants still show` — subject and verb agree. */
+function participantsStillShow(count: number): string {
+  return count === 1 ? '1 participant still shows' : `${String(count)} participants still show`;
+}
+
+/** The status enum as prose: `waiting_for_participants` → `waiting for participants`. */
+function humanizeStatus(status: string): string {
+  return status.replaceAll('_', ' ');
+}
+
+/**
+ * BAL-586 — meetings still in a live status an hour past their `scheduled_end`. No lookback
+ * floor: unlike the lifecycle sweep, a stranded meeting stays visible however old it is, and
+ * `Past sweep lookback` tells the operator when the sweep itself has stopped looking at it. Rows
+ * self-close when the meeting ends or is cancelled.
+ */
+async function meetingStranded(ctx: AdminAlertFinderContext): Promise<AdminAlertFinderOutcome> {
+  const rows = await meetingsRepository.listStrandedLive({
+    scheduledEndBefore: new Date(ctx.now.getTime() - MEETING_STRANDED_AFTER_END_MS),
+    limit: ctx.limit,
+  });
+  const batchFilled = rows.length === ctx.limit;
+  const lookbackFloor = ctx.now.getTime() - LIFECYCLE_LOOKBACK_MS;
+  const endAction =
+    'Until an admin end action exists, the delivering expert or a client principal can end it from the meeting page.';
+
+  const findings: AdminAlertFinding[] = rows.map((row) => {
+    const connected =
+      row.openIntervalCount > 0 && row.oldestOpenJoinedAt !== null
+        ? `Still ${humanizeStatus(row.status)} past its scheduled end, and ${participantsStillShow(row.openIntervalCount)} as connected (since ${formatDateTimeShortUtc(row.oldestOpenJoinedAt)}). Any presence session on it is still drawing credit every minute.`
+        : `Still ${humanizeStatus(row.status)} past its scheduled end with nobody connected; it was never moved to ended.`;
+    return {
+      entityType: 'meeting',
+      entityId: row.meetingId,
+      detail: {
+        title: 'Live meeting was never ended',
+        entityLabel: `Meeting ${formatDateTimeShortUtc(row.scheduledStart)}`,
+        evidence: `${connected} ${endAction}`,
+        facts: [
+          ['Status', row.status],
+          [
+            'Scheduled (UTC)',
+            `${formatDateTimeShortUtc(row.scheduledStart)} to ${formatDateTimeShortUtc(row.scheduledEnd)}`,
+          ],
+          ['Open presence intervals', String(row.openIntervalCount)],
+          ['Past sweep lookback', row.scheduledStart.getTime() < lookbackFloor ? 'yes' : 'no'],
+          ['Meeting id', row.meetingId],
+        ],
+      },
+    };
+  });
+
+  return { findings, batchFilled };
+}
+
+// ── session.presence_stuck ───────────────────────────────────────────────
+
+type PresenceStuckArm = 'overrunning' | 'unsettled';
+
+const PRESENCE_ARM_ORDER: readonly PresenceStuckArm[] = ['overrunning', 'unsettled'];
+
+/**
+ * BAL-586 — ONE kind over TWO reads, folded per session (the `calendarSubscriptionLapse`
+ * precedent), so a session that overruns and then sits unsettled past its meeting's end keeps ONE
+ * row. `findPresenceUnsettled` is ALREADY read by `credit-session-meter-sweep.ts` pass 6
+ * (through its filtered sibling); this finder calls the unfiltered read IN ADDITION, and must stay
+ * unfiltered so a session the backstop marked exhausted is still alarmed.
+ */
+async function sessionPresenceStuck(
+  ctx: AdminAlertFinderContext
+): Promise<AdminAlertFinderOutcome> {
+  const overrunning = await creditSessionsRepository.listPresenceOverrunning({
+    marginMinutes: PRESENCE_OVERRUN_MARGIN_MINUTES,
+    limit: ctx.limit,
+  });
+  const unsettled = await creditSessionsRepository.findPresenceUnsettled(
+    new Date(ctx.now.getTime() - PRESENCE_UNSETTLED_ALERT_MS),
+    ctx.limit
+  );
+  const batchFilled = overrunning.length === ctx.limit || unsettled.length === ctx.limit;
+
+  const armsBySession = new Map<string, Set<PresenceStuckArm>>();
+  const addArm = (sessionId: string, arm: PresenceStuckArm): void => {
+    const existing = armsBySession.get(sessionId);
+    if (existing === undefined) {
+      armsBySession.set(sessionId, new Set([arm]));
+    } else {
+      existing.add(arm);
+    }
+  };
+  for (const row of overrunning) addArm(row.sessionId, 'overrunning');
+  for (const row of unsettled) addArm(row.id, 'unsettled');
+
+  const sessionIds = [...armsBySession.keys()];
+  const labels = await creditSessionsRepository.listPresenceAlertLabels(sessionIds);
+
+  const findings: AdminAlertFinding[] = sessionIds.flatMap((sessionId) => {
+    const label = labels.get(sessionId);
+    // A session missing from the hydration was soft-deleted between the reads and this one.
+    if (label === undefined) {
+      return [];
+    }
+    const arms = armsBySession.get(sessionId) ?? new Set<PresenceStuckArm>();
+    const guard = label.exhaustionGuard ?? 'unknown guard';
+    const orderedArms = PRESENCE_ARM_ORDER.filter((arm) => arms.has(arm));
+    const armEvidence: Record<PresenceStuckArm, string> = {
+      overrunning: `${String(label.connectedMinutes)} connected minutes against an estimate of ${String(label.estimatedMinutes)}`,
+      unsettled: `the meeting ended ${label.meetingEndedAt === null ? 'earlier' : formatDateTimeShortUtc(label.meetingEndedAt)} and the session has not settled`,
+    };
+    const evidence = label.settlementExhausted
+      ? `Settlement refused this session permanently (${guard}); the backstop no longer retries it and it needs manual repair — see ${PRESENCE_SETTLEMENT_EXHAUSTED_RUNBOOK}.`
+      : orderedArms.map((arm) => armEvidence[arm]).join('; ');
+
+    let title = `${label.companyName}'s consultation is still drawing credit past its estimate`;
+    if (label.settlementExhausted) {
+      title = `Settlement refused for ${label.companyName}'s consultation`;
+    } else if (arms.has('unsettled')) {
+      title = `${label.companyName}'s consultation ended but never settled`;
+    }
+
+    return [
+      {
+        entityType: 'session',
+        entityId: sessionId,
+        targetId: label.meetingId,
+        detail: {
+          title,
+          entityLabel: `${label.companyName} · ${formatDateTimeShortUtc(label.meetingScheduledStart)}`,
+          evidence,
+          facts: [
+            ['Arms', orderedArms.join(', ')],
+            ['Company', label.companyName],
+            [
+              'Minutes drawn / estimated',
+              `${String(label.connectedMinutes)} / ${String(label.estimatedMinutes)}`,
+            ],
+            ['Credit drawn', formatAudMinor(label.creditDrawnMinor)],
+            [
+              'Meeting',
+              `${label.meetingStatus}, ${formatDateTimeShortUtc(label.meetingScheduledStart)}`,
+            ],
+            ...(label.settlementExhausted ? [['Settlement refused', guard] as const] : []),
+          ],
+        },
+      },
+    ];
+  });
+
+  return { findings, batchFilled };
+}
+
 // ── The registry ─────────────────────────────────────────────────────────
 
 /**
@@ -534,4 +701,6 @@ export const ADMIN_ALERT_FINDERS: Readonly<Record<string, AdminAlertFinder>> = {
   transcriptCaptureWithheldSource,
   calendarSubscriptionLapse,
   meetingUnprovisioned,
+  meetingStranded,
+  sessionPresenceStuck,
 };

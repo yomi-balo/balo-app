@@ -4095,7 +4095,7 @@ describe('creditSessionsRepository.findPresenceSettlementCandidates / markPresen
     expect(alerts.map((r) => r.id)).toEqual([id]);
   });
 
-  it('a marked row leaves the candidates read but stays in the alert read, with the marker recorded', async () => {
+  it('a marked row leaves the candidates read but stays in the session.presence_stuck alert read, with the marker recorded', async () => {
     const { id, meetingId } = await unsettled();
 
     const { markerId } = await creditSessionsRepository.markPresenceSettlementExhausted({
@@ -4126,10 +4126,11 @@ describe('creditSessionsRepository.findPresenceSettlementCandidates / markPresen
     const older = await unsettled();
     await creditSessionsRepository.markPresenceSettlementExhausted({
       sessionId: older.id,
-      meetingId: older.meetingId,
       guard: 'meeting_mismatch',
       error: 'x',
     });
+    const [olderMarker] = await sessionAudits(older.id, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION);
+    expect(olderMarker?.metadata).not.toHaveProperty('meetingId');
     const ctx = await setup({ balanceMinor: 50_000 });
     const newerMeeting = await endedMeeting(meterAt(30));
     const newerId = await openPresence(ctx, newerMeeting);
@@ -4139,33 +4140,7 @@ describe('creditSessionsRepository.findPresenceSettlementCandidates / markPresen
     expect(candidates.map((r) => r.id)).toEqual([newerId]);
   });
 
-  it('countPresenceSettlementExhausted counts marked+unsettled rows only', async () => {
-    const marked = await unsettled();
-    await creditSessionsRepository.markPresenceSettlementExhausted({
-      sessionId: marked.id,
-      guard: 'figure_exceeds_bound',
-      error: 'x',
-    });
-    await unsettled();
-    const settled = await unsettled();
-    await creditSessionsRepository.markPresenceSettlementExhausted({
-      sessionId: settled.id,
-      meetingId: settled.meetingId,
-      guard: 'figure_not_integer',
-      error: 'x',
-    });
-    expect(await creditSessionsRepository.countPresenceSettlementExhausted(CUTOFF)).toBe(2);
-
-    await creditSessionsRepository.settleFromPresence(
-      settlementInput(settled.id, settled.meetingId)
-    );
-    expect(await creditSessionsRepository.countPresenceSettlementExhausted(CUTOFF)).toBe(1);
-    const [row] = await sessionAudits(marked.id, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION);
-    expect(row).toBeDefined();
-    expect(row?.metadata).not.toHaveProperty('meetingId');
-  });
-
-  it('once a marked row settles it is absent from both reads', async () => {
+  it('once a marked row settles it is absent from both reads, so session.presence_stuck closes', async () => {
     const { id, meetingId } = await unsettled();
     await creditSessionsRepository.markPresenceSettlementExhausted({
       sessionId: id,
@@ -4177,6 +4152,214 @@ describe('creditSessionsRepository.findPresenceSettlementCandidates / markPresen
 
     expect(await creditSessionsRepository.findPresenceSettlementCandidates(CUTOFF)).toHaveLength(0);
     expect(await creditSessionsRepository.findPresenceUnsettled(CUTOFF)).toHaveLength(0);
+  });
+});
+
+describe('creditSessionsRepository.listPresenceOverrunning (BAL-586)', () => {
+  /** A presence session on `meetingId` with the given estimate and connected minutes. */
+  async function sessionWith(
+    meetingId: string,
+    estimated: number,
+    connected: number
+  ): Promise<string> {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const id = await openPresence(ctx, meetingId, estimated);
+    await db
+      .update(creditSessions)
+      .set({ connectedMinutes: connected })
+      .where(eq(creditSessions.id, id));
+    return id;
+  }
+
+  async function overrunningIds(): Promise<string[]> {
+    const rows = await creditSessionsRepository.listPresenceOverrunning({
+      marginMinutes: 30,
+      limit: 50,
+    });
+    return rows.map((r) => r.sessionId);
+  }
+
+  it('estimate 60: 91 connected minutes is found, 90 is not', async () => {
+    const over = await sessionWith(await liveMeeting(), 60, 91);
+    const at = await sessionWith(await liveMeeting(), 60, 90);
+    const ids = await overrunningIds();
+    expect(ids).toContain(over);
+    expect(ids).not.toContain(at);
+  });
+
+  it('estimate 240: the threshold is capped by the session maximum, so 211 is found and 210 is not', async () => {
+    const over = await sessionWith(await liveMeeting(), 240, 211);
+    const at = await sessionWith(await liveMeeting(), 240, 210);
+    const ids = await overrunningIds();
+    expect(ids).toContain(over);
+    expect(ids).not.toContain(at);
+  });
+
+  it('returns the projected row and orders most-overrunning first', async () => {
+    const less = await sessionWith(await liveMeeting(), 60, 95);
+    const more = await sessionWith(await liveMeeting(), 60, 120);
+    const rows = await creditSessionsRepository.listPresenceOverrunning({
+      marginMinutes: 30,
+      limit: 50,
+    });
+    expect(rows.map((r) => r.sessionId)).toEqual([more, less]);
+    expect(rows[0]).toMatchObject({ connectedMinutes: 120, estimatedMinutes: 60 });
+    expect(
+      await creditSessionsRepository.listPresenceOverrunning({ marginMinutes: 30, limit: 1 })
+    ).toHaveLength(1);
+    expect(
+      await creditSessionsRepository.listPresenceOverrunning({ marginMinutes: 30, limit: 0 })
+    ).toEqual([]);
+  });
+
+  it('keeps a session whose meeting has already ended (one row across the meeting end)', async () => {
+    const id = await sessionWith(await endedMeeting(meterAt(20)), 60, 100);
+    expect(await overrunningIds()).toContain(id);
+  });
+
+  it('never finds a live_capture, cancelled, settled or soft-deleted session', async () => {
+    const ctx = await setup({ balanceMinor: 500_000 });
+    const liveCaptureRes = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 60,
+      meetingId: await liveMeeting(),
+    });
+    if (!liveCaptureRes.ok) throw new Error(`expected open ok, got ${liveCaptureRes.code}`);
+    await db
+      .update(creditSessions)
+      .set({ connectedMinutes: 200 })
+      .where(eq(creditSessions.id, liveCaptureRes.session.id));
+
+    const cancelled = await sessionWith(await liveMeeting(), 60, 200);
+    await creditSessionsRepository.cancel(cancelled);
+
+    const settledMeeting = await endedMeeting(meterAt(20));
+    const settled = await sessionWith(settledMeeting, 60, 200);
+    await db
+      .update(creditSessions)
+      .set({ billingFinalizedAt: new Date() })
+      .where(eq(creditSessions.id, settled));
+
+    const deleted = await sessionWith(await liveMeeting(), 60, 200);
+    await db
+      .update(creditSessions)
+      .set({ deletedAt: new Date() })
+      .where(eq(creditSessions.id, deleted));
+
+    const ids = await overrunningIds();
+    for (const id of [liveCaptureRes.session.id, cancelled, settled, deleted]) {
+      expect(ids).not.toContain(id);
+    }
+  });
+});
+
+describe('creditSessionsRepository.listPresenceAlertLabels (BAL-586)', () => {
+  it('returns an empty Map for an empty input', async () => {
+    expect((await creditSessionsRepository.listPresenceAlertLabels([])).size).toBe(0);
+  });
+
+  it('labels a session with its company, meeting and zero credit drawn', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting(meterAt(20));
+    const id = await openPresence(ctx, meetingId);
+
+    const label = (await creditSessionsRepository.listPresenceAlertLabels([id])).get(id);
+    expect(label).toMatchObject({
+      sessionId: id,
+      meetingId,
+      meetingStatus: 'ended',
+      creditDrawnMinor: 0,
+      settlementExhausted: false,
+      exhaustionGuard: null,
+    });
+    expect(label?.companyName).toEqual(expect.any(String));
+    expect(label?.meetingScheduledStart).toBeInstanceOf(Date);
+    expect(label?.meetingEndedAt).toBeInstanceOf(Date);
+  });
+
+  it('sums only session_consume ledger rows as credit drawn', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connectWithTransition(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    const consumed = await db
+      .select({ amount: creditLedger.amountMinor })
+      .from(creditLedger)
+      .where(and(eq(creditLedger.sessionId, id), eq(creditLedger.reason, 'session_consume')));
+    const expected = consumed.reduce((sum, row) => sum - row.amount, 0);
+    expect(expected).toBeGreaterThan(0);
+
+    await creditLedgerRepository.postEntry({
+      walletId: ctx.walletId,
+      entryType: 'adjustment',
+      reason: 'adjustment',
+      amountMinor: 777,
+      idempotencyKey: `bal586-noise-${id}`,
+      sessionId: id,
+    });
+
+    const label = (await creditSessionsRepository.listPresenceAlertLabels([id])).get(id);
+    expect(label?.creditDrawnMinor).toBe(expected);
+  });
+
+  it('reports the exhaustion marker flag and its newest guard', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting(meterAt(20));
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: id,
+      meetingId,
+      guard: 'figure_exceeds_bound',
+      error: 'x',
+    });
+
+    const label = (await creditSessionsRepository.listPresenceAlertLabels([id])).get(id);
+    expect(label?.settlementExhausted).toBe(true);
+    expect(label?.exhaustionGuard).toBe('figure_exceeds_bound');
+  });
+
+  it('returns the newest marker guard when several markers exist', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await endedMeeting(meterAt(20));
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: id,
+      guard: 'figure_not_integer',
+      error: 'old',
+    });
+    await creditSessionsRepository.markPresenceSettlementExhausted({
+      sessionId: id,
+      guard: 'figure_exceeds_bound',
+      error: 'new',
+    });
+    const markers = await sessionAudits(id, PRESENCE_SETTLEMENT_EXHAUSTED_ACTION);
+    const oldest = markers.find((m) => m.metadata?.guard === 'figure_not_integer');
+    expect(oldest).toBeDefined();
+    await db
+      .update(auditEvents)
+      .set({ createdAt: new Date(Date.now() - 3_600_000) })
+      .where(eq(auditEvents.id, oldest?.id ?? ''));
+
+    const label = (await creditSessionsRepository.listPresenceAlertLabels([id])).get(id);
+    expect(label?.exhaustionGuard).toBe('figure_exceeds_bound');
+  });
+
+  it('omits a missing or soft-deleted session from the Map', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openPresence(ctx, await endedMeeting(meterAt(20)));
+    await db.update(creditSessions).set({ deletedAt: new Date() }).where(eq(creditSessions.id, id));
+
+    const labels = await creditSessionsRepository.listPresenceAlertLabels([
+      id,
+      '00000000-0000-4000-8000-000000000000',
+    ]);
+    expect(labels.size).toBe(0);
   });
 });
 

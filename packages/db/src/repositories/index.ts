@@ -505,6 +505,9 @@ export {
   type ClientSessionView,
   type CaseExpertEarningsAggregate,
   type SessionStatementContextRow,
+  // BAL-586 — the `session.presence_stuck` finder's reads.
+  type PresenceOverrunningSession,
+  type PresenceAlertLabel,
 } from './credit-sessions';
 export {
   creditReceivablesRepository,
@@ -663,6 +666,9 @@ export {
   // BAL-581 — the venue repair producer's / `meeting.unprovisioned` finder's read.
   type ListUnprovisionedScheduledInput,
   type UnprovisionedScheduledMeeting,
+  // BAL-586 — the `meeting.stranded` finder's read.
+  type ListStrandedLiveInput,
+  type StrandedLiveMeeting,
   type EndMeetingInput,
   type EndMeetingResult,
   // BAL-498 — the expert calendar's read row shape.
