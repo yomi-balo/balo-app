@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { ApplicationSections } from './application-sections';
-import type { ApplicationWithRelations } from '@balo/db';
+import { ApplicationSections, WorkHistorySection } from './application-sections';
+import type { ApplicationWithRelations, StaffSelfRating, SupportType } from '@balo/db';
 
 function application(overrides: Partial<ApplicationWithRelations> = {}): ApplicationWithRelations {
   return {
@@ -40,185 +40,305 @@ function application(overrides: Partial<ApplicationWithRelations> = {}): Applica
   };
 }
 
+const SUPPORT_TYPES: SupportType[] = [
+  { id: 'st-config', slug: 'config', name: 'Configuration' } as unknown as SupportType,
+  { id: 'st-dev', slug: 'development', name: 'Development' } as unknown as SupportType,
+];
+
+interface RenderSectionsOptions {
+  application?: ApplicationWithRelations;
+  supportTypes?: readonly SupportType[];
+  selfRatings?: readonly StaffSelfRating[];
+  skillsLocked?: boolean;
+}
+
+function renderSections(options: RenderSectionsOptions = {}) {
+  return render(
+    <ApplicationSections
+      application={options.application ?? application()}
+      productsByCategory={[]}
+      supportTypes={options.supportTypes ?? []}
+      certificationsByCategory={[]}
+      selfRatings={options.selfRatings ?? []}
+      skillsLocked={options.skillsLocked ?? false}
+    />
+  );
+}
+
+const PRODUCT_ID = 'product-1';
+
+function applicationWithOneCompetency(
+  overrides: Partial<ApplicationWithRelations> = {}
+): ApplicationWithRelations {
+  return application({
+    competencies: [
+      {
+        id: 'comp-1',
+        expertProfileId: 'p1',
+        productId: PRODUCT_ID,
+        supportTypeId: 'st-config',
+        proficiency: 5,
+        product: { id: PRODUCT_ID, name: 'Sales Cloud' },
+        supportType: SUPPORT_TYPES[0],
+      } as unknown as ApplicationWithRelations['competencies'][number],
+      {
+        id: 'comp-2',
+        expertProfileId: 'p1',
+        productId: PRODUCT_ID,
+        supportTypeId: 'st-dev',
+        proficiency: 3,
+        product: { id: PRODUCT_ID, name: 'Sales Cloud' },
+        supportType: SUPPORT_TYPES[1],
+      } as unknown as ApplicationWithRelations['competencies'][number],
+    ],
+    ...overrides,
+  });
+}
+
 describe('ApplicationSections', () => {
   it('renders the experience section', () => {
-    render(
-      <ApplicationSections
-        application={application()}
-        productsByCategory={[]}
-        supportTypes={[]}
-        certificationsByCategory={[]}
-      />
-    );
+    renderSections();
     expect(screen.getByText('Experience')).toBeInTheDocument();
     expect(screen.getByText('2018')).toBeInTheDocument();
   });
 
   it('never renders decline_note, even though it is on the full profile row', () => {
-    render(
-      <ApplicationSections
-        application={application()}
-        productsByCategory={[]}
-        supportTypes={[]}
-        certificationsByCategory={[]}
-      />
-    );
+    renderSections();
     expect(screen.queryByText(/must never render on the staff sections/i)).not.toBeInTheDocument();
   });
 
   it('shows "None selected" for industries and distinctions when empty', () => {
-    render(
-      <ApplicationSections
-        application={application()}
-        productsByCategory={[]}
-        supportTypes={[]}
-        certificationsByCategory={[]}
-      />
-    );
+    renderSections();
     expect(screen.getAllByText('None selected')).toHaveLength(2);
   });
 
   it('renders a language row with its proficiency badge', () => {
-    render(
-      <ApplicationSections
-        application={application({
-          languages: [
-            {
-              id: 'l1',
-              expertProfileId: 'p1',
-              languageId: 'lang-1',
-              proficiency: 'advanced',
-              language: { id: 'lang-1', name: 'French', code: 'fr', flagEmoji: '🇫🇷' },
-            } as unknown as ApplicationWithRelations['languages'][number],
-          ],
-        })}
-        productsByCategory={[]}
-        supportTypes={[]}
-        certificationsByCategory={[]}
-      />
-    );
+    renderSections({
+      application: application({
+        languages: [
+          {
+            id: 'l1',
+            expertProfileId: 'p1',
+            languageId: 'lang-1',
+            proficiency: 'advanced',
+            language: { id: 'lang-1', name: 'French', code: 'fr', flagEmoji: '🇫🇷' },
+          } as unknown as ApplicationWithRelations['languages'][number],
+        ],
+      }),
+    });
     expect(screen.getByText('French')).toBeInTheDocument();
     expect(screen.getByText('advanced')).toBeInTheDocument();
   });
 
-  it('renders work history with a Current badge', () => {
-    render(
-      <ApplicationSections
-        application={application({
-          workHistory: [
-            {
-              id: 'w1',
-              role: 'Solutions Architect',
-              company: 'Acme Corp',
-              startedAt: new Date('2025-04-01T00:00:00.000Z'),
-              endedAt: null,
-              isCurrent: true,
-              responsibilities: null,
-            } as unknown as ApplicationWithRelations['workHistory'][number],
-          ],
-        })}
-        productsByCategory={[]}
-        supportTypes={[]}
-        certificationsByCategory={[]}
-      />
-    );
-    expect(screen.getByText('Solutions Architect')).toBeInTheDocument();
-    expect(screen.getByText('Acme Corp')).toBeInTheDocument();
-    expect(screen.getByText('Current')).toBeInTheDocument();
-    // A current role's tenure is open-ended.
-    expect(screen.getByText(/Apr 2025 — Present/)).toBeInTheDocument();
-  });
-
   /**
-   * WEB-REVIEW FIX ROUND W2 — TENURE AND RESPONSIBILITIES ARE WHAT THE DECISION NEEDS.
-   *
-   * This section rendered role + company + a `Current` badge and nothing else, while the
-   * applicant's own review page has always shown the date range and what they wrote about the
-   * role. Those two fields are precisely the evidence a reviewer weighs when choosing the
-   * `experience_depth` decline reason, so omitting them undermined the decision this page exists
-   * to support.
-   *
-   * MUTATION-PROVEN: delete either the `formatPeriod` line or the `responsibilities` block in
-   * `application-sections.tsx` and this goes red on that half.
+   * `WorkHistorySection` is rendered by the page and the edit workspace, not by
+   * `ApplicationSections`, so these tests exercise the exported component directly.
    */
-  it('renders the tenure range and the responsibilities the applicant wrote', () => {
-    render(
-      <ApplicationSections
-        application={application({
-          workHistory: [
-            {
-              id: 'w1',
-              role: 'Lead Consultant',
-              company: 'Northwind',
-              startedAt: new Date('2017-11-01T00:00:00.000Z'),
-              endedAt: new Date('2020-04-01T00:00:00.000Z'),
-              isCurrent: false,
-              responsibilities: 'Owned the CPQ rollout across three business units.',
-            } as unknown as ApplicationWithRelations['workHistory'][number],
-          ],
-        })}
-        productsByCategory={[]}
-        supportTypes={[]}
-        certificationsByCategory={[]}
-      />
-    );
-    expect(screen.getByText(/Nov 2017 — Apr 2020/)).toBeInTheDocument();
-    expect(
-      screen.getByText('Owned the CPQ rollout across three business units.')
-    ).toBeInTheDocument();
-    expect(screen.queryByText('Current')).toBeNull();
+  describe('WorkHistorySection (rendered by the page/workspace, not by ApplicationSections)', () => {
+    it('renders work history with a Current badge', () => {
+      render(
+        <WorkHistorySection
+          entries={
+            [
+              {
+                id: 'w1',
+                role: 'Solutions Architect',
+                company: 'Acme Corp',
+                startedAt: new Date('2025-04-01T00:00:00.000Z'),
+                endedAt: null,
+                isCurrent: true,
+                responsibilities: null,
+              },
+            ] as unknown as ApplicationWithRelations['workHistory']
+          }
+        />
+      );
+      expect(screen.getByText('Solutions Architect')).toBeInTheDocument();
+      expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+      expect(screen.getByText('Current')).toBeInTheDocument();
+      // A current role's tenure is open-ended.
+      expect(screen.getByText(/Apr 2025 — Present/)).toBeInTheDocument();
+    });
+
+    /**
+     * WEB-REVIEW FIX ROUND W2 — TENURE AND RESPONSIBILITIES ARE WHAT THE DECISION NEEDS.
+     *
+     * This section rendered role + company + a `Current` badge and nothing else, while the
+     * applicant's own review page has always shown the date range and what they wrote about the
+     * role. Those two fields are precisely the evidence a reviewer weighs when choosing the
+     * `experience_depth` decline reason, so omitting them undermined the decision this page
+     * exists to support.
+     *
+     * MUTATION-PROVEN: delete either the `formatPeriod` line or the `responsibilities` block in
+     * `application-sections.tsx` and this goes red on that half.
+     */
+    it('renders the tenure range and the responsibilities the applicant wrote', () => {
+      render(
+        <WorkHistorySection
+          entries={
+            [
+              {
+                id: 'w1',
+                role: 'Lead Consultant',
+                company: 'Northwind',
+                startedAt: new Date('2017-11-01T00:00:00.000Z'),
+                endedAt: new Date('2020-04-01T00:00:00.000Z'),
+                isCurrent: false,
+                responsibilities: 'Owned the CPQ rollout across three business units.',
+              },
+            ] as unknown as ApplicationWithRelations['workHistory']
+          }
+        />
+      );
+      expect(screen.getByText(/Nov 2017 — Apr 2020/)).toBeInTheDocument();
+      expect(
+        screen.getByText('Owned the CPQ rollout across three business units.')
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Current')).toBeNull();
+    });
+
+    it('renders rich-text responsibilities with their formatting, and strips anything unsafe', () => {
+      const { container } = render(
+        <WorkHistorySection
+          entries={
+            [
+              {
+                id: 'w1',
+                role: 'Lead Consultant',
+                company: 'Northwind',
+                startedAt: new Date('2017-11-01T00:00:00.000Z'),
+                endedAt: new Date('2020-04-01T00:00:00.000Z'),
+                isCurrent: false,
+                responsibilities:
+                  '<ul><li><strong>Owned</strong> the CPQ rollout</li></ul><script>alert(1)</script>',
+              },
+            ] as unknown as ApplicationWithRelations['workHistory']
+          }
+        />
+      );
+      expect(screen.getByRole('listitem')).toHaveTextContent('Owned the CPQ rollout');
+      expect(screen.getByText('Owned').tagName).toBe('STRONG');
+      expect(container.querySelector('script')).toBeNull();
+    });
+
+    it('renders the tenure but no responsibilities paragraph when the applicant left it blank', () => {
+      const { container } = render(
+        <WorkHistorySection
+          entries={
+            [
+              {
+                id: 'w1',
+                role: 'Lead Consultant',
+                company: 'Northwind',
+                startedAt: new Date('2017-11-01T00:00:00.000Z'),
+                endedAt: new Date('2020-04-01T00:00:00.000Z'),
+                isCurrent: false,
+                responsibilities: '',
+              },
+            ] as unknown as ApplicationWithRelations['workHistory']
+          }
+        />
+      );
+      expect(screen.getByText(/Nov 2017 — Apr 2020/)).toBeInTheDocument();
+      // No empty bordered paragraph left behind.
+      expect(container.querySelector('.border-t')).toBeNull();
+    });
   });
 
-  it('renders rich-text responsibilities with their formatting, and strips anything unsafe', () => {
-    const { container } = render(
-      <ApplicationSections
-        application={application({
-          workHistory: [
-            {
-              id: 'w1',
-              role: 'Lead Consultant',
-              company: 'Northwind',
-              startedAt: new Date('2017-11-01T00:00:00.000Z'),
-              endedAt: new Date('2020-04-01T00:00:00.000Z'),
-              isCurrent: false,
-              responsibilities:
-                '<ul><li><strong>Owned</strong> the CPQ rollout</li></ul><script>alert(1)</script>',
-            } as unknown as ApplicationWithRelations['workHistory'][number],
-          ],
-        })}
-        productsByCategory={[]}
-        supportTypes={[]}
-        certificationsByCategory={[]}
-      />
-    );
-    expect(screen.getByRole('listitem')).toHaveTextContent('Owned the CPQ rollout');
-    expect(screen.getByText('Owned').tagName).toBe('STRONG');
-    expect(container.querySelector('script')).toBeNull();
+  describe('Ratings (BAL-593 — self-rating overlay)', () => {
+    it('renders the renamed "Ratings (0–10)" heading, not "Self-assessment"', () => {
+      renderSections({ application: applicationWithOneCompetency(), supportTypes: SUPPORT_TYPES });
+      expect(screen.getByText('Ratings (0–10)')).toBeInTheDocument();
+      expect(screen.queryByText(/Self-assessment/)).toBeNull();
+    });
+
+    it('shows "Added by Balo" when every cell has no self-rating', () => {
+      renderSections({
+        application: applicationWithOneCompetency(),
+        supportTypes: SUPPORT_TYPES,
+        selfRatings: [],
+      });
+      expect(screen.getByText('Added by Balo')).toBeInTheDocument();
+      expect(screen.queryByText(/adjusted/)).toBeNull();
+    });
+
+    it('shows "Self {n} →" only on the cell where self differs from Balo’s rating', () => {
+      renderSections({
+        application: applicationWithOneCompetency(),
+        supportTypes: SUPPORT_TYPES,
+        selfRatings: [
+          { productId: PRODUCT_ID, supportTypeId: 'st-config', selfProficiency: 8 }, // differs (balo=5)
+          { productId: PRODUCT_ID, supportTypeId: 'st-dev', selfProficiency: 3 }, // matches (balo=3)
+        ],
+      });
+      expect(screen.getByText('Self 8 →')).toBeInTheDocument();
+      expect(screen.queryByText('Self 3 →')).toBeNull();
+      expect(screen.getByText('1 adjusted')).toBeInTheDocument();
+      expect(screen.queryByText('Added by Balo')).toBeNull();
+    });
+
+    it('renders the legend sentence only when some cell differs', () => {
+      const { rerender } = render(
+        <ApplicationSections
+          application={applicationWithOneCompetency()}
+          productsByCategory={[]}
+          supportTypes={SUPPORT_TYPES}
+          certificationsByCategory={[]}
+          selfRatings={[{ productId: PRODUCT_ID, supportTypeId: 'st-config', selfProficiency: 5 }]}
+          skillsLocked={false}
+        />
+      );
+      expect(screen.queryByText(/means the expert rated themselves/)).toBeNull();
+
+      rerender(
+        <ApplicationSections
+          application={applicationWithOneCompetency()}
+          productsByCategory={[]}
+          supportTypes={SUPPORT_TYPES}
+          certificationsByCategory={[]}
+          selfRatings={[{ productId: PRODUCT_ID, supportTypeId: 'st-config', selfProficiency: 8 }]}
+          skillsLocked={false}
+        />
+      );
+      expect(screen.getByText(/means the expert rated themselves/)).toBeInTheDocument();
+    });
+
+    it('renders no "Self" text for a cell missing from selfRatings', () => {
+      renderSections({
+        application: applicationWithOneCompetency(),
+        supportTypes: SUPPORT_TYPES,
+        selfRatings: [],
+      });
+      expect(screen.queryByText(/^Self \d+ →$/)).toBeNull();
+    });
   });
 
-  it('renders the tenure but no responsibilities paragraph when the applicant left it blank', () => {
-    const { container } = render(
-      <ApplicationSections
-        application={application({
-          workHistory: [
+  describe('Locked pill (Decision 4)', () => {
+    it('shows "Locked for the expert" on Product expertise, Ratings and Certifications when skillsLocked', () => {
+      renderSections({
+        application: applicationWithOneCompetency({
+          certifications: [
             {
-              id: 'w1',
-              role: 'Lead Consultant',
-              company: 'Northwind',
-              startedAt: new Date('2017-11-01T00:00:00.000Z'),
-              endedAt: new Date('2020-04-01T00:00:00.000Z'),
-              isCurrent: false,
-              responsibilities: '',
-            } as unknown as ApplicationWithRelations['workHistory'][number],
+              id: 'cert-row-1',
+              expertProfileId: 'p1',
+              certificationId: 'cert-1',
+              certification: { id: 'cert-1', name: 'Platform Developer I' },
+            } as unknown as ApplicationWithRelations['certifications'][number],
           ],
-        })}
-        productsByCategory={[]}
-        supportTypes={[]}
-        certificationsByCategory={[]}
-      />
-    );
-    expect(screen.getByText(/Nov 2017 — Apr 2020/)).toBeInTheDocument();
-    // No empty bordered paragraph left behind.
-    expect(container.querySelector('.border-t')).toBeNull();
+        }),
+        supportTypes: SUPPORT_TYPES,
+        skillsLocked: true,
+      });
+      expect(screen.getAllByText('Locked for the expert')).toHaveLength(3);
+    });
+
+    it('shows no locked pill when skillsLocked is false', () => {
+      renderSections({
+        application: applicationWithOneCompetency(),
+        supportTypes: SUPPORT_TYPES,
+        skillsLocked: false,
+      });
+      expect(screen.queryByText('Locked for the expert')).toBeNull();
+    });
   });
 });

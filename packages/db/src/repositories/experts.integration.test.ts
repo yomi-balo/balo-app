@@ -10,6 +10,7 @@ import {
   certifications,
   consultations,
   expertCertifications,
+  expertCompetency,
   expertIndustries,
   expertLanguages,
   expertProfiles,
@@ -2164,5 +2165,300 @@ describe('expertsRepository.listPendingApplicationsForAlerts', () => {
       1
     );
     expect(bounded).toHaveLength(1);
+  });
+});
+
+// ── BAL-593 — self-rating, projection, executor composition and the settings cert lock ──
+
+async function seedCompetencyTaxonomy(): Promise<{
+  productA: string;
+  productB: string;
+  supportX: string;
+  supportY: string;
+}> {
+  const vertical = await referenceDataRepository.getSalesforceVertical();
+  const productRows = await db
+    .insert(products)
+    .values([
+      { verticalId: vertical.id, name: 'Sales Cloud', slug: uniq('sales') },
+      { verticalId: vertical.id, name: 'Service Cloud', slug: uniq('service') },
+    ])
+    .returning({ id: products.id });
+  const supportRows = await db
+    .insert(supportTypes)
+    .values([
+      { verticalId: vertical.id, name: 'Build', slug: uniq('build') },
+      { verticalId: vertical.id, name: 'Advise', slug: uniq('advise') },
+    ])
+    .returning({ id: supportTypes.id });
+  const [productA, productB] = productRows.map((r) => r.id);
+  const [supportX, supportY] = supportRows.map((r) => r.id);
+  if (
+    productA === undefined ||
+    productB === undefined ||
+    supportX === undefined ||
+    supportY === undefined
+  ) {
+    throw new Error('seedCompetencyTaxonomy: insert returned too few rows');
+  }
+  return { productA, productB, supportX, supportY };
+}
+
+async function readCompetencyCell(
+  expertProfileId: string,
+  productId: string,
+  supportTypeId: string
+): Promise<{ proficiency: number; selfProficiency: number | null } | undefined> {
+  const [row] = await db
+    .select({
+      proficiency: expertCompetency.proficiency,
+      selfProficiency: expertCompetency.selfProficiency,
+    })
+    .from(expertCompetency)
+    .where(
+      and(
+        eq(expertCompetency.expertProfileId, expertProfileId),
+        eq(expertCompetency.productId, productId),
+        eq(expertCompetency.supportTypeId, supportTypeId)
+      )
+    );
+  return row;
+}
+
+describe('expertsRepository applicant writers — §H7 the self-rating', () => {
+  it('syncProducts inserts each new cell at proficiency 0 and selfProficiency 0', async () => {
+    const draft = await expertDraftFactory();
+    const t = await seedCompetencyTaxonomy();
+
+    await expertsRepository.syncProducts(draft.id, [t.productA], [t.supportX, t.supportY]);
+
+    expect(await readCompetencyCell(draft.id, t.productA, t.supportX)).toEqual({
+      proficiency: 0,
+      selfProficiency: 0,
+    });
+    expect(await readCompetencyCell(draft.id, t.productA, t.supportY)).toEqual({
+      proficiency: 0,
+      selfProficiency: 0,
+    });
+  });
+
+  it('updateCompetencyProficiency writes the self-rating on insert and on update', async () => {
+    const draft = await expertDraftFactory();
+    const t = await seedCompetencyTaxonomy();
+    await expertsRepository.syncProducts(draft.id, [t.productA], [t.supportX]);
+
+    await expertsRepository.updateCompetencyProficiency(draft.id, [
+      // Conflict arm: the cell exists from syncProducts.
+      { productId: t.productA, supportTypeId: t.supportX, proficiency: 7 },
+      // Insert arm: no such cell yet.
+      { productId: t.productB, supportTypeId: t.supportY, proficiency: 4 },
+    ]);
+
+    expect(await readCompetencyCell(draft.id, t.productA, t.supportX)).toEqual({
+      proficiency: 7,
+      selfProficiency: 7,
+    });
+    expect(await readCompetencyCell(draft.id, t.productB, t.supportY)).toEqual({
+      proficiency: 4,
+      selfProficiency: 4,
+    });
+  });
+});
+
+describe('expertsRepository reads — §H6 the self-rating stays off non-staff reads', () => {
+  it('the public, settings and applicant reads carry no selfProficiency key; the staff read does', async () => {
+    const username = uniq('self-rating');
+    const expert = await searchExpertFactory({ username, searchable: true });
+    const t = await seedCompetencyTaxonomy();
+    await expertsRepository.updateCompetencyProficiency(expert.id, [
+      { productId: t.productA, supportTypeId: t.supportX, proficiency: 6 },
+    ]);
+    await db
+      .update(expertCompetency)
+      .set({ proficiency: 3 })
+      .where(eq(expertCompetency.expertProfileId, expert.id));
+
+    const publicProfile = await expertsRepository.findPublicProfileByUsername(username);
+    const settings = await expertsRepository.findProfileForSettings(expert.id);
+    const application = await expertsRepository.findApplicationWithRelations(expert.id);
+    const staff = await expertsRepository.findApplicationForStaffReview(expert.id);
+
+    const reads = [publicProfile?.competencies, settings?.competencies, application?.competencies];
+    for (const competencies of reads) {
+      const [cell] = competencies ?? [];
+      expect(cell).toBeDefined();
+      expect(cell?.proficiency).toBe(3);
+      expect(cell).not.toHaveProperty('selfProficiency');
+    }
+    expect(staff?.competencies[0]).not.toHaveProperty('selfProficiency');
+    expect(staff?.selfRatings).toEqual([
+      { productId: t.productA, supportTypeId: t.supportX, selfProficiency: 6 },
+    ]);
+  });
+});
+
+describe('expertsRepository applicant writers — §executor composition', () => {
+  it('the five step writers compose under a parent transaction, so its rollback leaves nothing', async () => {
+    const draft = await expertDraftFactory();
+    const t = await seedCompetencyTaxonomy();
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const [cert] = await db
+      .insert(certifications)
+      .values({ verticalId: vertical.id, name: 'Composed', slug: uniq('composed') })
+      .returning();
+    if (!cert) throw new Error('Failed to seed certification');
+
+    await expect(
+      db.transaction(async (tx) => {
+        await expertsRepository.saveProfileStep(
+          draft.id,
+          undefined,
+          { projectCountMin: 42, languages: [], industryIds: [] },
+          tx
+        );
+        await expertsRepository.syncProducts(draft.id, [t.productA], [t.supportX], tx);
+        await expertsRepository.updateCompetencyProficiency(
+          draft.id,
+          [{ productId: t.productB, supportTypeId: t.supportY, proficiency: 5 }],
+          tx
+        );
+        await expertsRepository.saveCertificationsStep(
+          draft.id,
+          'https://trailblazer.me/id/composed',
+          [{ certificationId: cert.id }],
+          tx
+        );
+        await expertsRepository.syncWorkHistory(
+          draft.id,
+          [{ role: 'Lead', company: 'Contoso', startedAt: '2021-01-01', isCurrent: true }],
+          tx
+        );
+        throw new Error('parent rollback');
+      })
+    ).rejects.toThrow('parent rollback');
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.projectCountMin).toBeNull();
+    expect(profile?.trailheadUrl).toBeNull();
+    const competencyRows = await db
+      .select({ id: expertCompetency.id })
+      .from(expertCompetency)
+      .where(eq(expertCompetency.expertProfileId, draft.id));
+    expect(competencyRows).toHaveLength(0);
+    const certRows = await db.query.expertCertifications.findMany({
+      where: eq(expertCertifications.expertProfileId, draft.id),
+    });
+    expect(certRows).toHaveLength(0);
+    const historyRows = await db.query.workHistory.findMany({
+      where: eq(workHistory.expertProfileId, draft.id),
+    });
+    expect(historyRows).toHaveLength(0);
+  });
+});
+
+describe('expertsRepository.saveSettingsCertifications — §settings-lock', () => {
+  async function seedWithCerts(locked: boolean): Promise<{
+    expertProfileId: string;
+    certA: string;
+    certB: string;
+  }> {
+    const expert = await expertFactory();
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const certRows = await db
+      .insert(certifications)
+      .values([
+        { verticalId: vertical.id, name: 'Lock A', slug: uniq('lock-a') },
+        { verticalId: vertical.id, name: 'Lock B', slug: uniq('lock-b') },
+      ])
+      .returning({ id: certifications.id });
+    const [certA, certB] = certRows.map((r) => r.id);
+    if (certA === undefined || certB === undefined) throw new Error('seed failed');
+    await expertsRepository.saveCertificationsStep(expert.id, 'https://trailblazer.me/id/before', [
+      { certificationId: certA, earnedAt: '2022-02-02', credentialUrl: 'https://cred.example/a' },
+    ]);
+    await db
+      .update(expertProfiles)
+      .set({ skillsLocked: locked })
+      .where(eq(expertProfiles.id, expert.id));
+    return { expertProfileId: expert.id, certA, certB };
+  }
+
+  async function readCerts(
+    expertProfileId: string
+  ): Promise<{ certificationId: string; earnedAt: string | null; credentialUrl: string | null }[]> {
+    return db
+      .select({
+        certificationId: expertCertifications.certificationId,
+        earnedAt: expertCertifications.earnedAt,
+        credentialUrl: expertCertifications.credentialUrl,
+      })
+      .from(expertCertifications)
+      .where(eq(expertCertifications.expertProfileId, expertProfileId));
+  }
+
+  it('returns not_found for an unknown profile', async () => {
+    expect(
+      await expertsRepository.saveSettingsCertifications(randomUUID(), {
+        certs: [],
+        trailheadUrl: null,
+      })
+    ).toEqual({ outcome: 'not_found' });
+  });
+
+  it('unlocked: syncs the certifications and the trailhead URL', async () => {
+    const seeded = await seedWithCerts(false);
+
+    const result = await expertsRepository.saveSettingsCertifications(seeded.expertProfileId, {
+      certs: [{ certificationId: seeded.certB }],
+      trailheadUrl: 'https://trailblazer.me/id/after',
+    });
+
+    expect(result).toEqual({ outcome: 'saved' });
+    expect((await readCerts(seeded.expertProfileId)).map((c) => c.certificationId)).toEqual([
+      seeded.certB,
+    ]);
+    const profile = await expertsRepository.findProfileById(seeded.expertProfileId);
+    expect(profile?.trailheadUrl).toBe('https://trailblazer.me/id/after');
+  });
+
+  it.each([
+    ['adds', (s: { certA: string; certB: string }) => [s.certA, s.certB]],
+    ['removes', () => []],
+  ] as const)(
+    'locked: refuses a set that %s a certification and writes nothing',
+    async (_, ids) => {
+      const seeded = await seedWithCerts(true);
+      const before = await readCerts(seeded.expertProfileId);
+
+      const result = await expertsRepository.saveSettingsCertifications(seeded.expertProfileId, {
+        certs: ids(seeded).map((certificationId) => ({ certificationId })),
+        trailheadUrl: 'https://trailblazer.me/id/after',
+      });
+
+      expect(result).toEqual({ outcome: 'locked' });
+      expect(await readCerts(seeded.expertProfileId)).toEqual(before);
+      const profile = await expertsRepository.findProfileById(seeded.expertProfileId);
+      expect(profile?.trailheadUrl).toBe('https://trailblazer.me/id/before');
+    }
+  );
+
+  it('locked, same set: saves the trailhead URL and leaves the retained certification untouched', async () => {
+    const seeded = await seedWithCerts(true);
+
+    const result = await expertsRepository.saveSettingsCertifications(seeded.expertProfileId, {
+      certs: [{ certificationId: seeded.certA, earnedAt: '1999-01-01', credentialUrl: '' }],
+      trailheadUrl: 'https://trailblazer.me/id/after',
+    });
+
+    expect(result).toEqual({ outcome: 'saved' });
+    expect(await readCerts(seeded.expertProfileId)).toEqual([
+      {
+        certificationId: seeded.certA,
+        earnedAt: '2022-02-02',
+        credentialUrl: 'https://cred.example/a',
+      },
+    ]);
+    const profile = await expertsRepository.findProfileById(seeded.expertProfileId);
+    expect(profile?.trailheadUrl).toBe('https://trailblazer.me/id/after');
   });
 });

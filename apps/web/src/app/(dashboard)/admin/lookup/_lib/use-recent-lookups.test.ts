@@ -13,6 +13,7 @@ function result(
     sub: 'Sub',
     publicExpertUsername: null,
     engagementType: null,
+    expertApplicationReviewable: null,
     ...overrides,
   };
 }
@@ -33,11 +34,25 @@ describe('useRecentLookups', () => {
       hook.current.remember(result({ id: 'u1', type: 'user', title: 'Dana', sub: 'Owner' }));
     });
     expect(hook.current.recent).toEqual([
-      { type: 'user', id: 'u1', title: 'Dana', sub: 'Owner', engagementType: null },
+      {
+        type: 'user',
+        id: 'u1',
+        title: 'Dana',
+        sub: 'Owner',
+        engagementType: null,
+        expertApplicationReviewable: null,
+      },
     ]);
     const stored = JSON.parse(globalThis.localStorage.getItem(RECENT_KEY) ?? '[]');
     expect(stored).toEqual([
-      { type: 'user', id: 'u1', title: 'Dana', sub: 'Owner', engagementType: null },
+      {
+        type: 'user',
+        id: 'u1',
+        title: 'Dana',
+        sub: 'Owner',
+        engagementType: null,
+        expertApplicationReviewable: null,
+      },
     ]);
   });
 
@@ -108,7 +123,62 @@ describe('useRecentLookups', () => {
       );
     });
     expect(hook.current.recent).toEqual([
-      { type: 'engagement', id: 'e1', title: 'CPQ', sub: 'x', engagementType: 'project' },
+      {
+        type: 'engagement',
+        id: 'e1',
+        title: 'CPQ',
+        sub: 'x',
+        engagementType: 'project',
+        expertApplicationReviewable: null,
+      },
     ]);
+  });
+
+  it('round-trips expertApplicationReviewable through storage', () => {
+    const { result: hook } = renderHook(() => useRecentLookups());
+    act(() => {
+      hook.current.remember(
+        result({
+          id: 'x1',
+          type: 'expert',
+          title: 'Priya',
+          sub: 'x',
+          expertApplicationReviewable: true,
+        })
+      );
+    });
+    expect(hook.current.recent).toEqual([
+      {
+        type: 'expert',
+        id: 'x1',
+        title: 'Priya',
+        sub: 'x',
+        engagementType: null,
+        expertApplicationReviewable: true,
+      },
+    ]);
+    const stored = JSON.parse(globalThis.localStorage.getItem(RECENT_KEY) ?? '[]');
+    expect(stored[0].expertApplicationReviewable).toBe(true);
+  });
+
+  it('accepts a legacy stored entry with no expertApplicationReviewable (reads as undefined, not dropped)', () => {
+    globalThis.localStorage.setItem(
+      RECENT_KEY,
+      JSON.stringify([{ type: 'expert', id: 'x1', title: 'Priya', sub: 'x' }])
+    );
+    const { result: hook } = renderHook(() => useRecentLookups());
+    expect(hook.current.recent).toEqual([{ type: 'expert', id: 'x1', title: 'Priya', sub: 'x' }]);
+  });
+
+  it('drops a stored entry with an invalid expertApplicationReviewable', () => {
+    globalThis.localStorage.setItem(
+      RECENT_KEY,
+      JSON.stringify([
+        { type: 'expert', id: 'x1', title: 'Priya', sub: 'x', expertApplicationReviewable: 'yes' },
+        { type: 'user', id: 'u1', title: 'Dana', sub: 'x' },
+      ])
+    );
+    const { result: hook } = renderHook(() => useRecentLookups());
+    expect(hook.current.recent).toEqual([{ type: 'user', id: 'u1', title: 'Dana', sub: 'x' }]);
   });
 });

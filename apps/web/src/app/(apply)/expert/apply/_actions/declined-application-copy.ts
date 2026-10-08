@@ -18,3 +18,12 @@
  */
 export const DECLINED_APPLICATION_ERROR =
   "We've already reviewed this application, so it can't be changed or submitted again. Email support@getbalo.com and a person will pick it up from there.";
+
+/**
+ * BAL-593 H1 — the honest refusal for every OTHER closed status: a later `submitted`,
+ * `under_review`, or `approved` row. `rejected` keeps `DECLINED_APPLICATION_ERROR` above; this is
+ * the sibling message for an application that is closed because it was ACCEPTED into review or
+ * approved, not declined. Toast-length, warm, gender-neutral — pending-MJ.
+ */
+export const SUBMITTED_APPLICATION_ERROR =
+  "This application has already been submitted, so changes here aren't saved. If something needs correcting, email support@getbalo.com and a person will update it for you.";

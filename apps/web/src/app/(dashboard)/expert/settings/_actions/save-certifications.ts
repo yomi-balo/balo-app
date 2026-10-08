@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
+import { CERTIFICATIONS_LOCKED_ERROR } from './certifications-locked-copy';
 
 const dateFormatRegex = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -36,6 +37,7 @@ export interface SaveCertificationsInput {
 export interface SaveCertificationsResult {
   success: boolean;
   error?: string;
+  code?: 'locked';
 }
 
 export const saveCertificationsAction = withAuth(
@@ -49,27 +51,22 @@ export const saveCertificationsAction = withAuth(
 
       const expertProfileId = session.user.expertProfileId;
 
-      // Guard: if skills are locked, all existing certifications must remain
-      const profile = await expertsRepository.findProfileForSettings(expertProfileId);
-      if (profile?.skillsLocked) {
-        const existingCertIds = new Set(profile.certifications.map((c) => c.certificationId));
-        const incomingCertIds = new Set(validated.certifications.map((c) => c.certificationId));
-        for (const existingId of existingCertIds) {
-          if (!incomingCertIds.has(existingId)) {
-            return {
-              success: false,
-              error: 'Cannot remove locked certifications. Contact support for changes.',
-            };
-          }
-        }
+      const result = await expertsRepository.saveSettingsCertifications(expertProfileId, {
+        certs: validated.certifications,
+        trailheadUrl: validated.trailheadUrl || null,
+      });
+
+      if (result.outcome === 'locked') {
+        log.warn('Locked certification change refused', {
+          expertProfileId,
+          userId: session.user.id,
+        });
+        return { success: false, code: 'locked', error: CERTIFICATIONS_LOCKED_ERROR };
       }
 
-      // Sync certifications
-      await expertsRepository.syncCertifications(expertProfileId, validated.certifications);
-
-      // Update trailhead URL
-      const trailheadUrl = validated.trailheadUrl || null;
-      await expertsRepository.updateProfile(expertProfileId, { trailheadUrl });
+      if (result.outcome === 'not_found') {
+        return { success: false, error: 'Failed to save certifications. Please try again.' };
+      }
 
       log.info('Certifications saved', {
         expertProfileId,

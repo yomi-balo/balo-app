@@ -184,6 +184,21 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'critical',
     },
   ],
+  // BAL-593 — a Balo-staff edit changed something on an `approved` application. EMAIL ONLY (no
+  // in-app, no SMS), matching Decision 6: this is not time-sensitive the way a decision is, so
+  // `priority: 'normal'` rather than `expert.approved` / `expert.application_declined`'s
+  // `critical`. Published only for an edit on an ALREADY-APPROVED application — a pending edit
+  // (`submitted` / `under_review`) sends nothing, and the planner's `no_changes` result never
+  // publishes at all (H3/H5).
+  'expert.application_edited': [
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'expert-application-edited',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
   // BAL-325: referral invite to an EXTERNAL email (not a Balo user). The
   // 'email_address' recipient reads the address straight from the event payload in
   // the dispatcher — there is no user row to hydrate. Email channel only (no in-app

@@ -2,9 +2,13 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, FileText } from 'lucide-react';
 import type { LookupSelection } from '../_lib/lookup-view';
-import { LOOKUP_TYPE_LABEL, resolveOpenTarget } from '../_lib/lookup-view';
+import {
+  LOOKUP_TYPE_LABEL,
+  resolveApplicationTarget,
+  resolveOpenTarget,
+} from '../_lib/lookup-view';
 import { LookupMoneySection } from './lookup-money-section';
 import { LookupTimelineSection } from './lookup-timeline-section';
 import { LookupDrillInTabs, panelId, tabId, type LookupDrillInTab } from './lookup-drill-in-tabs';
@@ -25,6 +29,10 @@ import { LookupDrillInTabs, panelId, tabId, type LookupDrillInTab } from './look
  * tabs wiring (`aria-labelledby`, and testing-library's/AT's accessibility-tree exclusion of
  * `hidden` elements) keeps working unchanged. Only the two-tab (credit session) case is
  * affected — a single-tab type never unmounts anything to begin with.
+ *
+ * BAL-593 — the header's right slot can ALSO carry an Application link
+ * (`/admin/applications/{id}`), alongside Open when both resolve (an approved, public
+ * expert). Like Open, it is a plain navigation `Link`: the drill-in still mutates nothing.
  */
 
 function noDestinationCopy(selection: LookupSelection): string {
@@ -66,6 +74,7 @@ export function LookupDrillIn({
   onTabSelect,
 }: Readonly<LookupDrillInProps>): React.JSX.Element {
   const target = resolveOpenTarget(selection);
+  const applicationTarget = resolveApplicationTarget(selection);
   const [tab, setTab] = useState<LookupDrillInTab>('timeline');
   // BAL-555 fix round F2 — the initial tab is always "visited" (it fetches immediately on
   // mount today, and this preserves that), `money` joins only once the user actually selects
@@ -99,14 +108,27 @@ export function LookupDrillIn({
             </p>
             <p className="text-foreground mt-0.5 text-[14.5px] font-semibold">{selection.title}</p>
           </div>
-          {target !== null && (
-            <Link
-              href={target.href}
-              className="text-primary focus-visible:ring-ring inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded px-1 text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
-            >
-              <ExternalLink className="size-3.5" aria-hidden="true" />
-              {target.label}
-            </Link>
+          {(target !== null || applicationTarget !== null) && (
+            <div className="flex shrink-0 items-center gap-2">
+              {target !== null && (
+                <Link
+                  href={target.href}
+                  className="text-primary focus-visible:ring-ring inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded px-1 text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <ExternalLink className="size-3.5" aria-hidden="true" />
+                  {target.label}
+                </Link>
+              )}
+              {applicationTarget !== null && (
+                <Link
+                  href={applicationTarget.href}
+                  className="text-primary focus-visible:ring-ring inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded px-1 text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <FileText className="size-3.5" aria-hidden="true" />
+                  {applicationTarget.label}
+                </Link>
+              )}
+            </div>
           )}
         </div>
         {target === null && (

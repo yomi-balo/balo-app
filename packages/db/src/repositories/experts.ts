@@ -17,10 +17,24 @@ import {
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { userRowIsLive } from '@balo/shared/authz';
+import {
+  STAFF_EDITABLE_APPLICATION_STATUSES,
+  classifyApplicantDraftWrite,
+  type ExpertApplicationEditSection,
+  type StaffApplicationEdit,
+  type StaffApplicationEditCounts,
+  type StaffEditableApplicationStatus,
+} from '@balo/shared/experts';
 import { createLogger } from '@balo/shared/logging';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { type Database, db } from '../client';
 import { auditEventsRepository } from './audit-events';
+import {
+  planStaffApplicationEdit,
+  staffEditExperienceIsInvalid,
+  type ExpertApplicationEditedAuditMetadata,
+  type StaffEditSnapshot,
+} from './_shared/expert-application-edit';
 import { consultationCountExpression } from './_shared/consultation-count';
 import { expertOwnerIsLive } from './_shared/expert-owner-live';
 import { recordScheduleAudit } from './_shared/schedule-audit';
@@ -163,6 +177,176 @@ async function syncCertificationsTx(
   }
 }
 
+/**
+ * Applicant writer (Step 2): drops products no longer selected and inserts each new product at
+ * 0 for every support type. A new row records the self-rating too — `selfProficiency: 0` beside
+ * `proficiency: 0` — because the applicant IS the self-rater. Staff never call this.
+ */
+async function syncProductsTx(
+  exec: DbExecutor,
+  expertProfileId: string,
+  productIds: string[],
+  supportTypeIds: string[]
+): Promise<void> {
+  const existing = await exec
+    .select({ productId: expertCompetency.productId })
+    .from(expertCompetency)
+    .where(eq(expertCompetency.expertProfileId, expertProfileId));
+  const existingProductIds = new Set(existing.map((e) => e.productId));
+
+  const toRemoveProductIds = [...existingProductIds].filter((id) => !productIds.includes(id));
+  if (toRemoveProductIds.length > 0) {
+    await exec
+      .delete(expertCompetency)
+      .where(
+        and(
+          eq(expertCompetency.expertProfileId, expertProfileId),
+          inArray(expertCompetency.productId, toRemoveProductIds)
+        )
+      );
+  }
+
+  const newProductIds = productIds.filter((id) => !existingProductIds.has(id));
+  if (newProductIds.length > 0) {
+    await exec.insert(expertCompetency).values(
+      newProductIds.flatMap((productId) =>
+        supportTypeIds.map((supportTypeId) => ({
+          expertProfileId,
+          productId,
+          supportTypeId,
+          proficiency: 0,
+          selfProficiency: 0,
+        }))
+      )
+    );
+  }
+}
+
+/**
+ * Applicant writer (Step 3): upserts each rating. It writes the self-rating too —
+ * `selfProficiency` follows `proficiency` on insert AND on conflict, because before submit the
+ * two are the same number. Staff never call this; a staff rating change writes `proficiency` only.
+ */
+async function updateCompetencyProficiencyTx(
+  exec: DbExecutor,
+  expertProfileId: string,
+  ratings: CompetencyRatingInput[]
+): Promise<void> {
+  for (const rating of ratings) {
+    await exec
+      .insert(expertCompetency)
+      .values({
+        expertProfileId,
+        productId: rating.productId,
+        supportTypeId: rating.supportTypeId,
+        proficiency: rating.proficiency,
+        selfProficiency: rating.proficiency,
+      })
+      .onConflictDoUpdate({
+        target: [
+          expertCompetency.expertProfileId,
+          expertCompetency.productId,
+          expertCompetency.supportTypeId,
+        ],
+        set: {
+          proficiency: rating.proficiency,
+          selfProficiency: rating.proficiency,
+          updatedAt: new Date(),
+        },
+      });
+  }
+}
+
+async function syncWorkHistoryTx(
+  exec: DbExecutor,
+  expertProfileId: string,
+  entries: SyncWorkHistoryInput[]
+): Promise<void> {
+  await exec.delete(workHistory).where(eq(workHistory.expertProfileId, expertProfileId));
+
+  if (entries.length > 0) {
+    await exec.insert(workHistory).values(
+      entries.map((e, index) => ({
+        expertProfileId,
+        role: e.role,
+        company: e.company,
+        startedAt: new Date(e.startedAt),
+        endedAt: e.endedAt ? new Date(e.endedAt) : null,
+        isCurrent: e.isCurrent,
+        responsibilities: e.responsibilities || null,
+        sortOrder: index,
+      }))
+    );
+  }
+}
+
+/**
+ * Takes the `expert_profiles` row lock. Every writer that must serialise against a staff edit,
+ * an application decision or an applicant draft save goes through this one statement, so the
+ * lock order is always the profile first, then its children.
+ */
+async function lockProfileRow(
+  exec: DbExecutor,
+  expertProfileId: string
+): Promise<ExpertProfile | undefined> {
+  const [row] = await exec
+    .select()
+    .from(expertProfiles)
+    .where(eq(expertProfiles.id, expertProfileId))
+    .for('update');
+  return row;
+}
+
+function isStaffEditableStatus(
+  status: ApplicationStatus
+): status is StaffEditableApplicationStatus {
+  return (STAFF_EDITABLE_APPLICATION_STATUSES as readonly string[]).includes(status);
+}
+
+/** The staff edit's snapshot, read with the transaction's handle after the profile lock. */
+async function readStaffEditSnapshot(
+  exec: DbExecutor,
+  profile: ExpertProfile
+): Promise<StaffEditSnapshot> {
+  const [competencies, certs, langs, inds] = await Promise.all([
+    exec
+      .select({
+        productId: expertCompetency.productId,
+        supportTypeId: expertCompetency.supportTypeId,
+        proficiency: expertCompetency.proficiency,
+        selfProficiency: expertCompetency.selfProficiency,
+      })
+      .from(expertCompetency)
+      .where(eq(expertCompetency.expertProfileId, profile.id)),
+    exec
+      .select({ certificationId: expertCertifications.certificationId })
+      .from(expertCertifications)
+      .where(eq(expertCertifications.expertProfileId, profile.id)),
+    exec
+      .select({ languageId: expertLanguages.languageId, proficiency: expertLanguages.proficiency })
+      .from(expertLanguages)
+      .where(eq(expertLanguages.expertProfileId, profile.id)),
+    exec
+      .select({ industryId: expertIndustries.industryId })
+      .from(expertIndustries)
+      .where(eq(expertIndustries.expertProfileId, profile.id)),
+  ]);
+  return {
+    profile: {
+      yearStartedSalesforce: profile.yearStartedSalesforce,
+      projectCountMin: profile.projectCountMin,
+      projectLeadCountMin: profile.projectLeadCountMin,
+      isSalesforceMvp: profile.isSalesforceMvp,
+      isSalesforceCta: profile.isSalesforceCta,
+      isCertifiedTrainer: profile.isCertifiedTrainer,
+    },
+    competencies,
+    certificationIds: certs.map((c) => c.certificationId),
+    languages: langs,
+    industryIds: inds.map((i) => i.industryId),
+  };
+}
+
 /** Input for `expertsRepository.setAvailableForWork`. */
 export interface SetAvailableForWorkInput {
   expertProfileId: string;
@@ -256,7 +440,7 @@ async function insertDraftOrAdopt(
 
 // ── Input types ──────────────────────────────────────────────────
 
-interface CreateDraftInput {
+export interface CreateDraftInput {
   userId: string;
   verticalId: string;
   type: 'freelancer' | 'agency';
@@ -292,7 +476,7 @@ interface UpdateProfileInput {
   bookingMinimumNoticeMinutes?: number;
 }
 
-interface SyncLanguageInput {
+export interface SyncLanguageInput {
   languageId: string;
   proficiency: 'beginner' | 'intermediate' | 'advanced' | 'native';
 }
@@ -315,20 +499,20 @@ export interface ProfileStepWrite {
   industryIds: string[];
 }
 
-interface CompetencyRatingInput {
+export interface CompetencyRatingInput {
   productId: string;
   supportTypeId: string;
   proficiency: number;
 }
 
-interface SyncCertInput {
+export interface SyncCertInput {
   certificationId: string;
   earnedAt?: string; // ISO date string or empty
   expiresAt?: string; // ISO date string or empty
   credentialUrl?: string;
 }
 
-interface SyncWorkHistoryInput {
+export interface SyncWorkHistoryInput {
   role: string;
   company: string;
   startedAt: string; // ISO date string
@@ -339,7 +523,15 @@ interface SyncWorkHistoryInput {
 
 // ── Output types ─────────────────────────────────────────────────
 
-export interface ApplicationCompetencyWithRelations extends ExpertCompetency {
+/**
+ * A competency row as every non-staff read sees it: the EFFECTIVE rating only. `selfProficiency`
+ * is structurally absent (see `COMPETENCY_EFFECTIVE_COLUMNS`); staff read it through
+ * {@link StaffApplicationWithRelations.selfRatings}.
+ */
+export interface ApplicationCompetencyWithRelations extends Omit<
+  ExpertCompetency,
+  'selfProficiency'
+> {
   product: { id: string; name: string };
   supportType: { id: string; name: string; slug: string };
 }
@@ -422,7 +614,86 @@ export type ApplicationProfile = Omit<
  */
 export interface StaffApplicationWithRelations extends Omit<ApplicationWithRelations, 'profile'> {
   profile: ApplicationProfile & { declineNote: string | null };
+  /** The expert's own rating per cell, beside the effective one in `competencies`. Staff-only. */
+  selfRatings: StaffSelfRating[];
 }
+
+/** One competency cell's self-rating. `null` means the product was added by Balo staff. */
+export interface StaffSelfRating {
+  productId: string;
+  supportTypeId: string;
+  selfProficiency: number | null;
+}
+
+// ── The staff edit and the applicant draft gate (BAL-593) ────────
+
+/** Input for `expertsRepository.editApplicationAsStaff`. `actorUserId` comes from the session. */
+export interface EditApplicationAsStaffInput {
+  expertProfileId: string;
+  actorUserId: string;
+  edit: StaffApplicationEdit;
+}
+
+/**
+ * What one staff edit produced. A discriminant, not a throw: `not_editable` and `not_found` are
+ * ordinary states (a decline landed first; a stale tab). Only integrity failures throw — and a
+ * throw rolls back every write and the audit row together.
+ */
+export type EditApplicationAsStaffResult =
+  | {
+      outcome: 'edited';
+      /** Read from the LOCKED row — the recipient of a post-approval email. */
+      applicantUserId: string;
+      applicationStatus: StaffEditableApplicationStatus;
+      /** The `expert_application.edited` audit row id: a uuid, so colon-free and per-write. */
+      auditEventId: string;
+      sections: ExpertApplicationEditSection[];
+      counts: StaffApplicationEditCounts;
+    }
+  | { outcome: 'no_changes'; applicationStatus: StaffEditableApplicationStatus }
+  | { outcome: 'not_editable'; currentStatus: ApplicationStatus }
+  | { outcome: 'not_found' }
+  /** The effective experience (snapshot merged with the delta) would put the lead-count floor
+   *  above the project-count floor. Nothing is written and no audit row is recorded. */
+  | { outcome: 'invalid_experience' };
+
+/** One applicant wizard step's write. `none` locks and checks without writing (terms, agency). */
+export type ApplicantDraftStepWrite =
+  | { step: 'profile'; data: ProfileStepWrite }
+  | { step: 'products'; productIds: string[]; supportTypeIds: string[] }
+  | { step: 'assessment'; ratings: CompetencyRatingInput[] }
+  | { step: 'certifications'; trailheadUrl: string | null; certs: SyncCertInput[] }
+  | { step: 'work-history'; entries: SyncWorkHistoryInput[] }
+  | { step: 'none' };
+
+/**
+ * Input for `expertsRepository.saveApplicantDraftStep`. `expertProfileId` may be omitted only on
+ * the `profile` step with a `draftInput` (the first save, which may adopt an existing row).
+ */
+export interface SaveApplicantDraftStepInput {
+  applicantUserId: string;
+  expertProfileId: string | undefined;
+  draftInput: CreateDraftInput | undefined;
+  now: Date;
+  write: ApplicantDraftStepWrite;
+}
+
+export type SaveApplicantDraftStepResult =
+  | { outcome: 'saved'; expertProfileId: string }
+  | { outcome: 'not_owner' }
+  | { outcome: 'declined'; expertProfileId: string }
+  | { outcome: 'closed'; expertProfileId: string; currentStatus: ApplicationStatus };
+
+/** Input for `expertsRepository.saveSettingsCertifications`. */
+export interface SaveSettingsCertificationsInput {
+  certs: SyncCertInput[];
+  trailheadUrl: string | null;
+}
+
+export type SaveSettingsCertificationsResult =
+  | { outcome: 'saved' }
+  | { outcome: 'locked' }
+  | { outcome: 'not_found' };
 
 export interface ApplicationWithRelations {
   /** BAL-549 FIX ROUND (F1) — an ALLOW-LISTED projection; never the bare row. */
@@ -619,6 +890,23 @@ const APPLICATION_PROFILE_COLUMNS = {
   createdAt: true,
   updatedAt: true,
   approvedAt: true,
+} as const;
+
+/**
+ * Every `expert_competency` column EXCEPT `selfProficiency` — the projection on each relational
+ * `competencies` read that reaches the public profile, expert settings or the applicant's own
+ * wizard. The expert's self-rating is staff-only context; those surfaces show the effective
+ * rating. `as const` is load-bearing (see `APPLICATION_PROFILE_COLUMNS`), and a new column on the
+ * table stays off these reads until it is named here.
+ */
+const COMPETENCY_EFFECTIVE_COLUMNS = {
+  id: true,
+  expertProfileId: true,
+  productId: true,
+  supportTypeId: true,
+  proficiency: true,
+  createdAt: true,
+  updatedAt: true,
 } as const;
 
 // ── Repository ───────────────────────────────────────────────────
@@ -946,6 +1234,7 @@ export const expertsRepository = {
         // vertical-scoped "Find a similar expert" search link.
         vertical: { columns: { name: true, slug: true } },
         competencies: {
+          columns: COMPETENCY_EFFECTIVE_COLUMNS,
           with: {
             product: { columns: { id: true, name: true, slug: true } },
             supportType: { columns: { id: true, name: true, slug: true } },
@@ -1152,7 +1441,10 @@ export const expertsRepository = {
         workHistory: { orderBy: (wh, { asc }) => [asc(wh.sortOrder)] },
         certifications: { with: { certification: true } },
         // `aiHint` is internal prompt text (BAL-592); this read reaches a client component.
-        competencies: { with: { product: { columns: { aiHint: false } }, supportType: true } },
+        competencies: {
+          columns: COMPETENCY_EFFECTIVE_COLUMNS,
+          with: { product: { columns: { aiHint: false } }, supportType: true },
+        },
       },
     });
   },
@@ -1219,7 +1511,10 @@ export const expertsRepository = {
           columns: { id: true, name: true, slug: true, logoUrl: true },
         },
         // `aiHint` is internal prompt text (BAL-592); this read reaches a client component.
-        competencies: { with: { product: { columns: { aiHint: false } }, supportType: true } },
+        competencies: {
+          columns: COMPETENCY_EFFECTIVE_COLUMNS,
+          with: { product: { columns: { aiHint: false } }, supportType: true },
+        },
         certifications: { with: { certification: true } },
         languages: { with: { language: true } },
         industries: { with: { industry: true } },
@@ -1255,16 +1550,27 @@ export const expertsRepository = {
    * ⚠ THE NOTE IS FETCHED BY ITS OWN ONE-COLUMN READ rather than by re-stating the relation
    * block with a wider allow-list — one definition of the relations, one definition of the
    * allow-list, and the staff column appears in exactly one `columns:` literal in this package.
+   *
+   * The expert's own ratings (`selfRatings`) follow the same rule: one-purpose read, staff-only,
+   * never on the relational `competencies` block that every other read shares.
    */
   async findApplicationForStaffReview(
     expertProfileId: string
   ): Promise<StaffApplicationWithRelations | undefined> {
-    const [application, staffColumns] = await Promise.all([
+    const [application, staffColumns, selfRatings] = await Promise.all([
       expertsRepository.findApplicationWithRelations(expertProfileId),
       db.query.expertProfiles.findFirst({
         where: eq(expertProfiles.id, expertProfileId),
         columns: { declineNote: true },
       }),
+      db
+        .select({
+          productId: expertCompetency.productId,
+          supportTypeId: expertCompetency.supportTypeId,
+          selfProficiency: expertCompetency.selfProficiency,
+        })
+        .from(expertCompetency)
+        .where(eq(expertCompetency.expertProfileId, expertProfileId)),
     ]);
 
     if (application === undefined) return undefined;
@@ -1272,6 +1578,7 @@ export const expertsRepository = {
     return {
       ...application,
       profile: { ...application.profile, declineNote: staffColumns?.declineNote ?? null },
+      selfRatings,
     };
   },
 
@@ -1419,13 +1726,17 @@ export const expertsRepository = {
    * this step's child writes roll back). `draftInput` is required ONLY for the
    * create path (no id); pass it when `expertProfileId` is omitted. Returns the
    * resolved profile (full row when created; the loaded row when an id was provided).
+   *
+   * With an `executor`, the body runs on it instead of opening its own transaction — the
+   * applicant draft gate (`saveApplicantDraftStep`) runs it under the profile row lock.
    */
   async saveProfileStep(
     expertProfileId: string | undefined,
     draftInput: CreateDraftInput | undefined,
-    data: ProfileStepWrite
+    data: ProfileStepWrite,
+    executor?: DbExecutor
   ): Promise<ExpertProfile> {
-    return db.transaction(async (tx) => {
+    const run = async (tx: DbExecutor): Promise<ExpertProfile> => {
       const profile = await this.resolveProfileTx(tx, expertProfileId, draftInput);
 
       await this.updateProfile(
@@ -1445,7 +1756,8 @@ export const expertsRepository = {
       await this.syncIndustries(profile.id, data.industryIds, tx);
 
       return profile;
-    });
+    };
+    return executor ? run(executor) : db.transaction(run);
   },
 
   /**
@@ -1453,17 +1765,24 @@ export const expertsRepository = {
    * trailhead-URL `updateProfile` + `syncCertifications` in ONE `db.transaction` so
    * a half-applied certifications save can't occur — the same write-atomicity
    * principle as `saveProfileStep`. The row must already exist (the wizard always
-   * saves the profile step first).
+   * saves the profile step first). With an `executor`, the body runs on it instead of opening
+   * its own transaction.
    */
   async saveCertificationsStep(
     expertProfileId: string,
     trailheadUrl: string | null,
-    certs: SyncCertInput[]
+    certs: SyncCertInput[],
+    executor?: DbExecutor
   ): Promise<void> {
-    await db.transaction(async (tx) => {
+    const run = async (tx: DbExecutor): Promise<void> => {
       await this.updateProfile(expertProfileId, { trailheadUrl }, tx);
       await this.syncCertifications(expertProfileId, certs, tx);
-    });
+    };
+    if (executor) {
+      await run(executor);
+      return;
+    }
+    await db.transaction(run);
   },
 
   /**
@@ -1559,85 +1878,44 @@ export const expertsRepository = {
   },
 
   /**
-   * Sync selected products / competencies (Step 2).
+   * Sync selected products / competencies (Step 2). Applicant writer — writes the self-rating
+   * too; staff never call this.
    *
    * - Deletes competencies NOT in the new set (and their proficiency rows).
-   * - Inserts new competencies with proficiency=0 for each support type.
+   * - Inserts new competencies at `proficiency: 0, selfProficiency: 0` for each support type.
    * - Leaves existing competencies + proficiency untouched.
+   *
+   * Executor-aware (see `syncLanguages`).
    */
   async syncProducts(
     expertProfileId: string,
     productIds: string[],
-    supportTypeIds: string[]
+    supportTypeIds: string[],
+    executor?: DbExecutor
   ): Promise<void> {
-    await db.transaction(async (tx) => {
-      // 1. Find existing competency rows for this profile
-      const existing = await tx.query.expertCompetency.findMany({
-        where: eq(expertCompetency.expertProfileId, expertProfileId),
-      });
-
-      const existingProductIds = new Set(existing.map((e) => e.productId));
-
-      // 2. Delete competencies that are no longer selected
-      const toRemoveProductIds = [...existingProductIds].filter((id) => !productIds.includes(id));
-      if (toRemoveProductIds.length > 0) {
-        await tx
-          .delete(expertCompetency)
-          .where(
-            and(
-              eq(expertCompetency.expertProfileId, expertProfileId),
-              inArray(expertCompetency.productId, toRemoveProductIds)
-            )
-          );
-      }
-
-      // 3. Insert new competencies (not yet in DB) with proficiency=0
-      const newProductIds = productIds.filter((id) => !existingProductIds.has(id));
-      if (newProductIds.length > 0) {
-        const rows = newProductIds.flatMap((productId) =>
-          supportTypeIds.map((supportTypeId) => ({
-            expertProfileId,
-            productId,
-            supportTypeId,
-            proficiency: 0,
-          }))
-        );
-        await tx.insert(expertCompetency).values(rows);
-      }
-    });
+    if (executor) {
+      await syncProductsTx(executor, expertProfileId, productIds, supportTypeIds);
+      return;
+    }
+    await db.transaction((tx) => syncProductsTx(tx, expertProfileId, productIds, supportTypeIds));
   },
 
-  /** Update competency proficiency ratings (Step 3). Uses upsert via ON CONFLICT. */
+  /**
+   * Update competency proficiency ratings (Step 3) via upsert. Applicant writer — writes the
+   * self-rating too (`selfProficiency` follows `proficiency` on insert and on conflict); staff
+   * never call this. Executor-aware (see `syncLanguages`).
+   */
   async updateCompetencyProficiency(
     expertProfileId: string,
-    ratings: CompetencyRatingInput[]
+    ratings: CompetencyRatingInput[],
+    executor?: DbExecutor
   ): Promise<void> {
     if (ratings.length === 0) return;
-
-    // Batch upsert: for each rating, update proficiency on conflict
-    await db.transaction(async (tx) => {
-      for (const rating of ratings) {
-        await tx
-          .insert(expertCompetency)
-          .values({
-            expertProfileId,
-            productId: rating.productId,
-            supportTypeId: rating.supportTypeId,
-            proficiency: rating.proficiency,
-          })
-          .onConflictDoUpdate({
-            target: [
-              expertCompetency.expertProfileId,
-              expertCompetency.productId,
-              expertCompetency.supportTypeId,
-            ],
-            set: {
-              proficiency: rating.proficiency,
-              updatedAt: new Date(),
-            },
-          });
-      }
-    });
+    if (executor) {
+      await updateCompetencyProficiencyTx(executor, expertProfileId, ratings);
+      return;
+    }
+    await db.transaction((tx) => updateCompetencyProficiencyTx(tx, expertProfileId, ratings));
   },
 
   /**
@@ -1658,26 +1936,20 @@ export const expertsRepository = {
     await db.transaction((tx) => syncCertificationsTx(tx, expertProfileId, certs));
   },
 
-  /** Sync work history: delete all then reinsert with sortOrder */
-  async syncWorkHistory(expertProfileId: string, entries: SyncWorkHistoryInput[]): Promise<void> {
-    await db.transaction(async (tx) => {
-      await tx.delete(workHistory).where(eq(workHistory.expertProfileId, expertProfileId));
-
-      if (entries.length > 0) {
-        await tx.insert(workHistory).values(
-          entries.map((e, index) => ({
-            expertProfileId,
-            role: e.role,
-            company: e.company,
-            startedAt: new Date(e.startedAt),
-            endedAt: e.endedAt ? new Date(e.endedAt) : null,
-            isCurrent: e.isCurrent,
-            responsibilities: e.responsibilities || null,
-            sortOrder: index,
-          }))
-        );
-      }
-    });
+  /**
+   * Sync work history: delete all then reinsert with sortOrder. Executor-aware (see
+   * `syncLanguages`).
+   */
+  async syncWorkHistory(
+    expertProfileId: string,
+    entries: SyncWorkHistoryInput[],
+    executor?: DbExecutor
+  ): Promise<void> {
+    if (executor) {
+      await syncWorkHistoryTx(executor, expertProfileId, entries);
+      return;
+    }
+    await db.transaction((tx) => syncWorkHistoryTx(tx, expertProfileId, entries));
   },
 
   /**
@@ -1764,6 +2036,11 @@ export const expertsRepository = {
    * of BAL-549's scope. It is NOT cleared on the decline arm — a declined application never had
    * one.
    *
+   * ⚠ THE APPROVE ARM ALSO SETS `skills_locked` (BAL-593 Decision 4) and records
+   * `skillsLocked: true` in its audit metadata. From approval on, the expert cannot change their
+   * products, ratings or certifications from settings; Balo staff edit them through
+   * `editApplicationAsStaff`. The decline arm leaves the flag alone.
+   *
    * ⚠ `decline_note` IS NOT COPIED INTO THE AUDIT ROW. The row records `hasNote: boolean` and
    * nothing more (the `project_request.closed` precedent) — the column is the note's ONLY home,
    * so a leak has exactly one place to happen and one place to be tested.
@@ -1816,6 +2093,8 @@ export const expertsRepository = {
                 approvedAt: now,
                 decidedAt: now,
                 decidedByUserId: input.actorUserId,
+                // Approval locks expertise: from here only Balo staff change it.
+                skillsLocked: true,
                 updatedAt: now,
               }
             : {
@@ -1867,7 +2146,7 @@ export const expertsRepository = {
             applicantUserId,
             ...(input.decision === 'decline'
               ? { reason: input.reason, hasNote: input.note.length > 0 }
-              : {}),
+              : { skillsLocked: true }),
           },
         },
         tx
@@ -1881,6 +2160,274 @@ export const expertsRepository = {
         submittedAt: updated.submittedAt,
         auditEventId: auditRow.id,
       };
+    });
+  },
+
+  /**
+   * BAL-593 — A BALO-STAFF EDIT OF AN EXPERT APPLICATION. ONE `db.transaction`: lock the profile
+   * row, re-check its status, read the snapshot under that lock, plan the delta against it, write
+   * the changes, and append ONE `expert_application.edited` audit row last. Modelled on
+   * `decideApplication`, and it takes the same profile `FOR UPDATE`, so an edit and a decision
+   * serialise: a decline that commits first makes this return `not_editable`; an approval that
+   * commits first leaves the edit valid (and the caller then emails, because it is now live).
+   *
+   * ⚠ EVERY "BEFORE" VALUE COMES FROM THE LOCKED READ, never from the client
+   * (`planStaffApplicationEdit`). A delta that plans to nothing returns `no_changes`: no write,
+   * no audit row. An effective lead-count floor above the effective project-count floor
+   * (`staffEditExperienceIsInvalid`, checked against the snapshot BEFORE planning) returns
+   * `invalid_experience` the same way: no write, no audit row.
+   *
+   * ⚠ STAFF WRITE `proficiency` ONLY. A rating change never touches `self_proficiency`; a
+   * staff-added product inserts it as NULL ("added by Balo"), and its conflict arm sets
+   * `proficiency` alone, so a concurrent applicant-authored row keeps its self-rating.
+   *
+   * ⚠ NEVER WRITES `skills_locked`, the status or the `decided_*` columns. Staff edits ignore the
+   * lock: it is the expert's lock, not Balo's. Lock order: the profile, then its children; the
+   * `users` row is not touched.
+   *
+   * ⚠ THIS REPOSITORY NOTIFIES NOBODY (`invariants/repositories-never-notify.test.ts`). The
+   * caller publishes the post-approval email after commit, keyed on the returned `auditEventId`.
+   */
+  async editApplicationAsStaff(
+    input: EditApplicationAsStaffInput
+  ): Promise<EditApplicationAsStaffResult> {
+    return db.transaction(async (tx) => {
+      // 1. Lock the profile row.
+      const current = await lockProfileRow(tx, input.expertProfileId);
+      if (current === undefined) return { outcome: 'not_found' };
+
+      // 2. Only `submitted` / `under_review` / `approved` are editable (draft and rejected are not).
+      const status = current.applicationStatus;
+      if (!isStaffEditableStatus(status)) {
+        return { outcome: 'not_editable', currentStatus: status };
+      }
+
+      // 3-4. Snapshot under the lock, then plan.
+      const snapshot = await readStaffEditSnapshot(tx, current);
+      if (staffEditExperienceIsInvalid(snapshot.profile, input.edit.experience)) {
+        return { outcome: 'invalid_experience' };
+      }
+      const plan = planStaffApplicationEdit(snapshot, input.edit);
+      if (plan.sections.length === 0) return { outcome: 'no_changes', applicationStatus: status };
+
+      // 5. The writes.
+      const expertProfileId = current.id;
+      const now = new Date();
+      if (plan.experience !== null) {
+        await this.updateProfile(expertProfileId, plan.experience, tx);
+      }
+      if (plan.languages !== null) {
+        await syncLanguagesTx(tx, expertProfileId, plan.languages);
+      }
+      if (plan.industryIds !== null) {
+        await syncIndustriesTx(tx, expertProfileId, plan.industryIds);
+      }
+      if (plan.productIdsToRemove.length > 0) {
+        await tx
+          .delete(expertCompetency)
+          .where(
+            and(
+              eq(expertCompetency.expertProfileId, expertProfileId),
+              inArray(expertCompetency.productId, plan.productIdsToRemove)
+            )
+          );
+      }
+      if (plan.competenciesToInsert.length > 0) {
+        await tx
+          .insert(expertCompetency)
+          .values(
+            plan.competenciesToInsert.map((c) => ({
+              expertProfileId,
+              productId: c.productId,
+              supportTypeId: c.supportTypeId,
+              proficiency: c.proficiency,
+              selfProficiency: null,
+            }))
+          )
+          .onConflictDoUpdate({
+            target: [
+              expertCompetency.expertProfileId,
+              expertCompetency.productId,
+              expertCompetency.supportTypeId,
+            ],
+            set: { proficiency: sql`excluded.proficiency`, updatedAt: now },
+          });
+      }
+      for (const rating of plan.ratingUpdates) {
+        await tx
+          .update(expertCompetency)
+          .set({ proficiency: rating.proficiency, updatedAt: now })
+          .where(
+            and(
+              eq(expertCompetency.expertProfileId, expertProfileId),
+              eq(expertCompetency.productId, rating.productId),
+              eq(expertCompetency.supportTypeId, rating.supportTypeId)
+            )
+          );
+      }
+      if (plan.certificationIdsToRemove.length > 0) {
+        await tx
+          .delete(expertCertifications)
+          .where(
+            and(
+              eq(expertCertifications.expertProfileId, expertProfileId),
+              inArray(expertCertifications.certificationId, plan.certificationIdsToRemove)
+            )
+          );
+      }
+      if (plan.certificationIdsToAdd.length > 0) {
+        // Retained certifications are never deleted and re-inserted, so their earned / expiry /
+        // credential metadata is untouched.
+        await tx
+          .insert(expertCertifications)
+          .values(
+            plan.certificationIdsToAdd.map((certificationId) => ({
+              expertProfileId,
+              certificationId,
+            }))
+          )
+          .onConflictDoNothing({
+            target: [expertCertifications.expertProfileId, expertCertifications.certificationId],
+          });
+      }
+
+      // 6. The audit row, LAST. Fixed key set — `audit_events` is append-only.
+      const metadata = {
+        applicationStatus: status,
+        applicantUserId: current.userId,
+        ...plan.changes,
+      } satisfies ExpertApplicationEditedAuditMetadata;
+      const auditRow = await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: 'expert_application.edited',
+          entityType: 'expert_profile',
+          entityId: expertProfileId,
+          metadata,
+        },
+        tx
+      );
+
+      return {
+        outcome: 'edited',
+        applicantUserId: current.userId,
+        applicationStatus: status,
+        auditEventId: auditRow.id,
+        sections: plan.sections,
+        counts: plan.counts,
+      };
+    });
+  },
+
+  /**
+   * BAL-593 H1 — THE APPLICANT WIZARD'S ONE WRITE PATH. ONE `db.transaction`: resolve the row,
+   * lock it `FOR UPDATE`, check ownership and writability under that lock, and only then run the
+   * step's writer on the same transaction. The lock is the one `editApplicationAsStaff` and
+   * `decideApplication` take, so an applicant save and a staff write serialise and the later one
+   * sees the earlier one's committed status.
+   *
+   * ⚠ THE CREATE PATH ADOPTS. With no id, `findOrCreateDraft` returns an EXISTING
+   * `(user, vertical)` row of any status — a fresh tab would otherwise rewrite a submitted or
+   * approved profile. The row is resolved first, then locked by id, then checked, exactly like
+   * the id path.
+   *
+   * Writability is `classifyApplicantDraftWrite` (`@balo/shared/experts`): `draft` and a
+   * `submitted` row inside the post-submit grace are writable; `rejected` is `declined`;
+   * everything else is `closed`. `none` locks and checks without writing.
+   */
+  async saveApplicantDraftStep(
+    input: SaveApplicantDraftStepInput
+  ): Promise<SaveApplicantDraftStepResult> {
+    return db.transaction(async (tx) => {
+      // 1. Resolve the id.
+      let expertProfileId = input.expertProfileId;
+      if (expertProfileId === undefined) {
+        if (input.write.step !== 'profile' || input.draftInput === undefined) {
+          throw new Error(
+            'saveApplicantDraftStep requires an expertProfileId outside a first save'
+          );
+        }
+        expertProfileId = (await this.findOrCreateDraft(input.draftInput, tx)).id;
+      }
+
+      // 2. Lock it, then check ownership under the lock.
+      const current = await lockProfileRow(tx, expertProfileId);
+      if (current?.userId !== input.applicantUserId) return { outcome: 'not_owner' };
+
+      // 3. Writability, against the LOCKED status.
+      const decision = classifyApplicantDraftWrite(
+        current.applicationStatus,
+        current.submittedAt,
+        input.now
+      );
+      if (decision === 'declined') return { outcome: 'declined', expertProfileId };
+      if (decision === 'closed') {
+        return { outcome: 'closed', expertProfileId, currentStatus: current.applicationStatus };
+      }
+
+      // 4. The step's write, on the same transaction.
+      const { write } = input;
+      switch (write.step) {
+        case 'profile':
+          await this.saveProfileStep(expertProfileId, undefined, write.data, tx);
+          break;
+        case 'products':
+          await this.syncProducts(expertProfileId, write.productIds, write.supportTypeIds, tx);
+          break;
+        case 'assessment':
+          await this.updateCompetencyProficiency(expertProfileId, write.ratings, tx);
+          break;
+        case 'certifications':
+          await this.saveCertificationsStep(expertProfileId, write.trailheadUrl, write.certs, tx);
+          break;
+        case 'work-history':
+          await this.syncWorkHistory(expertProfileId, write.entries, tx);
+          break;
+        case 'none':
+          break;
+      }
+
+      return { outcome: 'saved', expertProfileId };
+    });
+  },
+
+  /**
+   * BAL-593 — the expert-settings certifications save, with the expertise lock checked IN the
+   * write's transaction. Locks the profile `FOR UPDATE` (the lock `decideApplication` takes, so
+   * an approval that commits first is seen here as locked), then:
+   *
+   * - locked, and the incoming cert set differs from the stored one in EITHER direction →
+   *   `locked`, nothing written;
+   * - locked, same set → only `trailheadUrl` is written; cert rows (and their metadata) are
+   *   untouched;
+   * - unlocked → the full cert sync plus `trailheadUrl`.
+   */
+  async saveSettingsCertifications(
+    expertProfileId: string,
+    input: SaveSettingsCertificationsInput
+  ): Promise<SaveSettingsCertificationsResult> {
+    return db.transaction(async (tx) => {
+      const current = await lockProfileRow(tx, expertProfileId);
+      if (current === undefined) return { outcome: 'not_found' };
+
+      if (current.skillsLocked) {
+        const stored = await tx
+          .select({ certificationId: expertCertifications.certificationId })
+          .from(expertCertifications)
+          .where(eq(expertCertifications.expertProfileId, expertProfileId));
+        const storedIds = new Set(stored.map((c) => c.certificationId));
+        const incomingIds = new Set(input.certs.map((c) => c.certificationId));
+        const unchanged =
+          storedIds.size === incomingIds.size && [...incomingIds].every((id) => storedIds.has(id));
+        if (!unchanged) return { outcome: 'locked' };
+
+        await this.updateProfile(expertProfileId, { trailheadUrl: input.trailheadUrl }, tx);
+        return { outcome: 'saved' };
+      }
+
+      await syncCertificationsTx(tx, expertProfileId, input.certs);
+      await this.updateProfile(expertProfileId, { trailheadUrl: input.trailheadUrl }, tx);
+      return { outcome: 'saved' };
     });
   },
 

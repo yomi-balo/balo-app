@@ -155,6 +155,61 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('expert.application_edited (BAL-593)', () => {
+    it('accepts a compound, colon-free correlationId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_edited',
+        payload: {
+          correlationId:
+            'expert-application-edited.550e8400-e29b-41d4-a716-446655440000.550e8400-e29b-41d4-a716-446655440001',
+          userId: '550e8400-e29b-41d4-a716-446655440002',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+          sections: ['ratings'],
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an empty sections array', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_edited',
+        payload: {
+          correlationId: 'expert-application-edited.a.b',
+          userId: '550e8400-e29b-41d4-a716-446655440002',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+          sections: [],
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an unknown section', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_edited',
+        payload: {
+          correlationId: 'expert-application-edited.a.b',
+          userId: '550e8400-e29b-41d4-a716-446655440002',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+          sections: ['not-a-real-section'],
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-uuid userId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_edited',
+        payload: {
+          correlationId: 'expert-application-edited.a.b',
+          userId: 'not-a-uuid',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+          sections: ['ratings'],
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('expert.referral_invited', () => {
     const validPayload = {
       correlationId: '550e8400-e29b-41d4-a716-446655440090',

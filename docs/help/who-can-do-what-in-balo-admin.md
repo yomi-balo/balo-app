@@ -21,7 +21,8 @@ By default, Admin's bundle covers:
 - **Delivery and calls** — approve kickoff and start delivery, cancel a live engagement,
   manage action items, cancel a booked call.
 - **Money** — set the Balo fee on a project, create and manage promo codes.
-- **Queues** — close alert-queue items, approve or decline expert applications.
+- **Queues** — close alert-queue items, approve or decline expert applications, correct an
+  expert's application.
 - **Platform** — open the Balo admin area.
 
 ## Only super admins

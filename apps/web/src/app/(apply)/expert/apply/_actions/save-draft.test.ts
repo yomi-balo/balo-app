@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EXPERT_SERVER_EVENTS } from '@balo/analytics/events';
+import { log } from '@/lib/logging';
 
 // ── Constants ────────────────────────────────────────────────────
 
@@ -18,12 +19,7 @@ vi.mock('@/lib/auth/live-user', async () => (await import('@/test/live-user-doub
 
 vi.mock('server-only', () => ({}));
 
-const mockFindApplicationWithRelations = vi.fn();
-const mockSaveProfileStep = vi.fn();
-const mockSaveCertificationsStep = vi.fn();
-const mockSyncProducts = vi.fn();
-const mockUpdateCompetencyProficiency = vi.fn();
-const mockSyncWorkHistory = vi.fn();
+const mockSaveApplicantDraftStep = vi.fn();
 const mockIsUniqueViolation = vi.fn();
 
 const mockGetSalesforceVertical = vi.fn();
@@ -31,12 +27,7 @@ const mockGetSupportTypes = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
-    findApplicationWithRelations: (...args: unknown[]) => mockFindApplicationWithRelations(...args),
-    saveProfileStep: (...args: unknown[]) => mockSaveProfileStep(...args),
-    saveCertificationsStep: (...args: unknown[]) => mockSaveCertificationsStep(...args),
-    syncProducts: (...args: unknown[]) => mockSyncProducts(...args),
-    updateCompetencyProficiency: (...args: unknown[]) => mockUpdateCompetencyProficiency(...args),
-    syncWorkHistory: (...args: unknown[]) => mockSyncWorkHistory(...args),
+    saveApplicantDraftStep: (...args: unknown[]) => mockSaveApplicantDraftStep(...args),
   },
   referenceDataRepository: {
     getSalesforceVertical: (...args: unknown[]) => mockGetSalesforceVertical(...args),
@@ -63,7 +54,10 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 import { saveDraftAction } from './save-draft';
-import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
+import {
+  DECLINED_APPLICATION_ERROR,
+  SUBMITTED_APPLICATION_ERROR,
+} from './declined-application-copy';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -81,15 +75,11 @@ function validProfileData() {
   };
 }
 
-function setupOwnershipCheck(userId = USER_ID): void {
-  mockFindApplicationWithRelations.mockResolvedValue({
-    profile: { id: PROFILE_ID, userId },
-  });
-}
-
-function setupDraftCreation(): void {
-  mockGetSalesforceVertical.mockResolvedValue({ id: VERTICAL_ID });
-  mockSaveProfileStep.mockResolvedValue({ id: PROFILE_ID });
+function savedResult(expertProfileId: string = PROFILE_ID): {
+  outcome: 'saved';
+  expertProfileId: string;
+} {
+  return { outcome: 'saved', expertProfileId };
 }
 
 // ── Tests ────────────────────────────────────────────────────────
@@ -107,11 +97,7 @@ describe('saveDraftAction', () => {
       },
       save: mockSave,
     };
-    mockSaveProfileStep.mockResolvedValue({ id: PROFILE_ID });
-    mockSaveCertificationsStep.mockResolvedValue(undefined);
-    mockSyncProducts.mockResolvedValue(undefined);
-    mockUpdateCompetencyProficiency.mockResolvedValue(undefined);
-    mockSyncWorkHistory.mockResolvedValue(undefined);
+    mockSaveApplicantDraftStep.mockResolvedValue(savedResult());
     mockIsUniqueViolation.mockReturnValue(false);
   });
 
@@ -152,7 +138,6 @@ describe('saveDraftAction', () => {
     });
 
     it('returns error when step data fails schema validation', async () => {
-      setupDraftCreation();
       const result = await saveDraftAction({
         step: 'profile',
         data: { yearStartedSalesforce: 'not-a-number' }, // wrong type
@@ -162,17 +147,15 @@ describe('saveDraftAction', () => {
     });
 
     it('does NOT write to the repository when validation fails (validate-before-write)', async () => {
-      setupDraftCreation();
       await saveDraftAction({
         step: 'profile',
         data: { yearStartedSalesforce: 'not-a-number' },
       });
-      expect(mockSaveProfileStep).not.toHaveBeenCalled();
+      expect(mockSaveApplicantDraftStep).not.toHaveBeenCalled();
       expect(mockGetSalesforceVertical).not.toHaveBeenCalled();
     });
 
     it('fires DRAFT_SAVE_FAILED with error_code "validation" on a schema failure', async () => {
-      setupDraftCreation();
       await saveDraftAction({
         step: 'profile',
         data: { yearStartedSalesforce: 'not-a-number' },
@@ -188,44 +171,26 @@ describe('saveDraftAction', () => {
     });
   });
 
-  describe('ownership verification', () => {
-    it('returns Unauthorized when profile not found', async () => {
-      mockFindApplicationWithRelations.mockResolvedValue(null);
-      const result = await saveDraftAction({
-        step: 'profile',
-        data: validProfileData(),
-        expertProfileId: PROFILE_ID,
-      });
-      expect(result).toEqual({ success: false, expertProfileId: '', error: 'Unauthorized' });
-      expect(mockSaveProfileStep).not.toHaveBeenCalled();
-    });
-
-    it('returns Unauthorized when user does not own the profile', async () => {
-      setupOwnershipCheck('other-user');
-      const result = await saveDraftAction({
-        step: 'profile',
-        data: validProfileData(),
-        expertProfileId: PROFILE_ID,
-      });
-      expect(result).toEqual({ success: false, expertProfileId: '', error: 'Unauthorized' });
-      expect(mockSaveProfileStep).not.toHaveBeenCalled();
-    });
-  });
-
   /**
-   * WEB-REVIEW FIX ROUND W1 — A DECLINED APPLICATION IS NOT EDITABLE EITHER.
-   *
-   * This action read NO status at all, so a declined applicant's edits saved happily and only the
-   * final submit refused — after they had retyped the lot. The refusal now lands at the first
-   * server-bound keystroke, with the same honest message the submit gives.
-   *
-   * MUTATION-PROVEN: remove the `'declined'` arm of `classifyDraftWrite` and the first test goes
-   * red (the save succeeds); widen it to every non-draft status and the second goes red.
+   * BAL-593 H1 — every repository outcome, mapped. The writability check itself (draft / grace /
+   * declined / closed) lives in `saveApplicantDraftStep`'s own tests; this action's job is only to
+   * translate the discriminant into the right `SaveDraftResult`.
    */
-  describe('declined applications', () => {
-    it('refuses a write to a DECLINED application, with the honest message', async () => {
-      mockFindApplicationWithRelations.mockResolvedValue({
-        profile: { id: PROFILE_ID, userId: USER_ID, applicationStatus: 'rejected' },
+  describe('outcome mapping', () => {
+    it('maps not_owner to Unauthorized with an empty id', async () => {
+      mockSaveApplicantDraftStep.mockResolvedValue({ outcome: 'not_owner' });
+      const result = await saveDraftAction({
+        step: 'profile',
+        data: validProfileData(),
+        expertProfileId: PROFILE_ID,
+      });
+      expect(result).toEqual({ success: false, expertProfileId: '', error: 'Unauthorized' });
+    });
+
+    it('maps declined to the declined-application copy', async () => {
+      mockSaveApplicantDraftStep.mockResolvedValue({
+        outcome: 'declined',
+        expertProfileId: PROFILE_ID,
       });
       const result = await saveDraftAction({
         step: 'profile',
@@ -237,103 +202,124 @@ describe('saveDraftAction', () => {
         expertProfileId: PROFILE_ID,
         error: DECLINED_APPLICATION_ERROR,
       });
-      expect(mockSaveProfileStep).not.toHaveBeenCalled();
     });
 
-    /**
-     * ⚠ ONLY `'rejected'` IS REFUSED, DELIBERATELY. A `sendBeacon` autosave can land just AFTER a
-     * successful submit; refusing every non-draft status would turn that harmless late write into
-     * an error the applicant never caused.
-     */
-    it('still saves against a SUBMITTED application — the trailing-beacon path is untouched', async () => {
-      mockFindApplicationWithRelations.mockResolvedValue({
-        profile: { id: PROFILE_ID, userId: USER_ID, applicationStatus: 'submitted' },
+    it('maps closed to SUBMITTED_APPLICATION_ERROR and logs a warning', async () => {
+      mockSaveApplicantDraftStep.mockResolvedValue({
+        outcome: 'closed',
+        expertProfileId: PROFILE_ID,
+        currentStatus: 'approved',
       });
-      setupDraftCreation();
+      const result = await saveDraftAction({
+        step: 'profile',
+        data: validProfileData(),
+        expertProfileId: PROFILE_ID,
+      });
+      expect(result).toEqual({
+        success: false,
+        expertProfileId: PROFILE_ID,
+        error: SUBMITTED_APPLICATION_ERROR,
+      });
+      expect(log.warn).toHaveBeenCalledWith(
+        'Expert application draft write refused: application no longer a draft',
+        expect.objectContaining({
+          userId: USER_ID,
+          expertProfileId: PROFILE_ID,
+          step: 'profile',
+          currentStatus: 'approved',
+        })
+      );
+    });
+
+    it('maps saved to success with the resolved id', async () => {
+      mockSaveApplicantDraftStep.mockResolvedValue(savedResult(PROFILE_ID));
       const result = await saveDraftAction({
         step: 'profile',
         data: validProfileData(),
         expertProfileId: PROFILE_ID,
       });
       expect(result).toEqual({ success: true, expertProfileId: PROFILE_ID });
-      expect(mockSaveProfileStep).toHaveBeenCalled();
     });
   });
 
-  describe('draft creation', () => {
-    it('creates a new draft via saveProfileStep when no expertProfileId provided', async () => {
-      setupDraftCreation();
+  describe('draft creation (first save, no id)', () => {
+    it('builds a draftInput and passes expertProfileId undefined', async () => {
+      mockGetSalesforceVertical.mockResolvedValue({ id: VERTICAL_ID });
       const result = await saveDraftAction({
         step: 'profile',
         data: validProfileData(),
       });
-      expect(mockGetSalesforceVertical).toHaveBeenCalled();
-      expect(mockSaveProfileStep).toHaveBeenCalledWith(
-        undefined,
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
         expect.objectContaining({
-          userId: USER_ID,
-          verticalId: VERTICAL_ID,
-          type: 'freelancer',
-          firstName: 'John',
-          lastName: 'Doe',
-        }),
-        expect.any(Object)
+          applicantUserId: USER_ID,
+          expertProfileId: undefined,
+          draftInput: expect.objectContaining({
+            userId: USER_ID,
+            verticalId: VERTICAL_ID,
+            type: 'freelancer',
+            firstName: 'John',
+            lastName: 'Doe',
+          }),
+          write: expect.objectContaining({ step: 'profile' }),
+        })
       );
       expect(result.success).toBe(true);
       expect(result.expertProfileId).toBe(PROFILE_ID);
     });
 
-    it('passes the existing id (no create) when expertProfileId is provided', async () => {
-      setupOwnershipCheck();
+    it('passes no draftInput (and the existing id) when expertProfileId is provided', async () => {
       const result = await saveDraftAction({
         step: 'profile',
         data: validProfileData(),
         expertProfileId: PROFILE_ID,
       });
       expect(mockGetSalesforceVertical).not.toHaveBeenCalled();
-      expect(mockSaveProfileStep).toHaveBeenCalledWith(PROFILE_ID, undefined, expect.any(Object));
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({ expertProfileId: PROFILE_ID, draftInput: undefined })
+      );
       expect(result.success).toBe(true);
     });
 
     it('accepts a lenient draft with empty languages and industries', async () => {
-      setupDraftCreation();
+      mockGetSalesforceVertical.mockResolvedValue({ id: VERTICAL_ID });
       const result = await saveDraftAction({
         step: 'profile',
         data: { ...validProfileData(), languages: [], industryIds: [] },
       });
       expect(result.success).toBe(true);
-      expect(mockSaveProfileStep).toHaveBeenCalledWith(
-        undefined,
-        expect.any(Object),
-        expect.objectContaining({ languages: [], industryIds: [] })
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: expect.objectContaining({
+            data: expect.objectContaining({ languages: [], industryIds: [] }),
+          }),
+        })
       );
     });
   });
 
   describe('profile step', () => {
-    beforeEach(() => {
-      setupOwnershipCheck();
-    });
-
-    it('maps profile fields into the saveProfileStep write', async () => {
+    it('maps profile fields into the write', async () => {
       await saveDraftAction({
         step: 'profile',
         data: validProfileData(),
         expertProfileId: PROFILE_ID,
       });
-      expect(mockSaveProfileStep).toHaveBeenCalledWith(
-        PROFILE_ID,
-        undefined,
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
         expect.objectContaining({
-          yearStartedSalesforce: 2015,
-          projectCountMin: 10,
-          projectLeadCountMin: 1,
-          linkedinUrl: 'https://linkedin.com/in/john-doe',
-          isSalesforceMvp: false,
-          isSalesforceCta: false,
-          isCertifiedTrainer: false,
-          languages: [{ languageId: UUID1, proficiency: 'native' }],
-          industryIds: [UUID1],
+          write: {
+            step: 'profile',
+            data: expect.objectContaining({
+              yearStartedSalesforce: 2015,
+              projectCountMin: 10,
+              projectLeadCountMin: 1,
+              linkedinUrl: 'https://linkedin.com/in/john-doe',
+              isSalesforceMvp: false,
+              isSalesforceCta: false,
+              isCertifiedTrainer: false,
+              languages: [{ languageId: UUID1, proficiency: 'native' }],
+              industryIds: [UUID1],
+            }),
+          },
         })
       );
     });
@@ -344,10 +330,10 @@ describe('saveDraftAction', () => {
         data: { ...validProfileData(), linkedinSlug: '' },
         expertProfileId: PROFILE_ID,
       });
-      expect(mockSaveProfileStep).toHaveBeenCalledWith(
-        PROFILE_ID,
-        undefined,
-        expect.objectContaining({ linkedinUrl: null })
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: expect.objectContaining({ data: expect.objectContaining({ linkedinUrl: null }) }),
+        })
       );
     });
 
@@ -367,21 +353,24 @@ describe('saveDraftAction', () => {
 
   describe('products step', () => {
     beforeEach(() => {
-      setupOwnershipCheck();
       mockGetSalesforceVertical.mockResolvedValue({ id: VERTICAL_ID });
       mockGetSupportTypes.mockResolvedValue([{ id: SUPPORT_TYPE_ID_1 }, { id: SUPPORT_TYPE_ID_2 }]);
     });
 
-    it('syncs products with support type IDs', async () => {
+    it('builds the products write with support type ids', async () => {
       await saveDraftAction({
         step: 'products',
         data: { productIds: [UUID1, UUID2] },
         expertProfileId: PROFILE_ID,
       });
-      expect(mockSyncProducts).toHaveBeenCalledWith(
-        PROFILE_ID,
-        [UUID1, UUID2],
-        [SUPPORT_TYPE_ID_1, SUPPORT_TYPE_ID_2]
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: {
+            step: 'products',
+            productIds: [UUID1, UUID2],
+            supportTypeIds: [SUPPORT_TYPE_ID_1, SUPPORT_TYPE_ID_2],
+          },
+        })
       );
     });
 
@@ -394,13 +383,13 @@ describe('saveDraftAction', () => {
       expect(mockGetSupportTypes).toHaveBeenCalled();
     });
 
-    it('returns a failure (unknown) when no draft exists yet', async () => {
+    it('returns a failure (unknown) and calls no repository method when no draft exists yet', async () => {
       const result = await saveDraftAction({
         step: 'products',
         data: { productIds: [UUID1] },
       });
       expect(result.success).toBe(false);
-      expect(mockSyncProducts).not.toHaveBeenCalled();
+      expect(mockSaveApplicantDraftStep).not.toHaveBeenCalled();
       expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
         EXPERT_SERVER_EVENTS.DRAFT_SAVE_FAILED,
         expect.objectContaining({ step: 'products', error_code: 'unknown' })
@@ -409,18 +398,16 @@ describe('saveDraftAction', () => {
   });
 
   describe('assessment step', () => {
-    beforeEach(() => {
-      setupOwnershipCheck();
-    });
-
-    it('updates competency proficiencies', async () => {
+    it('builds the assessment write with the ratings', async () => {
       const ratings = [{ productId: UUID1, supportTypeId: UUID2, proficiency: 7 }];
       await saveDraftAction({
         step: 'assessment',
         data: { ratings },
         expertProfileId: PROFILE_ID,
       });
-      expect(mockUpdateCompetencyProficiency).toHaveBeenCalledWith(PROFILE_ID, ratings);
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({ write: { step: 'assessment', ratings } })
+      );
     });
 
     it('accepts an all-zero assessment draft (refine dropped)', async () => {
@@ -431,16 +418,14 @@ describe('saveDraftAction', () => {
         expertProfileId: PROFILE_ID,
       });
       expect(result.success).toBe(true);
-      expect(mockUpdateCompetencyProficiency).toHaveBeenCalledWith(PROFILE_ID, ratings);
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({ write: { step: 'assessment', ratings } })
+      );
     });
   });
 
   describe('certifications step', () => {
-    beforeEach(() => {
-      setupOwnershipCheck();
-    });
-
-    it('saves trailhead URL and certifications atomically', async () => {
+    it('builds the certifications write, deriving the Trailhead URL', async () => {
       const certifications = [
         { certificationId: UUID1, earnedAt: '2024-01-01', expiresAt: '', credentialUrl: '' },
       ];
@@ -449,10 +434,14 @@ describe('saveDraftAction', () => {
         data: { trailheadSlug: 'john-doe', certifications },
         expertProfileId: PROFILE_ID,
       });
-      expect(mockSaveCertificationsStep).toHaveBeenCalledWith(
-        PROFILE_ID,
-        'https://trailblazer.me/id/john-doe',
-        certifications
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: {
+            step: 'certifications',
+            trailheadUrl: 'https://trailblazer.me/id/john-doe',
+            certs: certifications,
+          },
+        })
       );
     });
 
@@ -462,16 +451,16 @@ describe('saveDraftAction', () => {
         data: { trailheadSlug: '', certifications: [] },
         expertProfileId: PROFILE_ID,
       });
-      expect(mockSaveCertificationsStep).toHaveBeenCalledWith(PROFILE_ID, null, []);
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: { step: 'certifications', trailheadUrl: null, certs: [] },
+        })
+      );
     });
   });
 
   describe('work-history step', () => {
-    beforeEach(() => {
-      setupOwnershipCheck();
-    });
-
-    it('syncs work history entries', async () => {
+    it('builds the work-history write with sanitized responsibilities', async () => {
       const entries = [
         {
           role: 'Senior Consultant',
@@ -488,9 +477,14 @@ describe('saveDraftAction', () => {
         expertProfileId: PROFILE_ID,
       });
       // A legacy plain-text value is persisted as escaped paragraph HTML.
-      expect(mockSyncWorkHistory).toHaveBeenCalledWith(PROFILE_ID, [
-        { ...entries[0], responsibilities: '<p>Led projects.</p>' },
-      ]);
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          write: {
+            step: 'work-history',
+            entries: [{ ...entries[0], responsibilities: '<p>Led projects.</p>' }],
+          },
+        })
+      );
     });
 
     const ENTRY = {
@@ -510,11 +504,10 @@ describe('saveDraftAction', () => {
     }
 
     function persistedResponsibilities(): unknown {
-      const [, persisted] = mockSyncWorkHistory.mock.calls[0] as [
-        string,
-        Array<{ responsibilities: string }>,
-      ];
-      return persisted[0]?.responsibilities;
+      const [call] = mockSaveApplicantDraftStep.mock.calls as [
+        { write: { entries: Array<{ responsibilities: string }> } },
+      ][];
+      return call?.[0].write.entries[0]?.responsibilities;
     }
 
     it('keeps the editor formatting and strips anything outside the allow-list', async () => {
@@ -533,21 +526,17 @@ describe('saveDraftAction', () => {
 
     it('bounds the VISIBLE text, not the markup: 1,000 characters of bold text is allowed', async () => {
       await saveResponsibilities(`<p><strong>${'a'.repeat(1000)}</strong></p>`);
-      expect(mockSyncWorkHistory).toHaveBeenCalled();
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalled();
     });
 
     it('refuses more than 1,000 visible characters and writes nothing', async () => {
       const result = await saveResponsibilities(`<p>${'a'.repeat(1001)}</p>`);
       expect(result).toMatchObject({ success: false });
-      expect(mockSyncWorkHistory).not.toHaveBeenCalled();
+      expect(mockSaveApplicantDraftStep).not.toHaveBeenCalled();
     });
   });
 
   describe('removed invite step (BAL-325)', () => {
-    beforeEach(() => {
-      setupOwnershipCheck();
-    });
-
     it('rejects the retired step: "invite" as invalid input', async () => {
       const result = await saveDraftAction({
         // The invite step was removed — the enum no longer accepts it, so the
@@ -557,33 +546,26 @@ describe('saveDraftAction', () => {
         expertProfileId: PROFILE_ID,
       });
       expect(result.success).toBe(false);
-      expect(mockSaveProfileStep).not.toHaveBeenCalled();
-      expect(mockSyncWorkHistory).not.toHaveBeenCalled();
+      expect(mockSaveApplicantDraftStep).not.toHaveBeenCalled();
     });
   });
 
   describe('terms step', () => {
-    beforeEach(() => {
-      setupOwnershipCheck();
-    });
-
-    it('returns success and accepts an unchecked terms draft', async () => {
+    it('returns success and accepts an unchecked terms draft, with a none write', async () => {
       const result = await saveDraftAction({
         step: 'terms',
         data: { termsAccepted: false },
         expertProfileId: PROFILE_ID,
       });
       expect(result.success).toBe(true);
-      expect(mockSaveProfileStep).not.toHaveBeenCalled();
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({ write: { step: 'none' } })
+      );
     });
   });
 
   describe('agency step (BAL-356 — self-advancing no-op)', () => {
-    beforeEach(() => {
-      setupOwnershipCheck();
-    });
-
-    it('accepts the permissive agency draft and writes nothing (the write is its own action)', async () => {
+    it('accepts the permissive agency draft with a none write (the write is its own action)', async () => {
       const result = await saveDraftAction({
         step: 'agency',
         data: { agencyId: null },
@@ -591,19 +573,25 @@ describe('saveDraftAction', () => {
       });
       expect(result.success).toBe(true);
       expect(result.expertProfileId).toBe(PROFILE_ID);
-      // No repository write path runs for the agency step.
-      expect(mockSaveProfileStep).not.toHaveBeenCalled();
-      expect(mockSyncProducts).not.toHaveBeenCalled();
-      expect(mockUpdateCompetencyProficiency).not.toHaveBeenCalled();
-      expect(mockSyncWorkHistory).not.toHaveBeenCalled();
-      expect(mockSaveCertificationsStep).not.toHaveBeenCalled();
+      expect(mockSaveApplicantDraftStep).toHaveBeenCalledWith(
+        expect.objectContaining({ write: { step: 'none' } })
+      );
+    });
+
+    it('no-ops without a repository call when there is no draft yet', async () => {
+      const result = await saveDraftAction({
+        step: 'agency',
+        data: { agencyId: null },
+      });
+      expect(result.success).toBe(true);
+      expect(result.expertProfileId).toBe('');
+      expect(mockSaveApplicantDraftStep).not.toHaveBeenCalled();
     });
   });
 
   describe('error handling', () => {
     it('returns the known id (not empty) when the repository throws during save', async () => {
-      setupOwnershipCheck();
-      mockSaveProfileStep.mockRejectedValue(new Error('DB error'));
+      mockSaveApplicantDraftStep.mockRejectedValue(new Error('DB error'));
       const result = await saveDraftAction({
         step: 'profile',
         data: validProfileData(),
@@ -617,12 +605,11 @@ describe('saveDraftAction', () => {
     });
 
     it('classifies a duplicate-key violation as error_code "duplicate_key"', async () => {
-      setupOwnershipCheck();
       const uniqueViolation = Object.assign(new Error('duplicate key value'), {
         code: '23505',
         constraint_name: 'expert_user_vertical_idx',
       });
-      mockSaveProfileStep.mockRejectedValue(uniqueViolation);
+      mockSaveApplicantDraftStep.mockRejectedValue(uniqueViolation);
       mockIsUniqueViolation.mockReturnValue(true);
 
       const result = await saveDraftAction({
@@ -644,8 +631,7 @@ describe('saveDraftAction', () => {
     });
 
     it('classifies a generic DB error as error_code "unknown"', async () => {
-      setupOwnershipCheck();
-      mockSaveProfileStep.mockRejectedValue(new Error('connection reset'));
+      mockSaveApplicantDraftStep.mockRejectedValue(new Error('connection reset'));
       mockIsUniqueViolation.mockReturnValue(false);
 
       await saveDraftAction({

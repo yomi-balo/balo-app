@@ -219,6 +219,25 @@ describe('decideApplication — §1 stamps the ADR-1030 floor columns', () => {
     expect(row.approvedAt).toBeNull();
   });
 
+  it('locks expertise on an approve (BAL-593 Decision 4)', async () => {
+    const actorUserId = await seedActor();
+    const profile = await seedPendingApplication();
+    expect(profile.skillsLocked).toBe(false);
+
+    await approve(profile.id, actorUserId);
+
+    expect((await readProfile(profile.id)).skillsLocked).toBe(true);
+  });
+
+  it('leaves skills_locked false on a decline', async () => {
+    const actorUserId = await seedActor();
+    const profile = await seedPendingApplication();
+
+    await decline(profile.id, actorUserId);
+
+    expect((await readProfile(profile.id)).skillsLocked).toBe(false);
+  });
+
   it('leaves decline_reason and decline_note NULL on an approve', async () => {
     const actorUserId = await seedActor();
     const profile = await seedPendingApplication();
@@ -350,10 +369,12 @@ describe('decideApplication — §4 the audit row', () => {
     expect(Object.keys(row?.metadata as Record<string, unknown>).sort()).toEqual([
       'applicantUserId',
       'previousStatus',
+      'skillsLocked',
     ]);
     expect(row?.metadata).toMatchObject({
       previousStatus: 'under_review',
       applicantUserId: result.applicantUserId,
+      skillsLocked: true,
     });
   });
 

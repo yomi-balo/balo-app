@@ -110,6 +110,7 @@ export function LookupShell({
       ...entry,
       publicExpertUsername: null,
       engagementType: entry.engagementType ?? null,
+      expertApplicationReviewable: entry.expertApplicationReviewable ?? null,
     });
     seqRef.current += 1;
     setOpened({ entityType: entry.type, via: 'recent', seq: seqRef.current });

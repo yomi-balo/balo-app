@@ -317,6 +317,11 @@ export const expertCompetency = pgTable(
       .notNull(),
 
     proficiency: integer('proficiency').notNull().default(0),
+    // The expert's own rating, frozen at submit. `proficiency` above is the EFFECTIVE rating
+    // (Balo staff may adjust it); this column keeps what the expert said. NULL means "product
+    // added by Balo staff", and nothing else. Bounded 0–10 in Zod, like `proficiency`. Never
+    // projected on a public, settings or applicant read — staff review reads it explicitly.
+    selfProficiency: integer('self_proficiency'),
 
     ...timestamps,
   },

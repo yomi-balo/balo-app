@@ -17,6 +17,7 @@ import {
   userFactory,
 } from '../test/factories';
 import { creditSessionsRepository } from './credit-sessions';
+import { expertsRepository } from './experts';
 import {
   LOOKUP_RESULT_CAP,
   platformLookupRepository,
@@ -280,6 +281,31 @@ describe('platformLookupRepository.search — expert profiles', () => {
     expect(publishedHit?.sub).toContain('searchable');
   });
 
+  it('marks a draft application unreviewable, a submitted or approved one reviewable', async () => {
+    // MUTATION: map `expertApplicationReviewable` to a constant (or drop the `draft` test) and
+    // one of the expectations below fails.
+    const token = uniqueToken('Reviewexp');
+    const draftUser = await userFactory({ firstName: 'Draft', lastName: token });
+    const draft = await expertDraftFactory({ userId: draftUser.id });
+    const submittedUser = await userFactory({ firstName: 'Submitted', lastName: token });
+    const submitted = await expertDraftFactory({ userId: submittedUser.id });
+    await expertsRepository.submitApplication(submitted.id);
+    const approvedUser = await userFactory({ firstName: 'Approved', lastName: token });
+    const approved = await expertFactory({ userId: approvedUser.id });
+
+    const result = await search(token);
+    const reviewable = (id: string): boolean | null | undefined =>
+      result.results.find((r) => r.type === 'expert' && r.id === id)?.expertApplicationReviewable;
+
+    expect(reviewable(draft.id)).toBe(false);
+    expect(reviewable(submitted.id)).toBe(true);
+    expect(reviewable(approved.id)).toBe(true);
+    // Every non-expert arm carries null.
+    const userHit = result.results.find((r) => r.type === 'user' && r.id === draftUser.id);
+    expect(userHit).toBeDefined();
+    expect(userHit?.expertApplicationReviewable).toBeNull();
+  });
+
   it('matches an expert on their username', async () => {
     const token = uniqueToken('userhandle');
     const user = await userFactory();
@@ -405,6 +431,7 @@ describe('platformLookupRepository.search — credit sessions', () => {
       'sub',
       'publicExpertUsername',
       'engagementType',
+      'expertApplicationReviewable',
     ]);
     expect(JSON.stringify(row)).not.toContain('pi_3');
   });
@@ -559,6 +586,7 @@ describe('platformLookupRepository.search — engagements', () => {
       'sub',
       'publicExpertUsername',
       'engagementType',
+      'expertApplicationReviewable',
     ]);
     const serialized = JSON.stringify(hit);
     expect(serialized).not.toContain('500000'); // the fixture's priceCents

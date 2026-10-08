@@ -131,6 +131,16 @@ export interface LookupSelection {
    * value can only ever be right or absent, never wrong.
    */
   readonly engagementType: LookupResult['engagementType'];
+  /**
+   * BAL-593 — whether `/admin/applications/{id}` is reachable for this hit, mirroring
+   * `LookupResult.expertApplicationReviewable`. UNLIKE `publicExpertUsername` (deliberately
+   * never cached, F12), a cached value here is safe to carry from Recent: a profile id is
+   * NEVER re-claimed, so the only way this flag can go stale is draft → submitted, which can
+   * only ADD a link a stale entry lacks, never point at the wrong person. Every non-draft
+   * status renders the same staff review page, so there is no further staleness to worry
+   * about once an entry stops being `false`.
+   */
+  readonly expertApplicationReviewable: boolean | null;
   readonly via: 'search' | 'recent';
 }
 
@@ -143,6 +153,7 @@ export function selectionFromResult(result: LookupResult): LookupSelection {
     sub: result.sub,
     publicExpertUsername: result.publicExpertUsername,
     engagementType: result.engagementType,
+    expertApplicationReviewable: result.expertApplicationReviewable,
     via: 'search',
   };
 }
@@ -153,6 +164,7 @@ export function selectionFromRecent(entry: {
   readonly title: string;
   readonly sub: string;
   readonly engagementType?: LookupResult['engagementType'];
+  readonly expertApplicationReviewable?: boolean | null;
 }): LookupSelection {
   return {
     key: `${entry.type}:${entry.id}`,
@@ -169,6 +181,10 @@ export function selectionFromRecent(entry: {
     // `LookupResult['engagementType']` typing (`'project' | 'case' | 'package' | 'retainer' |
     // null`) does not admit.
     engagementType: entry.engagementType ?? null,
+    // Same normalisation, same reason — a legacy stored entry with no flag at all reads
+    // `undefined` here, normalised to `null` (no Application link) rather than left
+    // `undefined`, which this DTO's `boolean | null` typing does not admit.
+    expertApplicationReviewable: entry.expertApplicationReviewable ?? null,
     via: 'recent',
   };
 }
@@ -200,6 +216,23 @@ export function resolveOpenTarget(
   }
   if (result.type === 'engagement' && result.engagementType === 'project') {
     return { href: `/engagements/${result.id}`, label: 'Open' };
+  }
+  return null;
+}
+
+/**
+ * BAL-593 — the Lookup→Application drill-in link. Renders ONLY when the hit's
+ * `/admin/applications/{id}` destination is reachable: `type === 'expert'` AND
+ * `expertApplicationReviewable === true` (a `draft` application, or any non-expert type,
+ * carries `false` or `null` and gets no link). This is a navigation convenience, not an
+ * authorization boundary — the page itself re-gates on `VIEW_PLATFORM_ADMIN` (the same token
+ * Lookup already requires), and editing re-checks `REVIEW_EXPERT_APPLICATIONS` server-side.
+ */
+export function resolveApplicationTarget(
+  selection: Pick<LookupSelection, 'type' | 'id' | 'expertApplicationReviewable'>
+): LookupOpenTarget | null {
+  if (selection.type === 'expert' && selection.expertApplicationReviewable === true) {
+    return { href: `/admin/applications/${selection.id}`, label: 'Application' };
   }
   return null;
 }

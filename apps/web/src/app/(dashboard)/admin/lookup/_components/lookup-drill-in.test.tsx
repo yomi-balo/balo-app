@@ -33,6 +33,7 @@ function selection(
     sub: 'Sub line',
     publicExpertUsername: null,
     engagementType: null,
+    expertApplicationReviewable: null,
     via: 'search',
     ...overrides,
   };
@@ -150,6 +151,49 @@ describe('LookupDrillIn — the Open-link matrix', () => {
     );
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+  });
+
+  it('BAL-593 — a reviewable expert application renders an Application link alongside Open when public', () => {
+    render(
+      <LookupDrillIn
+        selection={selection({
+          type: 'expert',
+          id: 'x1',
+          publicExpertUsername: 'priya',
+          expertApplicationReviewable: true,
+        })}
+        onTabSelect={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('link', { name: /open/i })).toHaveAttribute('href', '/experts/priya');
+    expect(screen.getByRole('link', { name: /application/i })).toHaveAttribute(
+      'href',
+      '/admin/applications/x1'
+    );
+  });
+
+  it('BAL-593 — an unpublished but reviewable expert application renders only the Application link', () => {
+    render(
+      <LookupDrillIn
+        selection={selection({ type: 'expert', id: 'x2', expertApplicationReviewable: true })}
+        onTabSelect={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('link', { name: /^open$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /application/i })).toHaveAttribute(
+      'href',
+      '/admin/applications/x2'
+    );
+  });
+
+  it('BAL-593 — an expert with no reviewability signal renders no Application link', () => {
+    render(
+      <LookupDrillIn
+        selection={selection({ type: 'expert', id: 'x3', expertApplicationReviewable: null })}
+        onTabSelect={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('link', { name: /application/i })).not.toBeInTheDocument();
   });
 
   it('renders the type eyebrow and title', () => {

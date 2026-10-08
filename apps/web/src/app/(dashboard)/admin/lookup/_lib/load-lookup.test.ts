@@ -62,14 +62,34 @@ describe('loadLookup — the authorization proof', () => {
 
   it('passes the results, truncated and tooShort straight through', async () => {
     mockSearch.mockResolvedValue({
-      results: [{ id: 'u1', type: 'user', title: 'Dana', sub: 'x', publicExpertUsername: null }],
+      results: [
+        {
+          id: 'u1',
+          type: 'user',
+          title: 'Dana',
+          sub: 'x',
+          publicExpertUsername: null,
+          engagementType: null,
+          expertApplicationReviewable: null,
+        },
+      ],
       truncated: true,
       tooShort: false,
     });
     const dto = await loadLookup(user(), 'dana');
     expect(dto).toEqual({
       ok: true,
-      results: [{ id: 'u1', type: 'user', title: 'Dana', sub: 'x', publicExpertUsername: null }],
+      results: [
+        {
+          id: 'u1',
+          type: 'user',
+          title: 'Dana',
+          sub: 'x',
+          publicExpertUsername: null,
+          engagementType: null,
+          expertApplicationReviewable: null,
+        },
+      ],
       truncated: true,
       tooShort: false,
     });

@@ -1,4 +1,4 @@
-import { Lock } from 'lucide-react';
+import { CircleCheck, Lock } from 'lucide-react';
 import type { ExpertDeclineReason } from '@balo/shared/experts';
 import { LocalDate } from '@/components/local-date';
 import { formatDecisionAttribution } from '../_lib/application-list-view';
@@ -16,9 +16,15 @@ import { DECLINE_REASON_LABEL } from '../_lib/decline-copy';
  * W4): it renders in the VIEWER's timezone, because the previous UTC label showed Melbourne staff
  * the PREVIOUS calendar day for any decision recorded before ~10am AEST. See
  * `formatDecisionAttribution` for the full ruling.
+ *
+ * BAL-593 — a SECOND arm, `kind: 'approved_unrecorded'`, for an `approved` application whose
+ * `decidedAt` is `null` (approved before decisions were logged, or imported from Bubble — AC 10).
+ * It renders no attribution and no `<LocalDate>`: there is no decider and no timestamp to show.
+ * The default arm (`kind` omitted, or `'recorded'`) keeps every existing prop and caller.
  */
 
-interface DecisionOutcomeBannerProps {
+interface RecordedDecisionOutcomeBannerProps {
+  readonly kind?: 'recorded';
   readonly decision: 'approved' | 'declined';
   readonly decidedByFirstName: string | null;
   readonly decidedByLastName: string | null;
@@ -27,14 +33,34 @@ interface DecisionOutcomeBannerProps {
   readonly declineNote: string | null;
 }
 
-export function DecisionOutcomeBanner({
-  decision,
-  decidedByFirstName,
-  decidedByLastName,
-  decidedAt,
-  declineReason,
-  declineNote,
-}: Readonly<DecisionOutcomeBannerProps>): React.JSX.Element {
+interface ApprovedUnrecordedBannerProps {
+  readonly kind: 'approved_unrecorded';
+}
+
+type DecisionOutcomeBannerProps =
+  | RecordedDecisionOutcomeBannerProps
+  | ApprovedUnrecordedBannerProps;
+
+export function DecisionOutcomeBanner(
+  props: Readonly<DecisionOutcomeBannerProps>
+): React.JSX.Element {
+  if (props.kind === 'approved_unrecorded') {
+    return (
+      <div className="border-success/30 bg-success/10 flex items-start gap-3 rounded-2xl border p-4">
+        <CircleCheck className="text-success mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <div>
+          {/* pending-MJ */}
+          <p className="text-foreground text-sm font-semibold">Approved, no decision record</p>
+          <p className="text-muted-foreground mt-0.5 text-sm">
+            Approved before decisions were logged, or imported from Bubble.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const { decision, decidedByFirstName, decidedByLastName, decidedAt, declineReason, declineNote } =
+    props;
   const attribution = formatDecisionAttribution({
     decision,
     decidedByFirstName,

@@ -116,6 +116,14 @@ export interface LookupResult {
    * `project` engagement has a staff destination.
    */
   readonly engagementType: 'project' | 'case' | 'package' | 'retainer' | null;
+  /**
+   * BAL-593 — whether this hit's `/admin/applications/[profileId]` destination is reachable at
+   * all, a THIRD type-specific field on this DTO and for the same reason as the two above: the
+   * Open-link policy needs it. For `type: 'expert'` it is `applicationStatus !== 'draft'` — a
+   * `draft` application has no staff review page, since the applicant hasn't submitted it yet.
+   * `null` for every other type.
+   */
+  readonly expertApplicationReviewable: boolean | null;
 }
 
 /** What one `platformLookupRepository.search(...)` call returns. */

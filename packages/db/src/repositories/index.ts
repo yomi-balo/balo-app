@@ -60,7 +60,26 @@ export type {
   NewWorkIneligibleReason,
   SetAvailableForWorkInput,
   WorkInFlightCounts,
+  // BAL-593 — the staff edit, the applicant draft gate and the locked settings cert save, with
+  // the step write inputs the gate's caller builds.
+  StaffSelfRating,
+  EditApplicationAsStaffInput,
+  EditApplicationAsStaffResult,
+  ApplicantDraftStepWrite,
+  SaveApplicantDraftStepInput,
+  SaveApplicantDraftStepResult,
+  SaveSettingsCertificationsInput,
+  SaveSettingsCertificationsResult,
+  CreateDraftInput,
+  CompetencyRatingInput,
+  SyncCertInput,
+  SyncWorkHistoryInput,
 } from './experts';
+// BAL-593 — the `expert_application.edited` audit metadata contract.
+export type {
+  ExpertApplicationEditedAuditMetadata,
+  ExpertApplicationEditChanges,
+} from './_shared/expert-application-edit';
 // BAL-549 — the schema-derived unions the decision surfaces name. `ExpertDeclineReason` is
 // pinned at compile time to `@balo/shared/experts`' client-safe restatement; `ApplicationStatus`
 // is what `DecideApplicationResult`'s `not_pending` arm reports.

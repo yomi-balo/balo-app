@@ -33,3 +33,22 @@ export {
 // BAL-549 FIX ROUND (F13) — the ONE project-count range vocabulary, shared by the applicant's
 // picker, the applicant's review page and the staff review page (three drifting copies before).
 export { PROJECT_COUNT_RANGES, type ProjectCountRange, projectRangeLabel } from './project-ranges';
+
+// BAL-593 — a Balo-staff edit of an expert application: the editable-status vocabulary, the
+// four edit sections and the delta the Server Action sends.
+export {
+  STAFF_EDITABLE_APPLICATION_STATUSES,
+  type StaffEditableApplicationStatus,
+  EXPERT_APPLICATION_EDIT_SECTIONS,
+  type ExpertApplicationEditSection,
+  type StaffApplicationEdit,
+  type StaffApplicationEditCounts,
+} from './application-edit';
+
+// BAL-593 H1 — the one predicate gating an applicant-authored draft write against a row a staff
+// edit may now also act on.
+export {
+  APPLICANT_POST_SUBMIT_GRACE_MS,
+  type ApplicantDraftWriteDecision,
+  classifyApplicantDraftWrite,
+} from './applicant-write-window';

@@ -1105,6 +1105,7 @@ export const platformLookupRepository = {
           sub: buildUserSub(row.activeMode, userMemberships.get(row.id)),
           publicExpertUsername: null,
           engagementType: null,
+          expertApplicationReviewable: null,
         })),
       ],
       [
@@ -1128,6 +1129,8 @@ export const platformLookupRepository = {
               ? row.username
               : null,
           engagementType: null,
+          // A `draft` application has no staff review page yet; every other status does.
+          expertApplicationReviewable: row.applicationStatus !== 'draft',
         })),
       ],
       [
@@ -1145,6 +1148,7 @@ export const platformLookupRepository = {
           }),
           publicExpertUsername: null,
           engagementType: null,
+          expertApplicationReviewable: null,
         })),
       ],
       [
@@ -1159,6 +1163,7 @@ export const platformLookupRepository = {
           }),
           publicExpertUsername: null,
           engagementType: null,
+          expertApplicationReviewable: null,
         })),
       ],
       [
@@ -1174,6 +1179,7 @@ export const platformLookupRepository = {
           }),
           publicExpertUsername: null,
           engagementType: null,
+          expertApplicationReviewable: null,
         })),
       ],
       [
@@ -1196,6 +1202,7 @@ export const platformLookupRepository = {
           }),
           publicExpertUsername: null,
           engagementType: row.engagementType,
+          expertApplicationReviewable: null,
         })),
       ],
       [
@@ -1219,6 +1226,7 @@ export const platformLookupRepository = {
           }),
           publicExpertUsername: null,
           engagementType: null,
+          expertApplicationReviewable: null,
         })),
       ],
     ]);

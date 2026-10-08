@@ -170,6 +170,8 @@ async function insertExpert(
     applicationStatus: 'approved',
     submittedAt: approvedAt,
     approvedAt,
+    // An approved expert's expertise is locked; only Balo staff change it.
+    skillsLocked: true,
     timezone: expert.timezone,
     createdAt: baselineNow,
     updatedAt: baselineNow,
@@ -186,6 +188,8 @@ async function insertExpert(
       productId: c.productId,
       supportTypeId: c.supportTypeId,
       proficiency: c.proficiency,
+      // The seeded expert rated themselves; staff have not adjusted anything.
+      selfProficiency: c.proficiency,
     }));
     await tx.insert(expertCompetency).values(competencyRows);
   }

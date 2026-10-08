@@ -1430,6 +1430,22 @@ describe('notificationRules', () => {
     ]);
   });
 
+  /**
+   * BAL-593 — the WHOLE array, not `objectContaining`, same as the `expert.application_declined`
+   * pin above: a stray channel/recipient/template/priority change must go red here.
+   */
+  it('expert.application_edited has exactly one email rule, recipient self, template expert-application-edited, priority normal', () => {
+    expect(notificationRules['expert.application_edited']).toEqual([
+      {
+        channel: 'email',
+        recipient: 'self',
+        template: 'expert-application-edited',
+        timing: 'immediate',
+        priority: 'normal',
+      },
+    ]);
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

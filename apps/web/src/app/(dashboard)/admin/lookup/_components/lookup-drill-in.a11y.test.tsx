@@ -32,6 +32,7 @@ function selection(
     sub: 'Sub line',
     publicExpertUsername: null,
     engagementType: null,
+    expertApplicationReviewable: null,
     via: 'search',
     ...overrides,
   };
@@ -76,6 +77,30 @@ describe('LookupDrillIn — accessibility (BAL-555 fix round F3)', () => {
 
     const { container } = render(
       <LookupDrillIn selection={selection({ type: 'company', id: 'co1' })} onTabSelect={vi.fn()} />
+    );
+
+    await waitFor(() => expect(mockTimelineAction).toHaveBeenCalled());
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('BAL-593 — has no violations when both Open and Application links render for an expert', async () => {
+    mockTimelineAction.mockResolvedValue({
+      ok: true,
+      entries: [],
+      hasEarlier: false,
+      earlier: null,
+    });
+
+    const { container } = render(
+      <LookupDrillIn
+        selection={selection({
+          type: 'expert',
+          id: 'x1',
+          publicExpertUsername: 'priya',
+          expertApplicationReviewable: true,
+        })}
+        onTabSelect={vi.fn()}
+      />
     );
 
     await waitFor(() => expect(mockTimelineAction).toHaveBeenCalled());

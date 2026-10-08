@@ -8,6 +8,7 @@ import {
   classifyLookupQuery,
   countsByFilter,
   filterByType,
+  resolveApplicationTarget,
   resolveOpenTarget,
   selectionFromRecent,
   selectionFromResult,
@@ -21,6 +22,7 @@ function result(
     sub: 'Sub',
     publicExpertUsername: null,
     engagementType: null,
+    expertApplicationReviewable: null,
     ...overrides,
   };
 }
@@ -71,6 +73,35 @@ describe('resolveOpenTarget', () => {
 
   it('covers all seven LOOKUP_ENTITY_TYPES', () => {
     expect(LOOKUP_ENTITY_TYPES).toHaveLength(7);
+  });
+});
+
+describe('resolveApplicationTarget', () => {
+  it('resolves an Application link for a reviewable expert application', () => {
+    const target = resolveApplicationTarget({
+      type: 'expert',
+      id: 'x1',
+      expertApplicationReviewable: true,
+    });
+    expect(target).toEqual({ href: '/admin/applications/x1', label: 'Application' });
+  });
+
+  it('returns null for an expert whose application is not yet reviewable (still a draft)', () => {
+    expect(
+      resolveApplicationTarget({ type: 'expert', id: 'x2', expertApplicationReviewable: false })
+    ).toBeNull();
+  });
+
+  it('returns null for an expert with no reviewability signal', () => {
+    expect(
+      resolveApplicationTarget({ type: 'expert', id: 'x3', expertApplicationReviewable: null })
+    ).toBeNull();
+  });
+
+  it('returns null for a non-expert type regardless of the flag', () => {
+    expect(
+      resolveApplicationTarget({ type: 'user', id: 'u1', expertApplicationReviewable: true })
+    ).toBeNull();
   });
 });
 
@@ -197,6 +228,7 @@ describe('selectionFromResult / selectionFromRecent', () => {
       sub: 'x',
       publicExpertUsername: 'priya',
       engagementType: null,
+      expertApplicationReviewable: null,
       via: 'search',
     });
   });
@@ -239,5 +271,26 @@ describe('selectionFromResult / selectionFromRecent', () => {
       sub: 'x',
     });
     expect(selection.engagementType).toBeNull();
+  });
+
+  it('selectionFromRecent carries a stored expertApplicationReviewable through', () => {
+    const selection = selectionFromRecent({
+      type: 'expert',
+      id: 'x1',
+      title: 'Priya',
+      sub: 'x',
+      expertApplicationReviewable: true,
+    });
+    expect(selection.expertApplicationReviewable).toBe(true);
+  });
+
+  it('selectionFromRecent normalises a legacy entry with no expertApplicationReviewable to null (BAL-593 — a profile id is never re-claimed, unlike a username)', () => {
+    const selection = selectionFromRecent({
+      type: 'expert',
+      id: 'x1',
+      title: 'Priya',
+      sub: 'x',
+    });
+    expect(selection.expertApplicationReviewable).toBeNull();
   });
 });

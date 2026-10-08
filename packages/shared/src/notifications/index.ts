@@ -1232,7 +1232,11 @@ export * from './meeting-absence';
 // ── BAL-414 — the two searchability-transition promises (D1/D2) ────────────────────────
 //
 // ⚠ EXTENSIONLESS relative specifier — same rule as every other import in this file.
-import type { ExpertChecklistItemKey, ExpertDeclineReason } from '../experts';
+import type {
+  ExpertChecklistItemKey,
+  ExpertDeclineReason,
+  ExpertApplicationEditSection,
+} from '../experts';
 
 /**
  * BAL-414 (D1/D2) — the expert stopped meeting the six-item checklist and has been removed
@@ -1298,6 +1302,32 @@ export interface ExpertApplicationDeclinedPayload {
   expertProfileId: string;
   /** ⚠ the CATEGORY. Never the note. */
   reason: ExpertDeclineReason;
+}
+
+/**
+ * BAL-593 — Balo staff edited an `approved` expert application and changed something (H3's
+ * `no_changes` planner result publishes nothing). Recipient `self` via `userId`, same as
+ * `ExpertApplicationDeclinedPayload` above — `engine/dispatcher.ts:253` reads exactly that field.
+ * EMAIL ONLY, following the `expert.approved` / `expert_application.declined` precedent: a
+ * profile change this consequential belongs in the applicant's inbox.
+ *
+ * ⚠ NO ACTOR ID, for the SAME reason as `ExpertApplicationDeclinedPayload` above:
+ * `payload.userId` drives both the generic `data.user` hydration (`resolver.ts`) and the `self`
+ * recipient path, so an actor id under the wrong key would mail the EDITING staffer instead of
+ * the applicant. The applicant email never names the staffer who made the change.
+ *
+ * `correlationId` is `expert-application-edited.{expertProfileId}.{auditEventId}` —
+ * COLON-FREE by construction (a `.`-joined uuid pair never contains a `:`) and unique per WRITE,
+ * exactly as `ExpertApplicationDeclinedPayload.correlationId` is. Do NOT use the bare
+ * `expertProfileId`: a second edit must not dedup against a retained completed job.
+ */
+export interface ExpertApplicationEditedPayload {
+  correlationId: string;
+  /** the applicant — `recipient:'self'` resolves the recipient from this. */
+  userId: string;
+  expertProfileId: string;
+  /** Which of the four edit sections changed, in `EXPERT_APPLICATION_EDIT_SECTIONS` order. */
+  sections: ExpertApplicationEditSection[];
 }
 
 /**
