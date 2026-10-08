@@ -414,6 +414,7 @@ async function seedAcmeExperts(acmeVerticalId: string): Promise<void> {
           applicationStatus: 'approved',
           submittedAt: now,
           approvedAt: now,
+          skillsLocked: true,
         })
         .returning();
       if (!profile) return;
@@ -428,6 +429,7 @@ async function seedAcmeExperts(acmeVerticalId: string): Promise<void> {
             productId: productId,
             supportTypeId,
             proficiency: 4,
+            selfProficiency: 4,
           })
           .onConflictDoNothing();
       }
@@ -563,7 +565,7 @@ async function seed(): Promise<void> {
   await client.end();
 }
 
-seed().catch((err: unknown) => {
-  console.error('Seed failed:', err);
+seed().catch((error: unknown) => {
+  console.error('Seed failed:', error);
   process.exit(1);
 });

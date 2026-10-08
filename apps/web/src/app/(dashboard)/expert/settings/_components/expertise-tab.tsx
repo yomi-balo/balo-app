@@ -1,9 +1,10 @@
 'use client';
 
-import { Lock, Shield, AlertCircle } from 'lucide-react';
+import { Shield, AlertCircle } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { ExpertiseLockedBanner } from './expertise-locked-banner';
 import type { ApplicationCompetencyWithRelations } from '@balo/db';
 
 interface ExpertiseTabProps {
@@ -79,24 +80,7 @@ export function ExpertiseTab({
   return (
     <div>
       {/* Locked banner */}
-      {skillsLocked && (
-        <div className="bg-warning/10 border-warning/30 mb-6 flex items-start gap-3 rounded-xl border p-4">
-          <Lock className="text-warning mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            <p className="text-warning text-[13px] font-semibold">
-              Expertise is locked after approval
-            </p>
-            <p className="text-warning/80 mt-1 text-xs">
-              Your skills and certifications were verified by Balo during onboarding. To request
-              changes,{' '}
-              <a href="mailto:support@balo.expert" className="font-semibold underline">
-                contact support
-              </a>
-              .
-            </p>
-          </div>
-        </div>
-      )}
+      {skillsLocked && <ExpertiseLockedBanner />}
 
       {/* Competency cards */}
       {competencyGroups.length === 0 ? (
@@ -158,7 +142,7 @@ export function ExpertiseTab({
       {/* Request changes button */}
       <div className="mt-5 text-center">
         <Button variant="outline" asChild>
-          <a href="mailto:support@balo.expert">
+          <a href="mailto:support@getbalo.com">
             <AlertCircle className="mr-2 h-4 w-4" />
             Request changes to expertise
           </a>

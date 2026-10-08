@@ -53,6 +53,16 @@ export interface RecentLookupEntry {
    * Open link).
    */
   readonly engagementType?: LookupResult['engagementType'];
+  /**
+   * BAL-593 — present only for an entry stored since this shipped, mirroring
+   * `LookupResult.expertApplicationReviewable`. UNLIKE `publicExpertUsername` (deliberately
+   * never cached — a renamed username can be re-claimed by someone else), a cached value here
+   * is safe: a profile id is never re-claimed, so the only staleness direction is draft →
+   * submitted, which can only add a link a stale entry lacks. A legacy stored entry without it
+   * reads `undefined` here, which `selectionFromRecent` normalises to `null` (no Application
+   * link).
+   */
+  readonly expertApplicationReviewable?: boolean | null;
 }
 
 function isLookupEntityType(value: unknown): value is LookupEntityType {
@@ -77,27 +87,38 @@ function isValidStoredEngagementType(
   );
 }
 
+/** `undefined` (absent — a legacy entry), `null`, or a boolean. */
+function isValidStoredApplicationReviewable(value: unknown): value is boolean | null | undefined {
+  return value === undefined || value === null || typeof value === 'boolean';
+}
+
 /** Narrow an unknown value to one valid entry, dropping anything malformed rather than throwing. */
 function readEntry(value: unknown): RecentLookupEntry | null {
   if (typeof value !== 'object' || value === null) return null;
   const record = value as Record<string, unknown>;
-  const { type, id, title, sub, engagementType } = record;
+  const { type, id, title, sub, engagementType, expertApplicationReviewable } = record;
   if (
     !isLookupEntityType(type) ||
     typeof id !== 'string' ||
     typeof title !== 'string' ||
     typeof sub !== 'string' ||
-    !isValidStoredEngagementType(engagementType)
+    !isValidStoredEngagementType(engagementType) ||
+    !isValidStoredApplicationReviewable(expertApplicationReviewable)
   ) {
     return null;
   }
-  return engagementType === undefined
-    ? { type, id, title, sub }
-    : { type, id, title, sub, engagementType };
+  return {
+    type,
+    id,
+    title,
+    sub,
+    ...(engagementType === undefined ? {} : { engagementType }),
+    ...(expertApplicationReviewable === undefined ? {} : { expertApplicationReviewable }),
+  };
 }
 
 function readStoredRecent(): RecentLookupEntry[] {
-  if (typeof globalThis.window === 'undefined') return [];
+  if (globalThis.window === undefined) return [];
   try {
     const raw = globalThis.localStorage.getItem(RECENT_KEY);
     if (raw === null) return [];
@@ -117,7 +138,7 @@ function readStoredRecent(): RecentLookupEntry[] {
 }
 
 function writeStoredRecent(entries: readonly RecentLookupEntry[]): void {
-  if (typeof globalThis.window === 'undefined') return;
+  if (globalThis.window === undefined) return;
   try {
     globalThis.localStorage.setItem(RECENT_KEY, JSON.stringify(entries));
   } catch {
@@ -170,6 +191,7 @@ export function useRecentLookups(): UseRecentLookupsResult {
           title: result.title,
           sub: result.sub,
           engagementType: result.engagementType,
+          expertApplicationReviewable: result.expertApplicationReviewable,
         },
         ...withoutExisting,
       ].slice(0, RECENT_LIMIT);

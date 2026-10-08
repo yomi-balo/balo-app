@@ -108,4 +108,15 @@ describe('DecisionOutcomeBanner', () => {
     );
     expect(screen.queryByText(/never shown to the applicant/i)).toBeNull();
   });
+
+  /** AC 10 — an `approved` application with no decision record (pre-logging, or a Bubble import). */
+  it('renders the "Approved, no decision record" arm, with no attribution and no LocalDate', () => {
+    const { container } = render(<DecisionOutcomeBanner kind="approved_unrecorded" />);
+    expect(screen.getByText('Approved, no decision record')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Approved before decisions were logged, or imported from Bubble\./)
+    ).toBeInTheDocument();
+    expect(container.querySelector('time')).toBeNull();
+    expect(screen.queryByText(/Approved by/)).toBeNull();
+  });
 });

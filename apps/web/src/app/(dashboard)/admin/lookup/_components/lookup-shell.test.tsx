@@ -30,6 +30,7 @@ function result(
     sub: 'Sub',
     publicExpertUsername: null,
     engagementType: null,
+    expertApplicationReviewable: null,
     ...overrides,
   };
 }

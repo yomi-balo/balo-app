@@ -1,4 +1,4 @@
-import type { ExpertDeclineReason } from '@balo/shared/experts';
+import type { ExpertDeclineReason, ExpertApplicationEditSection } from '@balo/shared/experts';
 
 /**
  * BAL-549 — the admin expert-applications surface's CLIENT event family (throughput and wait
@@ -15,6 +15,9 @@ import type { ExpertDeclineReason } from '@balo/shared/experts';
 export const ADMIN_APPLICATIONS_EVENTS = {
   REVIEWED: 'admin_applications_reviewed',
   LIST_VIEWED: 'admin_applications_list_viewed',
+  /** BAL-593 — a staff save that changed something on the application (a `no_changes` plan
+   *  result never emits this). */
+  EDITED: 'admin_applications_edited',
 } as const;
 
 /**
@@ -40,5 +43,21 @@ export interface AdminApplicationsEventMap {
     pending_count: number;
     /** `days_waiting` of the OLDEST pending application, or 0 when none are pending. */
     oldest_days: number;
+  };
+  /**
+   * BAL-593 — a staff save that changed something. `status` collapses `submitted` and
+   * `under_review` into `'pending'` (the same fold the review page's own badge already uses);
+   * `'approved'` is reported as-is. `sections` lists which of the four edit sections changed, in
+   * `EXPERT_APPLICATION_EDIT_SECTIONS` order. The five snake_case counts mirror
+   * `StaffApplicationEditCounts` (`@balo/shared/experts`) field-for-field.
+   */
+  [ADMIN_APPLICATIONS_EVENTS.EDITED]: {
+    status: 'pending' | 'approved';
+    sections: ExpertApplicationEditSection[];
+    ratings_adjusted: number;
+    products_added: number;
+    products_removed: number;
+    certifications_added: number;
+    certifications_removed: number;
   };
 }

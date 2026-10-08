@@ -6,6 +6,12 @@ import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
 import { ExpertApplicationDeclinedEmail } from './expert-application-declined.js';
 import { readExpertDeclineReason } from './expert-decline-reason-label.js';
+import { ExpertApplicationEditedEmail } from './expert-application-edited.js';
+import {
+  EXPERT_APPLICATION_EDIT_SECTIONS,
+  type ExpertApplicationEditSection,
+  type ExpertChecklistItemKey,
+} from '@balo/shared/experts';
 import { ExpertReferralInvitedEmail } from './expert-referral-invited.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
@@ -116,7 +122,6 @@ import {
 } from './conversation-unread-digest.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { ExpertSearchabilityLostEmail } from './expert-searchability-lost.js';
-import type { ExpertChecklistItemKey } from '@balo/shared/experts';
 import {
   BookingConfirmedClientEmail,
   BookingConfirmedExpertEmail,
@@ -462,6 +467,18 @@ function conversationPath(data: Record<string, unknown>): string {
   return projectRequestId ? `/projects/${projectRequestId}` : '/dashboard';
 }
 
+/**
+ * BAL-593 — narrows the merged payload's `sections` to known `ExpertApplicationEditSection`
+ * values, in `EXPERT_APPLICATION_EDIT_SECTIONS` canonical (display) order, dropping anything
+ * unrecognised rather than rendering it. Falls back to `[]` for a non-array value so the
+ * template never renders `undefined`.
+ */
+function readExpertApplicationEditSections(value: unknown): ExpertApplicationEditSection[] {
+  if (!Array.isArray(value)) return [];
+  const known = new Set(value);
+  return EXPERT_APPLICATION_EDIT_SECTIONS.filter((section) => known.has(section));
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => TemplateOutput> = {
   welcome: (data) => ({
     component: React.createElement(WelcomeEmail, {
@@ -499,6 +516,20 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     // ⚠ NO user-authored string in the subject ⇒ no `sanitizeSubjectTitle` needed, and the
     // template is therefore NOT added to `components.test.ts`'s header-injection sweep list.
     subject: 'An update on your Balo expert application', // pending-MJ
+  }),
+
+  // BAL-593 — a Balo-staff edit changed something on an `approved` application. `data.sections`
+  // is the raw merged payload field; `readExpertApplicationEditSections` keeps only known values,
+  // in canonical order, and drops the rest rather than rendering them.
+  'expert-application-edited': (data) => ({
+    component: React.createElement(ExpertApplicationEditedEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      sections: readExpertApplicationEditSections(data.sections),
+      baseUrl: BASE_URL,
+    }),
+    // ⚠ NO user-authored string in the subject ⇒ no `sanitizeSubjectTitle` needed, and the
+    // template is therefore NOT added to `components.test.ts`'s header-injection sweep list.
+    subject: 'Balo updated your expert profile', // pending-MJ
   }),
 
   // BAL-325: the resolver hydrates nothing for this event (no userId/expertProfileId/

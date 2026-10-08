@@ -52,7 +52,16 @@ describe('ExpertiseTab', () => {
   it('shows the locked banner when skills are locked', () => {
     render(<ExpertiseTab competencies={competencies} skillsLocked />);
     expect(screen.getByText(/expertise is locked after approval/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'support@getbalo.com' })).toHaveAttribute(
+      'href',
+      'mailto:support@getbalo.com'
+    );
     expect(screen.getAllByText(/locked/i).length).toBeGreaterThan(0);
+  });
+
+  it('does not show the locked banner when skills are unlocked', () => {
+    render(<ExpertiseTab competencies={competencies} skillsLocked={false} />);
+    expect(screen.queryByText(/expertise is locked after approval/i)).not.toBeInTheDocument();
   });
 
   it('renders the empty state when there are no skills', () => {

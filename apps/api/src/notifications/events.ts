@@ -66,6 +66,7 @@ import type {
   ProjectTrackDeclinedPayload,
   ProjectRequestOwnerAssignedPayload,
   ExpertApplicationDeclinedPayload,
+  ExpertApplicationEditedPayload,
 } from '@balo/shared/notifications';
 // BAL-475 — the calendar-invite engine contract lives in this app (not `@balo/shared`), since
 // it is server-only vocabulary (no publish-route Zod arm ever reads it).
@@ -454,6 +455,9 @@ export type NotificationEvent =
   | 'expert.application_submitted'
   | 'expert.approved'
   | 'expert.application_declined'
+  // BAL-593 — a Balo-staff edit changed something on an `approved` application. Published by the
+  // web Server Action after the edit commits; a `no_changes` planner result publishes nothing.
+  | 'expert.application_edited'
   | 'expert.referral_invited'
   | 'calendar.auth_error'
   // BAL-468 — the daily calendar-subscription monitor's non-zero-arm alert. SERVER-ONLY.
@@ -831,6 +835,7 @@ export interface EventPayloadMap {
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
   'expert.application_declined': ExpertApplicationDeclinedPayload;
+  'expert.application_edited': ExpertApplicationEditedPayload;
   'expert.referral_invited': ExpertReferralInvitedPayload;
   'calendar.auth_error': CalendarAuthErrorPayload;
   'calendar.subscription_lapse': CalendarSubscriptionLapsePayload;

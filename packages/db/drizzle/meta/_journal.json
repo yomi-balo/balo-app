@@ -743,6 +743,13 @@
       "when": 1791133291365,
       "tag": "0105_bal592_product_aliases",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1791421014044,
+      "tag": "0106_bal593_competency_self_proficiency",
+      "breakpoints": true
     }
   ]
 }

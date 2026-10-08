@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import type { EventPayloadMap, PublishableNotificationEvent } from '../../notifications/events.js';
-import { EXPERT_CHECKLIST_ITEM_KEYS, EXPERT_DECLINE_REASONS } from '@balo/shared/experts';
+import {
+  EXPERT_CHECKLIST_ITEM_KEYS,
+  EXPERT_DECLINE_REASONS,
+  EXPERT_APPLICATION_EDIT_SECTIONS,
+} from '@balo/shared/experts';
 import { MILESTONE_CHANGE_KINDS } from '@balo/shared/notifications';
 import {
   DECLINABLE_RELATIONSHIP_STATUSES,
@@ -85,6 +89,20 @@ const expertApplicationDeclinedPayload = z.object({
   userId: z.uuid(),
   expertProfileId: z.uuid(),
   reason: z.enum(EXPERT_DECLINE_REASONS),
+});
+
+/**
+ * BAL-593 — same compound-correlationId shape as `expertApplicationDeclinedPayload` above:
+ * `correlationId` is `expert-application-edited.{expertProfileId}.{auditEventId}`, colon-free by
+ * construction and unique per WRITE, so a second edit is not deduped away against a retained
+ * BullMQ job. `.min(1).max(200)` erases under `z.infer`, so this still key-for-key matches
+ * `ExpertApplicationEditedPayload` (`AssertPublishPayloadShapesMatch`'s documented limit L1).
+ */
+const expertApplicationEditedPayload = z.object({
+  correlationId: z.string().min(1).max(200),
+  userId: z.uuid(),
+  expertProfileId: z.uuid(),
+  sections: z.array(z.enum(EXPERT_APPLICATION_EDIT_SECTIONS)).min(1).max(4),
 });
 
 // BAL-325 referral invite (expert → EXTERNAL email). `correlationId` is the
@@ -878,6 +896,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('expert.application_declined'),
     payload: expertApplicationDeclinedPayload,
+  }),
+  z.object({
+    event: z.literal('expert.application_edited'),
+    payload: expertApplicationEditedPayload,
   }),
   z.object({
     event: z.literal('expert.referral_invited'),

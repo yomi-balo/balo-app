@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
 import { expertsRepository } from '@balo/db';
+import { EXPERT_LANGUAGES_MAX, EXPERT_INDUSTRIES_MAX } from '@balo/shared/experts';
 import { log } from '@/lib/logging';
 import { USERNAME_REGEX, RESERVED_USERNAMES, USERNAME_MIN, USERNAME_MAX } from './username-rules';
 
@@ -19,7 +20,7 @@ const saveProfileSchema = z.object({
     .optional()
     .nullable()
     .or(z.literal('')),
-  industryIds: z.array(z.string().uuid()).max(20).optional(),
+  industryIds: z.array(z.string().uuid()).max(EXPERT_INDUSTRIES_MAX).optional(),
   languages: z
     .array(
       z.object({
@@ -27,7 +28,7 @@ const saveProfileSchema = z.object({
         proficiency: z.enum(['beginner', 'intermediate', 'advanced', 'native']),
       })
     )
-    .max(10)
+    .max(EXPERT_LANGUAGES_MAX)
     .optional(),
 });
 

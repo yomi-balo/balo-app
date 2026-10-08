@@ -133,6 +133,7 @@ function row(type: LookupEntityType, n: number): LookupResult {
     sub: 'sub',
     publicExpertUsername: null,
     engagementType: null,
+    expertApplicationReviewable: null,
   };
 }
 

@@ -1,12 +1,20 @@
 'use server';
 import 'server-only';
-import { withAuth, type AuthenticatedSession } from '@/lib/auth/with-auth';
-import { expertsRepository, referenceDataRepository, isUniqueViolation } from '@balo/db';
+import { withAuth } from '@/lib/auth/with-auth';
+import {
+  expertsRepository,
+  referenceDataRepository,
+  isUniqueViolation,
+  type ApplicantDraftStepWrite,
+} from '@balo/db';
 import { log } from '@/lib/logging';
 import { sanitizeResponsibilitiesHtml } from '@/lib/sanitize/work-history-html';
 import { trackServerAndFlush, EXPERT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { z } from 'zod';
-import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
+import {
+  DECLINED_APPLICATION_ERROR,
+  SUBMITTED_APPLICATION_ERROR,
+} from './declined-application-copy';
 import {
   STEP_DRAFT_SCHEMAS,
   type ProfileStepDraftData,
@@ -65,6 +73,23 @@ function isNonProfileDraftStep(step: StepName): step is NonProfileDraftStep {
   return (NON_PROFILE_DRAFT_REQUIRED as ReadonlySet<StepName>).has(step);
 }
 
+/**
+ * BAL-593 H1 — THE WIZARD'S ONE WRITE PATH NOW GOES THROUGH `saveApplicantDraftStep`. Every
+ * step that carries an id (and the profile step's first save, which may adopt an existing row)
+ * is locked `FOR UPDATE` and checked against the LOCKED status before its writer runs on the same
+ * transaction — the same lock `editApplicationAsStaff` and `decideApplication` take, so a staff
+ * write and an applicant write serialise.
+ *
+ * `draft`, and a `submitted` row inside the post-submit grace (`APPLICANT_POST_SUBMIT_GRACE_MS`,
+ * 60 s — covers the debounced autosave and the unload beacon), are writable. `rejected` is
+ * `declined` (`DECLINED_APPLICATION_ERROR`). Everything else — a later `submitted`,
+ * `under_review`, `approved` — is `closed` (`SUBMITTED_APPLICATION_ERROR`): the applicant can no
+ * longer write a non-draft application, full stop.
+ *
+ * `terms` and `agency` (BAL-356, self-advancing) pass `write: { step: 'none' }` when an id
+ * exists (lock and check, no write — the agency step performs its own determined write via
+ * `linkExpertAgencyAction`); with no id yet there is nothing to lock, so they no-op below.
+ */
 export const saveDraftAction = withAuth(
   async (session, rawInput: SaveDraftInput): Promise<SaveDraftResult> => {
     // `profileId` is captured in the outer scope so the catch block can return a
@@ -80,31 +105,53 @@ export const saveDraftAction = withAuth(
       const draftSchema = STEP_DRAFT_SCHEMAS[input.step];
       const parsed = draftSchema.parse(input.data);
 
-      // 3. Verify ownership — and refuse a DECLINED application — when an id was provided.
-      if (profileId) {
-        const verdict = await classifyDraftWrite(profileId, session.user.id);
-        if (verdict === 'unauthorized') {
+      // 3. Lock, check and write in one call — only when there is a row to lock (an id) or
+      //    the profile step, which may create one. All other DB-writing steps require an
+      //    existing draft (profile is always saved first and its id threaded forward); the
+      //    old lazy "create on any step" path was an orphan vector and stays removed.
+      if (profileId !== undefined || input.step === 'profile') {
+        const write = await buildStepWrite(input.step, parsed);
+        const draftInput = profileId
+          ? undefined
+          : await buildDraftInput(session.user.id, session.user.firstName, session.user.lastName);
+
+        const result = await expertsRepository.saveApplicantDraftStep({
+          applicantUserId: session.user.id,
+          expertProfileId: profileId,
+          draftInput,
+          now: new Date(),
+          write,
+        });
+
+        if (result.outcome === 'not_owner') {
           return { success: false, expertProfileId: '', error: 'Unauthorized' };
         }
-        if (verdict === 'declined') {
-          return { success: false, expertProfileId: profileId, error: DECLINED_APPLICATION_ERROR };
+        if (result.outcome === 'declined') {
+          return {
+            success: false,
+            expertProfileId: result.expertProfileId,
+            error: DECLINED_APPLICATION_ERROR,
+          };
         }
-      }
+        if (result.outcome === 'closed') {
+          log.warn('Expert application draft write refused: application no longer a draft', {
+            userId: session.user.id,
+            expertProfileId: result.expertProfileId,
+            step: input.step,
+            currentStatus: result.currentStatus,
+          });
+          return {
+            success: false,
+            expertProfileId: result.expertProfileId,
+            error: SUBMITTED_APPLICATION_ERROR,
+          };
+        }
 
-      // 4. The profile step creates (or reuses) the draft; all other DB-writing
-      //    steps require an existing draft (profile is always saved first and its id
-      //    threaded forward). The old lazy "create on any step" path was an orphan
-      //    vector and is intentionally removed.
-      if (input.step === 'profile') {
-        profileId = await persistProfileStep(session, profileId, parsed as ProfileStepDraftData);
+        profileId = result.expertProfileId;
       } else if (isNonProfileDraftStep(input.step)) {
-        if (profileId === undefined) {
-          throw new Error(`Cannot save ${input.step} step before the profile step`);
-        }
-        await dispatchNonProfileStep(input.step, profileId, parsed);
+        throw new Error(`Cannot save ${input.step} step before the profile step`);
       }
-      // `terms` and `agency` (BAL-356, self-advancing): no DB write here — the agency
-      // step performs its own determined write via `linkExpertAgencyAction`.
+      // `terms` / `agency` with no draft yet: nothing to lock or write.
 
       trackServerAndFlush(EXPERT_SERVER_EVENTS.DRAFT_SAVED, {
         step: input.step,
@@ -140,60 +187,6 @@ export const saveDraftAction = withAuth(
   }
 );
 
-/** The three answers to "may this user write to this draft right now?". */
-type DraftWriteVerdict = 'ok' | 'unauthorized' | 'declined';
-
-/**
- * The autosave's ownership guard, plus the DECLINED refusal (web-review fix round, W1).
- *
- * ⚠⚠ THIS FILE PREVIOUSLY READ NO STATUS AT ALL, which made the failure order the worst one
- * available: a declined applicant's edits SAVED happily and only the final submit refused, after
- * they had retyped the lot. `'rejected'` is refused here instead, at the first keystroke that
- * reaches the server, with the same honest message the submit gives.
- *
- * ⚠ ONLY `'rejected'`, DELIBERATELY — NOT every non-draft status. The wizard page redirects
- * `submitted` / `under_review` / `approved` away, so the only status reachable here besides
- * `draft` is `rejected`; refusing the others too would also refuse the trailing `sendBeacon`
- * autosave that can land just AFTER a successful submit (memory
- * `project_bal342_per_step_save_baselines`), turning a harmless late write into an error the
- * applicant never caused. Narrow on purpose.
- *
- * ⚠ NOT THE RE-APPLICATION TRANSITION. Nothing here opens `rejected → draft`; a follow-up ticket
- * owns that. See `DECLINED_APPLICATION_ERROR`.
- */
-async function classifyDraftWrite(profileId: string, userId: string): Promise<DraftWriteVerdict> {
-  const existing = await expertsRepository.findApplicationWithRelations(profileId);
-  if (existing?.profile.userId !== userId) return 'unauthorized';
-  return existing.profile.applicationStatus === 'rejected' ? 'declined' : 'ok';
-}
-
-/**
- * Persist the profile step in one transaction and return the resolved draft id.
- * Creates the draft on a first save (no id) or updates the existing one. Maps the
- * lenient draft data into the repository write shape (derives the LinkedIn URL).
- */
-async function persistProfileStep(
-  session: AuthenticatedSession,
-  profileId: string | undefined,
-  data: ProfileStepDraftData
-): Promise<string> {
-  const draftInput = profileId
-    ? undefined
-    : await buildDraftInput(session.user.id, session.user.firstName, session.user.lastName);
-  const profile = await expertsRepository.saveProfileStep(profileId, draftInput, {
-    yearStartedSalesforce: data.yearStartedSalesforce,
-    projectCountMin: data.projectCountMin,
-    projectLeadCountMin: data.projectLeadCountMin,
-    linkedinUrl: data.linkedinSlug ? `https://linkedin.com/in/${data.linkedinSlug}` : null,
-    isSalesforceMvp: data.isSalesforceMvp,
-    isSalesforceCta: data.isSalesforceCta,
-    isCertifiedTrainer: data.isCertifiedTrainer,
-    languages: data.languages,
-    industryIds: data.industryIds,
-  });
-  return profile.id;
-}
-
 /** Build the create-draft input for a first profile save (resolves the vertical). */
 async function buildDraftInput(
   userId: string,
@@ -211,52 +204,63 @@ async function buildDraftInput(
 }
 
 /**
- * Dispatch a non-profile DB-writing step. The draft already exists (`profileId` is
- * required and verified by the caller). `parsed` is the lenient draft-schema output
- * for the step. Each step runs its (now executor-aware, still self-transactional)
- * repository sync AFTER validation.
+ * Build the step's write for `saveApplicantDraftStep` from the lenient draft-schema output.
+ * `terms` and `agency` (BAL-356, self-advancing) carry no write of their own — `'none'` locks
+ * and checks the row without touching it.
  */
-async function dispatchNonProfileStep(
-  step: NonProfileDraftStep,
-  profileId: string,
-  parsed: unknown
-): Promise<void> {
+async function buildStepWrite(step: StepName, parsed: unknown): Promise<ApplicantDraftStepWrite> {
   switch (step) {
+    case 'profile': {
+      const data = parsed as ProfileStepDraftData;
+      return {
+        step: 'profile',
+        data: {
+          yearStartedSalesforce: data.yearStartedSalesforce,
+          projectCountMin: data.projectCountMin,
+          projectLeadCountMin: data.projectLeadCountMin,
+          linkedinUrl: data.linkedinSlug ? `https://linkedin.com/in/${data.linkedinSlug}` : null,
+          isSalesforceMvp: data.isSalesforceMvp,
+          isSalesforceCta: data.isSalesforceCta,
+          isCertifiedTrainer: data.isCertifiedTrainer,
+          languages: data.languages,
+          industryIds: data.industryIds,
+        },
+      };
+    }
     case 'products': {
       const data = parsed as ProductsStepDraftData;
       const vertical = await referenceDataRepository.getSalesforceVertical();
       const supportTypes = await referenceDataRepository.getSupportTypes(vertical.id);
-      await expertsRepository.syncProducts(
-        profileId,
-        data.productIds,
-        supportTypes.map((st) => st.id)
-      );
-      return;
+      return {
+        step: 'products',
+        productIds: data.productIds,
+        supportTypeIds: supportTypes.map((st) => st.id),
+      };
     }
     case 'assessment': {
       const data = parsed as AssessmentStepDraftData;
-      await expertsRepository.updateCompetencyProficiency(profileId, data.ratings);
-      return;
+      return { step: 'assessment', ratings: data.ratings };
     }
     case 'certifications': {
       const data = parsed as CertificationsStepData;
-      await expertsRepository.saveCertificationsStep(
-        profileId,
-        data.trailheadSlug ? `https://trailblazer.me/id/${data.trailheadSlug}` : null,
-        data.certifications ?? []
-      );
-      return;
+      return {
+        step: 'certifications',
+        trailheadUrl: data.trailheadSlug ? `https://trailblazer.me/id/${data.trailheadSlug}` : null,
+        certs: data.certifications ?? [],
+      };
     }
     case 'work-history': {
       const data = parsed as WorkHistoryStepData;
-      await expertsRepository.syncWorkHistory(
-        profileId,
-        (data.entries ?? []).map((entry) => ({
+      return {
+        step: 'work-history',
+        entries: (data.entries ?? []).map((entry) => ({
           ...entry,
           responsibilities: sanitizeResponsibilitiesHtml(entry.responsibilities),
-        }))
-      );
-      return;
+        })),
+      };
     }
+    case 'terms':
+    case 'agency':
+      return { step: 'none' };
   }
 }

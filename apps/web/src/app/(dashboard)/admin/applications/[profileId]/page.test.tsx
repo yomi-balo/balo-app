@@ -12,7 +12,10 @@ const {
   mockGetProductsByVertical,
   mockGetSupportTypes,
   mockGetCertificationsByVertical,
+  mockGetLanguages,
+  mockGetIndustries,
   mockHasPlatformCapability,
+  mockBuildStaffEditModel,
 } = vi.hoisted(() => ({
   mockGetCurrentUser: vi.fn(),
   mockRedirect: vi.fn(() => {
@@ -27,7 +30,10 @@ const {
   mockGetProductsByVertical: vi.fn(),
   mockGetSupportTypes: vi.fn(),
   mockGetCertificationsByVertical: vi.fn(),
+  mockGetLanguages: vi.fn(),
+  mockGetIndustries: vi.fn(),
   mockHasPlatformCapability: vi.fn(),
+  mockBuildStaffEditModel: vi.fn<(...a: unknown[]) => Record<string, unknown>>(() => ({})),
 }));
 
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
@@ -67,7 +73,39 @@ vi.mock('@balo/db', () => ({
     getProductsByVertical: (...a: unknown[]) => mockGetProductsByVertical(...a),
     getSupportTypes: (...a: unknown[]) => mockGetSupportTypes(...a),
     getCertificationsByVertical: (...a: unknown[]) => mockGetCertificationsByVertical(...a),
+    getLanguages: (...a: unknown[]) => mockGetLanguages(...a),
+    getIndustries: (...a: unknown[]) => mockGetIndustries(...a),
   },
+}));
+
+// Isolates this suite from the model-building logic — it pins what the PAGE passes to
+// `buildStaffEditModel` and when, not the model it returns.
+vi.mock('../_lib/staff-edit-model', () => ({
+  buildStaffEditModel: (...a: unknown[]) => mockBuildStaffEditModel(...a),
+}));
+
+// `ApplicationReviewWorkspace` (this package's own file) is stubbed down to its OBSERVABLE
+// surface — the props it was given — so this suite pins what the PAGE computes and passes
+// (canEdit, isPending, banner, readSections, reference-data fetch timing), not the workspace's
+// own save/cancel state machine, which `application-review-workspace.test.tsx` already covers.
+vi.mock('../_components/application-review-workspace', () => ({
+  ApplicationReviewWorkspace: (props: {
+    canEdit: boolean;
+    isPending: boolean;
+    headerSummary: React.ReactNode;
+    banner: React.ReactNode;
+    readSections: React.ReactNode;
+    workHistory: React.ReactNode;
+  }) => (
+    <div>
+      {props.headerSummary}
+      {props.canEdit && <button type="button">Edit application</button>}
+      {props.isPending && <button type="button">Approve</button>}
+      {props.banner}
+      {props.readSections}
+      {props.workHistory}
+    </div>
+  ),
 }));
 
 import { PLATFORM_CAPABILITIES } from '@balo/shared/authz';
@@ -116,6 +154,7 @@ function application(overrides: Record<string, unknown> = {}) {
       isSalesforceMvp: false,
       isSalesforceCta: false,
       isCertifiedTrainer: false,
+      skillsLocked: false,
       ...(overrides.profile as Record<string, unknown> | undefined),
     },
     user: {
@@ -136,6 +175,7 @@ function application(overrides: Record<string, unknown> = {}) {
     languages: [],
     industries: [],
     workHistory: [],
+    selfRatings: [],
     ...restOverrides,
   };
 }
@@ -157,6 +197,8 @@ beforeEach(() => {
   mockGetProductsByVertical.mockResolvedValue([]);
   mockGetSupportTypes.mockResolvedValue([]);
   mockGetCertificationsByVertical.mockResolvedValue([]);
+  mockGetLanguages.mockResolvedValue([]);
+  mockGetIndustries.mockResolvedValue([]);
   mockFindNamesByIds.mockResolvedValue([]);
   // Default: the REAL platform map, so the role-based tests below stay real.
   mockHasPlatformCapability.mockImplementation(
@@ -272,6 +314,66 @@ describe('AdminApplicationReviewPage (RSC) — staff render', () => {
     expect(screen.queryByText(/Balo-only note/i)).toBeNull();
   });
 
+  /**
+   * The self-rating overlay is gated the same way as the decline note: on
+   * `REVIEW_EXPERT_APPLICATIONS`, not just the page's `VIEW_PLATFORM_ADMIN` token.
+   */
+  it('withholds self-ratings from a viewer who reaches the page WITHOUT review_expert_applications', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockHasPlatformCapability.mockImplementation(
+      (_u: unknown, capability: string) => capability === PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN
+    );
+    mockGetSupportTypes.mockResolvedValue([{ id: 'st-1', slug: 'config', name: 'Configuration' }]);
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({
+        competencies: [
+          {
+            id: 'comp-1',
+            expertProfileId: PROFILE_ID,
+            productId: 'product-1',
+            supportTypeId: 'st-1',
+            proficiency: 5,
+            product: { id: 'product-1', name: 'Sales Cloud' },
+            supportType: { id: 'st-1', slug: 'config', name: 'Configuration' },
+          },
+        ],
+        selfRatings: [{ productId: 'product-1', supportTypeId: 'st-1', selfProficiency: 8 }],
+      })
+    );
+
+    await renderPage();
+
+    expect(screen.queryByText('Self 8 →')).toBeNull();
+    // `null`, not `[]`: this viewer must not see a false "Added by Balo" guess
+    // for a product the expert DID self-rate.
+    expect(screen.queryByText('Added by Balo')).toBeNull();
+  });
+
+  it('shows self-ratings for a reviewer with review_expert_applications', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockGetSupportTypes.mockResolvedValue([{ id: 'st-1', slug: 'config', name: 'Configuration' }]);
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({
+        competencies: [
+          {
+            id: 'comp-1',
+            expertProfileId: PROFILE_ID,
+            productId: 'product-1',
+            supportTypeId: 'st-1',
+            proficiency: 5,
+            product: { id: 'product-1', name: 'Sales Cloud' },
+            supportType: { id: 'st-1', slug: 'config', name: 'Configuration' },
+          },
+        ],
+        selfRatings: [{ productId: 'product-1', supportTypeId: 'st-1', selfProficiency: 8 }],
+      })
+    );
+
+    await renderPage();
+
+    expect(screen.getByText('Self 8 →')).toBeInTheDocument();
+  });
+
   it('resolves REVIEW_EXPERT_APPLICATIONS for the note, not just the page token', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
     mockFindApplicationForStaffReview.mockResolvedValue(application());
@@ -309,5 +411,93 @@ describe('AdminApplicationReviewPage (RSC) — staff render', () => {
     expect(screen.getByText(/priya@example.com/)).toBeInTheDocument();
     expect(screen.getByText(/Independent/)).toBeInTheDocument();
     expect(screen.getByText(/waiting 6d/)).toBeInTheDocument();
+  });
+});
+
+describe('AdminApplicationReviewPage (RSC) — BAL-593 edit affordance', () => {
+  it('rejected → no "Edit application"', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({
+        profile: {
+          applicationStatus: 'rejected',
+          decidedAt: new Date('2026-01-01'),
+          decidedByUserId: 'staff-1',
+          declineReason: 'not_a_fit',
+        },
+      })
+    );
+    await renderPage();
+    expect(screen.queryByRole('button', { name: /edit application/i })).toBeNull();
+  });
+
+  it('approved with a null decidedAt → the unrecorded banner and Edit', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({ profile: { applicationStatus: 'approved', decidedAt: null } })
+    );
+    await renderPage();
+    expect(screen.getByText('Approved, no decision record')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /edit application/i })).toBeInTheDocument();
+  });
+
+  it('a pending holder sees Edit application AND Approve/Decline', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({ profile: { applicationStatus: 'submitted' } })
+    );
+    await renderPage();
+    expect(screen.getByRole('button', { name: /edit application/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^approve$/i })).toBeInTheDocument();
+  });
+
+  it('a VIEW_PLATFORM_ADMIN-only viewer sees no Edit application', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockHasPlatformCapability.mockImplementation(
+      (_u: unknown, capability: string) => capability === PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN
+    );
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({ profile: { applicationStatus: 'submitted' } })
+    );
+    await renderPage();
+    expect(screen.queryByRole('button', { name: /edit application/i })).toBeNull();
+  });
+
+  it('fetches languages and industries only when canEdit', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({
+        profile: {
+          applicationStatus: 'rejected',
+          decidedAt: new Date('2026-01-01'),
+          decidedByUserId: 'staff-1',
+          declineReason: 'not_a_fit',
+        },
+      })
+    );
+    await renderPage();
+    expect(mockGetLanguages).not.toHaveBeenCalled();
+    expect(mockGetIndustries).not.toHaveBeenCalled();
+    expect(mockBuildStaffEditModel).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    mockGetSalesforceVertical.mockResolvedValue({ id: 'vertical-1' });
+    mockGetProductsByVertical.mockResolvedValue([]);
+    mockGetSupportTypes.mockResolvedValue([]);
+    mockGetCertificationsByVertical.mockResolvedValue([]);
+    mockGetLanguages.mockResolvedValue([]);
+    mockGetIndustries.mockResolvedValue([]);
+    mockHasPlatformCapability.mockImplementation(
+      (u: { platformRole: 'user' | 'admin' | 'super_admin' }, capability: string) =>
+        platformRoleHasCapability(u.platformRole, capability as never)
+    );
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({ profile: { applicationStatus: 'submitted' } })
+    );
+    await renderPage();
+    expect(mockGetLanguages).toHaveBeenCalledTimes(1);
+    expect(mockGetIndustries).toHaveBeenCalledTimes(1);
+    expect(mockBuildStaffEditModel).toHaveBeenCalledTimes(1);
   });
 });

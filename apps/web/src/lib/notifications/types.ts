@@ -37,6 +37,7 @@ import type {
   ProjectTrackDeclinedPayload,
   ProjectRequestOwnerAssignedPayload,
   ExpertApplicationDeclinedPayload,
+  ExpertApplicationEditedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -211,6 +212,10 @@ export type NotificationEvent =
   | 'expert.application_submitted'
   | 'expert.approved'
   | 'expert.application_declined'
+  // BAL-593 — a Balo-staff edit changed something on an `approved` application. Published by
+  // the admin edit Server Action AFTER the edit transaction commits; a `no_changes` planner
+  // result publishes nothing. Mirror of apps/api/src/notifications/events.ts — keep in lockstep.
+  | 'expert.application_edited'
   | 'expert.referral_invited'
   | 'project.request_submitted'
   | 'project.match_requested'
@@ -315,6 +320,7 @@ export interface EventPayloadMap {
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
   'expert.application_declined': ExpertApplicationDeclinedPayload;
+  'expert.application_edited': ExpertApplicationEditedPayload;
   'expert.referral_invited': ExpertReferralInvitedPayload;
   'project.request_submitted': ProjectRequestSubmittedPayload;
   'project.match_requested': ProjectMatchRequestedPayload;

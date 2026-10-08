@@ -795,6 +795,46 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(html).not.toContain('undefined');
   });
 
+  it('resolves expert-application-edited with the changed sections, in canonical order (BAL-593)', async () => {
+    const { component, subject } = getEmailTemplate('expert-application-edited', {
+      recipientName: 'Priya',
+      // Out of EXPERT_APPLICATION_EDIT_SECTIONS display order on the wire — the resolved
+      // markup must still render them ratings, products, certifications, experience.
+      sections: ['experience', 'ratings'],
+    });
+    const html = await render(component);
+    expect(subject).toBe('Balo updated your expert profile');
+    expect(html).toContain('Skill ratings');
+    expect(html).toContain('Experience');
+    expect(html).not.toContain('Products');
+    expect(html).not.toContain('Certifications');
+    // Canonical order, NOT wire order: "Skill ratings" (ratings) renders before "Experience"
+    // (experience) even though the payload listed `experience` first.
+    expect(html.indexOf('Skill ratings')).toBeLessThan(html.indexOf('Experience'));
+    expect(html).not.toContain('undefined');
+  });
+
+  it('drops an unknown expert-application-edited section rather than rendering it', async () => {
+    const { component } = getEmailTemplate('expert-application-edited', {
+      recipientName: 'Priya',
+      sections: ['ratings', 'not-a-real-section'],
+    });
+    const html = await render(component);
+    expect(html).toContain('Skill ratings');
+    expect(html).not.toContain('not-a-real-section');
+    expect(html).not.toContain('undefined');
+  });
+
+  it('falls back to no section rows for a non-array expert-application-edited sections value', async () => {
+    const { component } = getEmailTemplate('expert-application-edited', {
+      recipientName: 'Priya',
+      sections: 'ratings',
+    });
+    const html = await render(component);
+    expect(html).not.toContain('Skill ratings');
+    expect(html).not.toContain('undefined');
+  });
+
   it('resolves project-track-declined with the invited-stage withdrawal copy (BAL-540)', async () => {
     const { component, subject } = getEmailTemplate('project-track-declined', {
       title: 'CPQ implementation',
