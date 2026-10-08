@@ -4,6 +4,7 @@ import {
   buildStaffEditModel,
   buildStaffEdit,
   describeStaffEditChanges,
+  staffEditExperienceError,
   type StaffEditModel,
   type StaffEditReference,
 } from './staff-edit-model';
@@ -456,5 +457,48 @@ describe('describeStaffEditChanges', () => {
   it('returns [] for a no-op draft', () => {
     const initial = buildStaffEditModel(application(), SUPPORT_TYPES);
     expect(describeStaffEditChanges(initial, initial, REFERENCE)).toEqual([]);
+  });
+});
+
+// ── staffEditExperienceError ────────────
+
+describe('staffEditExperienceError', () => {
+  it('returns null for an untouched pair, even when the stored snapshot is already bad', () => {
+    // The stored pair is already invalid (lead above project) and the draft leaves it untouched.
+    const initial = buildStaffEditModel(application(), SUPPORT_TYPES);
+    const badInitial: StaffEditModel = {
+      ...initial,
+      experience: { ...initial.experience, projectCountMin: 1, projectLeadCountMin: 10 },
+    };
+    expect(staffEditExperienceError(badInitial, badInitial)).toBeNull();
+  });
+
+  it('returns a message when touched and the draft pair is bad', () => {
+    const initial = buildStaffEditModel(application(), SUPPORT_TYPES);
+    const draft: StaffEditModel = {
+      ...initial,
+      experience: { ...initial.experience, projectCountMin: 1, projectLeadCountMin: 10 },
+    };
+    expect(staffEditExperienceError(initial, draft)).toBe(
+      "Projects led can't be more than total projects."
+    );
+  });
+
+  it('returns null when touched and the draft pair is fine', () => {
+    const initial = buildStaffEditModel(application(), SUPPORT_TYPES);
+    const draft: StaffEditModel = {
+      ...initial,
+      experience: { ...initial.experience, projectCountMin: 26 },
+    };
+    expect(staffEditExperienceError(initial, draft)).toBeNull();
+  });
+
+  it('returns null when either draft count is null', () => {
+    const initial = buildStaffEditModel(application(), SUPPORT_TYPES);
+    const draft: StaffEditModel = {
+      ...initial,
+      experience: { ...initial.experience, projectCountMin: null },
+    };
+    expect(staffEditExperienceError(initial, draft)).toBeNull();
   });
 });

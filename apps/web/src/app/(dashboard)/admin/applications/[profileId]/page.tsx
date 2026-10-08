@@ -58,9 +58,11 @@ import {
  * ⚠ `findApplicationForStaffReview` IS THE ONLY READ THAT CARRIES THE NOTE AND THE SELF-RATINGS.
  * The applicant's own `findApplicationWithRelations` does not project either (fix-round F1 /
  * BAL-593 H6), so the page gate and the repository projection fail closed independently. The
- * self-ratings RENDER is gated the same way as the decline note — `canReview ? … : []` — so a
+ * self-ratings RENDER is gated the same way as the decline note — `canReview ? … : null` — so a
  * `VIEW_PLATFORM_ADMIN`-only viewer who reaches the page sees Balo's rating with no self-rating
- * overlay, never a hint of what the expert rated themselves.
+ * overlay, never a hint of what the expert rated themselves. `null`, not `[]`: an empty array
+ * would read as "every cell was staff-added" and render a false "Added by Balo" badge for a
+ * product the expert DID self-rate but this viewer may not see.
  *
  * ⚠ `editModel` / `reference` ARE BUILT ONLY WHEN `canEdit`, and the page passes neither
  * `application` nor `declineNote` into the client-facing workspace props beyond what
@@ -253,7 +255,7 @@ export default async function AdminApplicationReviewPage({
             productsByCategory={productsByCategory}
             supportTypes={supportTypes}
             certificationsByCategory={certificationsByCategory}
-            selfRatings={canReview ? application.selfRatings : []}
+            selfRatings={canReview ? application.selfRatings : null}
             skillsLocked={profile.skillsLocked}
           />
         }

@@ -12,15 +12,19 @@ import type { AdminApplicationsEventMap } from '@/lib/analytics';
  * `'not_pending'` / `'gone'` pair, and this union carries no `'not_pending'` at all: an edit does
  * not race a pending-vs-decided distinction, it races pending-vs-ineditable.
  *
- * `'invalid'` maps the repository's `invalid_experience` outcome — a delta whose effective
- * (locked snapshot merged with the edit) lead count exceeds its effective involved count. The
- * repository refuses the write before anything is committed, so this reaches the client as an
- * ordinary validation failure, same copy as a Zod refusal.
+ * `'invalid_experience'` maps the repository's `invalid_experience` outcome — a delta whose
+ * effective (locked snapshot merged with the edit) lead count exceeds its effective involved
+ * count. The repository refuses the write before anything is committed, so this reaches the
+ * client with its own copy — never folded into the generic
+ * `APPLICATION_EDIT_FAILURE`, which would read as an unexplained save failure rather than naming
+ * the rule that was violated.
  */
 export const APPLICATION_EDIT_GONE = 'That application no longer exists.'; // pending-MJ
 export const APPLICATION_EDIT_NOT_EDITABLE = 'That application can no longer be edited.'; // pending-MJ
 export const APPLICATION_EDIT_FAILURE =
   "Couldn't save the changes. Nothing was written, so try again."; // pending-MJ
+export const APPLICATION_EDIT_INVALID_EXPERIENCE =
+  "Projects led can't be more than total projects. Nothing was written."; // pending-MJ
 
 export type EditApplicationActionResult =
   | {
@@ -30,4 +34,8 @@ export type EditApplicationActionResult =
       analytics: AdminApplicationsEventMap['admin_applications_edited'];
     }
   | { success: true; changed: false }
-  | { success: false; error: string; code?: 'denied' | 'gone' | 'not_editable' | 'invalid' };
+  | {
+      success: false;
+      error: string;
+      code?: 'denied' | 'gone' | 'not_editable' | 'invalid_experience';
+    };

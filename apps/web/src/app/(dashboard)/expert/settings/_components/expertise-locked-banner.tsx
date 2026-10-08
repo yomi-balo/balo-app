@@ -20,7 +20,10 @@ export function ExpertiseLockedBanner(): React.JSX.Element {
           <a href="mailto:support@getbalo.com" className="font-semibold underline">
             support@getbalo.com
           </a>
-          .
+          {/* An explicit string expression, not bare JSXText,
+              so there is no newline-adjacent-to-tag whitespace for a reader (or Prettier's own
+              reflow) to add or drop a space from. No space is intended before the period. */}
+          {'.'}
         </p>
       </div>
     </div>

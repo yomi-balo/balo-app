@@ -4,7 +4,11 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { expertsRepository } from '@balo/db';
-import { PROJECT_COUNT_RANGES } from '@balo/shared/experts';
+import {
+  PROJECT_COUNT_RANGES,
+  EXPERT_LANGUAGES_MAX,
+  EXPERT_INDUSTRIES_MAX,
+} from '@balo/shared/experts';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { requireApplicationReviewer } from './_shared/require-application-reviewer';
@@ -12,6 +16,7 @@ import {
   APPLICATION_EDIT_GONE,
   APPLICATION_EDIT_NOT_EDITABLE,
   APPLICATION_EDIT_FAILURE,
+  APPLICATION_EDIT_INVALID_EXPERIENCE,
   type EditApplicationActionResult,
 } from './_shared/edit-outcome';
 
@@ -39,13 +44,10 @@ const experienceEditSchema = z
   })
   .partial()
   .strict()
-  .refine((experience) => Object.keys(experience).length > 0)
-  .refine(
-    (experience) =>
-      experience.projectLeadCountMin === undefined ||
-      experience.projectCountMin === undefined ||
-      experience.projectLeadCountMin <= experience.projectCountMin
-  );
+  .refine((experience) => Object.keys(experience).length > 0);
+// No lead ≤ project refine here: the rule needs the stored counts as well as the delta, so it
+// lives in the repository planner (`staffEditExperienceIsInvalid`), which checks the effective
+// pair under the profile lock and only when the edit touches a count.
 
 const languagesEditSchema = z
   .array(
@@ -56,12 +58,12 @@ const languagesEditSchema = z
       })
       .strict()
   )
-  .max(50)
+  .max(EXPERT_LANGUAGES_MAX)
   .refine((languages) => hasNoDuplicates(languages, (l) => l.languageId));
 
 const industryIdsEditSchema = z
   .array(z.uuid())
-  .max(50)
+  .max(EXPERT_INDUSTRIES_MAX)
   .refine((ids) => hasNoDuplicates(ids, (id) => id));
 
 const productRatingSchema = z
@@ -207,7 +209,11 @@ export async function editExpertApplicationAction(
     case 'not_editable':
       return { success: false, error: APPLICATION_EDIT_NOT_EDITABLE, code: 'not_editable' };
     case 'invalid_experience':
-      return { success: false, error: APPLICATION_EDIT_FAILURE, code: 'invalid' };
+      return {
+        success: false,
+        error: APPLICATION_EDIT_INVALID_EXPERIENCE,
+        code: 'invalid_experience',
+      };
     case 'no_changes':
       return { success: true, changed: false };
     case 'edited':

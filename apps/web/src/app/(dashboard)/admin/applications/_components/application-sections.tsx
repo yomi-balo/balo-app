@@ -43,6 +43,12 @@ import {
  * and `skillsLocked` shows a "Locked for the expert" pill on Product expertise, Ratings and
  * Certifications (Decision 4). Neither prop changes what is WRITABLE here — this stays a
  * read-only Server Component; the edit workspace is a separate client island.
+ *
+ * `selfRatings: … | null`, where `null` means the viewer
+ * may not see self-ratings at all (gated on `REVIEW_EXPERT_APPLICATIONS`, not just the page's
+ * `VIEW_PLATFORM_ADMIN`). `[]` would be indistinguishable from "every cell was staff-added" and
+ * render a false "Added by Balo" badge for a product the expert DID self-rate — `null` renders
+ * Balo's value only: no "Self n →", no "Added by Balo", no legend, on every cell.
  */
 
 interface ApplicationSectionsProps {
@@ -50,7 +56,7 @@ interface ApplicationSectionsProps {
   readonly productsByCategory: readonly ProductsByCategory[];
   readonly supportTypes: readonly SupportType[];
   readonly certificationsByCategory: readonly CertificationsByCategory[];
-  readonly selfRatings: readonly StaffSelfRating[];
+  readonly selfRatings: readonly StaffSelfRating[] | null;
   readonly skillsLocked: boolean;
 }
 
@@ -139,15 +145,20 @@ export function ApplicationSections({
   const assessmentMap = buildAssessmentMap(competencies);
   const certCategoryMap = buildCertCategoryMap(certificationsByCategory);
   const distinctions = buildDistinctions(profile);
-  const selfRatingMap = buildSelfRatingMap(selfRatings);
+  const viewOnly = selfRatings === null;
+  const selfRatingMap = viewOnly
+    ? new Map<string, number | null>()
+    : buildSelfRatingMap(selfRatings);
   const ratingsByProduct = [...assessmentMap.entries()].map(([productId, { name, ratings }]) => ({
     productId,
     name,
     cells: buildRatingCells(productId, ratings, supportTypes, selfRatingMap),
   }));
-  const anyAdjusted = ratingsByProduct.some(({ cells }) =>
-    cells.some((cell) => cell.self !== null && cell.self !== cell.balo)
-  );
+  const anyAdjusted =
+    !viewOnly &&
+    ratingsByProduct.some(({ cells }) =>
+      cells.some((cell) => cell.self !== null && cell.self !== cell.balo)
+    );
 
   return (
     <div className="flex flex-col gap-6">
@@ -296,10 +307,10 @@ export function ApplicationSections({
           )}
           <div className="flex flex-col gap-3">
             {ratingsByProduct.map(({ productId, name, cells }) => {
-              const staffAdded = cells.every((cell) => cell.self === null);
-              const adjustedCount = cells.filter(
-                (cell) => cell.self !== null && cell.self !== cell.balo
-              ).length;
+              const staffAdded = !viewOnly && cells.every((cell) => cell.self === null);
+              const adjustedCount = viewOnly
+                ? 0
+                : cells.filter((cell) => cell.self !== null && cell.self !== cell.balo).length;
               return (
                 <div key={productId} className="border-border bg-card rounded-xl border p-4">
                   <div className="mb-2 flex items-center gap-2">

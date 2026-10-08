@@ -675,6 +675,32 @@ describe('editApplicationAsStaff — §invalid_experience', () => {
     expect(await readApplicationState(profile.id)).toEqual(before);
     expect(await readEditedAudit(profile.id)).toHaveLength(0);
   });
+
+  it('a ratings-only edit saves against a stored lead-above-project pair the delta never touches', async () => {
+    const t = await seedTaxonomy();
+    const actor = await seedActor();
+    const profile = await seedApplication(t, { status: 'approved' });
+    // Stored bad data (e.g. a Bubble import) the delta below never sets either count for.
+    await db
+      .update(expertProfiles)
+      .set({ projectLeadCountMin: 99 })
+      .where(eq(expertProfiles.id, profile.id));
+
+    const result = expectEdited(
+      await edit(profile.id, actor, {
+        ratings: [{ productId: t.p1, supportTypeId: t.stA, proficiency: 2 }],
+      })
+    );
+
+    expect(result.sections).toEqual(['ratings']);
+    const [row] = await db.select().from(expertProfiles).where(eq(expertProfiles.id, profile.id));
+    expect(row?.projectLeadCountMin).toBe(99);
+    const competencies = await readCompetencies(profile.id);
+    expect(
+      competencies.find((c) => c.productId === t.p1 && c.supportTypeId === t.stA)?.proficiency
+    ).toBe(2);
+    expect(await readEditedAudit(profile.id)).toHaveLength(1);
+  });
 });
 
 // ── §readers ─────────────────────────────────────────────────────────────────────────────

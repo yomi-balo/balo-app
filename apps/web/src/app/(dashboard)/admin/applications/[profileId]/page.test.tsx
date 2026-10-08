@@ -344,6 +344,9 @@ describe('AdminApplicationReviewPage (RSC) — staff render', () => {
     await renderPage();
 
     expect(screen.queryByText('Self 8 →')).toBeNull();
+    // `null`, not `[]`: this viewer must not see a false "Added by Balo" guess
+    // for a product the expert DID self-rate.
+    expect(screen.queryByText('Added by Balo')).toBeNull();
   });
 
   it('shows self-ratings for a reviewer with review_expert_applications', async () => {

@@ -121,7 +121,8 @@ export async function searchExpertFactory(
       .where(eq(expertProfiles.id, profile.id));
   }
 
-  // Competencies (product + support_type pairings).
+  // Competencies (product + support_type pairings). The fixture is self-rated like a real
+  // applicant write, so selfProficiency follows proficiency (BAL-593 invariant).
   if (overrides.competencies?.length) {
     await db.insert(expertCompetency).values(
       overrides.competencies.map((c) => ({
@@ -129,6 +130,7 @@ export async function searchExpertFactory(
         productId: c.productId,
         supportTypeId: c.supportTypeId,
         proficiency: c.proficiency ?? 3,
+        selfProficiency: c.proficiency ?? 3,
       }))
     );
   }

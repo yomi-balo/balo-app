@@ -48,19 +48,27 @@ const SUPPORT_TYPES: SupportType[] = [
 interface RenderSectionsOptions {
   application?: ApplicationWithRelations;
   supportTypes?: readonly SupportType[];
-  selfRatings?: readonly StaffSelfRating[];
+  selfRatings?: readonly StaffSelfRating[] | null;
   skillsLocked?: boolean;
 }
 
-function renderSections(options: RenderSectionsOptions = {}) {
+function renderSections({
+  application: applicationOverride,
+  supportTypes = [],
+  // A destructuring default only applies to `undefined` (an OMITTED key), never to an
+  // explicitly-passed `null` — the view-only arm needs exactly that distinction,
+  // which `options.selfRatings ?? []` would erase.
+  selfRatings = [],
+  skillsLocked = false,
+}: RenderSectionsOptions = {}) {
   return render(
     <ApplicationSections
-      application={options.application ?? application()}
+      application={applicationOverride ?? application()}
       productsByCategory={[]}
-      supportTypes={options.supportTypes ?? []}
+      supportTypes={supportTypes}
       certificationsByCategory={[]}
-      selfRatings={options.selfRatings ?? []}
-      skillsLocked={options.skillsLocked ?? false}
+      selfRatings={selfRatings}
+      skillsLocked={skillsLocked}
     />
   );
 }
@@ -310,6 +318,24 @@ describe('ApplicationSections', () => {
         selfRatings: [],
       });
       expect(screen.queryByText(/^Self \d+ →$/)).toBeNull();
+    });
+
+    /**
+     * `selfRatings: null` (the view-only viewer) renders
+     * Balo's value only. An empty ARRAY still means "every cell was self-rated the same as
+     * Balo's" and gets its own badge path (`staffAdded` / adjusted count); `null` suppresses that
+     * badge logic entirely rather than guessing from an absent overlay.
+     */
+    it('renders Balo-only — no "Added by Balo", no "n adjusted", no legend — when selfRatings is null', () => {
+      renderSections({
+        application: applicationWithOneCompetency(),
+        supportTypes: SUPPORT_TYPES,
+        selfRatings: null,
+      });
+      expect(screen.queryByText(/^Self \d+ →$/)).toBeNull();
+      expect(screen.queryByText('Added by Balo')).toBeNull();
+      expect(screen.queryByText(/adjusted/)).toBeNull();
+      expect(screen.queryByText(/means the expert rated themselves/)).toBeNull();
     });
   });
 

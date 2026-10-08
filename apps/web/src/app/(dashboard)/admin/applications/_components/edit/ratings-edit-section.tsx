@@ -20,17 +20,24 @@ function RatingLegend(): React.JSX.Element {
       aria-hidden="true"
       className="text-muted-foreground hidden items-center gap-3.5 text-xs sm:flex"
     >
+      {/*
+        Each label is an explicit string expression, not bare
+        JSXText, so there is no newline-adjacent-to-tag whitespace for a reader (or Prettier's own
+        reflow) to add or drop a space from. No space is intended between the marker and its
+        label either way: `gap-1.5` on the flex parent supplies the visual gap, not a text-node
+        space.
+      */}
       <span className="inline-flex items-center gap-1.5">
         <span className="bg-primary inline-block h-1.5 w-3.5 rounded-full" />
-        Balo’s rating
+        {'Balo’s rating'}
       </span>
       <span className="inline-flex items-center gap-1.5">
         <span className="bg-foreground/55 inline-block h-3 w-0.5 rounded-full" />
-        Self-rating
+        {'Self-rating'}
       </span>
       <span className="inline-flex items-center gap-1.5">
         <span className="border-warning/40 bg-warning/15 inline-block h-2 w-3.5 rounded-sm border" />
-        Difference
+        {'Difference'}
       </span>
     </div>
   );
@@ -168,7 +175,7 @@ export function RatingsEditSection({
                   Remove
                 </Button>
               </div>
-              <div role="group" aria-label={`${name} ratings`}>
+              <fieldset aria-label={`${name} ratings`} className="m-0 min-w-0 border-0 p-0">
                 {supportTypes.map((st) => (
                   <RatingRowEdit
                     key={st.id}
@@ -180,7 +187,7 @@ export function RatingsEditSection({
                     disabled={disabled}
                   />
                 ))}
-              </div>
+              </fieldset>
             </div>
           );
         })}

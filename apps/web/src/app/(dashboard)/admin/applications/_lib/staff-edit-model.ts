@@ -257,6 +257,30 @@ function buildCertificationsEdit(
 }
 
 /**
+ * Mirrors the repository planner's `staffEditExperienceIsInvalid`
+ * on the client, so Save can be disabled before the round-trip. Same copy as the server's
+ * `APPLICATION_EDIT_INVALID_EXPERIENCE` (`_actions/_shared/edit-outcome.ts`) — restated rather
+ * than imported, since that module is `server-only` and this one must stay client-safe.
+ *
+ * `null` when either draft count is null (nothing to compare), when the draft didn't touch either
+ * count from `initial`, or when the touched pair is valid.
+ */
+const STAFF_EDIT_EXPERIENCE_ERROR = "Projects led can't be more than total projects."; // pending-MJ
+
+export function staffEditExperienceError(
+  initial: StaffEditModel,
+  draft: StaffEditModel
+): string | null {
+  const { projectCountMin, projectLeadCountMin } = draft.experience;
+  if (projectCountMin === null || projectLeadCountMin === null) return null;
+  const touched =
+    projectCountMin !== initial.experience.projectCountMin ||
+    projectLeadCountMin !== initial.experience.projectLeadCountMin;
+  if (!touched) return null;
+  return projectLeadCountMin > projectCountMin ? STAFF_EDIT_EXPERIENCE_ERROR : null;
+}
+
+/**
  * The delta between two models — every key optional, omitted when nothing in that key changed.
  * An edit that plans to nothing returns `{}` (H3's `no_changes`).
  */

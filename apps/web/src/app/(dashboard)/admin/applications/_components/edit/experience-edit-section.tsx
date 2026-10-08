@@ -56,13 +56,22 @@ export interface ExperienceEditSectionProps {
   readonly initial: StaffEditModel;
   readonly update: (fn: (draft: StaffEditModel) => StaffEditModel) => void;
   readonly disabled: boolean;
+  /**
+   * `staffEditExperienceError(initial, draft)`, computed
+   * ONCE by the workspace (not recomputed here) so the inline message and the Save-disabled
+   * state in `EditSaveBar` never disagree about the same comparison.
+   */
+  readonly error: string | null;
 }
+
+const EXPERIENCE_ERROR_ID = 'staff-edit-experience-error';
 
 export function ExperienceEditSection({
   draft,
   initial,
   update,
   disabled,
+  error,
 }: Readonly<ExperienceEditSectionProps>): React.JSX.Element {
   const exp = draft.experience;
 
@@ -145,7 +154,13 @@ export function ExperienceEditSection({
               }))
             }
           >
-            <SelectTrigger id="staff-edit-project-lead-count" size="sm" className="w-32">
+            <SelectTrigger
+              id="staff-edit-project-lead-count"
+              size="sm"
+              className="w-32"
+              aria-invalid={error !== null}
+              aria-describedby={error === null ? undefined : EXPERIENCE_ERROR_ID}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -157,6 +172,15 @@ export function ExperienceEditSection({
             </SelectContent>
           </Select>
         </Field>
+        {error !== null && (
+          <p
+            id={EXPERIENCE_ERROR_ID}
+            role="alert"
+            className="text-destructive col-span-full text-xs"
+          >
+            {error}
+          </p>
+        )}
       </div>
     </section>
   );

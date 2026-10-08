@@ -328,7 +328,7 @@ export function formatMinorAmount(minor: number, currency: string): string {
 
 /** Turn `proposal_submitted` into `proposal submitted`. Never a regex. */
 export function humanizeEnumLabel(value: string): string {
-  return value.split('_').join(' ');
+  return value.replaceAll('_', ' ');
 }
 
 /** Join the non-empty segments of a sub-line, so an absent fact leaves no dangling `·`. */

@@ -24,6 +24,8 @@ export interface ApplicationEditFormProps {
   readonly onChange: (next: StaffEditModel) => void;
   readonly reference: StaffEditReference;
   readonly disabled: boolean;
+  /** `staffEditExperienceError(initial, draft)`, computed once by the workspace. */
+  readonly experienceError: string | null;
 }
 
 export function ApplicationEditForm({
@@ -32,6 +34,7 @@ export function ApplicationEditForm({
   onChange,
   reference,
   disabled,
+  experienceError,
 }: Readonly<ApplicationEditFormProps>): React.JSX.Element {
   const update = (fn: (draft: StaffEditModel) => StaffEditModel): void => {
     onChange(fn(draft));
@@ -39,7 +42,13 @@ export function ApplicationEditForm({
 
   return (
     <div className="flex flex-col gap-7">
-      <ExperienceEditSection draft={draft} initial={initial} update={update} disabled={disabled} />
+      <ExperienceEditSection
+        draft={draft}
+        initial={initial}
+        update={update}
+        disabled={disabled}
+        error={experienceError}
+      />
       <LanguagesEditSection
         draft={draft}
         initial={initial}

@@ -2,6 +2,7 @@
 
 import { Building2, Award, X, Check, Plus } from 'lucide-react';
 import type { Industry } from '@balo/db';
+import { EXPERT_INDUSTRIES_MAX } from '@balo/shared/experts';
 import { Button } from '@/components/ui/button';
 import { AddPicker } from './add-picker';
 import { ChangedDot } from './changed-dot';
@@ -38,6 +39,8 @@ export function IndustriesDistinctionsEditSection({
 }: Readonly<IndustriesDistinctionsEditSectionProps>): React.JSX.Element {
   const industryById = new Map(industries.map((i) => [i.id, i]));
   const removedIndustries = initial.industryIds.filter((id) => !draft.industryIds.includes(id));
+  // The same cap the expert's own settings save enforces.
+  const atCap = draft.industryIds.length >= EXPERT_INDUSTRIES_MAX;
 
   const addIndustry = (id: string): void => {
     update((d) => ({ ...d, industryIds: [...d.industryIds, id] }));
@@ -74,9 +77,15 @@ export function IndustriesDistinctionsEditSection({
             label="Add industry"
             groups={available}
             onPick={addIndustry}
-            disabled={disabled}
+            disabled={disabled || atCap}
           />
         </div>
+        {atCap && (
+          <p className="text-muted-foreground mb-2 text-xs">
+            {/* pending-MJ */}
+            Up to {EXPERT_INDUSTRIES_MAX} industries — remove one to add another.
+          </p>
+        )}
         {draft.industryIds.length === 0 && removedIndustries.length === 0 ? (
           <p className="text-muted-foreground text-xs">
             None selected — add the industries this expert has worked in.
@@ -141,34 +150,36 @@ export function IndustriesDistinctionsEditSection({
             Distinctions
           </p>
         </div>
-        <div role="group" aria-label="Distinctions" className="flex flex-wrap gap-2">
-          {DISTINCTIONS.map(({ key, label }) => {
-            const on = draft.experience[key];
-            const changed = on !== initial.experience[key];
-            return (
-              <button
-                key={key}
-                type="button"
-                aria-pressed={on}
-                disabled={disabled}
-                onClick={() => toggleDistinction(key)}
-                className={
-                  on
-                    ? 'bg-warning/10 text-warning border-warning/30 inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold disabled:opacity-50'
-                    : 'bg-card text-muted-foreground border-border inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold disabled:opacity-50'
-                }
-              >
-                {changed && <ChangedDot />}
-                {on ? (
-                  <Check className="size-3.5" aria-hidden="true" />
-                ) : (
-                  <Plus className="size-3.5" aria-hidden="true" />
-                )}
-                {label}
-              </button>
-            );
-          })}
-        </div>
+        <fieldset aria-label="Distinctions" className="m-0 min-w-0 border-0 p-0">
+          <div className="flex flex-wrap gap-2">
+            {DISTINCTIONS.map(({ key, label }) => {
+              const on = draft.experience[key];
+              const changed = on !== initial.experience[key];
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={on}
+                  disabled={disabled}
+                  onClick={() => toggleDistinction(key)}
+                  className={
+                    on
+                      ? 'bg-warning/10 text-warning border-warning/30 inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold disabled:opacity-50'
+                      : 'bg-card text-muted-foreground border-border inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold disabled:opacity-50'
+                  }
+                >
+                  {changed && <ChangedDot />}
+                  {on ? (
+                    <Check className="size-3.5" aria-hidden="true" />
+                  ) : (
+                    <Plus className="size-3.5" aria-hidden="true" />
+                  )}
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
       </div>
     </section>
   );

@@ -361,4 +361,26 @@ describe('staffEditExperienceIsInvalid', () => {
       })
     ).toBe(false);
   });
+
+  it('allows a bad stored pair when the delta sets neither count', () => {
+    const badSnapshot = profile({ projectCountMin: 5, projectLeadCountMin: 10 });
+    expect(staffEditExperienceIsInvalid(badSnapshot, {})).toBe(false);
+    expect(staffEditExperienceIsInvalid(badSnapshot, undefined)).toBe(false);
+    expect(staffEditExperienceIsInvalid(badSnapshot, { yearStartedSalesforce: 2020 })).toBe(false);
+  });
+
+  it('allows a delta lead count at or below the stored project count', () => {
+    expect(
+      staffEditExperienceIsInvalid(profile({ projectCountMin: 10 }), { projectLeadCountMin: 5 })
+    ).toBe(false);
+  });
+
+  it('allows a delta that sets both counts validly', () => {
+    expect(
+      staffEditExperienceIsInvalid(profile({ projectCountMin: 1, projectLeadCountMin: 1 }), {
+        projectCountMin: 20,
+        projectLeadCountMin: 15,
+      })
+    ).toBe(false);
+  });
 });

@@ -193,18 +193,25 @@ function planIndustries(
 }
 
 /**
- * True when the EFFECTIVE experience — the locked snapshot's `projectCountMin` /
- * `projectLeadCountMin`, each overridden by the delta's value when the delta provides one — would
- * leave the lead-count floor above the project-count floor. Checked ahead of
- * `planStaffApplicationEdit`, against the raw snapshot and edit, so an invalid combination is
- * caught before any plan is built and never reaches a write.
+ * True when the delta touches `projectCountMin` and/or `projectLeadCountMin`, AND the EFFECTIVE
+ * experience that would result — the locked snapshot's value for each, overridden by the delta's
+ * value when the delta provides one — would leave the lead-count floor above the project-count
+ * floor. Checked ahead of `planStaffApplicationEdit`, against the raw snapshot and edit, so an
+ * invalid combination is caught before any plan is built and never reaches a write.
+ *
+ * A delta that sets neither count never fires this, even against a snapshot whose stored pair is
+ * already bad (e.g. a Bubble import) — an edit that doesn't touch either count must not be
+ * blocked by data it didn't write.
  */
 export function staffEditExperienceIsInvalid(
   profile: StaffEditSnapshot['profile'],
   experience: StaffEditExperience | undefined
 ): boolean {
-  const projectCountMin = experience?.projectCountMin ?? profile.projectCountMin;
-  const projectLeadCountMin = experience?.projectLeadCountMin ?? profile.projectLeadCountMin;
+  const deltaProjectCountMin = experience?.projectCountMin;
+  const deltaProjectLeadCountMin = experience?.projectLeadCountMin;
+  if (deltaProjectCountMin === undefined && deltaProjectLeadCountMin === undefined) return false;
+  const projectCountMin = deltaProjectCountMin ?? profile.projectCountMin;
+  const projectLeadCountMin = deltaProjectLeadCountMin ?? profile.projectLeadCountMin;
   if (projectCountMin === null || projectLeadCountMin === null) return false;
   return projectLeadCountMin > projectCountMin;
 }

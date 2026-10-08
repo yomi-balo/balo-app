@@ -135,4 +135,22 @@ describe('EditSaveBar', () => {
     expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
   });
+
+  /** The experience error disables Save even WITH changes. */
+  it('disables Save when disableSave is true, even with changes and not saving', () => {
+    render(
+      <EditSaveBar
+        changes={[{ section: 'Experience', text: 'x' }]}
+        saving={false}
+        live={false}
+        firstName="Priya"
+        open={false}
+        onToggle={vi.fn()}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+        disableSave
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  });
 });

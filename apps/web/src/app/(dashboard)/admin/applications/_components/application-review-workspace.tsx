@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import * as Sentry from '@sentry/nextjs';
 import { Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { track, ADMIN_APPLICATIONS_EVENTS } from '@/lib/analytics';
@@ -11,6 +12,7 @@ import { editExpertApplicationAction } from '../_actions/edit-expert-application
 import {
   buildStaffEdit,
   describeStaffEditChanges,
+  staffEditExperienceError,
   type StaffEditModel,
   type StaffEditReference,
 } from '../_lib/staff-edit-model';
@@ -76,6 +78,13 @@ export function ApplicationReviewWorkspace({
     return describeStaffEditChanges(editModel, draft, reference);
   }, [draft, editModel, reference]);
 
+  // Computed ONCE here so the inline message
+  // (`ApplicationEditForm`) and the Save-disabled state (`EditSaveBar`) never disagree.
+  const experienceError = useMemo(() => {
+    if (draft === null || editModel === null) return null;
+    return staffEditExperienceError(editModel, draft);
+  }, [draft, editModel]);
+
   const handleAttemptLeave = useCallback((href: string): void => {
     setPendingHref(href);
     setDiscardOpen(true);
@@ -114,7 +123,15 @@ export function ApplicationReviewWorkspace({
   }, [pendingHref, router]);
 
   const handleSave = useCallback((): void => {
-    if (draft === null || editModel === null || saving || changes.length === 0) return;
+    if (
+      draft === null ||
+      editModel === null ||
+      saving ||
+      changes.length === 0 ||
+      experienceError !== null
+    ) {
+      return;
+    }
     setSaving(true);
 
     const run = async (): Promise<void> => {
@@ -161,8 +178,17 @@ export function ApplicationReviewWorkspace({
         setSaving(false);
       }
     };
-    run();
-  }, [draft, editModel, saving, changes.length, expertProfileId, firstName, router]);
+    run().catch((error: unknown) => Sentry.captureException(error));
+  }, [
+    draft,
+    editModel,
+    saving,
+    changes.length,
+    experienceError,
+    expertProfileId,
+    firstName,
+    router,
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -210,6 +236,7 @@ export function ApplicationReviewWorkspace({
               onChange={setDraft}
               reference={reference}
               disabled={saving}
+              experienceError={experienceError}
             />
           </fieldset>
           <div>
@@ -226,6 +253,7 @@ export function ApplicationReviewWorkspace({
             onToggle={handleToggleChanges}
             onCancel={handleCancel}
             onSave={handleSave}
+            disableSave={experienceError !== null}
           />
           <DiscardChangesDialog
             open={discardOpen}

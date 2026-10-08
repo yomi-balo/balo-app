@@ -10,6 +10,7 @@ import { ExpertApplicationEditedEmail } from './expert-application-edited.js';
 import {
   EXPERT_APPLICATION_EDIT_SECTIONS,
   type ExpertApplicationEditSection,
+  type ExpertChecklistItemKey,
 } from '@balo/shared/experts';
 import { ExpertReferralInvitedEmail } from './expert-referral-invited.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
@@ -121,7 +122,6 @@ import {
 } from './conversation-unread-digest.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { ExpertSearchabilityLostEmail } from './expert-searchability-lost.js';
-import type { ExpertChecklistItemKey } from '@balo/shared/experts';
 import {
   BookingConfirmedClientEmail,
   BookingConfirmedExpertEmail,

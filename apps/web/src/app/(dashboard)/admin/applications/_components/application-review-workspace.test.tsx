@@ -28,9 +28,13 @@ vi.mock('../_actions/edit-expert-application', () => ({
 }));
 
 const mockDescribeChanges = vi.fn<() => { section: string; text: string }[]>(() => []);
+// Defaults to `null` (no error), same as the REAL function's
+// no-touched/valid-pair outcome, so every pre-existing test here keeps its prior behaviour.
+const mockStaffEditExperienceError = vi.fn<() => string | null>(() => null);
 vi.mock('../_lib/staff-edit-model', () => ({
   buildStaffEdit: vi.fn(() => ({})),
   describeStaffEditChanges: (...args: unknown[]) => mockDescribeChanges(...(args as [])),
+  staffEditExperienceError: (...args: unknown[]) => mockStaffEditExperienceError(...(args as [])),
 }));
 
 vi.mock('./edit/application-edit-form', () => ({
@@ -57,6 +61,7 @@ vi.mock('./edit/edit-save-bar', () => ({
     firstName,
     onCancel,
     onSave,
+    disableSave,
   }: {
     changes: { section: string; text: string }[];
     saving: boolean;
@@ -64,6 +69,7 @@ vi.mock('./edit/edit-save-bar', () => ({
     firstName: string;
     onCancel: () => void;
     onSave: () => void;
+    disableSave?: boolean;
   }) => (
     <div>
       <span data-testid="change-count">{changes.length}</span>
@@ -72,7 +78,7 @@ vi.mock('./edit/edit-save-bar', () => ({
       <button type="button" onClick={onCancel}>
         Cancel
       </button>
-      <button type="button" disabled={saving} onClick={onSave}>
+      <button type="button" disabled={saving || disableSave} onClick={onSave}>
         Save changes
       </button>
     </div>
@@ -183,6 +189,7 @@ const mockTrack = vi.mocked(track);
 beforeEach(() => {
   vi.clearAllMocks();
   mockDescribeChanges.mockReturnValue([]);
+  mockStaffEditExperienceError.mockReturnValue(null);
 });
 
 describe('ApplicationReviewWorkspace', () => {
@@ -326,5 +333,50 @@ describe('ApplicationReviewWorkspace', () => {
     expect(mockToast.error).toHaveBeenCalledWith('Invalid request.');
     expect(screen.queryByTestId('read-sections')).toBeNull();
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The repository's OWN refusal, surfaced through its
+   * dedicated `code`/message pair rather than the generic failure copy.
+   */
+  it('toasts the invalid_experience message by code, and never refreshes', async () => {
+    const user = userEvent.setup();
+    mockDescribeChanges.mockReturnValue([
+      { section: 'Experience', text: 'Projects as lead 1 → 10' },
+    ]);
+    mockEditAction.mockResolvedValue({
+      success: false,
+      error: "Projects led can't be more than total projects. Nothing was written.",
+      code: 'invalid_experience',
+    });
+    renderWorkspace();
+
+    await user.click(screen.getByRole('button', { name: /edit application/i }));
+    await user.click(screen.getByRole('button', { name: 'change a field' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "Projects led can't be more than total projects. Nothing was written."
+    );
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Computed ONCE and passed down; Save stays disabled even
+   * though `changes` is non-empty, so a staffer can't submit a delta that will be refused anyway.
+   */
+  it('disables Save while staffEditExperienceError is non-null, even with changes', async () => {
+    mockDescribeChanges.mockReturnValue([
+      { section: 'Experience', text: 'Projects as lead 1 → 10' },
+    ]);
+    mockStaffEditExperienceError.mockReturnValue("Projects led can't be more than total projects.");
+    const user = userEvent.setup();
+    renderWorkspace();
+
+    await user.click(screen.getByRole('button', { name: /edit application/i }));
+    await user.click(screen.getByRole('button', { name: 'change a field' }));
+
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    expect(mockEditAction).not.toHaveBeenCalled();
   });
 });

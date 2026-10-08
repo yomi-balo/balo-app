@@ -82,6 +82,21 @@ describe('ApplicationEditForm — accessibility', () => {
         onChange={vi.fn()}
         reference={REFERENCE}
         disabled={false}
+        experienceError={null}
+      />
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('has no violations with the experience error shown', async () => {
+    const { container } = render(
+      <ApplicationEditForm
+        initial={MODEL}
+        draft={MODEL}
+        onChange={vi.fn()}
+        reference={REFERENCE}
+        disabled={false}
+        experienceError="Projects led can't be more than total projects."
       />
     );
     expect(await axe(container)).toHaveNoViolations();
@@ -110,6 +125,7 @@ describe('ApplicationEditForm — accessibility', () => {
         onChange={vi.fn()}
         reference={REFERENCE}
         disabled={false}
+        experienceError={null}
       />
     );
     expect(await axe(container)).toHaveNoViolations();
@@ -123,6 +139,7 @@ describe('ApplicationEditForm — accessibility', () => {
         onChange={vi.fn()}
         reference={REFERENCE}
         disabled
+        experienceError={null}
       />
     );
     expect(await axe(container)).toHaveNoViolations();

@@ -22,6 +22,11 @@ export interface EditSaveBarProps {
   readonly onToggle: () => void;
   readonly onCancel: () => void;
   readonly onSave: () => void;
+  /**
+   * True while the experience section's lead/project
+   * counts are invalid, so Save stays disabled even though there ARE changes to describe.
+   */
+  readonly disableSave?: boolean;
 }
 
 function groupBySection(
@@ -50,6 +55,7 @@ export function EditSaveBar({
   onToggle,
   onCancel,
   onSave,
+  disableSave = false,
 }: Readonly<EditSaveBarProps>): React.JSX.Element {
   const n = changes.length;
   const grouped = groupBySection(changes);
@@ -108,7 +114,7 @@ export function EditSaveBar({
         <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="button" disabled={n === 0 || saving} onClick={onSave}>
+        <Button type="button" disabled={n === 0 || saving || disableSave} onClick={onSave}>
           {saving ? (
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
           ) : (

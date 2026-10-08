@@ -200,19 +200,53 @@ describe('editExpertApplicationAction — Zod refusals', () => {
     expect(mockEditApplicationAsStaff).not.toHaveBeenCalled();
   });
 
-  it('rejects projectLeadCountMin greater than projectCountMin', async () => {
+  /**
+   * Zod validates each experience field on its own; the lead ≤ project rule lives in the
+   * repository planner, which checks the effective pair under the lock. So this delta reaches the
+   * repository, and the "maps invalid_experience…" case below covers its refusal.
+   */
+  it('forwards projectLeadCountMin greater than projectCountMin to the repository (no cross-field Zod refine)', async () => {
+    mockEditApplicationAsStaff.mockResolvedValue(EDITED_RESULT());
     const result = await editExpertApplicationAction({
       expertProfileId: PROFILE_ID,
       edit: { experience: { projectCountMin: 1, projectLeadCountMin: 10 } },
     });
-    expect(result.success).toBe(false);
-    expect(mockEditApplicationAsStaff).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect(mockEditApplicationAsStaff).toHaveBeenCalled();
   });
 
   it('rejects an experience count outside the PROJECT_COUNT_RANGES vocabulary', async () => {
     const result = await editExpertApplicationAction({
       expertProfileId: PROFILE_ID,
       edit: { experience: { projectCountMin: 7 } },
+    });
+    expect(result.success).toBe(false);
+    expect(mockEditApplicationAsStaff).not.toHaveBeenCalled();
+  });
+
+  /** One shared cap (`EXPERT_LANGUAGES_MAX`) with `save-profile.ts`. */
+  it('rejects more than EXPERT_LANGUAGES_MAX languages', async () => {
+    const languages = Array.from({ length: 11 }, (_, i) => ({
+      languageId: `d0000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      proficiency: 'intermediate' as const,
+    }));
+    const result = await editExpertApplicationAction({
+      expertProfileId: PROFILE_ID,
+      edit: { languages },
+    });
+    expect(result.success).toBe(false);
+    expect(mockEditApplicationAsStaff).not.toHaveBeenCalled();
+  });
+
+  /** One shared cap (`EXPERT_INDUSTRIES_MAX`) with `save-profile.ts`. */
+  it('rejects more than EXPERT_INDUSTRIES_MAX industryIds', async () => {
+    const industryIds = Array.from(
+      { length: 21 },
+      (_, i) => `e0000000-0000-4000-8000-${String(i).padStart(12, '0')}`
+    );
+    const result = await editExpertApplicationAction({
+      expertProfileId: PROFILE_ID,
+      edit: { industryIds },
     });
     expect(result.success).toBe(false);
     expect(mockEditApplicationAsStaff).not.toHaveBeenCalled();
@@ -256,11 +290,16 @@ describe('editExpertApplicationAction — repository outcomes', () => {
     expect(mockPublish).not.toHaveBeenCalled();
   });
 
-  it('maps invalid_experience to code invalid, and never publishes', async () => {
+  it('maps invalid_experience to code invalid_experience, with its own message, and never publishes', async () => {
     mockEditApplicationAsStaff.mockResolvedValue({ outcome: 'invalid_experience' });
     const result = await editExpertApplicationAction(VALID_INPUT);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.code).toBe('invalid');
+    if (!result.success) {
+      expect(result.code).toBe('invalid_experience');
+      expect(result.error).toBe(
+        "Projects led can't be more than total projects. Nothing was written."
+      );
+    }
     expect(mockPublish).not.toHaveBeenCalled();
   });
 

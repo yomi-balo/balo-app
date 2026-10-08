@@ -2,6 +2,7 @@
 
 import { Globe, X, Undo2 } from 'lucide-react';
 import type { Language } from '@balo/db';
+import { EXPERT_LANGUAGES_MAX } from '@balo/shared/experts';
 import {
   Select,
   SelectContent,
@@ -46,6 +47,8 @@ export function LanguagesEditSection({
   const languageById = new Map(languages.map((l) => [l.id, l]));
   const draftIds = new Set(draft.languages.map((l) => l.languageId));
   const removed = initial.languages.filter((l) => !draftIds.has(l.languageId));
+  // The same cap the expert's own settings save enforces.
+  const atCap = draft.languages.length >= EXPERT_LANGUAGES_MAX;
 
   const addLanguage = (languageId: string): void => {
     update((d) => {
@@ -99,9 +102,15 @@ export function LanguagesEditSection({
           label="Add language"
           groups={available}
           onPick={addLanguage}
-          disabled={disabled}
+          disabled={disabled || atCap}
         />
       </div>
+      {atCap && (
+        <p className="text-muted-foreground mb-2 text-xs">
+          {/* pending-MJ */}
+          Up to {EXPERT_LANGUAGES_MAX} languages — remove one to add another.
+        </p>
+      )}
       {draft.languages.length === 0 && removed.length === 0 ? (
         <p className="text-muted-foreground text-xs">
           No languages yet — add the ones this expert speaks.

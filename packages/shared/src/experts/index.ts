@@ -52,3 +52,7 @@ export {
   type ApplicantDraftWriteDecision,
   classifyApplicantDraftWrite,
 } from './applicant-write-window';
+
+// The ONE language/industry cap definition, shared by the applicant
+// profile save, the staff edit Zod schema and the wizard step schemas.
+export { EXPERT_LANGUAGES_MAX, EXPERT_INDUSTRIES_MAX } from './expert-profile-limits';
