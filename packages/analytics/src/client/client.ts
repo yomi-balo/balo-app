@@ -7,6 +7,13 @@ import {
 import { reportAnalyticsError } from './error-reporter';
 
 let initialized = false;
+/** The landing was redaction-sensitive: replay is refused for the whole document, never resumed. */
+let replaySuppressedAtLanding = false;
+/**
+ * Replay is currently stopped (or was never started) because of the current route (staff surface
+ * or redaction-sensitive path).
+ */
+let replaySuppressedByRoute = false;
 
 /** URL-shaped autocapture properties that may carry a secret-bearing path. */
 const URL_PROPERTY_KEYS = [
@@ -80,6 +87,14 @@ const INITIAL_URL_PROPERTY_KEYS = [
  */
 export function sanitizeAnalyticsEvent(cr: CaptureResult | null): CaptureResult | null {
   if (cr === null) return null;
+  // While replay is suppressed, a `$snapshot` can still arrive from a recorder that slipped past
+  // a stop (the lazy recorder loading after it) or from the buffer `stop()` flushes through
+  // `capture`; both are dropped here. A few pre-navigation frames flushed at stop are lost too, an
+  // accepted fidelity loss. `stopSessionRecording` must not be called from here: it re-enters
+  // capture.
+  if (cr.event === '$snapshot' && (replaySuppressedAtLanding || replaySuppressedByRoute)) {
+    return null;
+  }
   const { properties } = cr;
   if (properties === undefined || properties === null) return cr;
 
@@ -121,19 +136,67 @@ function currentHref(): string {
  * behind no export this framework-agnostic, also-`apps/api`-consumed package may depend on —
  * see the module docblock on why `@sentry/nextjs` itself cannot be a dependency here), while
  * `@balo/shared/redaction` is already a dependency of this package. "Sensitive" is DERIVED,
- * never a second registry: a URL is sensitive exactly when redaction would change it, so this
+ * never a second registry: a value is sensitive exactly when redaction would change it, so this
  * cannot drift from `SENSITIVE_PATH_PREFIXES` / the Stripe query-param registry the way a
  * hand-copied prefix list would — identical reasoning to `isSensitiveUrl`'s own docblock.
  */
-function isOnSensitiveLanding(): boolean {
-  const href = currentHref();
-  return redactSensitivePath(href) !== href;
+function isRedactionSensitive(value: string): boolean {
+  return redactSensitivePath(value) !== value;
+}
+
+/**
+ * Balo-staff surfaces whose DOM carries tenant data; Session Replay must not record them.
+ * `subtree` matches the path and everything beneath it; `exact` matches the path alone.
+ * `/engagements/[id]` is a page shared with clients and experts, so only the staff list
+ * (`/engagements`) is registered. Known residual: `/projects` and `/projects/[requestId]` render
+ * an admin lens (cross-tenant company names) for platform admins on URLs shared with clients, so
+ * a path registry cannot see them; they stay recorded.
+ */
+const STAFF_REPLAY_SURFACES = [
+  { path: '/admin', match: 'subtree' },
+  { path: '/promo-codes', match: 'subtree' },
+  { path: '/engagements', match: 'exact' },
+] as const;
+
+function normaliseReplayPath(input: string): string {
+  let path: string;
+  try {
+    path = new URL(input, 'https://placeholder.invalid').pathname;
+  } catch {
+    path = input;
+  }
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // Malformed escape: compare the raw value.
+  }
+  return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+}
+
+/** Segment-boundary, case-sensitive match against the registry. */
+function isStaffReplaySurface(pathnameOrHref: string): boolean {
+  const p = normaliseReplayPath(pathnameOrHref);
+  return STAFF_REPLAY_SURFACES.some(({ path, match }) =>
+    match === 'subtree' ? p === path || p.startsWith(`${path}/`) : p === path
+  );
+}
+
+/**
+ * The single decision for "Session Replay must not run here", used at init and on navigation so
+ * the two cannot drift: a redaction-sensitive value (see `isRedactionSensitive`) or a staff
+ * surface.
+ */
+export function shouldSuppressReplay(pathnameOrHref: string): boolean {
+  return isRedactionSensitive(pathnameOrHref) || isStaffReplaySurface(pathnameOrHref);
 }
 
 export function initAnalytics(): void {
   if (globalThis.window === undefined || initialized) return;
 
   if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
+    const href = currentHref();
+    replaySuppressedAtLanding = isRedactionSensitive(href);
+    replaySuppressedByRoute = isStaffReplaySurface(href);
     try {
       posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
         api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://app.posthog.com',
@@ -170,10 +233,16 @@ export function initAnalytics(): void {
           'payment_intent',
           'payment_intent_client_secret',
         ],
-        // FIX ROUND 3 R2 — refuse Session Replay outright (never start it) on a landing whose
-        // URL `redactSensitivePath` would rewrite. See `sanitizeAnalyticsEvent`'s G7 docblock
-        // above for why scrubbing is not an option for this sink.
-        disable_session_recording: isOnSensitiveLanding(),
+        // ⚠ `disable_session_recording` is evaluated at init ONLY. It does NOT hold across
+        // client-side navigation: a Next.js route change never re-runs init, so a session that
+        // started on a normal page keeps recording onto a staff surface. `syncSessionReplayToRoute`
+        // (below), driven by `SessionReplayRouteGuard` in `apps/web`, is what makes it hold; any
+        // new host app MUST call it on every route change. Known residual: `/engagements/[id]` is
+        // shared with clients and experts, so it stays recorded, as do `/projects` and
+        // `/projects/[requestId]` (an admin lens on shared URLs).
+        // FIX ROUND 3 R2 — a redaction-sensitive landing is refused for the whole document; see
+        // `sanitizeAnalyticsEvent`'s G7 docblock above for why scrubbing is not an option.
+        disable_session_recording: replaySuppressedAtLanding || replaySuppressedByRoute,
       });
     } catch (error) {
       // FIX ROUND 3 R1 — `posthog.init` is the one call in this module that used to be
@@ -185,6 +254,35 @@ export function initAnalytics(): void {
       reportAnalyticsError(error, 'init');
     }
     initialized = true;
+  }
+}
+
+/**
+ * Stops Session Replay on entry to a staff surface and resumes it on exit. Idempotent: it calls
+ * the SDK only when the decision changes. A no-op before init and after a redaction-sensitive
+ * landing (never resumed). `startSessionRecording()` is called with no override so sampling and
+ * linked-flag gating still apply, and a sampled-out session stays out.
+ */
+export function syncSessionReplayToRoute(pathname: string): void {
+  if (!initialized || replaySuppressedAtLanding) return;
+  const next = shouldSuppressReplay(pathname);
+  if (next === replaySuppressedByRoute) return;
+  try {
+    if (next) {
+      // Set BEFORE the SDK call: `stop()` flushes through `before_send`, whose `$snapshot` drop
+      // reads this flag.
+      replaySuppressedByRoute = true;
+      posthog.stopSessionRecording();
+    } else {
+      // Stop again while still suppressed: a recorder whose lazy script loaded after the entry
+      // stop is running and buffering staff-surface frames. This flush is dropped and the
+      // recorder shut down, so `start()` begins clean instead of no-oping onto that buffer.
+      posthog.stopSessionRecording();
+      replaySuppressedByRoute = false;
+      posthog.startSessionRecording();
+    }
+  } catch (error) {
+    reportAnalyticsError(error, 'replay');
   }
 }
 
