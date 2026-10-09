@@ -135,6 +135,48 @@ describe('profileStepSchema', () => {
     });
     expect(result.success).toBe(true);
   });
+
+  /**
+   * BAL-557 — the wizard caps languages/industries the same way the settings save and the
+   * staff edit do (`@balo/shared/experts`' ONE definition).
+   */
+  describe('language/industry caps', () => {
+    it('accepts exactly 10 languages', () => {
+      const languages = Array.from({ length: 10 }, (_, i) => ({
+        languageId: i === 0 ? UUID_A : UUID_B,
+        proficiency: 'native' as const,
+      }));
+      expect(profileStepSchema.safeParse({ ...validData, languages }).success).toBe(true);
+    });
+
+    it('rejects 11 languages, at path "languages", with the field message', () => {
+      const languages = Array.from({ length: 11 }, () => ({
+        languageId: UUID_A,
+        proficiency: 'native' as const,
+      }));
+      const result = profileStepSchema.safeParse({ ...validData, languages });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issue = result.error.issues.find((i) => i.path[0] === 'languages');
+        expect(issue?.message).toBe('You can list up to 10 languages.');
+      }
+    });
+
+    it('accepts exactly 20 industries', () => {
+      const industryIds = Array.from({ length: 20 }, () => UUID_A);
+      expect(profileStepSchema.safeParse({ ...validData, industryIds }).success).toBe(true);
+    });
+
+    it('rejects 21 industries, at path "industryIds", with the field message', () => {
+      const industryIds = Array.from({ length: 21 }, () => UUID_A);
+      const result = profileStepSchema.safeParse({ ...validData, industryIds });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issue = result.error.issues.find((i) => i.path[0] === 'industryIds');
+        expect(issue?.message).toBe('You can pick up to 20 industries.');
+      }
+    });
+  });
 });
 
 describe('productsStepSchema', () => {

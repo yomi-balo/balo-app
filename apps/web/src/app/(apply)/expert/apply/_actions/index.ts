@@ -1,6 +1,7 @@
 export { loadDraftAction, type LoadDraftResult, type ReferenceData } from './load-draft';
 export { saveDraftAction } from './save-draft';
 export { submitApplicationAction } from './submit-application';
+export { startNewApplicationAction, type StartNewApplicationResult } from './start-new-application';
 export {
   STEP_CONFIG,
   STEP_SCHEMAS,

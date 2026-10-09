@@ -33,6 +33,11 @@ export type ApplicantDraftWriteDecision = 'ok' | 'declined' | 'closed';
  * | `rejected`                       | `declined`                                           |
  * | anything else (`under_review`, `approved`, a later `submitted`) | `closed`              |
  *
+ * `rejected` STAYS `declined`. The only route from `rejected` back to a writable row is the
+ * applicant's explicit "Start a new application" transition, `expertsRepository.reopenApplication`
+ * (`rejected → draft`, behind the reapply cooldown). A stale wizard tab whose row is still
+ * `rejected` is therefore refused, never silently reopened.
+ *
  * `submittedAt` is `null` for a row that was marked `submitted` without that timestamp ever being
  * set — an impossible-in-practice but UNTRUSTED-input shape; it resolves to `closed`, never `ok`,
  * because there is no evidence of a recent submit to grant grace against.

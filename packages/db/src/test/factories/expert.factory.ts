@@ -1,6 +1,5 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../client';
-import { expertsRepository } from '../../repositories/experts';
 import { expertProfiles, type ExpertProfile } from '../../schema/experts';
 import { expertDraftFactory } from './expert-draft.factory';
 
@@ -26,15 +25,18 @@ interface ExpertOverrides {
  * floor columns (`decided_at` / `decided_by_user_id`): a fixture expert is a PRE-BAL-549-shaped
  * approval, which is also the shape the "excludes a pre-BAL-549 approval" coverage in
  * `expert-application-decision.integration.test.ts` needs to exist.
+ *
+ * The SUBMIT is a fixture write for the same reason: `expertsRepository.submitApplication`
+ * appends an `expert_application.submitted` audit row (BAL-557), so this stamps `submitted_at`
+ * directly in the same UPDATE instead of calling it.
  */
 export async function expertFactory(overrides: ExpertOverrides = {}): Promise<ExpertProfile> {
   const draft = await expertDraftFactory(overrides);
-  await expertsRepository.submitApplication(draft.id);
 
   const now = new Date();
   const [profile] = await db
     .update(expertProfiles)
-    .set({ applicationStatus: 'approved', approvedAt: now, updatedAt: now })
+    .set({ applicationStatus: 'approved', submittedAt: now, approvedAt: now, updatedAt: now })
     .where(eq(expertProfiles.id, draft.id))
     .returning();
 

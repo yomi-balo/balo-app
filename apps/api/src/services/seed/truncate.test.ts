@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   users,
   expertProfiles,
+  expertApplicationDecisions,
   companies,
   conversations,
   conversationMessages,
@@ -208,6 +209,30 @@ describe('truncateSeedData — BAL-424 conversation sweep ordering', () => {
 
     expect(recorder.deletes).not.toContain(conversations);
     expect(recorder.deletes).not.toContain(users);
+  });
+});
+
+describe('truncateSeedData — expert_application_decisions is RESTRICT on expert_profiles', () => {
+  /**
+   * `expert_application_decisions.expert_profile_id` is `ON DELETE RESTRICT` — an archived
+   * decision survives a hard-deleted profile by design. The seeder must delete these rows
+   * itself before the profile delete, or that delete raises `23503`.
+   */
+  it('deletes expert_application_decisions BEFORE expertProfiles', async () => {
+    const recorder = newRecorder([
+      [users, [SEED_USER]],
+      [expertProfiles, [SEED_PROFILE]],
+      [conversationMessages, []],
+      [conversationFiles, []],
+    ]);
+
+    await truncateSeedData(makeTx(recorder), 'experts');
+
+    const decisionsAt = recorder.deletes.indexOf(expertApplicationDecisions);
+    const profilesAt = recorder.deletes.indexOf(expertProfiles);
+    expect(decisionsAt).toBeGreaterThanOrEqual(0);
+    expect(profilesAt).toBeGreaterThanOrEqual(0);
+    expect(decisionsAt).toBeLessThan(profilesAt);
   });
 });
 

@@ -53,6 +53,10 @@ export {
   classifyApplicantDraftWrite,
 } from './applicant-write-window';
 
-// The ONE language/industry cap definition, shared by the applicant
-// profile save, the staff edit Zod schema and the wizard step schemas.
+// The ONE language/industry cap definition, shared by the expert-settings profile save, the
+// staff edit Zod schema and the wizard's strict and draft profile-step schemas.
 export { EXPERT_LANGUAGES_MAX, EXPERT_INDUSTRIES_MAX } from './expert-profile-limits';
+
+// BAL-557 — when a declined applicant may start a new application. The cooldown length is the
+// `expert_reapply_cooldown_days` platform setting; these derive the date from it.
+export { reapplyAvailableAt, isReapplyCooldownActive } from './reapply-cooldown';

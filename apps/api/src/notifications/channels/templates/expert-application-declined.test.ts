@@ -7,49 +7,26 @@ import {
   ExpertApplicationDeclinedEmail,
   EXPERT_APPLICATION_DECLINED_COPY,
   declinedLeadParagraph,
+  REAPPLY_HEADING,
+  reapplyText,
+  REAPPLY_TEXT_UNDATED,
+  REAPPLY_CTA_LABEL,
 } from './expert-application-declined.js';
 import { EXPERT_DECLINE_REASON_LABEL } from './expert-decline-reason-label.js';
 
 /**
- * BAL-549 WEB-REVIEW FIX ROUND (W1) — THE DECLINE STORY MUST NOT PROMISE A RE-APPLICATION.
+ * BAL-557 — THE DECLINE STORY NOW PROMISES A RE-APPLICATION, DATED AND TRUE.
  *
- * `expertsRepository.submitApplication`'s WHERE is `applicationStatus = 'draft'`, so a `rejected`
- * profile matches no row: re-applying does not work, and BAL-549's "Out of scope" excluded the
- * transition deliberately. Three shipped surfaces promised it anyway. This suite covers the two
- * applicant-facing ones — the EMAIL and the HELP DOC. (The code comments and the misleading
- * submit error are pinned in `apps/web`: `submit-application.test.ts`, `save-draft.test.ts`.)
+ * BAL-549's web-review fix round (W1) banned the promise because the transition did not exist.
+ * BAL-557 builds it (`expertsRepository.reopenApplication`) behind a server-enforced,
+ * runtime-configurable cooldown, so this suite REPLACES the old banned-phrase sweep with
+ * verbatim pins of the restored copy: every sentence of the re-application block, the CTA href,
+ * and both the dated and undated variants.
  *
- * ⚠⚠ FULL LITERALS, NOT `toContain` ON A FRAGMENT. A fragment assertion cannot notice a promise
- * being ADDED, which is the regression that matters here, and it is the failure mode the
- * `feedback_monitor_strings_need_verbatim_pin` rule exists to stop. Every body string of the
- * email is an exported constant and is asserted against its whole text, so a copy change is a
- * deliberate two-file edit. The banned-phrase sweep below is the second layer: it reads the
- * RENDERED HTML and the SHIPPED MARKDOWN, so it also catches a promise re-introduced in prose
- * that no constant covers.
+ * ⚠⚠ FULL LITERALS, NOT `toContain` ON A FRAGMENT (`feedback_monitor_strings_need_verbatim_pin`).
  */
 
 const BASE_URL = 'https://app.balo.expert';
-
-/**
- * The phrases that describe a flow which does not exist. Lower-cased before matching so a
- * sentence-case or title-case spelling cannot slip past.
- */
-const BANNED_PROMISES = [
-  'apply again',
-  're-apply',
-  'reapply',
-  'apply once more',
-  'start from scratch',
-  'pick up right where you left off',
-  'nothing here is permanent',
-] as const;
-
-function assertNoPromise(haystack: string, label: string): void {
-  const lowered = haystack.toLowerCase();
-  for (const phrase of BANNED_PROMISES) {
-    expect(lowered, `${label} must not promise "${phrase}"`).not.toContain(phrase);
-  }
-}
 
 describe('EXPERT_APPLICATION_DECLINED_COPY', () => {
   it('is the exact shipped copy, sentence for sentence', () => {
@@ -65,12 +42,6 @@ describe('EXPERT_APPLICATION_DECLINED_COPY', () => {
       supportPrefix: 'Want to talk it through?',
     });
   });
-
-  it('promises nothing that does not exist', () => {
-    for (const [key, value] of Object.entries(EXPERT_APPLICATION_DECLINED_COPY)) {
-      assertNoPromise(value, `EXPERT_APPLICATION_DECLINED_COPY.${key}`);
-    }
-  });
 });
 
 describe('declinedLeadParagraph', () => {
@@ -82,23 +53,45 @@ describe('declinedLeadParagraph', () => {
   });
 });
 
+describe('the restored re-application copy', () => {
+  it('pins the heading verbatim', () => {
+    expect(REAPPLY_HEADING).toBe("You're welcome to try again");
+  });
+
+  it('pins the dated text verbatim, with the date spliced in exactly once', () => {
+    expect(reapplyText('9 Dec 2026')).toBe(
+      "You're welcome to start a new application from 9 Dec 2026. Your earlier answers stay " +
+        'saved, so you can pick up and update them rather than start from the beginning.'
+    );
+  });
+
+  it('pins the undated fallback verbatim — no digit-day count anywhere in it', () => {
+    expect(REAPPLY_TEXT_UNDATED).toBe(
+      "You're welcome to start a new application once a short wait has passed. Your earlier " +
+        'answers stay saved, so you can pick up and update them rather than start from the ' +
+        'beginning.'
+    );
+    expect(REAPPLY_TEXT_UNDATED).not.toMatch(/\d/);
+  });
+
+  it('pins the CTA label verbatim', () => {
+    expect(REAPPLY_CTA_LABEL).toBe('Start a new application');
+  });
+});
+
 describe('ExpertApplicationDeclinedEmail', () => {
   it.each(EXPERT_DECLINE_REASONS)(
-    'renders the %s reason with no re-application promise and no CTA to the wizard',
+    'renders the %s reason with the dated re-application block and its CTA',
     async (reason) => {
       const html = await render(
-        ExpertApplicationDeclinedEmail({ firstName: 'Priya', reason, baseUrl: BASE_URL })
+        ExpertApplicationDeclinedEmail({
+          firstName: 'Priya',
+          reason,
+          baseUrl: BASE_URL,
+          reapplyAvailableDate: '9 Dec 2026',
+        })
       );
 
-      /*
-        Guards the guard: the sweep below is only meaningful if the email really rendered.
-
-        ⚠ FRAGMENTS, AND APOSTROPHE-FREE ONES, DELIBERATELY. React escapes `'` to `&#x27;` in
-        text and inserts `<!-- -->` around every interpolation, so a whole-sentence `toContain`
-        against the HTML would fail for reasons that have nothing to do with the copy. The WHOLE
-        sentences are pinned above, against the exported constants; these fragments only prove
-        this render is the real email.
-      */
       expect(html).toContain('Application update');
       expect(html).toContain('the end of the road');
       expect(html).toContain('a person on our team reads every reply');
@@ -106,14 +99,15 @@ describe('ExpertApplicationDeclinedEmail', () => {
       // The reason CATEGORY renders — the one dynamic sentence in the body.
       expect(html).toContain(EXPERT_DECLINE_REASON_LABEL[reason]);
 
-      assertNoPromise(html, 'the decline email');
+      // The re-application block renders with the dated copy, not the undated fallback.
+      expect(html).toContain('welcome to start a new application from 9 Dec 2026');
+      expect(html).not.toContain('once a short wait has passed');
 
-      /*
-        ⚠ NO LINK TO THE WIZARD. `/expert/apply` was the actionable half of the false promise:
-        the page renders for a declined applicant and then both writes refuse. The support
-        channel in `SupportFooter` is the one action this email offers.
-      */
-      expect(html).not.toContain(`${BASE_URL}/expert/apply`);
+      // The CTA links the REAL route — `DeclinedApplicationPanel` (apps/web), not a dead help
+      // doc and not a bare `/expert/apply` with no destination state.
+      expect(html).toContain(`${BASE_URL}/expert/apply`);
+      expect(html).toContain(REAPPLY_CTA_LABEL);
+
       expect(html).toContain('support@getbalo.com');
       expect(html).toContain(EXPERT_APPLICATION_DECLINED_COPY.supportPrefix);
 
@@ -122,9 +116,27 @@ describe('ExpertApplicationDeclinedEmail', () => {
     }
   );
 
+  it('falls back to the undated variant for a pre-BAL-557-shaped job', async () => {
+    const html = await render(
+      ExpertApplicationDeclinedEmail({
+        firstName: 'Priya',
+        reason: 'not_a_fit',
+        baseUrl: BASE_URL,
+        reapplyAvailableDate: null,
+      })
+    );
+    expect(html).toContain('welcome to start a new application once a short wait has passed');
+    expect(html).toContain(`${BASE_URL}/expert/apply`);
+  });
+
   it('still greets a missing first name gracefully', async () => {
     const html = await render(
-      ExpertApplicationDeclinedEmail({ firstName: 'there', reason: 'not_a_fit', baseUrl: BASE_URL })
+      ExpertApplicationDeclinedEmail({
+        firstName: 'there',
+        reason: 'not_a_fit',
+        baseUrl: BASE_URL,
+        reapplyAvailableDate: '9 Dec 2026',
+      })
     );
     // The preview text is built in JS, so it survives rendering as one contiguous string.
     expect(html).toContain('An update on your Balo expert application, there.');
@@ -132,10 +144,9 @@ describe('ExpertApplicationDeclinedEmail', () => {
 });
 
 /**
- * THE HELP DOC IS A SHIPPED SURFACE TOO. `docs/help/what-happens-after-you-apply.md` told the
- * same story ("you're welcome to apply again … your application is saved, so you won't start from
- * scratch") and the submission email promises its content in production. It is plain Markdown
- * with no module to import, so the file itself is read.
+ * THE HELP DOC IS A SHIPPED SURFACE TOO. `docs/help/what-happens-after-you-apply.md` tells the
+ * same story the decline email does. It is plain Markdown with no module to import, so the file
+ * itself is read.
  *
  * Vitest may run from the package or the repo root (CI does the latter), so the repo root is
  * resolved against both and a miss THROWS rather than passing vacuously (memory
@@ -158,13 +169,15 @@ describe('docs/help/what-happens-after-you-apply.md', () => {
     expect(doc).toContain('support@getbalo.com');
   });
 
-  it('promises no re-application', () => {
-    assertNoPromise(readHelpDoc(), 'the help doc');
+  it('mentions starting a new application', () => {
+    const doc = readHelpDoc().toLowerCase();
+    expect(doc).toContain('start a new application');
   });
 
-  it('says plainly that re-submitting is not available today', () => {
-    expect(readHelpDoc()).toContain(
-      "Submitting the same application again isn't something you can do from your account today."
-    );
+  // The doc is static Markdown and cannot read the runtime `expert_reapply_cooldown_days`
+  // setting, so it must never hard-code the wait in days (a config change would make it lie).
+  it('never hard-codes the cooldown as a number of days', () => {
+    const doc = readHelpDoc();
+    expect(doc).not.toMatch(/\d+[\s-]*day/i);
   });
 });

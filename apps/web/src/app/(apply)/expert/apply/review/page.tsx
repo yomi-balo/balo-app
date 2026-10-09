@@ -26,12 +26,11 @@ export default async function ApplicationReviewPage(): Promise<React.JSX.Element
   }
 
   /*
-    Rejected → back to the wizard, which is where a declined applicant's own answers are shown.
-
-    ⚠ NOT "because they may reapply" (web-review fix round, W1). This comment used to say so;
-    re-submitting is refused (`submitApplication` accepts `'draft'` only) and a follow-up ticket
-    owns the real transition. This read-only review page has nothing to show for a closed
-    application, so the redirect stands on its own — behaviour deliberately unchanged.
+    Rejected → back to `/expert/apply`, which now renders `DeclinedApplicationPanel` (BAL-557)
+    rather than the wizard — the declined panel IS the re-application surface
+    (`startNewApplicationAction`, `rejected → draft`). This read-only review page still has
+    nothing of its own to show for a closed application, so the redirect stands on its own;
+    only where it lands has changed meaning.
   */
   if (result.application.profile.applicationStatus === 'rejected') {
     redirect('/expert/apply');

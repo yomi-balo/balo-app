@@ -289,7 +289,11 @@ describe('platformLookupRepository.search — expert profiles', () => {
     const draft = await expertDraftFactory({ userId: draftUser.id });
     const submittedUser = await userFactory({ firstName: 'Submitted', lastName: token });
     const submitted = await expertDraftFactory({ userId: submittedUser.id });
-    await expertsRepository.submitApplication(submitted.id);
+    await expertsRepository.submitApplication({
+      applicantUserId: submittedUser.id,
+      verticalId: submitted.verticalId,
+      now: new Date(),
+    });
     const approvedUser = await userFactory({ firstName: 'Approved', lastName: token });
     const approved = await expertFactory({ userId: approvedUser.id });
 

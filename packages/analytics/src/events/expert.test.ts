@@ -20,6 +20,7 @@ describe('EXPERT_EVENTS', () => {
       'WORK_AVAILABILITY_CHANGED',
       'WORK_AVAILABILITY_PAUSE_CANCELLED',
       'APPLICATION_REVIEW_BANNER_CLICKED',
+      'APPLICATION_RESTARTED',
     ]);
   });
 
@@ -50,6 +51,7 @@ describe('EXPERT_EVENTS', () => {
     expect(EXPERT_EVENTS.APPLICATION_REVIEW_BANNER_CLICKED).toBe(
       'expert_application_review_banner_clicked'
     );
+    expect(EXPERT_EVENTS.APPLICATION_RESTARTED).toBe('expert_application_restarted');
   });
 
   it('values follow the naming convention expert_{noun}(_{noun})*', () => {

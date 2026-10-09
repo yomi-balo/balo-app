@@ -74,21 +74,18 @@ export const saveProfileAction = withAuth(
         }
       }
 
-      // Update profile scalars
-      await expertsRepository.updateProfile(expertProfileId, {
+      // BAL-557 — one transaction under the profile row lock, so this save and a staff edit
+      // serialise instead of deadlocking.
+      const saveResult = await expertsRepository.saveSettingsProfile(expertProfileId, {
         headline: validated.headline ?? null,
         bio: validated.bio ?? null,
         username: usernameToSave,
+        industryIds: validated.industryIds,
+        languages: validated.languages,
       });
 
-      // Sync industries if provided
-      if (validated.industryIds) {
-        await expertsRepository.syncIndustries(expertProfileId, validated.industryIds);
-      }
-
-      // Sync languages if provided
-      if (validated.languages) {
-        await expertsRepository.syncLanguages(expertProfileId, validated.languages);
+      if (saveResult.outcome === 'not_found') {
+        return { success: false, error: 'Expert profile required' };
       }
 
       log.info('Expert profile saved', {

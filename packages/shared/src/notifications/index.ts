@@ -1229,6 +1229,11 @@ export interface ConversationUnreadDigestDuePayload {
 // specifier — see the corrected note in `../meetings/index.ts`; a `.js` here 404s Turbopack.
 export * from './meeting-absence';
 
+// ── `expert.application_submitted` — payload + its one builder (BAL-557) ──────────────
+//
+// ⚠ EXTENSIONLESS relative specifier, as above.
+export * from './expert-application-submitted';
+
 // ── BAL-414 — the two searchability-transition promises (D1/D2) ────────────────────────
 //
 // ⚠ EXTENSIONLESS relative specifier — same rule as every other import in this file.
@@ -1302,6 +1307,13 @@ export interface ExpertApplicationDeclinedPayload {
   expertProfileId: string;
   /** ⚠ the CATEGORY. Never the note. */
   reason: ExpertDeclineReason;
+  /**
+   * The date the applicant may start a new application, pre-formatted (`formatLongUtc`, e.g.
+   * "9 Dec 2026"). Computed at PUBLISH time from the live `expert_reapply_cooldown_days`
+   * platform setting, so the template never reads config. Optional: a retained BullMQ job from
+   * before this field existed carries no value, and the template renders the undated variant.
+   */
+  reapplyAvailableDate?: string;
 }
 
 /**

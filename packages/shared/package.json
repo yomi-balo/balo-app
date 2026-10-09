@@ -24,6 +24,7 @@
     "./availability": "./src/availability/index.ts",
     "./calendar": "./src/calendar/index.ts",
     "./experts": "./src/experts/index.ts",
+    "./platform-settings": "./src/platform-settings/index.ts",
     "./redaction": "./src/redaction/index.ts",
     "./reviews": "./src/reviews/index.ts",
     "./lookup": "./src/lookup/index.ts",

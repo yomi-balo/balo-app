@@ -2,8 +2,12 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
 import { loadReferenceData } from '@/lib/expert-apply/reference-data';
+import { platformSettingsRepository } from '@balo/db';
+import { reapplyAvailableAt, isReapplyCooldownActive } from '@balo/shared/experts';
+import { formatLongUtc } from '@/lib/format/utc-date';
 import { loadDraftAction } from './_actions/load-draft';
 import { ExpertApplicationWizard } from './_components/expert-application-wizard';
+import { DeclinedApplicationPanel } from './_components/declined-application-panel';
 
 export const metadata: Metadata = {
   title: 'Apply as Expert | Balo',
@@ -39,48 +43,39 @@ export default async function ExpertApplyPage(): Promise<React.JSX.Element> {
   }
 
   /*
-    BAL-549 FIX ROUND (F1) — DEFENCE IN DEPTH, NOT THE FIX.
+    BAL-557 — THE DECLINED PANEL REPLACES THE WIZARD WHILE `rejected`.
 
-    ⚠⚠ RE-APPLYING IS **NOT** SUPPORTED TODAY (web-review fix round, W1 — user-ruled). This
-    comment used to say that it was, and that it was why a declined applicant lands here. Both
-    halves were wrong: `expertsRepository.submitApplication`'s WHERE is `and(eq(id, …),
-    eq(applicationStatus, 'draft'))`, so a `'rejected'` profile matches no row and the submit
-    refuses, and the decline email no longer points anyone at `/expert/apply`. BAL-549's own
-    "Out of scope" excluded the `rejected → submitted` transition and A FOLLOW-UP TICKET OWNS
-    IT — do not build it here.
+    ⚠⚠ RE-APPLYING IS NOW SUPPORTED, THROUGH ONE EXPLICIT ACTION. This used to be a FALL-THROUGH
+    — nothing redirected a declined applicant away, so `'rejected'` rendered the wizard prefilled
+    with their own answers, and every write refused (`DECLINED_APPLICATION_ERROR`). BAL-549's
+    fix-round F1 stripped the decision columns off `draft` as defence in depth for that
+    fall-through. BAL-557 removes the fall-through itself: `'rejected'` no longer reaches the
+    wizard at all, so there is nothing left to strip. `DeclinedApplicationPanel` receives only a
+    pre-formatted date string (or `null`) and a boolean — never `declineReason`, `decidedAt`,
+    `decidedByUserId` or `declineNote`. The cooldown (`expert_reapply_cooldown_days`) is read at
+    CALL TIME so the shown date always matches what `reopenApplication` would enforce.
 
-    What IS true: nothing redirects a declined applicant away, so `'rejected'` falls through and
-    renders the wizard prefilled with their own answers. Both writes then refuse with
-    `DECLINED_APPLICATION_ERROR` — `_actions/save-draft.ts` at the first server-bound keystroke,
-    `_actions/submit-application.ts` at submit.
-
-    That fall-through is how the leak went unseen — the wizard is a `'use client'` boundary, so
-    everything on `draft` is serialised into the applicant's own RSC flight payload.
-
-    The real fix is the repository allow-list (`findApplicationWithRelations` no longer projects
-    `decline_note` at all). This branch is the second layer: the decision METADATA is withheld
-    too, because this form has no use for any of it. `applicationStatus` stays — the wizard
-    needs it to know the application is closed.
+    Start a new application via `startNewApplicationAction` (`rejected → draft`); the page then
+    re-renders the wizard, prefilled with the applicant's own answers.
   */
-  const applicantDraft =
-    draft?.profile.applicationStatus === 'rejected'
-      ? {
-          ...draft,
-          profile: {
-            ...draft.profile,
-            declineReason: null,
-            decidedAt: null,
-            decidedByUserId: null,
-          },
-        }
-      : (draft ?? null);
+  if (draft?.profile.applicationStatus === 'rejected') {
+    const cooldown = await platformSettingsRepository.get('expert_reapply_cooldown_days');
+    const now = new Date();
+    const availableAt = reapplyAvailableAt(draft.profile.decidedAt, cooldown.value);
+    return (
+      <DeclinedApplicationPanel
+        reapplyAvailableOn={availableAt === null ? null : formatLongUtc(availableAt)}
+        canStartNow={!isReapplyCooldownActive(draft.profile.decidedAt, cooldown.value, now)}
+      />
+    );
+  }
 
   return (
     // FIX round (smaller item) — `{ id }` only, not `{ id, email }`: nothing under
     // `_components/` reads either field off `user` (only its nullness matters, for
     // `isAnonymous`), so the visitor's own email address is dead payload here.
     <ExpertApplicationWizard
-      draft={applicantDraft}
+      draft={draft ?? null}
       referenceData={referenceData}
       user={{ id: user.id }}
     />

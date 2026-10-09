@@ -67,6 +67,7 @@ import type {
   ProjectRequestOwnerAssignedPayload,
   ExpertApplicationDeclinedPayload,
   ExpertApplicationEditedPayload,
+  ExpertApplicationSubmittedPayload,
 } from '@balo/shared/notifications';
 // BAL-475 — the calendar-invite engine contract lives in this app (not `@balo/shared`), since
 // it is server-only vocabulary (no publish-route Zod arm ever reads it).
@@ -76,12 +77,6 @@ export interface UserWelcomePayload {
   correlationId: string; // userId
   userId: string;
   role: 'client' | 'expert';
-}
-
-export interface ExpertApplicationSubmittedPayload {
-  correlationId: string; // applicationId
-  userId: string;
-  applicationId: string;
 }
 
 export interface ExpertApprovedPayload {

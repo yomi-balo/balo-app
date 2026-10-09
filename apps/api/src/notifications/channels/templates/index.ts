@@ -505,13 +505,17 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     subject: `You're approved, ${(data.recipientName as string) ?? 'there'}!`,
   }),
 
-  // BAL-549 — the applicant's application was declined. Renders the reason CATEGORY only; the
-  // staff-only `decline_note` is not in the payload and can never reach here.
+  // BAL-549 / BAL-557 — the applicant's application was declined. Renders the reason CATEGORY
+  // only; the staff-only `decline_note` is not in the payload and can never reach here.
+  // `reapplyAvailableDate` is `null` only for a job enqueued before BAL-557, or missing/invalid on
+  // the payload — the template falls back to the undated re-application copy.
   'expert-application-declined': (data) => ({
     component: React.createElement(ExpertApplicationDeclinedEmail, {
       firstName: (data.recipientName as string) ?? 'there',
       reason: readExpertDeclineReason(data.reason),
       baseUrl: BASE_URL,
+      reapplyAvailableDate:
+        typeof data.reapplyAvailableDate === 'string' ? data.reapplyAvailableDate : null,
     }),
     // ⚠ NO user-authored string in the subject ⇒ no `sanitizeSubjectTitle` needed, and the
     // template is therefore NOT added to `components.test.ts`'s header-injection sweep list.

@@ -82,9 +82,12 @@ function isNonProfileDraftStep(step: StepName): step is NonProfileDraftStep {
  *
  * `draft`, and a `submitted` row inside the post-submit grace (`APPLICANT_POST_SUBMIT_GRACE_MS`,
  * 60 s — covers the debounced autosave and the unload beacon), are writable. `rejected` is
- * `declined` (`DECLINED_APPLICATION_ERROR`). Everything else — a later `submitted`,
- * `under_review`, `approved` — is `closed` (`SUBMITTED_APPLICATION_ERROR`): the applicant can no
- * longer write a non-draft application, full stop.
+ * `declined` (`DECLINED_APPLICATION_ERROR`) — STAYS `declined`, even after BAL-557. The only
+ * route from `rejected` back to a writable row is `expertsRepository.reopenApplication`
+ * (`startNewApplicationAction`), an explicit action the applicant must take; a stale wizard tab
+ * left open on a still-`rejected` row keeps refusing every write. Everything else — a later
+ * `submitted`, `under_review`, `approved` — is `closed` (`SUBMITTED_APPLICATION_ERROR`): the
+ * applicant can no longer write a non-draft application, full stop.
  *
  * `terms` and `agency` (BAL-356, self-advancing) pass `write: { step: 'none' }` when an id
  * exists (lock and check, no write — the agency step performs its own determined write via

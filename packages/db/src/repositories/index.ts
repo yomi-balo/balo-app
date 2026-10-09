@@ -70,6 +70,13 @@ export type {
   SaveApplicantDraftStepResult,
   SaveSettingsCertificationsInput,
   SaveSettingsCertificationsResult,
+  // BAL-557 — the applicant's own submit / reopen transitions and the locked settings saves.
+  ApplicantTransitionInput,
+  SubmitApplicationResult,
+  ReopenApplicationResult,
+  SaveSettingsProfileInput,
+  SaveSettingsResult,
+  SyncLanguageInput,
   CreateDraftInput,
   CompetencyRatingInput,
   SyncCertInput,
@@ -84,6 +91,17 @@ export type {
 // pinned at compile time to `@balo/shared/experts`' client-safe restatement; `ApplicationStatus`
 // is what `DecideApplicationResult`'s `not_pending` arm reports.
 export type { ApplicationStatus, ExpertDeclineReason } from '../schema';
+// BAL-557 — the archive of past application decisions (staff review page) and the runtime
+// settings read (reapply cooldown).
+export {
+  expertApplicationDecisionsRepository,
+  type ArchivedApplicationDecision,
+} from './expert-application-decisions';
+export {
+  platformSettingsRepository,
+  type PlatformSettingRead,
+  type PlatformSettingSource,
+} from './platform-settings';
 /**
  * BAL-414 — the ONLY reader of the six checklist inputs and the ONLY writer of
  * `expert_profiles.searchable` outside seeds. Both apps go through it: `apps/api`'s
