@@ -2,6 +2,7 @@
 
 import * as Sentry from '@sentry/nextjs';
 import { initAnalytics, setAnalyticsErrorReporter } from '@/lib/analytics';
+import { SessionReplayRouteGuard } from './session-replay-route-guard';
 
 /**
  * ⚠⚠ FIX ROUND 1 F3 (security S3) — MODULE SCOPE, DELIBERATELY NOT a `useEffect`.
@@ -68,8 +69,14 @@ interface PostHogProviderProps {
  * BAL-504 — the identify effect this used to run moved to `<AnalyticsIdentify>`
  * (`@/components/providers/analytics-identify`), placed wherever a caller already has `user` in
  * hand. This provider is now init-only: the module-scope statements above it are the whole
- * point, and stay exactly as they were.
+ * point, and stay exactly as they were. It also mounts `SessionReplayRouteGuard`, which keeps
+ * Session Replay off staff surfaces across client-side navigation.
  */
 export function PostHogProvider({ children }: Readonly<PostHogProviderProps>): React.JSX.Element {
-  return <>{children}</>;
+  return (
+    <>
+      <SessionReplayRouteGuard />
+      {children}
+    </>
+  );
 }

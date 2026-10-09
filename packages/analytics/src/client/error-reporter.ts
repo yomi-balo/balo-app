@@ -15,7 +15,7 @@
  */
 export type AnalyticsErrorReporter = (
   error: unknown,
-  context: { readonly method: 'init' | 'identify' | 'track' | 'page' | 'reset' }
+  context: { readonly method: 'init' | 'identify' | 'track' | 'page' | 'reset' | 'replay' }
 ) => void;
 
 let reporter: AnalyticsErrorReporter | null = null;
@@ -32,7 +32,7 @@ export function setAnalyticsErrorReporter(next: AnalyticsErrorReporter | null): 
  */
 export function reportAnalyticsError(
   error: unknown,
-  method: 'init' | 'identify' | 'track' | 'page' | 'reset'
+  method: 'init' | 'identify' | 'track' | 'page' | 'reset' | 'replay'
 ): void {
   const current = reporter;
   if (current === null) return;

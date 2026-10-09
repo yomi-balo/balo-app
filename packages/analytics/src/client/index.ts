@@ -1,4 +1,4 @@
-export { initAnalytics, analytics } from './client';
+export { initAnalytics, analytics, syncSessionReplayToRoute, shouldSuppressReplay } from './client';
 export { track } from './track';
 export type { AllEvents, EventName } from '../types';
 // BAL-529 §A — the browser-side analytics error reporter seam. The host app installs a

@@ -7,6 +7,9 @@ export {
   // BAL-529 §A — the browser-side analytics error reporter seam. Installed by
   // `PostHogProvider` with a Sentry-backed reporter before `initAnalytics()` runs.
   setAnalyticsErrorReporter,
+  // BAL-556 — keeps Session Replay off staff surfaces across client-side navigation. Driven by
+  // `SessionReplayRouteGuard`.
+  syncSessionReplayToRoute,
   AUTH_EVENTS,
   ONBOARDING_EVENTS,
   EXPERT_EVENTS,

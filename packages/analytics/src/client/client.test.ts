@@ -5,6 +5,8 @@ const mockCapture = vi.fn();
 const mockIdentify = vi.fn();
 const mockReset = vi.fn();
 const mockInit = vi.fn();
+const mockStopSessionRecording = vi.fn();
+const mockStartSessionRecording = vi.fn();
 
 vi.mock('posthog-js', () => ({
   default: {
@@ -12,6 +14,8 @@ vi.mock('posthog-js', () => ({
     capture: mockCapture,
     reset: mockReset,
     init: mockInit,
+    stopSessionRecording: mockStopSessionRecording,
+    startSessionRecording: mockStartSessionRecording,
   },
 }));
 
@@ -315,5 +319,222 @@ describe('initAnalytics — BAL-529 fix-round-3 R2 (disable_session_recording on
 
     const [, options] = mockInit.mock.calls[0] as [string, Record<string, unknown>];
     expect(options.disable_session_recording).toBe(false);
+  });
+});
+
+describe('BAL-556 replay follows navigation', () => {
+  const PREV_KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+
+  afterEach(() => {
+    if (PREV_KEY === undefined) {
+      delete process.env.NEXT_PUBLIC_POSTHOG_KEY;
+    } else {
+      process.env.NEXT_PUBLIC_POSTHOG_KEY = PREV_KEY;
+    }
+    vi.unstubAllGlobals();
+  });
+
+  async function boot(
+    href: string,
+    { withKey = true }: { withKey?: boolean } = {}
+  ): Promise<typeof import('./client')> {
+    vi.resetModules();
+    mockInit.mockClear();
+    mockStopSessionRecording.mockReset();
+    mockStartSessionRecording.mockReset();
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('location', { href });
+    if (withKey) {
+      process.env.NEXT_PUBLIC_POSTHOG_KEY = 'phc_test_key';
+    } else {
+      delete process.env.NEXT_PUBLIC_POSTHOG_KEY;
+    }
+    const mod = await import('./client');
+    mod.initAnalytics();
+    return mod;
+  }
+
+  function initOptions(): Record<string, unknown> {
+    const [, options] = mockInit.mock.calls[0] as [string, Record<string, unknown>];
+    return options;
+  }
+
+  it('stops on entering a staff surface and resumes with no override on leaving', async () => {
+    const { syncSessionReplayToRoute } = await boot('https://balo.expert/dashboard');
+
+    syncSessionReplayToRoute('/admin/lookup');
+    expect(mockStopSessionRecording).toHaveBeenCalledTimes(1);
+
+    syncSessionReplayToRoute('/experts/dana');
+    expect(mockStartSessionRecording).toHaveBeenCalledTimes(1);
+    expect(mockStartSessionRecording).toHaveBeenCalledWith();
+  });
+
+  it('is idempotent in both directions', async () => {
+    const { syncSessionReplayToRoute } = await boot('https://balo.expert/dashboard');
+
+    syncSessionReplayToRoute('/admin');
+    syncSessionReplayToRoute('/admin');
+    expect(mockStopSessionRecording).toHaveBeenCalledTimes(1);
+
+    syncSessionReplayToRoute('/');
+    syncSessionReplayToRoute('/');
+    expect(mockStartSessionRecording).toHaveBeenCalledTimes(1);
+  });
+
+  for (const path of [
+    '/admin',
+    '/admin/',
+    '/admin/catalogue',
+    '/%61dmin/lookup',
+    '/promo-codes',
+    '/promo-codes/x',
+    '/engagements',
+    '/engagements/',
+  ]) {
+    it(`stops on staff path ${path}`, async () => {
+      const { syncSessionReplayToRoute } = await boot('https://balo.expert/dashboard');
+      syncSessionReplayToRoute(path);
+      expect(mockStopSessionRecording).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  for (const path of [
+    '/administrator',
+    '/promo-codesx',
+    '/engagements/abc',
+    '/engagementsx',
+    '/',
+  ]) {
+    it(`does not stop on non-staff path ${path}`, async () => {
+      const { syncSessionReplayToRoute } = await boot('https://balo.expert/dashboard');
+      syncSessionReplayToRoute(path);
+      expect(mockStopSessionRecording).not.toHaveBeenCalled();
+    });
+  }
+
+  it('never resumes after a redaction-sensitive landing', async () => {
+    const { syncSessionReplayToRoute } = await boot(
+      'https://balo.expert/settings/billing?setup_intent=seti_abc&setup_intent_client_secret=seti_abc_secret'
+    );
+
+    syncSessionReplayToRoute('/admin');
+    syncSessionReplayToRoute('/dashboard');
+    expect(mockStopSessionRecording).not.toHaveBeenCalled();
+    expect(mockStartSessionRecording).not.toHaveBeenCalled();
+  });
+
+  it('disables replay on a staff landing and resumes on leaving it', async () => {
+    const { syncSessionReplayToRoute } = await boot('https://balo.expert/admin/catalogue?x=1');
+    expect(initOptions().disable_session_recording).toBe(true);
+
+    syncSessionReplayToRoute('/dashboard');
+    expect(mockStartSessionRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats an admin lookup landing carrying q as redaction-sensitive and never resumes', async () => {
+    const { syncSessionReplayToRoute } = await boot('https://balo.expert/admin/lookup?q=x');
+    expect(initOptions().disable_session_recording).toBe(true);
+
+    syncSessionReplayToRoute('/dashboard');
+    expect(mockStartSessionRecording).not.toHaveBeenCalled();
+  });
+
+  it('applies the staff registry to the landing', async () => {
+    await boot('https://balo.expert/promo-codes');
+    expect(initOptions().disable_session_recording).toBe(true);
+
+    await boot('https://balo.expert/engagements/abc');
+    expect(initOptions().disable_session_recording).toBe(false);
+  });
+
+  it('stops on client-side navigation into a token path', async () => {
+    const { syncSessionReplayToRoute } = await boot('https://balo.expert/dashboard');
+    syncSessionReplayToRoute('/shared/proposals/tok');
+    expect(mockStopSessionRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing without a PostHog key', async () => {
+    const { syncSessionReplayToRoute } = await boot('https://balo.expert/dashboard', {
+      withKey: false,
+    });
+    syncSessionReplayToRoute('/admin');
+    expect(mockStopSessionRecording).not.toHaveBeenCalled();
+    expect(mockStartSessionRecording).not.toHaveBeenCalled();
+  });
+
+  it('reports an SDK failure with method replay and does not throw', async () => {
+    const { syncSessionReplayToRoute } = await boot('https://balo.expert/dashboard');
+    const { setAnalyticsErrorReporter: setReporter } = await import('./error-reporter');
+    const reporter = vi.fn();
+    setReporter(reporter);
+    const error = new Error('stop failed');
+    mockStopSessionRecording.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    expect(() => syncSessionReplayToRoute('/admin')).not.toThrow();
+    expect(reporter).toHaveBeenCalledWith(error, { method: 'replay' });
+    setReporter(null);
+  });
+
+  describe('$snapshot drop while suppressed', () => {
+    const snapshot = (): CaptureResult => ({
+      uuid: 's',
+      event: '$snapshot',
+      properties: {} as CaptureResult['properties'],
+    });
+    const pageview = (): CaptureResult => ({
+      uuid: 'p',
+      event: '$pageview',
+      properties: {} as CaptureResult['properties'],
+    });
+
+    it('drops $snapshot after entering a staff surface and passes it after leaving', async () => {
+      const mod = await boot('https://balo.expert/dashboard');
+      expect(mod.sanitizeAnalyticsEvent(snapshot())).not.toBeNull();
+      mod.syncSessionReplayToRoute('/admin');
+      expect(mod.sanitizeAnalyticsEvent(snapshot())).toBeNull();
+      mod.syncSessionReplayToRoute('/dashboard');
+      expect(mod.sanitizeAnalyticsEvent(snapshot())).not.toBeNull();
+    });
+
+    it('drops $snapshot on a Stripe-return landing', async () => {
+      const mod = await boot(
+        'https://balo.expert/redeem?setup_intent=seti_def&redirect_status=succeeded'
+      );
+      expect(mod.sanitizeAnalyticsEvent(snapshot())).toBeNull();
+    });
+
+    it('drops the buffer stop() flushes on entering a staff surface', async () => {
+      const mod = await boot('https://balo.expert/dashboard');
+      const flushed: Array<CaptureResult | null> = [];
+      mockStopSessionRecording.mockImplementation(() => {
+        flushed.push(mod.sanitizeAnalyticsEvent(snapshot()));
+      });
+      mod.syncSessionReplayToRoute('/admin/lookup');
+      expect(flushed).toEqual([null]);
+    });
+
+    it('stops and drops a late-started recorder before resuming on leaving', async () => {
+      const mod = await boot('https://balo.expert/dashboard');
+      mod.syncSessionReplayToRoute('/admin/lookup');
+      const flushed: Array<CaptureResult | null> = [];
+      mockStopSessionRecording.mockImplementation(() => {
+        flushed.push(mod.sanitizeAnalyticsEvent(snapshot()));
+      });
+      mod.syncSessionReplayToRoute('/dashboard');
+      expect(flushed).toEqual([null]);
+      const stops = mockStopSessionRecording.mock.invocationCallOrder;
+      const [start] = mockStartSessionRecording.mock.invocationCallOrder;
+      expect(stops).toHaveLength(2);
+      expect(stops.at(-1) ?? Infinity).toBeLessThan(start ?? -Infinity);
+    });
+
+    it('leaves other events untouched while suppressed', async () => {
+      const mod = await boot('https://balo.expert/dashboard');
+      mod.syncSessionReplayToRoute('/admin');
+      expect(mod.sanitizeAnalyticsEvent(pageview())).not.toBeNull();
+    });
   });
 });

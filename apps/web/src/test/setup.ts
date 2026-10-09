@@ -209,6 +209,7 @@ vi.mock('@/lib/analytics', async () => {
     // constant (memory `reference_web_analytics_test_mock_export_list`).
     CASE_BRIEF_EVENTS: events.CASE_BRIEF_EVENTS,
     initAnalytics: vi.fn(),
+    syncSessionReplayToRoute: vi.fn(),
   };
 });
 
