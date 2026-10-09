@@ -7,7 +7,6 @@ import * as Sentry from '@sentry/nextjs';
 import { Loader2, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import { startNewApplicationAction } from '../_actions/start-new-application';
 import {
   DECLINED_PANEL_COPY,
@@ -54,11 +53,6 @@ export function DeclinedApplicationPanel({
 
         if (result.success) {
           toast.success(REOPENED_TOAST);
-          if (!result.alreadyOpen) {
-            track(EXPERT_EVENTS.APPLICATION_RESTARTED, {
-              days_since_decision: result.daysSinceDecision,
-            });
-          }
           router.refresh();
           return;
         }
@@ -90,7 +84,7 @@ export function DeclinedApplicationPanel({
         <CardContent className="flex flex-col gap-4 p-6 sm:p-8">
           <h1 className="text-foreground text-xl font-semibold">{DECLINED_PANEL_COPY.heading}</h1>
           <p className="text-muted-foreground text-sm leading-relaxed">
-            {DECLINED_PANEL_COPY.body}
+            {canStartNow ? DECLINED_PANEL_COPY.bodyReady : DECLINED_PANEL_COPY.bodyCooldown}
           </p>
 
           <p id={availabilityId} className="text-foreground text-sm font-medium">

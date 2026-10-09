@@ -1,4 +1,4 @@
-import { Button, Heading, Section, Text } from '@react-email/components';
+import { Heading, Section, Text } from '@react-email/components';
 import type { ExpertDeclineReason } from '@balo/shared/experts';
 import {
   colors,
@@ -33,9 +33,6 @@ const declinedPillStyle = {
  */
 export const EXPERT_APPLICATION_DECLINED_COPY = {
   heroSubtext: "We're not able to approve your application this time.",
-  calloutHeading: "This isn't the end of the road",
-  calloutText:
-    'Experience, certifications and the mix of work clients ask us for all move over time. If yours change, we would like to hear about it — a person on our team reads every reply.',
   standing:
     'Nothing further is needed from you, and your Balo account stays exactly as it is — you can keep using Balo to find experts of your own whenever you need one.',
   supportPrefix: 'Want to talk it through?',
@@ -51,22 +48,35 @@ export function declinedLeadParagraph(reasonLabel: string): string {
 }
 
 /**
- * BAL-557 — the re-application block. `reapplyText` is used when the payload carries a date
- * (every decline published from here on); `reapplyTextUndated` covers a job enqueued before this
- * field existed and queued past deploy — it still reads true, just without a date.
+ * BAL-557 fix round 2 — the re-application block is now the ONE callout. It used to sit next to
+ * a separate "this isn't the end of the road" callout (BAL-549's stand-in for the missing
+ * re-apply path); now that the path exists, that sentiment folds in here instead of repeating
+ * the same idea twice. There is also no CTA button any more — it would land on a disabled button
+ * for the whole cooldown — so the dated text itself names the destination ("your apply page").
+ * `reapplyText` is used when the payload carries a date (every decline published from here on);
+ * `REAPPLY_TEXT_UNDATED` covers a job enqueued before this field existed and queued past deploy
+ * — it still reads true, just without a date.
  */
 export const REAPPLY_HEADING = "You're welcome to try again"; // pending-MJ
 
 export function reapplyText(reapplyAvailableDate: string): string {
   // pending-MJ — the wait is stated as a helpful fact, never a countdown.
-  return `You're welcome to start a new application from ${reapplyAvailableDate}. Your earlier answers stay saved, so you can pick up and update them rather than start from the beginning.`;
+  return (
+    `You're welcome to start a new application from ${reapplyAvailableDate} — just head back ` +
+    'to your apply page. Your earlier answers stay saved, so you can pick up and update them ' +
+    'rather than start from the beginning. Experience, certifications and the mix of work ' +
+    'clients ask us for all move over time, so if yours change, we would like to hear about it ' +
+    '— a person on our team reads every reply.'
+  );
 }
 
 export const REAPPLY_TEXT_UNDATED =
   // pending-MJ
-  "You're welcome to start a new application once a short wait has passed. Your earlier answers stay saved, so you can pick up and update them rather than start from the beginning.";
-
-export const REAPPLY_CTA_LABEL = 'Start a new application'; // pending-MJ
+  "You're welcome to start a new application once a short wait has passed — just head back to " +
+  'your apply page and you will see exactly when it reopens for you. Your earlier answers stay ' +
+  'saved, so you can pick up and update them rather than start from the beginning. Experience, ' +
+  'certifications and the mix of work clients ask us for all move over time, so if yours ' +
+  'change, we would like to hear about it — a person on our team reads every reply.';
 
 // ── Template ─────────────────────────────────────────────────────
 
@@ -93,9 +103,10 @@ interface ExpertApplicationDeclinedEmailProps {
  * REMOVED. W1 was correct for its time: `expertsRepository.submitApplication`'s WHERE was
  * `applicationStatus = 'draft'`, so a `rejected` profile matched no row and any re-application
  * copy described a flow that did not exist. BAL-557 BUILDS that flow — `reopenApplication`
- * (`rejected → draft`) behind a runtime-configurable cooldown — so the promise is now true,
- * dated, and enforced server-side. The CTA links `${baseUrl}/expert/apply`, which is the
- * real `DeclinedApplicationPanel` (apps/web) once the cooldown clears.
+ * (`rejected → draft`) behind a runtime-configurable cooldown — so the promise is now true and
+ * dated. There is no CTA button — it would land on a disabled `DeclinedApplicationPanel`
+ * (apps/web) for the whole cooldown — so the dated text names the destination in words
+ * ("your apply page") instead of linking it.
  */
 export function ExpertApplicationDeclinedEmail({
   firstName = 'there',
@@ -121,15 +132,6 @@ export function ExpertApplicationDeclinedEmail({
         <Text style={shared.greeting}>Hi {firstName},</Text>
         <Text style={shared.bodyText}>{declinedLeadParagraph(reasonLabel)}</Text>
 
-        <Callout
-          emoji="💬"
-          heading={EXPERT_APPLICATION_DECLINED_COPY.calloutHeading}
-          text={EXPERT_APPLICATION_DECLINED_COPY.calloutText}
-          bg={colors.primaryLight}
-          borderColor={colors.primaryBorder}
-          headingColor={colors.primary}
-        />
-
         <Text style={shared.bodyText}>{EXPERT_APPLICATION_DECLINED_COPY.standing}</Text>
 
         <Callout
@@ -142,12 +144,6 @@ export function ExpertApplicationDeclinedEmail({
           borderColor={colors.successBorder}
           headingColor={colors.success}
         />
-
-        <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
-          <Button style={shared.smallCtaButton} href={`${baseUrl}/expert/apply`}>
-            {REAPPLY_CTA_LABEL}
-          </Button>
-        </Section>
 
         <SupportFooter prefix={EXPERT_APPLICATION_DECLINED_COPY.supportPrefix} />
       </Section>

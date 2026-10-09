@@ -297,6 +297,29 @@ describe('submitApplicationAction', () => {
       });
     });
 
+    /**
+     * BAL-557 fix round 2 — the payload's `applicationId` is built from the repository's OWN
+     * resolved `expertProfileId`, not the caller's argument.
+     * MUTATION-PROVEN: revert to `applicationId: expertProfileId` and this goes red.
+     */
+    it('publishes with the resolved expertProfileId from submitResult, not the caller argument', async () => {
+      setupValidApplication();
+      const resolvedProfileId = 'profile-resolved-by-repo';
+      mockSubmitApplication.mockResolvedValue({
+        outcome: 'submitted',
+        expertProfileId: resolvedProfileId,
+        submittedAt: new Date('2026-01-01T00:00:00.000Z'),
+        auditEventId: AUDIT_EVENT_ID,
+      });
+      const { publishNotificationEvent } = await import('@/lib/notifications/publish');
+      await submitApplicationAction(PROFILE_ID);
+      expect(publishNotificationEvent).toHaveBeenCalledWith('expert.application_submitted', {
+        correlationId: AUDIT_EVENT_ID,
+        userId: USER_ID,
+        applicationId: resolvedProfileId,
+      });
+    });
+
     it('returns not_draft outcome mapped to the honest declined refusal on a race', async () => {
       setupValidApplication();
       mockSubmitApplication.mockResolvedValue({

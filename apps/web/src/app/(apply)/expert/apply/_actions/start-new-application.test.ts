@@ -27,6 +27,15 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
+const mockTrackServerAndFlush = vi.fn();
+
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: (...args: unknown[]) => mockTrackServerAndFlush(...args),
+  EXPERT_SERVER_EVENTS: {
+    APPLICATION_RESTARTED: 'expert_application_restarted',
+  },
+}));
+
 const mockSave = vi.fn();
 let mockSessionObj: Record<string, unknown>;
 
@@ -95,6 +104,11 @@ describe('startNewApplicationAction', () => {
 
       expect(result).toEqual({ success: true, alreadyOpen: false, daysSinceDecision: 9 });
       expect(revalidatePath).toHaveBeenCalledWith('/expert/apply');
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('expert_application_restarted', {
+        expert_profile_id: PROFILE_ID,
+        days_since_decision: 9,
+        distinct_id: USER_ID,
+      });
       vi.useRealTimers();
     });
 
@@ -104,6 +118,7 @@ describe('startNewApplicationAction', () => {
       const result = await startNewApplicationAction();
 
       expect(result).toEqual({ success: true, alreadyOpen: true });
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     });
 
     it('not_rejected with another status → failure, code not_rejected', async () => {
@@ -116,6 +131,7 @@ describe('startNewApplicationAction', () => {
 
       expect(result.success).toBe(false);
       expect(result).toMatchObject({ code: 'not_rejected' });
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     });
 
     it('cooldown_active → failure, availableOn formatted, error from reopenCooldownError', async () => {
@@ -132,6 +148,7 @@ describe('startNewApplicationAction', () => {
         availableOn: '9 Dec 2026',
         error: reopenCooldownError('9 Dec 2026'),
       });
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     });
 
     it('not_found → failure, code not_found', async () => {
@@ -144,6 +161,7 @@ describe('startNewApplicationAction', () => {
         code: 'not_found',
         error: 'We could not find an application to restart.',
       });
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     });
   });
 
@@ -158,6 +176,7 @@ describe('startNewApplicationAction', () => {
         code: 'failed',
         error: 'Something went wrong starting your new application. Please try again.',
       });
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     });
   });
 });

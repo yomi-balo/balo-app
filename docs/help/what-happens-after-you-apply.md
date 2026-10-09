@@ -36,7 +36,7 @@ Nothing further is needed from you, and your Balo account stays exactly as it is
 keep using Balo to find experts of your own whenever you need one.
 
 You're welcome to start a new application once the wait shown in your decline email has
-passed — head to **/expert/apply** and you'll see exactly when it reopens for you. Your
+passed — head to your apply page and you'll see exactly when it reopens for you. Your
 earlier answers stay saved, so you can pick up and update them rather than start from
 scratch. Experience, certifications and the mix of work clients ask us for all move over
 time, so if yours change before then, we'd still like to hear about it — write to us at

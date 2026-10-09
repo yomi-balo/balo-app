@@ -172,7 +172,7 @@ export const submitApplicationAction = withAuth(
         'expert.application_submitted',
         buildExpertApplicationSubmittedPayload({
           userId: session.user.id,
-          expertProfileId,
+          expertProfileId: submitResult.expertProfileId,
           auditEventId: submitResult.auditEventId,
         })
       ).catch(() => {

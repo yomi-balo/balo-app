@@ -2163,12 +2163,17 @@ export const expertsRepository = {
    *     `decline_note` and `submitted_at` from the LOCKED row into `expert_application_decisions`.
    *  5. ONE profile UPDATE: `draft`, and those five columns NULL. `approved_at` and
    *     `skills_locked` are untouched (a declined application never had either).
-   *  6. Reset the ratings: every applicant-rated competency (`self_proficiency IS NOT NULL`) gets
-   *     `proficiency := self_proficiency`, undoing a staff adjustment. A staff-added row
-   *     (`self_proficiency IS NULL`, "Added by Balo") keeps its row and its staff rating.
+   *  6. Reset the ratings: every applicant-rated competency the staff adjusted away from the
+   *     applicant's own rating (`self_proficiency IS NOT NULL AND proficiency IS DISTINCT FROM
+   *     self_proficiency`) gets `proficiency := self_proficiency`, undoing the adjustment. A row
+   *     already equal to the applicant's rating is left untouched (its `updated_at` does not move).
+   *     A staff-added row (`self_proficiency IS NULL`, "Added by Balo") keeps its row and its
+   *     staff rating.
    *  7. Append ONE `expert_application.reopened` audit row LAST, with fixed metadata
    *     `{ previousStatus: 'rejected', applicantUserId, archivedDecisionId, cooldownDays,
-   *     ratingsReset }`.
+   *     ratingsReset }`, where `ratingsReset` counts only the rows actually changed in step 6
+   *     (staff adjustments undone) — `audit_events` is append-only, so this count can never be
+   *     corrected after the fact.
    *
    * ⚠ THE NOTE NEVER LEAVES ITS TWO HOMES. The audit row records the archived row's id, never the
    * note text; the archive row is read only by the staff review page.
@@ -2191,6 +2196,7 @@ export const expertsRepository = {
       const cooldown = await platformSettingsRepository.get('expert_reapply_cooldown_days', tx);
       const cooldownDays = cooldown.value;
       const availableAt = reapplyAvailableAt(current.decidedAt, cooldownDays);
+      // `availableAt !== null` narrows the type; an active cooldown always has a date.
       if (
         availableAt !== null &&
         isReapplyCooldownActive(current.decidedAt, cooldownDays, input.now)
@@ -2227,14 +2233,16 @@ export const expertsRepository = {
         throw new Error(`Failed to reopen expert application: ${current.id}`);
       }
 
-      // 6. Applicant-rated cells back to the applicant's own rating.
+      // 6. Applicant-rated cells back to the applicant's own rating — only the ones a staff
+      // adjustment actually moved away from it, so an unchanged row keeps its `updated_at`.
       const reset = await tx
         .update(expertCompetency)
         .set({ proficiency: sql`${expertCompetency.selfProficiency}`, updatedAt: input.now })
         .where(
           and(
             eq(expertCompetency.expertProfileId, current.id),
-            isNotNull(expertCompetency.selfProficiency)
+            isNotNull(expertCompetency.selfProficiency),
+            sql`${expertCompetency.proficiency} IS DISTINCT FROM ${expertCompetency.selfProficiency}`
           )
         )
         .returning({ id: expertCompetency.id });

@@ -20,7 +20,6 @@ describe('EXPERT_EVENTS', () => {
       'WORK_AVAILABILITY_CHANGED',
       'WORK_AVAILABILITY_PAUSE_CANCELLED',
       'APPLICATION_REVIEW_BANNER_CLICKED',
-      'APPLICATION_RESTARTED',
     ]);
   });
 
@@ -51,7 +50,6 @@ describe('EXPERT_EVENTS', () => {
     expect(EXPERT_EVENTS.APPLICATION_REVIEW_BANNER_CLICKED).toBe(
       'expert_application_review_banner_clicked'
     );
-    expect(EXPERT_EVENTS.APPLICATION_RESTARTED).toBe('expert_application_restarted');
   });
 
   it('values follow the naming convention expert_{noun}(_{noun})*', () => {
@@ -67,12 +65,17 @@ describe('EXPERT_EVENTS', () => {
 
 describe('EXPERT_SERVER_EVENTS', () => {
   it('has exactly the expected keys', () => {
-    expect(Object.keys(EXPERT_SERVER_EVENTS)).toEqual(['DRAFT_SAVED', 'DRAFT_SAVE_FAILED']);
+    expect(Object.keys(EXPERT_SERVER_EVENTS)).toEqual([
+      'DRAFT_SAVED',
+      'DRAFT_SAVE_FAILED',
+      'APPLICATION_RESTARTED',
+    ]);
   });
 
   it('maps each constant to its exact snake_case value', () => {
     expect(EXPERT_SERVER_EVENTS.DRAFT_SAVED).toBe('expert_application_draft_saved');
     expect(EXPERT_SERVER_EVENTS.DRAFT_SAVE_FAILED).toBe('expert_application_draft_save_failed');
+    expect(EXPERT_SERVER_EVENTS.APPLICATION_RESTARTED).toBe('expert_application_restarted');
   });
 
   it('values follow the naming convention expert_{noun}(_{noun})*', () => {

@@ -7,6 +7,7 @@ import { expertsRepository, referenceDataRepository } from '@balo/db';
 import { applicationWaitingDays } from '@balo/shared/experts';
 import { formatLongUtc } from '@/lib/format/utc-date';
 import { log } from '@/lib/logging';
+import { trackServerAndFlush, EXPERT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { reopenCooldownError } from './declined-application-copy';
 
 /**
@@ -40,11 +41,17 @@ export const startNewApplicationAction = withAuth(
           expertProfileId: result.expertProfileId,
           auditEventId: result.auditEventId,
         });
+        const daysSinceDecision = applicationWaitingDays(result.decidedAt, now);
+        trackServerAndFlush(EXPERT_SERVER_EVENTS.APPLICATION_RESTARTED, {
+          expert_profile_id: result.expertProfileId,
+          days_since_decision: daysSinceDecision,
+          distinct_id: session.user.id,
+        });
         revalidatePath('/expert/apply');
         return {
           success: true,
           alreadyOpen: false,
-          daysSinceDecision: applicationWaitingDays(result.decidedAt, now),
+          daysSinceDecision,
         };
       }
 

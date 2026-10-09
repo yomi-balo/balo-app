@@ -20,8 +20,6 @@ export const EXPERT_EVENTS = {
   WORK_AVAILABILITY_PAUSE_CANCELLED: 'expert_work_availability_pause_cancelled',
   // The client dashboard's "under review" banner — its "View your application" CTA.
   APPLICATION_REVIEW_BANNER_CLICKED: 'expert_application_review_banner_clicked',
-  // BAL-557 — a declined applicant started a new application (rejected → draft).
-  APPLICATION_RESTARTED: 'expert_application_restarted',
 } as const;
 
 /** The outcome of replaying an anonymous sessionStorage draft (BAL-502 §22.9). Kept
@@ -86,15 +84,15 @@ export interface ExpertEventMap {
   };
   [EXPERT_EVENTS.WORK_AVAILABILITY_PAUSE_CANCELLED]: Record<string, never>;
   [EXPERT_EVENTS.APPLICATION_REVIEW_BANNER_CLICKED]: Record<string, never>;
-  [EXPERT_EVENTS.APPLICATION_RESTARTED]: {
-    days_since_decision: number; // whole days from the archived decision to the restart
-  };
 }
 
 // -- Server events (fire from server actions via trackServerAndFlush) ------------------
 export const EXPERT_SERVER_EVENTS = {
   DRAFT_SAVED: 'expert_application_draft_saved',
   DRAFT_SAVE_FAILED: 'expert_application_draft_save_failed',
+  // BAL-557 — a declined applicant started a new application (rejected → draft). Fired from
+  // `startNewApplicationAction`, never the client — the server already resolved the outcome.
+  APPLICATION_RESTARTED: 'expert_application_restarted',
 } as const;
 
 export interface ExpertServerEventMap {
@@ -107,6 +105,11 @@ export interface ExpertServerEventMap {
     step: ExpertStepName;
     error_code: 'validation' | 'duplicate_key' | 'unknown';
     expert_profile_id: string | null;
+    distinct_id: string;
+  };
+  [EXPERT_SERVER_EVENTS.APPLICATION_RESTARTED]: {
+    expert_profile_id: string;
+    days_since_decision: number; // whole days from the archived decision to the restart
     distinct_id: string;
   };
 }

@@ -111,7 +111,12 @@ function farFuture(): Date {
   return new Date(Date.now() + 400 * DAY_MS);
 }
 
-async function seedTaxonomy(): Promise<{ productA: string; productB: string; support: string }> {
+async function seedTaxonomy(): Promise<{
+  productA: string;
+  productB: string;
+  productC: string;
+  support: string;
+}> {
   const vertical = await referenceDataRepository.getSalesforceVertical();
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const productRows = await db
@@ -119,17 +124,23 @@ async function seedTaxonomy(): Promise<{ productA: string; productB: string; sup
     .values([
       { verticalId: vertical.id, name: 'Sales Cloud', slug: `reapply-a-${suffix}` },
       { verticalId: vertical.id, name: 'Service Cloud', slug: `reapply-b-${suffix}` },
+      { verticalId: vertical.id, name: 'Marketing Cloud', slug: `reapply-c-${suffix}` },
     ])
     .returning({ id: products.id });
   const [support] = await db
     .insert(supportTypes)
     .values({ verticalId: vertical.id, name: 'Build', slug: `reapply-build-${suffix}` })
     .returning({ id: supportTypes.id });
-  const [productA, productB] = productRows.map((r) => r.id);
-  if (productA === undefined || productB === undefined || support === undefined) {
+  const [productA, productB, productC] = productRows.map((r) => r.id);
+  if (
+    productA === undefined ||
+    productB === undefined ||
+    productC === undefined ||
+    support === undefined
+  ) {
     throw new Error('seedTaxonomy: insert returned too few rows');
   }
-  return { productA, productB, support: support.id };
+  return { productA, productB, productC, support: support.id };
 }
 
 async function readCell(
@@ -140,6 +151,28 @@ async function readCell(
     .select({
       proficiency: expertCompetency.proficiency,
       selfProficiency: expertCompetency.selfProficiency,
+    })
+    .from(expertCompetency)
+    .where(
+      and(
+        eq(expertCompetency.expertProfileId, expertProfileId),
+        eq(expertCompetency.productId, productId)
+      )
+    );
+  return row;
+}
+
+async function readCompetencyRow(
+  expertProfileId: string,
+  productId: string
+): Promise<
+  { proficiency: number; selfProficiency: number | null; updatedAt: Date | string } | undefined
+> {
+  const [row] = await db
+    .select({
+      proficiency: expertCompetency.proficiency,
+      selfProficiency: expertCompetency.selfProficiency,
+      updatedAt: expertCompetency.updatedAt,
     })
     .from(expertCompetency)
     .where(
@@ -490,9 +523,11 @@ describe('re-application — the ratings', () => {
     const t = await seedTaxonomy();
     await expertsRepository.updateCompetencyProficiency(draft.id, [
       { productId: t.productA, supportTypeId: t.support, proficiency: 6 },
+      { productId: t.productC, supportTypeId: t.support, proficiency: 7 },
     ]);
     await submit(draft);
-    // Staff adjusted the applicant's rating, and added a product of their own.
+    // Staff adjusted the applicant's rating, and added a product of their own. Product C's
+    // self-rating is left exactly as the applicant set it — staff made no adjustment there.
     await db
       .update(expertCompetency)
       .set({ proficiency: 3 })
@@ -509,6 +544,7 @@ describe('re-application — the ratings', () => {
       proficiency: 8,
       selfProficiency: null,
     });
+    const unchangedBefore = await readCompetencyRow(draft.id, t.productC);
     await decline(draft, staff);
 
     const reopened = expectReopened(
@@ -517,6 +553,13 @@ describe('re-application — the ratings', () => {
 
     expect(await readCell(draft.id, t.productA)).toEqual({ proficiency: 6, selfProficiency: 6 });
     expect(await readCell(draft.id, t.productB)).toEqual({ proficiency: 8, selfProficiency: null });
+    // Already equal to its own self-rating — not counted, and its row is left untouched.
+    const unchangedAfter = await readCompetencyRow(draft.id, t.productC);
+    expect(unchangedAfter).toEqual({
+      proficiency: 7,
+      selfProficiency: 7,
+      updatedAt: unchangedBefore?.updatedAt,
+    });
     const row = (await readAudit(draft.id)).find((a) => a.id === reopened.auditEventId);
     expect(row?.metadata).toMatchObject({ ratingsReset: 1 });
   });

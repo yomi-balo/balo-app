@@ -10,7 +10,6 @@ import {
   REAPPLY_HEADING,
   reapplyText,
   REAPPLY_TEXT_UNDATED,
-  REAPPLY_CTA_LABEL,
 } from './expert-application-declined.js';
 import { EXPERT_DECLINE_REASON_LABEL } from './expert-decline-reason-label.js';
 
@@ -20,8 +19,12 @@ import { EXPERT_DECLINE_REASON_LABEL } from './expert-decline-reason-label.js';
  * BAL-549's web-review fix round (W1) banned the promise because the transition did not exist.
  * BAL-557 builds it (`expertsRepository.reopenApplication`) behind a server-enforced,
  * runtime-configurable cooldown, so this suite REPLACES the old banned-phrase sweep with
- * verbatim pins of the restored copy: every sentence of the re-application block, the CTA href,
- * and both the dated and undated variants.
+ * verbatim pins of the restored copy: every sentence of the re-application block, and both the
+ * dated and undated variants.
+ *
+ * Fix round 2 merged the old standalone "this isn't the end of the road" callout into this one
+ * block and removed the CTA button (it landed on a disabled button for the whole cooldown), so
+ * the pins below cover the single merged callout and no CTA-related assertions remain.
  *
  * ⚠⚠ FULL LITERALS, NOT `toContain` ON A FRAGMENT (`feedback_monitor_strings_need_verbatim_pin`).
  */
@@ -32,10 +35,6 @@ describe('EXPERT_APPLICATION_DECLINED_COPY', () => {
   it('is the exact shipped copy, sentence for sentence', () => {
     expect(EXPERT_APPLICATION_DECLINED_COPY).toEqual({
       heroSubtext: "We're not able to approve your application this time.",
-      calloutHeading: "This isn't the end of the road",
-      calloutText:
-        'Experience, certifications and the mix of work clients ask us for all move over time. ' +
-        'If yours change, we would like to hear about it — a person on our team reads every reply.',
       standing:
         'Nothing further is needed from you, and your Balo account stays exactly as it is — you ' +
         'can keep using Balo to find experts of your own whenever you need one.',
@@ -60,28 +59,30 @@ describe('the restored re-application copy', () => {
 
   it('pins the dated text verbatim, with the date spliced in exactly once', () => {
     expect(reapplyText('9 Dec 2026')).toBe(
-      "You're welcome to start a new application from 9 Dec 2026. Your earlier answers stay " +
-        'saved, so you can pick up and update them rather than start from the beginning.'
+      "You're welcome to start a new application from 9 Dec 2026 — just head back to your " +
+        'apply page. Your earlier answers stay saved, so you can pick up and update them ' +
+        'rather than start from the beginning. Experience, certifications and the mix of work ' +
+        'clients ask us for all move over time, so if yours change, we would like to hear ' +
+        'about it — a person on our team reads every reply.'
     );
   });
 
   it('pins the undated fallback verbatim — no digit-day count anywhere in it', () => {
     expect(REAPPLY_TEXT_UNDATED).toBe(
-      "You're welcome to start a new application once a short wait has passed. Your earlier " +
-        'answers stay saved, so you can pick up and update them rather than start from the ' +
-        'beginning.'
+      "You're welcome to start a new application once a short wait has passed — just head " +
+        'back to your apply page and you will see exactly when it reopens for you. Your ' +
+        'earlier answers stay saved, so you can pick up and update them rather than start from ' +
+        'the beginning. Experience, certifications and the mix of work clients ask us for all ' +
+        'move over time, so if yours change, we would like to hear about it — a person on our ' +
+        'team reads every reply.'
     );
     expect(REAPPLY_TEXT_UNDATED).not.toMatch(/\d/);
-  });
-
-  it('pins the CTA label verbatim', () => {
-    expect(REAPPLY_CTA_LABEL).toBe('Start a new application');
   });
 });
 
 describe('ExpertApplicationDeclinedEmail', () => {
   it.each(EXPERT_DECLINE_REASONS)(
-    'renders the %s reason with the dated re-application block and its CTA',
+    'renders the %s reason with the dated re-application block, no CTA button',
     async (reason) => {
       const html = await render(
         ExpertApplicationDeclinedEmail({
@@ -93,7 +94,7 @@ describe('ExpertApplicationDeclinedEmail', () => {
       );
 
       expect(html).toContain('Application update');
-      expect(html).toContain('the end of the road');
+      expect(html).toContain('welcome to try again');
       expect(html).toContain('a person on our team reads every reply');
       expect(html).toContain('Nothing further is needed from you');
       // The reason CATEGORY renders — the one dynamic sentence in the body.
@@ -103,10 +104,10 @@ describe('ExpertApplicationDeclinedEmail', () => {
       expect(html).toContain('welcome to start a new application from 9 Dec 2026');
       expect(html).not.toContain('once a short wait has passed');
 
-      // The CTA links the REAL route — `DeclinedApplicationPanel` (apps/web), not a dead help
-      // doc and not a bare `/expert/apply` with no destination state.
-      expect(html).toContain(`${BASE_URL}/expert/apply`);
-      expect(html).toContain(REAPPLY_CTA_LABEL);
+      // There is no CTA button — it would land on a disabled button for the whole cooldown.
+      // The dated text carries the destination in words instead.
+      expect(html).not.toContain(`${BASE_URL}/expert/apply`);
+      expect(html).toContain('your apply page');
 
       expect(html).toContain('support@getbalo.com');
       expect(html).toContain(EXPERT_APPLICATION_DECLINED_COPY.supportPrefix);
@@ -126,7 +127,8 @@ describe('ExpertApplicationDeclinedEmail', () => {
       })
     );
     expect(html).toContain('welcome to start a new application once a short wait has passed');
-    expect(html).toContain(`${BASE_URL}/expert/apply`);
+    expect(html).toContain('your apply page');
+    expect(html).not.toContain(`${BASE_URL}/expert/apply`);
   });
 
   it('still greets a missing first name gracefully', async () => {

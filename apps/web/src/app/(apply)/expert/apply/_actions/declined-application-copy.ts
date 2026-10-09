@@ -27,7 +27,17 @@ export const DECLINED_APPLICATION_ERROR =
  */
 export interface DeclinedPanelCopy {
   heading: string;
-  body: string;
+  /**
+   * The cooldown-arm body, used while `isReapplyCooldownActive` holds — "the wait below" refers
+   * to the date line rendered right after it.
+   */
+  bodyCooldown: string;
+  /**
+   * The ready-arm body, used once `canStartNow` is true — covers BOTH a legacy decline (no
+   * `decidedAt`, so no cooldown ever applied) and an expired cooldown. Never mentions a wait,
+   * because there isn't one.
+   */
+  bodyReady: string;
   ctaLabel: string;
   /** The cooldown-arm line, given the pre-formatted date the application reopens. */
   availableFrom: (date: string) => string;
@@ -37,7 +47,10 @@ export interface DeclinedPanelCopy {
 
 export const DECLINED_PANEL_COPY: DeclinedPanelCopy = {
   heading: 'This application was reviewed and closed', // pending-MJ
-  body: "Thanks for applying. This one didn't move forward this time, but your answers are saved — once the wait below has passed you can start a new application and pick up where you left off.", // pending-MJ
+  bodyCooldown:
+    "Thanks for applying. This one didn't move forward this time, but your answers are saved — once the wait below has passed you can start a new application and pick up where you left off.", // pending-MJ
+  bodyReady:
+    "Thanks for applying. This one didn't move forward this time, but your answers are saved — you can start a new application now and pick up where you left off.", // pending-MJ
   ctaLabel: 'Start a new application', // pending-MJ
   availableFrom: (date: string) => `You can start a new application from ${date} — no rush.`, // pending-MJ
   readyNow: "You're welcome to start a new application whenever you're ready.", // pending-MJ

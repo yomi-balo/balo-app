@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
-import { track, EXPERT_EVENTS } from '@/lib/analytics';
+import { track } from '@/lib/analytics';
 
 // ── Mocks ────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ vi.mock('../_actions/start-new-application', () => ({
 }));
 
 import { DeclinedApplicationPanel } from './declined-application-panel';
-import { reopenCooldownError } from '../_actions/declined-application-copy';
+import { DECLINED_PANEL_COPY, reopenCooldownError } from '../_actions/declined-application-copy';
 
 const toastSuccess = vi.mocked(toast.success);
 const toastError = vi.mocked(toast.error);
@@ -44,6 +44,12 @@ describe('DeclinedApplicationPanel — cooldown arm', () => {
     expect(screen.getByText(/9 Dec 2026/)).toBeInTheDocument();
   });
 
+  it('renders the cooldown-arm body, which names the wait below', () => {
+    render(<DeclinedApplicationPanel reapplyAvailableOn="9 Dec 2026" canStartNow={false} />);
+
+    expect(screen.getByText(DECLINED_PANEL_COPY.bodyCooldown)).toBeInTheDocument();
+  });
+
   it('describes the disabled CTA with the availability text', () => {
     render(<DeclinedApplicationPanel reapplyAvailableOn="9 Dec 2026" canStartNow={false} />);
 
@@ -58,6 +64,13 @@ describe('DeclinedApplicationPanel — ready arm', () => {
     render(<DeclinedApplicationPanel reapplyAvailableOn={null} canStartNow={true} />);
 
     expect(screen.getByRole('button', { name: /start a new application/i })).toBeEnabled();
+  });
+
+  it('renders the ready-arm body, which never mentions a wait (legacy decline or expired cooldown)', () => {
+    render(<DeclinedApplicationPanel reapplyAvailableOn={null} canStartNow={true} />);
+
+    expect(screen.getByText(DECLINED_PANEL_COPY.bodyReady)).toBeInTheDocument();
+    expect(screen.queryByText(DECLINED_PANEL_COPY.bodyCooldown)).not.toBeInTheDocument();
   });
 
   it('describes the enabled CTA with the availability text', () => {
@@ -89,13 +102,12 @@ describe('DeclinedApplicationPanel — ready arm', () => {
     resolve({ success: true, alreadyOpen: false, daysSinceDecision: 12 });
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
-    expect(trackMock).toHaveBeenCalledWith(EXPERT_EVENTS.APPLICATION_RESTARTED, {
-      days_since_decision: 12,
-    });
+    // The restart event fires server-side (`startNewApplicationAction`), never from the client.
+    expect(trackMock).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalled();
   });
 
-  it('does not fire the analytics event on an alreadyOpen (double click / second tab) success', async () => {
+  it('never fires a client analytics event on an alreadyOpen (double click / second tab) success', async () => {
     const user = userEvent.setup();
     mockStartNewApplicationAction.mockResolvedValue({ success: true, alreadyOpen: true });
 
@@ -103,10 +115,7 @@ describe('DeclinedApplicationPanel — ready arm', () => {
     await user.click(screen.getByRole('button', { name: /start a new application/i }));
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
-    expect(trackMock).not.toHaveBeenCalledWith(
-      EXPERT_EVENTS.APPLICATION_RESTARTED,
-      expect.anything()
-    );
+    expect(trackMock).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalled();
   });
 
