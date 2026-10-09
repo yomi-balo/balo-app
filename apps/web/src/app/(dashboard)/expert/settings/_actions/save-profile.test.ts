@@ -12,17 +12,13 @@ vi.mock('@/lib/logging', () => ({
   log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
 }));
 
-const mockUpdateProfile = vi.fn();
+const mockSaveSettingsProfile = vi.fn();
 const mockCheckUsernameAvailability = vi.fn();
-const mockSyncIndustries = vi.fn();
-const mockSyncLanguages = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
-    updateProfile: (...args: unknown[]) => mockUpdateProfile(...args),
+    saveSettingsProfile: (...args: unknown[]) => mockSaveSettingsProfile(...args),
     checkUsernameAvailability: (...args: unknown[]) => mockCheckUsernameAvailability(...args),
-    syncIndustries: (...args: unknown[]) => mockSyncIndustries(...args),
-    syncLanguages: (...args: unknown[]) => mockSyncLanguages(...args),
   },
 }));
 
@@ -55,17 +51,15 @@ describe('saveProfileAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
-    mockUpdateProfile.mockResolvedValue(undefined);
+    mockSaveSettingsProfile.mockResolvedValue({ outcome: 'saved' });
     mockCheckUsernameAvailability.mockResolvedValue(true);
-    mockSyncIndustries.mockResolvedValue(undefined);
-    mockSyncLanguages.mockResolvedValue(undefined);
   });
 
   describe('authentication', () => {
     it('throws when no session user', async () => {
       mockSessionObj = { save: mockSave };
       await expect(saveProfileAction({ headline: 'Test' })).rejects.toThrow('Unauthorized');
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
     });
   });
 
@@ -82,7 +76,7 @@ describe('saveProfileAction', () => {
       };
       const result = await saveProfileAction({ headline: 'Test' });
       expect(result).toEqual({ success: false, error: 'Expert profile required' });
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
     });
 
     it('returns error when no expertProfileId', async () => {
@@ -97,7 +91,7 @@ describe('saveProfileAction', () => {
       };
       const result = await saveProfileAction({ headline: 'Test' });
       expect(result).toEqual({ success: false, error: 'Expert profile required' });
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
     });
   });
 
@@ -108,10 +102,12 @@ describe('saveProfileAction', () => {
         bio: 'I have 10 years of experience.',
       });
       expect(result).toEqual({ success: true });
-      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', {
+      expect(mockSaveSettingsProfile).toHaveBeenCalledWith('profile-1', {
         headline: 'Senior Salesforce Consultant',
         bio: 'I have 10 years of experience.',
         username: null,
+        industryIds: undefined,
+        languages: undefined,
       });
     });
 
@@ -120,10 +116,12 @@ describe('saveProfileAction', () => {
       const result = await saveProfileAction({ username: 'john-doe' });
       expect(result).toEqual({ success: true });
       expect(mockCheckUsernameAvailability).toHaveBeenCalledWith('john-doe', 'profile-1');
-      expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', {
+      expect(mockSaveSettingsProfile).toHaveBeenCalledWith('profile-1', {
         headline: null,
         bio: null,
         username: 'john-doe',
+        industryIds: undefined,
+        languages: undefined,
       });
     });
 
@@ -138,21 +136,21 @@ describe('saveProfileAction', () => {
       mockCheckUsernameAvailability.mockResolvedValue(false);
       const result = await saveProfileAction({ username: 'taken-name' });
       expect(result).toEqual({ success: false, error: 'Username already taken' });
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
     });
 
     it('rejects reserved usernames', async () => {
       const result = await saveProfileAction({ username: 'admin' });
       expect(result).toEqual({ success: false, error: 'This username is reserved' });
       expect(mockCheckUsernameAvailability).not.toHaveBeenCalled();
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
     });
 
     it('does not check availability when username is empty', async () => {
       const result = await saveProfileAction({ username: '' });
       expect(result).toEqual({ success: true });
       expect(mockCheckUsernameAvailability).not.toHaveBeenCalled();
-      expect(mockUpdateProfile).toHaveBeenCalledWith(
+      expect(mockSaveSettingsProfile).toHaveBeenCalledWith(
         'profile-1',
         expect.objectContaining({ username: null })
       );
@@ -164,34 +162,44 @@ describe('saveProfileAction', () => {
       const result = await saveProfileAction({ headline: 'a'.repeat(101) });
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
     });
 
     it('rejects bio exceeding 1000 characters', async () => {
       const result = await saveProfileAction({ bio: 'a'.repeat(1001) });
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
     });
 
     it('rejects username with invalid characters', async () => {
       const result = await saveProfileAction({ username: 'UPPER_CASE!' });
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
     });
 
     it('rejects username shorter than minimum length', async () => {
       const result = await saveProfileAction({ username: 'ab' });
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+      expect(mockSaveSettingsProfile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('not_found outcome (BAL-557)', () => {
+    // MUTATION-PROOF: change the `not_found` branch to fall through to `{ success: true }` and
+    // this goes red — proves the action actually reads the repository's outcome.
+    it('maps saveSettingsProfile not_found to the expert-profile-required error', async () => {
+      mockSaveSettingsProfile.mockResolvedValue({ outcome: 'not_found' });
+      const result = await saveProfileAction({ headline: 'Test' });
+      expect(result).toEqual({ success: false, error: 'Expert profile required' });
     });
   });
 
   describe('error handling', () => {
     it('returns generic error when repository throws', async () => {
-      mockUpdateProfile.mockRejectedValue(new Error('DB connection failed'));
+      mockSaveSettingsProfile.mockRejectedValue(new Error('DB connection failed'));
       const result = await saveProfileAction({ headline: 'Test' });
       expect(result).toEqual({
         success: false,

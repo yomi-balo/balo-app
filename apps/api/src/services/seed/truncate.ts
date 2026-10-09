@@ -11,6 +11,7 @@
 import {
   users,
   expertProfiles,
+  expertApplicationDecisions,
   expertCompetency,
   expertCertifications,
   expertLanguages,
@@ -304,6 +305,11 @@ async function deleteProfileChildren(tx: Tx, profileIds: string[]): Promise<void
       .where(inArray(calendarSubCalendars.connectionId, connIds));
   }
 
+  // Restrict FK: an archived decision survives a hard-deleted profile by design, so the seeder
+  // must delete these rows itself before the profile goes.
+  await tx
+    .delete(expertApplicationDecisions)
+    .where(inArray(expertApplicationDecisions.expertProfileId, profileIds));
   await tx.delete(availabilityCache).where(inArray(availabilityCache.expertProfileId, profileIds));
   await tx.delete(consultations).where(inArray(consultations.expertProfileId, profileIds));
   await tx.delete(availabilityRules).where(inArray(availabilityRules.expertProfileId, profileIds));

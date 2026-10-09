@@ -89,6 +89,13 @@ const expertApplicationDeclinedPayload = z.object({
   userId: z.uuid(),
   expertProfileId: z.uuid(),
   reason: z.enum(EXPERT_DECLINE_REASONS),
+  // The date the applicant may start a new application, pre-formatted (`formatLongUtc`) at
+  // publish time from the live `expert_reapply_cooldown_days` platform setting. Mirrors the
+  // `autoDate` precedent (`:417`). Optional: a retained BullMQ job from before this field existed
+  // carries no value, and the template already renders the undated variant for a missing one.
+  // `.min(1).max(40)` erases under `z.infer`, so this still key-for-key matches
+  // `ExpertApplicationDeclinedPayload` (`AssertPublishPayloadShapesMatch`'s documented limit L1).
+  reapplyAvailableDate: z.string().min(1).max(40).optional(),
 });
 
 /**

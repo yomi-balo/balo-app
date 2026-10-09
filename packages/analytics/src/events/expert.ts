@@ -90,6 +90,9 @@ export interface ExpertEventMap {
 export const EXPERT_SERVER_EVENTS = {
   DRAFT_SAVED: 'expert_application_draft_saved',
   DRAFT_SAVE_FAILED: 'expert_application_draft_save_failed',
+  // BAL-557 — a declined applicant started a new application (rejected → draft). Fired from
+  // `startNewApplicationAction`, never the client — the server already resolved the outcome.
+  APPLICATION_RESTARTED: 'expert_application_restarted',
 } as const;
 
 export interface ExpertServerEventMap {
@@ -102,6 +105,11 @@ export interface ExpertServerEventMap {
     step: ExpertStepName;
     error_code: 'validation' | 'duplicate_key' | 'unknown';
     expert_profile_id: string | null;
+    distinct_id: string;
+  };
+  [EXPERT_SERVER_EVENTS.APPLICATION_RESTARTED]: {
+    expert_profile_id: string;
+    days_since_decision: number; // whole days from the archived decision to the restart
     distinct_id: string;
   };
 }

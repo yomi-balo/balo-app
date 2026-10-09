@@ -20,6 +20,8 @@ import { userRowIsLive } from '@balo/shared/authz';
 import {
   STAFF_EDITABLE_APPLICATION_STATUSES,
   classifyApplicantDraftWrite,
+  isReapplyCooldownActive,
+  reapplyAvailableAt,
   type ExpertApplicationEditSection,
   type StaffApplicationEdit,
   type StaffApplicationEditCounts,
@@ -29,6 +31,8 @@ import { createLogger } from '@balo/shared/logging';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { type Database, db } from '../client';
 import { auditEventsRepository } from './audit-events';
+import { expertApplicationDecisionsRepository } from './expert-application-decisions';
+import { platformSettingsRepository } from './platform-settings';
 import {
   planStaffApplicationEdit,
   staffEditExperienceIsInvalid,
@@ -181,6 +185,10 @@ async function syncCertificationsTx(
  * Applicant writer (Step 2): drops products no longer selected and inserts each new product at
  * 0 for every support type. A new row records the self-rating too — `selfProficiency: 0` beside
  * `proficiency: 0` — because the applicant IS the self-rater. Staff never call this.
+ *
+ * An EXISTING row is never updated, so a staff-added product (`self_proficiency IS NULL`, "Added
+ * by Balo") keeps its NULL self-rating while it stays selected. Deselecting a product deletes all
+ * its rows, staff-added included — the applicant may remove a product Balo added.
  */
 async function syncProductsTx(
   exec: DbExecutor,
@@ -224,8 +232,14 @@ async function syncProductsTx(
 
 /**
  * Applicant writer (Step 3): upserts each rating. It writes the self-rating too —
- * `selfProficiency` follows `proficiency` on insert AND on conflict, because before submit the
- * two are the same number. Staff never call this; a staff rating change writes `proficiency` only.
+ * `selfProficiency` follows `proficiency` on insert, and on conflict for an applicant-rated row,
+ * because before submit the two are the same number. Staff never call this; a staff rating
+ * change writes `proficiency` only.
+ *
+ * ⚠ A STAFF-ADDED ROW STAYS STAFF-ADDED. On conflict with a row whose `self_proficiency IS NULL`
+ * ("Added by Balo"), the applicant's rating writes `proficiency` only and `self_proficiency` stays
+ * NULL. The applicant may RATE such a row or REMOVE it (`syncProductsTx`), never turn it into a
+ * self-rated row.
  */
 async function updateCompetencyProficiencyTx(
   exec: DbExecutor,
@@ -250,7 +264,7 @@ async function updateCompetencyProficiencyTx(
         ],
         set: {
           proficiency: rating.proficiency,
-          selfProficiency: rating.proficiency,
+          selfProficiency: sql`CASE WHEN ${expertCompetency.selfProficiency} IS NULL THEN NULL ELSE excluded.self_proficiency END`,
           updatedAt: new Date(),
         },
       });
@@ -293,6 +307,26 @@ async function lockProfileRow(
     .select()
     .from(expertProfiles)
     .where(eq(expertProfiles.id, expertProfileId))
+    .for('update');
+  return row;
+}
+
+/**
+ * Takes the same `expert_profiles` row lock as {@link lockProfileRow}, resolving the row from the
+ * APPLICANT instead of from an id: `(user_id, vertical_id)` is the table's unique key. Used by
+ * the applicant transitions (`submitApplication`, `reopenApplication`), which take no profile id
+ * at all, so a caller can only ever act on their own application. Same row, same lock, so the
+ * lock order is unchanged.
+ */
+async function lockApplicantProfileRow(
+  exec: DbExecutor,
+  userId: string,
+  verticalId: string
+): Promise<ExpertProfile | undefined> {
+  const [row] = await exec
+    .select()
+    .from(expertProfiles)
+    .where(and(eq(expertProfiles.userId, userId), eq(expertProfiles.verticalId, verticalId)))
     .for('update');
   return row;
 }
@@ -693,6 +727,64 @@ export interface SaveSettingsCertificationsInput {
 export type SaveSettingsCertificationsResult =
   | { outcome: 'saved' }
   | { outcome: 'locked' }
+  | { outcome: 'not_found' };
+
+/**
+ * Input for `expertsRepository.saveSettingsProfile`. The scalars are always written; each array
+ * is synced only when provided (replace-all semantics, so an empty array clears the set).
+ */
+export interface SaveSettingsProfileInput {
+  headline: string | null;
+  bio: string | null;
+  username: string | null;
+  industryIds?: string[];
+  languages?: SyncLanguageInput[];
+}
+
+/** The outcome of a locked expert-settings save (`saveSettingsProfile`, `saveSettingsWorkHistory`). */
+export type SaveSettingsResult = { outcome: 'saved' } | { outcome: 'not_found' };
+
+// ── The applicant's own transitions (BAL-557) ────────────────────
+
+/**
+ * Input for the applicant transitions `submitApplication` and `reopenApplication`. There is NO
+ * profile id: the row is resolved from `(applicantUserId, verticalId)` under the lock, so a
+ * caller can only act on their own application. `applicantUserId` comes from the session.
+ */
+export interface ApplicantTransitionInput {
+  applicantUserId: string;
+  verticalId: string;
+  now: Date;
+}
+
+export type SubmitApplicationResult =
+  | {
+      outcome: 'submitted';
+      expertProfileId: string;
+      submittedAt: Date;
+      /**
+       * The `expert_application.submitted` audit row id — unique per WRITE. The caller's
+       * `expert.application_submitted` correlationId, so a resubmission is not deduped against
+       * the first submission's retained BullMQ job.
+       */
+      auditEventId: string;
+    }
+  | { outcome: 'not_draft'; expertProfileId: string; currentStatus: ApplicationStatus }
+  | { outcome: 'not_found' };
+
+export type ReopenApplicationResult =
+  | {
+      outcome: 'reopened';
+      expertProfileId: string;
+      /** The `expert_application.reopened` audit row id. */
+      auditEventId: string;
+      /** The `expert_application_decisions` row the decision was archived into. */
+      archivedDecisionId: string;
+      /** The archived decision's `decided_at` — NULL for a legacy decline. */
+      decidedAt: Date | null;
+    }
+  | { outcome: 'not_rejected'; currentStatus: ApplicationStatus }
+  | { outcome: 'cooldown_active'; availableAt: Date }
   | { outcome: 'not_found' };
 
 export interface ApplicationWithRelations {
@@ -1881,9 +1973,10 @@ export const expertsRepository = {
    * Sync selected products / competencies (Step 2). Applicant writer — writes the self-rating
    * too; staff never call this.
    *
-   * - Deletes competencies NOT in the new set (and their proficiency rows).
+   * - Deletes competencies NOT in the new set (and their proficiency rows), staff-added included.
    * - Inserts new competencies at `proficiency: 0, selfProficiency: 0` for each support type.
-   * - Leaves existing competencies + proficiency untouched.
+   * - Leaves existing competencies + proficiency untouched, so a staff-added row keeps its NULL
+   *   `selfProficiency`.
    *
    * Executor-aware (see `syncLanguages`).
    */
@@ -1902,8 +1995,10 @@ export const expertsRepository = {
 
   /**
    * Update competency proficiency ratings (Step 3) via upsert. Applicant writer — writes the
-   * self-rating too (`selfProficiency` follows `proficiency` on insert and on conflict); staff
-   * never call this. Executor-aware (see `syncLanguages`).
+   * self-rating too (`selfProficiency` follows `proficiency` on insert and on conflict with an
+   * applicant-rated row); staff never call this. On a staff-added row (`selfProficiency` NULL)
+   * it writes `proficiency` only, so "Added by Balo" survives. Executor-aware (see
+   * `syncLanguages`).
    */
   async updateCompetencyProficiency(
     expertProfileId: string,
@@ -1977,25 +2072,207 @@ export const expertsRepository = {
     return row;
   },
 
-  /** Submit application: transition from draft to submitted */
-  async submitApplication(expertProfileId: string): Promise<ExpertProfile> {
-    const [profile] = await db
-      .update(expertProfiles)
-      .set({
-        applicationStatus: 'submitted',
-        submittedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(eq(expertProfiles.id, expertProfileId), eq(expertProfiles.applicationStatus, 'draft'))
-      )
-      .returning();
+  /**
+   * BAL-557 — SUBMIT AN EXPERT APPLICATION (`draft → submitted`). ONE `db.transaction`: lock the
+   * applicant's own profile row, re-check `draft` under the lock, set `submitted` with a fresh
+   * `submitted_at`, and append ONE `expert_application.submitted` audit row LAST. The same path
+   * serves a first submit and a resubmit after `reopenApplication`.
+   *
+   * ⚠ THE ROW IS RESOLVED FROM THE APPLICANT, NEVER FROM A PROFILE ID. There is no id parameter
+   * (`lockApplicantProfileRow`), so a caller cannot submit someone else's application.
+   *
+   * ⚠ `submitted_at` IS REFRESHED ON EVERY SUBMIT. The pending-application alert finder
+   * (`listPendingApplicationsForAlerts`) keys on it, so a resubmission reads as newly pending.
+   *
+   * ⚠ THE AUDIT ROW ID IS THE NOTIFICATION KEY. The caller publishes
+   * `expert.application_submitted` after commit with `correlationId` = the returned
+   * `auditEventId` (`buildExpertApplicationSubmittedPayload`), unique per write. This repository
+   * notifies nobody (`invariants/repositories-never-notify.test.ts`).
+   *
+   * Fixed audit metadata: `{ previousStatus: 'draft', applicantUserId, resubmission }`, where
+   * `resubmission` is true when the application has a live archived decision.
+   *
+   * Returns a discriminated outcome; `not_draft` and `not_found` are ordinary states (a double
+   * submit, a stale tab, a still-`rejected` row).
+   */
+  async submitApplication(input: ApplicantTransitionInput): Promise<SubmitApplicationResult> {
+    return db.transaction(async (tx) => {
+      const current = await lockApplicantProfileRow(tx, input.applicantUserId, input.verticalId);
+      if (current === undefined) return { outcome: 'not_found' };
 
-    if (!profile) {
-      throw new Error('Application not found or already submitted');
-    }
+      if (current.applicationStatus !== 'draft') {
+        return {
+          outcome: 'not_draft',
+          expertProfileId: current.id,
+          currentStatus: current.applicationStatus,
+        };
+      }
 
-    return profile;
+      const [updated] = await tx
+        .update(expertProfiles)
+        .set({ applicationStatus: 'submitted', submittedAt: input.now, updatedAt: input.now })
+        .where(eq(expertProfiles.id, current.id))
+        .returning({ id: expertProfiles.id });
+      if (updated === undefined) {
+        throw new Error(`Failed to submit expert application: ${current.id}`);
+      }
+
+      const resubmission = await expertApplicationDecisionsRepository.existsForProfileTx(
+        tx,
+        current.id
+      );
+
+      // The audit row, LAST. Fixed key set — `audit_events` is append-only.
+      const auditRow = await auditEventsRepository.record(
+        {
+          actorUserId: input.applicantUserId,
+          action: 'expert_application.submitted',
+          entityType: 'expert_profile',
+          entityId: current.id,
+          metadata: {
+            previousStatus: 'draft',
+            applicantUserId: input.applicantUserId,
+            resubmission,
+          },
+        },
+        tx
+      );
+
+      return {
+        outcome: 'submitted',
+        expertProfileId: current.id,
+        submittedAt: input.now,
+        auditEventId: auditRow.id,
+      };
+    });
+  },
+
+  /**
+   * BAL-557 — START A NEW APPLICATION AFTER A DECLINE (`rejected → draft`). The ONLY route from
+   * `rejected` back to a writable row; `classifyApplicantDraftWrite` keeps refusing every write to
+   * a still-`rejected` row. ONE `db.transaction`, modelled on `decideApplication`:
+   *
+   *  1. Lock the applicant's own profile row (`lockApplicantProfileRow` — no profile id
+   *     parameter, so ownership holds by construction). No row → `not_found`.
+   *  2. Re-check `rejected` under the lock → else `not_rejected` (a double click or second tab
+   *     sees `draft`).
+   *  3. Read `expert_reapply_cooldown_days` AT CALL TIME on the same transaction. While
+   *     `now < decided_at + N days` → `cooldown_active` with the date. A legacy decline with a NULL
+   *     `decided_at` has no cooldown.
+   *  4. Archive the decision: copy `decided_at`, `decided_by_user_id`, `decline_reason`,
+   *     `decline_note` and `submitted_at` from the LOCKED row into `expert_application_decisions`.
+   *  5. ONE profile UPDATE: `draft`, and those five columns NULL. `approved_at` and
+   *     `skills_locked` are untouched (a declined application never had either).
+   *  6. Reset the ratings: every applicant-rated competency the staff adjusted away from the
+   *     applicant's own rating (`self_proficiency IS NOT NULL AND proficiency IS DISTINCT FROM
+   *     self_proficiency`) gets `proficiency := self_proficiency`, undoing the adjustment. A row
+   *     already equal to the applicant's rating is left untouched (its `updated_at` does not move).
+   *     A staff-added row (`self_proficiency IS NULL`, "Added by Balo") keeps its row and its
+   *     staff rating.
+   *  7. Append ONE `expert_application.reopened` audit row LAST, with fixed metadata
+   *     `{ previousStatus: 'rejected', applicantUserId, archivedDecisionId, cooldownDays,
+   *     ratingsReset }`, where `ratingsReset` counts only the rows actually changed in step 6
+   *     (staff adjustments undone) — `audit_events` is append-only, so this count can never be
+   *     corrected after the fact.
+   *
+   * ⚠ THE NOTE NEVER LEAVES ITS TWO HOMES. The audit row records the archived row's id, never the
+   * note text; the archive row is read only by the staff review page.
+   *
+   * ⚠ THIS REPOSITORY NOTIFIES NOBODY (`invariants/repositories-never-notify.test.ts`), and the
+   * reopen publishes nothing.
+   */
+  async reopenApplication(input: ApplicantTransitionInput): Promise<ReopenApplicationResult> {
+    return db.transaction(async (tx) => {
+      // 1. Lock the applicant's own row.
+      const current = await lockApplicantProfileRow(tx, input.applicantUserId, input.verticalId);
+      if (current === undefined) return { outcome: 'not_found' };
+
+      // 2. Only a declined application reopens.
+      if (current.applicationStatus !== 'rejected') {
+        return { outcome: 'not_rejected', currentStatus: current.applicationStatus };
+      }
+
+      // 3. The cooldown, read at call time on this transaction.
+      const cooldown = await platformSettingsRepository.get('expert_reapply_cooldown_days', tx);
+      const cooldownDays = cooldown.value;
+      const availableAt = reapplyAvailableAt(current.decidedAt, cooldownDays);
+      // `availableAt !== null` narrows the type; an active cooldown always has a date.
+      if (
+        availableAt !== null &&
+        isReapplyCooldownActive(current.decidedAt, cooldownDays, input.now)
+      ) {
+        return { outcome: 'cooldown_active', availableAt };
+      }
+
+      // 4. Archive the decision from the LOCKED row.
+      const archived = await expertApplicationDecisionsRepository.archiveTx(tx, {
+        expertProfileId: current.id,
+        decision: 'declined',
+        decidedAt: current.decidedAt,
+        decidedByUserId: current.decidedByUserId,
+        declineReason: current.declineReason,
+        declineNote: current.declineNote,
+        submittedAt: current.submittedAt,
+      });
+
+      // 5. Back to draft, with the decision floor cleared.
+      const [updated] = await tx
+        .update(expertProfiles)
+        .set({
+          applicationStatus: 'draft',
+          decidedAt: null,
+          decidedByUserId: null,
+          declineReason: null,
+          declineNote: null,
+          submittedAt: null,
+          updatedAt: input.now,
+        })
+        .where(eq(expertProfiles.id, current.id))
+        .returning({ id: expertProfiles.id });
+      if (updated === undefined) {
+        throw new Error(`Failed to reopen expert application: ${current.id}`);
+      }
+
+      // 6. Applicant-rated cells back to the applicant's own rating — only the ones a staff
+      // adjustment actually moved away from it, so an unchanged row keeps its `updated_at`.
+      const reset = await tx
+        .update(expertCompetency)
+        .set({ proficiency: sql`${expertCompetency.selfProficiency}`, updatedAt: input.now })
+        .where(
+          and(
+            eq(expertCompetency.expertProfileId, current.id),
+            isNotNull(expertCompetency.selfProficiency),
+            sql`${expertCompetency.proficiency} IS DISTINCT FROM ${expertCompetency.selfProficiency}`
+          )
+        )
+        .returning({ id: expertCompetency.id });
+
+      // 7. The audit row, LAST. Fixed key set — `audit_events` is append-only. Never the note.
+      const auditRow = await auditEventsRepository.record(
+        {
+          actorUserId: input.applicantUserId,
+          action: 'expert_application.reopened',
+          entityType: 'expert_profile',
+          entityId: current.id,
+          metadata: {
+            previousStatus: 'rejected',
+            applicantUserId: input.applicantUserId,
+            archivedDecisionId: archived.id,
+            cooldownDays,
+            ratingsReset: reset.length,
+          },
+        },
+        tx
+      );
+
+      return {
+        outcome: 'reopened',
+        expertProfileId: current.id,
+        auditEventId: auditRow.id,
+        archivedDecisionId: archived.id,
+        decidedAt: current.decidedAt,
+      };
+    });
   },
 
   /**
@@ -2432,6 +2709,59 @@ export const expertsRepository = {
   },
 
   /**
+   * BAL-557 — the expert-settings profile save (headline, bio, username, and the industry and
+   * language sets) in ONE transaction under the profile row lock, the
+   * `saveSettingsCertifications` pattern.
+   *
+   * ⚠ THE LOCK IS WHAT PREVENTS A DEADLOCK WITH A STAFF EDIT. `editApplicationAsStaff` locks the
+   * profile, then deletes and reinserts the same child rows. Unlocked, this save would hold
+   * child-row locks and then need the profile's `FOR KEY SHARE` for its FK inserts while the
+   * staff edit held the profile and waited on those children — a cycle. Taking the profile lock
+   * first gives both writers one order: the profile, then its children.
+   *
+   * The scalars are always written; `industryIds` / `languages` are synced only when provided.
+   */
+  async saveSettingsProfile(
+    expertProfileId: string,
+    input: SaveSettingsProfileInput
+  ): Promise<SaveSettingsResult> {
+    return db.transaction(async (tx) => {
+      const current = await lockProfileRow(tx, expertProfileId);
+      if (current === undefined) return { outcome: 'not_found' };
+
+      await this.updateProfile(
+        expertProfileId,
+        { headline: input.headline, bio: input.bio, username: input.username },
+        tx
+      );
+      if (input.industryIds !== undefined) {
+        await syncIndustriesTx(tx, expertProfileId, input.industryIds);
+      }
+      if (input.languages !== undefined) {
+        await syncLanguagesTx(tx, expertProfileId, input.languages);
+      }
+      return { outcome: 'saved' };
+    });
+  },
+
+  /**
+   * BAL-557 — the expert-settings work-history save (delete-all then reinsert) in ONE transaction
+   * under the profile row lock, for the same lock-order reason as `saveSettingsProfile`.
+   */
+  async saveSettingsWorkHistory(
+    expertProfileId: string,
+    entries: SyncWorkHistoryInput[]
+  ): Promise<SaveSettingsResult> {
+    return db.transaction(async (tx) => {
+      const current = await lockProfileRow(tx, expertProfileId);
+      if (current === undefined) return { outcome: 'not_found' };
+
+      await syncWorkHistoryTx(tx, expertProfileId, entries);
+      return { outcome: 'saved' };
+    });
+  },
+
+  /**
    * BAL-549 — the `/admin/applications` list read. ONE filter arm per call plus the three chip
    * counts, in one round trip's worth of queries.
    *
@@ -2559,7 +2889,8 @@ export const expertsRepository = {
    * attribution case, where the filter in the WHERE would wrongly drop the parent).
    *
    * ⚠ `'under_review'` HAS NO WRITER TODAY. The only transitions in this repository are
-   * `draft → submitted → approved`. It is matched anyway because the kind's copy promises the
+   * `draft → submitted` (`submitApplication`), `submitted → approved | rejected`
+   * (`decideApplication`) and `rejected → draft` (`reopenApplication`). It is matched anyway because the kind's copy promises the
    * row closes "once the application is approved or rejected"; a triage state that starts being
    * written later must not silently drop those applications out of the queue.
    *

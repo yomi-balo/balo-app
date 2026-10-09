@@ -52,13 +52,19 @@ export const saveWorkHistoryAction = withAuth(
         return { success: false, error: 'Expert profile required' };
       }
 
-      await expertsRepository.syncWorkHistory(
+      // BAL-557 — one transaction under the profile row lock, so this save and a staff edit
+      // serialise instead of deadlocking.
+      const saveResult = await expertsRepository.saveSettingsWorkHistory(
         session.user.expertProfileId,
         validated.entries.map((entry) => ({
           ...entry,
           responsibilities: sanitizeResponsibilitiesHtml(entry.responsibilities),
         }))
       );
+
+      if (saveResult.outcome === 'not_found') {
+        return { success: false, error: 'Expert profile required' };
+      }
 
       log.info('Work history saved', {
         expertProfileId: session.user.expertProfileId,

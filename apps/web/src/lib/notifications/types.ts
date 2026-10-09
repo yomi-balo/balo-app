@@ -38,18 +38,17 @@ import type {
   ProjectRequestOwnerAssignedPayload,
   ExpertApplicationDeclinedPayload,
   ExpertApplicationEditedPayload,
+  // BAL-557 — moved here from a local declaration; defined once in `@balo/shared/notifications`
+  // (shared with apps/api). Re-exported below so existing imports of this module keep working.
+  ExpertApplicationSubmittedPayload,
 } from '@balo/shared/notifications';
+
+export type { ExpertApplicationSubmittedPayload };
 
 export interface UserWelcomePayload {
   correlationId: string;
   userId: string;
   role: 'client' | 'expert';
-}
-
-export interface ExpertApplicationSubmittedPayload {
-  correlationId: string;
-  userId: string;
-  applicationId: string;
 }
 
 export interface ExpertApprovedPayload {

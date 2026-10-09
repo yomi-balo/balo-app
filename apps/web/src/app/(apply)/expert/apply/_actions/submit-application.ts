@@ -2,6 +2,7 @@
 import 'server-only';
 import { withAuth } from '@/lib/auth/with-auth';
 import { expertsRepository, type ApplicationWithRelations } from '@balo/db';
+import { buildExpertApplicationSubmittedPayload } from '@balo/shared/notifications';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
@@ -23,7 +24,8 @@ interface SubmitResult {
  * can see how often a declined applicant tries (the follow-up ticket's demand signal).
  *
  * ⚠ THIS IS NOT THE RE-APPLICATION TRANSITION and must not become it — see
- * `DECLINED_APPLICATION_ERROR`'s docblock. The refusal stays; only the explanation changed.
+ * `DECLINED_APPLICATION_ERROR`'s docblock. BAL-557's `startNewApplicationAction` is the only
+ * route from `rejected` back to `draft`; this refusal stands for a still-`rejected` row.
  *
  * ⚠ EXTRACTED ONLY TO SHED COGNITIVE COMPLEXITY. Inlining the second branch put
  * `submitApplicationAction` at 16 against SonarCloud's cap of 15 (`pnpm lint:sonar:diff`). The
@@ -131,24 +133,49 @@ export const submitApplicationAction = withAuth(
         }
       }
 
-      // 5. Submit in single update
-      await expertsRepository.submitApplication(expertProfileId);
+      // 5. Submit — ONE locked transaction, re-checks `draft` and appends the per-write audit
+      // row. `not_found`/`not_draft` are ordinary states here (a stale tab racing this same
+      // read), not exceptions.
+      const submitResult = await expertsRepository.submitApplication({
+        applicantUserId: session.user.id,
+        verticalId: application.profile.verticalId,
+        now: new Date(),
+      });
+
+      if (submitResult.outcome === 'not_found') {
+        return { success: false, error: 'Application not found' };
+      }
+      if (submitResult.outcome === 'not_draft') {
+        const statusRefusal = refusalForStatus(submitResult.currentStatus, {
+          userId: session.user.id,
+          expertProfileId,
+        });
+        return {
+          success: false,
+          error: statusRefusal ?? 'Application already submitted',
+        };
+      }
 
       log.info('Expert application submitted', {
         userId: session.user.id,
         expertProfileId,
+        auditEventId: submitResult.auditEventId,
         productsCount: uniqueProductIds.size,
         certsCount: application.certifications.length,
         workHistoryCount: application.workHistory.length,
       });
 
-      // 6. Publish domain event (notification engine) — fire-and-forget
-      // Note: applicationId === expertProfileId because expert_profiles IS the application record
-      publishNotificationEvent('expert.application_submitted', {
-        correlationId: expertProfileId,
-        userId: session.user.id,
-        applicationId: expertProfileId, // expert_profiles table doubles as the application
-      }).catch(() => {
+      // 6. Publish domain event (notification engine) — fire-and-forget. `correlationId` is the
+      // audit row id, unique per WRITE, so a resubmission after a reopen is not deduped against
+      // the first submission's retained BullMQ job.
+      publishNotificationEvent(
+        'expert.application_submitted',
+        buildExpertApplicationSubmittedPayload({
+          userId: session.user.id,
+          expertProfileId: submitResult.expertProfileId,
+          auditEventId: submitResult.auditEventId,
+        })
+      ).catch(() => {
         // publishNotificationEvent logs internally
       });
 

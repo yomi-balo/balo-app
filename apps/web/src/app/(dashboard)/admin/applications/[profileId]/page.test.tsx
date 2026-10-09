@@ -7,6 +7,7 @@ const {
   mockRedirect,
   mockNotFound,
   mockFindApplicationForStaffReview,
+  mockListForStaffReview,
   mockFindNamesByIds,
   mockGetSalesforceVertical,
   mockGetProductsByVertical,
@@ -25,6 +26,7 @@ const {
     throw new Error('NEXT_NOT_FOUND');
   }),
   mockFindApplicationForStaffReview: vi.fn(),
+  mockListForStaffReview: vi.fn(),
   mockFindNamesByIds: vi.fn(),
   mockGetSalesforceVertical: vi.fn(),
   mockGetProductsByVertical: vi.fn(),
@@ -64,6 +66,9 @@ vi.mock('next/navigation', () => ({
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     findApplicationForStaffReview: (...a: unknown[]) => mockFindApplicationForStaffReview(...a),
+  },
+  expertApplicationDecisionsRepository: {
+    listForStaffReview: (...a: unknown[]) => mockListForStaffReview(...a),
   },
   usersRepository: {
     findNamesByIds: (...a: unknown[]) => mockFindNamesByIds(...a),
@@ -200,6 +205,7 @@ beforeEach(() => {
   mockGetLanguages.mockResolvedValue([]);
   mockGetIndustries.mockResolvedValue([]);
   mockFindNamesByIds.mockResolvedValue([]);
+  mockListForStaffReview.mockResolvedValue([]);
   // Default: the REAL platform map, so the role-based tests below stay real.
   mockHasPlatformCapability.mockImplementation(
     (u: { platformRole: 'user' | 'admin' | 'super_admin' }, capability: string) =>
@@ -499,5 +505,103 @@ describe('AdminApplicationReviewPage (RSC) — BAL-593 edit affordance', () => {
     expect(mockGetLanguages).toHaveBeenCalledTimes(1);
     expect(mockGetIndustries).toHaveBeenCalledTimes(1);
     expect(mockBuildStaffEditModel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AdminApplicationReviewPage (RSC) — BAL-557 previous decisions section', () => {
+  it('renders nothing when listForStaffReview returns no rows', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindApplicationForStaffReview.mockResolvedValue(application());
+    mockListForStaffReview.mockResolvedValue([]);
+    await renderPage();
+    expect(screen.queryByText('Previous decisions')).toBeNull();
+  });
+
+  it('renders the section fed by listForStaffReview, with attribution hydrated from findNamesByIds', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({ profile: { applicationStatus: 'draft' } })
+    );
+    mockFindNamesByIds.mockResolvedValue([{ id: 'staff-2', firstName: 'Priya', lastName: null }]);
+    mockListForStaffReview.mockResolvedValue([
+      {
+        id: 'decision-1',
+        decision: 'declined',
+        decidedByUserId: 'staff-2',
+        decidedAt: new Date('2026-01-01'),
+        declineReason: 'not_a_fit',
+        declineNote: 'A staff-only note.',
+        submittedAt: new Date('2025-12-01'),
+        createdAt: new Date('2026-01-01'),
+      },
+    ]);
+    await renderPage();
+    expect(mockListForStaffReview).toHaveBeenCalledWith(PROFILE_ID);
+    expect(screen.getByText('Previous decisions')).toBeInTheDocument();
+    expect(screen.getByText(/Declined by Priya @ Balo/)).toBeInTheDocument();
+    expect(screen.getByText('A staff-only note.')).toBeInTheDocument();
+  });
+
+  it('withholds declineNote on archived rows for a viewer without REVIEW_EXPERT_APPLICATIONS', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockHasPlatformCapability.mockImplementation(
+      (_u: unknown, capability: string) => capability === PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN
+    );
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({ profile: { applicationStatus: 'draft' } })
+    );
+    mockFindNamesByIds.mockResolvedValue([{ id: 'staff-2', firstName: 'Priya', lastName: null }]);
+    mockListForStaffReview.mockResolvedValue([
+      {
+        id: 'decision-1',
+        decision: 'declined',
+        decidedByUserId: 'staff-2',
+        decidedAt: new Date('2026-01-01'),
+        declineReason: 'not_a_fit',
+        declineNote: 'A staff-only note.',
+        submittedAt: new Date('2025-12-01'),
+        createdAt: new Date('2026-01-01'),
+      },
+    ]);
+    await renderPage();
+    expect(screen.getByText(/Declined by Priya @ Balo/)).toBeInTheDocument();
+    expect(screen.queryByText('A staff-only note.')).toBeNull();
+  });
+
+  /**
+   * ONE combined `findNamesByIds` call covers both the current decision's decider AND every
+   * archived row's decider — never one lookup per row.
+   */
+  it('hydrates the current decision AND the archived rows in ONE findNamesByIds call', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindApplicationForStaffReview.mockResolvedValue(
+      application({
+        profile: {
+          applicationStatus: 'rejected',
+          decidedAt: new Date('2026-02-01'),
+          decidedByUserId: 'staff-1',
+          declineReason: 'not_a_fit',
+        },
+      })
+    );
+    mockFindNamesByIds.mockResolvedValue([
+      { id: 'staff-1', firstName: 'Dana', lastName: null },
+      { id: 'staff-2', firstName: 'Priya', lastName: null },
+    ]);
+    mockListForStaffReview.mockResolvedValue([
+      {
+        id: 'decision-1',
+        decision: 'declined',
+        decidedByUserId: 'staff-2',
+        decidedAt: new Date('2026-01-01'),
+        declineReason: 'not_a_fit',
+        declineNote: null,
+        submittedAt: new Date('2025-12-01'),
+        createdAt: new Date('2026-01-01'),
+      },
+    ]);
+    await renderPage();
+    expect(mockFindNamesByIds).toHaveBeenCalledTimes(1);
+    expect(mockFindNamesByIds).toHaveBeenCalledWith(expect.arrayContaining(['staff-1', 'staff-2']));
   });
 });

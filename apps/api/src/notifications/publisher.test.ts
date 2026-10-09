@@ -8,10 +8,14 @@ vi.mock('../lib/queue.js', async (importOriginal) => ({
 
 import { notificationEvents } from './publisher.js';
 import { getQueue } from '../lib/queue.js';
+import { buildExpertApplicationSubmittedPayload } from '@balo/shared/notifications';
 
 describe('notificationEvents.publish', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The dedup-double tests below install a custom `mockImplementation`; restore the plain
+    // resolved-value default so it never leaks into an unrelated test.
+    mockAdd.mockReset().mockResolvedValue(undefined);
   });
 
   it('publishes user.welcome event with correct job name, data, and jobId', async () => {
@@ -122,6 +126,59 @@ describe('notificationEvents.publish', () => {
         jobId: 'expert.application__submitted--app-456',
       })
     );
+  });
+
+  /**
+   * BAL-557 — a RESUBMISSION after a decline + reopen must not be deduped away against
+   * the first submission's retained BullMQ job. This double REPRODUCES BullMQ's own dedup
+   * semantics (`queue.add` with a jobId it has already seen is a silent no-op), so it is a real
+   * arbiter for the assertion, not a tautology — the "characterises the bug" case below proves
+   * the SAME double collapses two adds sharing one jobId down to one.
+   */
+  describe('expert.application_submitted — per-write dedup identity', () => {
+    function installDedupDouble(): Set<string> {
+      const seen = new Set<string>();
+      mockAdd.mockImplementation(async (_name: string, _data: unknown, opts: { jobId: string }) => {
+        if (seen.has(opts.jobId)) return undefined;
+        seen.add(opts.jobId);
+        return undefined;
+      });
+      return seen;
+    }
+
+    it('two submits with distinct audit ids reach the dedup double as TWO jobs', async () => {
+      const seen = installDedupDouble();
+      const first = buildExpertApplicationSubmittedPayload({
+        userId: 'user-1',
+        expertProfileId: 'profile-1',
+        auditEventId: 'audit-1',
+      });
+      const second = buildExpertApplicationSubmittedPayload({
+        userId: 'user-1',
+        expertProfileId: 'profile-1',
+        auditEventId: 'audit-2',
+      });
+      expect(first.correlationId).not.toBe(second.correlationId);
+
+      await notificationEvents.publish('expert.application_submitted', first);
+      await notificationEvents.publish('expert.application_submitted', second);
+
+      expect(seen.size).toBe(2);
+    });
+
+    it('characterises the bug: a per-profile correlationId collapses two submits onto ONE job', async () => {
+      const seen = installDedupDouble();
+      const buggyPayload = {
+        correlationId: 'profile-1',
+        userId: 'user-1',
+        applicationId: 'profile-1',
+      };
+
+      await notificationEvents.publish('expert.application_submitted', buggyPayload);
+      await notificationEvents.publish('expert.application_submitted', buggyPayload);
+
+      expect(seen.size).toBe(1);
+    });
   });
 
   it('includes ISO timestamp in publishedAt', async () => {

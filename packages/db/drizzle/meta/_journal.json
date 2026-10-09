@@ -750,6 +750,13 @@
       "when": 1791421014044,
       "tag": "0106_bal593_competency_self_proficiency",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1791499478714,
+      "tag": "0107_bal557_reapplication",
+      "breakpoints": true
     }
   ]
 }

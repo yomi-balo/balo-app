@@ -3,11 +3,16 @@ import 'server-only';
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import { expertsRepository } from '@balo/db';
-import { EXPERT_DECLINE_REASONS, applicationWaitingDays } from '@balo/shared/experts';
+import { expertsRepository, platformSettingsRepository } from '@balo/db';
+import {
+  EXPERT_DECLINE_REASONS,
+  applicationWaitingDays,
+  reapplyAvailableAt,
+} from '@balo/shared/experts';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { formatLongUtc } from '@/lib/format/utc-date';
 import { DECLINE_NOTE_MIN_LENGTH } from '../_lib/decline-copy';
 import { requireApplicationReviewer } from './_shared/require-application-reviewer';
 import {
@@ -62,6 +67,10 @@ export async function declineExpertApplicationAction(
   const { expertProfileId, reason, note } = parsed.data;
 
   try {
+    // Read BEFORE the decline commits: a failure here must fail before any write, so a retry
+    // still finds the application pending.
+    const cooldown = await platformSettingsRepository.get('expert_reapply_cooldown_days');
+
     const result = await expertsRepository.decideApplication({
       expertProfileId,
       actorUserId: auth.user.id,
@@ -95,11 +104,19 @@ export async function declineExpertApplicationAction(
     // (D5): a re-decline of the same profile must not be deduped away against a retained
     // completed BullMQ job.
     const correlationId = `expert-application-declined.${expertProfileId}.${result.auditEventId}`;
+
+    // `decidedAt` is always set on this arm; the `?? new Date()` is a type guard only (the
+    // column is nullable for a legacy row), never an assertion.
+    const decidedAt = result.profile.decidedAt ?? new Date();
+    const availableAt = reapplyAvailableAt(decidedAt, cooldown.value) ?? decidedAt;
+    const reapplyAvailableDate = formatLongUtc(availableAt);
+
     publishNotificationEvent('expert.application_declined', {
       correlationId,
       userId: result.applicantUserId,
       expertProfileId,
       reason,
+      reapplyAvailableDate,
     }).catch(() => {
       // publishNotificationEvent logs internally
     });

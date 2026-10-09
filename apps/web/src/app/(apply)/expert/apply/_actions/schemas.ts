@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EXPERT_LANGUAGES_MAX, EXPERT_INDUSTRIES_MAX } from '@balo/shared/experts';
 import { responsibilitiesFieldSchema } from '@/lib/expert-profile/work-history-responsibilities';
 
 // ── Shared field schemas (single source of truth) ────────────────
@@ -40,6 +41,17 @@ const ratingItem = z.object({
   proficiency: z.number().int().min(0).max(10),
 });
 
+// Shared array fields (BAL-557) so the cap + message stay in lockstep between the strict
+// (submit + client "Next" gate) and lenient draft variants — the `productIdsField` precedent
+// below. The cap itself is `@balo/shared/experts`' ONE definition, shared with the settings
+// save and the staff edit.
+const languagesField = z
+  .array(languageItem)
+  .max(EXPERT_LANGUAGES_MAX, `You can list up to ${EXPERT_LANGUAGES_MAX} languages.`);
+const industryIdsField = z
+  .array(industryIdItem)
+  .max(EXPERT_INDUSTRIES_MAX, `You can pick up to ${EXPERT_INDUSTRIES_MAX} industries.`);
+
 // ── Step 1: Profile ──────────────────────────────────────────────
 
 const profileStepBase = z.object({
@@ -50,8 +62,8 @@ const profileStepBase = z.object({
   isSalesforceMvp: isSalesforceMvpField,
   isSalesforceCta: isSalesforceCtaField,
   isCertifiedTrainer: isCertifiedTrainerField,
-  languages: z.array(languageItem).min(1, 'Please add at least one language you can consult in.'),
-  industryIds: z.array(industryIdItem).min(1, 'Please select at least one industry.'),
+  languages: languagesField.min(1, 'Please add at least one language you can consult in.'),
+  industryIds: industryIdsField.min(1, 'Please select at least one industry.'),
 });
 
 const projectLeadRefineOpts = {
@@ -163,7 +175,7 @@ export const termsStepSchema = z.object({
 // Consumed ONLY by saveDraftAction. Arrays may be empty (drop `.min(1)`), required
 // scalars are optional, and completeness-only refines are dropped. Data-quality
 // refines (linkedin/trailhead format, lead<=total, work-history end-after-start)
-// are kept. The strict variants above are unchanged.
+// and the BAL-557 language/industry caps are kept. The strict variants above are unchanged.
 
 const profileStepDraftBase = profileStepBase
   .partial({
@@ -175,8 +187,8 @@ const profileStepDraftBase = profileStepBase
     isCertifiedTrainer: true,
   })
   .extend({
-    languages: z.array(languageItem),
-    industryIds: z.array(industryIdItem),
+    languages: languagesField,
+    industryIds: industryIdsField,
   });
 
 export const profileStepDraftSchema = profileStepDraftBase.refine(

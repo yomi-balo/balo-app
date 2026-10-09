@@ -29,9 +29,13 @@ vi.mock('@/lib/auth/session', () => ({
   getCurrentUser: () => mockGetCurrentUser(),
 }));
 
-const { mockDecideApplication } = vi.hoisted(() => ({ mockDecideApplication: vi.fn() }));
+const { mockDecideApplication, mockPlatformSettingsGet } = vi.hoisted(() => ({
+  mockDecideApplication: vi.fn(),
+  mockPlatformSettingsGet: vi.fn(),
+}));
 vi.mock('@balo/db', () => ({
   expertsRepository: { decideApplication: (...a: unknown[]) => mockDecideApplication(...a) },
+  platformSettingsRepository: { get: (...a: unknown[]) => mockPlatformSettingsGet(...a) },
 }));
 
 const mockPublish = vi.fn();
@@ -46,10 +50,13 @@ import { DECLINE_NOTE_MIN_LENGTH } from '../_lib/decline-copy';
 import { declineExpertApplicationAction } from './decline-expert-application';
 import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
+import { reapplyAvailableAt } from '@balo/shared/experts';
+import { formatLongUtc } from '@/lib/format/utc-date';
 
 const ADMIN = { id: 'admin-1', firstName: 'Dana', lastName: null, platformRole: 'admin' };
 const PLAIN_USER = { id: 'user-1', platformRole: 'user' };
 const SUBMITTED_AT = new Date('2026-01-01T00:00:00.000Z');
+const DECIDED_AT = new Date('2026-01-08T00:00:00.000Z');
 
 const VALID_INPUT = {
   expertProfileId: PROFILE_ID,
@@ -62,12 +69,15 @@ beforeEach(() => {
   mockGetCurrentUser.mockResolvedValue(ADMIN);
   mockDecideApplication.mockResolvedValue({
     outcome: 'decided',
-    profile: {},
+    profile: { decidedAt: DECIDED_AT },
     previousStatus: 'submitted',
     applicantUserId: APPLICANT_ID,
     submittedAt: SUBMITTED_AT,
     auditEventId: AUDIT_ID,
   });
+  // N mocked as 30, so the "call-time read" test can prove the live value (not a hard-coded 60)
+  // drives the published date.
+  mockPlatformSettingsGet.mockResolvedValue({ value: 30, source: 'stored' });
 });
 
 describe('declineExpertApplicationAction', () => {
@@ -187,8 +197,36 @@ describe('declineExpertApplicationAction', () => {
     await declineExpertApplicationAction(VALID_INPUT);
     const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
     expect(Object.keys(payload).sort()).toEqual(
-      ['correlationId', 'expertProfileId', 'reason', 'userId'].sort()
+      ['correlationId', 'expertProfileId', 'reapplyAvailableDate', 'reason', 'userId'].sort()
     );
+  });
+
+  /**
+   * The cooldown is read at CALL TIME, not hard-coded. `platformSettingsRepository.get` is
+   * mocked to 30 here (the default-60 registry value would make this test pass even on a
+   * hard-coded 30 OR a hard-coded 60 picked at random, so the suite also pins 30 explicitly).
+   */
+  it('publishes reapplyAvailableDate computed from the call-time cooldown read', async () => {
+    mockPlatformSettingsGet.mockResolvedValue({ value: 30, source: 'stored' });
+    await declineExpertApplicationAction(VALID_INPUT);
+    expect(mockPlatformSettingsGet).toHaveBeenCalledWith('expert_reapply_cooldown_days');
+    const [, payload] = mockPublish.mock.calls[0] as [string, { reapplyAvailableDate: string }];
+    const expected = formatLongUtc(reapplyAvailableAt(DECIDED_AT, 30) ?? DECIDED_AT);
+    expect(payload.reapplyAvailableDate).toBe(expected);
+  });
+
+  /**
+   * MUTATION-PROOF (contract): revert the action to omit the cooldown read (hard-code the
+   * published date to today, or any fixed N) and this goes red, because 30 and 7 disagree.
+   */
+  it('a different cooldown value produces a different published date', async () => {
+    mockPlatformSettingsGet.mockResolvedValue({ value: 7, source: 'stored' });
+    await declineExpertApplicationAction(VALID_INPUT);
+    const [, payload] = mockPublish.mock.calls[0] as [string, { reapplyAvailableDate: string }];
+    const expectedFor7 = formatLongUtc(reapplyAvailableAt(DECIDED_AT, 7) ?? DECIDED_AT);
+    const expectedFor30 = formatLongUtc(reapplyAvailableAt(DECIDED_AT, 30) ?? DECIDED_AT);
+    expect(payload.reapplyAvailableDate).toBe(expectedFor7);
+    expect(payload.reapplyAvailableDate).not.toBe(expectedFor30);
   });
 
   it('log.info for a decline records the reason but NEVER the note', async () => {
@@ -238,5 +276,18 @@ describe('declineExpertApplicationAction', () => {
       })
     );
     expect(JSON.stringify(vi.mocked(log.error).mock.calls)).not.toContain(NOTE_TEXT);
+  });
+
+  /**
+   * The cooldown read happens BEFORE the decline commits: a read failure must fail before any
+   * write, so a retry still finds the application pending rather than already declined with no
+   * notification sent.
+   */
+  it('reads the cooldown setting before deciding, and never decides when that read rejects', async () => {
+    mockPlatformSettingsGet.mockRejectedValue(new Error('settings unavailable'));
+    const result = await declineExpertApplicationAction(VALID_INPUT);
+    expect(result.success).toBe(false);
+    expect(mockDecideApplication).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
   });
 });

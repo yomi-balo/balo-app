@@ -5,8 +5,10 @@ import { ArrowLeft } from 'lucide-react';
 import { z } from 'zod';
 import {
   expertsRepository,
+  expertApplicationDecisionsRepository,
   referenceDataRepository,
   usersRepository,
+  type ArchivedApplicationDecision,
   type CertificationsByCategory,
   type ProductsByCategory,
   type StaffApplicationWithRelations,
@@ -20,6 +22,10 @@ import { applicationWaitingDays, STAFF_EDITABLE_APPLICATION_STATUSES } from '@ba
 import { formatWaitingLabel } from '../_lib/application-list-view';
 import { ApplicationSections, WorkHistorySection } from '../_components/application-sections';
 import { DecisionOutcomeBanner } from '../_components/decision-outcome-banner';
+import {
+  PreviousDecisionsSection,
+  type PreviousDecisionRowView,
+} from '../_components/previous-decisions-section';
 import { ApplicationReviewWorkspace } from '../_components/application-review-workspace';
 import {
   buildStaffEditModel,
@@ -79,16 +85,58 @@ interface AdminApplicationReviewPageProps {
   params: Promise<{ profileId: string }>;
 }
 
-/** The decider's name for the decision banner — unresolved unless the application was decided by someone. */
-async function resolveDeciderName(
+/**
+ * Decider names for the current decision's banner AND every archived decision's row — ONE
+ * `findNamesByIds` call (BAL-557), never one per row.
+ */
+async function resolveDeciderNames(
   isDecided: boolean,
-  decidedByUserId: string | null
-): Promise<{ firstName: string | null; lastName: string | null }> {
-  if (!isDecided || decidedByUserId === null) {
-    return { firstName: null, lastName: null };
+  currentDecidedByUserId: string | null,
+  previousDecisions: readonly ArchivedApplicationDecision[]
+): Promise<Map<string, { firstName: string | null; lastName: string | null }>> {
+  const ids = new Set<string>();
+  if (isDecided && currentDecidedByUserId !== null) {
+    ids.add(currentDecidedByUserId);
   }
-  const [decider] = await usersRepository.findNamesByIds([decidedByUserId]);
-  return { firstName: decider?.firstName ?? null, lastName: decider?.lastName ?? null };
+  for (const decision of previousDecisions) {
+    if (decision.decidedByUserId !== null) {
+      ids.add(decision.decidedByUserId);
+    }
+  }
+  if (ids.size === 0) return new Map();
+
+  const rows = await usersRepository.findNamesByIds([...ids]);
+  return new Map(rows.map((row) => [row.id, { firstName: row.firstName, lastName: row.lastName }]));
+}
+
+/** Looks up one decider's name in the combined map, falling back to "unknown" rather than `!`. */
+function lookupDeciderName(
+  deciderNames: Map<string, { firstName: string | null; lastName: string | null }>,
+  decidedByUserId: string | null
+): { firstName: string | null; lastName: string | null } {
+  if (decidedByUserId === null) return { firstName: null, lastName: null };
+  return deciderNames.get(decidedByUserId) ?? { firstName: null, lastName: null };
+}
+
+/** The staff review page's "previous decisions" view rows (BAL-557). `declineNote` is passed
+ * through as given — the CALLER decides whether the viewer may see it (`canReview`). */
+function buildPreviousDecisionRows(
+  previousDecisions: readonly ArchivedApplicationDecision[],
+  deciderNames: Map<string, { firstName: string | null; lastName: string | null }>,
+  canReview: boolean
+): PreviousDecisionRowView[] {
+  return previousDecisions.map((decision) => {
+    const name = lookupDeciderName(deciderNames, decision.decidedByUserId);
+    return {
+      id: decision.id,
+      decidedByFirstName: name.firstName,
+      decidedByLastName: name.lastName,
+      decidedAt: decision.decidedAt,
+      declineReason: decision.declineReason,
+      declineNote: canReview ? decision.declineNote : null,
+      submittedAt: decision.submittedAt,
+    };
+  });
 }
 
 /** The staff edit form's working copy and reference data — built only when the viewer can edit. */
@@ -172,11 +220,13 @@ export default async function AdminApplicationReviewPage({
     notFound();
   }
 
-  const [productsByCategory, supportTypes, certificationsByCategory] = await Promise.all([
-    referenceDataRepository.getProductsByVertical(vertical.id),
-    referenceDataRepository.getSupportTypes(vertical.id),
-    referenceDataRepository.getCertificationsByVertical(vertical.id),
-  ]);
+  const [productsByCategory, supportTypes, certificationsByCategory, previousDecisions] =
+    await Promise.all([
+      referenceDataRepository.getProductsByVertical(vertical.id),
+      referenceDataRepository.getSupportTypes(vertical.id),
+      referenceDataRepository.getCertificationsByVertical(vertical.id),
+      expertApplicationDecisionsRepository.listForStaffReview(profileId),
+    ]);
 
   const { profile, user: applicant, agency } = application;
   // ⚠ THE SECOND TOKEN — resolved here, not inherited from the page gate above (F2/F12).
@@ -190,7 +240,17 @@ export default async function AdminApplicationReviewPage({
     canReview &&
     (STAFF_EDITABLE_APPLICATION_STATUSES as readonly string[]).includes(profile.applicationStatus);
 
-  const decider = await resolveDeciderName(isDecided, profile.decidedByUserId);
+  const deciderNames = await resolveDeciderNames(
+    isDecided,
+    profile.decidedByUserId,
+    previousDecisions
+  );
+  const decider = lookupDeciderName(deciderNames, isDecided ? profile.decidedByUserId : null);
+  const previousDecisionRows = buildPreviousDecisionRows(
+    previousDecisions,
+    deciderNames,
+    canReview
+  );
   const { editModel, reference } = await buildEditModelAndReference(
     application,
     supportTypes,
@@ -263,6 +323,8 @@ export default async function AdminApplicationReviewPage({
         editModel={editModel}
         reference={reference}
       />
+
+      <PreviousDecisionsSection decisions={previousDecisionRows} />
     </div>
   );
 }

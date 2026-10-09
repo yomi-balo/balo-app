@@ -74,3 +74,10 @@ export * from './admin-alerts';
 // it belongs to the project-request DOMAIN but not to `project-requests.ts`, because a parse is
 // a pre-request work item that may never become a request at all.
 export * from './project-brief-parses';
+// BAL-557 — the archive of past expert-application decisions, written when a declined applicant
+// starts a new application. Its own file: a history table beside `expert_profiles`' current
+// decision columns, not part of the profile's own shape.
+export * from './expert-application-decisions';
+// BAL-557 — runtime configuration (`key` → jsonb `value`). Generic; each key's type lives in
+// `@balo/shared/platform-settings`.
+export * from './platform-settings';

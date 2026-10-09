@@ -162,6 +162,14 @@ export const expertDeclineReasonEnum = pgEnum('expert_decline_reason', [
   'not_a_fit',
 ]);
 
+/**
+ * Which terminal decision an `expert_application_decisions` row archives (BAL-557). Only a
+ * DECLINE is archived today: `expertsRepository.reopenApplication` (`rejected → draft`) is the
+ * one writer, and an approved application has no route back to `draft`. No default — the writer
+ * always names it.
+ */
+export const expertApplicationDecisionEnum = pgEnum('expert_application_decision', ['declined']);
+
 // ── A6 proposal model (BAL-287) ──────────────────────────────────────────
 
 /**

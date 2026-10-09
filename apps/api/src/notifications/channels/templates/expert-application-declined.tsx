@@ -33,9 +33,6 @@ const declinedPillStyle = {
  */
 export const EXPERT_APPLICATION_DECLINED_COPY = {
   heroSubtext: "We're not able to approve your application this time.",
-  calloutHeading: "This isn't the end of the road",
-  calloutText:
-    'Experience, certifications and the mix of work clients ask us for all move over time. If yours change, we would like to hear about it — a person on our team reads every reply.',
   standing:
     'Nothing further is needed from you, and your Balo account stays exactly as it is — you can keep using Balo to find experts of your own whenever you need one.',
   supportPrefix: 'Want to talk it through?',
@@ -50,42 +47,72 @@ export function declinedLeadParagraph(reasonLabel: string): string {
   return `Thanks for taking the time to apply. Our team has reviewed your application, and we're not able to approve it this time — ${reasonLabel}.`;
 }
 
+/**
+ * BAL-557 fix round 2 — the re-application block is now the ONE callout. It used to sit next to
+ * a separate "this isn't the end of the road" callout (BAL-549's stand-in for the missing
+ * re-apply path); now that the path exists, that sentiment folds in here instead of repeating
+ * the same idea twice. There is also no CTA button any more — it would land on a disabled button
+ * for the whole cooldown — so the dated text itself names the destination ("your apply page").
+ * `reapplyText` is used when the payload carries a date (every decline published from here on);
+ * `REAPPLY_TEXT_UNDATED` covers a job enqueued before this field existed and queued past deploy
+ * — it still reads true, just without a date.
+ */
+export const REAPPLY_HEADING = "You're welcome to try again"; // pending-MJ
+
+export function reapplyText(reapplyAvailableDate: string): string {
+  // pending-MJ — the wait is stated as a helpful fact, never a countdown.
+  return (
+    `You're welcome to start a new application from ${reapplyAvailableDate} — just head back ` +
+    'to your apply page. Your earlier answers stay saved, so you can pick up and update them ' +
+    'rather than start from the beginning. Experience, certifications and the mix of work ' +
+    'clients ask us for all move over time, so if yours change, we would like to hear about it ' +
+    '— a person on our team reads every reply.'
+  );
+}
+
+export const REAPPLY_TEXT_UNDATED =
+  // pending-MJ
+  "You're welcome to start a new application once a short wait has passed — just head back to " +
+  'your apply page and you will see exactly when it reopens for you. Your earlier answers stay ' +
+  'saved, so you can pick up and update them rather than start from the beginning. Experience, ' +
+  'certifications and the mix of work clients ask us for all move over time, so if yours ' +
+  'change, we would like to hear about it — a person on our team reads every reply.';
+
 // ── Template ─────────────────────────────────────────────────────
 
 interface ExpertApplicationDeclinedEmailProps {
   readonly firstName: string;
   readonly reason: ExpertDeclineReason;
   readonly baseUrl: string;
+  /**
+   * Pre-formatted (`formatLongUtc`), e.g. "9 Dec 2026" — computed at PUBLISH time from the live
+   * `expert_reapply_cooldown_days` platform setting, so this template never reads config. `null`
+   * only for a job enqueued before this field existed; every decline published from here on
+   * carries a date.
+   */
+  readonly reapplyAvailableDate: string | null;
 }
 
 /**
- * BAL-549 — the applicant's expert application was declined. Renders the reason CATEGORY only —
- * `expert_profiles.decline_note` is staff-only, never leaves the DB, and is structurally absent
- * from the payload this template reads. Warm and non-adversarial (CLAUDE.md): a decline is a
- * decision, not a rejection of the person.
+ * BAL-549 / BAL-557 — the applicant's expert application was declined. Renders the reason
+ * CATEGORY only — `expert_profiles.decline_note` is staff-only, never leaves the DB, and is
+ * structurally absent from the payload this template reads. Warm and non-adversarial
+ * (CLAUDE.md): a decline is a decision, not a rejection of the person.
  *
- * ⚠⚠ THIS EMAIL MUST NOT PROMISE A RE-APPLICATION (WEB-REVIEW FIX ROUND, W1 — user-ruled).
- * It used to: it said the application was "saved, so you won't start from scratch", carried a
- * 🔄 "You can apply again" callout, and a CTA button reading "Apply again when you're ready →".
- * NONE OF THAT WORKED. `expertsRepository.submitApplication`'s WHERE is
- * `applicationStatus = 'draft'`, so a `rejected` profile matches no row and the submit fails —
- * BAL-549's own "Out of scope" excluded the `rejected → submitted` transition, so the copy
- * described a flow that was never built. It now names only what is true today: the decision, the
- * reason category, that nothing more is needed, and the support channel. A FOLLOW-UP TICKET owns
- * the real transition; when that ships, this copy may invite a re-application again — and not one
- * day sooner.
- *
- * ⚠ THERE IS DELIBERATELY NO CTA BUTTON. Linking `/expert/apply` was the actionable half of the
- * false promise (the wizard renders for a `rejected` applicant, then refuses at submit), and
- * linking `docs/help/what-happens-after-you-apply.md` is impossible — that doc is unrouted plain
- * Markdown with no page under `apps/web`, so a `/help/...` href would 404 in production. The
- * `SupportFooter`'s "reply to this email or reach us at support@getbalo.com" is the one action,
- * and it is a channel that genuinely exists.
+ * ⚠⚠ BAL-557 RESTORES THE RE-APPLICATION PROMISE THAT BAL-549's WEB-REVIEW FIX ROUND (W1)
+ * REMOVED. W1 was correct for its time: `expertsRepository.submitApplication`'s WHERE was
+ * `applicationStatus = 'draft'`, so a `rejected` profile matched no row and any re-application
+ * copy described a flow that did not exist. BAL-557 BUILDS that flow — `reopenApplication`
+ * (`rejected → draft`) behind a runtime-configurable cooldown — so the promise is now true and
+ * dated. There is no CTA button — it would land on a disabled `DeclinedApplicationPanel`
+ * (apps/web) for the whole cooldown — so the dated text names the destination in words
+ * ("your apply page") instead of linking it.
  */
 export function ExpertApplicationDeclinedEmail({
   firstName = 'there',
   reason,
   baseUrl,
+  reapplyAvailableDate,
 }: Readonly<ExpertApplicationDeclinedEmailProps>) {
   const reasonLabel = EXPERT_DECLINE_REASON_LABEL[reason];
   const previewText = `An update on your Balo expert application, ${firstName}.`;
@@ -105,16 +132,18 @@ export function ExpertApplicationDeclinedEmail({
         <Text style={shared.greeting}>Hi {firstName},</Text>
         <Text style={shared.bodyText}>{declinedLeadParagraph(reasonLabel)}</Text>
 
-        <Callout
-          emoji="💬"
-          heading={EXPERT_APPLICATION_DECLINED_COPY.calloutHeading}
-          text={EXPERT_APPLICATION_DECLINED_COPY.calloutText}
-          bg={colors.primaryLight}
-          borderColor={colors.primaryBorder}
-          headingColor={colors.primary}
-        />
-
         <Text style={shared.bodyText}>{EXPERT_APPLICATION_DECLINED_COPY.standing}</Text>
+
+        <Callout
+          emoji="🔁"
+          heading={REAPPLY_HEADING}
+          text={
+            reapplyAvailableDate === null ? REAPPLY_TEXT_UNDATED : reapplyText(reapplyAvailableDate)
+          }
+          bg={colors.successLight}
+          borderColor={colors.successBorder}
+          headingColor={colors.success}
+        />
 
         <SupportFooter prefix={EXPERT_APPLICATION_DECLINED_COPY.supportPrefix} />
       </Section>

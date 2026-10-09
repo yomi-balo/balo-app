@@ -124,6 +124,7 @@ describe('publishBodySchema', () => {
           userId: '550e8400-e29b-41d4-a716-446655440002',
           expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
           reason: 'not_a_fit',
+          reapplyAvailableDate: '9 Dec 2026',
         },
       });
       expect(result.success).toBe(true);
@@ -137,6 +138,7 @@ describe('publishBodySchema', () => {
           userId: '550e8400-e29b-41d4-a716-446655440002',
           expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
           reason: 'not-a-real-reason',
+          reapplyAvailableDate: '9 Dec 2026',
         },
       });
       expect(result.success).toBe(false);
@@ -149,6 +151,38 @@ describe('publishBodySchema', () => {
           correlationId: 'expert-application-declined.a.b',
           userId: '550e8400-e29b-41d4-a716-446655440002',
           reason: 'not_a_fit',
+          reapplyAvailableDate: '9 Dec 2026',
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    // `reapplyAvailableDate` is optional: a retained BullMQ job from before this field existed
+    // carries no value, and the template renders the undated variant for a missing one.
+    it('accepts a missing reapplyAvailableDate', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_declined',
+        payload: {
+          correlationId:
+            'expert-application-declined.550e8400-e29b-41d4-a716-446655440000.550e8400-e29b-41d4-a716-446655440001',
+          userId: '550e8400-e29b-41d4-a716-446655440002',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+          reason: 'not_a_fit',
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an empty-string reapplyAvailableDate', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_declined',
+        payload: {
+          correlationId:
+            'expert-application-declined.550e8400-e29b-41d4-a716-446655440000.550e8400-e29b-41d4-a716-446655440001',
+          userId: '550e8400-e29b-41d4-a716-446655440002',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+          reason: 'not_a_fit',
+          reapplyAvailableDate: '',
         },
       });
       expect(result.success).toBe(false);

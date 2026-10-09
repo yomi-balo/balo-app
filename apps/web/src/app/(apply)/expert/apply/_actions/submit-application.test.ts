@@ -31,6 +31,10 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: vi.fn(() => Promise.resolve(mockSessionObj)),
 }));
 
+vi.mock('@/lib/notifications/publish', () => ({
+  publishNotificationEvent: vi.fn(() => Promise.resolve()),
+}));
+
 import { submitApplicationAction } from './submit-application';
 import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
 
@@ -45,11 +49,15 @@ interface MockAppOptions {
   workHistory?: unknown[];
 }
 
+const VERTICAL_ID = 'vertical-1';
+const AUDIT_EVENT_ID = 'a0000000-0000-4000-8000-00000000AUD1';
+
 function mockApplication(opts: MockAppOptions = {}) {
   return {
     profile: {
       id: PROFILE_ID,
       userId: USER_ID,
+      verticalId: VERTICAL_ID,
       applicationStatus: 'draft',
       ...opts.profileOverrides,
     },
@@ -63,7 +71,12 @@ function mockApplication(opts: MockAppOptions = {}) {
 
 function setupValidApplication(opts: MockAppOptions = {}): void {
   mockFindApplicationWithRelations.mockResolvedValue(mockApplication(opts));
-  mockSubmitApplication.mockResolvedValue(undefined);
+  mockSubmitApplication.mockResolvedValue({
+    outcome: 'submitted',
+    expertProfileId: PROFILE_ID,
+    submittedAt: new Date('2026-01-01T00:00:00.000Z'),
+    auditEventId: AUDIT_EVENT_ID,
+  });
 }
 
 // ── Tests ────────────────────────────────────────────────────────
@@ -139,8 +152,8 @@ describe('submitApplicationAction', () => {
       const result = await submitApplicationAction(PROFILE_ID);
       expect(result).toEqual({ success: false, error: DECLINED_APPLICATION_ERROR });
       expect(DECLINED_APPLICATION_ERROR).toBe(
-        "We've already reviewed this application, so it can't be changed or submitted again. " +
-          'Email support@getbalo.com and a person will pick it up from there.'
+        'This application was reviewed and closed. You can start a new application from your ' +
+          'apply page once it reopens — your answers will still be there.'
       );
       expect(mockSubmitApplication).not.toHaveBeenCalled();
     });
@@ -247,10 +260,14 @@ describe('submitApplicationAction', () => {
   });
 
   describe('successful submission', () => {
-    it('calls submitApplication with correct profile ID', async () => {
+    it('calls submitApplication with the applicant id and vertical — never a caller-supplied profile id', async () => {
       setupValidApplication();
       await submitApplicationAction(PROFILE_ID);
-      expect(mockSubmitApplication).toHaveBeenCalledWith(PROFILE_ID);
+      expect(mockSubmitApplication).toHaveBeenCalledWith({
+        applicantUserId: USER_ID,
+        verticalId: VERTICAL_ID,
+        now: expect.any(Date),
+      });
     });
 
     it('returns success true', async () => {
@@ -263,6 +280,62 @@ describe('submitApplicationAction', () => {
       setupValidApplication({ certifications: [], workHistory: [] });
       const result = await submitApplicationAction(PROFILE_ID);
       expect(result).toEqual({ success: true });
+    });
+
+    /**
+     * BAL-557 — THE PUBLISHED `correlationId` IS THE AUDIT ROW ID, NOT THE PROFILE ID.
+     * MUTATION-PROVEN: revert to `correlationId: expertProfileId` and this goes red.
+     */
+    it('publishes expert.application_submitted with correlationId = the audit event id', async () => {
+      setupValidApplication();
+      const { publishNotificationEvent } = await import('@/lib/notifications/publish');
+      await submitApplicationAction(PROFILE_ID);
+      expect(publishNotificationEvent).toHaveBeenCalledWith('expert.application_submitted', {
+        correlationId: AUDIT_EVENT_ID,
+        userId: USER_ID,
+        applicationId: PROFILE_ID,
+      });
+    });
+
+    /**
+     * BAL-557 fix round 2 — the payload's `applicationId` is built from the repository's OWN
+     * resolved `expertProfileId`, not the caller's argument.
+     * MUTATION-PROVEN: revert to `applicationId: expertProfileId` and this goes red.
+     */
+    it('publishes with the resolved expertProfileId from submitResult, not the caller argument', async () => {
+      setupValidApplication();
+      const resolvedProfileId = 'profile-resolved-by-repo';
+      mockSubmitApplication.mockResolvedValue({
+        outcome: 'submitted',
+        expertProfileId: resolvedProfileId,
+        submittedAt: new Date('2026-01-01T00:00:00.000Z'),
+        auditEventId: AUDIT_EVENT_ID,
+      });
+      const { publishNotificationEvent } = await import('@/lib/notifications/publish');
+      await submitApplicationAction(PROFILE_ID);
+      expect(publishNotificationEvent).toHaveBeenCalledWith('expert.application_submitted', {
+        correlationId: AUDIT_EVENT_ID,
+        userId: USER_ID,
+        applicationId: resolvedProfileId,
+      });
+    });
+
+    it('returns not_draft outcome mapped to the honest declined refusal on a race', async () => {
+      setupValidApplication();
+      mockSubmitApplication.mockResolvedValue({
+        outcome: 'not_draft',
+        expertProfileId: PROFILE_ID,
+        currentStatus: 'rejected',
+      });
+      const result = await submitApplicationAction(PROFILE_ID);
+      expect(result).toEqual({ success: false, error: DECLINED_APPLICATION_ERROR });
+    });
+
+    it('returns not_found outcome mapped to "Application not found" on a race', async () => {
+      setupValidApplication();
+      mockSubmitApplication.mockResolvedValue({ outcome: 'not_found' });
+      const result = await submitApplicationAction(PROFILE_ID);
+      expect(result).toEqual({ success: false, error: 'Application not found' });
     });
   });
 

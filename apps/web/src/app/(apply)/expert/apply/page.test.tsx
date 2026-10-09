@@ -17,12 +17,17 @@ const { mockRedirect, mockGetCurrentUser, mockLoadReferenceData, mockLoadDraftAc
   })
 );
 
+const mockPlatformSettingsGet = vi.fn();
+
 vi.mock('next/navigation', () => ({ redirect: mockRedirect }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/expert-apply/reference-data', () => ({
   loadReferenceData: mockLoadReferenceData,
 }));
 vi.mock('./_actions/load-draft', () => ({ loadDraftAction: mockLoadDraftAction }));
+vi.mock('@balo/db', () => ({
+  platformSettingsRepository: { get: (...a: unknown[]) => mockPlatformSettingsGet(...a) },
+}));
 
 // Stub the wizard so this stays a page-level test (its own suite covers the
 // wizard/context internals). Surface `user`/`draft`/`referenceData` as text so
@@ -44,6 +49,23 @@ vi.mock('./_components/expert-application-wizard', () => ({
       {/* The WHOLE prop, serialised — this is what the RSC flight payload carries. */}
       <span data-testid="draft-json">{draft === null ? 'null' : JSON.stringify(draft)}</span>
       <span data-testid="vertical">{referenceData.vertical.id}</span>
+    </div>
+  ),
+}));
+
+// Stub the declined panel the same way — this suite pins what the PAGE computes and passes
+// (the date string, the boolean), never a full application shape (BAL-557).
+vi.mock('./_components/declined-application-panel', () => ({
+  DeclinedApplicationPanel: ({
+    reapplyAvailableOn,
+    canStartNow,
+  }: {
+    reapplyAvailableOn: string | null;
+    canStartNow: boolean;
+  }): React.JSX.Element => (
+    <div data-testid="declined-panel">
+      <span data-testid="reapply-available-on">{reapplyAvailableOn ?? 'null'}</span>
+      <span data-testid="can-start-now">{String(canStartNow)}</span>
     </div>
   ),
 }));
@@ -95,6 +117,7 @@ function buildDraft(overrides: Record<string, unknown> = {}): ApplicationWithRel
 beforeEach(() => {
   vi.clearAllMocks();
   mockLoadReferenceData.mockResolvedValue(referenceData);
+  mockPlatformSettingsGet.mockResolvedValue({ value: 60, source: 'stored' });
 });
 
 describe('ExpertApplyPage — anonymous', () => {
@@ -180,39 +203,75 @@ describe('ExpertApplyPage — authenticated', () => {
   });
 
   /**
-   * FIX ROUND F1 — `'rejected'` IS HANDLED EXPLICITLY, AND CARRIES NO DECISION METADATA.
+   * BAL-557 — `'rejected'` RENDERS THE DECLINED PANEL, NOT THE WIZARD, AND CARRIES NO
+   * DECISION METADATA INTO THE CLIENT PAYLOAD AT ALL.
    *
-   * A declined applicant can still REACH this page — nothing redirects them — which is why this
-   * used to be an unremarked FALL-THROUGH, and why it was the leak's last hop: the wizard is a
-   * `'use client'` boundary, so everything on `draft` is serialised into the applicant's own
-   * browser payload. (Re-applying itself is NOT supported: web-review fix round W1. Both writes
-   * refuse a `'rejected'` profile, and the decline email no longer links here.)
+   * Before BAL-557, nothing redirected a declined applicant away, so `'rejected'` fell through to
+   * the wizard (prefilled, with the decision columns stripped as defence in depth) and every
+   * write refused. That fall-through is gone: the wizard never renders for `'rejected'`, so there
+   * is nothing left to strip — the panel receives only a date string and a boolean.
    *
-   * The repository allow-list is the fix; this is the second layer. MUTATION: drop the
-   * `applicantDraft` branch and pass `draft` straight through → red.
+   * MUTATION: drop the `rejected` branch and fall through to the wizard → red (no panel, and the
+   * raw `draft` — including `declineReason`/`decidedByUserId` — reaches the wizard stub).
    */
-  it('renders the wizard for a DECLINED application, stripped of every decision column', async () => {
+  it('renders the declined panel — not the wizard — for a rejected application, with no decision metadata', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-10T00:00:00.000Z')); // 8 days after decidedAt — cooldown still active
+    try {
+      mockGetCurrentUser.mockResolvedValue(buildUser());
+      mockLoadDraftAction.mockResolvedValue({
+        draft: buildDraft({
+          applicationStatus: 'rejected',
+          declineReason: 'credentials_unverified',
+          decidedAt: new Date('2026-02-02T00:00:00.000Z'),
+          decidedByUserId: 'staffer-secret-id',
+        }),
+        referenceData,
+      });
+
+      const { container } = render(await ExpertApplyPage());
+
+      expect(mockRedirect).not.toHaveBeenCalled();
+      expect(screen.getByTestId('declined-panel')).toBeInTheDocument();
+      expect(screen.queryByTestId('wizard')).toBeNull();
+
+      // Only a pre-formatted date string and a boolean cross into the client payload.
+      expect(container.innerHTML).not.toContain('credentials_unverified');
+      expect(container.innerHTML).not.toContain('staffer-secret-id');
+      expect(screen.getByTestId('reapply-available-on').textContent).toBe('3 Apr 2026'); // 2026-02-02 + 60d
+      expect(screen.getByTestId('can-start-now').textContent).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows the declined panel as ready once the cooldown has passed', async () => {
     mockGetCurrentUser.mockResolvedValue(buildUser());
     mockLoadDraftAction.mockResolvedValue({
       draft: buildDraft({
         applicationStatus: 'rejected',
-        declineReason: 'credentials_unverified',
-        decidedAt: new Date('2026-02-02T00:00:00.000Z'),
-        decidedByUserId: 'staffer-secret-id',
+        decidedAt: new Date('2020-01-01T00:00:00.000Z'),
       }),
       referenceData,
     });
 
     render(await ExpertApplyPage());
 
-    // Nothing redirects a declined applicant away, so the wizard renders (the writes refuse).
-    expect(screen.getByTestId('draft').textContent).toBe('has-draft');
-    expect(mockRedirect).not.toHaveBeenCalled();
+    expect(screen.getByTestId('can-start-now').textContent).toBe('true');
+  });
 
-    const payload = screen.getByTestId('draft-json').textContent ?? '';
-    expect(payload).toContain('rejected'); // the status is kept — the wizard needs to know
-    expect(payload).not.toContain('credentials_unverified');
-    expect(payload).not.toContain('staffer-secret-id');
-    expect(payload).not.toContain('2026-02-02');
+  it('reads the live reapply-cooldown platform setting, never a hard-coded value', async () => {
+    mockGetCurrentUser.mockResolvedValue(buildUser());
+    mockLoadDraftAction.mockResolvedValue({
+      draft: buildDraft({
+        applicationStatus: 'rejected',
+        decidedAt: new Date('2026-02-02T00:00:00.000Z'),
+      }),
+      referenceData,
+    });
+
+    render(await ExpertApplyPage());
+
+    expect(mockPlatformSettingsGet).toHaveBeenCalledWith('expert_reapply_cooldown_days');
   });
 });

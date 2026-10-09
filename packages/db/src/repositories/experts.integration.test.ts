@@ -64,6 +64,22 @@ async function setSearchableDirectly(expertProfileId: string, searchable: boolea
   await db.update(expertProfiles).set({ searchable }).where(eq(expertProfiles.id, expertProfileId));
 }
 
+/** Submit a draft through the domain path, as its applicant, and return the committed submit. */
+async function submitAsApplicant(draft: {
+  userId: string;
+  verticalId: string;
+}): Promise<{ expertProfileId: string; submittedAt: Date; auditEventId: string }> {
+  const result = await expertsRepository.submitApplication({
+    applicantUserId: draft.userId,
+    verticalId: draft.verticalId,
+    now: new Date(),
+  });
+  if (result.outcome !== 'submitted') {
+    throw new Error(`submitAsApplicant: expected submitted, got ${result.outcome}`);
+  }
+  return result;
+}
+
 // ── createDraft ─────────────────────────────────────────────────────
 
 describe('expertsRepository.createDraft', () => {
@@ -563,7 +579,7 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     const draft = await expertDraftFactory();
     await expertsRepository.updateProfile(draft.id, { username });
     await setSearchableDirectly(draft.id, true);
-    await expertsRepository.submitApplication(draft.id);
+    await submitAsApplicant(draft);
 
     const result = await expertsRepository.findPublicProfileByUsername(username);
 
@@ -1660,7 +1676,7 @@ describe('expertsRepository.findPendingApplicationByUserId', () => {
   it('returns the submission time of a submitted application', async () => {
     const user = await userFactory();
     const draft = await expertDraftFactory({ userId: user.id });
-    const submitted = await expertsRepository.submitApplication(draft.id);
+    const submitted = await submitAsApplicant(draft);
 
     const result = await expertsRepository.findPendingApplicationByUserId(user.id);
 
@@ -1670,7 +1686,7 @@ describe('expertsRepository.findPendingApplicationByUserId', () => {
   it('counts an application staff have moved to under_review as still pending', async () => {
     const user = await userFactory();
     const draft = await expertDraftFactory({ userId: user.id });
-    await expertsRepository.submitApplication(draft.id);
+    await submitAsApplicant(draft);
     await db
       .update(expertProfiles)
       .set({ applicationStatus: 'under_review' })
@@ -1693,7 +1709,7 @@ describe('expertsRepository.findPendingApplicationByUserId', () => {
     async (status) => {
       const user = await userFactory();
       const draft = await expertDraftFactory({ userId: user.id });
-      await expertsRepository.submitApplication(draft.id);
+      await submitAsApplicant(draft);
       await db
         .update(expertProfiles)
         .set({ applicationStatus: status })
@@ -1707,7 +1723,7 @@ describe('expertsRepository.findPendingApplicationByUserId', () => {
     const applicant = await userFactory();
     const other = await userFactory();
     const draft = await expertDraftFactory({ userId: applicant.id });
-    await expertsRepository.submitApplication(draft.id);
+    await submitAsApplicant(draft);
 
     expect(await expertsRepository.findPendingApplicationByUserId(other.id)).toBeUndefined();
   });
@@ -2082,7 +2098,7 @@ describe('expertsRepository.listPendingApplicationsForAlerts', () => {
   /** A submitted (undecided) application, with a chosen `submitted_at`. */
   async function seedSubmitted(submittedAt: Date, overrides: { agencyId?: string } = {}) {
     const draft = await expertDraftFactory();
-    await expertsRepository.submitApplication(draft.id);
+    await submitAsApplicant(draft);
     // ⚠ `submitted_at` is stamped with a JS `new Date()`, so every row in one test lands
     // within the same millisecond band; the ordering assertion needs an explicit anchor.
     await db
@@ -2263,6 +2279,79 @@ describe('expertsRepository applicant writers — §H7 the self-rating', () => {
       selfProficiency: 4,
     });
   });
+
+  /** A product Balo staff added: `self_proficiency` NULL, a staff `proficiency`. */
+  async function seedStaffAddedCell(
+    expertProfileId: string,
+    productId: string,
+    supportTypeId: string,
+    proficiency: number
+  ): Promise<void> {
+    await db
+      .insert(expertCompetency)
+      .values({ expertProfileId, productId, supportTypeId, proficiency, selfProficiency: null });
+  }
+
+  it('updateCompetencyProficiency on a staff-added row updates proficiency and keeps selfProficiency NULL', async () => {
+    const draft = await expertDraftFactory();
+    const t = await seedCompetencyTaxonomy();
+    await seedStaffAddedCell(draft.id, t.productA, t.supportX, 8);
+
+    await expertsRepository.updateCompetencyProficiency(draft.id, [
+      { productId: t.productA, supportTypeId: t.supportX, proficiency: 5 },
+    ]);
+
+    expect(await readCompetencyCell(draft.id, t.productA, t.supportX)).toEqual({
+      proficiency: 5,
+      selfProficiency: null,
+    });
+  });
+
+  it('updateCompetencyProficiency on an applicant-rated row still updates both columns', async () => {
+    const draft = await expertDraftFactory();
+    const t = await seedCompetencyTaxonomy();
+    await expertsRepository.updateCompetencyProficiency(draft.id, [
+      { productId: t.productA, supportTypeId: t.supportX, proficiency: 3 },
+    ]);
+
+    await expertsRepository.updateCompetencyProficiency(draft.id, [
+      { productId: t.productA, supportTypeId: t.supportX, proficiency: 9 },
+    ]);
+
+    expect(await readCompetencyCell(draft.id, t.productA, t.supportX)).toEqual({
+      proficiency: 9,
+      selfProficiency: 9,
+    });
+  });
+
+  it('syncProducts keeps a still-selected staff-added row as-is and deselecting it removes it', async () => {
+    const draft = await expertDraftFactory();
+    const t = await seedCompetencyTaxonomy();
+    await seedStaffAddedCell(draft.id, t.productA, t.supportX, 8);
+
+    await expertsRepository.syncProducts(draft.id, [t.productA, t.productB], [t.supportX]);
+    expect(await readCompetencyCell(draft.id, t.productA, t.supportX)).toEqual({
+      proficiency: 8,
+      selfProficiency: null,
+    });
+
+    await expertsRepository.syncProducts(draft.id, [t.productB], [t.supportX]);
+    expect(await readCompetencyCell(draft.id, t.productA, t.supportX)).toBeUndefined();
+  });
+});
+
+describe('expertFactory', () => {
+  it('stamps submitted_at as a fixture write and records no audit row', async () => {
+    const expert = await expertFactory();
+
+    expect(expert.applicationStatus).toBe('approved');
+    expect(expert.submittedAt).toBeInstanceOf(Date);
+    const rows = await db
+      .select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(eq(auditEvents.entityId, expert.id));
+    expect(rows).toEqual([]);
+  });
 });
 
 describe('expertsRepository reads — §H6 the self-rating stays off non-staff reads', () => {
@@ -2353,6 +2442,94 @@ describe('expertsRepository applicant writers — §executor composition', () =>
       where: eq(workHistory.expertProfileId, draft.id),
     });
     expect(historyRows).toHaveLength(0);
+  });
+});
+
+describe('expertsRepository.saveSettingsProfile / saveSettingsWorkHistory — the locked settings saves', () => {
+  it('writes the scalars and syncs only the arrays provided', async () => {
+    const draft = await expertDraftFactory();
+    const [industry] = await db
+      .insert(industries)
+      .values({ name: 'Retail', slug: uniq('retail') })
+      .returning({ id: industries.id });
+    const [language] = await db
+      .insert(languages)
+      .values({ name: 'Welsh', code: uniq('cy') })
+      .returning({ id: languages.id });
+    if (industry === undefined || language === undefined) throw new Error('seed failed');
+    await expertsRepository.syncIndustries(draft.id, [industry.id]);
+    const username = uniq('settings-user');
+
+    const result = await expertsRepository.saveSettingsProfile(draft.id, {
+      headline: 'Salesforce architect',
+      bio: 'Bio',
+      username,
+      languages: [{ languageId: language.id, proficiency: 'native' }],
+    });
+
+    expect(result).toEqual({ outcome: 'saved' });
+    const [profile] = await db
+      .select({
+        headline: expertProfiles.headline,
+        bio: expertProfiles.bio,
+        username: expertProfiles.username,
+      })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, draft.id));
+    expect(profile).toEqual({ headline: 'Salesforce architect', bio: 'Bio', username });
+    await expect(
+      db
+        .select({ industryId: expertIndustries.industryId })
+        .from(expertIndustries)
+        .where(eq(expertIndustries.expertProfileId, draft.id))
+    ).resolves.toEqual([{ industryId: industry.id }]);
+    await expect(
+      db
+        .select({ languageId: expertLanguages.languageId })
+        .from(expertLanguages)
+        .where(eq(expertLanguages.expertProfileId, draft.id))
+    ).resolves.toEqual([{ languageId: language.id }]);
+
+    await expertsRepository.saveSettingsProfile(draft.id, {
+      headline: null,
+      bio: null,
+      username: null,
+      industryIds: [],
+    });
+    await expect(
+      db.select().from(expertIndustries).where(eq(expertIndustries.expertProfileId, draft.id))
+    ).resolves.toEqual([]);
+  });
+
+  it('replaces the work history', async () => {
+    const draft = await expertDraftFactory();
+    const entry = { role: 'Admin', company: 'Acme', startedAt: '2020-01-01', isCurrent: false };
+    await expertsRepository.syncWorkHistory(draft.id, [entry, { ...entry, role: 'Dev' }]);
+
+    const result = await expertsRepository.saveSettingsWorkHistory(draft.id, [
+      { ...entry, role: 'Architect' },
+    ]);
+
+    expect(result).toEqual({ outcome: 'saved' });
+    await expect(
+      db
+        .select({ role: workHistory.role })
+        .from(workHistory)
+        .where(eq(workHistory.expertProfileId, draft.id))
+    ).resolves.toEqual([{ role: 'Architect' }]);
+  });
+
+  it('reports not_found for an unknown profile and writes nothing', async () => {
+    await expect(
+      expertsRepository.saveSettingsProfile(randomUUID(), {
+        headline: 'x',
+        bio: null,
+        username: null,
+      })
+    ).resolves.toEqual({ outcome: 'not_found' });
+    await expect(expertsRepository.saveSettingsWorkHistory(randomUUID(), [])).resolves.toEqual({
+      outcome: 'not_found',
+    });
   });
 });
 

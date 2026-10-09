@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSyncWorkHistory, session } = vi.hoisted(() => ({
-  mockSyncWorkHistory: vi.fn(),
+const { mockSaveSettingsWorkHistory, session } = vi.hoisted(() => ({
+  mockSaveSettingsWorkHistory: vi.fn(),
   session: {
     user: { id: 'user-1', activeMode: 'expert', expertProfileId: 'profile-1' },
   },
 }));
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
-vi.mock('@balo/db', () => ({ expertsRepository: { syncWorkHistory: mockSyncWorkHistory } }));
+vi.mock('@balo/db', () => ({
+  expertsRepository: { saveSettingsWorkHistory: mockSaveSettingsWorkHistory },
+}));
 vi.mock('@/lib/auth/with-auth', () => ({
   withAuth:
     <TInput, TResult>(handler: (s: typeof session, input: TInput) => Promise<TResult>) =>
@@ -28,7 +30,7 @@ const ENTRY = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSyncWorkHistory.mockResolvedValue(undefined);
+  mockSaveSettingsWorkHistory.mockResolvedValue({ outcome: 'saved' });
 });
 
 describe('saveWorkHistoryAction — responsibilities', () => {
@@ -42,7 +44,7 @@ describe('saveWorkHistoryAction — responsibilities', () => {
       ],
     });
     expect(result).toEqual({ success: true });
-    expect(mockSyncWorkHistory).toHaveBeenCalledWith('profile-1', [
+    expect(mockSaveSettingsWorkHistory).toHaveBeenCalledWith('profile-1', [
       { ...ENTRY, responsibilities: '<p><strong>Led</strong> delivery</p>' },
     ]);
   });
@@ -51,7 +53,7 @@ describe('saveWorkHistoryAction — responsibilities', () => {
     await saveWorkHistoryAction({
       entries: [{ ...ENTRY, responsibilities: 'Led delivery\nRan CPQ' }],
     });
-    expect(mockSyncWorkHistory).toHaveBeenCalledWith('profile-1', [
+    expect(mockSaveSettingsWorkHistory).toHaveBeenCalledWith('profile-1', [
       { ...ENTRY, responsibilities: '<p>Led delivery</p><p>Ran CPQ</p>' },
     ]);
   });
@@ -64,6 +66,16 @@ describe('saveWorkHistoryAction — responsibilities', () => {
       success: false,
       error: 'Keep responsibilities under 1000 characters.',
     });
-    expect(mockSyncWorkHistory).not.toHaveBeenCalled();
+    expect(mockSaveSettingsWorkHistory).not.toHaveBeenCalled();
+  });
+});
+
+describe('saveWorkHistoryAction — not_found outcome (BAL-557)', () => {
+  // MUTATION-PROOF: change the `not_found` branch to fall through to `{ success: true }` and
+  // this goes red — proves the action actually reads the repository's outcome.
+  it('maps saveSettingsWorkHistory not_found to the expert-profile-required error', async () => {
+    mockSaveSettingsWorkHistory.mockResolvedValue({ outcome: 'not_found' });
+    const result = await saveWorkHistoryAction({ entries: [ENTRY] });
+    expect(result).toEqual({ success: false, error: 'Expert profile required' });
   });
 });
