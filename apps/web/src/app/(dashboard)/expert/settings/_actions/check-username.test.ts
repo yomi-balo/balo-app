@@ -9,12 +9,12 @@ vi.mock('@/lib/logging', () => ({
   log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
 }));
 
-const mockFindProfileById = vi.fn();
+const mockFindApprovalById = vi.fn();
 const mockCheckUsernameAvailability = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
     checkUsernameAvailability: (...args: unknown[]) => mockCheckUsernameAvailability(...args),
   },
 }));
@@ -48,7 +48,7 @@ describe('checkUsernameAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
     mockCheckUsernameAvailability.mockResolvedValue(true);
   });
 
@@ -65,8 +65,8 @@ describe('checkUsernameAction', () => {
           user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? undefined },
         };
       },
-      setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
-      findProfileById: mockFindProfileById,
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
       run: () => checkUsernameAction({ username: 'jane-doe' }),
       expectAllowed: (result) => expect(result).toEqual({ available: true }),
       expectRefused: (result) =>
@@ -75,7 +75,7 @@ describe('checkUsernameAction', () => {
     });
 
     it('returns the generic failure, without throwing, when the guard read fails', async () => {
-      mockFindProfileById.mockRejectedValue(new Error('DB down'));
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
       const result = await checkUsernameAction({ username: 'jane-doe' });
       expect(result).toEqual({
         available: false,

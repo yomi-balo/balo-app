@@ -4,9 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-const { mockFindProfileById } = vi.hoisted(() => ({ mockFindProfileById: vi.fn() }));
+const { mockFindApprovalById } = vi.hoisted(() => ({ mockFindApprovalById: vi.fn() }));
 vi.mock('@balo/db', () => ({
-  expertsRepository: { findProfileById: mockFindProfileById },
+  expertsRepository: { findApprovalById: mockFindApprovalById },
 }));
 
 import { log } from '@/lib/logging';
@@ -27,12 +27,12 @@ describe('resolveApprovedExpert', () => {
   it.each([undefined, ''])('refuses no_profile for %j without a read', async (id) => {
     const result = await resolveApprovedExpert({ id: 'user-1', expertProfileId: id });
     expect(result).toEqual({ ok: false, reason: 'no_profile' });
-    expect(mockFindProfileById).not.toHaveBeenCalled();
+    expect(mockFindApprovalById).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('refuses not_found when the profile row is missing', async () => {
-    mockFindProfileById.mockResolvedValue(undefined);
+    mockFindApprovalById.mockResolvedValue(undefined);
     expect(await resolveApprovedExpert(USER)).toEqual({ ok: false, reason: 'not_found' });
     expect(log.warn).toHaveBeenCalledWith('Approved-expert guard refused', {
       userId: 'user-1',
@@ -42,7 +42,7 @@ describe('resolveApprovedExpert', () => {
   });
 
   it('refuses not_owner when the profile belongs to another user', async () => {
-    mockFindProfileById.mockResolvedValue({ ...APPROVED_PROFILE_ROW, userId: 'someone-else' });
+    mockFindApprovalById.mockResolvedValue({ ...APPROVED_PROFILE_ROW, userId: 'someone-else' });
     expect(await resolveApprovedExpert(USER)).toEqual({ ok: false, reason: 'not_owner' });
     expect(log.warn).toHaveBeenCalledWith(
       'Approved-expert guard refused',
@@ -51,7 +51,7 @@ describe('resolveApprovedExpert', () => {
   });
 
   it('refuses not_approved when approvedAt is null and logs the reason', async () => {
-    mockFindProfileById.mockResolvedValue(DRAFT_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(DRAFT_PROFILE_ROW);
     expect(await resolveApprovedExpert(USER)).toEqual({ ok: false, reason: 'not_approved' });
     expect(log.warn).toHaveBeenCalledWith(
       'Approved-expert guard refused',
@@ -59,15 +59,20 @@ describe('resolveApprovedExpert', () => {
     );
   });
 
+  it('fails closed when the row carries no approvedAt key at all', async () => {
+    mockFindApprovalById.mockResolvedValue({ userId: 'user-1' } as unknown);
+    expect(await resolveApprovedExpert(USER)).toEqual({ ok: false, reason: 'not_approved' });
+  });
+
   it('resolves ok with the session profile id for an approved owner', async () => {
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
     expect(await resolveApprovedExpert(USER)).toEqual({ ok: true, expertProfileId: 'profile-1' });
-    expect(mockFindProfileById).toHaveBeenCalledWith('profile-1');
+    expect(mockFindApprovalById).toHaveBeenCalledWith('profile-1');
     expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('propagates a failed profile read', async () => {
-    mockFindProfileById.mockRejectedValue(new Error('db down'));
+    mockFindApprovalById.mockRejectedValue(new Error('db down'));
     await expect(resolveApprovedExpert(USER)).rejects.toThrow('db down');
   });
 

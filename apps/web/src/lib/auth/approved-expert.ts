@@ -35,10 +35,10 @@ export async function resolveApprovedExpert(
     return { ok: false, reason };
   };
 
-  const profile = await expertsRepository.findProfileById(expertProfileId);
+  const profile = await expertsRepository.findApprovalById(expertProfileId);
   if (!profile) return refuse('not_found');
   if (profile.userId !== userId) return refuse('not_owner');
-  if (profile.approvedAt === null) return refuse('not_approved');
+  if (!profile.approvedAt) return refuse('not_approved');
 
   return { ok: true, expertProfileId };
 }

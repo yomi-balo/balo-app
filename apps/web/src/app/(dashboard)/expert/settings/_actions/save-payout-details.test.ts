@@ -15,14 +15,14 @@ vi.mock('@/lib/logging/fetch-wrapper', () => ({
   loggedFetch: (...args: unknown[]) => mockLoggedFetch(...args),
 }));
 
-const mockFindProfileById = vi.fn();
+const mockFindApprovalById = vi.fn();
 const mockFindByExpertProfileId = vi.fn();
 const mockUpsertPayoutDetails = vi.fn();
 const mockUpdateBeneficiaryStatus = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
   },
   payoutsRepository: {
     findByExpertProfileId: (...args: unknown[]) => mockFindByExpertProfileId(...args),
@@ -70,7 +70,7 @@ describe('savePayoutDetailsAction', () => {
     vi.clearAllMocks();
     vi.stubEnv('INTERNAL_API_SECRET', '');
     mockSessionObj = { ...EXPERT_SESSION };
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
     mockFindByExpertProfileId.mockResolvedValue(undefined);
     mockUpsertPayoutDetails.mockResolvedValue(undefined);
     mockUpdateBeneficiaryStatus.mockResolvedValue(undefined);
@@ -89,8 +89,8 @@ describe('savePayoutDetailsAction', () => {
           user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? undefined },
         };
       },
-      setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
-      findProfileById: mockFindProfileById,
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
       run: () => savePayoutDetailsAction(INPUT),
       expectAllowed: (result) => expect(result).toEqual(expect.objectContaining({ success: true })),
       expectRefused: (result) =>
@@ -99,7 +99,7 @@ describe('savePayoutDetailsAction', () => {
     });
 
     it('returns the generic failure, without throwing, when the guard read fails', async () => {
-      mockFindProfileById.mockRejectedValue(new Error('DB down'));
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
       const result = await savePayoutDetailsAction(INPUT);
       expect(result).toEqual({
         success: false,
@@ -135,7 +135,7 @@ describe('savePayoutDetailsAction', () => {
     it('rejects invalid input before reading the profile', async () => {
       const result = await savePayoutDetailsAction({ ...INPUT, countryCode: 'AUS' });
       expect(result).toEqual({ success: false, error: 'Country code must be 2 characters' });
-      expect(mockFindProfileById).not.toHaveBeenCalled();
+      expect(mockFindApprovalById).not.toHaveBeenCalled();
     });
   });
 });

@@ -14,11 +14,11 @@ vi.mock('react', async (importOriginal) => {
 
 const mockLoadInputs = vi.fn();
 const mockReconcileFromRead = vi.fn();
-const mockFindProfileById = vi.fn();
+const mockFindApprovalById = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
   },
   expertSearchabilityRepository: {
     loadInputs: (...args: unknown[]) => mockLoadInputs(...args),
@@ -92,7 +92,7 @@ describe('getChecklistStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUserObj = { ...EXPERT_USER };
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE);
     mockReconcileFromRead.mockResolvedValue({ changed: false });
     mockLoadInputs.mockResolvedValue(completeSnapshot());
   });
@@ -120,7 +120,7 @@ describe('getChecklistStatus', () => {
     });
 
     it('throws when the expert profile is not approved', async () => {
-      mockFindProfileById.mockResolvedValue({ ...APPROVED_PROFILE, approvedAt: null });
+      mockFindApprovalById.mockResolvedValue({ ...APPROVED_PROFILE, approvedAt: null });
       await expect(getChecklistStatus()).rejects.toThrow('Expert profile required');
       expect(mockLoadInputs).not.toHaveBeenCalled();
     });
@@ -133,7 +133,7 @@ describe('getChecklistStatus', () => {
         onboardingCompleted: true,
       };
       await expect(getChecklistStatus()).rejects.toThrow('Expert profile required');
-      expect(mockFindProfileById).not.toHaveBeenCalled();
+      expect(mockFindApprovalById).not.toHaveBeenCalled();
       expect(mockLoadInputs).not.toHaveBeenCalled();
     });
 

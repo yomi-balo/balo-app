@@ -9,12 +9,12 @@ vi.mock('server-only', () => ({}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 const mockUpdateProfile = vi.fn();
-const mockFindProfileById = vi.fn();
+const mockFindApprovalById = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     updateProfile: (...args: unknown[]) => mockUpdateProfile(...args),
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
   },
 }));
 
@@ -52,7 +52,7 @@ describe('saveRateAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
     mockUpdateProfile.mockResolvedValue(undefined);
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   describe('authentication', () => {
@@ -71,8 +71,8 @@ describe('saveRateAction', () => {
           user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? null },
         };
       },
-      setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
-      findProfileById: mockFindProfileById,
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
       run: () => saveRateAction({ ratePerMinuteCents: 200 }),
       expectAllowed: (result) => {
         expect(result).toEqual({ success: true });
@@ -84,7 +84,7 @@ describe('saveRateAction', () => {
     });
 
     it('returns the generic failure, without throwing, when the guard read fails', async () => {
-      mockFindProfileById.mockRejectedValue(new Error('DB down'));
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
       const result = await saveRateAction({ ratePerMinuteCents: 200 });
       expect(result).toEqual({ success: false, error: 'Failed to save rate. Please try again.' });
       expect(mockUpdateProfile).not.toHaveBeenCalled();

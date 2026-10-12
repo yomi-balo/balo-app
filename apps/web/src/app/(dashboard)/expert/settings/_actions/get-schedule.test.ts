@@ -18,10 +18,10 @@ vi.mock('@/lib/logging', () => ({
 }));
 
 const mockCountWorkInFlight = vi.fn();
-const mockFindProfileById = vi.fn();
+const mockFindApprovalById = vi.fn();
 vi.mock('@balo/db', () => ({
   expertsRepository: {
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
     countWorkInFlight: (...args: unknown[]) => mockCountWorkInFlight(...args),
   },
 }));
@@ -67,7 +67,7 @@ describe('getScheduleAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
     mockCountWorkInFlight.mockResolvedValue(WORK_IN_FLIGHT);
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   it('throws when there is no session user', async () => {
@@ -83,8 +83,8 @@ describe('getScheduleAction', () => {
           save: mockSave,
         };
       },
-      setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
-      findProfileById: mockFindProfileById,
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
       run: () => {
         mockInternalApiFetch.mockResolvedValue(SCHEDULE);
         return getScheduleAction();
@@ -96,7 +96,7 @@ describe('getScheduleAction', () => {
     });
 
     it('returns null, without throwing, when the guard read fails', async () => {
-      mockFindProfileById.mockRejectedValue(new Error('DB down'));
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
       expect(await getScheduleAction()).toBeNull();
       expect(mockInternalApiFetch).not.toHaveBeenCalled();
     });

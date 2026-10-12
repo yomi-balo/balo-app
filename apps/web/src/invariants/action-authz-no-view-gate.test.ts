@@ -44,6 +44,10 @@ import {
  * `user.companyRole` into `canManageBilling(...)`; that is not a comparison, so it is tracked with
  * its lens gate in BAL-596.
  *
+ * A `redundant-routing-assertion` entry is checked for exactly this much: the file's code has a
+ * `hasCapability(` or `hasEngagementCapability(` call positioned AFTER every occurrence of the
+ * excluded comparison. It proves ordering, not that the call guards the same branch.
+ *
  * EXCLUSIONS are never an `activeMode`/`companyRole` entry: those were FIXED. Only the eleven
  * `deferred-bal-596` files (twelve hits) are temporary; they are tracked in BAL-596 and shrink to
  * zero there. The other categories are permanent and individually justified.
@@ -360,11 +364,20 @@ describe('BAL-438 — no Server Action authorizes by role / lens / activeMode', 
       }
       if (exclusion.category === 'redundant-routing-assertion') {
         const file = SCANNED.find((candidate) => candidate.rel === exclusion.file);
-        const code = file?.code ?? '';
-        expect(
-          code.includes('hasCapability(') || code.includes('hasEngagementCapability('),
-          `${exclusion.file} must carry the capability check that is the real gate`
-        ).toBe(true);
+        const code = normalizeWhitespace(file?.code ?? '');
+        const lastCall = Math.max(
+          code.lastIndexOf('hasCapability('),
+          code.lastIndexOf('hasEngagementCapability(')
+        );
+        let at = code.indexOf(exclusion.comparison);
+        expect(at, `${exclusion.file} no longer contains its excluded comparison`).not.toBe(-1);
+        while (at !== -1) {
+          expect(
+            lastCall,
+            `${exclusion.file}: a capability call must follow every excluded comparison`
+          ).toBeGreaterThan(at);
+          at = code.indexOf(exclusion.comparison, at + exclusion.comparison.length);
+        }
       }
     }
   });

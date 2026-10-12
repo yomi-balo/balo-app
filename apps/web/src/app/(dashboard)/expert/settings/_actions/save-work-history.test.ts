@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSaveSettingsWorkHistory, mockFindProfileById, session } = vi.hoisted(() => ({
+const { mockSaveSettingsWorkHistory, mockFindApprovalById, session } = vi.hoisted(() => ({
   mockSaveSettingsWorkHistory: vi.fn(),
-  mockFindProfileById: vi.fn(),
+  mockFindApprovalById: vi.fn(),
   session: {
     user: {
       id: 'user-1',
@@ -16,7 +16,7 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     saveSettingsWorkHistory: mockSaveSettingsWorkHistory,
-    findProfileById: mockFindProfileById,
+    findApprovalById: mockFindApprovalById,
   },
 }));
 vi.mock('@/lib/auth/with-auth', () => ({
@@ -43,7 +43,7 @@ const ENTRY = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSaveSettingsWorkHistory.mockResolvedValue({ outcome: 'saved' });
-  mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+  mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   session.user = { id: 'user-1', activeMode: 'expert', expertProfileId: 'profile-1' };
 });
 
@@ -52,8 +52,8 @@ describe('saveWorkHistoryAction — approved expert guard', () => {
     setSessionUser: (u) => {
       session.user = { id: 'user-1', activeMode: u.activeMode, expertProfileId: u.expertProfileId };
     },
-    setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
-    findProfileById: mockFindProfileById,
+    setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+    findApprovalById: mockFindApprovalById,
     run: () => saveWorkHistoryAction({ entries: [ENTRY] }),
     expectAllowed: (result) => {
       expect(result).toEqual({ success: true });
@@ -65,7 +65,7 @@ describe('saveWorkHistoryAction — approved expert guard', () => {
   });
 
   it('returns the generic failure, without throwing, when the guard read fails', async () => {
-    mockFindProfileById.mockRejectedValue(new Error('DB down'));
+    mockFindApprovalById.mockRejectedValue(new Error('DB down'));
     const result = await saveWorkHistoryAction({ entries: [ENTRY] });
     expect(result).toEqual({
       success: false,

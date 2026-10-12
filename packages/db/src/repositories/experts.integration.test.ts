@@ -2087,6 +2087,35 @@ describe('expertsRepository.findRateCentsById (BAL-478)', () => {
   });
 });
 
+/** BAL-438 — the approved-expert guard's projected ownership and approval read. */
+describe('expertsRepository.findApprovalById (BAL-438)', () => {
+  it('returns the owner and approval time for an approved profile', async () => {
+    const expert = await expertFactory();
+    const approvedAt = new Date('2026-01-01T00:00:00.000Z');
+    await db.update(expertProfiles).set({ approvedAt }).where(eq(expertProfiles.id, expert.id));
+
+    const row = await expertsRepository.findApprovalById(expert.id);
+
+    expect(row).toEqual({ userId: expert.userId, approvedAt });
+  });
+
+  it('returns approvedAt null for a draft profile', async () => {
+    const expert = await expertFactory();
+    await db
+      .update(expertProfiles)
+      .set({ approvedAt: null })
+      .where(eq(expertProfiles.id, expert.id));
+
+    const row = await expertsRepository.findApprovalById(expert.id);
+
+    expect(row).toEqual({ userId: expert.userId, approvedAt: null });
+  });
+
+  it('returns undefined for an unknown profile id', async () => {
+    await expect(expertsRepository.findApprovalById(randomUUID())).resolves.toBeUndefined();
+  });
+});
+
 /**
  * BAL-548 / ADR-1055 — the `expert.application_pending` finder read.
  *

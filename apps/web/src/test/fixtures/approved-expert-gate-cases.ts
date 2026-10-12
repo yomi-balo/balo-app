@@ -17,7 +17,7 @@ export const DRAFT_PROFILE_ROW: ApprovedProfileRow = { ...APPROVED_PROFILE_ROW, 
 export interface ApprovedExpertGateHarness {
   setSessionUser(user: { activeMode: 'client' | 'expert'; expertProfileId?: string }): void;
   setProfileRow(row: ApprovedProfileRow | undefined): void;
-  readonly findProfileById: { mock: { calls: unknown[][] } };
+  readonly findApprovalById: { mock: { calls: unknown[][] } };
   run(): Promise<unknown>;
   expectAllowed(result: unknown): void;
   expectRefused(result: unknown): void;
@@ -39,7 +39,7 @@ export function itEnforcesApprovedExpertGate(h: ApprovedExpertGateHarness): void
     h.setSessionUser({ activeMode: 'expert' });
     h.setProfileRow(APPROVED_PROFILE_ROW);
     h.expectRefused(await h.run());
-    expect(h.findProfileById.mock.calls).toHaveLength(0);
+    expect(h.findApprovalById.mock.calls).toHaveLength(0);
   });
 
   it('refuses an unapproved (draft) expert profile', async () => {

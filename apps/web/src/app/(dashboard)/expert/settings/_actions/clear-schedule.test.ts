@@ -21,10 +21,10 @@ vi.mock('@/lib/logging', () => ({
   errorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 
-const mockFindProfileById = vi.fn();
+const mockFindApprovalById = vi.fn();
 vi.mock('@balo/db', () => ({
   expertsRepository: {
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
   },
 }));
 
@@ -56,7 +56,7 @@ describe('clearScheduleAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   it('throws when there is no session user', async () => {
@@ -72,8 +72,8 @@ describe('clearScheduleAction', () => {
           save: mockSave,
         };
       },
-      setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
-      findProfileById: mockFindProfileById,
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
       run: () => {
         mockInternalApiFetch.mockResolvedValue({ success: true });
         return clearScheduleAction();
@@ -88,7 +88,7 @@ describe('clearScheduleAction', () => {
     });
 
     it('returns the generic failure, without throwing, when the guard read fails', async () => {
-      mockFindProfileById.mockRejectedValue(new Error('DB down'));
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
       const result = await clearScheduleAction();
       expect(result).toEqual({
         success: false,

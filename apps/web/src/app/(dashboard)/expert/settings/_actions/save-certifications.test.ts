@@ -13,12 +13,12 @@ vi.mock('@/lib/logging', () => ({
 }));
 
 const mockSaveSettingsCertifications = vi.fn();
-const mockFindProfileById = vi.fn();
+const mockFindApprovalById = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     saveSettingsCertifications: (...args: unknown[]) => mockSaveSettingsCertifications(...args),
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
   },
 }));
 
@@ -69,7 +69,7 @@ describe('saveCertificationsAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
     mockSaveSettingsCertifications.mockResolvedValue({ outcome: 'saved' });
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   describe('authentication / mode guard', () => {
@@ -87,8 +87,8 @@ describe('saveCertificationsAction', () => {
           user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? undefined },
         };
       },
-      setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
-      findProfileById: mockFindProfileById,
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
       run: () => saveCertificationsAction(validInput()),
       expectAllowed: (result) => {
         expect(result).toEqual({ success: true });
@@ -100,7 +100,7 @@ describe('saveCertificationsAction', () => {
     });
 
     it('returns the generic failure, without throwing, when the guard read fails', async () => {
-      mockFindProfileById.mockRejectedValue(new Error('DB down'));
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
       const result = await saveCertificationsAction(validInput());
       expect(result).toEqual({
         success: false,

@@ -14,13 +14,13 @@ vi.mock('@/lib/logging', () => ({
 
 const mockSaveSettingsProfile = vi.fn();
 const mockCheckUsernameAvailability = vi.fn();
-const mockFindProfileById = vi.fn();
+const mockFindApprovalById = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     saveSettingsProfile: (...args: unknown[]) => mockSaveSettingsProfile(...args),
     checkUsernameAvailability: (...args: unknown[]) => mockCheckUsernameAvailability(...args),
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
   },
 }));
 
@@ -59,7 +59,7 @@ describe('saveProfileAction', () => {
     mockSessionObj = { ...EXPERT_SESSION };
     mockSaveSettingsProfile.mockResolvedValue({ outcome: 'saved' });
     mockCheckUsernameAvailability.mockResolvedValue(true);
-    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   describe('authentication', () => {
@@ -78,8 +78,8 @@ describe('saveProfileAction', () => {
           user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? null },
         };
       },
-      setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
-      findProfileById: mockFindProfileById,
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
       run: () => saveProfileAction({ headline: 'Test' }),
       expectAllowed: (result) => {
         expect(result).toEqual({ success: true });
@@ -91,7 +91,7 @@ describe('saveProfileAction', () => {
     });
 
     it('returns the generic failure, without throwing, when the guard read fails', async () => {
-      mockFindProfileById.mockRejectedValue(new Error('DB down'));
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
       const result = await saveProfileAction({ headline: 'Test' });
       expect(result).toEqual({
         success: false,
