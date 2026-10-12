@@ -56,6 +56,8 @@ function inputTextFor(cents: number, unit: RateUnit): string {
 interface RateUnitToggleProps {
   unit: RateUnit;
   onChange: (next: RateUnit) => void;
+  /** Locks the unit while a save is in flight, so the saved amount re-renders in its own unit. */
+  disabled: boolean;
 }
 
 /**
@@ -63,7 +65,11 @@ interface RateUnitToggleProps {
  * same rate), not a tablist: roving tabIndex plus Arrow/Home/End on each radio, which move
  * and select in one step.
  */
-function RateUnitToggle({ unit, onChange }: Readonly<RateUnitToggleProps>): React.JSX.Element {
+function RateUnitToggle({
+  unit,
+  onChange,
+  disabled,
+}: Readonly<RateUnitToggleProps>): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const focusOption = useCallback((index: number) => {
@@ -100,6 +106,7 @@ function RateUnitToggle({ unit, onChange }: Readonly<RateUnitToggleProps>): Reac
       ref={containerRef}
       role="radiogroup"
       aria-label="Enter your rate"
+      aria-disabled={disabled}
       className="bg-muted inline-flex gap-1 rounded-[10px] p-[3px]"
     >
       {UNIT_OPTIONS.map((option) => {
@@ -111,10 +118,11 @@ function RateUnitToggle({ unit, onChange }: Readonly<RateUnitToggleProps>): Reac
             role="radio"
             aria-checked={isActive}
             tabIndex={isActive ? 0 : -1}
+            disabled={disabled}
             onClick={() => onChange(option.value)}
             onKeyDown={handleKeyDown}
             className={cn(
-              'focus-visible:ring-ring min-h-8 rounded-lg px-3 text-xs font-semibold transition-colors outline-none focus-visible:ring-2',
+              'focus-visible:ring-ring min-h-8 rounded-lg px-3 text-xs font-semibold transition-colors outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-60',
               isActive
                 ? 'bg-card text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
@@ -217,7 +225,7 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
   }
 
   function handleUnitChange(next: RateUnit): void {
-    if (next === unit) return;
+    if (next === unit || isSubmitting) return;
     // Re-render from cents, never from the typed text, so a toggle can't change the rate.
     setRateInput(inputTextFor(rateCents, next));
     setUnit(next);
@@ -281,7 +289,7 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
               <DollarSign className="h-4 w-4 text-emerald-600" aria-hidden="true" />
               <span className="text-foreground text-sm font-semibold">Your Rate</span>
             </div>
-            <RateUnitToggle unit={unit} onChange={handleUnitChange} />
+            <RateUnitToggle unit={unit} onChange={handleUnitChange} disabled={isSubmitting} />
           </div>
 
           {/* Oversized rate input row */}
@@ -292,6 +300,7 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
               inputMode="decimal"
               value={rateInput}
               onChange={handleRateChange}
+              readOnly={isSubmitting}
               placeholder="0.00"
               aria-label={
                 unit === 'hour' ? 'Rate per hour in dollars' : 'Rate per minute in dollars'

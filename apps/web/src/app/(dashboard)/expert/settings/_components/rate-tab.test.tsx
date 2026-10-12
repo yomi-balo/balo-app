@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { track, EXPERT_RATE_EVENTS } from '@/lib/analytics';
@@ -237,6 +237,37 @@ describe('RateTab — validation', () => {
 });
 
 describe('RateTab — save', () => {
+  it('locks the unit and the field while a save is in flight', async () => {
+    let resolveSave: (value: { success: true }) => void = () => {};
+    mockSave.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve;
+      })
+    );
+    const user = userEvent.setup();
+    render(<RateTab initialRateCents={230} />);
+    await user.click(screen.getByRole('radio', { name: 'Per hour' }));
+    await typeRate(hourInput(), '30');
+    await user.click(saveButton());
+
+    const perMinute = screen.getByRole('radio', { name: 'Per minute' });
+    expect(perMinute).toBeDisabled();
+    expect(screen.getByRole('radiogroup')).toHaveAttribute('aria-disabled', 'true');
+    expect(hourInput()).toHaveAttribute('readonly');
+    await user.click(perMinute);
+    fireEvent.keyDown(screen.getByRole('radio', { name: 'Per hour' }), { key: 'ArrowLeft' });
+    expect(screen.getByRole('radio', { name: 'Per hour' })).toHaveAttribute('aria-checked', 'true');
+
+    await act(async () => {
+      resolveSave({ success: true });
+    });
+
+    expect(mockSave).toHaveBeenCalledWith({ ratePerMinuteCents: 50 });
+    expect(hourInput()).toHaveValue('30.00');
+    expect(hourInput()).not.toHaveAttribute('readonly');
+    expect(perMinute).toBeEnabled();
+  });
+
   it('saves the rounded-up per-minute cents from an hourly entry', async () => {
     const user = userEvent.setup();
     render(<RateTab initialRateCents={230} />);

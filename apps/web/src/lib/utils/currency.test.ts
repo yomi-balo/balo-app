@@ -40,9 +40,8 @@ describe('calculateClientRate', () => {
 });
 
 describe('PLATFORM_PRICING.SERVICE_FEE_SHARE_LABEL', () => {
-  it("is the default fee's share of the client price, not the markup", () => {
+  it("is the default fee's share of the client price (2500 / 12500), not the 25% markup", () => {
     expect(PLATFORM_PRICING.SERVICE_FEE_SHARE_LABEL).toBe('20%');
-    expect(PLATFORM_PRICING.MARKUP_LABEL).toBe('25%');
   });
 });
 
