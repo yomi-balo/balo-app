@@ -12,6 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
+import { ExpertTermsDocument } from '@/components/balo/legal/expert-terms-document';
 import { cn } from '@/lib/utils';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import { useAuthModal } from '@/hooks/use-auth-modal';
@@ -297,62 +298,12 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
           <ScrollArea className="max-h-[50vh] sm:max-h-[400px]">
             <div
               ref={scrollViewportRef}
-              className="prose prose-sm dark:prose-invert max-h-[50vh] max-w-none overflow-y-auto p-6 sm:max-h-[400px]"
+              tabIndex={0}
+              role="region"
+              aria-label="Balo Expert Terms & Conditions"
+              className="prose prose-sm dark:prose-invert focus-visible:ring-ring max-h-[50vh] max-w-none overflow-y-auto p-6 focus-visible:ring-2 focus-visible:outline-none sm:max-h-[400px]"
             >
-              <h3 className="text-foreground text-sm font-semibold">
-                1. Expert Platform Agreement
-              </h3>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                By registering as an expert on Balo, you agree to provide professional consulting
-                services in accordance with the standards outlined in this agreement. You represent
-                that all information provided in your application is accurate and complete.
-              </p>
-
-              <h3 className="text-foreground text-sm font-semibold">2. Service Standards</h3>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                As a Balo expert, you commit to maintaining high professional standards in all
-                client interactions. This includes responding to client inquiries within a
-                reasonable timeframe, delivering work that meets the agreed-upon scope, and
-                maintaining confidentiality of client information.
-              </p>
-
-              <h3 className="text-foreground text-sm font-semibold">3. Payment Terms</h3>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                Balo operates on a prepaid credit system with a 25% platform fee. Your earnings will
-                be calculated based on your set hourly rate minus the platform fee. Payments are
-                processed through Stripe Connect and deposited to your linked bank account on a
-                regular schedule.
-              </p>
-
-              <h3 className="text-foreground text-sm font-semibold">4. Intellectual Property</h3>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                Work product created during engagements belongs to the client unless otherwise
-                agreed upon in the project scope. You retain ownership of your pre-existing tools,
-                templates, and methodologies.
-              </p>
-
-              <h3 className="text-foreground text-sm font-semibold">5. Community Standards</h3>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                You agree to treat all clients, fellow experts, and Balo staff with respect and
-                professionalism. Harassment, discrimination, or any form of misconduct may result in
-                immediate removal from the platform.
-              </p>
-
-              <h3 className="text-foreground text-sm font-semibold">
-                6. Account Suspension & Termination
-              </h3>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                Balo reserves the right to suspend or terminate your expert account for violations
-                of these terms, consistently poor service quality, or fraudulent activity. You may
-                voluntarily deactivate your expert profile at any time.
-              </p>
-
-              <h3 className="text-foreground text-sm font-semibold">7. Amendments</h3>
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                These terms may be updated from time to time. Material changes will be communicated
-                via email with reasonable notice. Continued use of the platform after changes take
-                effect constitutes acceptance of the updated terms.
-              </p>
+              <ExpertTermsDocument />
             </div>
           </ScrollArea>
 
@@ -391,8 +342,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
                   </label>
                 </div>
                 <p className="text-muted-foreground mt-2 ml-7 text-xs">
-                  By submitting, you agree to our platform guidelines, community standards, and
-                  payment terms.
+                  By submitting, you agree to these terms in full.
                 </p>
                 <FormMessage />
               </FormItem>
