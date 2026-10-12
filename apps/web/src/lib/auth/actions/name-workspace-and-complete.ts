@@ -11,6 +11,7 @@ import { type AuthResult } from '@/lib/auth/errors';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { emitOrgCreatedAtIntent } from '@/lib/analytics/org-intent';
 import { log } from '@/lib/logging';
+import { hasCapability, CAPABILITIES } from '@/lib/authz';
 
 interface NameWorkspaceResult {
   redirectTo: string;
@@ -128,16 +129,19 @@ export async function nameWorkspaceAndCompleteAction(
   if (session.user.onboardingCompleted) {
     return { success: false, error: 'Onboarding already completed' };
   }
-  // Least-privilege: only the workspace OWNER may rename/promote the company. At
-  // onboarding this always holds (the personal workspace was created with the user as
-  // owner and `companyId` is server-derived, never client input), so this is
-  // defense-in-depth: non-owner memberships now genuinely exist (BAL-371 domain joins),
-  // and this keeps one from ever renaming or promoting a company here.
-  if (session.user.companyRole !== 'owner') {
-    return { success: false, error: 'Unauthorized' };
-  }
-
   try {
+    // Least-privilege: only a member holding `manage_members` (owner/admin) may rename or
+    // promote the company. At onboarding the personal workspace was created with the user as
+    // owner and `companyId` is server-derived, never client input, so this is defense-in-depth
+    // against non-owner memberships (BAL-371 domain joins). Inside the try so a membership read
+    // failure takes the retryable path instead of throwing.
+    const canManage = await hasCapability(session.user, CAPABILITIES.MANAGE_MEMBERS, {
+      companyId: session.user.companyId,
+    });
+    if (!canManage) {
+      return { success: false, error: 'Unauthorized' };
+    }
+
     // Authoritative identity re-read — email + verified flag come from the DB, never
     // the session copy, so the corporate-domain gate reflects real state.
     const dbUser = await usersRepository.findById(session.user.id);

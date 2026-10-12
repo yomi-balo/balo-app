@@ -4,6 +4,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { responsibilitiesFieldSchema } from '@/lib/expert-profile/work-history-responsibilities';
@@ -48,14 +49,15 @@ export const saveWorkHistoryAction = withAuth(
     try {
       const validated = saveWorkHistorySchema.parse(input);
 
-      if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-        return { success: false, error: 'Expert profile required' };
+      const gate = await resolveApprovedExpert(session.user);
+      if (!gate.ok) {
+        return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
       }
 
       // BAL-557 — one transaction under the profile row lock, so this save and a staff edit
       // serialise instead of deadlocking.
       const saveResult = await expertsRepository.saveSettingsWorkHistory(
-        session.user.expertProfileId,
+        gate.expertProfileId,
         validated.entries.map((entry) => ({
           ...entry,
           responsibilities: sanitizeResponsibilitiesHtml(entry.responsibilities),
@@ -67,7 +69,7 @@ export const saveWorkHistoryAction = withAuth(
       }
 
       log.info('Work history saved', {
-        expertProfileId: session.user.expertProfileId,
+        expertProfileId: gate.expertProfileId,
         userId: session.user.id,
         entryCount: validated.entries.length,
       });

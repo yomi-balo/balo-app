@@ -164,7 +164,7 @@ describe('resolveCasesIndexRequest', () => {
     expect(resolveCasesIndexRequest(sessionUser({ activeMode: 'expert' }))).toBeNull();
   });
 
-  it('treats an EMPTY-STRING profile id as no profile (the `requireExpert` check)', () => {
+  it('treats an EMPTY-STRING profile id as no profile (the `resolveApprovedExpert` check)', () => {
     expect(
       resolveCasesIndexRequest(sessionUser({ activeMode: 'expert', expertProfileId: '' }))
     ).toBeNull();

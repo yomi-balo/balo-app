@@ -263,15 +263,6 @@ export async function requireOnboardedUser(): Promise<SessionUser> {
   return user;
 }
 
-// Helper to check if user is in expert mode with active profile
-export async function requireExpert(): Promise<SessionUser & { expertProfileId: string }> {
-  const user = await requireUser();
-  if (user.activeMode !== 'expert' || !user.expertProfileId) {
-    throw new Error('Expert profile required');
-  }
-  return user as SessionUser & { expertProfileId: string };
-}
-
 // Helper to get company context
 export async function getCompanyContext() {
   const user = await requireUser();

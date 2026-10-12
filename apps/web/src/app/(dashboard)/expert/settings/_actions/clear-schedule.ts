@@ -3,6 +3,7 @@ import 'server-only';
 
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { log, errorMessage } from '@/lib/logging';
 import { internalApiFetch } from '../_lib/internal-api';
 
@@ -16,12 +17,13 @@ export interface ClearScheduleResult {
  * IDOR gate: the expertProfileId is derived from the session, never the client.
  */
 export const clearScheduleAction = withAuth(async (session): Promise<ClearScheduleResult> => {
-  if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-    return { success: false, error: 'Expert profile required' };
-  }
-  const expertProfileId = session.user.expertProfileId;
-
   try {
+    const gate = await resolveApprovedExpert(session.user);
+    if (!gate.ok) {
+      return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
+    }
+    const { expertProfileId } = gate;
+
     await internalApiFetch<{ success: boolean }>(
       `/api/experts/${expertProfileId}/schedule`,
       // actorUserId rides a header (DELETE carries no JSON body, and a query param
@@ -42,7 +44,7 @@ export const clearScheduleAction = withAuth(async (session): Promise<ClearSchedu
   } catch (err: unknown) {
     log.error('Failed to clear expert schedule', {
       userId: session.user.id,
-      expertProfileId,
+      expertProfileId: session.user.expertProfileId,
       error: errorMessage(err),
       stack: err instanceof Error ? err.stack : undefined,
     });

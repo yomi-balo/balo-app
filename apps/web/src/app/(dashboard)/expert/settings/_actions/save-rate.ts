@@ -4,6 +4,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { PLATFORM_PRICING } from '@/lib/constants/platform';
@@ -34,18 +35,19 @@ export const saveRateAction = withAuth(
       // 1. Validate input
       const validated = saveRateSchema.parse(input);
 
-      // 2. Verify expert mode
-      if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-        return { success: false, error: 'Expert profile required' };
+      // 2. Verify approved expert profile
+      const gate = await resolveApprovedExpert(session.user);
+      if (!gate.ok) {
+        return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
       }
 
       // 3. Persist to database
-      await expertsRepository.updateProfile(session.user.expertProfileId, {
+      await expertsRepository.updateProfile(gate.expertProfileId, {
         rateCents: validated.ratePerMinuteCents,
       });
 
       log.info('Expert rate saved', {
-        expertProfileId: session.user.expertProfileId,
+        expertProfileId: gate.expertProfileId,
         userId: session.user.id,
         ratePerMinuteCents: validated.ratePerMinuteCents,
       });

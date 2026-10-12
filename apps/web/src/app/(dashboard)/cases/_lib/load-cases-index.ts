@@ -71,7 +71,7 @@ export type CasesIndexRequest =
  * docblock says so). It picks WHICH list; `resolveCompanyParticipation` decides whether the
  * viewer may read it.
  *
- * ⚠ TRUTHINESS ON `expertProfileId`, matching `requireExpert()` and `dashboard/page.tsx`:
+ * ⚠ TRUTHINESS ON `expertProfileId`, matching `resolveApprovedExpert()` and `dashboard/page.tsx`:
  * `SessionUser` is a type assertion over cookie JSON with NO runtime validation, so an
  * empty-string id is representable and must not be treated as a profile.
  */

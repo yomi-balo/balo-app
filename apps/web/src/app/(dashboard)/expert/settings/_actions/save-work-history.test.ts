@@ -1,15 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSaveSettingsWorkHistory, session } = vi.hoisted(() => ({
+const { mockSaveSettingsWorkHistory, mockFindProfileById, session } = vi.hoisted(() => ({
   mockSaveSettingsWorkHistory: vi.fn(),
+  mockFindProfileById: vi.fn(),
   session: {
-    user: { id: 'user-1', activeMode: 'expert', expertProfileId: 'profile-1' },
+    user: {
+      id: 'user-1',
+      activeMode: 'expert',
+      expertProfileId: 'profile-1' as string | undefined,
+    },
   },
 }));
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@balo/db', () => ({
-  expertsRepository: { saveSettingsWorkHistory: mockSaveSettingsWorkHistory },
+  expertsRepository: {
+    saveSettingsWorkHistory: mockSaveSettingsWorkHistory,
+    findProfileById: mockFindProfileById,
+  },
 }));
 vi.mock('@/lib/auth/with-auth', () => ({
   withAuth:
@@ -19,6 +27,10 @@ vi.mock('@/lib/auth/with-auth', () => ({
 }));
 
 import { saveWorkHistoryAction } from './save-work-history';
+import {
+  APPROVED_PROFILE_ROW,
+  itEnforcesApprovedExpertGate,
+} from '@/test/fixtures/approved-expert-gate-cases';
 
 const ENTRY = {
   role: 'Senior Consultant',
@@ -31,6 +43,36 @@ const ENTRY = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSaveSettingsWorkHistory.mockResolvedValue({ outcome: 'saved' });
+  mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
+  session.user = { id: 'user-1', activeMode: 'expert', expertProfileId: 'profile-1' };
+});
+
+describe('saveWorkHistoryAction — approved expert guard', () => {
+  itEnforcesApprovedExpertGate({
+    setSessionUser: (u) => {
+      session.user = { id: 'user-1', activeMode: u.activeMode, expertProfileId: u.expertProfileId };
+    },
+    setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
+    findProfileById: mockFindProfileById,
+    run: () => saveWorkHistoryAction({ entries: [ENTRY] }),
+    expectAllowed: (result) => {
+      expect(result).toEqual({ success: true });
+      expect(mockSaveSettingsWorkHistory).toHaveBeenCalledWith('profile-1', expect.anything());
+    },
+    expectRefused: (result) =>
+      expect(result).toEqual({ success: false, error: 'Expert profile required' }),
+    expectNoSideEffect: () => expect(mockSaveSettingsWorkHistory).not.toHaveBeenCalled(),
+  });
+
+  it('returns the generic failure, without throwing, when the guard read fails', async () => {
+    mockFindProfileById.mockRejectedValue(new Error('DB down'));
+    const result = await saveWorkHistoryAction({ entries: [ENTRY] });
+    expect(result).toEqual({
+      success: false,
+      error: 'Failed to save work history. Please try again.',
+    });
+    expect(mockSaveSettingsWorkHistory).not.toHaveBeenCalled();
+  });
 });
 
 describe('saveWorkHistoryAction — responsibilities', () => {

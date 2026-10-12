@@ -9,10 +9,12 @@ vi.mock('server-only', () => ({}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 const mockUpdateProfile = vi.fn();
+const mockFindProfileById = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     updateProfile: (...args: unknown[]) => mockUpdateProfile(...args),
+    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
   },
 }));
 
@@ -25,6 +27,10 @@ vi.mock('@/lib/auth/session', () => ({
 
 import { saveRateAction } from './save-rate';
 import { revalidatePath } from 'next/cache';
+import {
+  APPROVED_PROFILE_ROW,
+  itEnforcesApprovedExpertGate,
+} from '@/test/fixtures/approved-expert-gate-cases';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -46,6 +52,7 @@ describe('saveRateAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
     mockUpdateProfile.mockResolvedValue(undefined);
+    mockFindProfileById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   describe('authentication', () => {
@@ -56,34 +63,30 @@ describe('saveRateAction', () => {
     });
   });
 
-  describe('expert mode guard', () => {
-    it('returns error when not in expert mode', async () => {
-      mockSessionObj = {
-        user: {
-          id: 'user-1',
-          onboardingCompleted: true,
-          activeMode: 'client',
-          expertProfileId: 'profile-1',
-        },
-        save: mockSave,
-      };
-      const result = await saveRateAction({ ratePerMinuteCents: 200 });
-      expect(result).toEqual({ success: false, error: 'Expert profile required' });
-      expect(mockUpdateProfile).not.toHaveBeenCalled();
+  describe('approved expert guard', () => {
+    itEnforcesApprovedExpertGate({
+      setSessionUser: (u) => {
+        mockSessionObj = {
+          ...EXPERT_SESSION,
+          user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? null },
+        };
+      },
+      setProfileRow: (row) => mockFindProfileById.mockResolvedValue(row),
+      findProfileById: mockFindProfileById,
+      run: () => saveRateAction({ ratePerMinuteCents: 200 }),
+      expectAllowed: (result) => {
+        expect(result).toEqual({ success: true });
+        expect(mockUpdateProfile).toHaveBeenCalledWith('profile-1', { rateCents: 200 });
+      },
+      expectRefused: (result) =>
+        expect(result).toEqual({ success: false, error: 'Expert profile required' }),
+      expectNoSideEffect: () => expect(mockUpdateProfile).not.toHaveBeenCalled(),
     });
 
-    it('returns error when no expertProfileId', async () => {
-      mockSessionObj = {
-        user: {
-          id: 'user-1',
-          onboardingCompleted: true,
-          activeMode: 'expert',
-          expertProfileId: null,
-        },
-        save: mockSave,
-      };
+    it('returns the generic failure, without throwing, when the guard read fails', async () => {
+      mockFindProfileById.mockRejectedValue(new Error('DB down'));
       const result = await saveRateAction({ ratePerMinuteCents: 200 });
-      expect(result).toEqual({ success: false, error: 'Expert profile required' });
+      expect(result).toEqual({ success: false, error: 'Failed to save rate. Please try again.' });
       expect(mockUpdateProfile).not.toHaveBeenCalled();
     });
   });

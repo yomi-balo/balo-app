@@ -4,6 +4,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { CERTIFICATIONS_LOCKED_ERROR } from './certifications-locked-copy';
@@ -45,11 +46,12 @@ export const saveCertificationsAction = withAuth(
     try {
       const validated = saveCertificationsSchema.parse(input);
 
-      if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-        return { success: false, error: 'Expert profile required' };
+      const gate = await resolveApprovedExpert(session.user);
+      if (!gate.ok) {
+        return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
       }
 
-      const expertProfileId = session.user.expertProfileId;
+      const expertProfileId = gate.expertProfileId;
 
       const result = await expertsRepository.saveSettingsCertifications(expertProfileId, {
         certs: validated.certifications,

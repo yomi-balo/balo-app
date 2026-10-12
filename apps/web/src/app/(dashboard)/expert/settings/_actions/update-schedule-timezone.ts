@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { isValidTimezone } from '@balo/shared/timezone';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { log, errorMessage } from '@/lib/logging';
 import { internalApiFetch } from '../_lib/internal-api';
 
@@ -23,12 +24,12 @@ export interface UpdateScheduleTimezoneResult {
  */
 export const updateScheduleTimezoneAction = withAuth(
   async (session, timezone: string): Promise<UpdateScheduleTimezoneResult> => {
-    if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-      return { success: false, error: 'Expert profile required' };
-    }
-    const expertProfileId = session.user.expertProfileId;
-
     try {
+      const gate = await resolveApprovedExpert(session.user);
+      if (!gate.ok) {
+        return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
+      }
+      const { expertProfileId } = gate;
       const validTimezone = timezoneSchema.parse(timezone);
 
       await internalApiFetch<{ success: boolean }>(
@@ -52,7 +53,7 @@ export const updateScheduleTimezoneAction = withAuth(
     } catch (err: unknown) {
       log.error('Failed to update expert schedule timezone', {
         userId: session.user.id,
-        expertProfileId,
+        expertProfileId: session.user.expertProfileId,
         error: errorMessage(err),
         stack: err instanceof Error ? err.stack : undefined,
       });

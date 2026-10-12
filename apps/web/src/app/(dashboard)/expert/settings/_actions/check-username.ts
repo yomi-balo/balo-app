@@ -2,6 +2,7 @@
 import 'server-only';
 
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { expertsRepository } from '@balo/db';
 import { log } from '@/lib/logging';
 import { USERNAME_REGEX, RESERVED_USERNAMES, USERNAME_MIN, USERNAME_MAX } from './username-rules';
@@ -13,8 +14,22 @@ export interface CheckUsernameResult {
 
 export const checkUsernameAction = withAuth(
   async (session, input: { username: string }): Promise<CheckUsernameResult> => {
-    if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-      return { available: false, error: 'Expert profile required' };
+    let expertProfileId: string;
+    try {
+      const gate = await resolveApprovedExpert(session.user);
+      if (!gate.ok) {
+        return { available: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
+      }
+      expertProfileId = gate.expertProfileId;
+    } catch (error) {
+      log.error('Failed to verify approved expert for username check', {
+        userId: session.user.id,
+        expertProfileId: session.user.expertProfileId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
+      return { available: false, error: 'Failed to check username. Please try again.' };
     }
 
     const { username } = input;
@@ -44,14 +59,14 @@ export const checkUsernameAction = withAuth(
     try {
       const isAvailable = await expertsRepository.checkUsernameAvailability(
         username,
-        session.user.expertProfileId
+        expertProfileId
       );
 
       return { available: isAvailable };
     } catch (error) {
       log.error('Failed to check username availability', {
         userId: session.user.id,
-        expertProfileId: session.user.expertProfileId,
+        expertProfileId,
         username,
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
