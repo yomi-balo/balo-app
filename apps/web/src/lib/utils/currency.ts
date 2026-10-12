@@ -1,3 +1,4 @@
+import { applyBaloFee, DEFAULT_BALO_FEE_BPS } from '@balo/shared/pricing';
 import { PLATFORM_PRICING } from '@/lib/constants/platform';
 
 /** Convert cents (integer) to dollars (number). E.g. 200 => 2.00 */
@@ -35,26 +36,30 @@ export function formatWholeCurrency(cents: number, currency: string): string {
 }
 
 /**
- * Calculate client rate from expert rate (both in cents).
+ * Calculate client rate from expert rate (both in cents) at the platform default fee.
  *
- * ⚠ BAL-493 — this is a DUPLICATE DEFINITION of the SAME arithmetic, not a different markup.
- * `PLATFORM_PRICING.MARKUP_MULTIPLIER` (1.25) and `DEFAULT_BALO_FEE_BPS` (2500 bps) are both
- * 25%; they agree today and there is no discrepancy to "fix". The risk is DRIFT — two constants
- * encoding one business rule, which can silently diverge.
- *
- * `publicDisplayRatePerMinute` in `@balo/shared/pricing` (over the canonical `applyBaloFee`) is
- * the single source of truth for any PUBLIC-FACING "From A$…/min" figure. Do not add a display
- * caller to this function. Longer term this should delegate to `applyBaloFee` so the two cannot
- * drift at all; it is left alone here only to keep BAL-493 off the authenticated
- * expert-settings path, which is this function's sole remaining consumer.
+ * Delegates to the canonical `applyBaloFee` at `DEFAULT_BALO_FEE_BPS`, so this figure and
+ * `publicDisplayRatePerMinute` (`@balo/shared/pricing`) cannot drift apart. It is the
+ * expert-settings preview only; public-facing "From A$…/min" figures use
+ * `publicDisplayRatePerMinute`.
  */
 export function calculateClientRate(expertRateCents: number): number {
-  return Math.round(expertRateCents * PLATFORM_PRICING.MARKUP_MULTIPLIER);
+  return applyBaloFee(expertRateCents, DEFAULT_BALO_FEE_BPS);
 }
 
 /** Convert per-minute rate (cents) to per-hour rate (cents). */
 export function perMinuteToPerHour(perMinuteCents: number): number {
   return perMinuteCents * 60;
+}
+
+/**
+ * Convert an hourly amount (cents) to a per-minute rate (cents), rounding UP.
+ * The platform stores whole cents per minute, so an hourly figure that doesn't divide
+ * evenly by 60 rounds to the next cent: the expert never earns less than the hourly
+ * amount they entered. E.g. 20000 (A$200.00/h) => 334 (A$3.34/min, A$200.40/h).
+ */
+export function perHourToPerMinuteCents(perHourCents: number): number {
+  return Math.ceil(perHourCents / 60);
 }
 
 /**
