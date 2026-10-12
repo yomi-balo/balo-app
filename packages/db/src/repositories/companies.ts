@@ -120,8 +120,8 @@ export type SetBillingEmailResult =
  *  - 'domain_conflict_same_type'   → another live COMPANY owns the domain → caller stays
  *                                    PERSONAL (non-blocked); the live owner keeps the domain.
  *                                    Retry is futile (that owner never disappears), so this is
- *                                    NOT retryable — the paths back are JOIN or admin
- *                                    reassignment (BAL-347 removeDomain+addDomain).
+ *                                    NOT retryable — the paths back are JOIN or Balo staff
+ *                                    reassignment (BAL-594).
  *  - 'domain_conflict_other_type'  → a live AGENCY owns the domain → caller stays personal.
  *  - 'domain_conflict_retryable'   → transient race: the slot was freed mid-op (concurrent
  *                                    soft-delete), so a retry legitimately re-attempts the claim.

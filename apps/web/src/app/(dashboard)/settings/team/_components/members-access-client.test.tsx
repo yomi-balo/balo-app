@@ -1,25 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import type { PartyDomainWithCreator } from '@balo/db';
+import type { PartyDomainForSettings } from '@balo/db';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('@/app/(dashboard)/settings/team/_actions/add-domain', () => ({ addPartyDomain: vi.fn() }));
-vi.mock('@/app/(dashboard)/settings/team/_actions/remove-domain', () => ({
-  removePartyDomain: vi.fn(),
-}));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('../_actions/set-join-mode', () => ({ setCompanyJoinMode: vi.fn() }));
 vi.mock('../_actions/approve-join-request', () => ({ approveJoinRequest: vi.fn() }));
 vi.mock('../_actions/decline-join-request', () => ({ declineJoinRequest: vi.fn() }));
 
 import { MembersAccessClient, type MembersAccessDto } from './members-access-client';
 
-const DOMAIN: PartyDomainWithCreator = {
+const DOMAIN: PartyDomainForSettings = {
   id: 'd1',
   domain: 'northwind.com',
-  source: 'auto_captured',
   createdAt: new Date('2020-01-01T00:00:00Z'),
-  createdBy: { id: 'u1', firstName: 'Jordan', lastName: 'Ellis' },
+  attribution: { kind: 'signup', name: 'Jordan Ellis' },
 };
 
 function makeDto(over: Partial<MembersAccessDto> = {}): MembersAccessDto {
@@ -50,6 +46,20 @@ describe('MembersAccessClient', () => {
     expect(screen.getByRole('radiogroup', { name: /join mode/i })).toBeInTheDocument();
     // Join requests section (empty here).
     expect(screen.getByText(/you're all caught up/i)).toBeInTheDocument();
+  });
+
+  it('hides the Domains card for a company with no domains but keeps the other sections', () => {
+    render(<MembersAccessClient dto={makeDto({ domains: [] })} />);
+
+    expect(screen.queryByRole('heading', { name: 'Domains' })).not.toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: /join mode/i })).toBeInTheDocument();
+  });
+
+  it('shows the Domains error state when the domains read failed', () => {
+    render(<MembersAccessClient dto={makeDto({ domains: null })} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/couldn't load your domains/i);
+    expect(screen.getByRole('radiogroup', { name: /join mode/i })).toBeInTheDocument();
   });
 
   it('has no accessibility violations', async () => {

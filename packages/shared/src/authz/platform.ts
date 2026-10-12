@@ -385,6 +385,21 @@ export const PLATFORM_CAPABILITIES = {
    * the actor-set test in `platform.test.ts`.
    */
   MANAGE_ANY_KICKOFF_GATE: 'manage_any_kickoff_gate',
+  /**
+   * BAL-594 — add, remove or reassign a verified-email domain on any company or agency
+   * (`party_domains`), the only write path besides signup auto-capture.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST / RESOLVE_ADMIN_ALERTS argument verbatim.
+   * In particular it is NOT `VIEW_PLATFORM_ADMIN`: that token gates REACHABILITY and "IS NOT A
+   * PER-SURFACE GRANT", so gating a MUTATION on it would make this map lie about what it grants.
+   * A domain decides which signups auto-join a tenant, a cross-tenant act with no
+   * membership-axis expression.
+   *
+   * Granted to BOTH staff roles via `PLATFORM_STAFF_BUNDLE`. The page read is reachable on
+   * `VIEW_PLATFORM_ADMIN`; every write action resolves this token itself, live.
+   */
+  MANAGE_PARTY_DOMAINS: 'manage_party_domains',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -500,6 +515,10 @@ export const PLATFORM_CAPABILITY_LABELS: Readonly<
     name: 'Open the Balo admin area',
     group: 'platform',
   },
+  [PLATFORM_CAPABILITIES.MANAGE_PARTY_DOMAINS]: {
+    name: 'Manage party domains',
+    group: 'platform',
+  },
   [PLATFORM_CAPABILITIES.REDRIVE_JOB]: {
     name: 'Re-run a stuck recording or transcript job',
     group: 'platform',
@@ -581,6 +600,7 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST,
   PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING,
   PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE,
+  PLATFORM_CAPABILITIES.MANAGE_PARTY_DOMAINS,
 ];
 
 /**
@@ -782,6 +802,7 @@ export const PLATFORM_CAPABILITY_SEAL_ORDER: readonly PlatformCapability[] = Obj
   PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES, //          16
   PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING, //        17 (BAL-558)
   PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE, //             18 (BAL-558)
+  PLATFORM_CAPABILITIES.MANAGE_PARTY_DOMAINS, //                19 (BAL-594)
 ]);
 
 export type SealedPlatformCapabilityIndexes = number[];

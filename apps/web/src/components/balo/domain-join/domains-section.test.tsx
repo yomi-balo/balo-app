@@ -1,83 +1,83 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import type { PartyDomainWithCreator } from '@balo/db';
+import type { PartyDomainForSettings } from '@balo/db';
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('@/app/(dashboard)/settings/team/_actions/add-domain', () => ({ addPartyDomain: vi.fn() }));
-vi.mock('@/app/(dashboard)/settings/team/_actions/remove-domain', () => ({
-  removePartyDomain: vi.fn(),
-}));
+const mockRefresh = vi.fn();
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: mockRefresh }) }));
 
 import { DomainsSection } from './domains-section';
 
-const PARTY_ID = '22222222-2222-4222-8222-222222222222';
-
-function domain(over: Partial<PartyDomainWithCreator>): PartyDomainWithCreator {
+function domain(over: Partial<PartyDomainForSettings>): PartyDomainForSettings {
   return {
     id: 'd1',
     domain: 'northwind.com',
-    source: 'auto_captured',
     createdAt: new Date('2020-01-01T00:00:00Z'),
-    createdBy: { id: 'u1', firstName: 'Jordan', lastName: 'Ellis' },
+    attribution: { kind: 'signup', name: 'Jordan Ellis' },
     ...over,
   };
 }
 
 describe('DomainsSection', () => {
-  it('renders the company empty invitation and the add form', () => {
-    render(
-      <DomainsSection party="company" partyId={PARTY_ID} partyName="Northwind" domains={[]} />
+  it('renders nothing for a party with no domains', () => {
+    const { container } = render(
+      <DomainsSection party="company" partyName="Northwind" domains={[]} />
     );
-
-    // Action-led title (never bare "No … yet" absence copy — balo-ui).
-    expect(screen.getByRole('heading', { name: 'Add your first domain' })).toBeInTheDocument();
-    expect(screen.queryByText(/no domains yet/i)).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/add your company's email domain so teammates can join automatically/i)
-    ).toBeInTheDocument();
-    expect(screen.getByLabelText(/add a domain/i)).toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders the agency-specific empty copy with the action-led title', () => {
-    render(<DomainsSection party="agency" partyId={PARTY_ID} partyName="Lattice" domains={[]} />);
-    expect(screen.getByRole('heading', { name: 'Add your first domain' })).toBeInTheDocument();
-    expect(
-      screen.getByText(/colleagues who sign up with it join your team automatically/i)
-    ).toBeInTheDocument();
+  it('renders the error state and retries via a router refresh when the read failed', async () => {
+    const user = userEvent.setup();
+    render(<DomainsSection party="agency" partyName="Lattice" domains={null} />);
+
+    expect(screen.getByText("We couldn't load your domains")).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /try again/i }));
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it('renders rows with source-aware attribution and first-mention "@ party" only once per person', () => {
-    const domains: PartyDomainWithCreator[] = [
-      domain({ id: 'd1', domain: 'northwind.com', source: 'auto_captured' }),
-      domain({ id: 'd2', domain: 'northwind.io', source: 'admin_added' }),
-      domain({
-        id: 'd3',
-        domain: 'northwind.co.uk',
-        source: 'admin_added',
-        createdBy: { id: 'u2', firstName: 'Riley', lastName: 'Chen' },
-      }),
-    ];
+  it.each([
+    ['company', /based on your join setting below/i],
+    ['agency', /joins your team automatically/i],
+  ] as const)('shows the %s description', (party, text) => {
+    render(<DomainsSection party={party} partyName="Northwind" domains={[domain({})]} />);
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it('names each signup person with "@ party" once, and attributes Balo-added rows to Balo', () => {
     render(
-      <DomainsSection party="company" partyId={PARTY_ID} partyName="Northwind" domains={domains} />
+      <DomainsSection
+        party="company"
+        partyName="Northwind"
+        domains={[
+          domain({ id: 'd1', domain: 'northwind.com' }),
+          domain({ id: 'd2', domain: 'northwind.io' }),
+          domain({ id: 'd3', domain: 'northwind.co.uk', attribution: { kind: 'balo' } }),
+        ]}
+      />
     );
 
-    // Jordan is first-mentioned on d1 (with @ party), bare on d2.
-    expect(screen.getByText('Captured from Jordan Ellis @ Northwind')).toBeInTheDocument();
-    expect(screen.getByText('Added by Jordan Ellis')).toBeInTheDocument();
-    // Riley is first-mentioned on d3 (with @ party).
-    expect(screen.getByText('Added by Riley Chen @ Northwind')).toBeInTheDocument();
-    expect(screen.getByText('northwind.co.uk')).toBeInTheDocument();
+    expect(
+      screen.getByText('Added automatically when Jordan Ellis @ Northwind signed up')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Added automatically when Jordan Ellis signed up')).toBeInTheDocument();
+    expect(screen.getByText('Added by Balo')).toBeInTheDocument();
+  });
+
+  it('offers the support contact and no add or remove control', () => {
+    render(<DomainsSection party="company" partyName="Northwind" domains={[domain({})]} />);
+
+    expect(screen.getByRole('link', { name: 'Contact Balo support' })).toHaveAttribute(
+      'href',
+      'mailto:support@getbalo.com'
+    );
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remove|add/i })).not.toBeInTheDocument();
   });
 
   it('has no accessibility violations', async () => {
     const { container } = render(
-      <DomainsSection
-        party="company"
-        partyId={PARTY_ID}
-        partyName="Northwind"
-        domains={[domain({})]}
-      />
+      <DomainsSection party="company" partyName="Northwind" domains={[domain({})]} />
     );
     expect(await axe(container)).toHaveNoViolations();
   });

@@ -238,6 +238,21 @@ export function resolveApplicationTarget(
 }
 
 /**
+ * BAL-594 — the Lookup→Domains drill-in link. Companies and agencies resolve to the staff
+ * domains page (`/admin/domains/{type}/{id}`); every other type gets none. Like
+ * `resolveApplicationTarget` this is a navigation convenience, not an authorization boundary:
+ * the page re-gates on `VIEW_PLATFORM_ADMIN` and every write re-checks `MANAGE_PARTY_DOMAINS`.
+ */
+export function resolveDomainsTarget(
+  selection: Pick<LookupSelection, 'type' | 'id'>
+): LookupOpenTarget | null {
+  if (selection.type === 'company' || selection.type === 'agency') {
+    return { href: `/admin/domains/${selection.type}/${selection.id}`, label: 'Domains' };
+  }
+  return null;
+}
+
+/**
  * How the QUERY looked, not which column matched — a shape heuristic over the raw input, used
  * ONLY for the `admin_lookup_searched` analytics property. The repository does not report which
  * column matched, so this must never be read as match provenance: a uuid could legitimately

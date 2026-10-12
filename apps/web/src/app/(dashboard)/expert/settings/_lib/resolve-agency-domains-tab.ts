@@ -1,12 +1,12 @@
 import 'server-only';
 
-import { agenciesRepository, partyDomainsRepository, type PartyDomainWithCreator } from '@balo/db';
+import { agenciesRepository, partyDomainsRepository, type PartyDomainForSettings } from '@balo/db';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
 import type { AgencyDomainsTabData } from '../_components/settings-tabs';
 
 export interface AgencyDomainsTabResult {
-  canManageAgency: boolean;
+  showDomainsTab: boolean;
   agencyDomains: AgencyDomainsTabData | null;
 }
 
@@ -14,8 +14,9 @@ const AGENCY_NAME_FALLBACK = 'Your agency';
 
 /**
  * Resolve the agency Domains tab payload (BAL-347). Only surfaced when the expert can
- * MANAGE_MEMBERS on their linked agency; `agencyId === null` (solo/no agency) or a
- * non-admin yields no tab.
+ * MANAGE_MEMBERS on their linked agency AND the agency has at least one domain (or the read
+ * failed); `agencyId === null` (solo/no agency), a non-admin, or a zero-domain agency yields
+ * no tab. Domains are read-only here — Balo staff are the only writers.
  *
  * The tab's own reads are CONTAINED here (`Promise.allSettled`) so a failure degrades to
  * the tab's own error state — `domains: null` → `SectionError` + retry in
@@ -28,16 +29,16 @@ export async function resolveAgencyDomainsTab(
   agencyId: string | null
 ): Promise<AgencyDomainsTabResult> {
   if (!agencyId) {
-    return { canManageAgency: false, agencyDomains: null };
+    return { showDomainsTab: false, agencyDomains: null };
   }
   const canManageAgency = await hasCapability(user, CAPABILITIES.MANAGE_MEMBERS, { agencyId });
   if (!canManageAgency) {
-    return { canManageAgency: false, agencyDomains: null };
+    return { showDomainsTab: false, agencyDomains: null };
   }
 
   const [summaryResult, domainsResult] = await Promise.allSettled([
     agenciesRepository.getSummaryById(agencyId),
-    partyDomainsRepository.listByPartyWithCreator('agency', agencyId),
+    partyDomainsRepository.listForPartySettings('agency', agencyId),
   ]);
 
   const partyName =
@@ -45,7 +46,7 @@ export async function resolveAgencyDomainsTab(
       ? (summaryResult.value?.name ?? AGENCY_NAME_FALLBACK)
       : AGENCY_NAME_FALLBACK;
 
-  let domains: PartyDomainWithCreator[] | null = null;
+  let domains: PartyDomainForSettings[] | null = null;
   if (domainsResult.status === 'fulfilled') {
     domains = domainsResult.value;
   } else {
@@ -59,5 +60,8 @@ export async function resolveAgencyDomainsTab(
     });
   }
 
-  return { canManageAgency: true, agencyDomains: { agencyId, partyName, domains } };
+  // Zero domains hides the tab (nothing to show, nothing the agency can act on); a failed read
+  // keeps it so the tab's own error state can offer a retry.
+  const showDomainsTab = domains === null || domains.length > 0;
+  return { showDomainsTab, agencyDomains: { partyName, domains } };
 }

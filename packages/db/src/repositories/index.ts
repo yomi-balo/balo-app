@@ -429,11 +429,23 @@ export { partyDomainsRepository } from './party-domains';
 export type {
   DomainCaptureResult,
   CaptureDomainInput,
-  AddDomainInput,
-  RemoveDomainInput,
-  RemoveDomainResult,
-  PartyDomainWithCreator,
+  PartyDomainAttribution,
+  PartyDomainForSettings,
 } from './party-domains';
+export { partyDomainsStaffRepository, PARTY_DOMAIN_STAFF_AUDIT } from './party-domains-staff';
+export type {
+  PartyRef,
+  StaffAddDomainInput,
+  StaffAddDomainResult,
+  StaffRemoveDomainInput,
+  StaffRemoveDomainResult,
+  StaffReassignDomainInput,
+  StaffReassignDomainResult,
+  StaffPartySummary,
+  StaffPartyDomainRow,
+  StaffDomainAddedVia,
+  StaffDomainOwner,
+} from './party-domains-staff';
 export { auditEventsRepository } from './audit-events';
 export type {
   RecordAuditInput,

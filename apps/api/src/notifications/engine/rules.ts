@@ -947,6 +947,11 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   'party.join_request_created': emailAndInApp('party_admins', 'party-join-request-created'),
   'party.join_request_approved': emailAndInApp('self', 'party-join-request-approved'),
   'party.join_request_declined': emailAndInApp('self', 'party-join-request-declined'),
+  // BAL-594: Balo staff changed a party's domains. Owners and admins are told by email +
+  // in-app (`party_admins`, resolved from data.partyAdminUserIds); no SMS. A reassign
+  // publishes both events, one per party.
+  'party.domain_added': emailAndInApp('party_admins', 'party-domain-added'),
+  'party.domain_removed': emailAndInApp('party_admins', 'party-domain-removed'),
   // BAL-348: a corporate expert provisioned a new agency. The new OWNER
   // (recipient:'owner' → payload.ownerUserId; a single recipient, NOT a fan-out) gets
   // an email + in-app milestone notice naming the team. Corporate-only gating lives at

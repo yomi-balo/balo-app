@@ -543,6 +543,16 @@ const partyJoinEventPayload = z.object({
   userId: z.uuid(),
 });
 
+// BAL-594 staff party-domain add/remove. `correlationId` = the per-write party_domains row id.
+// `.strict()` so a stray `userId` can never reach the resolver's `data.user` hydration.
+const partyDomainChangedPayload = z.strictObject({
+  correlationId: z.uuid(),
+  partyType: z.enum(['company', 'agency']),
+  partyId: z.uuid(),
+  partyName: z.string().min(1).max(200),
+  domain: z.string().min(1).max(253),
+});
+
 // BAL-348 agency provisioned (corporate expert → new agency owner). `correlationId`
 // = agencyId (stable → jobId dedup); `ownerUserId` is the new owner (subject +
 // recipient). All three are uuids. Mirrors apps/web/src/lib/notifications/types.ts.
@@ -1027,6 +1037,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('party.join_request_declined'),
     payload: partyJoinEventPayload,
+  }),
+  z.object({
+    event: z.literal('party.domain_added'),
+    payload: partyDomainChangedPayload,
+  }),
+  z.object({
+    event: z.literal('party.domain_removed'),
+    payload: partyDomainChangedPayload,
   }),
   z.object({
     event: z.literal('agency.provisioned'),

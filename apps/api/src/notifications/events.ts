@@ -17,6 +17,8 @@ import type {
   EngagementAutoAcceptedPayload,
   EngagementReviewReminderPayload,
   CompanyProvisionedPayload,
+  PartyDomainAddedPayload,
+  PartyDomainRemovedPayload,
   OnboardingReminderPayload,
   CreditDormancyReminderPayload,
   CreditBalanceExpiredPayload,
@@ -502,6 +504,8 @@ export type NotificationEvent =
   | 'party.join_request_created'
   | 'party.join_request_approved'
   | 'party.join_request_declined'
+  | 'party.domain_added'
+  | 'party.domain_removed'
   | 'agency.provisioned'
   | 'company.provisioned'
   | 'onboarding.reminder'
@@ -867,6 +871,8 @@ export interface EventPayloadMap {
   'party.join_request_created': PartyJoinRequestCreatedPayload;
   'party.join_request_approved': PartyJoinRequestApprovedPayload;
   'party.join_request_declined': PartyJoinRequestDeclinedPayload;
+  'party.domain_added': PartyDomainAddedPayload;
+  'party.domain_removed': PartyDomainRemovedPayload;
   'agency.provisioned': AgencyProvisionedPayload;
   'company.provisioned': CompanyProvisionedPayload;
   'onboarding.reminder': OnboardingReminderPayload;

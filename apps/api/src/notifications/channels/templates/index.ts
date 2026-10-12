@@ -58,6 +58,11 @@ import {
   PartyJoinRequestApprovedEmail,
   PartyJoinRequestDeclinedEmail,
 } from './party-domain-join.js';
+import {
+  PartyDomainAddedEmail,
+  PartyDomainRemovedEmail,
+  partyDomainsPath,
+} from './party-domain-ownership.js';
 import { AgencyProvisionedEmail } from './agency-provisioned.js';
 import { OnboardingReminderEmail } from './onboarding-reminder.js';
 import { CalendarReconnectRequiredEmail } from './calendar-reconnect-required.js';
@@ -419,6 +424,24 @@ function partyActorName(data: Record<string, unknown>): string {
   const user = data.user as { firstName?: string | null; lastName?: string | null } | undefined;
   const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
   return name.length > 0 ? name : 'A teammate';
+}
+
+/** BAL-594 — the snapshotted party name and domain from the payload, with neutral fallbacks. */
+function partyDomainCopyInputs(
+  data: Record<string, unknown>,
+  event: 'added' | 'removed'
+): {
+  partyName: string;
+  domain: string;
+  domainsUrl: string;
+} {
+  const rawName = typeof data.partyName === 'string' ? data.partyName : '';
+  const rawDomain = typeof data.domain === 'string' ? data.domain : '';
+  return {
+    partyName: sanitizeSubjectTitle(rawName) || 'your organization',
+    domain: sanitizeSubjectTitle(rawDomain) || 'A domain',
+    domainsUrl: `${BASE_URL}${partyDomainsPath(data.partyType, event)}`,
+  };
 }
 
 /** BAL-345 — human noun for the party type carried in `data.partyType`. */
@@ -1280,6 +1303,35 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `An update on your request to join the ${noun}`,
+    };
+  },
+
+  // BAL-594 — Balo staff changed a party's domains; owners and admins are told, never the staffer.
+  'party-domain-added': (data) => {
+    const { partyName, domain, domainsUrl } = partyDomainCopyInputs(data, 'added');
+    return {
+      component: React.createElement(PartyDomainAddedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        partyName,
+        domain,
+        domainsUrl,
+        baseUrl: BASE_URL,
+      }),
+      subject: `We've added ${domain} to ${partyName}`,
+    };
+  },
+
+  'party-domain-removed': (data) => {
+    const { partyName, domain, domainsUrl } = partyDomainCopyInputs(data, 'removed');
+    return {
+      component: React.createElement(PartyDomainRemovedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        partyName,
+        domain,
+        domainsUrl,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${domain} is no longer linked to ${partyName}`,
     };
   },
 

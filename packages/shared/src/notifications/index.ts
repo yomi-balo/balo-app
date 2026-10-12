@@ -1804,3 +1804,26 @@ export interface ProjectRequestOwnerAssignedPayload {
   title: string;
   clientCompanyName: string;
 }
+
+/**
+ * BAL-594 — Balo staff added or removed a domain on a company or agency. Recipient is the
+ * party's owners and admins (`party_admins`, resolved from `partyType` + `partyId`).
+ *
+ * ⚠ NO ACTOR AND NO `userId`: `payload.userId` drives the generic `data.user` hydration and the
+ * `self` recipient path, so a staffer id under that key would target the staffer. The copy
+ * never names who made the change.
+ *
+ * `partyName` and `domain` are snapshotted so the copy is stable if either changes later.
+ * `correlationId` is the per-write `party_domains` row id (a uuid, COLON-FREE): the NEW row on
+ * add, the REMOVED row on remove. A reassign publishes both events, one per party, each keyed on
+ * its own row — never on the domain string, which a later re-add would collide with.
+ */
+export interface PartyDomainChangedPayload {
+  correlationId: string;
+  partyType: 'company' | 'agency';
+  partyId: string;
+  partyName: string;
+  domain: string;
+}
+export type PartyDomainAddedPayload = PartyDomainChangedPayload; // correlationId = the new row id
+export type PartyDomainRemovedPayload = PartyDomainChangedPayload; // correlationId = the removed row id

@@ -325,6 +325,25 @@ describe('resolveContext', () => {
       }
     );
 
+    it.each(['party.domain_added', 'party.domain_removed'] as const)(
+      'hydrates data.partyAdminUserIds for %s without a payload.userId',
+      async (event) => {
+        mockListAdminUserIds.mockResolvedValue(['admin-1']);
+
+        const context = await resolveContext(event, {
+          correlationId: 'corr-1',
+          partyType: 'agency',
+          partyId: 'party-9',
+          partyName: 'CloudPeak',
+          domain: 'cloudpeak.io',
+        });
+
+        expect(mockListAdminUserIds).toHaveBeenCalledWith('agency', 'party-9');
+        expect(context.data.partyAdminUserIds).toEqual(['admin-1']);
+        expect(context.data.user).toBeUndefined();
+      }
+    );
+
     it('does NOT hydrate partyAdminUserIds for the self-facing approved/declined events', async () => {
       mockFindById.mockResolvedValue({ id: 'req-1', firstName: 'Re' });
 

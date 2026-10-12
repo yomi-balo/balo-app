@@ -743,6 +743,24 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('BAL-594 staff party-domain changes', () => {
+    it.each([
+      ['party.domain_added', 'party-domain-added'],
+      ['party.domain_removed', 'party-domain-removed'],
+    ] as const)('%s notifies party_admins via email + in-app, no SMS', (event, template) => {
+      const rules = notificationRules[event];
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('party_admins');
+        expect(rule.template).toBe(template);
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+  });
+
   describe('BAL-345 domain auto-join', () => {
     it('member_joined_via_domain notifies party_admins in-app ONLY (low-signal FYI)', () => {
       const rules = notificationRules['party.member_joined_via_domain'];

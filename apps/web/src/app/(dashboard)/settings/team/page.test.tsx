@@ -12,6 +12,7 @@ const {
   mockFindNames,
   mockRedirect,
   mockNotFound,
+  mockLogError,
 } = vi.hoisted(() => ({
   mockGetCurrentUser: vi.fn(),
   mockHasCapability: vi.fn(),
@@ -27,9 +28,11 @@ const {
   mockNotFound: vi.fn(() => {
     throw new Error('NOT_FOUND');
   }),
+  mockLogError: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({ redirect: mockRedirect, notFound: mockNotFound }));
+vi.mock('@/lib/logging', () => ({ log: { error: mockLogError } }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/authz', () => ({
   hasCapability: mockHasCapability,
@@ -37,7 +40,7 @@ vi.mock('@/lib/authz', () => ({
 }));
 vi.mock('@balo/db', () => ({
   companiesRepository: { findById: mockFindById },
-  partyDomainsRepository: { listByPartyWithCreator: mockListDomains },
+  partyDomainsRepository: { listForPartySettings: mockListDomains },
   auditEventsRepository: { findLatestByEntityAndAction: mockFindLatest },
   partyJoinRequestsRepository: {
     listPendingByParty: mockListPending,
@@ -47,7 +50,7 @@ vi.mock('@balo/db', () => ({
 }));
 vi.mock('./_components/members-access-client', () => ({
   MembersAccessClient: ({ dto }: { dto: Record<string, unknown> }) => (
-    <div data-testid="shell">{`${dto.companyName}|${dto.mode}|${(dto.domains as unknown[]).length}|${dto.lastChangedByName}`}</div>
+    <div data-testid="shell">{`${dto.companyName}|${dto.mode}|${(dto.domains as unknown[] | null)?.length ?? 'error'}|${dto.lastChangedByName}`}</div>
   ),
 }));
 
@@ -125,6 +128,52 @@ describe('MembersAccessPage gating', () => {
     expect(shell).toHaveTextContent('request');
     expect(shell).toHaveTextContent('Jordan Ellis');
     expect(mockFindNames).toHaveBeenCalledWith(['u9']);
+  });
+
+  it('hands the client the projected domains only, with no staff identity', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'admin-1', companyId: COMPANY_ID });
+    mockHasCapability.mockResolvedValue(true);
+    mockFindById.mockResolvedValue({
+      id: COMPANY_ID,
+      name: 'Northwind',
+      isPersonal: false,
+      domainJoinMode: 'auto',
+    });
+    const projected = [{ id: 'd1', domain: 'northwind.com', attribution: { kind: 'balo' } }];
+    mockListDomains.mockResolvedValue(projected);
+    mockFindLatest.mockResolvedValue(undefined);
+    mockListPending.mockResolvedValue([]);
+    mockListResolved.mockResolvedValue([]);
+
+    const ui = await MembersAccessPage();
+
+    expect(mockListDomains).toHaveBeenCalledWith('company', COMPANY_ID);
+    const props = (ui as { props: { dto: { domains: unknown } } }).props;
+    expect(props.dto.domains).toBe(projected);
+    expect(JSON.stringify(props.dto.domains)).not.toMatch(/firstName|lastName|createdBy/);
+  });
+
+  it('degrades a failed domains read to domains: null and logs it, without failing the page', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'admin-1', companyId: COMPANY_ID });
+    mockHasCapability.mockResolvedValue(true);
+    mockFindById.mockResolvedValue({
+      id: COMPANY_ID,
+      name: 'Northwind',
+      isPersonal: false,
+      domainJoinMode: 'auto',
+    });
+    mockListDomains.mockRejectedValue(new Error('db down'));
+    mockFindLatest.mockResolvedValue(undefined);
+    mockListPending.mockResolvedValue([]);
+    mockListResolved.mockResolvedValue([]);
+
+    render(await MembersAccessPage());
+
+    expect(screen.getByTestId('shell')).toHaveTextContent('Northwind|auto|error|null');
+    expect(mockLogError).toHaveBeenCalledWith(
+      'Failed to load company domains for members & access',
+      expect.objectContaining({ companyId: COMPANY_ID, error: 'db down' })
+    );
   });
 
   it('leaves lastChangedByName null when the mode was never changed', async () => {

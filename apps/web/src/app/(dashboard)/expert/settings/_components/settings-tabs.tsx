@@ -16,7 +16,7 @@ import type {
   ProfileSettingsData,
   ApplicationCertWithRelations,
   CertificationsByCategory,
-  PartyDomainWithCreator,
+  PartyDomainForSettings,
 } from '@balo/db';
 
 // ── Main tabs (pill strip) ──────────────────────────────────────
@@ -27,14 +27,14 @@ const MAIN_TABS = [
   { key: 'payouts', label: 'Payouts', icon: CreditCard },
 ] as const;
 
-// BAL-347: the agency Domains tab is appended only for agency owners/admins.
+// BAL-347: the agency Domains tab is appended only for agency owners/admins whose agency has
+// at least one domain (or whose domains failed to load, so the tab's error state can show).
 const DOMAINS_TAB = { key: 'domains', label: 'Domains', icon: Globe } as const;
 
-/** Agency-domains payload threaded through only when the expert can manage an agency. */
+/** Agency-domains payload threaded through only when the Domains tab is shown. */
 export interface AgencyDomainsTabData {
-  agencyId: string;
   partyName: string;
-  domains: PartyDomainWithCreator[] | null;
+  domains: PartyDomainForSettings[] | null;
 }
 
 // ── Sub tabs (underline strip, under the Profile main tab) ──────
@@ -100,8 +100,8 @@ interface SettingsTabsProps {
   certCategories: CertificationsByCategory[] | null;
   initialPhone: string | null;
   phoneVerifiedAt: string | null;
-  /** BAL-347: present + true only for agency owners/admins (adds the Domains tab). */
-  canManageAgency: boolean;
+  /** True only when the Domains tab should appear (agency owner/admin with domains, or a load error). */
+  showDomainsTab: boolean;
   agencyDomains: AgencyDomainsTabData | null;
 }
 
@@ -115,13 +115,13 @@ export function SettingsTabs({
   certCategories,
   initialPhone,
   phoneVerifiedAt,
-  canManageAgency,
+  showDomainsTab,
   agencyDomains,
 }: Readonly<SettingsTabsProps>): React.JSX.Element {
   const [tab, setTab] = useState(defaultTab);
   const router = useRouter();
   const idBase = useId();
-  const mainTabs = canManageAgency ? [...MAIN_TABS, DOMAINS_TAB] : MAIN_TABS;
+  const mainTabs = showDomainsTab ? [...MAIN_TABS, DOMAINS_TAB] : MAIN_TABS;
 
   // Sync tab state when URL changes externally (browser back/forward, checklist click)
   useEffect(() => {
@@ -332,11 +332,7 @@ function TabPanelContent(props: Readonly<TabPanelContentProps>): React.JSX.Eleme
     if (!agencyDomains) return null;
     return (
       <div className={WIDE_PANEL_CLASSES}>
-        <AgencyDomainsTab
-          agencyId={agencyDomains.agencyId}
-          partyName={agencyDomains.partyName}
-          domains={agencyDomains.domains}
-        />
+        <AgencyDomainsTab partyName={agencyDomains.partyName} domains={agencyDomains.domains} />
       </div>
     );
   }

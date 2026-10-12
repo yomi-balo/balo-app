@@ -9,6 +9,7 @@ import {
   countsByFilter,
   filterByType,
   resolveApplicationTarget,
+  resolveDomainsTarget,
   resolveOpenTarget,
   selectionFromRecent,
   selectionFromResult,
@@ -103,6 +104,22 @@ describe('resolveApplicationTarget', () => {
       resolveApplicationTarget({ type: 'user', id: 'u1', expertApplicationReviewable: true })
     ).toBeNull();
   });
+});
+
+describe('resolveDomainsTarget', () => {
+  it.each(['company', 'agency'] as const)('resolves a Domains link for a %s', (type) => {
+    expect(resolveDomainsTarget({ type, id: 'p1' })).toEqual({
+      href: `/admin/domains/${type}/p1`,
+      label: 'Domains',
+    });
+  });
+
+  it.each(['user', 'expert', 'engagement', 'credit_session', 'project_request'] as const)(
+    'returns null for a %s',
+    (type) => {
+      expect(resolveDomainsTarget({ type, id: 'x1' })).toBeNull();
+    }
+  );
 });
 
 describe('filterByType / countsByFilter', () => {

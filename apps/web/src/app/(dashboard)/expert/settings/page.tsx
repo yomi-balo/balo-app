@@ -36,7 +36,7 @@ interface ExpertSettingsData {
   certCategories: CertificationsByCategory[] | null;
   phone: string | null;
   phoneVerifiedAt: string | null;
-  canManageAgency: boolean;
+  showDomainsTab: boolean;
   agencyDomains: AgencyDomainsTabData | null;
 }
 
@@ -48,7 +48,7 @@ const EMPTY_SETTINGS_DATA: ExpertSettingsData = {
   certCategories: null,
   phone: null,
   phoneVerifiedAt: null,
-  canManageAgency: false,
+  showDomainsTab: false,
   agencyDomains: null,
 };
 
@@ -101,7 +101,7 @@ async function loadExpertSettingsData(): Promise<ExpertSettingsData> {
     certCategories: certs,
     phone: userData?.phone ?? null,
     phoneVerifiedAt: userData?.phoneVerifiedAt?.toISOString() ?? null,
-    canManageAgency: agencyResult.canManageAgency,
+    showDomainsTab: agencyResult.showDomainsTab,
     agencyDomains: agencyResult.agencyDomains,
   };
 }
@@ -137,8 +137,8 @@ export default async function ExpertSettingsPage({
     });
   }
 
-  // A non-admin can't force the Domains tab via the URL — coerce it back to profile.
-  const resolvedTab = activeTab === 'domains' && !data.canManageAgency ? 'profile' : activeTab;
+  // A hidden Domains tab can't be forced via the URL — coerce it back to profile.
+  const resolvedTab = activeTab === 'domains' && !data.showDomainsTab ? 'profile' : activeTab;
 
   const hasReferenceData = data.languages.length > 0 || data.industries.length > 0;
 
@@ -161,7 +161,7 @@ export default async function ExpertSettingsPage({
         certCategories={data.certCategories}
         initialPhone={data.phone}
         phoneVerifiedAt={data.phoneVerifiedAt}
-        canManageAgency={data.canManageAgency}
+        showDomainsTab={data.showDomainsTab}
         agencyDomains={data.agencyDomains}
       />
     </div>

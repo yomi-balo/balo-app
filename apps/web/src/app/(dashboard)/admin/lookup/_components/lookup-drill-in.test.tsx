@@ -153,6 +153,21 @@ describe('LookupDrillIn — the Open-link matrix', () => {
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
   });
 
+  it.each(['company', 'agency'] as const)('BAL-594 — a %s renders a Domains link', (type) => {
+    render(<LookupDrillIn selection={selection({ type, id: 'p1' })} onTabSelect={vi.fn()} />);
+    expect(screen.getByRole('link', { name: 'Domains' })).toHaveAttribute(
+      'href',
+      `/admin/domains/${type}/p1`
+    );
+  });
+
+  it('BAL-594 — a user renders no Domains link', () => {
+    render(
+      <LookupDrillIn selection={selection({ type: 'user', id: 'u1' })} onTabSelect={vi.fn()} />
+    );
+    expect(screen.queryByRole('link', { name: 'Domains' })).not.toBeInTheDocument();
+  });
+
   it('BAL-593 — a reviewable expert application renders an Application link alongside Open when public', () => {
     render(
       <LookupDrillIn

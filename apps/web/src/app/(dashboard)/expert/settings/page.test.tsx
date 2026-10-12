@@ -95,7 +95,7 @@ beforeEach(() => {
   mockGetIndustries.mockResolvedValue([{ id: 'i1', name: 'Retail', extra: 'dropped' }]);
   mockGetCerts.mockResolvedValue([]);
   mockFindUser.mockResolvedValue({ phone: '+61400000000', phoneVerifiedAt: null });
-  mockResolveAgencyDomainsTab.mockResolvedValue({ canManageAgency: false, agencyDomains: null });
+  mockResolveAgencyDomainsTab.mockResolvedValue({ showDomainsTab: false, agencyDomains: null });
 });
 
 describe('ExpertSettingsPage — chrome', () => {
@@ -140,23 +140,35 @@ describe('ExpertSettingsPage — tab + setup params', () => {
     expect(lastProps(tabsProps).defaultTab).toBe(expected);
   });
 
-  it('coerces Domains back to Profile for an expert who cannot manage an agency', async () => {
+  it('coerces Domains back to Profile when the Domains tab is hidden', async () => {
     await renderPage({ tab: 'domains' });
     expect(lastProps(bannerProps).activeTab).toBe('profile');
-    expect(lastProps(tabsProps)).toMatchObject({ defaultTab: 'profile', canManageAgency: false });
+    expect(lastProps(tabsProps)).toMatchObject({ defaultTab: 'profile', showDomainsTab: false });
   });
 
-  it('keeps Domains for an agency owner/admin', async () => {
-    const agencyDomains = { agencyId: 'a1', partyName: 'Lattice', domains: [] };
+  it('coerces Domains back to Profile for an agency admin whose agency has no domains', async () => {
     mockFindProfile.mockResolvedValue({ agencyId: 'a1' });
-    mockResolveAgencyDomainsTab.mockResolvedValue({ canManageAgency: true, agencyDomains });
+    mockResolveAgencyDomainsTab.mockResolvedValue({
+      showDomainsTab: false,
+      agencyDomains: { partyName: 'Lattice', domains: [] },
+    });
+    await renderPage({ tab: 'domains' });
+
+    expect(lastProps(bannerProps).activeTab).toBe('profile');
+    expect(lastProps(tabsProps)).toMatchObject({ defaultTab: 'profile', showDomainsTab: false });
+  });
+
+  it('keeps Domains when the Domains tab is shown', async () => {
+    const agencyDomains = { partyName: 'Lattice', domains: [] };
+    mockFindProfile.mockResolvedValue({ agencyId: 'a1' });
+    mockResolveAgencyDomainsTab.mockResolvedValue({ showDomainsTab: true, agencyDomains });
     await renderPage({ tab: 'domains' });
 
     expect(mockResolveAgencyDomainsTab).toHaveBeenCalledWith(EXPERT_USER, 'a1');
     expect(lastProps(bannerProps).activeTab).toBe('domains');
     expect(lastProps(tabsProps)).toMatchObject({
       defaultTab: 'domains',
-      canManageAgency: true,
+      showDomainsTab: true,
       agencyDomains,
     });
   });
@@ -226,7 +238,7 @@ describe('ExpertSettingsPage — settings data', () => {
       profileData: null,
       referenceData: null,
       initialPhone: null,
-      canManageAgency: false,
+      showDomainsTab: false,
     });
   });
 

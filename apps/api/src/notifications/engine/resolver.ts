@@ -9,6 +9,14 @@ import {
 import { personWithOrgLabel } from '@balo/shared/parties';
 import type { RuleContext } from './rules.js';
 
+/** Events whose recipients are the party's owners and admins (`data.partyAdminUserIds`). */
+const PARTY_ADMIN_FANOUT_EVENTS: ReadonlySet<string> = new Set([
+  'party.member_joined_via_domain',
+  'party.join_request_created',
+  'party.domain_added',
+  'party.domain_removed',
+]);
+
 /**
  * Events whose rules include an `admin_users` fan-out (dispatcher resolves it from
  * `data.adminUserIds`): the BAL-289 "raise invoice" nudge, the BAL-323 "ready to
@@ -284,12 +292,12 @@ export async function resolveContext(
     data.adminUserIds = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
   }
 
-  // BAL-345: the two admin-facing domain-join events fan out to the party's admin
+  // BAL-345 / BAL-594: the admin-facing party events fan out to the party's admin
   // (MANAGE_MEMBERS) members. `data.user` (the joiner/requester) is already
   // hydrated above from payload.userId — no requesterUserId/joinedUserId special
   // case needed. listAdminUserIds derives the admin-role set from the pure authz
   // map (never a hardcoded role IN (...)), so a base-member joiner is excluded.
-  if (event === 'party.member_joined_via_domain' || event === 'party.join_request_created') {
+  if (PARTY_ADMIN_FANOUT_EVENTS.has(event)) {
     const partyType = payload.partyType;
     const partyId = payload.partyId;
     if ((partyType === 'company' || partyType === 'agency') && typeof partyId === 'string') {

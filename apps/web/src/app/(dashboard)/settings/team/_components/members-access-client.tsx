@@ -1,7 +1,7 @@
 'use client';
 
 import type {
-  PartyDomainWithCreator,
+  PartyDomainForSettings,
   PendingJoinRequestRow,
   ResolvedJoinRequestRow,
 } from '@balo/db';
@@ -13,7 +13,7 @@ import { JoinRequestsSection } from './join-requests-section';
 export interface MembersAccessDto {
   companyId: string;
   companyName: string;
-  domains: PartyDomainWithCreator[];
+  domains: PartyDomainForSettings[] | null;
   mode: 'auto' | 'request' | 'off';
   lastChangedByName: string | null;
   lastChangedAt: Date | null;
@@ -34,12 +34,7 @@ export function MembersAccessClient({
     <div className="mx-auto max-w-3xl">
       <PartyHeader companyName={dto.companyName} />
       <div className="flex flex-col gap-4">
-        <DomainsSection
-          party="company"
-          partyId={dto.companyId}
-          partyName={dto.companyName}
-          domains={dto.domains}
-        />
+        <DomainsSection party="company" partyName={dto.companyName} domains={dto.domains} />
         <JoinModeSection
           companyId={dto.companyId}
           initialMode={dto.mode}

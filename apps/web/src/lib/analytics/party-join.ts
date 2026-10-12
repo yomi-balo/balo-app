@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { PartyDomainSource, PartyType } from '@balo/db';
 import {
   trackServerAndFlush,
   PARTY_JOIN_SERVER_EVENTS,
@@ -15,8 +16,6 @@ import {
  * NB none of these are client events, so there is NO change to the
  * `vi.mock('@/lib/analytics')` client-export list in `apps/web/src/test/setup.ts`.
  */
-
-type PartyType = 'company' | 'agency';
 
 /** A verified domain matched a shareable party (any of the 4 matched outcomes). */
 export function emitSignupDomainMatched(
@@ -76,10 +75,10 @@ export function emitDomainJoinOptedOut(path: 'auto' | 'request', userId: string)
 }
 
 /**
- * BAL-347 admin settings surface. An admin explicitly ADDED a domain (source is
- * always 'admin_added'). Fired post-commit from the add-domain Server Action on a
- * `captured` outcome only. (The former signup auto-capture CAPTURED event was
- * retired in BAL-369 — the corporate domain claim now happens at onboarding Intent.)
+ * Balo staff ADDED a domain (source is always 'admin_added'). Fired post-commit from the
+ * staff add-domain Server Action on an `added` outcome only. (The former signup auto-capture
+ * CAPTURED event was retired in BAL-369 — the corporate domain claim now happens at
+ * onboarding Intent.)
  */
 export function emitPartyDomainAdded(
   partyType: PartyType,
@@ -93,15 +92,39 @@ export function emitPartyDomainAdded(
   });
 }
 
-/** BAL-347. An admin soft-removed a domain (fired post-commit on a `removed` outcome). */
-export function emitPartyDomainRemoved(partyType: PartyType, userId: string): void {
+/**
+ * Balo staff soft-removed a domain (fired post-commit on a `removed` outcome). `source` is
+ * the removed row's source.
+ */
+export function emitPartyDomainRemoved(
+  partyType: PartyType,
+  source: PartyDomainSource,
+  userId: string
+): void {
   trackServerAndFlush(PARTY_DOMAIN_SERVER_EVENTS.REMOVED, {
     party_type: partyType,
+    source,
     distinct_id: userId,
   });
 }
 
-/** BAL-347 (company only). An admin changed the domain join mode (fired only when it changed). */
+/**
+ * Balo staff moved a domain from one party to another (fired post-commit on a `reassigned`
+ * outcome). The only event a reassign emits — never alongside added/removed.
+ */
+export function emitPartyDomainReassigned(
+  fromPartyType: PartyType,
+  toPartyType: PartyType,
+  userId: string
+): void {
+  trackServerAndFlush(PARTY_DOMAIN_SERVER_EVENTS.REASSIGNED, {
+    from_party_type: fromPartyType,
+    to_party_type: toPartyType,
+    distinct_id: userId,
+  });
+}
+
+/** BAL-347 (company only). A party admin changed the domain join mode (fired only when it changed). */
 export function emitDomainJoinModeChanged(
   from: 'auto' | 'request' | 'off',
   to: 'auto' | 'request' | 'off',

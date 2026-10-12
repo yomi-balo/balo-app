@@ -1128,14 +1128,14 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
   });
 
   it('LENGTH: the full axis is ACCEPTED — the bound has real slack above it', async () => {
-    // ⚠ 19 is `Object.keys(PLATFORM_CAPABILITIES).length` at BAL-558 and the CHECK does NOT
+    // ⚠ 20 is `Object.keys(PLATFORM_CAPABILITIES).length` at BAL-594 and the CHECK does NOT
     // track it. Until fix round 3 (R8) the bound WAS 17 (the count at the time), so an 18th
     // platform token would have made this exact write fail with a mystifying 23514 — a silent
     // migration obligation on every new token. 64 is deliberate slack so that stops being true.
     // If the axis ever exceeds 64, the fix is a MIGRATION bumping the bound, not a smaller
     // fixture here.
     const user = await userFactory({ platformRole: 'super_admin' });
-    expect(FULL_AXIS).toHaveLength(19);
+    expect(FULL_AXIS).toHaveLength(20);
 
     await db
       .update(users)
