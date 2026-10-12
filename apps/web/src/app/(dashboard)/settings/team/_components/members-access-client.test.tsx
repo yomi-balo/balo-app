@@ -48,10 +48,13 @@ describe('MembersAccessClient', () => {
     expect(screen.getByText(/you're all caught up/i)).toBeInTheDocument();
   });
 
-  it('hides the Domains card for a company with no domains but keeps the other sections', () => {
+  it('shows the support invitation for a company with no domains and keeps the other sections', () => {
     render(<MembersAccessClient dto={makeDto({ domains: [] })} />);
 
-    expect(screen.queryByRole('heading', { name: 'Domains' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Domains' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Want teammates with your work email to join automatically\?/)
+    ).toBeInTheDocument();
     expect(screen.getByRole('radiogroup', { name: /join mode/i })).toBeInTheDocument();
   });
 

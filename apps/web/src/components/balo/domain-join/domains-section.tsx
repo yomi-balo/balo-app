@@ -24,8 +24,8 @@ const SUPPORT_MAILTO = 'mailto:support@getbalo.com';
 
 /**
  * The read-only Domains section shared by the company and agency surfaces. Balo staff are the
- * only writers (BAL-594), so there is no add or remove control here: a zero-domain party renders
- * nothing (a party that cannot act on an empty list has nothing to invite), a load error renders
+ * only writers (BAL-594), so there is no add or remove control here: a zero-domain company renders
+ * an invitation to contact support, a zero-domain agency renders nothing, a load error renders
  * the error state with a retry, and otherwise the list ends with a "contact support" line for
  * anyone who needs another domain.
  */
@@ -44,7 +44,23 @@ export function DomainsSection({
       </SectionCard>
     );
   }
-  if (domains.length === 0) return null;
+  if (domains.length === 0) {
+    if (party === 'agency') return null;
+    return (
+      <SectionCard title="Domains" description={DESCRIPTION[party]}>
+        <p className="text-muted-foreground text-[13px] leading-relaxed">
+          Want teammates with your work email to join automatically?{' '}
+          <a
+            href={SUPPORT_MAILTO}
+            className="text-primary focus-visible:ring-ring rounded font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
+          >
+            Contact Balo support
+          </a>{' '}
+          and we&apos;ll add your domain.
+        </p>
+      </SectionCard>
+    );
+  }
 
   const seenNames = new Set<string>();
   return (

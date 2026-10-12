@@ -36,9 +36,17 @@ describe('party domain ownership emails render', () => {
 
   it('added email carries the copy and the CTA', async () => {
     const html = await render(PartyDomainAddedEmail(props));
-    expect(html).toContain('New teammates with a northwind.co.nz email can now join.');
+    expect(html).toContain(
+      'New teammates with a northwind.co.nz email can now join, based on your join setting.'
+    );
     expect(html).toContain('View domains');
     expect(html).toContain('/settings/team');
+  });
+
+  it('agency added email keeps the unconditional join copy', async () => {
+    const html = await render(PartyDomainAddedEmail({ ...props, partyType: 'agency' }));
+    expect(html).toContain('New teammates with a northwind.co.nz email can now join.');
+    expect(html).not.toContain('based on your join setting');
   });
 
   it('removed email carries the copy', async () => {
@@ -49,6 +57,15 @@ describe('party domain ownership emails render', () => {
 });
 
 describe('getEmailTemplate — party domain events', () => {
+  it('added email body carries the join-setting caveat for a company only', async () => {
+    const company = await render(getEmailTemplate('party-domain-added', data).component);
+    expect(company).toContain('based on your join setting.');
+    const agency = await render(
+      getEmailTemplate('party-domain-added', { ...data, partyType: 'agency' }).component
+    );
+    expect(agency).not.toContain('based on your join setting');
+  });
+
   it('added subject names the domain and party', () => {
     expect(getEmailTemplate('party-domain-added', data).subject).toBe(
       "We've added northwind.co.nz to Northwind Industrial"
@@ -94,9 +111,15 @@ describe('getInAppTemplate — party domain events', () => {
   it('added', () => {
     expect(getInAppTemplate('party-domain-added', data)).toEqual({
       title: 'Domain added',
-      body: "We've added northwind.co.nz to Northwind Industrial. New teammates with a northwind.co.nz email can now join.",
+      body: "We've added northwind.co.nz to Northwind Industrial. New teammates with a northwind.co.nz email can now join, based on your join setting.",
       actionUrl: '/settings/team',
     });
+  });
+
+  it('added, agency body keeps the unconditional join copy', () => {
+    expect(getInAppTemplate('party-domain-added', { ...data, partyType: 'agency' }).body).toBe(
+      "We've added northwind.co.nz to Northwind Industrial. New teammates with a northwind.co.nz email can now join."
+    );
   });
 
   it('removed, agency deep link', () => {

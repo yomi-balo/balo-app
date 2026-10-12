@@ -32,6 +32,7 @@ const OWNER: ConflictOwnerView = {
   partyName: 'Globex',
   memberCount: 4,
   source: 'auto_captured',
+  addedVia: 'signup',
   createdAt: '2026-10-03T08:00:00.000Z',
   createdByName: 'Dana Lee',
 };

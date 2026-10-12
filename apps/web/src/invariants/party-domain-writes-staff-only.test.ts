@@ -12,7 +12,8 @@ import { codeLinesOf, memberNamesOf, resolveRouteDir, scanRouteSources } from '.
  *  (b) the staff repository's WRITE members (`addDomain` / `removeDomain` / `reassignDomain`)
  *      are referenced only from `admin/domains/_actions/`. The staff page reads the same
  *      repository (`getPartyForStaff` / `listForStaff`), so the scan is scoped to the writes;
- *  (c) the customer repository (`party-domains.ts`) exposes no `addDomain` / `removeDomain`.
+ *  (c) the customer repository (`party-domains.ts`) exposes no `addDomain` / `removeDomain`;
+ *  (d) no web source file calls `partyDomainsRepository.capture`.
  *
  * Source-text scans, no regex (`_source-scan.ts`). The non-vacuity tests pin that the scan saw
  * the tree and found the staff actions directory.
@@ -71,6 +72,16 @@ describe('invariant: party_domains has no party-side write path (BAL-594)', () =
       'const r = await partyDomainsStaffRepository.reassignDomain({});\n// partyDomainsStaffRepository.addDomain(\n'
     );
     expect(memberNamesOf(sample, 'partyDomainsStaffRepository')).toEqual(['reassignDomain']);
+  });
+
+  it('(d) no web source file calls partyDomainsRepository.capture (signup capture lives in @balo/db)', () => {
+    const offenders = all
+      .filter((file) => memberNamesOf(file.code, 'partyDomainsRepository').includes('capture'))
+      .map((file) => file.rel);
+    expect(
+      offenders,
+      `These files call partyDomainsRepository.capture from apps/web:\n  ${offenders.join('\n  ')}`
+    ).toEqual([]);
   });
 
   it('(c) the customer party-domains repository exposes no addDomain or removeDomain', () => {

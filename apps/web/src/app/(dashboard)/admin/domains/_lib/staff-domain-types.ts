@@ -14,6 +14,7 @@ export interface ConflictOwnerView {
   partyName: string;
   memberCount: number;
   source: PartyDomainSource;
+  addedVia: StaffDomainAddedVia;
   createdAt: string;
   createdByName: string | null;
 }

@@ -924,3 +924,255 @@ describe('auditEventsRepository.listTrailForEntity', () => {
     ).resolves.toBeDefined();
   });
 });
+
+/**
+ * The company/agency party-domain arm: `party_domain` rows are keyed by the DOMAIN row's id,
+ * so `listTrailForEntity` matches them on `metadata.partyType` + `metadata.partyId` when the
+ * caller passes `partyDomainsOf`. Metadata mirrors the writers' shapes
+ * (`party-domains.ts` capture, `party-domains-staff.ts` add/remove/reassign).
+ */
+describe('auditEventsRepository.listTrailForEntity — party-domain arm', () => {
+  async function recordDomainRow(input: {
+    action: string;
+    partyType: 'company' | 'agency';
+    partyId: string;
+    domain: string;
+    extra?: Record<string, unknown>;
+  }): Promise<AuditEvent> {
+    return auditEventsRepository.record(
+      {
+        actorUserId: null,
+        action: input.action,
+        entityType: 'party_domain',
+        entityId: randomUUID(),
+        metadata: {
+          partyType: input.partyType,
+          partyId: input.partyId,
+          domain: input.domain,
+          source: 'admin_added',
+          reason: 'Verified',
+          ...input.extra,
+        },
+      },
+      db
+    );
+  }
+
+  async function recordOwnRow(
+    entityType: string,
+    entityId: string,
+    action: string
+  ): Promise<AuditEvent> {
+    return auditEventsRepository.record({ actorUserId: null, action, entityType, entityId }, db);
+  }
+
+  it.each(['company', 'agency'] as const)(
+    'the %s Timeline includes its own domain rows and excludes every other party’s',
+    async (partyType) => {
+      const partyId = randomUUID();
+      const otherPartyId = randomUUID();
+      const otherType = partyType === 'company' ? 'agency' : 'company';
+
+      const own = await recordOwnRow(partyType, partyId, `${partyType}.probe`);
+      const captured = await recordDomainRow({
+        action: 'party_domain.captured',
+        partyType,
+        partyId,
+        domain: 'mine.example',
+      });
+      const added = await recordDomainRow({
+        action: 'party_domain.staff_added',
+        partyType,
+        partyId,
+        domain: 'added.example',
+      });
+      // Same party type, different party.
+      await recordDomainRow({
+        action: 'party_domain.staff_added',
+        partyType,
+        partyId: otherPartyId,
+        domain: 'theirs.example',
+      });
+      // Same party id, the OTHER party type — never a match.
+      await recordDomainRow({
+        action: 'party_domain.staff_added',
+        partyType: otherType,
+        partyId,
+        domain: 'crosstype.example',
+      });
+      // Metadata naming this party on a NON-party_domain row — never a match.
+      await auditEventsRepository.record(
+        {
+          actorUserId: null,
+          action: 'internal_note.created',
+          entityType: 'internal_note',
+          entityId: randomUUID(),
+          metadata: { partyType, partyId },
+        },
+        db
+      );
+
+      const page = await auditEventsRepository.listTrailForEntity({
+        entityType: partyType,
+        entityId: partyId,
+        partyDomainsOf: partyType,
+        limit: 25,
+        authorizedPlatformStaff: true,
+      });
+      // Mutation: drop the partyId (or partyType) predicate from the arm ⇒ extra rows appear.
+      expect(page.rows.map((r) => r.id)).toEqual([own.id, captured.id, added.id]);
+    }
+  );
+
+  it('without partyDomainsOf, a company Timeline reads only its own rows', async () => {
+    const partyId = randomUUID();
+    const own = await recordOwnRow('company', partyId, 'company.probe');
+    await recordDomainRow({
+      action: 'party_domain.staff_added',
+      partyType: 'company',
+      partyId,
+      domain: 'acme.example',
+    });
+
+    const page = await auditEventsRepository.listTrailForEntity({
+      entityType: 'company',
+      entityId: partyId,
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+    expect(page.rows.map((r) => r.id)).toEqual([own.id]);
+  });
+
+  it('pages gap-free across interleaved own and domain rows, other parties excluded', async () => {
+    const partyId = randomUUID();
+    const expected: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      expected.push((await recordOwnRow('company', partyId, `company.probe_${i}`)).id);
+      expected.push(
+        (
+          await recordDomainRow({
+            action: 'party_domain.staff_added',
+            partyType: 'company',
+            partyId,
+            domain: `d${i}.example`,
+          })
+        ).id
+      );
+      await recordDomainRow({
+        action: 'party_domain.staff_added',
+        partyType: 'company',
+        partyId: randomUUID(),
+        domain: `other${i}.example`,
+      });
+    }
+
+    const olderPages: string[][] = [];
+    let before: AuditTrailCursor | undefined;
+    let hasEarlier = true;
+    let guard = 0;
+    while (hasEarlier) {
+      guard += 1;
+      if (guard > 10) throw new Error('pagination did not terminate');
+      const page = await auditEventsRepository.listTrailForEntity({
+        entityType: 'company',
+        entityId: partyId,
+        partyDomainsOf: 'company',
+        limit: 3,
+        before,
+        authorizedPlatformStaff: true,
+      });
+      olderPages.unshift(page.rows.map((r) => r.id));
+      hasEarlier = page.hasEarlier;
+      before = page.earlierCursor ?? undefined;
+    }
+    // Every row shares this test transaction's created_at, so the order is `seq` — insertion.
+    expect(olderPages.flat()).toEqual(expected);
+  });
+
+  it('names the other party on both sides of a reassignment', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const agency = await agencyFactory({ name: 'CloudPeak' });
+
+    const removed = await recordDomainRow({
+      action: 'party_domain.staff_removed',
+      partyType: 'agency',
+      partyId: agency.id,
+      domain: 'acme.example',
+      extra: { reassignedTo: { partyType: 'company', partyId: company.id } },
+    });
+    const added = await recordDomainRow({
+      action: 'party_domain.staff_added',
+      partyType: 'company',
+      partyId: company.id,
+      domain: 'acme.example',
+      extra: { reassignedFrom: { partyType: 'agency', partyId: agency.id } },
+    });
+    const plain = await recordDomainRow({
+      action: 'party_domain.staff_added',
+      partyType: 'company',
+      partyId: company.id,
+      domain: 'plain.example',
+    });
+    const dangling = await recordDomainRow({
+      action: 'party_domain.staff_added',
+      partyType: 'company',
+      partyId: company.id,
+      domain: 'dangling.example',
+      extra: { reassignedFrom: { partyType: 'agency', partyId: randomUUID() } },
+    });
+    const malformed = await recordDomainRow({
+      action: 'party_domain.staff_added',
+      partyType: 'company',
+      partyId: company.id,
+      domain: 'malformed.example',
+      extra: { reassignedFrom: { partyType: 'agency', partyId: 'not-a-uuid' } },
+    });
+
+    const companyPage = await auditEventsRepository.listTrailForEntity({
+      entityType: 'company',
+      entityId: company.id,
+      partyDomainsOf: 'company',
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+    const names = new Map(companyPage.rows.map((r) => [r.id, r.relatedPartyName]));
+    expect(names.get(added.id)).toBe('CloudPeak');
+    expect(names.get(plain.id)).toBeNull();
+    expect(names.get(dangling.id)).toBeNull();
+    expect(names.get(malformed.id)).toBeNull();
+
+    const agencyPage = await auditEventsRepository.listTrailForEntity({
+      entityType: 'agency',
+      entityId: agency.id,
+      partyDomainsOf: 'agency',
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+    expect(agencyPage.rows.map((r) => [r.id, r.relatedPartyName])).toEqual([
+      [removed.id, 'Northwind Industrial'],
+    ]);
+  });
+
+  it('a non-party_domain row carrying reassign-shaped metadata resolves no name', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const entityId = randomUUID();
+    await auditEventsRepository.record(
+      {
+        actorUserId: null,
+        action: 'company.probe',
+        entityType: 'company',
+        entityId,
+        metadata: { reassignedFrom: { partyType: 'company', partyId: company.id } },
+      },
+      db
+    );
+    const page = await auditEventsRepository.listTrailForEntity({
+      entityType: 'company',
+      entityId,
+      partyDomainsOf: 'company',
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+    expect(page.rows.map((r) => r.relatedPartyName)).toEqual([null]);
+  });
+});

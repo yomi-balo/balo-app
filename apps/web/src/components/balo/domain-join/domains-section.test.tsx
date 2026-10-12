@@ -20,11 +20,24 @@ function domain(over: Partial<PartyDomainForSettings>): PartyDomainForSettings {
 }
 
 describe('DomainsSection', () => {
-  it('renders nothing for a party with no domains', () => {
+  it('renders nothing for an agency with no domains', () => {
     const { container } = render(
-      <DomainsSection party="company" partyName="Northwind" domains={[]} />
+      <DomainsSection party="agency" partyName="Lattice" domains={[]} />
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('invites a company with no domains to contact support', () => {
+    render(<DomainsSection party="company" partyName="Northwind" domains={[]} />);
+
+    expect(screen.getByRole('heading', { name: 'Domains' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Want teammates with your work email to join automatically\?/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Contact Balo support' })).toHaveAttribute(
+      'href',
+      'mailto:support@getbalo.com'
+    );
   });
 
   it('renders the error state and retries via a router refresh when the read failed', async () => {

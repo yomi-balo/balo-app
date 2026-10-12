@@ -80,6 +80,71 @@ describe('loadLookupTimeline — the type -> audit-entity-type mapping (C7)', ()
   });
 });
 
+describe('loadLookupTimeline — the party-domain arm', () => {
+  it.each([
+    ['company', 'company'],
+    ['agency', 'agency'],
+  ] as const)('the %s Timeline also reads that party’s domain rows', async (type, partyType) => {
+    mockListTrailForEntity.mockResolvedValue({ rows: [], hasEarlier: false, earlierCursor: null });
+    await loadLookupTimeline(user(), { type, id: 'p1' });
+    expect(mockListTrailForEntity).toHaveBeenCalledWith(
+      expect.objectContaining({ entityType: type, entityId: 'p1', partyDomainsOf: partyType })
+    );
+  });
+
+  it.each(['user', 'expert', 'project_request', 'engagement', 'credit_session'] as const)(
+    'the %s Timeline has no party-domain arm',
+    async (type) => {
+      mockListTrailForEntity.mockResolvedValue({
+        rows: [],
+        hasEarlier: false,
+        earlierCursor: null,
+      });
+      await loadLookupTimeline(user(), { type, id: 'x1' });
+      const call = mockListTrailForEntity.mock.calls[0]?.[0];
+      expect(call.partyDomainsOf).toBeUndefined();
+    }
+  );
+
+  it('a reassignment row names the other party from relatedPartyName, and the reason note', async () => {
+    mockListTrailForEntity.mockResolvedValue({
+      rows: [
+        {
+          id: 'row-d',
+          action: 'party_domain.staff_added',
+          createdAt: new Date('2026-06-02T10:15:30.000Z'),
+          createdAtPrecise: '2026-06-02 10:15:30.000789+00',
+          seq: 3,
+          metadata: {
+            partyType: 'company',
+            partyId: 'c1',
+            domain: 'acme.co.nz',
+            source: 'admin_added',
+            reason: 'Acquisition',
+            reassignedFrom: { partyType: 'agency', partyId: 'a1' },
+          },
+          actorUserId: 'user-1',
+          actorFirstName: 'MJ',
+          actorLastName: null,
+          actorPlatformRole: 'admin',
+          actorCompanyName: null,
+          actorAgencyName: null,
+          relatedPartyName: 'CloudPeak',
+        },
+      ],
+      hasEarlier: false,
+      earlierCursor: null,
+    });
+
+    const dto = await loadLookupTimeline(user(), { type: 'company', id: 'c1' });
+    expect(dto.ok).toBe(true);
+    if (!dto.ok) return;
+    expect(dto.entries[0]?.summary).toBe(
+      'Domain acme.co.nz moved here from CloudPeak — "Acquisition" — MJ @ Balo'
+    );
+  });
+});
+
 describe('loadLookupTimeline — the DTO projection', () => {
   it('carries no metadata and no actorUserId across the boundary', async () => {
     mockListTrailForEntity.mockResolvedValue({

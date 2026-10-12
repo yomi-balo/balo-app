@@ -45,11 +45,10 @@ const SEAL_ORDER_AS_SHIPPED: readonly string[] = [
   'manage_staff_capabilities',
   'manage_any_request_sourcing',
   'manage_any_kickoff_gate',
-  'manage_party_domains',
 ];
 
-/** Tokens appended to `PLATFORM_CAPABILITY_SEAL_ORDER` after BAL-558 shipped. Empty today. */
-const APPENDED_SINCE_BAL_558: readonly string[] = [];
+/** Tokens appended to `PLATFORM_CAPABILITY_SEAL_ORDER` after BAL-558 shipped, in append order. */
+const APPENDED_SINCE_BAL_558: readonly string[] = ['manage_party_domains'];
 
 const CAPABILITY_COMPARATOR = (a: string, b: string): number => a.localeCompare(b);
 

@@ -1,4 +1,5 @@
-import { and, asc, desc, eq, gte, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { isLookupUuid } from '@balo/shared/lookup';
 import { db } from '../client';
 import {
   agencies,
@@ -8,6 +9,7 @@ import {
   companyMembers,
   users,
   type AuditEvent,
+  type PartyType,
 } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
 import type { EngagementType } from './_shared/engagement-supertype';
@@ -76,6 +78,12 @@ export interface AuditTrailRow {
   readonly actorCompanyName: string | null;
   /** Oldest LIVE agency membership name for a non-staff actor, else null. */
   readonly actorAgencyName: string | null;
+  /**
+   * The name of the OTHER party on a `party_domain` reassignment row (`metadata.reassignedFrom`
+   * or `metadata.reassignedTo`), batch-resolved; null for every other row, or when that party
+   * no longer resolves.
+   */
+  readonly relatedPartyName: string | null;
 }
 
 export interface ListTrailForEntityInput {
@@ -83,6 +91,13 @@ export interface ListTrailForEntityInput {
   readonly entityId: string;
   readonly limit: number;
   readonly before?: AuditTrailCursor;
+  /**
+   * Also read `entity_type='party_domain'` rows whose `metadata.partyType` is this value and
+   * whose `metadata.partyId` is {@link entityId} — a company/agency Timeline's domain changes,
+   * which are keyed by the domain row's id rather than the party's. The caller resolves this
+   * from its own allow-list (`LOOKUP_PARTY_DOMAIN_PARTY_TYPE`), never from the wire.
+   */
+  readonly partyDomainsOf?: PartyType;
   /**
    * ⚠⚠ THE CALLER'S ASSERTION THAT IT HAS ALREADY RESOLVED
    * `PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN` (ADR-1029 / ADR-1035). Literal `true`, not
@@ -181,6 +196,84 @@ async function loadActorOrgNames(
     }
   }
   return byUser;
+}
+
+/** The `audit_events.entity_type` every party-domain writer records under. */
+const PARTY_DOMAIN_ENTITY_TYPE = 'party_domain';
+
+/**
+ * The Timeline's row scope: the entity's own rows, plus — for a company/agency — the
+ * `party_domain` rows whose metadata names that party. The first arm rides
+ * `audit_events_entity_idx` (entity_type, entity_id); the second rides its `entity_type` prefix
+ * and filters on metadata.
+ */
+function trailScope(input: ListTrailForEntityInput): SQL | undefined {
+  const ownRows = and(
+    eq(auditEvents.entityType, input.entityType),
+    eq(auditEvents.entityId, input.entityId)
+  );
+  if (input.partyDomainsOf === undefined) return ownRows;
+  return or(
+    ownRows,
+    and(
+      eq(auditEvents.entityType, PARTY_DOMAIN_ENTITY_TYPE),
+      sql`${auditEvents.metadata} ->> 'partyType' = ${input.partyDomainsOf}`,
+      sql`${auditEvents.metadata} ->> 'partyId' = ${input.entityId}`
+    )
+  );
+}
+
+interface PartyRefLike {
+  readonly partyType: PartyType;
+  readonly partyId: string;
+}
+
+/**
+ * The counterpart party on a `party_domain` reassignment row, or undefined. Metadata is
+ * `unknown` jsonb, so every field is narrowed, and a non-uuid id is dropped before it can reach
+ * a uuid-column `IN (…)`.
+ */
+function reassignmentCounterpart(entityType: string, metadata: unknown): PartyRefLike | undefined {
+  if (entityType !== PARTY_DOMAIN_ENTITY_TYPE) return undefined;
+  if (typeof metadata !== 'object' || metadata === null) return undefined;
+  const m = metadata as Record<string, unknown>;
+  const ref = m.reassignedFrom ?? m.reassignedTo;
+  if (typeof ref !== 'object' || ref === null) return undefined;
+  const { partyType, partyId } = ref as Record<string, unknown>;
+  if (partyType !== 'company' && partyType !== 'agency') return undefined;
+  if (typeof partyId !== 'string' || !isLookupUuid(partyId)) return undefined;
+  return { partyType, partyId };
+}
+
+/**
+ * One batched name read per party type for the page's reassignment counterparts. Soft-deleted
+ * agencies still resolve: this names a party in history, it does not offer it as live.
+ */
+async function loadPartyNames(refs: readonly PartyRefLike[]): Promise<Map<string, string>> {
+  const companyIds = [
+    ...new Set(refs.filter((r) => r.partyType === 'company').map((r) => r.partyId)),
+  ];
+  const agencyIds = [
+    ...new Set(refs.filter((r) => r.partyType === 'agency').map((r) => r.partyId)),
+  ];
+  const [companyRows, agencyRows] = await Promise.all([
+    companyIds.length === 0
+      ? []
+      : db
+          .select({ id: companies.id, name: companies.name })
+          .from(companies)
+          .where(inArray(companies.id, companyIds)),
+    agencyIds.length === 0
+      ? []
+      : db
+          .select({ id: agencies.id, name: agencies.name })
+          .from(agencies)
+          .where(inArray(agencies.id, agencyIds)),
+  ]);
+  const names = new Map<string, string>();
+  for (const row of companyRows) names.set(`company:${row.id}`, row.name);
+  for (const row of agencyRows) names.set(`agency:${row.id}`, row.name);
+  return names;
 }
 
 export const auditEventsRepository = {
@@ -357,6 +450,11 @@ export const auditEventsRepository = {
    * means). `seq` GAPS ARE EXPECTED AND CORRECT (docblock addition 4/4) — nothing here derives
    * a count from `max(seq)`.
    *
+   * `party_domain` ROWS ARE UNIONED IN for a company/agency, via `partyDomainsOf` (see
+   * {@link trailScope}): they are keyed by the domain row's id, so the second arm matches
+   * `metadata.partyType`/`metadata.partyId` instead. Both arms share the ONE `ORDER BY` and
+   * keyset predicate below, so paging across a mix of the two stays gap-free.
+   *
    * `engagement_milestone` ROWS ARE NOT UNIONED IN. They are keyed by MILESTONE id, so an
    * engagement's Timeline shows `engagement_milestone.reordered` (written with
    * `entityType: 'engagement'`) but not `added`/`completed`/`edited`/`removed`/`started`/
@@ -386,6 +484,7 @@ export const auditEventsRepository = {
          */
         createdAtPrecise: sql<string>`${auditEvents.createdAt}::text`,
         seq: auditEvents.seq,
+        entityType: auditEvents.entityType,
         metadata: auditEvents.metadata,
         actorUserId: auditEvents.actorUserId,
         actorFirstName: users.firstName,
@@ -397,8 +496,7 @@ export const auditEventsRepository = {
       .leftJoin(users, eq(users.id, auditEvents.actorUserId))
       .where(
         and(
-          eq(auditEvents.entityType, input.entityType),
-          eq(auditEvents.entityId, input.entityId),
+          trailScope(input),
           input.before === undefined ? undefined : auditTrailKeysetBefore(input.before)
         )
       )
@@ -420,11 +518,16 @@ export const auditEventsRepository = {
     const actorIds = [
       ...new Set(page.map((row) => row.actorUserId).filter((id): id is string => id !== null)),
     ];
-    const orgNames = await loadActorOrgNames(actorIds);
+    const counterparts = page.map((row) => reassignmentCounterpart(row.entityType, row.metadata));
+    const [orgNames, partyNames] = await Promise.all([
+      loadActorOrgNames(actorIds),
+      loadPartyNames(counterparts.filter((ref): ref is PartyRefLike => ref !== undefined)),
+    ]);
 
     return {
-      rows: page.map((row) => {
+      rows: page.map((row, index) => {
         const org = row.actorUserId === null ? undefined : orgNames.get(row.actorUserId);
+        const counterpart = counterparts[index];
         return {
           id: row.id,
           action: row.action,
@@ -438,6 +541,10 @@ export const auditEventsRepository = {
           actorPlatformRole: row.actorPlatformRole,
           actorCompanyName: org?.companyName ?? null,
           actorAgencyName: org?.agencyName ?? null,
+          relatedPartyName:
+            counterpart === undefined
+              ? null
+              : (partyNames.get(`${counterpart.partyType}:${counterpart.partyId}`) ?? null),
         };
       }),
       hasEarlier,

@@ -66,6 +66,7 @@ const OWNER = {
   partyName: 'Acme',
   memberCount: 3,
   source: 'auto_captured',
+  addedVia: 'signup',
   createdAt: new Date('2026-10-03T08:00:00.000Z'),
   createdBy: { firstName: 'Dana', lastName: 'Lee' },
 } as const;
@@ -104,6 +105,7 @@ describe('owner projection', () => {
       partyName: 'Acme',
       memberCount: 3,
       source: 'auto_captured',
+      addedVia: 'signup',
       createdAt: '2026-10-03T08:00:00.000Z',
       createdByName: 'Dana Lee',
     });

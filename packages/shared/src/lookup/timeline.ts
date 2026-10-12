@@ -40,6 +40,27 @@ export const LOOKUP_AUDIT_ENTITY_TYPE: Record<LookupEntityType, string> = {
   credit_session: 'credit_session',
 };
 
+/**
+ * The party-domain arm of the Timeline: which `party_domains.party_type` a Lookup entity's
+ * Timeline also reads `entity_type='party_domain'` audit rows for. Those rows are keyed by the
+ * DOMAIN row's id, not the party's, so the reader matches them on `metadata.partyType` +
+ * `metadata.partyId` instead. `null` ⇒ no party-domain arm.
+ *
+ * ⚠ A SECURITY ALLOW-LIST, like {@link LOOKUP_AUDIT_ENTITY_TYPE}: the party type is resolved
+ * server-side from the `LookupEntityType`, never taken from the wire. Exhaustive, so a new
+ * Lookup type fails tsc until it states whether it owns domains.
+ */
+export const LOOKUP_PARTY_DOMAIN_PARTY_TYPE: Record<LookupEntityType, 'company' | 'agency' | null> =
+  {
+    user: null,
+    expert: null,
+    company: 'company',
+    agency: 'agency',
+    project_request: null,
+    engagement: null,
+    credit_session: null,
+  };
+
 export interface AuditActorFacts {
   readonly firstName: string | null;
   readonly lastName: string | null;
@@ -125,6 +146,23 @@ function truncate(text: string, maxLength: number): string {
   return text.length > maxLength ? text.slice(0, maxLength) : text;
 }
 
+/** ` — "reason"` for a staff-written note, or `''` when there is none. */
+function reasonSuffix(m: Record<string, unknown>): string {
+  const reason = readString(m, 'reason', '').trim();
+  return reason === '' ? '' : ` — "${truncate(reason, 140)}"`;
+}
+
+/**
+ * The other party in a domain reassignment, named by the reader's batched lookup; falls back
+ * to "another company"/"another agency" when the name could not be resolved.
+ */
+function counterpartyLabel(ref: unknown, ctx: AuditSentenceContext): string {
+  if (ctx.relatedPartyName !== null && ctx.relatedPartyName !== undefined) {
+    return ctx.relatedPartyName;
+  }
+  return asRecord(ref).partyType === 'agency' ? 'another agency' : 'another company';
+}
+
 function capitalizeFirst(text: string): string {
   if (text.length === 0) return text;
   return text.charAt(0).toUpperCase() + text.slice(1);
@@ -162,7 +200,7 @@ function expertSearchabilitySourceLabel(source: string): string {
  * (`schema/audit-events.ts`), so a missing entry MUST degrade gracefully, never render
  * `undefined`.
  *
- * `party_domain.captured` ⇒ `Domain captured`: the LAST underscore-segment of the namespace
+ * `expert_payout.held` ⇒ `Payout held`: the LAST underscore-segment of the namespace
  * (before the first `.`) stands in for the entity name, joined with the tail's words. Not
  * `humanizeEnumLabel` from `platform-lookup.ts` — a different transform, and hoisting a
  * one-liner across packages is churn for no reuse.
@@ -190,7 +228,18 @@ export function humanizeActionTail(action: string): string {
  * `previous_bps`/`new_bps`; both are rendered WITHOUT the figure. `timeline.test.ts` pins this
  * as a property over the whole table.
  */
-export const AUDIT_ACTION_SENTENCES: Record<string, (m: Record<string, unknown>) => string> = {
+/**
+ * Row facts a sentence may need beyond its own metadata, resolved by the reader.
+ * `relatedPartyName` is the name of the other party in a party-domain reassignment.
+ */
+export interface AuditSentenceContext {
+  readonly relatedPartyName?: string | null;
+}
+
+export const AUDIT_ACTION_SENTENCES: Record<
+  string,
+  (m: Record<string, unknown>, ctx: AuditSentenceContext) => string
+> = {
   'user.workos_relinked': () => 'Sign-in identity re-linked',
 
   'impersonation.started': (m) =>
@@ -218,6 +267,29 @@ export const AUDIT_ACTION_SENTENCES: Record<string, (m: Record<string, unknown>)
     `Billing email changed from ${readString(m, 'previous_email')} to ${readString(m, 'new_email')}`,
   'company.promoted_to_organization': (m) =>
     `Promoted to an organization on ${readString(m, 'domain')}`,
+
+  // A party admin's self-serve add also wrote `captured`, told apart by `source: 'admin_added'`.
+  'party_domain.captured': (m) =>
+    m.source === 'admin_added'
+      ? `Added domain ${readString(m, 'domain')} in settings`
+      : `Domain ${readString(m, 'domain')} captured at signup`,
+  'party_domain.removed': (m) => `Removed domain ${readString(m, 'domain')} in settings`,
+  'party_domain.staff_added': (m, ctx) => {
+    const domain = readString(m, 'domain');
+    const head =
+      m.reassignedFrom === undefined
+        ? `Added domain ${domain}`
+        : `Domain ${domain} moved here from ${counterpartyLabel(m.reassignedFrom, ctx)}`;
+    return `${head}${reasonSuffix(m)}`;
+  },
+  'party_domain.staff_removed': (m, ctx) => {
+    const domain = readString(m, 'domain');
+    const head =
+      m.reassignedTo === undefined
+        ? `Removed domain ${domain}`
+        : `Domain ${domain} moved to ${counterpartyLabel(m.reassignedTo, ctx)}`;
+    return `${head}${reasonSuffix(m)}`;
+  },
 
   'agency.created': () => 'Agency created',
   'agency.ownership_transferred': () => 'Ownership transferred',
@@ -297,6 +369,8 @@ export function describeAuditEvent(input: {
   readonly action: string;
   readonly metadata: unknown;
   readonly actorLabel: string | null;
+  /** See {@link AuditSentenceContext.relatedPartyName}. */
+  readonly relatedPartyName?: string | null;
 }): string {
   // ⚠ BAL-555 fix round F5 — `Object.hasOwn`, never a bare index lookup. `audit_events.action`
   // is arbitrary TEXT off the wire (via `metadata`-adjacent narrowing, never validated against
@@ -308,7 +382,9 @@ export function describeAuditEvent(input: {
     ? AUDIT_ACTION_SENTENCES[input.action]
     : undefined;
   const sentence =
-    compose === undefined ? humanizeActionTail(input.action) : compose(asRecord(input.metadata));
+    compose === undefined
+      ? humanizeActionTail(input.action)
+      : compose(asRecord(input.metadata), { relatedPartyName: input.relatedPartyName });
   return input.actorLabel === null ? sentence : `${sentence} — ${input.actorLabel}`;
 }
 

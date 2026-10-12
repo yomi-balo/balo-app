@@ -11,6 +11,7 @@ const OWNER: ConflictOwnerView = {
   partyName: 'Acme & Co',
   memberCount: 12,
   source: 'auto_captured',
+  addedVia: 'signup',
   createdAt: '2026-10-03T08:00:00.000Z',
   createdByName: 'Dana Lee',
 };
@@ -34,7 +35,7 @@ describe('ConflictPanel', () => {
     render(
       <ConflictPanel
         domain="acme.com"
-        owner={{ ...OWNER, source: 'admin_added', createdByName: 'Sam Staff' }}
+        owner={{ ...OWNER, source: 'admin_added', addedVia: 'balo', createdByName: 'Sam Staff' }}
         targetName="Globex"
       />
     );

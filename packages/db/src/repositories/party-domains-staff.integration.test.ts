@@ -565,16 +565,11 @@ describe('partyDomainsStaffRepository reads', () => {
       actorUserId: staff.id,
       reason: REASON,
     });
-    await partyDomainsRepository.capture(
-      {
-        partyType: 'company',
-        partyId: company.id,
-        domain: 'c-legacy.com',
-        actorUserId: legacy.id,
-        source: 'admin_added',
-      },
-      db
-    );
+    await seedOwned('company', company.id, 'c-legacy.com', legacy.id);
+    await db
+      .update(partyDomains)
+      .set({ source: 'admin_added' })
+      .where(eq(partyDomains.domain, 'c-legacy.com'));
     await seedOwned('company', other.id, 'z-other.com', signup.id);
     const goneId = await seedOwned('company', company.id, 'd-gone.com', signup.id);
     await partyDomainsStaffRepository.removeDomain({
@@ -628,6 +623,31 @@ describe('partyDomainsStaffRepository reads', () => {
       source: 'auto_captured',
       createdBy: { firstName: 'Dana', lastName: 'Lee' },
     });
+  });
+
+  it('findLiveOwnerForStaff computes addedVia for signup, staff-added and legacy party-admin rows', async () => {
+    const signup = await userFactory();
+    const staff = await userFactory();
+    const company = await companyFactory();
+    await seedOwned('company', company.id, 'own-signup.com', signup.id);
+    await partyDomainsStaffRepository.addDomain({
+      partyType: 'company',
+      partyId: company.id,
+      domain: 'own-staff.com',
+      actorUserId: staff.id,
+      reason: REASON,
+    });
+    await seedOwned('company', company.id, 'own-legacy.com', signup.id);
+    await db
+      .update(partyDomains)
+      .set({ source: 'admin_added' })
+      .where(eq(partyDomains.domain, 'own-legacy.com'));
+
+    const via = async (domain: string): Promise<string | undefined> =>
+      (await partyDomainsStaffRepository.findLiveOwnerForStaff(domain))?.addedVia;
+    await expect(via('own-signup.com')).resolves.toBe('signup');
+    await expect(via('own-staff.com')).resolves.toBe('balo');
+    await expect(via('own-legacy.com')).resolves.toBe('party_admin');
   });
 
   it('findLiveOwnerForStaff is undefined for unowned, removed and empty domains', async () => {

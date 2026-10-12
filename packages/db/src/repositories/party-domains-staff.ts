@@ -112,6 +112,7 @@ export interface StaffDomainOwner extends PartyRef {
   source: PartyDomainSource;
   createdAt: Date;
   createdBy: { firstName: string | null; lastName: string | null } | null;
+  addedVia: StaffDomainAddedVia;
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────────────
@@ -220,6 +221,15 @@ function auditMetadata(
     reason: row.reason,
     ...extra,
   };
+}
+
+/** `admin_added` with no staff-added audit row is a legacy self-serve row. */
+function resolveAddedVia(
+  source: PartyDomainSource,
+  staffAuditId: string | null
+): StaffDomainAddedVia {
+  if (source !== 'admin_added') return 'signup';
+  return staffAuditId === null ? 'party_admin' : 'balo';
 }
 
 async function countMembers(ref: PartyRef): Promise<number> {
@@ -457,10 +467,6 @@ export const partyDomainsStaffRepository = {
       .orderBy(asc(partyDomains.createdAt), asc(partyDomains.id));
 
     return rows.map((row): StaffPartyDomainRow => {
-      let addedVia: StaffDomainAddedVia = 'signup';
-      if (row.source === 'admin_added') {
-        addedVia = row.auditId === null ? 'party_admin' : 'balo';
-      }
       return {
         id: row.id,
         domain: row.domain,
@@ -468,7 +474,7 @@ export const partyDomainsStaffRepository = {
         createdAt: row.createdAt,
         createdBy:
           row.hasCreator === null ? null : { firstName: row.firstName, lastName: row.lastName },
-        addedVia,
+        addedVia: resolveAddedVia(row.source, row.auditId),
         reason: row.reason,
       };
     });
@@ -490,9 +496,18 @@ export const partyDomainsStaffRepository = {
         firstName: users.firstName,
         lastName: users.lastName,
         hasCreator: users.id,
+        auditId: auditEvents.id,
       })
       .from(partyDomains)
       .leftJoin(users, eq(users.id, partyDomains.createdByUserId))
+      .leftJoin(
+        auditEvents,
+        and(
+          eq(auditEvents.entityType, 'party_domain'),
+          eq(auditEvents.entityId, partyDomains.id),
+          eq(auditEvents.action, PARTY_DOMAIN_STAFF_AUDIT.ADDED)
+        )
+      )
       .where(and(eq(partyDomains.domain, normalized), isNull(partyDomains.deletedAt)))
       .limit(1);
     if (row === undefined) return undefined;
@@ -511,6 +526,7 @@ export const partyDomainsStaffRepository = {
       createdAt: row.createdAt,
       createdBy:
         row.hasCreator === null ? null : { firstName: row.firstName, lastName: row.lastName },
+      addedVia: resolveAddedVia(row.source, row.auditId),
     };
   },
 };

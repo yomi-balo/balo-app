@@ -585,14 +585,13 @@ export const companiesRepository = {
       // 1. Claim the domain FIRST. `capture()` is race-safe (INSERT ... ON CONFLICT DO
       //    NOTHING on the partial-unique arbiter) and never throws on the conflict
       //    path; on success it also writes the `party_domain.captured` audit row in
-      //    this tx. `source: 'auto_captured'` matches the agency axis (`provision`).
+      //    this tx. `capture()` always records `auto_captured`.
       const capture = await partyDomainsRepository.capture(
         {
           partyType: 'company',
           partyId: input.companyId,
           domain: input.domain,
           actorUserId: input.actorUserId,
-          source: 'auto_captured',
         },
         tx
       );

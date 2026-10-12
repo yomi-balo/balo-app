@@ -6,7 +6,7 @@ import {
 import { buildBillingEmailChangedCopy } from './billing-email-changed.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
-import { partyDomainsPath } from './party-domain-ownership.js';
+import { partyDomainAddedBody, partyDomainsPath } from './party-domain-ownership.js';
 import { consultationClause } from './review-email-shared.js';
 import {
   buildTopUpFigure,
@@ -735,7 +735,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const { partyName, domain } = partyDomainInputs(data);
     return {
       title: 'Domain added',
-      body: `We've added ${domain} to ${partyName}. New teammates with a ${domain} email can now join.`,
+      body: partyDomainAddedBody(data.partyType, partyName, domain),
       actionUrl: partyDomainsPath(data.partyType, 'added'),
     };
   },

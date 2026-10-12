@@ -1316,6 +1316,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         domain,
         domainsUrl,
         baseUrl: BASE_URL,
+        partyType: data.partyType,
       }),
       subject: `We've added ${domain} to ${partyName}`,
     };

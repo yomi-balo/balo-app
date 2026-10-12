@@ -129,6 +129,7 @@ export function toOwnerView(owner: StaffDomainOwner): ConflictOwnerView {
     partyName: owner.partyName,
     memberCount: owner.memberCount,
     source: owner.source,
+    addedVia: owner.addedVia,
     createdAt: owner.createdAt.toISOString(),
     createdByName: personName(owner.createdBy),
   };

@@ -21,6 +21,7 @@ const OWNER: ConflictOwnerView = {
   partyName: 'Acme Ltd',
   memberCount: 12,
   source: 'auto_captured',
+  addedVia: 'signup',
   createdAt: '2026-10-03T08:00:00.000Z',
   createdByName: 'Dana Lee',
 };
@@ -132,9 +133,45 @@ describe('conflict copy', () => {
         partyType: 'agency',
         memberCount: 1,
         source: 'admin_added',
+        addedVia: 'balo',
         createdByName: null,
       })
     ).toBe('Acme Ltd is an agency with 1 member. It was added by Balo on 3 Oct 2026.');
+  });
+
+  it('names the staff member who added a domain', () => {
+    expect(
+      conflictOwnerSentence({
+        ...OWNER,
+        source: 'admin_added',
+        addedVia: 'balo',
+        createdByName: 'Sam Staff',
+      })
+    ).toContain('It was added by Sam Staff on 3 Oct 2026.');
+  });
+
+  it('describes a legacy party-admin owner with the party and settings', () => {
+    expect(
+      conflictOwnerSentence({
+        ...OWNER,
+        source: 'admin_added',
+        addedVia: 'party_admin',
+        createdByName: 'Lou Legacy',
+      })
+    ).toBe(
+      'Acme Ltd is a company with 12 members. It was added by Lou Legacy @ Acme Ltd in settings on 3 Oct 2026.'
+    );
+  });
+
+  it('falls back to a party admin for an unnamed legacy owner', () => {
+    expect(
+      conflictOwnerSentence({
+        ...OWNER,
+        source: 'admin_added',
+        addedVia: 'party_admin',
+        createdByName: null,
+      })
+    ).toContain('It was added by a party admin @ Acme Ltd in settings on');
   });
 
   it('falls back to a teammate for an unnamed signup', () => {

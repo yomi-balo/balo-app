@@ -236,24 +236,22 @@ describe('partyDomainsRepository.capture', () => {
     expect(audits).toHaveLength(0);
   });
 
-  it('respects a caller-supplied source (admin_added)', async () => {
+  it('always writes auto_captured, ignoring any source smuggled in past the type', async () => {
     const actor = await userFactory();
     const companyId = await seedCompany();
 
-    const result = await partyDomainsRepository.capture(
-      {
-        partyType: 'company',
-        partyId: companyId,
-        domain: 'admin.com',
-        actorUserId: actor.id,
-        source: 'admin_added',
-      },
-      db
-    );
+    const input = {
+      partyType: 'company' as const,
+      partyId: companyId,
+      domain: 'admin.com',
+      actorUserId: actor.id,
+      source: 'admin_added',
+    };
+    const result = await partyDomainsRepository.capture(input, db);
 
-    expect(result).toEqual({ outcome: 'captured', partyType: 'company', source: 'admin_added' });
+    expect(result).toEqual({ outcome: 'captured', partyType: 'company', source: 'auto_captured' });
     const [row] = await liveRowsForDomain('admin.com');
-    expect(row?.source).toBe('admin_added');
+    expect(row?.source).toBe('auto_captured');
   });
 });
 
@@ -354,10 +352,13 @@ describe('partyDomainsRepository.listForPartySettings', () => {
         partyId: companyId,
         domain: 'second.com',
         actorUserId: staffUser.id,
-        source: 'admin_added',
       },
       db
     );
+    await db
+      .update(partyDomains)
+      .set({ source: 'admin_added' })
+      .where(eq(partyDomains.domain, 'second.com'));
 
     // Rows created in one transaction share `now()`; pin the order explicitly.
     await db

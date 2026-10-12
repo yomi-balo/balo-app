@@ -26,7 +26,6 @@ export interface CaptureDomainInput {
   partyId: string;
   domain: string; // caller-extracted; the repo re-normalises defensively
   actorUserId: string;
-  source?: PartyDomainSource; // defaults to 'auto_captured'
 }
 
 /** How a domain reached a party, as customers may see it — never carries staff identity. */
@@ -60,7 +59,7 @@ export const partyDomainsRepository = {
     if (domain === '') return { outcome: 'not_applicable' };
     if (isBlockedDomain(domain)) return { outcome: 'skipped', reason: 'blocked_domain' };
 
-    const source: PartyDomainSource = input.source ?? 'auto_captured';
+    const source: PartyDomainSource = 'auto_captured';
 
     const [inserted] = await exec
       .insert(partyDomains)

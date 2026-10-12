@@ -107,10 +107,16 @@ export function memberCountLabel(count: number): string {
 export function conflictOwnerSentence(owner: ConflictOwnerView): string {
   const date = formatStaffDate(owner.createdAt);
   const intro = `${owner.partyName} is ${PARTY_ARTICLE[owner.partyType]} with ${memberCountLabel(owner.memberCount)}.`;
-  if (owner.source === 'auto_captured') {
-    return `${intro} The domain was captured when ${owner.createdByName ?? 'a teammate'} @ ${owner.partyName} signed up on ${date}.`;
+  switch (owner.addedVia) {
+    case 'signup':
+      return `${intro} The domain was captured when ${owner.createdByName ?? 'a teammate'} @ ${owner.partyName} signed up on ${date}.`;
+    case 'balo':
+      return `${intro} It was added by ${owner.createdByName ?? 'Balo'} on ${date}.`;
+    case 'party_admin':
+      return `${intro} It was added by ${owner.createdByName ?? 'a party admin'} @ ${owner.partyName} in settings on ${date}.`;
+    default:
+      return owner.addedVia satisfies never;
   }
-  return `${intro} It was added by ${owner.createdByName ?? 'Balo'} on ${date}.`;
 }
 
 /** Second conflict-panel sentence: reassigning moves the domain, never the people. */

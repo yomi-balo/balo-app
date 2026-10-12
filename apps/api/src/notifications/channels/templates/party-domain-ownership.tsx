@@ -1,24 +1,9 @@
-import { PartyJoinEmail } from './party-domain-join.js';
-import { shared } from './shared.js';
+import { neutralPillStyle, PartyJoinEmail, successPillStyle } from './party-domain-join.js';
 
 /**
  * Balo-staff domain changes (BAL-594). Both emails COMPOSE the `PartyJoinEmail` shell, so only
  * the copy differs. They go to the party's owners and admins and never name the staffer.
  */
-
-const successPillStyle = {
-  ...shared.statusPillBase,
-  background: 'rgba(5, 150, 105, 0.18)',
-  border: '1px solid rgba(5, 150, 105, 0.35)',
-  color: '#A7F3D0',
-};
-
-const neutralPillStyle = {
-  ...shared.statusPillBase,
-  background: 'rgba(124, 58, 237, 0.18)',
-  border: '1px solid rgba(124, 58, 237, 0.35)',
-  color: '#DDD6FE',
-};
 
 /**
  * Where a party's domains are listed, per party type. A removal links the agency to the bare
@@ -29,6 +14,19 @@ export function partyDomainsPath(partyType: unknown, event: 'added' | 'removed')
   return event === 'removed' ? '/expert/settings' : '/expert/settings?tab=domains';
 }
 
+/**
+ * The "domain added" body shared by the email and the in-app notice. A company's join setting
+ * decides whether a matching signup actually joins, so its copy says so; an agency auto-joins.
+ */
+export function partyDomainAddedBody(
+  partyType: unknown,
+  partyName: string,
+  domain: string
+): string {
+  const base = `We've added ${domain} to ${partyName}. New teammates with a ${domain} email can now join`;
+  return partyType === 'agency' ? `${base}.` : `${base}, based on your join setting.`;
+}
+
 export interface PartyDomainOwnershipEmailProps {
   readonly firstName: string;
   readonly partyName: string;
@@ -36,6 +34,8 @@ export interface PartyDomainOwnershipEmailProps {
   /** Absolute URL of the party's domains list. */
   readonly domainsUrl: string;
   readonly baseUrl: string;
+  /** `'agency'` selects the agency copy; anything else is treated as a company. */
+  readonly partyType?: unknown;
 }
 
 export function PartyDomainAddedEmail({
@@ -44,6 +44,7 @@ export function PartyDomainAddedEmail({
   domain,
   domainsUrl,
   baseUrl,
+  partyType,
 }: Readonly<PartyDomainOwnershipEmailProps>): ReturnType<typeof PartyJoinEmail> {
   return (
     <PartyJoinEmail
@@ -53,7 +54,7 @@ export function PartyDomainAddedEmail({
       pillStyle={successPillStyle}
       heroHeading={`${domain} is now linked`}
       heroSubtext={`It's now one of ${partyName}'s domains.`}
-      bodyText={`We've added ${domain} to ${partyName}. New teammates with a ${domain} email can now join.`}
+      bodyText={partyDomainAddedBody(partyType, partyName, domain)}
       calloutHeading="Who this affects"
       calloutText="Only new signups. People who are already members keep their access exactly as it is."
       supportPrefix="Questions about your domains?"
