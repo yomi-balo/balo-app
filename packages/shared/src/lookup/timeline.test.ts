@@ -6,6 +6,7 @@ import {
   AUDIT_ACTION_SENTENCES,
   EXPERT_SEARCHABILITY_SOURCE_LABEL,
   LOOKUP_AUDIT_ENTITY_TYPE,
+  LOOKUP_PARTY_DOMAIN_PARTY_TYPE,
   auditActorLabel,
   describeAuditEvent,
   humanizeActionTail,
@@ -27,6 +28,144 @@ describe('LOOKUP_AUDIT_ENTITY_TYPE', () => {
       if (type === 'expert') continue;
       expect(LOOKUP_AUDIT_ENTITY_TYPE[type]).toBe(type);
     }
+  });
+});
+
+describe('LOOKUP_PARTY_DOMAIN_PARTY_TYPE', () => {
+  it('only company and agency carry a party-domain arm, each as its own party type', () => {
+    const withArm = LOOKUP_ENTITY_TYPES.filter(
+      (type) => LOOKUP_PARTY_DOMAIN_PARTY_TYPE[type] !== null
+    );
+    expect(withArm).toEqual(['company', 'agency']);
+    expect(LOOKUP_PARTY_DOMAIN_PARTY_TYPE.company).toBe('company');
+    expect(LOOKUP_PARTY_DOMAIN_PARTY_TYPE.agency).toBe('agency');
+  });
+});
+
+describe('describeAuditEvent — party-domain rows', () => {
+  const base = { partyType: 'company', partyId: 'c1', domain: 'acme.co.nz' };
+
+  it('a signup capture names the domain', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.captured',
+        metadata: { ...base, source: 'auto_captured' },
+        actorLabel: 'Dana Whitfield @ Northwind Industrial',
+      })
+    ).toBe('Domain acme.co.nz captured at signup — Dana Whitfield @ Northwind Industrial');
+  });
+
+  it('a party admin’s self-serve add (captured, source admin_added) reads as added in settings', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.captured',
+        metadata: { ...base, source: 'admin_added' },
+        actorLabel: 'Dana Whitfield @ Northwind Industrial',
+      })
+    ).toBe('Added domain acme.co.nz in settings — Dana Whitfield @ Northwind Industrial');
+  });
+
+  it('a party admin’s self-serve removal reads as removed in settings', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.removed',
+        metadata: { ...base, source: 'auto_captured' },
+        actorLabel: null,
+      })
+    ).toBe('Removed domain acme.co.nz in settings');
+  });
+
+  it('a staff add carries the reason note', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.staff_added',
+        metadata: { ...base, source: 'admin_added', reason: 'Verified over email' },
+        actorLabel: 'MJ @ Balo',
+      })
+    ).toBe('Added domain acme.co.nz — "Verified over email" — MJ @ Balo');
+  });
+
+  it('a staff removal carries the reason note', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.staff_removed',
+        metadata: { ...base, source: 'auto_captured', reason: 'Wrong company' },
+        actorLabel: null,
+      })
+    ).toBe('Removed domain acme.co.nz — "Wrong company"');
+  });
+
+  it('a blank reason renders no empty quotes', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.staff_added',
+        metadata: { ...base, reason: '   ' },
+        actorLabel: null,
+      })
+    ).toBe('Added domain acme.co.nz');
+  });
+
+  it('a long reason is truncated to 140 characters', () => {
+    const rendered = describeAuditEvent({
+      action: 'party_domain.staff_removed',
+      metadata: { ...base, reason: 'x'.repeat(200) },
+      actorLabel: null,
+    });
+    expect(rendered).toBe(`Removed domain acme.co.nz — "${'x'.repeat(140)}"`);
+  });
+
+  it('the receiving side of a reassignment names the party it moved from', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.staff_added',
+        metadata: {
+          ...base,
+          reason: 'Acquisition',
+          reassignedFrom: { partyType: 'agency', partyId: 'a1' },
+        },
+        actorLabel: null,
+        relatedPartyName: 'CloudPeak',
+      })
+    ).toBe('Domain acme.co.nz moved here from CloudPeak — "Acquisition"');
+  });
+
+  it('the giving side of a reassignment names the party it moved to', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.staff_removed',
+        metadata: {
+          ...base,
+          reason: 'Acquisition',
+          reassignedTo: { partyType: 'company', partyId: 'c2' },
+        },
+        actorLabel: 'MJ @ Balo',
+        relatedPartyName: 'Northwind Industrial',
+      })
+    ).toBe('Domain acme.co.nz moved to Northwind Industrial — "Acquisition" — MJ @ Balo');
+  });
+
+  it.each([
+    ['agency', 'another agency'],
+    ['company', 'another company'],
+  ])('an unresolved %s counterpart reads "%s"', (partyType, label) => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.staff_removed',
+        metadata: { ...base, reassignedTo: { partyType, partyId: 'x' } },
+        actorLabel: null,
+        relatedPartyName: null,
+      })
+    ).toBe(`Domain acme.co.nz moved to ${label}`);
+  });
+
+  it('a reassignment with malformed counterpart metadata still renders', () => {
+    expect(
+      describeAuditEvent({
+        action: 'party_domain.staff_added',
+        metadata: { ...base, reassignedFrom: 'garbage' },
+        actorLabel: null,
+      })
+    ).toBe('Domain acme.co.nz moved here from another company');
   });
 });
 
@@ -307,8 +446,8 @@ describe('describeAuditEvent — mapped actions', () => {
 describe('describeAuditEvent — unmapped fallback', () => {
   it('humanizes an unmapped dotted action', () => {
     expect(
-      describeAuditEvent({ action: 'party_domain.captured', metadata: {}, actorLabel: null })
-    ).toBe('Domain captured');
+      describeAuditEvent({ action: 'expert_payout.held', metadata: {}, actorLabel: null })
+    ).toBe('Payout held');
   });
 
   it('humanizes an unmapped bare action', () => {
@@ -338,8 +477,8 @@ describe('describeAuditEvent — unmapped fallback', () => {
 });
 
 describe('humanizeActionTail', () => {
-  it('party_domain.captured -> Domain captured', () => {
-    expect(humanizeActionTail('party_domain.captured')).toBe('Domain captured');
+  it('expert_payout.held -> Payout held', () => {
+    expect(humanizeActionTail('expert_payout.held')).toBe('Payout held');
   });
 
   it('nonsense -> Nonsense', () => {

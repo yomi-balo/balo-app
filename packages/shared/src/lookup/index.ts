@@ -30,6 +30,7 @@ export {
 // actually needs.
 export {
   LOOKUP_AUDIT_ENTITY_TYPE,
+  LOOKUP_PARTY_DOMAIN_PARTY_TYPE,
   auditActorLabel,
   describeAuditEvent,
   type AuditActorFacts,

@@ -29,14 +29,14 @@ const infoPillStyle = {
   color: '#BFDBFE',
 };
 
-const successPillStyle = {
+export const successPillStyle = {
   ...shared.statusPillBase,
   background: 'rgba(5, 150, 105, 0.18)',
   border: '1px solid rgba(5, 150, 105, 0.35)',
   color: '#A7F3D0',
 };
 
-const neutralPillStyle = {
+export const neutralPillStyle = {
   ...shared.statusPillBase,
   background: 'rgba(124, 58, 237, 0.18)',
   border: '1px solid rgba(124, 58, 237, 0.35)',

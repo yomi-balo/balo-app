@@ -205,7 +205,6 @@ export const agenciesRepository = {
           partyId: created.agencyId,
           domain: input.domain,
           actorUserId: input.actorUserId,
-          source: 'auto_captured',
         },
         tx
       );

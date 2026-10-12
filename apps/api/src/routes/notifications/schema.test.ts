@@ -2,6 +2,44 @@ import { describe, it, expect } from 'vitest';
 import { publishBodySchema } from './schema.js';
 import { EXPERT_CHECKLIST_ITEM_KEYS } from '@balo/shared/experts';
 
+describe('publishBodySchema — BAL-594 party domain events', () => {
+  const payload = {
+    correlationId: '550e8400-e29b-41d4-a716-446655440000',
+    partyType: 'company',
+    partyId: '550e8400-e29b-41d4-a716-446655440001',
+    partyName: 'Northwind Industrial',
+    domain: 'northwind.co.nz',
+  };
+
+  it.each(['party.domain_added', 'party.domain_removed'] as const)(
+    '%s accepts a valid payload and rejects an extra key',
+    (event) => {
+      expect(publishBodySchema.safeParse({ event, payload }).success).toBe(true);
+      expect(
+        publishBodySchema.safeParse({
+          event,
+          payload: { ...payload, userId: '550e8400-e29b-41d4-a716-446655440002' },
+        }).success
+      ).toBe(false);
+    }
+  );
+
+  it('rejects a non-uuid correlationId and an unknown party type', () => {
+    expect(
+      publishBodySchema.safeParse({
+        event: 'party.domain_added',
+        payload: { ...payload, correlationId: 'northwind.co.nz' },
+      }).success
+    ).toBe(false);
+    expect(
+      publishBodySchema.safeParse({
+        event: 'party.domain_added',
+        payload: { ...payload, partyType: 'expert' },
+      }).success
+    ).toBe(false);
+  });
+});
+
 describe('publishBodySchema', () => {
   describe('user.welcome', () => {
     it('accepts a valid payload', () => {

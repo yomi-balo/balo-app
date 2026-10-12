@@ -3,6 +3,7 @@ import 'server-only';
 import { auditEventsRepository } from '@balo/db';
 import {
   LOOKUP_AUDIT_ENTITY_TYPE,
+  LOOKUP_PARTY_DOMAIN_PARTY_TYPE,
   LOOKUP_TIMELINE_PAGE_SIZE,
   auditActorLabel,
   describeAuditEvent,
@@ -27,7 +28,8 @@ import { log } from '@/lib/logging';
  *
  * `LOOKUP_AUDIT_ENTITY_TYPE` (`@balo/shared/lookup`) is the SECURITY ALLOW-LIST that turns a
  * `LookupEntityType` into the `audit_events.entity_type` string — never forward a free string
- * from the wire straight into the query (C7).
+ * from the wire straight into the query (C7). `LOOKUP_PARTY_DOMAIN_PARTY_TYPE` is its sibling for
+ * the company/agency party-domain arm — the party type is resolved here, never read off the wire.
  *
  * The projection into `LookupTimelineEntry` happens HERE — the one place `metadata` and
  * `actorUserId` are read; nothing downstream sees them (the DTO allow-list, §3.5).
@@ -42,10 +44,12 @@ export async function loadLookupTimeline(
   }
 
   const entityType = LOOKUP_AUDIT_ENTITY_TYPE[input.type];
+  const partyDomainsOf = LOOKUP_PARTY_DOMAIN_PARTY_TYPE[input.type] ?? undefined;
 
   const page = await auditEventsRepository.listTrailForEntity({
     entityType,
     entityId: input.id,
+    partyDomainsOf,
     limit: LOOKUP_TIMELINE_PAGE_SIZE,
     // ⚠ BAL-555 fix round — `input.before.createdAtPrecise` is carried straight through as an
     // OPAQUE, already-precise Postgres-parseable string. NEVER wrap it in `new Date(...)`: a
@@ -74,7 +78,12 @@ export async function loadLookupTimeline(
     return {
       id: row.id,
       action: row.action,
-      summary: describeAuditEvent({ action: row.action, metadata: row.metadata, actorLabel }),
+      summary: describeAuditEvent({
+        action: row.action,
+        metadata: row.metadata,
+        actorLabel,
+        relatedPartyName: row.relatedPartyName,
+      }),
       occurredAtIso: row.createdAt.toISOString(),
       // ⚠ BAL-555 fix round F1 — the OPAQUE grouping key, carried verbatim from the repository's
       // full-microsecond `createdAtPrecise`. NEVER derive this from `occurredAtIso` above (that

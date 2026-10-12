@@ -83,6 +83,23 @@ describe('LookupDrillIn — accessibility (BAL-555 fix round F3)', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it('BAL-594 — has no violations when the Domains link renders for an agency', async () => {
+    mockTimelineAction.mockResolvedValue({
+      ok: true,
+      entries: [],
+      hasEarlier: false,
+      earlier: null,
+    });
+
+    const { container } = render(
+      <LookupDrillIn selection={selection({ type: 'agency', id: 'ag1' })} onTabSelect={vi.fn()} />
+    );
+
+    await waitFor(() => expect(mockTimelineAction).toHaveBeenCalled());
+    expect(screen.getByRole('link', { name: 'Domains' })).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it('BAL-593 — has no violations when both Open and Application links render for an expert', async () => {
     mockTimelineAction.mockResolvedValue({
       ok: true,

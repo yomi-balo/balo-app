@@ -481,8 +481,8 @@ describe('companiesRepository.promoteToOrganization', () => {
     const actor = await userFactory();
     const otherOwner = await userFactory();
     const otherCompany = await companyFactory();
-    // A competing company claims acme.io first, then the claim is RELEASED (admin
-    // removeDomain soft-deletes the mapping — modelled here by stamping deleted_at). The
+    // A competing company claims acme.io first, then the claim is RELEASED (a staff
+    // removal soft-deletes the mapping — modelled here by stamping deleted_at). The
     // partial-unique index is partial on `deleted_at IS NULL`, so the slot is now free.
     await seedClaim('company', otherCompany.id, 'acme.io', otherOwner.id);
     await db

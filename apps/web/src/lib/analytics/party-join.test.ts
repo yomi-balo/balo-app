@@ -15,6 +15,7 @@ vi.mock('@/lib/analytics/server', () => ({
   PARTY_DOMAIN_SERVER_EVENTS: {
     ADDED: 'party_domain_added',
     REMOVED: 'party_domain_removed',
+    REASSIGNED: 'party_domain_reassigned',
   },
 }));
 
@@ -26,6 +27,7 @@ import {
   emitDomainJoinOptedOut,
   emitPartyDomainAdded,
   emitPartyDomainRemoved,
+  emitPartyDomainReassigned,
   emitDomainJoinModeChanged,
 } from './party-join';
 
@@ -111,11 +113,25 @@ describe('party-join analytics wrappers', () => {
     });
   });
 
-  it('emitPartyDomainRemoved → party_domain_removed + distinct_id', () => {
-    emitPartyDomainRemoved('agency', 'admin-3');
-    expect(mockTrack).toHaveBeenCalledWith('party_domain_removed', {
-      party_type: 'agency',
-      distinct_id: 'admin-3',
+  it.each(['auto_captured', 'admin_added'] as const)(
+    'emitPartyDomainRemoved → party_domain_removed with source %s',
+    (source) => {
+      emitPartyDomainRemoved('agency', source, 'admin-3');
+      expect(mockTrack).toHaveBeenCalledWith('party_domain_removed', {
+        party_type: 'agency',
+        source,
+        distinct_id: 'admin-3',
+      });
+    }
+  );
+
+  it('emitPartyDomainReassigned → party_domain_reassigned with from + to party types', () => {
+    emitPartyDomainReassigned('company', 'agency', 'admin-5');
+    expect(mockTrack).toHaveBeenCalledTimes(1);
+    expect(mockTrack).toHaveBeenCalledWith('party_domain_reassigned', {
+      from_party_type: 'company',
+      to_party_type: 'agency',
+      distinct_id: 'admin-5',
     });
   });
 

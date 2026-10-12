@@ -6,6 +6,7 @@ import {
 import { buildBillingEmailChangedCopy } from './billing-email-changed.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
+import { partyDomainAddedBody, partyDomainsPath } from './party-domain-ownership.js';
 import { consultationClause } from './review-email-shared.js';
 import {
   buildTopUpFigure,
@@ -218,6 +219,13 @@ function conversationActionUrl(data: Record<string, unknown>): string | undefine
   }
   const projectRequestId = data.projectRequestId as string | undefined;
   return projectRequestId ? `/projects/${projectRequestId}` : undefined;
+}
+
+/** BAL-594 — the snapshotted party name and domain, with neutral fallbacks. */
+function partyDomainInputs(data: Record<string, unknown>): { partyName: string; domain: string } {
+  const partyName = typeof data.partyName === 'string' ? data.partyName.trim() : '';
+  const domain = typeof data.domain === 'string' ? data.domain.trim() : '';
+  return { partyName: partyName || 'your organization', domain: domain || 'A domain' };
 }
 
 /** BAL-345 — human noun for the party type carried in `data.partyType`. */
@@ -720,6 +728,26 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     body: `Your request to join the ${partyTypeNoun(data)} was not approved`,
     actionUrl: joinResultActionUrl('declined', data),
   }),
+
+  // BAL-594 — Balo staff changed a party's domains. Names the snapshotted party and domain,
+  // never the staffer. Deep-links to the party's domains list.
+  'party-domain-added': (data) => {
+    const { partyName, domain } = partyDomainInputs(data);
+    return {
+      title: 'Domain added',
+      body: partyDomainAddedBody(data.partyType, partyName, domain),
+      actionUrl: partyDomainsPath(data.partyType, 'added'),
+    };
+  },
+
+  'party-domain-removed': (data) => {
+    const { partyName, domain } = partyDomainInputs(data);
+    return {
+      title: 'Domain removed',
+      body: `${domain} is no longer linked to ${partyName}. New signups with a ${domain} email won't join ${partyName}.`,
+      actionUrl: partyDomainsPath(data.partyType, 'removed'),
+    };
+  },
 
   // BAL-348 agency provisioned — owner in-app milestone. `data.agency` is the
   // resolver-hydrated summary (name only). Deep-links to team/members settings.

@@ -18,9 +18,9 @@ import {
 const ALL_TOKENS = Object.values(PLATFORM_CAPABILITIES);
 
 describe('PLATFORM_CAPABILITY_LABELS', () => {
-  it('has exactly one entry per token on the axis — 19', () => {
-    expect(ALL_TOKENS).toHaveLength(19);
-    expect(Object.keys(PLATFORM_CAPABILITY_LABELS)).toHaveLength(19);
+  it('has exactly one entry per token on the axis — 20', () => {
+    expect(ALL_TOKENS).toHaveLength(20);
+    expect(Object.keys(PLATFORM_CAPABILITY_LABELS)).toHaveLength(20);
     for (const token of ALL_TOKENS) {
       expect(Object.hasOwn(PLATFORM_CAPABILITY_LABELS, token), `missing label for ${token}`).toBe(
         true
@@ -30,7 +30,7 @@ describe('PLATFORM_CAPABILITY_LABELS', () => {
 
   it('every name is unique and non-empty', () => {
     const names = Object.values(PLATFORM_CAPABILITY_LABELS).map((label) => label.name);
-    expect(names).toHaveLength(19);
+    expect(names).toHaveLength(20);
     for (const name of names) {
       expect(name.length).toBeGreaterThan(0);
     }
@@ -108,7 +108,7 @@ describe('platformCapabilityGroupMembers', () => {
 describe('platformCapabilityDisplayOrder', () => {
   it('is a permutation of the whole axis — same members, same length', () => {
     const order = platformCapabilityDisplayOrder();
-    expect(order).toHaveLength(19);
+    expect(order).toHaveLength(20);
     expect([...order].sort()).toEqual([...ALL_TOKENS].sort());
   });
 

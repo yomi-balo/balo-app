@@ -41,12 +41,12 @@ const PROFILE = {
 } as unknown as ProfileSettingsData;
 
 const REFERENCE = { languages: [], industries: [] };
-const AGENCY: AgencyDomainsTabData = { agencyId: 'a1', partyName: 'Lattice', domains: [] };
+const AGENCY: AgencyDomainsTabData = { partyName: 'Lattice', domains: [] };
 
 interface RenderOptions {
   defaultTab?: string;
   setupStep?: string | null;
-  canManageAgency?: boolean;
+  showDomainsTab?: boolean;
   agencyDomains?: AgencyDomainsTabData | null;
   profileData?: ProfileSettingsData | null;
   referenceData?: { languages: never[]; industries: never[] } | null;
@@ -65,7 +65,7 @@ function tabsElement(over: RenderOptions = {}): React.JSX.Element {
       certCategories={over.certCategories ?? null}
       initialPhone={null}
       phoneVerifiedAt={null}
-      canManageAgency={over.canManageAgency ?? false}
+      showDomainsTab={over.showDomainsTab ?? false}
       agencyDomains={over.agencyDomains ?? null}
     />
   );
@@ -165,7 +165,7 @@ describe('SettingsTabs — panel widths', () => {
   });
 
   it('caps the Domains panel at the wide width', () => {
-    renderTabs({ defaultTab: 'domains', canManageAgency: true, agencyDomains: AGENCY });
+    renderTabs({ defaultTab: 'domains', showDomainsTab: true, agencyDomains: AGENCY });
     expect(classesOf(wrapperOf('agency-domains-tab'))).toEqual(['max-w-[860px]']);
   });
 
@@ -177,13 +177,13 @@ describe('SettingsTabs — panel widths', () => {
 
 describe('SettingsTabs — agency Domains tab (BAL-347)', () => {
   it('does NOT show a Domains tab when the expert cannot manage an agency', () => {
-    renderTabs({ canManageAgency: false });
+    renderTabs({ showDomainsTab: false });
     expect(screen.queryByRole('tab', { name: /domains/i })).not.toBeInTheDocument();
   });
 
   it('shows the Domains tab and renders AgencyDomainsTab when selected', async () => {
     const user = userEvent.setup();
-    renderTabs({ canManageAgency: true, agencyDomains: AGENCY });
+    renderTabs({ showDomainsTab: true, agencyDomains: AGENCY });
 
     const domainsTab = screen.getByRole('tab', { name: /domains/i });
     expect(domainsTab).toBeInTheDocument();
@@ -193,7 +193,7 @@ describe('SettingsTabs — agency Domains tab (BAL-347)', () => {
   });
 
   it('renders an empty panel on Domains when the agency payload is missing', () => {
-    renderTabs({ defaultTab: 'domains', canManageAgency: true, agencyDomains: null });
+    renderTabs({ defaultTab: 'domains', showDomainsTab: true, agencyDomains: null });
     expect(screen.getByRole('tabpanel')).toBeEmptyDOMElement();
   });
 });
@@ -244,7 +244,7 @@ describe('SettingsTabs — URL sync', () => {
 
 describe('SettingsTabs — pill main strip, underline sub strip', () => {
   it('lists the main tabs in order, each with a decorative icon', () => {
-    renderTabs({ canManageAgency: true, agencyDomains: AGENCY });
+    renderTabs({ showDomainsTab: true, agencyDomains: AGENCY });
     const tabs = mainTablist().getAllByRole('tab');
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Profile',
@@ -409,7 +409,7 @@ describe('SettingsTabs — deliberately static (ADR-1053, BAL-511)', () => {
   });
 
   it('puts the new panel in the DOM synchronously — no await, no findBy, no exit hold', () => {
-    renderTabs({ canManageAgency: true, agencyDomains: AGENCY });
+    renderTabs({ showDomainsTab: true, agencyDomains: AGENCY });
     // `fireEvent` (not `userEvent`) on purpose: it is fully synchronous, so a single expression
     // after it proves the panel swapped in the same commit. Under `AnimatePresence mode="wait"`
     // the outgoing panel is held for an extra commit and this fails.

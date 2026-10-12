@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import {
+  type PartyDomainForSettings,
   partyDomainsRepository,
   companiesRepository,
   auditEventsRepository,
@@ -10,6 +11,23 @@ import { getCurrentUser } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
 import { MembersAccessClient } from './_components/members-access-client';
+
+/**
+ * The read-only Domains list for this company, contained so a failed read degrades to the
+ * Domains section's own error state (`null`) instead of blanking the whole surface.
+ */
+async function loadDomains(companyId: string): Promise<PartyDomainForSettings[] | null> {
+  try {
+    return await partyDomainsRepository.listForPartySettings('company', companyId);
+  } catch (error) {
+    log.error('Failed to load company domains for members & access', {
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return null;
+  }
+}
 
 /**
  * Company "Members & access" (BAL-347) — the THREE-section admin surface (Domains +
@@ -40,7 +58,7 @@ export default async function MembersAccessPage(): Promise<React.JSX.Element> {
 
   try {
     const [domains, latestChange, pending, resolved] = await Promise.all([
-      partyDomainsRepository.listByPartyWithCreator('company', companyId),
+      loadDomains(companyId),
       auditEventsRepository.findLatestByEntityAndAction({
         entityType: 'company',
         entityId: companyId,
