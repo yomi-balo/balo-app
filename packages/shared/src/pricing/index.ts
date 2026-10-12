@@ -142,9 +142,9 @@ export function applyBaloFee(cents: number, feeBps: number): number {
  * the UN-MARKED-UP consultant rate; that invariant is about the DB row and stays true precisely
  * because the markup lives here, at the serializer.
  *
- * ⚠ `PLATFORM_PRICING.MARKUP_MULTIPLIER` / `calculateClientRate()`
- * (`apps/web/src/lib/utils/currency.ts`) is a DUPLICATE of this arithmetic kept for the
- * expert-settings rate editor. Never add a public-surface caller to it; use this function.
+ * `calculateClientRate()` (`apps/web/src/lib/utils/currency.ts`) delegates to `applyBaloFee`
+ * at the same default for the expert-settings rate editor. Never add a public-surface caller
+ * to it; use this function.
  *
  * `null` in ⇒ `null` out (no rate set). `0` stays `0`, never `null`.
  */

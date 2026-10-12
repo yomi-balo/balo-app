@@ -6,7 +6,9 @@ import {
   formatWholeCurrency,
   formatBudgetRange,
   perHourToPerMinuteCents,
+  calculateClientRate,
 } from './currency';
+import { PLATFORM_PRICING } from '@/lib/constants/platform';
 
 describe('centsToDollars / dollarsToCents', () => {
   it('round-trips cents to dollars and back', () => {
@@ -22,6 +24,25 @@ describe('centsToDollars / dollarsToCents', () => {
 describe('formatCurrency', () => {
   it('formats cents with the platform symbol and two decimals', () => {
     expect(formatCurrency(200)).toBe('A$2.00');
+  });
+});
+
+describe('calculateClientRate', () => {
+  it.each([
+    [230, 288],
+    [313, 391],
+    [1, 1],
+    [0, 0],
+    [5000, 6250],
+  ])('grosses %i expert cents up to %i client cents at the default fee', (expert, client) => {
+    expect(calculateClientRate(expert)).toBe(client);
+  });
+});
+
+describe('PLATFORM_PRICING.SERVICE_FEE_SHARE_LABEL', () => {
+  it("is the default fee's share of the client price, not the markup", () => {
+    expect(PLATFORM_PRICING.SERVICE_FEE_SHARE_LABEL).toBe('20%');
+    expect(PLATFORM_PRICING.MARKUP_LABEL).toBe('25%');
   });
 });
 
