@@ -41,7 +41,7 @@ const CHECKLIST_ITEMS_UI: ChecklistItemUI[] = [
     icon: DollarSign,
     color: '#059669',
     label: 'Set your rate',
-    description: 'Choose your per-minute consulting rate',
+    description: 'Choose your consulting rate',
     tab: 'rate',
   },
   {

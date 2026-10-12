@@ -58,6 +58,16 @@ export function perMinuteToPerHour(perMinuteCents: number): number {
 }
 
 /**
+ * Convert an hourly amount (cents) to a per-minute rate (cents), rounding UP.
+ * The platform stores whole cents per minute, so an hourly figure that doesn't divide
+ * evenly by 60 rounds to the next cent: the expert never earns less than the hourly
+ * amount they entered. E.g. 20000 (A$200.00/h) => 334 (A$3.34/min, A$200.40/h).
+ */
+export function perHourToPerMinuteCents(perHourCents: number): number {
+  return Math.ceil(perHourCents / 60);
+}
+
+/**
  * Format a budget range (integer minor units) as a grouped whole-dollar display
  * string, e.g. `A$45,000 – A$70,000`. Distinct from {@link formatCurrency}
  * (line-item, two-decimal): budgets are coarse ranges so we drop cents

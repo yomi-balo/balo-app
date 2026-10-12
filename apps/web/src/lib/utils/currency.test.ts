@@ -5,6 +5,7 @@ import {
   formatCurrency,
   formatWholeCurrency,
   formatBudgetRange,
+  perHourToPerMinuteCents,
 } from './currency';
 
 describe('centsToDollars / dollarsToCents', () => {
@@ -21,6 +22,19 @@ describe('centsToDollars / dollarsToCents', () => {
 describe('formatCurrency', () => {
   it('formats cents with the platform symbol and two decimals', () => {
     expect(formatCurrency(200)).toBe('A$2.00');
+  });
+});
+
+describe('perHourToPerMinuteCents', () => {
+  it.each([
+    [15000, 250],
+    [13800, 230],
+    [10000, 167],
+    [20000, 334],
+    [50, 1],
+    [0, 0],
+  ])('converts %i hourly cents to %i per-minute cents, rounding up', (hourly, perMinute) => {
+    expect(perHourToPerMinuteCents(hourly)).toBe(perMinute);
   });
 });
 

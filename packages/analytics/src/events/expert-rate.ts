@@ -6,5 +6,7 @@ export interface ExpertRateEventMap {
   [EXPERT_RATE_EVENTS.RATE_SAVED]: {
     rate_per_minute_cents: number;
     is_initial_setup: boolean;
+    input_unit: 'minute' | 'hour';
+    was_rounded: boolean;
   };
 }

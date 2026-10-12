@@ -1,13 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Check, DollarSign, Zap } from 'lucide-react';
+import { Check, DollarSign, Info } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { track, EXPERT_RATE_EVENTS } from '@/lib/analytics';
+import { cn } from '@/lib/utils';
 import { PLATFORM_PRICING } from '@/lib/constants/platform';
 import {
   centsToDollars,
@@ -15,6 +16,7 @@ import {
   formatCurrency,
   calculateClientRate,
   perMinuteToPerHour,
+  perHourToPerMinuteCents,
 } from '@/lib/utils/currency';
 import { saveRateAction } from '../_actions/save-rate';
 import { SettingsPageHeader } from './settings-page-header';
@@ -37,25 +39,163 @@ const itemVariants = {
   show: { opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' as const } },
 };
 
+type RateUnit = 'minute' | 'hour';
+
+const UNIT_OPTIONS: ReadonlyArray<{ value: RateUnit; label: string }> = [
+  { value: 'minute', label: 'Per minute' },
+  { value: 'hour', label: 'Per hour' },
+];
+
+/** The input text for a stored per-minute cents value, expressed in the given unit. */
+function inputTextFor(cents: number, unit: RateUnit): string {
+  if (!cents) return '';
+  const shown = unit === 'hour' ? perMinuteToPerHour(cents) : cents;
+  return centsToDollars(shown).toFixed(2);
+}
+
+interface RateUnitToggleProps {
+  unit: RateUnit;
+  onChange: (next: RateUnit) => void;
+}
+
+/**
+ * Per minute / per hour input-mode switch. A radiogroup (one region, two ways to enter the
+ * same rate), not a tablist: roving tabIndex plus Arrow/Home/End on each radio, which move
+ * and select in one step.
+ */
+function RateUnitToggle({ unit, onChange }: Readonly<RateUnitToggleProps>): React.JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const focusOption = useCallback((index: number) => {
+    const buttons = containerRef.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    buttons?.[index]?.focus();
+  }, []);
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLButtonElement>) => {
+      const current = UNIT_OPTIONS.findIndex((option) => option.value === unit);
+      if (current === -1) return;
+      let nextIndex: number | null = null;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+        nextIndex = (current + 1) % UNIT_OPTIONS.length;
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+        nextIndex = (current - 1 + UNIT_OPTIONS.length) % UNIT_OPTIONS.length;
+      } else if (event.key === 'Home') {
+        nextIndex = 0;
+      } else if (event.key === 'End') {
+        nextIndex = UNIT_OPTIONS.length - 1;
+      }
+      if (nextIndex === null) return;
+      const next = UNIT_OPTIONS[nextIndex];
+      if (next === undefined) return;
+      event.preventDefault();
+      onChange(next.value);
+      focusOption(nextIndex);
+    },
+    [unit, onChange, focusOption]
+  );
+
+  return (
+    <div
+      ref={containerRef}
+      role="radiogroup"
+      aria-label="Enter your rate"
+      className="bg-muted inline-flex gap-1 rounded-[10px] p-[3px]"
+    >
+      {UNIT_OPTIONS.map((option) => {
+        const isActive = option.value === unit;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={isActive}
+            tabIndex={isActive ? 0 : -1}
+            onClick={() => onChange(option.value)}
+            onKeyDown={handleKeyDown}
+            className={cn(
+              'focus-visible:ring-ring min-h-8 rounded-lg px-3 text-xs font-semibold transition-colors outline-none focus-visible:ring-2',
+              isActive
+                ? 'bg-card text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+interface ConversionLineProps {
+  unit: RateUnit;
+  rateCents: number;
+  hourlyCents: number;
+  wasRounded: boolean;
+}
+
+/** The line under the input: the other unit, or the rounding explanation. Empty until a rate is set. */
+function ConversionLine({
+  unit,
+  rateCents,
+  hourlyCents,
+  wasRounded,
+}: Readonly<ConversionLineProps>): React.JSX.Element | null {
+  if (rateCents <= 0) return null;
+  if (unit === 'minute') {
+    return (
+      <>
+        That&apos;s{' '}
+        <span className="text-foreground font-semibold">{formatCurrency(hourlyCents)}/hour</span>{' '}
+        take-home
+      </>
+    );
+  }
+  if (wasRounded) {
+    return (
+      <>
+        You&apos;re paid per minute, so this saves as{' '}
+        <span className="text-foreground font-semibold">{formatCurrency(rateCents)}/minute</span> (
+        {formatCurrency(hourlyCents)}/hour) take-home
+      </>
+    );
+  }
+  return (
+    <>
+      That&apos;s{' '}
+      <span className="text-foreground font-semibold">{formatCurrency(rateCents)}/minute</span>{' '}
+      take-home
+    </>
+  );
+}
+
 export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
-  const [rateInput, setRateInput] = useState<string>(
-    initialRateCents && initialRateCents > 0 ? centsToDollars(initialRateCents).toFixed(2) : ''
+  const [unit, setUnit] = useState<RateUnit>('minute');
+  const [rateInput, setRateInput] = useState<string>(() =>
+    inputTextFor(initialRateCents ?? 0, 'minute')
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const conversionId = useId();
 
   // All derived — no useEffect, no extra state
-  const rateDollars = parseFloat(rateInput) || 0;
-  const rateCents = dollarsToCents(rateDollars);
+  const enteredCents = dollarsToCents(parseFloat(rateInput) || 0);
+  const rateCents = unit === 'hour' ? perHourToPerMinuteCents(enteredCents) : enteredCents;
+  const hourlyCents = perMinuteToPerHour(rateCents);
+  const wasRounded = unit === 'hour' && enteredCents > 0 && hourlyCents !== enteredCents;
   const clientRateCents = calculateClientRate(rateCents);
-  const hourlyExpertCents = perMinuteToPerHour(rateCents);
   const hourlyClientCents = perMinuteToPerHour(clientRateCents);
 
-  const validationError =
-    rateDollars > PLATFORM_PRICING.MAX_RATE_DOLLARS
-      ? `Max rate is ${PLATFORM_PRICING.CURRENCY_SYMBOL}${PLATFORM_PRICING.MAX_RATE_DOLLARS}/min`
-      : rateInput !== '' && rateCents <= 0
-        ? 'Rate must be greater than zero'
-        : null;
+  const maxRateCents = PLATFORM_PRICING.MAX_RATE_CENTS;
+  let validationError: string | null = null;
+  if (rateCents > maxRateCents) {
+    validationError =
+      unit === 'hour'
+        ? `Max rate is ${formatCurrency(perMinuteToPerHour(maxRateCents))}/hour`
+        : `Max rate is ${formatCurrency(maxRateCents)}/min`;
+  } else if (rateInput !== '' && rateCents <= 0) {
+    validationError = 'Rate must be greater than zero';
+  }
 
   const isSaveDisabled =
     isSubmitting ||
@@ -76,6 +216,13 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
     }
   }
 
+  function handleUnitChange(next: RateUnit): void {
+    if (next === unit) return;
+    // Re-render from cents, never from the typed text, so a toggle can't change the rate.
+    setRateInput(inputTextFor(rateCents, next));
+    setUnit(next);
+  }
+
   async function handleSave(): Promise<void> {
     if (isSaveDisabled) return;
     setIsSubmitting(true);
@@ -83,11 +230,15 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
       const result = await saveRateAction({ ratePerMinuteCents: rateCents });
       if (result.success) {
         toast.success(
-          `Rate saved — ${PLATFORM_PRICING.CURRENCY_SYMBOL}${rateDollars.toFixed(2)}/min`
+          unit === 'hour'
+            ? `Rate saved — ${formatCurrency(hourlyCents)}/hour`
+            : `Rate saved — ${formatCurrency(rateCents)}/min`
         );
         track(EXPERT_RATE_EVENTS.RATE_SAVED, {
           rate_per_minute_cents: rateCents,
           is_initial_setup: !initialRateCents || initialRateCents === 0,
+          input_unit: unit,
+          was_rounded: wasRounded,
         });
       } else {
         toast.error(result.error ?? 'Failed to save rate');
@@ -100,11 +251,8 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
   }
 
   // Display values
-  const hourlyExpert = formatCurrency(hourlyExpertCents);
   const clientRatePerMin = centsToDollars(clientRateCents).toFixed(2);
   const clientRatePerHour = formatCurrency(hourlyClientCents);
-  const earnings30min = formatCurrency(rateCents * 30);
-  const clientPays30min = formatCurrency(clientRateCents * 30);
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -115,8 +263,8 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
           title="Set Your Rate"
           description={
             <>
-              This is your take-home amount per minute. Clients see a higher rate that includes
-              Balo&apos;s service fee.
+              This is your take-home rate. Clients see a higher rate that includes Balo&apos;s
+              service fee.
             </>
           }
         />
@@ -126,13 +274,16 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
       <motion.div variants={itemVariants}>
         <Card className="p-8">
           {/* Section label */}
-          <div className="flex items-center gap-2">
-            <DollarSign className="h-4 w-4 text-emerald-600" />
-            <span className="text-foreground text-sm font-semibold">Your Rate</span>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <DollarSign className="h-4 w-4 text-emerald-600" aria-hidden="true" />
+              <span className="text-foreground text-sm font-semibold">Your Rate</span>
+            </div>
+            <RateUnitToggle unit={unit} onChange={handleUnitChange} />
           </div>
 
           {/* Oversized rate input row */}
-          <div className="mt-2 flex items-center gap-3">
+          <div className="mt-3.5 flex flex-wrap items-center gap-3">
             <span className="text-foreground text-[32px] font-semibold">A$</span>
             <input
               type="text"
@@ -140,19 +291,45 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
               value={rateInput}
               onChange={handleRateChange}
               placeholder="0.00"
-              aria-label="Rate per minute in dollars"
-              className="border-primary text-foreground focus-visible:border-ring w-[180px] border-0 border-b-[3px] bg-transparent text-center font-mono text-[48px] font-semibold tabular-nums outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              aria-label={
+                unit === 'hour' ? 'Rate per hour in dollars' : 'Rate per minute in dollars'
+              }
+              aria-describedby={conversionId}
+              maxLength={8}
+              className={cn(
+                'border-primary text-foreground focus-visible:border-ring focus-visible:outline-primary border-0 border-b-[3px] bg-transparent text-center font-mono text-[48px] font-semibold tabular-nums outline-none focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid',
+                unit === 'hour' ? 'w-[230px]' : 'w-[180px]'
+              )}
             />
-            <span className="text-muted-foreground text-base font-medium">/ minute</span>
+            <span className="text-muted-foreground text-base font-medium">
+              {unit === 'hour' ? '/ hour' : '/ minute'}
+            </span>
           </div>
 
           {/* Validation error */}
-          {validationError && <p className="text-destructive mt-2 text-sm">{validationError}</p>}
+          {validationError && (
+            <p role="alert" className="text-destructive mt-2 text-sm">
+              {validationError}
+            </p>
+          )}
 
           {/* Hourly conversion */}
-          <p className="text-muted-foreground mt-3 text-sm">
-            That&apos;s <span className="text-foreground font-semibold">{hourlyExpert}/hour</span>{' '}
-            take-home
+          <p
+            id={conversionId}
+            aria-live="polite"
+            className="text-muted-foreground mt-3 flex min-h-[22px] items-start gap-1.5 text-sm"
+          >
+            {wasRounded && (
+              <Info className="text-primary mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            )}
+            <span>
+              <ConversionLine
+                unit={unit}
+                rateCents={rateCents}
+                hourlyCents={hourlyCents}
+                wasRounded={wasRounded}
+              />
+            </span>
           </p>
 
           <Separator className="my-6" />
@@ -172,23 +349,10 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
               <span className="text-muted-foreground text-sm">{clientRatePerHour}/hour</span>
             </div>
             <p className="text-muted-foreground mt-2 text-xs">
-              Includes Balo&apos;s {PLATFORM_PRICING.MARKUP_LABEL} service fee
+              Includes Balo&apos;s {PLATFORM_PRICING.SERVICE_FEE_SHARE_LABEL} service fee
             </p>
           </div>
         </Card>
-      </motion.div>
-
-      {/* Quick math box */}
-      <motion.div variants={itemVariants}>
-        <div className="border-border bg-muted/50 mt-5 flex items-start gap-2.5 rounded-xl border p-4">
-          <Zap className="text-primary mt-0.5 h-4 w-4 shrink-0" />
-          <p className="text-muted-foreground text-[13px] leading-relaxed">
-            <span className="text-foreground font-semibold">Quick math:</span> A 30-minute
-            consultation earns you{' '}
-            <span className="text-success font-semibold">{earnings30min}</span>. The client pays{' '}
-            {clientPays30min}.
-          </p>
-        </div>
       </motion.div>
 
       {/* Save button */}
