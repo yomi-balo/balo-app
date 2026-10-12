@@ -204,6 +204,14 @@ describe('StepTerms', () => {
     expect(screen.getByRole('checkbox')).toBeInTheDocument();
   });
 
+  it('renders the live expert terms with the last updated date and no retired payment copy', () => {
+    renderStep(draft);
+    expect(screen.getByText('Last updated 12 October 2026')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '8. Fees' })).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('Stripe Connect');
+    expect(document.body.textContent).not.toContain('hourly');
+  });
+
   it('builds the application summary with real counts (exercises the summaryItems ternaries)', () => {
     // Hydrated draft → productsData.productIds has 2 ids, so the ternary at
     // lines 137-138 renders "2 selected" rather than "None".
