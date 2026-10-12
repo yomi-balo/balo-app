@@ -169,6 +169,7 @@ describe('RateTab — conversion line', () => {
     expect(describedBy).toBeTruthy();
     const region = document.getElementById(describedBy ?? '');
     expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toHaveAttribute('aria-atomic', 'true');
     expect(region).toHaveTextContent(
       "You're paid per minute, so this saves as A$3.34/minute (A$200.40/hour) take-home"
     );
@@ -245,6 +246,8 @@ describe('RateTab — save', () => {
 
     expect(mockSave).toHaveBeenCalledWith({ ratePerMinuteCents: 334 });
     expect(toast.success).toHaveBeenCalledWith('Rate saved — A$200.40/hour');
+    expect(hourInput()).toHaveValue('200.40');
+    expect(screen.getByText(/That's/)).toHaveTextContent("That's A$3.34/minute take-home");
     expect(track).toHaveBeenCalledWith(EXPERT_RATE_EVENTS.RATE_SAVED, {
       rate_per_minute_cents: 334,
       is_initial_setup: false,

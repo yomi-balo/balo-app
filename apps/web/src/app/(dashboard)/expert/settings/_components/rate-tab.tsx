@@ -229,6 +229,8 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
     try {
       const result = await saveRateAction({ ratePerMinuteCents: rateCents });
       if (result.success) {
+        // Show what was saved: a rounded hourly amount becomes the amount it saves as.
+        setRateInput(inputTextFor(rateCents, unit));
         toast.success(
           unit === 'hour'
             ? `Rate saved — ${formatCurrency(hourlyCents)}/hour`
@@ -317,6 +319,7 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
           <p
             id={conversionId}
             aria-live="polite"
+            aria-atomic="true"
             className="text-muted-foreground mt-3 flex min-h-[22px] items-start gap-1.5 text-sm"
           >
             {wasRounded && (
