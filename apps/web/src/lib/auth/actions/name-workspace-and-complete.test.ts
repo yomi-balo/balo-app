@@ -11,6 +11,7 @@ const {
   mockPublish,
   mockEmitOrg,
   mockFindForSessionSync,
+  mockGetMemberRole,
 } = vi.hoisted(() => ({
   mockUpdateName: vi.fn(),
   mockPromote: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockEmitOrg: vi.fn(),
   // BAL-568 — the account-liveness gate reads the LIVE row through `readLiveUserRow`.
   mockFindForSessionSync: vi.fn(),
+  mockGetMemberRole: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -29,6 +31,7 @@ vi.mock('@balo/db', () => ({
     update: mockUsersUpdate,
     findForSessionSync: mockFindForSessionSync,
   },
+  partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
 }));
 
 // `readLiveUserRow` is `React.cache()`'d; a unit test has no request scope, so pass it through.
@@ -72,6 +75,7 @@ describe('nameWorkspaceAndCompleteAction', () => {
     // success-path suites unchanged). Corporate cases override per-test.
     mockFindById.mockResolvedValue({ id: 'user-1', email: 'jane@gmail.com', emailVerified: true });
     mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
+    mockGetMemberRole.mockResolvedValue('owner');
     mockSessionObj = {
       user: {
         id: 'user-1',
@@ -152,13 +156,36 @@ describe('nameWorkspaceAndCompleteAction', () => {
       expect(mockUpdateName).not.toHaveBeenCalled();
     });
 
-    it('rejects a non-owner member without touching the DB (least-privilege)', async () => {
-      (mockSessionObj.user as Record<string, unknown>).companyRole = 'member';
+    it('rejects a plain member without touching the DB (least-privilege)', async () => {
+      mockGetMemberRole.mockResolvedValue('member');
       const result = await nameWorkspaceAndCompleteAction('Acme Corp');
       expect(result).toEqual({ success: false, error: 'Unauthorized' });
       expect(mockFindById).not.toHaveBeenCalled();
       expect(mockUpdateName).not.toHaveBeenCalled();
       expect(mockPromote).not.toHaveBeenCalled();
+      expect(mockUsersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('allows an admin (holds manage_members)', async () => {
+      mockGetMemberRole.mockResolvedValue('admin');
+      const result = await nameWorkspaceAndCompleteAction('Acme Corp');
+      expect(result).toEqual({ success: true, data: { redirectTo: '/dashboard' } });
+      expect(mockGetMemberRole).toHaveBeenCalledWith('company', 'company-1', 'user-1');
+    });
+
+    it('rejects a caller with no live membership', async () => {
+      mockGetMemberRole.mockResolvedValue(undefined);
+      const result = await nameWorkspaceAndCompleteAction('Acme Corp');
+      expect(result).toEqual({ success: false, error: 'Unauthorized' });
+      expect(mockFindById).not.toHaveBeenCalled();
+      expect(mockUsersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('returns the retryable error without throwing when the membership read fails', async () => {
+      mockGetMemberRole.mockRejectedValue(new Error('db down'));
+      const result = await nameWorkspaceAndCompleteAction('Acme Corp');
+      expect(result).toEqual({ success: false, error: RETRYABLE });
+      expect(mockFindById).not.toHaveBeenCalled();
       expect(mockUsersUpdate).not.toHaveBeenCalled();
     });
   });
@@ -340,9 +367,9 @@ describe('nameWorkspaceAndCompleteAction', () => {
   });
 
   describe('BAL-494 / ADR-1053 — workspace name patch', () => {
-    it('the owner guard still passes with a NULL active_company_id (unchanged pre-onboarding behaviour)', async () => {
+    it('the capability gate still passes with a NULL active_company_id (unchanged pre-onboarding behaviour)', async () => {
       // No `activeCompanyId` concept in the session at all — this pins that the guard
-      // (`companyRole !== 'owner'`) is untouched by BAL-494.
+      // (`manage_members`) is untouched by BAL-494.
       const result = await nameWorkspaceAndCompleteAction('Acme Corp');
       expect(result).toEqual({ success: true, data: { redirectTo: '/dashboard' } });
     });

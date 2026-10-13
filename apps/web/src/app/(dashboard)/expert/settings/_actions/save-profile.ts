@@ -4,6 +4,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { expertsRepository } from '@balo/db';
 import { EXPERT_LANGUAGES_MAX, EXPERT_INDUSTRIES_MAX } from '@balo/shared/experts';
 import { log } from '@/lib/logging';
@@ -53,11 +54,12 @@ export const saveProfileAction = withAuth(
     try {
       const validated = saveProfileSchema.parse(input);
 
-      if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-        return { success: false, error: 'Expert profile required' };
+      const gate = await resolveApprovedExpert(session.user);
+      if (!gate.ok) {
+        return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
       }
 
-      const expertProfileId = session.user.expertProfileId;
+      const expertProfileId = gate.expertProfileId;
 
       // Check username availability if provided
       const usernameToSave = validated.username || null;

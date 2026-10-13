@@ -106,13 +106,10 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
 
     const membership = userWithCompany.companyMemberships[0];
 
-    // 5. Load expert profile if user is in expert mode
-    let expertProfile = null;
-    if (user.activeMode === 'expert') {
-      expertProfile = await db.query.expertProfiles.findFirst({
-        where: (profiles, { eq }) => eq(profiles.userId, user.id),
-      });
-    }
+    // 5. Load the expert profile whenever one exists, independent of the active view
+    const expertProfile = await db.query.expertProfiles.findFirst({
+      where: (profiles, { eq }) => eq(profiles.userId, user.id),
+    });
 
     // 6. Set session
     const session = await getSession();

@@ -145,9 +145,11 @@ getCurrentUser(): Promise<SessionUser | null>
 // Also throws 'Onboarding not completed' if !user.onboardingCompleted
 requireUser(): Promise<SessionUser>
 
-// Like requireUser(), but also asserts user.activeMode === 'expert' and expertProfileId exists
-// Throws 'Expert profile required' if not
-requireExpert(): Promise<SessionUser & { expertProfileId: string }>
+// Approved-expert write gate (lib/auth/approved-expert.ts). Returns a result, never throws on refusal,
+// so each action keeps its own refusal shape. Reads expert_profiles.approved_at LIVE on every call
+// and never reads activeMode (a view toggle, not an authorization input).
+// { ok: true, expertProfileId } | { ok: false, reason: 'no_profile' | 'not_found' | 'not_owner' | 'not_approved' }
+resolveApprovedExpert(user: Pick<SessionUser, 'id' | 'expertProfileId'>): Promise<ApprovedExpertResolution>
 
 // Returns { companyId, companyName, companyRole } for the current user's active company context
 // Throws if not authenticated or no company membership found

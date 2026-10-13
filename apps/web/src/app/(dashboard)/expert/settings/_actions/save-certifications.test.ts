@@ -13,10 +13,12 @@ vi.mock('@/lib/logging', () => ({
 }));
 
 const mockSaveSettingsCertifications = vi.fn();
+const mockFindApprovalById = vi.fn();
 
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     saveSettingsCertifications: (...args: unknown[]) => mockSaveSettingsCertifications(...args),
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
   },
 }));
 
@@ -30,6 +32,10 @@ vi.mock('@/lib/auth/session', () => ({
 import { saveCertificationsAction } from './save-certifications';
 import { CERTIFICATIONS_LOCKED_ERROR } from './certifications-locked-copy';
 import { revalidatePath } from 'next/cache';
+import {
+  APPROVED_PROFILE_ROW,
+  itEnforcesApprovedExpertGate,
+} from '@/test/fixtures/approved-expert-gate-cases';
 import { log } from '@/lib/logging';
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -63,6 +69,7 @@ describe('saveCertificationsAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
     mockSaveSettingsCertifications.mockResolvedValue({ outcome: 'saved' });
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   describe('authentication / mode guard', () => {
@@ -70,24 +77,36 @@ describe('saveCertificationsAction', () => {
       mockSessionObj = { save: mockSave };
       await expect(saveCertificationsAction(validInput())).rejects.toThrow('Unauthorized');
     });
+  });
 
-    it('refuses when the active mode is not expert', async () => {
-      mockSessionObj = {
-        ...EXPERT_SESSION,
-        user: { ...EXPERT_SESSION.user, activeMode: 'client' },
-      };
-      const result = await saveCertificationsAction(validInput());
-      expect(result).toEqual({ success: false, error: 'Expert profile required' });
-      expect(mockSaveSettingsCertifications).not.toHaveBeenCalled();
+  describe('approved expert guard', () => {
+    itEnforcesApprovedExpertGate({
+      setSessionUser: (u) => {
+        mockSessionObj = {
+          ...EXPERT_SESSION,
+          user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? undefined },
+        };
+      },
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
+      run: () => saveCertificationsAction(validInput()),
+      expectAllowed: (result) => {
+        expect(result).toEqual({ success: true });
+        expect(mockSaveSettingsCertifications).toHaveBeenCalledWith(PROFILE_ID, expect.anything());
+      },
+      expectRefused: (result) =>
+        expect(result).toEqual({ success: false, error: 'Expert profile required' }),
+      expectNoSideEffect: () => expect(mockSaveSettingsCertifications).not.toHaveBeenCalled(),
     });
 
-    it('refuses when there is no expertProfileId', async () => {
-      mockSessionObj = {
-        ...EXPERT_SESSION,
-        user: { ...EXPERT_SESSION.user, expertProfileId: undefined },
-      };
+    it('returns the generic failure, without throwing, when the guard read fails', async () => {
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
       const result = await saveCertificationsAction(validInput());
-      expect(result).toEqual({ success: false, error: 'Expert profile required' });
+      expect(result).toEqual({
+        success: false,
+        error: 'Failed to save certifications. Please try again.',
+      });
+      expect(mockSaveSettingsCertifications).not.toHaveBeenCalled();
     });
   });
 

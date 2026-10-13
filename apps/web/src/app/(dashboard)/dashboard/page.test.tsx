@@ -136,7 +136,7 @@ describe('DashboardPage — company branch', () => {
 
   /**
    * `SessionUser` is a type assertion over cookie JSON with no runtime validation, so a BLANK
-   * `expertProfileId` is representable. The branch gates on truthiness — as `requireExpert()`
+   * `expertProfileId` is representable. The branch gates on truthiness — as `resolveApprovedExpert()`
    * does — so a blank id lands here rather than on an expert dashboard whose every read
    * ('' as a profile id) can only come back empty.
    */

@@ -1101,6 +1101,29 @@ export const expertsRepository = {
   },
 
   /**
+   * BAL-438 — the approved-expert guard's narrow read: ownership and approval, and nothing else.
+   *
+   * ⚠ WHY NOT `findProfileById`: that returns the FULL row (`stripeConnectId`, `cronofyUserId`,
+   * `rateCents`, every staff-only flag), and the guard runs on every expert-settings write. The
+   * projection means the row CAN hold nothing the guard does not decide on, and it never returns
+   * the full row.
+   *
+   * `undefined` ⇒ no such profile. `{ approvedAt: null }` ⇒ a draft or declined profile. The
+   * caller compares `userId` to the session user and decides; `expert_profiles` has no
+   * `deleted_at`, so no soft-delete predicate applies.
+   */
+  async findApprovalById(
+    expertProfileId: string
+  ): Promise<{ userId: string; approvedAt: Date | null } | undefined> {
+    const [row] = await db
+      .select({ userId: expertProfiles.userId, approvedAt: expertProfiles.approvedAt })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, expertProfileId))
+      .limit(1);
+    return row;
+  },
+
+  /**
    * BAL-356: link an expert draft/profile to its payout agency by setting
    * `agency_id`. A single UPDATE — `expert_profiles` has no `deletedAt`, so only a
    * not-found guard applies (no soft-delete predicate). Executor-aware: the three

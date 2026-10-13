@@ -21,6 +21,13 @@ vi.mock('@/lib/logging', () => ({
   errorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 
+const mockFindApprovalById = vi.fn();
+vi.mock('@balo/db', () => ({
+  expertsRepository: {
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
+  },
+}));
+
 const mockInternalApiFetch = vi.fn();
 vi.mock('../_lib/internal-api', () => ({
   internalApiFetch: (...args: unknown[]) => mockInternalApiFetch(...args),
@@ -29,6 +36,10 @@ vi.mock('../_lib/internal-api', () => ({
 import { saveScheduleAction } from './save-schedule';
 import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
+import {
+  APPROVED_PROFILE_ROW,
+  itEnforcesApprovedExpertGate,
+} from '@/test/fixtures/approved-expert-gate-cases';
 
 const EXPERT_SESSION = {
   user: {
@@ -58,6 +69,7 @@ describe('saveScheduleAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   it('throws when there is no session user', async () => {
@@ -65,11 +77,38 @@ describe('saveScheduleAction', () => {
     await expect(saveScheduleAction(VALID_INPUT)).rejects.toThrow('Unauthorized');
   });
 
-  it('returns an error when not in expert mode', async () => {
-    mockSessionObj = { user: { ...EXPERT_SESSION.user, activeMode: 'client' }, save: mockSave };
-    const result = await saveScheduleAction(VALID_INPUT);
-    expect(result).toEqual({ success: false, error: 'Expert profile required' });
-    expect(mockInternalApiFetch).not.toHaveBeenCalled();
+  describe('approved expert guard', () => {
+    itEnforcesApprovedExpertGate({
+      setSessionUser: (u) => {
+        mockSessionObj = {
+          user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? undefined },
+          save: mockSave,
+        };
+      },
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
+      run: () => {
+        mockInternalApiFetch.mockResolvedValue({ success: true });
+        return saveScheduleAction(VALID_INPUT);
+      },
+      expectAllowed: (result) => {
+        expect(result).toEqual({ success: true });
+        expect(mockInternalApiFetch).toHaveBeenCalledTimes(1);
+      },
+      expectRefused: (result) =>
+        expect(result).toEqual({ success: false, error: 'Expert profile required' }),
+      expectNoSideEffect: () => expect(mockInternalApiFetch).not.toHaveBeenCalled(),
+    });
+
+    it('returns the generic failure, without throwing, when the guard read fails', async () => {
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
+      const result = await saveScheduleAction(VALID_INPUT);
+      expect(result).toEqual({
+        success: false,
+        error: 'Failed to save schedule. Please try again.',
+      });
+      expect(mockInternalApiFetch).not.toHaveBeenCalled();
+    });
   });
 
   it('POSTs to the session-derived profile path — never a client id — and revalidates', async () => {

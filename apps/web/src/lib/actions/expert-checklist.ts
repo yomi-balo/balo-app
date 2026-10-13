@@ -2,6 +2,7 @@ import 'server-only';
 
 import { cache } from 'react';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import { APPROVED_EXPERT_REQUIRED_ERROR, resolveApprovedExpert } from '@/lib/auth/approved-expert';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { expertSearchabilityRepository } from '@balo/db';
 import { calendarConnectionNeedsReconnect, deriveExpertChecklist } from '@balo/shared/experts';
@@ -57,14 +58,11 @@ export interface ChecklistStatus {
 export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
   const user = await requireOnboardedUser();
 
-  if (user.activeMode !== 'expert') {
-    throw new Error('Expert mode required');
+  const gate = await resolveApprovedExpert(user);
+  if (!gate.ok) {
+    throw new Error(APPROVED_EXPERT_REQUIRED_ERROR);
   }
-
-  const expertProfileId = user.expertProfileId;
-  if (!expertProfileId) {
-    throw new Error('Expert profile required');
-  }
+  const { expertProfileId } = gate;
 
   // S4 — the scoped overload: an extra `AND expert_profiles.user_id = :userId` term on a
   // by-id read against a table with no RLS. `session.user.id` is the caller's own id, so this

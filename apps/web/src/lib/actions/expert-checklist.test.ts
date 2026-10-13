@@ -14,8 +14,12 @@ vi.mock('react', async (importOriginal) => {
 
 const mockLoadInputs = vi.fn();
 const mockReconcileFromRead = vi.fn();
+const mockFindApprovalById = vi.fn();
 
 vi.mock('@balo/db', () => ({
+  expertsRepository: {
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
+  },
   expertSearchabilityRepository: {
     loadInputs: (...args: unknown[]) => mockLoadInputs(...args),
   },
@@ -56,6 +60,12 @@ const EXPERT_USER = {
   onboardingCompleted: true,
 };
 
+const APPROVED_PROFILE = {
+  id: 'profile-1',
+  userId: 'user-1',
+  approvedAt: new Date('2026-01-01T00:00:00Z'),
+};
+
 /** A snapshot where every checklist item is satisfied. */
 function completeSnapshot(overrides: Record<string, unknown> = {}) {
   return {
@@ -82,6 +92,7 @@ describe('getChecklistStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUserObj = { ...EXPERT_USER };
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE);
     mockReconcileFromRead.mockResolvedValue({ changed: false });
     mockLoadInputs.mockResolvedValue(completeSnapshot());
   });
@@ -101,14 +112,16 @@ describe('getChecklistStatus', () => {
       expect(mockLoadInputs).not.toHaveBeenCalled();
     });
 
-    it('throws when not in expert mode', async () => {
-      mockUserObj = {
-        id: 'user-1',
-        activeMode: 'client',
-        expertProfileId: 'profile-1',
-        onboardingCompleted: true,
-      };
-      await expect(getChecklistStatus()).rejects.toThrow('Expert mode required');
+    it('computes the checklist for an approved expert in client view', async () => {
+      mockUserObj = { ...EXPERT_USER, activeMode: 'client' };
+      const status = await getChecklistStatus();
+      expect(status.allComplete).toBe(true);
+      expect(mockLoadInputs).toHaveBeenCalled();
+    });
+
+    it('throws when the expert profile is not approved', async () => {
+      mockFindApprovalById.mockResolvedValue({ ...APPROVED_PROFILE, approvedAt: null });
+      await expect(getChecklistStatus()).rejects.toThrow('Expert profile required');
       expect(mockLoadInputs).not.toHaveBeenCalled();
     });
 
@@ -120,6 +133,7 @@ describe('getChecklistStatus', () => {
         onboardingCompleted: true,
       };
       await expect(getChecklistStatus()).rejects.toThrow('Expert profile required');
+      expect(mockFindApprovalById).not.toHaveBeenCalled();
       expect(mockLoadInputs).not.toHaveBeenCalled();
     });
 

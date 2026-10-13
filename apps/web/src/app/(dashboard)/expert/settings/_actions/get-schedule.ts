@@ -3,6 +3,7 @@ import 'server-only';
 
 import { expertsRepository } from '@balo/db';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert } from '@/lib/auth/approved-expert';
 import { log, errorMessage } from '@/lib/logging';
 import { internalApiFetch } from '../_lib/internal-api';
 import type { ScheduleApiResponse, WorkInFlight } from '../_types/schedule';
@@ -43,12 +44,13 @@ async function loadWorkInFlight(expertProfileId: string, userId: string): Promis
  * IDOR gate: the expertProfileId is derived from the session, never the client.
  */
 export const getScheduleAction = withAuth(async (session): Promise<ScheduleLoadResult | null> => {
-  if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-    return null;
-  }
-  const expertProfileId = session.user.expertProfileId;
-
   try {
+    const gate = await resolveApprovedExpert(session.user);
+    if (!gate.ok) {
+      return null;
+    }
+    const { expertProfileId } = gate;
+
     const [schedule, workInFlight] = await Promise.all([
       internalApiFetch<ScheduleApiResponse>(
         `/api/experts/${expertProfileId}/schedule`,
@@ -61,7 +63,7 @@ export const getScheduleAction = withAuth(async (session): Promise<ScheduleLoadR
   } catch (err: unknown) {
     log.error('Failed to fetch expert schedule', {
       userId: session.user.id,
-      expertProfileId,
+      expertProfileId: session.user.expertProfileId,
       error: errorMessage(err),
       stack: err instanceof Error ? err.stack : undefined,
     });

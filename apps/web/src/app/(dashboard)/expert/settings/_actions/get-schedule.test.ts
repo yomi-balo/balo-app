@@ -18,8 +18,10 @@ vi.mock('@/lib/logging', () => ({
 }));
 
 const mockCountWorkInFlight = vi.fn();
+const mockFindApprovalById = vi.fn();
 vi.mock('@balo/db', () => ({
   expertsRepository: {
+    findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
     countWorkInFlight: (...args: unknown[]) => mockCountWorkInFlight(...args),
   },
 }));
@@ -31,6 +33,10 @@ vi.mock('../_lib/internal-api', () => ({
 
 import { getScheduleAction } from './get-schedule';
 import { log } from '@/lib/logging';
+import {
+  APPROVED_PROFILE_ROW,
+  itEnforcesApprovedExpertGate,
+} from '@/test/fixtures/approved-expert-gate-cases';
 
 const EXPERT_SESSION = {
   user: {
@@ -61,6 +67,7 @@ describe('getScheduleAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
     mockCountWorkInFlight.mockResolvedValue(WORK_IN_FLIGHT);
+    mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
   it('throws when there is no session user', async () => {
@@ -68,21 +75,31 @@ describe('getScheduleAction', () => {
     await expect(getScheduleAction()).rejects.toThrow('Unauthorized');
   });
 
-  it('returns null when not in expert mode', async () => {
-    mockSessionObj = {
-      user: { ...EXPERT_SESSION.user, activeMode: 'client' },
-      save: mockSave,
-    };
-    expect(await getScheduleAction()).toBeNull();
-    expect(mockInternalApiFetch).not.toHaveBeenCalled();
-  });
+  describe('approved expert guard', () => {
+    itEnforcesApprovedExpertGate({
+      setSessionUser: (u) => {
+        mockSessionObj = {
+          user: { ...EXPERT_SESSION.user, ...u, expertProfileId: u.expertProfileId ?? undefined },
+          save: mockSave,
+        };
+      },
+      setProfileRow: (row) => mockFindApprovalById.mockResolvedValue(row),
+      findApprovalById: mockFindApprovalById,
+      run: () => {
+        mockInternalApiFetch.mockResolvedValue(SCHEDULE);
+        return getScheduleAction();
+      },
+      expectAllowed: (result) =>
+        expect(result).toEqual(expect.objectContaining({ expertProfileId: 'profile-1' })),
+      expectRefused: (result) => expect(result).toBeNull(),
+      expectNoSideEffect: () => expect(mockInternalApiFetch).not.toHaveBeenCalled(),
+    });
 
-  it('returns null when there is no expert profile', async () => {
-    mockSessionObj = {
-      user: { ...EXPERT_SESSION.user, expertProfileId: undefined },
-      save: mockSave,
-    };
-    expect(await getScheduleAction()).toBeNull();
+    it('returns null, without throwing, when the guard read fails', async () => {
+      mockFindApprovalById.mockRejectedValue(new Error('DB down'));
+      expect(await getScheduleAction()).toBeNull();
+      expect(mockInternalApiFetch).not.toHaveBeenCalled();
+    });
   });
 
   it('sends only the session-derived expertProfileId and returns the schedule', async () => {

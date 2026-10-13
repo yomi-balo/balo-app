@@ -4,6 +4,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { log, errorMessage } from '@/lib/logging';
 import { internalApiFetch } from '../_lib/internal-api';
 
@@ -21,12 +22,12 @@ export interface SetWorkAvailabilityResult {
  */
 export const setWorkAvailabilityAction = withAuth(
   async (session, input: { availableForWork: boolean }): Promise<SetWorkAvailabilityResult> => {
-    if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-      return { success: false, error: 'Expert profile required' };
-    }
-    const expertProfileId = session.user.expertProfileId;
-
     try {
+      const gate = await resolveApprovedExpert(session.user);
+      if (!gate.ok) {
+        return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
+      }
+      const { expertProfileId } = gate;
       const { availableForWork } = setWorkAvailabilitySchema.parse(input);
 
       await internalApiFetch<{ success: boolean }>(
@@ -54,7 +55,7 @@ export const setWorkAvailabilityAction = withAuth(
     } catch (err: unknown) {
       log.error('Failed to change expert work availability', {
         userId: session.user.id,
-        expertProfileId,
+        expertProfileId: session.user.expertProfileId,
         error: errorMessage(err),
         stack: err instanceof Error ? err.stack : undefined,
       });

@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
+import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { payoutsRepository, type BeneficiaryStatus } from '@balo/db';
 import { log } from '@/lib/logging';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
@@ -83,12 +84,13 @@ export const savePayoutDetailsAction = withAuth(
       // 1. Validate input
       const validated = savePayoutDetailsSchema.parse(input);
 
-      // 2. Verify expert mode
-      if (session.user.activeMode !== 'expert' || !session.user.expertProfileId) {
-        return { success: false, error: 'Expert profile required' };
+      // 2. Verify approved expert profile
+      const gate = await resolveApprovedExpert(session.user);
+      if (!gate.ok) {
+        return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
       }
 
-      const expertProfileId = session.user.expertProfileId;
+      const { expertProfileId } = gate;
 
       // 3. Check if this is an update (details already exist)
       const existing = await payoutsRepository.findByExpertProfileId(expertProfileId);

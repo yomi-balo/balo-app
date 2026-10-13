@@ -341,11 +341,18 @@ describe('signInAction', () => {
       );
     });
 
-    it('does NOT load expert profile when activeMode is "client"', async () => {
+    it('loads expert profile when activeMode is "client"', async () => {
       setupHappyPath({ activeMode: 'client' });
+      mockExpertProfileFindFirst.mockResolvedValue({
+        id: 'ep-1',
+        verticalId: 'v-1',
+        userId: 'user-1',
+      });
+
       await signInAction(validInput());
-      expect(mockExpertProfileFindFirst).not.toHaveBeenCalled();
-      expect(mockSessionObj.user).not.toHaveProperty('expertProfileId');
+
+      expect(mockExpertProfileFindFirst).toHaveBeenCalled();
+      expect(mockSessionObj.user).toEqual(expect.objectContaining({ expertProfileId: 'ep-1' }));
     });
 
     it('omits expert fields when expert profile query returns null', async () => {

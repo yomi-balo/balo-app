@@ -145,7 +145,7 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
   // through to the company branch below, and `navContext.workspaceType` still reads 'expert' in
   // that case (R1 / D11) — resolving footer links from it would hand the company card the
   // expert's "Open calendar" link instead of Cases/Projects.
-  // ⚠ TRUTHINESS, not `!== undefined` — `requireExpert()` (`lib/auth/session.ts`) gates on
+  // ⚠ TRUTHINESS, not `!== undefined` — `resolveApprovedExpert()` (`lib/auth/approved-expert.ts`) gates on
   // `!user.expertProfileId`, and `SessionUser` is a type assertion over cookie JSON with no
   // runtime validation, so an empty-string id is representable. Matching the house check keeps a
   // blank id on the company branch rather than rendering an expert dashboard that can only fail.
