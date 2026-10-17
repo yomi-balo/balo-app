@@ -23,6 +23,8 @@ are.
 To come back, turn **Available for new work** on again. It takes effect straight away, no
 confirmation needed.
 
+![Expert Settings on the Schedule tab, with the Available for new work switch (currently on) highlighted.](01)
+
 ## What pauses
 
 - **New consultations.** Clients can't book a new consultation with you. Your profile stops
@@ -32,6 +34,8 @@ confirmation needed.
 - **Project invites.** You won't be invited to new project requests.
 
 Your profile stays visible and clients can still message you. While you're paused, search won't show you as available.
+
+![Your public profile while paused, with the card saying you aren't taking on new work highlighted.](02)
 
 ## What carries on as normal
 
@@ -45,11 +49,15 @@ Your profile stays visible and clients can still message you. While you're pause
 - **Your calendar connection.** It keeps syncing, so existing bookings and conflict checks stay
   correct.
 
+![A booked consultation on your calendar, shown in full colour while you're paused.](03)
+
 ## Your settings are kept
 
 While you're paused, your weekly hours, booking rules and time off are greyed out but never
 cleared. When you turn **Available for new work** back on, everything is exactly as you left it
 and your open times return straight away.
+
+![The Availability card while paused, with the note that your hours are kept highlighted and your weekly hours greyed out.](04)
 
 On your **Calendar**, open hours show as hatched while you're paused. Booked meetings stay in full
 colour and you can still join them.

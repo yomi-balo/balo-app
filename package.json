@@ -20,6 +20,7 @@
     "test:integration:coverage": "pnpm --filter @balo/db test:integration:coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "help:screenshots": "playwright test --config e2e/help-screenshots/playwright.config.ts",
     "prepare": "husky"
   },
   "devDependencies": {
@@ -33,6 +34,7 @@
     "lint-staged": "^16.2.7",
     "prettier": "^3.7.4",
     "prettier-plugin-tailwindcss": "^0.7.2",
+    "sharp": "0.34.5",
     "turbo": "^2.7.5",
     "typescript": "5.9.2",
     "vitest": "^4.0.18"
