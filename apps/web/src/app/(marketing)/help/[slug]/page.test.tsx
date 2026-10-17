@@ -109,16 +109,17 @@ describe('HelpGuidePage', () => {
     expect(screen.getByText('Step one body')).toBeInTheDocument();
   });
 
-  it('renders the callout and a light/dark picture with alt text', async () => {
+  it('renders the callout and a light/dark image pair with alt text', async () => {
     await renderGuide('main');
 
     expect(screen.getByText('Good to know')).toBeInTheDocument();
     expect(screen.getByText('Mind the timezone')).toBeInTheDocument();
-    const img = screen.getByRole('img', { name: 'Slots shown' });
+    const [img] = screen.getAllByRole('img', { name: 'Slots shown' });
     expect(img).toHaveAttribute('src', '/help/main/02-light.png');
-    const source = img.closest('picture')?.querySelector('source');
-    expect(source).toHaveAttribute('media', '(prefers-color-scheme: dark)');
-    expect(source).toHaveAttribute('srcset', '/help/main/02-dark.png');
+    const dark = document.querySelector('img[src="/help/main/02-dark.png"]');
+    expect(dark).toHaveAttribute('alt', 'Slots shown');
+    expect(dark).not.toHaveAttribute('aria-hidden');
+    expect(dark).toHaveClass('hidden', 'dark:block');
   });
 
   it('builds the breadcrumb from the first audience when no side is requested', async () => {

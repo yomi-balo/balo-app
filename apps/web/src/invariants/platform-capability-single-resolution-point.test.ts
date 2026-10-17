@@ -128,6 +128,10 @@ const OVERRIDE_TOUCHERS: readonly string[] = [
   // pin catching it is the pin working: a new toucher has to be argued for, and here is the
   // argument.
   'apps/web/src/app/api/auth/test-login/route.ts',
+  // BAL-598: the help-screenshot seed refuses to touch the same `onboarded-e2e` fixture row when it
+  // carries a non-NULL override, the same two-sided NULL check as test-login above, so it never
+  // re-dresses an elevated row as Priya. A refusal read, never a resolution or a write.
+  'packages/db/src/help-seed/fixture.ts',
 ];
 
 /**
@@ -517,7 +521,7 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
   it('PIN C: the column / session field is touched by exactly the one writer and the readers (both directions + length)', () => {
     const found = filesNaming(OVERRIDE_FIELD).sort();
     expect(found).toEqual([...OVERRIDE_TOUCHERS].sort());
-    expect(found).toHaveLength(8);
+    expect(found).toHaveLength(9);
   });
 
   it('PIN C2: the snake_case COLUMN name is written by exactly the schema that declares it (+ the argued audit-action namer)', () => {

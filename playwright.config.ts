@@ -2,6 +2,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
+  // The help-screenshot runner has its own config (`pnpm help:screenshots`) and mutates the
+  // seeded DB, so it must never be picked up by the default run or CI.
+  testIgnore: ['**/help-screenshots/**'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
