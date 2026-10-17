@@ -398,6 +398,17 @@ export {
   COMMAND_PALETTE_ACTION_TYPES,
   type CommandPaletteActionType,
 } from './command-palette';
+// BAL-597 — the public help centre's CLIENT event family. `comment` is the first free-text
+// PostHog property; see the module docblock.
+export {
+  HELP_EVENTS,
+  type HelpEventMap,
+  HELP_AUDIENCES,
+  type HelpAudience,
+  HELP_ARTICLE_SOURCES,
+  type HelpArticleSource,
+  HELP_FEEDBACK_COMMENT_MAX,
+} from './help';
 // BAL-529 §D — the Stripe redirect-return family's CLIENT event + its two canonical vocabulary
 // tuples (surface, unbound reason). Deliberately NOT folded into `./settings` — see this
 // module's own header for why.

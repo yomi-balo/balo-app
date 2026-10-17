@@ -118,6 +118,15 @@ describe('Sidebar motion + jump-out (BAL-497)', () => {
     expect(link.textContent?.trim()).toContain('Find experts');
   });
 
+  it('Help names its own destination in the accessible name and never prefetches', () => {
+    pathname = '/dashboard';
+    renderSidebar({ mode: 'client' });
+    const help = screen.getByRole('link', { name: 'Help, opens the help centre' });
+    expect(help).toHaveAttribute('href', '/help?for=clients');
+    expect(help).toHaveAttribute('data-prefetch', 'false');
+    expect(help.textContent?.trim()).toContain('Help');
+  });
+
   it('D3 — the /experts anchor carries prefetch={false}; every other anchor is untouched', () => {
     pathname = '/dashboard';
     renderSidebar({ mode: 'client' });

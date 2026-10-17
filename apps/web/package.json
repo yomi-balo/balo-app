@@ -11,7 +11,8 @@
     "check-types": "next typegen && tsc --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "help:generate": "vitest run src/lib/help/compiler/help-content.generated.test.ts --update"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",
@@ -81,7 +82,9 @@
     "eslint": "^9.39.1",
     "jest-axe": "^10.0.0",
     "jsdom": "^27.4.0",
+    "marked": "^15.0.12",
     "pino-pretty": "^11.0.0",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "yaml": "^2.8.2"
   }
 }

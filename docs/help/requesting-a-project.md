@@ -1,4 +1,14 @@
-# Requesting a project
+---
+title: 'Requesting a project'
+summary: 'Describe the work, get proposals from experts and choose one.'
+audience: [client]
+category:
+  client: cases-projects
+order: 2
+published: false
+updated: 2026-10-17
+related: [turning-a-case-into-a-project, booking-a-consultation]
+---
 
 Have a piece of work in mind? Tell us about it once and we'll get it to the right person. Where
 you start decides who sees it first.

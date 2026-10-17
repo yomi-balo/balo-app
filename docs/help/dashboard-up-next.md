@@ -1,4 +1,15 @@
-# Up next on your dashboard
+---
+title: 'Up next on your dashboard'
+summary: 'Your upcoming meetings at a glance, and where each one takes you.'
+audience: [client, expert]
+category:
+  client: getting-started
+  expert: getting-started
+order: 4
+published: false
+updated: 2026-10-17
+related: [cases-index]
+---
 
 The Up next card on your dashboard lists up to four of your upcoming meetings, soonest
 first — across consultations, project kickoffs, discovery calls and intro calls. Times show

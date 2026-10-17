@@ -1,4 +1,14 @@
-# Booking a consultation
+---
+title: 'Booking a consultation'
+summary: 'Pick a time with an expert, choose a length and confirm the call.'
+audience: [client]
+category:
+  client: calls
+order: 1
+published: false
+updated: 2026-10-17
+related: [cases-index, turning-a-case-into-a-project]
+---
 
 A consultation is a live video call with an expert, billed per minute from your company's
 prepaid credit. Every consultation belongs to a case, so all your calls, messages and files with

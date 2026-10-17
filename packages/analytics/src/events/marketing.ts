@@ -18,6 +18,7 @@ export const MARKETING_NAV_LINKS = [
   'for_experts',
   'how_it_works', // TODO(MJ): no page yet — declared, never emitted
   'pricing', // TODO(MJ): no page yet — declared, never emitted
+  'help',
 ] as const;
 export type MarketingNavLink = (typeof MARKETING_NAV_LINKS)[number];
 

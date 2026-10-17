@@ -125,6 +125,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
       '/projects',
       '/settings',
       '/settings/account',
+      '/help?for=clients',
     ]);
   });
 
@@ -136,6 +137,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
       '/expert/settings',
       '/settings/team',
       '/settings/account',
+      '/help?for=experts',
     ]);
   });
 
@@ -181,6 +183,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
       '/projects',
       '/settings',
       '/settings/account',
+      '/help?for=clients',
       '/admin',
       '/admin/applications',
       '/engagements',

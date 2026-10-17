@@ -1,4 +1,14 @@
-# Pausing new work
+---
+title: 'Pausing new work'
+summary: 'Stop new bookings for a while without losing your setup.'
+audience: [expert]
+category:
+  expert: getting-booked
+order: 2
+published: false
+updated: 2026-10-17
+related: [project-requests-for-experts]
+---
 
 Need a break, or fully booked for a while? You can stop new work coming in without touching
 anything you've already set up.

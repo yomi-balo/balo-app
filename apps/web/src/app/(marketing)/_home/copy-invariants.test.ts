@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@/test/utils';
 import { resolveRouteDir, scanRouteSources } from '@/invariants/_source-scan';
-import { PRICE_POINTS } from './copy';
+import { GLOBAL_FORBIDDEN } from '@/lib/copy/forbidden-terms';
+import { FOOTER_COLUMNS, PRICE_POINTS } from './copy';
 import { ExpertBandSection } from './expert-band-section';
 
 /**
@@ -31,16 +32,6 @@ const HOME_DIR = resolveRouteDir([
   'apps/web/src/app/(marketing)/_home',
 ]);
 const files = scanRouteSources(HOME_DIR, '', []);
-
-const GLOBAL_FORBIDDEN = [
-  'margin',
-  'commission',
-  'take rate',
-  'our cut',
-  'platform fee',
-  'earnings',
-  'payout',
-] as const;
 
 /** `margin: 0` (a CSS-in-JS declaration, `testimonials-section.tsx`) and `marginTop`/
  * `marginBottom`/… (camelCase CSS properties) are NOT the English word "margin" — both are
@@ -113,5 +104,17 @@ describe('copy-invariants — the for-experts band carries ZERO fee/margin langu
     for (const term of FOR_EXPERTS_FORBIDDEN) {
       expect(text.includes(term), `for-experts rendered text contains "${term}"`).toBe(false);
     }
+  });
+});
+
+describe('copy-invariants — the footer links to the help centre for both sides', () => {
+  const hrefsOf = (heading: string): string[] =>
+    (FOOTER_COLUMNS.find((column) => column.heading === heading)?.links ?? []).map(
+      (link) => link.href
+    );
+
+  it('Resources carries the client help centre and Experts carries the expert one', () => {
+    expect(hrefsOf('Resources')).toEqual(['/help']);
+    expect(hrefsOf('Experts')).toContain('/help?for=experts');
   });
 });

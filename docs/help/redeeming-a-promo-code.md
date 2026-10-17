@@ -1,4 +1,14 @@
-# Redeeming a promo code
+---
+title: 'Redeeming a promo code'
+summary: 'Add promo credit to your company without paying.'
+audience: [client]
+category:
+  client: credit-billing
+order: 2
+published: false
+updated: 2026-10-17
+related: [booking-a-consultation]
+---
 
 Have a Balo promo code? Redeeming it adds prepaid credit to your company — no card and no
 payment required.

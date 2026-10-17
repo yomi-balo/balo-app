@@ -343,13 +343,13 @@ export interface MarketingFooterColumn {
 
 /**
  * §13.2 — ship only links that resolve. The ref's remaining ~19 links (About, Careers, Contact,
- * Trust & security, Help centre, Blog, Status, Payouts, How vetting works, Expert help centre)
+ * Trust & security, Blog, Status, Payouts, How vetting works)
  * are preserved here, verbatim, as a TODO(MJ) rather than silently dropped:
  *
  * TODO(MJ): candidate future footer links, once the destinations exist —
  *   Company: About, Careers, Contact, Trust & security
- *   Resources: Help centre, Blog, Status
- *   Experts: How vetting works, Payouts, Expert help centre
+ *   Resources: Blog, Status
+ *   Experts: How vetting works, Payouts
  *   Legal: Privacy, Terms, Cookies (the bottom-bar `<nav aria-label="Legal">` is omitted
  *     entirely until these routes exist, rather than linking to them nowhere).
  */
@@ -363,8 +363,15 @@ export const FOOTER_COLUMNS: readonly MarketingFooterColumn[] = [
     ],
   },
   {
+    heading: 'Resources',
+    links: [{ label: 'Help centre', href: '/help' }],
+  },
+  {
     heading: 'Experts',
-    links: [{ label: 'Apply to join', href: '/expert/apply' }],
+    links: [
+      { label: 'Apply to join', href: '/expert/apply' },
+      { label: 'Expert help centre', href: '/help?for=experts' },
+    ],
   },
   {
     heading: 'Account',

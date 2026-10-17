@@ -9,12 +9,13 @@ describe('MARKETING_NAV_ITEMS', () => {
     }
   });
 
-  it('is the design reference’s four links, in its order, with their hrefs', () => {
+  it('is the design reference’s four links in its order, then Help, with their hrefs', () => {
     expect(MARKETING_NAV_ITEMS.map((entry) => [entry.key, entry.label, entry.href])).toEqual([
       ['find_experts', 'Find experts', '/experts'],
       ['how_it_works', 'How it works', '/how-it-works'],
       ['for_experts', 'For experts', '/for-experts'],
       ['pricing', 'Pricing', '/pricing'],
+      ['help', 'Help', '/help'],
     ]);
   });
 
@@ -26,6 +27,20 @@ describe('MARKETING_NAV_ITEMS', () => {
   it('has no duplicate keys', () => {
     const keys = MARKETING_NAV_ITEMS.map((entry) => entry.key);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  describe('help.isActive', () => {
+    const help = MARKETING_NAV_ITEMS.find((entry) => entry.key === 'help');
+
+    it('is true for the index and any guide', () => {
+      expect(help?.isActive('/help')).toBe(true);
+      expect(help?.isActive('/help/booking-a-consultation')).toBe(true);
+    });
+
+    it('is false for unrelated or lookalike paths', () => {
+      expect(help?.isActive('/helpdesk')).toBe(false);
+      expect(help?.isActive('/experts')).toBe(false);
+    });
   });
 
   describe('find_experts.isActive', () => {

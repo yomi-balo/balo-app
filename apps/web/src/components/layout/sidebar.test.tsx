@@ -203,7 +203,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expert.unmount();
   });
 
-  it('bottom gating matrix — client, cannot manage company → Settings + Account', () => {
+  it('bottom gating matrix — client, cannot manage company → Settings + Account + Help', () => {
     renderSidebar({ mode: 'client', canManageCompany: false });
     const allLinks = screen.getAllByRole('link');
     // BAL-497 — '/experts' added to the denylist: the primary section gained a fifth href, and
@@ -216,10 +216,10 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
           href &&
           !['/dashboard', '/experts', '/cases', '/projects', '/messages', '/'].includes(href)
       );
-    expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
+    expect(bottomHrefs).toEqual(['/settings', '/settings/account', '/help?for=clients']);
   });
 
-  it('bottom gating matrix — client, can manage company → Settings + Account (identical to the no-manage case)', () => {
+  it('bottom gating matrix — client, can manage company → Settings + Account + Help (identical to the no-manage case)', () => {
     renderSidebar({ mode: 'client', canManageCompany: true });
     const allLinks = screen.getAllByRole('link');
     // BAL-497 — '/experts' added to the denylist (see the no-manage case above for why).
@@ -230,10 +230,10 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
           href &&
           !['/dashboard', '/experts', '/cases', '/projects', '/messages', '/'].includes(href)
       );
-    expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
+    expect(bottomHrefs).toEqual(['/settings', '/settings/account', '/help?for=clients']);
   });
 
-  it('bottom gating matrix — expert, cannot manage company → Expert Settings + Account', () => {
+  it('bottom gating matrix — expert, cannot manage company → Expert Settings + Account + Help', () => {
     renderSidebar({ mode: 'expert', canManageCompany: false });
     const allLinks = screen.getAllByRole('link');
     const bottomHrefs = allLinks
@@ -245,10 +245,10 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
             href
           )
       );
-    expect(bottomHrefs).toEqual(['/expert/settings', '/settings/account']);
+    expect(bottomHrefs).toEqual(['/expert/settings', '/settings/account', '/help?for=experts']);
   });
 
-  it('bottom gating matrix — expert, can manage company → Expert Settings + Team + Account', () => {
+  it('bottom gating matrix — expert, can manage company → Expert Settings + Team + Account + Help', () => {
     renderSidebar({ mode: 'expert', canManageCompany: true });
     const allLinks = screen.getAllByRole('link');
     const bottomHrefs = allLinks
@@ -260,7 +260,12 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
             href
           )
       );
-    expect(bottomHrefs).toEqual(['/expert/settings', '/settings/team', '/settings/account']);
+    expect(bottomHrefs).toEqual([
+      '/expert/settings',
+      '/settings/team',
+      '/settings/account',
+      '/help?for=experts',
+    ]);
   });
 
   it('checklist badge, incomplete: shows N/6 on the Expert Settings link only', () => {

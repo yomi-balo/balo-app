@@ -16,10 +16,12 @@ interface SidebarNavLinkProps {
   isSecondary?: boolean;
   suffix?: React.ReactNode;
   /** BAL-497 (D3/D9) — leaves the dashboard shell for the `(marketing)` route group. Presentation
-   *  only: renders the jump-out arrow (expanded only), sets `prefetch={false}`, and folds "opens
-   *  the public directory" into the accessible name. Never changes the navigation mechanism —
+   *  only: renders the jump-out arrow (expanded only), sets `prefetch={false}`, and folds the
+   *  `jumpOutHint` ("opens the public directory" by default) into the accessible name. Never changes the navigation mechanism —
    *  still a soft `<Link>`. */
   jumpOut?: boolean;
+  /** Names the jump-out destination in the accessible name; defaults to the public directory. */
+  jumpOutHint?: string;
   /** BAL-495 — telemetry only. Navigation is still `<Link>`'s job; this never preventDefaults. */
   onClick?: () => void;
 }
@@ -32,6 +34,7 @@ export function SidebarNavLink({
   isSecondary = false,
   suffix,
   jumpOut = false,
+  jumpOutHint,
   onClick,
 }: SidebarNavLinkProps): React.JSX.Element {
   const pathname = usePathname();
@@ -60,7 +63,7 @@ export function SidebarNavLink({
   // the expert-checklist badge ("3/6") from the announced name.
   let accessibleName: string | undefined;
   if (jumpOut) {
-    accessibleName = `${label}, opens the public directory`;
+    accessibleName = `${label}, ${jumpOutHint ?? 'opens the public directory'}`;
   } else if (isCollapsed) {
     accessibleName = label;
   }

@@ -1,4 +1,14 @@
-# Turning a case into a project
+---
+title: 'Turning a case into a project'
+summary: 'Start a project from a case without losing its history.'
+audience: [client]
+category:
+  client: cases-projects
+order: 3
+published: false
+updated: 2026-10-17
+related: [requesting-a-project, cases-index]
+---
 
 If a case has grown into something bigger than its next consultation, you can turn it into a
 project request — with its own written scope and a proposal to review — without losing anything
