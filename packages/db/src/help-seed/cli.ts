@@ -51,7 +51,7 @@ function assertLocalDatabase(connectionString: string): void {
   }
   if (!LOCAL_HOSTNAMES.has(hostname)) {
     throw new Error(
-      `Refusing to run: DATABASE_URL host "${hostname}" is not local. The help fixture only runs against localhost.`
+      'Refusing to run: DATABASE_URL does not point at localhost. The help fixture only runs against a local database.'
     );
   }
 }

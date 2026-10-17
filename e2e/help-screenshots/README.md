@@ -12,7 +12,9 @@ folder, because the runner seeds a fixture into the database and writes files in
 
 - Docker Postgres and Redis running, with `pnpm db:migrate` and `pnpm db:seed` applied (the fixture
   needs the Salesforce vertical).
-- The `apps/web` dev server running (or let the runner start `pnpm dev`) with `E2E_TEST_SECRET` and
+- The `apps/web` dev server (:3000) **and** the API (:3002) running against the same local database.
+  The pages fetch hours, calendars and schedule through the API; the runner's `webServer` only
+  starts web (`pnpm dev` at the repo root starts both). Web needs `E2E_TEST_SECRET` and
   `WORKOS_COOKIE_PASSWORD` set.
 - `E2E_TEST_SECRET` exported in the shell that runs the command, with the same value.
 - `packages/db/.env` must point at the **same** database as the web server, and that database must be
@@ -28,7 +30,9 @@ pnpm help:screenshots pausing-new-work     # one guide (the arg filters guides/<
 pnpm --filter @balo/db help:reset          # remove the fixture when you are done
 ```
 
-Run `help:reset` after capturing. It removes everything the fixture added
+The runner's global teardown runs `help:reset` automatically, so a finished run leaves no fixture
+behind. Set `HELP_KEEP_FIXTURE=1` to skip it and inspect the seeded data; run `help:reset` yourself
+afterwards. Reset removes everything the fixture added
 (Priya's expert profile, availability rules, calendar connection, payout row, the case, consultation and meeting) and hands the
 shared `onboarded-e2e@balo.test` user back as test-login creates it, so the default e2e suite's
 member is not left an expert.
@@ -48,6 +52,13 @@ member is not left an expert.
 
 Each section declares `state: 'available' | 'paused'`; the runner applies it with `help:state`
 before navigating, so sections do not depend on run order.
+
+## Personas
+
+`as` is `'expert'` (the seeded Priya Raman) or `'visitor'` (signed out). There is no `'client'`
+persona yet: it is a type error until BAL-599 rules on how a client signs in.
+
+Every capture fails if the page emits a `pageerror` or a `console.error`, listing them.
 
 ## Adding a guide
 

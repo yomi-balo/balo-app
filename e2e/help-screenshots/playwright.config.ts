@@ -15,6 +15,7 @@ export default defineConfig({
   retries: 0,
   reporter: 'list',
   globalSetup: './global-setup.ts',
+  globalTeardown: './global-teardown.ts',
   use: { baseURL: 'http://localhost:3000' },
   projects: (['light', 'dark'] as const).map((colorScheme) => ({
     name: colorScheme,

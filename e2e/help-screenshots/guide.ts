@@ -5,7 +5,7 @@ import { test } from '../fixtures/auth';
 import { captureSection } from './capture';
 import { paddedSection, type Box, type HelpScheme } from './ring';
 
-export type HelpPersona = 'client' | 'expert' | 'visitor';
+export type HelpPersona = 'expert' | 'visitor';
 
 export interface HelpSectionSpec {
   /** The guide's `##` ordinal. Equals the badge number and the `<nn>` in the filename. */
@@ -33,26 +33,52 @@ export interface HelpSectionSpec {
 const DOCS_DIR = path.resolve(__dirname, '../../docs/help');
 const SCHEMES: readonly HelpScheme[] = ['light', 'dark'];
 
+/** Removes fenced code blocks (``` or ~~~) so a `##` or image ref inside one is ignored. */
+function stripFences(markdown: string): string {
+  const kept: string[] = [];
+  let fence: string | undefined;
+  for (const line of markdown.split('\n')) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence === undefined) {
+      if (marker === undefined) {
+        kept.push(line);
+      } else {
+        fence = marker;
+      }
+    } else if (marker?.[0] === fence[0] && marker.length >= fence.length) {
+      fence = undefined;
+    }
+  }
+  return kept.join('\n');
+}
+
 /** The markdown body of each `##` section, in order. */
 function readSections(slug: string): string[] {
   const markdown = readFileSync(path.join(DOCS_DIR, `${slug}.md`), 'utf8');
-  return markdown.split(/^## /m).slice(1);
+  return stripFences(markdown).split(/^## /m).slice(1);
 }
 
 function assertSpecMatchesDoc(slug: string, sections: readonly HelpSectionSpec[]): void {
   const bodies = readSections(slug);
   const seen = new Set<number>();
   const specified = new Set(sections.map((spec) => paddedSection(spec.section)));
-  const docRefs = readFileSync(path.join(DOCS_DIR, `${slug}.md`), 'utf8').matchAll(
-    /!\[[^\]]*\]\((\d{2})\)/g
-  );
-  for (const [, ref] of docRefs) {
-    if (ref !== undefined && !specified.has(ref)) {
-      throw new Error(
-        `${slug}: docs/help/${slug}.md references image ](${ref}) with no spec section`
-      );
+  bodies.forEach((body, index) => {
+    for (const [, ref] of body.matchAll(/!\[[^\]]*\]\((\d{2})\)/g)) {
+      if (ref === undefined) {
+        continue;
+      }
+      if (!specified.has(ref)) {
+        throw new Error(
+          `${slug}: docs/help/${slug}.md references image ](${ref}) with no spec section`
+        );
+      }
+      if (ref !== paddedSection(index + 1)) {
+        throw new Error(
+          `${slug}: image ref ](${ref}) appears in section ${index + 1}, not section ${Number(ref)}`
+        );
+      }
     }
-  }
+  });
   for (const { section } of sections) {
     if (seen.has(section)) {
       throw new Error(`${slug}: duplicate section ${section}`);

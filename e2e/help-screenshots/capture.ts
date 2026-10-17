@@ -123,6 +123,9 @@ export async function captureSection(args: CaptureArgs): Promise<void> {
     throw new Error('HELP_ANCHOR is unset; run through `pnpm help:screenshots` (global setup)');
   }
 
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
   setFixtureState(spec.state);
   await page.addInitScript((value) => globalThis.localStorage.setItem('theme', value), scheme);
   await page.clock.setFixedTime(new Date(`${anchor}T09:00:00Z`));
@@ -167,6 +170,11 @@ export async function captureSection(args: CaptureArgs): Promise<void> {
     buffer = await page.screenshot({ clip, animations: 'disabled', caret: 'hide' });
   } finally {
     expect(await removeRing(page)).toBe(0);
+  }
+  if (pageErrors.length > 0) {
+    throw new Error(
+      `${slug} ${spec.section} (${scheme}): page errors during capture:\n${pageErrors.join('\n')}`
+    );
   }
   await writePng(buffer, slug, spec.section, scheme);
 }
