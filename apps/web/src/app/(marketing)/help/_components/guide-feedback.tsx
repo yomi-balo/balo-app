@@ -43,9 +43,12 @@ export function GuideFeedback({ slug }: Readonly<{ slug: string }>): React.JSX.E
   return (
     <div className="border-line mt-14 border-t pt-7">
       {state === 'ask' && (
-        <div className="flex flex-wrap items-center gap-3.5">
-          <span className="text-foreground text-[15px] font-semibold">Did this guide help?</span>
-          <div role="group" aria-label="Did this guide help?" className="flex gap-2">
+        <fieldset className="m-0 flex min-w-0 flex-wrap items-center gap-3.5 border-0 p-0">
+          <legend className="sr-only">Did this guide help?</legend>
+          <span aria-hidden="true" className="text-foreground text-[15px] font-semibold">
+            Did this guide help?
+          </span>
+          <div className="flex gap-2">
             <button type="button" onClick={handleYes} className={BUTTON_CLASS}>
               <ThumbsUp aria-hidden="true" className="size-[15px]" />
               Yes
@@ -55,7 +58,7 @@ export function GuideFeedback({ slug }: Readonly<{ slug: string }>): React.JSX.E
               No
             </button>
           </div>
-        </div>
+        </fieldset>
       )}
       {state === 'no' && (
         <div>

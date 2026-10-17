@@ -38,7 +38,7 @@ export function MobileSectionJump({
         onClick={handleToggle}
         className="text-foreground focus-visible:ring-ring flex min-h-11 w-full items-center justify-between gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold outline-none focus-visible:ring-2"
       >
-        In this guide
+        <span>In this guide</span>
         <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
           {steps.length} {steps.length === 1 ? 'section' : 'sections'}
           <ChevronDown

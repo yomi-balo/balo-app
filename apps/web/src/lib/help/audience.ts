@@ -19,12 +19,15 @@ const ARTICLE_SOURCE_PARAMS: readonly Exclude<HelpArticleSource, 'external'>[] =
   'product',
 ];
 
-function firstValue(raw: string | string[] | undefined): string | undefined {
+/** A raw `searchParams` value as Next.js hands it to a page. */
+type SearchParamValue = string | string[] | undefined;
+
+function firstValue(raw: SearchParamValue): string | undefined {
   return Array.isArray(raw) ? raw[0] : raw;
 }
 
 /** `?for=clients|experts` to an audience. Anything else, including a missing value, is `null`. */
-export function parseHelpSide(raw: string | string[] | undefined): HelpAudience | null {
+export function parseHelpSide(raw: SearchParamValue): HelpAudience | null {
   const value = firstValue(raw);
   if (value === 'clients') return SIDE_PARAMS.clients;
   if (value === 'experts') return SIDE_PARAMS.experts;
@@ -55,7 +58,7 @@ export function resolveGuideSide(
 }
 
 /** `?src=` to a {@link HelpArticleSource}. Anything unrecognised is `external`. */
-export function parseHelpSource(raw: string | string[] | undefined): HelpArticleSource {
+export function parseHelpSource(raw: SearchParamValue): HelpArticleSource {
   const value = firstValue(raw);
   return ARTICLE_SOURCE_PARAMS.find((source) => source === value) ?? 'external';
 }
@@ -73,5 +76,6 @@ export function helpGuideHref(
   const params: string[] = [];
   if (opts.for !== undefined) params.push(`for=${helpSideParam(opts.for)}`);
   if (opts.src !== undefined) params.push(`src=${opts.src}`);
-  return `/help/${slug}${params.length > 0 ? `?${params.join('&')}` : ''}`;
+  const query = params.length > 0 ? `?${params.join('&')}` : '';
+  return `/help/${slug}${query}`;
 }

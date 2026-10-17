@@ -155,8 +155,10 @@ function validateOne(
     return issues;
   }
 
-  issues.push(...crossFieldIssues(filename, stem, result.data, stems));
-  issues.push(...forbiddenCopyIssues(filename, result.data, parsed));
+  issues.push(
+    ...crossFieldIssues(filename, stem, result.data, stems),
+    ...forbiddenCopyIssues(filename, result.data, parsed)
+  );
   if (result.data.published) {
     const images = [
       ...parsed.intro,

@@ -220,7 +220,7 @@ describe('HelpGuidePage', () => {
     await renderGuide('main');
 
     expect(screen.getByText('17 October 2026')).toHaveAttribute('datetime', '2026-10-17');
-    expect(screen.getByText('Did this guide help?')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Did this guide help?' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Email support' })).toBeInTheDocument();
   });
 });

@@ -35,9 +35,8 @@ function toGuide(file: HelpSourceFile): HelpGuide | null {
 export function buildHelpGuides(files: readonly HelpSourceFile[]): readonly HelpGuide[] {
   const issues = validateHelpDocs(files, () => true);
   if (issues.length > 0) {
-    throw new Error(
-      `Help docs are invalid:\n${issues.map((issue) => `- ${issue.file} [${issue.code}] ${issue.message}`).join('\n')}`
-    );
+    const lines = issues.map((issue) => `- ${issue.file} [${issue.code}] ${issue.message}`);
+    throw new Error(`Help docs are invalid:\n${lines.join('\n')}`);
   }
   return files
     .map(toGuide)

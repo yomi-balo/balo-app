@@ -35,7 +35,7 @@ describe('MARKETING_NAV_LINKS', () => {
   });
 
   it('has 5 entries with no duplicates', () => {
-    expect(MARKETING_NAV_LINKS.length).toBe(5);
+    expect(MARKETING_NAV_LINKS).toHaveLength(5);
     expect(new Set(MARKETING_NAV_LINKS).size).toBe(5);
   });
 });

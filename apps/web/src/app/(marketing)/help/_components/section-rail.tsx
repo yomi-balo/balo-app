@@ -25,7 +25,8 @@ export function SectionRail({ slug, steps }: Readonly<SectionRailProps>): React.
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          const n = Number(entry.target.getAttribute('data-step'));
+          if (!(entry.target instanceof HTMLElement)) continue;
+          const n = Number(entry.target.dataset.step);
           if (entry.isIntersecting && Number.isFinite(n)) setActive(n);
         }
       },

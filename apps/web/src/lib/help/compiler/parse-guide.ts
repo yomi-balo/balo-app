@@ -168,7 +168,7 @@ class DocWalker {
 
   private addImage(image: HelpImage): void {
     const section = this.sections.at(-1);
-    if (section !== undefined && section.screenshot === null) {
+    if (section?.screenshot === null) {
       section.screenshot = image;
       return;
     }
@@ -208,32 +208,48 @@ class DocWalker {
     return true;
   }
 
+  private handleBlockquote(token: Tokens.Blockquote): void {
+    this.flush();
+    this.rejectNestedImages(token.tokens);
+    const html = renderHtml(token.tokens);
+    if (html !== '') this.pushBlock({ kind: 'callout', html });
+  }
+
+  private handleToken(token: Token): void {
+    if (token.type === 'heading' && token.depth === 1) {
+      this.report(
+        'h1_in_body',
+        'The title comes from frontmatter; remove the leading "# " heading.'
+      );
+      return;
+    }
+    if (token.type === 'heading' && token.depth === 2) {
+      this.flush();
+      this.sections.push({
+        n: this.sections.length + 1,
+        title: plainText(token.tokens ?? []),
+        blocks: [],
+        screenshot: null,
+      });
+      return;
+    }
+    if (token.type === 'blockquote') {
+      this.handleBlockquote(token as Tokens.Blockquote);
+      return;
+    }
+    if (token.type === 'paragraph') {
+      if (!this.handleParagraph(token as Tokens.Paragraph)) this.pending.push(token);
+      return;
+    }
+    this.rejectNestedImages([token]);
+    this.pending.push(token);
+  }
+
   walk(tokens: readonly Token[]): void {
     for (const token of tokens) {
       if (token.type === 'space') continue;
       this.rejectUnsupported(token);
-      if (token.type === 'heading' && token.depth === 1) {
-        this.report(
-          'h1_in_body',
-          'The title comes from frontmatter; remove the leading "# " heading.'
-        );
-      } else if (token.type === 'heading' && token.depth === 2) {
-        this.flush();
-        this.sections.push({
-          n: this.sections.length + 1,
-          title: plainText(token.tokens ?? []),
-          blocks: [],
-          screenshot: null,
-        });
-      } else if (token.type === 'blockquote') {
-        this.flush();
-        this.rejectNestedImages(token.tokens ?? []);
-        const html = renderHtml(token.tokens ?? []);
-        if (html !== '') this.pushBlock({ kind: 'callout', html });
-      } else if (token.type !== 'paragraph' || !this.handleParagraph(token as Tokens.Paragraph)) {
-        if (token.type !== 'paragraph') this.rejectNestedImages([token]);
-        this.pending.push(token);
-      }
+      this.handleToken(token);
     }
     this.flush();
   }
