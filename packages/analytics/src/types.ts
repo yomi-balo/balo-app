@@ -53,6 +53,7 @@ import type { MarketingEventMap } from './events/marketing';
 import type { MarketingHomeEventMap } from './events/marketing-home';
 import type { SettingsEventMap } from './events/settings';
 import type { CommandPaletteEventMap } from './events/command-palette';
+import type { HelpEventMap } from './events/help';
 import type { StripeRedirectEventMap } from './events/stripe-redirect';
 import type { AdminLookupEventMap } from './events/admin-lookup';
 import type { AdminApplicationsEventMap } from './events/admin-applications';
@@ -116,6 +117,9 @@ export type AllEvents = AuthEventMap &
   // BAL-500 — the ⌘K command palette's CLIENT family. `'navigate'` is deliberately absent; see
   // `./events/command-palette.ts`.
   CommandPaletteEventMap &
+  // BAL-597 — the public help centre's CLIENT family. `comment` is the first free-text property;
+  // see `./events/help.ts`.
+  HelpEventMap &
   // BAL-529 §D — the Stripe redirect-return family. `useSetupIntentRedirectReturn` (apps/web)
   // is the ONE dispatch point; no other module calls `track()` with this event.
   StripeRedirectEventMap &

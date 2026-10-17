@@ -1,4 +1,4 @@
-import { LifeBuoy, Search, Sparkles, Wallet, type LucideIcon } from 'lucide-react';
+import { CircleHelp, LifeBuoy, Search, Sparkles, Wallet, type LucideIcon } from 'lucide-react';
 import type { MarketingNavLink } from '@/lib/analytics';
 
 export interface MarketingNavEntry {
@@ -18,7 +18,7 @@ export interface MarketingNavEntry {
 // text contains the literal substring `NAV_ENTRIES`. Renaming this constant to end in
 // `_ENTRIES` would trip that invariant and fail the suite — leave the name as-is.
 // The design reference's four links, in its order: Find experts · How it works · For experts ·
-// Pricing. Only Find experts has an active state there.
+// Pricing. Only Find experts has an active state there. Help (the public help centre) follows.
 //
 // ⚠ How it works, For experts and Pricing point at PLACEHOLDER pages for now
 // (`app/(marketing)/{how-it-works,for-experts,pricing}`). For experts deliberately does NOT go to
@@ -54,5 +54,12 @@ export const MARKETING_NAV_ITEMS: readonly MarketingNavEntry[] = [
     href: '/pricing',
     icon: Wallet,
     isActive: () => false,
+  },
+  {
+    key: 'help',
+    label: 'Help',
+    href: '/help',
+    icon: CircleHelp,
+    isActive: (pathname) => pathname === '/help' || pathname.startsWith('/help/'),
   },
 ];

@@ -21,11 +21,17 @@ describe('isPublicRoute', () => {
     }
   });
 
+  it('serves the help centre index and guides without a session', () => {
+    expect(isPublicRoute('/help')).toBe(true);
+    expect(isPublicRoute('/help/')).toBe(true);
+  });
+
   it('matches prefix-based public paths', () => {
     expect(isPublicRoute('/api/auth/callback')).toBe(true);
     expect(isPublicRoute('/api/webhooks/stripe')).toBe(true);
     expect(isPublicRoute('/api/health')).toBe(true);
     expect(isPublicRoute('/experts/abc-123')).toBe(true);
+    expect(isPublicRoute('/help/booking-a-consultation')).toBe(true);
     expect(isPublicRoute('/blog/some-post')).toBe(true);
     // BAL-386 — public email-bound magic-link proposal view.
     expect(isPublicRoute('/shared/proposals/some-token')).toBe(true);
@@ -97,6 +103,7 @@ describe('isPublicRoute', () => {
   it('does not match similar-but-different paths', () => {
     // /experts is exact match, /experts/ is prefix — /expertsx should not match
     expect(isPublicRoute('/expertsx')).toBe(false);
+    expect(isPublicRoute('/helpdesk')).toBe(false);
     expect(isPublicRoute('/loginx')).toBe(false);
     expect(isPublicRoute('/api/cases')).toBe(false);
     // BAL-390 — `/review/` is a prefix, so neither the bare word nor a plural

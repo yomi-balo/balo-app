@@ -3,15 +3,16 @@ import { CAPABILITIES } from '@balo/shared/authz';
 import { resolveNavItems, type NavContext } from './nav-registry';
 
 describe('resolveNavItems secondary section (BAL-347 Team nav gating → BAL-495 registry → BAL-503)', () => {
-  it('client → Settings + Account, regardless of MANAGE_MEMBERS', () => {
+  it('client → Settings + Account + Help, regardless of MANAGE_MEMBERS', () => {
     const context: NavContext = { workspaceType: 'company', capabilities: [] };
     expect(resolveNavItems(context, 'secondary').map((i) => i.href)).toEqual([
       '/settings',
       '/settings/account',
+      '/help?for=clients',
     ]);
   });
 
-  it('client, can manage company → Settings + Account (identical to the no-manage case — the client bottom section no longer varies by capability)', () => {
+  it('client, can manage company → Settings + Account + Help (identical to the no-manage case — the client bottom section no longer varies by capability)', () => {
     const context: NavContext = {
       workspaceType: 'company',
       capabilities: [CAPABILITIES.MANAGE_MEMBERS],
@@ -19,18 +20,20 @@ describe('resolveNavItems secondary section (BAL-347 Team nav gating → BAL-495
     expect(resolveNavItems(context, 'secondary').map((i) => i.href)).toEqual([
       '/settings',
       '/settings/account',
+      '/help?for=clients',
     ]);
   });
 
-  it('expert, cannot manage company → Expert Settings + Account', () => {
+  it('expert, cannot manage company → Expert Settings + Account + Help', () => {
     const context: NavContext = { workspaceType: 'expert', capabilities: [] };
     expect(resolveNavItems(context, 'secondary').map((i) => i.href)).toEqual([
       '/expert/settings',
       '/settings/account',
+      '/help?for=experts',
     ]);
   });
 
-  it('expert, can manage company → Expert Settings + Team + Account', () => {
+  it('expert, can manage company → Expert Settings + Team + Account + Help', () => {
     const context: NavContext = {
       workspaceType: 'expert',
       capabilities: [CAPABILITIES.MANAGE_MEMBERS],
@@ -39,6 +42,7 @@ describe('resolveNavItems secondary section (BAL-347 Team nav gating → BAL-495
       '/expert/settings',
       '/settings/team',
       '/settings/account',
+      '/help?for=experts',
     ]);
   });
 

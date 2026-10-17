@@ -87,6 +87,12 @@ export {
   COMMAND_PALETTE_EVENTS,
   COMMAND_PALETTE_OPEN_METHODS,
   COMMAND_PALETTE_ACTION_TYPES,
+  // BAL-597 — the public help centre's canonical event + vocabulary tuples + comment cap.
+  // ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT package.
+  HELP_EVENTS,
+  HELP_AUDIENCES,
+  HELP_ARTICLE_SOURCES,
+  HELP_FEEDBACK_COMMENT_MAX,
   // BAL-529 §D — the Stripe redirect-return family's event constant + its two canonical
   // vocabulary tuples. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT
   // package (`apps/web` cannot import it), not in this one.
@@ -242,6 +248,10 @@ export type {
   CommandPaletteEventMap,
   CommandPaletteOpenMethod,
   CommandPaletteActionType,
+  // BAL-597 — the public help centre's event payload and vocabularies.
+  HelpEventMap,
+  HelpAudience,
+  HelpArticleSource,
   // BAL-529 §D — the Stripe redirect-return family's event payload and its two vocabularies.
   StripeRedirectEventMap,
   StripeRedirectSurface,

@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { LifeBuoy } from 'lucide-react';
 import { NAV_ITEM_KEYS } from '@/lib/analytics';
 import {
   NAV_ENTRIES,
   resolveNavItems,
+  selectNavItems,
   requiresCapability,
   NO_CAPABILITY_REQUIRED,
   resolveBreadcrumbTrail,
@@ -13,6 +15,7 @@ import {
   MOBILE_TAB_LIMIT,
   type NavContext,
   type EnabledNavEntry,
+  type NavEntry,
 } from './nav-registry';
 import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 
@@ -56,23 +59,55 @@ const ALL_CONTEXTS = [
   COMPANY_STAFF,
   EXPERT_STAFF,
 ];
-const DISABLED_KEYS = ['help'];
 
 describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
-  it('excludes disabled entries from every context, in any of the three sections', () => {
-    for (const context of ALL_CONTEXTS) {
-      const resolvedKeys = [
-        ...resolveNavItems(context, 'primary'),
-        ...resolveNavItems(context, 'secondary'),
-        ...resolveNavItems(context, 'admin'),
-      ].map((entry) => entry.key);
-      for (const disabledKey of DISABLED_KEYS) {
-        expect(resolvedKeys).not.toContain(disabledKey);
+  describe('selectNavItems', () => {
+    const base = {
+      icon: LifeBuoy,
+      section: 'secondary',
+      workspaceTypes: ['company', 'expert'],
+      requires: NO_CAPABILITY_REQUIRED,
+      mobilePriority: 'more',
+    } as const;
+    const fixture: readonly NavEntry[] = [
+      { ...base, key: 'account', label: 'Account', href: '/a', enabled: true },
+      { ...base, key: 'settings', label: 'Settings', href: '/s', enabled: false },
+      {
+        ...base,
+        key: 'help',
+        label: 'Help',
+        href: '/h',
+        hrefByWorkspace: { company: '/h?c', expert: '/h?e' },
+        enabled: true,
+      },
+    ];
+
+    it('excludes a disabled entry in every context and keeps the authored order', () => {
+      for (const context of ALL_CONTEXTS) {
+        expect(selectNavItems(fixture, context, 'secondary').map((e) => e.key)).toEqual([
+          'account',
+          'help',
+        ]);
       }
-    }
+    });
+
+    it('substitutes the active workspace href only where hrefByWorkspace is declared', () => {
+      expect(selectNavItems(fixture, COMPANY_NO_MANAGE, 'secondary').map((e) => e.href)).toEqual([
+        '/a',
+        '/h?c',
+      ]);
+      expect(selectNavItems(fixture, EXPERT_NO_MANAGE, 'secondary').map((e) => e.href)).toEqual([
+        '/a',
+        '/h?e',
+      ]);
+    });
+
+    it('returns nothing for a section the fixture does not populate', () => {
+      expect(selectNavItems(fixture, COMPANY_NO_MANAGE, 'primary')).toEqual([]);
+    });
   });
 
-  it('preserves NAV_ENTRIES order for the primary section despite interleaved disabled entries', () => {
+  it('preserves NAV_ENTRIES order for the primary section', () => {
     const keys = resolveNavItems(COMPANY_MANAGE, 'primary').map((entry) => entry.key);
     expect(keys).toEqual(['dashboard', 'find_experts', 'cases', 'projects', 'messages']);
   });
@@ -137,10 +172,37 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(withBadge[0]?.badgeSource).toBe('expertChecklist');
   });
 
-  it('jumpOut: exactly one entry has it, and it is find_experts', () => {
+  it('jumpOut: exactly find_experts and help have it, and only help names its destination', () => {
     const withJumpOut = NAV_ENTRIES.filter((e) => e.jumpOut === true);
-    expect(withJumpOut).toHaveLength(1);
-    expect(withJumpOut[0]?.key).toBe('find_experts');
+    expect(withJumpOut.map((e) => e.key)).toEqual(['find_experts', 'help']);
+    expect(withJumpOut.map((e) => e.jumpOutHint)).toEqual([undefined, 'opens the help centre']);
+  });
+
+  it('help: the canonical href is /help; each workspace resolves its own side, last in secondary', () => {
+    expect(NAV_ENTRIES.find((e) => e.key === 'help')?.href).toBe('/help');
+    for (const [context, href] of [
+      [COMPANY_NO_MANAGE, '/help?for=clients'],
+      [COMPANY_MANAGE, '/help?for=clients'],
+      [EXPERT_NO_MANAGE, '/help?for=experts'],
+      [EXPERT_MANAGE, '/help?for=experts'],
+    ] as const) {
+      const secondary = resolveNavItems(context, 'secondary');
+      const last = secondary[secondary.length - 1];
+      expect(last?.key).toBe('help');
+      expect(last?.href).toBe(href);
+    }
+  });
+
+  it('only help substitutes a per-workspace href; every other entry keeps its own', () => {
+    for (const context of ALL_CONTEXTS) {
+      for (const section of ['primary', 'secondary', 'admin'] as const) {
+        for (const entry of resolveNavItems(context, section)) {
+          if (entry.key === 'help') continue;
+          expect(entry.hrefByWorkspace).toBeUndefined();
+          expect(entry).toBe(NAV_ENTRIES.find((e) => e.key === entry.key));
+        }
+      }
+    }
   });
 
   it('the admin section resolves for a staff context in BOTH workspace types, and for nobody else', () => {
@@ -190,7 +252,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     }
   });
 
-  it('href pins: every enabled entry matches today’s literal; help is null', () => {
+  it('href pins: every enabled entry matches today’s literal; help is /help', () => {
     const byKey = new Map(NAV_ENTRIES.map((e) => [e.key, e]));
     expect(byKey.get('dashboard')?.href).toBe('/dashboard');
     // ⚠ BAL-567 — key, label and href all renamed in place. `/consultations` 308s to this now.
@@ -204,7 +266,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(byKey.get('account')?.href).toBe('/settings/account');
     expect(byKey.get('find_experts')?.href).toBe('/experts');
     expect(byKey.get('calendar')?.href).toBe('/expert/calendar');
-    expect(byKey.get('help')?.href).toBeNull();
+    expect(byKey.get('help')?.href).toBe('/help');
     expect(byKey.get('admin_home')?.href).toBe('/admin');
     expect(byKey.get('admin_applications')?.href).toBe('/admin/applications');
     expect(byKey.get('admin_engagements')?.href).toBe('/engagements');
@@ -243,9 +305,9 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 19 declared entries, 18 enabled', () => {
+  it('non-vacuity: 19 declared entries, all enabled', () => {
     expect(NAV_ENTRIES).toHaveLength(19);
-    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(18);
+    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(19);
   });
 
   /**
@@ -362,11 +424,13 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'projects',
       'settings',
       'account',
+      'help',
     ]);
     expect(resolveMoreItems(COMPANY_MANAGE).map((e) => e.key)).toEqual([
       'projects',
       'settings',
       'account',
+      'help',
     ]);
     // The expert workspace keeps `team` (BAL-503 narrowed it TO expert) and has no `settings`.
     expect(resolveMoreItems(EXPERT_MANAGE).map((e) => e.key)).toEqual([
@@ -374,6 +438,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'expert_settings',
       'team',
       'account',
+      'help',
     ]);
   });
 
@@ -382,6 +447,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'projects',
       'settings',
       'account',
+      'help',
       'admin_home',
       'admin_applications',
       'admin_engagements',
@@ -395,6 +461,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'projects',
       'expert_settings',
       'account',
+      'help',
       'admin_home',
       'admin_applications',
       'admin_engagements',
@@ -629,16 +696,14 @@ describe('resolveEntityListNavEntry (BAL-566)', () => {
   });
 
   it('BAL-566 fix round 1 (F9): a segment absent from ENTITY_PARENTS resolves to undefined (renamed — see below)', () => {
-    // ⚠ RENAMED FROM "a disabled entry resolves to undefined". `help` has no href, is disabled,
-    // AND is not a key in ENTITY_PARENTS at all — so this exercises the exact same early-return
+    // ⚠ RENAMED FROM "a disabled entry resolves to undefined". `help` is enabled but is not a key
+    // in ENTITY_PARENTS at all, so this exercises the same early-return
     // (`!Object.hasOwn(ENTITY_PARENTS, entitySegment)`) as the "an unknown segment resolves to
     // undefined" test above, NOT the second failure mode (an ENTITY_PARENTS hit whose target nav
     // entry is disabled or missing for the given workspace). That second branch is UNREACHABLE
     // today: every `ENTITY_PARENTS` value's `href` ('/cases', '/projects') resolves to an
-    // enabled entry present in BOTH workspaces' primary section (pinned by
-    // `resolveNavItems(...).map(...)` assertions elsewhere in this file), so there is no
-    // ENTITY_PARENTS mapping whose target is ever disabled or workspace-scoped-out — constructing
-    // a genuine "disabled entry" case would require adding one, which is out of scope for a test.
+    // enabled entry present in BOTH workspaces' primary section, so constructing a genuine
+    // "disabled entry" case would require adding one, which is out of scope for a test.
     // Kept as a real (if duplicate-path) assertion rather than deleted, with an honest title.
     expect(resolveEntityListNavEntry(COMPANY_NO_MANAGE, 'help')).toBeUndefined();
   });

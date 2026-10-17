@@ -46,6 +46,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
       isCollapsed={isCollapsed}
       isSecondary={isSecondary}
       jumpOut={entry.jumpOut === true}
+      jumpOutHint={entry.jumpOutHint}
       onClick={() => trackNavItem(entry.key)}
       suffix={entry.badgeSource ? NAV_BADGE_RENDERERS[entry.badgeSource](badgeCounts) : undefined}
     />

@@ -9,7 +9,7 @@ import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
 // ⚠ `NAV_ENTRIES` is imported ON PURPOSE, and only a TEST may do this. Invariant Scan C
 // (`nav-registry-capability-gated.test.ts`) pins `nav-registry.ts` as the sole NON-TEST consumer;
 // its walker skips any filename containing `.test.` (`invariants/_source-scan.ts:333`), so this
-// import cannot trip it. T8 needs the real table — see the comment there.
+// import cannot trip it. The admin-heading test derives its expected labels from the real table.
 import { NAV_ENTRIES, type NavCapability } from './nav-registry';
 
 // cmdk / Radix UI need `hasPointerCapture`, which jsdom lacks and — unlike `ResizeObserver` and
@@ -290,19 +290,7 @@ describe('CommandPalette', () => {
     }
   });
 
-  it('T8: disabled registry keys never surface, in any context', async () => {
-    // ⚠ DERIVED FROM THE REGISTRY, NEVER HARD-CODED. This used to list
-    // `['Help', 'Find experts', 'Calendar']` literally, which made the test a hostage to every
-    // OTHER open PR: BAL-498 (#257) flips `calendar` on and BAL-497 flips `find_experts`, so
-    // whichever of those and this one merged second went red for a reason that was not a bug.
-    // Deriving it means the assertion tracks whatever the registry says today.
-    const disabledLabels = NAV_ENTRIES.filter((entry) => !entry.enabled).map((e) => e.label);
-
-    // Guards the guard: with an empty derived set every assertion in the loop below would pass
-    // vacuously, and this test would silently stop covering anything. If this ever fires, every
-    // registry entry is enabled and the test needs a rethink, not a bigger fixture.
-    expect(disabledLabels.length).toBeGreaterThan(0);
-
+  it('T8: Help is listed in every context and opens the help centre on the workspace’s own side', async () => {
     const contexts: RenderPaletteOptions[] = [
       { workspaceType: 'company', capabilities: [] },
       { workspaceType: 'company', capabilities: [CAPABILITIES.MANAGE_MEMBERS] },
@@ -310,10 +298,18 @@ describe('CommandPalette', () => {
       { workspaceType: 'expert', capabilities: [CAPABILITIES.MANAGE_MEMBERS] },
     ];
     for (const context of contexts) {
-      const labels = await openAndListOptions(context);
-      for (const disabledLabel of disabledLabels) {
-        expect(labels).not.toContain(disabledLabel);
-      }
+      expect(await openAndListOptions(context)).toContain('Help');
+    }
+
+    const hrefByWorkspace = { company: '/help?for=clients', expert: '/help?for=experts' } as const;
+    for (const workspaceType of ['company', 'expert'] as const) {
+      push.mockClear();
+      const user = userEvent.setup();
+      const { unmount } = renderPalette({ workspaceType });
+      await user.click(screen.getByRole('button', { name: 'Search' }));
+      await user.click(screen.getByRole('option', { name: /^Help/ }));
+      expect(push).toHaveBeenCalledWith(hrefByWorkspace[workspaceType]);
+      unmount();
     }
   });
 

@@ -25,12 +25,18 @@ describe('MARKETING_EVENTS', () => {
 
 describe('MARKETING_NAV_LINKS', () => {
   it('is the exact pinned tuple, in order', () => {
-    expect(MARKETING_NAV_LINKS).toEqual(['find_experts', 'for_experts', 'how_it_works', 'pricing']);
+    expect(MARKETING_NAV_LINKS).toEqual([
+      'find_experts',
+      'for_experts',
+      'how_it_works',
+      'pricing',
+      'help',
+    ]);
   });
 
-  it('has 4 entries with no duplicates', () => {
-    expect(MARKETING_NAV_LINKS.length).toBe(4);
-    expect(new Set(MARKETING_NAV_LINKS).size).toBe(4);
+  it('has 5 entries with no duplicates', () => {
+    expect(MARKETING_NAV_LINKS.length).toBe(5);
+    expect(new Set(MARKETING_NAV_LINKS).size).toBe(5);
   });
 });
 

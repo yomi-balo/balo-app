@@ -22,6 +22,7 @@ import {
 import type { Workspace } from '@balo/shared/workspaces';
 import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import type { NavItemKey } from '@/lib/analytics'; // TYPE-ONLY — erased; no posthog-js at runtime
+import { helpIndexHref } from '@/lib/help/audience';
 
 /**
  * BAL-495 — the single declarative source for the desktop sidebar, mobile bottom tabs (BAL-501)
@@ -123,12 +124,18 @@ interface NavEntryBase {
   readonly badgeSource?: NavBadgeSource;
   /** Leaves the dashboard shell (a different Next route group). Presentation only. */
   readonly jumpOut?: boolean;
+  /** Names the destination in the jump-out link's accessible name ("Help, opens the help centre").
+   *  Falls back to the public-directory wording when absent. */
+  readonly jumpOutHint?: string;
 }
 
 /** An entry that renders. `href` is non-nullable HERE so a consumer never handles a null link. */
 export interface EnabledNavEntry extends NavEntryBase {
   readonly enabled: true;
   readonly href: string;
+  /** Overrides `href` per active workspace type; `resolveNavItems` substitutes it, so every
+   *  surface renders the workspace's own URL. `href` stays the canonical, workspace-free form. */
+  readonly hrefByWorkspace?: Readonly<Record<NavWorkspaceType, string>>;
 }
 
 /**
@@ -302,19 +309,21 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     enabled: true,
   },
 
-  // Awaits its OWN ticket to flip on and supply the help-centre URL. ⚠ NOT BAL-500: the ⌘K
-  // palette shipped WITHOUT touching this entry — it resolves through the same `enabled` gate as
-  // every other surface, so `help` stays absent there too. No href today — modelled honestly.
+  // The help centre lives in the `(marketing)` route group, outside the app shell, so it jumps
+  // out. `href` is the canonical index; `hrefByWorkspace` opens each workspace on its own side.
   {
     key: 'help',
     label: 'Help',
     icon: LifeBuoy,
-    href: null,
+    href: helpIndexHref(),
+    hrefByWorkspace: { company: helpIndexHref('client'), expert: helpIndexHref('expert') },
     section: 'secondary',
     workspaceTypes: ['company', 'expert'],
     requires: NO_CAPABILITY_REQUIRED,
     mobilePriority: 'more',
-    enabled: false,
+    jumpOut: true,
+    jumpOutHint: 'opens the help centre',
+    enabled: true,
   },
 
   // ── Balo admin (staff-only) section ───────────────────────────────────────────────────────
@@ -474,16 +483,31 @@ const isEnabled = (entry: NavEntry): entry is EnabledNavEntry => entry.enabled =
  * input. The invariant's deny-list names `role ===` / `lens` / `activeMode` / `platformRole` /
  * `companyRole` / `isPersonal` — never a bare `===`.
  */
+export function selectNavItems(
+  entries: readonly NavEntry[],
+  context: NavContext,
+  section: NavSection
+): readonly EnabledNavEntry[] {
+  return entries
+    .filter(isEnabled)
+    .filter(
+      (entry) =>
+        entry.section === section &&
+        entry.workspaceTypes.includes(context.workspaceType) &&
+        entry.requires(context)
+    )
+    .map((entry) =>
+      entry.hrefByWorkspace
+        ? { ...entry, href: entry.hrefByWorkspace[context.workspaceType] }
+        : entry
+    );
+}
+
 export function resolveNavItems(
   context: NavContext,
   section: NavSection
 ): readonly EnabledNavEntry[] {
-  return NAV_ENTRIES.filter(isEnabled).filter(
-    (entry) =>
-      entry.section === section &&
-      entry.workspaceTypes.includes(context.workspaceType) &&
-      entry.requires(context)
-  );
+  return selectNavItems(NAV_ENTRIES, context, section);
 }
 
 /** BAL-501 — the bar's cap. At most 4 tabs + the always-present More cell = 5 columns. */

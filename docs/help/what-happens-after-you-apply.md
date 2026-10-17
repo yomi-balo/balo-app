@@ -1,4 +1,14 @@
-# What happens after you apply
+---
+title: 'What happens after you apply'
+summary: 'How we review applications and what happens either way.'
+audience: [expert]
+category:
+  expert: getting-started
+order: 1
+published: false
+updated: 2026-10-17
+related: [pausing-new-work]
+---
 
 Once you submit your expert application, our team takes it from there — here's what to
 expect, and what happens either way it goes.

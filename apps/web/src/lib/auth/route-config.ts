@@ -10,6 +10,7 @@ export const PUBLIC_PATHS = new Set([
   '/signup',
   '/reset-password',
   '/experts',
+  '/help',
   '/about',
   '/pricing',
   '/contact',
@@ -59,6 +60,7 @@ export const PUBLIC_PREFIXES: readonly string[] = [
   '/api/webhooks/',
   '/api/health',
   '/experts/',
+  '/help/',
   '/blog/',
   // BAL-386 — public, no-auth, email-bound magic-link proposal view.
   '/shared/proposals/',

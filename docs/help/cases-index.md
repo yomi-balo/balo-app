@@ -1,4 +1,15 @@
-# Your cases
+---
+title: 'Your cases'
+summary: 'How cases are listed, what the coloured bands mean and when a case closes.'
+audience: [client, expert]
+category:
+  client: cases-projects
+  expert: calls-cases
+order: 1
+published: false
+updated: 2026-10-17
+related: [booking-a-consultation, turning-a-case-into-a-project]
+---
 
 **Cases** lists every case in the workspace you're currently in. A case is one thread of work
 with an expert: it holds every consultation, every message and every file in one place, and it

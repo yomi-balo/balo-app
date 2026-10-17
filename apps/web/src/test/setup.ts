@@ -177,6 +177,13 @@ vi.mock('@/lib/analytics', async () => {
     COMMAND_PALETTE_EVENTS: events.COMMAND_PALETTE_EVENTS,
     COMMAND_PALETTE_OPEN_METHODS: events.COMMAND_PALETTE_OPEN_METHODS,
     COMMAND_PALETTE_ACTION_TYPES: events.COMMAND_PALETTE_ACTION_TYPES,
+    // BAL-597 — the public help centre's CLIENT event, vocabulary tuples and comment cap. ⚠ WITHOUT
+    // THESE LINES every test whose module graph reaches a help component throws on an undefined
+    // constant (memory `reference_web_analytics_test_mock_export_list`).
+    HELP_EVENTS: events.HELP_EVENTS,
+    HELP_AUDIENCES: events.HELP_AUDIENCES,
+    HELP_ARTICLE_SOURCES: events.HELP_ARTICLE_SOURCES,
+    HELP_FEEDBACK_COMMENT_MAX: events.HELP_FEEDBACK_COMMENT_MAX,
     // BAL-529 §D — the Stripe redirect-return family's event constant + its two vocabularies.
     // ⚠ WITHOUT THESE LINES every test whose module graph reaches
     // `useSetupIntentRedirectReturn` throws on an undefined constant (memory

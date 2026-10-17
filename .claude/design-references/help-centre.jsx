@@ -112,7 +112,7 @@ const rich = (text, t) =>
       </strong>
     ) : (
       <React.Fragment key={i}>{part}</React.Fragment>
-    ),
+    )
   );
 
 // ── Lucide-style inline icons ────────────────────────────────────────
@@ -217,9 +217,21 @@ const CATEGORIES = {
       title: 'Getting started',
       blurb: 'Setting up your company and bringing your team in.',
       articles: [
-        { slug: 'naming-your-workspace', title: 'Naming your workspace', summary: 'What your company name is used for and how to change it.' },
-        { slug: 'joining-your-team', title: 'Joining your team on Balo', summary: 'How signing up with your work email connects you to your company.' },
-        { slug: 'switching-workspaces', title: 'Switching workspaces', summary: 'Move between your company and any other workspace you belong to.' },
+        {
+          slug: 'naming-your-workspace',
+          title: 'Naming your workspace',
+          summary: 'What your company name is used for and how to change it.',
+        },
+        {
+          slug: 'joining-your-team',
+          title: 'Joining your team on Balo',
+          summary: 'How signing up with your work email connects you to your company.',
+        },
+        {
+          slug: 'switching-workspaces',
+          title: 'Switching workspaces',
+          summary: 'Move between your company and any other workspace you belong to.',
+        },
       ],
     },
     {
@@ -227,11 +239,31 @@ const CATEGORIES = {
       title: 'Consultations and calls',
       blurb: 'Booking time with an expert and getting the most from the call.',
       articles: [
-        { slug: 'booking-a-consultation', title: 'Booking a consultation', summary: 'Pick a time with an expert, choose a length and confirm the call.' },
-        { slug: 'joining-a-call', title: 'Joining a call', summary: 'Getting into the call, admitting guests and sharing files while you talk.' },
-        { slug: 'adding-to-your-calendar', title: 'Adding a consultation to your calendar', summary: 'The calendar invite Balo sends, and where changes actually happen.' },
-        { slug: 'inviting-others', title: 'Inviting others to a consultation', summary: 'Bring in colleagues or outside guests, and what each of them can see.' },
-        { slug: 'meeting-recap', title: 'Understanding your meeting recap', summary: 'The summary, transcript, action items and files from each call.' },
+        {
+          slug: 'booking-a-consultation',
+          title: 'Booking a consultation',
+          summary: 'Pick a time with an expert, choose a length and confirm the call.',
+        },
+        {
+          slug: 'joining-a-call',
+          title: 'Joining a call',
+          summary: 'Getting into the call, admitting guests and sharing files while you talk.',
+        },
+        {
+          slug: 'adding-to-your-calendar',
+          title: 'Adding a consultation to your calendar',
+          summary: 'The calendar invite Balo sends, and where changes actually happen.',
+        },
+        {
+          slug: 'inviting-others',
+          title: 'Inviting others to a consultation',
+          summary: 'Bring in colleagues or outside guests, and what each of them can see.',
+        },
+        {
+          slug: 'meeting-recap',
+          title: 'Understanding your meeting recap',
+          summary: 'The summary, transcript, action items and files from each call.',
+        },
       ],
     },
     {
@@ -239,11 +271,31 @@ const CATEGORIES = {
       title: 'Cases and projects',
       blurb: 'Ongoing work with an expert, from a single case to a scoped project.',
       articles: [
-        { slug: 'your-cases', title: 'Your cases', summary: 'How cases are listed, what the coloured bands mean and when a case closes.' },
-        { slug: 'requesting-a-project', title: 'Requesting a project', summary: 'Describe the work, get proposals from experts and choose one.' },
-        { slug: 'turning-a-case-into-a-project', title: 'Turning a case into a project', summary: 'Start a project from a case without losing its history.' },
-        { slug: 'sharing-a-proposal', title: 'Sharing a proposal with colleagues', summary: 'Send a proposal by email or as a PDF so others can review it.' },
-        { slug: 'reviewing-a-finished-project', title: 'Reviewing a finished project', summary: 'Accept the work or ask for changes before the review window ends.' },
+        {
+          slug: 'your-cases',
+          title: 'Your cases',
+          summary: 'How cases are listed, what the coloured bands mean and when a case closes.',
+        },
+        {
+          slug: 'requesting-a-project',
+          title: 'Requesting a project',
+          summary: 'Describe the work, get proposals from experts and choose one.',
+        },
+        {
+          slug: 'turning-a-case-into-a-project',
+          title: 'Turning a case into a project',
+          summary: 'Start a project from a case without losing its history.',
+        },
+        {
+          slug: 'sharing-a-proposal',
+          title: 'Sharing a proposal with colleagues',
+          summary: 'Send a proposal by email or as a PDF so others can review it.',
+        },
+        {
+          slug: 'reviewing-a-finished-project',
+          title: 'Reviewing a finished project',
+          summary: 'Accept the work or ask for changes before the review window ends.',
+        },
       ],
     },
     {
@@ -251,10 +303,26 @@ const CATEGORIES = {
       title: 'Credit and billing',
       blurb: 'How prepaid credit works and how calls are charged.',
       articles: [
-        { slug: 'buying-credit', title: 'Buying credit', summary: 'Top up your company’s credit and choose what happens when it runs low.' },
-        { slug: 'redeeming-a-promo-code', title: 'Redeeming a promo code', summary: 'Add promo credit to your company without paying.' },
-        { slug: 'how-calls-are-billed', title: 'How consultation time is billed', summary: 'Per-minute charges, the 15-minute minimum and where to find receipts.' },
-        { slug: 'billing-settings', title: 'Billing settings', summary: 'Your saved card, billing email and low-balance setting.' },
+        {
+          slug: 'buying-credit',
+          title: 'Buying credit',
+          summary: 'Top up your company’s credit and choose what happens when it runs low.',
+        },
+        {
+          slug: 'redeeming-a-promo-code',
+          title: 'Redeeming a promo code',
+          summary: 'Add promo credit to your company without paying.',
+        },
+        {
+          slug: 'how-calls-are-billed',
+          title: 'How consultation time is billed',
+          summary: 'Per-minute charges, the 15-minute minimum and where to find receipts.',
+        },
+        {
+          slug: 'billing-settings',
+          title: 'Billing settings',
+          summary: 'Your saved card, billing email and low-balance setting.',
+        },
       ],
     },
     {
@@ -262,7 +330,11 @@ const CATEGORIES = {
       title: 'Your company',
       blurb: 'Who is in your company on Balo and how new people join.',
       articles: [
-        { slug: 'managing-who-can-join', title: 'Managing who can join your company', summary: 'Your email domains, join modes and handling join requests.' },
+        {
+          slug: 'managing-who-can-join',
+          title: 'Managing who can join your company',
+          summary: 'Your email domains, join modes and handling join requests.',
+        },
       ],
     },
   ],
@@ -272,11 +344,31 @@ const CATEGORIES = {
       title: 'Getting started',
       blurb: 'From your application to your first booking.',
       articles: [
-        { slug: 'what-happens-after-you-apply', title: 'What happens after you apply', summary: 'How we review applications and what happens either way.' },
-        { slug: 'rate-and-payouts', title: 'Setting your rate and payout details', summary: 'Enter your rate and the bank details we pay you to.' },
-        { slug: 'connecting-your-calendar', title: 'Connecting your calendar', summary: 'Link Google or Microsoft so clients only see times you’re free.' },
-        { slug: 'weekly-schedule', title: 'Setting your weekly hours', summary: 'Your working hours, time off and timezone.' },
-        { slug: 'working-through-an-agency', title: 'Working through an agency', summary: 'Joining or creating an agency, and how it shows to clients.' },
+        {
+          slug: 'what-happens-after-you-apply',
+          title: 'What happens after you apply',
+          summary: 'How we review applications and what happens either way.',
+        },
+        {
+          slug: 'rate-and-payouts',
+          title: 'Setting your rate and payout details',
+          summary: 'Enter your rate and the bank details we pay you to.',
+        },
+        {
+          slug: 'connecting-your-calendar',
+          title: 'Connecting your calendar',
+          summary: 'Link Google or Microsoft so clients only see times you’re free.',
+        },
+        {
+          slug: 'weekly-schedule',
+          title: 'Setting your weekly hours',
+          summary: 'Your working hours, time off and timezone.',
+        },
+        {
+          slug: 'working-through-an-agency',
+          title: 'Working through an agency',
+          summary: 'Joining or creating an agency, and how it shows to clients.',
+        },
       ],
     },
     {
@@ -284,9 +376,21 @@ const CATEGORIES = {
       title: 'Getting booked',
       blurb: 'Being found by clients and choosing when you take on work.',
       articles: [
-        { slug: 'not-in-search', title: 'Why am I not appearing in search?', summary: 'The six things that keep you listed, and what to fix.' },
-        { slug: 'pausing-new-work', title: 'Pausing new work', summary: 'Stop new bookings for a while without losing your setup.' },
-        { slug: 'your-calendar', title: 'Your calendar', summary: 'Your upcoming meetings and the times clients can still book.' },
+        {
+          slug: 'not-in-search',
+          title: 'Why am I not appearing in search?',
+          summary: 'The six things that keep you listed, and what to fix.',
+        },
+        {
+          slug: 'pausing-new-work',
+          title: 'Pausing new work',
+          summary: 'Stop new bookings for a while without losing your setup.',
+        },
+        {
+          slug: 'your-calendar',
+          title: 'Your calendar',
+          summary: 'Your upcoming meetings and the times clients can still book.',
+        },
       ],
     },
     {
@@ -294,9 +398,21 @@ const CATEGORIES = {
       title: 'Calls and cases',
       blurb: 'Running consultations and keeping track of ongoing work.',
       articles: [
-        { slug: 'joining-a-call', title: 'Joining a call', summary: 'Getting into the call, admitting guests and sharing files while you talk.' },
-        { slug: 'your-cases', title: 'Your cases', summary: 'Every case clients have booked with you, and what each card tells you.' },
-        { slug: 'meeting-recap', title: 'Understanding your meeting recap', summary: 'The summary, transcript, action items and files from each call.' },
+        {
+          slug: 'joining-a-call',
+          title: 'Joining a call',
+          summary: 'Getting into the call, admitting guests and sharing files while you talk.',
+        },
+        {
+          slug: 'your-cases',
+          title: 'Your cases',
+          summary: 'Every case clients have booked with you, and what each card tells you.',
+        },
+        {
+          slug: 'meeting-recap',
+          title: 'Understanding your meeting recap',
+          summary: 'The summary, transcript, action items and files from each call.',
+        },
       ],
     },
     {
@@ -304,8 +420,16 @@ const CATEGORIES = {
       title: 'Projects',
       blurb: 'Responding to requests and delivering scoped work.',
       articles: [
-        { slug: 'project-requests', title: 'Responding to project requests', summary: 'Expressing interest, talking it through and sending a proposal.' },
-        { slug: 'delivering-a-project', title: 'Delivering a project', summary: 'Milestones, delivery notes and asking the client to review.' },
+        {
+          slug: 'project-requests',
+          title: 'Responding to project requests',
+          summary: 'Expressing interest, talking it through and sending a proposal.',
+        },
+        {
+          slug: 'delivering-a-project',
+          title: 'Delivering a project',
+          summary: 'Milestones, delivery notes and asking the client to review.',
+        },
       ],
     },
     {
@@ -313,8 +437,16 @@ const CATEGORIES = {
       title: 'Getting paid',
       blurb: 'What you earn and when it reaches you.',
       articles: [
-        { slug: 'how-pricing-works', title: 'How pricing works on Balo', summary: 'Your quote is what you’re paid. Balo adds its margin separately.' },
-        { slug: 'your-earnings', title: 'Your earnings from consultations', summary: 'What you earned from each call, and its payout status.' },
+        {
+          slug: 'how-pricing-works',
+          title: 'How pricing works on Balo',
+          summary: 'Your quote is what you’re paid. Balo adds its margin separately.',
+        },
+        {
+          slug: 'your-earnings',
+          title: 'Your earnings from consultations',
+          summary: 'What you earned from each call, and its payout status.',
+        },
       ],
     },
   ],
@@ -325,8 +457,8 @@ Object.values(CATEGORIES).forEach((cats) =>
   cats.forEach((c) =>
     c.articles.forEach((a) => {
       if (!ALL[a.slug]) ALL[a.slug] = a;
-    }),
-  ),
+    })
+  )
 );
 const findCategory = (audience, id) => CATEGORIES[audience].find((c) => c.id === id);
 
@@ -622,7 +754,11 @@ function SupportBlock({ t, isMobile }) {
           Reach us any time at support@getbalo.com.
         </p>
       </div>
-      <a href="mailto:support@getbalo.com" className="hb-btn" style={{ ...btnStyle(t), padding: '10px 16px' }}>
+      <a
+        href="mailto:support@getbalo.com"
+        className="hb-btn"
+        style={{ ...btnStyle(t), padding: '10px 16px' }}
+      >
         <I.mail size={16} />
         Email support
       </a>
@@ -657,7 +793,15 @@ function ArticleRows({ t, items, onOpen }) {
               >
                 {a.title}
               </span>
-              <span style={{ display: 'block', marginTop: 3, fontSize: 14, lineHeight: 1.5, color: t.sub }}>
+              <span
+                style={{
+                  display: 'block',
+                  marginTop: 3,
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                  color: t.sub,
+                }}
+              >
                 {a.summary}
               </span>
             </span>
@@ -708,7 +852,11 @@ function AudienceSplit({ t, audience, onChange, isMobile }) {
     <div
       role="tablist"
       aria-label="Who the guides are for"
-      style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 8 : 12 }}
+      style={{
+        display: 'flex',
+        flexDirection: isMobile ? 'column' : 'row',
+        gap: isMobile ? 8 : 12,
+      }}
     >
       {tabs.map((tab) => {
         const sel = tab.key === audience;
@@ -764,7 +912,13 @@ function AudienceSplit({ t, audience, onChange, isMobile }) {
             {sel && (
               <span
                 className="hb-fade"
-                style={{ marginTop: 10, fontSize: 15, lineHeight: 1.5, color: tab.subInk, maxWidth: 420 }}
+                style={{
+                  marginTop: 10,
+                  fontSize: 15,
+                  lineHeight: 1.5,
+                  color: tab.subInk,
+                  maxWidth: 420,
+                }}
               >
                 {tab.sub}
               </span>
@@ -800,7 +954,13 @@ function HelpIndex({ t, audience, setAudience, isMobile, openArticle, focusTopic
   }, [focusTopic, clearFocus]);
 
   return (
-    <main style={{ maxWidth: 1080, margin: '0 auto', padding: isMobile ? '28px 20px 48px' : '52px 40px 72px' }}>
+    <main
+      style={{
+        maxWidth: 1080,
+        margin: '0 auto',
+        padding: isMobile ? '28px 20px 48px' : '52px 40px 72px',
+      }}
+    >
       <h1
         style={{
           margin: 0,
@@ -835,10 +995,18 @@ function HelpIndex({ t, audience, setAudience, isMobile, openArticle, focusTopic
         role="tabpanel"
         aria-labelledby={`hb-tab-${audience}`}
         className="hb-fade"
-        style={{ display: 'flex', alignItems: 'flex-start', gap: 56, marginTop: isMobile ? 32 : 52 }}
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 56,
+          marginTop: isMobile ? 32 : 52,
+        }}
       >
         {!isMobile && (
-          <nav aria-label="Topics" style={{ width: 196, flexShrink: 0, position: 'sticky', top: 24 }}>
+          <nav
+            aria-label="Topics"
+            style={{ width: 196, flexShrink: 0, position: 'sticky', top: 24 }}
+          >
             <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 2 }}>
               {cats.map((c) => (
                 <li key={c.id}>
@@ -877,11 +1045,19 @@ function HelpIndex({ t, audience, setAudience, isMobile, openArticle, focusTopic
             >
               <h2
                 id={`topic-${c.id}-title`}
-                style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: '-0.015em', color: t.ink }}
+                style={{
+                  margin: 0,
+                  fontSize: 20,
+                  fontWeight: 700,
+                  letterSpacing: '-0.015em',
+                  color: t.ink,
+                }}
               >
                 {c.title}
               </h2>
-              <p style={{ margin: '4px 0 12px', fontSize: 14, lineHeight: 1.5, color: t.sub }}>{c.blurb}</p>
+              <p style={{ margin: '4px 0 12px', fontSize: 14, lineHeight: 1.5, color: t.sub }}>
+                {c.blurb}
+              </p>
               <ArticleRows t={t} items={c.articles} onOpen={(slug) => openArticle(slug)} />
             </section>
           ))}
@@ -960,7 +1136,16 @@ function Ring({ t, n, block, radius = 10, children }) {
 }
 
 const Bar = ({ t, w, h = 8 }) => (
-  <span style={{ display: 'block', width: w, maxWidth: '100%', height: h, borderRadius: h / 2, background: t.lineSoft }} />
+  <span
+    style={{
+      display: 'block',
+      width: w,
+      maxWidth: '100%',
+      height: h,
+      borderRadius: h / 2,
+      background: t.lineSoft,
+    }}
+  />
 );
 const SLabel = ({ t, children }) => (
   <div style={{ fontSize: 12.5, fontWeight: 600, color: t.ink }}>{children}</div>
@@ -1057,7 +1242,15 @@ const Toggle = ({ t, on }) => (
       background: on ? t.primary : t.line,
     }}
   >
-    <span style={{ width: 16, height: 16, borderRadius: 999, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.2)' }} />
+    <span
+      style={{
+        width: 16,
+        height: 16,
+        borderRadius: 999,
+        background: '#fff',
+        boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+      }}
+    />
   </span>
 );
 
@@ -1067,7 +1260,9 @@ const ExpertIdentity = ({ t }) => (
       <Avatar t={t} initials="PR" />
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: t.ink }}>Priya Raman</div>
-        <div style={{ fontSize: 12, color: t.sub, marginTop: 2 }}>Salesforce CPQ and Revenue Cloud</div>
+        <div style={{ fontSize: 12, color: t.sub, marginTop: 2 }}>
+          Salesforce CPQ and Revenue Cloud
+        </div>
       </div>
     </div>
     <div style={{ display: 'grid', gap: 7, marginTop: 16 }}>
@@ -1091,7 +1286,15 @@ function ProfileScene({ t, n }) {
           ))}
         </div>
       </div>
-      <div style={{ flex: '1 1 170px', maxWidth: 230, border: `1px solid ${t.line}`, borderRadius: 12, padding: 14 }}>
+      <div
+        style={{
+          flex: '1 1 170px',
+          maxWidth: 230,
+          border: `1px solid ${t.line}`,
+          borderRadius: 12,
+          padding: 14,
+        }}
+      >
         <SLabel t={t}>Talk to Priya</SLabel>
         <div style={{ display: 'grid', gap: 6, margin: '10px 0 16px' }}>
           <Bar t={t} w="80%" />
@@ -1116,11 +1319,26 @@ function SlotsScene({ t, n }) {
   ];
   return (
     <div style={{ padding: 18 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          flexWrap: 'wrap',
+          gap: 8,
+        }}
+      >
         <SLabel t={t}>Pick a time</SLabel>
         <span style={{ fontSize: 11.5, color: t.sub }}>Times in your timezone (AEDT)</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8, marginTop: 14 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+          gap: 8,
+          marginTop: 14,
+        }}
+      >
         {days.map((day) => (
           <div key={day.d} style={{ display: 'grid', gap: 6, alignContent: 'start' }}>
             <div style={{ textAlign: 'center', marginBottom: 2 }}>
@@ -1178,7 +1396,7 @@ function DurationScene({ t, n }) {
             <Chip key={d} t={t} big>
               {d}
             </Chip>
-          ),
+          )
         )}
       </div>
       <div style={{ marginTop: 18 }}>
@@ -1250,7 +1468,14 @@ function ConfirmScene({ t, n }) {
     <div style={{ padding: 18, display: 'flex', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: 320 }}>
         <SLabel t={t}>Check your booking</SLabel>
-        <div style={{ marginTop: 10, padding: '4px 14px', border: `1px solid ${t.line}`, borderRadius: 12 }}>
+        <div
+          style={{
+            marginTop: 10,
+            padding: '4px 14px',
+            border: `1px solid ${t.line}`,
+            borderRadius: 12,
+          }}
+        >
           {rows.map(([k, v], i) => (
             <div
               key={k}
@@ -1288,7 +1513,15 @@ function ScheduleScene({ t, n, on }) {
   ];
   return (
     <div style={{ padding: '14px 18px 18px' }}>
-      <div style={{ display: 'flex', gap: 18, borderBottom: `1px solid ${t.line}`, fontSize: 12, fontWeight: 600 }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 18,
+          borderBottom: `1px solid ${t.line}`,
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+      >
         {['Profile', 'Rate', 'Schedule', 'Payouts'].map((x) => (
           <span
             key={x}
@@ -1316,9 +1549,13 @@ function ScheduleScene({ t, n, on }) {
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: t.ink }}>Available for new work</div>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: t.ink }}>
+            Available for new work
+          </div>
           <div style={{ fontSize: 11.5, color: t.sub, marginTop: 2 }}>
-            {on ? 'Clients can book you and send you new projects.' : 'New work is paused. Your settings are kept.'}
+            {on
+              ? 'Clients can book you and send you new projects.'
+              : 'New work is paused. Your settings are kept.'}
           </div>
         </div>
         <Ring t={t} n={n} radius={999}>
@@ -1326,11 +1563,31 @@ function ScheduleScene({ t, n, on }) {
         </Ring>
       </div>
       <div style={{ marginTop: 14, opacity: on ? 1 : 0.55 }}>
-        <div style={{ fontSize: 11.5, fontWeight: 600, color: t.sub, marginBottom: 6 }}>Weekly hours</div>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: t.sub, marginBottom: 6 }}>
+          Weekly hours
+        </div>
         {days.map(([d, h]) => (
-          <div key={d} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '5px 0', fontSize: 12 }}>
+          <div
+            key={d}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: '5px 0',
+              fontSize: 12,
+            }}
+          >
             <span style={{ width: 34, fontWeight: 600, color: t.ink }}>{d}</span>
-            <span style={{ padding: '4px 10px', borderRadius: 8, border: `1px solid ${t.line}`, color: t.body }}>{h}</span>
+            <span
+              style={{
+                padding: '4px 10px',
+                borderRadius: 8,
+                border: `1px solid ${t.line}`,
+                color: t.body,
+              }}
+            >
+              {h}
+            </span>
           </div>
         ))}
       </div>
@@ -1340,7 +1597,15 @@ function ScheduleScene({ t, n, on }) {
 
 function PauseDialogScene({ t, n }) {
   return (
-    <div style={{ padding: '26px 18px', display: 'flex', justifyContent: 'center', background: t.scrim, borderRadius: 10 }}>
+    <div
+      style={{
+        padding: '26px 18px',
+        display: 'flex',
+        justifyContent: 'center',
+        background: t.scrim,
+        borderRadius: 10,
+      }}
+    >
       <div
         style={{
           width: '100%',
@@ -1354,10 +1619,18 @@ function PauseDialogScene({ t, n }) {
       >
         <div style={{ fontSize: 14, fontWeight: 700, color: t.ink }}>Pause new work?</div>
         <p style={{ margin: '8px 0 0', fontSize: 12, lineHeight: 1.55, color: t.body }}>
-          You have 3 upcoming consultations and 1 active project. They go ahead as planned. Clients just can’t
-          start anything new with you.
+          You have 3 upcoming consultations and 1 active project. They go ahead as planned. Clients
+          just can’t start anything new with you.
         </p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            flexWrap: 'wrap',
+            gap: 10,
+            marginTop: 16,
+          }}
+        >
           <SBtn t={t} kind="outline">
             Keep me available
           </SBtn>
@@ -1380,7 +1653,14 @@ function PausedProfileScene({ t, n }) {
       </div>
       <div style={{ flex: '1 1 170px', maxWidth: 240 }}>
         <Ring t={t} n={n} block radius={12}>
-          <div style={{ ...hatch(t), padding: 14, border: `1px solid ${t.pausedBorder}`, borderRadius: 12 }}>
+          <div
+            style={{
+              ...hatch(t),
+              padding: 14,
+              border: `1px solid ${t.pausedBorder}`,
+              borderRadius: 12,
+            }}
+          >
             <SLabel t={t}>Not taking on new work right now</SLabel>
             <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
               <SBtn t={t} kind="outline" full>
@@ -1409,10 +1689,21 @@ function CalendarScene({ t, n }) {
   const cell = { display: 'block', height: 38, borderRadius: 7 };
   return (
     <div style={{ padding: 14 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '36px repeat(5, minmax(0, 1fr))', gap: 4 }}>
+      <div
+        style={{ display: 'grid', gridTemplateColumns: '36px repeat(5, minmax(0, 1fr))', gap: 4 }}
+      >
         <span />
         {days.map((d) => (
-          <span key={d} style={{ paddingBottom: 4, fontSize: 10.5, fontWeight: 600, color: t.sub, textAlign: 'center' }}>
+          <span
+            key={d}
+            style={{
+              paddingBottom: 4,
+              fontSize: 10.5,
+              fontWeight: 600,
+              color: t.sub,
+              textAlign: 'center',
+            }}
+          >
             {d}
           </span>
         ))}
@@ -1441,9 +1732,13 @@ function CalendarScene({ t, n }) {
               ) : (
                 <span
                   key={d}
-                  style={{ ...cell, border: `1px solid ${t.lineSoft}`, ...(open[r][c] ? hatch(t) : {}) }}
+                  style={{
+                    ...cell,
+                    border: `1px solid ${t.lineSoft}`,
+                    ...(open[r][c] ? hatch(t) : {}),
+                  }}
                 />
-              ),
+              )
             )}
           </React.Fragment>
         ))}
@@ -1539,8 +1834,13 @@ const AudienceChip = ({ t, audience }) => (
 function SectionRail({ t, steps, active, onJump }) {
   const ITEM = 44;
   return (
-    <nav aria-label="Sections in this guide" style={{ width: 216, flexShrink: 0, position: 'sticky', top: 24, paddingTop: 4 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: t.sub, marginBottom: 14 }}>In this guide</div>
+    <nav
+      aria-label="Sections in this guide"
+      style={{ width: 216, flexShrink: 0, position: 'sticky', top: 24, paddingTop: 4 }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 600, color: t.sub, marginBottom: 14 }}>
+        In this guide
+      </div>
       <div style={{ position: 'relative' }}>
         <span
           aria-hidden="true"
@@ -1661,9 +1961,17 @@ function MobileJump({ t, steps, onJump }) {
         }}
       >
         In this guide
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 500, color: t.sub }}>
+        <span
+          style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 500, color: t.sub }}
+        >
           {steps.length} sections
-          <I.chevronDown size={16} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' }} />
+          <I.chevronDown
+            size={16}
+            style={{
+              transform: open ? 'rotate(180deg)' : 'none',
+              transition: 'transform .2s ease',
+            }}
+          />
         </span>
       </button>
       {open && (
@@ -1746,7 +2054,15 @@ function SectionBlock({ t, step, i, isMobile }) {
           {step.title}
         </h2>
       </div>
-      <p style={{ margin: '12px 0 0', maxWidth: '64ch', fontSize: 16.5, lineHeight: 1.65, color: t.body }}>
+      <p
+        style={{
+          margin: '12px 0 0',
+          maxWidth: '64ch',
+          fontSize: 16.5,
+          lineHeight: 1.65,
+          color: t.body,
+        }}
+      >
         {rich(step.body, t)}
       </p>
       {step.scene && (
@@ -1776,7 +2092,9 @@ function Callout({ t, title, body }) {
       </span>
       <div>
         <div style={{ fontSize: 15, fontWeight: 650, color: t.ink }}>{title}</div>
-        <p style={{ margin: '6px 0 0', fontSize: 15, lineHeight: 1.6, color: t.body }}>{rich(body, t)}</p>
+        <p style={{ margin: '6px 0 0', fontSize: 15, lineHeight: 1.6, color: t.body }}>
+          {rich(body, t)}
+        </p>
       </div>
     </aside>
   );
@@ -1786,16 +2104,29 @@ function Feedback({ t }) {
   const [state, setState] = useState('ask'); // ask | no | thanks | sent
   const [note, setNote] = useState('');
   return (
-    <div aria-live="polite" style={{ marginTop: 56, paddingTop: 28, borderTop: `1px solid ${t.line}` }}>
+    <div
+      aria-live="polite"
+      style={{ marginTop: 56, paddingTop: 28, borderTop: `1px solid ${t.line}` }}
+    >
       {state === 'ask' && (
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
           <span style={{ fontSize: 15, fontWeight: 600, color: t.ink }}>Did this guide help?</span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="hb-btn" onClick={() => setState('thanks')} style={btnStyle(t)}>
+            <button
+              type="button"
+              className="hb-btn"
+              onClick={() => setState('thanks')}
+              style={btnStyle(t)}
+            >
               <I.thumbsUp size={15} />
               Yes
             </button>
-            <button type="button" className="hb-btn" onClick={() => setState('no')} style={btnStyle(t)}>
+            <button
+              type="button"
+              className="hb-btn"
+              onClick={() => setState('no')}
+              style={btnStyle(t)}
+            >
               <I.thumbsDown size={15} />
               No
             </button>
@@ -1831,18 +2162,30 @@ function Feedback({ t }) {
             <button
               type="button"
               onClick={() => setState(note.trim() ? 'sent' : 'thanks')}
-              style={{ ...btnStyle(t), background: t.primary, color: '#fff', border: '1px solid transparent' }}
+              style={{
+                ...btnStyle(t),
+                background: t.primary,
+                color: '#fff',
+                border: '1px solid transparent',
+              }}
             >
               Send
             </button>
-            <button type="button" className="hb-btn" onClick={() => setState('thanks')} style={btnStyle(t)}>
+            <button
+              type="button"
+              className="hb-btn"
+              onClick={() => setState('thanks')}
+              style={btnStyle(t)}
+            >
               Skip
             </button>
           </div>
         </div>
       )}
       {state === 'thanks' && (
-        <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: t.ink }}>Thanks for letting us know.</p>
+        <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: t.ink }}>
+          Thanks for letting us know.
+        </p>
       )}
       {state === 'sent' && (
         <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: t.ink }}>
@@ -1871,7 +2214,7 @@ function HelpArticle({ t, slug, isMobile, goIndex, openArticle }) {
           if (en.isIntersecting) setActive(Number(en.target.getAttribute('data-idx')));
         });
       },
-      { rootMargin: '-20% 0px -70% 0px' },
+      { rootMargin: '-20% 0px -70% 0px' }
     );
     els.forEach((el) => io.observe(el));
     return () => io.disconnect();
@@ -1885,7 +2228,13 @@ function HelpArticle({ t, slug, isMobile, goIndex, openArticle }) {
   const sideLabel = art.audience === 'expert' ? 'For experts' : 'For clients';
 
   return (
-    <main style={{ maxWidth: 1080, margin: '0 auto', padding: isMobile ? '24px 20px 48px' : '44px 40px 72px' }}>
+    <main
+      style={{
+        maxWidth: 1080,
+        margin: '0 auto',
+        padding: isMobile ? '24px 20px 48px' : '44px 40px 72px',
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 56 }}>
         {!isMobile && <SectionRail t={t} steps={art.steps} active={active} onJump={jump} />}
         <article style={{ flex: 1, minWidth: 0, maxWidth: 680 }}>
@@ -1917,10 +2266,26 @@ function HelpArticle({ t, slug, isMobile, goIndex, openArticle }) {
           >
             {art.title}
           </h1>
-          <p style={{ margin: '12px 0 0', maxWidth: '60ch', fontSize: 18, lineHeight: 1.55, color: t.sub }}>
+          <p
+            style={{
+              margin: '12px 0 0',
+              maxWidth: '60ch',
+              fontSize: 18,
+              lineHeight: 1.55,
+              color: t.sub,
+            }}
+          >
             {art.summary}
           </p>
-          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 18 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 12,
+              marginTop: 18,
+            }}
+          >
             <AudienceChip t={t} audience={art.audience} />
             <span style={{ fontSize: 13.5, color: t.sub }}>Updated {art.updated}</span>
           </div>
@@ -1938,10 +2303,17 @@ function HelpArticle({ t, slug, isMobile, goIndex, openArticle }) {
           <Feedback key={slug} t={t} />
 
           <section aria-labelledby="hb-related" style={{ marginTop: 48 }}>
-            <h2 id="hb-related" style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700, color: t.ink }}>
+            <h2
+              id="hb-related"
+              style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700, color: t.ink }}
+            >
               Related guides
             </h2>
-            <ArticleRows t={t} items={art.related.map((s) => ALL[s]).filter(Boolean)} onOpen={openArticle} />
+            <ArticleRows
+              t={t}
+              items={art.related.map((s) => ALL[s]).filter(Boolean)}
+              onOpen={openArticle}
+            />
           </section>
 
           <SupportBlock t={t} isMobile={isMobile} />
@@ -2129,7 +2501,10 @@ export default function HelpCentrePrototype() {
   const clearFocus = () => setFocusTopic(null);
 
   const page = (
-    <div className="hb-root" style={{ fontFamily: FONT, color: t.ink, background: t.page, colorScheme: t.name }}>
+    <div
+      className="hb-root"
+      style={{ fontFamily: FONT, color: t.ink, background: t.page, colorScheme: t.name }}
+    >
       <SiteHeader t={t} viewer={viewer} isMobile={isMobile} goHome={() => goIndex()} />
       {view === 'index' ? (
         <HelpIndex
@@ -2142,7 +2517,13 @@ export default function HelpCentrePrototype() {
           clearFocus={clearFocus}
         />
       ) : (
-        <HelpArticle t={t} slug={slug} isMobile={isMobile} goIndex={goIndex} openArticle={openArticle} />
+        <HelpArticle
+          t={t}
+          slug={slug}
+          isMobile={isMobile}
+          goIndex={goIndex}
+          openArticle={openArticle}
+        />
       )}
       <SiteFooter t={t} isMobile={isMobile} />
     </div>
@@ -2155,9 +2536,11 @@ export default function HelpCentrePrototype() {
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: '-0.01em' }}>
           Help centre: list page and guide page
         </h1>
-        <p style={{ margin: '6px 0 0', maxWidth: 680, fontSize: 14, lineHeight: 1.6, color: S.sub }}>
-          /help and /help/[slug] on the marketing site. Pick a side on the list page, then open Booking a
-          consultation (clients) or Pausing new work (experts) to see the guide template.
+        <p
+          style={{ margin: '6px 0 0', maxWidth: 680, fontSize: 14, lineHeight: 1.6, color: S.sub }}
+        >
+          /help and /help/[slug] on the marketing site. Pick a side on the list page, then open
+          Booking a consultation (clients) or Pausing new work (experts) to see the guide template.
         </p>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 22px', margin: '20px 0 18px' }}>
@@ -2266,8 +2649,12 @@ export default function HelpCentrePrototype() {
                 borderBottom: `1px solid ${S.border}`,
               }}
             >
-              <div style={{ minWidth: 140, fontSize: 12.5, fontWeight: 700, color: S.accent }}>{title}</div>
-              <div style={{ flex: '1 1 380px', fontSize: 13, lineHeight: 1.6, color: S.sub }}>{body}</div>
+              <div style={{ minWidth: 140, fontSize: 12.5, fontWeight: 700, color: S.accent }}>
+                {title}
+              </div>
+              <div style={{ flex: '1 1 380px', fontSize: 13, lineHeight: 1.6, color: S.sub }}>
+                {body}
+              </div>
             </div>
           ))}
           <pre
