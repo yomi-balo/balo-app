@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@/test/utils';
 import { resolveRouteDir, scanRouteSources } from '@/invariants/_source-scan';
+import { GLOBAL_FORBIDDEN } from '@/lib/copy/forbidden-terms';
 import { FOOTER_COLUMNS, PRICE_POINTS } from './copy';
 import { ExpertBandSection } from './expert-band-section';
 
@@ -31,16 +32,6 @@ const HOME_DIR = resolveRouteDir([
   'apps/web/src/app/(marketing)/_home',
 ]);
 const files = scanRouteSources(HOME_DIR, '', []);
-
-const GLOBAL_FORBIDDEN = [
-  'margin',
-  'commission',
-  'take rate',
-  'our cut',
-  'platform fee',
-  'earnings',
-  'payout',
-] as const;
 
 /** `margin: 0` (a CSS-in-JS declaration, `testimonials-section.tsx`) and `marginTop`/
  * `marginBottom`/… (camelCase CSS properties) are NOT the English word "margin" — both are

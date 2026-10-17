@@ -48,20 +48,20 @@ const main = guide({
   audience: ['client', 'expert'],
   category: { client: 'calls', expert: 'calls-cases' },
   related: ['other', 'missing'],
-  intro: [{ kind: 'html', html: '<p>Intro text</p>' }],
+  intro: [{ id: 'b-intro', kind: 'html', html: '<p>Intro text</p>' }],
   sections: [
     {
       n: 1,
       title: 'Open the profile',
-      blocks: [{ kind: 'html', html: '<p>Step one body</p>' }],
+      blocks: [{ id: 'b-1', kind: 'html', html: '<p>Step one body</p>' }],
       screenshot: null,
     },
     {
       n: 2,
       title: 'Pick a time',
       blocks: [
-        { kind: 'html', html: '<p>Step two body</p>' },
-        { kind: 'callout', html: '<p>Mind the timezone</p>' },
+        { id: 'b-2', kind: 'html', html: '<p>Step two body</p>' },
+        { id: 'b-3', kind: 'callout', html: '<p>Mind the timezone</p>' },
       ],
       screenshot: {
         alt: 'Slots shown',

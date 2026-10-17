@@ -22,6 +22,17 @@ describe('GuideFeedback', () => {
     expect(screen.getByText('Thanks for letting us know.')).toBeInTheDocument();
   });
 
+  it('announces only the thanks line, from a status region outside the form', async () => {
+    render(<GuideFeedback slug="booking" />);
+    const status = screen.getByRole('status');
+    expect(status).toBeEmptyDOMElement();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Yes' }));
+
+    expect(status).toHaveTextContent('Thanks for letting us know.');
+    expect(status.parentElement).not.toHaveAttribute('aria-live');
+  });
+
   it('names the Yes/No group', () => {
     render(<GuideFeedback slug="booking" />);
 

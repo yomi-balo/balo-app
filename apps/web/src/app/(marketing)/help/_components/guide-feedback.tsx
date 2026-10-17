@@ -41,7 +41,7 @@ export function GuideFeedback({ slug }: Readonly<{ slug: string }>): React.JSX.E
   const handleSkip = useCallback(() => submitNo(''), [submitNo]);
 
   return (
-    <div aria-live="polite" className="border-line mt-14 border-t pt-7">
+    <div className="border-line mt-14 border-t pt-7">
       {state === 'ask' && (
         <div className="flex flex-wrap items-center gap-3.5">
           <span className="text-foreground text-[15px] font-semibold">Did this guide help?</span>
@@ -91,14 +91,18 @@ export function GuideFeedback({ slug }: Readonly<{ slug: string }>): React.JSX.E
           </div>
         </div>
       )}
-      {state === 'thanks' && (
-        <p className="text-foreground m-0 text-[15px] font-semibold">Thanks for letting us know.</p>
-      )}
-      {state === 'sent' && (
-        <p className="text-foreground m-0 text-[15px] font-semibold">
-          Thanks. Your note will help us fix this guide.
-        </p>
-      )}
+      <div role="status" aria-live="polite">
+        {state === 'thanks' && (
+          <p className="text-foreground m-0 text-[15px] font-semibold">
+            Thanks for letting us know.
+          </p>
+        )}
+        {state === 'sent' && (
+          <p className="text-foreground m-0 text-[15px] font-semibold">
+            Thanks. Your note will help us fix this guide.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

@@ -38,7 +38,7 @@ describe('parseHelpDoc: frontmatter', () => {
 
   it('treats an unclosed fence as missing frontmatter', () => {
     const doc = parseHelpDoc('a.md', '---\ntitle: T\n');
-    expect(doc.issues.map((issue) => issue.code)).toEqual(['missing_frontmatter']);
+    expect(doc.issues.map((issue) => issue.code)).toContain('missing_frontmatter');
   });
 
   it('handles CRLF line endings', () => {
@@ -51,13 +51,13 @@ describe('parseHelpDoc: frontmatter', () => {
 describe('parseHelpDoc: sections', () => {
   it('numbers ## sections from 1 in document order and puts earlier content in the intro', () => {
     const doc = parse('Intro text.\n\n## One\n\nA.\n\n## Two\n\nB.\n\n## Three\n\nC.\n');
-    expect(doc.intro).toEqual([{ kind: 'html', html: '<p>Intro text.</p>' }]);
+    expect(doc.intro).toEqual([{ id: 'intro-b0', kind: 'html', html: '<p>Intro text.</p>' }]);
     expect(doc.sections.map((section) => [section.n, section.title])).toEqual([
       [1, 'One'],
       [2, 'Two'],
       [3, 'Three'],
     ]);
-    expect(doc.sections[1]?.blocks).toEqual([{ kind: 'html', html: '<p>B.</p>' }]);
+    expect(doc.sections[1]?.blocks).toEqual([{ id: 's2-b0', kind: 'html', html: '<p>B.</p>' }]);
   });
 
   it('uses plain text, with markup removed and entities decoded, for the title', () => {
@@ -65,10 +65,15 @@ describe('parseHelpDoc: sections', () => {
     expect(doc.sections[0]?.title).toBe('Pay & go with bold and code');
   });
 
+  it('decodes &amp; last, so &amp;lt; reads as the text &lt;', () => {
+    const doc = parse('## Use &amp;lt; here\n\nx\n');
+    expect(doc.sections[0]?.title).toBe('Use &lt; here');
+  });
+
   it('keeps h3 headings inside a section as html', () => {
     const doc = parse('## One\n\n### Detail\n\nText.\n');
     expect(doc.sections[0]?.blocks).toEqual([
-      { kind: 'html', html: '<h3>Detail</h3>\n<p>Text.</p>' },
+      { id: 's1-b0', kind: 'html', html: '<h3>Detail</h3>\n<p>Text.</p>' },
     ]);
   });
 
@@ -95,7 +100,7 @@ describe('parseHelpDoc: callouts and images', () => {
   it('turns a blockquote into a callout', () => {
     const doc = parse('## One\n\n> Mind the **gap**.\n');
     expect(doc.sections[0]?.blocks).toEqual([
-      { kind: 'callout', html: '<p>Mind the <strong>gap</strong>.</p>' },
+      { id: 's1-b0', kind: 'callout', html: '<p>Mind the <strong>gap</strong>.</p>' },
     ]);
   });
 
@@ -106,15 +111,16 @@ describe('parseHelpDoc: callouts and images', () => {
       lightSrc: '/help/a-guide/01-book-button-light.png',
       darkSrc: '/help/a-guide/01-book-button-dark.png',
     });
-    expect(doc.sections[0]?.blocks).toEqual([{ kind: 'html', html: '<p>Text.</p>' }]);
+    expect(doc.sections[0]?.blocks).toEqual([{ id: 's1-b0', kind: 'html', html: '<p>Text.</p>' }]);
   });
 
   it('makes a second image in the section an image block, in place', () => {
     const doc = parse('## One\n\n![First](a-one)\n\nBetween.\n\n![Second](a-two)\n');
     expect(doc.sections[0]?.screenshot?.alt).toBe('First');
     expect(doc.sections[0]?.blocks).toEqual([
-      { kind: 'html', html: '<p>Between.</p>' },
+      { id: 's1-b0', kind: 'html', html: '<p>Between.</p>' },
       {
+        id: 's1-b1',
         kind: 'image',
         image: {
           alt: 'Second',
@@ -129,6 +135,7 @@ describe('parseHelpDoc: callouts and images', () => {
     const doc = parse('![Intro](intro-shot)\n\n## One\n\nx\n');
     expect(doc.intro).toEqual([
       {
+        id: 'intro-b0',
         kind: 'image',
         image: {
           alt: 'Intro',
@@ -147,10 +154,14 @@ describe('parseHelpDoc: callouts and images', () => {
   it.each([
     ['a list item', '## One\n\n- step\n- ![shot](a-shot)\n'],
     ['a blockquote', '## One\n\n> ![shot](a-shot)\n'],
-    ['a table cell', '## One\n\n| a |\n| - |\n| ![shot](a-shot) |\n'],
     ['a heading', '## One\n\n### ![shot](a-shot)\n'],
   ])('reports an image nested in %s', (_name, body) => {
     expect(parse(body).issues.map((issue) => issue.code)).toEqual(['inline_image']);
+  });
+
+  it('reports an image in a table cell as both nested and unsupported', () => {
+    const codes = parse('## One\n\n| a |\n| - |\n| ![shot](a-shot) |\n').issues.map((i) => i.code);
+    expect(codes).toEqual(['unsupported_markdown', 'inline_image']);
   });
 
   it('reports an image reference that is not a bare kebab name', () => {

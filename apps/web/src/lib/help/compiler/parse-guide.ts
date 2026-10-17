@@ -1,6 +1,6 @@
 import { Lexer, Parser, type Token, type Tokens } from 'marked';
 import { parse as parseYaml } from 'yaml';
-import type { HelpBlock, HelpImage, HelpSection } from '../types';
+import type { HelpBlock, HelpBlockContent, HelpImage, HelpSection } from '../types';
 import { isKebab } from './kebab';
 import { sanitizeHelpHtml } from './sanitize-help-html';
 import type { HelpDocIssue } from './types';
@@ -39,12 +39,13 @@ function splitFrontmatter(source: string): SplitSource {
   return { yamlText: null, body: text };
 }
 
+// `&amp;` is last on purpose: decoding it first would turn `&amp;lt;` into `<` instead of `&lt;`.
 const ENTITIES: Readonly<Record<string, string>> = {
-  '&amp;': '&',
   '&lt;': '<',
   '&gt;': '>',
   '&quot;': '"',
   '&#39;': "'",
+  '&amp;': '&',
 };
 
 function decodeEntities(text: string): string {
@@ -66,10 +67,10 @@ function plainText(tokens: readonly Token[]): string {
   ).trim();
 }
 
-/** Whether any token, at any depth (list items, quotes, table cells, inline), is an image. */
-function containsImage(tokens: readonly Token[]): boolean {
-  return tokens.some((token) => {
-    if (token.type === 'image') return true;
+/** Calls `visit` on every token at any depth: list items, quotes, table cells and inline tokens. */
+function visitTokens(tokens: readonly Token[], visit: (token: Token) => void): void {
+  for (const token of tokens) {
+    visit(token);
     const generic = token as Tokens.Generic;
     const nested: Token[] = [
       ...(Array.isArray(generic.tokens) ? generic.tokens : []),
@@ -77,8 +78,34 @@ function containsImage(tokens: readonly Token[]): boolean {
       ...(Array.isArray(generic.header) ? generic.header : []),
       ...(Array.isArray(generic.rows) ? generic.rows.flat() : []),
     ];
-    return containsImage(nested);
+    visitTokens(nested, visit);
+  }
+}
+
+function containsImage(tokens: readonly Token[]): boolean {
+  let found = false;
+  visitTokens(tokens, (token) => {
+    if (token.type === 'image') found = true;
   });
+  return found;
+}
+
+/** Names the markdown constructs the guide renderer does not support, once each. */
+function unsupportedLabels(tokens: readonly Token[]): Set<string> {
+  const labels = new Set<string>();
+  visitTokens(tokens, (token) => {
+    if (
+      token.type === 'table' ||
+      token.type === 'code' ||
+      token.type === 'hr' ||
+      token.type === 'html'
+    ) {
+      labels.add(token.type);
+    } else if (token.type === 'heading' && token.depth >= 5) {
+      labels.add(`heading level ${token.depth}`);
+    }
+  });
+  return labels;
 }
 
 function isBlankInline(token: Token): boolean {
@@ -109,15 +136,18 @@ class DocWalker {
     this.issues.push({ file: this.file, code, message });
   }
 
-  private target(): HelpBlock[] {
-    return this.sections.at(-1)?.blocks ?? this.intro;
+  private pushBlock(content: HelpBlockContent): void {
+    const section = this.sections.at(-1);
+    const blocks = section?.blocks ?? this.intro;
+    const prefix = section === undefined ? 'intro' : `s${section.n}`;
+    blocks.push({ ...content, id: `${prefix}-b${blocks.length}` });
   }
 
   private flush(): void {
     if (this.pending.length === 0) return;
     const html = renderHtml(this.pending);
     this.pending = [];
-    if (html !== '') this.target().push({ kind: 'html', html });
+    if (html !== '') this.pushBlock({ kind: 'html', html });
   }
 
   private toImage(token: Tokens.Image): HelpImage | null {
@@ -142,7 +172,16 @@ class DocWalker {
       section.screenshot = image;
       return;
     }
-    this.target().push({ kind: 'image', image });
+    this.pushBlock({ kind: 'image', image });
+  }
+
+  private rejectUnsupported(token: Token): void {
+    for (const label of unsupportedLabels([token])) {
+      this.report(
+        'unsupported_markdown',
+        `Unsupported markdown (${label}); the guide renderer cannot show it.`
+      );
+    }
   }
 
   private rejectNestedImages(tokens: readonly Token[]): void {
@@ -172,6 +211,7 @@ class DocWalker {
   walk(tokens: readonly Token[]): void {
     for (const token of tokens) {
       if (token.type === 'space') continue;
+      this.rejectUnsupported(token);
       if (token.type === 'heading' && token.depth === 1) {
         this.report(
           'h1_in_body',
@@ -189,7 +229,7 @@ class DocWalker {
         this.flush();
         this.rejectNestedImages(token.tokens ?? []);
         const html = renderHtml(token.tokens ?? []);
-        if (html !== '') this.target().push({ kind: 'callout', html });
+        if (html !== '') this.pushBlock({ kind: 'callout', html });
       } else if (token.type !== 'paragraph' || !this.handleParagraph(token as Tokens.Paragraph)) {
         if (token.type !== 'paragraph') this.rejectNestedImages([token]);
         this.pending.push(token);

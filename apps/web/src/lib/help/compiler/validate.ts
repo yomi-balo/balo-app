@@ -1,4 +1,5 @@
 import { HELP_AUDIENCES } from '@balo/analytics/events';
+import { EXPERT_MONEY_TERMS, FEE_TERMS, forbiddenTermsIn } from '@/lib/copy/forbidden-terms';
 import { isHelpCategoryId } from '../categories';
 import type { HelpImage } from '../types';
 import { helpFrontmatterSchema, type HelpFrontmatter } from './frontmatter-schema';
@@ -76,6 +77,39 @@ function missingImageIssues(
   );
 }
 
+function textOf(html: string): string {
+  let out = '';
+  let inTag = false;
+  for (const ch of html) {
+    if (ch === '<') inTag = true;
+    else if (ch === '>') inTag = false;
+    else if (!inTag) out += ch;
+  }
+  return out;
+}
+
+function forbiddenCopyIssues(
+  file: string,
+  fm: HelpFrontmatter,
+  parsed: ReturnType<typeof parseHelpDoc>
+): HelpDocIssue[] {
+  const blocks = [...parsed.intro, ...parsed.sections.flatMap((section) => section.blocks)];
+  const text = [
+    fm.title,
+    fm.summary,
+    ...parsed.sections.map((section) => section.title),
+    ...blocks.map((block) => (block.kind === 'image' ? block.image.alt : textOf(block.html))),
+  ].join('\n');
+  const banned: readonly string[] = fm.audience.includes('client')
+    ? [...FEE_TERMS, ...EXPERT_MONEY_TERMS]
+    : FEE_TERMS;
+  return forbiddenTermsIn(text, banned).map((term) => ({
+    file,
+    code: 'forbidden_copy' as const,
+    message: `The copy mentions "${term}", which guides must not use.`,
+  }));
+}
+
 function validateOne(
   { filename, source }: HelpSourceFile,
   stems: ReadonlySet<string>,
@@ -122,6 +156,7 @@ function validateOne(
   }
 
   issues.push(...crossFieldIssues(filename, stem, result.data, stems));
+  issues.push(...forbiddenCopyIssues(filename, result.data, parsed));
   if (result.data.published) {
     const images = [
       ...parsed.intro,

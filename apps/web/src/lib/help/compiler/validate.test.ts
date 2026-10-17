@@ -115,6 +115,81 @@ describe('validateHelpDocs', () => {
     ]);
   });
 
+  describe('unsupported_markdown', () => {
+    it.each([
+      ['table', '## One\n\n| a |\n| - |\n| b |\n', 'table'],
+      ['fenced code', '## One\n\n```\ncode\n```\n', 'code'],
+      ['indented code', '## One\n\n    indented\n', 'code'],
+      ['hr', '## One\n\nText.\n\n---\n\nMore.\n', 'hr'],
+      ['block html', '## One\n\n<div>raw</div>\n', 'html'],
+      ['inline html', '## One\n\nSome <b>bold</b>.\n', 'html'],
+      ['inline html in a ## heading', '## One <span>x</span>\n\ntext\n', 'html'],
+      ['heading level 5', '## One\n\n##### Deep\n', 'heading level 5'],
+      ['heading level 6', '## One\n\n###### Deeper\n', 'heading level 6'],
+    ])('flags %s and names it', (_name, body, label) => {
+      const issues = validateHelpDocs([helpDoc('a.md', { body })], allExist);
+      expect(issues.map((issue) => issue.code)).toEqual(['unsupported_markdown']);
+      expect(issues[0]?.message).toContain(label);
+    });
+
+    it('accepts h3, h4, lists, links, emphasis and inline code', () => {
+      const body = '## One\n\n### Sub\n\n#### Subsub\n\n- **a** and *b*\n- `c` [d](/e)\n';
+      expect(codes([helpDoc('a.md', { body })])).toEqual([]);
+    });
+  });
+
+  describe('forbidden_copy', () => {
+    it('flags a forbidden term in the title, the summary, a section title and the body', () => {
+      expect(codes([helpDoc('a.md', { frontmatter: { title: '"Your payout"' } })])).toEqual([
+        'forbidden_copy',
+      ]);
+      expect(codes([helpDoc('a.md', { frontmatter: { summary: '"Our Commission"' } })])).toEqual([
+        'forbidden_copy',
+      ]);
+      expect(codes([helpDoc('a.md', { body: '## Your earnings\n\nx\n' })])).toEqual([
+        'forbidden_copy',
+      ]);
+      expect(codes([helpDoc('a.md', { body: '## One\n\nWe keep a **platform fee**.\n' })])).toEqual(
+        ['forbidden_copy']
+      );
+    });
+
+    it('allows payout and earnings talk in an expert-only guide', () => {
+      const expert = { audience: '[expert]', category: '{ expert: projects }' };
+      const body = '## One\n\nYour payout and earnings.\n';
+      expect(codes([helpDoc('a.md', { frontmatter: expert, body })])).toEqual([]);
+    });
+
+    it('still bans fee and margin talk in an expert-only guide', () => {
+      const expert = { audience: '[expert]', category: '{ expert: projects }' };
+      const body = '## One\n\nOur margin.\n';
+      expect(codes([helpDoc('a.md', { frontmatter: expert, body })])).toEqual(['forbidden_copy']);
+    });
+
+    it('bans payout talk in a client guide and in a dual guide', () => {
+      const body = '## One\n\nYour payout.\n';
+      expect(codes([helpDoc('a.md', { body })])).toEqual(['forbidden_copy']);
+      const dual = {
+        audience: '[client, expert]',
+        category: '{ client: calls, expert: projects }',
+      };
+      expect(codes([helpDoc('a.md', { frontmatter: dual, body })])).toEqual(['forbidden_copy']);
+    });
+
+    it('applies to unpublished guides too', () => {
+      const draft = helpDoc('a.md', {
+        frontmatter: { published: 'false' },
+        body: '## One\n\nOur margin.\n',
+      });
+      expect(codes([draft])).toEqual(['forbidden_copy']);
+    });
+
+    it('does not read tag names or attributes as text', () => {
+      const body = '## One\n\n[go](/settings/payouts) now.\n';
+      expect(codes([helpDoc('a.md', { body })])).toEqual([]);
+    });
+  });
+
   describe('missing_image (published only)', () => {
     const body = '## One\n\n![s](a-shot)\n\n![t](a-two)\n';
 

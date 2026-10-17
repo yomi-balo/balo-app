@@ -6,10 +6,13 @@ export interface HelpImage {
   readonly darkSrc: string;
 }
 
-export type HelpBlock =
+export type HelpBlockContent =
   | { readonly kind: 'html'; readonly html: string }
   | { readonly kind: 'callout'; readonly html: string }
   | { readonly kind: 'image'; readonly image: HelpImage };
+
+/** A block plus a stable id, unique within its guide: `intro-b<i>` or `s<section>-b<i>`. */
+export type HelpBlock = HelpBlockContent & { readonly id: string };
 
 export interface HelpSection {
   /** 1-based, in document order. */

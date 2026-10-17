@@ -1,4 +1,5 @@
 import { Mail } from 'lucide-react';
+import { HELP_SUPPORT_EMAIL } from '@/lib/help/support';
 
 /** The shared "Still stuck?" footer of the help index and every guide. */
 export function SupportBlock(): React.JSX.Element {
@@ -12,11 +13,11 @@ export function SupportBlock(): React.JSX.Element {
           Still stuck?
         </h2>
         <p className="text-muted-foreground mt-1 text-[15px] leading-normal">
-          Reach us any time at support@getbalo.com.
+          Reach us any time at {HELP_SUPPORT_EMAIL}.
         </p>
       </div>
       <a
-        href="mailto:support@getbalo.com"
+        href={`mailto:${HELP_SUPPORT_EMAIL}`}
         className="bg-card text-foreground border-line hover:bg-accent focus-visible:ring-ring inline-flex min-h-11 items-center gap-2 rounded-[10px] border px-4 py-2.5 text-sm font-semibold transition-colors outline-none focus-visible:ring-2 motion-reduce:transition-none"
       >
         <Mail aria-hidden="true" className="size-4" />

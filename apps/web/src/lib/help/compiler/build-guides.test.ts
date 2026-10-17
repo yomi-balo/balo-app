@@ -33,14 +33,14 @@ describe('buildHelpGuides', () => {
       order: 3,
       updated: '2026-10-17',
       related: ['both'],
-      intro: [{ kind: 'html', html: '<p>Intro.</p>' }],
+      intro: [{ id: 'intro-b0', kind: 'html', html: '<p>Intro.</p>' }],
       sections: [
         {
           n: 1,
           title: 'Step',
           blocks: [
-            { kind: 'html', html: '<p>Body.</p>' },
-            { kind: 'callout', html: '<p>Note.</p>' },
+            { id: 's1-b0', kind: 'html', html: '<p>Body.</p>' },
+            { id: 's1-b1', kind: 'callout', html: '<p>Note.</p>' },
           ],
           screenshot: null,
         },

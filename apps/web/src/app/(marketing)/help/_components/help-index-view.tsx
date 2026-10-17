@@ -3,6 +3,7 @@
 import { Mail } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { track, HELP_EVENTS, type HelpAudience } from '@/lib/analytics';
+import { HELP_SUPPORT_EMAIL } from '@/lib/help/support';
 import { helpGuideHref, helpIndexHref } from '@/lib/help/audience';
 import type { HelpCategoryGroup } from '@/lib/help/types';
 import { AudienceTabs } from './audience-tabs';
@@ -54,7 +55,7 @@ function EmptySide({
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <a
-          href="mailto:support@getbalo.com"
+          href={`mailto:${HELP_SUPPORT_EMAIL}`}
           className="bg-card text-foreground border-line hover:bg-accent focus-visible:ring-ring inline-flex min-h-11 items-center gap-2 rounded-[10px] border px-4 py-2.5 text-sm font-semibold transition-colors outline-none focus-visible:ring-2 motion-reduce:transition-none"
         >
           <Mail aria-hidden="true" className="size-4" />

@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { jumpToSection } from './jump-to-section';
@@ -17,13 +18,12 @@ export function MobileSectionJump({
   steps,
 }: Readonly<MobileSectionJumpProps>): React.JSX.Element {
   const [open, setOpen] = useState(false);
-  const toggleRef = useRef<HTMLButtonElement>(null);
 
   const handleToggle = useCallback(() => setOpen((value) => !value), []);
   const handlePick = useCallback(
     (n: number) => {
-      setOpen(false);
-      toggleRef.current?.focus();
+      // Collapse before measuring, so the scroll target is not offset by the list's height.
+      flushSync(() => setOpen(false));
       jumpToSection(slug, n);
     },
     [slug]
@@ -32,7 +32,6 @@ export function MobileSectionJump({
   return (
     <div className="border-line mt-6 rounded-xl border lg:hidden">
       <button
-        ref={toggleRef}
         type="button"
         aria-expanded={open}
         aria-controls={open ? 'help-jump' : undefined}

@@ -29,10 +29,6 @@ function Block({ block }: Readonly<{ block: HelpBlock }>): React.JSX.Element {
   }
 }
 
-function blockKey(block: HelpBlock): string {
-  return block.kind === 'image' ? `image:${block.image.lightSrc}` : `${block.kind}:${block.html}`;
-}
-
 /** Renders a guide's ordered content blocks: prose, callouts and screenshots. */
 export function HelpBlocks({
   blocks,
@@ -40,7 +36,7 @@ export function HelpBlocks({
   return (
     <div className="flex flex-col gap-3">
       {blocks.map((block) => (
-        <Block key={blockKey(block)} block={block} />
+        <Block key={block.id} block={block} />
       ))}
     </div>
   );
