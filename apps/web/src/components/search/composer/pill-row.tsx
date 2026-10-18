@@ -38,7 +38,7 @@ export function PillRow({
             type="button"
             onClick={() => onToggle(option.value)}
             aria-pressed={active}
-            whileTap={reduce ? undefined : { scale: 0.95 }}
+            whileTap={{ scale: reduce ? 1 : 0.95 }}
             transition={{ type: 'spring', stiffness: 600, damping: 30 }}
             className={cn(
               'focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[13px] transition-colors focus-visible:ring-2 focus-visible:outline-none',

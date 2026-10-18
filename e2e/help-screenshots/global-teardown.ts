@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import path from 'node:path';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -8,6 +9,9 @@ const REPO_ROOT = path.resolve(__dirname, '../..');
  * an expert. Set `HELP_KEEP_FIXTURE=1` to keep it for inspection.
  */
 export default function globalTeardown(): void {
+  if (process.env.HELP_CLIP_DIR) {
+    rmSync(process.env.HELP_CLIP_DIR, { recursive: true, force: true });
+  }
   if (process.env.HELP_KEEP_FIXTURE === '1') {
     return;
   }

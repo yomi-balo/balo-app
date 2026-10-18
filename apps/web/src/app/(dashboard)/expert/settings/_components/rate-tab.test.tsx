@@ -336,10 +336,11 @@ describe('RateTab — save', () => {
 });
 
 describe('RateTab — what clients see', () => {
-  it('states the fee as a share of the client price and drops the quick-math box', () => {
+  it('shows the client price without a fee line and drops the quick-math box', () => {
     render(<RateTab initialRateCents={230} />);
 
     expect(screen.queryByText(/Quick math/)).toBeNull();
-    expect(screen.getByText("Includes Balo's 20% service fee")).toBeInTheDocument();
+    expect(screen.getByText('What clients see')).toBeInTheDocument();
+    expect(screen.queryByText(/Includes Balo/)).toBeNull();
   });
 });

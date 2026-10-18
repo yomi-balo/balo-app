@@ -14,11 +14,11 @@ import { test as base, expect } from '@playwright/test';
  * The closed persona vocabulary the route accepts. Never an email, never a role.
  *
  * A DELIBERATE COPY of `TestPersona` in `apps/web/src/app/api/auth/test-login/route.ts` — not
- * shared, and not drift. There is no root `tsconfig.json`; `e2e/` is not typechecked against
- * `apps/web` at all, so an import across that boundary would not buy any actual cross-checking,
- * and the two literal unions must be kept in sync by hand if the route's vocabulary ever changes.
+ * shared, and not drift. `e2e/` is typechecked (`pnpm typecheck:e2e`), but `e2e/tsconfig.json`
+ * cannot resolve `apps/web`'s `@/` aliases, so the route module cannot be imported here; the two
+ * literal unions must be kept in sync by hand if the route's vocabulary ever changes.
  */
-type SeedPersona = 'member' | 'staff';
+export type SeedPersona = 'member' | 'staff' | 'help-client';
 
 export type SeedOptions = { onboardingCompleted: boolean; persona?: SeedPersona };
 

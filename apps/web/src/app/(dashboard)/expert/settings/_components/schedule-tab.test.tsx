@@ -51,8 +51,16 @@ vi.mock('./schedule-timezone-combobox', () => ({
 // `components/availability/ExpertAvailabilityCalendar.test.tsx`; this suite only proves the
 // mount condition and the expertProfileId ref→state promotion (D15).
 vi.mock('@/components/availability', () => ({
-  ExpertAvailabilityCalendar: ({ expertProfileId }: { expertProfileId: string }) => (
-    <div data-testid="availability-preview-stub">preview:{expertProfileId}</div>
+  ExpertAvailabilityCalendar: ({
+    expertProfileId,
+    skipFetch,
+  }: {
+    expertProfileId: string;
+    skipFetch?: boolean;
+  }) => (
+    <div data-testid="availability-preview-stub" data-skip-fetch={String(skipFetch)}>
+      preview:{expertProfileId}
+    </div>
   ),
 }));
 
@@ -113,6 +121,8 @@ vi.mock('../_actions/set-work-availability', () => ({
   setWorkAvailabilityAction: (...args: unknown[]) => mockSetWorkAvailability(...args),
 }));
 
+const mockUseReducedMotion = vi.hoisted(() => vi.fn(() => false));
+
 vi.mock('motion/react', () => {
   const MOTION_PROPS = new Set(['variants', 'initial', 'animate', 'exit', 'transition']);
   const filterMotion = (props: Record<string, unknown>): Record<string, unknown> =>
@@ -120,11 +130,17 @@ vi.mock('motion/react', () => {
   return {
     motion: {
       div: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => (
-        <div {...filterMotion(props)}>{children}</div>
+        <div
+          {...filterMotion(props)}
+          data-initial={JSON.stringify(props.initial)}
+          data-transition={JSON.stringify(props.transition)}
+        >
+          {children}
+        </div>
       ),
     },
     AnimatePresence: ({ children }: React.PropsWithChildren) => children,
-    useReducedMotion: () => false,
+    useReducedMotion: mockUseReducedMotion,
   };
 });
 
@@ -149,6 +165,7 @@ function loadResult(overrides: Partial<ScheduleLoadResult> = {}): ScheduleLoadRe
     ],
     availableForWork: true,
     workInFlight: { upcomingConsultations: 2, activeProjects: 1 },
+    publiclyVisible: true,
     ...overrides,
   };
 }
@@ -166,6 +183,7 @@ beforeAll(() => {
 describe('ScheduleTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseReducedMotion.mockReturnValue(false);
     mockGetSchedule.mockResolvedValue(loadResult());
     mockSaveSchedule.mockResolvedValue({ success: true });
     mockClearSchedule.mockResolvedValue({ success: true });
@@ -179,6 +197,28 @@ describe('ScheduleTab', () => {
     expect(screen.getByRole('button', { name: 'Save schedule' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Clear schedule' })).toBeInTheDocument();
     expect(screen.getByTestId('calendar-connections-section-stub')).toBeInTheDocument();
+  });
+
+  it('keeps the same initial style under reduced motion and only zeroes the transition', async () => {
+    mockUseReducedMotion.mockReturnValue(true);
+    const { container } = render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+    const root = container.querySelector('[data-initial]');
+    expect(root?.getAttribute('data-initial')).toBe(JSON.stringify({ opacity: 0, y: 8 }));
+    expect(root?.getAttribute('data-transition')).toBe(JSON.stringify({ duration: 0 }));
+  });
+
+  it('tells the preview to skip the public request when the profile is not publicly visible', async () => {
+    mockGetSchedule.mockResolvedValue(loadResult({ publiclyVisible: false }));
+    render(<ScheduleTab />);
+    const preview = await screen.findByTestId('availability-preview-stub');
+    expect(preview).toHaveAttribute('data-skip-fetch', 'true');
+  });
+
+  it('lets the preview fetch when the profile is publicly visible', async () => {
+    render(<ScheduleTab />);
+    const preview = await screen.findByTestId('availability-preview-stub');
+    expect(preview).toHaveAttribute('data-skip-fetch', 'false');
   });
 
   it('heads the tab with the title, description and the timezone line — no separate timezone card', async () => {

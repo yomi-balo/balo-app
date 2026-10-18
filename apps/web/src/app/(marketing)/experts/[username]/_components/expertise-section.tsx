@@ -61,10 +61,10 @@ export function ExpertiseSection({
 
   return (
     <motion.div
-      initial={reduce ? false : { opacity: 0, y: 18 }}
-      whileInView={reduce ? undefined : { opacity: 1, y: 0 }}
+      initial={{ opacity: 0, y: 18 }}
+      whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: '-80px' }}
-      transition={{ duration: 0.5, ease: 'easeOut' }}
+      transition={reduce ? { duration: 0 } : { duration: 0.5, ease: 'easeOut' }}
     >
       <Card className="gap-0 p-7">
         <SectionLabel icon={TrendingUp} tone="primary" className="mb-4">

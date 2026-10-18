@@ -24,7 +24,9 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
  * falls to `<body>` — the exact defect `@/test/motion-stub`'s docblock was written about. A
  * callback ref fires when the node actually mounts, whenever that is.
  *
- * ⚠ REDUCED MOTION GETS THE SAME LAYOUT, just no transform — the same contract `Reveal` keeps.
+ * ⚠ REDUCED MOTION GETS THE SAME LAYOUT AND THE SAME ELEMENT TREE, just an instant transition —
+ * the same contract `Reveal` keeps. Branching the tree on `useReducedMotion()` (null on the
+ * server, true on the client) would hydrate to a different element.
  * 200ms / `easeOut` is the approved "state change" row of the balo-ui motion table.
  */
 export function StateSwap({
@@ -38,9 +40,6 @@ export function StateSwap({
   children: React.ReactNode;
 }>): React.JSX.Element {
   const shouldReduceMotion = useReducedMotion();
-  if (shouldReduceMotion) {
-    return <div className={className}>{children}</div>;
-  }
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
@@ -49,7 +48,7 @@ export function StateSwap({
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: -6 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
+        transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2, ease: 'easeOut' }}
       >
         {children}
       </motion.div>

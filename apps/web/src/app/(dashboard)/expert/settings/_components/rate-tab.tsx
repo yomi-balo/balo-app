@@ -271,12 +271,7 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
           icon={DollarSign}
           color="#059669"
           title="Set Your Rate"
-          description={
-            <>
-              This is your take-home rate. Clients see a higher rate that includes Balo&apos;s
-              service fee.
-            </>
-          }
+          description="This is your take-home rate."
         />
       </motion.div>
 
@@ -360,9 +355,6 @@ export function RateTab({ initialRateCents }: RateTabProps): React.JSX.Element {
               </div>
               <span className="text-muted-foreground text-sm">{clientRatePerHour}/hour</span>
             </div>
-            <p className="text-muted-foreground mt-2 text-xs">
-              Includes Balo&apos;s {PLATFORM_PRICING.SERVICE_FEE_SHARE_LABEL} service fee
-            </p>
           </div>
         </Card>
       </motion.div>

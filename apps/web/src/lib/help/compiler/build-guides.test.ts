@@ -2,28 +2,36 @@ import { describe, expect, it } from 'vitest';
 import { buildHelpGuides, renderHelpModule } from './build-guides';
 import { helpDoc } from './doc-fixtures';
 
+const stubSize = (): { width: number; height: number } => ({ width: 1, height: 1 });
+
 describe('buildHelpGuides', () => {
   it('emits published guides only, sorted by slug', () => {
-    const guides = buildHelpGuides([
-      helpDoc('zeta.md'),
-      helpDoc('draft.md', { frontmatter: { published: 'false' } }),
-      helpDoc('alpha.md'),
-    ]);
+    const guides = buildHelpGuides(
+      [
+        helpDoc('zeta.md'),
+        helpDoc('draft.md', { frontmatter: { published: 'false' } }),
+        helpDoc('alpha.md'),
+      ],
+      stubSize
+    );
     expect(guides.map((guide) => guide.slug)).toEqual(['alpha', 'zeta']);
   });
 
   it('builds the guide model, with audience and category in canonical order', () => {
-    const [guide] = buildHelpGuides([
-      helpDoc('both.md', {
-        frontmatter: {
-          audience: '[expert, client]',
-          category: '{ expert: projects, client: calls }',
-          related: '[both]',
-          order: '3',
-        },
-        body: 'Intro.\n\n## Step\n\nBody.\n\n> Note.\n',
-      }),
-    ]);
+    const [guide] = buildHelpGuides(
+      [
+        helpDoc('both.md', {
+          frontmatter: {
+            audience: '[expert, client]',
+            category: '{ expert: projects, client: calls }',
+            related: '[both]',
+            order: '3',
+          },
+          body: 'Intro.\n\n## Step\n\nBody.\n\n> Note.\n',
+        }),
+      ],
+      stubSize
+    );
     expect(guide).toEqual({
       slug: 'both',
       title: 'Booking a consultation',
@@ -48,9 +56,37 @@ describe('buildHelpGuides', () => {
     });
   });
 
+  it('attaches the intrinsic size to the section screenshot and to image blocks', () => {
+    const sizes: Record<string, { width: number; height: number }> = {
+      '/help/shots/01-a-light.png': { width: 600, height: 400 },
+      '/help/shots/01-a-dark.png': { width: 600, height: 400 },
+      '/help/shots/extra-light.png': { width: 300, height: 200 },
+      '/help/shots/extra-dark.png': { width: 300, height: 200 },
+    };
+    const [guide] = buildHelpGuides(
+      [helpDoc('shots.md', { body: 'Intro.\n\n## Step\n\n![Alt](01-a)\n\n![More](extra)\n' })],
+      (src) => sizes[src] ?? { width: 0, height: 0 }
+    );
+    const [section] = guide?.sections ?? [];
+    expect(section?.screenshot).toMatchObject({ width: 600, height: 400 });
+    expect(section?.blocks.find((block) => block.kind === 'image')).toMatchObject({
+      image: { width: 300, height: 200 },
+    });
+  });
+
+  it('throws when the light and dark files differ in size', () => {
+    expect(() =>
+      buildHelpGuides(
+        [helpDoc('shots.md', { body: 'Intro.\n\n## Step\n\n![Alt](01-a)\n' })],
+        (src) =>
+          src.endsWith('-dark.png') ? { width: 599, height: 400 } : { width: 600, height: 400 }
+      )
+    ).toThrow(/600x400 but .*-dark\.png is 599x400/);
+  });
+
   it('throws, listing every issue, when a doc is invalid', () => {
     expect(() =>
-      buildHelpGuides([helpDoc('a.md', { frontmatter: { related: '[ghost]' } })])
+      buildHelpGuides([helpDoc('a.md', { frontmatter: { related: '[ghost]' } })], stubSize)
     ).toThrow(/a\.md \[unknown_related\]/);
   });
 });
@@ -70,7 +106,7 @@ describe('renderHelpModule', () => {
   });
 
   it('embeds the guides as JSON', () => {
-    const guides = buildHelpGuides([helpDoc('alpha.md')]);
+    const guides = buildHelpGuides([helpDoc('alpha.md')], stubSize);
     expect(renderHelpModule(guides)).toContain('"slug": "alpha"');
     expect(renderHelpModule(guides)).toBe(renderHelpModule(guides));
   });

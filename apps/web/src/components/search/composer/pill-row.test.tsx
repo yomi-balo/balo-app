@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { useReducedMotion } from 'motion/react';
 
 vi.mock('motion/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('motion/react')>();
@@ -53,5 +55,29 @@ describe('PillRow', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Today' }));
     expect(onToggle).toHaveBeenCalledWith('a');
+  });
+
+  it('server-renders the same markup whether or not reduced motion is known yet', () => {
+    // `useReducedMotion()` is null on the server and true on the client; a `whileTap` that is
+    // present in one and absent in the other makes motion add `tabindex` to only one of them.
+    vi.mocked(useReducedMotion).mockReturnValueOnce(null);
+    const unresolved = renderToStaticMarkup(
+      <PillRow
+        options={options}
+        selected={new Set(['a'])}
+        onToggle={vi.fn()}
+        ariaLabel="Availability"
+      />
+    );
+    vi.mocked(useReducedMotion).mockReturnValueOnce(true);
+    const reduced = renderToStaticMarkup(
+      <PillRow
+        options={options}
+        selected={new Set(['a'])}
+        onToggle={vi.fn()}
+        ariaLabel="Availability"
+      />
+    );
+    expect(reduced).toBe(unresolved);
   });
 });

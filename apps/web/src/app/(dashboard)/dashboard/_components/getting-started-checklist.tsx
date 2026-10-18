@@ -65,7 +65,7 @@ const CHECKLIST_ITEMS_UI: ChecklistItemUI[] = [
     icon: CreditCard,
     color: '#D97706',
     label: 'Set up payouts',
-    description: 'Connect Stripe to receive earnings',
+    description: 'Add your payout details to get paid',
     tab: 'payouts',
   },
 ];

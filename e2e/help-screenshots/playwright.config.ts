@@ -32,10 +32,10 @@ export default defineConfig({
     },
   })),
   webServer: {
-    command: 'pnpm dev',
+    command: 'pnpm build && pnpm start',
     url: 'http://localhost:3000',
     reuseExistingServer: true,
     cwd: path.resolve(__dirname, '../../apps/web'),
-    timeout: 300_000,
+    timeout: 900_000,
   },
 });

@@ -8,7 +8,7 @@ category:
 order: 1
 published: false
 updated: 2026-10-17
-related: [booking-a-consultation, turning-a-case-into-a-project]
+related: [booking-a-consultation, joining-a-call, turning-a-case-into-a-project]
 ---
 
 **Cases** lists every case in the workspace you're currently in. A case is one thread of work
@@ -71,6 +71,8 @@ expert — the closed one stays as it is.
 
 Nothing here yet? **Book a consultation** takes you to expert search.
 
+![The Cases list with the Your next consultation ticket at the top highlighted.](01)
+
 ## For experts
 
 The list shows every case clients have booked with you — your own deliveries, across every
@@ -95,6 +97,8 @@ Nothing here yet? If your expert setup is still incomplete, the page points you 
 setup** — clients can book you once it's finished. If setup is done, new bookings will show up
 here and in Calendar as they arrive.
 
+![The Cases list as an expert, with the Your next consultation ticket and the client company's name highlighted.](02)
+
 ## When does a case close on its own?
 
 When a case goes 30 days without a consultation, a booking, a message or file, or an action item
@@ -108,6 +112,8 @@ call on it can still be joined. The expert delivering the case and the client co
 are both told when it happens. Want to pick things up again? The client company can
 **Book again** any time — that starts a new case with the same expert, and the closed one stays
 as it is.
+
+![The Resolved section of Cases, with a case marked as closed automatically highlighted.](03)
 
 ## Questions?
 

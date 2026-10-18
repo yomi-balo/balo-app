@@ -1,17 +1,12 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from '../schema';
-import {
-  parseMondayAnchor,
-  resetHelpFixture,
-  seedHelpFixture,
-  setHelpAvailability,
-  type HelpAvailabilityState,
-} from './fixture';
+import { HELP_FIXTURE_STATES, type HelpFixtureState } from './constants';
+import { applyHelpState, parseMondayAnchor, resetHelpFixture, seedHelpFixture } from './fixture';
 
 type Command =
   | { kind: 'seed'; anchor: Date }
-  | { kind: 'state'; state: HelpAvailabilityState }
+  | { kind: 'state'; state: HelpFixtureState; anchor: Date }
   | { kind: 'reset' };
 
 function flagValue(args: readonly string[], name: string): string | undefined {
@@ -28,15 +23,18 @@ function parseCommand(argv: readonly string[]): Command {
   }
   if (command === 'state') {
     const [state] = rest;
-    if (state !== 'available' && state !== 'paused') {
-      throw new Error('usage: state <available|paused>');
+    const known = HELP_FIXTURE_STATES.find((candidate) => candidate === state);
+    if (known === undefined) {
+      throw new Error(`usage: state <${HELP_FIXTURE_STATES.join('|')}> --anchor=YYYY-MM-DD`);
     }
-    return { kind: 'state', state };
+    return { kind: 'state', state: known, anchor: parseMondayAnchor(flagValue(rest, 'anchor')) };
   }
   if (command === 'reset') {
     return { kind: 'reset' };
   }
-  throw new Error('usage: cli.ts <seed --anchor=YYYY-MM-DD | state <available|paused> | reset>');
+  throw new Error(
+    `usage: cli.ts <seed --anchor=YYYY-MM-DD | state <${HELP_FIXTURE_STATES.join('|')}> --anchor=YYYY-MM-DD | reset>`
+  );
 }
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -71,7 +69,7 @@ async function run(command: Command): Promise<void> {
     } else if (command.kind === 'reset') {
       await db.transaction((tx) => resetHelpFixture(tx));
     } else {
-      await setHelpAvailability(db, command.state);
+      await db.transaction((tx) => applyHelpState(tx, command.state, command.anchor));
     }
   } finally {
     await client.end();

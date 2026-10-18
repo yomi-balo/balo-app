@@ -11,9 +11,9 @@ export const dynamic = 'force-dynamic';
 
 /**
  * E2E-only session seeding harness (WorkOS is bypassed). Mints an iron-session cookie for
- * one of two deterministic test personas — `'member'` or `'staff'` — in a chosen onboarding
- * state, so Playwright can exercise both the middleware onboarding gate and the platform-admin
- * shell without a real auth provider.
+ * one of three deterministic test personas — `'member'`, `'staff'` or `'help-client'` — in a
+ * chosen onboarding state, so Playwright can exercise the middleware onboarding gate, the
+ * platform-admin shell and the help-screenshot client view without a real auth provider.
  *
  * SECURITY: this route is guarded by a deployment-agnostic, fail-safe SECRET gate that
  * is independent of `NODE_ENV` / `VERCEL` / platform:
@@ -28,7 +28,7 @@ export const dynamic = 'force-dynamic';
  * `x-e2e-secret` request header — never the body.
  *
  * The request body cannot select an identity or an arbitrary role: it can only choose from a
- * CLOSED `persona` enum (`'member' | 'staff'`, see `TestPersona` below). Each persona maps to
+ * CLOSED `persona` enum (`'member' | 'staff' | 'help-client'`, see `TestPersona` below). Each persona maps to
  * exactly one derived email (on a fixed `@balo.test` domain that can never collide with a real
  * account) and exactly one platform role (`PERSONA_PLATFORM_ROLE`) — `super_admin` is
  * deliberately unreachable from this route. If the derived account resolves to a row whose
@@ -71,16 +71,16 @@ function secretMatches(provided: string | null | undefined, expected: string): b
 }
 
 /**
- * The two personas the harness can seed. A CLOSED enum: the body can select a persona, and a
+ * The personas the harness can seed. A CLOSED enum: the body can select a persona, and a
  * persona maps to exactly one derived email and exactly one platform role. It can never name an
  * email, a role, or an arbitrary account.
  *
  * One const array, one derived type — `TEST_PERSONAS` is the single place the `'member' |
- * 'staff'` vocabulary is written on this side; `testLoginSchema`'s `z.enum` below is built from
+ * 'staff' | 'help-client'` vocabulary is written on this side; `testLoginSchema`'s `z.enum` below is built from
  * this same array. `e2e/fixtures/auth.ts` keeps its OWN `SeedPersona` union rather than importing
- * this one — there is no root `tsconfig.json`, so `e2e/` is never typechecked against `apps/web`
- * and the two literal unions can never cross-check each other regardless. That copy is a
- * deliberate, unavoidable duplication, not drift — see the comment there.
+ * this one — `e2e/` is typechecked (`pnpm typecheck:e2e`) but its `tsconfig.json` cannot resolve
+ * `apps/web`'s `@/` aliases, so it cannot import this module. That copy is a deliberate,
+ * unavoidable duplication, not drift — see the comment there.
  *
  * ⚠ `super_admin` IS DELIBERATELY UNREACHABLE FROM THIS ROUTE. Nothing in the admin lane needs
  * it — BAL-541's `DELETE_ANY_INTERNAL_NOTE` is the only super_admin-gated surface and it is out
@@ -88,7 +88,7 @@ function secretMatches(provided: string | null | undefined, expected: string): b
  * class from one that can mint a support account. `PERSONA_PLATFORM_ROLE` below is the whole
  * space.
  */
-const TEST_PERSONAS = ['member', 'staff'] as const;
+const TEST_PERSONAS = ['member', 'staff', 'help-client'] as const;
 type TestPersona = (typeof TEST_PERSONAS)[number];
 
 /**
@@ -110,6 +110,7 @@ export const PERSONA_PLATFORM_ROLE: Readonly<
 > = {
   member: 'user',
   staff: 'admin',
+  'help-client': 'user',
 };
 
 /** The fixed staff identity. One address, on the same unreachable-by-a-real-user domain. */
@@ -129,9 +130,17 @@ const testLoginSchema = z
   })
   .strict();
 
+/**
+ * The help-screenshot client: Dana Whitfield, the Northwind owner. The help seed dresses this
+ * row (name, active workspace, membership) and `help:reset` hands it back; a fixed address keeps
+ * the body from ever naming one.
+ */
+const HELP_CLIENT_EMAIL = 'dana-help@balo.test';
+
 /** Fixed test identities on a domain that can never belong to a real Balo user. */
 function deriveTestEmail(persona: TestPersona, onboardingCompleted: boolean): string {
   if (persona === 'staff') return STAFF_EMAIL;
+  if (persona === 'help-client') return HELP_CLIENT_EMAIL;
   return onboardingCompleted ? 'onboarded-e2e@balo.test' : 'unonboarded-e2e@balo.test';
 }
 

@@ -58,11 +58,13 @@ describe('stepSlideVariants', () => {
     expect(variants.exit.x).toBe(40);
   });
 
-  it('drops horizontal travel and shortens the transition under reduced motion', () => {
-    const variants = stepSlideVariants('forward', true);
-    expect(variants.initial.x).toBe(0);
-    expect(variants.exit.x).toBe(0);
-    expect(variants.transition.duration).toBe(0.15);
+  it('keeps the slide values identical for hydration but makes the x travel instant under reduced motion', () => {
+    const reduced = stepSlideVariants('forward', true);
+    const full = stepSlideVariants('forward', false);
+    expect(reduced.initial).toEqual(full.initial);
+    expect(reduced.exit).toEqual(full.exit);
+    expect(reduced.transition.duration).toBe(0.15);
+    expect(reduced.transition.x).toEqual({ duration: 0 });
   });
 
   it('keeps opacity fade on both forward and backward under reduced motion', () => {
@@ -70,7 +72,8 @@ describe('stepSlideVariants', () => {
     const backward = stepSlideVariants('backward', true);
     expect(forward.initial.opacity).toBe(0);
     expect(forward.animate.opacity).toBe(1);
-    expect(backward.exit.x).toBe(0);
+    expect(backward.exit.x).toBe(40);
+    expect(backward.transition.x).toEqual({ duration: 0 });
     expect(backward.transition.duration).toBe(0.15);
   });
 });

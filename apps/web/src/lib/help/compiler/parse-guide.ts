@@ -1,6 +1,6 @@
 import { Lexer, Parser, type Token, type Tokens } from 'marked';
 import { parse as parseYaml } from 'yaml';
-import type { HelpBlock, HelpBlockContent, HelpImage, HelpSection } from '../types';
+import type { HelpBlock, HelpBlockContent, HelpImageRef, HelpSection } from '../types';
 import { isKebab } from './kebab';
 import { sanitizeHelpHtml } from './sanitize-help-html';
 import type { HelpDocIssue } from './types';
@@ -10,8 +10,8 @@ export interface ParsedHelpDoc {
   readonly slug: string;
   /** The parsed YAML value, or `undefined` when the file has no frontmatter block. */
   readonly frontmatter: unknown;
-  readonly intro: readonly HelpBlock[];
-  readonly sections: readonly HelpSection[];
+  readonly intro: readonly HelpBlock<HelpImageRef>[];
+  readonly sections: readonly HelpSection<HelpImageRef>[];
   readonly issues: readonly HelpDocIssue[];
 }
 
@@ -118,12 +118,12 @@ function renderHtml(tokens: readonly Token[]): string {
 
 class DocWalker {
   readonly issues: HelpDocIssue[] = [];
-  readonly intro: HelpBlock[] = [];
+  readonly intro: HelpBlock<HelpImageRef>[] = [];
   readonly sections: {
     n: number;
     title: string;
-    blocks: HelpBlock[];
-    screenshot: HelpImage | null;
+    blocks: HelpBlock<HelpImageRef>[];
+    screenshot: HelpImageRef | null;
   }[] = [];
   private pending: Token[] = [];
 
@@ -136,7 +136,7 @@ class DocWalker {
     this.issues.push({ file: this.file, code, message });
   }
 
-  private pushBlock(content: HelpBlockContent): void {
+  private pushBlock(content: HelpBlockContent<HelpImageRef>): void {
     const section = this.sections.at(-1);
     const blocks = section?.blocks ?? this.intro;
     const prefix = section === undefined ? 'intro' : `s${section.n}`;
@@ -150,7 +150,7 @@ class DocWalker {
     if (html !== '') this.pushBlock({ kind: 'html', html });
   }
 
-  private toImage(token: Tokens.Image): HelpImage | null {
+  private toImage(token: Tokens.Image): HelpImageRef | null {
     if (!isKebab(token.href)) {
       this.report(
         'invalid_image_ref',
@@ -166,7 +166,7 @@ class DocWalker {
     };
   }
 
-  private addImage(image: HelpImage): void {
+  private addImage(image: HelpImageRef): void {
     const section = this.sections.at(-1);
     if (section?.screenshot === null) {
       section.screenshot = image;

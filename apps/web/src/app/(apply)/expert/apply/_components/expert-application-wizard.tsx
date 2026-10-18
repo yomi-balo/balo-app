@@ -29,6 +29,9 @@ interface ExpertApplicationWizardProps {
 
 // Step-slide variants with a reduced-motion guard. Pure + exported so the
 // reduced-motion branches are unit-testable without mounting the wizard.
+// `initial` / `exit` carry the slide for EVERY viewer: `useReducedMotion()` is null on the server
+// and true on the client, so a reduced-motion `initial.x` of 0 would hydrate to a different
+// inline transform. Reduced motion zeroes the x transition instead, keeping the opacity fade.
 export function stepSlideVariants(
   direction: 'forward' | 'backward',
   reduce: boolean
@@ -36,16 +39,16 @@ export function stepSlideVariants(
   initial: { opacity: number; x: number };
   animate: { opacity: number; x: number };
   exit: { opacity: number; x: number };
-  transition: { duration: number; ease: 'easeOut' };
+  transition: { duration: number; ease: 'easeOut'; x?: { duration: number } };
 } {
   const slide = direction === 'forward' ? 40 : -40; // no nested ternary
-  const enterX = reduce ? 0 : slide;
-  const exitX = reduce ? 0 : -slide;
   return {
-    initial: { opacity: 0, x: enterX },
+    initial: { opacity: 0, x: slide },
     animate: { opacity: 1, x: 0 },
-    exit: { opacity: 0, x: exitX },
-    transition: { duration: reduce ? 0.15 : 0.3, ease: 'easeOut' },
+    exit: { opacity: 0, x: -slide },
+    transition: reduce
+      ? { duration: 0.15, ease: 'easeOut', x: { duration: 0 } }
+      : { duration: 0.3, ease: 'easeOut' },
   };
 }
 

@@ -1,7 +1,7 @@
 import { HELP_AUDIENCES } from '@balo/analytics/events';
 import { EXPERT_MONEY_TERMS, FEE_TERMS, forbiddenTermsIn } from '@/lib/copy/forbidden-terms';
 import { isHelpCategoryId } from '../categories';
-import type { HelpImage } from '../types';
+import type { HelpImageRef } from '../types';
 import { helpFrontmatterSchema, type HelpFrontmatter } from './frontmatter-schema';
 import { isKebab } from './kebab';
 import { parseHelpDoc } from './parse-guide';
@@ -63,7 +63,7 @@ function crossFieldIssues(
 
 function missingImageIssues(
   file: string,
-  images: readonly HelpImage[],
+  images: readonly HelpImageRef[],
   imageExists: (publicPath: string) => boolean
 ): HelpDocIssue[] {
   return images.flatMap((image) =>

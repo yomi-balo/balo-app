@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { helpAnchor } from './anchor';
 
@@ -18,4 +20,6 @@ export default function globalSetup(): void {
     stdio: 'inherit',
   });
   process.env.HELP_ANCHOR = anchor;
+  // Per-run scratch folder where the first scheme of a section stores the clip both schemes use.
+  process.env.HELP_CLIP_DIR = mkdtempSync(path.join(os.tmpdir(), 'help-clips-'));
 }

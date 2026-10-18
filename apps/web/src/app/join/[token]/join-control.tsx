@@ -500,7 +500,7 @@ function JoinPhaseContent({
             type="button"
             onClick={onJoin}
             disabled={isJoining}
-            whileTap={isReduced ? undefined : { scale: 0.985 }}
+            whileTap={{ scale: isReduced ? 1 : 0.985 }}
             /* ⚠ `disabled:opacity-80`, NOT 60 — a 60% wash on `bg-primary` drops the label
                under 4.5:1 at the exact moment the guest is most anxious about whether the
                click registered. ⚠ `text-base sm:text-…` for the same iOS reason as the lobby

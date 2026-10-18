@@ -1,11 +1,38 @@
 import { HELP_AUDIENCES } from '@balo/analytics/events';
-import type { HelpGuide } from '../types';
+import type { HelpBlock, HelpGuide, HelpImage, HelpImageRef, HelpSection } from '../types';
 import { helpFrontmatterSchema } from './frontmatter-schema';
 import { parseHelpDoc } from './parse-guide';
+import type { PixelSize } from './png-size';
 import type { HelpSourceFile } from './types';
 import { validateHelpDocs } from './validate';
 
-function toGuide(file: HelpSourceFile): HelpGuide | null {
+export type ImageSizeReader = (publicPath: string) => PixelSize;
+
+/** Sized from the light file; the dark twin must match, or the pair would reflow on a theme switch. */
+function sizeImage(ref: HelpImageRef, imageSize: ImageSizeReader): HelpImage {
+  const light = imageSize(ref.lightSrc);
+  const dark = imageSize(ref.darkSrc);
+  if (light.width !== dark.width || light.height !== dark.height) {
+    throw new Error(
+      `Image ${ref.lightSrc} is ${light.width}x${light.height} but ${ref.darkSrc} is ${dark.width}x${dark.height}.`
+    );
+  }
+  return { ...ref, width: light.width, height: light.height };
+}
+
+function sizeBlock(block: HelpBlock<HelpImageRef>, imageSize: ImageSizeReader): HelpBlock {
+  return block.kind === 'image' ? { ...block, image: sizeImage(block.image, imageSize) } : block;
+}
+
+function sizeSection(section: HelpSection<HelpImageRef>, imageSize: ImageSizeReader): HelpSection {
+  return {
+    ...section,
+    blocks: section.blocks.map((block) => sizeBlock(block, imageSize)),
+    screenshot: section.screenshot === null ? null : sizeImage(section.screenshot, imageSize),
+  };
+}
+
+function toGuide(file: HelpSourceFile, imageSize: ImageSizeReader): HelpGuide | null {
   const parsed = parseHelpDoc(file.filename, file.source);
   const fm = helpFrontmatterSchema.parse(parsed.frontmatter);
   if (!fm.published) return null;
@@ -23,23 +50,26 @@ function toGuide(file: HelpSourceFile): HelpGuide | null {
     order: fm.order,
     updated: fm.updated,
     related: fm.related,
-    intro: parsed.intro,
-    sections: parsed.sections,
+    intro: parsed.intro.map((block) => sizeBlock(block, imageSize)),
+    sections: parsed.sections.map((section) => sizeSection(section, imageSize)),
   };
 }
 
 /**
  * The published guides, sorted by slug. Throws on any validation issue, so a broken doc can never
- * be written into the generated module. Image files are checked separately, against `public/`.
+ * be written into the generated module. Image files are checked separately, against `public/`; each image is sized from its PNG.
  */
-export function buildHelpGuides(files: readonly HelpSourceFile[]): readonly HelpGuide[] {
+export function buildHelpGuides(
+  files: readonly HelpSourceFile[],
+  imageSize: ImageSizeReader
+): readonly HelpGuide[] {
   const issues = validateHelpDocs(files, () => true);
   if (issues.length > 0) {
     const lines = issues.map((issue) => `- ${issue.file} [${issue.code}] ${issue.message}`);
     throw new Error(`Help docs are invalid:\n${lines.join('\n')}`);
   }
   return files
-    .map(toGuide)
+    .map((file) => toGuide(file, imageSize))
     .filter((guide): guide is HelpGuide => guide !== null)
     .sort((a, b) => a.slug.localeCompare(b.slug));
 }

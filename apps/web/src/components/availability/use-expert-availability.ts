@@ -88,7 +88,8 @@ function isPausedBody(value: unknown): boolean {
 export function useExpertAvailability(
   expertProfileId: string,
   days: number,
-  scope: AvailabilityScope = 'new_work'
+  scope: AvailabilityScope = 'new_work',
+  skipFetch = false
 ): { view: AvailabilityView; reload: () => void } {
   const [view, setView] = useState<AvailabilityView>({ kind: 'loading' });
   const [nonce, setNonce] = useState(0);
@@ -99,6 +100,13 @@ export function useExpertAvailability(
   }, []);
 
   useEffect(() => {
+    // The caller already knows the profile isn't publicly visible, so the public endpoint would
+    // only answer its concealing 404; resolve to that same state without the request.
+    if (skipFetch) {
+      setView({ kind: 'not_published' });
+      return undefined;
+    }
+
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -201,7 +209,7 @@ export function useExpertAvailability(
       clearTimeout(timer);
       controller.abort();
     };
-  }, [expertProfileId, days, scope, nonce]);
+  }, [expertProfileId, days, scope, nonce, skipFetch]);
 
   return { view, reload };
 }

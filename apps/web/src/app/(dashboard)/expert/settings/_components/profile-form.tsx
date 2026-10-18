@@ -481,10 +481,12 @@ export function ProfileForm({
                 return (
                   <motion.li
                     key={field.id}
-                    initial={reduceMotion ? false : { x: 20, opacity: 0 }}
+                    initial={{ x: 20, opacity: 0 }}
                     animate={{ x: 0, opacity: 1 }}
                     exit={reduceMotion ? undefined : { opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2, delay: reduceMotion ? 0 : index * 0.06 }}
+                    transition={
+                      reduceMotion ? { duration: 0 } : { duration: 0.2, delay: index * 0.06 }
+                    }
                     className="border-border/60 flex items-center gap-3 border-b px-4 py-2.5 last:border-b-0"
                   >
                     <span className="text-foreground flex min-w-0 flex-1 items-center gap-2 text-sm font-medium">
