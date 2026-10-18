@@ -20,7 +20,7 @@ import { test as base, expect } from '@playwright/test';
  */
 type SeedPersona = 'member' | 'staff';
 
-type SeedOptions = { onboardingCompleted: boolean; persona?: SeedPersona };
+export type SeedOptions = { onboardingCompleted: boolean; persona?: SeedPersona };
 
 type AuthFixtures = {
   /** Seed the browser context with a session in the given onboarding state (and persona). */
