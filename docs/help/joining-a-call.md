@@ -86,7 +86,7 @@ If you're on a team and can't manage billing, you'll see **Ask {name} to top up*
 lets your billing admin know.
 
 A call that goes well past its scheduled end finishes on its own 30 minutes after the scheduled
-end. See **Buying credit** for how to top up.
+end. See [Buying credit](/help/buying-credit) for how to top up.
 
 ## When the call ends
 

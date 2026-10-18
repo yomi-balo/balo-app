@@ -29,9 +29,12 @@ It passes when your company has an active card on file. Without a card, your ava
 needs to cover this call plus your company's other booked calls. If neither is in place you'll see
 **One setup step first**: **Set up billing** takes you to billing, or **I'll do this later** closes
 the window with nothing booked. If you can't manage billing yourself, your billing admins are
-told. See **Buying credit** for how to top up.
+told. See [Buying credit](/help/buying-credit) for how to top up.
 
 ## Choosing which case
+
+If you belong to more than one company, first choose which one pays under **Bill this session
+to**. Open cases are listed per company, so the case choice appears once you've picked.
 
 If you already have an open case with this expert, the confirm step asks which case the call is
 for. Choose an existing case, or **Start a new case** for a new issue with that expert. If you

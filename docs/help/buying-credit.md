@@ -29,8 +29,6 @@ Got a promo code? Choose **Have a promo code?**, type it in and choose **Apply**
 you'll see the code with "applied" and the bonus credit it adds to your top-up. If your company has
 already used the code, we'll say so: "You've already used this code."
 
-Want to redeem a code without topping up? See **Redeeming a promo code**.
-
 ![The promo code field open on the top-up page, with the Apply button highlighted.](02)
 
 ## Paying for your top-up

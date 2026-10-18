@@ -14,8 +14,8 @@ folder, because the runner seeds a fixture into the database and writes files in
   needs the Salesforce vertical).
 - `apps/web` as a **production build** (:3000) and the API (:3002, `pnpm dev`) running against the
   same local database. The runner's `webServer` builds and starts web (`pnpm build && pnpm start`
-  in `apps/web`) unless a server is already on :3000. On the dev server, React hydration ids drift
-  when chunks compile on demand, which fails the console gate. After a UI change, rebuild web
+  in `apps/web`) unless a server is already on :3000, which is reused. A dev server there is refused at
+  start-up: React hydration ids drift when chunks compile on demand, which fails the console gate. After a UI change, rebuild web
   before capturing. The pages fetch hours, calendars and schedule through the API, which the
   runner does not start. Web needs `E2E_TEST_SECRET` and `WORKOS_COOKIE_PASSWORD` set.
 - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` set when web is built (it is inlined at build time): the top-up page renders its
@@ -93,8 +93,8 @@ workspace to Northwind so the minted session lands there. `signIn` is an exhaust
 new persona is a type error until it is handled.
 
 Before each section is captured, its route is warmed once per scheme pass: the runner navigates to
-it, waits for `networkidle`, then navigates again for the real capture, so dev-mode compilation
-is not racing hydration.
+it, waits for `networkidle`, then navigates again for the real capture, so the route's chunks and
+fonts are cached before the visit that hydrates.
 
 Every capture fails if the page emits a `pageerror` or a `console.error`; both lists are printed
 and nothing is filtered.

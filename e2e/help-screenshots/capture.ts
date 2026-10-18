@@ -118,7 +118,8 @@ async function signIn({ page, seedSession, spec }: CaptureArgs): Promise<void> {
 async function openPage({ page, spec }: CaptureArgs): Promise<void> {
   const route =
     typeof spec.route === 'function' ? spec.route(process.env.HELP_ANCHOR ?? '') : spec.route;
-  // Warm the route first so dev-mode compilation is not racing hydration on the real visit.
+  // Warm the route first so its client chunks and fonts are already cached when the real visit
+  // hydrates.
   // Errors from this visit are still collected by the capture's console listener.
   await page.goto(route);
   await page.waitForLoadState('networkidle');

@@ -38,7 +38,7 @@ the card your company has on file, after the call. If there's no card on file, t
 owed instead and your next top-up covers it.
 
 Adding a card to your company charges nothing. A card on file is used for time beyond your balance,
-and for Auto top-up if you turn it on. See **Buying credit** for how to top up.
+and for Auto top-up if you turn it on. See [Buying credit](/help/buying-credit) for how to top up.
 
 ## Questions?
 

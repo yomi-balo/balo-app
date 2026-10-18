@@ -27,8 +27,8 @@ tick both, otherwise Balo can't read your busy times or add bookings. When you'r
 shows your account email and **Connected**.
 
 Under **Where bookings go**, choose which calendar new consultations are added to. We start with
-your primary one, and you can change it any time. Until you choose, we email you a calendar invite
-for each booking.
+your primary one, and you can change it any time. If no calendar is set there yet, we email you a
+calendar invite for each booking until you choose one.
 
 ![A connected Google calendar card showing the account email and the Connected label.](02)
 
@@ -49,12 +49,10 @@ permissions and connect again.
 ## Microsoft 365 work accounts
 
 Choose **Add calendar → Microsoft Outlook** and Balo shows **Connect Microsoft 365** first, with
-**What to expect**: a Microsoft sign-in window opens, you sign in with your work account, and if
-Microsoft asks for admin approval you request it and ask your IT admin. Once it's approved, connect
-again to finish. Choose **Continue to Microsoft 365** when you're ready.
-
-A work account may need approval from your IT admin. It only has to happen once for your whole
-company.
+**What to expect**: a Microsoft sign-in window opens and you sign in with your work account. If
+Microsoft asks for admin approval, request it and let your IT admin know — it only has to happen
+once for your whole company. Once it's approved, connect again to finish. Choose **Continue to
+Microsoft 365** when you're ready.
 
 ![The Connect Microsoft 365 dialog, with What to expect and the Continue to Microsoft 365 button highlighted.](04)
 

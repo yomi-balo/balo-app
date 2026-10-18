@@ -647,7 +647,7 @@ export async function applyHelpState(
       // End before start renders "Continues into Saturday".
       await db
         .update(availabilityRules)
-        .set({ startTime: '18:00', endTime: '02:00', updatedAt: new Date() })
+        .set({ startTime: '22:00', endTime: '02:00', updatedAt: new Date() })
         .where(eq(availabilityRules.id, fridayRuleId()));
       return;
     case 'setup-incomplete':

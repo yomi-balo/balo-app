@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { log } from '@/lib/logging';
@@ -495,6 +497,28 @@ describe('POST /api/auth/test-login — persona seam (BAL-548)', () => {
         expect(mockFindByEmail).toHaveBeenCalledWith('dana-help@balo.test');
       }
     );
+
+    it('looks up the same addresses the help seed constants name', async () => {
+      const constantsPath = path.resolve(
+        __dirname,
+        '../../../../../../../packages/db/src/help-seed/constants.ts'
+      );
+      const source = readFileSync(constantsPath, 'utf8');
+      const literal = (name: string): string => {
+        const match = new RegExp(`${name}\\s*=\\s*'([^']+)'`).exec(source);
+        if (match === null) throw new Error(`${name} not found in ${constantsPath}`);
+        return match[1] ?? '';
+      };
+
+      arrangeDana();
+      await POST(makeRequest({ persona: 'help-client', onboardingCompleted: true }, TEST_SECRET));
+      await POST(makeRequest({ persona: 'member', onboardingCompleted: true }, TEST_SECRET));
+
+      expect(mockFindByEmail.mock.calls.map(([email]) => email)).toEqual([
+        literal('HELP_CLIENT_EMAIL'),
+        literal('HELP_EXPERT_EMAIL'),
+      ]);
+    });
 
     it('mints platformRole "user"', async () => {
       arrangeDana();
