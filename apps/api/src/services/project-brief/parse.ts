@@ -416,13 +416,13 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
   // footnote exists to prevent. Both sources are unioned; see `deriveUnmatchedLabels`.
   const unmatchedTagLabels = deriveUnmatchedLabels(
     tagMapping.unmatchedSlugs,
-    value.unmatchedTagLabels
+    value.unmatchedTagLabels.map(decodeHtmlEntities)
   );
   // Products only: a missed slug or model-reported label that exactly matches a live product name
   // or alias becomes that product's id; only what still failed reaches the footnote.
   const resolution = resolveLabelsToProducts(
     productMapping.unmatchedSlugs,
-    value.unmatchedProductLabels,
+    value.unmatchedProductLabels.map(decodeHtmlEntities),
     productLabelIndex,
     { selectedIds: new Set(productMapping.ids), maxIds: MAX_BRIEF_PRODUCT_SLUGS }
   );

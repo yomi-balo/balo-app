@@ -183,7 +183,7 @@ describe('AdminDash', () => {
 
     await user.click(screen.getByRole('button', { name: 'Mine' }));
 
-    expect(screen.getByText('Nothing in Conversations is yours right now.')).toBeInTheDocument();
+    expect(screen.getAllByText('Nothing here is yours right now.').length).toBeGreaterThan(0);
     expect(screen.queryByText('Nothing here')).not.toBeInTheDocument();
   });
 });

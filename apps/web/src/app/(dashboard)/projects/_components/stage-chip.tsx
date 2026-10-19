@@ -16,13 +16,13 @@ interface StageChipProps {
 
 const STAGE_TONE: Record<StageKey, string> = {
   requested: 'bg-muted text-muted-foreground',
-  exploratory: 'bg-info/10 text-info',
+  exploratory: 'bg-info/10 text-info-strong',
   invited: 'bg-primary/10 text-primary',
   eoi: 'bg-violet-500/10 text-violet-600 dark:text-violet-400',
-  prop_req: 'bg-warning/15 text-warning',
-  prop_in: 'bg-warning/15 text-warning',
-  accepted: 'bg-success/15 text-success',
-  kicked: 'bg-success/15 text-success',
+  prop_req: 'bg-warning/15 text-warning-strong',
+  prop_in: 'bg-warning/15 text-warning-strong',
+  accepted: 'bg-success/15 text-success-strong',
+  kicked: 'bg-success/15 text-success-strong',
   // BAL-540 — the terminal `closed`, toned like `requested` (muted, not a status to celebrate
   // or warn about).
   closed: 'bg-muted text-muted-foreground',
