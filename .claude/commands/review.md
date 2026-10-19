@@ -109,6 +109,20 @@ SonarCloud enforces ≥80% coverage on new code. Failing this blocks merge. Chec
 - `analytics.reset()` called on logout?
 - New features define events in `events/{feature}.ts` with typed property maps?
 
+### 9. Help-Guide Drift
+
+End-user guides live in `docs/help/*.md` and ship with the code: a guide marked `published: true` goes live on merge. Guides quote UI labels verbatim, state numbers (time windows, limits, amounts, durations) and walk through flows step by step, so a code change can make a live guide wrong without touching it. This checks facts, not copy, so it applies even when the review brief puts MJ-owned copy out of scope.
+
+1. From the diff, list what a guide could quote: changed or removed user-facing strings (button labels, headings, dialog titles, toasts, empty states); changed constants a user would notice (time windows, limits, prices, durations, thresholds); changed flow steps (screens added, removed or reordered, entry points moved, a capability gate on a user action).
+2. Run `grep -rnF -- "<value>" docs/help/` for each one. Search the old value as well as the new, because the old value is what a stale guide still says. Don't read guides whole.
+3. For each hit, check the guide's `published:` frontmatter.
+
+Severity:
+
+- **[CRITICAL]** A published guide now states something false: a label that no longer exists, a wrong number, a missing or extra step. Fix: edit the guide in this PR, run `pnpm --filter web help:generate`, and bump the guide's `updated:` date.
+- **[WARNING]** The same for an unpublished guide, or a published guide's screenshot that now shows a changed screen. Fix: edit the draft; for a screenshot, name the guide and step to recapture.
+- Tone and wording of guide copy stay MJ's. Ask only for the smallest factual edit.
+
 ## Output Format
 
 ### VERDICT: [APPROVED | CHANGES_REQUESTED]
