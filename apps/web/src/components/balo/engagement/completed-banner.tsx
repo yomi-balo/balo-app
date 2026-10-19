@@ -38,7 +38,12 @@ export function CompletedBanner({
           // The v2 marketplace hooks (review-request CTA, then a rehire-{expert} shortcut —
           // BAL-329 flywheel) slot into THIS same row.
           <div className="mt-3 flex flex-wrap gap-2">
-            <NewRequestButton label="Start your next project" entryPoint="engagement" size="sm" />
+            <NewRequestButton
+              label="Start your next project"
+              entryPoint="engagement"
+              size="sm"
+              iconClassName="size-3.5"
+            />
             {banner.clientCta.messageHref !== null && (
               <Button asChild variant="ghost" size="sm">
                 <Link href={banner.clientCta.messageHref}>

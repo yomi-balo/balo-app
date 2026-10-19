@@ -6,17 +6,19 @@ category:
   client: cases-projects
 order: 2
 published: false
-updated: 2026-10-17
+updated: 2026-10-19
 related: [turning-a-case-into-a-project, booking-a-consultation]
 ---
 
 Have a piece of work in mind? Tell us about it once and we'll get it to the right person. Where
 you start decides who sees it first.
 
-## From the home page
+## From the home page or your Projects page
 
-When you start a project from the home page, we match you. Describe what you need and our team
-reviews your brief, then introduces a matched expert with the right experience.
+When you start a project from the home page, from **Raise a project request** or **New request**
+on your Projects page, or from **Start your next project** once a project wraps up, we match you.
+Describe what you need and our team reviews your brief, then introduces a matched expert with the
+right experience.
 
 ## From an expert's profile
 

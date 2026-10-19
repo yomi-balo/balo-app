@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { NewRequestButton } from './new-request-button';
@@ -39,6 +39,10 @@ vi.mock('@/components/balo/project-request/panel', () => ({
 }));
 
 describe('NewRequestButton', () => {
+  beforeEach(() => {
+    mockRefresh.mockClear();
+  });
+
   it('is a button, not a link, and mounts no panel until clicked', () => {
     render(<NewRequestButton label="Raise a project request" entryPoint="projects" />);
     expect(screen.getByRole('button', { name: /raise a project request/i })).toBeInTheDocument();
@@ -80,13 +84,41 @@ describe('NewRequestButton', () => {
     expect(screen.getByTestId('panel-stub')).toHaveAttribute('data-open', 'false');
   });
 
-  it('refreshes the inbox after a successful submit', async () => {
+  it('does not refresh at submit — the refresh would unmount the empty state and the open drawer', async () => {
     const user = userEvent.setup();
     render(<NewRequestButton label="New request" entryPoint="projects" />);
 
     await user.click(screen.getByRole('button', { name: /new request/i }));
     await user.click(await screen.findByRole('button', { name: 'stub submit' }));
 
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(screen.getByTestId('panel-stub')).toHaveAttribute('data-open', 'true');
+  });
+
+  it('refreshes once when the drawer closes after a submit', async () => {
+    const user = userEvent.setup();
+    render(<NewRequestButton label="New request" entryPoint="projects" />);
+
+    await user.click(screen.getByRole('button', { name: /new request/i }));
+    await user.click(await screen.findByRole('button', { name: 'stub submit' }));
+    await user.click(screen.getByRole('button', { name: 'stub close' }));
+
     expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // A later open-and-close with no submit does not refresh again.
+    await user.click(screen.getByRole('button', { name: /new request/i }));
+    await user.click(screen.getByRole('button', { name: 'stub close' }));
+
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not refresh when the drawer closes without a submit', async () => {
+    const user = userEvent.setup();
+    render(<NewRequestButton label="New request" entryPoint="projects" />);
+
+    await user.click(screen.getByRole('button', { name: /new request/i }));
+    await user.click(await screen.findByRole('button', { name: 'stub close' }));
+
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 });
