@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sealData, unsealData } from 'iron-session';
 import { NextRequest, type NextResponse } from 'next/server';
 import type { SessionData } from './session';
@@ -229,6 +229,16 @@ describe('refreshSessionIfNeeded — the refreshed cookie reaches THIS request',
 });
 
 describe('refreshSessionIfNeeded — a session WorkOS has ended is destroyed for THIS request too', () => {
+  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleLogSpy.mockRestore();
+  });
+
   async function endedResponse(): Promise<NextResponse> {
     mockAuthenticateWithRefreshToken.mockRejectedValue(
       Object.assign(new Error('Error: invalid_grant'), {
@@ -248,7 +258,6 @@ describe('refreshSessionIfNeeded — a session WorkOS has ended is destroyed for
   }
 
   it('⚠ forwards THIS request with an empty session cookie, so it renders signed out', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
     const response = await endedResponse();
 
     const overridden = (response.headers.get('x-middleware-override-headers') ?? '').split(',');
@@ -256,11 +265,9 @@ describe('refreshSessionIfNeeded — a session WorkOS has ended is destroyed for
     const forwardedCookie = response.headers.get('x-middleware-request-cookie') ?? '';
     expect(sealFromCookieHeader(forwardedCookie)).toBe('');
     expect(forwardedCookie).toContain('theme=dark');
-    vi.restoreAllMocks();
   });
 
   it('sends the browser exactly ONE balo_session Set-Cookie that expires it', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
     const response = await endedResponse();
 
     const setCookies = response.headers.getSetCookie().filter((c) => c.startsWith(`${COOKIE}=`));
@@ -268,6 +275,5 @@ describe('refreshSessionIfNeeded — a session WorkOS has ended is destroyed for
     const [cookie] = setCookies;
     expect(sealFromSetCookie(cookie ?? '')).toBe('');
     expect(cookie).toMatch(/Max-Age=0/i);
-    vi.restoreAllMocks();
   });
 });

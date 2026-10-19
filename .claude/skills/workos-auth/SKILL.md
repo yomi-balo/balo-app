@@ -285,9 +285,9 @@ WorkOS access tokens expire after 5 minutes. Token refresh is handled automatica
 
 **You do not need to handle token refresh manually in Server Actions or components.** Middleware handles it on every request. It returns one of three outcomes:
 
-- `unchanged` — no refresh needed, or a transient failure (including a concurrent refresh racing on a rotated token). The request proceeds on the existing cookie.
+- `unchanged` — no refresh needed, or a transient failure (network error, timeout, 5xx, 429). The request proceeds on the existing cookie; WorkOS says never to destroy a session on a transient failure.
 - `refreshed` — the new seal is forwarded to this request and the browser.
-- `ended` — WorkOS answered `invalid_grant` / "Session has already ended" (inactivity timeout, max session length, or revocation). The cookie is destroyed; protected routes redirect to login, public routes render signed out.
+- `ended` — WorkOS answered `invalid_grant` (HTTP 400), whatever the description: a revoked, expired or consumed refresh token, including inactivity timeout and max session length. The cookie is destroyed; protected routes redirect to login, public routes render signed out. A concurrent refresh is not an `invalid_grant` — AuthKit's 30-second replay grace period returns the same rotated tokens to the second exchange.
 
 Session lifetime is set in the WorkOS dashboard (AuthKit application → Sessions): 30-day inactivity timeout, 90-day maximum. The cookie's `SESSION_MAX_AGE_SECONDS` matches the maximum — change both together. Full implementation → [references/protected-routes.md](references/protected-routes.md)
 

@@ -112,27 +112,23 @@ export type SessionRefreshOutcome =
 const UNCHANGED: SessionRefreshOutcome = { status: 'unchanged' };
 
 /**
- * WorkOS's answer to a refresh once the session itself is over — past its inactivity timeout or
- * maximum length, or revoked: `invalid_grant` with this description.
+ * WorkOS's terminal answer to a refresh: the OAuth `invalid_grant` code (HTTP 400) — a revoked,
+ * expired or already-consumed refresh token, including a session past its inactivity timeout or
+ * maximum length. WorkOS's session-resilience guidance is to clear the session and send the user
+ * to sign in.
  *
- * ⚠ MATCHED ON THE DESCRIPTION, NOT ON `invalid_grant` ALONE. `invalid_grant` is also the generic
- * answer for an unusable refresh token, and two concurrent requests refreshing the same rotated
- * token is an ordinary race (two tabs polling, a page plus its Server Actions). Signing the user
- * out on that would be a spurious logout. If WorkOS rewords the description this stops matching
- * and the outcome falls back to `unchanged` — the cookie lingers until it expires, never a false
- * sign-out.
+ * Every `invalid_grant` counts, whatever its description. A concurrent refresh is not one:
+ * AuthKit gives a just-exchanged refresh token a 30-second replay grace period in which a second
+ * exchange returns the same rotated tokens rather than an error. Anything else — network errors,
+ * timeouts, 5xx, 429 — is transient and leaves the session alone (`unchanged`); WorkOS is explicit
+ * that a session is never destroyed on a transient failure.
  *
- * Duck-typed on the two fields the SDK's `OauthException` carries, so the check does not depend
+ * Duck-typed on the `error` field the SDK's `OauthException` carries, so the check does not depend
  * on the SDK's class identity.
  */
 function isSessionEndedError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
-  const { error: code, errorDescription } = error as Record<string, unknown>;
-  return (
-    code === 'invalid_grant' &&
-    typeof errorDescription === 'string' &&
-    /session has already ended/i.test(errorDescription)
-  );
+  return (error as Record<string, unknown>).error === 'invalid_grant';
 }
 
 /** Destroy the session cookie for this request and the browser. */
@@ -222,6 +218,8 @@ export async function refreshSessionIfNeeded(
       JSON.stringify({
         level: ended ? 'info' : 'warn',
         msg: ended ? 'WorkOS session ended — signing out' : 'Token refresh failed',
+        // The internal user UUID (never an email): "why was I signed out?" is answered from this.
+        userId: session.user?.id,
         error: error instanceof Error ? error.message : 'Unknown',
         timestamp: new Date().toISOString(),
       })

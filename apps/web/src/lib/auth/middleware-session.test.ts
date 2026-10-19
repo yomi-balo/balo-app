@@ -430,27 +430,47 @@ describe('refreshSessionIfNeeded', () => {
       >;
       expect(parsed.level).toBe('info');
       expect(parsed.msg).toBe('WorkOS session ended — signing out');
+      expect(parsed.userId).toBe('user-1');
     });
 
     it.each([
-      [
-        'invalid_grant with another description',
-        oauthError('invalid_grant', 'Invalid refresh token.'),
-      ],
-      [
-        'another error code with the ended description',
-        oauthError('server_error', 'Session has already ended.'),
-      ],
-      ['a plain Error whose message mentions it', new Error('Session has already ended.')],
-    ])('stays unchanged for %s — never a spurious sign-out', async (_label, error) => {
-      const session = mockSession({ accessToken: createExpiredToken() });
-      mockAuthenticateWithRefreshToken.mockRejectedValue(error);
+      ['the session-ended description', 'Session has already ended.'],
+      ['a revoked or consumed token', 'Invalid refresh token.'],
+      ['no description at all', undefined],
+    ])(
+      'treats invalid_grant with %s as ended — every invalid_grant is terminal',
+      async (_label, description) => {
+        const session = mockSession({ accessToken: createExpiredToken() });
+        mockGetIronSession.mockResolvedValue(mockSessionData());
+        mockAuthenticateWithRefreshToken.mockRejectedValue(
+          Object.assign(new Error('Error: invalid_grant'), {
+            error: 'invalid_grant',
+            errorDescription: description,
+          })
+        );
 
-      const result = await refreshSessionIfNeeded(createRequest(), session);
+        const result = await refreshSessionIfNeeded(createRequest(), session);
 
-      expect(result).toEqual({ status: 'unchanged' });
-      expect(mockGetIronSession).not.toHaveBeenCalled();
-    });
+        expect(result.status).toBe('ended');
+      }
+    );
+
+    it.each([
+      ['another OAuth error code', oauthError('server_error', 'Session has already ended.')],
+      ['a plain Error (network, timeout)', new Error('fetch failed')],
+      ['a 429 rate limit', Object.assign(new Error('Too Many Requests'), { status: 429 })],
+    ])(
+      'stays unchanged for %s — a transient failure never signs anyone out',
+      async (_label, error) => {
+        const session = mockSession({ accessToken: createExpiredToken() });
+        mockAuthenticateWithRefreshToken.mockRejectedValue(error);
+
+        const result = await refreshSessionIfNeeded(createRequest(), session);
+
+        expect(result).toEqual({ status: 'unchanged' });
+        expect(mockGetIronSession).not.toHaveBeenCalled();
+      }
+    );
   });
 });
 
