@@ -1,9 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import {
   sessionConfig,
+  SESSION_MAX_AGE_SECONDS,
   IMPERSONATED_SESSION_MAX_AGE_SECONDS,
   impersonatedSessionConfig,
 } from './session-config';
+
+describe('sessionConfig', () => {
+  it("lives 90 days — the WorkOS AuthKit application's maximum session length", () => {
+    expect(SESSION_MAX_AGE_SECONDS).toBe(60 * 60 * 24 * 90);
+    expect(sessionConfig.cookieOptions.maxAge).toBe(SESSION_MAX_AGE_SECONDS);
+  });
+
+  it("seals for the same 90 days — without ttl the seal stops opening at iron-session's 14-day default", () => {
+    expect(sessionConfig.ttl).toBe(SESSION_MAX_AGE_SECONDS);
+  });
+});
 
 /**
  * BAL-553 ⟦R5⟧ — the per-save TTL override seam for an impersonated session.
@@ -61,7 +73,8 @@ describe('impersonatedSessionConfig', () => {
     impersonatedSessionConfig(1800);
     impersonatedSessionConfig(1);
     impersonatedSessionConfig(99999);
-    expect(sessionConfig.cookieOptions.maxAge).toBe(60 * 60 * 24 * 7);
+    expect(sessionConfig.cookieOptions.maxAge).toBe(SESSION_MAX_AGE_SECONDS);
+    expect(sessionConfig.ttl).toBe(SESSION_MAX_AGE_SECONDS);
   });
 
   it('returns a NEW object on every call — not a shared mutable reference', () => {

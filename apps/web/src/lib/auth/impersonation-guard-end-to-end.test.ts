@@ -123,7 +123,7 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 import { unsealData } from 'iron-session';
 import { getSession } from '@/lib/auth/session';
 import type { SessionData, SessionUser } from '@/lib/auth/session';
-import { COOKIE_NAME } from '@/lib/auth/session-config';
+import { COOKIE_NAME, SESSION_MAX_AGE_SECONDS } from '@/lib/auth/session-config';
 import { IMPERSONATION_REFUSAL_MESSAGE } from '@/lib/auth/impersonation';
 import { PRESERVED_ADMIN_COOKIE } from '@/lib/auth/impersonation-preserved-session';
 import {
@@ -332,14 +332,14 @@ describe('BAL-553 AC 3 — the impersonation guard end-to-end', () => {
     expect(log.warn).not.toHaveBeenCalledWith(IMPERSONATION_REFUSAL_MESSAGE, expect.anything());
   });
 
-  it('TTL — the started session gets a 1800s cookie; the stopped/restored session gets the 7-day cookie', async () => {
+  it('TTL — the started session gets a 1800s cookie; the stopped/restored session gets the normal 90-day cookie', async () => {
     await seedAdminSession();
 
     await startImpersonationAction({ targetUserId: TARGET_ID, reason: 'ttl check' });
     expect(jarOptionsOf(COOKIE_NAME)?.maxAge).toBe(1800);
 
     await stopImpersonationAction();
-    expect(jarOptionsOf(COOKIE_NAME)?.maxAge).toBe(60 * 60 * 24 * 7);
+    expect(jarOptionsOf(COOKIE_NAME)?.maxAge).toBe(SESSION_MAX_AGE_SECONDS);
   });
 
   // BAL-553 fix round 1, F4 part 2 — AC 4's OTHER half. `session.test.ts` pins the
@@ -349,7 +349,7 @@ describe('BAL-553 AC 3 — the impersonation guard end-to-end', () => {
   // pre-arm actually keeps a REPAIR save at 30 minutes rather than the 7-day default. This is the
   // one place both are real at once: the real `getSession()`, the real session-sync route, and a
   // real cookie jar.
-  it('AC 4 — a repair save through the REAL session-sync route stays at maxAge 1800, not 604800', async () => {
+  it('AC 4 — a repair save through the REAL session-sync route stays at maxAge 1800, not the normal session lifetime', async () => {
     await seedAdminSession();
     await startImpersonationAction({ targetUserId: TARGET_ID, reason: 'AC4 repair check' });
     expect(jarOptionsOf(COOKIE_NAME)?.maxAge).toBe(1800);

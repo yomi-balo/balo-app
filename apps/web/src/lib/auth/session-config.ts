@@ -5,19 +5,37 @@
 
 export const COOKIE_NAME = 'balo_session';
 
+/**
+ * 90 days — matches the WorkOS AuthKit application's maximum session length (dashboard →
+ * Applications → Sessions; inactivity timeout 30 days). The cookie must not die before the WorkOS
+ * session does, or a user WorkOS still considers signed in is sent to /login. The reverse — WorkOS
+ * ending first — is handled by middleware, which destroys the cookie on WorkOS's "session has
+ * already ended" refresh answer. Change both together.
+ *
+ * Every refresh re-seals the cookie, so for an active user it slides; the WorkOS maximum is the
+ * hard bound.
+ */
+export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 90;
+
+/**
+ * `ttl` AND `cookieOptions.maxAge` are both set, to the same value: iron-session derives `maxAge`
+ * from `ttl` only when `maxAge` is absent, and without `ttl` the SEAL keeps iron-session's 14-day
+ * default — a 90-day cookie would then stop unsealing after two weeks.
+ */
 export const sessionConfig = {
   password: process.env.WORKOS_COOKIE_PASSWORD!,
   cookieName: COOKIE_NAME,
+  ttl: SESSION_MAX_AGE_SECONDS,
   cookieOptions: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: 'lax' as const,
-    maxAge: 60 * 60 * 24 * 7, // 7 days
+    maxAge: SESSION_MAX_AGE_SECONDS,
   },
 };
 
 /**
- * BAL-553 — an impersonated session lives 30 minutes, absolute. Never the 7-day cookie.
+ * BAL-553 — an impersonated session lives 30 minutes, absolute. Never the 90-day cookie.
  *
  * DOCUMENT-ONLY (fix round 1, security agent informational) — `iron-webcrypto` (via
  * `iron-session`) applies a FIXED 60-second clock-skew allowance on top of whatever `ttl` a seal

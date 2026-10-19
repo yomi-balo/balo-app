@@ -5,7 +5,7 @@
  *   - session.ts imports 'server-only' (fails in Edge Runtime)
  *   - session.ts uses cookies() from next/headers (unavailable in middleware)
  *   - Middleware reads and writes the request/response cookies directly — see
- *     {@link responseForRefreshedSession} for how a refresh reaches both the browser and the
+ *     {@link responseForSessionWrites} for how a refresh reaches both the browser and the
  *     request being handled
  */
 
@@ -31,12 +31,13 @@ function getWorkOS(): WorkOS {
   return _workos;
 }
 
-/** One `set` call iron-session's cookie-store form makes on `save()`. */
+/** One `set` call iron-session's cookie-store form makes on `save()` or `destroy()`. */
 type CookieWrite = Parameters<NextResponse['cookies']['set']>;
 
 /**
- * The middleware response for a refreshed session: the new seal forwarded to THIS request, and
- * one `Set-Cookie` for the browser.
+ * The middleware response for a rewritten session cookie — a refreshed seal, or a destroyed one
+ * when WorkOS has ended the session: the new value forwarded to THIS request, and one
+ * `Set-Cookie` for the browser.
  *
  * ⚠⚠ THE REQUEST HALF IS THE POINT. The request that triggered the refresh goes on to the page
  * render, a Server Action or a Route Handler, and each reads the session through `cookies()`.
@@ -53,7 +54,7 @@ type CookieWrite = Parameters<NextResponse['cookies']['set']>;
  * ⚠ THE OVERRIDE CARRIES EVERY REQUEST HEADER. Next drops any downstream request header missing
  * from `x-middleware-override-headers`, so the forwarded headers start as a full copy.
  */
-function responseForRefreshedSession(
+function responseForSessionWrites(
   request: NextRequest,
   writes: readonly CookieWrite[]
 ): NextResponse {
@@ -96,35 +97,84 @@ export async function getMiddlewareSession(request: NextRequest): Promise<Middle
 }
 
 /**
+ * What {@link refreshSessionIfNeeded} did to the session:
+ *   - `unchanged` — no refresh was needed, or it failed transiently; proceed on the existing cookie.
+ *   - `refreshed` — `response` carries the new seal to this request and the browser.
+ *   - `ended` — WorkOS has ended the session, so it can never refresh again. `response` carries
+ *     the destroyed cookie to this request and the browser; the caller treats the visitor as
+ *     signed out.
+ */
+export type SessionRefreshOutcome =
+  | { readonly status: 'unchanged' }
+  | { readonly status: 'refreshed'; readonly response: NextResponse }
+  | { readonly status: 'ended'; readonly response: NextResponse };
+
+const UNCHANGED: SessionRefreshOutcome = { status: 'unchanged' };
+
+/**
+ * WorkOS's terminal answer to a refresh: the OAuth `invalid_grant` code (HTTP 400) — a revoked,
+ * expired or already-consumed refresh token, including a session past its inactivity timeout or
+ * maximum length. WorkOS's session-resilience guidance is to clear the session and send the user
+ * to sign in.
+ *
+ * Every `invalid_grant` counts, whatever its description. A concurrent refresh is not one:
+ * AuthKit gives a just-exchanged refresh token a 30-second replay grace period in which a second
+ * exchange returns the same rotated tokens rather than an error. Anything else — network errors,
+ * timeouts, 5xx, 429 — is transient and leaves the session alone (`unchanged`); WorkOS is explicit
+ * that a session is never destroyed on a transient failure.
+ *
+ * Duck-typed on the `error` field the SDK's `OauthException` carries, so the check does not depend
+ * on the SDK's class identity.
+ */
+function isSessionEndedError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  return (error as Record<string, unknown>).error === 'invalid_grant';
+}
+
+/** Destroy the session cookie for this request and the browser. */
+async function endedSessionOutcome(request: NextRequest): Promise<SessionRefreshOutcome> {
+  const writes: CookieWrite[] = [];
+  const endedSession = await getIronSession<SessionData>(
+    {
+      get: (name: string) => request.cookies.get(name),
+      set: (...args: CookieWrite): void => {
+        writes.push(args);
+      },
+    },
+    sessionConfig
+  );
+  endedSession.destroy();
+  return { status: 'ended', response: responseForSessionWrites(request, writes) };
+}
+
+/**
  * Attempt to refresh the session tokens if the access token is expired
  * or about to expire (within REFRESH_BUFFER_SECONDS).
  *
- * Returns a NextResponse with the updated session cookie if refresh
- * was needed and succeeded.
- * Returns null if no refresh was needed or if refresh failed.
- *
- * On failure, the caller should proceed normally — token-level auth
- * is handled by Server Actions independently. Middleware is UX convenience.
+ * A transient refresh failure is `unchanged`: the caller proceeds normally, and token-level auth
+ * is enforced by Server Actions and `apps/api` independently. A session WorkOS has ended is
+ * `ended` — left in place, the long-lived cookie would keep the user looking signed in while
+ * every `apps/api` call 401s.
  */
 export async function refreshSessionIfNeeded(
   request: NextRequest,
   session: IronSession<SessionData>
-): Promise<NextResponse | null> {
+): Promise<SessionRefreshOutcome> {
   // BAL-553 fix round 1, S3 — THIS EARLY RETURN IS LOAD-BEARING FOR THE 30-MINUTE TTL, NOT JUST
   // A TOKEN CHECK. `startImpersonationAction` deletes BOTH `accessToken`/`refreshToken` from an
   // impersonated session precisely so this function can never reach the `.save()` below for one
-  // — that save re-seals with the default 7-day `sessionConfig`, which would silently promote an
+  // — that save re-seals with the default 90-day `sessionConfig`, which would silently promote an
   // impersonated session past its 30-minute deadline with `isImpersonating` still intact. That
   // coupling holds today, but it is undocumented and the `workos-auth` skill's own sketch
   // *carries* the tokens on an impersonated session — a future ticket following the skill would
   // silently reopen this. The `impersonatorUserId` re-arm below is the DEFENSIVE backstop, not
   // the primary guarantee: do not remove either half.
   if (!session.accessToken || !session.refreshToken) {
-    return null;
+    return UNCHANGED;
   }
 
   if (!isAccessTokenExpired(session.accessToken, REFRESH_BUFFER_SECONDS)) {
-    return null;
+    return UNCHANGED;
   }
 
   try {
@@ -161,17 +211,20 @@ export async function refreshSessionIfNeeded(
 
     await updatedSession.save();
 
-    return responseForRefreshedSession(request, writes);
+    return { status: 'refreshed', response: responseForSessionWrites(request, writes) };
   } catch (error) {
+    const ended = isSessionEndedError(error);
     console.log(
       JSON.stringify({
-        level: 'warn',
-        msg: 'Token refresh failed',
+        level: ended ? 'info' : 'warn',
+        msg: ended ? 'WorkOS session ended — signing out' : 'Token refresh failed',
+        // The internal user UUID (never an email): "why was I signed out?" is answered from this.
+        userId: session.user?.id,
         error: error instanceof Error ? error.message : 'Unknown',
         timestamp: new Date().toISOString(),
       })
     );
-    return null;
+    return ended ? endedSessionOutcome(request) : UNCHANGED;
   }
 }
 

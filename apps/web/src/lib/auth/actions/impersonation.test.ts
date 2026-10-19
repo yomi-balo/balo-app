@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SESSION_MAX_AGE_SECONDS } from '@/lib/auth/session-config';
 
 vi.mock('server-only', () => ({}));
 
@@ -539,7 +540,8 @@ describe('stopImpersonationAction', () => {
     expect(session.refreshToken).toBe('admin-refresh-token');
     expect(session.updateConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        cookieOptions: expect.objectContaining({ maxAge: 60 * 60 * 24 * 7 }),
+        ttl: SESSION_MAX_AGE_SECONDS,
+        cookieOptions: expect.objectContaining({ maxAge: SESSION_MAX_AGE_SECONDS }),
       })
     );
     expect(session.save).toHaveBeenCalledTimes(1);

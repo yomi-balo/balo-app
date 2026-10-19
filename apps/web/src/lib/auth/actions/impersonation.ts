@@ -305,7 +305,7 @@ export async function startImpersonationAction(input: {
  *
  * DOCUMENT-ONLY (fix round 1, security agent informational) — a DECISION, not an oversight: this
  * restore does NOT re-verify the admin's CURRENT DB status (demoted / suspended / deleted since
- * the preserved cookie was sealed, up to 30 minutes ago). It is not a new hole — a normal 7-day
+ * the preserved cookie was sealed, up to 30 minutes ago). It is not a new hole — a normal 90-day
  * session has the identical staleness window between sign-ins — and the very next authenticated
  * request self-heals through `checkSessionDrift` / the session-sync route, exactly like any other
  * session. Re-verifying here would duplicate that mechanism for a window strictly shorter than

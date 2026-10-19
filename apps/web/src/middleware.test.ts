@@ -74,7 +74,7 @@ function mockSession(
 function setupAuthenticatedSession(userOverrides: Partial<SessionUser> = {}): void {
   const user = mockSessionUser(userOverrides);
   mockGetMiddlewareSession.mockResolvedValue(mockSession(user));
-  mockRefreshSessionIfNeeded.mockResolvedValue(null);
+  mockRefreshSessionIfNeeded.mockResolvedValue({ status: 'unchanged' });
 }
 
 function setupUnauthenticatedSession(): void {
@@ -112,7 +112,7 @@ async function expectRedirectTo(path: string, expectedPathname: string): Promise
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockRefreshSessionIfNeeded.mockResolvedValue(null);
+  mockRefreshSessionIfNeeded.mockResolvedValue({ status: 'unchanged' });
   mockClearMiddlewareSession.mockResolvedValue(new Response(null, { headers: new Headers() }));
 });
 
@@ -382,7 +382,7 @@ describe('middleware — admin routes', () => {
     // Simulate old session without platformRole
     const user = mockSessionUser({ platformRole: undefined });
     mockGetMiddlewareSession.mockResolvedValue(mockSession(user));
-    mockRefreshSessionIfNeeded.mockResolvedValue(null);
+    mockRefreshSessionIfNeeded.mockResolvedValue({ status: 'unchanged' });
     await expectRedirectTo('/admin/users', '/dashboard');
   });
 
@@ -447,18 +447,66 @@ describe('middleware — token refresh', () => {
 
     const refreshedResponse = NextResponse.next();
     refreshedResponse.headers.set('x-refreshed', 'true');
-    mockRefreshSessionIfNeeded.mockResolvedValue(refreshedResponse);
+    mockRefreshSessionIfNeeded.mockResolvedValue({
+      status: 'refreshed',
+      response: refreshedResponse,
+    });
 
     const res = await middleware(createRequest('/dashboard'));
     expect(res.headers.get('x-refreshed')).toBe('true');
   });
 
-  it('uses original response when token refresh returns null', async () => {
+  it('uses original response when the session is unchanged', async () => {
     setupAuthenticatedSession();
-    mockRefreshSessionIfNeeded.mockResolvedValue(null);
 
     const res = await middleware(createRequest('/dashboard'));
     expect(res.status).toBe(200);
+  });
+
+  describe('WorkOS ended the session', () => {
+    function setupEndedSession(): NextResponse {
+      mockGetMiddlewareSession.mockResolvedValue(mockSession(mockSessionUser()));
+      const endedResponse = NextResponse.next();
+      endedResponse.headers.set('x-session-ended', 'true');
+      mockRefreshSessionIfNeeded.mockResolvedValue({ status: 'ended', response: endedResponse });
+      return endedResponse;
+    }
+
+    it('redirects a protected route to /login, clearing the cookie', async () => {
+      setupEndedSession();
+      const res = await middleware(createRequestWithCookie('/projects'));
+      expect(res.status).toBe(307);
+      const location = getRedirectUrl(res);
+      expect(location.pathname).toBe('/login');
+      expect(location.searchParams.get('returnTo')).toBe('/projects');
+      expect(mockClearMiddlewareSession).toHaveBeenCalledOnce();
+    });
+
+    it('redirects a protected API route to /login rather than serving it on the dead session', async () => {
+      setupEndedSession();
+      const res = await middleware(createRequestWithCookie('/api/notifications'));
+      expect(res.status).toBe(307);
+      expect(getRedirectUrl(res).pathname).toBe('/login');
+    });
+
+    it('serves a public route anonymously on the destroyed cookie', async () => {
+      setupEndedSession();
+      const res = await middleware(createRequestWithCookie('/experts'));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('x-session-ended')).toBe('true');
+    });
+
+    it('skips the route guards — an ended session is not bounced to /onboarding', async () => {
+      mockGetMiddlewareSession.mockResolvedValue(
+        mockSession(mockSessionUser({ onboardingCompleted: false }))
+      );
+      mockRefreshSessionIfNeeded.mockResolvedValue({
+        status: 'ended',
+        response: NextResponse.next(),
+      });
+      const res = await middleware(createRequestWithCookie('/experts'));
+      expect(res.status).toBe(200);
+    });
   });
 });
 
@@ -495,7 +543,7 @@ describe('middleware — fail-closed onboarding gate (BAL-361)', () => {
   it('redirects an un-onboarded user (null flag) from /dashboard to /onboarding', async () => {
     const user = mockSessionUser({ onboardingCompleted: null as unknown as boolean });
     mockGetMiddlewareSession.mockResolvedValue(mockSession(user));
-    mockRefreshSessionIfNeeded.mockResolvedValue(null);
+    mockRefreshSessionIfNeeded.mockResolvedValue({ status: 'unchanged' });
     await expectRedirectTo('/dashboard', '/onboarding');
   });
 

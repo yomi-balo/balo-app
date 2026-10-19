@@ -108,7 +108,7 @@ export interface SessionUser {
   verticalId?: string;
 
   // BAL-494 / ADR-1053 — the workspace the user is acting AS. OPTIONAL on purpose: sessions
-  // sealed before BAL-494 carry it not at all (7-day cookie), so a required field would be a
+  // sealed before BAL-494 carry it not at all (90-day cookie), so a required field would be a
   // runtime lie. Absent ⇒ `checkSessionDrift` reports drift and the sync route repopulates on
   // the next dashboard render — self-healing, one extra redirect, once per session.
   // `activeMode` / `companyId` / `companyName` / `companyRole` above stay in the session too,
