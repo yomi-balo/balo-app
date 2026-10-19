@@ -139,8 +139,17 @@ async function handleSessionedRoute(
     return redirectToLogin(request, pathname);
   }
 
-  const refreshedResponse = await refreshSessionIfNeeded(request, session);
-  const activeResponse = refreshedResponse ?? response;
+  const refresh = await refreshSessionIfNeeded(request, session);
+
+  // WorkOS ended the session, so its tokens can never refresh: treat the visitor exactly like
+  // the no-session branch above. Public → continue anonymously on the destroyed cookie;
+  // protected → login.
+  if (refresh.status === 'ended') {
+    if (publicRoute) return refresh.response;
+    return redirectToLogin(request, pathname);
+  }
+
+  const activeResponse = refresh.status === 'refreshed' ? refresh.response : response;
 
   const guardRedirect = checkRouteGuards(session.user, pathname, request.url, activeResponse);
   return guardRedirect ?? activeResponse;

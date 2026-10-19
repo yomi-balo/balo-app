@@ -199,7 +199,7 @@ Do not add new repository files without integration tests. SonarQube will flag c
     ⚠ `authorizeSessionExpertVisibility` (`apps/api`) grants to **any** live agency member, including role `expert` — wider than this holder set. That is **deliberate and permanent** (ADR-1046 §7, resolved 2026-08-03), not drift: **visibility** (delivering expert ∪ any live agency member) and **act** rights (delivering expert ∪ agency `owner`/`admin`) are different rules by design. **Do not narrow it.** The rule has ONE definition — `actorHasExpertSideVisibility` in `@balo/shared/authz` (BAL-419) — consumed by all three visibility gates (credit-session money block, engagement conversation, meeting files). Never write a second. `packages/shared/src/authz/expert-side-visibility.test.ts` pins visibility and act side by side over one agency-role table, so an "alignment" fails there.
 - **Decided in ADR-1029 but NOT built.** Do not write code, tickets, or docs against these as though they exist: the `finance` role, `approve_any_proposals`, `member_capability_overrides`, the `capability` pgEnum, and `representations` (act-on-behalf; ticketed as BAL-313, still open). See ADR-1029's 2026-07-30 amendment for the full as-built reconciliation.
 - Custom UI modals (not hosted AuthKit redirect)
-- Session via iron-session with 7-day cookie (`balo_session`)
+- Session via iron-session with a 90-day cookie (`balo_session`), matched to the WorkOS max session length (30-day inactivity timeout); middleware destroys it when WorkOS reports the session ended
 
 ### Analytics
 

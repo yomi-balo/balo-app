@@ -140,31 +140,31 @@ describe('getMiddlewareSession', () => {
 
 describe('refreshSessionIfNeeded', () => {
   describe('skip refresh — no tokens', () => {
-    it('returns null when session has no accessToken', async () => {
+    it('returns unchanged when session has no accessToken', async () => {
       const session = mockSession({ accessToken: undefined });
       const result = await refreshSessionIfNeeded(createRequest(), session);
-      expect(result).toBeNull();
+      expect(result).toEqual({ status: 'unchanged' });
       expect(mockAuthenticateWithRefreshToken).not.toHaveBeenCalled();
     });
 
-    it('returns null when session has no refreshToken', async () => {
+    it('returns unchanged when session has no refreshToken', async () => {
       const session = mockSession({ refreshToken: undefined });
       const result = await refreshSessionIfNeeded(createRequest(), session);
-      expect(result).toBeNull();
+      expect(result).toEqual({ status: 'unchanged' });
     });
 
-    it('returns null when both tokens are missing', async () => {
+    it('returns unchanged when both tokens are missing', async () => {
       const session = mockSession({ accessToken: undefined, refreshToken: undefined });
       const result = await refreshSessionIfNeeded(createRequest(), session);
-      expect(result).toBeNull();
+      expect(result).toEqual({ status: 'unchanged' });
     });
   });
 
   describe('skip refresh — token still valid', () => {
-    it('returns null when access token is not expired', async () => {
+    it('returns unchanged when access token is not expired', async () => {
       const session = mockSession({ accessToken: createValidToken() });
       const result = await refreshSessionIfNeeded(createRequest(), session);
-      expect(result).toBeNull();
+      expect(result).toEqual({ status: 'unchanged' });
       expect(mockAuthenticateWithRefreshToken).not.toHaveBeenCalled();
     });
   });
@@ -265,7 +265,7 @@ describe('refreshSessionIfNeeded', () => {
       expect(updatedSession.save).toHaveBeenCalledOnce();
     });
 
-    it('returns a NextResponse (not null)', async () => {
+    it('returns refreshed with a NextResponse', async () => {
       const session = mockSession({ accessToken: createExpiredToken() });
       const updatedSession = mockSessionData();
       mockGetIronSession.mockResolvedValue(updatedSession);
@@ -275,8 +275,9 @@ describe('refreshSessionIfNeeded', () => {
       });
 
       const result = await refreshSessionIfNeeded(createRequest(), session);
-      expect(result).not.toBeNull();
-      expect(result).toBeInstanceOf(NextResponse);
+      expect(result.status).toBe('refreshed');
+      if (result.status !== 'refreshed') throw new Error('expected a refreshed outcome');
+      expect(result.response).toBeInstanceOf(NextResponse);
     });
 
     // BAL-553 fix round 1, S3 — this path is unreachable in production TODAY only because an
@@ -344,12 +345,12 @@ describe('refreshSessionIfNeeded', () => {
       consoleLogSpy.mockRestore();
     });
 
-    it('returns null when authenticateWithRefreshToken throws', async () => {
+    it('returns unchanged when authenticateWithRefreshToken throws', async () => {
       const session = mockSession({ accessToken: createExpiredToken() });
       mockAuthenticateWithRefreshToken.mockRejectedValue(new Error('token revoked'));
 
       const result = await refreshSessionIfNeeded(createRequest(), session);
-      expect(result).toBeNull();
+      expect(result).toEqual({ status: 'unchanged' });
     });
 
     it('logs a structured warning when refresh fails', async () => {
@@ -375,6 +376,80 @@ describe('refreshSessionIfNeeded', () => {
       const logArg = consoleLogSpy.mock.calls[0]?.[0] as string;
       const parsed = JSON.parse(logArg) as Record<string, unknown>;
       expect(parsed.error).toBe('Unknown');
+    });
+  });
+
+  describe('session ended at WorkOS', () => {
+    let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleLogSpy.mockRestore();
+    });
+
+    /** The shape the SDK's `OauthException` carries. */
+    function oauthError(error: string, errorDescription: string): Error {
+      return Object.assign(new Error(`Error: ${error}\nError Description: ${errorDescription}`), {
+        error,
+        errorDescription,
+      });
+    }
+
+    it('returns ended and destroys the session when WorkOS says the session has ended', async () => {
+      const session = mockSession({ accessToken: createExpiredToken() });
+      const endedSession = mockSessionData();
+      mockGetIronSession.mockResolvedValue(endedSession);
+      mockAuthenticateWithRefreshToken.mockRejectedValue(
+        oauthError('invalid_grant', 'Session has already ended.')
+      );
+
+      const result = await refreshSessionIfNeeded(createRequest(), session);
+
+      expect(result.status).toBe('ended');
+      if (result.status !== 'ended') throw new Error('expected an ended outcome');
+      expect(result.response).toBeInstanceOf(NextResponse);
+      expect(endedSession.destroy).toHaveBeenCalledOnce();
+      expect(endedSession.save).not.toHaveBeenCalled();
+    });
+
+    it('logs the sign-out at info, not as a refresh failure', async () => {
+      const session = mockSession({ accessToken: createExpiredToken() });
+      mockGetIronSession.mockResolvedValue(mockSessionData());
+      mockAuthenticateWithRefreshToken.mockRejectedValue(
+        oauthError('invalid_grant', 'Session has already ended.')
+      );
+
+      await refreshSessionIfNeeded(createRequest(), session);
+
+      const parsed = JSON.parse(consoleLogSpy.mock.calls[0]?.[0] as string) as Record<
+        string,
+        unknown
+      >;
+      expect(parsed.level).toBe('info');
+      expect(parsed.msg).toBe('WorkOS session ended — signing out');
+    });
+
+    it.each([
+      [
+        'invalid_grant with another description',
+        oauthError('invalid_grant', 'Invalid refresh token.'),
+      ],
+      [
+        'another error code with the ended description',
+        oauthError('server_error', 'Session has already ended.'),
+      ],
+      ['a plain Error whose message mentions it', new Error('Session has already ended.')],
+    ])('stays unchanged for %s — never a spurious sign-out', async (_label, error) => {
+      const session = mockSession({ accessToken: createExpiredToken() });
+      mockAuthenticateWithRefreshToken.mockRejectedValue(error);
+
+      const result = await refreshSessionIfNeeded(createRequest(), session);
+
+      expect(result).toEqual({ status: 'unchanged' });
+      expect(mockGetIronSession).not.toHaveBeenCalled();
     });
   });
 });

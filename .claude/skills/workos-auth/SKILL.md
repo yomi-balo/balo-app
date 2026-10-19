@@ -68,14 +68,17 @@ export function getWorkOS(): WorkOS {
 
 export const clientId = process.env.WORKOS_CLIENT_ID!;
 
+export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 90; // = WorkOS max session length
+
 export const sessionConfig = {
   password: process.env.WORKOS_COOKIE_PASSWORD!,
   cookieName: 'balo_session',
+  ttl: SESSION_MAX_AGE_SECONDS, // seal lifetime — without it iron-session seals for 14 days
   cookieOptions: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     sameSite: 'lax' as const,
-    maxAge: 60 * 60 * 24 * 7, // 7 days
+    maxAge: SESSION_MAX_AGE_SECONDS,
   },
 };
 ```
@@ -278,11 +281,15 @@ Full implementation → [references/protected-routes.md](references/protected-ro
 
 ## Token Refresh
 
-WorkOS access tokens expire (~1 hour). Token refresh is handled automatically in Next.js middleware via `refreshSessionIfNeeded()`, which calls `authenticateWithRefreshToken` and re-issues the session cookie transparently.
+WorkOS access tokens expire after 5 minutes. Token refresh is handled automatically in Next.js middleware via `refreshSessionIfNeeded()`, which calls `authenticateWithRefreshToken` and re-issues the session cookie transparently.
 
-**You do not need to handle token refresh manually in Server Actions or components.** Middleware handles it on every request. If a refresh fails (e.g. refresh token itself has expired), the session is cleared and the user is redirected to login.
+**You do not need to handle token refresh manually in Server Actions or components.** Middleware handles it on every request. It returns one of three outcomes:
 
-The 7-day cookie lifetime means users stay logged in even as access tokens rotate. Full implementation → [references/protected-routes.md](references/protected-routes.md)
+- `unchanged` — no refresh needed, or a transient failure (including a concurrent refresh racing on a rotated token). The request proceeds on the existing cookie.
+- `refreshed` — the new seal is forwarded to this request and the browser.
+- `ended` — WorkOS answered `invalid_grant` / "Session has already ended" (inactivity timeout, max session length, or revocation). The cookie is destroyed; protected routes redirect to login, public routes render signed out.
+
+Session lifetime is set in the WorkOS dashboard (AuthKit application → Sessions): 30-day inactivity timeout, 90-day maximum. The cookie's `SESSION_MAX_AGE_SECONDS` matches the maximum — change both together. Full implementation → [references/protected-routes.md](references/protected-routes.md)
 
 ## `activeMode` Switch Flow
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { sealData, unsealData } from 'iron-session';
-import { NextRequest } from 'next/server';
+import { NextRequest, type NextResponse } from 'next/server';
 import type { SessionData } from './session';
 
 /**
@@ -81,6 +81,16 @@ function sealFromCookieHeader(header: string): string {
   return decodeURIComponent(entry.slice(COOKIE.length + 1));
 }
 
+/** The response of a refresh that must have happened — fails the test on any other outcome. */
+async function refreshedResponse(
+  request: NextRequest,
+  session: Awaited<ReturnType<typeof getMiddlewareSession>>['session']
+): Promise<NextResponse> {
+  const outcome = await refreshSessionIfNeeded(request, session);
+  if (outcome.status !== 'refreshed') throw new Error(`expected refreshed, got ${outcome.status}`);
+  return outcome.response;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.WORKOS_API_KEY = 'sk_test_key';
@@ -100,11 +110,11 @@ describe('refreshSessionIfNeeded — the refreshed cookie reaches THIS request',
     });
     const { session } = await getMiddlewareSession(request);
 
-    const response = await refreshSessionIfNeeded(request, session);
+    const response = await refreshedResponse(request, session);
 
-    const overridden = (response?.headers.get('x-middleware-override-headers') ?? '').split(',');
+    const overridden = (response.headers.get('x-middleware-override-headers') ?? '').split(',');
     expect(overridden).toContain('cookie');
-    const forwardedCookie = response?.headers.get('x-middleware-request-cookie') ?? '';
+    const forwardedCookie = response.headers.get('x-middleware-request-cookie') ?? '';
     const unsealed = await unsealData<SessionData>(sealFromCookieHeader(forwardedCookie), {
       password: PASSWORD,
     });
@@ -121,9 +131,9 @@ describe('refreshSessionIfNeeded — the refreshed cookie reaches THIS request',
     });
     const { session } = await getMiddlewareSession(request);
 
-    const response = await refreshSessionIfNeeded(request, session);
+    const response = await refreshedResponse(request, session);
 
-    expect(response?.headers.has('x-middleware-set-cookie')).toBe(false);
+    expect(response.headers.has('x-middleware-set-cookie')).toBe(false);
   });
 
   it('keeps every other request header and cookie — Next drops any header missing from the override', async () => {
@@ -134,12 +144,12 @@ describe('refreshSessionIfNeeded — the refreshed cookie reaches THIS request',
     });
     const { session } = await getMiddlewareSession(request);
 
-    const response = await refreshSessionIfNeeded(request, session);
+    const response = await refreshedResponse(request, session);
 
-    const overridden = (response?.headers.get('x-middleware-override-headers') ?? '').split(',');
+    const overridden = (response.headers.get('x-middleware-override-headers') ?? '').split(',');
     expect(overridden).toEqual(expect.arrayContaining(['user-agent', 'x-forwarded-for']));
-    expect(response?.headers.get('x-middleware-request-user-agent')).toBe('vitest');
-    const forwardedCookie = response?.headers.get('x-middleware-request-cookie') ?? '';
+    expect(response.headers.get('x-middleware-request-user-agent')).toBe('vitest');
+    const forwardedCookie = response.headers.get('x-middleware-request-cookie') ?? '';
     expect(forwardedCookie).toContain('ph_session=abc%20def');
     expect(forwardedCookie).toContain('theme=dark');
     // The request itself is not mutated: only the forwarded copy carries the new seal.
@@ -154,11 +164,9 @@ describe('refreshSessionIfNeeded — the refreshed cookie reaches THIS request',
     });
     const { session } = await getMiddlewareSession(request);
 
-    const response = await refreshSessionIfNeeded(request, session);
+    const response = await refreshedResponse(request, session);
 
-    const setCookies = (response?.headers.getSetCookie() ?? []).filter((c) =>
-      c.startsWith(`${COOKIE}=`)
-    );
+    const setCookies = response.headers.getSetCookie().filter((c) => c.startsWith(`${COOKIE}=`));
     expect(setCookies).toHaveLength(1);
     const [cookie] = setCookies;
     expect(cookie).toMatch(/HttpOnly/i);
@@ -183,11 +191,9 @@ describe('refreshSessionIfNeeded — the refreshed cookie reaches THIS request',
     });
     const { session } = await getMiddlewareSession(request);
 
-    const response = await refreshSessionIfNeeded(request, session);
+    const response = await refreshedResponse(request, session);
 
-    const [cookie] = (response?.headers.getSetCookie() ?? []).filter((c) =>
-      c.startsWith(`${COOKIE}=`)
-    );
+    const [cookie] = response.headers.getSetCookie().filter((c) => c.startsWith(`${COOKIE}=`));
     const maxAge = Number(/Max-Age=(\d+)/i.exec(cookie ?? '')?.[1]);
     expect(maxAge).toBeGreaterThan(14 * 60);
     expect(maxAge).toBeLessThanOrEqual(15 * 60);
@@ -215,7 +221,53 @@ describe('refreshSessionIfNeeded — the refreshed cookie reaches THIS request',
     });
     const { session } = await getMiddlewareSession(request);
 
-    await expect(refreshSessionIfNeeded(request, session)).resolves.toBeNull();
+    await expect(refreshSessionIfNeeded(request, session)).resolves.toEqual({
+      status: 'unchanged',
+    });
     expect(mockAuthenticateWithRefreshToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('refreshSessionIfNeeded — a session WorkOS has ended is destroyed for THIS request too', () => {
+  async function endedResponse(): Promise<NextResponse> {
+    mockAuthenticateWithRefreshToken.mockRejectedValue(
+      Object.assign(new Error('Error: invalid_grant'), {
+        error: 'invalid_grant',
+        errorDescription: 'Session has already ended.',
+      })
+    );
+    const request = await requestCarrying({
+      user: USER,
+      accessToken: jwtExpiringIn(-120),
+      refreshToken: 'old-refresh-token',
+    });
+    const { session } = await getMiddlewareSession(request);
+    const outcome = await refreshSessionIfNeeded(request, session);
+    if (outcome.status !== 'ended') throw new Error(`expected ended, got ${outcome.status}`);
+    return outcome.response;
+  }
+
+  it('⚠ forwards THIS request with an empty session cookie, so it renders signed out', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const response = await endedResponse();
+
+    const overridden = (response.headers.get('x-middleware-override-headers') ?? '').split(',');
+    expect(overridden).toContain('cookie');
+    const forwardedCookie = response.headers.get('x-middleware-request-cookie') ?? '';
+    expect(sealFromCookieHeader(forwardedCookie)).toBe('');
+    expect(forwardedCookie).toContain('theme=dark');
+    vi.restoreAllMocks();
+  });
+
+  it('sends the browser exactly ONE balo_session Set-Cookie that expires it', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const response = await endedResponse();
+
+    const setCookies = response.headers.getSetCookie().filter((c) => c.startsWith(`${COOKIE}=`));
+    expect(setCookies).toHaveLength(1);
+    const [cookie] = setCookies;
+    expect(sealFromSetCookie(cookie ?? '')).toBe('');
+    expect(cookie).toMatch(/Max-Age=0/i);
+    vi.restoreAllMocks();
   });
 });

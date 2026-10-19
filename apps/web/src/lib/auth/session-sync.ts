@@ -91,7 +91,7 @@ export async function checkSessionDrift(): Promise<CheckResult> {
   //  3. The RESOLVED active workspace disagrees with the session's. Strictly stronger than
   //     (2) — being in the list is not the same as being the one the server would pick — and
   //     it is what actually makes the stored choice cross-device: device 1 switches to B,
-  //     device 2's 7-day cookie still says A, and only this comparison notices. It also
+  //     device 2's 90-day cookie still says A, and only this comparison notices. It also
   //     closes the `via` blind spot: the key does not encode `via`, so a member who ALSO
   //     holds an org-scope representation for the same company and then LOSES membership
   //     stays `stillListed` while the derivation has already re-resolved elsewhere — leaving
@@ -104,7 +104,7 @@ export async function checkSessionDrift(): Promise<CheckResult> {
   //  4. The PROJECTION invariant — the WHOLE projection, not just `activeMode`. Catches every
   //     writer that patches a legacy field without patching the workspace, catches an
   //     `owner → member` demotion (which would otherwise keep `companyRole:'owner'` in the
-  //     cookie for the full 7 days), and — because `companyName` is compared too — notices a
+  //     cookie for the full 90 days), and — because `companyName` is compared too — notices a
   //     company RENAME, which the key comparison in (3) cannot.
   //
   //     ⚠ THERE IS DELIBERATELY NO "STALE SWITCHER LIST" CHECK. An earlier cut compared
