@@ -45,7 +45,7 @@ export function validateDescription(html: string): string | null {
   if (length === 0) return 'Add a few words about what you need.';
   if (length < DESCRIPTION_MIN_TEXT) return 'Add a few words about what you need.';
   if (length > DESCRIPTION_MAX_TEXT)
-    return `Keep your brief under ${DESCRIPTION_MAX_TEXT} characters.`;
+    return `Keep your brief under ${DESCRIPTION_MAX_TEXT.toLocaleString('en-US')} characters.`;
   return null;
 }
 

@@ -77,7 +77,7 @@ export function EoiEntry({
     validationError === null
       ? null
       : plainTextLength(draft) > DESCRIPTION_MAX_TEXT
-        ? `Keep your pitch under ${DESCRIPTION_MAX_TEXT} characters.`
+        ? `Keep your pitch under ${DESCRIPTION_MAX_TEXT.toLocaleString('en-US')} characters.`
         : 'Add a few words about why you’re a strong fit.';
 
   const handleSubmit = useCallback((): void => {

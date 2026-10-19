@@ -137,15 +137,24 @@ vi.mock('@/components/balo/document-uploader', async () => {
 // The real RichTextEditor is a code-split TipTap (ProseMirror) component that
 // can't mount in jsdom. Mock the public module with a controlled textarea that
 // emits the same HTML contract, plus pass-through validation helpers.
-vi.mock('@/components/balo/rich-text-editor', () => ({
+vi.mock('@/components/balo/rich-text-editor', async () => ({
+  // The REAL validator (pure, no DOM): the review step's submit gate and its blocker copy are
+  // under test, so a stand-in that skipped the 4,000-character max would hide exactly that.
+  validateDescription: (
+    await vi.importActual<typeof import('@/components/balo/rich-text/plain-text')>(
+      '@/components/balo/rich-text/plain-text'
+    )
+  ).validateDescription,
   RichTextEditor: ({
     value,
     onChange,
     placeholder,
+    autoFocus,
   }: {
     value: string;
     onChange: (html: string) => void;
     placeholder?: string;
+    autoFocus?: boolean;
   }) => {
     // Show the plain text (strip the <p> wrapper) so char-by-char typing doesn't
     // re-wrap cumulatively; emit a single <p>…</p> HTML on change.
@@ -153,6 +162,7 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
     return (
       <textarea
         aria-label="Project description"
+        autoFocus={autoFocus}
         placeholder={placeholder}
         value={plain}
         onChange={(e) => onChange(e.target.value ? `<p>${e.target.value}</p>` : '')}
@@ -160,11 +170,6 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
     );
   },
   RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
-  validateDescription: (html: string) => {
-    const text = html.replace(/<[^<>]*>/g, '').trim();
-    if (text.length < 10) return 'Add a few words about what you need.';
-    return null;
-  },
 }));
 
 import { ProjectRequestPanel } from './project-request-panel';
@@ -466,13 +471,13 @@ describe('ProjectRequestPanel', () => {
       await user.click(screen.getByRole('button', { name: /^review/i }));
 
       expect(screen.getByText("Priya isn't taking on new work right now.")).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /send to priya/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled();
 
       await user.click(screen.getByRole('button', { name: 'Get matched instead' }));
 
       expect(screen.queryByText(/isn't taking on new work/i)).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Find me an expert' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: 'Find me an expert' })).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Submit request' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Submit request' })).toHaveFocus();
       expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ROUTING_SWITCHED, {
         from: 'direct',
         to: 'match',
@@ -534,7 +539,7 @@ describe('ProjectRequestPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Sales Cloud' }));
     await user.click(screen.getByRole('button', { name: /^review/i }));
 
-    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     await waitFor(() => {
       expect(mockSubmit).toHaveBeenCalledWith(
@@ -580,7 +585,7 @@ describe('ProjectRequestPanel', () => {
       'Rebuild our lead routing in Flow.'
     );
     await user.click(screen.getByRole('button', { name: /^review/i }));
-    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('pr-1'));
   });
@@ -600,7 +605,7 @@ describe('ProjectRequestPanel', () => {
     await user.type(screen.getByLabelText(/timeline/i), 'Target go-live: end of Q3');
 
     await user.click(screen.getByRole('button', { name: /^review/i }));
-    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     await waitFor(() => {
       expect(mockSubmit).toHaveBeenCalledWith(
@@ -632,7 +637,7 @@ describe('ProjectRequestPanel', () => {
     await user.type(screen.getByLabelText(/max budget/i), 'abc');
 
     await user.click(screen.getByRole('button', { name: /^review/i }));
-    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     await waitFor(() => {
       expect(mockSubmit).toHaveBeenCalledWith(
@@ -673,7 +678,7 @@ describe('ProjectRequestPanel', () => {
     await user.paste('45000.50');
 
     await user.click(screen.getByRole('button', { name: /^review/i }));
-    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     await waitFor(() => {
       expect(mockSubmit).toHaveBeenCalledWith(
@@ -691,7 +696,7 @@ describe('ProjectRequestPanel', () => {
     await user.type(screen.getByLabelText(/project description/i), 'We need help scoping work.');
     await user.click(screen.getByRole('button', { name: /^review/i }));
 
-    await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     await waitFor(() => {
       expect(mockSubmit).toHaveBeenCalledWith(
@@ -723,7 +728,7 @@ describe('ProjectRequestPanel', () => {
     await user.type(screen.getByLabelText(/project title/i), 'Unbound brief');
     await user.type(screen.getByLabelText(/project description/i), 'We need help scoping work.');
     await user.click(screen.getByRole('button', { name: /^review/i }));
-    await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
     expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ sendTo: 'match' }));
@@ -735,11 +740,11 @@ describe('ProjectRequestPanel', () => {
     mockSubmit.mockResolvedValue({ success: false, error: 'Something went wrong.' });
     const user = await advanceToReview();
 
-    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong.');
     expect(mockToast.error).toHaveBeenCalledWith('Something went wrong.');
-    expect(screen.getByRole('button', { name: /send to priya/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit request' })).toBeInTheDocument();
     expect(screen.queryByText(/request sent to priya/i)).not.toBeInTheDocument();
   });
 
@@ -754,7 +759,7 @@ describe('ProjectRequestPanel', () => {
       mockSubmit.mockResolvedValue(UNAVAILABLE_RESULT);
       const user = await advanceToReview();
 
-      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       expect(
         await screen.findByText("Priya isn't taking on new work right now.")
@@ -766,15 +771,15 @@ describe('ProjectRequestPanel', () => {
         entry_point: 'profile',
         trigger: 'submit_rejected',
       });
-      expect(screen.getByRole('button', { name: /send to priya/i })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled();
     });
 
     it('"Get matched instead" then submits as match and succeeds', async () => {
       mockSubmit.mockResolvedValueOnce(UNAVAILABLE_RESULT);
       const user = await advanceToReview();
-      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
       await user.click(await screen.findByRole('button', { name: 'Get matched instead' }));
-      await user.click(screen.getByRole('button', { name: 'Find me an expert' }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(2));
       expect(mockSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ sendTo: 'match' }));
@@ -880,7 +885,7 @@ describe('ProjectRequestPanel', () => {
       ).not.toBeNull();
     });
 
-    await user.click(screen.getByRole('button', { name: /send to priya/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
     await waitFor(() => {
       expect(globalThis.localStorage.getItem(`balo:project-draft:${EXPERT_PROFILE_ID}`)).toBeNull();
@@ -1043,7 +1048,7 @@ describe('ProjectRequestPanel', () => {
       await user.click(screen.getByRole('button', { name: /generate brief/i }));
       await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
 
-      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       await waitFor(() => {
         expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ source: 'ai' }));
@@ -1061,7 +1066,7 @@ describe('ProjectRequestPanel', () => {
       await user.click(screen.getByRole('button', { name: /generate brief/i }));
       await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
 
-      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       await waitFor(() => {
         expect(mockTrack).toHaveBeenCalledWith(
@@ -1102,7 +1107,7 @@ describe('ProjectRequestPanel', () => {
 
       expect(screen.queryByText(/ai-drafted from your documents/i)).not.toBeInTheDocument();
 
-      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
       await waitFor(() => {
         expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ source: 'manual' }));
       });
@@ -1221,7 +1226,7 @@ describe('ProjectRequestPanel', () => {
       await user.click(screen.getByRole('button', { name: /generate brief/i }));
       await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
 
-      expect(screen.getByRole('button', { name: /send to priya/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Submit request' })).not.toBeDisabled();
 
       // Regenerate, and keep the second parse pending.
       mockGetBrief.mockResolvedValue({ status: 'pending' });
@@ -1230,9 +1235,113 @@ describe('ProjectRequestPanel', () => {
       // Submitting here used to reach `done`, and the late success then repopulated the
       // just-cleared draft and dragged the user back to `review`.
       await waitFor(() => {
-        expect(screen.getByRole('button', { name: /send to priya/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled();
       });
       expect(mockSubmit).not.toHaveBeenCalled();
+    }, 12000);
+
+    // An AI draft lands on `review` directly, where there are no inline field errors — a
+    // disabled Submit must say why and offer the way out.
+    it('⚠ an over-limit AI draft disables Submit WITH the reason, and "Edit brief" opens the editor', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({
+        status: 'succeeded',
+        draft: { ...AI_DRAFT, descriptionHtml: `<p>${'x'.repeat(4001)}</p>` },
+      });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled();
+      expect(screen.getByText(/Keep your brief under 4,000 characters\./)).toBeInTheDocument();
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED, {
+        expert_id: EXPERT_PROFILE_ID,
+        entry_point: 'profile',
+        reason: 'description_too_long',
+        method: 'ai',
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Edit brief' }));
+
+      // On `manual` with the inline error already showing, and the cursor in the description
+      // that is over the limit — not the title.
+      expect(screen.getByLabelText(/project title/i)).toHaveValue('AI-drafted title');
+      expect(screen.getByText(/Keep your brief under 4,000 characters\./)).toBeInTheDocument();
+      expect(screen.getByLabelText('Project description')).toHaveFocus();
+    }, 12000);
+
+    it('a submittable AI draft shows no blocker', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      expect(screen.getByRole('button', { name: 'Submit request' })).toBeEnabled();
+      expect(screen.queryByRole('button', { name: 'Edit brief' })).not.toBeInTheDocument();
+      expect(mockTrack).not.toHaveBeenCalledWith(
+        PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED,
+        expect.anything()
+      );
+    }, 12000);
+
+    // Closing does not unmount the panel, so a reopen renders once with the pre-close `review`
+    // step before the open effect redirects — the event must not fire for that stale render.
+    it('⚠ a blocked review closed and reopened fires PROJECT_REVIEW_BLOCKED exactly once', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({
+        status: 'succeeded',
+        draft: { ...AI_DRAFT, descriptionHtml: `<p>${'x'.repeat(4001)}</p>` },
+      });
+
+      const user = userEvent.setup();
+      const { rerender } = renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      rerender(<ProjectRequestPanel open={false} onClose={vi.fn()} {...BASE_PROPS} />);
+      rerender(<ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} />);
+
+      const blocked = mockTrack.mock.calls.filter(
+        ([event]) => event === PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED
+      );
+      expect(blocked).toHaveLength(1);
+    }, 12000);
+
+    it("the summary's own Edit link still opens the editor with focus on the title", async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({
+        status: 'succeeded',
+        draft: { ...AI_DRAFT, descriptionHtml: `<p>${'x'.repeat(4001)}</p>` },
+      });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      // Fix via the blocker, return to review, then use the summary's Edit link: the
+      // description-focus request must not leak into this second visit.
+      await user.click(screen.getByRole('button', { name: 'Edit brief' }));
+      expect(screen.getByLabelText('Project description')).toHaveFocus();
+      await user.clear(screen.getByLabelText('Project description'));
+      await user.type(screen.getByLabelText('Project description'), 'A short brief that fits.');
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+      await user.click(screen.getAllByRole('button', { name: /^edit$/i })[0] as HTMLElement);
+
+      expect(screen.getByLabelText(/project title/i)).toHaveFocus();
     }, 12000);
   });
 
@@ -1292,7 +1401,7 @@ describe('ProjectRequestPanel', () => {
         'We need help scoping a Salesforce build.'
       );
       await user.click(screen.getByRole('button', { name: /^review/i }));
-      await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       await waitFor(() => {
         expect(mockSubmit).toHaveBeenCalledWith(
@@ -1345,7 +1454,7 @@ describe('ProjectRequestPanel', () => {
         'We need help scoping a Salesforce build.'
       );
       await user.click(screen.getByRole('button', { name: /^review/i }));
-      await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
       const submittedCall = mockTrack.mock.calls.find(
@@ -1448,7 +1557,7 @@ describe('ProjectRequestPanel', () => {
         })
       );
       await user.click(screen.getByRole('button', { name: /^review/i }));
-      await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
       expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ sendTo: 'match' }));
@@ -1977,7 +2086,7 @@ describe('ProjectRequestPanel', () => {
           'We need help scoping this work.'
         );
         await user.click(screen.getByRole('button', { name: /^review/i }));
-        await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+        await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
         expect(onAuthRequired).toHaveBeenCalledTimes(1);
         expect(mockSubmit).not.toHaveBeenCalled();
@@ -2013,7 +2122,7 @@ describe('ProjectRequestPanel', () => {
           'We need help scoping this work.'
         );
         await user.click(screen.getByRole('button', { name: /^review/i }));
-        await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+        await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
         await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
       });
@@ -2045,7 +2154,7 @@ describe('ProjectRequestPanel', () => {
         expect(screen.getByTestId('rt-viewer')).toBeInTheDocument();
         expect(onAuthRequired).not.toHaveBeenCalled();
 
-        await user.click(screen.getByRole('button', { name: /find me an expert/i }));
+        await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
         await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
       });
@@ -2147,7 +2256,7 @@ describe('ProjectRequestPanel', () => {
       await user.click(screen.getByRole('button', { name: /attach test file/i }));
 
       await user.click(screen.getByRole('button', { name: /^review/i }));
-      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       await waitFor(() => expect(mockSubmit).toHaveBeenCalled());
       const payload = mockSubmit.mock.calls.at(-1)?.[0] as { documents: Array<{ r2Key: string }> };
@@ -2364,7 +2473,7 @@ describe('ProjectRequestPanel', () => {
       await user.click(screen.getByRole('button', { name: /^review/i }));
       expect(screen.getByText(`Linked to case: ${CASE_SOURCE.title}`)).toBeInTheDocument();
 
-      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       expect(await screen.findByText(`Linked to case: ${CASE_SOURCE.title}`)).toBeInTheDocument();
       expect(mockSubmit).toHaveBeenCalledWith(
@@ -2402,7 +2511,7 @@ describe('ProjectRequestPanel', () => {
         'Rebuild our lead routing in Flow.'
       );
       await user.click(screen.getByRole('button', { name: /^review/i }));
-      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await user.click(screen.getByRole('button', { name: 'Submit request' }));
 
       const doneButton = await screen.findByRole('button', { name: /^done$/i });
       await user.click(doneButton);

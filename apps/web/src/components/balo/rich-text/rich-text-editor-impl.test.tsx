@@ -70,7 +70,7 @@ beforeAll(() => {
 import RichTextEditorImpl from './rich-text-editor-impl';
 
 type SetupOptions = Partial<
-  Pick<React.ComponentProps<typeof RichTextEditorImpl>, 'variant' | 'collapseOnBlur'>
+  Pick<React.ComponentProps<typeof RichTextEditorImpl>, 'variant' | 'collapseOnBlur' | 'autoFocus'>
 >;
 
 /** Mount the editor with a controlled value + onChange spy. */
@@ -117,6 +117,19 @@ describe('RichTextEditorImpl', () => {
     await waitFor(() =>
       expect(screen.getByRole('textbox', { name: 'Project description' })).toBeInTheDocument()
     );
+  });
+
+  it('autoFocus focuses the editable region once the editor mounts', async () => {
+    setup(undefined, { autoFocus: true });
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: 'Project description' })).toHaveFocus()
+    );
+  });
+
+  it('does not take focus without autoFocus', async () => {
+    setup();
+    const region = await screen.findByRole('textbox', { name: 'Project description' });
+    expect(region).not.toHaveFocus();
   });
 
   it('toolbar buttons expose aria-pressed reflecting (inactive) state on mount', async () => {

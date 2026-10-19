@@ -43,6 +43,11 @@ export interface RichTextEditorProps {
    * Ignored by `standard`/`light`. Defaults to `false`.
    */
   collapseOnBlur?: boolean;
+  /**
+   * Focus the editor (cursor at the end) as soon as it mounts. The editor is code-split, so a
+   * caller cannot reliably focus it from an effect — it may not exist yet. Defaults to `false`.
+   */
+  autoFocus?: boolean;
 }
 
 export interface RichTextViewerProps {

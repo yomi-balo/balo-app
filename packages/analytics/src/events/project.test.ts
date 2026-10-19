@@ -79,6 +79,21 @@ describe('PROJECT_EVENTS routing switch / expert unavailable (BAL-588)', () => {
   });
 });
 
+describe('PROJECT_EVENTS review blocked', () => {
+  it('maps to the feature-prefixed snake_case event name', () => {
+    expect(PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED).toBe('project_review_blocked');
+    expect(PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+  });
+
+  it('carries which check blocked and which path produced the draft', () => {
+    type Props = ProjectEventMap[typeof PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED];
+    expectTypeOf<Props['reason']>().toEqualTypeOf<
+      'title' | 'description_too_short' | 'description_too_long' | 'budget_range'
+    >();
+    expectTypeOf<Props['method']>().toEqualTypeOf<'manual' | 'ai'>();
+  });
+});
+
 describe('PROJECT_SERVER_EVENTS', () => {
   it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([
