@@ -62,6 +62,8 @@ describe('GettingStartedChecklist', () => {
     expect(screen.getByText('4/5')).toBeInTheDocument();
     expect(screen.getByText('Complete your profile')).toBeInTheDocument();
     expect(screen.getByText('Set up payouts')).toBeInTheDocument();
+    expect(screen.getByText('Add your payout details to get paid')).toBeInTheDocument();
+    expect(screen.queryByText(/Stripe/)).toBeNull();
   });
 
   it('renders the paused row as its own state: no strike-through, no Done, a Paused badge', () => {

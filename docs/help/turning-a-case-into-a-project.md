@@ -7,7 +7,7 @@ category:
 order: 3
 published: false
 updated: 2026-10-17
-related: [requesting-a-project, cases-index]
+related: [requesting-a-project, your-cases]
 ---
 
 If a case has grown into something bigger than its next consultation, you can turn it into a

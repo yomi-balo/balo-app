@@ -612,16 +612,14 @@ describe('engagement-case-closed-expert — the RECORD-only expert half (BAL-572
  * collapsed so a re-wrapped paragraph still matches.
  */
 function readCasesHelpDoc(): string {
-  const path = fileURLToPath(
-    new URL('../../../../../../docs/help/cases-index.md', import.meta.url)
-  );
+  const path = fileURLToPath(new URL('../../../../../../docs/help/your-cases.md', import.meta.url));
   if (!existsSync(path)) {
-    throw new Error(`Could not locate docs/help/cases-index.md at ${path}`);
+    throw new Error(`Could not locate docs/help/your-cases.md at ${path}`);
   }
   return readFileSync(path, 'utf8').replaceAll(/\s+/g, ' ');
 }
 
-describe('docs/help/cases-index.md', () => {
+describe('docs/help/your-cases.md', () => {
   it('states the auto-close rule the notices state', () => {
     const doc = readCasesHelpDoc();
     expect(doc).toContain('no consultations, bookings or messages');

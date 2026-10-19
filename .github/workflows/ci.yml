@@ -50,6 +50,9 @@ jobs:
       - name: Type Check
         run: pnpm typecheck
 
+      - name: Type Check (e2e)
+        run: pnpm typecheck:e2e
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest

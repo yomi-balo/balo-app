@@ -60,6 +60,12 @@ describe('useExpertAvailability', () => {
     await waitFor(() => expect(result.current.view).toEqual({ kind }));
   });
 
+  it('resolves to not_published without calling the public endpoint when skipFetch is set', async () => {
+    const { result } = renderHook(() => useExpertAvailability(EXPERT_ID, 14, 'new_work', true));
+    await waitFor(() => expect(result.current.view).toEqual({ kind: 'not_published' }));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   describe('scope (BAL-591)', () => {
     function requestedUrl(): URL {
       const [url] = fetchMock.mock.calls[0] ?? [];

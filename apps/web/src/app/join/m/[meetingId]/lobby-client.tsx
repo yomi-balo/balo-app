@@ -632,7 +632,7 @@ function LobbyIdentify({
         <motion.button
           type="submit"
           disabled={isSubmitting}
-          whileTap={reduceMotion ? undefined : { scale: 0.985 }}
+          whileTap={{ scale: reduceMotion ? 1 : 0.985 }}
           /* ⚠ `disabled:opacity-80`, NOT 60. On `bg-primary` a 60% wash drops the label under
              4.5:1 — at the exact moment the visitor is most anxious about whether the click
              registered. 80 stays legible while still reading as inert. */
@@ -684,7 +684,7 @@ function LobbyWaiting({
       <motion.button
         type="button"
         onClick={onLeave}
-        whileTap={reduceMotion ? undefined : { scale: 0.985 }}
+        whileTap={{ scale: reduceMotion ? 1 : 0.985 }}
         className="border-border text-foreground hover:bg-muted/60 focus-visible:ring-ring mt-4 inline-flex min-h-11 items-center justify-center rounded-lg border px-4 text-base font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none sm:text-[13.5px]"
       >
         Leave the queue

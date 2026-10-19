@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { log } from '@/lib/logging';
@@ -76,6 +78,7 @@ function enableSecret(): void {
 
 interface UserRowOverrides {
   id?: string;
+  email?: string;
   platformRole?: 'user' | 'admin' | 'super_admin';
   onboardingCompleted?: boolean;
   /** BAL-560 — the per-user override. NULL on every real fixture row. */
@@ -471,12 +474,153 @@ describe('POST /api/auth/test-login — persona seam (BAL-548)', () => {
     expect(fakeSession.user).toBeUndefined();
   });
 
+  describe('persona "help-client"', () => {
+    function arrangeDana(overrides: UserRowOverrides = {}): void {
+      enableSecret();
+      mockFindByEmail.mockResolvedValue(
+        userRow({ email: 'dana-help@balo.test', platformRole: 'user', ...overrides })
+      );
+      mockUpdate.mockResolvedValue(userRow({ platformRole: 'user', onboardingCompleted: true }));
+      mockFindWithCompany.mockResolvedValue({ companyMemberships: [membershipRow] });
+    }
+
+    it.each([true, false])(
+      'derives dana-help@balo.test when onboardingCompleted is %s',
+      async (onboardingCompleted) => {
+        arrangeDana();
+
+        const res = await POST(
+          makeRequest({ persona: 'help-client', onboardingCompleted }, TEST_SECRET)
+        );
+
+        expect(res.status).toBe(200);
+        expect(mockFindByEmail).toHaveBeenCalledWith('dana-help@balo.test');
+      }
+    );
+
+    it('looks up the same addresses the help seed constants name', async () => {
+      const constantsPath = path.resolve(
+        __dirname,
+        '../../../../../../../packages/db/src/help-seed/constants.ts'
+      );
+      const source = readFileSync(constantsPath, 'utf8');
+      const literal = (name: string): string => {
+        const match = new RegExp(`${name}\\s*=\\s*'([^']+)'`).exec(source);
+        if (match === null) throw new Error(`${name} not found in ${constantsPath}`);
+        return match[1] ?? '';
+      };
+
+      arrangeDana();
+      await POST(makeRequest({ persona: 'help-client', onboardingCompleted: true }, TEST_SECRET));
+      await POST(makeRequest({ persona: 'member', onboardingCompleted: true }, TEST_SECRET));
+
+      expect(mockFindByEmail.mock.calls.map(([email]) => email)).toEqual([
+        literal('HELP_CLIENT_EMAIL'),
+        literal('HELP_EXPERT_EMAIL'),
+      ]);
+    });
+
+    it('mints platformRole "user"', async () => {
+      arrangeDana();
+
+      await POST(makeRequest({ persona: 'help-client', onboardingCompleted: true }, TEST_SECRET));
+
+      expect(mintedRole()).toBe('user');
+    });
+
+    it('creates the row under the fixed address with the default E2E name when none exists', async () => {
+      enableSecret();
+      mockFindByEmail.mockResolvedValue(null);
+      mockCreateWithWorkspace.mockResolvedValue({
+        user: userRow({ email: 'dana-help@balo.test' }),
+        company: { id: 'company-1', name: 'Workspace' },
+        membership: { role: 'owner' },
+      });
+
+      const res = await POST(
+        makeRequest({ persona: 'help-client', onboardingCompleted: true }, TEST_SECRET)
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockCreateWithWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: 'dana-help@balo.test',
+          firstName: 'E2E',
+          lastName: 'Test',
+        })
+      );
+    });
+
+    it('refuses (400) with no mutation when the dana row is an admin', async () => {
+      arrangeDana({ platformRole: 'admin' });
+
+      const res = await POST(
+        makeRequest({ persona: 'help-client', onboardingCompleted: true }, TEST_SECRET)
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+
+    it('refuses (400) with no mutation when the dana row carries an override', async () => {
+      arrangeDana({ platformCapabilities: [] });
+
+      const res = await POST(
+        makeRequest({ persona: 'help-client', onboardingCompleted: true }, TEST_SECRET)
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+
+    it('takes the session workspace from the derivation, not the first membership', async () => {
+      arrangeDana();
+      const northwind = {
+        type: 'company' as const,
+        key: 'company:northwind',
+        companyId: 'northwind',
+        name: 'Northwind Industrial',
+        via: 'membership' as const,
+        isPersonal: false,
+      };
+      mockDeriveWorkspacesForUser.mockResolvedValue({
+        workspaces: [northwind],
+        activeWorkspace: northwind,
+        session: {
+          activeMode: 'client' as const,
+          companyId: 'northwind',
+          companyName: 'Northwind Industrial',
+          companyRole: 'owner' as const,
+        },
+      });
+
+      await POST(makeRequest({ persona: 'help-client', onboardingCompleted: true }, TEST_SECRET));
+
+      const user = fakeSession.user as { companyId?: string; companyName?: string };
+      expect(user.companyId).toBe('northwind');
+      expect(user.companyName).toBe('Northwind Industrial');
+    });
+
+    it('rejects a body that also names an email (.strict())', async () => {
+      enableSecret();
+
+      const res = await POST(
+        makeRequest({ persona: 'help-client', email: 'someone@real.com' }, TEST_SECRET)
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockFindByEmail).not.toHaveBeenCalled();
+    });
+  });
+
   it('the persona map is the entire mintable role space and contains no super_admin', () => {
-    // BAL-548 F4: enumerate the EXPORTED map, not the two personas this test already knows
-    // about — adding a third persona (e.g. `root: 'super_admin'`) to `TEST_PERSONAS` +
+    // BAL-548 F4: enumerate the EXPORTED map, not the personas this test already knows
+    // about — adding another persona (e.g. `root: 'super_admin'`) to `TEST_PERSONAS` +
     // `PERSONA_PLATFORM_ROLE` + the schema's `z.enum` fails this test even though nothing
     // above it changes, because it is reading the map's actual key/value set back.
-    expect(Object.keys(PERSONA_PLATFORM_ROLE).sort()).toEqual(['member', 'staff']);
+    expect(Object.keys(PERSONA_PLATFORM_ROLE).sort()).toEqual(['help-client', 'member', 'staff']);
     expect(new Set(Object.values(PERSONA_PLATFORM_ROLE))).toEqual(new Set(['user', 'admin']));
     expect(Object.values(PERSONA_PLATFORM_ROLE)).not.toContain('super_admin');
   });

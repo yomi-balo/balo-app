@@ -40,6 +40,11 @@ export interface AvailabilitySlotSelection {
 }
 
 export interface ExpertAvailabilityCalendarProps {
+  /**
+   * The caller (the expert's own settings) already knows the profile is not publicly visible:
+   * resolve straight to the `not_published` state without calling the public endpoint.
+   */
+  skipFetch?: boolean;
   /** `expert_profiles.id`. */
   expertProfileId: string;
   /** `'preview'` = read-only, non-interactive rows (D9). Default `'selectable'`. */
@@ -268,6 +273,7 @@ export function ExpertAvailabilityCalendar({
   pausedAction,
   scope,
   className,
+  skipFetch,
 }: Readonly<ExpertAvailabilityCalendarProps>): React.JSX.Element {
   const [resolvedTimezone, setResolvedTimezone] = useState<string | null>(
     viewerTimezone && isValidTimezone(viewerTimezone) ? viewerTimezone : null
@@ -300,7 +306,7 @@ export function ExpertAvailabilityCalendar({
   const [confirmed, setConfirmed] = useState(false);
   const [confirmedSummary, setConfirmedSummary] = useState<string | null>(null);
 
-  const { view, reload } = useExpertAvailability(expertProfileId, days, scope);
+  const { view, reload } = useExpertAvailability(expertProfileId, days, scope, skipFetch);
 
   const viewedTrackedRef = useRef(false);
   useEffect(() => {

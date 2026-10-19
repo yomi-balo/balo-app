@@ -7,7 +7,7 @@ category:
 order: 2
 published: false
 updated: 2026-10-17
-related: [booking-a-consultation]
+related: [buying-credit, booking-a-consultation]
 ---
 
 Have a Balo promo code? Redeeming it adds prepaid credit to your company — no card and no
@@ -33,12 +33,12 @@ redeemed, we'll let you know and nothing is added twice.
 
 ## When your promo balance runs out
 
-Your credit works as a warm stopping point: once the promo balance is used up, work pauses
-until you choose to keep going.
+Your calls never pause because the balance reaches zero. Time beyond your balance is charged to
+the card your company has on file, after the call. If there's no card on file, that amount is
+owed instead and your next top-up covers it.
 
-To continue, add a card from the redeem screen. **Nothing is charged when you add it** — we
-only use the card once your promo balance runs out, and only when you decide to continue.
-Until then, there's no charge and no commitment.
+Adding a card to your company charges nothing. A card on file is used for time beyond your balance,
+and for Auto top-up if you turn it on. See [Buying credit](/help/buying-credit) for how to top up.
 
 ## Questions?
 

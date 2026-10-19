@@ -210,7 +210,7 @@ export function PreJoin({
           type="button"
           onClick={onJoin}
           disabled={isJoining}
-          whileTap={reduceMotion ? undefined : { scale: 0.98 }}
+          whileTap={{ scale: reduceMotion ? 1 : 0.98 }}
           /* ⚠ `disabled:opacity-80`, NOT 60 — a 60% wash on `bg-primary` drops the label under
              4.5:1 at the exact moment the person is most anxious the click registered. */
           className={cn(

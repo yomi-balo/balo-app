@@ -8,7 +8,7 @@ category:
 order: 4
 published: false
 updated: 2026-10-17
-related: [cases-index]
+related: [your-cases]
 ---
 
 The Up next card on your dashboard lists up to four of your upcoming meetings, soonest

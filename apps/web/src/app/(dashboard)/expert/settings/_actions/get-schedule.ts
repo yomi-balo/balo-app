@@ -15,6 +15,8 @@ import type { ScheduleApiResponse, WorkInFlight } from '../_types/schedule';
 export interface ScheduleLoadResult extends ScheduleApiResponse {
   expertProfileId: string;
   workInFlight: WorkInFlight;
+  /** Whether the public availability endpoint would serve this profile (approved, searchable, live). */
+  publiclyVisible: boolean;
 }
 
 const NO_WORK_IN_FLIGHT: WorkInFlight = { upcomingConsultations: 0, activeProjects: 0 };
@@ -37,6 +39,24 @@ async function loadWorkInFlight(expertProfileId: string, userId: string): Promis
 }
 
 /**
+ * Whether the public availability endpoint would serve this profile. It only lets the preview
+ * skip a request that could not succeed, so a failed read falls back to `true` (fetch as before)
+ * rather than failing the schedule tab.
+ */
+async function loadPubliclyVisible(expertProfileId: string, userId: string): Promise<boolean> {
+  try {
+    return (await expertsRepository.findPublicVisibility(expertProfileId)) !== null;
+  } catch (err: unknown) {
+    log.warn('Failed to read public visibility; falling back to fetching the preview', {
+      userId,
+      expertProfileId,
+      error: errorMessage(err),
+    });
+    return true;
+  }
+}
+
+/**
  * Loads the signed-in expert's weekly schedule. Returns null when the schedule
  * can't be loaded (no expert profile or API error) — the caller renders the error
  * state. A loaded-but-unset schedule comes back with `rules: []`.
@@ -51,15 +71,16 @@ export const getScheduleAction = withAuth(async (session): Promise<ScheduleLoadR
     }
     const { expertProfileId } = gate;
 
-    const [schedule, workInFlight] = await Promise.all([
+    const [schedule, workInFlight, publiclyVisible] = await Promise.all([
       internalApiFetch<ScheduleApiResponse>(
         `/api/experts/${expertProfileId}/schedule`,
         {},
         'schedule-api'
       ),
       loadWorkInFlight(expertProfileId, session.user.id),
+      loadPubliclyVisible(expertProfileId, session.user.id),
     ]);
-    return { ...schedule, expertProfileId, workInFlight };
+    return { ...schedule, expertProfileId, workInFlight, publiclyVisible };
   } catch (err: unknown) {
     log.error('Failed to fetch expert schedule', {
       userId: session.user.id,

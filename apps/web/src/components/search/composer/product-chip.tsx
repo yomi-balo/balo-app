@@ -31,7 +31,7 @@ export function ProductChip({
       onClick={onToggle}
       aria-pressed={selected}
       aria-label={name}
-      whileTap={reduce ? undefined : { scale: 0.94 }}
+      whileTap={{ scale: reduce ? 1 : 0.94 }}
       transition={{ type: 'spring', stiffness: 600, damping: 30 }}
       className={cn(
         'focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-[10px] border px-3.5 py-2 text-[13.5px] whitespace-nowrap transition-colors focus-visible:ring-2 focus-visible:outline-none',

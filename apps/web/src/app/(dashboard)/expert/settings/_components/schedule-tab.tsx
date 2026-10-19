@@ -77,6 +77,7 @@ export function ScheduleTab(): React.JSX.Element {
   // the `ready` branch) re-renders once the id is known. The ref is KEPT: four `track(...)`
   // call sites read it synchronously inside callbacks and must not be disturbed.
   const [expertProfileId, setExpertProfileId] = useState<string | null>(null);
+  const [publiclyVisible, setPubliclyVisible] = useState(true);
   const [conflict, setConflict] = useState<ScheduleConflict | null>(null);
   // Target timezone awaiting confirmation (AC12): non-null while the reinterpret
   // warning dialog is open. Only reached when the expert has active saved rules.
@@ -114,6 +115,7 @@ export function ScheduleTab(): React.JSX.Element {
     }
     expertIdRef.current = data.expertProfileId;
     setExpertProfileId(data.expertProfileId);
+    setPubliclyVisible(data.publiclyVisible);
     setAvailableForWork(data.availableForWork);
     setWorkInFlight(data.workInFlight);
     persistedTimezoneRef.current = data.timezone;
@@ -379,9 +381,9 @@ export function ScheduleTab(): React.JSX.Element {
   return (
     <motion.div
       className="flex flex-col gap-7"
-      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
+      transition={reduceMotion ? { duration: 0 } : { duration: 0.3, ease: 'easeOut' }}
     >
       <SettingsPageHeader
         icon={Calendar}
@@ -563,6 +565,7 @@ export function ScheduleTab(): React.JSX.Element {
               viewerTimezone={persistedTimezone}
               daysAhead={14}
               viewerType="expert"
+              skipFetch={!publiclyVisible}
             />
           )}
         </SettingsCard>

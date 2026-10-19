@@ -20,10 +20,12 @@
     "test:integration:coverage": "pnpm --filter @balo/db test:integration:coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "typecheck:e2e": "tsc -p e2e/tsconfig.json",
     "help:screenshots": "playwright test --config e2e/help-screenshots/playwright.config.ts",
     "prepare": "husky"
   },
   "devDependencies": {
+    "@jsquash/oxipng": "2.3.0",
     "@playwright/test": "^1.58.0",
     "@repo/eslint-config": "workspace:*",
     "@types/node": "^22.15.3",

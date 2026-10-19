@@ -118,7 +118,7 @@ export function LobbyResumeClient({
 
   return (
     <motion.div
-      initial={isReduced ? false : { opacity: 0, y: 4 }}
+      initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: isReduced ? 0 : 0.18 }}
       className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-8 text-center shadow-sm"

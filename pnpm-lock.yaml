@@ -7,6 +7,9 @@ settings:
 importers:
   .:
     devDependencies:
+      '@jsquash/oxipng':
+        specifier: 2.3.0
+        version: 2.3.0
       '@playwright/test':
         specifier: ^1.58.0
         version: 1.58.0
@@ -2696,6 +2699,12 @@ packages:
     resolution:
       {
         integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==,
+      }
+
+  '@jsquash/oxipng@2.3.0':
+    resolution:
+      {
+        integrity: sha512-aQ8wiEp6ztlTMXc+RMt/CG8crU3mEHDU+h+JYkIi6ctMhlh8+Ltj5XwQFfBuyzKYrp8NxaFW80Dp824bqjr+zA==,
       }
 
   '@kwsites/file-exists@1.1.1':
@@ -13130,6 +13139,12 @@ packages:
       }
     engines: { node: '>=18' }
 
+  wasm-feature-detect@1.9.0:
+    resolution:
+      {
+        integrity: sha512-zonE+xlIIYtxPy++L24ow0hAD8CICb4+FgPyROd3buyXIqsJvUEDkBgfCCoXOd1Hu3DUr0GOfnPIdcGV+YpNaA==,
+      }
+
   watchpack@2.5.1:
     resolution:
       {
@@ -14746,6 +14761,10 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   '@js-sdsl/ordered-map@4.4.2': {}
+
+  '@jsquash/oxipng@2.3.0':
+    dependencies:
+      wasm-feature-detect: 1.9.0
 
   '@kwsites/file-exists@1.1.1':
     dependencies:
@@ -21797,6 +21816,8 @@ snapshots:
   w3c-xmlserializer@5.0.0:
     dependencies:
       xml-name-validator: 5.0.0
+
+  wasm-feature-detect@1.9.0: {}
 
   watchpack@2.5.1:
     dependencies:

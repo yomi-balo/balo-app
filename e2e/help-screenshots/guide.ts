@@ -1,18 +1,19 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Locator, Page } from '@playwright/test';
+import type { HelpFixtureState } from '../../packages/db/src/help-seed/constants';
 import { test } from '../fixtures/auth';
 import { captureSection } from './capture';
 import { paddedSection, type Box, type HelpScheme } from './ring';
 
-export type HelpPersona = 'expert' | 'visitor';
+export type HelpPersona = 'expert' | 'client' | 'visitor';
 
 export interface HelpSectionSpec {
   /** The guide's `##` ordinal. Equals the badge number and the `<nn>` in the filename. */
   section: number;
   as: HelpPersona;
   /** Fixture state, applied via `help:state` before navigation so tests stay order-independent. */
-  state: 'available' | 'paused';
+  state: HelpFixtureState;
   route: string | ((anchor: string) => string);
   setup?: (page: Page) => Promise<void>;
   target: (page: Page) => Locator;
@@ -31,6 +32,8 @@ export interface HelpSectionSpec {
 }
 
 const DOCS_DIR = path.resolve(__dirname, '../../docs/help');
+const IMAGE_REF = /!\[[^\]]*\]\((\d{2})\)/;
+const IMAGE_REF_GLOBAL = new RegExp(IMAGE_REF, 'g');
 const SCHEMES: readonly HelpScheme[] = ['light', 'dark'];
 
 /** Removes fenced code blocks (``` or ~~~) so a `##` or image ref inside one is ignored. */
@@ -45,25 +48,29 @@ function stripFences(markdown: string): string {
       } else {
         fence = marker;
       }
-    } else if (marker?.[0] === fence[0] && marker.length >= fence.length) {
+    } else if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length) {
       fence = undefined;
     }
   }
   return kept.join('\n');
 }
 
-/** The markdown body of each `##` section, in order. */
-function readSections(slug: string): string[] {
+/** The text before the first `##` and the markdown body of each `##` section, in order. */
+function readDoc(slug: string): { intro: string; sections: string[] } {
   const markdown = readFileSync(path.join(DOCS_DIR, `${slug}.md`), 'utf8');
-  return stripFences(markdown).split(/^## /m).slice(1);
+  const [intro = '', ...sections] = stripFences(markdown).split(/^## /m);
+  return { intro, sections };
 }
 
 function assertSpecMatchesDoc(slug: string, sections: readonly HelpSectionSpec[]): void {
-  const bodies = readSections(slug);
+  const { intro, sections: bodies } = readDoc(slug);
+  if (IMAGE_REF.test(intro)) {
+    throw new Error(`${slug}: image ref ](nn) appears before the first ## section`);
+  }
   const seen = new Set<number>();
   const specified = new Set(sections.map((spec) => paddedSection(spec.section)));
   bodies.forEach((body, index) => {
-    for (const [, ref] of body.matchAll(/!\[[^\]]*\]\((\d{2})\)/g)) {
+    for (const [, ref] of body.matchAll(IMAGE_REF_GLOBAL)) {
       if (ref === undefined) {
         continue;
       }
@@ -108,7 +115,14 @@ export function defineGuide(slug: string, sections: readonly HelpSectionSpec[]):
       if (scheme === undefined) {
         throw new Error(`Unknown help-screenshot project "${testInfo.project.name}"`);
       }
-      await captureSection({ page, seedSession, slug, spec, scheme });
+      await captureSection({
+        page,
+        seedSession,
+        slug,
+        spec,
+        scheme,
+        projectUse: testInfo.project.use,
+      });
     });
   }
 }

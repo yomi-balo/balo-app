@@ -67,6 +67,8 @@ const main = guide({
         alt: 'Slots shown',
         lightSrc: '/help/main/02-light.png',
         darkSrc: '/help/main/02-dark.png',
+        width: 1200,
+        height: 800,
       },
     },
   ],

@@ -19,10 +19,12 @@ vi.mock('@/lib/logging', () => ({
 
 const mockCountWorkInFlight = vi.fn();
 const mockFindApprovalById = vi.fn();
+const mockFindPublicVisibility = vi.fn();
 vi.mock('@balo/db', () => ({
   expertsRepository: {
     findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
     countWorkInFlight: (...args: unknown[]) => mockCountWorkInFlight(...args),
+    findPublicVisibility: (...args: unknown[]) => mockFindPublicVisibility(...args),
   },
 }));
 
@@ -67,6 +69,7 @@ describe('getScheduleAction', () => {
     vi.clearAllMocks();
     mockSessionObj = { ...EXPERT_SESSION };
     mockCountWorkInFlight.mockResolvedValue(WORK_IN_FLIGHT);
+    mockFindPublicVisibility.mockResolvedValue({ availableForWork: true });
     mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE_ROW);
   });
 
@@ -111,6 +114,7 @@ describe('getScheduleAction', () => {
       ...SCHEDULE,
       expertProfileId: 'profile-1',
       workInFlight: WORK_IN_FLIGHT,
+      publiclyVisible: true,
     });
     expect(mockCountWorkInFlight).toHaveBeenCalledWith('profile-1', expect.any(Date));
     expect(mockInternalApiFetch).toHaveBeenCalledWith(
@@ -118,6 +122,27 @@ describe('getScheduleAction', () => {
       {},
       'schedule-api'
     );
+  });
+
+  it('reports publiclyVisible false when the public visibility read finds nothing', async () => {
+    mockInternalApiFetch.mockResolvedValueOnce(SCHEDULE);
+    mockFindPublicVisibility.mockResolvedValueOnce(null);
+
+    const result = await getScheduleAction();
+
+    expect(mockFindPublicVisibility).toHaveBeenCalledWith('profile-1');
+    expect(result?.publiclyVisible).toBe(false);
+  });
+
+  it('falls back to publiclyVisible true and warns when the visibility read fails', async () => {
+    mockInternalApiFetch.mockResolvedValueOnce(SCHEDULE);
+    mockFindPublicVisibility.mockRejectedValueOnce(new Error('db down'));
+
+    const result = await getScheduleAction();
+
+    expect(result?.publiclyVisible).toBe(true);
+    expect(log.warn).toHaveBeenCalled();
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('returns the paused flag from the API', async () => {
@@ -138,6 +163,7 @@ describe('getScheduleAction', () => {
       ...SCHEDULE,
       expertProfileId: 'profile-1',
       workInFlight: { upcomingConsultations: 0, activeProjects: 0 },
+      publiclyVisible: true,
     });
     expect(log.warn).toHaveBeenCalled();
     expect(log.error).not.toHaveBeenCalled();
