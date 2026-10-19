@@ -1293,6 +1293,31 @@ describe('ProjectRequestPanel', () => {
       );
     }, 12000);
 
+    // Closing does not unmount the panel, so a reopen renders once with the pre-close `review`
+    // step before the open effect redirects — the event must not fire for that stale render.
+    it('⚠ a blocked review closed and reopened fires PROJECT_REVIEW_BLOCKED exactly once', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({
+        status: 'succeeded',
+        draft: { ...AI_DRAFT, descriptionHtml: `<p>${'x'.repeat(4001)}</p>` },
+      });
+
+      const user = userEvent.setup();
+      const { rerender } = renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      rerender(<ProjectRequestPanel open={false} onClose={vi.fn()} {...BASE_PROPS} />);
+      rerender(<ProjectRequestPanel open onClose={vi.fn()} {...BASE_PROPS} />);
+
+      const blocked = mockTrack.mock.calls.filter(
+        ([event]) => event === PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED
+      );
+      expect(blocked).toHaveLength(1);
+    }, 12000);
+
     it("the summary's own Edit link still opens the editor with focus on the title", async () => {
       mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
       mockGetBrief.mockResolvedValue({

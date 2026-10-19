@@ -245,6 +245,16 @@ type ReviewBlockReason =
   | 'description_too_long'
   | 'budget_range';
 
+/** The `manual` field that takes focus on arrival. */
+type EditFocusTarget = 'title' | 'description' | 'budget';
+
+/** Where the review blocker's "Edit brief" puts the cursor: the field the blocker is about. */
+function editFocusFor(reason: ReviewBlockReason | undefined): EditFocusTarget {
+  if (reason === 'description_too_short' || reason === 'description_too_long') return 'description';
+  if (reason === 'budget_range') return 'budget';
+  return 'title';
+}
+
 /** What is blocking submit on the review step: the analytics reason and the copy shown. */
 interface ReviewBlocker {
   readonly reason: ReviewBlockReason;
@@ -539,9 +549,9 @@ export function ProjectRequestPanel({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
-  // Set by the review blocker's "Edit brief" when the description is at fault, so the editor —
-  // not the title — takes focus on `manual`. Cleared on leaving `manual`.
-  const [focusDescriptionOnEdit, setFocusDescriptionOnEdit] = useState(false);
+  // Which field takes focus on `manual`. The review blocker's "Edit brief" points it at the field
+  // at fault; it falls back to the title on leaving `manual` and on every open.
+  const [editFocus, setEditFocus] = useState<EditFocusTarget>('title');
   // ⚠ UPLOAD STATE IS PER DRAFT REVISION. A new hero search's fresh start and its Undo replace the
   // draft wholesale (bumping `revision`) while an upload begun under the replaced draft may still
   // be in flight — `DocumentUploader` keeps publishing after it unmounts. Each update is tagged
@@ -597,6 +607,7 @@ export function ProjectRequestPanel({
   }, [projectTaxonomies]);
 
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const budgetMaxInputRef = useRef<HTMLInputElement>(null);
 
   const tagNameMap = useMemo(() => buildProductNameMap(taxonomies.tags), [taxonomies.tags]);
   const productNameMap = useMemo(
@@ -666,6 +677,7 @@ export function ProjectRequestPanel({
     setStep(openStep);
     setError(null);
     setShowValidation(false);
+    setEditFocus('title');
     resetOverride();
     if (initialRouting !== undefined && boundExpertProfileId !== undefined) {
       setField('routing', initialRouting);
@@ -790,13 +802,14 @@ export function ProjectRequestPanel({
   // dialog container instead.
   useEffect(() => {
     if (step !== 'manual') {
-      if (focusDescriptionOnEdit) setFocusDescriptionOnEdit(false);
+      if (editFocus !== 'title') setEditFocus('title');
       return;
     }
     // The description editor focuses itself on mount (`autoFocus`) — it is code-split, so an
     // effect here could run before it exists.
-    if (!focusDescriptionOnEdit) titleInputRef.current?.focus();
-  }, [step, revision, focusDescriptionOnEdit]);
+    if (editFocus === 'title') titleInputRef.current?.focus();
+    if (editFocus === 'budget') budgetMaxInputRef.current?.focus();
+  }, [step, revision, editFocus]);
 
   const handleClose = useCallback(() => onClose(), [onClose]);
 
@@ -1024,18 +1037,23 @@ export function ProjectRequestPanel({
   const draftSource = draft.source;
   useEffect(() => {
     if (!open || reviewBlockReason === undefined) return;
+    // Same stale-step guard as `step_viewed` (declared earlier, so it clears the ref first on the
+    // render that settles the step): closing does not unmount the panel, so on a reopen this
+    // render still holds the pre-close `review` until the open effect's `setStep` lands.
+    const pending = openingStepRef.current;
+    if (pending !== null && pending !== step) return;
     track(PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED, {
       ...projectFunnelDimensions(expertProfileId, entryPoint),
       reason: reviewBlockReason,
       method: draftSource,
     });
-  }, [open, reviewBlockReason, expertProfileId, entryPoint, draftSource]);
+  }, [open, step, reviewBlockReason, expertProfileId, entryPoint, draftSource]);
 
   // The blocker's own "Edit brief": unlike the summary's Edit link, it arrives on `manual` with
   // the inline errors already showing and the cursor in the field at fault.
   const handleFixReviewBlocker = useCallback(() => {
     setShowValidation(true);
-    setFocusDescriptionOnEdit(reviewBlockReason?.startsWith('description') === true);
+    setEditFocus(editFocusFor(reviewBlockReason));
     setStep('manual');
   }, [reviewBlockReason]);
 
@@ -1080,7 +1098,8 @@ export function ProjectRequestPanel({
       onDescriptionChange={(html) => setField('descriptionHtml', html)}
       descriptionPlaceholder={`Describe the problem or the outcome you're after — bullet points are fine. You can refine it ${descriptionRefinePerson}${DESCRIPTION_PLACEHOLDER_SUFFIX}`}
       descriptionError={descriptionError}
-      descriptionAutoFocus={focusDescriptionOnEdit}
+      descriptionAutoFocus={editFocus === 'description'}
+      budgetMaxInputRef={budgetMaxInputRef}
       taxonomies={taxonomies}
       tagIdSet={tagIdSet}
       tagNameMap={tagNameMap}
@@ -1710,6 +1729,8 @@ interface ManualStepFieldsProps {
   descriptionError: string | null;
   /** Focus the description editor on mount — set when the review blocker sent the user here. */
   descriptionAutoFocus: boolean;
+  /** The Max budget input — the review blocker's "Edit brief" focuses it for a budget error. */
+  budgetMaxInputRef: React.RefObject<HTMLInputElement | null>;
   taxonomies: ProjectRequestTaxonomies;
   tagIdSet: Set<string>;
   tagNameMap: Record<string, string>;
@@ -1766,6 +1787,7 @@ function ManualStepFields({
   descriptionPlaceholder,
   descriptionError,
   descriptionAutoFocus,
+  budgetMaxInputRef,
   taxonomies,
   tagIdSet,
   tagNameMap,
@@ -1970,6 +1992,7 @@ function ManualStepFields({
             aria-invalid={budgetRangeInvalid}
           />
           <InputFloating
+            ref={budgetMaxInputRef}
             label="Max budget (A$)"
             inputMode="numeric"
             value={budgetDollarsValue(budgetMaxCents)}
