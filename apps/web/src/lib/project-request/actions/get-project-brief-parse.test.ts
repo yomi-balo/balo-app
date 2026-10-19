@@ -114,7 +114,7 @@ describe('getProjectBriefParseAction', () => {
         unmatchedProductLabels: [],
       },
       failureReason: null,
-      promptVersion: 'v2',
+      promptVersion: 'v3',
       completedAt: new Date(),
       createdAt: new Date(),
     };
@@ -165,7 +165,7 @@ describe('getProjectBriefParseAction', () => {
     mockFindForOwner.mockResolvedValue(succeededRow('A description.'));
     const withVersion = await getProjectBriefParseAction({ parseId: PARSE_ID });
     if (withVersion.status !== 'succeeded') throw new Error('expected succeeded');
-    expect(withVersion.draft.promptVersion).toBe('v2');
+    expect(withVersion.draft.promptVersion).toBe('v3');
 
     mockFindForOwner.mockResolvedValue({ ...succeededRow('A description.'), promptVersion: null });
     const without = await getProjectBriefParseAction({ parseId: PARSE_ID });
@@ -260,7 +260,7 @@ describe('getProjectBriefParseAction', () => {
     expect(result.draft.descriptionHtml).toContain('Point 0');
     expect(log.warn).toHaveBeenCalledWith(
       'Project brief parse — description trimmed to the field limit',
-      expect.objectContaining({ parseId: PARSE_ID, limit: 4000, promptVersion: 'v2' })
+      expect.objectContaining({ parseId: PARSE_ID, limit: 4000, promptVersion: 'v3' })
     );
   });
 
@@ -270,7 +270,20 @@ describe('getProjectBriefParseAction', () => {
 
     await getProjectBriefParseAction({ parseId: PARSE_ID });
 
-    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalledWith(
+      'Project brief parse — description trimmed to the field limit',
+      expect.anything()
+    );
+  });
+
+  it('⚠ a description of which NOTHING fits is refused as invalid_output, not delivered empty', async () => {
+    // Only a heading, longer than the whole cap: no content line to keep or cut.
+    mockFindForOwner.mockResolvedValue(succeededRow(`## ${'x'.repeat(5000)}`));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(result).toEqual({ status: 'failed', failureReason: 'invalid_output' });
   });
 
   it('an invalid parseId shape resolves to not_found (never throws)', async () => {

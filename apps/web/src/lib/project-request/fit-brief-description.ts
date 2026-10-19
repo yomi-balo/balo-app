@@ -59,15 +59,53 @@ function cutLineToFit(head: readonly string[], line: string, limit: number): str
   return measure(candidate) <= limit ? candidate : null;
 }
 
+/** The first `count` lines, minus any trailing blank lines and headings, rendered. */
+function renderPrefix(lines: readonly string[], count: number): string | null {
+  const prefix = lines.slice(0, count);
+  dropDanglingTail(prefix);
+  return prefix.length === 0 ? null : toHtml(prefix.join('\n'));
+}
+
+/**
+ * The longest whole-line prefix of `lines` whose rendering fits `limit`, or `null` when not even
+ * the first content line does.
+ *
+ * Binary search, not a line-at-a-time walk: a one-word-per-line output (which a prompt injection
+ * in an uploaded document could produce) would otherwise cost a full convert + sanitise per line
+ * — around a thousand passes over up to 8 KB inside a Server Action. The search is exact because
+ * the converter renders every line independently (no fences, tables or multi-line inline
+ * markup), so the visible length never shrinks as more lines are kept. The answer is still
+ * re-measured, and the walk resumes downward from it should that ever stop holding.
+ */
+function longestFittingPrefix(lines: readonly string[], limit: number): string | null {
+  const fitting = (count: number): string | null => {
+    const html = renderPrefix(lines, count);
+    return html !== null && visibleLength(html) <= limit ? html : null;
+  };
+  let lo = 0;
+  let hi = lines.length - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fitting(mid) === null) hi = mid - 1;
+    else lo = mid;
+  }
+  for (let count = lo; count > 0; count -= 1) {
+    const html = fitting(count);
+    if (html !== null) return html;
+  }
+  return null;
+}
+
 /**
  * Fit a generated brief's markdown description to the form's visible-text cap, so a draft can
  * never prefill the review step already over the limit.
  *
  * The prompt asks for well under the cap; this is the guarantee for when the model overshoots.
- * Whole trailing lines (bullets, paragraph lines) are dropped until the rest fits, along with any
+ * The longest run of whole leading lines (bullets, paragraph lines) that fits is kept, minus any
  * heading left with nothing under it — the brief keeps its opening, which carries the problem and
  * the core scope. Only when no whole line fits (one long paragraph) is a line cut, at a word
- * boundary, with an ellipsis.
+ * boundary, with an ellipsis; if even that cannot fit, `html` is `''` and the caller must refuse
+ * the draft rather than deliver an empty description.
  *
  * Measured on the converted, sanitised HTML with the same `htmlToPlainText` the form validates
  * with, so "fits here" means "submittable there".
@@ -82,20 +120,14 @@ export function fitBriefDescription(
     return { html, originalTextLength, trimmed: false };
   }
 
-  const lines = markdown.split('\n');
-  while (lines.length > 0) {
-    lines.pop();
-    dropDanglingTail(lines);
-    if (lines.length === 0) break;
-    const candidate = toHtml(lines.join('\n'));
-    if (visibleLength(candidate) <= limit) {
-      return { html: candidate, originalTextLength, trimmed: true };
-    }
+  const all = markdown.split('\n');
+  const kept = longestFittingPrefix(all, limit);
+  if (kept !== null) {
+    return { html: kept, originalTextLength, trimmed: true };
   }
 
   // No whole line fits: the first content line is itself over the limit. Keep the headings
   // above it and cut that line.
-  const all = markdown.split('\n');
   const firstContent = all.findIndex(isContentLine);
   const head = firstContent > 0 ? all.slice(0, firstContent) : [];
   const cut = cutLineToFit(head, all[firstContent] ?? '', limit);

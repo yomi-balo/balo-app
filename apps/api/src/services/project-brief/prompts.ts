@@ -20,15 +20,18 @@ export const PROJECT_BRIEF_FROM_CASE_PROMPT_ID = 'project-brief.from-case' as co
 /**
  * The description's length budget, shared by both system prompts. The form rejects a description
  * over {@link MAX_PROJECT_DESCRIPTION_TEXT_LENGTH} visible characters, and an overshoot is trimmed
- * line by line before the client sees it — so the model is asked for well under the cap and told
- * to spend it on scope rather than restating the documents.
+ * from the END before the client sees it — so the model is asked for well under the cap, told to
+ * spend it on scope rather than restating the documents, and told to put deadlines, budget and
+ * hard constraints early, where a trim cannot reach them.
  */
 export const DESCRIPTION_LENGTH_CLAUSE =
   ` Keep the description to about ${BRIEF_DESCRIPTION_TARGET_TEXT_LENGTH.toLocaleString('en-US')} ` +
   `characters of visible text, and never more than ` +
   `${MAX_PROJECT_DESCRIPTION_TEXT_LENGTH.toLocaleString('en-US')} — formatting marks do not ` +
   'count, but every word does. Summarise; do not copy long passages. Prefer short bullet points ' +
-  'over long paragraphs, and keep only what an expert needs to understand and scope the work.';
+  'over long paragraphs, and keep only what an expert needs to understand and scope the work. ' +
+  'State any deadline, budget or other hard constraint early, in the opening lines, never only ' +
+  'at the end.';
 
 /**
  * Untrusted-content guard. Reuses the `services/transcript/llm/prompts.ts` precedent, adapted:

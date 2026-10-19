@@ -1,7 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { htmlToPlainText } from '@balo/shared/notifications';
 import { MAX_PROJECT_DESCRIPTION_TEXT_LENGTH } from '@balo/shared/project-requests';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
+
+// A pass-through spy, so the render count of the trim can be pinned.
+vi.mock('@/lib/sanitize/project-html', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/sanitize/project-html')>();
+  return { ...actual, sanitizeProjectHtml: vi.fn(actual.sanitizeProjectHtml) };
+});
 import { validateDescription } from '@/components/balo/rich-text/plain-text';
 import { markdownToProjectHtml } from './markdown-to-project-html';
 import { fitBriefDescription } from './fit-brief-description';
@@ -143,4 +149,16 @@ describe('fitBriefDescription', () => {
       expect(visible(fitBriefDescription(markdown).html)).toBeLessThanOrEqual(4000);
     }
   );
+
+  it('⚠ one word per line costs a logarithmic number of renders, not one per line', () => {
+    const markdown = Array.from({ length: 3000 }, (_, i) => `word${i}`).join('\n');
+    vi.mocked(sanitizeProjectHtml).mockClear();
+
+    const fitted = fitBriefDescription(markdown);
+
+    expect(visible(fitted.html)).toBeLessThanOrEqual(4000);
+    expect(visible(fitted.html)).toBeGreaterThan(3990);
+    // 1 full render + ~log2(3000) ≈ 12 search renders + 1 final.
+    expect(vi.mocked(sanitizeProjectHtml).mock.calls.length).toBeLessThan(20);
+  });
 });

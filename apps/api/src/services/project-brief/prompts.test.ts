@@ -31,6 +31,12 @@ describe('DESCRIPTION_LENGTH_CLAUSE', () => {
     expect(DESCRIPTION_LENGTH_CLAUSE).toContain('never more than 4,000');
   });
 
+  it('asks for deadlines, budget and hard constraints early — a trim removes the end', () => {
+    expect(DESCRIPTION_LENGTH_CLAUSE).toContain(
+      'State any deadline, budget or other hard constraint early, in the opening lines'
+    );
+  });
+
   it.each([
     [
       'documents',
