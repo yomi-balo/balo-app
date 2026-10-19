@@ -141,8 +141,7 @@ export function Hero({ taxonomy }: Readonly<HeroProps>): React.JSX.Element {
           </button>
         </form>
 
-        {/* O3 (build-rulings): no project-intake route exists — routes to /experts,
-            the precedented answer (`NEW_REQUEST_HREF` in the projects dashboard). */}
+        {/* O3 (build-rulings): no project-intake route exists — routes to /experts. */}
         <div className="mk2-alt">
           <Link className="mk2-btn mk2-btn-ghost" href="/experts" prefetch={false}>
             Submit a project brief

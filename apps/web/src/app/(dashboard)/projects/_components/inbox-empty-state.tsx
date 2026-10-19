@@ -1,15 +1,17 @@
 import Link from 'next/link';
-import { Briefcase, Coffee, Inbox, Plus, User } from 'lucide-react';
+import { Briefcase, Coffee, Inbox, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
+import { NewRequestButton } from '@/components/balo/project-request/new-request-button';
 import type { PortfolioLens } from '@/lib/projects-inbox/resolve-portfolio-lens';
-import { NEW_REQUEST_HREF, EXPERT_PROFILE_HREF } from './constants';
+import { EXPERT_PROFILE_HREF } from './constants';
 
 /**
  * Per-lens empty state — framed as an INVITATION centred on the next action
  * (balo-ui: "empty states are decisions, not absences"), never "No … yet". Pure
- * + server-safe. The client lens leads with raising a request; the expert lens
+ * apart from the client lens's CTA, which opens the project request panel in place
+ * (`NewRequestButton`). The client lens leads with raising a request; the expert lens
  * with completing the profile; the admin lens celebrates a clear queue.
  */
 
@@ -23,7 +25,8 @@ interface EmptyContent {
   iconTone: string;
   title: string;
   body: string;
-  cta?: { label: string; href: string; icon: typeof Plus; variant: 'gradient' | 'outline' };
+  /** `'panel'` opens the project request panel in place; a link CTA navigates. */
+  cta?: { kind: 'panel'; label: string } | { kind: 'link'; label: string; href: string };
 }
 
 const EMPTY_CONTENT: Record<PortfolioLens, EmptyContent> = {
@@ -33,12 +36,7 @@ const EMPTY_CONTENT: Record<PortfolioLens, EmptyContent> = {
     iconTone: 'text-primary',
     title: 'Start your first project',
     body: "Tell us what you're trying to get done in Salesforce. Balo matches you with vetted experts — you talk to them, compare proposals, and pick who you work with.",
-    cta: {
-      label: 'Raise a project request',
-      href: NEW_REQUEST_HREF,
-      icon: Plus,
-      variant: 'gradient',
-    },
+    cta: { kind: 'panel', label: 'Raise a project request' },
   },
   expert: {
     icon: Inbox,
@@ -46,12 +44,7 @@ const EMPTY_CONTENT: Record<PortfolioLens, EmptyContent> = {
     iconTone: 'text-violet-600 dark:text-violet-400',
     title: 'No project invitations yet',
     body: 'When Balo matches you to a client request, the invitation lands here. A complete profile gets you matched more often.',
-    cta: {
-      label: 'Review your expert profile',
-      href: EXPERT_PROFILE_HREF,
-      icon: User,
-      variant: 'outline',
-    },
+    cta: { kind: 'link', label: 'Review your expert profile', href: EXPERT_PROFILE_HREF },
   },
   admin: {
     icon: Coffee,
@@ -82,16 +75,20 @@ export function InboxEmptyState({ lens }: Readonly<InboxEmptyStateProps>): React
       </p>
       {content.cta && (
         <div className="mt-5">
-          <Button
-            asChild
-            className={content.cta.variant === 'gradient' ? PROPOSAL_CTA_GRADIENT_CLASS : undefined}
-            variant={content.cta.variant === 'gradient' ? 'default' : 'outline'}
-          >
-            <Link href={content.cta.href}>
-              <content.cta.icon className="h-4 w-4" aria-hidden="true" />
-              {content.cta.label}
-            </Link>
-          </Button>
+          {content.cta.kind === 'panel' ? (
+            <NewRequestButton
+              label={content.cta.label}
+              entryPoint="projects"
+              className={PROPOSAL_CTA_GRADIENT_CLASS}
+            />
+          ) : (
+            <Button asChild variant="outline">
+              <Link href={content.cta.href}>
+                <User className="h-4 w-4" aria-hidden="true" />
+                {content.cta.label}
+              </Link>
+            </Button>
+          )}
         </div>
       )}
     </div>

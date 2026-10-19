@@ -625,7 +625,6 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
     });
     const clientCta = mapEngagementToWorkspaceView(completed, ctxFor('client'), NOW).completedBanner
       ?.clientCta;
-    expect(clientCta?.nextProjectHref).toBe('/experts');
     expect(clientCta?.messageHref).toMatch(/^\/projects\//);
     expect(clientCta?.messagePersonLabel).toContain('Priya');
 
@@ -648,7 +647,6 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
     const clientCta = mapEngagementToWorkspaceView(retainer, ctxFor('client'), NOW).completedBanner
       ?.clientCta;
     expect(clientCta?.messageHref).toBeNull();
-    expect(clientCta?.nextProjectHref).toBe('/experts');
   });
 });
 

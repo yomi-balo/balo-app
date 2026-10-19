@@ -363,7 +363,6 @@ describe('EngagementWorkspace — the in-app rating card', () => {
             body: 'The project was accepted automatically.',
             readyToInvoice: false,
             clientCta: {
-              nextProjectHref: '/projects/new',
               messageHref: '/projects/req-1',
               messagePersonLabel: 'Priya Sharma',
             },

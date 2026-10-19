@@ -1,11 +1,9 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { motion } from 'motion/react';
-import { Briefcase, Check, ChevronDown, Clock, Plus, Zap } from 'lucide-react';
+import { Briefcase, Check, ChevronDown, Clock, Zap } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { track, PROJECTS_INBOX_EVENTS } from '@/lib/analytics';
 import type { ProjectsInboxFilter } from '@/lib/analytics';
@@ -18,7 +16,7 @@ import {
 import { StatTiles, type StatTileDescriptor } from './stat-tiles';
 import { HeroCard } from './hero-card';
 import { ListRow } from './list-row';
-import { NEW_REQUEST_HREF } from './constants';
+import { NewRequestButton } from '@/components/balo/project-request/new-request-button';
 
 /**
  * ParticipantDash — the client/expert dashboard body (the design's
@@ -138,12 +136,12 @@ export function ParticipantDash({ dto }: Readonly<ParticipantDashProps>): React.
               <Badge variant="secondary">{listRows.length}</Badge>
             </div>
             {dto.lens === 'client' && (
-              <Button asChild variant="outline" size="sm">
-                <Link href={NEW_REQUEST_HREF}>
-                  <Plus className="h-4 w-4" aria-hidden="true" />
-                  New request
-                </Link>
-              </Button>
+              <NewRequestButton
+                label="New request"
+                entryPoint="projects"
+                variant="outline"
+                size="sm"
+              />
             )}
           </div>
           <motion.div

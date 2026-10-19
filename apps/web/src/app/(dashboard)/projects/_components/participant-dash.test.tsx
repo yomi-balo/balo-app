@@ -5,6 +5,8 @@ import { track, PROJECTS_INBOX_EVENTS } from '@/lib/analytics';
 import type { PortfolioDTO, PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 import { ParticipantDash } from './participant-dash';
 
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+
 // Render motion elements as plain DOM so JSDOM doesn't choke on animations.
 vi.mock('motion/react', () => ({
   motion: new Proxy(
@@ -156,7 +158,8 @@ describe('ParticipantDash', () => {
 
   it('shows the New request button for the client lens', () => {
     render(<ParticipantDash dto={DTO} />);
-    expect(screen.getByRole('link', { name: /new request/i })).toHaveAttribute('href', '/experts');
+    expect(screen.getByRole('button', { name: /new request/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /new request/i })).not.toBeInTheDocument();
   });
 
   describe('BAL-540 — the closed group', () => {

@@ -1,16 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { render, screen } from '@/test/utils';
 import type { CompletedBannerView } from '@/lib/engagement/engagement-view';
 
 import { CompletedBanner } from './completed-banner';
 
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+
 const clientAccepted: CompletedBannerView = {
   title: 'Project completed',
   body: 'You accepted the project on 4 Jul 2026. Balo will be in touch about the final invoice.',
   readyToInvoice: false,
   clientCta: {
-    nextProjectHref: '/experts',
     messageHref: '/projects/req-1',
     messagePersonLabel: 'Priya Sharma',
   },
@@ -18,7 +19,7 @@ const clientAccepted: CompletedBannerView = {
 
 const clientRetainer: CompletedBannerView = {
   ...clientAccepted,
-  clientCta: { nextProjectHref: '/experts', messageHref: null, messagePersonLabel: 'Priya Sharma' },
+  clientCta: { messageHref: null, messagePersonLabel: 'Priya Sharma' },
 };
 
 const adminAuto: CompletedBannerView = {
@@ -50,12 +51,12 @@ describe('CompletedBanner', () => {
     expect(screen.queryByText(/Ready to invoice/)).not.toBeInTheDocument();
   });
 
-  it('renders the client next-step CTAs linking to the real destinations', () => {
+  it('renders the client next-step CTAs: a panel-opening button and the Message link', () => {
     render(<CompletedBanner banner={clientAccepted} engagementId="eng-1" />);
-    expect(screen.getByRole('link', { name: /Start your next project/i })).toHaveAttribute(
-      'href',
-      '/experts'
-    );
+    expect(screen.getByRole('button', { name: /Start your next project/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /Start your next project/i })
+    ).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Message Priya Sharma/i })).toHaveAttribute(
       'href',
       '/projects/req-1'
@@ -64,12 +65,15 @@ describe('CompletedBanner', () => {
 
   it('omits the Message CTA for a retainer (no source request)', () => {
     render(<CompletedBanner banner={clientRetainer} engagementId="eng-1" />);
-    expect(screen.getByRole('link', { name: /Start your next project/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Start your next project/i })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Message/i })).not.toBeInTheDocument();
   });
 
   it('renders no CTA row for the admin/expert lens (clientCta null)', () => {
     render(<CompletedBanner banner={adminAuto} engagementId="eng-1" />);
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Start your next project/i })
+    ).not.toBeInTheDocument();
   });
 });

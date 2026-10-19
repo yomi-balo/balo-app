@@ -87,6 +87,10 @@ export function useLogout(): () => void {
      * `use-recent-lookups.ts:29-35` documents the same limitation for every other draft key.
      */
     clearEntryPointDraft('home');
+    // The signed-in context-free mounts (`NewRequestButton`) — their draft keys are no more
+    // user-scoped than the home one.
+    clearEntryPointDraft('projects');
+    clearEntryPointDraft('engagement');
     forgetPendingHomeProject();
     // Defer reset so PostHog flushes the event with the user's identity
     setTimeout(() => analytics.reset(), 500);
