@@ -33,7 +33,3 @@ Experts can pause new work for a while. When they do, you'll see a note on their
 saying they aren't taking on new work right now. If they pause while you're writing, the note
 appears when you send. Either way, choose **Get matched instead** and we'll find someone with
 similar experience, keeping your brief as you wrote it.
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

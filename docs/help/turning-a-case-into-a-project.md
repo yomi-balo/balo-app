@@ -50,7 +50,3 @@ files count toward the same four-file limit as anything you upload directly.
 
 The request records the case it came from. You'll see "Linked to case" on the review step
 before you send it, and again on the confirmation screen once it's sent.
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

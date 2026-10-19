@@ -6,7 +6,7 @@ category:
   client: calls
   expert: calls-cases
 order: 2
-published: false
+published: true
 updated: 2026-10-18
 related: [booking-a-consultation, your-cases]
 ---
@@ -98,7 +98,3 @@ Clients then see **Consultation complete**, with "Your recap and receipt are on 
 get their own wrap-up page for the call.
 
 ![The Consultation complete page after a call, with the recap and receipt message highlighted.](07)
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

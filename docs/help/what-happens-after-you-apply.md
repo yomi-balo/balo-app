@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: getting-started
 order: 1
-published: false
+published: true
 updated: 2026-10-18
 related: [rate-and-payouts, connecting-your-calendar, weekly-schedule]
 ---
@@ -71,7 +71,3 @@ all move over time, so if yours change before then, we'd still like to hear abou
 at [support@getbalo.com](mailto:support@getbalo.com) and a person will pick it up.
 
 ![The apply page after a closed application, with the Start a new application button highlighted.](04)
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

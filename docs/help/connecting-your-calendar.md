@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: getting-booked
 order: 0
-published: false
+published: true
 updated: 2026-10-18
 related: [weekly-schedule, pausing-new-work]
 ---
@@ -74,7 +74,3 @@ Apple calendars can't be connected yet. Your weekly hours still work on their ow
 book you as normal.
 
 ![The foot of the Calendars card, with the line about reading event times highlighted.](06)
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: getting-paid
 order: 1
-published: false
+published: true
 updated: 2026-10-18
 related: [what-happens-after-you-apply, connecting-your-calendar]
 ---
@@ -45,7 +45,3 @@ your profile, phone, calendar and availability. Until all six are done, Settings
 not visible to clients yet. When they are, it says "You're appearing in search."
 
 ![The banner on Expert Settings saying you're appearing in search.](03)
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).
