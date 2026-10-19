@@ -10,10 +10,6 @@ import { formatWholeCurrency } from '@/lib/utils/currency';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import { pricingMethodLabel } from '@/components/balo/project-request/proposal/proposal-summary-cells';
-// The single-source "start a new project" front door (BAL-274). Currently expert
-// discovery; when BAL-253's generic match front door lands, that ONE constant repoints
-// and this completed-banner CTA follows with no change here.
-import { NEW_REQUEST_HREF } from '@/app/(dashboard)/projects/_components/constants';
 import {
   deriveEngagementParties,
   engagementHeaderLine,
@@ -193,15 +189,12 @@ export interface ChangeRequestBannerView {
 }
 
 /**
- * BAL-338 (D7) — the client's next-step CTAs on the completed banner. v1 ships only
- * affordances whose destinations already exist (new request → the discovery front
- * door; Message → the source request's conversation). The v2 marketplace hooks
- * (review-request, rehire shortcut) slot into this same row. Non-null ONLY on the
- * client lens.
+ * BAL-338 (D7) — the client's next-step CTAs on the completed banner: "Start your next
+ * project" (opens the context-free project request panel — no data needed here) and Message →
+ * the source request's conversation. The v2 marketplace hooks (review-request, rehire shortcut)
+ * slot into this same row. Non-null ONLY on the client lens.
  */
 export interface CompletedBannerClientCtaView {
-  /** "Start your next project" — the discovery/new-request front door. */
-  nextProjectHref: string;
   /** "Message {person}" — the source request's conversation; null for retainers (no request). */
   messageHref: string | null;
   /** Full person label for the Message CTA, e.g. "Priya Sharma". */
@@ -595,7 +588,6 @@ function deriveCompletedBanner(
         : `You accepted the project on ${acceptedAtLabel}. Balo will be in touch about the final invoice.`,
       readyToInvoice: false,
       clientCta: {
-        nextProjectHref: NEW_REQUEST_HREF,
         messageHref:
           engagement.projectRequest === null ? null : `/projects/${engagement.projectRequest.id}`,
         messagePersonLabel: parties.expertPerson,

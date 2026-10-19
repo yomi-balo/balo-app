@@ -152,5 +152,19 @@ export function narrowToProjectRequestCloseReason(
  *
  * `'case'` is the "Convert to project" mount on a case (BAL-589), bound to the case's expert;
  * its draft key is `balo:project-draft:case:{caseId}`, checked before the expert key.
+ *
+ * `'projects'` is the context-free Match-mode mount opened from the `/projects` portfolio inbox
+ * (empty-state CTA and "New request"); its draft key is `balo:project-draft:entry:projects`.
+ *
+ * `'engagement'` is the context-free Match-mode mount opened from a completed engagement's
+ * "Start your next project"; its draft key is `balo:project-draft:entry:engagement`.
  */
-export type ProjectRequestEntryPoint = 'profile' | 'search' | 'card' | 'direct' | 'home' | 'case';
+export type ProjectRequestEntryPoint =
+  | 'profile'
+  | 'search'
+  | 'card'
+  | 'direct'
+  | 'home'
+  | 'case'
+  | 'projects'
+  | 'engagement';

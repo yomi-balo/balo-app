@@ -90,6 +90,19 @@ describe('useLogout', () => {
     expect(hasPendingHomeProject()).toBe(false);
   });
 
+  it.each(['projects', 'engagement'])(
+    'clears the signed-in %s entry-point draft on sign-out',
+    (entryPoint) => {
+      const key = `balo:project-draft:entry:${entryPoint}`;
+      globalThis.localStorage.setItem(key, JSON.stringify({ title: 'Migrate us to Sales Cloud' }));
+
+      const { result } = renderHook(() => useLogout());
+      result.current();
+
+      expect(globalThis.localStorage.getItem(key)).toBeNull();
+    }
+  );
+
   it('BAL-582 §4 — the home draft/marker clear is synchronous, not on the deferred reset timer', () => {
     vi.useFakeTimers();
     globalThis.localStorage.setItem('balo:project-draft:entry:home', JSON.stringify({}));
