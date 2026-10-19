@@ -94,7 +94,9 @@ const RULES: readonly SingleCallerRule[] = [
   {
     symbol: 'markdownToProjectHtml',
     definedIn: 'apps/web/src/lib/project-request/markdown-to-project-html.ts',
-    allowedCallers: ['apps/web/src/lib/project-request/actions/get-project-brief-parse.ts'],
+    // The poll action reaches it through `fitBriefDescription`, which converts, sanitises and
+    // then holds the result to the form's visible-text cap — so the one caller is that module.
+    allowedCallers: ['apps/web/src/lib/project-request/fit-brief-description.ts'],
     why:
       'The converter is NOT a security boundary — it emits <a href> and <strong> from MODEL ' +
       'output and depends on sanitizeProjectHtml running after it. Before adding a caller, ' +

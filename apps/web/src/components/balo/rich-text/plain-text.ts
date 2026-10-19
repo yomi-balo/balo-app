@@ -1,4 +1,5 @@
 import { htmlToPlainText } from '@balo/shared/notifications';
+import { MAX_PROJECT_DESCRIPTION_TEXT_LENGTH } from '@balo/shared/project-requests';
 
 /**
  * Pure, client-safe helpers for validating rich-text HTML by its PLAIN-TEXT
@@ -15,8 +16,12 @@ import { htmlToPlainText } from '@balo/shared/notifications';
 
 /** Min plain-text length for a valid brief (design §2.3). */
 export const DESCRIPTION_MIN_TEXT = 10;
-/** Max plain-text length for a brief (design §2.3 — UX limit, separate from the server DoS bound). */
-export const DESCRIPTION_MAX_TEXT = 4000;
+/**
+ * Max plain-text length for a brief (design §2.3 — UX limit, separate from the server DoS bound).
+ * Defined in `@balo/shared/project-requests` so the AI brief prompt and the generated-draft fit
+ * read the same number.
+ */
+export const DESCRIPTION_MAX_TEXT = MAX_PROJECT_DESCRIPTION_TEXT_LENGTH;
 
 export { htmlToPlainText };
 

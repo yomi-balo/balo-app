@@ -27,6 +27,8 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 import { getProjectBriefParseAction } from './get-project-brief-parse';
+import { log } from '@/lib/logging';
+import { htmlToPlainText } from '@balo/shared/notifications';
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -240,6 +242,35 @@ describe('getProjectBriefParseAction', () => {
     const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
 
     expect(result.status).toBe('succeeded');
+  });
+
+  it('⚠ a description over the 4,000-character field limit is delivered TRIMMED to fit, and logged', async () => {
+    const bullets = Array.from(
+      { length: 80 },
+      (_, i) => `- **Point ${i}** — a requirement the client described in the documents.`
+    );
+    mockFindForOwner.mockResolvedValue(succeededRow(['## Scope', ...bullets].join('\n')));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(result.status).toBe('succeeded');
+    if (result.status !== 'succeeded') throw new Error('expected succeeded');
+    expect(htmlToPlainText(result.draft.descriptionHtml).length).toBeLessThanOrEqual(4000);
+    expect(result.draft.descriptionHtml).toContain('Point 0');
+    expect(log.warn).toHaveBeenCalledWith(
+      'Project brief parse — description trimmed to the field limit',
+      expect.objectContaining({ parseId: PARSE_ID, limit: 4000, promptVersion: 'v2' })
+    );
+  });
+
+  it('a description within the limit is delivered whole, with no trim warning', async () => {
+    mockFindForOwner.mockResolvedValue(succeededRow('A short brief.'));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('an invalid parseId shape resolves to not_found (never throws)', async () => {
