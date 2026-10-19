@@ -149,10 +149,12 @@ vi.mock('@/components/balo/rich-text-editor', async () => ({
     value,
     onChange,
     placeholder,
+    autoFocus,
   }: {
     value: string;
     onChange: (html: string) => void;
     placeholder?: string;
+    autoFocus?: boolean;
   }) => {
     // Show the plain text (strip the <p> wrapper) so char-by-char typing doesn't
     // re-wrap cumulatively; emit a single <p>…</p> HTML on change.
@@ -160,6 +162,7 @@ vi.mock('@/components/balo/rich-text-editor', async () => ({
     return (
       <textarea
         aria-label="Project description"
+        autoFocus={autoFocus}
         placeholder={placeholder}
         value={plain}
         onChange={(e) => onChange(e.target.value ? `<p>${e.target.value}</p>` : '')}
@@ -1254,11 +1257,21 @@ describe('ProjectRequestPanel', () => {
       await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
 
       expect(screen.getByRole('button', { name: 'Submit request' })).toBeDisabled();
-      expect(screen.getByText(/Keep your brief under 4000 characters\./)).toBeInTheDocument();
+      expect(screen.getByText(/Keep your brief under 4,000 characters\./)).toBeInTheDocument();
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED, {
+        expert_id: EXPERT_PROFILE_ID,
+        entry_point: 'profile',
+        reason: 'description_too_long',
+        method: 'ai',
+      });
 
       await user.click(screen.getByRole('button', { name: 'Edit brief' }));
 
+      // On `manual` with the inline error already showing, and the cursor in the description
+      // that is over the limit — not the title.
       expect(screen.getByLabelText(/project title/i)).toHaveValue('AI-drafted title');
+      expect(screen.getByText(/Keep your brief under 4,000 characters\./)).toBeInTheDocument();
+      expect(screen.getByLabelText('Project description')).toHaveFocus();
     }, 12000);
 
     it('a submittable AI draft shows no blocker', async () => {
@@ -1274,6 +1287,36 @@ describe('ProjectRequestPanel', () => {
 
       expect(screen.getByRole('button', { name: 'Submit request' })).toBeEnabled();
       expect(screen.queryByRole('button', { name: 'Edit brief' })).not.toBeInTheDocument();
+      expect(mockTrack).not.toHaveBeenCalledWith(
+        PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED,
+        expect.anything()
+      );
+    }, 12000);
+
+    it("the summary's own Edit link still opens the editor with focus on the title", async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({
+        status: 'succeeded',
+        draft: { ...AI_DRAFT, descriptionHtml: `<p>${'x'.repeat(4001)}</p>` },
+      });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      // Fix via the blocker, return to review, then use the summary's Edit link: the
+      // description-focus request must not leak into this second visit.
+      await user.click(screen.getByRole('button', { name: 'Edit brief' }));
+      expect(screen.getByLabelText('Project description')).toHaveFocus();
+      await user.clear(screen.getByLabelText('Project description'));
+      await user.type(screen.getByLabelText('Project description'), 'A short brief that fits.');
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+      await user.click(screen.getAllByRole('button', { name: /^edit$/i })[0] as HTMLElement);
+
+      expect(screen.getByLabelText(/project title/i)).toHaveFocus();
     }, 12000);
   });
 

@@ -391,6 +391,7 @@ export default function RichTextEditorImpl({
   className,
   variant = 'standard',
   collapseOnBlur = false,
+  autoFocus = false,
 }: Readonly<RichTextEditorProps>): React.JSX.Element {
   const features = useMemo(() => featuresFor(variant), [variant]);
   const reduceMotion = useReducedMotion();
@@ -403,6 +404,7 @@ export default function RichTextEditorImpl({
     // Avoid SSR hydration mismatch (we already gate with ssr:false, but Tiptap
     // recommends this explicitly).
     immediatelyRender: false,
+    autofocus: autoFocus ? 'end' : false,
     editorProps: {
       attributes: {
         'aria-label': ariaLabel,

@@ -22,6 +22,7 @@ import {
   RichTextViewer,
   validateDescription,
 } from '@/components/balo/rich-text-editor';
+import { DESCRIPTION_MAX_TEXT, plainTextLength } from '@/components/balo/rich-text/plain-text';
 import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
 import { DocumentUploader } from '@/components/balo/document-uploader';
 import { buildProductNameMap, EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
@@ -238,20 +239,46 @@ function titleErrorMessage(trimmedTitleLength: number): string {
     : 'Give your project a title (at least 3 characters).';
 }
 
+type ReviewBlockReason =
+  | 'title'
+  | 'description_too_short'
+  | 'description_too_long'
+  | 'budget_range';
+
+/** What is blocking submit on the review step: the analytics reason and the copy shown. */
+interface ReviewBlocker {
+  readonly reason: ReviewBlockReason;
+  readonly message: string;
+}
+
 /**
- * The first thing blocking submit on the review step, or `null` when the brief is submittable.
- * The review step has no inline field errors — an AI draft lands there directly — so without
- * this the submit button would be disabled with no reason given.
+ * The first thing blocking submit on the review step, or `null` when the brief is submittable
+ * (or a regenerate is still rewriting it). The review step has no inline field errors — an AI
+ * draft lands there directly — so without this the submit button would be disabled with no
+ * reason given.
  */
-function reviewBlockerMessage(input: {
+function reviewBlockerFor(input: {
   trimmedTitleLength: number;
   titleValid: boolean;
+  descriptionHtml: string;
   descriptionError: string | null;
   budgetRangeInvalid: boolean;
-}): string | null {
-  if (!input.titleValid) return titleErrorMessage(input.trimmedTitleLength);
-  if (input.descriptionError !== null) return input.descriptionError;
-  if (input.budgetRangeInvalid) return 'Max budget must be at least the minimum.';
+  generating: boolean;
+}): ReviewBlocker | null {
+  if (input.generating) return null;
+  if (!input.titleValid) {
+    return { reason: 'title', message: titleErrorMessage(input.trimmedTitleLength) };
+  }
+  if (input.descriptionError !== null) {
+    const tooLong = plainTextLength(input.descriptionHtml) > DESCRIPTION_MAX_TEXT;
+    return {
+      reason: tooLong ? 'description_too_long' : 'description_too_short',
+      message: input.descriptionError,
+    };
+  }
+  if (input.budgetRangeInvalid) {
+    return { reason: 'budget_range', message: 'Max budget must be at least the minimum.' };
+  }
   return null;
 }
 
@@ -455,8 +482,9 @@ function resolveStepper(
  * done` (the AI path renders as a disabled card only). Built on the shared
  * `Drawer` / `FlowStepper` flow primitives. Field set (BAL-259): routing
  * (Direct/Match) → title → rich-text brief → optional tags → optional products →
- * optional documents. Routing colours the heading, review summary, submit CTA,
- * and done screen. Autosaves to localStorage and submits via the
+ * optional documents. Routing colours the heading, review summary, the submit
+ * button's icon (Sparkles vs Send — its label is the neutral `SUBMIT_CTA`), and
+ * done screen. Autosaves to localStorage and submits via the
  * `submitProjectRequestAction` Server Action (discriminated union on `sendTo`).
  *
  * Two mount modes:
@@ -511,6 +539,9 @@ export function ProjectRequestPanel({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
+  // Set by the review blocker's "Edit brief" when the description is at fault, so the editor —
+  // not the title — takes focus on `manual`. Cleared on leaving `manual`.
+  const [focusDescriptionOnEdit, setFocusDescriptionOnEdit] = useState(false);
   // ⚠ UPLOAD STATE IS PER DRAFT REVISION. A new hero search's fresh start and its Undo replace the
   // draft wholesale (bumping `revision`) while an upload begun under the replaced draft may still
   // be in flight — `DocumentUploader` keeps publishing after it unmounts. Each update is tagged
@@ -758,8 +789,14 @@ export function ProjectRequestPanel({
   // to claim focus on that new element, and the focus Undo's own button held fell to the drawer's
   // dialog container instead.
   useEffect(() => {
-    if (step === 'manual') titleInputRef.current?.focus();
-  }, [step, revision]);
+    if (step !== 'manual') {
+      if (focusDescriptionOnEdit) setFocusDescriptionOnEdit(false);
+      return;
+    }
+    // The description editor focuses itself on mount (`autoFocus`) — it is code-split, so an
+    // effect here could run before it exists.
+    if (!focusDescriptionOnEdit) titleInputRef.current?.focus();
+  }, [step, revision, focusDescriptionOnEdit]);
 
   const handleClose = useCallback(() => onClose(), [onClose]);
 
@@ -975,6 +1012,33 @@ export function ProjectRequestPanel({
     onAuthRequired,
   ]);
 
+  const reviewBlocker = reviewBlockerFor({
+    trimmedTitleLength: trimmedTitle.length,
+    titleValid,
+    descriptionHtml,
+    descriptionError,
+    budgetRangeInvalid,
+    generating: draft.source === 'ai' && isGenerating,
+  });
+  const reviewBlockReason = step === 'review' ? reviewBlocker?.reason : undefined;
+  const draftSource = draft.source;
+  useEffect(() => {
+    if (!open || reviewBlockReason === undefined) return;
+    track(PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED, {
+      ...projectFunnelDimensions(expertProfileId, entryPoint),
+      reason: reviewBlockReason,
+      method: draftSource,
+    });
+  }, [open, reviewBlockReason, expertProfileId, entryPoint, draftSource]);
+
+  // The blocker's own "Edit brief": unlike the summary's Edit link, it arrives on `manual` with
+  // the inline errors already showing and the cursor in the field at fault.
+  const handleFixReviewBlocker = useCallback(() => {
+    setShowValidation(true);
+    setFocusDescriptionOnEdit(reviewBlockReason?.startsWith('description') === true);
+    setStep('manual');
+  }, [reviewBlockReason]);
+
   // ⚠ `isGenerating` (fix round F5). Submitting mid-REGENERATE reached `done`, and then the
   // still-running poll's success handler repopulated the just-cleared draft and pulled the user
   // back to `review` from the confirmation screen. The abandoned-flow guard in `useAiBriefFlow`
@@ -1016,6 +1080,7 @@ export function ProjectRequestPanel({
       onDescriptionChange={(html) => setField('descriptionHtml', html)}
       descriptionPlaceholder={`Describe the problem or the outcome you're after — bullet points are fine. You can refine it ${descriptionRefinePerson}${DESCRIPTION_PLACEHOLDER_SUFFIX}`}
       descriptionError={descriptionError}
+      descriptionAutoFocus={focusDescriptionOnEdit}
       taxonomies={taxonomies}
       tagIdSet={tagIdSet}
       tagNameMap={tagNameMap}
@@ -1138,12 +1203,8 @@ export function ProjectRequestPanel({
           isAiPath={isAiPath}
           onDismissRegenerateFailure={briefGeneration.dismissFailure}
           reviewReassurance={copy.reviewReassurance}
-          reviewBlocker={reviewBlockerMessage({
-            trimmedTitleLength: trimmedTitle.length,
-            titleValid,
-            descriptionError,
-            budgetRangeInvalid,
-          })}
+          reviewBlocker={reviewBlocker?.message ?? null}
+          onFixReviewBlocker={handleFixReviewBlocker}
           unavailableNotice={unavailableNoticeFor(
             directBlocked,
             expertFirstName,
@@ -1226,6 +1287,8 @@ interface ProjectRequestDrawerBodyProps {
   reviewReassurance: string;
   /** Why submit is disabled on the review step, or `null` when the brief is submittable. */
   reviewBlocker: string | null;
+  /** The blocker's "Edit brief": back to `manual` with validation showing. */
+  onFixReviewBlocker: () => void;
   /** Shown after the review summary when Direct is blocked (the expert isn't taking on new work). */
   unavailableNotice?: React.ReactNode;
   uploading: boolean;
@@ -1269,6 +1332,7 @@ function ProjectRequestDrawerBody({
   onDismissRegenerateFailure,
   reviewReassurance,
   reviewBlocker,
+  onFixReviewBlocker,
   unavailableNotice,
   uploading,
   error,
@@ -1342,12 +1406,12 @@ function ProjectRequestDrawerBody({
             skeleton={isAiPath && isGenerating}
             sourceCaseTitle={sourceCase?.title}
           />
-          {reviewBlocker !== null && !(isAiPath && isGenerating) && (
+          {reviewBlocker !== null && (
             <p role="alert" className="text-destructive text-sm">
               {reviewBlocker}{' '}
               <button
                 type="button"
-                onClick={onEditReview}
+                onClick={onFixReviewBlocker}
                 className="text-primary hover:text-primary/80 focus-visible:ring-ring rounded-sm font-semibold underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none"
               >
                 Edit brief
@@ -1644,6 +1708,8 @@ interface ManualStepFieldsProps {
   onDescriptionChange: (html: string) => void;
   descriptionPlaceholder: string;
   descriptionError: string | null;
+  /** Focus the description editor on mount — set when the review blocker sent the user here. */
+  descriptionAutoFocus: boolean;
   taxonomies: ProjectRequestTaxonomies;
   tagIdSet: Set<string>;
   tagNameMap: Record<string, string>;
@@ -1699,6 +1765,7 @@ function ManualStepFields({
   onDescriptionChange,
   descriptionPlaceholder,
   descriptionError,
+  descriptionAutoFocus,
   taxonomies,
   tagIdSet,
   tagNameMap,
@@ -1786,6 +1853,7 @@ function ManualStepFields({
           onDescriptionChange={onDescriptionChange}
           descriptionError={descriptionError}
           showValidation={showValidation}
+          autoFocus={descriptionAutoFocus}
         />
       ) : (
         <div className="space-y-2">
@@ -1794,6 +1862,7 @@ function ManualStepFields({
             value={descriptionHtml}
             onChange={onDescriptionChange}
             placeholder={descriptionPlaceholder}
+            autoFocus={descriptionAutoFocus}
           />
           {showValidation && descriptionError !== null && (
             <p role="alert" className="text-destructive text-xs">
@@ -1933,6 +2002,8 @@ interface CaseBriefFieldProps {
   onDescriptionChange: (html: string) => void;
   descriptionError: string | null;
   showValidation: boolean;
+  /** Focus the editor on mount — set when the review blocker sent the user here. */
+  autoFocus: boolean;
 }
 
 /**
@@ -2005,6 +2076,7 @@ function CaseBriefField({
   onDescriptionChange,
   descriptionError,
   showValidation,
+  autoFocus,
 }: Readonly<CaseBriefFieldProps>): React.JSX.Element {
   const {
     phase,
@@ -2060,6 +2132,7 @@ function CaseBriefField({
             value={descriptionHtml}
             onChange={onDescriptionChange}
             placeholder="Describe the problem or the outcome you're after — bullet points are fine."
+            autoFocus={autoFocus}
           />
           {showValidation && descriptionError !== null && (
             <p role="alert" className="text-destructive text-xs">

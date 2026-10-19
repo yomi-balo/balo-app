@@ -108,6 +108,10 @@ export const PROJECT_EVENTS = {
   // projects" notice first renders for an expert-bound mount.
   PROJECT_ROUTING_SWITCHED: 'project_routing_switched',
   PROJECT_EXPERT_UNAVAILABLE_SHOWN: 'project_expert_unavailable_shown',
+  // The review step shows why Submit is disabled. Reachable mainly from the AI path, which lands
+  // on review without passing the manual step's gate — so this measures how often a generated
+  // draft arrives unsubmittable (e.g. a description over the 4,000-character cap).
+  PROJECT_REVIEW_BLOCKED: 'project_review_blocked',
 } as const;
 
 /**
@@ -415,6 +419,13 @@ export interface ProjectEventMap {
     expert_id: string;
     entry_point: ProjectRequestEntryPoint;
     trigger: 'profile_data' | 'submit_rejected';
+  };
+  // Fires once per arrival on review with a blocker, and again only if the blocker changes.
+  [PROJECT_EVENTS.PROJECT_REVIEW_BLOCKED]: {
+    expert_id?: string;
+    entry_point: ProjectRequestEntryPoint;
+    reason: 'title' | 'description_too_short' | 'description_too_long' | 'budget_range';
+    method: 'manual' | 'ai';
   };
 }
 
