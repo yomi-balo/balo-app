@@ -74,22 +74,30 @@ function renderPrefix(lines: readonly string[], count: number): string | null {
  * in an uploaded document could produce) would otherwise cost a full convert + sanitise per line
  * — around a thousand passes over up to 8 KB inside a Server Action. The search is exact because
  * the converter renders every line independently (no fences, tables or multi-line inline
- * markup), so the visible length never shrinks as more lines are kept. The answer is still
- * re-measured, and the walk resumes downward from it should that ever stop holding.
+ * markup), so the visible length never shrinks as more lines are kept.
+ *
+ * ⚠ THE SEARCH STARTS AFTER THE LEADING HEADINGS AND BLANKS. A prefix with no content line renders
+ * to nothing (`null`), which reads as "doesn't fit" although nothing overflowed — false, then
+ * true, then false, which a binary search cannot handle. Every case brief opens with
+ * `## Problem`, so this is the common shape, not an edge. Past those lines the check is monotone;
+ * the answer is still re-measured, and the walk resumes downward from it should that ever stop
+ * holding.
  */
 function longestFittingPrefix(lines: readonly string[], limit: number): string | null {
   const fitting = (count: number): string | null => {
     const html = renderPrefix(lines, count);
     return html !== null && visibleLength(html) <= limit ? html : null;
   };
-  let lo = 0;
+  const leading = lines.findIndex(isContentLine);
+  if (leading === -1) return null;
+  let lo = leading;
   let hi = lines.length - 1;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
     if (fitting(mid) === null) hi = mid - 1;
     else lo = mid;
   }
-  for (let count = lo; count > 0; count -= 1) {
+  for (let count = lo; count > leading; count -= 1) {
     const html = fitting(count);
     if (html !== null) return html;
   }

@@ -161,4 +161,31 @@ describe('fitBriefDescription', () => {
     // 1 full render + ~log2(3000) ≈ 12 search renders + 1 final.
     expect(vi.mocked(sanitizeProjectHtml).mock.calls.length).toBeLessThan(20);
   });
+
+  it.each([1, 2, 3])(
+    '⚠ a brief OPENING WITH A HEADING keeps a paragraph that fits whole — no ellipsis (%i bullets)',
+    (bullets) => {
+      // Every case brief opens with `## Problem`. A heading-only prefix renders to nothing, so a
+      // search starting at 0 could land there, give up, and cut a paragraph that fits whole.
+      const paragraph = Array.from({ length: 788 }, (_, i) => `w${i % 10}x${i % 7}`).join(' ');
+      const markdown = [
+        '## Overview',
+        paragraph,
+        ...Array.from(
+          { length: bullets },
+          (_, i) =>
+            `- bullet ${i}: ${'a requirement long enough that this one bullet overflows the cap '.repeat(2)}`
+        ),
+      ].join('\n');
+      expect(visible(markdownToProjectHtml(`## Overview\n${paragraph}`))).toBeLessThanOrEqual(4000);
+      expect(visible(markdownToProjectHtml(markdown))).toBeGreaterThan(4000);
+
+      const fitted = fitBriefDescription(markdown);
+
+      expect(fitted.html).not.toContain('…');
+      expect(fitted.html).toBe(
+        sanitizeProjectHtml(markdownToProjectHtml(`## Overview\n${paragraph}`))
+      );
+    }
+  );
 });

@@ -83,10 +83,12 @@ export const getProjectBriefParseAction = withAuth(
       // step with a brief the client cannot submit until they cut it themselves.
       const description = fitBriefDescription(state.result.descriptionMarkdown);
       const descriptionHtml = description.html;
-      // Nothing fit at all (a single heading or word longer than the cap). An empty description
-      // would "succeed" into the form's "Add a few words" error; the failure banner, with Try
-      // again and Write it myself, is the honest outcome.
-      if (descriptionHtml === '') {
+      // The TRIM left nothing (a heading longer than the cap). An empty description would
+      // "succeed" into the form's "Add a few words" error; the failure banner, with Try again and
+      // Write it myself, is the honest outcome. Keyed on `trimmed`: a description that was
+      // simply empty to begin with is not a length failure, and still delivers the title and
+      // tags for the client to write the description themselves.
+      if (description.trimmed && descriptionHtml === '') {
         log.error('Project brief parse — no part of the description fits the field limit', {
           userId: session.user.id,
           parseId: row.id,

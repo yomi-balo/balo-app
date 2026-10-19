@@ -286,6 +286,22 @@ describe('getProjectBriefParseAction', () => {
     expect(result).toEqual({ status: 'failed', failureReason: 'invalid_output' });
   });
 
+  it('an EMPTY description is not a length failure — the draft is delivered for the client to finish', async () => {
+    mockFindForOwner.mockResolvedValue(succeededRow(''));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(result.status).toBe('succeeded');
+    if (result.status !== 'succeeded') throw new Error('expected succeeded');
+    expect(result.draft.descriptionHtml).toBe('');
+    expect(result.draft.title).toBe('A title');
+    expect(log.error).not.toHaveBeenCalledWith(
+      'Project brief parse — no part of the description fits the field limit',
+      expect.anything()
+    );
+  });
+
   it('an invalid parseId shape resolves to not_found (never throws)', async () => {
     const result = await getProjectBriefParseAction({ parseId: 'not-a-uuid' });
     expect(result).toEqual({ status: 'failed', failureReason: 'not_found' });
