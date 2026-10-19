@@ -33,6 +33,7 @@ import {
 import { projectBriefNoopResult, projectBriefCaseNoopResult } from './noop-fallback.js';
 import { loadCaseSource } from './case-source.js';
 import { ProjectBriefParseError } from './errors.js';
+import { decodeHtmlEntities } from './decode-entities.js';
 
 const log = createLogger('project-brief-parse');
 
@@ -396,8 +397,11 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
     noopFallback: source.noopFallback,
   });
 
+  const title = decodeHtmlEntities(value.title);
+  const descriptionMarkdown = decodeHtmlEntities(value.descriptionMarkdown);
+
   // ── Usable-output floor ──────────────────────────────────────────────────────────────────
-  if (value.title.trim().length < 3 || value.descriptionMarkdown.trim().length === 0) {
+  if (title.trim().length < 3 || descriptionMarkdown.trim().length === 0) {
     throw new ProjectBriefParseError('empty_extraction', 'Model output below the usable floor');
   }
 
@@ -441,8 +445,8 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
   await projectBriefParsesRepository.markSucceeded({
     parseId,
     result: {
-      title: value.title,
-      descriptionMarkdown: value.descriptionMarkdown,
+      title,
+      descriptionMarkdown,
       tagIds: tagMapping.ids,
       productIds,
       unmatchedTagLabels,

@@ -446,6 +446,45 @@ describe('runProjectBriefParse', () => {
     );
   });
 
+  it('persists HTML entities the model wrote into the title and description as characters', async () => {
+    findById.mockResolvedValue(baseRow());
+    const ai = fakeAi(
+      vi.fn().mockResolvedValue({
+        value: {
+          ...validModelOutput,
+          title: 'CRM &amp; Marketing Automation',
+          descriptionMarkdown: 'Sales &amp; service teams',
+        },
+        audit: { modelId: 'claude-opus-5', modelVersion: null, promptId: 'p', promptVersion: 'v1' },
+        usage: { inputTokens: 10, outputTokens: 5 },
+      })
+    );
+    await runProjectBriefParse(PARSE_ID, { ai });
+
+    expect(markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: expect.objectContaining({
+          title: 'CRM & Marketing Automation',
+          descriptionMarkdown: 'Sales & service teams',
+        }),
+      })
+    );
+  });
+
+  it('applies the usable-output floor to the decoded title', async () => {
+    findById.mockResolvedValue(baseRow());
+    const ai = fakeAi(
+      vi.fn().mockResolvedValue({
+        value: { ...validModelOutput, title: '&amp;&amp;' },
+        audit: { modelId: 'claude-opus-5', modelVersion: null, promptId: 'p', promptVersion: 'v1' },
+        usage: { inputTokens: 10, outputTokens: 5 },
+      })
+    );
+    await expect(runProjectBriefParse(PARSE_ID, { ai })).rejects.toMatchObject({
+      reason: 'empty_extraction',
+    });
+  });
+
   // ── BAL-592 — deterministic product resolution ────────────────────────────────────────────
   describe('product alias resolution', () => {
     const product = (
