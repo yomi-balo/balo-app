@@ -263,10 +263,13 @@ describe('CompanyStep', () => {
 
       await screen.findByRole('heading', { name: /join northwind\?/i });
       expect(screen.getByText(/42 teammates already on balo/i)).toBeInTheDocument();
-      expect(track).toHaveBeenCalledWith(DOMAIN_JOIN_EVENTS.INTERSTITIAL_VIEWED, {
-        mode: 'auto',
-        party_type: 'company',
-      });
+      // Fired from an effect, which can flush after the heading is already in the DOM.
+      await waitFor(() =>
+        expect(track).toHaveBeenCalledWith(DOMAIN_JOIN_EVENTS.INTERSTITIAL_VIEWED, {
+          mode: 'auto',
+          party_type: 'company',
+        })
+      );
     });
 
     it('auto-joins on the primary action and fires the completion analytics', async () => {
