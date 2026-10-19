@@ -224,6 +224,37 @@ const EMPTY_TAXONOMIES: ProjectRequestTaxonomies = {
   products: EMPTY_TAXONOMY,
 };
 
+/**
+ * The review step's submit button. Deliberately routing-neutral: the send-to choice and the
+ * review summary already say who receives the request, and a routing-specific label ("Find me
+ * an expert") reads wrong once the client has picked an expert.
+ */
+const SUBMIT_CTA = 'Submit request';
+
+/** The title field's error, shared by the edit step's inline message and the review blocker. */
+function titleErrorMessage(trimmedTitleLength: number): string {
+  return trimmedTitleLength > 120
+    ? 'Keep your title under 120 characters.'
+    : 'Give your project a title (at least 3 characters).';
+}
+
+/**
+ * The first thing blocking submit on the review step, or `null` when the brief is submittable.
+ * The review step has no inline field errors — an AI draft lands there directly — so without
+ * this the submit button would be disabled with no reason given.
+ */
+function reviewBlockerMessage(input: {
+  trimmedTitleLength: number;
+  titleValid: boolean;
+  descriptionError: string | null;
+  budgetRangeInvalid: boolean;
+}): string | null {
+  if (!input.titleValid) return titleErrorMessage(input.trimmedTitleLength);
+  if (input.descriptionError !== null) return input.descriptionError;
+  if (input.budgetRangeInvalid) return 'Max budget must be at least the minimum.';
+  return null;
+}
+
 /** Routing-aware copy — keyed off `draft.routing` to drive the whole flow. */
 interface RoutingCopy {
   /**
@@ -235,7 +266,6 @@ interface RoutingCopy {
   formDescription: string;
   /** The hint under the optional budget fields. */
   budgetHint: string;
-  submitCta: string;
   successDescription: string;
   doneHeading: string;
   doneBody: string;
@@ -247,7 +277,6 @@ const MATCH_COPY: RoutingCopy = {
   formDescription:
     'Our team reviews your brief and introduces a matched expert, usually within a day.',
   budgetHint: 'Helps your expert scope and price the work.',
-  submitCta: 'Find me an expert',
   successDescription: "We'll introduce a matched expert soon.",
   doneHeading: "Request sent — we're finding your expert",
   doneBody:
@@ -267,7 +296,6 @@ function getRoutingCopy(routing: ProjectRouting, firstName: string | undefined):
       manualHeading: null,
       formDescription: `${firstName} will review your brief and reply with a proposal.`,
       budgetHint: `Helps ${firstName} scope and price the work.`,
-      submitCta: `Send to ${firstName}`,
       successDescription: `${firstName} will reply with a proposal.`,
       doneHeading: `Request sent to ${firstName}`,
       doneBody: `${firstName} will review your brief and reply with a scoped proposal, usually within a day. We'll email you and notify you in-app.`,
@@ -1110,6 +1138,12 @@ export function ProjectRequestPanel({
           isAiPath={isAiPath}
           onDismissRegenerateFailure={briefGeneration.dismissFailure}
           reviewReassurance={copy.reviewReassurance}
+          reviewBlocker={reviewBlockerMessage({
+            trimmedTitleLength: trimmedTitle.length,
+            titleValid,
+            descriptionError,
+            budgetRangeInvalid,
+          })}
           unavailableNotice={unavailableNoticeFor(
             directBlocked,
             expertFirstName,
@@ -1137,7 +1171,7 @@ export function ProjectRequestPanel({
           submitDisabled={submitDisabled}
           submitButtonRef={submitButtonRef}
           routing={routing}
-          submitCta={copy.submitCta}
+          submitCta={SUBMIT_CTA}
           onDone={handleClose}
           isCaseMount={isCaseMount}
           caseBriefWorking={caseBriefWorking}
@@ -1190,6 +1224,8 @@ interface ProjectRequestDrawerBodyProps {
   isAiPath: boolean;
   onDismissRegenerateFailure: () => void;
   reviewReassurance: string;
+  /** Why submit is disabled on the review step, or `null` when the brief is submittable. */
+  reviewBlocker: string | null;
   /** Shown after the review summary when Direct is blocked (the expert isn't taking on new work). */
   unavailableNotice?: React.ReactNode;
   uploading: boolean;
@@ -1232,6 +1268,7 @@ function ProjectRequestDrawerBody({
   isAiPath,
   onDismissRegenerateFailure,
   reviewReassurance,
+  reviewBlocker,
   unavailableNotice,
   uploading,
   error,
@@ -1305,6 +1342,18 @@ function ProjectRequestDrawerBody({
             skeleton={isAiPath && isGenerating}
             sourceCaseTitle={sourceCase?.title}
           />
+          {reviewBlocker !== null && !(isAiPath && isGenerating) && (
+            <p role="alert" className="text-destructive text-sm">
+              {reviewBlocker}{' '}
+              <button
+                type="button"
+                onClick={onEditReview}
+                className="text-primary hover:text-primary/80 focus-visible:ring-ring rounded-sm font-semibold underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none"
+              >
+                Edit brief
+              </button>
+            </p>
+          )}
           {unavailableNotice}
           {isAiPath && isUploadFailed && (
             <GenerationErrorBanner
@@ -1724,9 +1773,7 @@ function ManualStepFields({
         />
         {showValidation && !titleValid && (
           <p role="alert" className="text-destructive text-xs">
-            {trimmedTitle.length > 120
-              ? 'Keep your title under 120 characters.'
-              : 'Give your project a title (at least 3 characters).'}
+            {titleErrorMessage(trimmedTitle.length)}
           </p>
         )}
       </div>
