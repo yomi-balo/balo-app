@@ -99,7 +99,7 @@ function CompactRequestContext({ view }: Readonly<{ view: RequestDetailView }>):
       {/* Card 3 — Documents (fully visible, never behind a scroll). */}
       <RequestCard className="p-4">
         <SectionLabel icon={Paperclip}>Request documents</SectionLabel>
-        <DocumentList documents={view.documents} compact />
+        <DocumentList requestId={view.id} documents={view.documents} compact />
       </RequestCard>
     </div>
   );
@@ -160,7 +160,7 @@ function FullRequestContext({ view }: Readonly<{ view: RequestDetailView }>): Re
 
       <div className="mt-5">
         <SectionLabel icon={Paperclip}>Attached documents</SectionLabel>
-        <DocumentList documents={view.documents} />
+        <DocumentList requestId={view.id} documents={view.documents} />
       </div>
     </RequestCard>
   );

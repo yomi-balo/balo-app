@@ -324,6 +324,34 @@ export const projectRequestsRepository = {
   },
 
   /**
+   * One live brief document by id, CONTAINED in the given request — a document on another
+   * request, a soft-deleted one, or an unknown id all resolve `undefined` identically, so a
+   * probe learns nothing. Carries `r2Key`, which the detail page's render graph
+   * (`findByIdWithRelations`) deliberately does not.
+   */
+  async findDocumentInRequest(
+    documentId: string,
+    projectRequestId: string
+  ): Promise<{ id: string; r2Key: string; fileName: string } | undefined> {
+    const [row] = await db
+      .select({
+        id: projectRequestDocuments.id,
+        r2Key: projectRequestDocuments.r2Key,
+        fileName: projectRequestDocuments.fileName,
+      })
+      .from(projectRequestDocuments)
+      .where(
+        and(
+          eq(projectRequestDocuments.id, documentId),
+          eq(projectRequestDocuments.projectRequestId, projectRequestId),
+          isNull(projectRequestDocuments.deletedAt)
+        )
+      )
+      .limit(1);
+    return row;
+  },
+
+  /**
    * Live request by id, hydrated with the relations the detail page needs:
    * company, creator, project-type tags, products, brief documents, and the
    * per-expert relationships (each with its expert's user identity). Returns
