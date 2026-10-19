@@ -7,6 +7,7 @@ import {
   PROJECT_BRIEF_FROM_CASE_PROMPT_ID,
   PROMPT_VERSION,
   TAXONOMY_GROUNDING_CLAUSE,
+  DESCRIPTION_LENGTH_CLAUSE,
 } from './prompts.js';
 import {
   MAX_BRIEF_TITLE_LENGTH,
@@ -23,6 +24,37 @@ const validOutput = {
   unmatchedTagLabels: [],
   unmatchedProductLabels: [],
 };
+
+describe('DESCRIPTION_LENGTH_CLAUSE', () => {
+  it('asks for about 3,000 visible characters and never more than the 4,000 the form accepts', () => {
+    expect(DESCRIPTION_LENGTH_CLAUSE).toContain('about 3,000 characters of visible text');
+    expect(DESCRIPTION_LENGTH_CLAUSE).toContain('never more than 4,000');
+  });
+
+  it('asks for deadlines, budget and hard constraints early — a trim removes the end', () => {
+    expect(DESCRIPTION_LENGTH_CLAUSE).toContain(
+      'State any deadline, budget or other hard constraint early, in the opening lines'
+    );
+  });
+
+  it.each([
+    [
+      'documents',
+      briefParsePrompt({ tagChoices: [], productChoices: [], fileNames: ['rfp.pdf'] }).system,
+    ],
+    [
+      'case',
+      briefFromCasePrompt({
+        tagChoices: [],
+        productChoices: [],
+        caseTitle: 'T',
+        historyText: 'H',
+      }).system,
+    ],
+  ])('is in the %s system prompt', (_source, system) => {
+    expect(system).toContain(DESCRIPTION_LENGTH_CLAUSE);
+  });
+});
 
 describe('briefParsePrompt', () => {
   it('includes the taxonomy lists, delimited, and the attached filenames', () => {
@@ -42,7 +74,7 @@ describe('briefParsePrompt', () => {
     expect(rendered.promptVersion).toBe(PROMPT_VERSION);
   });
 
-  it('BAL-592: is prompt v2, grouped, with the grounding clause before the untrusted clause', () => {
+  it('BAL-592: is grouped, with the grounding clause before the untrusted clause', () => {
     const rendered = briefParsePrompt({
       tagChoices: [],
       productChoices: [
@@ -58,7 +90,7 @@ describe('briefParsePrompt', () => {
       ],
       fileNames: [],
     });
-    expect(rendered.promptVersion).toBe('v2');
+    expect(rendered.promptVersion).toBe('v3');
     expect(rendered.system).toContain(
       'a short human label for any project type you recognised in the documents but could not match to a supplied slug, and for any product the product rules below say to report as unmatched'
     );
@@ -136,9 +168,9 @@ describe('briefFromCasePrompt (BAL-589)', () => {
     expect(rendered.promptVersion).toBe(PROMPT_VERSION);
   });
 
-  it('BAL-592: is prompt v2 with the grounding clause before the case-history clause', () => {
+  it('BAL-592: has the grounding clause before the case-history clause', () => {
     const rendered = render();
-    expect(rendered.promptVersion).toBe('v2');
+    expect(rendered.promptVersion).toBe('v3');
     expect(rendered.system).toContain(
       'a short human label for any project type you recognised in the history but could not match to a supplied slug, and for any product the product rules below say to report as unmatched'
     );

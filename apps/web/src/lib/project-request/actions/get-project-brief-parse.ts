@@ -6,20 +6,20 @@ import { withAuth } from '@/lib/auth/with-auth';
 import { projectBriefParsesRepository, toProjectBriefParseState } from '@balo/db';
 import {
   MAX_BRIEF_DESCRIPTION_HTML_LENGTH,
+  MAX_PROJECT_DESCRIPTION_TEXT_LENGTH,
   PARSE_DEADLINE_MS,
   narrowToProjectBriefFailureReason,
   type ProjectBriefFailureReason,
 } from '@balo/shared/project-requests';
-import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { loadProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
-import { markdownToProjectHtml } from '@/lib/project-request/markdown-to-project-html';
+import { fitBriefDescription } from '@/lib/project-request/fit-brief-description';
 import { log } from '@/lib/logging';
 
 const getProjectBriefParseInputSchema = z.object({ parseId: z.string().uuid() });
 
 export interface ProjectBriefDraftPatch {
   title: string;
-  /** Converted + sanitised server-side — see D4. */
+  /** Converted + sanitised server-side (see D4), and within the form's visible-text cap. */
   descriptionHtml: string;
   /** Re-intersected against the LIVE taxonomy (D5's second gate). */
   tagIds: string[];
@@ -77,10 +77,35 @@ export const getProjectBriefParseAction = withAuth(
 
     // ── succeeded ──────────────────────────────────────────────────────────────────────────
     try {
-      // ⚠⚠ D4 — this ordering (convert THEN sanitise) is the contract; a test pins it.
-      const descriptionHtml = sanitizeProjectHtml(
-        markdownToProjectHtml(state.result.descriptionMarkdown)
-      );
+      // ⚠⚠ D4 — convert THEN sanitise is the contract (inside `fitBriefDescription`); a test pins
+      // it. The fit then holds the draft to the form's 4,000-character visible-text cap: the
+      // prompt asks for well under it, but a model overshoot would otherwise prefill the review
+      // step with a brief the client cannot submit until they cut it themselves.
+      const description = fitBriefDescription(state.result.descriptionMarkdown);
+      const descriptionHtml = description.html;
+      // The TRIM left nothing (a heading longer than the cap). An empty description would
+      // "succeed" into the form's "Add a few words" error; the failure banner, with Try again and
+      // Write it myself, is the honest outcome. Keyed on `trimmed`: a description that was
+      // simply empty to begin with is not a length failure, and still delivers the title and
+      // tags for the client to write the description themselves.
+      if (description.trimmed && descriptionHtml === '') {
+        log.error('Project brief parse — no part of the description fits the field limit', {
+          userId: session.user.id,
+          parseId: row.id,
+          originalTextLength: description.originalTextLength,
+          limit: MAX_PROJECT_DESCRIPTION_TEXT_LENGTH,
+        });
+        return { status: 'failed', failureReason: 'invalid_output' };
+      }
+      if (description.trimmed) {
+        log.warn('Project brief parse — description trimmed to the field limit', {
+          userId: session.user.id,
+          parseId: row.id,
+          originalTextLength: description.originalTextLength,
+          limit: MAX_PROJECT_DESCRIPTION_TEXT_LENGTH,
+          promptVersion: row.promptVersion,
+        });
+      }
 
       // ⚠⚠ BAL-254 W7 — THE HTML BOUND, MEASURED RATHER THAN ASSUMED. `MAX_BRIEF_MARKDOWN_LENGTH`
       // (8000) was commented as "→ ≤20000 HTML", which is not a property the conversion has:

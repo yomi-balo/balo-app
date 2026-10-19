@@ -62,6 +62,19 @@ export const PARSE_DEADLINE_MS = 3 * 60 * 1000;
 /** Matches `actions/schemas.ts`' `title` max, so a parsed title can never fail submit. */
 export const MAX_BRIEF_TITLE_LENGTH = 120;
 /**
+ * The project description's VISIBLE-TEXT cap — the form's submit gate, measured as
+ * `htmlToPlainText(html).length`. `apps/web`'s `DESCRIPTION_MAX_TEXT` is this constant; it lives
+ * here so the brief prompt (`apps/api`) and the poll action that fits a generated draft to it
+ * (`apps/web`) read the same number.
+ */
+export const MAX_PROJECT_DESCRIPTION_TEXT_LENGTH = 4000;
+/**
+ * What the brief prompt asks the model to aim for. Deliberately well under
+ * {@link MAX_PROJECT_DESCRIPTION_TEXT_LENGTH}: a model cannot count characters exactly, and an
+ * overshoot past the cap is trimmed by the poll action, which loses content.
+ */
+export const BRIEF_DESCRIPTION_TARGET_TEXT_LENGTH = 3000;
+/**
  * Bound on the model's `descriptionMarkdown`.
  *
  * ⚠ THIS DOES **NOT** BOUND THE CONVERTED HTML, AND USED TO CLAIM IT DID (BAL-254 W7). The

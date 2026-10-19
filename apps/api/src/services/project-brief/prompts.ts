@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  BRIEF_DESCRIPTION_TARGET_TEXT_LENGTH,
+  MAX_PROJECT_DESCRIPTION_TEXT_LENGTH,
   MAX_BRIEF_TITLE_LENGTH,
   MAX_BRIEF_MARKDOWN_LENGTH,
   MAX_UNMATCHED_LABELS,
@@ -10,10 +12,26 @@ import {
 import { renderTaxonomyChoices, type TaxonomyChoice } from './taxonomy-mapping.js';
 
 export const PROJECT_BRIEF_PROMPT_ID = 'project-brief.parse' as const;
-export const PROMPT_VERSION = 'v2' as const;
+export const PROMPT_VERSION = 'v3' as const;
 
 /** BAL-589 — the case→project brief prompt id. Shares {@link briefParseOutputSchema}. */
 export const PROJECT_BRIEF_FROM_CASE_PROMPT_ID = 'project-brief.from-case' as const;
+
+/**
+ * The description's length budget, shared by both system prompts. The form rejects a description
+ * over {@link MAX_PROJECT_DESCRIPTION_TEXT_LENGTH} visible characters, and an overshoot is trimmed
+ * from the END before the client sees it — so the model is asked for well under the cap, told to
+ * spend it on scope rather than restating the documents, and told to put deadlines, budget and
+ * hard constraints early, where a trim cannot reach them.
+ */
+export const DESCRIPTION_LENGTH_CLAUSE =
+  ` Keep the description to about ${BRIEF_DESCRIPTION_TARGET_TEXT_LENGTH.toLocaleString('en-US')} ` +
+  `characters of visible text, and never more than ` +
+  `${MAX_PROJECT_DESCRIPTION_TEXT_LENGTH.toLocaleString('en-US')} — formatting marks do not ` +
+  'count, but every word does. Summarise; do not copy long passages. Prefer short bullet points ' +
+  'over long paragraphs, and keep only what an expert needs to understand and scope the work. ' +
+  'State any deadline, budget or other hard constraint early, in the opening lines, never only ' +
+  'at the end.';
 
 /**
  * Untrusted-content guard. Reuses the `services/transcript/llm/prompts.ts` precedent, adapted:
@@ -109,6 +127,7 @@ const SYSTEM_PROMPT =
   'any product the product rules below say to report as unmatched. Write in the ' +
   "client's own words where possible. Never invent scope the documents do not support. Return " +
   'an empty list rather than a guess.' +
+  DESCRIPTION_LENGTH_CLAUSE +
   TAXONOMY_GROUNDING_CLAUSE +
   UNTRUSTED_DOCUMENT_CLAUSE;
 
@@ -120,7 +139,7 @@ export interface RenderedBriefPrompt {
   promptVersion: string;
 }
 
-/** v2 brief-parse prompt: the grouped taxonomy lists (delimited) + the attached filenames. */
+/** v3 brief-parse prompt: the grouped taxonomy lists (delimited) + the attached filenames. */
 export function briefParsePrompt(input: {
   tagChoices: readonly TaxonomyChoice[];
   productChoices: readonly TaxonomyChoice[];
@@ -182,6 +201,7 @@ const FROM_CASE_SYSTEM_PROMPT =
   'supplied slug, and for any product the product rules below say to report as unmatched. ' +
   "Write in the client's own words where possible. Never invent scope the " +
   'history does not support. Return an empty list rather than a guess.' +
+  DESCRIPTION_LENGTH_CLAUSE +
   TAXONOMY_GROUNDING_CLAUSE +
   CASE_HISTORY_CLAUSE;
 
@@ -200,7 +220,7 @@ function escapeCaseAngleBrackets(text: string): string {
   return text.replaceAll('<', '&lt;');
 }
 
-/** v2 from-case prompt (BAL-589): the grouped taxonomy lists + the case title + its rendered history. */
+/** v3 from-case prompt (BAL-589): the grouped taxonomy lists + the case title + its rendered history. */
 export function briefFromCasePrompt(input: {
   tagChoices: readonly TaxonomyChoice[];
   productChoices: readonly TaxonomyChoice[];

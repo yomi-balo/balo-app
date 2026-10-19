@@ -27,6 +27,8 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 import { getProjectBriefParseAction } from './get-project-brief-parse';
+import { log } from '@/lib/logging';
+import { htmlToPlainText } from '@balo/shared/notifications';
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -112,7 +114,7 @@ describe('getProjectBriefParseAction', () => {
         unmatchedProductLabels: [],
       },
       failureReason: null,
-      promptVersion: 'v2',
+      promptVersion: 'v3',
       completedAt: new Date(),
       createdAt: new Date(),
     };
@@ -163,7 +165,7 @@ describe('getProjectBriefParseAction', () => {
     mockFindForOwner.mockResolvedValue(succeededRow('A description.'));
     const withVersion = await getProjectBriefParseAction({ parseId: PARSE_ID });
     if (withVersion.status !== 'succeeded') throw new Error('expected succeeded');
-    expect(withVersion.draft.promptVersion).toBe('v2');
+    expect(withVersion.draft.promptVersion).toBe('v3');
 
     mockFindForOwner.mockResolvedValue({ ...succeededRow('A description.'), promptVersion: null });
     const without = await getProjectBriefParseAction({ parseId: PARSE_ID });
@@ -240,6 +242,64 @@ describe('getProjectBriefParseAction', () => {
     const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
 
     expect(result.status).toBe('succeeded');
+  });
+
+  it('⚠ a description over the 4,000-character field limit is delivered TRIMMED to fit, and logged', async () => {
+    const bullets = Array.from(
+      { length: 80 },
+      (_, i) => `- **Point ${i}** — a requirement the client described in the documents.`
+    );
+    mockFindForOwner.mockResolvedValue(succeededRow(['## Scope', ...bullets].join('\n')));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(result.status).toBe('succeeded');
+    if (result.status !== 'succeeded') throw new Error('expected succeeded');
+    expect(htmlToPlainText(result.draft.descriptionHtml).length).toBeLessThanOrEqual(4000);
+    expect(result.draft.descriptionHtml).toContain('Point 0');
+    expect(log.warn).toHaveBeenCalledWith(
+      'Project brief parse — description trimmed to the field limit',
+      expect.objectContaining({ parseId: PARSE_ID, limit: 4000, promptVersion: 'v3' })
+    );
+  });
+
+  it('a description within the limit is delivered whole, with no trim warning', async () => {
+    mockFindForOwner.mockResolvedValue(succeededRow('A short brief.'));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(log.warn).not.toHaveBeenCalledWith(
+      'Project brief parse — description trimmed to the field limit',
+      expect.anything()
+    );
+  });
+
+  it('⚠ a description of which NOTHING fits is refused as invalid_output, not delivered empty', async () => {
+    // Only a heading, longer than the whole cap: no content line to keep or cut.
+    mockFindForOwner.mockResolvedValue(succeededRow(`## ${'x'.repeat(5000)}`));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(result).toEqual({ status: 'failed', failureReason: 'invalid_output' });
+  });
+
+  it('an EMPTY description is not a length failure — the draft is delivered for the client to finish', async () => {
+    mockFindForOwner.mockResolvedValue(succeededRow(''));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(result.status).toBe('succeeded');
+    if (result.status !== 'succeeded') throw new Error('expected succeeded');
+    expect(result.draft.descriptionHtml).toBe('');
+    expect(result.draft.title).toBe('A title');
+    expect(log.error).not.toHaveBeenCalledWith(
+      'Project brief parse — no part of the description fits the field limit',
+      expect.anything()
+    );
   });
 
   it('an invalid parseId shape resolves to not_found (never throws)', async () => {
