@@ -94,6 +94,7 @@ export function useLogout(): () => void {
     forgetPendingHomeProject();
     // Defer reset so PostHog flushes the event with the user's identity
     setTimeout(() => analytics.reset(), 500);
-    logoutAction();
+    // Fire-and-forget: the action ends in `redirect('/')`, which the router performs.
+    void logoutAction();
   }, []);
 }

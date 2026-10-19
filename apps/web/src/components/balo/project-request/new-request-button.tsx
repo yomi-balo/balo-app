@@ -23,8 +23,8 @@ type NewRequestEntryPoint = Extract<ProjectRequestEntryPoint, 'projects' | 'enga
 interface NewRequestButtonProps {
   label: string;
   entryPoint: NewRequestEntryPoint;
-  variant?: VariantProps<typeof buttonVariants>['variant'];
-  size?: VariantProps<typeof buttonVariants>['size'];
+  variant?: NonNullable<VariantProps<typeof buttonVariants>['variant']>;
+  size?: NonNullable<VariantProps<typeof buttonVariants>['size']>;
   className?: string;
   /** Sizes the leading Plus icon; defaults to the button's own `size-4`. */
   iconClassName?: string;
