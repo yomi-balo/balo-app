@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: getting-started
 order: 1
-published: false
+published: true
 updated: 2026-10-18
 related: [rate-and-payouts, connecting-your-calendar, weekly-schedule]
 ---

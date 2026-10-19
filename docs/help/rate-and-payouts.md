@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: getting-paid
 order: 1
-published: false
+published: true
 updated: 2026-10-18
 related: [what-happens-after-you-apply, connecting-your-calendar]
 ---

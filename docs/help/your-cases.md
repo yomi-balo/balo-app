@@ -6,7 +6,7 @@ category:
   client: cases-projects
   expert: calls-cases
 order: 1
-published: false
+published: true
 updated: 2026-10-17
 related: [booking-a-consultation, joining-a-call, turning-a-case-into-a-project]
 ---

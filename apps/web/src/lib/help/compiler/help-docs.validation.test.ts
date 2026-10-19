@@ -25,6 +25,19 @@ const EXPECTED_FILES = [
   'your-cases.md',
 ];
 
+/** Publishing is a reviewed decision: flipping a guide means adding it here too. */
+const PUBLISHED_FILES = [
+  'booking-a-consultation.md',
+  'buying-credit.md',
+  'connecting-your-calendar.md',
+  'joining-a-call.md',
+  'pausing-new-work.md',
+  'rate-and-payouts.md',
+  'weekly-schedule.md',
+  'what-happens-after-you-apply.md',
+  'your-cases.md',
+];
+
 describe('docs/help', () => {
   const docs = readHelpDocs();
 
@@ -32,13 +45,14 @@ describe('docs/help', () => {
     expect(docs.map((doc) => doc.filename)).toEqual(EXPECTED_FILES);
   });
 
-  it('keeps every guide unpublished until its content is reviewed', () => {
-    for (const doc of docs) {
-      const parsed = helpFrontmatterSchema.parse(
-        parseHelpDoc(doc.filename, doc.source).frontmatter
-      );
-      expect(parsed.published, doc.filename).toBe(false);
-    }
+  it('publishes exactly the reviewed guides', () => {
+    const published = docs
+      .filter(
+        (doc) =>
+          helpFrontmatterSchema.parse(parseHelpDoc(doc.filename, doc.source).frontmatter).published
+      )
+      .map((doc) => doc.filename);
+    expect(published).toEqual(PUBLISHED_FILES);
   });
 
   it('passes validation, including image files for any published guide', () => {

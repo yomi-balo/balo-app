@@ -6,7 +6,7 @@ category:
   client: calls
   expert: calls-cases
 order: 2
-published: false
+published: true
 updated: 2026-10-18
 related: [booking-a-consultation, your-cases]
 ---

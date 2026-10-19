@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: getting-booked
 order: 2
-published: false
+published: true
 updated: 2026-10-17
 related: [project-requests-for-experts]
 ---

@@ -5,7 +5,7 @@ audience: [client]
 category:
   client: credit-billing
 order: 1
-published: false
+published: true
 updated: 2026-10-18
 related: [redeeming-a-promo-code, booking-a-consultation]
 ---

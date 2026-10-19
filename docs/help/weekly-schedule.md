@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: getting-booked
 order: 1
-published: false
+published: true
 updated: 2026-10-18
 related: [connecting-your-calendar, pausing-new-work]
 ---
