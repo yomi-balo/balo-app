@@ -58,7 +58,3 @@ sessions listed still go ahead as planned.
 Choose **Block dates anyway** to carry on, or **Choose other dates** to go back and change them.
 
 ![The warning about a session already booked, with Block dates anyway and Choose other dates highlighted.](05)
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

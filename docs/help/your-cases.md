@@ -114,7 +114,3 @@ are both told when it happens. Want to pick things up again? The client company 
 as it is.
 
 ![The Resolved section of Cases, with a case marked as closed automatically highlighted.](03)
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

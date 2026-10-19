@@ -43,7 +43,3 @@ instead.
 If your calendar connection stops working, a banner appears at the top of your dashboard
 linking to Settings to reconnect it. While your calendar is disconnected, you won't appear
 in expert search.
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

@@ -88,7 +88,3 @@ it. Book it from that case's page, using **Book with {name} again** or **Book a 
 which opens the next open time on the case.
 
 ![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](06)
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

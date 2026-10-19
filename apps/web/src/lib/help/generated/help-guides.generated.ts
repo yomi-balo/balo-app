@@ -139,18 +139,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 848,
           "height": 1226
         }
-      },
-      {
-        "n": 7,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s7-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   },
@@ -173,7 +161,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     "intro": [
       {
         "kind": "html",
-        "html": "<p>Consultations are paid for from your company's prepaid credit. Topping up takes a minute, and you\ncan do it whenever suits you. The top-up page is at <strong>/billing/top-up</strong>.</p>",
+        "html": "<p>Consultations are paid for from your company's prepaid credit. Topping up takes a minute, and you\ncan do it whenever suits you. Open the <a href=\"/billing/top-up\">top-up page</a> to get started.</p>",
         "id": "intro-b0"
       }
     ],
@@ -267,18 +255,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 888,
           "height": 520
         }
-      },
-      {
-        "n": 6,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s6-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   },
@@ -413,18 +389,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 1752,
           "height": 724
         }
-      },
-      {
-        "n": 7,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s7-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   },
@@ -567,18 +531,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 908,
           "height": 638
         }
-      },
-      {
-        "n": 8,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s8-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   },
@@ -595,6 +547,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     "order": 2,
     "updated": "2026-10-17",
     "related": [
+      "weekly-schedule",
+      "connecting-your-calendar",
       "project-requests-for-experts"
     ],
     "intro": [
@@ -681,18 +635,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 1720,
           "height": 666
         }
-      },
-      {
-        "n": 5,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s5-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   },
@@ -773,18 +715,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 598,
           "height": 220
         }
-      },
-      {
-        "n": 4,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s4-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   },
@@ -901,18 +831,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 1472,
           "height": 662
         }
-      },
-      {
-        "n": 6,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s6-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   },
@@ -1011,18 +929,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 1408,
           "height": 694
         }
-      },
-      {
-        "n": 5,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s5-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   },
@@ -1106,18 +1012,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 1984,
           "height": 196
         }
-      },
-      {
-        "n": 4,
-        "title": "Questions?",
-        "blocks": [
-          {
-            "kind": "html",
-            "html": "<p>Reach us any time at <a href=\"mailto:support@getbalo.com\">support@getbalo.com</a>.</p>",
-            "id": "s4-b0"
-          }
-        ],
-        "screenshot": null
       }
     ]
   }

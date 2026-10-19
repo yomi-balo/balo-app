@@ -99,6 +99,49 @@ describe('validateHelpDocs', () => {
     expect(codes([helpDoc('a.md', { frontmatter: { related: '[draft]' } }), draft])).toEqual([]);
   });
 
+  describe('unpublished_link', () => {
+    const linking = (published: string) =>
+      helpDoc('a.md', {
+        frontmatter: { published },
+        body: 'See [Draft](/help/draft) and [Peer](/help/peer-guide#step-2).\n\n## One\n\nSee [Draft](/help/draft).\n',
+      });
+    const draft = helpDoc('draft.md', { frontmatter: { published: 'false' } });
+
+    it('flags each unpublished target once in a published guide', () => {
+      const issues = validateHelpDocs([linking('true'), draft, PEER], allExist);
+      expect(issues.map((issue) => [issue.code, issue.message])).toEqual([
+        ['unpublished_link', 'The link to /help/draft goes nowhere: that guide is not published.'],
+      ]);
+    });
+
+    it('flags a link to a guide with no file', () => {
+      expect(codes([linking('true'), PEER])).toEqual(['unpublished_link']);
+    });
+
+    it('does not check links in an unpublished guide', () => {
+      expect(codes([linking('false'), draft, PEER])).toEqual([]);
+    });
+  });
+
+  describe('support_section', () => {
+    it.each(['Questions?', 'questions', 'Need help?', 'Still stuck?', 'Contact us'])(
+      'flags a "%s" section, published or not',
+      (title) => {
+        const body = `Intro.\n\n## ${title}\n\nReach us any time.\n`;
+        expect(codes([helpDoc('a.md', { body })])).toEqual(['support_section']);
+        expect(codes([helpDoc('a.md', { body, frontmatter: { published: 'false' } })])).toEqual([
+          'support_section',
+        ]);
+      }
+    );
+
+    it('allows a support address inside a step', () => {
+      const body =
+        'Intro.\n\n## Apply again\n\nWrite to [support@getbalo.com](mailto:support@getbalo.com).\n';
+      expect(codes([helpDoc('a.md', { body })])).toEqual([]);
+    });
+  });
+
   it('h1_in_body', () => {
     expect(codes([helpDoc('a.md', { body: '# Title\n\n## One\n\nx\n' })])).toEqual(['h1_in_body']);
   });

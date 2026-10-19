@@ -11,7 +11,7 @@ related: [redeeming-a-promo-code, booking-a-consultation]
 ---
 
 Consultations are paid for from your company's prepaid credit. Topping up takes a minute, and you
-can do it whenever suits you. The top-up page is at **/billing/top-up**.
+can do it whenever suits you. Open the [top-up page](/billing/top-up) to get started.
 
 ## Choose an amount
 
@@ -63,7 +63,3 @@ Only owners and admins of your company can buy credit. If that isn't you, you'll
 (**Ask {name} to top up**) lets the person who manages billing know.
 
 ![The Team balance card a team member sees, with the button asking a billing admin to top up highlighted.](05)
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

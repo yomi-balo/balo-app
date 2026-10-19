@@ -39,7 +39,3 @@ owed instead and your next top-up covers it.
 
 Adding a card to your company charges nothing. A card on file is used for time beyond your balance,
 and for Auto top-up if you turn it on. See [Buying credit](/help/buying-credit) for how to top up.
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

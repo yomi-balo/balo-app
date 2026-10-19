@@ -7,7 +7,7 @@ category:
 order: 2
 published: true
 updated: 2026-10-17
-related: [project-requests-for-experts]
+related: [weekly-schedule, connecting-your-calendar, project-requests-for-experts]
 ---
 
 Need a break, or fully booked for a while? You can stop new work coming in without touching
@@ -61,7 +61,3 @@ and your open times return straight away.
 
 On your **Calendar**, open hours show as hatched while you're paused. Booked meetings stay in full
 colour and you can still join them.
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).

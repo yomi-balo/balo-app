@@ -18,7 +18,9 @@ export type HelpDocIssueCode =
   | 'invalid_image_ref'
   | 'missing_image'
   | 'unsupported_markdown'
-  | 'forbidden_copy';
+  | 'forbidden_copy'
+  | 'unpublished_link'
+  | 'support_section';
 
 export interface HelpDocIssue {
   readonly file: string;
