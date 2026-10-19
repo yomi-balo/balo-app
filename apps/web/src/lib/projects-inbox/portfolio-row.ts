@@ -30,6 +30,9 @@ const DAY_MS = 1000 * 60 * 60 * 24;
 /** Design `STAGE` keys — the visual pipeline stage chip. */
 export type StageKey =
   | 'requested'
+  // Admin asked for an exploratory call before inviting anyone — the client books next.
+  // Its own stage so the list never claims experts were invited when none were.
+  | 'exploratory'
   | 'invited'
   | 'eoi'
   | 'prop_req'
@@ -134,6 +137,7 @@ export interface AdminPortfolioDTO {
 /** Stage chip label per design `STAGE` key. */
 const STAGE_LABELS: Record<StageKey, string> = {
   requested: 'Requested',
+  exploratory: 'Exploratory call',
   invited: 'Experts invited',
   eoi: 'In conversation',
   prop_req: 'Proposal req.',
@@ -147,7 +151,7 @@ const STAGE_LABELS: Record<StageKey, string> = {
 const REQUEST_STATUS_TO_STAGE: Record<ProjectRequestStatus, StageKey> = {
   draft: 'requested',
   requested: 'requested',
-  exploratory_meeting_requested: 'invited',
+  exploratory_meeting_requested: 'exploratory',
   experts_invited: 'invited',
   eoi_submitted: 'eoi',
   proposal_requested: 'prop_req',
@@ -196,6 +200,7 @@ export function stageDistribution(
 ): Record<StageKey, number> {
   const dist: Record<StageKey, number> = {
     requested: 0,
+    exploratory: 0,
     invited: 0,
     eoi: 0,
     prop_req: 0,
@@ -297,6 +302,7 @@ function clientNeedsYou(row: PortfolioRequestRow, signal: RequestThreadSignal): 
     case 'requested':
       return { needsYou: false, nudgeLabel: 'Waiting on Balo' };
     case 'exploratory_meeting_requested':
+      return { needsYou: true, nudgeLabel: 'Book exploratory call' };
     case 'experts_invited':
       return { needsYou: false, nudgeLabel: 'Waiting on experts' };
     case 'eoi_submitted': {
@@ -387,6 +393,7 @@ function adminNeedsYou(row: PortfolioRequestRow, now: Date): NeedsYouResult {
     case 'requested':
       return { needsYou: true, nudgeLabel: 'Triage' };
     case 'exploratory_meeting_requested':
+      return { needsYou: false, nudgeLabel: 'Awaiting client booking' };
     case 'experts_invited': {
       const stalled = adminStallDays(row, now);
       if (stalled !== null) {

@@ -4,7 +4,7 @@ import type { StageKey } from '@/lib/projects-inbox/portfolio-row';
 /**
  * StageChip — the design's pipeline-stage pill. Pure + server-safe (no client
  * interactivity). Each stage maps to Balo CSS-variable tokens (never hex):
- * requested → muted, invited → primary, eoi → violet, prop_* → warning,
+ * requested → muted, exploratory → info, invited → primary, eoi → violet, prop_* → warning,
  * accepted/kicked → success. Dark-aware via the token classes.
  */
 
@@ -16,6 +16,7 @@ interface StageChipProps {
 
 const STAGE_TONE: Record<StageKey, string> = {
   requested: 'bg-muted text-muted-foreground',
+  exploratory: 'bg-info/10 text-info',
   invited: 'bg-primary/10 text-primary',
   eoi: 'bg-violet-500/10 text-violet-600 dark:text-violet-400',
   prop_req: 'bg-warning/15 text-warning',

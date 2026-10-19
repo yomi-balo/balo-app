@@ -105,7 +105,7 @@ describe('stageChipFor', () => {
     ['draft', 'Requested'],
     ['requested', 'Requested'],
     ['experts_invited', 'Experts invited'],
-    ['exploratory_meeting_requested', 'Experts invited'],
+    ['exploratory_meeting_requested', 'Exploratory call'],
     ['eoi_submitted', 'In conversation'],
     ['proposal_requested', 'Proposal req.'],
     ['proposal_submitted', 'Proposals in'],
@@ -185,6 +185,16 @@ describe('needsYouFor — client lens', () => {
   it('requested → not needs-you, waiting on Balo', () => {
     const res = needsYouFor('client', makeRequest({ status: 'requested' }), SIGNAL_QUIET, NOW);
     expect(res).toEqual({ needsYou: false, nudgeLabel: 'Waiting on Balo' });
+  });
+
+  it('exploratory_meeting_requested → needs-you, book the call (no expert is invited yet)', () => {
+    const res = needsYouFor(
+      'client',
+      makeRequest({ status: 'exploratory_meeting_requested' }),
+      SIGNAL_QUIET,
+      NOW
+    );
+    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Book exploratory call' });
   });
 
   it('experts_invited → waiting on experts', () => {
@@ -471,6 +481,12 @@ describe('adminNeedsYou + adminStallDays', () => {
     const res = needsYouFor('admin', row, SIGNAL_QUIET, NOW);
     expect(res.needsYou).toBe(true);
     expect(res.nudgeLabel).toBe('No EOIs · 5d');
+  });
+
+  it('exploratory_meeting_requested quiet beyond threshold → awaiting booking, never an EOI stall', () => {
+    const row = makeRequest({ status: 'exploratory_meeting_requested', updatedAt: day(5) });
+    const res = needsYouFor('admin', row, SIGNAL_QUIET, NOW);
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Awaiting client booking' });
   });
 
   it('experts_invited recent → not stalled', () => {
