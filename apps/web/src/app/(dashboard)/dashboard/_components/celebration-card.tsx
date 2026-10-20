@@ -110,7 +110,7 @@ export function CelebrationCard({
       )}
 
       <motion.p variants={itemVariants} className="text-subtle-foreground mt-3.5 text-xs">
-        From now on, your status lives in the sidebar.
+        From now on, your status sits next to your name.
       </motion.p>
     </motion.section>
   );

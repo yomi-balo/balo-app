@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { liveStatusForActiveWorkspace } from '@balo/shared/workspaces';
 import { PanelLeftClose, PanelLeft, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -31,6 +32,12 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
     liveStatus,
   } = useSidebar();
 
+  // One rule for "the active workspace is the expert one" — pill and dot read the same value.
+  const sidebarLiveStatus = liveStatusForActiveWorkspace(
+    workspaces,
+    activeWorkspaceKey,
+    liveStatus ?? null
+  );
   const primaryItems = resolveNavItems(navContext, 'primary');
   const secondaryItems = resolveNavItems(navContext, 'secondary');
   const adminItems = resolveNavItems(navContext, 'admin');
@@ -88,14 +95,14 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
           actorInitials={userInitials}
           actorAvatarUrl={userAvatarUrl}
           isCollapsed={isCollapsed}
-          liveState={liveStatus?.state ?? null}
+          liveState={sidebarLiveStatus?.state ?? null}
         />
         {/* BAL-603 — a SIBLING of the switcher, never inside it: the switcher renders nothing
             with zero workspaces, and the pill must not depend on that. Aligned under the name
             (`ml-[46px]` clears the 36px avatar + gap). Hidden collapsed; the avatar dot stays. */}
-        {!isCollapsed && liveStatus && (
+        {!isCollapsed && sidebarLiveStatus && (
           <div className="mt-1 ml-[46px]">
-            <LiveStatusPill status={liveStatus} variant="sidebar" />
+            <LiveStatusPill status={sidebarLiveStatus} variant="sidebar" />
           </div>
         )}
       </div>

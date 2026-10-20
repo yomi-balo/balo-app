@@ -58,9 +58,11 @@ describe('CelebrationCard', () => {
     expect(screen.getByText("You're live on the marketplace!")).toBeInTheDocument();
   });
 
-  it('says where the status lives from now on', () => {
+  it('says where the status sits from now on', () => {
     render(<CelebrationCard publicProfileHref={null} />);
-    expect(screen.getByText('From now on, your status lives in the sidebar.')).toBeInTheDocument();
+    expect(
+      screen.getByText('From now on, your status sits next to your name.')
+    ).toBeInTheDocument();
   });
 
   it('reports a rejected stamp to Sentry without breaking the card', async () => {

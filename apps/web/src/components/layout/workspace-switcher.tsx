@@ -2,7 +2,11 @@
 
 import { useCallback } from 'react';
 import { ChevronsUpDown, Loader2, Check } from 'lucide-react';
-import type { CompanyWorkspace, Workspace } from '@balo/shared/workspaces';
+import {
+  findActiveWorkspace,
+  type CompanyWorkspace,
+  type Workspace,
+} from '@balo/shared/workspaces';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -320,10 +324,9 @@ function WorkspaceMenu({
 }
 
 export function WorkspaceSwitcher(props: WorkspaceSwitcherProps): React.JSX.Element | null {
-  const [firstWorkspace] = props.workspaces; // destructure + guard, never `workspaces[0]!`
-  if (firstWorkspace === undefined) return null; // ── length === 0
+  const active = findActiveWorkspace(props.workspaces, props.activeWorkspaceKey);
+  if (active === null) return null; // ── length === 0
 
-  const active = props.workspaces.find((w) => w.key === props.activeWorkspaceKey) ?? firstWorkspace;
   const liveState = active.type === 'expert' ? (props.liveState ?? null) : null;
 
   if (props.workspaces.length === 1) {

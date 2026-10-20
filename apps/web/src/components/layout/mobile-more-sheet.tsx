@@ -3,7 +3,12 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { LogOut, Check, Shield } from 'lucide-react';
-import type { CompanyWorkspace, Workspace } from '@balo/shared/workspaces';
+import {
+  findActiveWorkspace,
+  liveStatusForActiveWorkspace,
+  type CompanyWorkspace,
+  type Workspace,
+} from '@balo/shared/workspaces';
 import { SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -208,14 +213,10 @@ export function MobileMoreSheet({
     logout();
   };
 
-  const [firstWorkspace] = workspaces; // destructure + guard, never `workspaces[0]!`
-  const active =
-    firstWorkspace === undefined
-      ? null
-      : (workspaces.find((w) => w.key === activeWorkspaceKey) ?? firstWorkspace);
+  const active = findActiveWorkspace(workspaces, activeWorkspaceKey);
   const expertWorkspace = workspaces.find((w) => w.type === 'expert');
   // BAL-603 — the status belongs to the EXPERT workspace identity row, wherever that row renders.
-  const activeLiveStatus = active?.type === 'expert' ? liveStatus : null;
+  const activeLiveStatus = liveStatusForActiveWorkspace(workspaces, activeWorkspaceKey, liveStatus);
   const companyWorkspaces = workspaces.filter((w): w is CompanyWorkspace => w.type === 'company');
 
   return (

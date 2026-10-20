@@ -67,11 +67,14 @@ export const LIVE_STATUS_TOKENS: Record<ExpertLiveState, { dot: string; pill: st
 /** `not_listed` for a cause the design does not cover: a failing non-calendar item, or none. */
 function notListedCopy(fixItem: ExpertChecklistItemKey | null): LiveStatusCopy {
   const base = LIVE_STATUS_COPY.not_listed;
-  if (fixItem === null) {
-    return { ...base, body: "Clients can't find you right now.", primary: null };
-  }
   const item = CHECKLIST_ITEMS.find((entry) => entry.key === fixItem);
-  if (item === undefined) return base;
+  if (item === undefined) {
+    return {
+      ...base,
+      body: "Clients can't find you right now. This usually clears up within a few minutes. If it doesn't, get in touch.",
+      primary: null,
+    };
+  }
   return {
     ...base,
     body: "Clients can't find you until your setup is complete.",

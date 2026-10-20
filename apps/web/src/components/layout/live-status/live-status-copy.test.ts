@@ -59,7 +59,18 @@ describe('liveStatusCopyFor', () => {
 
   it('not_listed with no failing item has no action', () => {
     const copy = liveStatusCopyFor({ state: 'not_listed', fixItem: null });
-    expect(copy.body).toBe("Clients can't find you right now.");
+    expect(copy.body).toBe(
+      "Clients can't find you right now. This usually clears up within a few minutes. If it doesn't, get in touch."
+    );
+    expect(copy.primary).toBeNull();
+  });
+
+  it('not_listed with an unknown item key falls back to the no-item copy', () => {
+    const copy = liveStatusCopyFor({
+      state: 'not_listed',
+      fixItem: 'bogus' as unknown as 'payouts',
+    });
+    expect(copy.body).toContain("Clients can't find you right now.");
     expect(copy.primary).toBeNull();
   });
 

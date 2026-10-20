@@ -467,6 +467,29 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
       expect(screen.getByRole('button', { name: 'Live' })).toBeInTheDocument();
     });
 
+    it('renders no pill or dot when a company workspace is active', () => {
+      renderSidebar({
+        mode: 'expert',
+        canManageCompany: false,
+        workspaces: [SINGLE_COMPANY_WORKSPACE, EXPERT_WORKSPACE],
+        activeWorkspaceKey: SINGLE_COMPANY_WORKSPACE.key,
+        liveStatus: LIVE,
+      });
+      expect(document.querySelector('[data-live-state]')).toBeNull();
+      expect(document.querySelector('[data-live-dot]')).toBeNull();
+    });
+
+    it('renders no pill when an unmatched key falls back to a company first', () => {
+      renderSidebar({
+        mode: 'expert',
+        canManageCompany: false,
+        workspaces: [SINGLE_COMPANY_WORKSPACE, EXPERT_WORKSPACE],
+        activeWorkspaceKey: 'stale',
+        liveStatus: LIVE,
+      });
+      expect(document.querySelector('[data-live-state]')).toBeNull();
+    });
+
     it('renders no pill without a live status', () => {
       renderSidebar({ mode: 'expert', canManageCompany: false });
       expect(document.querySelector('[data-live-state]')).toBeNull();
