@@ -11,7 +11,7 @@
  *    (ADR-1048 §3); this is fee concealment's sibling.
  * 2. NO AUDIT DATA (Ruling 4's last bullet) — audit rows are audience-shaped by construction.
  * 3. `sharedBeforeYouJoined` IS PERMITTED, and ONLY that, because it derives from DATES ONLY —
- *    `file.createdAt < viewer.invitedAt` — never from audience. Computed HERE; the boolean,
+ *    `file.createdAt < viewer.joinedAt` (when the viewer's track opened) — never from audience. Computed HERE; the boolean,
  *    never the dates, crosses the boundary.
  *
  * Also: `source: 'client' | 'you'` says WHO, never HOW MANY; `r2Key` has no field on any of the
@@ -242,7 +242,7 @@ export interface ExpertRequestFileView {
 export function toExpertRequestFileView(
   file: RequestFileSerializerFile,
   clientCompanyName: string,
-  viewer: { relationshipId: string; invitedAt: Date; access: RequestTrackFileAccess }
+  viewer: { relationshipId: string; joinedAt: Date; access: RequestTrackFileAccess }
 ): ExpertRequestFileView {
   const own = file.side === 'expert';
   return {
@@ -253,7 +253,7 @@ export function toExpertRequestFileView(
     source: own ? 'you' : 'client',
     uploadedByName: own ? 'You' : clientCompanyName,
     createdAtIso: file.createdAt.toISOString(),
-    sharedBeforeYouJoined: file.createdAt.getTime() < viewer.invitedAt.getTime(),
+    sharedBeforeYouJoined: file.createdAt.getTime() < viewer.joinedAt.getTime(),
     // Ruling 3 — delete right ≡ upload right on that side. A client file is never deletable by
     // an expert; an own-track file is deletable only while the track is LIVE (a closed track
     // can neither upload nor delete — it falls out of the same rule, no separate check).

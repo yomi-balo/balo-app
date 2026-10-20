@@ -151,6 +151,8 @@ async function queryPortfolioRequests(filter: {
           invitedAt: true,
           updatedAt: true,
           proposalRequestedAt: true,
+          // The client's recency folds only opened tracks (`relationshipIsOpened`).
+          openedAt: true,
         },
         with: {
           // Newest live EOI per relationship — its `submittedAt` is a recency signal.

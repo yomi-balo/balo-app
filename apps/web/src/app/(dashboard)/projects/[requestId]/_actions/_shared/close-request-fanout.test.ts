@@ -133,6 +133,7 @@ describe('runCloseRequestFanout', () => {
           relationshipId: 'rel-1',
           expertProfileId: 'expert-profile-1',
           previousStatus: 'proposal_submitted',
+          openedAt: new Date('2026-08-01T00:00:00Z'),
           declineAuditId: 'decline-1',
         },
       ],

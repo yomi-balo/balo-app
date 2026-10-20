@@ -44,7 +44,7 @@ describe('RequestFileAudienceBadges', () => {
   describe('all_live_tracks', () => {
     it('names the live-track count on the everyone-invited badge', () => {
       renderBadges({ type: 'all_live_tracks', liveTrackCount: 3, annotations: [] });
-      expect(screen.getByText(/Everyone invited · 3 live/)).toBeInTheDocument();
+      expect(screen.getByText(/All interested experts · 3/)).toBeInTheDocument();
     });
 
     /**
@@ -133,7 +133,7 @@ describe('RequestFileAudienceBadges', () => {
     it('states that nobody has access when every grant is gone', () => {
       renderBadges({ type: 'grants', grants: [] });
       expect(screen.getByText('No experts have access')).toBeInTheDocument();
-      expect(screen.queryByText(/Everyone invited/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/All interested experts/)).not.toBeInTheDocument();
       expect(screen.queryByRole('button')).not.toBeInTheDocument();
     });
 

@@ -51,9 +51,9 @@ interface Seed {
   tracks: SeededTrack[];
 }
 
-/** Seed one request carrying `trackCount` LIVE `invited` tracks. */
+/** Seed one request carrying `trackCount` LIVE (opened, `eoi_submitted`) tracks. */
 async function seedRequest(trackCount: number): Promise<Seed> {
-  const first = await requestExpertRelationshipFactory();
+  const first = await requestExpertRelationshipFactory({ values: { status: 'eoi_submitted' } });
   const tracks: SeededTrack[] = [
     { relationshipId: first.relationship.id, expertProfileId: first.expertProfileId },
   ];
@@ -64,6 +64,7 @@ async function seedRequest(trackCount: number): Promise<Seed> {
       projectRequestId: first.projectRequestId,
       expertProfileId: expert.id,
       invitedByUserId: first.invitedByUserId,
+      values: { status: 'eoi_submitted' },
     });
     tracks.push({ relationshipId: extra.relationship.id, expertProfileId: extra.expertProfileId });
   }
@@ -375,6 +376,34 @@ describe('a CLOSED track never gains new visibility', () => {
     const result = await requestSharedFilesRepository.share(shareInput(seed));
 
     expect(result.resolvedLiveTracks.map((e) => e.relationshipId)).toEqual([live.relationshipId]);
+  });
+
+  /**
+   * ⚠ THE CLIENT-VISIBILITY RULE. An `invited` track has not opened: it is in no share-to-all
+   * audience, and a grant naming it is refused in-transaction exactly like a closed one.
+   */
+  it('excludes an UNOPENED (invited) track from a share-to-all and refuses a grant to it', async () => {
+    const seed = await seedRequest(1);
+    const [live] = seed.tracks;
+    if (live === undefined) throw new Error('seed too small');
+    const invitee = await requestExpertRelationshipFactory({
+      projectRequestId: seed.projectRequestId,
+      expertProfileId: (await expertDraftFactory()).id,
+    });
+    expect(invitee.relationship.openedAt).toBeNull();
+
+    const shared = await requestSharedFilesRepository.share(shareInput(seed));
+    expect(shared.resolvedLiveTracks.map((e) => e.relationshipId)).toEqual([live.relationshipId]);
+
+    await expect(
+      requestSharedFilesRepository.share(
+        shareInput(seed, {
+          r2Key: freshR2Key(seed.projectRequestId, seed.clientUserId),
+          audience: 'grants',
+          grantRelationshipIds: [invitee.relationship.id],
+        })
+      )
+    ).rejects.toBeInstanceOf(RequestFileTrackNotLiveError);
   });
 
   /**

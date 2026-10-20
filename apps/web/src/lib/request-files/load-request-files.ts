@@ -9,6 +9,7 @@ import {
 } from '@balo/db';
 import {
   relationshipDeniesHosting,
+  requestFileVisibleToClient,
   requestFileVisibleToTrack,
   resolveRequestFileAudience,
   resolveRequestTrackFileAccess,
@@ -137,7 +138,14 @@ export async function loadTrackDisplays(
     scope.tracks.map((t) => [t.relationshipId, t.access])
   );
 
-  return relationships.map((r) => {
+  // The client arm's scope already excludes unopened tracks; this second read must not
+  // re-admit them. The admin lens keeps every track.
+  const visible =
+    scope.side === 'client'
+      ? relationships.filter((r) => resolveRequestTrackFileAccess(r).kind !== 'unopened')
+      : relationships;
+
+  return visible.map((r) => {
     const trackName = nameByRelationship.get(r.id);
     // ⚠ TWO SOURCES, ONE ITERATION. The names come from `scope.request.relationships` but the
     // rows come from `listByRequest`. Both reads filter `deleted_at IS NULL` over the same
@@ -200,9 +208,10 @@ export async function loadRequestFiles(
   const clientCompanyName = scope.request.company?.name ?? 'the client';
 
   if (scope.side === 'expert') {
-    const invitedAt =
-      scope.request.relationships.find((r) => r.id === scope.viewer.relationshipId)?.invitedAt ??
-      new Date(0);
+    // An expert whose track has not opened has no file plane at all — the panel does not render.
+    if (scope.viewer.access.kind === 'unopened') return null;
+    // Every opened track carries `openedAt`; the fallback only narrows the type.
+    const joinedAt = scope.viewer.standing.openedAt ?? new Date(0);
     const files = rows
       .filter(({ file, grants }) =>
         requestFileVisibleToTrack(
@@ -214,7 +223,7 @@ export async function loadRequestFiles(
       .map(({ file }) =>
         toExpertRequestFileView(toSerializerFile(file), clientCompanyName, {
           relationshipId: scope.viewer.relationshipId,
-          invitedAt,
+          joinedAt,
           access: scope.viewer.access,
         })
       );
@@ -231,7 +240,10 @@ export async function loadRequestFiles(
   const tracks = await loadTrackDisplays(scope);
 
   if (scope.side === 'client') {
-    const files = rows.map(({ file, grants }) =>
+    // The same rule the download gate enforces — an upload from a track the client cannot see
+    // is neither listed nor fetchable.
+    const visibleRows = rows.filter(({ file }) => requestFileVisibleToClient(file, tracks));
+    const files = visibleRows.map(({ file, grants }) =>
       toClientRequestFileView(
         toSerializerFile(file),
         new Set(grants.map((g) => g.relationshipId)),

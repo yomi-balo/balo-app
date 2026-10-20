@@ -233,13 +233,13 @@ export type {
 // file", and its `declined` arm IS `relationshipDeniesHosting` (Ruling 2's location correction
 // puts it here, beside that single definition). See `./request-files.ts`.
 //
-// ⚠ `requestTrackIsLiveForFiles` is NOT `isThreadOpenStatus` (apps/web) — that one excludes
-// `invited` by design and is pinned by a test; this one INCLUDES it. Do not conflate them, and
-// do not adopt this predicate into messages or meetings without a ruling.
+// An `invited` track is `unopened` here — files reach an expert only once their track opens
+// (`relationshipIsOpened`, `@balo/shared/project-requests`), the same moment messages do.
 export {
   resolveRequestTrackFileAccess,
   requestTrackIsLiveForFiles,
   trackCanReadAllAudienceShare,
+  requestFileVisibleToClient,
   requestFileVisibleToTrack,
   resolveRequestFileAudience,
 } from './request-files';

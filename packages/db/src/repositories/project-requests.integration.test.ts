@@ -33,6 +33,7 @@ import {
   projectRequestsRepository,
   InvalidStatusTransitionError,
   InvalidKickoffStateError,
+  DIRECT_REQUEST_EOI_MESSAGE,
 } from './project-requests';
 
 /**
@@ -118,7 +119,8 @@ describe('projectRequestsRepository.createProjectRequest', () => {
     expect(row.expertProfileId).toBe(expertProfileId);
     expect(row.createdByUserId).toBe(createdByUserId);
     expect(row.sendTo).toBe('direct'); // default
-    expect(row.status).toBe('experts_invited'); // a submitted direct request invites its expert
+    // A submitted direct request invites its expert WITH their automatic EOI.
+    expect(row.status).toBe('eoi_submitted');
     expect(row.source).toBe('manual'); // default
     expect(row.title).toBe('Lead routing rebuild');
     expect(row.createdAt).toBeInstanceOf(Date);
@@ -161,7 +163,7 @@ describe('projectRequestsRepository.createProjectRequest', () => {
     expect(row.baloFeeBps).toBe(2500);
   });
 
-  it('invites the direct expert on submit but seeds no message (BAL-212: nothing auto-posts)', async () => {
+  it('invites the direct expert with an automatic EOI but seeds no message (BAL-212: nothing auto-posts)', async () => {
     const { companyId, expertProfileId, createdByUserId } = await seedActors();
 
     const row = await projectRequestsRepository.createProjectRequest({
@@ -178,13 +180,15 @@ describe('projectRequestsRepository.createProjectRequest', () => {
     });
 
     // The target expert is invited in the same transaction, attributed to the submitting
-    // client, and their thread is provisioned eagerly (as `invite()` does).
+    // client, and their thread is provisioned eagerly (as `invite()` does). Their automatic EOI
+    // OPENS the track, so the client sees them under the same rule as every other expert.
     const relationships = await db
       .select({
         id: requestExpertRelationships.id,
         expertProfileId: requestExpertRelationships.expertProfileId,
         status: requestExpertRelationships.status,
         invitedByUserId: requestExpertRelationships.invitedByUserId,
+        openedAt: requestExpertRelationships.openedAt,
       })
       .from(requestExpertRelationships)
       .where(eq(requestExpertRelationships.projectRequestId, row.id));
@@ -192,11 +196,34 @@ describe('projectRequestsRepository.createProjectRequest', () => {
       {
         id: expect.any(String),
         expertProfileId,
-        status: 'invited',
+        status: 'eoi_submitted',
         invitedByUserId: createdByUserId,
+        openedAt: expect.any(Date),
       },
     ]);
     const [relationship] = relationships;
+
+    const eois = await db
+      .select({
+        relationshipId: expressionsOfInterest.relationshipId,
+        projectRequestId: expressionsOfInterest.projectRequestId,
+        expertProfileId: expressionsOfInterest.expertProfileId,
+        message: expressionsOfInterest.message,
+      })
+      .from(expressionsOfInterest)
+      .where(eq(expressionsOfInterest.projectRequestId, row.id));
+    expect(eois).toStrictEqual([
+      {
+        relationshipId: relationship?.id,
+        projectRequestId: row.id,
+        expertProfileId,
+        message: DIRECT_REQUEST_EOI_MESSAGE,
+      },
+    ]);
+
+    // The stored request agrees with the returned row — the advance's rollup was a no-op.
+    const stored = await projectRequestsRepository.findById(row.id);
+    expect(stored?.status).toBe('eoi_submitted');
     const contexts = await db
       .select({ conversationId: conversationContexts.conversationId })
       .from(conversationContexts)

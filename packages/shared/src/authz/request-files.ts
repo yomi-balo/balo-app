@@ -12,16 +12,22 @@
  */
 
 import { relationshipDeniesHosting, type RelationshipHostingStatus } from './engagement';
+import {
+  relationshipIsOpened,
+  type RelationshipOpenedFact,
+} from '../project-requests/client-visibility';
 
 /**
- * The four `request_expert_relationships` columns the FILE plane reads. STRUCTURAL on
+ * The five `request_expert_relationships` columns the FILE plane reads. STRUCTURAL on
  * purpose — typing it against `@balo/db`'s row would drag a DB dependency into a module
  * whose whole contract is that it has none. The real Drizzle row satisfies it.
  *
- * ⚠ IT EXTENDS `RelationshipHostingStatus`, WHICH IS THE POINT: the `declined` arm is
- * `relationshipDeniesHosting` and nothing else.
+ * ⚠ IT EXTENDS `RelationshipHostingStatus` AND `RelationshipOpenedFact`, WHICH IS THE POINT:
+ * the `declined` arm is `relationshipDeniesHosting` and the `unopened` arm is
+ * `relationshipIsOpened`, and nothing else.
  */
-export interface RequestTrackFileStanding extends RelationshipHostingStatus {
+export interface RequestTrackFileStanding
+  extends RelationshipHostingStatus, RelationshipOpenedFact {
   /** Withdrawal is a SOFT DELETE, not a status (`./engagement.ts:167-172`). */
   readonly deletedAt: Date | null;
   /** BAL-431 — closed by award (Ruling 2). Stamped by `markNotSelectedByAward`. */
@@ -33,6 +39,11 @@ export interface RequestTrackFileStanding extends RelationshipHostingStatus {
  * (BAL-431 / ADR-1048 §2 + §5 as amended by Ruling 2). Everything else in this module is a
  * one-line derivation of it; there must never be a second.
  *
+ *   { kind: 'unopened' }                ⇒ the track never opened (no EOI yet, or declined
+ *                                         before one). NO access of any kind — the client
+ *                                         cannot see this expert, so nothing is shared with
+ *                                         them. On opening the track turns `live` and
+ *                                         inherits every prior share-to-all.
  *   { kind: 'live' }                    ⇒ receives new shares.
  *   { kind: 'closed'; closedAt: Date }  ⇒ historical-read from `closedAt` backwards.
  *   { kind: 'closed'; closedAt: null }  ⇒ FAIL CLOSED. The row says closed but names no
@@ -41,15 +52,12 @@ export interface RequestTrackFileStanding extends RelationshipHostingStatus {
  *                                         granted, because nothing can be ordered against
  *                                         an unknown.
  *
- * ⚠ THIS IS NOT `isThreadOpenStatus`, AND MUST NEVER BE CONFLATED WITH IT.
- * `isThreadOpenStatus` (`apps/web/src/lib/project-request/conversation-view-types.ts:54`)
- * deliberately EXCLUDES `invited` and is pinned by a test. "Live for files" INCLUDES
- * `invited` — ADR-1048's headline scenario is that a late invitee inherits every prior
- * share-to-all the moment their track exists. Two genuinely different notions of "live".
- * DO NOT touch `isThreadOpenStatus`, and DO NOT adopt this predicate into messages or
- * meetings in this PR (Ruling 2 / standing constraint 3).
+ * ⚠ AN `invited` TRACK IS `unopened`, NOT LIVE. A client is blind to an expert until their
+ * track opens (`relationshipIsOpened`), so files reach an expert at the same moment messages
+ * do, and a track inherits every prior share-to-all the moment it OPENS (ADR-1048 §1).
  */
 export type RequestTrackFileAccess =
+  | { readonly kind: 'unopened' }
   | { readonly kind: 'live' }
   | { readonly kind: 'closed'; readonly closedAt: Date | null };
 
@@ -63,6 +71,10 @@ export type RequestTrackFileAccess =
 export function resolveRequestTrackFileAccess(
   track: RequestTrackFileStanding
 ): RequestTrackFileAccess {
+  // Before anything else: a track that never opened has no file standing at all — not even
+  // historical read, which would otherwise leak pre-decline shares to a never-engaged expert.
+  if (!relationshipIsOpened(track)) return { kind: 'unopened' };
+
   const declined = relationshipDeniesHosting(track);
   if (!declined && track.deletedAt === null && track.notSelectedAt === null) {
     return { kind: 'live' };
@@ -98,9 +110,15 @@ export function trackCanReadAllAudienceShare(
   access: RequestTrackFileAccess,
   sharedAt: Date
 ): boolean {
-  if (access.kind === 'live') return true;
-  if (access.closedAt === null) return false; // fail closed
-  return sharedAt.getTime() < access.closedAt.getTime();
+  switch (access.kind) {
+    case 'unopened':
+      return false;
+    case 'live':
+      return true;
+    case 'closed':
+      if (access.closedAt === null) return false; // fail closed
+      return sharedAt.getTime() < access.closedAt.getTime();
+  }
 }
 
 /**
@@ -140,6 +158,9 @@ export function requestFileVisibleToTrack(
   grantedRelationshipIds: ReadonlySet<string>
 ): boolean {
   if (file.deletedAt !== null) return false;
+  // An unopened track sees nothing — not a grant made before the rule changed, not an upload
+  // from before it. The client cannot see this expert, so no file reaches them.
+  if (viewer.access.kind === 'unopened') return false;
 
   if (file.side === 'expert') {
     return (
@@ -159,6 +180,28 @@ export function requestFileVisibleToTrack(
       // Unrepresentable for a client file (`request_shared_file_side_shape`) — fail closed.
       return false;
   }
+}
+
+/**
+ * ⚠⚠ THE ONE PER-FILE VISIBILITY RULE FOR THE CLIENT SIDE — the counterpart of
+ * {@link requestFileVisibleToTrack}. The list and the download gate both resolve through it,
+ * so what the client is shown and what the client can fetch cannot split.
+ *
+ * Every live client-side file is visible. An expert upload is visible only when its track is
+ * one the client can see: an upload from a track that has not opened (made before this rule)
+ * stays hidden, because the client is blind to that expert. `tracks` is fail-closed on its own
+ * — an unopened track in it admits nothing — so a caller passing unfiltered tracks still
+ * cannot leak.
+ */
+export function requestFileVisibleToClient(
+  file: Pick<RequestFileAudienceFacts, 'side' | 'expertRelationshipId' | 'deletedAt'>,
+  tracks: readonly Pick<RequestTrackRef, 'relationshipId' | 'access'>[]
+): boolean {
+  if (file.deletedAt !== null) return false;
+  if (file.side === 'client') return true;
+  return tracks.some(
+    (t) => t.access.kind !== 'unopened' && t.relationshipId === file.expertRelationshipId
+  );
 }
 
 /** How a track came to see a file — for the admin lens and the delete-time audit snapshot. */

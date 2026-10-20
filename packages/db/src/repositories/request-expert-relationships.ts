@@ -85,8 +85,9 @@ export class InvalidRelationshipTransitionError extends Error {
 /**
  * Shared transition implementation. Locks the live relationship row FOR UPDATE,
  * validates against `RELATIONSHIP_STATUS_TRANSITIONS`, sets `declinedAt` when
- * advancing to `declined` and `proposalRequestedAt` when advancing to
- * `proposal_requested`, persists the relationship, THEN re-derives and (if it
+ * advancing to `declined`, `proposalRequestedAt` when advancing to
+ * `proposal_requested` and `openedAt` on the first non-decline move off `invited`,
+ * persists the relationship, THEN re-derives and (if it
  * changed) writes the parent `project_requests.status` — the centrally-derived
  * max-progress rollup over the request's live relationships (ADR-1025 /
  * BAL-295). Request + relationship therefore advance ATOMICALLY through a single
@@ -235,6 +236,9 @@ export async function advanceRelationshipStatus(
           }
         : {}),
       ...(input.to === 'proposal_requested' ? { proposalRequestedAt: new Date() } : {}),
+      // The track OPENS on its first engaged move off `invited` — the client-visibility fact.
+      // A decline from `invited` leaves it NULL: that track never opened.
+      ...(previousStatus === 'invited' && input.to !== 'declined' ? { openedAt: new Date() } : {}),
     })
     .where(eq(requestExpertRelationships.id, input.id))
     .returning();

@@ -207,12 +207,11 @@ async function buildShareView(
 ): Promise<ClientRequestFileView | ExpertRequestFileView> {
   const serialized = toSerializerFile(shareResult.file);
   if (scope.side === 'expert') {
-    const invitedAt =
-      scope.request.relationships.find((r) => r.id === scope.viewer.relationshipId)?.invitedAt ??
-      new Date(0);
+    // The upload gate admits only a live track, so `openedAt` is set; the fallback only narrows.
+    const joinedAt = scope.viewer.standing.openedAt ?? new Date(0);
     return toExpertRequestFileView(serialized, clientCompanyName, {
       relationshipId: scope.viewer.relationshipId,
-      invitedAt,
+      joinedAt,
       access: scope.viewer.access,
     });
   }

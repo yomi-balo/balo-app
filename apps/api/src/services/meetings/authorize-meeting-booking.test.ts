@@ -373,6 +373,7 @@ function relationshipRow(overrides: Record<string, unknown> = {}): unknown {
     expertProfileId: EXPERT_PROFILE_ID,
     status: 'eoi_submitted',
     declinedAt: null,
+    openedAt: new Date('2026-08-01T00:00:00Z'),
     ...overrides,
   };
 }
@@ -535,6 +536,19 @@ describe('BAL-283 — the request_interaction arm (the loadSubject trap)', () =>
     { label: 'both set', overrides: { status: 'declined', declinedAt: new Date() } },
   ])('DECLINED — $label denies booking, membership never consulted', async ({ overrides }) => {
     mockRelationshipFindById.mockResolvedValue(relationshipRow(overrides));
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  /** A client and an expert interact only once the expert's track has opened (their EOI). */
+  it('UNOPENED (`invited`) denies booking, membership never consulted', async () => {
+    mockRelationshipFindById.mockResolvedValue(
+      relationshipRow({ status: 'invited', openedAt: null })
+    );
 
     await expect(authorizeInteraction()).resolves.toEqual({
       ok: false,

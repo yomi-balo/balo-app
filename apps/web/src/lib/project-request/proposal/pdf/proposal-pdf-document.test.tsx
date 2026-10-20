@@ -108,6 +108,7 @@ function makeRelationship(): Relationship {
     declinedAt: null,
     declinedByUserId: null,
     declineReason: null,
+    openedAt: NOW,
     expertProfile: {
       id: 'exp-1',
       // ⚠ `numeric` ⇒ a STRING off the driver — the fixture mirrors the raw row.

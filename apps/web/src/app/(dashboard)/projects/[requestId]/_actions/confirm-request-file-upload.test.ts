@@ -121,7 +121,17 @@ const EXPERT_SCOPE = {
     company: { name: 'Acme Corp' },
     relationships: [{ id: REL_ID, invitedAt: new Date('2026-08-01T00:00:00Z') }],
   },
-  viewer: { relationshipId: REL_ID, expertProfileId: EXPERT_PROFILE_ID, access: { kind: 'live' } },
+  viewer: {
+    relationshipId: REL_ID,
+    expertProfileId: EXPERT_PROFILE_ID,
+    access: { kind: 'live' },
+    standing: {
+      status: 'eoi_submitted',
+      declinedAt: null,
+      notSelectedAt: null,
+      openedAt: new Date('2026-08-02T00:00:00Z'),
+    },
+  },
 };
 
 const VALID_CLIENT_INPUT = {

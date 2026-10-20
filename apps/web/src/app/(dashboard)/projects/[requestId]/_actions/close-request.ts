@@ -5,6 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { projectRequestsRepository, InvalidStatusTransitionError } from '@balo/db';
+import { relationshipIsOpened } from '@balo/shared/project-requests';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
@@ -120,15 +121,18 @@ export async function closeRequestAction(
     revalidatePath(`/projects/${requestId}`);
     revalidatePath('/projects');
 
+    // The client counts only the experts it could see — a track that never opened is invisible
+    // to them, so it is neither in the toast nor in this browser-bound payload.
+    const visibleTracksEnded = result.declinedTracks.filter(relationshipIsOpened).length;
     return {
       success: true,
       analytics: {
         reason: 'withdrawn',
         actorKind: 'client',
         stageAtClose: result.previousStatus,
-        openTracks: result.declinedTracks.length,
+        openTracks: visibleTracksEnded,
         openProposals: result.withdrawnProposalIds.length,
-        tracksEnded: result.declinedTracks.length,
+        tracksEnded: visibleTracksEnded,
       },
     };
   } catch (error) {

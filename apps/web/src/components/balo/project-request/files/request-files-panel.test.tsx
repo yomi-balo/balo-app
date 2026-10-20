@@ -238,7 +238,7 @@ describe('RequestFilesPanel', () => {
       closedReason: null,
     };
     render(<RequestFilesPanel requestId={REQUEST_ID} initialView={view} />);
-    expect(screen.queryByText(/Everyone invited/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/All interested experts/)).not.toBeInTheDocument();
     expect(screen.queryByText(/only$/)).not.toBeInTheDocument();
     expect(screen.queryByText('Visible now to:')).not.toBeInTheDocument();
   });
@@ -667,7 +667,7 @@ describe('RequestFilesPanel', () => {
       expect(await screen.findByText('Proposal-draft.pdf')).toBeInTheDocument();
       // The expert arm never offers an audience — the server ignores it, and the UI must not
       // imply one was chosen.
-      expect(screen.queryByText(/Everyone invited/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/All interested experts/)).not.toBeInTheDocument();
     });
 
     it('surfaces a presign refusal and uploads nothing', async () => {

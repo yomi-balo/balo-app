@@ -56,7 +56,7 @@ export function RequestFileAudienceBadges({
       <>
         <Badge className="gap-1 bg-blue-50 text-xs font-medium text-blue-700 hover:bg-blue-50 dark:bg-blue-950 dark:text-blue-300">
           <Users className="h-2.5 w-2.5" aria-hidden="true" />
-          Everyone invited · {audience.liveTrackCount} live
+          All interested experts · {audience.liveTrackCount}
         </Badge>
         {audience.annotations.map((a) => (
           <span key={a.relationshipId} className="text-muted-foreground text-xs">

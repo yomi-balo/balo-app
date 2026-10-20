@@ -94,7 +94,59 @@ describe('getRequestFileDownloadAction', () => {
     expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
   });
 
-  it('downloads for a client viewer without an audience check', async () => {
+  it('downloads for a client viewer an upload from an opened track', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      request: { id: REQUEST_ID },
+      companyId: 'c1',
+      tracks: [
+        { relationshipId: REL_ID, expertProfileId: EXPERT_PROFILE_ID, access: { kind: 'live' } },
+      ],
+    });
+    mockFindByIdInRequest.mockResolvedValue({
+      file: {
+        ...LIVE_FILE.file,
+        side: 'expert',
+        audience: 'own_track',
+        expertRelationshipId: REL_ID,
+      },
+      grants: [],
+    });
+    const result = await getRequestFileDownloadAction(VALID_INPUT);
+    expect(result).toEqual({ success: true, url: 'https://signed-download' });
+  });
+
+  it('refuses a client an upload from a track it cannot see, as if the file did not exist', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      request: { id: REQUEST_ID },
+      companyId: 'c1',
+      // The scope's client arm never carries an unopened track, so the uploader is absent.
+      tracks: [
+        {
+          relationshipId: OTHER_REL_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+        },
+      ],
+    });
+    mockFindByIdInRequest.mockResolvedValue({
+      file: {
+        ...LIVE_FILE.file,
+        side: 'expert',
+        audience: 'own_track',
+        expertRelationshipId: REL_ID,
+      },
+      grants: [],
+    });
+    const result = await getRequestFileDownloadAction(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
+    expect(mockPresignDownload).not.toHaveBeenCalled();
+  });
+
+  it('downloads a client-side file for a client viewer', async () => {
     mockAuthorizeScope.mockResolvedValue({
       ok: true,
       side: 'client',

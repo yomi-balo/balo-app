@@ -5,6 +5,7 @@ import { platformRoleIsStaff } from '@balo/shared/authz';
 import { db } from '../client';
 import {
   expertProfiles,
+  expressionsOfInterest,
   projectRequests,
   projectRequestTags,
   projectRequestProducts,
@@ -33,6 +34,12 @@ import {
 } from './request-expert-relationships';
 
 export type ProjectRequestStatus = ProjectRequest['status'];
+
+/**
+ * The EOI a direct request's expert is born with (`createProjectRequest`). Sanitised-HTML like
+ * every EOI `message`; static, so it needs no sanitiser pass.
+ */
+export const DIRECT_REQUEST_EOI_MESSAGE = '<p>Invited by client</p>';
 type RelationshipStatus = RequestExpertRelationship['status'];
 
 /**
@@ -204,6 +211,8 @@ export interface CloseRequestResult {
     expertProfileId: string;
     /** The stage the track ended at — picks the notice's copy. */
     previousStatus: RelationshipStatus;
+    /** When the track opened; `null` ⇒ it never did, and the client never saw this expert. */
+    openedAt: Date | null;
     declineAuditId: string;
   }>;
   withdrawnProposalIds: string[];
@@ -278,11 +287,15 @@ export const projectRequestsRepository = {
    * case id fails the FK and rolls the whole request back.
    *
    * A SUBMITTED DIRECT request (`sendTo = 'direct'`, status `requested`) is born with its target
-   * expert already invited: the `invited` relationship and its conversation are written here,
-   * and the row lands at `experts_invited` rather than `requested`. The client chose the expert,
-   * so there is nobody for staff to route it to — without the relationship the expert's lens
-   * (`resolveRequestLens`) denies them the very request they were notified about, and the admin
-   * pipeline panel has no one to list. A draft or `match` request is written as given.
+   * expert already invited AND their EOI already submitted: the relationship and its
+   * conversation are written here, then advanced `invited → eoi_submitted` with an automatic
+   * EOI (`DIRECT_REQUEST_EOI_MESSAGE`). The client chose the expert, so there is nobody for staff
+   * to route it to — without the relationship the expert's lens (`resolveRequestLens`) denies
+   * them the very request they were notified about, and the admin pipeline panel has no one to
+   * list. The automatic EOI OPENS the track, so the client can see and talk to the expert they
+   * named under the same rule as every other expert (`relationshipIsOpened`). The advance
+   * re-derives the request to `eoi_submitted` and attributes the transition to the client. A
+   * draft or `match` request is written as given.
    *
    * Takes no request lock: it is the named exemption in `_shared/request-lock.ts` (the request
    * id is minted by this transaction's own INSERT, so nothing else can reach it until commit).
@@ -302,7 +315,9 @@ export const projectRequestsRepository = {
         .values(
           directExpertProfileId === null
             ? input.request
-            : { ...input.request, status: deriveRequestStatus(['invited'], 'requested') }
+            : // Born at the status the automatic EOI below rolls up to, so the returned row is
+              // the committed one (the advance's re-derive is then a no-op).
+              { ...input.request, status: deriveRequestStatus(['eoi_submitted'], 'requested') }
         )
         .returning();
       if (row === undefined) {
@@ -326,6 +341,19 @@ export const projectRequestsRepository = {
           { contextType: 'relationship', contextId: relationship.id },
           tx
         );
+        // The automatic EOI — the same two writes as `expressionsOfInterestRepository.submit`.
+        await advanceRelationshipStatus(tx, {
+          id: relationship.id,
+          to: 'eoi_submitted',
+          expectedFrom: 'invited',
+          actorUserId: row.createdByUserId,
+        });
+        await tx.insert(expressionsOfInterest).values({
+          relationshipId: relationship.id,
+          projectRequestId: row.id,
+          expertProfileId: directExpertProfileId,
+          message: DIRECT_REQUEST_EOI_MESSAGE,
+        });
       }
 
       if (input.tagIds.length > 0) {
@@ -493,6 +521,9 @@ export const projectRequestsRepository = {
           // in tests. This does NOT reopen `relationshipDeniesHosting`'s guard — that resolver
           // reads its OWN authoritative row inside the engagement-host seam, never this
           // render-path projection.
+          //
+          // `openedAt` is the client-visibility fact (`relationshipIsOpened`): every client-facing
+          // derivation over this list drops tracks that never opened.
           columns: {
             id: true,
             expertProfileId: true,
@@ -503,6 +534,7 @@ export const projectRequestsRepository = {
             declinedAt: true,
             declineReason: true,
             declinedByUserId: true,
+            openedAt: true,
           },
           with: {
             // ⚠ BAL-422 widened this allow-list by exactly TWO DISPLAY columns
@@ -1134,6 +1166,7 @@ export const projectRequestsRepository = {
           relationshipId: relationship.id,
           expertProfileId: relationship.expertProfileId,
           previousStatus: advanced.previousStatus,
+          openedAt: advanced.relationship.openedAt,
           declineAuditId: advanced.auditId,
         });
       }

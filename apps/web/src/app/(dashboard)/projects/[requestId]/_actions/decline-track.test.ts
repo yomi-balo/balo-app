@@ -77,7 +77,14 @@ function requestRow(overrides: Record<string, unknown> = {}) {
     title: 'CPQ implementation',
     createdByUserId: 'owner-1',
     company: { id: COMPANY_ID, name: 'Acme Corp' },
-    relationships: [{ id: RELATIONSHIP_ID, expertProfileId: EXPERT_PROFILE_ID, status: 'invited' }],
+    relationships: [
+      {
+        id: RELATIONSHIP_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        status: 'eoi_submitted',
+        openedAt: new Date('2026-08-01T00:00:00Z'),
+      },
+    ],
     ...overrides,
   };
 }
@@ -145,6 +152,29 @@ describe('declineTrackAction', () => {
       requestId: REQUEST_ID,
       relationshipId: OTHER_RELATIONSHIP_ID,
     });
+    expect(result).toEqual({
+      success: false,
+      error: 'This track can no longer be declined.',
+      code: 'not_declinable',
+    });
+    expect(mockDeclineTrack).not.toHaveBeenCalled();
+  });
+
+  /** The client is blind to an expert whose track has not opened — it answers as missing. */
+  it('refuses a track that has not opened, exactly as a missing one', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      requestRow({
+        relationships: [
+          {
+            id: RELATIONSHIP_ID,
+            expertProfileId: EXPERT_PROFILE_ID,
+            status: 'invited',
+            openedAt: null,
+          },
+        ],
+      })
+    );
+    const result = await declineTrackAction(VALID_INPUT);
     expect(result).toEqual({
       success: false,
       error: 'This track can no longer be declined.',

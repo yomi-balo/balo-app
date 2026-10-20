@@ -159,10 +159,37 @@ export const requestExpertRelationships = pgTable(
      * and `availabilitySharedAt` above.
      */
     notSelectedAt: timestamp('not_selected_at', { withTimezone: true }),
+    /**
+     * When this track OPENED — its first move off `invited` onto an engaged status (the
+     * expert's EOI, a direct request's automatic EOI, or Balo's BAL-315 proposal bypass).
+     * NULL ⇒ the track never opened.
+     *
+     * ⚠ THE CLIENT-VISIBILITY FACT. A client can see, count, name and interact with an
+     * expert only once the track has opened; until then the expert is invisible to them.
+     * Read through `relationshipIsOpened` (`@balo/shared/project-requests`) — never a
+     * second rule.
+     *
+     * ⚠ A STAMPED COLUMN, NOT `status`, BECAUSE DECLINE ERASES THE HISTORY. A track declined
+     * straight from `invited` and one declined after an EOI both read `declined`; only this
+     * column tells them apart, and the never-opened one must stay invisible to the client
+     * forever (closed lists, file audiences, counts).
+     *
+     * Written ONLY by `advanceRelationshipStatus` (on the first non-decline move off
+     * `invited`), which a direct request's automatic EOI also goes through. The CHECK below
+     * pins it to `status`. NO INDEX — read with the per-request relationship list, never a
+     * predicate on its own (same reasoning as `notSelectedAt`).
+     */
+    openedAt: timestamp('opened_at', { withTimezone: true }),
     ...timestamps,
     ...softDelete,
   },
   (t) => [
+    // `opened_at` agrees with `status`: never set on `invited`, always set on an engaged
+    // status, either on `declined` (declined before vs after the track opened).
+    check(
+      'request_expert_relationship_opened_shape',
+      sql`(${t.status} = 'invited' AND ${t.openedAt} IS NULL) OR ${t.status} = 'declined' OR (${t.status} NOT IN ('invited', 'declined') AND ${t.openedAt} IS NOT NULL)`
+    ),
     // One LIVE relationship per (request, expert). PARTIAL on `deleted_at IS NULL`
     // (mirrors the status index below) so a removed (soft-deleted) expert can be
     // re-invited — the soft-deleted row no longer occupies the unique slot, while

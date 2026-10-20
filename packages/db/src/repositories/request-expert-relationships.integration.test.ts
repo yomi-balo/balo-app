@@ -15,6 +15,7 @@ import {
 } from './request-expert-relationships';
 import { projectRequestsRepository } from './project-requests';
 import { conversationsRepository } from './conversations';
+import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 
 describe('requestExpertRelationshipsRepository.invite', () => {
   it('creates an invited relationship row', async () => {
@@ -493,6 +494,89 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
     expect(updated.declinedAt).toBeInstanceOf(Date);
     // The decline stamp must not touch the proposal-request stamp.
     expect(updated.proposalRequestedAt).toBeNull();
+  });
+
+  // ── `openedAt`: the client-visibility fact ──
+
+  it('stamps openedAt on the first engaged move off invited, and keeps it on later moves', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    expect(relationship.openedAt).toBeNull();
+    const actorUserId = await seedActorId();
+
+    const { relationship: opened } = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'eoi_submitted',
+      actorUserId,
+    });
+    expect(opened.openedAt).toBeInstanceOf(Date);
+
+    const { relationship: later } = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'proposal_requested',
+      actorUserId,
+    });
+    expect(later.openedAt?.getTime()).toBe(opened.openedAt?.getTime());
+
+    const { relationship: declined } = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'declined',
+      actorUserId,
+      reason: 'client_declined',
+    });
+    expect(declined.openedAt?.getTime()).toBe(opened.openedAt?.getTime());
+  });
+
+  it('stamps openedAt on the BAL-315 bypass (invited → proposal_requested, no EOI)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+
+    const { relationship: updated } = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'proposal_requested',
+      actorUserId: await seedActorId(),
+    });
+
+    expect(updated.openedAt).toBeInstanceOf(Date);
+  });
+
+  /** A track declined before it opened never opened — the client must never see it. */
+  it('leaves openedAt NULL on a decline straight from invited', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+
+    const { relationship: updated } = await requestExpertRelationshipsRepository.transitionStatus({
+      id: relationship.id,
+      to: 'declined',
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
+    });
+
+    expect(updated.status).toBe('declined');
+    expect(updated.openedAt).toBeNull();
+  });
+
+  it('pins openedAt to status with a CHECK', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    const { relationship: engaged } = await requestExpertRelationshipFactory({
+      values: { status: 'eoi_submitted' },
+    });
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx
+          .update(requestExpertRelationships)
+          .set({ openedAt: new Date() })
+          .where(eq(requestExpertRelationships.id, relationship.id)),
+      'request_expert_relationship_opened_shape'
+    );
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx
+          .update(requestExpertRelationships)
+          .set({ openedAt: null })
+          .where(eq(requestExpertRelationships.id, engaged.id)),
+      'request_expert_relationship_opened_shape'
+    );
   });
 
   it('sets proposalRequestedAt when transitioning to proposal_requested', async () => {
