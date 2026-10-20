@@ -1,6 +1,7 @@
 import { estimatedMinutesForWindow } from './estimate-window';
 import type { HoldStatus } from './receivable-coverage';
 import { deriveSessionEstimate } from './session-estimate';
+import { TOP_UP_LIMITS_MINOR } from './top-up-limits';
 
 /**
  * BAL-474 (ADR-1040 Amendment 7 §H; owner rulings D6.1 + D6.5) — THE ONE VERDICT on whether a
@@ -51,10 +52,30 @@ export interface ReservableCaseBooking {
   readonly expertRateCents: number | null;
 }
 
+/**
+ * The figures a refusal arm needs to size the top-up that would clear it. Read for the arms that
+ * return before the mandate/rate/balance reads (`no_wallet`, `on_hold`); `no_mandate` carries the
+ * same figures inline. The verdict ignores it.
+ */
+export interface BookingTopUpPricing {
+  /** The BOOKED expert's current rate; `null` ⇒ unset or unknown expert, so unpriceable. */
+  readonly expertRateCents: number | null;
+  /** `balance − Σ active holds net of their posted consumption`; 0 when the company has no wallet. */
+  readonly availableMinor: number;
+  readonly reservable: readonly ReservableCaseBooking[];
+  /** An active mandate would fund the booking itself, so only the hold figure needs clearing. */
+  readonly mandateActive: boolean;
+}
+
 /** ONE consistent read of a company's booking funding (see `bookingFundingRepository`). */
 export type BookingFundingSnapshot =
-  | { readonly kind: 'no_wallet' }
-  | { readonly kind: 'on_hold'; readonly walletId: string; readonly hold: HoldStatus }
+  | { readonly kind: 'no_wallet'; readonly topUpPricing: BookingTopUpPricing }
+  | {
+      readonly kind: 'on_hold';
+      readonly walletId: string;
+      readonly hold: HoldStatus;
+      readonly topUpPricing: BookingTopUpPricing;
+    }
   /** An active mandate and no hold — the reads below it are short-circuited. */
   | { readonly kind: 'mandate'; readonly walletId: string }
   | { readonly kind: 'unknown_expert'; readonly walletId: string }
@@ -132,6 +153,69 @@ function sumReservedBookings(reservable: readonly ReservableCaseBooking[]): {
     reservedBookingCount += 1;
   }
   return { reservedMinor, reservedBookingCount };
+}
+
+/**
+ * The smallest single top-up (a multiple of the top-up step, never below the minimum) after which
+ * {@link assessCaseBookingFunding} passes this booking, whatever refusal arm the snapshot is on.
+ * It may exceed `TOP_UP_LIMITS_MINOR.max`; the caller decides what to do with a figure that no
+ * single top-up can reach.
+ *
+ *   · `no_wallet` / `no_mandate`: estimate + reserved − available (a wallet-less company has
+ *     nothing available);
+ *   · `on_hold`: the hold's clear-it amount, or the booking part when that is larger and no
+ *     mandate would fund it;
+ *   · `mandate` / `unknown_expert` / a rate-less expert: no booking part, so the minimum.
+ *
+ * Uses {@link estimateCaseBookingMinor} and {@link sumReservedBookings} only — never a second
+ * estimator. PURE.
+ */
+export function suggestCaseBookingTopUpMinor(
+  snapshot: BookingFundingSnapshot,
+  booking: { readonly scheduledStart: Date; readonly scheduledEnd: Date }
+): number {
+  const { min, step } = TOP_UP_LIMITS_MINOR;
+  const bookingPart = (
+    rateCents: number | null,
+    availableMinor: number,
+    reservable: readonly ReservableCaseBooking[]
+  ): number => {
+    if (rateCents === null) return 0;
+    const estimateMinor = estimateCaseBookingMinor(
+      rateCents,
+      booking.scheduledStart,
+      booking.scheduledEnd
+    );
+    return estimateMinor + sumReservedBookings(reservable).reservedMinor - availableMinor;
+  };
+
+  let needMinor = 0;
+  switch (snapshot.kind) {
+    case 'no_wallet': {
+      const { expertRateCents, availableMinor, reservable } = snapshot.topUpPricing;
+      needMinor = bookingPart(expertRateCents, availableMinor, reservable);
+      break;
+    }
+    case 'on_hold': {
+      const { expertRateCents, availableMinor, reservable, mandateActive } = snapshot.topUpPricing;
+      needMinor = Math.max(
+        snapshot.hold.amountToClearMinor,
+        mandateActive ? 0 : bookingPart(expertRateCents, availableMinor, reservable)
+      );
+      break;
+    }
+    case 'no_mandate':
+      needMinor = bookingPart(
+        snapshot.expertRateCents,
+        snapshot.availableMinor,
+        snapshot.reservable
+      );
+      break;
+    case 'mandate':
+    case 'unknown_expert':
+      break;
+  }
+  return Math.max(min, Math.ceil(needMinor / step) * step);
 }
 
 export function assessCaseBookingFunding(

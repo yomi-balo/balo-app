@@ -5,6 +5,7 @@ import {
   BookingBalancePanel,
   ExpertUnavailablePanel,
   FundingSetupPanel,
+  StaleSlotBanner,
   bookingSwitchFailedCopy,
   caseSavedCopy,
   type BookingBalancePanelProps,
@@ -406,5 +407,93 @@ describe('ExpertUnavailablePanel', () => {
   it('shows no similar-expert link when none is supplied', () => {
     render(<ExpertUnavailablePanel expertFirstName="Priya" onClose={vi.fn()} />);
     expect(screen.queryByRole('link', { name: 'Find a similar expert' })).not.toBeInTheDocument();
+  });
+});
+
+describe('FundingSetupPanel — switch and top up', () => {
+  const INACTIVE = { name: COMPANY, isActive: false } as const;
+
+  it('keeps "Set up billing" by default', async () => {
+    const onManageBilling = vi.fn();
+    render(
+      <FundingSetupPanel canManageBilling onManageBilling={onManageBilling} onClose={vi.fn()} />
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Set up billing' }));
+    expect(onManageBilling).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps "Set up billing" when the company is already the active workspace', () => {
+    render(
+      <FundingSetupPanel
+        canManageBilling
+        onManageBilling={vi.fn()}
+        onClose={vi.fn()}
+        company={{ name: COMPANY, isActive: true }}
+        onSwitchAndTopUp={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Set up billing' })).toBeInTheDocument();
+  });
+
+  it('offers "Switch to {Company} and top up" for an inactive company and calls the handler', async () => {
+    const onManageBilling = vi.fn();
+    const onSwitchAndTopUp = vi.fn();
+    render(
+      <FundingSetupPanel
+        canManageBilling
+        onManageBilling={onManageBilling}
+        onClose={vi.fn()}
+        company={INACTIVE}
+        onSwitchAndTopUp={onSwitchAndTopUp}
+      />
+    );
+    await userEvent.click(screen.getByRole('button', { name: `Switch to ${COMPANY} and top up` }));
+    expect(onSwitchAndTopUp).toHaveBeenCalledTimes(1);
+    expect(onManageBilling).not.toHaveBeenCalled();
+  });
+
+  it('disables both buttons while the switch is in flight', () => {
+    render(
+      <FundingSetupPanel
+        canManageBilling
+        onManageBilling={vi.fn()}
+        onClose={vi.fn()}
+        company={INACTIVE}
+        isSwitching
+        onSwitchAndTopUp={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: `Switch to ${COMPANY} and top up` })).toBeDisabled();
+    expect(screen.getByRole('button', { name: "I'll do this later" })).toBeDisabled();
+  });
+
+  it('never offers the switch to a member', () => {
+    render(
+      <FundingSetupPanel
+        canManageBilling={false}
+        onManageBilling={vi.fn()}
+        onClose={vi.fn()}
+        company={INACTIVE}
+        onSwitchAndTopUp={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /Switch to/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('StaleSlotBanner — follow-up line', () => {
+  it('renders the follow-up under the base line when given', () => {
+    render(<StaleSlotBanner onChooseNewTime={vi.fn()} followUp="Your top-up went through." />);
+    expect(screen.getByText('Your top-up went through.')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This time was just booked by someone else.'
+    );
+  });
+
+  it('renders only the base line without one', () => {
+    render(<StaleSlotBanner onChooseNewTime={vi.fn()} />);
+    expect(screen.getByRole('alert').textContent).toBe(
+      'This time was just booked by someone else.Choose a new time'
+    );
   });
 });

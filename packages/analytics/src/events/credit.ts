@@ -28,6 +28,13 @@ export const CREDIT_EVENTS = {
 export type PaymentMethodSourceProperty = 'new_card' | 'saved_card';
 
 /**
+ * Which surface hosts the top-up parts that fired the event: the billing composer, or the
+ * inline funding block on the booking flow's Review & confirm step. Omitted on callers that
+ * predate the property.
+ */
+export type CreditSurfaceProperty = 'billing' | 'booking';
+
+/**
  * What the RECEIPT could verify about the wallet when the event fired — the client-side half of
  * the "charged but never credited" alarm.
  *
@@ -55,9 +62,11 @@ export interface CreditEventMap {
      * churn a live PostHog property (and every dashboard built on it) for no gain.
      */
     funding_method: 'card' | 'invoice';
-    low_balance_mode: 'auto_topup' | 'keep_going' | 'notify_only';
+    /** Absent on a pure top-up (booking surface), which neither reads nor writes the setting. */
+    low_balance_mode?: 'auto_topup' | 'keep_going' | 'notify_only';
     /** Top-up redesign — new card entered, or the card already on file. */
     payment_method_source?: PaymentMethodSourceProperty;
+    surface?: CreditSurfaceProperty;
   };
   [CREDIT_EVENTS.PURCHASE_COMPLETED]: {
     amount_minor: number;
@@ -70,11 +79,15 @@ export interface CreditEventMap {
   };
   [CREDIT_EVENTS.PROMO_REDEEMED]: { code: string; bonus_minor: number };
   [CREDIT_EVENTS.MANDATE_CAPTURED]: { low_balance_mode: 'auto_topup' | 'keep_going' };
-  [CREDIT_EVENTS.PAYMENT_METHOD_CHANGED]: { to: PaymentMethodSourceProperty };
+  [CREDIT_EVENTS.PAYMENT_METHOD_CHANGED]: {
+    to: PaymentMethodSourceProperty;
+    surface?: CreditSurfaceProperty;
+  };
   [CREDIT_EVENTS.PURCHASE_DECLINED]: {
     amount_minor: number;
     /** Stripe's specific refusal reason when it gave one; `null` otherwise. */
     decline_code: string | null;
+    surface?: CreditSurfaceProperty;
   };
 }
 

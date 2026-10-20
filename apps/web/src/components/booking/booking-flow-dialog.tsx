@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
@@ -16,12 +16,18 @@ import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
 import { bookConsultationAction } from '@/lib/booking/actions/book-consultation';
 import { refetchOpenCasesAction } from '@/lib/booking/actions/refetch-open-cases';
 import { refetchBookingContextAction } from '@/lib/booking/actions/refetch-booking-context';
+import { saveBookingForLaterAction } from '@/lib/booking/actions/save-booking-for-later';
+import type {
+  BookingFundingRequest,
+  BookingFundingView,
+} from '@/lib/booking/actions/booking-funding-types';
 import { switchWorkspaceAction } from '@/lib/auth/actions/switch-workspace';
 import type { AvailabilitySlotSelection } from '@/components/availability';
 import type {
   BookConsultationResult,
   BookingBalanceFailure,
   BookingFailureCode,
+  BookingSetupFailure,
 } from '@/lib/booking/actions/types';
 import { TOP_UP_LIMITS_MINOR, type EligibleCompany } from '@balo/shared/credit';
 import { companyWorkspaceKey } from '@balo/shared/workspaces';
@@ -29,6 +35,7 @@ import { BookingHeader, type BookingStep } from './booking-header';
 import { StepPickTime } from './step-pick-time';
 import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confirm';
 import { StepBooked } from './step-booked';
+import { StepSavedForLater } from './step-saved-for-later';
 import { OnboardingRoutingState } from './onboarding-routing-state';
 import {
   BookingBalancePanel,
@@ -43,13 +50,39 @@ import {
   type HardFailurePanelCopy,
 } from './booking-error-panels';
 import type { GuestDraft } from './guest-invite-composer';
-import type { BookingFlowDialogProps, FixedCaseSummary, OpenCaseForExpert } from './types';
+import {
+  clearBookingDrafts,
+  readBookingDraft,
+  writeBookingDraft,
+  type BookingDraft,
+  type BookingDraftScope,
+} from './booking-draft';
+import { findFirstInvalidField } from './focus-first-invalid';
+import { BookingFundingBlock, type FundedTopUp } from './funding/booking-funding-block';
+import { resolveFundingDisposition, type RefusedFundingView } from './funding/funding-disposition';
+import {
+  BALANCE_NOW_COVERS_COPY,
+  DRAFT_CLEARED_COPY,
+  fundedHardFailureBody,
+  fundedPartialFollowUp,
+  fundedSessionFollowUp,
+  staleSlotTopUpFollowUp,
+} from './funding/funding-copy';
+import { useBookingFunding } from './funding/use-booking-funding';
+import type {
+  BookingContext,
+  BookingEntry,
+  BookingFlowDialogProps,
+  FixedCaseSummary,
+  OpenCaseForExpert,
+} from './types';
 
 type Phase =
   | 'onboarding'
   | 'pick_time'
   | 'confirm'
   | 'booked'
+  | 'saved_for_later'
   | 'error_hard'
   | 'error_partial'
   | 'error_session'
@@ -267,6 +300,16 @@ type BalanceRefusal = {
 
 type BalanceOutcome = { kind: 'balance' } & BalanceRefusal;
 
+type FundingOutcome = {
+  kind: 'funding';
+  canManageBilling: boolean;
+  caseTitle: string | null;
+  /** The company the gate checked; `null` when the result carried no setup detail. */
+  company: BookingSetupFailure['company'] | null;
+};
+
+type FundingRefusalOutcome = FundingOutcome | BalanceOutcome;
+
 type SubmitFailureOutcome =
   | { kind: 'stale_slot' }
   | { kind: 'impersonation_refused' }
@@ -274,8 +317,7 @@ type SubmitFailureOutcome =
   | { kind: 'session_expired'; caseTitle: string | null }
   | { kind: 'partial'; engagementId: string; caseTitle: string }
   | { kind: 'company_fail_closed'; code: BookingFailureCode }
-  | { kind: 'funding'; canManageBilling: boolean; caseTitle: string | null }
-  | BalanceOutcome
+  | FundingRefusalOutcome
   | { kind: 'hard' };
 
 /**
@@ -312,6 +354,7 @@ function resolveFundingOutcome(
       kind: 'funding',
       canManageBilling: result.code === 'funding_setup_required',
       caseTitle,
+      company: result.setup?.company ?? null,
     };
   }
 
@@ -398,6 +441,151 @@ function resolveSubmitFailureOutcome(
 }
 
 /**
+ * Whether a submit-time funding refusal keeps today's full panel instead of the inline block: a
+ * billing manager who cannot top up from here, because the refusing company is not the active
+ * workspace or the amount is more than one top-up. Members always get the inline block (they save
+ * the booking rather than top up), and so does any refusal that carries no company to check.
+ */
+function isFullPanelOutcome(outcome: FundingRefusalOutcome): boolean {
+  if (!outcome.canManageBilling) return false;
+  if (outcome.kind === 'funding') {
+    return outcome.company !== null && !outcome.company.isActive;
+  }
+  const exceedsOneTopUp =
+    outcome.topUpNeededMinor !== null && outcome.topUpNeededMinor > TOP_UP_LIMITS_MINOR.max;
+  return !outcome.company.isActive || exceedsOneTopUp;
+}
+
+/**
+ * The pre-flight's subject: the booking in front of the client on Review & confirm. `null` until
+ * there is one (not on that step, no time chosen, or a company still to be picked).
+ */
+function buildFundingRequest(params: {
+  phase: Phase;
+  slot: ConfirmSlot | null;
+  expertProfileId: string;
+  recovered: FixedCaseSummary | null;
+  caseSelection: CaseSelection;
+  companyId: string | null;
+  companies: readonly EligibleCompany[] | null;
+}): BookingFundingRequest | null {
+  const { phase, slot, expertProfileId, recovered, caseSelection, companyId, companies } = params;
+  if (phase !== 'confirm' || slot === null) return null;
+  if (recovered !== null) {
+    return {
+      expertProfileId,
+      slot,
+      caseChoice: { kind: 'existing', engagementId: recovered.engagementId },
+    };
+  }
+  if (caseSelection.kind === 'existing') {
+    return {
+      expertProfileId,
+      slot,
+      caseChoice: { kind: 'existing', engagementId: caseSelection.engagementId },
+    };
+  }
+  if (companies !== null && companies.length > 1 && companyId === null) return null;
+  return {
+    expertProfileId,
+    slot,
+    caseChoice: companyId === null ? { kind: 'new' } : { kind: 'new', companyId },
+  };
+}
+
+/** The signed-in booker's id, for chooser entries that carry one; drafts exist only for those. */
+function resolveDraftOwner(entry: BookingEntry): string | null {
+  if (entry.mode !== 'chooser') return null;
+  const { context } = entry;
+  if (context.arm === 'single_company' || context.arm === 'choose_company') {
+    return context.viewerUserId;
+  }
+  return null;
+}
+
+const SAVE_FOR_LATER_FAILED_COPY =
+  "We couldn't let your billing admins know just now. What you typed is still saved on this device.";
+
+/**
+ * Tell the billing admins and keep the draft. A thrown action is captured and read as a failure;
+ * `bookable_now` means the gate no longer refuses, so there is nobody to tell.
+ */
+async function saveForLater(
+  request: BookingFundingRequest
+): Promise<'saved' | 'bookable_now' | 'failed'> {
+  try {
+    const result = await saveBookingForLaterAction(request);
+    if (result.ok) return 'saved';
+    return result.reason === 'not_refused' ? 'bookable_now' : 'failed';
+  } catch (error) {
+    Sentry.captureException(error, { tags: { feature: 'booking', step: 'save_for_later' } });
+    return 'failed';
+  }
+}
+
+/** The on-device draft's key scope, or `null` where no draft is kept. */
+function buildDraftScope(owner: string | null, expertProfileId: string): BookingDraftScope | null {
+  return owner === null ? null : { ownerUserId: owner, expertProfileId };
+}
+
+/**
+ * The case choice a restored draft puts back: an existing case only while it is still among this
+ * client's open cases (single-company chooser), otherwise a new case.
+ */
+function restoredCaseSelection(draft: BookingDraft, context: BookingContext): CaseSelection {
+  const { caseSelection } = draft;
+  if (caseSelection.kind !== 'existing' || context.arm !== 'single_company') {
+    return { kind: 'new' };
+  }
+  const stillOpen = context.openCases.some((c) => c.engagementId === caseSelection.engagementId);
+  return stillOpen ? caseSelection : { kind: 'new' };
+}
+
+/** The refusal the inline block renders, or `null` when the answer is not one it shows. */
+function inlineRefusal(view: BookingFundingView | null): RefusedFundingView | null {
+  if (view?.kind !== 'refused') return null;
+  return resolveFundingDisposition(view) === 'inline' ? view : null;
+}
+
+/** The line under the stale-slot banner once a top-up has landed, else `null`. */
+function staleSlotFollowUp(staleSlot: boolean, topUp: FundedTopUp | null): string | null {
+  if (!staleSlot || topUp === null) return null;
+  return staleSlotTopUpFollowUp(topUp.creditedMinor, topUp.companyName);
+}
+
+/** A line about the top-up that landed, built by `build`, or `null` when none did. */
+function fundedLine(
+  topUp: FundedTopUp | null,
+  build: (creditedMinor: number, companyName: string | null) => string
+): string | null {
+  return topUp === null ? null : build(topUp.creditedMinor, topUp.companyName);
+}
+
+/**
+ * The hard-failure panel's copy: the one set for this failure when there is one, else the
+ * landed-top-up body (which never says nothing was charged), else the panel's own defaults.
+ */
+function hardFailureCopy(
+  failure: HardFailurePanelCopy | null,
+  topUp: FundedTopUp | null
+): HardFailurePanelCopy | null {
+  if (failure !== null) return failure;
+  const body = fundedLine(topUp, fundedHardFailureBody);
+  return body === null ? null : { body };
+}
+
+function caseSavedNote(caseTitle: string | null, expertLabel: string): CaseSavedNote | null {
+  return caseTitle === null ? null : { caseTitle, expertLabel };
+}
+
+/** The companies a restored draft may belong to. */
+function eligibleCompanyIds(context: BookingContext): readonly string[] {
+  if (context.arm === 'single_company') return [context.company.id];
+  if (context.arm === 'choose_company') return context.companies.map((c) => c.id);
+  return [];
+}
+
+/**
  * The balance panel's props, built once so the two `BalanceRefusal` arms map onto the panel's
  * discriminated props without a ternary in the JSX.
  *
@@ -415,10 +603,7 @@ function buildBalancePanelProps(
     readonly onClose: () => void;
   }
 ): BookingBalancePanelProps {
-  const caseSaved: CaseSavedNote | null =
-    refusal.caseTitle === null
-      ? null
-      : { caseTitle: refusal.caseTitle, expertLabel: shared.expertLabel };
+  const caseSaved = caseSavedNote(refusal.caseTitle, shared.expertLabel);
   const common = {
     canManageBilling: refusal.canManageBilling,
     companyName: refusal.company.name,
@@ -505,6 +690,18 @@ export function BookingFlowDialog(
   const [balanceRefusal, setBalanceRefusal] = useState<BalanceOutcome | null>(null);
   /** BAL-474 — true while the workspace switch behind the balance panel's Top-up is in flight. */
   const [isSwitching, setIsSwitching] = useState(false);
+  /** BAL-608 — the case-saved line the inline funding block names, when hop 2 refused after the write. */
+  const [fundingCaseSaved, setFundingCaseSaved] = useState<CaseSavedNote | null>(null);
+  /** BAL-608 — the company a full-panel setup refusal checked, for the panel's switch-and-top-up. */
+  const [fundingCompany, setFundingCompany] = useState<BookingSetupFailure['company'] | null>(null);
+  /** BAL-608 — what the last landed top-up left in the balance, for the stale-slot follow-up. */
+  const [fundedTopUp, setFundedTopUp] = useState<FundedTopUp | null>(null);
+  /** BAL-608 — true while the fields on screen were restored from this device. */
+  const [draftRestored, setDraftRestored] = useState(false);
+  /** BAL-608 — true while a top-up, or the booking after it, locks the time, company and case. */
+  const [fundingBusy, setFundingBusy] = useState(false);
+  /** BAL-608 — the company name the saved-for-later result names. */
+  const [savedCompanyName, setSavedCompanyName] = useState<string | null>(null);
 
   const openFiredRef = useRef(false);
   /**
@@ -517,6 +714,85 @@ export function BookingFlowDialog(
   const caseAlreadyCreatedRef = useRef(false);
 
   const fixedCase = entry.mode === 'fixed_case' ? entry.fixedCase : null;
+
+  const draftOwner = resolveDraftOwner(entry);
+  const draftScope = useMemo(
+    () => buildDraftScope(draftOwner, expert.expertProfileId),
+    [draftOwner, expert.expertProfileId]
+  );
+
+  // The read-only funding pre-flight for the booking on Review & confirm. It re-runs on any change
+  // of expert, time, company or case, and shows nothing until it has an answer.
+  const fundingRequest = useMemo(
+    () =>
+      buildFundingRequest({
+        phase,
+        slot,
+        expertProfileId: expert.expertProfileId,
+        recovered,
+        caseSelection,
+        companyId,
+        companies,
+      }),
+    [phase, slot, expert.expertProfileId, recovered, caseSelection, companyId, companies]
+  );
+  const {
+    status: fundingStatus,
+    view: fundingView,
+    refresh: refreshFunding,
+  } = useBookingFunding(fundingRequest);
+  // Only rendered inside the confirm step, so no phase check is needed here.
+  const inlineFundingView = inlineRefusal(fundingView);
+
+  const handleCompanyIdChange = useCallback(
+    (id: string) => {
+      setCompanyId(id);
+      setOpenCases(null);
+      // UX-3 — the read this fetch starts is what the case-choice skeleton renders for; cleared
+      // in `finally` so it comes down on both the success and the silent-degrade paths below.
+      setCaseChoiceLoading(true);
+      refetchOpenCasesAction({ expertProfileId: expert.expertProfileId, companyId: id })
+        .then((result) => {
+          if (!result.ok) return;
+          setOpenCases(result.openCases);
+          setResolvedCaseCount(result.resolvedCaseCount);
+        })
+        .catch((error: unknown) => {
+          // Silent degrade — the design's "never block on a non-critical read" principle. Still
+          // captured — a swallowed rejection here previously left no trace at all.
+          Sentry.captureException(error, {
+            level: 'warning',
+            tags: { feature: 'booking', step: 'open_cases_refetch' },
+            extra: { expertProfileId: expert.expertProfileId, companyId: id },
+          });
+        })
+        .finally(() => setCaseChoiceLoading(false));
+    },
+    [expert.expertProfileId]
+  );
+
+  /**
+   * Put this device's draft back on screen, if there is one for a company the client can still
+   * book with. The phase is left alone: the client still picks a time, because a draft never
+   * carries one. A multi-company draft re-reads that company's open cases.
+   */
+  const restoreDraft = useCallback(
+    (context: BookingContext): boolean => {
+      if (draftScope === null) return false;
+      const draft = readBookingDraft(draftScope, eligibleCompanyIds(context));
+      if (draft === null) return false;
+      setTitle(draft.title);
+      setDescriptionHtml(draft.descriptionHtml);
+      setProductIds(draft.productIds);
+      setGuests(draft.guests);
+      setCaseSelection(restoredCaseSelection(draft, context));
+      if (context.arm === 'choose_company' && draft.companyId !== null) {
+        handleCompanyIdChange(draft.companyId);
+      }
+      return true;
+    },
+    [draftScope, handleCompanyIdChange]
+  );
 
   // ── reset all transient state once per open→close→open cycle (ProjectRequestPanel precedent) ──
   useEffect(() => {
@@ -545,6 +821,12 @@ export function BookingFlowDialog(
     setFundingCaseTitle(null);
     setBalanceRefusal(null);
     setIsSwitching(false);
+    setFundingCaseSaved(null);
+    setFundingCompany(null);
+    setFundedTopUp(null);
+    setDraftRestored(false);
+    setFundingBusy(false);
+    setSavedCompanyName(null);
 
     if (entry.mode === 'fixed_case') {
       setPhase('confirm');
@@ -577,6 +859,7 @@ export function BookingFlowDialog(
         setOpenCases(null);
         setResolvedCaseCount(0);
       }
+      setDraftRestored(restoreDraft(context));
     }
 
     track(BOOKING_EVENTS.FLOW_OPENED, { expert_id: expert.expertProfileId, source });
@@ -650,6 +933,7 @@ export function BookingFlowDialog(
       }
 
       setStaleSlot(false);
+      setFundedTopUp(null);
       setPhase('confirm');
     },
     [slot, recovered]
@@ -657,6 +941,7 @@ export function BookingFlowDialog(
 
   const handleChangeTime = useCallback(() => {
     setStaleSlot(false);
+    setFundedTopUp(null);
     setPhase('pick_time');
   }, []);
 
@@ -698,35 +983,8 @@ export function BookingFlowDialog(
     }
   }, [expert.expertProfileId]);
 
-  const handleCompanyIdChange = useCallback(
-    (id: string) => {
-      setCompanyId(id);
-      setOpenCases(null);
-      // UX-3 — the read this fetch starts is what the case-choice skeleton renders for; cleared
-      // in `finally` so it comes down on both the success and the silent-degrade paths below.
-      setCaseChoiceLoading(true);
-      refetchOpenCasesAction({ expertProfileId: expert.expertProfileId, companyId: id })
-        .then((result) => {
-          if (!result.ok) return;
-          setOpenCases(result.openCases);
-          setResolvedCaseCount(result.resolvedCaseCount);
-        })
-        .catch((error: unknown) => {
-          // Silent degrade — the design's "never block on a non-critical read" principle. Still
-          // captured — a swallowed rejection here previously left no trace at all.
-          Sentry.captureException(error, {
-            level: 'warning',
-            tags: { feature: 'booking', step: 'open_cases_refetch' },
-            extra: { expertProfileId: expert.expertProfileId, companyId: id },
-          });
-        })
-        .finally(() => setCaseChoiceLoading(false));
-    },
-    [expert.expertProfileId]
-  );
-
   const handleAbandon = useCallback(() => {
-    if (bookedResult !== null) {
+    if (bookedResult !== null || phase === 'saved_for_later') {
       onClose();
       return;
     }
@@ -737,12 +995,52 @@ export function BookingFlowDialog(
     onClose();
   }, [bookedResult, phase, expert.expertProfileId, onClose]);
 
+  /** Today's full panel for a funding refusal (`error_funding` / `error_balance`). */
+  const showFundingPanel = useCallback((outcome: FundingRefusalOutcome): void => {
+    if (outcome.kind === 'funding') {
+      setFundingCanManageBilling(outcome.canManageBilling);
+      setFundingCaseTitle(outcome.caseTitle);
+      setFundingCompany(outcome.company);
+      setPhase('error_funding');
+      return;
+    }
+    setBalanceRefusal(outcome);
+    setIsSwitching(false);
+    setPhase('error_balance');
+  }, []);
+
+  /**
+   * A submit-time funding refusal. A billing manager who cannot top up from here keeps today's
+   * full panel. Anyone else re-runs the pre-flight and is shown what it answers: the inline block
+   * (a `hold_*` refusal re-reads as a refusal, so a failed heal reproduces its fallback), the
+   * normal CTA when the booking would now pass, or the full panel when the read cannot say.
+   */
+  const applyFundingRefusal = useCallback(
+    async (outcome: FundingRefusalOutcome): Promise<void> => {
+      if (!isFullPanelOutcome(outcome)) {
+        const holdRefusal = outcome.kind === 'balance' && outcome.variant === 'hold';
+        const view = await refreshFunding({ onCoveredHold: holdRefusal ? 'refuse' : 'defer' });
+        if (view?.kind === 'clear') {
+          toast.info(BALANCE_NOW_COVERS_COPY);
+          return;
+        }
+        if (inlineRefusal(view) !== null) {
+          setFundingCaseSaved(caseSavedNote(outcome.caseTitle, expert.partyLabel));
+          setPhase('confirm');
+          return;
+        }
+      }
+      showFundingPanel(outcome);
+    },
+    [refreshFunding, showFundingPanel, expert.partyLabel]
+  );
+
   /**
    * Every `{ ok: false }` arm of a submit, kept out of `handleSubmit` so that function holds
    * only the happy path. Each arm ends the submit — there is no fallthrough to a booked state.
    */
   const applySubmitFailure = useCallback(
-    (result: Extract<BookConsultationResult, { ok: false }>): void => {
+    async (result: Extract<BookConsultationResult, { ok: false }>): Promise<void> => {
       // ⚠ ANY `stage: 'meeting'` failure means the CASE row already exists (Data Flow steps
       // 4-8 run to completion before `postBookMeeting` at step 9) — mark the nonce frozen so a
       // later slot re-pick reuses the SAME `bookingIdempotencyKey` and re-enters against that
@@ -814,36 +1112,27 @@ export function BookingFlowDialog(
         setPhase('confirm');
         return;
       }
-      if (outcome.kind === 'funding') {
-        // BAL-478 — an expected business refusal, not an exception: nothing is wrong with the
-        // slot, the case or the session. NO Sentry capture (unlike `company_fail_closed` above,
-        // whose failing eligibility READ is a defect) and NO analytics `track()` — the
+      if (outcome.kind === 'funding' || outcome.kind === 'balance') {
+        // BAL-478 / BAL-474 — an expected business refusal, not an exception: nothing is wrong with
+        // the slot, the case or the session. NO Sentry capture and NO client `track()` — the
         // server-side event in `enforceBookingFunding` is the single emit for this refusal.
-        // `caseTitle` is set only when the API's guard refused at the meeting hop, after the
-        // case row was written.
-        setFundingCanManageBilling(outcome.canManageBilling);
-        setFundingCaseTitle(outcome.caseTitle);
-        setPhase('error_funding');
-        return;
-      }
-      if (outcome.kind === 'balance') {
-        // BAL-474 — the same posture as `funding` above: an expected refusal (an open receivable
-        // or planned consultations set the credit aside), no Sentry and no client `track()`.
-        // The server event is the single emit.
-        setBalanceRefusal(outcome);
-        setIsSwitching(false);
-        setPhase('error_balance');
+        await applyFundingRefusal(outcome);
         return;
       }
       setHardFailure(null);
       setPhase('error_hard');
     },
-    [expert.expertProfileId]
+    [expert.expertProfileId, applyFundingRefusal]
   );
 
-  const handleSubmit = useCallback(async () => {
+  /**
+   * Resolves `true` once the consultation is booked. Every other end (a validation stop, a
+   * refusal, a thrown error) resolves `false`, which is what lets a funded top-up know whether
+   * its booking landed.
+   */
+  const handleSubmit = useCallback(async (): Promise<boolean> => {
     setShowValidation(true);
-    if (slot === null) return;
+    if (slot === null) return false;
 
     const effectiveCaseChoice = resolveEffectiveCaseChoice({
       recovered,
@@ -858,7 +1147,7 @@ export function BookingFlowDialog(
     // it client-side. A REAL-TEXT check (not markup non-emptiness — a bare `<p></p>` must
     // fail) so the ordinary path (title filled, description left blank) never reaches the
     // server, where it previously dead-ended on the generic hard-failure panel.
-    if (hasBlockingValidationError(effectiveCaseChoice, companies, companyId)) return;
+    if (hasBlockingValidationError(effectiveCaseChoice, companies, companyId)) return false;
 
     setSubmitting(true);
     setStaleSlot(false);
@@ -877,8 +1166,8 @@ export function BookingFlowDialog(
       });
 
       if (!result.ok) {
-        applySubmitFailure(result);
-        return;
+        await applySubmitFailure(result);
+        return false;
       }
 
       setBookedResult({
@@ -908,7 +1197,11 @@ export function BookingFlowDialog(
       toast.success('Booked', {
         description: `${result.durationMinutes}-minute consultation with ${expert.firstName ?? expert.name} confirmed.`,
       });
+      if (draftScope !== null) clearBookingDrafts(draftScope);
+      setFundedTopUp(null);
+      setFundingCaseSaved(null);
       setPhase('booked');
+      return true;
     } catch (error) {
       // M3 — every OTHER catch site around this action was a bare `.catch(() => {})`. This is
       // now the ONE place a rejection is handled: captured (the client-side equivalent of
@@ -920,6 +1213,7 @@ export function BookingFlowDialog(
         extra: { expertProfileId: expert.expertProfileId },
       });
       setPhase('error_hard');
+      return false;
     } finally {
       setSubmitting(false);
     }
@@ -940,6 +1234,7 @@ export function BookingFlowDialog(
     openCases,
     viewerEmailDomain,
     applySubmitFailure,
+    draftScope,
   ]);
 
   /**
@@ -975,6 +1270,19 @@ export function BookingFlowDialog(
     setPhase('pick_time');
   }, []);
 
+  /** Keeps the typed fields on this device, for a client who leaves this dialog or is signed out. */
+  const writeCurrentDraft = useCallback((): void => {
+    if (draftScope === null) return;
+    writeBookingDraft(draftScope, {
+      title,
+      descriptionHtml,
+      productIds,
+      guests,
+      caseSelection,
+      companyId,
+    });
+  }, [draftScope, title, descriptionHtml, productIds, guests, caseSelection, companyId]);
+
   /**
    * ⚠⚠ THE BALANCE PANEL'S TOP-UP TARGETS THE COMPANY THAT REFUSED. `/billing/top-up` tops up the
    * ACTIVE workspace's company, which may not be the company this booking bills (a user in two
@@ -987,40 +1295,49 @@ export function BookingFlowDialog(
    * deliberately left up — the page is navigating away, and re-enabling the button would open a
    * double-switch window.
    */
-  const handleTopUp = useCallback(async (): Promise<void> => {
-    if (balanceRefusal === null) return;
-    const { company } = balanceRefusal;
-    if (company.isActive) {
-      router.push('/billing/top-up');
-      return;
-    }
-    setIsSwitching(true);
-    try {
-      const result = await switchWorkspaceAction(companyWorkspaceKey(company.id));
-      if (result.success) {
-        // The dialog may have been closed while the switch was in flight — never navigate then.
-        if (openRef.current) {
-          router.push('/billing/top-up');
-        } else {
-          setIsSwitching(false);
-        }
+  const switchAndTopUp = useCallback(
+    async (company: BookingSetupFailure['company']): Promise<void> => {
+      // The client leaves this dialog for the top-up page, so what they typed waits on the device.
+      writeCurrentDraft();
+      if (company.isActive) {
+        router.push('/billing/top-up');
         return;
       }
-    } catch (error) {
-      // `@/lib/logging` is SERVER-only — `Sentry.captureException` is the build-safe client-side
-      // equivalent (see `handleRetryCompanies`).
-      Sentry.captureException(error, {
-        tags: { feature: 'booking', step: 'top_up_workspace_switch' },
-        extra: { companyId: company.id },
-      });
-    }
-    toast.error(bookingSwitchFailedCopy(company.name));
-    setIsSwitching(false);
-  }, [balanceRefusal, router]);
+      setIsSwitching(true);
+      try {
+        const result = await switchWorkspaceAction(companyWorkspaceKey(company.id));
+        if (result.success) {
+          // The dialog may have been closed while the switch was in flight — never navigate then.
+          if (openRef.current) {
+            router.push('/billing/top-up');
+          } else {
+            setIsSwitching(false);
+          }
+          return;
+        }
+      } catch (error) {
+        // `@/lib/logging` is SERVER-only — `Sentry.captureException` is the build-safe client-side
+        // equivalent (see `handleRetryCompanies`).
+        Sentry.captureException(error, {
+          tags: { feature: 'booking', step: 'top_up_workspace_switch' },
+          extra: { companyId: company.id },
+        });
+      }
+      toast.error(bookingSwitchFailedCopy(company.name));
+      setIsSwitching(false);
+    },
+    [writeCurrentDraft, router]
+  );
 
   const handleTopUpClick = useCallback(() => {
-    handleTopUp().catch(() => {});
-  }, [handleTopUp]);
+    if (balanceRefusal === null) return;
+    switchAndTopUp(balanceRefusal.company).catch(() => {});
+  }, [balanceRefusal, switchAndTopUp]);
+
+  const handleSwitchAndTopUpClick = useCallback(() => {
+    if (fundingCompany === null) return;
+    switchAndTopUp(fundingCompany).catch(() => {});
+  }, [fundingCompany, switchAndTopUp]);
 
   const submitDisabled =
     submitting ||
@@ -1035,6 +1352,90 @@ export function BookingFlowDialog(
       companies !== null &&
       companies.length > 1 &&
       companyId === null);
+
+  /**
+   * The funding block's pre-payment gate, also used by Save: show the form's validation, refuse
+   * while it blocks a booking, and otherwise write the draft so a payment that outlives this
+   * dialog still has the fields waiting.
+   */
+  const prepareFunding = useCallback((): boolean => {
+    setShowValidation(true);
+    const choice = resolveEffectiveCaseChoice({
+      recovered,
+      caseSelection,
+      title,
+      descriptionHtml,
+      productIds,
+      companyId,
+    });
+    if (hasBlockingValidationError(choice, companies, companyId) || submitDisabled) {
+      findFirstInvalidField({
+        isNewCase: choice.kind === 'new',
+        title: choice.kind === 'new' ? choice.title : '',
+        descriptionHtml: choice.kind === 'new' ? choice.descriptionHtml : '',
+        companyMissing:
+          choice.kind === 'new' && companies !== null && companies.length > 1 && companyId === null,
+      })?.focus();
+      return false;
+    }
+    writeCurrentDraft();
+    return true;
+  }, [
+    recovered,
+    caseSelection,
+    title,
+    descriptionHtml,
+    productIds,
+    companyId,
+    companies,
+    submitDisabled,
+    writeCurrentDraft,
+  ]);
+
+  /**
+   * The wallet shows the top-up, so book with the SAME nonce as the refused submit. When the
+   * booking does not land (the time went, or the gate refused again) the pre-flight is re-read,
+   * so a credit that has landed clears the block before any second payment is offered.
+   */
+  const handleFunded = useCallback(
+    async (topUp: FundedTopUp): Promise<boolean> => {
+      setFundedTopUp(topUp);
+      const booked = await handleSubmit();
+      if (!booked) await refreshFunding();
+      return booked;
+    },
+    [handleSubmit, refreshFunding]
+  );
+
+  const handleSaveForLater = useCallback(async (): Promise<void> => {
+    if (fundingRequest === null || !prepareFunding()) return;
+    const outcome = await saveForLater(fundingRequest);
+    if (outcome === 'saved') {
+      track(BOOKING_EVENTS.SAVED_FOR_LATER, {});
+      toast.success('Saved for later');
+      setSavedCompanyName(inlineFundingView?.company.name ?? null);
+      setPhase('saved_for_later');
+      return;
+    }
+    if (outcome === 'bookable_now') {
+      toast.info('Good news — this can be booked now.');
+      await refreshFunding();
+      return;
+    }
+    toast.error(SAVE_FOR_LATER_FAILED_COPY);
+  }, [fundingRequest, prepareFunding, inlineFundingView, refreshFunding]);
+
+  const handleClearDraft = useCallback(() => {
+    if (draftScope !== null) clearBookingDrafts(draftScope);
+    setTitle('');
+    setDescriptionHtml('');
+    setProductIds([]);
+    setGuests([]);
+    setCaseSelection({ kind: 'new' });
+    setShowValidation(false);
+    setDraftRestored(false);
+    toast.success(DRAFT_CLEARED_COPY);
+  }, [draftScope]);
 
   // The read-only attach card's data, resolved from whichever source applies: a partial-failure
   // recovery, entry point 3's fixed case, or a chooser selection matched against `openCases`.
@@ -1154,6 +1555,25 @@ export function BookingFlowDialog(
                 viewerEmailDomain={viewerEmailDomain}
                 clientCompanyName={clientCompanyName}
                 staleSlot={staleSlot}
+                staleSlotFollowUp={staleSlotFollowUp(staleSlot, fundedTopUp)}
+                fundingSection={
+                  inlineFundingView === null ? null : (
+                    <BookingFundingBlock
+                      view={inlineFundingView}
+                      caseSaved={fundingCaseSaved}
+                      ctaDisabled={submitDisabled}
+                      onBeforePay={prepareFunding}
+                      onFunded={handleFunded}
+                      onSaveForLater={handleSaveForLater}
+                      onBack={handleBack}
+                      draftKept={draftScope !== null}
+                      onBusyChange={setFundingBusy}
+                    />
+                  )
+                }
+                fundingBusy={fundingBusy}
+                preflightPending={fundingStatus === 'loading'}
+                draftNotice={draftRestored ? { onClear: handleClearDraft } : null}
                 submitting={submitting}
                 submitDisabled={submitDisabled}
                 onBack={handleBack}
@@ -1182,10 +1602,20 @@ export function BookingFlowDialog(
               />
             </motion.div>
           )}
+          {phase === 'saved_for_later' && (
+            <motion.div key="saved_for_later" {...pageTransition}>
+              <StepSavedForLater
+                companyName={savedCompanyName}
+                expertFirstName={expert.firstName}
+                draftKept={draftScope !== null}
+                onDone={onClose}
+              />
+            </motion.div>
+          )}
           {phase === 'error_hard' && (
             <motion.div key="error_hard" {...pageTransition}>
               <HardFailurePanel
-                {...hardFailure}
+                {...hardFailureCopy(hardFailure, fundedTopUp)}
                 onRetry={() => {
                   setHardFailure(null);
                   setPhase('confirm');
@@ -1207,6 +1637,7 @@ export function BookingFlowDialog(
             <motion.div key="error_session" {...pageTransition}>
               <SessionExpiredPanel
                 caseTitle={sessionExpiredCaseTitle}
+                followUp={fundedLine(fundedTopUp, fundedSessionFollowUp)}
                 onSignIn={handleReauthenticate}
                 onClose={onClose}
               />
@@ -1216,6 +1647,7 @@ export function BookingFlowDialog(
             <motion.div key="error_partial" {...pageTransition}>
               <PartialFailurePanel
                 caseTitle={recovered.title}
+                followUp={fundedLine(fundedTopUp, fundedPartialFollowUp)}
                 onRetry={handleRetryAfterPartial}
                 onChooseDifferentTime={handleChooseDifferentTimeAfterPartial}
                 onFinishLater={onClose}
@@ -1227,6 +1659,9 @@ export function BookingFlowDialog(
               <FundingSetupPanel
                 canManageBilling={fundingCanManageBilling}
                 onManageBilling={() => router.push('/settings/billing')}
+                company={fundingCompany}
+                isSwitching={isSwitching}
+                onSwitchAndTopUp={handleSwitchAndTopUpClick}
                 onClose={onClose}
                 caseSaved={
                   fundingCaseTitle === null

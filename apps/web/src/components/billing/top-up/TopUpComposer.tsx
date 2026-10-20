@@ -1,10 +1,7 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { StripeElementsOptions } from '@stripe/stripe-js';
-import { Elements } from '@stripe/react-stripe-js';
-import { getStripe } from '@/lib/stripe/loader';
 import { TopUpHero } from './TopUpHero';
 import { AmountSlider } from './AmountSlider';
 import { PromoField, type AppliedPromo } from './PromoField';
@@ -14,6 +11,8 @@ import { PayAction } from './PayAction';
 import { SummaryRail } from './SummaryRail';
 import { MobilePayBar } from './MobilePayBar';
 import { TopUpReceipt } from './TopUpReceipt';
+import { TopUpElements, isStripeConfigured } from './TopUpElements';
+import { usePurchaseRequestId } from './use-purchase-request-id';
 import { describeSavedCard } from './SavedCardRow';
 import { useContainerLayout, type TopUpLayout } from './use-container-layout';
 import { DEFAULT_AMOUNT_MINOR, autoTopupConfigErrors } from '@/lib/credit/display-constants';
@@ -94,36 +93,17 @@ export function TopUpComposer({
   const configValid = configErrors.reload === undefined && configErrors.threshold === undefined;
 
   // Stable across double-submits of the SAME configuration; regenerated when the amount /
-  // mode / promo / reload / threshold / PAYMENT-METHOD SOURCE change → the server idempotency
-  // key stays honest. Held in a ref keyed by a config signature (a lint-clean derived value —
-  // no hook deps array), so a re-render with the same configuration reuses the same UUID and a
-  // double-click returns the same PaymentIntent.
-  //
-  // ⚠ `paymentMethodSource` IS PART OF THE SIGNATURE ON PURPOSE. The two sources build
-  // PaymentIntents with DIFFERENT params (one carries `payment_method` + `confirm: true`), and
-  // Stripe 400s on the same idempotency key with different params — so without this, Pay would
-  // die permanently the moment a buyer pressed "Change".
-  //
-  // ⚠ SO IS `declineNonce`. Stripe caches a 402 `card_declined` against the key (the endpoint
-  // DID execute), so retrying the same configuration replays the cached decline for 24h
-  // without ever contacting the issuer — `insufficient_funds` and try-again-later declines
-  // would be permanent for this amount/card. PayAction bumps the nonce on every decline, so
-  // the next Pay press is a genuinely new attempt.
-  const [declineNonce, setDeclineNonce] = useState(0);
-  const signature = `${amountMinor}:${mode}:${promo?.code ?? ''}:${reloadMinor}:${thresholdMinor}:${paymentMethodSource}:${declineNonce}`;
-  const requestIdRef = useRef({ signature, id: globalThis.crypto.randomUUID() });
-  if (requestIdRef.current.signature !== signature) {
-    requestIdRef.current = { signature, id: globalThis.crypto.randomUUID() };
-  }
-  const clientRequestId = requestIdRef.current.id;
-
-  const handleCardDeclined = useCallback(() => setDeclineNonce((n) => n + 1), []);
+  // mode / promo / reload / threshold / PAYMENT-METHOD SOURCE change, and rotated on a decline
+  // (see `usePurchaseRequestId` for why both matter).
+  const { clientRequestId, rotate: handleCardDeclined } = usePurchaseRequestId(
+    `${amountMinor}:${mode}:${promo?.code ?? ''}:${reloadMinor}:${thresholdMinor}:${paymentMethodSource}`
+  );
   const handleApplied = useCallback((applied: AppliedPromo) => setPromo(applied), []);
   const handleRemoved = useCallback(() => setPromo(null), []);
 
   const handleSourceChange = useCallback((next: PaymentMethodSource) => {
     setPaymentMethodSource(next);
-    track(CREDIT_EVENTS.PAYMENT_METHOD_CHANGED, { to: next });
+    track(CREDIT_EVENTS.PAYMENT_METHOD_CHANGED, { to: next, surface: 'billing' });
   }, []);
   const handleUseDifferentCard = useCallback(
     () => handleSourceChange('new_card'),
@@ -160,38 +140,10 @@ export function TopUpComposer({
   }, [onClose, router]);
   const handleFindExpert = useCallback(() => router.push('/experts'), [router]);
 
-  // Frozen at first render: the Payment Element is created once with this amount and then kept
-  // in sync via `elements.update({ amount })` in PayAction. Re-creating `options.amount` on
-  // every slider tick would re-init the Element (and lose typed digits).
-  const initialAmount = useRef(amountMinor).current;
-  // NOTE: PM creation stays AUTOMATIC (do NOT set `paymentMethodCreation: 'manual'`). Manual
-  // PM creation is mutually exclusive with `confirmPayment({ elements, … })` — Stripe.js throws
-  // an IntegrationError, so the Pay button never charges.
-  const options = useMemo<StripeElementsOptions>(
-    () => ({
-      mode: 'payment',
-      amount: initialAmount,
-      currency: 'aud',
-      setupFutureUsage: 'off_session',
-    }),
-    [initialAmount]
-  );
-
   const usingSavedCard = wallet.savedCard !== null && paymentMethodSource === 'saved_card';
   const payingWith =
     usingSavedCard && wallet.savedCard !== null ? describeSavedCard(wallet.savedCard) : 'New card';
-  const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-  const stripeConfigured = Boolean(publishableKey);
-  /**
-   * BAL-529 §E — the shared, per-key-memoised loader. The unset-key guard lives here because the
-   * shared loader takes a key; `Promise.resolve(null)` is the same "Stripe unconfigured" value
-   * `<Elements>` received before. `useMemo` keeps the promise identity stable across renders —
-   * `<Elements>` treats a new promise as a new Stripe instance.
-   */
-  const stripePromise = useMemo(
-    () => (publishableKey ? getStripe(publishableKey) : Promise.resolve(null)),
-    [publishableKey]
-  );
+  const stripeConfigured = isStripeConfigured();
 
   if (completion) {
     return (
@@ -289,13 +241,7 @@ export function TopUpComposer({
   // replaced by the "not configured" line above and Pay is omitted entirely.
   return (
     <div ref={containerRef} className="w-full">
-      {stripeConfigured ? (
-        <Elements stripe={stripePromise} options={options}>
-          {body}
-        </Elements>
-      ) : (
-        body
-      )}
+      <TopUpElements initialAmountMinor={amountMinor}>{body}</TopUpElements>
     </div>
   );
 }

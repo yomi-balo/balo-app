@@ -68,6 +68,7 @@ import { ExpertProfileClient } from './expert-profile-client';
 
 const DEFAULT_BOOKING_CONTEXT: BookingContext = {
   arm: 'single_company',
+  viewerUserId: 'user-1',
   company: { id: 'company-1', name: 'Northwind Industrial', logoUrl: null },
   openCases: [],
   resolvedCaseCount: 0,

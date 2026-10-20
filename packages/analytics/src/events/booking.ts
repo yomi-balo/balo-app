@@ -57,7 +57,31 @@ export const BOOKING_EVENTS = {
    * otherwise invisible: the pre-flight arm never sends a request for the API to log.
    */
   SESSION_EXPIRED: 'booking_session_expired',
+  /**
+   * The Review & confirm step rendered the inline funding block (a top-up, or Save and finish
+   * later for a member). Fires once per shown block, never on a pre-flight that came back clear.
+   */
+  FUNDING_SHOWN: 'booking_funding_shown',
+  /** The inline top-up was credited and the booking went on to submit. */
+  FUNDED: 'booking_funded',
+  /** The inline top-up did not end in a credited balance. */
+  FUNDING_FAILED: 'booking_funding_failed',
+  /** A member without billing rights saved the draft and left it for a billing admin. */
+  SAVED_FOR_LATER: 'booking_saved_for_later',
 } as const;
+
+/** Which funding situation the inline block is resolving. */
+export type BookingFundingArmProperty = 'setup' | 'reserved' | 'hold';
+
+/**
+ * Why an inline top-up did not end in a credited balance.
+ *
+ *  · `declined`       — the card was refused.
+ *  · `auth_failed`    — the card challenge (3DS) did not complete.
+ *  · `credit_timeout` — the charge went through but the credit had not landed when polling stopped.
+ *  · `error`          — anything else, including outcomes that are ambiguous about the charge.
+ */
+export type BookingFundingFailureReason = 'declined' | 'auth_failed' | 'credit_timeout' | 'error';
 
 /**
  * WHERE the credential was found dead, which decides what the user loses.
@@ -188,6 +212,18 @@ export interface BookingEventMap {
     expert_id: string;
     stage: BookingSessionExpiryStage;
   };
+  [BOOKING_EVENTS.FUNDING_SHOWN]: {
+    arm: BookingFundingArmProperty;
+    can_manage_billing: boolean;
+  };
+  [BOOKING_EVENTS.FUNDED]: {
+    method: 'topup';
+    saved_card: boolean;
+  };
+  [BOOKING_EVENTS.FUNDING_FAILED]: {
+    reason: BookingFundingFailureReason;
+  };
+  [BOOKING_EVENTS.SAVED_FOR_LATER]: Record<string, never>;
 }
 
 /** BAL-478 — the booking flow's first SERVER event. Emitted by `enforceBookingFunding`. */

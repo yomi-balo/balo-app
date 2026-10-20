@@ -687,6 +687,88 @@ describe('credit actions', () => {
         { walletId: 'wallet-1', companyId: 'company-1' }
       );
     });
+
+    describe("lowBalance: 'keep' — a pure top-up (the booking surface)", () => {
+      function keepInput(overrides: Partial<StartPurchaseInput> = {}): StartPurchaseInput {
+        return {
+          amountMinor: 100_000,
+          clientRequestId: CLIENT_REQUEST_ID,
+          lowBalance: 'keep',
+          ...overrides,
+        };
+      }
+
+      it('writes no low-balance config and attempts no mandate, on either card source', async () => {
+        for (const paymentMethodSource of ['new_card', 'saved_card'] as const) {
+          vi.clearAllMocks();
+          mockHasCapability.mockResolvedValue(true);
+          mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', lowBalanceMode: 'keep_going' });
+          mockCreatePurchaseIntent.mockResolvedValue({
+            outcome: 'needs_client_confirmation',
+            clientSecret: 'pi_secret',
+            paymentIntentId: 'pi_1',
+          });
+
+          const res = await startPurchaseAction(keepInput({ paymentMethodSource }));
+
+          expect(res).toMatchObject({ ok: true, mandate: { outcome: 'not_required' } });
+          expect(mockUpdateConfig).not.toHaveBeenCalled();
+          expect(mockHasActiveSessionForWallet).not.toHaveBeenCalled();
+          expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
+          expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+        }
+      });
+
+      it('still creates the purchase intent with the same clientRequestId', async () => {
+        const res = await startPurchaseAction(keepInput({ promoCode: 'WELCOME' }));
+
+        expect(res).toMatchObject({ ok: true, paymentIntentId: 'pi_1', walletId: 'wallet-1' });
+        expect(mockCreatePurchaseIntent).toHaveBeenCalledTimes(1);
+        expect(mockCreatePurchaseIntent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            walletId: 'wallet-1',
+            presentmentAmountMinor: 100_000,
+            clientRequestId: CLIENT_REQUEST_ID,
+            promoCode: 'WELCOME',
+            paymentMethodSource: 'new_card',
+          })
+        );
+      });
+
+      it('is never refused as settlement_outstanding, even mid-session on a card-backed wallet', async () => {
+        mockEnsureForCompany.mockResolvedValue({
+          id: 'wallet-1',
+          balanceMinor: 0,
+          stripePaymentMethodId: 'pm_1',
+          lowBalanceMode: 'keep_going',
+        });
+        mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+        const res = await startPurchaseAction(keepInput());
+
+        expect(res).toMatchObject({ ok: true });
+        expect(mockCreatePurchaseIntent).toHaveBeenCalled();
+      });
+
+      it('still gates on MANAGE_BILLING', async () => {
+        mockHasCapability.mockResolvedValue(false);
+
+        const res = await startPurchaseAction(keepInput());
+
+        expect(res).toEqual({ ok: false, error: 'unauthorized' });
+        expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
+      });
+
+      it('rejects a persist purchase that carries no config as invalid_input', async () => {
+        const res = await startPurchaseAction({
+          amountMinor: 100_000,
+          clientRequestId: CLIENT_REQUEST_ID,
+        });
+
+        expect(res).toEqual({ ok: false, error: 'invalid_input' });
+        expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe('validatePromoAction', () => {

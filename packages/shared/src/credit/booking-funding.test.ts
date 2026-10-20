@@ -3,11 +3,14 @@ import {
   assessCardRemovalCoverage,
   assessCaseBookingFunding,
   estimateCaseBookingMinor,
+  suggestCaseBookingTopUpMinor,
   type BookingFundingSnapshot,
+  type BookingTopUpPricing,
   type CardRemovalSnapshot,
   type ReservableCaseBooking,
 } from './booking-funding';
 import type { HoldStatus } from './receivable-coverage';
+import { TOP_UP_LIMITS_MINOR } from './top-up-limits';
 
 /**
  * BAL-474 (plan §I.3 / §I.7) — the booking funding verdict's gate order, row by row. The check-time
@@ -69,6 +72,16 @@ const HOLD: HoldStatus = {
   amountToClearMinor: 24_000,
 };
 
+function pricing(overrides: Partial<BookingTopUpPricing> = {}): BookingTopUpPricing {
+  return {
+    expertRateCents: RATE_700,
+    availableMinor: 0,
+    reservable: [],
+    mandateActive: false,
+    ...overrides,
+  };
+}
+
 describe('estimateCaseBookingMinor', () => {
   it('prices a window with the SAME estimator admission uses: 30 min at 700 / min = 21,000', () => {
     const { start, end } = window(60, 30);
@@ -83,7 +96,9 @@ describe('estimateCaseBookingMinor', () => {
 
 describe('assessCaseBookingFunding — the gate order (§I.3)', () => {
   it('1. no wallet ⇒ no_wallet', () => {
-    expect(assessCaseBookingFunding({ kind: 'no_wallet' }, BOOKING)).toEqual({
+    expect(
+      assessCaseBookingFunding({ kind: 'no_wallet', topUpPricing: pricing() }, BOOKING)
+    ).toEqual({
       ok: false,
       reason: 'no_wallet',
     });
@@ -91,7 +106,10 @@ describe('assessCaseBookingFunding — the gate order (§I.3)', () => {
 
   it('2. an open receivable with a figure ⇒ account_on_hold, carrying the hold', () => {
     expect(
-      assessCaseBookingFunding({ kind: 'on_hold', walletId: WALLET, hold: HOLD }, BOOKING)
+      assessCaseBookingFunding(
+        { kind: 'on_hold', walletId: WALLET, hold: HOLD, topUpPricing: pricing() },
+        BOOKING
+      )
     ).toEqual({ ok: false, reason: 'account_on_hold', hold: HOLD });
   });
 
@@ -102,6 +120,7 @@ describe('assessCaseBookingFunding — the gate order (§I.3)', () => {
           kind: 'on_hold',
           walletId: WALLET,
           hold: { ...HOLD, balanceMinor: 0, amountToClearMinor: 0 },
+          topUpPricing: pricing(),
         },
         BOOKING
       )
@@ -189,6 +208,211 @@ describe('assessCaseBookingFunding — the gate order (§I.3)', () => {
       ok: true,
       arm: 'balance',
     });
+  });
+});
+
+describe('suggestCaseBookingTopUpMinor', () => {
+  const { min, step } = TOP_UP_LIMITS_MINOR;
+  // 30 minutes at 700 / minute estimates 21,000.
+  const noWallet = (p: Partial<BookingTopUpPricing> = {}): BookingFundingSnapshot => ({
+    kind: 'no_wallet',
+    topUpPricing: pricing(p),
+  });
+  const onHold = (amountToClearMinor: number, p: Partial<BookingTopUpPricing> = {}) =>
+    ({
+      kind: 'on_hold',
+      walletId: WALLET,
+      hold: { ...HOLD, amountToClearMinor },
+      topUpPricing: pricing(p),
+    }) satisfies BookingFundingSnapshot;
+
+  it('no_wallet: estimate + reserved, rounded up to the minimum', () => {
+    expect(suggestCaseBookingTopUpMinor(noWallet(), BOOKING)).toBe(min);
+  });
+
+  it('no_wallet: a large estimate rounds up to the next step', () => {
+    const { start, end } = window(240, 240);
+    const booking = { scheduledStart: start, scheduledEnd: end };
+    // 240 minutes at 700 / minute = 168,000 → A$1,700 in 10,000 steps.
+    expect(suggestCaseBookingTopUpMinor(noWallet(), booking)).toBe(170_000);
+  });
+
+  it('no_wallet: reservations add to the figure', () => {
+    const rows = [reservable(RATE_700, 60, 240), reservable(RATE_700, 400, 240)];
+    expect(suggestCaseBookingTopUpMinor(noWallet({ reservable: rows }), BOOKING)).toBe(
+      Math.ceil((21_000 + 2 * 168_000) / step) * step
+    );
+  });
+
+  it('no_wallet: a rate-less expert has no booking part, so the minimum', () => {
+    expect(suggestCaseBookingTopUpMinor(noWallet({ expertRateCents: null }), BOOKING)).toBe(min);
+  });
+
+  it('no_mandate: estimate + reserved − available, on the step', () => {
+    const rows = [reservable(RATE_700, 60, 240)];
+    // 21,000 + 168,000 − 50,000 = 139,000 → 140,000.
+    expect(suggestCaseBookingTopUpMinor(noMandate(50_000, rows), BOOKING)).toBe(140_000);
+  });
+
+  it('no_mandate: exact multiples do not round up a further step', () => {
+    const { start, end } = window(240, 60);
+    const booking = { scheduledStart: start, scheduledEnd: end };
+    // 60 minutes at 700 / minute = 42,000; 12,000 available → need 30,000 = min.
+    expect(suggestCaseBookingTopUpMinor(noMandate(12_000), booking)).toBe(30_000);
+    // 42,000 − 2,000 = 40,000, already a step multiple.
+    expect(suggestCaseBookingTopUpMinor(noMandate(2_000), booking)).toBe(40_000);
+  });
+
+  it('on_hold without a mandate: the larger of the hold figure and the booking part', () => {
+    const rows = [reservable(RATE_700, 60, 240)];
+    // booking part 21,000 + 168,000 − (−24,000) = 213,000; the hold figure 24,000 is smaller.
+    expect(
+      suggestCaseBookingTopUpMinor(
+        onHold(24_000, { availableMinor: -24_000, reservable: rows }),
+        BOOKING
+      )
+    ).toBe(220_000);
+    // A hold bigger than the booking part wins.
+    expect(
+      suggestCaseBookingTopUpMinor(onHold(500_000, { availableMinor: 400_000 }), BOOKING)
+    ).toBe(500_000);
+  });
+
+  it('on_hold with an active mandate: only the hold figure matters', () => {
+    expect(
+      suggestCaseBookingTopUpMinor(
+        onHold(450_000, { mandateActive: true, reservable: [reservable(RATE_700, 60, 240)] }),
+        BOOKING
+      )
+    ).toBe(450_000);
+    expect(suggestCaseBookingTopUpMinor(onHold(24_000, { mandateActive: true }), BOOKING)).toBe(
+      min
+    );
+  });
+
+  it('on_hold: a rate-less expert falls back to the hold figure', () => {
+    expect(suggestCaseBookingTopUpMinor(onHold(310_000, { expertRateCents: null }), BOOKING)).toBe(
+      310_000
+    );
+  });
+
+  it('mandate and unknown_expert have no booking part', () => {
+    expect(suggestCaseBookingTopUpMinor({ kind: 'mandate', walletId: WALLET }, BOOKING)).toBe(min);
+    expect(
+      suggestCaseBookingTopUpMinor({ kind: 'unknown_expert', walletId: WALLET }, BOOKING)
+    ).toBe(min);
+  });
+
+  it('may exceed the single top-up maximum — the caller decides', () => {
+    const { start, end } = window(240, 240);
+    const booking = { scheduledStart: start, scheduledEnd: end };
+    const rows = Array.from({ length: 8 }, (_, i) => reservable(RATE_700, 300 + i * 300, 240));
+    expect(suggestCaseBookingTopUpMinor(noWallet({ reservable: rows }), booking)).toBeGreaterThan(
+      TOP_UP_LIMITS_MINOR.max
+    );
+  });
+
+  /** Apply a top-up of `topUpMinor` to a refusal snapshot, as the webhook credit would. */
+  function applyTopUp(
+    snapshot: BookingFundingSnapshot,
+    topUpMinor: number
+  ): BookingFundingSnapshot {
+    if (snapshot.kind === 'no_wallet') {
+      const { topUpPricing } = snapshot;
+      return {
+        kind: 'no_mandate',
+        walletId: WALLET,
+        expertRateCents: topUpPricing.expertRateCents,
+        availableMinor: topUpMinor,
+        reservable: topUpPricing.reservable,
+      };
+    }
+    if (snapshot.kind === 'on_hold') {
+      const { topUpPricing, hold } = snapshot;
+      if (topUpMinor < hold.amountToClearMinor) return snapshot;
+      const availableMinor = topUpPricing.availableMinor + topUpMinor;
+      return topUpPricing.mandateActive
+        ? { kind: 'mandate', walletId: snapshot.walletId }
+        : {
+            kind: 'no_mandate',
+            walletId: snapshot.walletId,
+            expertRateCents: topUpPricing.expertRateCents,
+            availableMinor,
+            reservable: topUpPricing.reservable,
+          };
+    }
+    if (snapshot.kind === 'no_mandate') {
+      return { ...snapshot, availableMinor: snapshot.availableMinor + topUpMinor };
+    }
+    return snapshot;
+  }
+
+  const durations = [15, 30, 45, 60, 120, 240];
+  const planned = [[], [60], [60, 240], [30, 30, 30, 30]] as const;
+  const availables = [-50_000, 0, 10_000, 55_000, 250_000];
+  const holds = [20_000, 45_000, 300_000];
+
+  function grid(): { label: string; snapshot: BookingFundingSnapshot; booking: typeof BOOKING }[] {
+    const cases: { label: string; snapshot: BookingFundingSnapshot; booking: typeof BOOKING }[] =
+      [];
+    for (const minutes of durations) {
+      const { start, end } = window(240, minutes);
+      const booking = { scheduledStart: start, scheduledEnd: end };
+      for (const plannedMinutes of planned) {
+        const reservableRows = plannedMinutes.map((m, i) => reservable(RATE_700, 300 + i * 300, m));
+        const label = `${minutes}m booking, planned ${JSON.stringify(plannedMinutes)}`;
+        cases.push({
+          label: `no_wallet ${label}`,
+          snapshot: noWallet({ reservable: reservableRows }),
+          booking,
+        });
+        for (const available of availables) {
+          cases.push({
+            label: `no_mandate avail ${available} ${label}`,
+            snapshot: noMandate(available, reservableRows),
+            booking,
+          });
+          for (const hold of holds) {
+            for (const mandateActive of [false, true]) {
+              cases.push({
+                label: `on_hold ${hold} mandate=${mandateActive} avail ${available} ${label}`,
+                snapshot: onHold(hold, {
+                  availableMinor: available,
+                  reservable: reservableRows,
+                  mandateActive,
+                }),
+                booking,
+              });
+            }
+          }
+        }
+      }
+    }
+    return cases;
+  }
+
+  it('grid property: the suggestion passes the verdict, and (above the minimum) one step less fails', () => {
+    const failures: string[] = [];
+    let aboveMinimum = 0;
+    const cases = grid();
+    for (const { label, snapshot, booking } of cases) {
+      // A no_mandate snapshot only refuses once the balance is short; the others always refuse.
+      const before = assessCaseBookingFunding(snapshot, booking);
+      if (before.ok) continue;
+      const suggested = suggestCaseBookingTopUpMinor(snapshot, booking);
+      if (suggested % step !== 0 || suggested < min)
+        failures.push(`${label}: off-grid ${suggested}`);
+      const after = assessCaseBookingFunding(applyTopUp(snapshot, suggested), booking);
+      if (!after.ok) failures.push(`${label}: still refused at ${suggested} (${after.reason})`);
+      if (suggested > min) {
+        aboveMinimum += 1;
+        const short = assessCaseBookingFunding(applyTopUp(snapshot, suggested - step), booking);
+        if (short.ok) failures.push(`${label}: already passes at ${suggested - step}`);
+      }
+    }
+    expect(failures).toEqual([]);
+    // Positive control — the grid exercises suggestions above the minimum, not only the floor.
+    expect(aboveMinimum).toBeGreaterThan(20);
   });
 });
 

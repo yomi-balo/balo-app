@@ -175,6 +175,7 @@ export type {
   OnboardingReminderEventMap,
   OnboardingReminderDomainClass,
   CreditEventMap,
+  CreditSurfaceProperty,
   PromoEventMap,
   SessionEventMap,
   CaseBillingEventMap,
@@ -223,6 +224,7 @@ export type {
   RescheduleProposalOutcome,
   // Where a dead credential was caught — before any write, or after the case row existed.
   BookingSessionExpiryStage,
+  BookingFundingArmProperty,
   // BAL-495 — the nav registry's event payload and key/surface vocabularies.
   NavEventMap,
   NavItemKey,

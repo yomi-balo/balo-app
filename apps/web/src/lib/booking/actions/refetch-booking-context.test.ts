@@ -45,6 +45,7 @@ describe('refetchBookingContextAction', () => {
   it('re-runs the loader for THIS user and re-serializes the result (single_company arm)', async () => {
     mockLoadBookingContext.mockResolvedValue({
       arm: 'single_company',
+      viewerUserId: 'user-1',
       company: { id: 'company-1', name: 'Northwind', logoUrl: null },
       resolvedCaseCount: 1,
       openCases: [
@@ -64,6 +65,7 @@ describe('refetchBookingContextAction', () => {
       ok: true,
       context: {
         arm: 'single_company',
+        viewerUserId: 'user-1',
         company: { id: 'company-1', name: 'Northwind', logoUrl: null },
         resolvedCaseCount: 1,
         openCases: [
@@ -82,6 +84,7 @@ describe('refetchBookingContextAction', () => {
   it('re-serializes a choose_company arm, dropping the arm-carried expert field', async () => {
     mockLoadBookingContext.mockResolvedValue({
       arm: 'choose_company',
+      viewerUserId: 'user-1',
       companies: [
         { id: 'company-1', name: 'Northwind', logoUrl: null },
         { id: 'company-2', name: 'Acme', logoUrl: null },
@@ -93,6 +96,7 @@ describe('refetchBookingContextAction', () => {
       ok: true,
       context: {
         arm: 'choose_company',
+        viewerUserId: 'user-1',
         companies: [
           { id: 'company-1', name: 'Northwind', logoUrl: null },
           { id: 'company-2', name: 'Acme', logoUrl: null },

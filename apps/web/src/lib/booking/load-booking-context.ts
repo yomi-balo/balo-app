@@ -62,6 +62,8 @@ export type BookingContext =
       readonly arm: 'choose_company';
       readonly companies: readonly EligibleCompany[];
       readonly expert: BookingExpertDisplay;
+      /** The signed-in booker — the owner key of the on-device draft. */
+      readonly viewerUserId: string;
     }
   | {
       readonly arm: 'single_company';
@@ -69,6 +71,8 @@ export type BookingContext =
       readonly openCases: readonly OpenCaseForExpert[];
       readonly resolvedCaseCount: number;
       readonly expert: BookingExpertDisplay;
+      /** The signed-in booker — the owner key of the on-device draft. */
+      readonly viewerUserId: string;
     };
 
 const FALLBACK_EXPERT_DISPLAY: BookingExpertDisplay = {
@@ -185,7 +189,7 @@ export async function loadBookingContext(
     return { arm: 'onboarding_required' };
   }
   if (companies.length > 1) {
-    return { arm: 'choose_company', companies, expert };
+    return { arm: 'choose_company', companies, expert, viewerUserId: userId };
   }
 
   const [company] = companies;
@@ -197,5 +201,12 @@ export async function loadBookingContext(
 
   const { openCases, resolvedCaseCount } = await resolveOpenCases(company.id, expertProfileId);
 
-  return { arm: 'single_company', company, openCases, resolvedCaseCount, expert };
+  return {
+    arm: 'single_company',
+    company,
+    openCases,
+    resolvedCaseCount,
+    expert,
+    viewerUserId: userId,
+  };
 }

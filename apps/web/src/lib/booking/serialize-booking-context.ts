@@ -18,10 +18,15 @@ export function serializeBookingContext(context: ServerBookingContext): ClientBo
     return { arm: context.arm };
   }
   if (context.arm === 'choose_company') {
-    return { arm: 'choose_company', companies: context.companies };
+    return {
+      arm: 'choose_company',
+      companies: context.companies,
+      viewerUserId: context.viewerUserId,
+    };
   }
   return {
     arm: 'single_company',
+    viewerUserId: context.viewerUserId,
     company: context.company,
     resolvedCaseCount: context.resolvedCaseCount,
     openCases: context.openCases.map((c) => ({

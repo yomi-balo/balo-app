@@ -87,18 +87,30 @@ const configSchema = z
  */
 const promoCodeSchema = z.string().min(1).max(64);
 
-const startPurchaseSchema = z.object({
-  amountMinor: z.number().int().min(MIN_AMOUNT_MINOR).max(MAX_AMOUNT_MINOR),
-  clientRequestId: z.uuid(),
-  promoCode: promoCodeSchema.optional(),
-  config: configSchema,
-  /**
-   * Which card to charge (top-up redesign). `new_card` keeps the shipped deferred flow;
-   * `saved_card` charges the wallet's stored payment method, created AND confirmed on the api
-   * side (the browser never learns the payment-method id).
-   */
-  paymentMethodSource: z.enum(['new_card', 'saved_card']).default('new_card'),
-});
+const startPurchaseSchema = z
+  .object({
+    amountMinor: z.number().int().min(MIN_AMOUNT_MINOR).max(MAX_AMOUNT_MINOR),
+    clientRequestId: z.uuid(),
+    promoCode: promoCodeSchema.optional(),
+    /** The low-balance preference to persist. Required unless `lowBalance` is `'keep'`. */
+    config: configSchema.optional(),
+    /**
+     * What this purchase does to the wallet's low-balance setting. `persist` (the default, and
+     * every billing-page caller) writes `config` and may arm an off-session mandate. `keep` is a
+     * PURE top-up: it writes no config, attempts no mandate, and leaves the setting as it was.
+     */
+    lowBalance: z.enum(['persist', 'keep']).default('persist'),
+    /**
+     * Which card to charge (top-up redesign). `new_card` keeps the shipped deferred flow;
+     * `saved_card` charges the wallet's stored payment method, created AND confirmed on the api
+     * side (the browser never learns the payment-method id).
+     */
+    paymentMethodSource: z.enum(['new_card', 'saved_card']).default('new_card'),
+  })
+  .refine((v) => v.lowBalance === 'keep' || v.config !== undefined, {
+    message: 'config is required unless lowBalance is "keep"',
+    path: ['config'],
+  });
 
 export type StartPurchaseInput = z.input<typeof startPurchaseSchema>;
 
@@ -594,10 +606,64 @@ function mapPurchaseFailure(
   return undefined;
 }
 
+/** The preference a purchase writes: none for a `keep` (pure top-up) purchase. */
+function purchaseConfigToPersist(
+  input: z.infer<typeof startPurchaseSchema>
+): z.infer<typeof configSchema> | undefined {
+  return input.lowBalance === 'keep' ? undefined : input.config;
+}
+
 /**
- * Start a card top-up: gate MANAGE_BILLING, resolve the wallet, persist low-balance config,
- * then charge. `new_card` creates the on-session PaymentIntent (deferred flow) and returns its
- * `clientSecret` for the client to confirm with Stripe.js; `saved_card` has the api create AND
+ * Persist the purchase's low-balance preference, if it has one. `refused` is BAL-523's
+ * live-session disarm refusal, returned before any charge is made. Exempt from BAL-524's
+ * card-presence guard because this same operation establishes the card (see the call site in
+ * `startPurchaseAction`).
+ */
+async function persistPurchaseConfig(
+  wallet: CreditWallet,
+  config: z.infer<typeof configSchema> | undefined,
+  companyId: string
+): Promise<'persisted' | 'refused'> {
+  if (config === undefined) {
+    return 'persisted';
+  }
+  const outcome = await persistLowBalanceConfig(
+    wallet,
+    config,
+    companyId,
+    'card_is_established_by_this_same_operation'
+  );
+  return outcome === 'refused_live_session' ? 'refused' : 'persisted';
+}
+
+/**
+ * The mandate result for a purchase. A `keep` purchase (no config) attempted no mandate work, so
+ * it is `not_required`; otherwise it follows {@link resolveMandateOutcome}.
+ */
+async function resolvePurchaseMandate(
+  wallet: CreditWallet,
+  config: z.infer<typeof configSchema> | undefined,
+  paymentMethodSource: PaymentMethodSource,
+  clientRequestId: string,
+  actorUserId: string
+): Promise<MandateOutcome> {
+  if (config === undefined) {
+    return { outcome: 'not_required' };
+  }
+  return resolveMandateOutcome(
+    wallet,
+    config.lowBalanceMode,
+    paymentMethodSource,
+    clientRequestId,
+    actorUserId
+  );
+}
+
+/**
+ * Start a card top-up: gate MANAGE_BILLING, resolve the wallet, persist low-balance config
+ * (unless `lowBalance: 'keep'`, a pure top-up that writes no config and attempts no mandate, so
+ * `settlement_outstanding` cannot arise), then charge. `new_card` creates the on-session
+ * PaymentIntent (deferred flow) and returns its `clientSecret` for the client to confirm with Stripe.js; `saved_card` has the api create AND
  * confirm the PaymentIntent against the wallet's stored payment method, so the browser only runs
  * 3DS if asked. The wallet is credited by the shipped BAL-382 webhook — this NEVER writes the
  * ledger. `clientRequestId` (stable per configuration, and REGENERATED when the payment-method
@@ -621,7 +687,9 @@ export async function startPurchaseAction(
 
     const wallet = await ensureWallet(actor.companyId);
 
-    // Config is a preference — persist it regardless of payment outcome.
+    // Config is a preference — persist it regardless of payment outcome. A `keep` purchase has no
+    // config to persist (see `startPurchaseSchema`), so it skips this block entirely: the
+    // wallet's low-balance setting is left exactly as it was.
     //
     // ⚠ TWO GUARDS, ONE CALL. This call site is EXEMPT from BAL-524's card-presence guard (the
     // third argument, below) and SUBJECT to BAL-523's live-session disarm guard (the
@@ -655,13 +723,8 @@ export async function startPurchaseAction(
     // So BAL-524 constrains one DIRECTION OF WRITE (a mode write must prove a card, unless
     // exempted), never the CONTENTS OF THE TABLE — this exemption is exactly why a card-backed
     // mode with no card can still exist after BAL-524, deliberately, on the purchase path.
-    const configOutcome = await persistLowBalanceConfig(
-      wallet,
-      input.config,
-      actor.companyId,
-      'card_is_established_by_this_same_operation'
-    );
-    if (configOutcome === 'refused_live_session') {
+    const configToPersist = purchaseConfigToPersist(input);
+    if ((await persistPurchaseConfig(wallet, configToPersist, actor.companyId)) === 'refused') {
       return { ok: false, error: 'settlement_outstanding' };
     }
 
@@ -680,9 +743,9 @@ export async function startPurchaseAction(
     // Never throws (see its docblock): on the saved-card path the money has already moved above,
     // so a mandate hiccup degrades to `{ outcome: 'failed' }` rather than discarding a completed
     // purchase at the catch boundary below.
-    const mandate = await resolveMandateOutcome(
+    const mandate = await resolvePurchaseMandate(
       wallet,
-      input.config.lowBalanceMode,
+      configToPersist,
       input.paymentMethodSource,
       input.clientRequestId,
       actor.userId

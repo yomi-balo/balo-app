@@ -13,11 +13,15 @@ describe('BOOKING_EVENTS', () => {
       'COMPANY_SELECTION_SHOWN',
       'CONFIRM_VIEWED',
       'FLOW_OPENED',
+      'FUNDED',
+      'FUNDING_FAILED',
+      'FUNDING_SHOWN',
       'GUESTS_INVITED',
       'RESCHEDULE_PROPOSAL_ANSWERED',
       'RESCHEDULE_PROPOSAL_SLOT_LOST',
       'RESCHEDULE_PROPOSED',
       'RESCHEDULED',
+      'SAVED_FOR_LATER',
       'SESSION_EXPIRED',
     ]);
   });
@@ -38,6 +42,10 @@ describe('BOOKING_EVENTS', () => {
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSED).toBe('reschedule_proposed');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_ANSWERED).toBe('reschedule_proposal_answered');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_SLOT_LOST).toBe('reschedule_proposal_slot_lost');
+    expect(BOOKING_EVENTS.FUNDING_SHOWN).toBe('booking_funding_shown');
+    expect(BOOKING_EVENTS.FUNDED).toBe('booking_funded');
+    expect(BOOKING_EVENTS.FUNDING_FAILED).toBe('booking_funding_failed');
+    expect(BOOKING_EVENTS.SAVED_FOR_LATER).toBe('booking_saved_for_later');
   });
 
   it('uses snake_case event values throughout', () => {

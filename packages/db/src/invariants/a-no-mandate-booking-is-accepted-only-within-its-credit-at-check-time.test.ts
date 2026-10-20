@@ -5,6 +5,7 @@ import {
   assessCaseBookingFunding,
   estimateCaseBookingMinor,
   type BookingFundingSnapshot,
+  type BookingTopUpPricing,
   type HoldStatus,
   type ReservableCaseBooking,
 } from '@balo/shared/credit';
@@ -119,6 +120,13 @@ const HOLD_WITH_FIGURE: HoldStatus = {
   amountToClearMinor: 10_000,
 };
 
+const PRICING: BookingTopUpPricing = {
+  expertRateCents: 33_600,
+  availableMinor: 0,
+  reservable: [],
+  mandateActive: false,
+};
+
 describe('INVARIANT: a no-mandate booking is accepted only when its credit covers it at check time (ADR-1040 Amendment 7 §H)', () => {
   it('every booking the verdict accepts, checked one after another, keeps Σ reserved + this ≤ available', () => {
     const violations: string[] = [];
@@ -175,7 +183,7 @@ describe('INVARIANT: a no-mandate booking is accepted only when its credit cover
     // company (the population the brake exists for), and a covered hold asks to be healed.
     const { start, end } = window(60, 30);
     const onHold = assessCaseBookingFunding(
-      { kind: 'on_hold', walletId: 'wallet-1', hold: HOLD_WITH_FIGURE },
+      { kind: 'on_hold', walletId: 'wallet-1', hold: HOLD_WITH_FIGURE, topUpPricing: PRICING },
       { scheduledStart: start, scheduledEnd: end }
     );
     expect(onHold).toEqual({ ok: false, reason: 'account_on_hold', hold: HOLD_WITH_FIGURE });
@@ -185,6 +193,7 @@ describe('INVARIANT: a no-mandate booking is accepted only when its credit cover
         kind: 'on_hold',
         walletId: 'wallet-1',
         hold: { ...HOLD_WITH_FIGURE, balanceMinor: 0, amountToClearMinor: 0 },
+        topUpPricing: PRICING,
       },
       { scheduledStart: start, scheduledEnd: end }
     );

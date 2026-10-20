@@ -8,7 +8,6 @@ import {
   companiesRepository,
   expertsRepository,
   meetingsRepository,
-  partyMembershipsRepository,
   referenceDataRepository,
   isUniqueViolation,
 } from '@balo/db';
@@ -18,7 +17,6 @@ import {
   type BookingReplayClassification,
   type BookingReplayProbe,
 } from '@balo/shared/meetings';
-import { CAPABILITIES } from '@/lib/authz';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
@@ -28,6 +26,7 @@ import { deriveBookingIdempotencyKey } from '../booking-idempotency';
 import { bookingSlotSchema, MS_PER_MINUTE } from '../booking-slot-schema';
 import { sanitizeCaseDescription } from '../sanitize-case-description';
 import { authorizeCaseAttach } from '../authorize-case-attach';
+import { resolveBillingCompanyId } from '../resolve-billing-company';
 import {
   enforceBookingFunding,
   type BookingFundingRefusal,
@@ -211,6 +210,7 @@ function fundingRefusalFailure(
       ok: false,
       ...where,
       code: refusal.canManageBilling ? 'funding_setup_required' : 'funding_admins_notified',
+      setup: { kind: refusal.setupKind, company: refusal.billingCompany },
     };
   }
   if (refusal.reason === 'on_hold') {
@@ -237,43 +237,6 @@ function fundingRefusalFailure(
       company: refusal.billingCompany,
     },
   };
-}
-
-/** Resolve which company bills this booking (Decision 5's fail-closed IDOR guard). */
-async function resolveBillingCompanyId(
-  userId: string,
-  requestedCompanyId: string | undefined
-): Promise<
-  | { ok: true; companyId: string }
-  | {
-      ok: false;
-      code: 'no_eligible_company' | 'company_selection_required' | 'company_not_eligible';
-    }
-> {
-  const eligible = await partyMembershipsRepository.listCapabilityEligibleCompanies(
-    userId,
-    CAPABILITIES.CONSUME_CREDITS
-  );
-  if (eligible.length === 0) {
-    return { ok: false, code: 'no_eligible_company' };
-  }
-  if (eligible.length > 1) {
-    if (requestedCompanyId === undefined) {
-      return { ok: false, code: 'company_selection_required' };
-    }
-    const match = eligible.find((company) => company.id === requestedCompanyId);
-    if (match === undefined) {
-      return { ok: false, code: 'company_not_eligible' };
-    }
-    return { ok: true, companyId: match.id };
-  }
-  const [only] = eligible;
-  if (only === undefined) {
-    // Unreachable (length === 1 above), guarded rather than asserted for
-    // `noUncheckedIndexedAccess`.
-    return { ok: false, code: 'no_eligible_company' };
-  }
-  return { ok: true, companyId: only.id };
 }
 
 /**

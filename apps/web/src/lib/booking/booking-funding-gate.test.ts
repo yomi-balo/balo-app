@@ -46,7 +46,11 @@ vi.mock('./load-booking-context', () => ({
   resolveBookingExpertDisplay: (...args: unknown[]) => mockResolveBookingExpertDisplay(...args),
 }));
 
-import { enforceBookingFunding, type EnforceBookingFundingInput } from './booking-funding-gate';
+import {
+  assessBookingFunding,
+  enforceBookingFunding,
+  type EnforceBookingFundingInput,
+} from './booking-funding-gate';
 
 const COMPANY_ID = '33333333-3333-4333-8333-333333333333';
 const OTHER_COMPANY_ID = '44444444-4444-4444-8444-444444444444';
@@ -78,6 +82,35 @@ function noMandate(
   return { kind: 'no_mandate', walletId: WALLET_ID, expertRateCents, availableMinor, reservable };
 }
 
+/** The pricing a refusal arm that returns before the balance reads carries (rate A$300/hr). */
+const TOP_UP_PRICING = {
+  expertRateCents: 30_000,
+  availableMinor: 0,
+  reservable: [],
+  mandateActive: false,
+} as const;
+
+function noWallet(): BookingFundingSnapshot {
+  return { kind: 'no_wallet', topUpPricing: TOP_UP_PRICING };
+}
+
+const NORTHWIND = { id: COMPANY_ID, name: 'Northwind Industrial', isActive: true } as const;
+
+/** The unfunded refusal for the default fixtures: every top-up here is under the A$300 minimum. */
+function unfundedRefusal(
+  setupKind: 'no_wallet' | 'no_mandate_insufficient_balance',
+  canManageBilling = false
+): Record<string, unknown> {
+  return {
+    ok: false,
+    reason: 'unfunded',
+    canManageBilling,
+    billingCompany: NORTHWIND,
+    suggestedTopUpMinor: 30_000,
+    setupKind,
+  };
+}
+
 function onHold(amountToClearMinor: number): BookingFundingSnapshot {
   const hold: HoldStatus = {
     onHold: true,
@@ -87,7 +120,7 @@ function onHold(amountToClearMinor: number): BookingFundingSnapshot {
     promoGrantedSinceDebtMinor: 0,
     amountToClearMinor,
   };
-  return { kind: 'on_hold', walletId: WALLET_ID, hold };
+  return { kind: 'on_hold', walletId: WALLET_ID, hold, topUpPricing: TOP_UP_PRICING };
 }
 
 const PLANNED_30_MIN = {
@@ -168,7 +201,7 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
 
     const result = await enforceBookingFunding(BASE_INPUT);
 
-    expect(result).toEqual({ ok: false, reason: 'unfunded', canManageBilling: false });
+    expect(result).toEqual(unfundedRefusal('no_mandate_insufficient_balance'));
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
       'booking_funding_blocked',
       expect.objectContaining({ reason: 'no_mandate_insufficient_balance' })
@@ -180,7 +213,7 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
 
     const result = await enforceBookingFunding({ ...BASE_INPUT, slot: SLOT_60 });
 
-    expect(result).toEqual({ ok: false, reason: 'unfunded', canManageBilling: false });
+    expect(result).toEqual(unfundedRefusal('no_mandate_insufficient_balance'));
     expect(lastAnalytics()).toMatchObject({ duration_minutes: 60 });
   });
 
@@ -203,11 +236,11 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
   });
 
   it('R5 — no wallet: refuses with no_wallet, does not throw', async () => {
-    mockReadSnapshot.mockResolvedValue({ kind: 'no_wallet' });
+    mockReadSnapshot.mockResolvedValue(noWallet());
 
     const result = await enforceBookingFunding(BASE_INPUT);
 
-    expect(result).toEqual({ ok: false, reason: 'unfunded', canManageBilling: false });
+    expect(result).toEqual(unfundedRefusal('no_wallet'));
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
       'booking_funding_blocked',
       expect.objectContaining({ reason: 'no_wallet' })
@@ -260,12 +293,12 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
    * capability read is treated as a NON-holder.
    */
   it('SEC-1 — a hasCapability rejection is treated as non-holder, NOT re-classified as unavailable', async () => {
-    mockReadSnapshot.mockResolvedValue({ kind: 'no_wallet' });
+    mockReadSnapshot.mockResolvedValue(noWallet());
     mockHasCapability.mockRejectedValue(new Error('membership read timed out'));
 
     const result = await enforceBookingFunding(BASE_INPUT);
 
-    expect(result).toEqual({ ok: false, reason: 'unfunded', canManageBilling: false });
+    expect(result).toEqual(unfundedRefusal('no_wallet'));
     expect(mockLogError).toHaveBeenCalledWith(
       'Booking funding capability read failed — treating the actor as a non-holder',
       expect.objectContaining({ userId: USER_ID, companyId: COMPANY_ID })
@@ -281,14 +314,14 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
    * hence `mockImplementationOnce`, not `mockRejectedValue`.
    */
   it('REV-3 — a publish failure is logged to Sentry and swallowed; the refusal is still returned', async () => {
-    mockReadSnapshot.mockResolvedValue({ kind: 'no_wallet' });
+    mockReadSnapshot.mockResolvedValue(noWallet());
     mockPublishNotificationEvent.mockImplementationOnce(() => {
       throw new Error('queue unavailable');
     });
 
     const result = await enforceBookingFunding(BASE_INPUT);
 
-    expect(result).toEqual({ ok: false, reason: 'unfunded', canManageBilling: false });
+    expect(result).toEqual(unfundedRefusal('no_wallet'));
     expect(mockLogError).toHaveBeenCalledWith(
       'Booking funding blocked fan-out failed to publish',
       expect.objectContaining({ companyId: COMPANY_ID })
@@ -299,12 +332,12 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
   it('the fan-out promise: publishes booking.funding_blocked with a kind-and-hour-bucketed correlationId and NO figure', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(NOW_ISO));
-    mockReadSnapshot.mockResolvedValue({ kind: 'no_wallet' });
+    mockReadSnapshot.mockResolvedValue(noWallet());
 
     const result = await enforceBookingFunding(BASE_INPUT);
 
     const expectedBucket = Math.floor(Date.now() / (60 * 60 * 1000));
-    expect(result).toEqual({ ok: false, reason: 'unfunded', canManageBilling: false });
+    expect(result).toEqual(unfundedRefusal('no_wallet'));
     expect(mockPublishNotificationEvent).toHaveBeenCalledTimes(1);
     expect(mockPublishNotificationEvent).toHaveBeenCalledWith('booking.funding_blocked', {
       correlationId: `booking-funding:${COMPANY_ID}:${USER_ID}:unfunded:${expectedBucket}`,
@@ -321,12 +354,12 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
   });
 
   it('self-serve branch: canManageBilling true, publish STILL happens (unconditional)', async () => {
-    mockReadSnapshot.mockResolvedValue({ kind: 'no_wallet' });
+    mockReadSnapshot.mockResolvedValue(noWallet());
     mockHasCapability.mockResolvedValue(true);
 
     const result = await enforceBookingFunding(BASE_INPUT);
 
-    expect(result).toEqual({ ok: false, reason: 'unfunded', canManageBilling: true });
+    expect(result).toEqual(unfundedRefusal('no_wallet', true));
     expect(mockPublishNotificationEvent).toHaveBeenCalledTimes(1);
   });
 
@@ -336,7 +369,7 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
    * every other assertion in this file.
    */
   it('REV-4 — hasCapability is called with the exact actor, capability token and COMPANY scope', async () => {
-    mockReadSnapshot.mockResolvedValue({ kind: 'no_wallet' });
+    mockReadSnapshot.mockResolvedValue(noWallet());
 
     await enforceBookingFunding(BASE_INPUT);
 
@@ -346,7 +379,7 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
   });
 
   it('analytics: fires exactly once on the unfunded arm with the exact key set and no money property', async () => {
-    mockReadSnapshot.mockResolvedValue({ kind: 'no_wallet' });
+    mockReadSnapshot.mockResolvedValue(noWallet());
 
     await enforceBookingFunding(BASE_INPUT);
 
@@ -381,8 +414,9 @@ describe('enforceBookingFunding — an open receivable refuses the booking (D6.1
       ok: false,
       reason: 'on_hold',
       canManageBilling: true,
-      billingCompany: { id: COMPANY_ID, name: 'Northwind Industrial', isActive: true },
+      billingCompany: NORTHWIND,
       topUpNeededMinor: 27_500,
+      suggestedTopUpMinor: 30_000,
     });
   });
 
@@ -499,8 +533,9 @@ describe('enforceBookingFunding — an open receivable refuses the booking (D6.1
         ok: false,
         reason: 'on_hold',
         canManageBilling: false,
-        billingCompany: { id: COMPANY_ID, name: 'Northwind Industrial', isActive: true },
+        billingCompany: NORTHWIND,
         topUpNeededMinor: null,
+        suggestedTopUpMinor: 30_000,
       });
       expect(mockLogWarn).toHaveBeenCalledWith(
         'A covered hold could not be cleared by the booking API — showing the fallback',
@@ -528,8 +563,9 @@ describe('enforceBookingFunding — planned consultations set credit aside (D6.5
       ok: false,
       reason: 'reserved',
       canManageBilling: true,
-      billingCompany: { id: COMPANY_ID, name: 'Northwind Industrial', isActive: true },
+      billingCompany: NORTHWIND,
       topUpNeededMinor: 7_500,
+      suggestedTopUpMinor: 30_000,
       reservedBookingCount: 1,
     });
   });
@@ -590,7 +626,7 @@ describe('enforceBookingFunding — the correlationId carries the block kind', (
     vi.useFakeTimers();
     vi.setSystemTime(new Date(NOW_ISO));
     const snapshots: readonly BookingFundingSnapshot[] = [
-      { kind: 'no_wallet' },
+      noWallet(),
       onHold(27_500),
       noMandate(30_000, [PLANNED_30_MIN]),
     ];
@@ -610,5 +646,154 @@ describe('enforceBookingFunding — the correlationId carries the block kind', (
       'account_on_hold',
       'reserved_by_upcoming',
     ]);
+  });
+});
+
+describe('the new refusal fields', () => {
+  it('unfunded carries the billing company, the setup kind and the suggested top-up', async () => {
+    mockReadSnapshot.mockResolvedValue(noWallet());
+
+    const result = await enforceBookingFunding({
+      ...BASE_INPUT,
+      activeCompanyId: OTHER_COMPANY_ID,
+    });
+
+    expect(result).toEqual({
+      ...unfundedRefusal('no_wallet'),
+      billingCompany: { ...NORTHWIND, isActive: false },
+    });
+  });
+
+  it('an unfunded refusal degrades to a null company name when the name read fails', async () => {
+    mockReadSnapshot.mockResolvedValue(noMandate(0));
+    mockFindNameById.mockRejectedValue(new Error('read timed out'));
+
+    const result = await enforceBookingFunding(BASE_INPUT);
+
+    expect(result).toMatchObject({
+      reason: 'unfunded',
+      billingCompany: { id: COMPANY_ID, name: null, isActive: true },
+    });
+    expect(mockPublishNotificationEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('the suggested top-up rounds the shortfall UP to the A$100 step once it passes the minimum', async () => {
+    // A$300/hr over 60 minutes = A$375.00 (37,500) with nothing available → A$400.
+    mockReadSnapshot.mockResolvedValue(noMandate(0));
+
+    const result = await enforceBookingFunding({ ...BASE_INPUT, slot: SLOT_60 });
+
+    expect(result).toMatchObject({ reason: 'unfunded', suggestedTopUpMinor: 40_000 });
+  });
+
+  it('a company with no wallet is sized from the carried pricing, not from a zero', async () => {
+    mockReadSnapshot.mockResolvedValue({
+      kind: 'no_wallet',
+      topUpPricing: { ...TOP_UP_PRICING, reservable: [PLANNED_30_MIN] },
+    });
+
+    const result = await enforceBookingFunding({ ...BASE_INPUT, slot: SLOT_60 });
+
+    // 37,500 booking + 18,750 already planned = 56,250 → A$600.
+    expect(result).toMatchObject({ reason: 'unfunded', suggestedTopUpMinor: 60_000 });
+  });
+
+  it('an active mandate means a hold only needs its own clear-it amount', async () => {
+    const snapshot = onHold(80_000);
+    mockReadSnapshot.mockResolvedValue(
+      snapshot.kind === 'on_hold'
+        ? { ...snapshot, topUpPricing: { ...TOP_UP_PRICING, mandateActive: true } }
+        : snapshot
+    );
+
+    const result = await enforceBookingFunding({ ...BASE_INPUT, slot: SLOT_60 });
+
+    expect(result).toMatchObject({ reason: 'on_hold', suggestedTopUpMinor: 80_000 });
+  });
+
+  it('a figure above the top-up maximum is returned as is — the caller decides what to do with it', async () => {
+    mockReadSnapshot.mockResolvedValue({
+      kind: 'no_wallet',
+      topUpPricing: { ...TOP_UP_PRICING, expertRateCents: 3_000_000 },
+    });
+
+    const result = await enforceBookingFunding(BASE_INPUT);
+
+    expect(result).toMatchObject({ reason: 'unfunded', suggestedTopUpMinor: 1_880_000 });
+  });
+
+  it('a failed-heal fallback suggests the minimum chip', async () => {
+    mockReadSnapshot.mockResolvedValue(onHold(0));
+
+    const result = await enforceBookingFunding({ ...BASE_INPUT, onCoveredHold: 'refuse' });
+
+    expect(result).toMatchObject({
+      reason: 'on_hold',
+      topUpNeededMinor: null,
+      suggestedTopUpMinor: 30_000,
+    });
+  });
+});
+
+describe('assessBookingFunding — the read-only pre-flight', () => {
+  const refusalSnapshots: ReadonlyArray<readonly [string, BookingFundingSnapshot]> = [
+    ['no wallet', noWallet()],
+    ['short of the estimate', noMandate(0)],
+    ['an open hold', onHold(27_500)],
+    ['planned consultations', noMandate(30_000, [PLANNED_30_MIN])],
+  ];
+
+  it.each(refusalSnapshots)(
+    'decides %s like enforce does and tells nobody anything',
+    async (_label, snapshot) => {
+      mockReadSnapshot.mockResolvedValue(snapshot);
+      mockHasCapability.mockResolvedValue(true);
+      const assessed = await assessBookingFunding(BASE_INPUT);
+
+      expect(assessed.ok).toBe(false);
+      expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+      expect(mockLogWarn).not.toHaveBeenCalled();
+      expect(mockLogInfo).not.toHaveBeenCalled();
+
+      const enforced = await enforceBookingFunding(BASE_INPUT);
+      expect(enforced).toEqual(assessed);
+      expect(mockPublishNotificationEvent).toHaveBeenCalledTimes(1);
+      expect(mockTrackServerAndFlush).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('the failed-heal fallback is assessed without its warning being logged', async () => {
+    mockReadSnapshot.mockResolvedValue(onHold(0));
+
+    const result = await assessBookingFunding({ ...BASE_INPUT, onCoveredHold: 'refuse' });
+
+    expect(result).toMatchObject({ reason: 'on_hold', topUpNeededMinor: null });
+    expect(mockLogWarn).not.toHaveBeenCalled();
+    expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+  });
+
+  it('a deferred covered hold, a rate-less expert and an unknown expert log nothing when assessed', async () => {
+    mockReadSnapshot.mockResolvedValueOnce(onHold(0));
+    const covered = await assessBookingFunding(BASE_INPUT);
+    mockReadSnapshot.mockResolvedValueOnce(noMandate(0, [], null));
+    const rateLess = await assessBookingFunding(BASE_INPUT);
+    mockReadSnapshot.mockResolvedValueOnce({ kind: 'unknown_expert', walletId: WALLET_ID });
+    const unknown = await assessBookingFunding(BASE_INPUT);
+
+    expect(covered).toEqual({ ok: true });
+    expect(rateLess).toEqual({ ok: true });
+    expect(unknown).toEqual({ ok: false, reason: 'unavailable' });
+    expect(mockLogInfo).not.toHaveBeenCalled();
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('a read failure is unavailable and publishes nothing', async () => {
+    mockReadSnapshot.mockRejectedValue(new Error('connection reset'));
+
+    const result = await assessBookingFunding(BASE_INPUT);
+
+    expect(result).toEqual({ ok: false, reason: 'unavailable' });
+    expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
   });
 });
