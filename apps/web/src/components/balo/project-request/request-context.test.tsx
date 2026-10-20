@@ -26,6 +26,7 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     relationships: [],
     viewerEoi: null,
     viewerRelationshipStatus: null,
+    onDirectLeg: false,
     kickoff: null,
     liveTracksForClose: [],
     closed: null,

@@ -113,15 +113,37 @@ describe('NudgeBar', () => {
       'declined',
     ] as const;
 
+    const CHANGE_REQUESTS = [
+      null,
+      { requestedBy: 'Dana @ Northwind', notePreview: 'Add more deliverables', nextVersion: 2 },
+    ] as const;
+    const DIRECT_LEGS = [null, { companyName: 'Northwind' }] as const;
+
     const every = LENSES.flatMap((lens) =>
       STATUSES.flatMap((status) =>
-        REL_STATUSES.map((rel) => ({ lens, status, rel, nudge: nudgeFor(lens, status, rel) }))
+        REL_STATUSES.flatMap((rel) =>
+          CHANGE_REQUESTS.flatMap((changeRequest) =>
+            DIRECT_LEGS.map((directLeg) => ({
+              lens,
+              status,
+              rel,
+              revise: changeRequest !== null,
+              direct: directLeg !== null,
+              nudge: nudgeFor(lens, status, rel, changeRequest, directLeg),
+            }))
+          )
+        )
       )
     );
 
     it('covers a real, non-trivial number of cells (guards against a vacuous walk)', () => {
       expect(every.length).toBeGreaterThan(100);
       expect(every.filter((c) => c.nudge !== null).length).toBeGreaterThan(10);
+      // Both interpolated cells are actually reached, not just walked past.
+      expect(every.some((c) => c.revise && c.nudge?.primary?.label === 'Revise proposal')).toBe(
+        true
+      );
+      expect(every.some((c) => c.direct && c.nudge?.sub?.startsWith('Northwind chose'))).toBe(true);
     });
 
     it.each(['client', 'expert', 'admin'] as const)(
@@ -129,7 +151,7 @@ describe('NudgeBar', () => {
       (lens) => {
         for (const cell of every.filter((c) => c.lens === lens && c.nudge !== null)) {
           const nudge = cell.nudge!;
-          const where = `${cell.lens}:${cell.status}:${String(cell.rel)}`;
+          const where = `${cell.lens}:${cell.status}:${String(cell.rel)}:revise=${String(cell.revise)}:direct=${String(cell.direct)}`;
           // A function anywhere in here is what broke the page.
           expect(JSON.parse(JSON.stringify(nudge)), where).toEqual(nudge);
           expect(typeof nudge.icon, where).toBe('string');
@@ -456,6 +478,61 @@ describe('NudgeBar', () => {
     it('the winning expert is also suppressed at page level (KickoffBoard owns kickoff)', () => {
       expect(nudgeFor('expert', 'accepted', 'accepted')).toBeNull();
       expect(nudgeFor('expert', 'kickoff_approved', 'accepted')).toBeNull();
+    });
+  });
+
+  describe('nudgeFor — direct leg (the client chose the expert)', () => {
+    const DIRECT = { companyName: 'Northwind' };
+
+    it('tells the chosen expert which client sent it, not that Balo invited them', () => {
+      for (const status of ['experts_invited', 'eoi_submitted'] as const) {
+        const nudge = nudgeFor('expert', status, 'invited', null, DIRECT);
+        expect(nudge?.headline).toBe('Sent to you directly — submit your expression of interest');
+        expect(nudge?.sub).toBe(
+          'Northwind chose you for this one. A short, specific EOI starts the conversation.'
+        );
+      }
+    });
+
+    it('tells the client their chosen expert has it, not that Balo invited specialists', () => {
+      const nudge = nudgeFor('client', 'experts_invited', null, null, DIRECT);
+      expect(nudge?.headline).toBe('Your expert is reviewing your request');
+      expect(nudge?.sub).not.toMatch(/We've invited/);
+    });
+
+    it('promises the client no notification (the EOI event reaches only the creator)', () => {
+      for (const directLeg of [null, DIRECT]) {
+        expect(nudgeFor('client', 'experts_invited', null, null, directLeg)?.sub).not.toMatch(
+          /notified/i
+        );
+      }
+    });
+
+    it('leaves every other cell on the request-keyed copy', () => {
+      expect(nudgeFor('expert', 'experts_invited', 'invited')?.headline).toBe(
+        "You're invited — submit your expression of interest"
+      );
+      expect(nudgeFor('client', 'experts_invited')?.headline).toBe(
+        'Experts are reviewing your request'
+      );
+      expect(nudgeFor('admin', 'experts_invited', null, null, DIRECT)).toEqual(
+        nudgeFor('admin', 'experts_invited')
+      );
+      expect(nudgeFor('expert', 'proposal_requested', 'proposal_requested', null, DIRECT)).toEqual(
+        nudgeFor('expert', 'proposal_requested', 'proposal_requested')
+      );
+      expect(nudgeFor('expert', 'experts_invited', 'declined', null, DIRECT)).toBeNull();
+    });
+
+    it('the revise cell still wins for the chosen expert in a changes loop', () => {
+      const nudge = nudgeFor(
+        'expert',
+        'proposal_submitted',
+        'proposal_submitted',
+        { requestedBy: 'Dana @ Northwind', notePreview: 'Add more deliverables', nextVersion: 2 },
+        DIRECT
+      );
+      expect(nudge?.headline).toBe('Dana @ Northwind requested changes to your proposal');
     });
   });
 });

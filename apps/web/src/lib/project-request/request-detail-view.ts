@@ -119,6 +119,14 @@ export interface RequestDetailView {
    */
   viewerRelationshipStatus: RelationshipStatus | null;
   /**
+   * The viewer is on the DIRECT leg of a direct request — the client who chose the expert while
+   * that expert still has a live (non-declined) track, or that chosen expert. `false` for an
+   * expert Balo invited alongside (their invitation did come from Balo), for the client once
+   * staff decline or remove the chosen expert (the request can sit at `experts_invited` after
+   * either), for the admin lens, and for every `match` request. Drives nudge copy only.
+   */
+  onDirectLeg: boolean;
+  /**
    * Kickoff-board gate state — populated for the client + admin lenses when the
    * request is at `accepted`/`kickoff_approved` and an accepted relationship
    * exists; for the expert lens ONLY when the viewer IS the accepted/winning
@@ -275,6 +283,23 @@ function deriveViewerRelationshipStatus(
   return relationship?.status ?? null;
 }
 
+/** See {@link RequestDetailView.onDirectLeg}. */
+function deriveOnDirectLeg(
+  request: ProjectRequestWithRelations,
+  ctx: RequestViewerContext
+): boolean {
+  if (request.sendTo !== 'direct') return false;
+  if (ctx.lens === 'client') {
+    // `relationships` already excludes soft-deleted (removed) rows.
+    return request.relationships.some(
+      (r) => r.expertProfileId === request.expertProfileId && r.status !== 'declined'
+    );
+  }
+  if (ctx.lens !== 'expert' || ctx.relationshipId === null) return false;
+  const relationship = request.relationships.find((r) => r.id === ctx.relationshipId);
+  return relationship?.expertProfileId === request.expertProfileId;
+}
+
 /**
  * Kickoff-board projection — the dual-confirmation gate state. Returns `null`
  * unless the request is at `accepted`/`kickoff_approved` AND has an accepted
@@ -374,6 +399,7 @@ export function mapRequestToDetailView(
         : [],
     viewerEoi: deriveViewerEoi(request, ctx),
     viewerRelationshipStatus: deriveViewerRelationshipStatus(request, ctx),
+    onDirectLeg: deriveOnDirectLeg(request, ctx),
     kickoff: deriveKickoffView(request, ctx),
     liveTracksForClose: deriveLiveTracksForClose(request, ctx),
     closed: deriveClosedSummary(request, ctx, closedSummaryInput),
