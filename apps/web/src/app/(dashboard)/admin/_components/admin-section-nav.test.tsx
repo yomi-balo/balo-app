@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen } from '@/test/utils';
 
 let pathname = '/admin';

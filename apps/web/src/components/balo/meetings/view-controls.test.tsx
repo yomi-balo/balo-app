@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ViewControls, type ViewControlsProps } from './view-controls';
 

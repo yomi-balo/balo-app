@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
 import type { RecapFileRowView, RecapRecordingRowView } from '@/lib/meetings/recap-view-types';

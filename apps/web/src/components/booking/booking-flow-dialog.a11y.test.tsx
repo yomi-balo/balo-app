@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render } from '@/test/utils';
 import type { BookingFlowExpert, BookingContext } from './types';
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { dailyState, installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
 import {
   DEVICES_BLOCKED_BODY,

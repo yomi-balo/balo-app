@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { deriveDrawdownState, type DrawdownInputs, type DrawdownState } from '@balo/shared/credit';
 import { track, SESSION_EVENTS } from '@/lib/analytics';
 

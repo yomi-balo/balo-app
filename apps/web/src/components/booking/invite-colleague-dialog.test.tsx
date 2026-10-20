@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
 import { GUEST_ACTION_COPY, rateLimitedCopy } from '@/lib/meetings/guests-copy';

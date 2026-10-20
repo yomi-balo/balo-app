@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 const { mockUseIsMobile } = vi.hoisted(() => ({ mockUseIsMobile: vi.fn(() => false) }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => mockUseIsMobile() }));

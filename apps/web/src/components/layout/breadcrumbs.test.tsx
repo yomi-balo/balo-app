@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 // A mutable module-level pathname the mocked `usePathname` reads live, so a test can flip the
 // route mid-test (`pathname = '/next-route'`) and re-render to exercise a navigation.

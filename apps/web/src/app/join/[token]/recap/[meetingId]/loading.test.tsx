@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 import GuestRecapLoading from './loading';
 

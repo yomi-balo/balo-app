@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { useState } from 'react';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 // Stub motion to render plain elements (JSDOM-friendly).
 const MOTION_PROPS = new Set(['initial', 'animate', 'exit', 'variants', 'transition']);

@@ -8,7 +8,7 @@ import {
 import { rememberSetupIntent, readRememberedSetupIntent } from '@/lib/stripe/setup-intent-return';
 import { useLogout } from './use-logout';
 
-// Matches `use-recent-lookups.test.ts`'s own precedent of hardcoding this literal rather than
+// Matches `use-recent-lookups.test.tsx`'s own precedent of hardcoding this literal rather than
 // exporting it — the key is deliberately not part of that module's public surface.
 const RECENT_LOOKUPS_KEY = 'balo:admin-lookup-recent';
 

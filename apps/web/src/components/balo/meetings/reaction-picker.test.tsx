@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MEETING_REACTIONS, type MeetingReactionEmoji } from '@/lib/meetings/meeting-reactions';
 import { MeetingFrameElementProvider } from './meeting-frame-element';

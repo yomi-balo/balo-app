@@ -8,7 +8,7 @@ import type { ProjectBriefFailureReason } from '@balo/shared/project-requests';
 vi.mock('server-only', () => ({}));
 
 /**
- * The polling hook is stubbed exactly as `use-ai-brief-flow.test.ts` stubs it — this suite
+ * The polling hook is stubbed exactly as `use-ai-brief-flow.test.tsx` stubs it — this suite
  * invokes `onSucceeded` DIRECTLY, and drives `phase`/`failureReason` through a mutable module
  * variable the mocked hook reads fresh on every render.
  */
@@ -428,7 +428,7 @@ describe('useCaseBriefFlow', () => {
      * writes multiple fields in the same event, and `hasEditsSinceGenerate` compares the LIVE
      * draft against the snapshot on every commit — a no-op mock leaves the draft on its stale
      * initial value, which this hook would (correctly) read as every field having "diverged".
-     * Same harness shape as `use-ai-brief-flow.test.ts`'s `renderConnectedFlow`.
+     * Same harness shape as `use-ai-brief-flow.test.tsx`'s `renderConnectedFlow`.
      */
     function renderConnectedFlow(initialDraft: ProjectDraft) {
       const view = renderHook(() => {

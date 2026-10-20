@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 import GuestRecapIndexError from './error';
 

@@ -1,7 +1,7 @@
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import {
   CLIENT_WAITING_BODY,
   NEUTRAL_WAITING_COPY,

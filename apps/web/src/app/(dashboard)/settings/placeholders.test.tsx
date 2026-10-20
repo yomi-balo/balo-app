@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 const { mockGetCurrentUser, mockRedirect } = vi.hoisted(() => ({
   mockGetCurrentUser: vi.fn(),

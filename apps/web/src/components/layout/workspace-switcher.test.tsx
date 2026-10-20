@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render } from '@/test/utils';
 import type { CompanyWorkspace, Workspace } from '@balo/shared/workspaces';
 import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';

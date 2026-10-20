@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { ConversationMessageView } from '@/lib/conversations/conversation-view-types';
 import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';
 import type {

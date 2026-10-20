@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { PartyDomainForSettings } from '@balo/db';
 import { DomainRow, attributionText } from './domain-row';
 

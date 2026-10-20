@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen, fireEvent } from '@/test/utils';
 import { CalendarViewSwitcher } from './calendar-view-switcher';
 

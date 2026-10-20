@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { GUEST_ACTION_COPY } from '@/lib/meetings/guests-copy';
 import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
 import type { VouchActionResult } from '@/lib/meetings/meeting-panels';

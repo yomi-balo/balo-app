@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { MarketingNavLink } from '@/lib/analytics';
 import { MarketingMobileMenu } from './marketing-mobile-menu';
 import type { MarketingViewer } from './marketing-viewer';

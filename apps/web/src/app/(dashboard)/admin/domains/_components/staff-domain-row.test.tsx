@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 const { mockRemove, mockToastSuccess, mockToastError, mockRefresh, mockCapture } = vi.hoisted(
   () => ({

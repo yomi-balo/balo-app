@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { toast } from 'sonner';
 import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
 import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';

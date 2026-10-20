@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import type { GuestForViewer } from '@balo/shared/meetings';

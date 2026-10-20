@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { TYPING_ANNOUNCE_HOLD_MS, TypingIndicator, typingIndicatorCopy } from './typing-indicator';
 
 /**

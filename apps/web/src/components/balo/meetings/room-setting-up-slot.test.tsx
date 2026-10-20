@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen } from '@/test/utils';
 import {
   ROOM_SETTING_UP_LABEL,

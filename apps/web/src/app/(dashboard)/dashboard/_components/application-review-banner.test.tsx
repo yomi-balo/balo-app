@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import { ApplicationReviewBanner } from './application-review-banner';
 

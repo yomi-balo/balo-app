@@ -13,8 +13,8 @@ pnpm --filter web add -D jest-axe @types/jest-axe
 ```
 
 ```typescript
-import { axe, toHaveNoViolations } from 'jest-axe';
-expect.extend(toHaveNoViolations);
+// `@/test/axe` registers `toHaveNoViolations` on import — never import `jest-axe` directly.
+import { axe } from '@/test/axe';
 
 it('has no a11y violations', async () => {
   const { container } = render(<MyComponent />);

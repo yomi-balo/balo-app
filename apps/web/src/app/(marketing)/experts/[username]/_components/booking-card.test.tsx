@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 
 import { BookingCard } from './booking-card';

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen } from '@/test/utils';
 import type { CasesIndexCardState } from '@balo/analytics/events';
 import { CaseCard } from './case-card';

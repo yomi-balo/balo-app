@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { CAPABILITIES } from '@balo/shared/authz';
 import { track, NAV_EVENTS } from '@/lib/analytics';
 import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';

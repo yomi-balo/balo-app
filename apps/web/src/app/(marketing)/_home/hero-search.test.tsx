@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, within } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { buildProductNameMap } from '@/lib/search/taxonomy';
 import type { PopularChip } from '@/lib/marketing/popular-chips';

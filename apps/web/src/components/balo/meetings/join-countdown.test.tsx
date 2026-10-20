@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import { render, screen } from '@/test/utils';
 import { JoinCountdown } from './join-countdown';

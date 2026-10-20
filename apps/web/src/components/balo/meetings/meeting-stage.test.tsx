@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { orderTiles, type TileCandidate } from '@/lib/meetings/order-tiles';
 import { dailyState, installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
 import { StageContent } from './meeting-stage';

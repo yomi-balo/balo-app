@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { resolveRouteDir } from '@/invariants/_source-scan';
 import type { MarketingHomeData } from '@/lib/marketing/load-home-data';
 import MarketingLayout from './layout';

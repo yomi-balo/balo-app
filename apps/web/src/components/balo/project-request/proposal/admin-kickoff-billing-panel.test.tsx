@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 const mockRemind = vi.fn();
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/remind-client-billing', () => ({

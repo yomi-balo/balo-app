@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { dailySpies, dailyState, resetDailyMock } from '@/test/mocks/daily';
 import { RECORDING_PILL_MESSAGE } from './meeting-notices';
 import { RecordingIndicator } from './recording-indicator';
