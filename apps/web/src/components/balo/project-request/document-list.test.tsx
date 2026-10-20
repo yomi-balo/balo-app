@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 
@@ -18,15 +18,28 @@ const DOCUMENTS = [
   { id: 'doc-1', fileName: 'brief.pdf', sizeBytes: 266072, contentType: 'application/pdf' },
 ];
 
+/**
+ * jsdom's `Location.assign` is a non-configurable own property, so it cannot be spied; the whole
+ * `location` object is swapped for these tests and restored after.
+ */
 describe('DocumentList', () => {
-  const mockOpen = vi.fn();
+  const realLocation = globalThis.location;
+  let assign: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal('open', mockOpen);
+    assign = vi.fn();
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { href: realLocation.href, origin: realLocation.origin, assign },
+    });
   });
 
-  it('opens the presigned URL in a new tab when a document is clicked', async () => {
+  afterEach(() => {
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: realLocation });
+  });
+
+  it('downloads the presigned URL in place when a document is clicked', async () => {
     const user = userEvent.setup();
     mockDownload.mockResolvedValue({ success: true, url: 'https://signed-download' });
     render(<DocumentList requestId="req-1" documents={DOCUMENTS} />);
@@ -34,13 +47,7 @@ describe('DocumentList', () => {
     await user.click(screen.getByRole('button', { name: 'Download brief.pdf' }));
 
     expect(mockDownload).toHaveBeenCalledWith({ requestId: 'req-1', documentId: 'doc-1' });
-    await waitFor(() =>
-      expect(mockOpen).toHaveBeenCalledWith(
-        'https://signed-download',
-        '_blank',
-        'noopener,noreferrer'
-      )
-    );
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://signed-download'));
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
@@ -57,7 +64,21 @@ describe('DocumentList', () => {
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith('This document is no longer available.')
     );
-    expect(mockOpen).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Download brief.pdf' })).toBeEnabled();
+  });
+
+  it('toasts a retry message and re-enables the row when the action call itself rejects', async () => {
+    const user = userEvent.setup();
+    mockDownload.mockRejectedValue(new Error('Failed to fetch'));
+    render(<DocumentList requestId="req-1" documents={DOCUMENTS} />);
+
+    await user.click(screen.getByRole('button', { name: 'Download brief.pdf' }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith('Could not open this document. Please try again.')
+    );
+    expect(assign).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Download brief.pdf' })).toBeEnabled();
   });
 

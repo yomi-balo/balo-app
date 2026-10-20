@@ -33,12 +33,19 @@ vi.mock('@/lib/logging', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: (...args: unknown[]) => mockLogError(...args) },
 }));
 
+const mockTrack = vi.fn();
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: (...args: unknown[]) => mockTrack(...args),
+  REQUEST_DOCUMENT_SERVER_EVENTS: { DOWNLOADED: 'request_document_downloaded' },
+}));
+
 import { getRequestDocumentDownloadAction } from './get-request-document-download';
 
 const USER = { id: USER_ID };
 const VALID_INPUT = { requestId: REQUEST_ID, documentId: DOCUMENT_ID };
 const DOCUMENT = { id: DOCUMENT_ID, r2Key: 'project-documents/c/u/k', fileName: 'brief.pdf' };
 const GONE = { success: false, error: 'This document is no longer available.' };
+const OPEN_REQUEST = { id: REQUEST_ID, status: 'eoi_submitted' };
 
 describe('getRequestDocumentDownloadAction', () => {
   beforeEach(() => {
@@ -68,12 +75,9 @@ describe('getRequestDocumentDownloadAction', () => {
   });
 
   it.each([
-    ['admin', { ok: true, side: 'admin', request: { id: REQUEST_ID }, tracks: [] }],
-    [
-      'client',
-      { ok: true, side: 'client', request: { id: REQUEST_ID }, companyId: 'co', tracks: [] },
-    ],
-    ['expert', { ok: true, side: 'expert', request: { id: REQUEST_ID }, viewer: {} }],
+    ['admin', { ok: true, side: 'admin', request: OPEN_REQUEST, tracks: [] }],
+    ['client', { ok: true, side: 'client', request: OPEN_REQUEST, companyId: 'co', tracks: [] }],
+    ['expert', { ok: true, side: 'expert', request: OPEN_REQUEST, viewer: {} }],
   ])('presigns the document for an authorized %s reader', async (_side, scope) => {
     mockAuthorizeScope.mockResolvedValue(scope);
 
@@ -83,6 +87,53 @@ describe('getRequestDocumentDownloadAction', () => {
     expect(mockAuthorizeScope).toHaveBeenCalledWith(USER, REQUEST_ID);
     expect(mockFindDocumentInRequest).toHaveBeenCalledWith(DOCUMENT_ID, REQUEST_ID);
     expect(mockPresignDownload).toHaveBeenCalledWith('project-documents/c/u/k', 'brief.pdf');
+  });
+
+  it.each(['admin', 'client', 'expert'] as const)(
+    'records request_document_downloaded with the gate-resolved %s viewer side',
+    async (side) => {
+      mockAuthorizeScope.mockResolvedValue({ ok: true, side, request: OPEN_REQUEST, tracks: [] });
+
+      await getRequestDocumentDownloadAction(VALID_INPUT);
+
+      expect(mockTrack).toHaveBeenCalledExactlyOnceWith('request_document_downloaded', {
+        viewer_side: side,
+        distinct_id: USER_ID,
+      });
+    }
+  );
+
+  it.each(['draft', 'requested', 'exploratory_meeting_requested'])(
+    'denies an expert while the request is %s (before invite), mirroring the page gate',
+    async (status) => {
+      mockAuthorizeScope.mockResolvedValue({
+        ok: true,
+        side: 'expert',
+        request: { id: REQUEST_ID, status },
+        viewer: {},
+      });
+
+      const result = await getRequestDocumentDownloadAction(VALID_INPUT);
+
+      expect(result).toEqual(GONE);
+      expect(mockFindDocumentInRequest).not.toHaveBeenCalled();
+      expect(mockPresignDownload).not.toHaveBeenCalled();
+      expect(mockTrack).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still serves the client before invite (the gate is the expert lens only)', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      request: { id: REQUEST_ID, status: 'requested' },
+      companyId: 'co',
+      tracks: [],
+    });
+
+    const result = await getRequestDocumentDownloadAction(VALID_INPUT);
+
+    expect(result).toEqual({ success: true, url: 'https://signed-download' });
   });
 
   it('answers the not-available copy when the gate denies, without reading the document', async () => {
@@ -99,7 +150,7 @@ describe('getRequestDocumentDownloadAction', () => {
     mockAuthorizeScope.mockResolvedValue({
       ok: true,
       side: 'admin',
-      request: { id: REQUEST_ID },
+      request: OPEN_REQUEST,
       tracks: [],
     });
     mockFindDocumentInRequest.mockResolvedValue(undefined);
@@ -108,13 +159,14 @@ describe('getRequestDocumentDownloadAction', () => {
 
     expect(result).toEqual(GONE);
     expect(mockPresignDownload).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
   });
 
   it('logs and returns a retry message when presigning throws', async () => {
     mockAuthorizeScope.mockResolvedValue({
       ok: true,
       side: 'admin',
-      request: { id: REQUEST_ID },
+      request: OPEN_REQUEST,
       tracks: [],
     });
     mockPresignDownload.mockRejectedValue(new Error('r2 down'));

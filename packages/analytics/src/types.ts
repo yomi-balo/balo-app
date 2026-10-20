@@ -48,6 +48,7 @@ import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/
 import type { BookingEventMap, BookingServerEventMap } from './events/booking';
 import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/workspace';
 import type { RequestFileServerEventMap } from './events/request-files';
+import type { RequestDocumentServerEventMap } from './events/request-documents';
 import type { NavEventMap } from './events/nav';
 import type { MarketingEventMap } from './events/marketing';
 import type { MarketingHomeEventMap } from './events/marketing-home';
@@ -195,6 +196,9 @@ export type ServerEvents = ExpertServerEventMap &
   // `uploader_side` / `viewer_side` / `via_all_audience` are gate-resolved facts; a client
   // emission would let the browser assert its own side.
   RequestFileServerEventMap &
+  // SERVER-ONLY: deliberately absent from `AllEvents` above — `viewer_side` is gate-resolved,
+  // the same discipline as `RequestFileServerEventMap`.
+  RequestDocumentServerEventMap &
   // BAL-478 — SERVER-ONLY: deliberately absent from `AllEvents` above. The refusal is decided
   // entirely inside `enforceBookingFunding` (apps/web, `import 'server-only'`); no browser code
   // emits it.

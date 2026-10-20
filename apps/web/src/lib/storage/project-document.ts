@@ -9,6 +9,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MAX_PARSE_DOCUMENT_BYTES } from '@balo/shared/project-requests';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
+import { attachmentDisposition } from '@/lib/storage/content-disposition';
 import { log } from '@/lib/logging';
 import { CONVERSATION_FILE_PREFIX } from '@/lib/storage/conversation-file';
 import { MEETING_FILE_PREFIX } from '@/lib/storage/meeting-file';
@@ -67,7 +68,7 @@ export async function createPresignedProjectDocumentUpload(
 
 /**
  * Short-lived download URL for one brief document, forcing an attachment disposition with the
- * STORED file name (quotes/control chars stripped so the header can't be broken). Prefix-guarded
+ * STORED file name (sanitised by `attachmentDisposition`). Prefix-guarded
  * like the copy and delete below: a key outside the project-documents space is refused.
  */
 export async function createPresignedProjectDocumentDownload(
@@ -77,14 +78,12 @@ export async function createPresignedProjectDocumentDownload(
   if (!key.startsWith(PROJECT_DOCUMENT_PREFIX)) {
     throw new Error('Refusing to presign a key outside the project-documents space');
   }
-  // eslint-disable-next-line no-control-regex -- strip header-breaking control chars from the stored name
-  const safeName = fileName.replaceAll(/["\\\x00-\x1f]/g, '_');
   return getSignedUrl(
     r2Client,
     new GetObjectCommand({
       Bucket: R2_BUCKET,
       Key: key,
-      ResponseContentDisposition: `attachment; filename="${safeName}"`,
+      ResponseContentDisposition: attachmentDisposition(fileName),
     }),
     { expiresIn: DOWNLOAD_TTL_SECONDS }
   );

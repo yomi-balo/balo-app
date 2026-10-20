@@ -159,7 +159,13 @@ export function RequestFilesPanel({
         toast.error(result.error);
         return;
       }
-      globalThis.open(result.url, '_blank', 'noopener,noreferrer');
+      // Same-tab: the URL forces an attachment disposition, so this downloads in place. A
+      // `window.open` after the await runs outside the click's user gesture, which iOS Safari
+      // blocks as a popup.
+      globalThis.location.assign(result.url);
+    } catch {
+      // The action call itself rejected (offline, deploy skew) — it never got to answer.
+      toast.error('Could not download this file. Please try again.');
     } finally {
       setDownloadingId(null);
     }

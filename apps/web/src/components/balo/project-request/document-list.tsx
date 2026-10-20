@@ -36,7 +36,13 @@ export function DocumentList({
         toast.error(result.error);
         return;
       }
-      globalThis.open(result.url, '_blank', 'noopener,noreferrer');
+      // Same-tab: the URL forces an attachment disposition, so this downloads in place. A
+      // `window.open` after the await runs outside the click's user gesture, which iOS Safari
+      // blocks as a popup.
+      globalThis.location.assign(result.url);
+    } catch {
+      // The action call itself rejected (offline, deploy skew) — it never got to answer.
+      toast.error('Could not open this document. Please try again.');
     } finally {
       setDownloadingId(null);
     }
@@ -59,7 +65,7 @@ export function DocumentList({
           <li key={doc.id}>
             <button
               type="button"
-              onClick={() => void handleDownload(doc.id)}
+              onClick={() => handleDownload(doc.id)}
               disabled={downloading}
               aria-label={`Download ${doc.fileName}`}
               className={cn(

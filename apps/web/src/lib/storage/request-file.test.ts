@@ -8,7 +8,7 @@ vi.mock('server-only', () => ({}));
  * `Content-Disposition` sanitiser, the `ContentLength` condition on the presigned PUT, and the
  * prefix guard on delete. Mirrors `meeting-file.test.ts`, which is the shipped template.
  *
- * ⚠ THIS FILE ALSO GUARDS REVIEWABILITY. The sanitiser's character class used to be written
+ * ⚠ THIS FILE ALSO GUARDS REVIEWABILITY. The sanitiser's character class (now in `content-disposition.ts`) used to be written
  * with RAW `0x00`/`0x1f` bytes, which made git classify the whole module as BINARY — GitHub
  * rendered "Binary file not shown" and every control above escaped diff review. The class is
  * now `\x00-\x1f` escapes; if it ever regresses, the `strips … control chars` case below still

@@ -100,6 +100,24 @@ const ADMIN_FILE = {
   deletedByName: null,
 };
 
+/**
+ * jsdom's `Location.assign` is a non-configurable own property, so it cannot be spied; the whole
+ * `location` object is swapped for a download test and restored by the returned function.
+ */
+function swapLocation(): { assign: ReturnType<typeof vi.fn>; restore: () => void } {
+  const realLocation = globalThis.location;
+  const assign = vi.fn();
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { href: realLocation.href, origin: realLocation.origin, assign },
+  });
+  return {
+    assign,
+    restore: () =>
+      Object.defineProperty(globalThis, 'location', { configurable: true, value: realLocation }),
+  };
+}
+
 describe('RequestFilesPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -349,19 +367,17 @@ describe('RequestFilesPanel', () => {
     expect(screen.getByText('No files have been shared on this request yet.')).toBeInTheDocument();
   });
 
-  it('client lens: download mints a URL and opens it', async () => {
+  it('client lens: download mints a URL and downloads it in place', async () => {
     const user = userEvent.setup();
-    const openSpy = vi.spyOn(globalThis, 'open').mockImplementation(() => null);
+    const location = swapLocation();
     mockDownload.mockResolvedValue({ success: true, url: 'https://signed' });
     const view: RequestFilesView = { lens: 'client', files: [CLIENT_FILE], liveTracks: [] };
     render(<RequestFilesPanel requestId={REQUEST_ID} initialView={view} />);
 
     await user.click(screen.getByRole('button', { name: 'Download Requirements.pdf' }));
 
-    await waitFor(() =>
-      expect(openSpy).toHaveBeenCalledWith('https://signed', '_blank', 'noopener,noreferrer')
-    );
-    openSpy.mockRestore();
+    await waitFor(() => expect(location.assign).toHaveBeenCalledWith('https://signed'));
+    location.restore();
   });
 
   it('is axe-clean in the client lens', async () => {
@@ -379,7 +395,7 @@ describe('RequestFilesPanel', () => {
   describe('failure arms leave the island state untouched', () => {
     it('download: surfaces the action’s error and opens nothing', async () => {
       const user = userEvent.setup();
-      const openSpy = vi.spyOn(globalThis, 'open').mockImplementation(() => null);
+      const location = swapLocation();
       mockDownload.mockResolvedValue({
         success: false,
         error: 'This file is no longer available.',
@@ -392,8 +408,26 @@ describe('RequestFilesPanel', () => {
       await waitFor(() =>
         expect(mockToastError).toHaveBeenCalledWith('This file is no longer available.')
       );
-      expect(openSpy).not.toHaveBeenCalled();
-      openSpy.mockRestore();
+      expect(location.assign).not.toHaveBeenCalled();
+      location.restore();
+    });
+
+    it('download: a rejected action call toasts a retry message and navigates nowhere', async () => {
+      const user = userEvent.setup();
+      const location = swapLocation();
+      mockDownload.mockRejectedValue(new Error('Failed to fetch'));
+      const view: RequestFilesView = { lens: 'client', files: [CLIENT_FILE], liveTracks: [] };
+      render(<RequestFilesPanel requestId={REQUEST_ID} initialView={view} />);
+
+      await user.click(screen.getByRole('button', { name: 'Download Requirements.pdf' }));
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          'Could not download this file. Please try again.'
+        )
+      );
+      expect(location.assign).not.toHaveBeenCalled();
+      location.restore();
     });
 
     it('delete: a refused delete keeps the row on screen', async () => {

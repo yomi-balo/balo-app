@@ -48,6 +48,8 @@ export {
   // facts. NOT in the client `@/lib/analytics` barrel and NOT in `src/test/setup.ts`'s client
   // `vi.mock` list — those are client-only (mirrors WORKSPACE_SERVER_EVENTS above).
   REQUEST_FILE_SERVER_EVENTS,
+  // The brief's attached documents — same server-only discipline as REQUEST_FILE_SERVER_EVENTS.
+  REQUEST_DOCUMENT_SERVER_EVENTS,
   // BAL-441 — the session receipt/payout pages' RSC fires `SESSION_STATEMENT_VIEWED`; their PDF
   // Route Handlers fire `SESSION_STATEMENT_DOWNLOADED`. Both are `apps/web`-only producers, so
   // this is the first time `CASE_BILLING_SERVER_EVENTS` joins this app's RSC allowlist. NOT in
