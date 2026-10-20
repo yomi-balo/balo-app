@@ -8,7 +8,39 @@ import type { Workspace } from '@balo/shared/workspaces';
 export const DASHBOARD_EVENTS = {
   UP_NEXT_VIEWED: 'dashboard_up_next_viewed',
   UP_NEXT_CLICKED: 'dashboard_up_next_clicked',
+  YOUR_MOVE_VIEWED: 'dashboard_your_move_viewed',
+  YOUR_MOVE_CLICKED: 'dashboard_your_move_clicked',
+  YOUR_MOVE_FILTERED: 'dashboard_your_move_filtered',
 } as const;
+
+export const DASHBOARD_YOUR_MOVE_CARD_KINDS = [
+  'calendar_reconnect',
+  'invitation',
+  'eoi_followup',
+  'proposal_requested',
+  'changes_requested',
+  'kickoff_terms',
+  'delivery_changes',
+  'action_items',
+  'messages',
+] as const;
+export type DashboardYourMoveCardKind = (typeof DASHBOARD_YOUR_MOVE_CARD_KINDS)[number];
+
+export const DASHBOARD_YOUR_MOVE_CHIPS = [
+  'all',
+  'calendar',
+  'invitations',
+  'interest',
+  'proposals',
+  'kickoff',
+  'delivery',
+  'action_items',
+  'messages',
+] as const;
+export type DashboardYourMoveChip = (typeof DASHBOARD_YOUR_MOVE_CHIPS)[number];
+
+export const DASHBOARD_YOUR_MOVE_TARGETS = ['card', 'action'] as const;
+export type DashboardYourMoveTarget = (typeof DASHBOARD_YOUR_MOVE_TARGETS)[number];
 
 /**
  * The context types Up next lists, in display-tile order. The web view model derives its type
@@ -49,5 +81,22 @@ export interface DashboardEventMap {
     meeting_type: DashboardUpNextMeetingType | null;
     /** `null` for footer links and the Empty-state "Find an expert" CTA. */
     row_state: DashboardUpNextRowState | null;
+  };
+  [DASHBOARD_EVENTS.YOUR_MOVE_VIEWED]: {
+    workspace_type: Workspace['type'];
+    card_count: number;
+    /** Distinct card kinds present, in `DASHBOARD_YOUR_MOVE_CARD_KINDS` tuple order. */
+    card_kinds: DashboardYourMoveCardKind[];
+  };
+  [DASHBOARD_EVENTS.YOUR_MOVE_CLICKED]: {
+    target: DashboardYourMoveTarget;
+    card_kind: DashboardYourMoveCardKind;
+    /** 1-based position in the visible (filtered) list. */
+    position: number;
+  };
+  [DASHBOARD_EVENTS.YOUR_MOVE_FILTERED]: {
+    chip: DashboardYourMoveChip;
+    /** Cards remaining after the filter is applied. */
+    card_count: number;
   };
 }

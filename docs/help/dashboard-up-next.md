@@ -40,6 +40,6 @@ The card lists your own upcoming meetings — the same bookings you'll see in Ca
 While your setup is incomplete and nothing is booked yet, a setup preview shows here
 instead.
 
-If your calendar connection stops working, a banner appears at the top of your dashboard
-linking to Settings to reconnect it. While your calendar is disconnected, you won't appear
-in expert search.
+If your calendar connection stops working, a Calendar card appears in Your move at the top of
+your dashboard, linking to Settings to reconnect it. While your calendar is disconnected, you
+won't appear in expert search.

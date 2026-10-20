@@ -118,6 +118,9 @@ export {
   DASHBOARD_UP_NEXT_MEETING_TYPES,
   DASHBOARD_UP_NEXT_TARGETS,
   DASHBOARD_UP_NEXT_ROW_STATES,
+  DASHBOARD_YOUR_MOVE_CARD_KINDS,
+  DASHBOARD_YOUR_MOVE_CHIPS,
+  DASHBOARD_YOUR_MOVE_TARGETS,
   // BAL-567 — the `/cases` index's two vocabulary tuples. Its EVENTS ride the already-exported
   // `RECAP_EVENTS` (see the registration note on `CASE_ACTION_CLICKED`), so only the tuples are
   // new here. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT package

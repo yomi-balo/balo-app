@@ -3,6 +3,11 @@ import { db } from '../client';
 import {
   actionItems,
   auditEvents,
+  caseEngagements,
+  companies,
+  engagements,
+  projectEngagements,
+  projectRequests,
   type ActionItem,
   type Engagement,
   type NewActionItem,
@@ -501,4 +506,95 @@ export const actionItemsRepository = {
     }
     return result;
   },
+
+  /**
+   * The expert dashboard's action items: every LIVE, open item assigned to the expert side of
+   * an ACTIVE case or project engagement delivered by `expertProfileId` (completed and cancelled
+   * engagements drop out; the other engagement types have no page to link to). One query;
+   * the caller groups by engagement. Ordered `engagement_id, created_at, id`.
+   *
+   * `engagementTitle` is the case title for a case and the originating request's title for a
+   * project (null when the project has no live request).
+   */
+  async listOpenAssignedToExpert(expertProfileId: string): Promise<ExpertOpenActionItemRow[]> {
+    const rows = await db
+      .select({
+        actionItemId: actionItems.id,
+        engagementId: actionItems.engagementId,
+        engagementType: engagements.engagementType,
+        caseTitle: caseEngagements.title,
+        requestTitle: projectRequests.title,
+        companyName: companies.name,
+        body: actionItems.body,
+        dueAt: actionItems.dueAt,
+        createdAt: actionItems.createdAt,
+      })
+      .from(actionItems)
+      .innerJoin(
+        engagements,
+        and(
+          eq(engagements.id, actionItems.engagementId),
+          eq(engagements.expertProfileId, expertProfileId),
+          eq(engagements.status, 'active'),
+          inArray(engagements.engagementType, ['case', 'project']),
+          isNull(engagements.deletedAt)
+        )
+      )
+      .innerJoin(companies, eq(companies.id, engagements.companyId))
+      .leftJoin(
+        caseEngagements,
+        and(eq(caseEngagements.engagementId, engagements.id), isNull(caseEngagements.deletedAt))
+      )
+      .leftJoin(
+        projectEngagements,
+        and(
+          eq(projectEngagements.engagementId, engagements.id),
+          isNull(projectEngagements.deletedAt)
+        )
+      )
+      .leftJoin(
+        projectRequests,
+        and(
+          eq(projectRequests.id, projectEngagements.projectRequestId),
+          isNull(projectRequests.deletedAt)
+        )
+      )
+      .where(
+        and(
+          eq(actionItems.status, 'open'),
+          eq(actionItems.assigneeParty, 'expert'),
+          isNull(actionItems.deletedAt)
+        )
+      )
+      .orderBy(asc(actionItems.engagementId), asc(actionItems.createdAt), asc(actionItems.id));
+
+    return rows.flatMap((row) =>
+      row.engagementType === 'case' || row.engagementType === 'project'
+        ? [
+            {
+              actionItemId: row.actionItemId,
+              engagementId: row.engagementId,
+              engagementType: row.engagementType,
+              engagementTitle: row.engagementType === 'case' ? row.caseTitle : row.requestTitle,
+              companyName: row.companyName,
+              body: row.body,
+              dueAt: row.dueAt,
+              createdAt: row.createdAt,
+            },
+          ]
+        : []
+    );
+  },
 };
+
+/** One open, expert-assigned action item on an active case or project engagement. */
+export interface ExpertOpenActionItemRow {
+  actionItemId: string;
+  engagementId: string;
+  engagementType: 'case' | 'project';
+  engagementTitle: string | null;
+  companyName: string;
+  body: string;
+  dueAt: Date | null;
+  createdAt: Date;
+}

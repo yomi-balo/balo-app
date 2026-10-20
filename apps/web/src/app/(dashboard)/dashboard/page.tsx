@@ -15,6 +15,8 @@ import { DashboardWalletSlot } from './_components/dashboard-wallet-slot';
 import { CompanyUpNextSlot } from './_components/company-up-next-slot';
 import { ExpertUpNextSlot } from './_components/expert-up-next-slot';
 import { UpNextCardSkeleton } from './_components/up-next-card-skeleton';
+import { YourMoveSlot } from './_components/your-move-slot';
+import { YourMoveSkeleton } from './_components/your-move-skeleton';
 import { ApplicationReviewBannerSlot } from './_components/application-review-banner-slot';
 import { resolveUpNextFooterLinks } from './_lib/up-next-footer-links';
 import { log } from '@/lib/logging';
@@ -45,6 +47,15 @@ async function renderExpertDashboard(
     <ExpertDashboard
       checklistStatus={checklistStatus}
       userName={user.firstName ?? 'there'}
+      yourMove={
+        <Suspense fallback={<YourMoveSkeleton />}>
+          <YourMoveSlot
+            user={user}
+            expertProfileId={expertProfileId}
+            calendarNeedsReconnect={checklistStatus?.calendarNeedsReconnect === true}
+          />
+        </Suspense>
+      }
       upNext={
         <Suspense fallback={<UpNextCardSkeleton />}>
           <ExpertUpNextSlot

@@ -2,13 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { asc, eq } from 'drizzle-orm';
 import { db } from '../client';
-import { actionItems, auditEvents, type AuditEvent } from '../schema';
+import { actionItems, auditEvents, projectRequests, type AuditEvent } from '../schema';
 import type { ProjectDeliveryStatus } from './_shared/engagement-supertype';
 import {
   caseEngagementFactory,
   engagementFactory,
   actionItemFactory,
+  expertDraftFactory,
   meetingFactory,
+  projectRequestFactory,
   userFactory,
 } from '../test/factories';
 import { actionItemsRepository, InvalidActionItemTransitionError } from './action-items';
@@ -618,5 +620,110 @@ describe('actionItemsRepository.latestStatusChangeAtForEngagements (case-inactiv
     ]);
     expect(result.get(ticked.id)).not.toBeNull();
     expect(result.get(other.id)).toBeNull();
+  });
+});
+
+describe('actionItemsRepository.listOpenAssignedToExpert', () => {
+  it('returns only the expert’s own open, expert-assigned, live items on active engagements', async () => {
+    const expert = await expertDraftFactory();
+    const otherExpert = await expertDraftFactory();
+    const { engagement: mine } = await caseEngagementFactory({
+      expertProfileId: expert.id,
+      caseValues: { title: 'Flow debugging' },
+    });
+    const { engagement: theirs } = await caseEngagementFactory({
+      expertProfileId: otherExpert.id,
+    });
+    const { engagement: completedCase } = await caseEngagementFactory({
+      expertProfileId: expert.id,
+      values: { status: 'completed' },
+    });
+    const { engagement: deletedCase } = await caseEngagementFactory({
+      expertProfileId: expert.id,
+      values: { deletedAt: new Date() },
+    });
+    const { engagement: cancelledCase } = await caseEngagementFactory({
+      expertProfileId: expert.id,
+      values: { status: 'cancelled' },
+    });
+
+    const due = new Date('2026-12-01T00:00:00.000Z');
+    const { actionItem: included } = await actionItemFactory({
+      engagementId: mine.id,
+      values: { assigneeParty: 'expert', dueAt: due, body: 'Send the plan' },
+    });
+    await actionItemFactory({
+      engagementId: mine.id,
+      values: { assigneeParty: 'expert', status: 'done' },
+    });
+    await actionItemFactory({ engagementId: mine.id, values: { assigneeParty: 'client' } });
+    await actionItemFactory({ engagementId: mine.id, values: { assigneeParty: null } });
+    await actionItemFactory({
+      engagementId: mine.id,
+      values: { assigneeParty: 'expert', deletedAt: new Date() },
+    });
+    await actionItemFactory({ engagementId: theirs.id, values: { assigneeParty: 'expert' } });
+    await actionItemFactory({ engagementId: deletedCase.id, values: { assigneeParty: 'expert' } });
+    await actionItemFactory({
+      engagementId: completedCase.id,
+      values: { assigneeParty: 'expert' },
+    });
+    await actionItemFactory({
+      engagementId: cancelledCase.id,
+      values: { assigneeParty: 'expert' },
+    });
+
+    const rows = await actionItemsRepository.listOpenAssignedToExpert(expert.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actionItemId: included.id,
+      engagementId: mine.id,
+      engagementType: 'case',
+      engagementTitle: 'Flow debugging',
+      body: 'Send the plan',
+    });
+    expect(rows[0]?.dueAt?.getTime()).toBe(due.getTime());
+    expect(rows[0]?.companyName).toBeDefined();
+  });
+
+  it('titles a project item with its originating request’s title', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ title: 'CPQ rollout' });
+    const { engagement } = await engagementFactory({
+      expertProfileId: expert.id,
+      projectValues: { projectRequestId: request.id },
+    });
+    await actionItemFactory({
+      engagementId: engagement.id,
+      values: { assigneeParty: 'expert' },
+    });
+
+    const rows = await actionItemsRepository.listOpenAssignedToExpert(expert.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.engagementType).toBe('project');
+    expect(rows[0]?.engagementTitle).toBe('CPQ rollout');
+
+    await db
+      .update(projectRequests)
+      .set({ deletedAt: new Date() })
+      .where(eq(projectRequests.id, request.id));
+    const afterDelete = await actionItemsRepository.listOpenAssignedToExpert(expert.id);
+    expect(afterDelete[0]?.engagementTitle).toBeNull();
+  });
+
+  it('orders by engagement, then creation time', async () => {
+    const expert = await expertDraftFactory();
+    const { engagement } = await caseEngagementFactory({ expertProfileId: expert.id });
+    const first = await actionItemFactory({
+      engagementId: engagement.id,
+      values: { assigneeParty: 'expert', createdAt: new Date('2026-06-01T00:00:00.000Z') },
+    });
+    const second = await actionItemFactory({
+      engagementId: engagement.id,
+      values: { assigneeParty: 'expert', createdAt: new Date('2026-06-02T00:00:00.000Z') },
+    });
+
+    const rows = await actionItemsRepository.listOpenAssignedToExpert(expert.id);
+    expect(rows.map((r) => r.actionItemId)).toEqual([first.actionItem.id, second.actionItem.id]);
   });
 });

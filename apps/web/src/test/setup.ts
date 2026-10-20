@@ -207,9 +207,9 @@ vi.mock('@/lib/analytics', async () => {
     // every test whose module graph reaches `CaptureHealthAnalytics` or `RedriveSheet` throws
     // on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
     ADMIN_CAPTURE_HEALTH_EVENTS: events.ADMIN_CAPTURE_HEALTH_EVENTS,
-    // BAL-566 — the dashboard "Up next" card's CLIENT event constant. ⚠ WITHOUT THIS LINE every
-    // test whose module graph reaches `UpNextCard` or `CalendarDisconnectedBanner` throws on an
-    // undefined constant (memory `reference_web_analytics_test_mock_export_list`).
+    // BAL-566 / BAL-600 — the dashboard "Up next" card's and "Your move" rail's CLIENT event
+    // constant. ⚠ WITHOUT THIS LINE every test whose module graph reaches `UpNextCard` or
+    // `YourMove` throws on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
     DASHBOARD_EVENTS: events.DASHBOARD_EVENTS,
     // BAL-589 — the "Convert a case to a project" AI brief's CLIENT event constant. ⚠ WITHOUT
     // THIS LINE every test whose module graph reaches `useCaseBriefFlow` throws on an undefined

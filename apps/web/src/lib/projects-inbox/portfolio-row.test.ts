@@ -70,6 +70,9 @@ function makeInvitation(overrides: Partial<PortfolioInvitationRow> = {}): Portfo
     title: 'Experience Cloud portal',
     companyId: 'company-1',
     companyName: 'Harbour Health',
+    clientBillingConfirmedAt: null,
+    expertTermsConfirmedAt: null,
+    currentProposalStatus: null,
     newestEoiAt: null,
     ...overrides,
   };
@@ -272,6 +275,7 @@ describe('needsYouForExpert', () => {
     expect(needsYouForExpert(makeInvitation({ relationshipStatus: 'invited' }))).toEqual({
       needsYou: true,
       nudgeLabel: 'Submit your EOI',
+      moveKind: 'invitation',
     });
   });
 
@@ -280,7 +284,11 @@ describe('needsYouForExpert', () => {
       makeInvitation({ relationshipStatus: 'eoi_submitted', requestStatus: 'eoi_submitted' }),
       SIGNAL_UNREAD
     );
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Reply to client' });
+    expect(res).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Reply to client',
+      moveKind: 'eoi_reply_owed',
+    });
   });
 
   it('eoi_submitted quiet → propose times', () => {
@@ -288,7 +296,11 @@ describe('needsYouForExpert', () => {
       makeInvitation({ relationshipStatus: 'eoi_submitted', requestStatus: 'eoi_submitted' }),
       SIGNAL_QUIET
     );
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Propose times' });
+    expect(res).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Propose times',
+      moveKind: 'eoi_propose_times',
+    });
   });
 
   it('proposal_requested → build your proposal', () => {
@@ -298,7 +310,11 @@ describe('needsYouForExpert', () => {
         requestStatus: 'proposal_requested',
       })
     );
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Build your proposal' });
+    expect(res).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Build your proposal',
+      moveKind: 'proposal_requested',
+    });
   });
 
   it('proposal_submitted → waiting on client', () => {
@@ -316,35 +332,129 @@ describe('needsYouForExpert', () => {
     const res = needsYouForExpert(
       makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'accepted' })
     );
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Confirm terms' });
+    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Confirm terms', moveKind: 'kickoff_terms' });
+  });
+
+  it('won with terms already confirmed → awaiting kickoff, not needs-you', () => {
+    const res = needsYouForExpert(
+      makeInvitation({
+        relationshipStatus: 'accepted',
+        requestStatus: 'accepted',
+        expertTermsConfirmedAt: day(1),
+      })
+    );
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null });
+  });
+
+  it('accepted relationship on a not-yet-accepted request, terms confirmed → awaiting kickoff', () => {
+    const res = needsYouForExpert(
+      makeInvitation({
+        relationshipStatus: 'accepted',
+        requestStatus: 'proposal_submitted',
+        expertTermsConfirmedAt: day(1),
+      })
+    );
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null });
+  });
+
+  it('accepted relationship on a not-yet-accepted request, terms outstanding → confirm terms', () => {
+    const res = needsYouForExpert(
+      makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'proposal_submitted' })
+    );
+    expect(res.moveKind).toBe('kickoff_terms');
+  });
+
+  it('proposal_submitted with a changes_requested current proposal → revise your proposal', () => {
+    const res = needsYouForExpert(
+      makeInvitation({
+        relationshipStatus: 'proposal_submitted',
+        requestStatus: 'proposal_submitted',
+        currentProposalStatus: 'changes_requested',
+      })
+    );
+    expect(res).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Revise your proposal',
+      moveKind: 'changes_requested',
+    });
+  });
+
+  it('proposal_submitted with a submitted current proposal → not needs-you', () => {
+    const res = needsYouForExpert(
+      makeInvitation({
+        relationshipStatus: 'proposal_submitted',
+        requestStatus: 'proposal_submitted',
+        currentProposalStatus: 'submitted',
+      })
+    );
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Waiting on client', moveKind: null });
+  });
+
+  it('needsYou holds exactly when moveKind is set, over every relationship × request arm', () => {
+    const relationshipStatuses = [
+      'invited',
+      'eoi_submitted',
+      'proposal_requested',
+      'proposal_submitted',
+      'accepted',
+      'declined',
+    ] as const;
+    const requestStatuses = [
+      'experts_invited',
+      'eoi_submitted',
+      'proposal_submitted',
+      'accepted',
+      'kickoff_approved',
+      'closed',
+    ] as const;
+    for (const relationshipStatus of relationshipStatuses) {
+      for (const requestStatus of requestStatuses) {
+        for (const currentProposalStatus of [null, 'changes_requested', 'submitted'] as const) {
+          for (const signal of [SIGNAL_UNREAD, SIGNAL_QUIET]) {
+            for (const expertTermsConfirmedAt of [null, day(1)]) {
+              const res = needsYouForExpert(
+                makeInvitation({
+                  relationshipStatus,
+                  requestStatus,
+                  currentProposalStatus,
+                  expertTermsConfirmedAt,
+                }),
+                signal
+              );
+              expect(res.needsYou).toBe(res.moveKind !== null);
+            }
+          }
+        }
+      }
+    }
   });
 
   it('lost (relationship not accepted, request accepted) → not selected, not needs-you', () => {
     const res = needsYouForExpert(
       makeInvitation({ relationshipStatus: 'proposal_submitted', requestStatus: 'accepted' })
     );
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Not selected' });
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Not selected', moveKind: null });
   });
 
   it('won + kickoff_approved → live project, not needs-you', () => {
     const res = needsYouForExpert(
       makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'kickoff_approved' })
     );
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Live project' });
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Live project', moveKind: null });
   });
 
   it('closed request, even an ACCEPTED relationship → closed, not "Confirm terms" (BAL-540)', () => {
     const res = needsYouForExpert(
       makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'closed' })
     );
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed' });
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed', moveKind: null });
   });
 
   it('closed request, an invited relationship → closed, not "Submit your EOI" (BAL-540)', () => {
     const res = needsYouForExpert(
       makeInvitation({ relationshipStatus: 'invited', requestStatus: 'closed' })
     );
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed' });
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed', moveKind: null });
   });
 });
 
@@ -363,6 +473,7 @@ describe('deriveEngagementRow', () => {
       nudgeLabel: 'In delivery',
       progressLabel: '3 of 5 milestones',
       href: '/engagements/eng-1?from=inbox',
+      moveKind: null,
     });
   });
 
@@ -397,7 +508,22 @@ describe('deriveEngagementRow', () => {
         counterpartName: 'Northwind',
       })
     );
-    expect(res).toMatchObject({ needsYou: true, nudgeLabel: 'Northwind requested changes' });
+    expect(res).toMatchObject({
+      needsYou: true,
+      nudgeLabel: 'Northwind requested changes',
+      moveKind: 'delivery_changes',
+    });
+  });
+
+  it('expert lens: needsYou holds exactly when moveKind is set, over every status × change-note arm', () => {
+    for (const status of ['active', 'pending_acceptance', 'completed', 'cancelled'] as const) {
+      for (const hasChangeRequest of [false, true]) {
+        const res = deriveEngagementRow(
+          makeEngagementInput({ lens: 'expert', status, hasChangeRequest })
+        );
+        expect(res.needsYou).toBe(res.moveKind !== null);
+      }
+    }
   });
 
   it('client active + change request → not needs-you, "Changes requested"', () => {

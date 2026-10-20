@@ -38,8 +38,3 @@ export const upNextStartsIn = (minutes: number): string => `Starts in ${minutes}
 export const UP_NEXT_JOIN = 'Join';
 export const UP_NEXT_ERROR = 'We couldn’t load your upcoming meetings.';
 export const UP_NEXT_RETRY = 'Try again';
-
-export const CALENDAR_DISCONNECTED_TITLE = 'Your calendar is disconnected';
-export const CALENDAR_DISCONNECTED_BODY =
-  'While it’s disconnected, you won’t appear in expert search.';
-export const CALENDAR_DISCONNECTED_CTA = 'Reconnect';

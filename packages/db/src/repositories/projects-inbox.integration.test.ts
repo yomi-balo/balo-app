@@ -6,15 +6,23 @@ import {
   companyMembers,
   conversationMessages,
   expressionsOfInterest,
+  products,
+  projectRequestProducts,
+  projectRequestTags,
   projectRequests,
+  proposalChangeRequests,
+  proposals,
 } from '../schema';
 import {
   userFactory,
   expertDraftFactory,
   projectRequestFactory,
+  projectTagFactory,
+  proposalFactory,
   requestExpertRelationshipFactory,
 } from '../test/factories';
 import { projectsInboxRepository } from './projects-inbox';
+import { referenceDataRepository } from './reference-data';
 
 /**
  * Integration coverage for the A7 tri-lens aggregation reads (BAL-274). One real
@@ -326,6 +334,328 @@ describe('projectsInboxRepository.listInvitationsByExpert', () => {
   it('returns [] for an expert with no invitations', async () => {
     const expert = await expertDraftFactory();
     expect(await projectsInboxRepository.listInvitationsByExpert(expert.id)).toEqual([]);
+  });
+});
+
+describe('projectsInboxRepository.listInvitationsByExpert — kickoff gates + current proposal', () => {
+  it('passes the kickoff gate timestamps through and reports null status without a proposal', async () => {
+    const expert = await expertDraftFactory();
+    const billingAt = new Date('2026-05-01T00:00:00.000Z');
+    const request = await projectRequestFactory({ status: 'accepted' });
+    await db
+      .update(projectRequests)
+      .set({ clientBillingConfirmedAt: billingAt })
+      .where(eq(projectRequests.id, request.id));
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+      values: { status: 'accepted' },
+    });
+
+    const [row] = await projectsInboxRepository.listInvitationsByExpert(expert.id);
+    expect(row?.clientBillingConfirmedAt?.getTime()).toBe(billingAt.getTime());
+    expect(row?.expertTermsConfirmedAt).toBeNull();
+    expect(row?.currentProposalStatus).toBeNull();
+  });
+
+  it('returns the current changes_requested status, ignoring superseded and soft-deleted versions, with no fan-out', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    const relationship = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+      values: { status: 'proposal_submitted' },
+    });
+    await proposalFactory({
+      relationship,
+      values: { version: 1, isCurrent: false, status: 'submitted' },
+    });
+    await proposalFactory({
+      relationship,
+      values: { version: 2, isCurrent: true, status: 'changes_requested' },
+    });
+
+    const deletedRequest = await projectRequestFactory({ status: 'experts_invited' });
+    const deletedRel = await requestExpertRelationshipFactory({
+      projectRequestId: deletedRequest.id,
+      expertProfileId: expert.id,
+      values: { status: 'proposal_submitted' },
+    });
+    await proposalFactory({
+      relationship: deletedRel,
+      values: { version: 1, isCurrent: true, status: 'submitted', deletedAt: new Date() },
+    });
+
+    const rows = await projectsInboxRepository.listInvitationsByExpert(expert.id);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.projectRequestId === request.id)?.currentProposalStatus).toBe(
+      'changes_requested'
+    );
+    expect(
+      rows.find((r) => r.projectRequestId === deletedRequest.id)?.currentProposalStatus
+    ).toBeNull();
+  });
+});
+
+describe('projectsInboxRepository.listExpertMoveDetails', () => {
+  it('returns an empty Map for empty ids', async () => {
+    const expert = await expertDraftFactory();
+    const result = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [],
+    });
+    expect(result.size).toBe(0);
+  });
+
+  it('returns brief, timeline, sorted live product and tag names, dropping soft-deleted junctions', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    await db
+      .update(projectRequests)
+      .set({ timeline: 'Within 6 weeks', description: '<p>Rebuild routing.</p>' })
+      .where(eq(projectRequests.id, request.id));
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+    });
+
+    const vertical = await referenceDataRepository.getSalesforceVertical();
+    const [zebra, apple, gone] = await db
+      .insert(products)
+      .values([
+        { verticalId: vertical.id, name: 'Zebra Cloud', slug: `zebra-${request.id}` },
+        { verticalId: vertical.id, name: 'Apple Cloud', slug: `apple-${request.id}` },
+        { verticalId: vertical.id, name: 'Gone Cloud', slug: `gone-${request.id}` },
+      ])
+      .returning();
+    if (zebra === undefined || apple === undefined || gone === undefined) {
+      throw new Error('product insert failed');
+    }
+    await db.insert(projectRequestProducts).values([
+      { projectRequestId: request.id, productId: zebra.id },
+      { projectRequestId: request.id, productId: apple.id },
+      { projectRequestId: request.id, productId: gone.id, deletedAt: new Date() },
+    ]);
+    const tagB = await projectTagFactory({ name: 'B tag' });
+    const tagA = await projectTagFactory({ name: 'A tag' });
+    const tagGone = await projectTagFactory({ name: 'Gone tag' });
+    await db.insert(projectRequestTags).values([
+      { projectRequestId: request.id, projectTagId: tagB.id },
+      { projectRequestId: request.id, projectTagId: tagA.id },
+      { projectRequestId: request.id, projectTagId: tagGone.id, deletedAt: new Date() },
+    ]);
+
+    const result = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [request.id],
+    });
+    const detail = result.get(request.id);
+    expect(detail?.descriptionHtml).toBe('<p>Rebuild routing.</p>');
+    expect(detail?.timeline).toBe('Within 6 weeks');
+    expect(detail?.productNames).toEqual(['Apple Cloud', 'Zebra Cloud']);
+    expect(detail?.tagNames).toEqual(['A tag', 'B tag']);
+    expect(detail?.currentProposal).toBeNull();
+    expect(detail?.latestChangeRequest).toBeNull();
+  });
+
+  it('reports a draft proposal status and updatedAt', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    const relationship = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+    });
+    const { proposal } = await proposalFactory({
+      relationship,
+      values: { status: 'draft' },
+    });
+
+    const result = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [request.id],
+    });
+    expect(result.get(request.id)?.currentProposal).toEqual({
+      id: proposal.id,
+      status: 'draft',
+      version: 1,
+      updatedAt: proposal.updatedAt,
+    });
+  });
+
+  it('returns only the newest change request raised against the CURRENT version', async () => {
+    const expert = await expertDraftFactory();
+    const client = await userFactory();
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    const relationship = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+      values: { status: 'proposal_submitted' },
+    });
+    const { proposal: v1 } = await proposalFactory({
+      relationship,
+      values: { version: 1, isCurrent: false },
+    });
+    const { proposal: v2 } = await proposalFactory({
+      relationship,
+      values: { version: 2, isCurrent: true, status: 'changes_requested' },
+    });
+    await db.insert(proposalChangeRequests).values([
+      {
+        proposalId: v1.id,
+        requestedByUserId: client.id,
+        note: 'Old version note',
+        proposalVersion: 1,
+        createdAt: new Date('2026-06-03T00:00:00.000Z'),
+      },
+      {
+        proposalId: v2.id,
+        requestedByUserId: client.id,
+        note: 'First v2 note',
+        section: 'pricing',
+        proposalVersion: 2,
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+      {
+        proposalId: v2.id,
+        requestedByUserId: client.id,
+        note: 'Newest v2 note',
+        section: 'timeline',
+        proposalVersion: 2,
+        createdAt: new Date('2026-06-02T00:00:00.000Z'),
+      },
+      {
+        proposalId: v2.id,
+        requestedByUserId: client.id,
+        note: 'Deleted note',
+        proposalVersion: 2,
+        createdAt: new Date('2026-06-04T00:00:00.000Z'),
+        deletedAt: new Date(),
+      },
+    ]);
+
+    const result = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [request.id],
+    });
+    const detail = result.get(request.id);
+    expect(detail?.currentProposal?.version).toBe(2);
+    expect(detail?.latestChangeRequest).toEqual({
+      note: 'Newest v2 note',
+      section: 'timeline',
+      createdAt: new Date('2026-06-02T00:00:00.000Z'),
+    });
+  });
+
+  it('omits a request the expert has no live relationship on', async () => {
+    const expert = await expertDraftFactory();
+    const other = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: other.id,
+    });
+
+    const result = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [request.id],
+    });
+    expect(result.has(request.id)).toBe(false);
+  });
+
+  it('omits a request whose relationship is declined, or soft-deleted, or whose request is soft-deleted', async () => {
+    const expert = await expertDraftFactory();
+    const declinedReq = await projectRequestFactory({ status: 'experts_invited' });
+    const deletedRelReq = await projectRequestFactory({ status: 'experts_invited' });
+    const deletedReq = await projectRequestFactory({ status: 'experts_invited' });
+    await requestExpertRelationshipFactory({
+      projectRequestId: declinedReq.id,
+      expertProfileId: expert.id,
+      values: { status: 'declined', declinedAt: new Date() },
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: deletedRelReq.id,
+      expertProfileId: expert.id,
+      values: { deletedAt: new Date() },
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: deletedReq.id,
+      expertProfileId: expert.id,
+    });
+    await db
+      .update(projectRequests)
+      .set({ deletedAt: new Date() })
+      .where(eq(projectRequests.id, deletedReq.id));
+
+    const result = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [declinedReq.id, deletedRelReq.id, deletedReq.id],
+    });
+    expect(result.size).toBe(0);
+  });
+
+  it('omits a declined relationship on a CLOSED request, which the inbox list still returns as history', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'closed' });
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+      values: { status: 'declined', declinedAt: new Date() },
+    });
+
+    const details = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [request.id],
+    });
+    expect(details.has(request.id)).toBe(false);
+
+    const rows = await projectsInboxRepository.listInvitationsByExpert(expert.id);
+    expect(rows.map((r) => r.projectRequestId)).toContain(request.id);
+  });
+
+  it('drops a soft-deleted project tag from tagNames', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+    });
+    const live = await projectTagFactory({ name: 'Live tag' });
+    const retired = await projectTagFactory({ name: 'Retired tag', deletedAt: new Date() });
+    await db.insert(projectRequestTags).values([
+      { projectRequestId: request.id, projectTagId: live.id },
+      { projectRequestId: request.id, projectTagId: retired.id },
+    ]);
+
+    const result = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [request.id],
+    });
+    expect(result.get(request.id)?.tagNames).toEqual(['Live tag']);
+  });
+
+  it('pins the exact key set (no budget or price field)', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+    });
+    const result = await projectsInboxRepository.listExpertMoveDetails({
+      expertProfileId: expert.id,
+      projectRequestIds: [request.id],
+    });
+    expect(Object.keys(result.get(request.id) ?? {}).sort((a, b) => a.localeCompare(b))).toEqual([
+      'clientBillingConfirmedAt',
+      'currentProposal',
+      'descriptionHtml',
+      'expertTermsConfirmedAt',
+      'latestChangeRequest',
+      'productNames',
+      'projectRequestId',
+      'requestStatus',
+      'tagNames',
+      'timeline',
+    ]);
   });
 });
 

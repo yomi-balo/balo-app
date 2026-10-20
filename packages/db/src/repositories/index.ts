@@ -333,6 +333,7 @@ export {
   InvalidActionItemTransitionError,
   type ActionItemStatus,
   type ActionItemAssigneeParty,
+  type ExpertOpenActionItemRow,
 } from './action-items';
 export type { ActionItem, NewActionItem } from '../schema';
 // ── Transcript pipeline (BAL-387 / ADR-1013 + ADR-1043) ────────────────────
@@ -376,9 +377,14 @@ export type {
   ConversationContextRef,
   ConversationThreadSummary,
   ConversationUnreadSummary,
+  ConversationUnreadCount,
 } from './conversations';
 export { projectsInboxRepository } from './projects-inbox';
-export type { PortfolioRequestRow, PortfolioInvitationRow } from './projects-inbox';
+export type {
+  PortfolioRequestRow,
+  PortfolioInvitationRow,
+  ExpertMoveDetail,
+} from './projects-inbox';
 export type {
   RequestExpertRelationship,
   NewRequestExpertRelationship,

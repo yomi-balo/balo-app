@@ -33,18 +33,19 @@ const HOOKS_DIR = resolveRouteDir(['src/hooks', 'apps/web/src/hooks']);
 
 /**
  * ⚠⚠ AN ALLOW-LIST, NOT THE WHOLE `_lib`/`_components` DIRECTORY. `_components/getting-started-
- * checklist.tsx`, `_components/metric-cards.tsx`, `_components/expert-dashboard.tsx` and friends
+ * checklist.tsx`, `_components/expert-dashboard.tsx` and friends
  * are pre-existing dashboard surfaces this ticket does not own the rules for — sweeping them in
  * would assert BAL-566's rule over BAL-414/other tickets' code. `page.tsx` is pinned directly
  * (below), not through this filter, because it is the ROUTE file, not a `_lib`/`_components`
- * member. `expert-dashboard.tsx` is ALSO deliberately excluded even though it now renders the
- * `upNext` slot and the R2 banner conditionally — it is BAL-414's file with one added prop and
- * one added conditional render, not a new file this ticket owns whole.
+ * member. `expert-dashboard.tsx` is ALSO deliberately excluded even though it renders the
+ * `upNext` and `yourMove` slots — it is BAL-414's file with added props, not a new file this
+ * ticket owns whole. The Your move files (`your-move*`, `move-card*`) are scanned too.
  */
 function isUpNextFile(rel: string): boolean {
   return (
     rel.includes('up-next') ||
-    rel === '_components/calendar-disconnected-banner.tsx' ||
+    rel.includes('your-move') ||
+    rel.includes('move-card') ||
     rel === '_lib/expert-up-next-surface.ts'
   );
 }
@@ -84,7 +85,16 @@ const PINNED_FILES: readonly string[] = [
   '_components/up-next-card-skeleton.tsx',
   '_components/company-up-next-slot.tsx',
   '_components/expert-up-next-slot.tsx',
-  '_components/calendar-disconnected-banner.tsx',
+  '_lib/your-move-view-types.ts',
+  '_lib/your-move-copy.ts',
+  '_lib/build-your-move-cards.ts',
+  '_lib/load-your-move.ts',
+  '_lib/read-your-move-data.ts',
+  '_components/your-move.tsx',
+  '_components/your-move-slot.tsx',
+  '_components/your-move-skeleton.tsx',
+  '_components/move-card.tsx',
+  '_components/move-card-context.tsx',
 ];
 
 const VIEW_GATE_TOKENS: readonly string[] = [

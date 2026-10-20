@@ -10,11 +10,13 @@ import {
   isNull,
   lt,
   max,
+  min,
   ne,
   or,
   sql,
   type SQL,
 } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type {
   ConversationContextTypeLabel,
   ConversationReadScope,
@@ -131,6 +133,12 @@ export interface ConversationThreadSummary {
   fileCount: number;
   /** The VIEWER's live read watermark. Null when they have never marked read. */
   lastReadAt: Date | null;
+}
+
+/** Per-conversation unread tally for one viewer (`countUnreadForViewer`). */
+export interface ConversationUnreadCount {
+  unreadCount: number;
+  earliestUnreadAt: Date | null;
 }
 
 /** `unreadSummaryFor`'s answer — see its docblock for the borrowed "unread" definition. */
@@ -1049,6 +1057,101 @@ export const conversationsRepository = {
       latestInboundBody,
       latestInboundFileName,
     };
+  },
+
+  /**
+   * Unread counts for ONE viewer over MANY conversations, in two grouped queries. "Unread" is
+   * the same definition as `unreadSummaryFor`: live inbound messages plus live inbound files
+   * strictly after the viewer's LIVE read watermark (no watermark = everything inbound).
+   * Returns an entry for EVERY input id (`unreadCount` 0 and `earliestUnreadAt` null when
+   * nothing is unread); empty input returns an empty Map without touching the DB.
+   */
+  async countUnreadForViewer(input: {
+    conversationIds: string[];
+    viewerUserId: string;
+  }): Promise<Map<string, ConversationUnreadCount>> {
+    const result = new Map<string, ConversationUnreadCount>();
+    for (const conversationId of input.conversationIds) {
+      result.set(conversationId, { unreadCount: 0, earliestUnreadAt: null });
+    }
+    if (result.size === 0) {
+      return result;
+    }
+    const ids = [...result.keys()];
+
+    const afterWatermark = (createdAt: AnyPgColumn) =>
+      or(
+        isNull(conversationReadStates.lastReadAt),
+        gt(createdAt, conversationReadStates.lastReadAt)
+      );
+
+    const [messageRows, fileRows] = await Promise.all([
+      db
+        .select({
+          conversationId: conversationMessages.conversationId,
+          unread: count(),
+          earliest: min(conversationMessages.createdAt),
+        })
+        .from(conversationMessages)
+        .leftJoin(
+          conversationReadStates,
+          and(
+            eq(conversationReadStates.conversationId, conversationMessages.conversationId),
+            eq(conversationReadStates.userId, input.viewerUserId),
+            isNull(conversationReadStates.deletedAt)
+          )
+        )
+        .where(
+          and(
+            inArray(conversationMessages.conversationId, ids),
+            isNull(conversationMessages.deletedAt),
+            ne(conversationMessages.senderUserId, input.viewerUserId),
+            afterWatermark(conversationMessages.createdAt)
+          )
+        )
+        .groupBy(conversationMessages.conversationId),
+      db
+        .select({
+          conversationId: conversationFiles.conversationId,
+          unread: count(),
+          earliest: min(conversationFiles.createdAt),
+        })
+        .from(conversationFiles)
+        .leftJoin(
+          conversationReadStates,
+          and(
+            eq(conversationReadStates.conversationId, conversationFiles.conversationId),
+            eq(conversationReadStates.userId, input.viewerUserId),
+            isNull(conversationReadStates.deletedAt)
+          )
+        )
+        .where(
+          and(
+            inArray(conversationFiles.conversationId, ids),
+            isNull(conversationFiles.deletedAt),
+            ne(conversationFiles.uploadedByUserId, input.viewerUserId),
+            afterWatermark(conversationFiles.createdAt)
+          )
+        )
+        .groupBy(conversationFiles.conversationId),
+    ]);
+
+    for (const row of [...messageRows, ...fileRows]) {
+      const current = result.get(row.conversationId);
+      if (current === undefined) {
+        continue;
+      }
+      const earlier =
+        current.earliestUnreadAt === null ||
+        (row.earliest !== null && row.earliest.getTime() < current.earliestUnreadAt.getTime())
+          ? row.earliest
+          : current.earliestUnreadAt;
+      result.set(row.conversationId, {
+        unreadCount: current.unreadCount + row.unread,
+        earliestUnreadAt: earlier,
+      });
+    }
+    return result;
   },
 
   // ── Files ────────────────────────────────────────────────────────────
