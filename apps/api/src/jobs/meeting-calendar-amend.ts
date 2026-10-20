@@ -59,16 +59,21 @@ const MAX_RATE_LIMIT_DEFERRALS = 10;
  *
  * `audit_events` is append-only, so its row id is unique per SUCCESSFUL MOVE. Retries of the same
  * move still collapse to one amend (the point of a jobId); genuinely distinct moves never do.
+ *
+ * `amendKey` is per WRITE: either a `meeting.rescheduled` audit id, or
+ * `bookingCalendarProjectionJobId(meetingId)` when the booking projection job finds the window
+ * moved while it ran (one projection per meeting, ever). The job id stays
+ * `buildJobId('meeting-calendar-amend', amendKey)`.
  */
 export function enqueueMeetingCalendarAmend(
   meetingId: string,
   expertProfileId: string,
-  rescheduleAuditId: string
+  amendKey: string
 ): Promise<void> {
   const queue = getQueue(MEETING_CALENDAR_AMEND_QUEUE);
   return queue
     .add('amend', { meetingId, expertProfileId } satisfies MeetingCalendarAmendJobData, {
-      jobId: buildJobId('meeting-calendar-amend', rescheduleAuditId),
+      jobId: buildJobId('meeting-calendar-amend', amendKey),
       attempts: 5,
       backoff: { type: 'exponential', delay: 10_000 },
       removeOnComplete: { count: 1000 },

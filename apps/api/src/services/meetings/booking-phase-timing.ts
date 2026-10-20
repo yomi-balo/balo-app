@@ -23,7 +23,6 @@ export const BOOKING_PHASES = [
   'vendorFreeBusy',
   'bookingTransaction',
   'venue',
-  'calendar',
 ] as const;
 
 export type BookingPhase = (typeof BOOKING_PHASES)[number];

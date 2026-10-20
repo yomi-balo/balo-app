@@ -412,6 +412,7 @@ describe('auditEventsRepository.findLatestByEntityAndAction', () => {
       action: 'company.join_mode_changed',
     });
 
+    expect(latest?.id).toBe(second.id);
     expect(latest?.actorUserId).toBe(newer.id);
     expect(latest?.createdAt).toBeInstanceOf(Date);
   });

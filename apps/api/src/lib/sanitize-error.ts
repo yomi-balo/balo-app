@@ -26,8 +26,11 @@
  */
 import Mux, { type APIError as MuxAPIError } from '@mux/mux-node';
 
-/** Anything `http(s)://`-shaped, greedy up to the next whitespace. */
-const URL_PATTERN = /https?:\/\/\S+/g;
+/**
+ * Anything `http(s)://` or `redis(s)://`-shaped, greedy up to the next whitespace. A Redis URL
+ * can carry credentials. One linear pattern: no nested quantifiers.
+ */
+const URL_PATTERN = /(?:https?|rediss?):\/\/\S+/g;
 
 function redactUrls(message: string): string {
   return message.replace(URL_PATTERN, '[redacted-url]');

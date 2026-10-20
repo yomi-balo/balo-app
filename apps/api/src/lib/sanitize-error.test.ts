@@ -36,6 +36,17 @@ describe('sanitizedErrorMessage (BAL-473 fix round 1, F4)', () => {
     expect(message).toBe('upload rejected: [redacted-url] is not reachable');
   });
 
+  it.each(['redis://user:pass@host:6379', 'rediss://default:s3cret@cache.internal:6380/0'])(
+    'redacts a credential-bearing Redis URL: %s',
+    (url) => {
+      const message = sanitizedErrorMessage(new Error(`connect failed to ${url} after 3 tries`));
+
+      expect(message).toBe('connect failed to [redacted-url] after 3 tries');
+      expect(message).not.toContain('pass');
+      expect(message).not.toContain('s3cret');
+    }
+  );
+
   it('passes through a plain message with no URL unchanged', () => {
     expect(sanitizedErrorMessage(new Error('daily_recording_id has no source'))).toBe(
       'daily_recording_id has no source'

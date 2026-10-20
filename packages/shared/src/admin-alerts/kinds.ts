@@ -2,12 +2,12 @@ import type { AdminAlertDetail } from './detail';
 import type { AdminAlertGroup, AdminAlertCadence } from './groups';
 
 /**
- * BAL-548 / ADR-1055 — the kind registry: THE fifteen-row table (fifteen registered kinds,
+ * BAL-548 / ADR-1055 — the kind registry: THE sixteen-row table (sixteen registered kinds,
  * one of which — `sweep.failed` — has no finder) that a `packages/db` invariant
  * (`admin-alert-kinds-have-exactly-one-writer.test.ts`) value-imports to prove every kind has
  * EXACTLY one writer: a finder XOR a `raise()` call site.
  *
- * ⚠ TEN FINDER KINDS, FOUR EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
+ * ⚠ TEN FINDER KINDS, FIVE EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
  * `calendar.subscription_lapse` is ONE kind consuming THREE finder reads;
  * `session.presence_stuck` is ONE kind consuming TWO (overrunning and unsettled).
  */
@@ -23,6 +23,7 @@ export const ADMIN_ALERT_KIND_KEYS = [
   'transcript_capture.withheld_source',
   'calendar.subscription_lapse',
   'calendar.amend_failed',
+  'calendar.projection_enqueue_failed',
   'meeting.unprovisioned',
   'meeting.stranded',
   'session.presence_stuck',
@@ -227,6 +228,14 @@ export const ADMIN_ALERT_KINDS: Readonly<Record<AdminAlertKind, AdminAlertKindMe
     finder: null,
     cadence: null,
     closes: 'No row to re-check — closes with a note after the amend is re-driven',
+    target: targetMeeting,
+  },
+  'calendar.projection_enqueue_failed': {
+    group: 'meetings',
+    finder: null,
+    cadence: null,
+    closes:
+      'No row to re-check — closes with a note after the booking calendar projection is re-driven',
     target: targetMeeting,
   },
   'meeting.unprovisioned': {

@@ -1,4 +1,4 @@
-import { meetingCalendarEventsRepository, type CreatedMeeting } from '@balo/db';
+import { meetingCalendarEventsRepository, type CreatedMeeting, type Meeting } from '@balo/db';
 import type { FastifyBaseLogger } from 'fastify';
 import type { CalendarProjectedContextType } from './calendar-context-registry.js';
 import { memberCallUrl } from './member-call-url.js';
@@ -32,6 +32,15 @@ import { resolveExpertCalendarFacts } from './resolve-calendar-facts.js';
 export type { ExpertCalendarDelivery };
 
 /**
+ * What the expert-party projection needs of a booking: whose calendar, and which meeting
+ * window. A `CreatedMeeting` satisfies it, and so does a meeting re-read from the database by
+ * the projection job.
+ */
+export type BookingProjectionSubject = Pick<CreatedMeeting, 'expertProfileId'> & {
+  readonly meeting: Pick<Meeting, 'id' | 'scheduledStart' | 'scheduledEnd'>;
+};
+
+/**
  * The projection itself — every branch that decides WHAT this booking's expert-party calendar
  * entry becomes, and nothing else.
  *
@@ -41,7 +50,7 @@ export type { ExpertCalendarDelivery };
  * line at all. The branches, and the value each of them returns, are UNCHANGED.
  */
 async function runExpertCalendarProjection(
-  created: CreatedMeeting,
+  created: BookingProjectionSubject,
   contextType: CalendarProjectedContextType,
   contextId: string,
   log: FastifyBaseLogger
@@ -100,7 +109,7 @@ async function runExpertCalendarProjection(
  * on it, and none should: every outcome, including `'failed'`, leaves the booking standing.
  */
 export async function projectBookingCalendarEvent(
-  created: CreatedMeeting,
+  created: BookingProjectionSubject,
   contextType: CalendarProjectedContextType,
   contextId: string,
   log: FastifyBaseLogger
@@ -124,17 +133,42 @@ export async function projectBookingCalendarEvent(
    * lives on the calendar-invite publish/delivery outcome lines instead
    * (`services/calendar-invites/log-fields.ts`), which is where it actually changes.
    */
-  log.info(
-    { meetingId: created.meeting.id, party: 'expert', contextType, contextId, deliveryMode },
-    'Meeting calendar projection outcome'
+  logCalendarProjectionOutcome(
+    {
+      meetingId: created.meeting.id,
+      party: 'expert',
+      contextType,
+      contextId,
+      deliveryMode,
+    },
+    log
   );
 
   return deliveryMode;
 }
 
 /** What the CLIENT-party row became — narrower than {@link ExpertCalendarDelivery} because
- *  there is no vendor path on this side, only ICS or a swallowed failure. */
-export type ClientCalendarDelivery = 'ics' | 'failed';
+ *  there is no vendor path on this side: ICS, a swallowed failure, or `skipped` when the
+ *  projection job found the meeting cancelled or removed before it ran. `skipped` comes from
+ *  that branch only; {@link recordClientCalendarEntry} never returns it. */
+export type ClientCalendarDelivery = 'ics' | 'failed' | 'skipped';
+
+/**
+ * The single `'Meeting calendar projection outcome'` line, shared by both parties and by the
+ * projection job's cancelled/missing branch. Ids and closed enums only (ADR-1044 §4).
+ */
+export function logCalendarProjectionOutcome(
+  fields: {
+    meetingId: string;
+    party: 'expert' | 'client';
+    contextType: CalendarProjectedContextType;
+    contextId: string;
+    deliveryMode: ExpertCalendarDelivery | ClientCalendarDelivery;
+  },
+  log: FastifyBaseLogger
+): void {
+  log.info(fields, 'Meeting calendar projection outcome');
+}
 
 /**
  * BAL-475 — the CLIENT-party row for one FRESH booking: always `ics` (no client vendor path in
@@ -146,8 +180,8 @@ export async function recordClientCalendarEntry(
   contextType: CalendarProjectedContextType,
   contextId: string,
   log: FastifyBaseLogger
-): Promise<ClientCalendarDelivery> {
-  let deliveryMode: ClientCalendarDelivery;
+): Promise<Exclude<ClientCalendarDelivery, 'skipped'>> {
+  let deliveryMode: Exclude<ClientCalendarDelivery, 'skipped'>;
   try {
     await meetingCalendarEventsRepository.recordIcsDelivery({ meetingId, party: 'client' });
     deliveryMode = 'ics';
@@ -166,9 +200,9 @@ export async function recordClientCalendarEntry(
     deliveryMode = 'failed';
   }
 
-  log.info(
+  logCalendarProjectionOutcome(
     { meetingId, party: 'client', contextType, contextId, deliveryMode },
-    'Meeting calendar projection outcome'
+    log
   );
 
   return deliveryMode;

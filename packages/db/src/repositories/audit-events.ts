@@ -397,6 +397,8 @@ export const auditEventsRepository = {
    * quotes — returns the EARLIEST row of that tie and inverts this function. `asc` here is a bug,
    * not a style choice.
    *
+   * ⚠ BAL-607 widened this by `id`, the booking calendar projection job's `cancelAuditId`.
+   *
    * ⚠ BAL-540 widened this by exactly ONE column, `metadata` — additive; every existing
    * caller (BAL-347's team page) already ignores extra fields. `request-detail-view.ts`'s
    * `deriveClosedSummary` is the first reader: it needs the `project_request.closed` audit
@@ -408,9 +410,12 @@ export const auditEventsRepository = {
     entityType: string;
     entityId: string;
     action: string;
-  }): Promise<{ actorUserId: string | null; createdAt: Date; metadata: unknown } | undefined> => {
+  }): Promise<
+    { id: string; actorUserId: string | null; createdAt: Date; metadata: unknown } | undefined
+  > => {
     const [row] = await db
       .select({
+        id: auditEvents.id,
         actorUserId: auditEvents.actorUserId,
         createdAt: auditEvents.createdAt,
         metadata: auditEvents.metadata,

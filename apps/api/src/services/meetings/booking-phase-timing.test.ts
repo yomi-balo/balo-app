@@ -23,7 +23,7 @@ describe('BOOKING_PHASE_TIMING_MESSAGE', () => {
 });
 
 describe('createBookingPhaseTimer', () => {
-  it('exposes exactly the nine phase keys plus totalMs, all null before anything is recorded', () => {
+  it('exposes exactly the eight phase keys plus totalMs, all null before anything is recorded', () => {
     const timer = createBookingPhaseTimer(steppingClock(0, 0));
 
     expect(timer.fields()).toEqual({
@@ -35,10 +35,9 @@ describe('createBookingPhaseTimer', () => {
       vendorFreeBusyMs: null,
       bookingTransactionMs: null,
       venueMs: null,
-      calendarMs: null,
       totalMs: 0,
     });
-    expect(BOOKING_PHASES).toHaveLength(9);
+    expect(BOOKING_PHASES).toHaveLength(8);
   });
 
   it('reports a recorded phase under its Ms key and leaves the others null', () => {
@@ -48,7 +47,8 @@ describe('createBookingPhaseTimer', () => {
 
     const fields = timer.fields();
     expect(fields.venueMs).toBe(120);
-    expect(fields.calendarMs).toBeNull();
+    expect(fields.tenancyGateMs).toBeNull();
+    expect(fields).not.toHaveProperty('calendarMs');
   });
 
   it('overwrites a phase recorded twice', () => {

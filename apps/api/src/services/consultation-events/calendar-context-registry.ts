@@ -22,7 +22,7 @@ import type {
  * ⚠ `Extract`, NOT A BARE UNION. A label renamed in the database drops out of the Extract,
  * which shrinks {@link CALENDAR_CONTEXT_REGISTRY}'s key set below `MeetingBookingContextType`
  * — and the call site that indexes it (`booking-calendar-projection.ts`, reached from
- * `provision-meeting.ts` with an `input.contextType`) then fails `pnpm --filter api typecheck`.
+ * `jobs/booking-calendar-projection-job.ts` with the payload's `contextType`) then fails `pnpm --filter api typecheck`.
  * A plain union would keep the stale name and nothing would notice. Same pattern, same reason,
  * as `HandledMeetingContextType` in `@balo/shared/meetings`.
  *

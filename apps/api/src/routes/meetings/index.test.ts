@@ -976,7 +976,6 @@ describe('POST /meetings', () => {
         (_input: unknown, _log: unknown, deps: { phaseRecorder: BookingPhaseRecorder }) => {
           deps.phaseRecorder.record('bookingTransaction', 11);
           deps.phaseRecorder.record('venue', 22);
-          deps.phaseRecorder.record('calendar', 33);
           return Promise.resolve(result);
         }
       );
@@ -1025,10 +1024,10 @@ describe('POST /meetings', () => {
         vendorFreeBusyMs: 42,
         bookingTransactionMs: 11,
         venueMs: 22,
-        calendarMs: 33,
         totalMs: expect.any(Number),
       });
       expect(Object.keys(fields as object)).toHaveLength(4 + BOOKING_PHASES.length + 1);
+      expect(fields).not.toHaveProperty('calendarMs');
     });
 
     it('still logs when the venue failed (provisioned:false is still a 201)', async () => {

@@ -120,6 +120,7 @@ import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import {
   bookMeeting,
   cancelMeeting,
+  reportCalendarAmendEnqueueFailure,
   rescheduleMeeting,
   softDeleteMeeting,
   tearDownCancelledMeetings,
@@ -1094,5 +1095,60 @@ describe('tearDownCancelledMeetings — the calendar withdrawal (BAL-476)', () =
 
     expect(result).toEqual({ processed: 0, skipped: 1 });
     expect(mockWithdrawMeetingCalendarProjection).not.toHaveBeenCalled();
+  });
+});
+
+describe('reportCalendarAmendEnqueueFailure', () => {
+  const NEW_START = new Date('2026-09-07T09:00:00.000Z');
+
+  it('a booking_projection failure logs and raises calendar.amend_failed with its own title', async () => {
+    await reportCalendarAmendEnqueueFailure(
+      {
+        meetingId: MEETING_ID,
+        expertProfileId: EXPERT_ID,
+        newStart: NEW_START,
+        trigger: 'booking_projection',
+        error: new Error('upstream said https://daily.co/secret-room-token?x=1 is invalid'),
+      },
+      log
+    );
+
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID }),
+      'Failed to enqueue meeting-calendar-amend job'
+    );
+    expect(mockRaiseAdminAlert).toHaveBeenCalledTimes(1);
+    const [[input]] = mockRaiseAdminAlert.mock.calls;
+    expect(input).toMatchObject({
+      kind: 'calendar.amend_failed',
+      entityType: 'meeting',
+      entityId: MEETING_ID,
+    });
+    expect(input.detail.title).toBe(
+      'Calendar amend could not be enqueued after a booking projection'
+    );
+    expect(input.detail.evidence).toContain('[redacted-url]');
+    expect(input.detail.evidence).not.toContain('https://daily.co/secret-room-token');
+    expect(input.detail.facts).toEqual([
+      ['Meeting', MEETING_ID],
+      ['Expert profile', EXPERT_ID],
+      ['New start', NEW_START.toISOString()],
+    ]);
+  });
+
+  it('a reschedule failure keeps the reschedule title', async () => {
+    await reportCalendarAmendEnqueueFailure(
+      {
+        meetingId: MEETING_ID,
+        expertProfileId: EXPERT_ID,
+        newStart: NEW_START,
+        trigger: 'reschedule',
+        error: 'redis down',
+      },
+      log
+    );
+
+    const [[input]] = mockRaiseAdminAlert.mock.calls;
+    expect(input.detail.title).toBe('Calendar amend could not be enqueued after a reschedule');
   });
 });

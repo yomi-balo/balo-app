@@ -28,7 +28,7 @@ import { ADMIN_ALERT_KIND_KEYS, ADMIN_ALERT_KINDS } from '@balo/shared/admin-ale
  *      over all mentions is what let a purely presentational map (`alert-row.tsx`'s
  *      `KIND_ICONS`, which names every kind for its icon/copy) collide with the real raise
  *      site and fail the invariant (A-F1 — RED on the merged tree, 5 kinds failing this way).
- *      An EVENT-DRIVEN kind (`finder === null` — the four `raise()`-only kinds PLUS
+ *      An EVENT-DRIVEN kind (`finder === null` — the five `raise()`-only kinds PLUS
  *      `sweep.failed`, which is also `finder: null`) must appear EXACTLY ONCE across
  *      raise-capable files, in a file that raises. A FINDER kind must appear ZERO times there
  *      (TR-7: the old matcher iterated only event-driven kinds, so a finder kind wrongly ALSO

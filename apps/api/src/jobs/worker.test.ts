@@ -39,6 +39,7 @@ const mockStartCalendarSubscriptionReconcile = vi.fn();
 const mockStartCalendarSubscriptionMonitor = vi.fn();
 const mockRegisterCalendarSubscriptionMonitorCron = vi.fn().mockResolvedValue(undefined);
 const mockStartMeetingCalendarAmend = vi.fn();
+const mockStartBookingCalendarProjection = vi.fn();
 const mockStartRecordingCapture = vi.fn();
 const mockStartRecordingIngest = vi.fn();
 const mockStartRecordingCleanupSource = vi.fn();
@@ -162,6 +163,13 @@ vi.mock('./calendar-subscription-monitor.js', () => ({
 vi.mock('./meeting-calendar-amend.js', () => ({
   startMeetingCalendarAmendWorker: () => mockStartMeetingCalendarAmend(),
 }));
+// BAL-607: mocking this is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
+// which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
+// GREEN LOCALLY whenever a dev Redis happens to be running. Must land in the SAME COMMIT as the
+// `worker.ts` registration.
+vi.mock('./booking-calendar-projection-job.js', () => ({
+  startBookingCalendarProjectionWorker: () => mockStartBookingCalendarProjection(),
+}));
 // BAL-473: mocking these THREE is MANDATORY — otherwise the REDIS_URL-set test loads the real
 // modules, which construct a Worker on a live Redis connection and HANGS at the 5s CI timeout.
 // It stays GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it
@@ -252,6 +260,7 @@ describe('startWorkers', () => {
     expect(mockStartCalendarSubscriptionMonitor).not.toHaveBeenCalled();
     expect(mockRegisterCalendarSubscriptionMonitorCron).not.toHaveBeenCalled();
     expect(mockStartMeetingCalendarAmend).not.toHaveBeenCalled();
+    expect(mockStartBookingCalendarProjection).not.toHaveBeenCalled();
     expect(mockStartRecordingCapture).not.toHaveBeenCalled();
     expect(mockStartRecordingIngest).not.toHaveBeenCalled();
     expect(mockStartRecordingCleanupSource).not.toHaveBeenCalled();
@@ -310,6 +319,7 @@ describe('startWorkers', () => {
     expect(mockStartCalendarSubscriptionMonitor).toHaveBeenCalled();
     expect(mockRegisterCalendarSubscriptionMonitorCron).toHaveBeenCalled();
     expect(mockStartMeetingCalendarAmend).toHaveBeenCalled();
+    expect(mockStartBookingCalendarProjection).toHaveBeenCalled();
     expect(mockStartRecordingCapture).toHaveBeenCalled();
     expect(mockStartRecordingIngest).toHaveBeenCalled();
     expect(mockStartRecordingCleanupSource).toHaveBeenCalled();

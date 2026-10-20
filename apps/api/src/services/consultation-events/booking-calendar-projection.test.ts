@@ -17,7 +17,7 @@ vi.mock('@balo/db', () => ({
   meetingCalendarEventsRepository: { recordIcsDelivery: mockRecordIcsDelivery },
 }));
 
-const { projectBookingCalendarEvent, recordClientCalendarEntry } =
+const { projectBookingCalendarEvent, recordClientCalendarEntry, logCalendarProjectionOutcome } =
   await import('./booking-calendar-projection.js');
 
 function fakeLog(): FastifyBaseLogger {
@@ -312,8 +312,9 @@ describe('projectBookingCalendarEvent — it never rejects on its own callees', 
   it('a throwing fact resolver propagates nothing beyond its own contract', async () => {
     // ⚠ BOTH CALLEES CONTRACT TO "NEVER THROW" AND EACH OWNS A `try`/`catch`. This asserts the
     // COMPOSITION: if one of them ever violates that contract, the call site in
-    // `provision-meeting.ts` still catches it (`projectBookingCalendarEventSafely`) — so a
-    // committed booking can never be reported to the client as a failure.
+    // `jobs/booking-calendar-projection-job.ts` still catches it
+    // (`projectBookingCalendarEventSafely`) — so the job still records the client row and
+    // publishes the invites.
     mockResolveFacts.mockRejectedValue(new Error('contract violated'));
 
     await expect(
@@ -373,6 +374,58 @@ describe('recordClientCalendarEntry', () => {
     expect(vi.mocked(log.info)).toHaveBeenCalledWith(
       expect.objectContaining({ deliveryMode: 'failed' }),
       'Meeting calendar projection outcome'
+    );
+  });
+});
+
+describe('logCalendarProjectionOutcome', () => {
+  it('emits exactly the outcome key set, for either party and any delivery', () => {
+    const log = fakeLog();
+
+    logCalendarProjectionOutcome(
+      {
+        meetingId: MEETING_ID,
+        party: 'client',
+        contextType: 'case',
+        contextId: CONTEXT_ID,
+        deliveryMode: 'skipped',
+      },
+      log
+    );
+
+    expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(log.info)).toHaveBeenCalledWith(
+      {
+        meetingId: MEETING_ID,
+        party: 'client',
+        contextType: 'case',
+        contextId: CONTEXT_ID,
+        deliveryMode: 'skipped',
+      },
+      'Meeting calendar projection outcome'
+    );
+  });
+});
+
+describe('projectBookingCalendarEvent — a re-read meeting subject', () => {
+  it('projects from just the id, the window and the expert profile', async () => {
+    const log = fakeLog();
+
+    await expect(
+      projectBookingCalendarEvent(
+        {
+          expertProfileId: 'expert-1',
+          meeting: { id: MEETING_ID, scheduledStart: START, scheduledEnd: END },
+        },
+        'case',
+        CONTEXT_ID,
+        log
+      )
+    ).resolves.toBe('provider_event');
+
+    expect(mockProjectToExpertCalendar).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, startAt: START, endAt: END }),
+      log
     );
   });
 });
