@@ -27,11 +27,11 @@ import type { BookingFundingRequest, SaveBookingForLaterResult } from './booking
 
 const requestSchema = z
   .object({
-    expertProfileId: z.string().uuid(),
+    expertProfileId: z.uuid(),
     slot: bookingSlotSchema,
     caseChoice: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('new'), companyId: z.string().uuid().optional() }).strict(),
-      z.object({ kind: z.literal('existing'), engagementId: z.string().uuid() }).strict(),
+      z.object({ kind: z.literal('new'), companyId: z.uuid().optional() }).strict(),
+      z.object({ kind: z.literal('existing'), engagementId: z.uuid() }).strict(),
     ]),
   })
   .strict();

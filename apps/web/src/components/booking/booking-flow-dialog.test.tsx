@@ -1806,7 +1806,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
 
       expect(await screen.findByText('One setup step first')).toBeInTheDocument();
-      expect(mockReadBookingFundingAction.mock.calls.length).toBe(readsBefore);
+      expect(mockReadBookingFundingAction.mock.calls).toHaveLength(readsBefore);
       await user.click(screen.getByRole('button', { name: 'Switch to Acme Corp and top up' }));
 
       expect(mockSwitchWorkspaceAction).toHaveBeenCalledWith(companyWorkspaceKey('company-1'));
@@ -1835,7 +1835,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
 
       expect(await screen.findByText('One thing to settle first')).toBeInTheDocument();
       expect(screen.getByText(/top-ups totalling/)).toBeInTheDocument();
-      expect(mockReadBookingFundingAction.mock.calls.length).toBe(readsBefore);
+      expect(mockReadBookingFundingAction.mock.calls).toHaveLength(readsBefore);
       expect(screen.queryByTestId('funding-block')).not.toBeInTheDocument();
     });
 
