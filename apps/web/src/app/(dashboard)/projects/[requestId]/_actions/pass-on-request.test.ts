@@ -106,7 +106,12 @@ function requestRow(overrides: Record<string, unknown> = {}): Record<string, unk
 
 function passResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    relationship: { id: RELATIONSHIP_ID, expertProfileId: EXPERT_PROFILE_ID, status: 'declined' },
+    relationship: {
+      id: RELATIONSHIP_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      status: 'declined',
+      openedAt: new Date('2026-10-01T00:00:00.000Z'),
+    },
     previousStatus: 'eoi_submitted',
     auditId: 'audit-1',
     withdrawnProposalIds: ['p-1'],
@@ -253,9 +258,53 @@ describe('passOnRequestAction', () => {
       clientCompanyName: 'Acme Corp',
       expertName: 'Priya Nair',
       fromStatus: 'eoi_submitted',
+      clientSawTrack: true,
       recipientId: 'creator-1',
       baloOwnerUserId: OWNER_ID,
     });
+  });
+
+  it('a pass from invited (track never opened) publishes clientSawTrack:false', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      requestRow({ relationships: [ownRelationship({ status: 'invited', openedAt: null })] })
+    );
+    mockPassTrack.mockResolvedValue(
+      passResult({
+        previousStatus: 'invited',
+        relationship: {
+          id: RELATIONSHIP_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          status: 'declined',
+          openedAt: null,
+        },
+      })
+    );
+    await passOnRequestAction(VALID_INPUT);
+    await getScheduled()?.();
+    expect(mockPublishNow).toHaveBeenCalledWith(
+      'project.track_passed',
+      expect.objectContaining({ fromStatus: 'invited', clientSawTrack: false })
+    );
+  });
+
+  it('a pass from eoi_submitted whose track was never opened publishes clientSawTrack:false', async () => {
+    mockPassTrack.mockResolvedValue(
+      passResult({
+        previousStatus: 'eoi_submitted',
+        relationship: {
+          id: RELATIONSHIP_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          status: 'declined',
+          openedAt: null,
+        },
+      })
+    );
+    await passOnRequestAction(VALID_INPUT);
+    await getScheduled()?.();
+    expect(mockPublishNow).toHaveBeenCalledWith(
+      'project.track_passed',
+      expect.objectContaining({ fromStatus: 'eoi_submitted', clientSawTrack: false })
+    );
   });
 
   it('publishes a null owner and the fallback expert name when neither is known', async () => {

@@ -10,6 +10,7 @@ import {
   Send,
   Sparkles,
   Users,
+  X,
 } from 'lucide-react';
 
 /**
@@ -39,7 +40,8 @@ export type NudgeIconName =
   | 'plus'
   | 'send'
   | 'sparkles'
-  | 'users';
+  | 'users'
+  | 'x';
 
 /**
  * Token → component. Exhaustive by `Record<NudgeIconName, LucideIcon>`, so adding a token
@@ -56,4 +58,5 @@ export const NUDGE_ICONS: Record<NudgeIconName, LucideIcon> = {
   send: Send,
   sparkles: Sparkles,
   users: Users,
+  x: X,
 };

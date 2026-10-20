@@ -9,7 +9,10 @@ import {
   requestExpertRelationshipsRepository,
   InvalidRelationshipTransitionError,
 } from '@balo/db';
-import { narrowToPassableRelationshipStatus } from '@balo/shared/project-requests';
+import {
+  narrowToPassableRelationshipStatus,
+  relationshipIsOpened,
+} from '@balo/shared/project-requests';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveApprovedExpert } from '@/lib/auth/approved-expert';
 import { log } from '@/lib/logging';
@@ -117,6 +120,9 @@ export async function passOnRequestAction(
         clientCompanyName: request.company.name,
         expertName: expertDisplayName(relationship),
         fromStatus: result.previousStatus,
+        // `openedAt` survives the decline, so the post-pass row still answers whether the client
+        // could see this track.
+        clientSawTrack: relationshipIsOpened(result.relationship),
         recipientId: request.createdByUserId,
         baloOwnerUserId: request.baloOwnerUserId,
       });

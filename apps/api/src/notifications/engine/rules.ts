@@ -136,12 +136,13 @@ const hasRecipientId: NonNullable<NotificationRule['condition']> = (ctx) =>
   typeof ctx.payload.recipientId === 'string';
 
 /**
- * BAL-604 — `project.track_passed`'s CLIENT gate: tell the client only when they could have seen
- * the track. An `invited` expert never expressed interest, so the client has nothing to be told
- * about. The stage is the publisher's `fromStatus` (one of `PASSABLE_RELATIONSHIP_STATUSES`).
+ * BAL-604 — `project.track_passed`'s CLIENT gate: tell the client only when the track had been
+ * opened to them. The publisher computes `clientSawTrack` with `relationshipIsOpened`, the one
+ * client-visibility rule, so an expert who passed while unopened (e.g. from `invited`) is never
+ * announced to a client who never saw them. Strictly `true`: anything else stays silent.
  */
 const passedAfterClientSawTrack: NonNullable<NotificationRule['condition']> = (ctx) =>
-  ctx.payload.fromStatus === 'eoi_submitted' || ctx.payload.fromStatus === 'proposal_requested';
+  ctx.payload.clientSawTrack === true;
 
 /**
  * BAL-572 — `engagement.case_closed`'s EXPERT gate: the +30d inactivity sweep only, never a

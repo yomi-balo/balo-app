@@ -769,6 +769,7 @@ describe('publishBodySchema', () => {
       clientCompanyName: 'Acme Corp',
       expertName: 'Ada Lovelace',
       fromStatus: 'eoi_submitted',
+      clientSawTrack: true,
       recipientId: '550e8400-e29b-41d4-a716-446655440093',
       baloOwnerUserId: '550e8400-e29b-41d4-a716-446655440094',
     };
@@ -786,6 +787,13 @@ describe('publishBodySchema', () => {
 
     it.each(['proposal_submitted', 'accepted', 'declined'])('rejects fromStatus %s', (s) => {
       expect(parse({ ...validPayload, fromStatus: s }).success).toBe(false);
+    });
+
+    it('requires clientSawTrack as a boolean', () => {
+      expect(parse({ ...validPayload, clientSawTrack: false }).success).toBe(true);
+      const { clientSawTrack: _saw, ...rest } = validPayload;
+      expect(parse(rest).success).toBe(false);
+      expect(parse({ ...validPayload, clientSawTrack: 'true' }).success).toBe(false);
     });
 
     it('rejects an unknown key (strict payload)', () => {

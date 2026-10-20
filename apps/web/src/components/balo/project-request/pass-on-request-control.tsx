@@ -28,33 +28,39 @@ interface PassOnRequestControlProps {
   relationshipStatus: PassableRelationshipStatus;
 }
 
+interface PassOnRequestDialogProps extends PassOnRequestControlProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
 const UNEXPECTED_FAILURE = 'Something went wrong. Please try again.';
 
 /**
- * Expert-side "Pass on this project" control (BAL-604): a quiet text trigger that opens an
- * AlertDialog confirm. "Keep it" is the default focus; "Pass" is a ghost button with destructive
- * text, never the primary.
+ * The "Pass on this project?" confirm (BAL-604), controlled by its opener: the quiet
+ * {@link PassOnRequestControl} trigger, and the direct-request nudge's "Pass on this project"
+ * button. "Keep it" is the default focus; "Pass" is a ghost button with destructive text, never
+ * the primary.
  *
- * Mounted by the shell only while the viewer's track is at a passable stage, so there is no
- * empty state. A plain `useState` flag drives the pending state (not `useTransition`) and the
- * Action click calls `preventDefault`, so the dialog stays mounted while the action runs and is
- * dismissed only on failure or by the redirect.
+ * A plain `useState` flag drives the pending state (not `useTransition`) and the Action click
+ * calls `preventDefault`, so the dialog stays mounted while the action runs and is dismissed only
+ * on failure or by the redirect. While passing, the opener cannot close it.
  */
-export function PassOnRequestControl({
+export function PassOnRequestDialog({
   requestId,
   requestTitle,
   relationshipStatus,
-}: Readonly<PassOnRequestControlProps>): React.JSX.Element {
+  open,
+  onOpenChange,
+}: Readonly<PassOnRequestDialogProps>): React.JSX.Element {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [passing, setPassing] = useState(false);
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
       if (passing) return;
-      setOpen(next);
+      onOpenChange(next);
     },
-    [passing]
+    [passing, onOpenChange]
   );
 
   const handleConfirm = useCallback(
@@ -72,62 +78,87 @@ export function PassOnRequestControl({
         toast.error(result.error);
         if (result.code === 'not_passable') router.refresh();
         setPassing(false);
-        setOpen(false);
+        onOpenChange(false);
       })().catch((error: unknown) => {
         toast.error(UNEXPECTED_FAILURE);
         Sentry.captureException(error);
         setPassing(false);
-        setOpen(false);
+        onOpenChange(false);
       });
     },
-    [passing, requestId, requestTitle, router]
+    [passing, requestId, requestTitle, router, onOpenChange]
   );
+
+  return (
+    <AlertDialog open={open} onOpenChange={handleOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Pass on this project?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Balo will look for other experts. You won&apos;t be able to rejoin this request
+            yourself.
+            {relationshipStatus === 'proposal_requested' && (
+              // pending-MJ
+              <> Any draft proposal you&apos;ve started will be withdrawn.</>
+            )}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="sm:items-center sm:justify-between">
+          <AlertDialogAction
+            onClick={handleConfirm}
+            disabled={passing}
+            className={cn(
+              buttonVariants({ variant: 'ghost' }),
+              'text-destructive hover:bg-destructive/10 hover:text-destructive bg-transparent sm:-ml-3.5'
+            )}
+          >
+            {passing ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                Passing…
+              </>
+            ) : (
+              'Pass'
+            )}
+          </AlertDialogAction>
+          <AlertDialogCancel disabled={passing}>Keep it</AlertDialogCancel>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * Expert-side "Pass on this project" control (BAL-604): a quiet text trigger that opens
+ * {@link PassOnRequestDialog}.
+ *
+ * Mounted by the shell only while the viewer's track is at a passable stage, so there is no
+ * empty state.
+ */
+export function PassOnRequestControl({
+  requestId,
+  requestTitle,
+  relationshipStatus,
+}: Readonly<PassOnRequestControlProps>): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const handleTriggerClick = useCallback(() => setOpen(true), []);
 
   return (
     <div className="flex justify-end">
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={handleTriggerClick}
         className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center rounded-[10px] px-3 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
       >
         Pass on this project
       </button>
-
-      <AlertDialog open={open} onOpenChange={handleOpenChange}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Pass on this project?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Balo will look for other experts. You won&apos;t be able to rejoin this request
-              yourself.
-              {relationshipStatus === 'proposal_requested' && (
-                // pending-MJ
-                <> Any draft proposal you&apos;ve started will be withdrawn.</>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="sm:items-center sm:justify-between">
-            <AlertDialogAction
-              onClick={handleConfirm}
-              disabled={passing}
-              className={cn(
-                buttonVariants({ variant: 'ghost' }),
-                'text-destructive hover:bg-destructive/10 hover:text-destructive bg-transparent sm:-ml-3.5'
-              )}
-            >
-              {passing ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  Passing…
-                </>
-              ) : (
-                'Pass'
-              )}
-            </AlertDialogAction>
-            <AlertDialogCancel disabled={passing}>Keep it</AlertDialogCancel>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <PassOnRequestDialog
+        requestId={requestId}
+        requestTitle={requestTitle}
+        relationshipStatus={relationshipStatus}
+        open={open}
+        onOpenChange={setOpen}
+      />
     </div>
   );
 }

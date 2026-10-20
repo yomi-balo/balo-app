@@ -97,8 +97,10 @@ function invitationRow(overrides: Record<string, unknown> = {}): Record<string, 
     invitedAt: day(2),
     relationshipUpdatedAt: day(2),
     proposalRequestedAt: null,
+    availabilitySharedAt: null,
     projectRequestId: 'req-9',
     requestStatus: 'experts_invited',
+    onDirectLeg: false,
     title: 'Experience Cloud portal',
     companyId: 'company-9',
     companyName: 'Harbour Health',
@@ -220,6 +222,7 @@ describe('loadClientPortfolio', () => {
           senderFirstName: 'Priya',
         },
         latestInboundActivityAt: day(1),
+        latestOutboundMessageAt: null,
         fileCount: 0,
         lastReadAt: null,
       },
@@ -276,6 +279,7 @@ describe('loadClientPortfolio', () => {
           senderFirstName: null,
         },
         latestInboundActivityAt: day(1),
+        latestOutboundMessageAt: null,
         fileCount: 0,
         lastReadAt: null,
       },
@@ -753,6 +757,7 @@ function summaryFor(
       senderFirstName: 'Priya',
     },
     latestInboundActivityAt: day(inboundDaysAgo),
+    latestOutboundMessageAt: sender === 'user-1' ? day(inboundDaysAgo) : null,
     fileCount: 0,
     lastReadAt: null,
   };
@@ -811,6 +816,35 @@ describe('freshest inbound signal (shared fold)', () => {
       NOW
     );
     expect(dto.rows[0]?.signal).toMatchObject({ relationshipId: 'rel-x' });
+  });
+});
+
+describe('direct request choice on the expert row (BAL-604)', () => {
+  const DIRECT_EOI = {
+    relationshipId: 'rel-d',
+    relationshipStatus: 'eoi_submitted',
+    requestStatus: 'eoi_submitted',
+    onDirectLeg: true,
+  };
+  const expertViewer = { ...USER, expertProfileId: 'expert-1' };
+
+  it('asks the chosen expert to take it on or pass until they write in the thread', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([invitationRow(DIRECT_EOI)]);
+    mockListThreadSummaries.mockResolvedValue([summaryFor('rel-d', 'client-user', 1)]);
+    const dto = await loadExpertPortfolio(expertViewer, ['expert'], NOW);
+    expect(dto.rows[0]).toMatchObject({
+      needsYou: true,
+      nudgeLabel: 'Take it on, or pass?',
+      moveKind: 'direct_request',
+    });
+  });
+
+  it('folds the viewer’s own message as having acted', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([invitationRow(DIRECT_EOI)]);
+    mockListThreadSummaries.mockResolvedValue([summaryFor('rel-d', 'user-1', 1)]);
+    const dto = await loadExpertPortfolio(expertViewer, ['expert'], NOW);
+    expect(dto.rows[0]?.moveKind).not.toBe('direct_request');
+    expect(dto.rows[0]?.nudgeLabel).not.toBe('Take it on, or pass?');
   });
 });
 

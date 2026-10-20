@@ -5,6 +5,10 @@ import type {
   ProposalStatus,
 } from '@balo/db';
 import { relationshipIsOpened } from '@balo/shared/project-requests';
+import {
+  DIRECT_CHOICE_LABEL,
+  directExpertOwesChoice,
+} from '@/lib/project-request/direct-request-choice';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import { QUIET_THRESHOLD_DAYS } from '@/lib/project-request/request-detail-view';
@@ -55,6 +59,8 @@ export type PortfolioFilter = 'all' | 'needs' | 'in_progress' | 'kicked';
  */
 export type ExpertMoveKind =
   | 'invitation'
+  // A direct request's chosen expert who has not yet acted on it (`directExpertOwesChoice`).
+  | 'direct_request'
   | 'eoi_propose_times'
   | 'eoi_reply_owed'
   | 'proposal_requested'
@@ -340,12 +346,15 @@ export interface RequestThreadSignal {
   awaitingViewerReply: boolean;
   /** Freshest inbound preview ({from, messagePreview}) or null. */
   freshestSignal: { from: string; messagePreview: string; relationshipId?: string } | null;
+  /** The viewer has written at least one live message in some open thread. */
+  viewerHasSentMessage: boolean;
 }
 
 const EMPTY_SIGNAL: RequestThreadSignal = {
   anyUnread: false,
   awaitingViewerReply: false,
   freshestSignal: null,
+  viewerHasSentMessage: false,
 };
 
 /**
@@ -474,6 +483,15 @@ function expertNeedsYou(
     case 'invited':
       return { needsYou: true, nudgeLabel: 'Submit your EOI', moveKind: 'invitation' };
     case 'eoi_submitted': {
+      const owesChoice = directExpertOwesChoice({
+        onDirectLeg: invitation.onDirectLeg,
+        relationshipStatus: invitation.relationshipStatus,
+        availabilityShared: invitation.availabilitySharedAt !== null,
+        sentMessage: signal.viewerHasSentMessage,
+      });
+      if (owesChoice) {
+        return { needsYou: true, nudgeLabel: DIRECT_CHOICE_LABEL, moveKind: 'direct_request' };
+      }
       const needsReply = signal.anyUnread || signal.awaitingViewerReply;
       return {
         needsYou: true,

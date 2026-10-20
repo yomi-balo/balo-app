@@ -4,6 +4,7 @@ import {
   PASSABLE_RELATIONSHIP_STATUSES,
   type PassableRelationshipStatus,
 } from '@balo/shared/project-requests';
+import { resolveRequestTrackFileAccess } from '@balo/shared/authz';
 import { db } from '../client';
 import { auditEvents, proposals, requestExpertRelationships } from '../schema';
 import {
@@ -292,5 +293,25 @@ describe('passTrack — §6 the request leaves the expert’s projects inbox', (
 
     const after = await projectsInboxRepository.listInvitationsByExpert(expertProfileId);
     expect(after.map((row) => row.relationshipId)).not.toContain(relationship.id);
+  });
+});
+
+// ── §7 — the file plane: a pass from invited never opened the track ─────────────────────
+
+describe('passTrack — §7 request-file access after a pass from invited', () => {
+  it('resolves to unopened — no historical read for a track the client never saw', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'invited' },
+    });
+
+    await requestExpertRelationshipsRepository.passTrack({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+    });
+
+    const row = await readRelationship(relationship.id);
+    expect(row?.openedAt).toBeNull();
+    if (row === undefined) throw new Error('relationship row missing');
+    expect(resolveRequestTrackFileAccess(row)).toEqual({ kind: 'unopened' });
   });
 });

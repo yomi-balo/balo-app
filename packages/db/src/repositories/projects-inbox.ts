@@ -264,8 +264,11 @@ export const projectsInboxRepository = {
         invitedAt: requestExpertRelationships.invitedAt,
         relationshipUpdatedAt: requestExpertRelationships.updatedAt,
         proposalRequestedAt: requestExpertRelationships.proposalRequestedAt,
+        availabilitySharedAt: requestExpertRelationships.availabilitySharedAt,
         projectRequestId: projectRequests.id,
         requestStatus: projectRequests.status,
+        sendTo: projectRequests.sendTo,
+        directExpertProfileId: projectRequests.expertProfileId,
         title: projectRequests.title,
         companyId: companies.id,
         companyName: companies.name,
@@ -335,8 +338,10 @@ export const projectsInboxRepository = {
       invitedAt: row.invitedAt,
       relationshipUpdatedAt: row.relationshipUpdatedAt,
       proposalRequestedAt: row.proposalRequestedAt,
+      availabilitySharedAt: row.availabilitySharedAt,
       projectRequestId: row.projectRequestId,
       requestStatus: row.requestStatus,
+      onDirectLeg: row.sendTo === 'direct' && row.directExpertProfileId === expertProfileId,
       title: row.title,
       companyId: row.companyId,
       companyName: row.companyName,
@@ -633,8 +638,15 @@ export interface PortfolioInvitationRow {
   invitedAt: Date;
   relationshipUpdatedAt: Date;
   proposalRequestedAt: Date | null;
+  /** When this expert last shared availability on the track (null = never). */
+  availabilitySharedAt: Date | null;
   projectRequestId: string;
   requestStatus: ProjectRequestStatus;
+  /**
+   * The expert is the one a DIRECT request was sent to (`send_to = 'direct'` and the request's
+   * `expert_profile_id` is theirs) — false for anyone Balo invited alongside, and for `match`.
+   */
+  onDirectLeg: boolean;
   title: string;
   companyId: string;
   companyName: string;

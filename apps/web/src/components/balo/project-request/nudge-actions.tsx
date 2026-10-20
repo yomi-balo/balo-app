@@ -8,8 +8,17 @@ import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 import { requestExploratoryMeetingAction } from '@/app/(dashboard)/projects/[requestId]/_actions/request-exploratory-meeting';
 import { bookExploratoryMeetingAction } from '@/app/(dashboard)/projects/[requestId]/_actions/book-exploratory';
+import type { PassableRelationshipStatus } from '@balo/shared/project-requests';
 import { ExpertInviteDialog } from './expert-invite-dialog';
 import { NUDGE_ICONS, type NudgeIconName } from './nudge-icons';
+import { PassOnRequestDialog } from './pass-on-request-control';
+import { useExpertProposeTimes, useExpertProposeTimesPending } from './expert-call-bridge';
+
+/** What the `pass` CTA's confirm dialog needs — set only while the viewer's track is passable. */
+export interface NudgePassContext {
+  requestTitle: string;
+  relationshipStatus: PassableRelationshipStatus;
+}
 
 export interface NudgeButtonDescriptor {
   label: string;
@@ -37,6 +46,8 @@ interface NudgeActionsProps {
    * client/admin lenses, which never reach that wired action.
    */
   viewerRelationshipId?: string | null;
+  /** Enables the `pass` CTA (its confirm dialog's inputs); `null` leaves it disabled. */
+  passOn?: NudgePassContext | null;
   primary?: NudgeButtonDescriptor;
   secondary?: NudgeButtonDescriptor;
 }
@@ -48,7 +59,15 @@ interface NudgeActionsProps {
  * it later). This keeps `nudgeFor` copy presentational while A2 only lights up the
  * triage/invite/book CTAs it owns.
  */
-type WiredAction = 'invite' | 'request-exploratory' | 'book-exploratory' | 'build-proposal';
+type WiredAction =
+  | 'invite'
+  | 'request-exploratory'
+  | 'book-exploratory'
+  | 'build-proposal'
+  // The conversation stage's own share-availability handler, via `expert-call-bridge`.
+  | 'propose-times'
+  // Opens the expert's "Pass on this project?" confirm (`PassOnRequestDialog`).
+  | 'pass';
 
 const WIRED: Record<string, { primary?: WiredAction; secondary?: WiredAction }> = {
   'admin:requested': { primary: 'invite', secondary: 'request-exploratory' },
@@ -76,12 +95,16 @@ export function NudgeActions({
   status,
   requestId,
   viewerRelationshipId = null,
+  passOn = null,
   primary,
   secondary,
 }: Readonly<NudgeActionsProps>): React.JSX.Element {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [passOpen, setPassOpen] = useState(false);
+  const proposeTimes = useExpertProposeTimes();
+  const proposeTimesPending = useExpertProposeTimesPending();
   const wired = WIRED[`${lens}:${status}`] ?? {};
 
   const runRequestExploratory = useCallback((): void => {
@@ -128,6 +151,8 @@ export function NudgeActions({
     if (action === 'build-proposal') {
       return viewerRelationshipId === null ? undefined : runBuildProposal;
     }
+    if (action === 'propose-times') return proposeTimes ?? undefined;
+    if (action === 'pass') return passOn === null ? undefined : () => setPassOpen(true);
     return undefined;
   };
 
@@ -137,6 +162,8 @@ export function NudgeActions({
   const secondaryAction = secondary?.action ?? wired.secondary;
   const primaryHandler = handlerFor(primaryAction);
   const secondaryHandler = handlerFor(secondaryAction);
+  const primarySharing = primaryAction === 'propose-times' && proposeTimesPending;
+  const secondarySharing = secondaryAction === 'propose-times' && proposeTimesPending;
   // Token → component on THIS side of the boundary (the descriptor carries only a name).
   const PrimaryIcon = primary ? NUDGE_ICONS[primary.icon] : null;
   const SecondaryIcon = secondary ? NUDGE_ICONS[secondary.icon] : null;
@@ -146,31 +173,31 @@ export function NudgeActions({
       {primary && PrimaryIcon && (
         <button
           type="button"
-          disabled={primaryHandler === undefined || isPending}
+          disabled={primaryHandler === undefined || isPending || primarySharing}
           onClick={primaryHandler}
           className={cn(
             PRIMARY_CLASS,
             primaryHandler === undefined && 'opacity-60',
-            isPending && 'opacity-70'
+            (isPending || primarySharing) && 'opacity-70'
           )}
         >
           <PrimaryIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          {primary.label}
+          {primarySharing ? 'Sharing…' : primary.label}
         </button>
       )}
       {secondary && SecondaryIcon && (
         <button
           type="button"
-          disabled={secondaryHandler === undefined || isPending}
+          disabled={secondaryHandler === undefined || isPending || secondarySharing}
           onClick={secondaryHandler}
           className={cn(
             SECONDARY_CLASS,
             secondaryHandler === undefined && 'opacity-60',
-            isPending && 'opacity-70'
+            (isPending || secondarySharing) && 'opacity-70'
           )}
         >
           <SecondaryIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          {secondary.label}
+          {secondarySharing ? 'Sharing…' : secondary.label}
         </button>
       )}
 
@@ -180,6 +207,15 @@ export function NudgeActions({
           onOpenChange={setInviteOpen}
           requestId={requestId}
           alreadyInvitedIds={[]}
+        />
+      )}
+      {passOn !== null && (primaryAction === 'pass' || secondaryAction === 'pass') && (
+        <PassOnRequestDialog
+          requestId={requestId}
+          requestTitle={passOn.requestTitle}
+          relationshipStatus={passOn.relationshipStatus}
+          open={passOpen}
+          onOpenChange={setPassOpen}
         />
       )}
     </div>

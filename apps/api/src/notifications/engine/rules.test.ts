@@ -739,16 +739,16 @@ describe('notificationRules', () => {
       ]);
     });
 
-    it('gives the client email + in-app, gated on the stage the client could have seen', () => {
+    it('gives the client email + in-app, gated on clientSawTrack (the track was opened)', () => {
       expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
         'email',
         'in-app',
       ]);
       const ctx = (
-        fromStatus: string
+        payload: Record<string, unknown>
       ): Parameters<NonNullable<NotificationRule['condition']>>[0] => ({
         event: 'project.track_passed',
-        payload: { fromStatus },
+        payload,
         data: {},
       });
       for (const rule of clientRules) {
@@ -756,9 +756,15 @@ describe('notificationRules', () => {
         const condition = rule.condition;
         expect(condition).toBeDefined();
         if (!condition) continue;
-        expect(condition(ctx('eoi_submitted'))).toBe(true);
-        expect(condition(ctx('proposal_requested'))).toBe(true);
-        expect(condition(ctx('invited'))).toBe(false);
+        expect(condition(ctx({ clientSawTrack: true, fromStatus: 'eoi_submitted' }))).toBe(true);
+        // The stage no longer decides: an opened track fires whatever stage it passed from…
+        expect(condition(ctx({ clientSawTrack: true, fromStatus: 'invited' }))).toBe(true);
+        // …and an unopened one never does, even from a stage that used to qualify.
+        expect(condition(ctx({ clientSawTrack: false, fromStatus: 'eoi_submitted' }))).toBe(false);
+        expect(condition(ctx({ clientSawTrack: false, fromStatus: 'invited' }))).toBe(false);
+        // Strictly `true`: a missing or truthy-but-not-boolean value stays silent.
+        expect(condition(ctx({ fromStatus: 'proposal_requested' }))).toBe(false);
+        expect(condition(ctx({ clientSawTrack: 'true' }))).toBe(false);
       }
     });
   });

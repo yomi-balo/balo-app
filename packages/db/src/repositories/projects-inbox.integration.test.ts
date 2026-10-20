@@ -337,6 +337,49 @@ describe('projectsInboxRepository.listInvitationsByExpert', () => {
     const expert = await expertDraftFactory();
     expect(await projectsInboxRepository.listInvitationsByExpert(expert.id)).toEqual([]);
   });
+
+  it('marks only the direct request’s chosen expert as onDirectLeg, and carries availabilitySharedAt', async () => {
+    const chosen = await expertDraftFactory();
+    const alongside = await expertDraftFactory();
+    const direct = await projectRequestFactory({
+      status: 'eoi_submitted',
+      sendTo: 'direct',
+      expertProfileId: chosen.id,
+    });
+    const match = await projectRequestFactory({
+      status: 'eoi_submitted',
+      sendTo: 'match',
+      expertProfileId: null,
+    });
+    const sharedAt = new Date('2026-03-02T00:00:00.000Z');
+    await requestExpertRelationshipFactory({
+      projectRequestId: direct.id,
+      expertProfileId: chosen.id,
+      values: { status: 'eoi_submitted', availabilitySharedAt: sharedAt },
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: direct.id,
+      expertProfileId: alongside.id,
+      values: { status: 'eoi_submitted' },
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: match.id,
+      expertProfileId: chosen.id,
+      values: { status: 'eoi_submitted' },
+    });
+
+    const chosenRows = await projectsInboxRepository.listInvitationsByExpert(chosen.id);
+    const onDirect = chosenRows.find((r) => r.projectRequestId === direct.id);
+    const onMatch = chosenRows.find((r) => r.projectRequestId === match.id);
+    expect(onDirect?.onDirectLeg).toBe(true);
+    expect(onDirect?.availabilitySharedAt?.getTime()).toBe(sharedAt.getTime());
+    expect(onMatch?.onDirectLeg).toBe(false);
+    expect(onMatch?.availabilitySharedAt).toBeNull();
+
+    const [alongsideRow] = await projectsInboxRepository.listInvitationsByExpert(alongside.id);
+    expect(alongsideRow?.projectRequestId).toBe(direct.id);
+    expect(alongsideRow?.onDirectLeg).toBe(false);
+  });
 });
 
 describe('projectsInboxRepository.listInvitationsByExpert — kickoff gates + current proposal', () => {

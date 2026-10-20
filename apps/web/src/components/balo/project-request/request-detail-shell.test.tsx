@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@/test/utils';
+import { render, screen, within } from '@/test/utils';
 import type { RequestDetailView } from '@/lib/project-request/request-detail-view';
 import type {
   RequestViewerContext,
@@ -125,7 +125,10 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
   validateDescription: () => null,
 }));
 
+import userEvent from '@testing-library/user-event';
 import { RequestDetailShell } from './request-detail-shell';
+import { NudgeBar } from './nudge-bar';
+import { shareAvailabilityAction } from '@/app/(dashboard)/projects/[requestId]/_actions/share-availability';
 import { track, BILLING_EVENTS } from '@/lib/analytics';
 import { ConversationStage } from './conversation/conversation-stage';
 import { EoiEntry } from './eoi-entry';
@@ -929,6 +932,159 @@ describe('RequestDetailShell — PassOnRequestControl mounting (BAL-604)', () =>
       />
     );
     expect(screen.queryByRole('button', PASS_BUTTON)).not.toBeInTheDocument();
+  });
+});
+
+describe('RequestDetailShell — direct-request take-it-on-or-pass nudge (BAL-604)', () => {
+  const expertCtx = ctx({
+    lens: 'expert',
+    isOwner: false,
+    isInvitedExpert: true,
+    relationshipId: 'rel-1',
+    canSeeContact: true,
+  });
+  const CHOICE = 'Northwind Industrial asked for you directly. Take it on, or pass?';
+  const NORMAL = 'Offer the client a time to talk';
+
+  function directView(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
+    return view({
+      status: 'eoi_submitted',
+      viewerEoi: { hasLiveEoi: true, messageHtml: '<p>Invited by client</p>' },
+      viewerRelationshipStatus: 'eoi_submitted',
+      onDirectLeg: true,
+      ...overrides,
+    });
+  }
+
+  function nudgeProps(
+    v: RequestDetailView,
+    convo: ConversationView | null
+  ): Record<string, unknown> | undefined {
+    const tree = RequestDetailShell({ view: v, ctx: expertCtx, conversation: convo });
+    const [bar] = findAllOfType(tree, NudgeBar);
+    return bar?.props as Record<string, unknown> | undefined;
+  }
+
+  it('leads the chosen expert who has not acted with the choice, wired to pass', () => {
+    const props = nudgeProps(directView(), conversation());
+    expect((props?.nudge as { headline: string }).headline).toBe(CHOICE);
+    expect(props?.passOn).toEqual({
+      requestTitle: 'CPQ implementation',
+      relationshipStatus: 'eoi_submitted',
+    });
+  });
+
+  it.each([
+    ['shared availability', { availabilitySharedAtIso: '2026-06-02T00:00:00.000Z' }],
+    ['sent a message', { viewerHasSentMessage: true }],
+  ])('after the expert %s the normal nudge applies', (_label, threadOverrides) => {
+    const props = nudgeProps(
+      directView(),
+      conversation({ threads: [conversationThread(threadOverrides)] })
+    );
+    expect((props?.nudge as { headline: string }).headline).toBe(NORMAL);
+  });
+
+  it('a non-direct request is unchanged', () => {
+    const props = nudgeProps(directView({ onDirectLeg: false }), conversation());
+    expect((props?.nudge as { headline: string }).headline).toBe(NORMAL);
+  });
+
+  it('without the viewer’s thread there is no evidence either way, so the normal nudge applies', () => {
+    const props = nudgeProps(directView(), null);
+    expect((props?.nudge as { headline: string }).headline).toBe(NORMAL);
+  });
+
+  it('the nudge’s "Propose times" runs the conversation stage’s share handler', async () => {
+    vi.mocked(shareAvailabilityAction).mockResolvedValue({
+      ok: true,
+      isReshare: false,
+      calendarConnected: true,
+      sharedAtIso: '2026-06-02T00:00:00.000Z',
+    });
+    render(
+      <RequestDetailShell view={directView()} ctx={expertCtx} conversation={conversation()} />
+    );
+    const bar = screen.getByText(CHOICE).parentElement;
+    if (bar === null) throw new Error('nudge bar missing');
+    const propose = within(bar).getByRole('button', { name: 'Propose times' });
+    expect(propose).toBeEnabled();
+    await userEvent.setup().click(propose);
+    expect(shareAvailabilityAction).toHaveBeenCalledWith({
+      requestId: 'req-1',
+      relationshipId: 'rel-1',
+      surface: 'page_nudge',
+    });
+  });
+
+  it('after the expert has acted, the normal "Propose meeting times" primary runs the same handler', async () => {
+    vi.mocked(shareAvailabilityAction).mockClear();
+    vi.mocked(shareAvailabilityAction).mockResolvedValue({
+      ok: true,
+      isReshare: true,
+      calendarConnected: true,
+      sharedAtIso: '2026-06-02T00:00:00.000Z',
+    });
+    render(
+      <RequestDetailShell
+        view={directView()}
+        ctx={expertCtx}
+        conversation={conversation({
+          threads: [conversationThread({ viewerHasSentMessage: true })],
+        })}
+      />
+    );
+    const bar = screen.getByText(NORMAL).parentElement;
+    if (bar === null) throw new Error('nudge bar missing');
+    const propose = within(bar).getByRole('button', { name: 'Propose meeting times' });
+    expect(propose).toBeEnabled();
+    await userEvent.setup().click(propose);
+    expect(shareAvailabilityAction).toHaveBeenCalledWith({
+      requestId: 'req-1',
+      relationshipId: 'rel-1',
+      surface: 'page_nudge',
+    });
+  });
+
+  it('keys the nudge bar by request id so its pass confirm cannot outlive a navigation', () => {
+    const tree = RequestDetailShell({
+      view: directView(),
+      ctx: expertCtx,
+      conversation: conversation(),
+    });
+    const [bar] = findAllOfType(tree, NudgeBar);
+    expect(bar?.key).toBe('req-1');
+  });
+
+  it('offers exactly one Pass entry point: the nudge carries it, the quiet control is not mounted', () => {
+    const tree = RequestDetailShell({
+      view: directView(),
+      ctx: expertCtx,
+      conversation: conversation(),
+    });
+    expect(findAllOfType(tree, PassOnRequestControl)).toHaveLength(0);
+    render(
+      <RequestDetailShell view={directView()} ctx={expertCtx} conversation={conversation()} />
+    );
+    expect(screen.getAllByRole('button', { name: 'Pass on this project' })).toHaveLength(1);
+  });
+
+  it('once the expert has acted, the quiet Pass control returns in place of the nudge’s', () => {
+    const acted = conversation({ threads: [conversationThread({ viewerHasSentMessage: true })] });
+    const tree = RequestDetailShell({ view: directView(), ctx: expertCtx, conversation: acted });
+    expect(findAllOfType(tree, PassOnRequestControl)).toHaveLength(2);
+  });
+
+  it('the nudge’s "Pass on this project" opens the pass confirm', async () => {
+    render(
+      <RequestDetailShell view={directView()} ctx={expertCtx} conversation={conversation()} />
+    );
+    const bar = screen.getByText(CHOICE).parentElement;
+    if (bar === null) throw new Error('nudge bar missing');
+    await userEvent
+      .setup()
+      .click(within(bar).getByRole('button', { name: 'Pass on this project' }));
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('Pass on this project?');
   });
 });
 

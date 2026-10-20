@@ -1,5 +1,8 @@
 import { Lock, Shield, User, Users } from 'lucide-react';
-import { narrowToPassableRelationshipStatus } from '@balo/shared/project-requests';
+import {
+  narrowToPassableRelationshipStatus,
+  type PassableRelationshipStatus,
+} from '@balo/shared/project-requests';
 import { cn } from '@/lib/utils';
 import type { RequestDetailView } from '@/lib/project-request/request-detail-view';
 import {
@@ -7,7 +10,11 @@ import {
   requestPhase,
   type RequestViewerContext,
 } from '@/lib/project-request/resolve-request-lens';
-import type { ConversationView } from '@/lib/project-request/conversation-view-types';
+import type {
+  ConversationThreadView,
+  ConversationView,
+} from '@/lib/project-request/conversation-view-types';
+import { directExpertOwesChoice } from '@/lib/project-request/direct-request-choice';
 import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import { RequestCard } from './request-card';
 import { RequestContext } from './request-context';
@@ -18,6 +25,7 @@ import { RequestDetailAnalytics } from './request-detail-analytics';
 import { StatusStepper } from './status-stepper';
 import { EoiEntry } from './eoi-entry';
 import { PassOnRequestControl } from './pass-on-request-control';
+import { ExpertCallBridgeProvider } from './expert-call-bridge';
 import { ProposalSlot } from './proposal-slot';
 import { KickoffBoard } from './proposal/kickoff-board';
 import { AdminKickoffBillingPanel } from './proposal/admin-kickoff-billing-panel';
@@ -129,25 +137,30 @@ const LENS_META = {
 
 const STATUS_LABEL_BEFORE_INVITE = new Set<string>(BEFORE_INVITE_STATUSES);
 
-/**
- * BAL-604 — the expert's "Pass on this project" control, or null when the viewer is not an expert
- * or their own track is not at a passable stage.
- */
-function buildExpertPassControl(
+/** BAL-604 — the viewer-expert's own track stage when they can pass on it, else null. */
+function expertPassableStatus(
   view: RequestDetailView,
   ctx: RequestViewerContext
-): React.JSX.Element | null {
+): PassableRelationshipStatus | null {
   if (ctx.lens !== 'expert') return null;
-  const status = narrowToPassableRelationshipStatus(view.viewerRelationshipStatus ?? '');
-  if (status === null) return null;
-  return (
-    <PassOnRequestControl
-      key={`pass-${view.id}`}
-      requestId={view.id}
-      requestTitle={view.title}
-      relationshipStatus={status}
-    />
-  );
+  return narrowToPassableRelationshipStatus(view.viewerRelationshipStatus ?? '');
+}
+
+/**
+ * The direct-request take-it-on-or-pass fact for the page nudge. Read off the viewer's OWN
+ * thread; without one there is no evidence either way, so the normal cell is served.
+ */
+function owesDirectChoice(
+  view: RequestDetailView,
+  viewerThread: ConversationThreadView | null
+): boolean {
+  if (viewerThread === null) return false;
+  return directExpertOwesChoice({
+    onDirectLeg: view.onDirectLeg,
+    relationshipStatus: view.viewerRelationshipStatus ?? '',
+    availabilityShared: viewerThread.availabilitySharedAtIso !== null,
+    sentMessage: viewerThread.viewerHasSentMessage,
+  });
 }
 
 /** "Viewing as {lens}" line + phase pill (participants only) + the BAL-540 close control. */
@@ -264,18 +277,27 @@ export function RequestDetailShell({
   // Expert lens: the proposal-phase nudge cells key on the VIEWER'S relationship
   // status (BAL-272 divergence fix) — request status is the max-progress aggregate —
   // and on the open change request on their own thread (the revise cell).
-  const viewerChangeRequest =
-    conversation?.threads.find((t) => t.relationshipId === ctx.relationshipId)?.changeRequest ??
-    null;
+  const viewerThread =
+    conversation?.threads.find((t) => t.relationshipId === ctx.relationshipId) ?? null;
   const nudge = isExpertGated
     ? EXPERT_GATED_NUDGE
     : nudgeFor(
         ctx.lens,
         view.status,
         view.viewerRelationshipStatus,
-        viewerChangeRequest,
-        view.onDirectLeg ? { companyName: view.companyName } : null
+        viewerThread?.changeRequest ?? null,
+        view.onDirectLeg
+          ? { companyName: view.companyName, owesChoice: owesDirectChoice(view, viewerThread) }
+          : null
       );
+  // BAL-604 — the pass confirm's inputs, shared by the quiet control and a nudge `pass` CTA.
+  const passableStatus = expertPassableStatus(view, ctx);
+  // The nudge's own "Pass on this project" is the single Pass entry point while it is showing, so
+  // the quiet control is not mounted beside it.
+  const nudgeCarriesPass =
+    !isExpertGated &&
+    !isClosed &&
+    (nudge?.primary?.action === 'pass' || nudge?.secondary?.action === 'pass');
   // Health panel only once there are relationships (none before experts_invited).
   const showHealthPanel = ctx.archetype === 'observer' && view.relationships.length > 0;
 
@@ -307,285 +329,301 @@ export function RequestDetailShell({
   // Mounted below the expert's main action; keyed by request (with a prefix, since it is a sibling
   // of the EOI card keyed by the bare id) so a confirm dialog never lingers across
   // /projects/A → /projects/B. The gated and closed branches never mount it.
-  const expertPassControl = buildExpertPassControl(view, ctx);
+  const expertPassControl =
+    passableStatus === null || nudgeCarriesPass ? null : (
+      <PassOnRequestControl
+        key={`pass-${view.id}`}
+        requestId={view.id}
+        requestTitle={view.title}
+        relationshipStatus={passableStatus}
+      />
+    );
 
   return (
-    <div>
-      <RequestDetailAnalytics
-        requestId={view.id}
-        lens={ctx.lens}
-        archetype={ctx.archetype}
-        status={view.status}
-        phase={phase}
-      />
+    <ExpertCallBridgeProvider>
+      <div>
+        <RequestDetailAnalytics
+          requestId={view.id}
+          lens={ctx.lens}
+          archetype={ctx.archetype}
+          status={view.status}
+          phase={phase}
+        />
 
-      {billingBlocked && billingCapture && (
-        <BillingBlockedViewTracker companyId={billingCapture.companyId} requestId={view.id} />
-      )}
+        {billingBlocked && billingCapture && (
+          <BillingBlockedViewTracker companyId={billingCapture.companyId} requestId={view.id} />
+        )}
 
-      <LensLine ctx={ctx} isPhase2={isPhase2} isClosed={isClosed} closeControl={closeControl} />
+        <LensLine ctx={ctx} isPhase2={isPhase2} isClosed={isClosed} closeControl={closeControl} />
 
-      {/* BAL-540 — the stepper and the nudge bar are replaced by `ClosedBanner` once a request
+        {/* BAL-540 — the stepper and the nudge bar are replaced by `ClosedBanner` once a request
           is closed (design ref: no stage pill, no nudge on a terminal request). */}
-      {!isClosed && (
-        <>
-          {/* At-a-glance pipeline position — shown for every lens. A slim full-width
+        {!isClosed && (
+          <>
+            {/* At-a-glance pipeline position — shown for every lens. A slim full-width
               strip; the stepper itself scrolls horizontally on narrow viewports. */}
-          <div
-            className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
-            style={{ animationDelay: '60ms' }}
-          >
-            <StatusStepper current={view.status} />
-          </div>
+            <div
+              className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
+              style={{ animationDelay: '60ms' }}
+            >
+              <StatusStepper current={view.status} />
+            </div>
 
-          {/* BAL-331 deep-link: once kickoff is approved and a delivery engagement
+            {/* BAL-331 deep-link: once kickoff is approved and a delivery engagement
               exists, surface the workspace entry for EVERY lens. Rendered once here
               (a single navigational Link) so it never duplicates across the mobile /
               desktop kickoff-board mounts. */}
-          {deliveryEngagementId && (
-            <div
-              className="border-border bg-card animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 duration-500 motion-reduce:animate-none"
-              style={{ animationDelay: '90ms' }}
-            >
-              <span className="text-muted-foreground text-sm">
-                Kickoff approved — delivery is underway.
-              </span>
-              <DeliveryWorkspaceLink engagementId={deliveryEngagementId} />
-            </div>
-          )}
+            {deliveryEngagementId && (
+              <div
+                className="border-border bg-card animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 duration-500 motion-reduce:animate-none"
+                style={{ animationDelay: '90ms' }}
+              >
+                <span className="text-muted-foreground text-sm">
+                  Kickoff approved — delivery is underway.
+                </span>
+                <DeliveryWorkspaceLink engagementId={deliveryEngagementId} />
+              </div>
+            )}
 
-          {nudge && (
-            <div
-              className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
-              style={{ animationDelay: '120ms' }}
-            >
-              <NudgeBar
-                nudge={nudge}
-                lens={ctx.lens}
-                status={view.status}
-                requestId={view.id}
-                viewerRelationshipId={ctx.relationshipId}
-              />
-            </div>
-          )}
-        </>
-      )}
+            {nudge && (
+              <div
+                className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
+                style={{ animationDelay: '120ms' }}
+              >
+                <NudgeBar
+                  key={view.id}
+                  nudge={nudge}
+                  lens={ctx.lens}
+                  status={view.status}
+                  requestId={view.id}
+                  viewerRelationshipId={ctx.relationshipId}
+                  passOn={
+                    passableStatus === null
+                      ? null
+                      : { requestTitle: view.title, relationshipStatus: passableStatus }
+                  }
+                />
+              </div>
+            )}
+          </>
+        )}
 
-      {/* BAL-540 — the closed state (design ref `ClosedBanner` + frozen `TrackCard`s). Only the
+        {/* BAL-540 — the closed state (design ref `ClosedBanner` + frozen `TrackCard`s). Only the
           client + admin lenses ever reach this: a closed-out expert is intercepted earlier by
           `page.tsx`'s ended-track branch (`resolveRequestLens` returns `null` for a declined
           relationship, and every track is declined by the close cascade). */}
-      {isClosed && (
-        <div className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both space-y-5 duration-500 motion-reduce:animate-none">
-          {view.closed && (
-            <ClosedBanner
-              closed={view.closed}
-              viewerLens={ctx.lens === 'admin' ? 'admin' : 'client'}
-            />
-          )}
-          {/* BAL-541 (D5) — the design reference renders the Balo panel unconditionally inside
+        {isClosed && (
+          <div className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both space-y-5 duration-500 motion-reduce:animate-none">
+            {view.closed && (
+              <ClosedBanner
+                closed={view.closed}
+                viewerLens={ctx.lens === 'admin' ? 'admin' : 'client'}
+              />
+            )}
+            {/* BAL-541 (D5) — the design reference renders the Balo panel unconditionally inside
               the admin grid (`request-close.jsx:1604,1633-1644`), and the handover note matters
               MOST once a request has ended. Switches on `baloPanelNode`'s null-ness, never on
               `ctx.archetype` — an admin who cannot see the panel (no BAL-541 token, however
               unlikely today) still gets the plain single-column closed layout. */}
-          {baloPanelNode === null ? (
-            <>
-              <RequestContext view={view} variant="full" />
-              <ClosedTrackList tracks={view.closedTracks} />
-            </>
-          ) : (
-            <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-              <div className="space-y-5">
+            {baloPanelNode === null ? (
+              <>
                 <RequestContext view={view} variant="full" />
                 <ClosedTrackList tracks={view.closedTracks} />
+              </>
+            ) : (
+              <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+                <div className="space-y-5">
+                  <RequestContext view={view} variant="full" />
+                  <ClosedTrackList tracks={view.closedTracks} />
+                </div>
+                <div className="space-y-5">{baloPanelNode}</div>
               </div>
-              <div className="space-y-5">{baloPanelNode}</div>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div
-        className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none"
-        style={{ animationDelay: '180ms' }}
-      >
-        {!isClosed && ctx.archetype === 'observer' && (
-          <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-            <RequestContext view={view} variant="full" />
-            <div className="space-y-5">
-              {/* BAL-541 — "who is handling this, and what the last person left behind" is
-                  the orienting fact for an admin landing on a request; it sits ABOVE the fee
-                  control, which is a rarer act. */}
-              {baloPanelNode}
-              {/* BAL-358: request-level Balo fee control — config-first, so it shows
-                  even before any expert is invited (the mapper populates baloFeeBps
-                  for the observer lens only; the guard is defensive). */}
-              {view.baloFeeBps !== null && (
-                <AdminFeeOverridePanel requestId={view.id} baloFeeBps={view.baloFeeBps} />
-              )}
-              {/* Kickoff board is the admin's first CTA — above the health panel. */}
-              {view.kickoff && (
-                <KickoffBoard
-                  requestId={view.id}
-                  acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
-                  lens={ctx.lens}
-                  clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                  expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
-                  approved={view.kickoff.approved}
-                  expertName={view.kickoff.expertName}
-                  billing={billingCapture}
-                />
-              )}
-              {/* BAL-324: billing + payment-terms visibility (observer only). Sits
-                  under the kickoff board so the admin sees WHY the billing gate is
-                  open and can remind the client inline. */}
-              {view.kickoff && (
-                <AdminKickoffBillingPanel
-                  view={adminBilling ?? null}
-                  requestId={view.id}
-                  acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
-                  clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                />
-              )}
-              {showHealthPanel && (
-                <AdminHealthPanel
-                  requestId={view.id}
-                  status={view.status}
-                  companyName={view.companyName}
-                  relationships={view.relationships}
-                />
-              )}
-            </div>
+            )}
           </div>
         )}
 
-        {ctx.archetype === 'participant' && isExpertGated && <ExpertGatedCard />}
+        <div
+          className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none"
+          style={{ animationDelay: '180ms' }}
+        >
+          {!isClosed && ctx.archetype === 'observer' && (
+            <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+              <RequestContext view={view} variant="full" />
+              <div className="space-y-5">
+                {/* BAL-541 — "who is handling this, and what the last person left behind" is
+                  the orienting fact for an admin landing on a request; it sits ABOVE the fee
+                  control, which is a rarer act. */}
+                {baloPanelNode}
+                {/* BAL-358: request-level Balo fee control — config-first, so it shows
+                  even before any expert is invited (the mapper populates baloFeeBps
+                  for the observer lens only; the guard is defensive). */}
+                {view.baloFeeBps !== null && (
+                  <AdminFeeOverridePanel requestId={view.id} baloFeeBps={view.baloFeeBps} />
+                )}
+                {/* Kickoff board is the admin's first CTA — above the health panel. */}
+                {view.kickoff && (
+                  <KickoffBoard
+                    requestId={view.id}
+                    acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
+                    lens={ctx.lens}
+                    clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                    expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                    approved={view.kickoff.approved}
+                    expertName={view.kickoff.expertName}
+                    billing={billingCapture}
+                  />
+                )}
+                {/* BAL-324: billing + payment-terms visibility (observer only). Sits
+                  under the kickoff board so the admin sees WHY the billing gate is
+                  open and can remind the client inline. */}
+                {view.kickoff && (
+                  <AdminKickoffBillingPanel
+                    view={adminBilling ?? null}
+                    requestId={view.id}
+                    acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
+                    clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                  />
+                )}
+                {showHealthPanel && (
+                  <AdminHealthPanel
+                    requestId={view.id}
+                    status={view.status}
+                    companyName={view.companyName}
+                    relationships={view.relationships}
+                  />
+                )}
+              </div>
+            </div>
+          )}
 
-        {!isClosed && ctx.archetype === 'participant' && !isExpertGated && !isPhase2 && (
-          <div className="space-y-5">
-            <RequestContext view={view} variant="full" />
-            {/* Expert Phase-1: the EOI-entry card sits under the brief. The client
+          {ctx.archetype === 'participant' && isExpertGated && <ExpertGatedCard />}
+
+          {!isClosed && ctx.archetype === 'participant' && !isExpertGated && !isPhase2 && (
+            <div className="space-y-5">
+              <RequestContext view={view} variant="full" />
+              {/* Expert Phase-1: the EOI-entry card sits under the brief. The client
                 lens never sees it (no `viewerEoi`).
                 key={view.id}: App Router preserves client state across dynamic-param
                 navigation (/projects/A → /projects/B) — keying by request remounts the
                 card so A's in-progress EOI draft never lingers under B's URL. Mirrors
                 the ConversationStage keying below. */}
-            {ctx.lens === 'expert' && view.viewerEoi && (
-              <EoiEntry
-                key={view.id}
-                requestId={view.id}
-                initialHasEoi={view.viewerEoi.hasLiveEoi}
-                initialMessageHtml={view.viewerEoi.messageHtml}
-              />
-            )}
-            {expertPassControl}
-          </div>
-        )}
+              {ctx.lens === 'expert' && view.viewerEoi && (
+                <EoiEntry
+                  key={view.id}
+                  requestId={view.id}
+                  initialHasEoi={view.viewerEoi.hasLiveEoi}
+                  initialMessageHtml={view.viewerEoi.messageHtml}
+                />
+              )}
+              {expertPassControl}
+            </div>
+          )}
 
-        {ctx.archetype === 'participant' && !isExpertGated && isPhase2 && (
-          <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-            <div className="min-w-0 space-y-4">
-              {/* Mobile: slim request bar → bottom sheet. Children are the SAME
+          {ctx.archetype === 'participant' && !isExpertGated && isPhase2 && (
+            <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+              <div className="min-w-0 space-y-4">
+                {/* Mobile: slim request bar → bottom sheet. Children are the SAME
                   server-rendered compact panel the desktop right column shows
                   (RSC composition through the client sheet wrapper). */}
-              <div className="lg:hidden">
-                <MobileRequestSheet title={view.title}>
-                  <div className="space-y-5">
-                    {ctx.lens === 'expert' && (
-                      <>
-                        <div className="flex justify-end">
-                          <ProposalSlot
-                            requestId={view.id}
-                            viewerRelationshipStatus={view.viewerRelationshipStatus}
-                            viewerRelationshipId={ctx.relationshipId}
-                          />
-                        </div>
-                        {expertCompactEoi}
-                        {expertPassControl}
-                      </>
-                    )}
-                    {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
-                    {view.kickoff && (
-                      <KickoffBoard
-                        requestId={view.id}
-                        acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
-                        lens={ctx.lens}
-                        clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                        expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
-                        approved={view.kickoff.approved}
-                        expertName={view.kickoff.expertName}
-                        billing={billingCapture}
-                        mobile
-                      />
-                    )}
-                    <RequestContext view={view} variant="compact" />
-                  </div>
-                </MobileRequestSheet>
-              </div>
-              {/* key={view.id}: App Router preserves client state across
+                <div className="lg:hidden">
+                  <MobileRequestSheet title={view.title}>
+                    <div className="space-y-5">
+                      {ctx.lens === 'expert' && (
+                        <>
+                          <div className="flex justify-end">
+                            <ProposalSlot
+                              requestId={view.id}
+                              viewerRelationshipStatus={view.viewerRelationshipStatus}
+                              viewerRelationshipId={ctx.relationshipId}
+                            />
+                          </div>
+                          {expertCompactEoi}
+                          {expertPassControl}
+                        </>
+                      )}
+                      {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
+                      {view.kickoff && (
+                        <KickoffBoard
+                          requestId={view.id}
+                          acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
+                          lens={ctx.lens}
+                          clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                          expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                          approved={view.kickoff.approved}
+                          expertName={view.kickoff.expertName}
+                          billing={billingCapture}
+                          mobile
+                        />
+                      )}
+                      <RequestContext view={view} variant="compact" />
+                    </div>
+                  </MobileRequestSheet>
+                </div>
+                {/* key={view.id}: App Router preserves client state across
                   dynamic-param navigation (/projects/A → /projects/B) — keying
                   by request remounts the island so A's threads never linger
                   under B's URL. */}
-              <ConversationStage
-                key={view.id}
-                requestId={view.id}
-                lens={ctx.lens === 'expert' ? 'expert' : 'client'}
-                requestStatus={view.status}
-                view={conversation ?? EMPTY_CONVERSATION_VIEW}
-                requestTitle={view.title}
-                clientCompanyName={view.companyName}
-                viewerEmailDomain={viewerEmailDomain}
-                canDecline={canDecline}
-              />
-            </div>
-            <div className="hidden space-y-5 lg:block">
-              {/* Expert Phase-2: the gated "Build proposal" header slot + a compact
+                <ConversationStage
+                  key={view.id}
+                  requestId={view.id}
+                  lens={ctx.lens === 'expert' ? 'expert' : 'client'}
+                  requestStatus={view.status}
+                  view={conversation ?? EMPTY_CONVERSATION_VIEW}
+                  requestTitle={view.title}
+                  clientCompanyName={view.companyName}
+                  viewerEmailDomain={viewerEmailDomain}
+                  canDecline={canDecline}
+                />
+              </div>
+              <div className="hidden space-y-5 lg:block">
+                {/* Expert Phase-2: the gated "Build proposal" header slot + a compact
                   EOI card so withdraw/resubmit stays reachable once the request has
                   flipped to the conversation. The client lens gets neither. */}
-              {ctx.lens === 'expert' && (
-                <>
-                  <div className="flex justify-end">
-                    <ProposalSlot
-                      requestId={view.id}
-                      viewerRelationshipStatus={view.viewerRelationshipStatus}
-                      viewerRelationshipId={ctx.relationshipId}
-                    />
-                  </div>
-                  {expertCompactEoi}
-                  {expertPassControl}
-                </>
-              )}
-              {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
-              {view.kickoff && (
-                <KickoffBoard
-                  requestId={view.id}
-                  acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
-                  lens={ctx.lens}
-                  clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                  expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
-                  approved={view.kickoff.approved}
-                  expertName={view.kickoff.expertName}
-                  billing={billingCapture}
-                />
-              )}
-              <RequestContext view={view} variant="compact" />
+                {ctx.lens === 'expert' && (
+                  <>
+                    <div className="flex justify-end">
+                      <ProposalSlot
+                        requestId={view.id}
+                        viewerRelationshipStatus={view.viewerRelationshipStatus}
+                        viewerRelationshipId={ctx.relationshipId}
+                      />
+                    </div>
+                    {expertCompactEoi}
+                    {expertPassControl}
+                  </>
+                )}
+                {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
+                {view.kickoff && (
+                  <KickoffBoard
+                    requestId={view.id}
+                    acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
+                    lens={ctx.lens}
+                    clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                    expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                    approved={view.kickoff.approved}
+                    expertName={view.kickoff.expertName}
+                    billing={billingCapture}
+                  />
+                )}
+                <RequestContext view={view} variant="compact" />
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
 
-      {/* BAL-431 / ADR-1048 — the request-file audience panel. ONE mount point for EVERY
+        {/* BAL-431 / ADR-1048 — the request-file audience panel. ONE mount point for EVERY
           lens/phase — deliberately NOT nested inside the phase-2 conversation branch above.
           `requestFilesView` is `null` when the loader found no lens, or the viewer is an
           expert whose track has not opened (no EOI yet). */}
-      {requestFilesView && (
-        <div
-          className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mt-5 duration-500 motion-reduce:animate-none"
-          style={{ animationDelay: '210ms' }}
-        >
-          <RequestFilesPanel requestId={view.id} initialView={requestFilesView} />
-        </div>
-      )}
-    </div>
+        {requestFilesView && (
+          <div
+            className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mt-5 duration-500 motion-reduce:animate-none"
+            style={{ animationDelay: '210ms' }}
+          >
+            <RequestFilesPanel requestId={view.id} initialView={requestFilesView} />
+          </div>
+        )}
+      </div>
+    </ExpertCallBridgeProvider>
   );
 }

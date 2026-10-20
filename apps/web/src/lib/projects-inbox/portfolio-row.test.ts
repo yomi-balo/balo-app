@@ -71,8 +71,10 @@ function makeInvitation(overrides: Partial<PortfolioInvitationRow> = {}): Portfo
     invitedAt: day(2),
     relationshipUpdatedAt: day(2),
     proposalRequestedAt: null,
+    availabilitySharedAt: null,
     projectRequestId: 'req-1',
     requestStatus: 'experts_invited',
+    onDirectLeg: false,
     title: 'Experience Cloud portal',
     companyId: 'company-1',
     companyName: 'Harbour Health',
@@ -102,11 +104,13 @@ const SIGNAL_UNREAD: RequestThreadSignal = {
   anyUnread: true,
   awaitingViewerReply: true,
   freshestSignal: { from: 'Priya', messagePreview: 'Proposal submitted' },
+  viewerHasSentMessage: false,
 };
 const SIGNAL_QUIET: RequestThreadSignal = {
   anyUnread: false,
   awaitingViewerReply: false,
   freshestSignal: null,
+  viewerHasSentMessage: false,
 };
 
 describe('stageChipFor', () => {
@@ -445,6 +449,52 @@ describe('needsYouForExpert', () => {
       needsYou: true,
       nudgeLabel: 'Propose times',
       moveKind: 'eoi_propose_times',
+    });
+  });
+
+  describe('direct request — take it on, or pass (BAL-604)', () => {
+    const DIRECT_EOI = {
+      relationshipStatus: 'eoi_submitted',
+      requestStatus: 'eoi_submitted',
+      onDirectLeg: true,
+    } as const;
+    const CHOICE = {
+      needsYou: true,
+      nudgeLabel: 'Take it on, or pass?',
+      moveKind: 'direct_request',
+    };
+
+    it('the chosen expert who has not acted owes the choice — even with a client message waiting', () => {
+      expect(needsYouForExpert(makeInvitation(DIRECT_EOI), SIGNAL_QUIET)).toEqual(CHOICE);
+      expect(needsYouForExpert(makeInvitation(DIRECT_EOI), SIGNAL_UNREAD)).toEqual(CHOICE);
+    });
+
+    it('after sharing availability the normal eoi_submitted move applies', () => {
+      const res = needsYouForExpert(
+        makeInvitation({ ...DIRECT_EOI, availabilitySharedAt: day(1) }),
+        SIGNAL_QUIET
+      );
+      expect(res.moveKind).toBe('eoi_propose_times');
+    });
+
+    it('after sending a message the normal eoi_submitted move applies', () => {
+      const res = needsYouForExpert(makeInvitation(DIRECT_EOI), {
+        ...SIGNAL_UNREAD,
+        viewerHasSentMessage: true,
+      });
+      expect(res).toEqual({
+        needsYou: true,
+        nudgeLabel: 'Reply to client',
+        moveKind: 'eoi_reply_owed',
+      });
+    });
+
+    it('a non-direct track is unchanged', () => {
+      const res = needsYouForExpert(
+        makeInvitation({ ...DIRECT_EOI, onDirectLeg: false }),
+        SIGNAL_QUIET
+      );
+      expect(res.moveKind).toBe('eoi_propose_times');
     });
   });
 

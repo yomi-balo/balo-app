@@ -3,6 +3,11 @@ import { render, screen, waitFor, within, act } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { track, CONVERSATION_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
+import {
+  ExpertCallBridgeProvider,
+  useExpertProposeTimes,
+  useExpertProposeTimesPending,
+} from '../expert-call-bridge';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const VIEWER_ID = 'user-viewer';
@@ -438,6 +443,37 @@ describe('ConversationStage — composer send', () => {
     );
   });
 
+  it("refreshes the page once, on the expert's first message in the thread", async () => {
+    const user = userEvent.setup();
+    renderStage(view(), 'expert');
+    const textarea = screen.getByRole('textbox', { name: 'Message the client' });
+    await user.type(textarea, 'First{Enter}');
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith('Message sent'));
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    mockRefresh.mockClear();
+    await user.type(textarea, 'Second{Enter}');
+    await waitFor(() => expect(mockPostMessage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledTimes(2));
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh on a client's first message in the thread", async () => {
+    const user = userEvent.setup();
+    renderStage(view());
+    await user.type(screen.getByRole('textbox', { name: 'Message Priya' }), 'First{Enter}');
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith('Message sent'));
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not refresh when the expert had already written in the thread', async () => {
+    const user = userEvent.setup();
+    renderStage(view({ threads: [thread({ viewerHasSentMessage: true })] }), 'expert');
+    await user.type(screen.getByRole('textbox', { name: 'Message the client' }), 'Again{Enter}');
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith('Message sent'));
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
   it('keeps the draft and toasts on failure', async () => {
     const user = userEvent.setup();
     mockPostMessage.mockResolvedValue({ success: false, error: 'Could not send your message.' });
@@ -561,6 +597,61 @@ describe('ConversationStage — call + EOI intro', () => {
     expect(
       screen.queryByText('Pick a time — this is a free intro call, no commitment.')
     ).not.toBeInTheDocument();
+  });
+
+  it('EXPERT lens: the page nudge bridge shares availability on the page_nudge surface, reporting pending', async () => {
+    const user = userEvent.setup();
+    let resolveShare: (value: unknown) => void = () => undefined;
+    mockShareAvailability.mockReturnValue(
+      new Promise((resolve) => {
+        resolveShare = resolve;
+      })
+    );
+    function PageNudgeStandIn(): React.JSX.Element {
+      const proposeTimes = useExpertProposeTimes();
+      const pending = useExpertProposeTimesPending();
+      return (
+        <button type="button" disabled={proposeTimes === null} onClick={() => proposeTimes?.()}>
+          {pending ? 'Page nudge sharing' : 'Page nudge propose'}
+        </button>
+      );
+    }
+    render(
+      <ExpertCallBridgeProvider>
+        <PageNudgeStandIn />
+        <ConversationStage
+          requestId={REQUEST_ID}
+          lens="expert"
+          requestStatus="eoi_submitted"
+          view={view()}
+          requestTitle="CPQ implementation"
+          clientCompanyName="Northwind Industrial"
+          viewerEmailDomain="northwind.example"
+        />
+      </ExpertCallBridgeProvider>
+    );
+    await user.click(await screen.findByRole('button', { name: 'Page nudge propose' }));
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
+      expect.objectContaining({ surface: 'page_nudge', lens: 'expert' })
+    );
+    await waitFor(() =>
+      expect(mockShareAvailability).toHaveBeenCalledWith({
+        requestId: REQUEST_ID,
+        relationshipId: 'rel-1',
+        surface: 'page_nudge',
+      })
+    );
+    expect(screen.getByRole('button', { name: 'Page nudge sharing' })).toBeInTheDocument();
+    await act(async () => {
+      resolveShare({
+        ok: true,
+        isReshare: false,
+        calendarConnected: true,
+        sharedAtIso: '2026-10-21T00:00:00.000Z',
+      });
+    });
+    expect(await screen.findByRole('button', { name: 'Page nudge propose' })).toBeInTheDocument();
   });
 
   it('EXPERT lens: the toast NEVER names the viewer themselves, even without a company name', async () => {

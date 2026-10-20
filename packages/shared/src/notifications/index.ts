@@ -1791,7 +1791,7 @@ export interface ProjectTrackDeclinedPayload {
  * BAL-604 — the delivering expert PASSED on a project (their own track ended). Two recipient
  * arms, neither the expert (the toast covers them): the Balo owner — or every platform admin when
  * no owner is set — over `data.adminUserIds`, and the client via `recipientId` only when
- * `fromStatus` is a stage the client could have seen (`eoi_submitted` / `proposal_requested`).
+ * `clientSawTrack` (the track was opened to the client, `relationshipIsOpened`).
  * `correlationId` = the `request_expert_relationship.declined` audit row id.
  *
  * Deliberately carries NO `userId` / `expertProfileId`: the resolver would hydrate `data.user` /
@@ -1805,8 +1805,10 @@ export interface ProjectTrackPassedPayload {
   title: string;
   clientCompanyName: string;
   expertName: string;
-  /** the stage the expert passed from — gates the client notification. */
+  /** the stage the expert passed from — admin copy and analytics. */
   fromStatus: PassableRelationshipStatus;
+  /** the track was opened to the client (`relationshipIsOpened`) — gates the client arm. */
+  clientSawTrack: boolean;
   /** the request creator's user id — the client arm's recipient. */
   recipientId: string;
   baloOwnerUserId: string | null;

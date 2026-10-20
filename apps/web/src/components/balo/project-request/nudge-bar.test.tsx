@@ -117,7 +117,11 @@ describe('NudgeBar', () => {
       null,
       { requestedBy: 'Dana @ Northwind', notePreview: 'Add more deliverables', nextVersion: 2 },
     ] as const;
-    const DIRECT_LEGS = [null, { companyName: 'Northwind' }] as const;
+    const DIRECT_LEGS = [
+      null,
+      { companyName: 'Northwind', owesChoice: false },
+      { companyName: 'Northwind', owesChoice: true },
+    ] as const;
 
     const every = LENSES.flatMap((lens) =>
       STATUSES.flatMap((status) =>
@@ -482,7 +486,7 @@ describe('NudgeBar', () => {
   });
 
   describe('nudgeFor — direct leg (the client chose the expert)', () => {
-    const DIRECT = { companyName: 'Northwind' };
+    const DIRECT = { companyName: 'Northwind', owesChoice: false };
 
     it('tells the chosen expert which client sent it, not that Balo invited them', () => {
       for (const status of ['experts_invited', 'eoi_submitted'] as const) {
@@ -533,6 +537,61 @@ describe('NudgeBar', () => {
         DIRECT
       );
       expect(nudge?.headline).toBe('Dana @ Northwind requested changes to your proposal');
+    });
+  });
+  describe('nudgeFor — direct request take-it-on-or-pass choice (BAL-604)', () => {
+    const OWES = { companyName: 'Northwind', owesChoice: true };
+    const ACTED = { companyName: 'Northwind', owesChoice: false };
+
+    it('leads the chosen expert who has not acted with the choice', () => {
+      const nudge = nudgeFor('expert', 'eoi_submitted', 'eoi_submitted', null, OWES);
+      expect(nudge?.headline).toBe('Northwind asked for you directly. Take it on, or pass?');
+      expect(nudge?.variant).toBe('action');
+      expect(nudge?.primary).toEqual({
+        label: 'Propose times',
+        icon: 'calendar',
+        action: 'propose-times',
+      });
+      expect(nudge?.secondary).toEqual({
+        label: 'Pass on this project',
+        icon: 'x',
+        action: 'pass',
+      });
+    });
+
+    it('serves the normal eoi_submitted cell once the expert has acted', () => {
+      expect(nudgeFor('expert', 'eoi_submitted', 'eoi_submitted', null, ACTED)).toEqual(
+        nudgeFor('expert', 'eoi_submitted', 'eoi_submitted')
+      );
+    });
+
+    it('wires the normal eoi_submitted primary to the stage’s share handler', () => {
+      expect(nudgeFor('expert', 'eoi_submitted', 'eoi_submitted')?.primary).toEqual({
+        label: 'Propose meeting times',
+        icon: 'calendar',
+        action: 'propose-times',
+      });
+    });
+
+    it('leaves a non-direct request unchanged', () => {
+      expect(nudgeFor('expert', 'eoi_submitted', 'eoi_submitted', null, null)?.headline).toBe(
+        'Offer the client a time to talk'
+      );
+    });
+
+    it('applies only at eoi_submitted — later stages keep their own cells', () => {
+      expect(nudgeFor('expert', 'proposal_requested', 'proposal_requested', null, OWES)).toEqual(
+        nudgeFor('expert', 'proposal_requested', 'proposal_requested')
+      );
+      expect(nudgeFor('expert', 'experts_invited', 'invited', null, OWES)?.headline).toBe(
+        'Sent to you directly — submit your expression of interest'
+      );
+    });
+
+    it('never reaches the client lens', () => {
+      expect(nudgeFor('client', 'eoi_submitted', null, null, OWES)).toEqual(
+        nudgeFor('client', 'eoi_submitted', null, null, ACTED)
+      );
     });
   });
 });
