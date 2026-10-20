@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# A new push to a PR supersedes its in-flight run. Pushes to main are keyed by SHA, so every main
+# commit keeps its own run.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
