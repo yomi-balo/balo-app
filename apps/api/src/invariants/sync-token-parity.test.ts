@@ -778,17 +778,20 @@ describe('Layer 3 / Scan C — availability reaches a vendor only as a windowed 
    * (`/loadResolverInputs\([^)]*,[^)]*,[^)]*,/s`) is quantified overlapping alternation of the
    * kind SonarCloud S5852 fails the gate on, and it would also mis-count any argument that
    * itself contains a `)`. The walk is linear and exact.
+   *
+   * A literal-`undefined` 4th argument is NOT an override: `window-availability.ts` passes
+   * `undefined` there only to reach the 5th, `hooks`, parameter.
    */
-  it('⚠ only the seed path may pass a busyBlocks override (the 4-argument form)', () => {
+  it('⚠ only the seed path may pass a busyBlocks override (a non-`undefined` 4th argument)', () => {
     const withOverride = ALL_SOURCE_FILES.filter(
       (rel) =>
-        // The loader's own 4-parameter DECLARATION is not a call site.
+        // The loader's own DECLARATION is not a call site.
         rel !== 'services/availability/load-resolver-inputs.ts' &&
-        maxCallArity(codeLines(readRaw(rel)), 'loadResolverInputs(') >= 4
+        hasNonUndefinedArgAt(codeLines(readRaw(rel)), 'loadResolverInputs(', 3)
     );
     expect(
       withOverride,
-      `A 4-argument \`loadResolverInputs(…, busyBlocksOverride)\` SKIPS the vendor read ` +
+      `A \`loadResolverInputs(…)\` call with a non-\`undefined\` 4th argument (busyBlocksOverride) SKIPS the vendor read ` +
         `entirely and every other scan in this file stays green. It is sanctioned ONLY for ` +
         `resolve-and-cache.ts's seed path. AMEND THE ADR FIRST.`
     ).toEqual(['services/availability/resolve-and-cache.ts']);
@@ -796,29 +799,39 @@ describe('Layer 3 / Scan C — availability reaches a vendor only as a windowed 
 });
 
 /**
- * The largest number of top-level arguments any `<open>` call in `code` is given, or 0 when the
- * call does not appear. Walks parenthesis depth and counts depth-1 commas; string and template
- * literals are not interpreted, which is safe here because the scanned call takes identifiers
- * and `Date`s. Deliberately regex-free (S5852) and linear in `code.length`.
+ * The trimmed top-level arguments of the call whose argument list begins at `start` (just past
+ * its opening parenthesis). Walks parenthesis depth and slices the text between depth-1 commas;
+ * string and template literals are not interpreted, which is safe here because the scanned call
+ * takes identifiers and `Date`s. Deliberately regex-free (S5852) and linear in `code.length`.
  */
-function maxCallArity(code: string, open: string): number {
-  let best = 0;
+function topLevelArgs(code: string, start: number): string[] {
+  const args: string[] = [];
+  let depth = 1;
+  let argStart = start;
+  for (let i = start; i < code.length && depth > 0; i += 1) {
+    const ch = code[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+    if (depth === 0 || (ch === ',' && depth === 1)) {
+      args.push(code.slice(argStart, i).trim());
+      argStart = i + 1;
+    }
+  }
+  return args;
+}
+
+/**
+ * `true` when some `<open>` call in `code` has a top-level argument at `index` (0-based) that is
+ * present and is not the literal `undefined`.
+ */
+function hasNonUndefinedArgAt(code: string, open: string, index: number): boolean {
   let from = code.indexOf(open);
   while (from !== -1) {
-    let depth = 1;
-    let args = 0;
-    let sawToken = false;
-    for (let i = from + open.length; i < code.length && depth > 0; i += 1) {
-      const ch = code[i];
-      if (ch === '(' || ch === '[' || ch === '{') depth += 1;
-      else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
-      else if (ch === ',' && depth === 1) args += 1;
-      else if (depth === 1 && ch !== undefined && ch.trim() !== '') sawToken = true;
-    }
-    if (sawToken) best = Math.max(best, args + 1);
+    const arg = topLevelArgs(code, from + open.length)[index];
+    if (arg !== undefined && arg !== '' && arg !== 'undefined') return true;
     from = code.indexOf(open, from + open.length);
   }
-  return best;
+  return false;
 }
 
 /**

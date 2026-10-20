@@ -974,6 +974,137 @@ describe('bookAndProvisionMeeting — idempotent replay (BAL-400 Decision 7)', (
 });
 
 /**
+ * BAL-607 — the phase recorder. A FRESH create reports `bookingTransaction`, `venue` and
+ * `calendar` once each; neither replay return reports anything, which is the freshness predicate
+ * the booking route reads (`hasRecorded('bookingTransaction')`).
+ */
+describe('bookAndProvisionMeeting — phase recorder (BAL-607)', () => {
+  const KEY = 'c'.repeat(64);
+  const baseInput: BookAndProvisionInput = {
+    contextType: 'case',
+    contextId: CONTEXT_ID,
+    scheduledStart: START,
+    scheduledEnd: END,
+    engagementType: 'case',
+    userId: USER_ID,
+  };
+
+  function replayableExisting(): void {
+    mockFindByBookingIdempotencyKey.mockResolvedValue({
+      ...unstampedMeeting(),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+    mockFindWithContexts.mockResolvedValue({
+      meeting: unstampedMeeting(),
+      contexts: [{ contextType: 'case', contextId: CONTEXT_ID }],
+    });
+    mockFindById.mockResolvedValue({
+      ...unstampedMeeting(),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+  }
+
+  it('a fresh create records bookingTransaction, venue and calendar once each', async () => {
+    const record = vi.fn();
+
+    await bookAndProvisionMeeting(baseInput, log, {
+      provisioner: fakeProvisioner(),
+      phaseRecorder: { record },
+    });
+
+    expect(record).toHaveBeenCalledTimes(3);
+    expect(record).toHaveBeenCalledWith('bookingTransaction', expect.any(Number));
+    expect(record).toHaveBeenCalledWith('venue', expect.any(Number));
+    expect(record).toHaveBeenCalledWith('calendar', expect.any(Number));
+  });
+
+  it('records bookingTransaction before venue and calendar', async () => {
+    const phases: string[] = [];
+
+    await bookAndProvisionMeeting(baseInput, log, {
+      provisioner: fakeProvisioner(),
+      phaseRecorder: { record: (phase) => phases.push(phase) },
+    });
+
+    expect(phases).toEqual(['bookingTransaction', 'venue', 'calendar']);
+  });
+
+  it('measures the booking transaction from before the service pre-probe', async () => {
+    mockFindByBookingIdempotencyKey.mockImplementation(async () => {
+      vi.advanceTimersByTime(40);
+      return undefined;
+    });
+    mockBookMeeting.mockImplementation(async () => {
+      vi.advanceTimersByTime(60);
+      return { meeting: unstampedMeeting(), contexts: [], expertProfileId: 'expert_1' };
+    });
+    const record = vi.fn();
+
+    await bookAndProvisionMeeting({ ...baseInput, bookingIdempotencyKey: KEY }, log, {
+      provisioner: fakeProvisioner(),
+      phaseRecorder: { record },
+    });
+
+    expect(record).toHaveBeenCalledWith('bookingTransaction', 100);
+  });
+
+  it('the pre-probe replay records nothing', async () => {
+    replayableExisting();
+    const record = vi.fn();
+
+    await bookAndProvisionMeeting({ ...baseInput, bookingIdempotencyKey: KEY }, log, {
+      provisioner: fakeProvisioner(),
+      phaseRecorder: { record },
+    });
+
+    expect(mockBookMeeting).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('the 23505 replay records nothing', async () => {
+    mockFindByBookingIdempotencyKey.mockResolvedValueOnce(undefined);
+    replayableExisting();
+    mockFindByBookingIdempotencyKey.mockResolvedValueOnce({
+      ...unstampedMeeting(),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+    mockBookMeeting.mockRejectedValue(Object.assign(new Error('duplicate key'), { code: '23505' }));
+    const record = vi.fn();
+
+    await bookAndProvisionMeeting({ ...baseInput, bookingIdempotencyKey: KEY }, log, {
+      provisioner: fakeProvisioner(),
+      phaseRecorder: { record },
+    });
+
+    expect(mockBookMeeting).toHaveBeenCalledTimes(1);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a failed create records nothing', async () => {
+    mockBookMeeting.mockRejectedValue(new Error('something else broke'));
+    const record = vi.fn();
+
+    await expect(
+      bookAndProvisionMeeting(baseInput, log, {
+        provisioner: fakeProvisioner(),
+        phaseRecorder: { record },
+      })
+    ).rejects.toThrow('something else broke');
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('runs unchanged with no recorder supplied', async () => {
+    await expect(
+      bookAndProvisionMeeting(baseInput, log, { provisioner: fakeProvisioner() })
+    ).resolves.toMatchObject({ provisioned: true });
+  });
+});
+
+/**
  * BAL-400 (D2) / BAL-283 / BAL-433 — THE PROJECTION CALL, AND ONLY THE CALL.
  *
  * ⚠ WHAT THIS FILE DELIBERATELY NO LONGER TESTS. Until BAL-433 this suite reached through the

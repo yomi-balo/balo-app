@@ -159,6 +159,7 @@ import {
   type ExpertCalendarDelivery,
 } from '../consultation-events/booking-calendar-projection.js';
 import type { BookableEngagementType } from './authorize-meeting-booking.js';
+import { timeBookingPhase, type BookingPhaseRecorder } from './booking-phase-timing.js';
 import { bookMeeting } from './meeting-availability.js';
 
 /**
@@ -222,6 +223,13 @@ export interface ProvisionMeetingDeps {
   provisioner?: RoomProvisioner;
   /** Defaults to the live `dailyRoomTeardown`; tests substitute their own. */
   teardown?: RoomTeardown;
+  /**
+   * BAL-607 — receives `bookingTransaction`, `venue` and `calendar` elapsed ms from
+   * `bookAndProvisionMeeting` on a FRESH create only. Only the booking route passes it;
+   * `provisionMeeting` and both replay returns ignore it, so a recorder that never saw
+   * `bookingTransaction` identifies a replay.
+   */
+  phaseRecorder?: BookingPhaseRecorder;
 }
 
 export interface BookAndProvisionInput {
@@ -600,6 +608,7 @@ export async function bookAndProvisionMeeting(
   log: FastifyBaseLogger,
   deps: ProvisionMeetingDeps = {}
 ): Promise<BookAndProvisionResult> {
+  const bookingStartedAt = Date.now();
   if (input.bookingIdempotencyKey !== undefined) {
     const replay = await replayByIdempotencyKey(input.bookingIdempotencyKey, input, log, deps);
     if (replay !== null) {
@@ -634,17 +643,22 @@ export async function bookAndProvisionMeeting(
     throw error;
   }
 
-  const venue = await provisionVenue(
-    created.meeting,
-    {
-      contextType: input.contextType,
-      engagementType: input.engagementType,
-      distinctId: input.userId,
-      trigger: 'booking',
-      escalateFailure: true,
-    },
-    log,
-    deps
+  // Reached only on a fresh create: both replay paths above return before this line.
+  deps.phaseRecorder?.record('bookingTransaction', Date.now() - bookingStartedAt);
+
+  const venue = await timeBookingPhase(deps.phaseRecorder, 'venue', () =>
+    provisionVenue(
+      created.meeting,
+      {
+        contextType: input.contextType,
+        engagementType: input.engagementType,
+        distinctId: input.userId,
+        trigger: 'booking',
+        escalateFailure: true,
+      },
+      log,
+      deps
+    )
   );
 
   // BAL-400 (D2) / BAL-283 / BAL-433 / BAL-475 — the calendar pipeline, run ONLY on a fresh
@@ -665,7 +679,9 @@ export async function bookAndProvisionMeeting(
   // by a best-effort projection or a best-effort invite publish. See
   // `runPostCommitCalendarSteps`'s own docblock for the step order (load-bearing: the invite
   // publisher reads the rows the first two steps write).
-  await runPostCommitCalendarSteps(created, input, log);
+  await timeBookingPhase(deps.phaseRecorder, 'calendar', () =>
+    runPostCommitCalendarSteps(created, input, log)
+  );
 
   return { meeting: created.meeting, ...venue };
 }
