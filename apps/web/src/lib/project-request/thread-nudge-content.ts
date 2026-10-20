@@ -12,6 +12,7 @@ import {
 import type { ProjectRequestStatus } from './resolve-request-lens';
 import {
   requestStatusRank,
+  reviseProposalCopy,
   type ConversationThreadView,
   type ThreadChangeRequestView,
 } from './conversation-view-types';
@@ -202,7 +203,7 @@ function clientNudge(
       variant: 'waiting',
       icon: Clock,
       headline: `${name} is revising the proposal`,
-      sub: `Changes requested — you'll be notified when version ${thread.changeRequest.nextVersion} is in.`,
+      sub: `Changes requested — version ${thread.changeRequest.nextVersion} will appear here once it's in.`,
       secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
     };
   }
@@ -225,8 +226,7 @@ function reviseProposalNudge(changeRequest: ThreadChangeRequestView): ThreadNudg
   return {
     variant: 'action',
     icon: FileText,
-    headline: `${changeRequest.requestedBy} requested changes to your proposal`,
-    sub: `“${changeRequest.notePreview}” — revise and resubmit as version ${changeRequest.nextVersion}.`,
+    ...reviseProposalCopy(changeRequest),
     primary: { label: 'Revise proposal', icon: FileText, action: 'build' },
     secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
   };

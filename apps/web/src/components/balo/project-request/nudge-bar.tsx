@@ -1,9 +1,10 @@
 import { cn } from '@/lib/utils';
 import { NUDGE_ICONS, type NudgeIconName } from './nudge-icons';
 import type { RequestLens, ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
-import type {
-  RelationshipStatus,
-  ThreadChangeRequestView,
+import {
+  reviseProposalCopy,
+  type RelationshipStatus,
+  type ThreadChangeRequestView,
 } from '@/lib/project-request/conversation-view-types';
 import { RequestCard } from './request-card';
 import { NudgeActions, type NudgeButtonDescriptor } from './nudge-actions';
@@ -307,8 +308,7 @@ function reviseProposalNudge(changeRequest: ThreadChangeRequestView): NudgeConte
   return {
     variant: 'action',
     icon: 'fileText',
-    headline: `${changeRequest.requestedBy} requested changes to your proposal`,
-    sub: `“${changeRequest.notePreview}” — revise and resubmit as version ${changeRequest.nextVersion}.`,
+    ...reviseProposalCopy(changeRequest),
     primary: { label: 'Revise proposal', icon: 'fileText', action: 'build-proposal' },
   };
 }
@@ -338,10 +338,10 @@ function reviseProposalNudge(changeRequest: ThreadChangeRequestView): NudgeConte
  *     (`deriveThreadStage(viewerRelationshipStatus, status)` ∈ {'won','not_selected'}).
  *     Any future winner/loser page prompt MUST branch on that derived outcome
  *     here, never on `status`, or it lies to losing experts again.
- *  3. Open change request on the viewer's current proposal → the revise cell
- *     ({@link reviseProposalNudge}), ahead of the plain `proposal_submitted` one.
- *  4. Proposal phase (`eoi_submitted` / `proposal_requested` / `proposal_submitted`)
- *     → keyed per-thread via {@link expertCellFor} (BAL-272 divergence fix).
+ *  3. Proposal phase (`eoi_submitted` / `proposal_requested` / `proposal_submitted`)
+ *     → keyed per-thread via {@link expertCellFor} (BAL-272 divergence fix) — except
+ *     an open change request on the viewer's current proposal, which takes the
+ *     revise cell ({@link reviseProposalNudge}) ahead of the plain waiting one.
  *
  * Anything else (pre-proposal request statuses — `experts_invited`, exploratory…)
  * can only carry an `invited` viewer here, so the request-keyed expert cell is
@@ -354,10 +354,10 @@ function expertNudgeFor(
 ): NudgeContent | null {
   if (viewerRelationshipStatus === 'declined') return null;
   if (status === 'accepted' || status === 'kickoff_approved') return null;
-  if (viewerRelationshipStatus === 'proposal_submitted' && viewerChangeRequest !== null) {
-    return reviseProposalNudge(viewerChangeRequest);
-  }
   if (RELATIONSHIP_KEYED_EXPERT_STATUSES.has(status)) {
+    if (viewerRelationshipStatus === 'proposal_submitted' && viewerChangeRequest !== null) {
+      return reviseProposalNudge(viewerChangeRequest);
+    }
     return expertCellFor(viewerRelationshipStatus);
   }
   return EXPERT_NUDGES[status] ?? null;

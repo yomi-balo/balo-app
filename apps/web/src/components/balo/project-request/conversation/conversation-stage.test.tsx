@@ -822,6 +822,7 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
       request_id: REQUEST_ID,
       relationship_id: 'rel-1',
       surface: 'header',
+      cta: 'request',
     });
     expect(await screen.findByText('Request a proposal from Priya?')).toBeInTheDocument();
     expect(mockRequestProposal).not.toHaveBeenCalled();
@@ -940,6 +941,7 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
       request_id: REQUEST_ID,
       relationship_id: 'rel-1',
       surface: 'header',
+      cta: 'build',
     });
     expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
     // It opens the composer, never the client's request-proposal confirm beat.
@@ -1011,6 +1013,7 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
       request_id: REQUEST_ID,
       relationship_id: 'rel-1',
       surface: 'header',
+      cta: 'view',
     });
     expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
     // It opens the review surface, never the client's request-proposal confirm beat.
@@ -1066,7 +1069,13 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
       mockPush.mockClear();
       await user.click(cta);
       expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
-    }
+    } // Revise is its own funnel step, never folded into Build.
+    expect(mockTrack).toHaveBeenCalledWith(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      surface: 'header',
+      cta: 'revise',
+    });
   });
 });
 

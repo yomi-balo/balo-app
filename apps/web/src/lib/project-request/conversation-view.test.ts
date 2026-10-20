@@ -10,6 +10,7 @@ const {
   mockFindProfileById,
   mockListActiveMeetingsForContexts,
   mockListProposalsByRequest,
+  mockFindCurrentProposalByRelationship,
   mockListChangeRequestsByProposal,
   mockFindUserById,
 } = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const {
   mockFindProfileById: vi.fn(),
   mockListActiveMeetingsForContexts: vi.fn(),
   mockListProposalsByRequest: vi.fn(),
+  mockFindCurrentProposalByRelationship: vi.fn(),
   mockListChangeRequestsByProposal: vi.fn(),
   mockFindUserById: vi.fn(),
 }));
@@ -43,6 +45,8 @@ vi.mock('@balo/db', () => ({
   },
   proposalsRepository: {
     listByRequest: (...args: unknown[]) => mockListProposalsByRequest(...args),
+    findCurrentByRelationship: (...args: unknown[]) =>
+      mockFindCurrentProposalByRelationship(...args),
   },
   proposalChangeRequestsRepository: {
     listByProposal: (...args: unknown[]) => mockListChangeRequestsByProposal(...args),
@@ -289,16 +293,14 @@ describe('loadConversationView', () => {
     expect(view.threads.find((t) => t.relationshipId === 'rel-2')?.changeRequest).toBeNull();
   });
 
-  it("changeRequest falls back to the party when the requester's name is unavailable", async () => {
-    mockListProposalsByRequest.mockResolvedValue([
-      {
-        id: 'p-1',
-        relationshipId: 'rel-1',
-        isCurrent: true,
-        status: 'changes_requested',
-        version: 2,
-      },
-    ]);
+  it('expert lens reads only its own current proposal; requester falls back to the party', async () => {
+    mockFindCurrentProposalByRelationship.mockResolvedValue({
+      id: 'p-1',
+      relationshipId: 'rel-1',
+      isCurrent: true,
+      status: 'changes_requested',
+      version: 2,
+    });
     mockListChangeRequestsByProposal.mockResolvedValue([
       { note: 'Tighten the timeline', requestedByUserId: 'gone' },
     ]);
@@ -309,11 +311,34 @@ describe('loadConversationView', () => {
       EXPERT_CTX,
       USER
     );
+    expect(mockFindCurrentProposalByRelationship).toHaveBeenCalledWith('rel-1');
+    expect(mockListProposalsByRequest).not.toHaveBeenCalled();
     expect(view.threads[0]?.changeRequest).toEqual({
       requestedBy: 'Northwind',
       notePreview: 'Tighten the timeline',
       nextVersion: 3,
     });
+  });
+
+  it('a change-request read failure degrades to no change request, never a broken page', async () => {
+    mockListProposalsByRequest.mockResolvedValue([
+      {
+        id: 'p-1',
+        relationshipId: 'rel-1',
+        isCurrent: true,
+        status: 'changes_requested',
+        version: 1,
+      },
+    ]);
+    mockListChangeRequestsByProposal.mockRejectedValue(new Error('db down'));
+
+    const view = await loadConversationView(
+      request([relationship({ status: 'proposal_submitted' })]) as never,
+      CLIENT_CTX,
+      USER
+    );
+    expect(view.threads).toHaveLength(1);
+    expect(view.threads[0]?.changeRequest).toBeNull();
   });
 
   it('runs ONE batched booked-call query for the whole page, never one per relationship', async () => {

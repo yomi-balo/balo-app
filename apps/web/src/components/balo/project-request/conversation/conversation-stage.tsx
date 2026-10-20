@@ -5,7 +5,12 @@ import { useRouter } from 'next/navigation';
 import { Ellipsis, MessageSquare, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { track, CONVERSATION_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
+import {
+  track,
+  CONVERSATION_EVENTS,
+  PROJECT_EVENTS,
+  type ConversationProposalCta,
+} from '@/lib/analytics';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import {
   previewOfHtml,
@@ -194,13 +199,15 @@ const noopDraftChange = (): void => {
 function trackProposalCtaClick(
   surface: 'header' | 'rail' | undefined,
   requestId: string,
-  relationshipId: string
+  relationshipId: string,
+  cta: ConversationProposalCta
 ): void {
   if (surface === undefined) return;
   track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
     request_id: requestId,
     relationship_id: relationshipId,
     surface,
+    cta,
   });
 }
 
@@ -220,10 +227,9 @@ function openProposalComposer(args: {
   surface?: 'header' | 'rail';
 }): void {
   const { push, requestId, threadId, status, revising, surface } = args;
-  const composable =
-    status === 'proposal_requested' || (status === 'proposal_submitted' && revising);
-  if (threadId === null || !composable) return;
-  trackProposalCtaClick(surface, requestId, threadId);
+  const isRevise = status === 'proposal_submitted' && revising;
+  if (threadId === null || !(status === 'proposal_requested' || isRevise)) return;
+  trackProposalCtaClick(surface, requestId, threadId, isRevise ? 'revise' : 'build');
   push(`/projects/${requestId}/proposal/${threadId}`);
 }
 
@@ -241,7 +247,7 @@ function openProposalSurface(args: {
 }): void {
   const { push, requestId, threadId, status, surface } = args;
   if (threadId === null || !PROPOSAL_VIEW_STATUSES.has(status ?? '')) return;
-  trackProposalCtaClick(surface, requestId, threadId);
+  trackProposalCtaClick(surface, requestId, threadId, 'view');
   push(`/projects/${requestId}/proposal/${threadId}`);
 }
 
@@ -878,6 +884,7 @@ export function ConversationStage({
         request_id: requestId,
         relationship_id: activeThreadId,
         surface,
+        cta: 'request',
       });
       proposalContextRef.current = { threadId: activeThreadId, surface };
       setProposalDialogOpen(true);

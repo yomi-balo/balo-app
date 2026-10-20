@@ -371,6 +371,16 @@ describe('NudgeBar', () => {
       });
     });
 
+    it('the revise cell never fires outside the proposal-phase band (e.g. a closed request)', () => {
+      expect(
+        nudgeFor('expert', 'closed', 'proposal_submitted', {
+          requestedBy: 'Dana @ Northwind',
+          notePreview: 'Add more deliverables',
+          nextVersion: 2,
+        })
+      ).toBeNull();
+    });
+
     it("an invited-but-quiet expert gets the EOI cell, never another expert's aggregate", () => {
       // The REQUEST advanced via other experts; this viewer hasn't submitted an
       // EOI yet — their true next step is the EOI, not the aggregate cell.

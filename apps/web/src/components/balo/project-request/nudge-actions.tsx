@@ -131,8 +131,12 @@ export function NudgeActions({
     return undefined;
   };
 
-  const primaryHandler = handlerFor(primary?.action ?? wired.primary);
-  const secondaryHandler = handlerFor(secondary?.action ?? wired.secondary);
+  // A descriptor's own `action` wins over the status-keyed lookup — resolved ONCE so
+  // the click handlers and the dialog mount below can never disagree.
+  const primaryAction = primary?.action ?? wired.primary;
+  const secondaryAction = secondary?.action ?? wired.secondary;
+  const primaryHandler = handlerFor(primaryAction);
+  const secondaryHandler = handlerFor(secondaryAction);
   // Token → component on THIS side of the boundary (the descriptor carries only a name).
   const PrimaryIcon = primary ? NUDGE_ICONS[primary.icon] : null;
   const SecondaryIcon = secondary ? NUDGE_ICONS[secondary.icon] : null;
@@ -170,7 +174,7 @@ export function NudgeActions({
         </button>
       )}
 
-      {(wired.primary === 'invite' || wired.secondary === 'invite') && (
+      {(primaryAction === 'invite' || secondaryAction === 'invite') && (
         <ExpertInviteDialog
           open={inviteOpen}
           onOpenChange={setInviteOpen}

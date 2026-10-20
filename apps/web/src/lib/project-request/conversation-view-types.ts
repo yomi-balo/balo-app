@@ -221,6 +221,20 @@ export interface ThreadChangeRequestView {
 }
 
 /**
+ * The expert's revise-cell copy — ONE definition shared by the page nudge (`nudge-bar.tsx`)
+ * and the thread nudge (`thread-nudge-content.ts`), which differ only in icon/CTA plumbing.
+ */
+export function reviseProposalCopy(changeRequest: ThreadChangeRequestView): {
+  headline: string;
+  sub: string;
+} {
+  return {
+    headline: `${changeRequest.requestedBy} requested changes to your proposal`,
+    sub: `“${changeRequest.notePreview}” — revise and resubmit as version ${changeRequest.nextVersion}.`,
+  };
+}
+
+/**
  * ⚠⚠ RE-EXPORTED, NOT DECLARED HERE (BAL-421). Both shapes are ANCHOR-AGNOSTIC — they key
  * on `conversationId` alone — and they are the ABLY WIRE PAYLOADS, so there must be exactly
  * ONE declaration of each on the platform. They now live in

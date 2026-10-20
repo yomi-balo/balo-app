@@ -89,7 +89,7 @@ describe('threadNudgeFor — client lens', () => {
     );
     expect(nudge?.variant).toBe('waiting');
     expect(nudge?.headline).toBe('Priya is revising the proposal');
-    expect(nudge?.sub).toBe("Changes requested — you'll be notified when version 2 is in.");
+    expect(nudge?.sub).toBe("Changes requested — version 2 will appear here once it's in.");
     expect(nudge?.primary).toBeUndefined();
     expect(nudge?.secondary?.action).toBe('reply');
   });
