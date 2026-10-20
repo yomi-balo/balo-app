@@ -60,3 +60,14 @@ export { EXPERT_LANGUAGES_MAX, EXPERT_INDUSTRIES_MAX } from './expert-profile-li
 // BAL-557 — when a declined applicant may start a new application. The cooldown length is the
 // `expert_reapply_cooldown_days` platform setting; these derive the date from it.
 export { reapplyAvailableAt, isReapplyCooldownActive } from './reapply-cooldown';
+
+// BAL-603 — the pure marketplace live-status derivation behind the sidebar pill.
+export {
+  EXPERT_LIVE_STATES,
+  LIVE_STATUS_ACTIONS,
+  type LiveStatusAction,
+  type ExpertLiveState,
+  type ExpertLiveStatus,
+  isExpertLiveStatusVisible,
+  deriveExpertLiveStatus,
+} from './live-status';

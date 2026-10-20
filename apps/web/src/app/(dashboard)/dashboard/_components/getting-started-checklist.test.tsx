@@ -31,6 +31,10 @@ function status(overrides: Partial<ChecklistStatus> = {}): ChecklistStatus {
     rateCents: 313,
     calendarNeedsReconnect: false,
     availableForWork: true,
+    searchable: false,
+    username: 'dana',
+    liveCelebrationSeen: false,
+    liveStatus: null,
     ...overrides,
   };
 }

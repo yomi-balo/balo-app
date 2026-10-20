@@ -177,8 +177,8 @@ export const vendorBusyProvider: VendorBusyProvider = {
   async listBusyBlocks(expertProfileId, from, to): Promise<BusyBlock[]> {
     const targets = await calendarRepository.listBusyReadTargets(expertProfileId);
     if (targets.length === 0) return []; // no connection at all — see below
-    const considered = targets.filter((t) => !t.provisioned || t.calendarIds.length > 0);
-    const unreadable = considered.filter(isUnreadable);
+    const considered = targets.filter(isConsideredForBusyRead); // @balo/shared/calendar busy-read.ts
+    const unreadable = unreadableBusyReadTargets(targets); // considered AND unreadable
     if (unreadable.length > 0) throw new VendorBusyUnavailableError(expertProfileId, '/* … */');
     const results = await Promise.allSettled(
       considered.map((t) => fetchBusyForTarget(t, from, to))

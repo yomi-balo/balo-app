@@ -43,7 +43,7 @@ export interface CalendarConnection {
   isBookingTarget: boolean;
   /**
    * BAL-576 round 2 — would BREAKING this connection actually block bookings? Computed
-   * server-side by `isConsideredForBusyRead` (`services/availability/vendor-busy.ts`), the same
+   * server-side by `isConsideredForBusyRead` (`@balo/shared/calendar`), the same
    * rule `listBusyBlocks` applies. `false` for a provisioned connection with no conflict-checked
    * calendar — the expert's explicit opt-out, and its health is irrelevant to bookability.
    */

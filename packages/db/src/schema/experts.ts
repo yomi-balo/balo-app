@@ -64,6 +64,12 @@ export const expertProfiles = pgTable(
     stripeConnectId: text('stripe_connect_id'),
 
     searchable: boolean('searchable').default(false).notNull(),
+    // BAL-603 — when the expert first saw the one-time go-live card. NULL until then; stamped
+    // once by `expertsRepository.markLiveCelebrationSeen` (conditional on IS NULL). A UI
+    // acknowledgement, not a domain change, so it writes no audit row. It gates the go-live card
+    // (shown only while NULL) and keeps the sidebar live-status badge visible after a post-live
+    // regression of the setup checklist.
+    liveCelebrationSeenAt: timestamp('live_celebration_seen_at', { withTimezone: true }),
     skillsLocked: boolean('skills_locked').default(false).notNull(),
 
     // Experience metrics

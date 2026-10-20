@@ -15,10 +15,16 @@ vi.mock('react', async (importOriginal) => {
 const mockLoadInputs = vi.fn();
 const mockReconcileFromRead = vi.fn();
 const mockFindApprovalById = vi.fn();
+const mockListBusyReadTargets = vi.fn();
+const mockMarkLiveCelebrationSeen = vi.fn();
 
 vi.mock('@balo/db', () => ({
+  calendarRepository: {
+    listBusyReadTargets: (...args: unknown[]) => mockListBusyReadTargets(...args),
+  },
   expertsRepository: {
     findApprovalById: (...args: unknown[]) => mockFindApprovalById(...args),
+    markLiveCelebrationSeen: (...args: unknown[]) => mockMarkLiveCelebrationSeen(...args),
   },
   expertSearchabilityRepository: {
     loadInputs: (...args: unknown[]) => mockLoadInputs(...args),
@@ -82,6 +88,20 @@ function completeSnapshot(overrides: Record<string, unknown> = {}) {
     currentSearchable: false,
     rateCents: 313,
     availableForWork: true,
+    username: 'dana',
+    liveCelebrationSeenAt: null,
+    ...overrides,
+  };
+}
+
+function target(overrides: Record<string, unknown> = {}) {
+  return {
+    connectionId: 'c1',
+    provider: 'google',
+    endUserAccountId: 'acct-1',
+    credentialStatus: 'ACTIVE',
+    calendarIds: ['cal-1'],
+    provisioned: true,
     ...overrides,
   };
 }
@@ -95,6 +115,7 @@ describe('getChecklistStatus', () => {
     mockFindApprovalById.mockResolvedValue(APPROVED_PROFILE);
     mockReconcileFromRead.mockResolvedValue({ changed: false });
     mockLoadInputs.mockResolvedValue(completeSnapshot());
+    mockListBusyReadTargets.mockResolvedValue([target()]);
   });
 
   describe('authentication & mode guards', () => {
@@ -352,6 +373,91 @@ describe('getChecklistStatus', () => {
         'Expert searchability reconcile failed',
         expect.objectContaining({ expertProfileId: 'profile-1', userId: 'user-1' })
       );
+    });
+  });
+
+  describe('BAL-603 — live status', () => {
+    it('is live from the post-reconcile searchable value, not the stale snapshot', async () => {
+      mockLoadInputs.mockResolvedValue(completeSnapshot({ currentSearchable: false }));
+      const status = await getChecklistStatus();
+      expect(status.searchable).toBe(true);
+      expect(status.liveStatus).toEqual({ state: 'live', fixItem: null });
+      expect(status.username).toBe('dana');
+    });
+
+    it('is not_listed when the reconcile throws and the snapshot says unlisted', async () => {
+      mockReconcileFromRead.mockRejectedValue(new Error('db unavailable'));
+      const status = await getChecklistStatus();
+      expect(status.searchable).toBe(false);
+      expect(status.liveStatus?.state).toBe('not_listed');
+      expect(mockListBusyReadTargets).not.toHaveBeenCalled();
+    });
+
+    it('is paused when a considered calendar is unreadable', async () => {
+      mockListBusyReadTargets.mockResolvedValue([
+        target(),
+        target({ connectionId: 'c2', credentialStatus: 'EXPIRED' }),
+      ]);
+      const status = await getChecklistStatus();
+      expect(status.liveStatus).toEqual({ state: 'paused', fixItem: null });
+      expect(mockListBusyReadTargets).toHaveBeenCalledWith('profile-1');
+    });
+
+    it('stays live when the unreadable calendar is not conflict-checked', async () => {
+      mockListBusyReadTargets.mockResolvedValue([
+        target(),
+        target({ connectionId: 'c2', credentialStatus: 'EXPIRED', calendarIds: [] }),
+      ]);
+      const status = await getChecklistStatus();
+      expect(status.liveStatus?.state).toBe('live');
+    });
+
+    it('is away without reading calendars', async () => {
+      mockLoadInputs.mockResolvedValue(completeSnapshot({ availableForWork: false }));
+      const status = await getChecklistStatus();
+      expect(status.liveStatus?.state).toBe('away');
+      expect(mockListBusyReadTargets).not.toHaveBeenCalled();
+    });
+
+    it('is hidden before first go-live, with no busy read', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          inputs: { ...completeSnapshot().inputs, hasPayoutDetails: false },
+        })
+      );
+      const status = await getChecklistStatus();
+      expect(status.liveStatus).toBeNull();
+      expect(status.liveCelebrationSeen).toBe(false);
+      expect(mockListBusyReadTargets).not.toHaveBeenCalled();
+    });
+
+    it('shows not_listed with the failing item after a post-live regression', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          currentSearchable: true,
+          liveCelebrationSeenAt: new Date('2026-02-01T00:00:00Z'),
+          inputs: { ...completeSnapshot().inputs, hasPayoutDetails: false },
+        })
+      );
+      const status = await getChecklistStatus();
+      expect(status.liveCelebrationSeen).toBe(true);
+      expect(status.liveStatus).toEqual({ state: 'not_listed', fixItem: 'payouts' });
+      expect(mockListBusyReadTargets).not.toHaveBeenCalled();
+    });
+
+    it('hides the badge and warns when the busy read fails', async () => {
+      mockListBusyReadTargets.mockRejectedValue(new Error('db down'));
+      const status = await getChecklistStatus();
+      expect(status.liveStatus).toBeNull();
+      expect(log.warn).toHaveBeenCalledWith('Live status busy-read failed', {
+        expertProfileId: 'profile-1',
+        error: 'db down',
+      });
+    });
+
+    it('never stamps the celebration from the read path', async () => {
+      await getChecklistStatus();
+      expect(mockMarkLiveCelebrationSeen).not.toHaveBeenCalled();
     });
   });
 });

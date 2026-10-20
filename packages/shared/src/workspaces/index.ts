@@ -477,3 +477,31 @@ export function deriveWorkspaces(
 
   return { workspaces, activeWorkspace, session };
 }
+
+/**
+ * The workspace the UI treats as active: the one named by `activeWorkspaceKey`, else the first.
+ * `null` only for an empty list. The ONE find-or-first resolution the switcher, sidebar and More
+ * sheet share, so a stale or unmatched key cannot make them disagree.
+ */
+export function findActiveWorkspace(
+  workspaces: readonly Workspace[],
+  activeWorkspaceKey: string | null
+): Workspace | null {
+  const [first] = workspaces; // destructure + guard, never `workspaces[0]!`
+  if (first === undefined) return null;
+  return workspaces.find((w) => w.key === activeWorkspaceKey) ?? first;
+}
+
+/**
+ * Passes a status through only where it belongs: with no workspaces at all (the pill does not
+ * depend on the switcher) or when the active workspace is the expert one. Otherwise `null`.
+ */
+export function liveStatusForActiveWorkspace<T>(
+  workspaces: readonly Workspace[],
+  activeWorkspaceKey: string | null,
+  liveStatus: T | null
+): T | null {
+  const active = findActiveWorkspace(workspaces, activeWorkspaceKey);
+  if (active === null || active.type === 'expert') return liveStatus;
+  return null;
+}
