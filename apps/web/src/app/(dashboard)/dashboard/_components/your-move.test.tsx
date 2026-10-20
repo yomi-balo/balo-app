@@ -14,6 +14,7 @@ import { YourMove } from './your-move';
 import { track, DASHBOARD_EVENTS, CALENDAR_EVENTS } from '@/lib/analytics';
 import { DASHBOARD_YOUR_MOVE_CARD_KINDS } from '@balo/analytics/events';
 import { YOUR_MOVE_EMPTY, YOUR_MOVE_ERROR } from '../_lib/your-move-copy';
+import { buildCalendarCards } from '../_lib/build-your-move-cards';
 import type { YourMoveCardView, YourMoveData } from '../_lib/your-move-view-types';
 
 function card(overrides: Partial<YourMoveCardView> = {}): YourMoveCardView {
@@ -36,7 +37,7 @@ function card(overrides: Partial<YourMoveCardView> = {}): YourMoveCardView {
 const REALISTIC_CONTEXTS: Record<YourMoveCardView['kind'], YourMoveCardView['context']> = {
   calendar_reconnect: {
     type: 'sentence',
-    body: 'Clients can’t find you in search until it’s reconnected.',
+    body: 'While it’s disconnected, you won’t appear in expert search.',
   },
   invitation: {
     type: 'brief',
@@ -262,6 +263,15 @@ describe('YourMove — analytics', () => {
     expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_CTA_CLICKED, {
       source: 'dashboard_banner',
     });
+  });
+
+  it('the calendar card never promises reconnection will fix everything ("until …")', () => {
+    const cards = buildCalendarCards({ calendarNeedsReconnect: true, now: new Date() });
+    render(<YourMove data={ready(cards)} />);
+    expect(
+      screen.getByText('While it’s disconnected, you won’t appear in expert search.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/until/i)).toBeNull();
   });
 });
 

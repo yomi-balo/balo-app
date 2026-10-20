@@ -23,8 +23,8 @@ one row of cards, most pressing first. Scroll sideways to see them all.
 - Change requests on work you're delivering.
 - Open action items assigned to you on your active cases and projects.
 - Unread messages from your clients.
-- A calendar connection that needs reconnecting, which keeps you out of expert search until
-  it's fixed.
+- A calendar connection that needs reconnecting. While it's disconnected, you won't appear in
+  expert search.
 
 When more than one kind is waiting, filter chips above the row narrow it down.
 

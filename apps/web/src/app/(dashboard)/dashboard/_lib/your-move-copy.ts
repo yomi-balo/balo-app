@@ -54,6 +54,7 @@ export function yourMoveCompaniesSentence(names: readonly string[]): string {
 
 export const YOUR_MOVE_CALENDAR_TITLE = 'Reconnect your calendar';
 export const YOUR_MOVE_CALENDAR_COUNTERPARTY = 'Out of search';
-export const YOUR_MOVE_CALENDAR_BODY = 'Clients can’t find you in search until it’s reconnected.';
+export const YOUR_MOVE_CALENDAR_BODY =
+  'While it’s disconnected, you won’t appear in expert search.';
 
 export const YOUR_MOVE_ONGOING_ENGAGEMENT = 'Ongoing engagement';
