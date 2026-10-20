@@ -23,7 +23,8 @@ const ERROR_MAP: Record<string, string> = {
   email_already_exists: 'Invalid email or password. Please try again.',
   user_creation_failed: 'Could not create your account. Please try again.',
   password_too_short: 'Password must be at least 8 characters.',
-  password_too_weak: 'Please choose a stronger password.',
+  password_too_weak:
+    'That password is too easy to guess. Try a longer passphrase, or mix in more symbols and numbers.',
 
   // Email verification errors
   email_verification_required: 'Please verify your email address.',
@@ -79,6 +80,11 @@ export function mapWorkOSError(error: unknown): string {
     }
     if (msg.includes('not found') || (msg.includes('invalid') && msg.includes('credentials'))) {
       return ERROR_MAP.invalid_credentials ?? DEFAULT_ERROR;
+    }
+    // WorkOS rejects guessable passwords that pass our form rules with
+    // "Password does not meet strength requirements."
+    if (msg.includes('strength requirements')) {
+      return ERROR_MAP.password_too_weak ?? DEFAULT_ERROR;
     }
     if (msg.includes('rate limit') || msg.includes('too many')) {
       return ERROR_MAP.rate_limit_exceeded ?? DEFAULT_ERROR;

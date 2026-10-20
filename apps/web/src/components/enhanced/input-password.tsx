@@ -33,6 +33,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
       { text: 'Contains lowercase letter', valid: /[a-z]/.test(pwd) },
       { text: 'Contains uppercase letter', valid: /[A-Z]/.test(pwd) },
       { text: 'Contains a number', valid: /\d/.test(pwd) },
+      { text: 'Contains a special character', valid: /[^A-Za-z0-9]/.test(pwd) },
     ];
 
     const strength = validations.filter((v) => v.valid).length;
@@ -41,7 +42,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
       if (score === 0) return 'bg-muted';
       if (score <= 1) return 'bg-destructive';
       if (score <= 2) return 'bg-warning';
-      if (score <= 3) return 'bg-info';
+      if (score <= 4) return 'bg-info';
       return 'bg-success';
     };
 
@@ -49,7 +50,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
       if (score === 0) return '';
       if (score <= 1) return 'Weak';
       if (score <= 2) return 'Moderate';
-      if (score <= 3) return 'Strong';
+      if (score <= 4) return 'Strong';
       return 'Very Strong';
     };
 
@@ -57,7 +58,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
       if (score === 0) return 'text-muted-foreground';
       if (score <= 1) return 'text-destructive';
       if (score <= 2) return 'text-warning';
-      if (score <= 3) return 'text-info';
+      if (score <= 4) return 'text-info';
       return 'text-success';
     };
 
@@ -124,7 +125,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
                   'h-full transition-all duration-500 ease-out',
                   getStrengthColor(strength)
                 )}
-                style={{ width: `${(strength / 4) * 100}%` }}
+                style={{ width: `${(strength / validations.length) * 100}%` }}
               />
             </div>
             <div className="flex items-center justify-between text-xs font-medium">

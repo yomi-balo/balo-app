@@ -25,7 +25,8 @@ const passwordField = z
   .min(8, 'Password must be at least 8 characters')
   .regex(/[a-z]/, 'Must contain a lowercase letter')
   .regex(/[A-Z]/, 'Must contain an uppercase letter')
-  .regex(/\d/, 'Must contain a number');
+  .regex(/\d/, 'Must contain a number')
+  .regex(/[^A-Za-z0-9]/, 'Must contain a special character');
 
 /** Unified sign-up schema -- no firstName/lastName (collected in onboarding) */
 export const unifiedSignUpSchema = z.object({

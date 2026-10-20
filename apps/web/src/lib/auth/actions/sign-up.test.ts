@@ -73,7 +73,7 @@ import type { UnifiedSignUpFormData } from '@/components/balo/auth/schemas';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-const TEST_PASSWORD = 'Passw0rd'; // NOSONAR — test fixture, not a real credential
+const TEST_PASSWORD = 'Passw0rd!'; // NOSONAR — test fixture, not a real credential
 
 function validInput(): UnifiedSignUpFormData {
   return { email: 'jane@example.com', password: TEST_PASSWORD };

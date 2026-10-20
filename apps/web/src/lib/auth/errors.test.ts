@@ -23,7 +23,10 @@ describe('mapWorkOSError', () => {
       ['email_already_exists', 'Invalid email or password. Please try again.'],
       ['user_creation_failed', 'Could not create your account. Please try again.'],
       ['password_too_short', 'Password must be at least 8 characters.'],
-      ['password_too_weak', 'Please choose a stronger password.'],
+      [
+        'password_too_weak',
+        'That password is too easy to guess. Try a longer passphrase, or mix in more symbols and numbers.',
+      ],
       ['password_reset_expired', 'This password reset link has expired. Please request a new one.'],
       ['oauth_failed', 'Could not connect to the authentication provider. Please try again.'],
       ['rate_limit_exceeded', 'Too many attempts. Please wait a moment and try again.'],
@@ -59,6 +62,10 @@ describe('mapWorkOSError', () => {
       ['invalid credentials provided', 'Invalid email or password. Please try again.'],
       ['rate limit hit', 'Too many attempts. Please wait a moment and try again.'],
       ['too many requests', 'Too many attempts. Please wait a moment and try again.'],
+      [
+        'Password does not meet strength requirements.',
+        'That password is too easy to guess. Try a longer passphrase, or mix in more symbols and numbers.',
+      ],
     ])('matches message containing "%s"', (message, expected) => {
       expect(mapWorkOSError(new Error(message))).toBe(expected);
     });

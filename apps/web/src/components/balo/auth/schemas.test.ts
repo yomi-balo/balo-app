@@ -56,7 +56,7 @@ describe('signInSchema', () => {
 describe('unifiedSignUpSchema', () => {
   const validInput = {
     email: 'john@example.com',
-    password: 'Passw0rd', // NOSONAR — test fixture, not a real credential
+    password: 'Passw0rd!', // NOSONAR — test fixture, not a real credential
   };
 
   describe('valid input', () => {
@@ -65,7 +65,7 @@ describe('unifiedSignUpSchema', () => {
     });
 
     it('accepts password at exactly 8 chars meeting all requirements', () => {
-      const pwd = 'Passwo1d'; // NOSONAR — test fixture, not a real credential
+      const pwd = 'Passw1d!'; // NOSONAR — test fixture, not a real credential
       expect(unifiedSignUpSchema.safeParse({ ...validInput, password: pwd }).success).toBe(true);
     });
   });
@@ -94,6 +94,7 @@ describe('unifiedSignUpSchema', () => {
       ['PASSWORD1', 'Must contain a lowercase letter'], // NOSONAR — no lowercase
       ['password1', 'Must contain an uppercase letter'], // NOSONAR — no uppercase
       ['Passwords', 'Must contain a number'], // NOSONAR — no digit
+      ['Passw0rds', 'Must contain a special character'], // NOSONAR — no special character
     ])('rejects "%s" with expected error', (pwd, expectedMsg) => {
       const result = unifiedSignUpSchema.safeParse({ ...validInput, password: pwd }); // NOSONAR
       expect(result.success).toBe(false);

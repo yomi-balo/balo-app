@@ -16,7 +16,7 @@ import type { ResetPasswordFormData } from '@/components/balo/auth/schemas';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-const TEST_PASSWORD = 'SecurePass1'; // NOSONAR — test fixture, not a real credential
+const TEST_PASSWORD = 'SecurePass1!'; // NOSONAR — test fixture, not a real credential
 
 function validInput(): ResetPasswordFormData {
   return {
@@ -59,6 +59,11 @@ describe('resetPasswordAction', () => {
         name: 'password without number',
         input: { token: 'tok', password: 'NoNumbersHere', confirmPassword: 'NoNumbersHere' },
         errorMatch: 'number',
+      },
+      {
+        name: 'password without special character',
+        input: { token: 'tok', password: 'NoSymbols123', confirmPassword: 'NoSymbols123' },
+        errorMatch: 'special character',
       },
       {
         name: 'passwords do not match',
@@ -110,7 +115,7 @@ describe('resetPasswordAction', () => {
       const result = await resetPasswordAction(validInput());
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('stronger password');
+        expect(result.error).toContain('too easy to guess');
         expect(result.code).toBe('password_too_weak');
       }
     });
