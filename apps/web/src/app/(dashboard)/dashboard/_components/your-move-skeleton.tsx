@@ -1,7 +1,8 @@
 /**
  * The Your move rail's Suspense fallback, covering the rail and the project track below it. No
  * hooks and no client boundary: a presentational skeleton that mirrors both panels so nothing
- * jumps when the content streams in.
+ * jumps when the content streams in. The fallback can't know whether the track will render, so
+ * for a viewer with no live projects, or after a failed read, the track placeholder collapses.
  */
 export function YourMoveSkeleton(): React.JSX.Element {
   return (

@@ -8,12 +8,9 @@ import type {
   StageKey,
 } from '@/lib/projects-inbox/portfolio-row';
 import { buildClientYourMoveCards } from './build-client-move-cards';
-import {
-  buildProjectTrack,
-  PROJECT_TRACK_COPY,
-  type ProjectTrackView,
-} from './build-project-track';
+import { buildProjectTrack } from './build-project-track';
 import { buildYourMoveCards } from './build-your-move-cards';
+import { PROJECT_TRACK_COPY, type ProjectTrackView } from './your-move-view-types';
 
 const NOW = new Date('2026-10-20T10:00:00.000Z');
 
@@ -107,7 +104,10 @@ describe('buildProjectTrack stages', () => {
   });
 
   it('every emitted key and turn belongs to the analytics vocabularies', () => {
-    const view = buildProjectTrack([row('a', { needsYou: true })], 'expert');
+    const view = buildProjectTrack(
+      [row('a', { needsYou: true, moveKind: 'invitation' })],
+      'expert'
+    );
     for (const s of view?.stages ?? []) expect(DASHBOARD_TRACK_STAGES).toContain(s.key);
     for (const t of tokensOf(view)) expect(DASHBOARD_TRACK_TURNS).toContain(t.turn);
   });
@@ -120,7 +120,7 @@ describe('buildProjectTrack turns', () => {
   it('needsYou is your_move, an in_delivery engagement is in_progress, the rest waiting', () => {
     const view = buildProjectTrack(
       [
-        row('mine', { needsYou: true, stage: 'prop_req' }),
+        row('mine', { needsYou: true, moveKind: 'proposal_requested', stage: 'prop_req' }),
         engagement('live', 'in_delivery'),
         engagement('review', 'pending_acceptance'),
         row('quiet', { stage: 'eoi' }),
@@ -143,9 +143,30 @@ describe('buildProjectTrack turns', () => {
     expect(tokensOf(view)).toEqual([{ stage: 'delivery', id: 'c', turn: 'waiting' }]);
   });
 
+  it("is your_move only with this lens's move kind, the same test the rail uses for a card", () => {
+    const rows = [
+      row('none', { needsYou: true, stage: 'eoi' }),
+      row('expert', { needsYou: true, stage: 'eoi', moveKind: 'eoi_reply_owed' }),
+      row('client', { needsYou: true, stage: 'eoi', clientMoveKind: 'eoi_reply' }),
+    ];
+    expect(tokensOf(buildProjectTrack(rows, 'expert'))).toEqual([
+      { stage: 'eoi', id: 'none', turn: 'waiting' },
+      { stage: 'eoi', id: 'expert', turn: 'your_move' },
+      { stage: 'eoi', id: 'client', turn: 'waiting' },
+    ]);
+    expect(tokensOf(buildProjectTrack(rows, 'company'))).toEqual([
+      { stage: 'interest', id: 'none', turn: 'waiting' },
+      { stage: 'interest', id: 'expert', turn: 'waiting' },
+      { stage: 'interest', id: 'client', turn: 'your_move' },
+    ]);
+  });
+
   it('flags hasYourMove only on stages holding a your_move token', () => {
     const view = buildProjectTrack(
-      [row('mine', { needsYou: true, stage: 'eoi' }), row('quiet', { stage: 'accepted' })],
+      [
+        row('mine', { needsYou: true, moveKind: 'eoi_reply_owed', stage: 'eoi' }),
+        row('quiet', { stage: 'accepted' }),
+      ],
       'expert'
     );
     expect(view?.stages.map((s) => s.hasYourMove)).toEqual([false, true, false, false, false]);
@@ -208,6 +229,7 @@ describe('buildProjectTrack tokens', () => {
     const rows = [
       row('a', {
         needsYou: true,
+        moveKind: 'invitation',
         signal: { from: 'Dana Reyes', messagePreview: 'Budget is $90k' },
         companyName: 'Northwind',
       }),

@@ -8,7 +8,7 @@ import {
   type ProjectTrackStage,
   type ProjectTrackToken,
   type ProjectTrackView,
-} from '../_lib/build-project-track';
+} from '../_lib/your-move-view-types';
 import { ProjectTrack } from './project-track';
 
 function token(id: string, over: Partial<ProjectTrackToken> = {}): ProjectTrackToken {

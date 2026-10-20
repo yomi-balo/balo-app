@@ -13,8 +13,8 @@ import {
   type ProjectTrackStage,
   type ProjectTrackToken,
   type ProjectTrackView,
-} from '../_lib/build-project-track';
-import type { YourMoveWorkspaceType } from '../_lib/your-move-view-types';
+  type YourMoveWorkspaceType,
+} from '../_lib/your-move-view-types';
 
 interface TurnStyle {
   readonly token: string;

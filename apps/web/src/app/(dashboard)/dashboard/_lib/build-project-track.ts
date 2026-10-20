@@ -1,49 +1,10 @@
 import type { DashboardTrackStage, DashboardTrackTurn } from '@balo/analytics/events';
 import type { PortfolioRowView, StageKey } from '@/lib/projects-inbox/portfolio-row';
-import type { YourMoveWorkspaceType } from './your-move-view-types';
-
-export interface ProjectTrackToken {
-  readonly id: string;
-  readonly label: string;
-  readonly title: string;
-  readonly href: string;
-  readonly turn: DashboardTrackTurn;
-}
-
-export interface ProjectTrackStage {
-  readonly key: DashboardTrackStage;
-  readonly label: string;
-  readonly tokens: readonly ProjectTrackToken[];
-  readonly hasYourMove: boolean;
-}
-
-export interface ProjectTrackView {
-  readonly workspaceType: YourMoveWorkspaceType;
-  readonly stages: readonly ProjectTrackStage[];
-}
-
-interface TrackCopy {
-  readonly title: string;
-  readonly sub: string;
-  readonly waiting: string;
-}
-
-export const PROJECT_TRACK_COPY: Record<YourMoveWorkspaceType, TrackCopy> = {
-  expert: {
-    title: 'Where your projects stand',
-    sub: 'Every live project, and whose move it is.',
-    waiting: 'Waiting on client',
-  },
-  company: {
-    title: 'Where your projects stand',
-    sub: 'Every open request and project, and whose move it is.',
-    waiting: 'Waiting on others',
-  },
-};
-
-export const PROJECT_TRACK_YOUR_MOVE = 'Your move';
-export const PROJECT_TRACK_IN_PROGRESS = 'In progress';
-export const PROJECT_TRACK_NONE = 'None';
+import type {
+  ProjectTrackToken,
+  ProjectTrackView,
+  YourMoveWorkspaceType,
+} from './your-move-view-types';
 
 interface StageDef {
   readonly key: DashboardTrackStage;
@@ -96,8 +57,13 @@ const STAGE_OF: Record<YourMoveWorkspaceType, Record<StageKey, DashboardTrackSta
   },
 };
 
-function turnOf(row: PortfolioRowView): DashboardTrackTurn {
-  if (row.needsYou) return 'your_move';
+/**
+ * Same test the rail uses to emit a project card (`needsYou` plus this lens's move kind), so every
+ * Your move token has a card by construction.
+ */
+function turnOf(row: PortfolioRowView, workspaceType: YourMoveWorkspaceType): DashboardTrackTurn {
+  const moveKind = workspaceType === 'expert' ? row.moveKind : row.clientMoveKind;
+  if (row.needsYou && moveKind !== null && moveKind !== undefined) return 'your_move';
   if (row.kind === 'engagement' && row.deliveryState === 'in_delivery') return 'in_progress';
   return 'waiting';
 }
@@ -127,7 +93,7 @@ export function buildProjectTrack(
       label: workspaceType === 'expert' ? (row.companyName ?? row.title) : row.title,
       title: row.title,
       href: row.href ?? '/projects',
-      turn: turnOf(row),
+      turn: turnOf(row, workspaceType),
     };
     const bucket = tokensByStage.get(stage);
     if (bucket) bucket.push(token);
