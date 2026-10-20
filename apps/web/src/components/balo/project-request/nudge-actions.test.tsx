@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@/test/utils';
+import { render, screen, fireEvent, waitFor } from '@/test/utils';
 
 // The island imports these server actions — mock so it renders without network.
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-exploratory-meeting', () => ({
@@ -18,8 +18,9 @@ vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 
+const mockPassOnRequest = vi.hoisted(() => vi.fn());
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/pass-on-request', () => ({
-  passOnRequestAction: vi.fn(),
+  passOnRequestAction: mockPassOnRequest,
 }));
 
 const mockPush = vi.hoisted(() => vi.fn());
@@ -188,6 +189,24 @@ describe('NudgeActions — direct-request choice CTAs (BAL-604)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pass on this project' }));
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog).toHaveTextContent('Pass on this project?');
+  });
+
+  it('confirming the pass from the nudge records the nudge surface', async () => {
+    mockPassOnRequest.mockResolvedValue({ success: true });
+    render(
+      <NudgeActions
+        lens="expert"
+        status="eoi_submitted"
+        requestId={REQUEST_ID}
+        secondary={PASS}
+        passOn={PASS_ON}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Pass on this project' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pass' }));
+    await waitFor(() =>
+      expect(mockPassOnRequest).toHaveBeenCalledWith({ requestId: REQUEST_ID, surface: 'nudge' })
+    );
   });
 
   it('"Pass on this project" is disabled without a passable track', () => {

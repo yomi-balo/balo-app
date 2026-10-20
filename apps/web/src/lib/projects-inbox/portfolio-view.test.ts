@@ -836,6 +836,7 @@ describe('direct request choice on the expert row (BAL-604)', () => {
       needsYou: true,
       nudgeLabel: 'Take it on, or pass?',
       moveKind: 'direct_request',
+      stage: 'eoi',
     });
   });
 

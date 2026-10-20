@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import * as Sentry from '@sentry/nextjs';
 import { Loader2 } from 'lucide-react';
+import type { ProjectTrackPassSurface } from '@balo/analytics/events';
 import type { PassableRelationshipStatus } from '@balo/shared/project-requests';
 import { cn } from '@/lib/utils';
 import { buttonVariants } from '@/components/ui/button';
@@ -31,6 +32,8 @@ interface PassOnRequestControlProps {
 interface PassOnRequestDialogProps extends PassOnRequestControlProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Which entry point opened the confirm — recorded on `project_track_passed`. */
+  surface: ProjectTrackPassSurface;
 }
 
 const UNEXPECTED_FAILURE = 'Something went wrong. Please try again.';
@@ -51,6 +54,7 @@ export function PassOnRequestDialog({
   relationshipStatus,
   open,
   onOpenChange,
+  surface,
 }: Readonly<PassOnRequestDialogProps>): React.JSX.Element {
   const router = useRouter();
   const [passing, setPassing] = useState(false);
@@ -69,7 +73,7 @@ export function PassOnRequestDialog({
       if (passing) return;
       setPassing(true);
       (async () => {
-        const result = await passOnRequestAction({ requestId });
+        const result = await passOnRequestAction({ requestId, surface });
         if (result.success) {
           toast.success(`You've passed on ${requestTitle}`);
           router.push('/projects');
@@ -86,7 +90,7 @@ export function PassOnRequestDialog({
         onOpenChange(false);
       });
     },
-    [passing, requestId, requestTitle, router, onOpenChange]
+    [passing, requestId, surface, requestTitle, router, onOpenChange]
   );
 
   return (
@@ -158,6 +162,7 @@ export function PassOnRequestControl({
         relationshipStatus={relationshipStatus}
         open={open}
         onOpenChange={setOpen}
+        surface="control"
       />
     </div>
   );

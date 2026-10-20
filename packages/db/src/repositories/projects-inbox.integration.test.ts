@@ -24,7 +24,9 @@ import {
   requestExpertRelationshipFactory,
 } from '../test/factories';
 import { projectsInboxRepository } from './projects-inbox';
+import { projectRequestsRepository } from './project-requests';
 import { referenceDataRepository } from './reference-data';
+import { requestExpertRelationshipsRepository } from './request-expert-relationships';
 
 /**
  * Integration coverage for the A7 tri-lens aggregation reads (BAL-274). One real
@@ -382,6 +384,69 @@ describe('projectsInboxRepository.listInvitationsByExpert', () => {
   });
 });
 
+describe('projectsInboxRepository.listInvitationsByExpert — declined tracks on a closed request', () => {
+  /** A direct request at `eoi_submitted` with its chosen expert's live track. */
+  async function seedDirectTrack() {
+    const request = await projectRequestFactory({ status: 'eoi_submitted' });
+    const { relationship, expertProfileId } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId ?? undefined,
+      values: { status: 'eoi_submitted' },
+    });
+    return { requestId: request.id, relationshipId: relationship.id, expertProfileId };
+  }
+
+  async function closeRequest(requestId: string): Promise<void> {
+    await projectRequestsRepository.close({
+      requestId,
+      actorUserId: (await userFactory()).id,
+      actorKind: 'client',
+      reason: 'withdrawn',
+      note: null,
+    });
+  }
+
+  it('keeps a request the expert passed on out of the list after it closes', async () => {
+    const { requestId, relationshipId, expertProfileId } = await seedDirectTrack();
+    await requestExpertRelationshipsRepository.passTrack({
+      relationshipId,
+      actorUserId: (await userFactory()).id,
+    });
+    await closeRequest(requestId);
+
+    expect((await projectRequestsRepository.findById(requestId))?.status).toBe('closed');
+    const rows = await projectsInboxRepository.listInvitationsByExpert(expertProfileId);
+    expect(rows.map((r) => r.projectRequestId)).not.toContain(requestId);
+  });
+
+  it('still lists a track the close cascade declined, for the Closed group', async () => {
+    const { requestId, relationshipId, expertProfileId } = await seedDirectTrack();
+    await closeRequest(requestId);
+
+    const rows = await projectsInboxRepository.listInvitationsByExpert(expertProfileId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      relationshipId,
+      requestStatus: 'closed',
+      relationshipStatus: 'declined',
+    });
+  });
+
+  it('keeps a client-declined track out of the list after the request closes', async () => {
+    const { requestId, relationshipId, expertProfileId } = await seedDirectTrack();
+    await requestExpertRelationshipsRepository.declineTrack({
+      relationshipId,
+      actorUserId: (await userFactory()).id,
+      reason: 'client_declined',
+    });
+    await closeRequest(requestId);
+
+    expect((await projectRequestsRepository.findById(requestId))?.status).toBe('closed');
+    const rows = await projectsInboxRepository.listInvitationsByExpert(expertProfileId);
+    expect(rows.map((r) => r.projectRequestId)).not.toContain(requestId);
+  });
+});
+
 describe('projectsInboxRepository.listInvitationsByExpert — kickoff gates + current proposal', () => {
   it('passes the kickoff gate timestamps through and reports null status without a proposal', async () => {
     const expert = await expertDraftFactory();
@@ -638,13 +703,13 @@ describe('projectsInboxRepository.listExpertMoveDetails', () => {
     expect(result.size).toBe(0);
   });
 
-  it('omits a declined relationship on a CLOSED request, which the inbox list still returns as history', async () => {
+  it('omits a cascade-declined relationship on a CLOSED request, which the inbox list still returns as history', async () => {
     const expert = await expertDraftFactory();
     const request = await projectRequestFactory({ status: 'closed' });
     await requestExpertRelationshipFactory({
       projectRequestId: request.id,
       expertProfileId: expert.id,
-      values: { status: 'declined', declinedAt: new Date() },
+      values: { status: 'declined', declinedAt: new Date(), declineReason: 'request_closed' },
     });
 
     const details = await projectsInboxRepository.listExpertMoveDetails({

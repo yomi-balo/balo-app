@@ -885,6 +885,7 @@ const projectTrackPassedPayload = z.strictObject({
   clientCompanyName: z.string().min(1).max(200),
   expertName: z.string().min(1).max(200),
   fromStatus: z.enum(PASSABLE_RELATIONSHIP_STATUSES),
+  onDirectLeg: z.boolean(),
   clientSawTrack: z.boolean(),
   recipientId: z.uuid(),
   baloOwnerUserId: z.uuid().nullable(),

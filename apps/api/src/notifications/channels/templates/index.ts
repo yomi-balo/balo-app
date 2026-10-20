@@ -911,6 +911,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         clientCompanyName: (data.clientCompanyName as string) ?? 'The client',
         expertName,
         fromStatus: data.fromStatus,
+        onDirectLeg: data.onDirectLeg,
       }),
       subject: `${sanitizeSubjectTitle(expertName)} passed on: ${sanitizeSubjectTitle(title)}`,
     };

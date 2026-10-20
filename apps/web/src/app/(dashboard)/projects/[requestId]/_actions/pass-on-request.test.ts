@@ -75,7 +75,7 @@ import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
 
 const EXPERT_USER = { id: 'user-expert', expertProfileId: EXPERT_PROFILE_ID };
-const VALID_INPUT = { requestId: REQUEST_ID };
+const VALID_INPUT = { requestId: REQUEST_ID, surface: 'control' } as const;
 const DENIED = {
   success: false,
   error: 'You do not have permission to do this.',
@@ -98,6 +98,8 @@ function requestRow(overrides: Record<string, unknown> = {}): Record<string, unk
     title: 'CPQ implementation',
     createdByUserId: 'creator-1',
     baloOwnerUserId: OWNER_ID,
+    sendTo: 'match',
+    expertProfileId: null,
     company: { id: 'company-1', name: 'Acme Corp' },
     relationships: [ownRelationship()],
     ...overrides,
@@ -142,9 +144,24 @@ describe('passOnRequestAction', () => {
   it('rejects invalid input, including an extra relationshipId key', async () => {
     const extra = { ...VALID_INPUT, relationshipId: RELATIONSHIP_ID };
     expect(await passOnRequestAction(extra)).toEqual({ success: false, error: 'Invalid request.' });
-    expect(
-      await passOnRequestAction({ requestId: 'nope' } as unknown as typeof VALID_INPUT)
-    ).toEqual({ success: false, error: 'Invalid request.' });
+    expect(await passOnRequestAction({ requestId: 'nope', surface: 'control' })).toEqual({
+      success: false,
+      error: 'Invalid request.',
+    });
+    expect(mockPassTrack).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing or unknown surface', async () => {
+    const missing = { requestId: REQUEST_ID } as unknown as typeof VALID_INPUT;
+    const unknown = { requestId: REQUEST_ID, surface: 'banner' } as unknown as typeof VALID_INPUT;
+    expect(await passOnRequestAction(missing)).toEqual({
+      success: false,
+      error: 'Invalid request.',
+    });
+    expect(await passOnRequestAction(unknown)).toEqual({
+      success: false,
+      error: 'Invalid request.',
+    });
     expect(mockPassTrack).not.toHaveBeenCalled();
   });
 
@@ -231,15 +248,19 @@ describe('passOnRequestAction', () => {
     expect(revalidatePath).toHaveBeenCalledWith('/projects');
   });
 
-  it('tracks project_track_passed with the stage passed from', async () => {
-    await passOnRequestAction(VALID_INPUT);
-    expect(mockTrackServerAndFlush).toHaveBeenCalledWith('project_track_passed', {
-      request_id: REQUEST_ID,
-      relationship_id: RELATIONSHIP_ID,
-      from_status: 'eoi_submitted',
-      distinct_id: EXPERT_USER.id,
-    });
-  });
+  it.each(['control', 'nudge'] as const)(
+    'tracks project_track_passed with the stage and the %s surface passed from',
+    async (surface) => {
+      await passOnRequestAction({ requestId: REQUEST_ID, surface });
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('project_track_passed', {
+        request_id: REQUEST_ID,
+        relationship_id: RELATIONSHIP_ID,
+        from_status: 'eoi_submitted',
+        surface,
+        distinct_id: EXPERT_USER.id,
+      });
+    }
+  );
 
   it('registers the publish with runAfterResponse and does not run it inline', async () => {
     await passOnRequestAction(VALID_INPUT);
@@ -258,10 +279,35 @@ describe('passOnRequestAction', () => {
       clientCompanyName: 'Acme Corp',
       expertName: 'Priya Nair',
       fromStatus: 'eoi_submitted',
+      onDirectLeg: false,
       clientSawTrack: true,
       recipientId: 'creator-1',
       baloOwnerUserId: OWNER_ID,
     });
+  });
+
+  it("publishes onDirectLeg:true when the caller is the direct request's chosen expert", async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      requestRow({ sendTo: 'direct', expertProfileId: EXPERT_PROFILE_ID })
+    );
+    await passOnRequestAction(VALID_INPUT);
+    await getScheduled()?.();
+    expect(mockPublishNow).toHaveBeenCalledWith(
+      'project.track_passed',
+      expect.objectContaining({ onDirectLeg: true })
+    );
+  });
+
+  it('publishes onDirectLeg:false on a direct request chosen for another expert', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      requestRow({ sendTo: 'direct', expertProfileId: OTHER_EXPERT_PROFILE_ID })
+    );
+    await passOnRequestAction(VALID_INPUT);
+    await getScheduled()?.();
+    expect(mockPublishNow).toHaveBeenCalledWith(
+      'project.track_passed',
+      expect.objectContaining({ onDirectLeg: false })
+    );
   });
 
   it('a pass from invited (track never opened) publishes clientSawTrack:false', async () => {

@@ -216,6 +216,7 @@ export function NudgeActions({
           relationshipStatus={passOn.relationshipStatus}
           open={passOpen}
           onOpenChange={setPassOpen}
+          surface="nudge"
         />
       )}
     </div>

@@ -15,14 +15,16 @@ export function ProjectTrackPassedAdminEmail({
   clientCompanyName = 'The client',
   expertName = 'An expert',
   fromStatus,
+  onDirectLeg,
 }: Readonly<
   ProjectEmailRecipientProps & {
     readonly clientCompanyName?: string;
     readonly expertName?: string;
     readonly fromStatus?: unknown;
+    readonly onDirectLeg?: unknown;
   }
 >) {
-  const stageClause = passedStageClause(fromStatus);
+  const stageClause = passedStageClause(fromStatus, onDirectLeg);
   return (
     <ProjectStatusEmail
       previewText={`${expertName} passed on ${projectTitle}`}

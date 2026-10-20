@@ -7,6 +7,7 @@ import type {
   PortfolioRowView,
   StageKey,
 } from '@/lib/projects-inbox/portfolio-row';
+import { stageChipForRelationship } from '@/lib/projects-inbox/portfolio-row';
 import { buildClientYourMoveCards } from './build-client-move-cards';
 import { buildProjectTrack } from './build-project-track';
 import { buildYourMoveCards } from './build-your-move-cards';
@@ -161,6 +162,23 @@ describe('buildProjectTrack turns', () => {
     ]);
   });
 
+  it('puts a direct-leg expert who owes the choice on Interest sent, as their move', () => {
+    const { key, label } = stageChipForRelationship('eoi_submitted');
+    const view = buildProjectTrack(
+      [
+        row('direct', {
+          needsYou: true,
+          moveKind: 'direct_request',
+          stage: key,
+          stageLabel: label,
+        }),
+      ],
+      'expert'
+    );
+    expect(tokensOf(view)).toEqual([{ stage: 'eoi', id: 'direct', turn: 'your_move' }]);
+    expect(view?.stages.find((s) => s.key === 'eoi')?.label).toBe('Interest sent');
+  });
+
   it('flags hasYourMove only on stages holding a your_move token', () => {
     const view = buildProjectTrack(
       [
@@ -275,6 +293,7 @@ describe('PROJECT_TRACK_COPY', () => {
 describe('rail/track agreement', () => {
   const EXPERT_STAGE_OF = {
     invitation: 'invited',
+    direct_request: 'eoi',
     eoi_propose_times: 'eoi',
     eoi_reply_owed: 'eoi',
     proposal_requested: 'prop_req',

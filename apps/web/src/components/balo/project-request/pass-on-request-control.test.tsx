@@ -91,12 +91,12 @@ describe('PassOnRequestControl', () => {
     expect(mockPassOnRequest).not.toHaveBeenCalled();
   });
 
-  it('"Pass" calls the action with the request id only, toasts and redirects to /projects', async () => {
+  it('"Pass" calls the action with the request id and the control surface, toasts and redirects to /projects', async () => {
     renderControl();
     const user = await openDialog();
     await user.click(await screen.findByRole('button', { name: 'Pass' }));
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/projects'));
-    expect(mockPassOnRequest).toHaveBeenCalledWith({ requestId: REQUEST_ID });
+    expect(mockPassOnRequest).toHaveBeenCalledWith({ requestId: REQUEST_ID, surface: 'control' });
     expect(toast.success).toHaveBeenCalledWith("You've passed on CPQ implementation");
     expect(mockRefresh).not.toHaveBeenCalled();
   });

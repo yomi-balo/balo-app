@@ -1538,6 +1538,22 @@ describe('getInAppTemplate', () => {
       expect(result.body).toContain(`(Acme Corp) ${phrase} —`);
     });
 
+    it('names the direct request instead of the stage when the expert was on the direct leg', () => {
+      const result = getInAppTemplate('project-track-passed-admin', { ...data, onDirectLeg: true });
+      expect(result.body).toBe(
+        'Priya Nair passed on “CPQ implementation” (Acme Corp) on a direct request — Balo can invite someone else.'
+      );
+      expect(result.body).not.toContain('expressing interest');
+    });
+
+    it('keeps the stage phrase when onDirectLeg is false', () => {
+      const result = getInAppTemplate('project-track-passed-admin', {
+        ...data,
+        onDirectLeg: false,
+      });
+      expect(result.body).toContain('(Acme Corp) after expressing interest —');
+    });
+
     it('renders the client copy and deep-links to the request', () => {
       const result = getInAppTemplate('project-track-passed-client', data);
       expect(result.title).toBe('Expert no longer available');

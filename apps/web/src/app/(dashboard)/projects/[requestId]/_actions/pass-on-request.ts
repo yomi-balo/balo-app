@@ -18,13 +18,16 @@ import { resolveApprovedExpert } from '@/lib/auth/approved-expert';
 import { log } from '@/lib/logging';
 import { publishNotificationEventNow } from '@/lib/notifications/publish';
 import { runAfterResponse } from '@/lib/after-response';
+import { PROJECT_TRACK_PASS_SURFACES } from '@balo/analytics/events';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { lockContentionFailure } from './_shared/deadlock';
 import { expertDisplayName } from './_shared/expert-display-name';
 
 // The relationship id is never client-supplied: it is derived server-side from the caller's own
-// expert profile (mirrors `withdraw-eoi.ts`).
-const inputSchema = z.object({ requestId: z.uuid() }).strict();
+// expert profile (mirrors `withdraw-eoi.ts`). `surface` is analytics only and authorizes nothing.
+const inputSchema = z
+  .object({ requestId: z.uuid(), surface: z.enum(PROJECT_TRACK_PASS_SURFACES) })
+  .strict();
 
 const NOT_SIGNED_IN = 'You are not signed in.';
 const PERMISSION_DENIED = 'You do not have permission to do this.';
@@ -41,7 +44,7 @@ export type PassOnRequestActionResult =
  * re-derived, all in one transaction under the per-request advisory lock.
  *
  * Authorized by identity: the loaded relationship's `expertProfileId` must be the caller's own
- * expert profile. The input is `{ requestId }` only. "Missing request", "not an expert" and "not
+ * expert profile. The input is `{ requestId, surface }`. "Missing request", "not an expert" and "not
  * your track" leave as one opaque denial so the wire cannot be used as an existence oracle.
  *
  * Deliberately does NOT cancel the track's meetings or revoke file grants (decline precedent:
@@ -61,7 +64,7 @@ export async function passOnRequestAction(
   if (!parsed.success) {
     return { success: false, error: 'Invalid request.' };
   }
-  const { requestId } = parsed.data;
+  const { requestId, surface } = parsed.data;
 
   try {
     const request = await projectRequestsRepository.findByIdWithRelations(requestId);
@@ -105,8 +108,13 @@ export async function passOnRequestAction(
       request_id: requestId,
       relationship_id: relationshipId,
       from_status: result.previousStatus,
+      surface,
       distinct_id: user.id,
     });
+
+    // The same direct-leg fact the request page reads (`deriveOnDirectLeg`).
+    const onDirectLeg =
+      request.sendTo === 'direct' && relationship.expertProfileId === request.expertProfileId;
 
     // Deferred, not fire-and-forget: an un-awaited publish is at-most-once on Vercel and the pass
     // is already committed, so nothing would ever retry it. The publish helper logs its own
@@ -120,6 +128,7 @@ export async function passOnRequestAction(
         clientCompanyName: request.company.name,
         expertName: expertDisplayName(relationship),
         fromStatus: result.previousStatus,
+        onDirectLeg,
         // `openedAt` survives the decline, so the post-pass row still answers whether the client
         // could see this track.
         clientSawTrack: relationshipIsOpened(result.relationship),

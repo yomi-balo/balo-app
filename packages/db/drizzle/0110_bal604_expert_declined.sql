@@ -1,1 +1,1 @@
-ALTER TYPE "public"."relationship_decline_reason" ADD VALUE 'expert_declined';
+ALTER TYPE "public"."relationship_decline_reason" ADD VALUE IF NOT EXISTS 'expert_declined';

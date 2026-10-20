@@ -769,12 +769,20 @@ describe('publishBodySchema', () => {
       clientCompanyName: 'Acme Corp',
       expertName: 'Ada Lovelace',
       fromStatus: 'eoi_submitted',
+      onDirectLeg: false,
       clientSawTrack: true,
       recipientId: '550e8400-e29b-41d4-a716-446655440093',
       baloOwnerUserId: '550e8400-e29b-41d4-a716-446655440094',
     };
     const parse = (payload: Record<string, unknown>) =>
       publishBodySchema.safeParse({ event: 'project.track_passed', payload });
+
+    it('requires onDirectLeg as a boolean', () => {
+      expect(parse({ ...validPayload, onDirectLeg: true }).success).toBe(true);
+      const { onDirectLeg: _direct, ...rest } = validPayload;
+      expect(parse(rest).success).toBe(false);
+      expect(parse({ ...validPayload, onDirectLeg: 'true' }).success).toBe(false);
+    });
 
     it('accepts a valid payload, with or without a Balo owner', () => {
       expect(parse(validPayload).success).toBe(true);

@@ -1807,6 +1807,12 @@ export interface ProjectTrackPassedPayload {
   expertName: string;
   /** the stage the expert passed from — admin copy and analytics. */
   fromStatus: PassableRelationshipStatus;
+  /**
+   * the request is `send_to='direct'` and this track is the chosen expert's. The admin copy then
+   * names the direct request in place of the stage phrase: that expert's `eoi_submitted` was
+   * written automatically, never an expression of interest.
+   */
+  onDirectLeg: boolean;
   /** the track was opened to the client (`relationshipIsOpened`) — gates the client arm. */
   clientSawTrack: boolean;
   /** the request creator's user id — the client arm's recipient. */

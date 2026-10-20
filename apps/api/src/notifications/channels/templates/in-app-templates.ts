@@ -1615,7 +1615,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const companyName = (data.clientCompanyName as string) ?? 'the client';
     const expertName = (data.expertName as string) ?? 'An expert';
     const projectRequestId = data.projectRequestId as string | undefined;
-    const stageClause = passedStageClause(data.fromStatus);
+    const stageClause = passedStageClause(data.fromStatus, data.onDirectLeg);
     return {
       title: 'Expert passed',
       body: `${expertName} passed on “${title}” (${companyName})${stageClause} — Balo can invite someone else.`,

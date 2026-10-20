@@ -69,16 +69,24 @@ import { conversationsRepository } from './conversations';
  * included). `listExpertMoveDetails` is stricter: it never returns a declined relationship.
  *
  * BAL-540 — a declined track is normally invisible to the expert (they are no longer a
- * participant), BUT the tracks of a CLOSED request must still come back or the expert's
- * "Closed" portfolio group would be permanently empty: the close cascade declines every track
- * it closes, so the two predicates would cancel out. The ended state is then rendered from the
- * REQUEST's status, which is the honest signal — "this request was closed", not "you were
- * declined".
+ * participant), BUT the tracks the close cascade ended (`decline_reason = 'request_closed'`)
+ * must still come back on a CLOSED request or the expert's "Closed" portfolio group would be
+ * permanently empty: the cascade declines every live track it closes, so the two predicates
+ * would cancel out. The ended state is then rendered from the REQUEST's status, which is the
+ * honest signal — "this request was closed", not "you were declined".
+ *
+ * The exception is ONLY for cascade-declined tracks. A track that ended before the close — the
+ * expert passed (`expert_declined`) or the client/Balo declined it (`client_declined` /
+ * `balo_declined`) — stays hidden after the request closes: the expert had already left that
+ * request, so it never reappears in their Closed group.
  */
 function expertCanSeeRelationship(): SQL | undefined {
   return or(
     ne(requestExpertRelationships.status, 'declined'),
-    eq(projectRequests.status, 'closed')
+    and(
+      eq(projectRequests.status, 'closed'),
+      eq(requestExpertRelationships.declineReason, 'request_closed')
+    )
   );
 }
 

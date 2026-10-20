@@ -886,6 +886,25 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(html).not.toContain('undefined');
   });
 
+  it.each([
+    [true, 'Priya Nair passed on CPQ implementation for Acme Corp on a direct request.'],
+    [false, 'Priya Nair passed on CPQ implementation for Acme Corp after expressing interest.'],
+  ])(
+    'project-track-passed-admin with onDirectLeg %s names the right clause (BAL-604)',
+    async (onDirectLeg, sentence) => {
+      const { component } = getEmailTemplate('project-track-passed-admin', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+        clientCompanyName: 'Acme Corp',
+        expertName: 'Priya Nair',
+        fromStatus: 'eoi_submitted',
+        onDirectLeg,
+        recipientName: 'Sam',
+      });
+      expect(await render(component)).toContain(sentence);
+    }
+  );
+
   it('resolves project-track-passed-client with the no-longer-available copy (BAL-604)', async () => {
     const { component, subject } = getEmailTemplate('project-track-passed-client', {
       title: 'CPQ implementation',
