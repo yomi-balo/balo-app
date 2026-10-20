@@ -184,6 +184,8 @@ export interface ConversationThreadView {
   latestMessagePreview: string | null;
   latestMessageAtIso: string | null;
   latestMessageFromViewer: boolean;
+  /** The viewer has written at least one live message in this thread (any position). */
+  viewerHasSentMessage: boolean;
   latestInboundActivityAtIso: string | null;
   lastReadAtIso: string | null;
   fileCount: number;

@@ -122,8 +122,17 @@ export const projectRequestCloseReasonEnum = pgEnum('project_request_close_reaso
 
 /**
  * BAL-540 / ADR-1030 — why ONE track ended. `request_closed` is the close cascade;
- * `client_declined` / `balo_declined` are a deliberate per-track decline. Also a brand-new
- * standalone `CREATE TYPE`, so D6's ADD-VALUE hazard does not apply to it.
+ * `client_declined` / `balo_declined` are a deliberate per-track decline by the client side;
+ * `expert_declined` (BAL-604) is the delivering expert passing on the project
+ * (`requestExpertRelationshipsRepository.passTrack`). The type was born a standalone
+ * `CREATE TYPE` (migration 0086) with the first three labels.
+ *
+ * ⚠ `expert_declined` IS `ALTER TYPE … ADD VALUE`-BORN (migration 0110), so it IS subject to
+ * the one-transaction hazard: drizzle-orm's migrator runs every pending migration in ONE
+ * transaction, and a label added that way is unusable until that transaction commits. It must
+ * therefore never appear in a CHECK, an index predicate or a column DEFAULT — in 0110 or in any
+ * later migration (the `credit_duration_source` note below states the same rule). Literals at
+ * QUERY time are always safe.
  *
  * ⚠ IT IS NOT A STATUS. `request_expert_relationship_status` keeps its single terminal
  * `declined`; this column says WHY, beside `declined_by_user_id` (WHO) and the existing
@@ -134,6 +143,7 @@ export const relationshipDeclineReasonEnum = pgEnum('relationship_decline_reason
   'request_closed',
   'client_declined',
   'balo_declined',
+  'expert_declined',
 ]);
 
 /**

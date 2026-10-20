@@ -8,6 +8,7 @@ import {
 import { MILESTONE_CHANGE_KINDS } from '@balo/shared/notifications';
 import {
   DECLINABLE_RELATIONSHIP_STATUSES,
+  PASSABLE_RELATIONSHIP_STATUSES,
   PROJECT_REQUEST_CLOSE_REASONS,
   PROPOSAL_CHANGE_SECTIONS,
 } from '@balo/shared/project-requests';
@@ -874,6 +875,22 @@ const projectTrackDeclinedPayload = z.object({
   hadOpenProposal: z.boolean(),
 });
 
+// BAL-604 — the delivering expert passed on a project. `correlationId` is the
+// `request_expert_relationship.declined` audit row id. Mirrors packages/shared/src/notifications/index.ts.
+const projectTrackPassedPayload = z.strictObject({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  relationshipId: z.uuid(),
+  title: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+  expertName: z.string().min(1).max(200),
+  fromStatus: z.enum(PASSABLE_RELATIONSHIP_STATUSES),
+  onDirectLeg: z.boolean(),
+  clientSawTrack: z.boolean(),
+  recipientId: z.uuid(),
+  baloOwnerUserId: z.uuid().nullable(),
+});
+
 // BAL-541 — a Balo staffer was assigned as a request's Balo owner. `correlationId` is the
 // `project_request.owner_assigned` audit row id. Mirrors packages/shared/src/notifications/index.ts.
 const projectRequestOwnerAssignedPayload = z.object({
@@ -1117,6 +1134,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.track_declined'),
     payload: projectTrackDeclinedPayload,
+  }),
+  z.object({
+    event: z.literal('project.track_passed'),
+    payload: projectTrackPassedPayload,
   }),
   z.object({
     event: z.literal('project.request_owner_assigned'),

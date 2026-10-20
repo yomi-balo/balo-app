@@ -15,16 +15,27 @@ interface ExpertEndedTrackViewProps {
   view: EndedTrackView;
 }
 
+const DATE_VERB: Record<EndedTrackView['mode'], string> = {
+  declined: 'Declined',
+  request_closed: 'Closed',
+  passed: 'Passed',
+}; // pending-MJ
+
 function titleFor(view: EndedTrackView): string {
-  // pending-MJ (all three titles)
+  // pending-MJ (all titles)
   if (view.mode === 'request_closed') return `${view.companyName} closed this request`;
+  if (view.mode === 'passed') return 'You passed on this project';
   return view.hadProposal
     ? `${view.companyName} isn’t proceeding with your proposal`
     : `${view.companyName} isn’t proceeding with you`;
 }
 
 function bodyFor(view: EndedTrackView): string {
-  // pending-MJ (both bodies and both proposal clauses)
+  // pending-MJ (all bodies and both proposal clauses). `passed` ignores `hadProposal`: the
+  // withdrawn draft is the expert's own, so there is no review outcome to describe.
+  if (view.mode === 'passed') {
+    return 'Balo is looking for other experts. The files you had access to stay exactly as they were. There’s nothing further to do here.';
+  }
   if (view.mode === 'request_closed') {
     const proposalClause = view.hadProposal
       ? ' Your proposal was withdrawn along with the request,'
@@ -40,7 +51,7 @@ function bodyFor(view: EndedTrackView): string {
 export function ExpertEndedTrackView({
   view,
 }: Readonly<ExpertEndedTrackViewProps>): React.JSX.Element {
-  const dateVerb = view.mode === 'declined' ? 'Declined' : 'Closed'; // pending-MJ
+  const dateVerb = DATE_VERB[view.mode];
   return (
     <RequestCard className="p-6 sm:p-7">
       <span className="bg-muted flex h-10 w-10 items-center justify-center rounded-xl">

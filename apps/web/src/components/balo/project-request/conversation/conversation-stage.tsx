@@ -9,6 +9,7 @@ import {
   track,
   CONVERSATION_EVENTS,
   PROJECT_EVENTS,
+  type ConversationCallSurface,
   type ConversationProposalCta,
 } from '@/lib/analytics';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
@@ -54,6 +55,7 @@ import { MobileActionRail } from './mobile-action-rail';
 import { MobileOverflowSheet, hasOverflowContent } from './mobile-overflow-sheet';
 import { ProposalRequestDialog } from './proposal-request-dialog';
 import { DeclineTrackDialog } from '../close/decline-track-dialog';
+import { useRegisterExpertProposeTimes } from '../expert-call-bridge';
 
 interface ConversationStageProps {
   requestId: string;
@@ -395,7 +397,7 @@ export function ConversationStage({
   const [sending, setSending] = useState(false);
   const [callPending, setCallPending] = useState(false);
   const [introCallDialogOpen, setIntroCallDialogOpen] = useState(false);
-  const [introCallSurface, setIntroCallSurface] = useState<'header' | 'rail' | 'nudge'>('header');
+  const [introCallSurface, setIntroCallSurface] = useState<ConversationCallSurface>('header');
   const [proposalDialogOpen, setProposalDialogOpen] = useState(false);
   // Per-thread composer drafts (Slack behaviour): a reply typed for expert A
   // survives a tab switch and can never be Enter-sent to expert B.
@@ -691,6 +693,8 @@ export function ConversationStage({
         // start — a mid-send tab switch can't clear another thread's draft).
         setDrafts((prev) => ({ ...prev, [threadId]: '' }));
         const wasFirst = (threadData[threadId]?.messages.length ?? 0) === 0;
+        const firstFromViewer =
+          threads.find((t) => t.relationshipId === threadId)?.viewerHasSentMessage === false;
         const { message } = result;
         setThreadData((prev) => {
           const data = prev[threadId];
@@ -706,6 +710,7 @@ export function ConversationStage({
                   latestMessagePreview: previewOfHtml(message.bodyHtml),
                   latestMessageAtIso: message.createdAtIso,
                   latestMessageFromViewer: true,
+                  viewerHasSentMessage: true,
                 }
               : t
           )
@@ -725,6 +730,10 @@ export function ConversationStage({
           during_meeting: false,
         });
         toast.success('Message sent');
+        // The viewer's first message can change what the server-rendered page nudge asks for
+        // (a direct request's take-it-on-or-pass choice, an expert-only nudge), so re-render the
+        // page once for the expert lens.
+        if (firstFromViewer && lens === 'expert') router.refresh();
         return true;
       } catch {
         toast.error('Could not send your message. Please try again.');
@@ -733,7 +742,7 @@ export function ConversationStage({
         setSending(false);
       }
     },
-    [activeThreadId, requestId, lens, threads.length, threadData, conversationIdOf]
+    [activeThreadId, requestId, lens, threads, threadData, conversationIdOf, router]
   );
 
   // ── Call CTA (BAL-283) ───────────────────────────────────────────────────
@@ -776,7 +785,7 @@ export function ConversationStage({
   );
 
   const handleCall = useCallback(
-    (surface: 'header' | 'rail' | 'nudge'): void => {
+    (surface: ConversationCallSurface): void => {
       if (activeThreadId === null || callPending) return;
       track(CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED, {
         request_id: requestId,
@@ -853,6 +862,9 @@ export function ConversationStage({
   const handleHeaderCall = useCallback((): void => handleCall('header'), [handleCall]);
   const handleRailCall = useCallback((): void => handleCall('rail'), [handleCall]);
   const handleNudgeCall = useCallback((): void => handleCall('nudge'), [handleCall]);
+  const handlePageNudgeCall = useCallback((): void => handleCall('page_nudge'), [handleCall]);
+  // The page nudge's "Propose times" runs this same handler (see `expert-call-bridge.tsx`).
+  useRegisterExpertProposeTimes(lens === 'expert' ? handlePageNudgeCall : null, callPending);
 
   // ── Request proposal (BAL-272 / A5 — client lens only) ─────────────────
   // Surface + thread captured at CTA-click time; the modal blocks tab switches

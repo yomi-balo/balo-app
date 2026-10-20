@@ -502,6 +502,71 @@ describe('resolveContext', () => {
     });
   });
 
+  // ── BAL-604 project.track_passed admin recipients ──
+  describe('project.track_passed admin hydration', () => {
+    const passedPayload = {
+      correlationId: 'audit-1',
+      projectRequestId: 'req-1',
+      relationshipId: 'rel-1',
+      recipientId: 'client-1',
+    };
+
+    it('targets only the Balo owner when they are still a platform admin', async () => {
+      mockFindIdsByPlatformRoles.mockResolvedValue(['admin-1', 'owner-1']);
+
+      const context = await resolveContext('project.track_passed', {
+        ...passedPayload,
+        baloOwnerUserId: 'owner-1',
+      });
+
+      expect(mockFindIdsByPlatformRoles).toHaveBeenCalledWith(['admin', 'super_admin']);
+      expect(context.data.adminUserIds).toEqual(['owner-1']);
+    });
+
+    it('falls back to the full admin set when the owner has been demoted', async () => {
+      mockFindIdsByPlatformRoles.mockResolvedValue(['admin-1', 'admin-2']);
+
+      const context = await resolveContext('project.track_passed', {
+        ...passedPayload,
+        baloOwnerUserId: 'owner-1',
+      });
+
+      expect(context.data.adminUserIds).toEqual(['admin-1', 'admin-2']);
+    });
+
+    it('falls back to every platform admin when there is no owner', async () => {
+      mockFindIdsByPlatformRoles.mockResolvedValue(['admin-1', 'admin-2']);
+
+      const context = await resolveContext('project.track_passed', {
+        ...passedPayload,
+        baloOwnerUserId: null,
+      });
+
+      expect(mockFindIdsByPlatformRoles).toHaveBeenCalledWith(['admin', 'super_admin']);
+      expect(context.data.adminUserIds).toEqual(['admin-1', 'admin-2']);
+    });
+
+    it('does not hydrate a stray user or expert from the payload', async () => {
+      await resolveContext('project.track_passed', {
+        ...passedPayload,
+        baloOwnerUserId: 'owner-1',
+      });
+
+      expect(mockFindById).not.toHaveBeenCalled();
+      expect(mockFindUserIdByProfileId).not.toHaveBeenCalled();
+    });
+
+    it('leaves other events untouched', async () => {
+      const context = await resolveContext('project.track_declined', {
+        ...passedPayload,
+        baloOwnerUserId: 'owner-1',
+      });
+
+      expect(context.data.adminUserIds).toBeUndefined();
+      expect(mockFindIdsByPlatformRoles).not.toHaveBeenCalled();
+    });
+  });
+
   // ── BAL-323 admin fan-out hydration for billing.details_confirmed ──
   describe('billing.details_confirmed hydration', () => {
     it('hydrates adminUserIds for the admin in-app fan-out (no sibling read)', async () => {

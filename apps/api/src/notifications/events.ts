@@ -66,6 +66,7 @@ import type {
   RequestFileSharedWithClientPayload,
   ProjectRequestClosedPayload,
   ProjectTrackDeclinedPayload,
+  ProjectTrackPassedPayload,
   ProjectRequestOwnerAssignedPayload,
   ExpertApplicationDeclinedPayload,
   ExpertApplicationEditedPayload,
@@ -475,6 +476,8 @@ export type NotificationEvent =
   // track declined.
   | 'project.request_closed'
   | 'project.track_declined'
+  // BAL-604 — the delivering expert passed on a project.
+  | 'project.track_passed'
   // BAL-541 — a Balo staffer was assigned as a request's Balo owner. IN-APP ONLY, to the new
   // owner alone; no event on clear.
   | 'project.request_owner_assigned'
@@ -852,6 +855,7 @@ export interface EventPayloadMap {
   'project.billing_reminder': ProjectBillingReminderPayload;
   'project.request_closed': ProjectRequestClosedPayload;
   'project.track_declined': ProjectTrackDeclinedPayload;
+  'project.track_passed': ProjectTrackPassedPayload;
   'project.request_owner_assigned': ProjectRequestOwnerAssignedPayload;
   'proposal.shared': ProposalSharedPayload;
   'billing.details_confirmed': BillingDetailsConfirmedPayload;

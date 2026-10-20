@@ -68,6 +68,7 @@ function build(over: Partial<BuildYourMoveCardsInput> = {}): YourMoveCardView[] 
 
 const ALL_KINDS: ExpertMoveKind[] = [
   'invitation',
+  'direct_request',
   'eoi_propose_times',
   'eoi_reply_owed',
   'proposal_requested',
@@ -120,6 +121,17 @@ describe('project cards (AC1, AC2)', () => {
       tags: ['Marketing Cloud', 'Data Cloud', 'CPQ'],
       timeline: 'Early December',
     });
+  });
+
+  it('direct_request reads as an invitation card — the expert never sent interest themselves', () => {
+    const [card] = build({
+      rows: [row('a', { moveKind: 'direct_request' })],
+      details: new Map([['a', detail('a')]]),
+    });
+    expect(card?.kind).toBe('invitation');
+    expect(card?.fact).toBe('Invited 2 days ago');
+    expect(card?.actionLabel).toBe('Review invitation');
+    expect(card?.context).toMatchObject({ type: 'brief', excerpt: 'Rebuild our journeys' });
   });
 
   it('a missing detail gives a null context, not a missing card', () => {

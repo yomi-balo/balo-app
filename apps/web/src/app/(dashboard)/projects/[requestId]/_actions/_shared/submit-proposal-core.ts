@@ -251,7 +251,7 @@ export async function runSubmitProposal(
   try {
     return await runSubmit(user, parsed.data);
   } catch (error) {
-    // ⚠ fix round R1 — `proposalsRepository.promoteToSubmit` is one of the eleven writers
+    // ⚠ fix round R1 — `proposalsRepository.promoteToSubmit` is one of the twelve writers
     // serialised on the per-request advisory lock (`_shared/request-lock.ts`); a 55P03 here
     // means the submit never wrote anything and a retry queues again. WARN + retryable copy,
     // checked BEFORE the generic fallback below — never `log.error` for an expected-rare,

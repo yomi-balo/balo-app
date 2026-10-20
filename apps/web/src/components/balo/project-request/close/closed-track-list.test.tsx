@@ -41,6 +41,21 @@ describe('ClosedTrackList', () => {
     expect(screen.getByText('Invite withdrawn')).toBeInTheDocument();
   });
 
+  it('shows "Passed" for the expert_passed chip', () => {
+    render(
+      <ClosedTrackList
+        tracks={[
+          track({
+            finalChip: 'expert_passed',
+            endedLabel: 'Passed before the request closed',
+          }),
+        ]}
+      />
+    );
+    expect(screen.getByText('Expert passed')).toBeInTheDocument();
+    expect(screen.getByText('Passed before the request closed')).toBeInTheDocument();
+  });
+
   it('shows the ended label for each track', () => {
     render(<ClosedTrackList tracks={[track()]} />);
     expect(

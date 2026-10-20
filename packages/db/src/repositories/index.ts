@@ -240,6 +240,8 @@ export {
   // `apps/web` decline-track Server Actions.
   type DeclineTrackResult,
   RequestClosedError,
+  // BAL-604 — `passTrack`'s output shape.
+  type PassTrackResult,
 } from './request-expert-relationships';
 export {
   deriveRequestStatus,

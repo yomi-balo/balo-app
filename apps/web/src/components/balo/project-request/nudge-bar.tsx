@@ -6,8 +6,9 @@ import {
   type RelationshipStatus,
   type ThreadChangeRequestView,
 } from '@/lib/project-request/conversation-view-types';
+import { directChoiceHeadline } from '@/lib/project-request/direct-request-choice';
 import { RequestCard } from './request-card';
-import { NudgeActions, type NudgeButtonDescriptor } from './nudge-actions';
+import { NudgeActions, type NudgeButtonDescriptor, type NudgePassContext } from './nudge-actions';
 
 type NudgeVariant = 'action' | 'waiting' | 'done' | 'commit';
 
@@ -33,6 +34,8 @@ interface NudgeBarProps {
    * `null` for client/admin lenses.
    */
   viewerRelationshipId?: string | null;
+  /** Enables a `pass` CTA — see `NudgeActions`. `null` for anyone without a passable track. */
+  passOn?: NudgePassContext | null;
 }
 
 const EYEBROW: Record<NudgeVariant, string> = {
@@ -86,6 +89,7 @@ export function NudgeBar({
   status,
   requestId,
   viewerRelationshipId = null,
+  passOn = null,
 }: Readonly<NudgeBarProps>): React.JSX.Element {
   const { variant, icon: iconName, headline, sub, primary, secondary } = nudge;
   const Icon = NUDGE_ICONS[iconName];
@@ -120,6 +124,7 @@ export function NudgeBar({
               status={status}
               requestId={requestId}
               viewerRelationshipId={viewerRelationshipId}
+              passOn={passOn}
               primary={primary}
               secondary={secondary}
             />
@@ -177,7 +182,7 @@ const EXPERT_NUDGES: NudgeMap = {
     icon: 'calendar',
     headline: 'Offer the client a time to talk',
     sub: "Clients don't share calendars — propose a couple of times to get ahead.",
-    primary: { label: 'Propose meeting times', icon: 'calendar' },
+    primary: { label: 'Propose meeting times', icon: 'calendar', action: 'propose-times' },
     secondary: { label: 'Send a message', icon: 'messageSquare' },
   },
   proposal_requested: {
@@ -202,6 +207,11 @@ const EXPERT_NUDGES: NudgeMap = {
 export interface DirectLeg {
   /** The client party — named, never the person, as their contact details are gated pre-EOI. */
   companyName: string;
+  /**
+   * The chosen expert has not acted on the request yet (`directExpertOwesChoice`), so their
+   * `eoi_submitted` cell is the take-it-on-or-pass choice. Always `false` for the client.
+   */
+  owesChoice: boolean;
 }
 
 /**
@@ -226,6 +236,22 @@ function directExpertInvitedNudge({ companyName }: DirectLeg): NudgeContent {
     sub: `${companyName} chose you for this one. A short, specific EOI starts the conversation.`,
     primary: { label: 'Write your EOI', icon: 'send' },
     secondary: { label: 'Re-read the brief', icon: 'fileText' },
+  };
+}
+
+/**
+ * The chosen expert on a direct request, before they act: born at `eoi_submitted` with an
+ * automatic EOI, they never opted in, so the page leads with the choice. "Propose times" runs the
+ * conversation stage's share-availability handler; "Pass on this project" opens the pass confirm.
+ */
+function directChoiceNudge({ companyName }: DirectLeg): NudgeContent {
+  return {
+    variant: 'action',
+    icon: 'sparkles',
+    headline: directChoiceHeadline(companyName),
+    sub: 'Propose a couple of times to get started — or pass, and Balo will look for other experts.', // pending-MJ
+    primary: { label: 'Propose times', icon: 'calendar', action: 'propose-times' },
+    secondary: { label: 'Pass on this project', icon: 'x', action: 'pass' },
   };
 }
 
@@ -310,6 +336,8 @@ const RELATIONSHIP_KEYED_EXPERT_STATUSES = new Set<ProjectRequestStatus>([
  * decided outcomes (`accepted`) are filtered upstream in {@link expertNudgeFor},
  * so in practice this maps:
  *  - `invited` → the experts_invited cell (their true next step is the EOI);
+ *  - `eoi_submitted` on a direct request the expert has not acted on yet → the
+ *    take-it-on-or-pass choice ({@link directChoiceNudge});
  *  - the three proposal-phase statuses → their own cells;
  *  - anything else → null (defensive; never fall back to the aggregate).
  */
@@ -321,6 +349,9 @@ function expertCellFor(
     return directLeg === null
       ? (EXPERT_NUDGES['experts_invited'] ?? null)
       : directExpertInvitedNudge(directLeg);
+  }
+  if (viewerRelationshipStatus === 'eoi_submitted' && directLeg?.owesChoice === true) {
+    return directChoiceNudge(directLeg);
   }
   if (
     viewerRelationshipStatus === 'eoi_submitted' ||

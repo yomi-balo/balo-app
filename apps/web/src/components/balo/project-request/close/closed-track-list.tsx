@@ -17,6 +17,7 @@ const CHIP_LABEL: Record<ClosedTrackView['finalChip'], string> = {
   invite_withdrawn: 'Invite withdrawn', // pending-MJ
   declined: 'Declined', // pending-MJ
   ended_request_closed: 'Ended — request closed', // pending-MJ
+  expert_passed: 'Expert passed', // pending-MJ
 };
 
 interface ClosedTrackListProps {

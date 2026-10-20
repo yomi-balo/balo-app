@@ -19,14 +19,15 @@ export type ConversationThreadSelectMethod = 'auto' | 'manual';
 /** Where the files drawer/sheet was opened from. */
 export type ConversationFilesSurface = 'header' | 'tabstrip';
 /**
- * Where the call CTA was clicked — THE canonical surface list.
+ * Where the call CTA was clicked — THE canonical surface list. `nudge` is the conversation
+ * thread's own nudge; `page_nudge` is the request page's nudge bar above the stage.
  *
  * ⚠ THE TUPLE IS EXPORTED, NOT ONLY THE TYPE (round-1 W10). Four modules had re-declared the
  * literal union inline and two more had hand-written a matching `z.enum([...])`, so the wire
  * contract lived in six places and could drift silently in five of them. Server Actions derive
  * their Zod enum from THIS tuple; components import the type from here.
  */
-export const CONVERSATION_CALL_SURFACES = ['header', 'rail', 'nudge'] as const;
+export const CONVERSATION_CALL_SURFACES = ['header', 'rail', 'nudge', 'page_nudge'] as const;
 export type ConversationCallSurface = (typeof CONVERSATION_CALL_SURFACES)[number];
 /** Where the client's Request-proposal CTA was clicked (A5: no nudge surface). */
 export type ConversationProposalSurface = 'header' | 'rail';

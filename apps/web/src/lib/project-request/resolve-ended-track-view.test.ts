@@ -105,6 +105,14 @@ describe('resolveEndedTrackView', () => {
     }
   });
 
+  it('mode is "passed" when the expert passed on the project themselves', () => {
+    const view = resolveEndedTrackView(
+      user(),
+      request({ relationships: [relationship({ declineReason: 'expert_declined' })] })
+    );
+    expect(view?.mode).toBe('passed');
+  });
+
   it('carries the title, company name, relationshipId and endedAtIso', () => {
     const view = resolveEndedTrackView(user(), request());
     expect(view).toEqual({

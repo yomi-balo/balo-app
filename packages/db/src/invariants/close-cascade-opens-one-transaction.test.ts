@@ -42,6 +42,7 @@ const FORBIDDEN_INSIDE_CLOSE: readonly string[] = [
   'proposalsRepository.transitionStatus',
   'requestExpertRelationshipsRepository.transitionStatus',
   'requestExpertRelationshipsRepository.declineTrack',
+  'requestExpertRelationshipsRepository.passTrack',
   'representationsRepository.revoke(',
 ];
 

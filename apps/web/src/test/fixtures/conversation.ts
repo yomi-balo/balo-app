@@ -22,6 +22,7 @@ export function thread(overrides: Partial<ConversationThreadView> = {}): Convers
     latestMessagePreview: null,
     latestMessageAtIso: null,
     latestMessageFromViewer: false,
+    viewerHasSentMessage: false,
     latestInboundActivityAtIso: null,
     lastReadAtIso: null,
     fileCount: 0,

@@ -69,16 +69,24 @@ import { conversationsRepository } from './conversations';
  * included). `listExpertMoveDetails` is stricter: it never returns a declined relationship.
  *
  * BAL-540 — a declined track is normally invisible to the expert (they are no longer a
- * participant), BUT the tracks of a CLOSED request must still come back or the expert's
- * "Closed" portfolio group would be permanently empty: the close cascade declines every track
- * it closes, so the two predicates would cancel out. The ended state is then rendered from the
- * REQUEST's status, which is the honest signal — "this request was closed", not "you were
- * declined".
+ * participant), BUT the tracks the close cascade ended (`decline_reason = 'request_closed'`)
+ * must still come back on a CLOSED request or the expert's "Closed" portfolio group would be
+ * permanently empty: the cascade declines every live track it closes, so the two predicates
+ * would cancel out. The ended state is then rendered from the REQUEST's status, which is the
+ * honest signal — "this request was closed", not "you were declined".
+ *
+ * The exception is ONLY for cascade-declined tracks. A track that ended before the close — the
+ * expert passed (`expert_declined`) or the client/Balo declined it (`client_declined` /
+ * `balo_declined`) — stays hidden after the request closes: the expert had already left that
+ * request, so it never reappears in their Closed group.
  */
 function expertCanSeeRelationship(): SQL | undefined {
   return or(
     ne(requestExpertRelationships.status, 'declined'),
-    eq(projectRequests.status, 'closed')
+    and(
+      eq(projectRequests.status, 'closed'),
+      eq(requestExpertRelationships.declineReason, 'request_closed')
+    )
   );
 }
 
@@ -264,8 +272,11 @@ export const projectsInboxRepository = {
         invitedAt: requestExpertRelationships.invitedAt,
         relationshipUpdatedAt: requestExpertRelationships.updatedAt,
         proposalRequestedAt: requestExpertRelationships.proposalRequestedAt,
+        availabilitySharedAt: requestExpertRelationships.availabilitySharedAt,
         projectRequestId: projectRequests.id,
         requestStatus: projectRequests.status,
+        sendTo: projectRequests.sendTo,
+        directExpertProfileId: projectRequests.expertProfileId,
         title: projectRequests.title,
         companyId: companies.id,
         companyName: companies.name,
@@ -335,8 +346,10 @@ export const projectsInboxRepository = {
       invitedAt: row.invitedAt,
       relationshipUpdatedAt: row.relationshipUpdatedAt,
       proposalRequestedAt: row.proposalRequestedAt,
+      availabilitySharedAt: row.availabilitySharedAt,
       projectRequestId: row.projectRequestId,
       requestStatus: row.requestStatus,
+      onDirectLeg: row.sendTo === 'direct' && row.directExpertProfileId === expertProfileId,
       title: row.title,
       companyId: row.companyId,
       companyName: row.companyName,
@@ -633,8 +646,15 @@ export interface PortfolioInvitationRow {
   invitedAt: Date;
   relationshipUpdatedAt: Date;
   proposalRequestedAt: Date | null;
+  /** When this expert last shared availability on the track (null = never). */
+  availabilitySharedAt: Date | null;
   projectRequestId: string;
   requestStatus: ProjectRequestStatus;
+  /**
+   * The expert is the one a DIRECT request was sent to (`send_to = 'direct'` and the request's
+   * `expert_profile_id` is theirs) — false for anyone Balo invited alongside, and for `match`.
+   */
+  onDirectLeg: boolean;
   title: string;
   companyId: string;
   companyName: string;

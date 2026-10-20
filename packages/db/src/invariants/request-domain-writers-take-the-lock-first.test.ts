@@ -7,34 +7,34 @@ import { stripComments } from '@balo/shared/testing';
  * ⚠⚠ INVARIANT (BAL-546 fix round R4) — MEMBERSHIP IN THE PER-REQUEST ADVISORY LOCK'S
  * SERIALISED SET IS MECHANICALLY FENCED, NOT PROSE-ENFORCED.
  *
- * `_shared/request-lock.ts`'s docblock names ELEVEN writers that must take
+ * `_shared/request-lock.ts`'s docblock names TWELVE writers that must take
  * `acquireRequestLock` / `acquireRequestLockViaRelationshipTx` / `acquireRequestLockViaProposalTx`
  * as their transaction's FIRST LOCK — not necessarily its first statement (fix round R6; see
  * `_shared/request-lock.ts`'s own docblock for why those two are not the same claim). For every
- * one of the eleven, taking the lock call as the literal first statement of their `db.transaction(`
+ * one of the twelve, taking the lock call as the literal first statement of their `db.transaction(`
  * body is how that first-lock requirement is met in practice, and it is exactly that source-text
  * position this scan checks below. Before this file, that claim was
  * enforced only by a reviewer re-reading five source files and counting by eye — Group A of the
- * concurrency suite covers 5 of the 11, and the ticket this fix round answers exists BECAUSE a
+ * concurrency suite covers 5 of the 12, and the ticket this fix round answers exists BECAUSE a
  * membership rule stated in prose (D3/D13) missed a writer (`resubmit`) on its first pass. A
- * twelfth writer added to one of these five files without taking the lock first would compile,
+ * thirteenth writer added to one of these five files without taking the lock first would compile,
  * pass every existing test, and silently reopen the exact AB/BA class this ticket closed.
  *
  * ⚠ WHY A SOURCE SCAN. There is no runtime signal that distinguishes "this writer takes the
  * lock first" from "this writer takes the lock second, after a row lock" — both look identical
- * to an integration suite that never races two real connections against every one of the eleven
+ * to an integration suite that never races two real connections against every one of the twelve
  * (the concurrency suite proves interleaving for the writers it covers; it does not enumerate
  * every writer in these five files). A source scan is the only mechanical way to say "these
- * eleven, and NO OTHERS, open with the lock" without trusting a human recount.
+ * twelve, and NO OTHERS, open with the lock" without trusting a human recount.
  *
  * ⚠ THIS IS A GENUINE SET-EQUALITY OVER AN UNFILTERED DISCOVERY, NOT A HAND-PICKED ALLOWLIST.
- * `discoverWriters()` below does not start from the eleven names and check each is present — it
+ * `discoverWriters()` below does not start from the twelve names and check each is present — it
  * walks EVERY `db.transaction(` call site in the five request-domain files, resolves its
  * enclosing method, and records whether that method's first statement is one of the three lock
- * helpers. The eleven-item `EXPECTED_LOCK_TAKERS` list is compared against that full discovery
+ * helpers. The twelve-item `EXPECTED_LOCK_TAKERS` list is compared against that full discovery
  * with `toEqual`, exactly like `an-account-hold-outlives-only-an-unpaid-balance.test.ts`'s
  * `ADVISORY_LOCK_CLASSES` carrier check. A writer that starts taking the lock, or one of the
- * eleven that stops, changes the DISCOVERED set and fails the comparison — the list cannot grow
+ * twelve that stops, changes the DISCOVERED set and fails the comparison — the list cannot grow
  * or shrink silently in either direction.
  *
  * ⚠ COMMENTS ARE STRIPPED FIRST (`@balo/shared/testing`'s `stripComments`) — several of these
@@ -211,11 +211,12 @@ function discoverWriters(): WriterRecord[] {
 }
 
 /**
- * The eleven named writers (orchestrator D13) — cross-checked against `discoverWriters()`'s
- * exhaustive walk, never trusted alone. `resubmit` and `createDraft` are here even though the
- * membership RULE they satisfy is "inserts an open proposal onto a request" rather than "writes
- * two-or-more tables" (fix round R3) — this scan does not care which arm of the rule justified a
- * writer's inclusion, only whether it takes the lock first.
+ * The twelve named writers (orchestrator D13, plus BAL-604's `passTrack`) — cross-checked
+ * against `discoverWriters()`'s exhaustive walk, never trusted alone. `resubmit` and
+ * `createDraft` are here even though the membership RULE they satisfy is "inserts an open
+ * proposal onto a request" rather than "writes two-or-more tables" (fix round R3) — this scan
+ * does not care which arm of the rule justified a writer's inclusion, only whether it takes the
+ * lock first.
  */
 const EXPECTED_LOCK_TAKERS: readonly string[] = [
   'proposals.ts:submit',
@@ -226,6 +227,7 @@ const EXPECTED_LOCK_TAKERS: readonly string[] = [
   'project-requests.ts:close',
   'request-expert-relationships.ts:invite',
   'request-expert-relationships.ts:declineTrack',
+  'request-expert-relationships.ts:passTrack',
   'request-expert-relationships.ts:transitionStatus',
   'expressions-of-interest.ts:submit',
   'project-engagements.ts:materializeFromKickoff',
@@ -233,11 +235,11 @@ const EXPECTED_LOCK_TAKERS: readonly string[] = [
   .slice()
   .sort();
 
-describe('INVARIANT: the eleven request-domain writers, and only these, take the per-request advisory lock first (BAL-546, D13, fix round R4)', () => {
+describe('INVARIANT: the twelve request-domain writers, and only these, take the per-request advisory lock first (BAL-546, D13, fix round R4)', () => {
   const records = discoverWriters();
 
-  it('⚠ POSITIVE CONTROL — the scan finds more db.transaction( sites than the eleven (non-vacuity)', () => {
-    // If this ever shrinks to ⇐ 11, the discovery loop itself is broken (e.g. an early break),
+  it('⚠ POSITIVE CONTROL — the scan finds more db.transaction( sites than the twelve (non-vacuity)', () => {
+    // If this ever shrinks to ⇐ 12, the discovery loop itself is broken (e.g. an early break),
     // and the set-equality assertion below would no longer be exercising real discrimination.
     expect(records.length).toBeGreaterThan(EXPECTED_LOCK_TAKERS.length);
   });
@@ -252,7 +254,7 @@ describe('INVARIANT: the eleven request-domain writers, and only these, take the
     expect(outOfSet?.lockCall).toBeUndefined();
   });
 
-  it('the discovered lock-first writer set equals the eleven named writers exactly', () => {
+  it('the discovered lock-first writer set equals the twelve named writers exactly', () => {
     const discovered = records
       .filter((r) => r.lockCall !== undefined)
       .map((r) => `${r.file}:${r.method}`)

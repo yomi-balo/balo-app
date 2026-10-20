@@ -355,7 +355,7 @@ describe('acceptProposalAction', () => {
     expect(log.error).toHaveBeenCalledWith('Failed to accept proposal', expect.any(Object));
   });
 
-  // fix round R1 — `proposalsRepository.accept` is one of the eleven writers serialised on the
+  // fix round R1 — `proposalsRepository.accept` is one of the twelve writers serialised on the
   // per-request advisory lock (`_shared/request-lock.ts`).
   it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
     mockAccept.mockRejectedValue(

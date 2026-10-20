@@ -336,6 +336,7 @@ export async function loadConversationView(
       latestMessagePreview: latestMessage === null ? null : previewOfHtml(latestMessage.body),
       latestMessageAtIso: latestMessage === null ? null : latestMessage.createdAt.toISOString(),
       latestMessageFromViewer: latestMessage !== null && latestMessage.senderUserId === user.id,
+      viewerHasSentMessage: (summary?.latestOutboundMessageAt ?? null) !== null,
       latestInboundActivityAtIso: latestInboundAt === null ? null : latestInboundAt.toISOString(),
       lastReadAtIso: lastReadAt === null ? null : lastReadAt.toISOString(),
       fileCount: summary?.fileCount ?? 0,

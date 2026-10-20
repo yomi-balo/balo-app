@@ -16,12 +16,16 @@ import { conversationsRepository } from './conversations';
 // from here). Both directions import ONLY hoisted `function` declarations that are called
 // from method bodies — never at module-evaluation time — so neither module reads a
 // half-initialised binding from the other, in any evaluation order. It is the natural shape:
-// a proposal advance moves the relationship spine, and `declineTrack` below ends the track's
+// a proposal advance moves the relationship spine, and `endTrackTx` below ends the track's
 // open proposals. The alternative (hoisting `PROPOSAL_STATUS_TRANSITIONS`, its guard, its
 // error class and `advanceProposalStatus` into `_shared/`) was considered and rejected as a
 // larger, unrelated refactor of a file this ticket otherwise barely touches.
 import { advanceProposalStatus, lockOpenProposalsForRelationshipTx } from './proposals';
-import type { DeclinableRelationshipStatus } from '@balo/shared/project-requests';
+import {
+  narrowToPassableRelationshipStatus,
+  type DeclinableRelationshipStatus,
+  type PassableRelationshipStatus,
+} from '@balo/shared/project-requests';
 
 export type RelationshipStatus = RequestExpertRelationship['status'];
 
@@ -401,6 +405,94 @@ export interface DeclineTrackResult {
   hadOpenProposal: boolean;
 }
 
+/** BAL-604 — what one expert pass produced. */
+export interface PassTrackResult {
+  relationship: RequestExpertRelationship;
+  /** The stage the expert passed from — read under the lock, so provably the value moved from. */
+  previousStatus: PassableRelationshipStatus;
+  /** The `request_expert_relationship.declined` audit row id: the fan-out's correlationId. */
+  auditId: string;
+  /** The open proposals (in practice a `draft`) this pass moved to `withdrawn`. */
+  withdrawnProposalIds: string[];
+}
+
+/**
+ * What {@link endTrackTx} ends a track with. A DISCRIMINATED UNION so the reason and the
+ * proposal outcome cannot be mispaired: an expert's own pass (`expert_declined`) withdraws an open
+ * proposal nobody judged, while the client-side reasons decline it.
+ */
+type EndTrackInput = {
+  relationshipId: string;
+  actorUserId: string;
+  expectedFrom?: RelationshipStatus;
+} & (
+  | {
+      reason: Extract<RelationshipDeclineReason, 'client_declined' | 'balo_declined'>;
+      proposalOutcome: 'declined';
+    }
+  | { reason: Extract<RelationshipDeclineReason, 'expert_declined'>; proposalOutcome: 'withdrawn' }
+);
+
+/**
+ * The ONE transaction body behind both deliberate single-track endings:
+ * {@link requestExpertRelationshipsRepository.declineTrack} (the client side says no) and
+ * {@link requestExpertRelationshipsRepository.passTrack} (the delivering expert passes). The two
+ * differ only in the decline reason, the optional stage guard and what an open proposal becomes.
+ *
+ * ⚠ IT TAKES NO ADVISORY LOCK, DELIBERATELY. Each public caller takes
+ * `acquireRequestLockViaRelationshipTx` as the literal first statement of its own
+ * `db.transaction` body — the source position `invariants/request-domain-writers-take-the-lock-
+ * first.test.ts` scans — so this must only ever run inside a transaction that already holds it.
+ *
+ * ⚠ LOCK ORDER — PROPOSAL → RELATIONSHIP → REQUEST, the order `proposalsRepository.accept`
+ * documents and every writer that touches both must preserve. That is why the proposals are
+ * LOCKED (step 1) before `advanceRelationshipStatus` runs (step 2) even though they are not
+ * WRITTEN until step 3: taking the proposal locks after the relationship lock would invert
+ * the order against `accept`.
+ *
+ * Throws `InvalidRelationshipTransitionError` from a terminal track, or when `expectedFrom` no
+ * longer matches; the caller's transaction then rolls back whole.
+ */
+async function endTrackTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  input: EndTrackInput
+): Promise<{ advanced: AdvanceRelationshipResult; endedProposalIds: string[] }> {
+  // 1. Proposal rows FIRST (lock order — see above).
+  const snapshot = await lockOpenProposalsForRelationshipTx(tx, input.relationshipId);
+
+  // 2. Relationship, then request (the request lock is taken inside).
+  const advanced = await advanceRelationshipStatus(tx, {
+    id: input.relationshipId,
+    to: 'declined',
+    expectedFrom: input.expectedFrom,
+    actorUserId: input.actorUserId,
+    reason: input.reason,
+  });
+
+  // 2b. UNION RE-READ (BAL-546) — the relationship AND request locks are now held, so re-read
+  //     the track's open proposals and act on the union. Only the PROPOSAL set can have grown:
+  //     this is keyed on ONE relationship, which step 2 already holds `FOR UPDATE`, so no second
+  //     relationship can appear.
+  //
+  //     ⚠ NOT LOCK-ORDER-NEUTRAL, same as `close()`'s re-read: a proposal found only by this
+  //     re-read takes its `FOR UPDATE` (here, and again inside `advanceProposalStatus`) AFTER the
+  //     relationship and request locks — inverting `accept`'s documented proposal → relationship
+  //     → request order. Safe ONLY because the caller's advisory lock serialises every writer on
+  //     this request.
+  const reRead = await lockOpenProposalsForRelationshipTx(tx, input.relationshipId);
+  const openProposals = unionById(snapshot, reRead);
+
+  // 3. End each open proposal. Already locked in step 1/2b, so `advanceProposalStatus`'s own
+  //    `FOR UPDATE` re-take is free and its transition guard still runs.
+  const endedProposalIds: string[] = [];
+  for (const proposal of openProposals) {
+    await advanceProposalStatus(tx, { id: proposal.id, to: input.proposalOutcome });
+    endedProposalIds.push(proposal.id);
+  }
+
+  return { advanced, endedProposalIds };
+}
+
 /**
  * BAL-540 — the target request is CLOSED, so no new track may be opened on it. Thrown by
  * {@link requestExpertRelationshipsRepository.invite} from inside its transaction, so nothing
@@ -643,7 +735,7 @@ export const requestExpertRelationshipsRepository = {
    * ⚠ BAL-546 — THE ADVISORY LOCK MAKES THE OLD DEADLOCK CYCLE UNREACHABLE. This transaction
    * takes the per-request advisory lock (`acquireRequestLockViaRelationshipTx`) as the
    * transaction's FIRST LOCK — not literally its first statement (fix round R6) — and every
-   * other multi-table request-domain writer (the eleven named in
+   * other multi-table request-domain writer (the twelve named in
    * `_shared/request-lock.ts`) takes the identical lock first. So the paragraph that used to sit
    * here — "this path CAN still deadlock against `promoteToSubmit`" — is RETRACTED: that AB/BA
    * cycle can no longer form, because the two transactions can never interleave their row-lock
@@ -651,16 +743,14 @@ export const requestExpertRelationshipsRepository = {
    * Actions' 40P01 mapping is kept as a cheap backstop over a strictly smaller residual
    * (orchestrator D6), not extended.
    *
-   * ⚠ LOCK ORDER — PROPOSAL → RELATIONSHIP → REQUEST, the order `proposalsRepository.accept`
-   * documents and every writer that touches both must preserve. That is why the proposals are
-   * LOCKED (step 1) before `advanceRelationshipStatus` runs (step 2) even though they are not
-   * WRITTEN until step 3: taking the proposal locks after the relationship lock would invert
-   * the order against `accept`.
+   * ⚠ LOCK ORDER — PROPOSAL → RELATIONSHIP → REQUEST. The three steps (lock the open proposals,
+   * advance the relationship, end the proposals) live in the module-private `endTrackTx`, shared
+   * with {@link passTrack}; its docblock carries the lock-order argument.
    *
    * ⚠ THE RESIDUAL IS CLOSED — TWO CORRECTIONS TO WHAT USED TO BE SAID HERE. (a) Step 1's
    * proposal set is a SNAPSHOT taken before this transaction owns anything, so in principle a
    * proposal committed between the snapshot and this transaction's lock could survive un-declined
-   * — that is now closed by the union re-read below (step 2b), which is safe ONLY because the
+   * — that is now closed by `endTrackTx`'s union re-read (step 2b), safe ONLY because the
    * advisory lock serialises every writer on this request (see the re-read's own docblock for the
    * lock-order inversion this creates). (b) The insert-based producer this residual names was
    * never `proposalsRepository.submit()` — that method has zero production callers
@@ -690,44 +780,23 @@ export const requestExpertRelationshipsRepository = {
   async declineTrack(input: {
     relationshipId: string;
     actorUserId: string;
-    /** `request_closed` is NOT accepted here — that reason belongs to the close cascade. */
-    reason: Exclude<RelationshipDeclineReason, 'request_closed'>;
+    /**
+     * The CLIENT-SIDE reasons only. `request_closed` belongs to the close cascade and
+     * `expert_declined` to {@link passTrack} — which also withdraws, rather than declines, the
+     * track's open proposals.
+     */
+    reason: Extract<RelationshipDeclineReason, 'client_declined' | 'balo_declined'>;
   }): Promise<DeclineTrackResult> {
     return db.transaction(async (tx) => {
       // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
       await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
 
-      // 1. Proposal rows FIRST (lock order — see the docblock).
-      const snapshot = await lockOpenProposalsForRelationshipTx(tx, input.relationshipId);
-
-      // 2. Relationship, then request (the request lock is taken inside).
-      const advanced = await advanceRelationshipStatus(tx, {
-        id: input.relationshipId,
-        to: 'declined',
+      const { advanced, endedProposalIds: declinedProposalIds } = await endTrackTx(tx, {
+        relationshipId: input.relationshipId,
         actorUserId: input.actorUserId,
         reason: input.reason,
+        proposalOutcome: 'declined',
       });
-
-      // 2b. UNION RE-READ (BAL-546) — the relationship AND request locks are now held, so
-      //     re-read the track's open proposals and act on the union. Only the PROPOSAL set can
-      //     have grown: this cascade is keyed on ONE relationship, which step 2 above already
-      //     holds `FOR UPDATE`, so no second relationship can appear.
-      //
-      //     ⚠ NOT LOCK-ORDER-NEUTRAL, same as `close()`'s re-read: a proposal found only by this
-      //     re-read takes its `FOR UPDATE` (here, and again inside `advanceProposalStatus`)
-      //     AFTER the relationship and request locks — inverting `accept`'s documented proposal →
-      //     relationship → request order. Safe ONLY because the advisory lock above serialises
-      //     every writer on this request.
-      const reRead = await lockOpenProposalsForRelationshipTx(tx, input.relationshipId);
-      const openProposals = unionById(snapshot, reRead);
-
-      // 3. End each open proposal. Already locked in step 1/2b, so `advanceProposalStatus`'s own
-      //    `FOR UPDATE` re-take is free and its transition guard still runs.
-      const declinedProposalIds: string[] = [];
-      for (const proposal of openProposals) {
-        await advanceProposalStatus(tx, { id: proposal.id, to: 'declined' });
-        declinedProposalIds.push(proposal.id);
-      }
 
       return {
         relationship: advanced.relationship,
@@ -735,6 +804,83 @@ export const requestExpertRelationshipsRepository = {
         declineAuditId: advanced.auditId,
         declinedProposalIds,
         hadOpenProposal: declinedProposalIds.length > 0,
+      };
+    });
+  },
+
+  /**
+   * BAL-604 — THE EXPERT PASSES ON THE PROJECT. ONE transaction, under the same per-request
+   * advisory lock and through the same `endTrackTx` core as {@link declineTrack}: the track
+   * moves to `declined` with reason `expert_declined` (stamping WHO/WHY/WHEN, re-deriving the
+   * parent request status and appending the `request_expert_relationship.declined` audit row),
+   * and every open proposal on the track moves to `withdrawn`.
+   *
+   * ⚠ ONLY FROM A PASSABLE STAGE (`PASSABLE_RELATIONSHIP_STATUSES`: `invited` / `eoi_submitted`
+   * / `proposal_requested`). The stage is read AFTER the advisory lock is held and handed to
+   * `advanceRelationshipStatus` as `expectedFrom`, so the guard and the write see the same
+   * value. `proposal_submitted` (a proposal is in front of the client), `accepted` and
+   * `declined` are refused with `InvalidRelationshipTransitionError` and nothing is written.
+   *
+   * ⚠ `withdrawn`, NOT `declined`, FOR THE PROPOSAL. `declined` means the client side judged a
+   * proposal and said no (`proposals.ts`'s transition-map docblock). Here nobody judged it: the
+   * expert stopped the process it belonged to, which is exactly what `withdrawn` records. In
+   * practice the only open proposal at a passable stage is a `draft` (submitting one moves the
+   * track to `proposal_submitted`, which is not passable).
+   *
+   * ⚠ THE EOI STAYS LIVE. It is history, like on a client decline; it is neither soft-deleted
+   * nor rewritten.
+   *
+   * ⚠ NO MEETING CANCELLATION and NO FILE-GRANT REVOCATION — {@link declineTrack}'s two
+   * paragraphs apply verbatim: a scheduled intro call on the track survives and becomes
+   * unhostable at join time, and the file plane flips to historical-read off the `status` /
+   * `declined_at` this path stamps.
+   *
+   * ⚠ AUTHORIZATION IS THE CALLER'S. This method checks no identity: the Server Action resolves
+   * the relationship server-side from the caller's own expert profile before calling it.
+   *
+   * Throws `Error` for a missing / soft-deleted relationship and
+   * `InvalidRelationshipTransitionError` from a non-passable stage.
+   */
+  async passTrack(input: {
+    relationshipId: string;
+    actorUserId: string;
+  }): Promise<PassTrackResult> {
+    return db.transaction(async (tx) => {
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
+      await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
+
+      const [current] = await tx
+        .select({ status: requestExpertRelationships.status })
+        .from(requestExpertRelationships)
+        .where(
+          and(
+            eq(requestExpertRelationships.id, input.relationshipId),
+            isNull(requestExpertRelationships.deletedAt)
+          )
+        );
+
+      if (current === undefined) {
+        throw new Error('Request expert relationship not found');
+      }
+
+      const from = narrowToPassableRelationshipStatus(current.status);
+      if (from === null) {
+        throw new InvalidRelationshipTransitionError(current.status, 'declined');
+      }
+
+      const { advanced, endedProposalIds } = await endTrackTx(tx, {
+        relationshipId: input.relationshipId,
+        actorUserId: input.actorUserId,
+        reason: 'expert_declined',
+        expectedFrom: from,
+        proposalOutcome: 'withdrawn',
+      });
+
+      return {
+        relationship: advanced.relationship,
+        previousStatus: from,
+        auditId: advanced.auditId,
+        withdrawnProposalIds: endedProposalIds,
       };
     });
   },

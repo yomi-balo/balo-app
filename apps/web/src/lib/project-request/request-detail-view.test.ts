@@ -769,6 +769,50 @@ describe('mapRequestToDetailView — BAL-540 closed summary + closed tracks', ()
     expect(adminView.closed?.counts.tracksEnded).toBe(2);
   });
 
+  it('hides an expert who passed from invited from the client; staff see them as expert_passed', () => {
+    const req = closedRequest({
+      relationships: [
+        rel({
+          id: 'rel-opened',
+          status: 'declined',
+          declineReason: 'request_closed',
+          openedAt: new Date('2025-01-08T00:00:00Z'),
+        }),
+        rel({
+          id: 'rel-passed',
+          status: 'declined',
+          declineReason: 'expert_declined',
+          openedAt: null,
+          expertProfile: {
+            id: 'expert-2',
+            user: { id: 'user-expert-2', firstName: 'Benny', lastName: 'Legros' },
+          } as Relationship['expertProfile'],
+        }),
+      ],
+    });
+
+    const clientView = mapRequestToDetailView(
+      req,
+      ctx({ lens: 'client', archetype: 'participant', relationshipId: null }),
+      NOW,
+      CLOSED_INPUT
+    );
+    expect(clientView.closedTracks.map((t) => t.relationshipId)).toStrictEqual(['rel-opened']);
+    expect(clientView.closed?.counts.tracksEnded).toBe(1);
+    expect(JSON.stringify(clientView)).not.toContain('Benny');
+
+    const adminView = mapRequestToDetailView(
+      req,
+      ctx({ lens: 'admin', archetype: 'observer', relationshipId: null, canSeeStaffOnly: true }),
+      NOW,
+      CLOSED_INPUT
+    );
+    expect(adminView.closedTracks.map((t) => [t.relationshipId, t.finalChip])).toStrictEqual([
+      ['rel-opened', 'ended_request_closed'],
+      ['rel-passed', 'expert_passed'],
+    ]);
+  });
+
   it('close_note IS populated for a viewer holding canSeeStaffOnly (D11)', () => {
     const view = mapRequestToDetailView(
       closedRequest(),
