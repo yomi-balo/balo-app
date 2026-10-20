@@ -15,7 +15,7 @@ function renderHeader(input: {
   onRequestProposal?: (() => void) | null;
   /** Non-null → the expert "Build proposal" CTA renders enabled (A6.2). */
   onBuildProposal?: (() => void) | null;
-  /** Non-null → the "View proposal"/"View submitted" CTA renders enabled (A6.3). */
+  /** Non-null → the "View proposal"/"View submitted proposal" CTA renders enabled (A6.3). */
   onViewProposal?: (() => void) | null;
   /** Non-null → the BAL-540 decline control renders enabled when the derived slot is non-null. */
   onDecline?: (() => void) | null;
@@ -160,7 +160,7 @@ describe('ThreadHeader', () => {
     expect(onViewProposal).toHaveBeenCalledTimes(1);
   });
 
-  it('expert lens + proposal submitted: View submitted is ENABLED and fires it (A6.3)', async () => {
+  it('expert lens + proposal submitted: View submitted proposal is ENABLED and fires it (A6.3)', async () => {
     const user = userEvent.setup();
     const onViewProposal = vi.fn();
     renderHeader({
@@ -169,7 +169,7 @@ describe('ThreadHeader', () => {
       threadOverrides: { relationshipStatus: 'proposal_submitted' },
       onViewProposal,
     });
-    const cta = screen.getByRole('button', { name: 'View submitted' });
+    const cta = screen.getByRole('button', { name: 'View submitted proposal' });
     expect(cta).toBeEnabled();
     await user.click(cta);
     expect(onViewProposal).toHaveBeenCalledTimes(1);

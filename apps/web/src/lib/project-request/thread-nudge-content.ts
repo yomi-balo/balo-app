@@ -10,7 +10,12 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { ProjectRequestStatus } from './resolve-request-lens';
-import { requestStatusRank, type ConversationThreadView } from './conversation-view-types';
+import {
+  requestStatusRank,
+  reviseProposalCopy,
+  type ConversationThreadView,
+  type ThreadChangeRequestView,
+} from './conversation-view-types';
 
 /**
  * Per-thread nudge copy matrices (BAL-271 / A4) — the design reference's
@@ -193,6 +198,16 @@ function clientNudge(
     };
   }
 
+  if (thread.relationshipStatus === 'proposal_submitted' && thread.changeRequest !== null) {
+    return {
+      variant: 'waiting',
+      icon: Clock,
+      headline: `${name} is revising the proposal`,
+      sub: `Changes requested — version ${thread.changeRequest.nextVersion} will appear here once it's in.`,
+      secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
+    };
+  }
+
   if (thread.relationshipStatus === 'proposal_submitted') {
     return {
       variant: 'commit',
@@ -205,6 +220,16 @@ function clientNudge(
   }
 
   return null;
+}
+
+function reviseProposalNudge(changeRequest: ThreadChangeRequestView): ThreadNudgeContent {
+  return {
+    variant: 'action',
+    icon: FileText,
+    ...reviseProposalCopy(changeRequest),
+    primary: { label: 'Revise proposal', icon: FileText, action: 'build' },
+    secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
+  };
 }
 
 function expertNudge(
@@ -309,6 +334,12 @@ function expertNudge(
       sub: 'Lay out scope, milestones and pricing. You can save a draft and submit when ready.',
       primary: { label: 'Build proposal', icon: FileText, action: 'build' },
     };
+  }
+
+  // The client sent the proposal back — the relationship stays `proposal_submitted`, so
+  // without this cell the expert reads "with the client" while the client waits on them.
+  if (thread.relationshipStatus === 'proposal_submitted' && thread.changeRequest !== null) {
+    return reviseProposalNudge(thread.changeRequest);
   }
 
   if (thread.relationshipStatus === 'proposal_submitted') {

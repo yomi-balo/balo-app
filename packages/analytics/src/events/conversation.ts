@@ -30,6 +30,8 @@ export const CONVERSATION_CALL_SURFACES = ['header', 'rail', 'nudge'] as const;
 export type ConversationCallSurface = (typeof CONVERSATION_CALL_SURFACES)[number];
 /** Where the client's Request-proposal CTA was clicked (A5: no nudge surface). */
 export type ConversationProposalSurface = 'header' | 'rail';
+/** Which proposal CTA was clicked — each is a distinct funnel step. */
+export type ConversationProposalCta = 'request' | 'build' | 'revise' | 'view';
 
 /**
  * What a conversation is ANCHORED to (BAL-424 / ADR-1045 §2) — the seam, restated for the
@@ -114,6 +116,7 @@ export interface ConversationEventMap {
     request_id: string;
     relationship_id: string;
     surface: ConversationProposalSurface;
+    cta: ConversationProposalCta;
   };
   /**
    * BAL-283 (Ruling 3) — `shareAvailabilityAction` returned `ok`. `lens` is deliberately

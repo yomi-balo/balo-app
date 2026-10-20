@@ -79,4 +79,19 @@ describe('NudgeActions — A6.2 build-proposal CTA', () => {
     expect(screen.getByRole('button', { name: /Build proposal/i })).toBeDisabled();
     expect(mockPush).not.toHaveBeenCalled();
   });
+
+  it("a descriptor's own action wires a cell with no WIRED entry — dialog mount included", () => {
+    render(
+      <NudgeActions
+        lens="client"
+        status="proposal_submitted"
+        requestId={REQUEST_ID}
+        primary={{ label: 'Invite experts', icon: 'users', action: 'invite' }}
+      />
+    );
+    const cta = screen.getByRole('button', { name: /Invite experts/i });
+    expect(cta).toBeEnabled();
+    fireEvent.click(cta);
+    expect(screen.getByRole('dialog', { name: /Invite experts/i })).toBeInTheDocument();
+  });
 });

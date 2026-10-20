@@ -5,10 +5,14 @@ import {
   conversationsRepository,
   expertsRepository,
   meetingsRepository,
+  proposalChangeRequestsRepository,
+  proposalsRepository,
+  usersRepository,
   type ConversationContextRef,
   type ConversationFile,
   type ContextMeetingSummary,
   type ProjectRequestWithRelations,
+  type Proposal,
 } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 import { mapMessageRowToView } from '@/lib/conversations/conversation-view';
@@ -21,10 +25,12 @@ import {
   pickDefaultThread,
   pickUpcomingContextMeeting,
   previewOfHtml,
+  previewOfPlainText,
   type ConversationFileView,
   type ConversationMessageView,
   type ConversationThreadView,
   type ConversationView,
+  type ThreadChangeRequestView,
 } from './conversation-view-types';
 
 /**
@@ -148,6 +154,68 @@ async function hydrateUsernames(
 }
 
 /**
+ * The CURRENT proposals whose threads this viewer can see. The expert lens has at most one
+ * thread, so it reads only its own; the client lens takes one read for the whole request.
+ */
+async function loadCurrentProposals(
+  request: ProjectRequestWithRelations,
+  ctx: RequestViewerContext
+): Promise<Proposal[]> {
+  if (ctx.lens === 'expert') {
+    if (ctx.relationshipId === null) return [];
+    const own = await proposalsRepository.findCurrentByRelationship(ctx.relationshipId);
+    return own === undefined ? [] : [own];
+  }
+  const proposals = await proposalsRepository.listByRequest(request.id);
+  return proposals.filter((p) => p.isCurrent);
+}
+
+/**
+ * The open change request per thread, keyed by relationship id — only threads whose CURRENT
+ * proposal is `changes_requested` appear. The note + requester reads run only for threads
+ * actually in a revision loop, and are sequential per thread (the requester id comes from the
+ * note row). Non-critical: any failure resolves to an empty map, so a hiccup here degrades to
+ * the plain "with the client" copy rather than breaking the conversation page.
+ */
+async function loadChangeRequests(
+  request: ProjectRequestWithRelations,
+  ctx: RequestViewerContext,
+  relationshipIds: ReadonlySet<string>
+): Promise<Map<string, ThreadChangeRequestView>> {
+  try {
+    const proposals = await loadCurrentProposals(request, ctx);
+    const awaitingRevision = proposals.filter(
+      (p) => p.status === 'changes_requested' && relationshipIds.has(p.relationshipId)
+    );
+    const entries = await Promise.all(
+      awaitingRevision.map(async (proposal) => {
+        // `listByProposal` returns newest-first — the most recent note is the open ask.
+        const [latest] = await proposalChangeRequestsRepository.listByProposal(proposal.id);
+        if (latest === undefined) return null;
+        const requester = await usersRepository.findById(latest.requestedByUserId);
+        const firstName = requester?.firstName?.trim() ?? '';
+        const companyName = request.company.name.trim();
+        const requestedBy =
+          [firstName, companyName].filter((part) => part.length > 0).join(' @ ') || 'The client';
+        const view: ThreadChangeRequestView = {
+          requestedBy,
+          notePreview: previewOfPlainText(latest.note.replaceAll(/\s+/g, ' ').trim()),
+          nextVersion: proposal.version + 1,
+        };
+        return [proposal.relationshipId, view] as const;
+      })
+    );
+    return new Map(entries.filter((entry) => entry !== null));
+  } catch (error) {
+    log.warn('Failed to load proposal change requests for conversation threads', {
+      requestId: request.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return new Map();
+  }
+}
+
+/**
  * Build the full `ConversationView` for a participant viewer. Open threads =
  * live relationships in `THREAD_OPEN_RELATIONSHIP_STATUSES` (the expert lens
  * additionally sees ONLY their own). Thread order is invite order
@@ -192,7 +260,7 @@ export async function loadConversationView(
     return [{ relationship, conversationId }];
   });
 
-  const [summaries, usernames, bookedCallsByRelationship] = await Promise.all([
+  const [summaries, usernames, bookedCallsByRelationship, changeRequests] = await Promise.all([
     conversationsRepository.listThreadSummaries({
       conversationIds: openThreads.map((t) => t.conversationId),
       viewerUserId: user.id,
@@ -209,6 +277,7 @@ export async function loadConversationView(
       contextType: 'request_interaction',
       contextIds: openThreads.map((t) => t.relationship.id),
     }),
+    loadChangeRequests(request, ctx, new Set(openThreads.map((t) => t.relationship.id))),
   ]);
   const summaryById = new Map(summaries.map((s) => [s.conversationId, s]));
 
@@ -275,6 +344,7 @@ export async function loadConversationView(
         ctx.lens === 'client' && liveEoi !== undefined ? liveEoi.submittedAt.toISOString() : null,
       availabilitySharedAtIso: relationship.availabilitySharedAt?.toISOString() ?? null,
       bookedCall: pickBookedCall(relationship.id),
+      changeRequest: changeRequests.get(relationship.id) ?? null,
     };
   });
 

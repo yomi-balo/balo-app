@@ -9,6 +9,10 @@ const {
   mockEnsureManyForContexts,
   mockFindProfileById,
   mockListActiveMeetingsForContexts,
+  mockListProposalsByRequest,
+  mockFindCurrentProposalByRelationship,
+  mockListChangeRequestsByProposal,
+  mockFindUserById,
 } = vi.hoisted(() => ({
   mockListThreadSummaries: vi.fn(),
   mockListMessagesPage: vi.fn(),
@@ -16,6 +20,10 @@ const {
   mockEnsureManyForContexts: vi.fn(),
   mockFindProfileById: vi.fn(),
   mockListActiveMeetingsForContexts: vi.fn(),
+  mockListProposalsByRequest: vi.fn(),
+  mockFindCurrentProposalByRelationship: vi.fn(),
+  mockListChangeRequestsByProposal: vi.fn(),
+  mockFindUserById: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -34,6 +42,17 @@ vi.mock('@balo/db', () => ({
   meetingsRepository: {
     listActiveMeetingsForContexts: (...args: unknown[]) =>
       mockListActiveMeetingsForContexts(...args),
+  },
+  proposalsRepository: {
+    listByRequest: (...args: unknown[]) => mockListProposalsByRequest(...args),
+    findCurrentByRelationship: (...args: unknown[]) =>
+      mockFindCurrentProposalByRelationship(...args),
+  },
+  proposalChangeRequestsRepository: {
+    listByProposal: (...args: unknown[]) => mockListChangeRequestsByProposal(...args),
+  },
+  usersRepository: {
+    findById: (...args: unknown[]) => mockFindUserById(...args),
   },
 }));
 
@@ -79,6 +98,7 @@ function request(relationships: Record<string, unknown>[]): Record<string, unkno
     status: 'eoi_submitted',
     title: 'CPQ implementation',
     createdByUser: { id: VIEWER_ID, firstName: 'Dana', lastName: 'Whitfield', email: 'd@x.com' },
+    company: { id: 'company-1', name: 'Northwind' },
     relationships,
   };
 }
@@ -143,6 +163,7 @@ describe('loadConversationView', () => {
     mockListFiles.mockResolvedValue([]);
     mockFindProfileById.mockResolvedValue({ id: 'exp-1', username: 'priya-nair' });
     mockListActiveMeetingsForContexts.mockResolvedValue(new Map());
+    mockListProposalsByRequest.mockResolvedValue([]);
   });
 
   it('builds one thread per OPEN relationship and skips invited/declined ones', async () => {
@@ -225,6 +246,99 @@ describe('loadConversationView', () => {
       USER
     );
     expect(neverSharedView.threads[0]?.availabilitySharedAtIso).toBeNull();
+  });
+
+  it('changeRequest is set only for a thread whose CURRENT proposal is changes_requested', async () => {
+    mockListProposalsByRequest.mockResolvedValue([
+      // A superseded version — not current, so ignored even though it is changes_requested.
+      {
+        id: 'p-old',
+        relationshipId: 'rel-1',
+        isCurrent: false,
+        status: 'changes_requested',
+        version: 1,
+      },
+      {
+        id: 'p-1',
+        relationshipId: 'rel-1',
+        isCurrent: true,
+        status: 'changes_requested',
+        version: 1,
+      },
+      { id: 'p-2', relationshipId: 'rel-2', isCurrent: true, status: 'submitted', version: 1 },
+    ]);
+    mockListChangeRequestsByProposal.mockResolvedValue([
+      { note: 'Add more\n\n  deliverables', requestedByUserId: VIEWER_ID },
+      { note: 'An older note', requestedByUserId: VIEWER_ID },
+    ]);
+    mockFindUserById.mockResolvedValue({ id: VIEWER_ID, firstName: 'Dana' });
+
+    const view = await loadConversationView(
+      request([
+        relationship({ status: 'proposal_submitted' }),
+        relationship({ id: 'rel-2', expertProfileId: 'exp-2', status: 'proposal_submitted' }),
+      ]) as never,
+      CLIENT_CTX,
+      USER
+    );
+
+    expect(mockListProposalsByRequest).toHaveBeenCalledWith('req-1');
+    expect(mockListChangeRequestsByProposal).toHaveBeenCalledTimes(1);
+    expect(mockListChangeRequestsByProposal).toHaveBeenCalledWith('p-1');
+    expect(view.threads.find((t) => t.relationshipId === 'rel-1')?.changeRequest).toEqual({
+      requestedBy: 'Dana @ Northwind',
+      notePreview: 'Add more deliverables',
+      nextVersion: 2,
+    });
+    expect(view.threads.find((t) => t.relationshipId === 'rel-2')?.changeRequest).toBeNull();
+  });
+
+  it('expert lens reads only its own current proposal; requester falls back to the party', async () => {
+    mockFindCurrentProposalByRelationship.mockResolvedValue({
+      id: 'p-1',
+      relationshipId: 'rel-1',
+      isCurrent: true,
+      status: 'changes_requested',
+      version: 2,
+    });
+    mockListChangeRequestsByProposal.mockResolvedValue([
+      { note: 'Tighten the timeline', requestedByUserId: 'gone' },
+    ]);
+    mockFindUserById.mockResolvedValue(undefined);
+
+    const view = await loadConversationView(
+      request([relationship({ status: 'proposal_submitted' })]) as never,
+      EXPERT_CTX,
+      USER
+    );
+    expect(mockFindCurrentProposalByRelationship).toHaveBeenCalledWith('rel-1');
+    expect(mockListProposalsByRequest).not.toHaveBeenCalled();
+    expect(view.threads[0]?.changeRequest).toEqual({
+      requestedBy: 'Northwind',
+      notePreview: 'Tighten the timeline',
+      nextVersion: 3,
+    });
+  });
+
+  it('a change-request read failure degrades to no change request, never a broken page', async () => {
+    mockListProposalsByRequest.mockResolvedValue([
+      {
+        id: 'p-1',
+        relationshipId: 'rel-1',
+        isCurrent: true,
+        status: 'changes_requested',
+        version: 1,
+      },
+    ]);
+    mockListChangeRequestsByProposal.mockRejectedValue(new Error('db down'));
+
+    const view = await loadConversationView(
+      request([relationship({ status: 'proposal_submitted' })]) as never,
+      CLIENT_CTX,
+      USER
+    );
+    expect(view.threads).toHaveLength(1);
+    expect(view.threads[0]?.changeRequest).toBeNull();
   });
 
   it('runs ONE batched booked-call query for the whole page, never one per relationship', async () => {

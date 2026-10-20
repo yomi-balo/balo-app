@@ -71,6 +71,7 @@ export interface ThreadActions {
 function deriveHeaderProposal(
   lens: 'client' | 'expert',
   relationshipStatus: string,
+  revising: boolean,
   nudgeIsProposal: boolean
 ): HeaderProposalSlot | null {
   if (lens === 'client' && relationshipStatus === 'proposal_requested') {
@@ -79,8 +80,13 @@ function deriveHeaderProposal(
   if (lens === 'expert' && relationshipStatus === 'eoi_submitted') {
     return { kind: 'pill-awaiting' };
   }
+  // The client sent the proposal back — the expert's next step is the revise
+  // composer, so it gets the commit CTA rather than a quiet "view" link.
+  if (lens === 'expert' && relationshipStatus === 'proposal_submitted' && revising) {
+    return { kind: 'build', label: 'Revise proposal', quiet: nudgeIsProposal };
+  }
   if (relationshipStatus === 'proposal_submitted' || relationshipStatus === 'accepted') {
-    return { kind: 'view', label: lens === 'expert' ? 'View submitted' : 'View proposal' };
+    return { kind: 'view', label: lens === 'expert' ? 'View submitted proposal' : 'View proposal' };
   }
   if (lens === 'client' && relationshipStatus === 'eoi_submitted') {
     return { kind: 'request', label: 'Request proposal', quiet: nudgeIsProposal };
@@ -94,6 +100,7 @@ function deriveHeaderProposal(
 function deriveRailProposal(
   lens: 'client' | 'expert',
   relationshipStatus: string,
+  revising: boolean,
   pastAcceptance: boolean,
   nudgeIsProposal: boolean
 ): RailProposalSlot | null {
@@ -103,6 +110,9 @@ function deriveRailProposal(
   }
   if (lens === 'expert' && relationshipStatus === 'proposal_requested') {
     return { kind: 'build', label: 'Build proposal', quiet: nudgeIsProposal };
+  }
+  if (lens === 'expert' && relationshipStatus === 'proposal_submitted' && revising) {
+    return { kind: 'build', label: 'Revise proposal', quiet: nudgeIsProposal };
   }
   if (lens === 'client' && relationshipStatus === 'proposal_submitted') {
     // The live A6.3 (BAL-289) review link — wired via `onViewProposal`, never
@@ -165,6 +175,7 @@ export function deriveThreadActions(input: {
   const beforeKickoff = rank < requestStatusRank('kickoff_approved');
   const pastAcceptance = rank >= requestStatusRank('accepted');
   const callAllowed = beforeKickoff && thread.stage === 'active';
+  const revising = thread.changeRequest !== null;
 
   const callSlot = deriveCallSlot({
     lens,
@@ -177,11 +188,12 @@ export function deriveThreadActions(input: {
     callSlot,
     // Design: the proposal slot shares the call gate (hidden once decided).
     headerProposal: callAllowed
-      ? deriveHeaderProposal(lens, thread.relationshipStatus, nudgeIsProposal)
+      ? deriveHeaderProposal(lens, thread.relationshipStatus, revising, nudgeIsProposal)
       : null,
     railProposal: deriveRailProposal(
       lens,
       thread.relationshipStatus,
+      revising,
       pastAcceptance,
       nudgeIsProposal
     ),

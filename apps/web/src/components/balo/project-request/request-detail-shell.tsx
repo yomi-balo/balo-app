@@ -239,10 +239,14 @@ export function RequestDetailShell({
       />
     ) : null;
   // Expert lens: the proposal-phase nudge cells key on the VIEWER'S relationship
-  // status (BAL-272 divergence fix) — request status is the max-progress aggregate.
+  // status (BAL-272 divergence fix) — request status is the max-progress aggregate —
+  // and on the open change request on their own thread (the revise cell).
+  const viewerChangeRequest =
+    conversation?.threads.find((t) => t.relationshipId === ctx.relationshipId)?.changeRequest ??
+    null;
   const nudge = isExpertGated
     ? EXPERT_GATED_NUDGE
-    : nudgeFor(ctx.lens, view.status, view.viewerRelationshipStatus);
+    : nudgeFor(ctx.lens, view.status, view.viewerRelationshipStatus, viewerChangeRequest);
   // Health panel only once there are relationships (none before experts_invited).
   const showHealthPanel = ctx.archetype === 'observer' && view.relationships.length > 0;
 

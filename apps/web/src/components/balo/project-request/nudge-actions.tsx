@@ -19,6 +19,12 @@ export interface NudgeButtonDescriptor {
    * object and crashed the render. See `./nudge-icons` for the full account.
    */
   icon: NudgeIconName;
+  /**
+   * Wires this button directly, overriding the `WIRED` lookup — for a cell the
+   * `${lens}:${status}` key cannot single out (it is keyed by REQUEST status, so
+   * two cells for one status would otherwise share wiring).
+   */
+  action?: WiredAction;
 }
 
 interface NudgeActionsProps {
@@ -125,8 +131,12 @@ export function NudgeActions({
     return undefined;
   };
 
-  const primaryHandler = handlerFor(wired.primary);
-  const secondaryHandler = handlerFor(wired.secondary);
+  // A descriptor's own `action` wins over the status-keyed lookup — resolved ONCE so
+  // the click handlers and the dialog mount below can never disagree.
+  const primaryAction = primary?.action ?? wired.primary;
+  const secondaryAction = secondary?.action ?? wired.secondary;
+  const primaryHandler = handlerFor(primaryAction);
+  const secondaryHandler = handlerFor(secondaryAction);
   // Token → component on THIS side of the boundary (the descriptor carries only a name).
   const PrimaryIcon = primary ? NUDGE_ICONS[primary.icon] : null;
   const SecondaryIcon = secondary ? NUDGE_ICONS[secondary.icon] : null;
@@ -164,7 +174,7 @@ export function NudgeActions({
         </button>
       )}
 
-      {(wired.primary === 'invite' || wired.secondary === 'invite') && (
+      {(primaryAction === 'invite' || secondaryAction === 'invite') && (
         <ExpertInviteDialog
           open={inviteOpen}
           onOpenChange={setInviteOpen}

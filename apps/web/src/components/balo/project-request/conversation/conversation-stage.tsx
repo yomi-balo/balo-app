@@ -5,7 +5,12 @@ import { useRouter } from 'next/navigation';
 import { Ellipsis, MessageSquare, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { track, CONVERSATION_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
+import {
+  track,
+  CONVERSATION_EVENTS,
+  PROJECT_EVENTS,
+  type ConversationProposalCta,
+} from '@/lib/analytics';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import {
   previewOfHtml,
@@ -194,31 +199,37 @@ const noopDraftChange = (): void => {
 function trackProposalCtaClick(
   surface: 'header' | 'rail' | undefined,
   requestId: string,
-  relationshipId: string
+  relationshipId: string,
+  cta: ConversationProposalCta
 ): void {
   if (surface === undefined) return;
   track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
     request_id: requestId,
     relationship_id: relationshipId,
     surface,
+    cta,
   });
 }
 
 /**
  * Open the expert proposal composer for `threadId`. No-op unless the thread is at
- * `proposal_requested` (defence-in-depth — the Build CTA only renders then). At
- * module scope so the `handleBuildProposal` callback stays branch-free.
+ * `proposal_requested`, or `proposal_submitted` with an open change request (the
+ * route renders the revise composer then) — defence-in-depth, the Build/Revise CTA
+ * only renders in those states. At module scope so the `handleBuildProposal`
+ * callback stays branch-free.
  */
 function openProposalComposer(args: {
   push: (href: string) => void;
   requestId: string;
   threadId: string | null;
   status: string | undefined;
+  revising: boolean;
   surface?: 'header' | 'rail';
 }): void {
-  const { push, requestId, threadId, status, surface } = args;
-  if (threadId === null || status !== 'proposal_requested') return;
-  trackProposalCtaClick(surface, requestId, threadId);
+  const { push, requestId, threadId, status, revising, surface } = args;
+  const isRevise = status === 'proposal_submitted' && revising;
+  if (threadId === null || !(status === 'proposal_requested' || isRevise)) return;
+  trackProposalCtaClick(surface, requestId, threadId, isRevise ? 'revise' : 'build');
   push(`/projects/${requestId}/proposal/${threadId}`);
 }
 
@@ -236,7 +247,7 @@ function openProposalSurface(args: {
 }): void {
   const { push, requestId, threadId, status, surface } = args;
   if (threadId === null || !PROPOSAL_VIEW_STATUSES.has(status ?? '')) return;
-  trackProposalCtaClick(surface, requestId, threadId);
+  trackProposalCtaClick(surface, requestId, threadId, 'view');
   push(`/projects/${requestId}/proposal/${threadId}`);
 }
 
@@ -873,6 +884,7 @@ export function ConversationStage({
         request_id: requestId,
         relationship_id: activeThreadId,
         surface,
+        cta: 'request',
       });
       proposalContextRef.current = { threadId: activeThreadId, surface };
       setProposalDialogOpen(true);
@@ -890,8 +902,9 @@ export function ConversationStage({
 
   // ── Build proposal (BAL-288 / A6.2 — expert lens only) ─────────────────
   // Opens the proposal composer for the active thread. Gated to the expert
-  // lens AND a `proposal_requested` relationship (defence-in-depth: the Build
-  // CTA only renders at that state). `surface` (`header`/`rail`) feeds the
+  // lens AND a `proposal_requested` relationship, or a `proposal_submitted` one
+  // with an open change request (defence-in-depth: the Build/Revise CTA only
+  // renders at those states). `surface` (`header`/`rail`) feeds the
   // existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel; the nudge surface (no
   // matching surface value on that event) navigates without re-firing it.
   const handleBuildProposal = useCallback(
@@ -901,10 +914,17 @@ export function ConversationStage({
         requestId,
         threadId: activeThreadId,
         status: activeThread?.relationshipStatus,
+        revising: activeThread?.changeRequest != null,
         surface,
       });
     },
-    [activeThreadId, activeThread?.relationshipStatus, requestId, router]
+    [
+      activeThreadId,
+      activeThread?.relationshipStatus,
+      activeThread?.changeRequest,
+      requestId,
+      router,
+    ]
   );
   const handleHeaderBuild = useCallback(
     (): void => handleBuildProposal('header'),

@@ -161,6 +161,7 @@ export type {
   ConversationFilesSurface,
   ConversationCallSurface,
   ConversationProposalSurface,
+  ConversationProposalCta,
   ProjectsInboxEventMap,
   ProjectsInboxLens,
   ProjectsInboxFilter,

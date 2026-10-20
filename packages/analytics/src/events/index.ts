@@ -87,6 +87,7 @@ export {
   CONVERSATION_CALL_SURFACES,
   type ConversationCallSurface,
   type ConversationProposalSurface,
+  type ConversationProposalCta,
 } from './conversation';
 export {
   PROJECTS_INBOX_EVENTS,

@@ -202,6 +202,36 @@ export interface ConversationThreadView {
    * is removed from header/rail (plan §12.3/§12.4).
    */
   bookedCall: { meetingId: string; scheduledStartIso: string } | null;
+  /**
+   * The client's open change request on this thread's CURRENT proposal — non-null while that
+   * proposal is `changes_requested`. The relationship stays `proposal_submitted` throughout the
+   * changes loop, so `relationshipStatus` alone cannot tell "with the client" from "back with
+   * the expert to revise"; every revise-aware nudge and CTA keys on this instead.
+   */
+  changeRequest: ThreadChangeRequestView | null;
+}
+
+export interface ThreadChangeRequestView {
+  /** Retrospective attribution of who asked — "Dana @ Northwind" (person @ client company). */
+  requestedBy: string;
+  /** The client's note, whitespace-collapsed and clipped for nudge display. */
+  notePreview: string;
+  /** The version number a resubmit will create. */
+  nextVersion: number;
+}
+
+/**
+ * The expert's revise-cell copy — ONE definition shared by the page nudge (`nudge-bar.tsx`)
+ * and the thread nudge (`thread-nudge-content.ts`), which differ only in icon/CTA plumbing.
+ */
+export function reviseProposalCopy(changeRequest: ThreadChangeRequestView): {
+  headline: string;
+  sub: string;
+} {
+  return {
+    headline: `${changeRequest.requestedBy} requested changes to your proposal`,
+    sub: `“${changeRequest.notePreview}” — revise and resubmit as version ${changeRequest.nextVersion}.`,
+  };
 }
 
 /**
