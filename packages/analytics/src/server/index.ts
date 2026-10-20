@@ -110,3 +110,6 @@ export { WORKSPACE_SERVER_EVENTS } from '../events/workspace';
 // omitting this line makes `REQUEST_FILE_SERVER_EVENTS` unimportable there, which fails
 // `apps/web`'s typecheck, not this package's own (same fourth-step trap noted above).
 export { REQUEST_FILE_SERVER_EVENTS } from '../events/request-files';
+// `get-request-document-download.ts` (apps/web) imports from `@balo/analytics/server` ONLY
+// (same fourth-step trap noted above).
+export { REQUEST_DOCUMENT_SERVER_EVENTS } from '../events/request-documents';

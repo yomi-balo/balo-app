@@ -1,9 +1,15 @@
 import 'server-only';
 
-import { PutObjectCommand, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
+import {
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  CopyObjectCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MAX_PARSE_DOCUMENT_BYTES } from '@balo/shared/project-requests';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
+import { attachmentDisposition } from '@/lib/storage/content-disposition';
 import { log } from '@/lib/logging';
 import { CONVERSATION_FILE_PREFIX } from '@/lib/storage/conversation-file';
 import { MEETING_FILE_PREFIX } from '@/lib/storage/meeting-file';
@@ -17,6 +23,7 @@ export const ALLOWED_CONTENT_TYPES = new Set<string>([
   'image/webp',
 ]);
 const PRESIGN_TTL_SECONDS = 60;
+const DOWNLOAD_TTL_SECONDS = 300;
 /** ⚠ ONE definition, in `@balo/shared` — the worker enforces the same cap (BAL-254 W3). */
 export const MAX_DOCUMENT_BYTES = MAX_PARSE_DOCUMENT_BYTES;
 /** Key prefix all project documents live under. */
@@ -57,6 +64,29 @@ export async function createPresignedProjectDocumentUpload(
   });
 
   return { presignedUrl, key };
+}
+
+/**
+ * Short-lived download URL for one brief document, forcing an attachment disposition with the
+ * STORED file name (sanitised by `attachmentDisposition`). Prefix-guarded
+ * like the copy and delete below: a key outside the project-documents space is refused.
+ */
+export async function createPresignedProjectDocumentDownload(
+  key: string,
+  fileName: string
+): Promise<string> {
+  if (!key.startsWith(PROJECT_DOCUMENT_PREFIX)) {
+    throw new Error('Refusing to presign a key outside the project-documents space');
+  }
+  return getSignedUrl(
+    r2Client,
+    new GetObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      ResponseContentDisposition: attachmentDisposition(fileName),
+    }),
+    { expiresIn: DOWNLOAD_TTL_SECONDS }
+  );
 }
 
 // ── R2 server-side copy (server-only) ──

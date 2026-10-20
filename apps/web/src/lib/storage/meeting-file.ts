@@ -3,6 +3,7 @@ import 'server-only';
 import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
+import { attachmentDisposition } from '@/lib/storage/content-disposition';
 import { log } from '@/lib/logging';
 
 /**
@@ -205,12 +206,10 @@ export async function createPresignedMeetingFileDownload(
   fileName: string,
   opts?: { readonly expiresInSeconds?: number }
 ): Promise<string> {
-  // eslint-disable-next-line no-control-regex -- strip header-breaking control chars from the stored name
-  const safeName = fileName.replaceAll(/["\\\u0000-\u001f]/g, '_');
   const command = new GetObjectCommand({
     Bucket: R2_BUCKET,
     Key: key,
-    ResponseContentDisposition: `attachment; filename="${safeName}"`,
+    ResponseContentDisposition: attachmentDisposition(fileName),
   });
   return getSignedUrl(r2Client, command, {
     expiresIn: opts?.expiresInSeconds ?? DOWNLOAD_TTL_SECONDS,

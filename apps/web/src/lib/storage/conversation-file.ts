@@ -3,6 +3,7 @@ import 'server-only';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
+import { attachmentDisposition } from '@/lib/storage/content-disposition';
 import { deletePrefixedObjectFromR2 } from '@/lib/storage/delete-prefixed-object';
 
 /**
@@ -68,18 +69,16 @@ export async function createPresignedConversationFileUpload(
 // ── Presigned GET (server-only) ──
 /**
  * Short-lived download URL forcing an attachment disposition with the STORED
- * file name (quotes/control chars stripped so the header can't be broken).
+ * file name (sanitised by `attachmentDisposition`).
  */
 export async function createPresignedConversationFileDownload(
   key: string,
   fileName: string
 ): Promise<string> {
-  // eslint-disable-next-line no-control-regex -- strip header-breaking control chars from the stored name
-  const safeName = fileName.replaceAll(/["\\\u0000-\u001f]/g, '_');
   const command = new GetObjectCommand({
     Bucket: R2_BUCKET,
     Key: key,
-    ResponseContentDisposition: `attachment; filename="${safeName}"`,
+    ResponseContentDisposition: attachmentDisposition(fileName),
   });
   return getSignedUrl(r2Client, command, { expiresIn: DOWNLOAD_TTL_SECONDS });
 }

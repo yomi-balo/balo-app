@@ -51,6 +51,9 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   // conversation-access module) while `onboarding-mutation-gate.test.ts` still does. Same shape
   // as the BAL-423 meeting-file entries below.
   'app/(dashboard)/projects/[requestId]/_actions/get-request-file-download.ts',
+  // The brief's attached documents (`project_request_documents`) — same gate, same shape: a
+  // short-lived presigned GET behind `authorizeRequestFileScope`, which performs no writes.
+  'app/(dashboard)/projects/[requestId]/_actions/get-request-document-download.ts',
   // Mints a short-lived presigned GET URL for a proposal document — no mutation.
   //
   // ⚠ ITS LENS CHECK RUNS *AFTER* ACCESS RESOLUTION, which is what made the writing variant

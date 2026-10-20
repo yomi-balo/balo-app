@@ -335,6 +335,11 @@ export {
   REQUEST_FILE_VIEWER_SIDES,
   type RequestFileViewerSideProp,
 } from './request-files';
+// The request brief's attached documents — server-only, `viewer_side` is gate-resolved.
+export {
+  REQUEST_DOCUMENT_SERVER_EVENTS,
+  type RequestDocumentServerEventMap,
+} from './request-documents';
 // BAL-495 / ADR-1053 — the nav registry's CLIENT event, shared by the sidebar today and by
 // BAL-501's bottom tabs / BAL-503's ⌘K palette later. `NAV_ITEM_KEYS` / `NAV_SURFACES` are the
 // canonical tuples `apps/web`'s `nav-registry.ts` derives its `NavItemKey` type from.

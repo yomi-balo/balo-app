@@ -21,6 +21,12 @@ vi.mock('@aws-sdk/client-s3', () => ({
       this.input = input;
     }
   },
+  GetObjectCommand: class {
+    input: Record<string, unknown>;
+    constructor(input: Record<string, unknown>) {
+      this.input = input;
+    }
+  },
   DeleteObjectCommand: class {
     input: Record<string, unknown>;
     constructor(input: Record<string, unknown>) {
@@ -54,6 +60,7 @@ vi.mock('@/lib/storage/meeting-file', () => ({
 import {
   generateProjectDocumentKey,
   createPresignedProjectDocumentUpload,
+  createPresignedProjectDocumentDownload,
   deleteProjectDocumentFromR2,
   copyCaseFileIntoProjectDocuments,
   MAX_DOCUMENT_BYTES,
@@ -104,6 +111,37 @@ describe('project-document storage', () => {
           createPresignedProjectDocumentUpload(COMPANY, USER, type)
         ).resolves.toHaveProperty('key');
       }
+    });
+  });
+
+  describe('createPresignedProjectDocumentDownload', () => {
+    it('presigns a GET with an attachment disposition naming the stored file', async () => {
+      mockGetSignedUrl.mockResolvedValue('https://r2.test/get');
+
+      const url = await createPresignedProjectDocumentDownload(
+        'project-documents/c/u/k',
+        'NDC "brief"\n.pdf'
+      );
+
+      expect(url).toBe('https://r2.test/get');
+      const [, command, options] = mockGetSignedUrl.mock.calls[0] as [
+        unknown,
+        { input: Record<string, unknown> },
+        { expiresIn: number },
+      ];
+      expect(command.input).toEqual({
+        Bucket: 'test-bucket',
+        Key: 'project-documents/c/u/k',
+        ResponseContentDisposition: 'attachment; filename="NDC _brief__.pdf"',
+      });
+      expect(options).toEqual({ expiresIn: 300 });
+    });
+
+    it('refuses a key outside the project-documents space', async () => {
+      await expect(
+        createPresignedProjectDocumentDownload('request-files/r/u/k', 'x.pdf')
+      ).rejects.toThrow('outside the project-documents space');
+      expect(mockGetSignedUrl).not.toHaveBeenCalled();
     });
   });
 

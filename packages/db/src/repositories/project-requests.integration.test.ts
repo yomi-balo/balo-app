@@ -603,6 +603,68 @@ describe('projectRequestsRepository.findById', () => {
   });
 });
 
+// ── findDocumentInRequest ───────────────────────────────────────────
+
+describe('projectRequestsRepository.findDocumentInRequest', () => {
+  async function seedDocument(
+    projectRequestId: string,
+    deletedAt: Date | null = null
+  ): Promise<{ id: string; r2Key: string }> {
+    const r2Key = `project-documents/${randomUUID()}`;
+    const [doc] = await db
+      .insert(projectRequestDocuments)
+      .values({
+        projectRequestId,
+        r2Key,
+        fileName: 'brief.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1024,
+        deletedAt,
+      })
+      .returning();
+    if (doc === undefined) {
+      throw new Error('document insert failed');
+    }
+    return { id: doc.id, r2Key };
+  }
+
+  it('returns the key and file name of a live document on the request', async () => {
+    const request = await projectRequestFactory();
+    const doc = await seedDocument(request.id);
+
+    const found = await projectRequestsRepository.findDocumentInRequest(doc.id, request.id);
+
+    expect(found).toEqual({ id: doc.id, r2Key: doc.r2Key, fileName: 'brief.pdf' });
+  });
+
+  it('returns undefined for a document that belongs to another request', async () => {
+    const request = await projectRequestFactory();
+    const other = await projectRequestFactory();
+    const doc = await seedDocument(other.id);
+
+    const found = await projectRequestsRepository.findDocumentInRequest(doc.id, request.id);
+
+    expect(found).toBeUndefined();
+  });
+
+  it('returns undefined for a soft-deleted document', async () => {
+    const request = await projectRequestFactory();
+    const doc = await seedDocument(request.id, new Date());
+
+    const found = await projectRequestsRepository.findDocumentInRequest(doc.id, request.id);
+
+    expect(found).toBeUndefined();
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    const request = await projectRequestFactory();
+
+    const found = await projectRequestsRepository.findDocumentInRequest(randomUUID(), request.id);
+
+    expect(found).toBeUndefined();
+  });
+});
+
 // ── transitionStatus ─────────────────────────────────────────────────
 
 describe('projectRequestsRepository.transitionStatus', () => {
