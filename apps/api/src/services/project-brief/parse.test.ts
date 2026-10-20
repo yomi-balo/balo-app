@@ -423,6 +423,11 @@ describe('runProjectBriefParse', () => {
     expectPersistedResult({ unmatchedTagLabels: ['Crm analytics', 'Sandbox refresh'] });
   });
 
+  it('decodes entities in model-reported tag labels before the footnote', async () => {
+    await runWithModelOutput({ unmatchedTagLabels: ['Sales &amp; Service'] });
+    expectPersistedResult({ unmatchedTagLabels: ['Sales & Service'] });
+  });
+
   it('happy path: slug→id mapping reaches markSucceeded', async () => {
     findById.mockResolvedValue(baseRow());
     const ai = fakeAi(
@@ -444,6 +449,45 @@ describe('runProjectBriefParse', () => {
         }),
       })
     );
+  });
+
+  it('persists HTML entities the model wrote into the title and description as characters', async () => {
+    findById.mockResolvedValue(baseRow());
+    const ai = fakeAi(
+      vi.fn().mockResolvedValue({
+        value: {
+          ...validModelOutput,
+          title: 'CRM &amp; Marketing Automation',
+          descriptionMarkdown: 'Sales &amp; service teams',
+        },
+        audit: { modelId: 'claude-opus-5', modelVersion: null, promptId: 'p', promptVersion: 'v1' },
+        usage: { inputTokens: 10, outputTokens: 5 },
+      })
+    );
+    await runProjectBriefParse(PARSE_ID, { ai });
+
+    expect(markSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: expect.objectContaining({
+          title: 'CRM & Marketing Automation',
+          descriptionMarkdown: 'Sales & service teams',
+        }),
+      })
+    );
+  });
+
+  it('applies the usable-output floor to the decoded title', async () => {
+    findById.mockResolvedValue(baseRow());
+    const ai = fakeAi(
+      vi.fn().mockResolvedValue({
+        value: { ...validModelOutput, title: '&amp;&amp;' },
+        audit: { modelId: 'claude-opus-5', modelVersion: null, promptId: 'p', promptVersion: 'v1' },
+        usage: { inputTokens: 10, outputTokens: 5 },
+      })
+    );
+    await expect(runProjectBriefParse(PARSE_ID, { ai })).rejects.toMatchObject({
+      reason: 'empty_extraction',
+    });
   });
 
   // ── BAL-592 — deterministic product resolution ────────────────────────────────────────────
@@ -486,6 +530,26 @@ describe('runProjectBriefParse', () => {
     it('AC2: a slug that missed the taxonomy resolves through its humanised alias', async () => {
       await runWithModelOutput({ productSlugs: ['marketing-cloud'] });
       expectPersistedResult({ productIds: ['prod-engagement'], unmatchedProductLabels: [] });
+    });
+
+    it('an entity-encoded label resolves exactly like its decoded form', async () => {
+      getProductsForBriefMapping.mockResolvedValue([
+        {
+          category: { id: 'c1', name: 'Service', slug: 'service-cat', sortOrder: 0 },
+          products: [
+            product('prod-service', 'service-cloud', 'Service Cloud', [
+              { alias: 'Sales & Service', kind: 'alt_name' },
+            ]),
+          ],
+        },
+      ]);
+      await runWithModelOutput({ unmatchedProductLabels: ['Sales &amp; Service'] });
+      expectPersistedResult({ productIds: ['prod-service'], unmatchedProductLabels: [] });
+    });
+
+    it('an unresolved entity-encoded label reaches the footnote decoded', async () => {
+      await runWithModelOutput({ unmatchedProductLabels: ['Gong &amp; Chorus'] });
+      expectPersistedResult({ productIds: [], unmatchedProductLabels: ['Gong & Chorus'] });
     });
 
     it('AC5: an unknown label stays in the footnote and adds no id', async () => {

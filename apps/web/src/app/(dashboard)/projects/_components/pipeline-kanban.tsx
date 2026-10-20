@@ -103,7 +103,7 @@ export function PipelineKanban({
             <div className="bg-muted flex min-h-[110px] flex-col gap-2 rounded-2xl p-2">
               {items.length === 0 ? (
                 <p className="text-muted-foreground px-2 py-4 text-center text-xs">
-                  {mine ? `Nothing in ${column.label} is yours right now.` : 'Nothing here'}
+                  {mine ? 'Nothing here is yours right now.' : 'Nothing here'}
                 </p>
               ) : (
                 items.map((card) => <KanbanCard key={card.id} card={card} />)

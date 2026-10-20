@@ -474,6 +474,7 @@ export async function loadExpertPortfolio(
 
 /** The admin kanban stage order (the design's pipeline columns). */
 const KANBAN_STAGES: ReadonlyArray<{ stage: StageKey; label: string }> = [
+  { stage: 'exploratory', label: 'Exploratory call' },
   { stage: 'invited', label: 'Inviting' },
   { stage: 'eoi', label: 'Conversations' },
   { stage: 'prop_req', label: 'Proposal requested' },

@@ -10,7 +10,7 @@ describe('StageChip', () => {
 
   it('applies the success token classes for the kicked stage', () => {
     render(<StageChip stage="kicked" label="Kicked off" />);
-    expect(screen.getByText('Kicked off')).toHaveClass('text-success');
+    expect(screen.getByText('Kicked off')).toHaveClass('text-success-strong');
   });
 
   it('applies the primary token classes for the invited stage', () => {

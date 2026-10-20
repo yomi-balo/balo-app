@@ -521,6 +521,12 @@ describe('loadAdminPortfolio', () => {
   it('builds the triage hero, kanban columns, and tiles', async () => {
     const triageRequest = requestRow({ id: 'triage-1', status: 'requested', createdAt: day(2) });
     const stalled = requestRow({ id: 'stalled-1', status: 'experts_invited', updatedAt: day(5) });
+    // Quiet just as long, but no expert has been invited yet — never an EOI stall.
+    const exploratory = requestRow({
+      id: 'exploratory-1',
+      status: 'exploratory_meeting_requested',
+      updatedAt: day(5),
+    });
     const gateRequest = requestRow({
       id: 'gate-1',
       status: 'accepted',
@@ -528,7 +534,7 @@ describe('loadAdminPortfolio', () => {
       expertTermsConfirmedAt: null,
     });
     const liveRequest = requestRow({ id: 'live-1', status: 'kickoff_approved' });
-    mockListAll.mockResolvedValue([triageRequest, stalled, gateRequest, liveRequest]);
+    mockListAll.mockResolvedValue([triageRequest, stalled, exploratory, gateRequest, liveRequest]);
 
     const dto = await loadAdminPortfolio(['client', 'admin'], NOW);
 
@@ -537,6 +543,10 @@ describe('loadAdminPortfolio', () => {
     expect(mockListPortfolioEngagements).toHaveBeenCalledWith({ platform: true });
     expect(dto.triage.map((t) => t.id)).toEqual(['triage-1']);
     expect(dto.triage[0]?.overdue).toBe(true);
+
+    const exploratoryColumn = dto.kanban.find((c) => c.stage === 'exploratory');
+    expect(exploratoryColumn?.items.map((i) => i.id)).toEqual(['exploratory-1']);
+    expect(exploratoryColumn?.items[0]?.stalledLabel).toBeNull();
 
     const invitedColumn = dto.kanban.find((c) => c.stage === 'invited');
     expect(invitedColumn?.items.map((i) => i.id)).toEqual(['stalled-1']);
@@ -547,7 +557,7 @@ describe('loadAdminPortfolio', () => {
     expect(acceptedColumn?.items[0]?.stalledLabel).toBe('Kickoff gate');
 
     // Pipeline tile spans origination columns only (kickoff_approved excluded).
-    expect(dto.tiles).toEqual({ untriaged: 1, stalled: 2, pipeline: 2, gate: 1 });
+    expect(dto.tiles).toEqual({ untriaged: 1, stalled: 2, pipeline: 3, gate: 1 });
     expect(dto.isEmpty).toBe(false);
   });
 
