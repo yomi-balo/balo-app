@@ -9,6 +9,7 @@ import {
   projectRequestTags,
   projectRequestProducts,
   projectRequestDocuments,
+  requestExpertRelationships,
   users,
   type ProjectRequest,
   type ProjectRequestCloseReason,
@@ -271,12 +272,53 @@ export const projectRequestsRepository = {
    * `project_request.converted_from_case` audit row, LAST, inside the same transaction — so the
    * provenance outlives the `source_case_id` FK being nulled by a case hard-delete. An unknown
    * case id fails the FK and rolls the whole request back.
+   *
+   * A SUBMITTED DIRECT request (`sendTo = 'direct'`, status `requested`) is born with its target
+   * expert already invited: the `invited` relationship and its conversation are written here,
+   * and the row lands at `experts_invited` rather than `requested`. The client chose the expert,
+   * so there is nobody for staff to route it to — without the relationship the expert's lens
+   * (`resolveRequestLens`) denies them the very request they were notified about, and the admin
+   * pipeline panel has no one to list. A draft or `match` request is written as given.
    */
   async createProjectRequest(input: CreateProjectRequestInput): Promise<ProjectRequest> {
+    const { expertProfileId } = input.request;
+    const directExpertProfileId =
+      (input.request.sendTo ?? 'direct') === 'direct' &&
+      (input.request.status ?? 'requested') === 'requested' &&
+      typeof expertProfileId === 'string'
+        ? expertProfileId
+        : null;
+
     return db.transaction(async (tx) => {
-      const [row] = await tx.insert(projectRequests).values(input.request).returning();
+      const [row] = await tx
+        .insert(projectRequests)
+        .values(
+          directExpertProfileId === null
+            ? input.request
+            : { ...input.request, status: 'experts_invited' }
+        )
+        .returning();
       if (row === undefined) {
         throw new Error('Failed to create project request');
+      }
+
+      if (directExpertProfileId !== null) {
+        const [relationship] = await tx
+          .insert(requestExpertRelationships)
+          .values({
+            projectRequestId: row.id,
+            expertProfileId: directExpertProfileId,
+            invitedByUserId: row.createdByUserId,
+          })
+          .returning({ id: requestExpertRelationships.id });
+        if (relationship === undefined) {
+          throw new Error('Failed to invite the direct expert');
+        }
+        // Eager, like `requestExpertRelationshipsRepository.invite` — see its BAL-424 note.
+        await conversationsRepository.ensureForContext(
+          { contextType: 'relationship', contextId: relationship.id },
+          tx
+        );
       }
 
       if (input.tagIds.length > 0) {

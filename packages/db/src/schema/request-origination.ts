@@ -40,7 +40,8 @@ import { timestamps, softDelete } from './helpers';
  * 'relationship', contextId })`, never by an FK from here.
  *
  * `request_expert_relationships` is the per-expert spine: one row per
- * (request, expert), created at admin invite (`invited`), carrying that single
+ * (request, expert), created `invited` — by an admin invite, or at submission for
+ * the target expert of a direct request — carrying that single
  * expert's own status. EOIs and proposals FK to the relationship and carry a
  * denormalised `project_request_id` (and, where useful, `expert_profile_id`) for
  * indexed request-scoped reads.
@@ -52,10 +53,11 @@ import { timestamps, softDelete } from './helpers';
  */
 
 /**
- * request_expert_relationships — the per-expert spine. Born at admin invite.
+ * request_expert_relationships — the per-expert spine. Born at admin invite, or at
+ * submission for a direct request's target expert.
  * `projectRequestId`/`expertProfileId` CASCADE (children die with the request /
  * expert, mirroring project_requests.expert_profile_id); `invitedByUserId`
- * RESTRICT (preserve admin attribution, mirrors created_by_user_id).
+ * RESTRICT (preserve inviter attribution, mirrors created_by_user_id).
  */
 export const requestExpertRelationships = pgTable(
   'request_expert_relationships',
@@ -68,7 +70,8 @@ export const requestExpertRelationships = pgTable(
       .notNull()
       .references(() => expertProfiles.id, { onDelete: 'cascade' }),
     status: requestExpertRelationshipStatusEnum('status').notNull().default('invited'),
-    // The admin who invited this expert. Preserve attribution → restrict.
+    // Who invited this expert: the admin, or the submitting client on a direct request.
+    // Preserve attribution → restrict.
     invitedByUserId: uuid('invited_by_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),

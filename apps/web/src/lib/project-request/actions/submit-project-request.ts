@@ -200,7 +200,8 @@ export const submitProjectRequestAction = withAuth(
         return { success: false, error: eligibilityGate.error, code: eligibilityGate.code };
       }
 
-      // 5. Persist request + tags + products + documents in one transaction.
+      // 5. Persist request + tags + products + documents in one transaction. A direct request
+      //    is stored at `experts_invited` with its expert's relationship — see the repository.
       const created = await projectRequestsRepository.createProjectRequest({
         request: {
           companyId: session.user.companyId,
