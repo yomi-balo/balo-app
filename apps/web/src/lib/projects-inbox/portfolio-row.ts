@@ -46,6 +46,20 @@ export type StageKey =
 /** The portfolio filter tiles (participant lenses). */
 export type PortfolioFilter = 'all' | 'needs' | 'in_progress' | 'kicked';
 
+/**
+ * Which expert-side action a needs-you row is asking for. Set by the same branch that sets
+ * `needsYou`, so `needsYou === (moveKind !== null)` on every expert row; consumers map it to a
+ * card and never parse `stage` or `nudgeLabel`.
+ */
+export type ExpertMoveKind =
+  | 'invitation'
+  | 'eoi_propose_times'
+  | 'eoi_reply_owed'
+  | 'proposal_requested'
+  | 'changes_requested'
+  | 'kickoff_terms'
+  | 'delivery_changes';
+
 /** A serialisable portfolio row — what crosses the RSC boundary to the client. */
 export interface PortfolioRowView {
   id: string;
@@ -67,6 +81,12 @@ export interface PortfolioRowView {
   /** Freshest inbound signal preview, or null. */
   signal?: { from: string; messagePreview: string } | null;
   kind: 'request' | 'engagement';
+  /** The expert-side action this row asks for; null when `needsYou` is false (client rows: null). */
+  moveKind?: ExpertMoveKind | null;
+  /** The expert's relationship id on an expert request row; unset elsewhere. */
+  relationshipId?: string | null;
+  /** The client's change request on a `delivery_changes` engagement row; null otherwise. */
+  delivery?: { changeRequestNote: string; milestonesDone: number; milestonesTotal: number } | null;
 }
 
 /** Participant-lens DTO (client / expert). Fully serialisable (ISO + labels). */
@@ -296,6 +316,9 @@ interface NeedsYouResult {
   nudgeLabel: string;
 }
 
+/** Expert-lens result: the needs-you decision plus the typed reason (null when not needed). */
+export type ExpertNeedsYouResult = NeedsYouResult & { moveKind: ExpertMoveKind | null };
+
 function clientNeedsYou(row: PortfolioRequestRow, signal: RequestThreadSignal): NeedsYouResult {
   switch (row.status) {
     case 'draft':
@@ -337,15 +360,22 @@ function clientNeedsYou(row: PortfolioRequestRow, signal: RequestThreadSignal): 
 
 // ── Expert lens needs-you + nudge (per-relationship) ───────────────
 
+/** The accepted expert owes the kickoff terms until `expertTermsConfirmedAt` is set. */
+function acceptedExpertResult(invitation: PortfolioInvitationRow): ExpertNeedsYouResult {
+  return invitation.expertTermsConfirmedAt === null
+    ? { needsYou: true, nudgeLabel: 'Confirm terms', moveKind: 'kickoff_terms' }
+    : { needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null };
+}
+
 function expertNeedsYou(
   invitation: PortfolioInvitationRow,
   signal: RequestThreadSignal
-): NeedsYouResult {
+): ExpertNeedsYouResult {
   // BAL-540 — a closed request needs nothing from anybody, on ANY relationship status,
   // BEFORE the accepted/kickoff_approved branch below (which would otherwise read a closed
   // request's accepted relationship as still owing the kickoff gate).
   if (invitation.requestStatus === 'closed') {
-    return { needsYou: false, nudgeLabel: 'Closed' };
+    return { needsYou: false, nudgeLabel: 'Closed', moveKind: null };
   }
 
   // Request-level decision: if the request is accepted, the surviving thread owes
@@ -353,35 +383,44 @@ function expertNeedsYou(
   if (invitation.requestStatus === 'accepted' || invitation.requestStatus === 'kickoff_approved') {
     if (invitation.relationshipStatus === 'accepted') {
       if (invitation.requestStatus === 'kickoff_approved') {
-        return { needsYou: false, nudgeLabel: 'Live project' };
+        return { needsYou: false, nudgeLabel: 'Live project', moveKind: null };
       }
-      // requestStatus 'accepted' + viewer is the accepted expert → confirm terms.
-      // The expert lens does not carry the gate column, so the row is keyed on the
-      // accepted status; the detail page enforces the actual gate flag.
-      return { needsYou: true, nudgeLabel: 'Confirm terms' };
+      return acceptedExpertResult(invitation);
     }
-    return { needsYou: false, nudgeLabel: 'Not selected' };
+    return { needsYou: false, nudgeLabel: 'Not selected', moveKind: null };
   }
 
   switch (invitation.relationshipStatus) {
     case 'invited':
-      return { needsYou: true, nudgeLabel: 'Submit your EOI' };
+      return { needsYou: true, nudgeLabel: 'Submit your EOI', moveKind: 'invitation' };
     case 'eoi_submitted': {
       const needsReply = signal.anyUnread || signal.awaitingViewerReply;
       return {
         needsYou: true,
         nudgeLabel: needsReply ? 'Reply to client' : 'Propose times',
+        moveKind: needsReply ? 'eoi_reply_owed' : 'eoi_propose_times',
       };
     }
     case 'proposal_requested':
-      return { needsYou: true, nudgeLabel: 'Build your proposal' };
+      return {
+        needsYou: true,
+        nudgeLabel: 'Build your proposal',
+        moveKind: 'proposal_requested',
+      };
     case 'proposal_submitted':
-      return { needsYou: false, nudgeLabel: 'Waiting on client' };
+      if (invitation.currentProposalStatus === 'changes_requested') {
+        return {
+          needsYou: true,
+          nudgeLabel: 'Revise your proposal',
+          moveKind: 'changes_requested',
+        };
+      }
+      return { needsYou: false, nudgeLabel: 'Waiting on client', moveKind: null };
     case 'accepted':
-      return { needsYou: true, nudgeLabel: 'Confirm terms' };
+      return acceptedExpertResult(invitation);
     case 'declined':
     default:
-      return { needsYou: false, nudgeLabel: 'Not selected' };
+      return { needsYou: false, nudgeLabel: 'Not selected', moveKind: null };
   }
 }
 
@@ -446,7 +485,7 @@ export function needsYouFor(
 export function needsYouForExpert(
   invitation: PortfolioInvitationRow,
   signal: RequestThreadSignal = EMPTY_SIGNAL
-): NeedsYouResult {
+): ExpertNeedsYouResult {
   return expertNeedsYou(invitation, signal);
 }
 
@@ -479,6 +518,7 @@ export interface EngagementRowDeriv {
   nudgeLabel: string;
   href: string;
   progressLabel: string | null;
+  moveKind: ExpertMoveKind | null;
 }
 
 /**
@@ -515,11 +555,18 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
             nudgeLabel: `${input.counterpartName} requested changes`,
             href,
             progressLabel,
+            moveKind: 'delivery_changes',
           };
         }
-        return { needsYou: false, nudgeLabel: 'Changes requested', href, progressLabel };
+        return {
+          needsYou: false,
+          nudgeLabel: 'Changes requested',
+          href,
+          progressLabel,
+          moveKind: null,
+        };
       }
-      return { needsYou: false, nudgeLabel: 'In delivery', href, progressLabel };
+      return { needsYou: false, nudgeLabel: 'In delivery', href, progressLabel, moveKind: null };
     }
     case 'pending_acceptance': {
       if (input.lens === 'client') {
@@ -527,19 +574,32 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
           input.autoAcceptLabel === null
             ? 'Review project completion'
             : `Review project completion — auto-accepts ${input.autoAcceptLabel}`;
-        return { needsYou: true, nudgeLabel, href, progressLabel: null };
+        return { needsYou: true, nudgeLabel, href, progressLabel: null, moveKind: null };
       }
       return {
         needsYou: false,
         nudgeLabel: `Awaiting ${input.counterpartName} review`,
         href,
         progressLabel: null,
+        moveKind: null,
       };
     }
     case 'completed':
-      return { needsYou: false, nudgeLabel: 'Completed', href, progressLabel: null };
+      return {
+        needsYou: false,
+        nudgeLabel: 'Completed',
+        href,
+        progressLabel: null,
+        moveKind: null,
+      };
     case 'cancelled':
-      return { needsYou: false, nudgeLabel: 'Cancelled', href, progressLabel: null };
+      return {
+        needsYou: false,
+        nudgeLabel: 'Cancelled',
+        href,
+        progressLabel: null,
+        moveKind: null,
+      };
     default:
       return assertNeverStatus(input.status);
   }

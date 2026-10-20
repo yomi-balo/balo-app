@@ -1,12 +1,32 @@
-import { and, desc, eq, inArray, isNull, max, ne, notInArray, or } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  max,
+  ne,
+  notInArray,
+  or,
+  type SQL,
+} from 'drizzle-orm';
 import { db } from '../client';
 import {
   companies,
   expressionsOfInterest,
+  products,
+  projectRequestProducts,
+  projectRequestTags,
   projectRequests,
+  projectTags,
+  proposalChangeRequests,
+  proposals,
   requestExpertRelationships,
 } from '../schema';
 import type { ProjectRequestStatus } from './project-requests';
+import type { ProposalStatus } from './proposals';
+import type { ProposalChangeSection } from './proposal-types';
 import { conversationsRepository } from './conversations';
 
 /**
@@ -41,6 +61,24 @@ import { conversationsRepository } from './conversations';
  * hydrate — NOT in the repo (which stays free of view concerns). This module only
  * guarantees those timestamps are selected.
  */
+
+/**
+ * The single definition of which of an expert's relationships the INBOX lists (history
+ * included). `listExpertMoveDetails` is stricter: it never returns a declined relationship.
+ *
+ * BAL-540 — a declined track is normally invisible to the expert (they are no longer a
+ * participant), BUT the tracks of a CLOSED request must still come back or the expert's
+ * "Closed" portfolio group would be permanently empty: the close cascade declines every track
+ * it closes, so the two predicates would cancel out. The ended state is then rendered from the
+ * REQUEST's status, which is the honest signal — "this request was closed", not "you were
+ * declined".
+ */
+function expertCanSeeRelationship(): SQL | undefined {
+  return or(
+    ne(requestExpertRelationships.status, 'declined'),
+    eq(projectRequests.status, 'closed')
+  );
+}
 
 /** Local alias — the per-expert relationship status enum value. */
 type RequestExpertRelationshipStatus = (typeof requestExpertRelationships.$inferSelect)['status'];
@@ -219,6 +257,9 @@ export const projectsInboxRepository = {
         title: projectRequests.title,
         companyId: companies.id,
         companyName: companies.name,
+        clientBillingConfirmedAt: projectRequests.clientBillingConfirmedAt,
+        expertTermsConfirmedAt: projectRequests.expertTermsConfirmedAt,
+        currentProposalStatus: proposals.status,
       })
       .from(requestExpertRelationships)
       // LIVE parent request only — the deletedAt guard rides the join condition,
@@ -232,19 +273,20 @@ export const projectsInboxRepository = {
         )
       )
       .innerJoin(companies, eq(projectRequests.companyId, companies.id))
+      // At most one row per relationship (`proposal_current_per_relationship_idx`), so the
+      // LEFT JOIN cannot fan the result out.
+      .leftJoin(
+        proposals,
+        and(
+          eq(proposals.relationshipId, requestExpertRelationships.id),
+          eq(proposals.isCurrent, true),
+          isNull(proposals.deletedAt)
+        )
+      )
       .where(
         and(
           eq(requestExpertRelationships.expertProfileId, expertProfileId),
-          // BAL-540 — a declined track is normally invisible to the expert (they are no
-          // longer a participant), BUT the tracks of a CLOSED request must still come back or
-          // the expert's "Closed" portfolio group would be permanently empty: the close
-          // cascade declines every track it closes, so the two predicates would cancel out.
-          // The ended state is then rendered from the REQUEST's status, which is the honest
-          // signal — "this request was closed", not "you were declined".
-          or(
-            ne(requestExpertRelationships.status, 'declined'),
-            eq(projectRequests.status, 'closed')
-          ),
+          expertCanSeeRelationship(),
           isNull(requestExpertRelationships.deletedAt)
         )
       )
@@ -286,8 +328,170 @@ export const projectsInboxRepository = {
       title: row.title,
       companyId: row.companyId,
       companyName: row.companyName,
+      clientBillingConfirmedAt: row.clientBillingConfirmedAt,
+      expertTermsConfirmedAt: row.expertTermsConfirmedAt,
+      currentProposalStatus: row.currentProposalStatus,
       newestEoiAt: newestEoiByRelationship.get(row.relationshipId) ?? null,
     }));
+  },
+
+  /**
+   * Expert "Your move" detail batch. For the given project requests, what the expert's own
+   * card needs and the portfolio row does not: brief, timeline, product and tag names, kickoff
+   * gates, the relationship's LIVE current proposal and the newest change request raised
+   * against that current proposal row (a resubmit is a fresh row, so older versions' change
+   * requests hang off older rows and never appear).
+   *
+   * Scoped to the caller: a request the expert has no live, non-declined relationship on is
+   * absent from the result, even when the request is closed (the closed-request history
+   * exception belongs to the inbox list only). No budget or price column is selected. Four fixed queries regardless of input
+   * size; empty input returns an empty Map without touching the DB.
+   */
+  async listExpertMoveDetails(input: {
+    expertProfileId: string;
+    projectRequestIds: readonly string[];
+  }): Promise<Map<string, ExpertMoveDetail>> {
+    const result = new Map<string, ExpertMoveDetail>();
+    if (input.projectRequestIds.length === 0) {
+      return result;
+    }
+    const requestIds = [...input.projectRequestIds];
+
+    const [requestRows, productRows, tagRows] = await Promise.all([
+      db
+        .select({
+          projectRequestId: projectRequests.id,
+          requestStatus: projectRequests.status,
+          descriptionHtml: projectRequests.description,
+          timeline: projectRequests.timeline,
+          clientBillingConfirmedAt: projectRequests.clientBillingConfirmedAt,
+          expertTermsConfirmedAt: projectRequests.expertTermsConfirmedAt,
+          proposalId: proposals.id,
+          proposalStatus: proposals.status,
+          proposalVersion: proposals.version,
+          proposalUpdatedAt: proposals.updatedAt,
+        })
+        .from(projectRequests)
+        .innerJoin(
+          requestExpertRelationships,
+          and(
+            eq(requestExpertRelationships.projectRequestId, projectRequests.id),
+            eq(requestExpertRelationships.expertProfileId, input.expertProfileId),
+            isNull(requestExpertRelationships.deletedAt),
+            ne(requestExpertRelationships.status, 'declined')
+          )
+        )
+        .leftJoin(
+          proposals,
+          and(
+            eq(proposals.relationshipId, requestExpertRelationships.id),
+            eq(proposals.isCurrent, true),
+            isNull(proposals.deletedAt)
+          )
+        )
+        .where(and(inArray(projectRequests.id, requestIds), isNull(projectRequests.deletedAt))),
+      db
+        .select({
+          projectRequestId: projectRequestProducts.projectRequestId,
+          name: products.name,
+        })
+        .from(projectRequestProducts)
+        .innerJoin(products, eq(products.id, projectRequestProducts.productId))
+        .where(
+          and(
+            inArray(projectRequestProducts.projectRequestId, requestIds),
+            isNull(projectRequestProducts.deletedAt)
+          )
+        )
+        .orderBy(asc(products.name)),
+      db
+        .select({
+          projectRequestId: projectRequestTags.projectRequestId,
+          name: projectTags.name,
+        })
+        .from(projectRequestTags)
+        .innerJoin(
+          projectTags,
+          and(eq(projectTags.id, projectRequestTags.projectTagId), isNull(projectTags.deletedAt))
+        )
+        .where(
+          and(
+            inArray(projectRequestTags.projectRequestId, requestIds),
+            isNull(projectRequestTags.deletedAt)
+          )
+        )
+        .orderBy(asc(projectTags.name)),
+    ]);
+
+    const proposalIds = requestRows.flatMap((row) =>
+      row.proposalId === null ? [] : [row.proposalId]
+    );
+    const changeRows =
+      proposalIds.length === 0
+        ? []
+        : await db
+            .selectDistinctOn([proposalChangeRequests.proposalId], {
+              proposalId: proposalChangeRequests.proposalId,
+              note: proposalChangeRequests.note,
+              section: proposalChangeRequests.section,
+              createdAt: proposalChangeRequests.createdAt,
+            })
+            .from(proposalChangeRequests)
+            .where(
+              and(
+                inArray(proposalChangeRequests.proposalId, proposalIds),
+                isNull(proposalChangeRequests.deletedAt)
+              )
+            )
+            .orderBy(
+              proposalChangeRequests.proposalId,
+              desc(proposalChangeRequests.createdAt),
+              desc(proposalChangeRequests.id)
+            );
+    const changeByProposal = new Map(changeRows.map((row) => [row.proposalId, row]));
+
+    const namesByRequest = (rows: { projectRequestId: string; name: string }[]) => {
+      const grouped = new Map<string, string[]>();
+      for (const row of rows) {
+        const names = grouped.get(row.projectRequestId) ?? [];
+        names.push(row.name);
+        grouped.set(row.projectRequestId, names);
+      }
+      return grouped;
+    };
+    const productsByRequest = namesByRequest(productRows);
+    const tagsByRequest = namesByRequest(tagRows);
+
+    for (const row of requestRows) {
+      const change = row.proposalId === null ? undefined : changeByProposal.get(row.proposalId);
+      result.set(row.projectRequestId, {
+        projectRequestId: row.projectRequestId,
+        requestStatus: row.requestStatus,
+        descriptionHtml: row.descriptionHtml,
+        timeline: row.timeline,
+        productNames: productsByRequest.get(row.projectRequestId) ?? [],
+        tagNames: tagsByRequest.get(row.projectRequestId) ?? [],
+        clientBillingConfirmedAt: row.clientBillingConfirmedAt,
+        expertTermsConfirmedAt: row.expertTermsConfirmedAt,
+        currentProposal:
+          row.proposalId === null ||
+          row.proposalStatus === null ||
+          row.proposalVersion === null ||
+          row.proposalUpdatedAt === null
+            ? null
+            : {
+                id: row.proposalId,
+                status: row.proposalStatus,
+                version: row.proposalVersion,
+                updatedAt: row.proposalUpdatedAt,
+              },
+        latestChangeRequest:
+          change === undefined
+            ? null
+            : { note: change.note, section: change.section, createdAt: change.createdAt },
+      });
+    }
+    return result;
   },
 };
 
@@ -310,5 +514,32 @@ export interface PortfolioInvitationRow {
   title: string;
   companyId: string;
   companyName: string;
+  /** Kickoff gate: the client's billing confirmation (null = outstanding). */
+  clientBillingConfirmedAt: Date | null;
+  /** Kickoff gate: the expert's terms confirmation (null = outstanding). */
+  expertTermsConfirmedAt: Date | null;
+  /** Status of the relationship's LIVE current proposal (null = none). */
+  currentProposalStatus: ProposalStatus | null;
   newestEoiAt: Date | null;
+}
+
+/**
+ * Everything an expert's "Your move" card needs beyond the portfolio row. Deliberately has no
+ * budget or price field.
+ */
+export interface ExpertMoveDetail {
+  projectRequestId: string;
+  requestStatus: ProjectRequestStatus;
+  descriptionHtml: string;
+  timeline: string | null;
+  productNames: string[];
+  tagNames: string[];
+  clientBillingConfirmedAt: Date | null;
+  expertTermsConfirmedAt: Date | null;
+  currentProposal: { id: string; status: ProposalStatus; version: number; updatedAt: Date } | null;
+  latestChangeRequest: {
+    note: string;
+    section: ProposalChangeSection;
+    createdAt: Date;
+  } | null;
 }

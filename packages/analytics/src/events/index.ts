@@ -47,6 +47,12 @@ export {
   type DashboardUpNextTarget,
   DASHBOARD_UP_NEXT_ROW_STATES,
   type DashboardUpNextRowState,
+  DASHBOARD_YOUR_MOVE_CARD_KINDS,
+  type DashboardYourMoveCardKind,
+  DASHBOARD_YOUR_MOVE_CHIPS,
+  type DashboardYourMoveChip,
+  DASHBOARD_YOUR_MOVE_TARGETS,
+  type DashboardYourMoveTarget,
 } from './dashboard';
 export {
   SEARCH_EVENTS,

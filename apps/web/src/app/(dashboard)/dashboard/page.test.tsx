@@ -30,8 +30,17 @@ vi.mock('./_lib/up-next-footer-links', () => ({
 vi.mock('@/lib/logging', () => ({ log: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 vi.mock('./_components/expert-dashboard', () => ({
-  ExpertDashboard: ({ upNext }: { upNext: React.ReactNode }) => (
-    <div data-testid="expert-dashboard">{upNext}</div>
+  ExpertDashboard: ({
+    upNext,
+    yourMove,
+  }: {
+    upNext: React.ReactNode;
+    yourMove: React.ReactNode;
+  }) => (
+    <div data-testid="expert-dashboard">
+      {yourMove}
+      {upNext}
+    </div>
   ),
 }));
 vi.mock('./_components/dashboard-wallet-slot', () => ({
@@ -39,6 +48,16 @@ vi.mock('./_components/dashboard-wallet-slot', () => ({
 }));
 vi.mock('./_components/company-up-next-slot', () => ({
   CompanyUpNextSlot: () => <div data-testid="company-up-next-slot" />,
+}));
+const mockYourMoveSlot = vi.fn();
+vi.mock('./_components/your-move-slot', () => ({
+  YourMoveSlot: (props: unknown) => {
+    mockYourMoveSlot(props);
+    return <div data-testid="your-move-slot" />;
+  },
+}));
+vi.mock('./_components/your-move-skeleton', () => ({
+  YourMoveSkeleton: () => <div data-testid="your-move-skeleton" />,
 }));
 vi.mock('./_components/expert-up-next-slot', () => ({
   ExpertUpNextSlot: () => <div data-testid="expert-up-next-slot" />,
@@ -184,6 +203,40 @@ describe('DashboardPage — expert branch', () => {
     expect(mockResolveUpNextFooterLinks).toHaveBeenCalledWith(
       { workspaceType: 'company', capabilities: [] },
       'expert'
+    );
+  });
+
+  it.each([
+    [true, true],
+    [false, false],
+  ])('passes calendarNeedsReconnect=%s through to the Your move slot', async (flag, expected) => {
+    mockGetCurrentUser.mockResolvedValue({
+      id: 'u-1',
+      activeMode: 'expert',
+      expertProfileId: 'profile-1',
+    });
+    mockGetChecklistStatus.mockResolvedValue({ allComplete: true, calendarNeedsReconnect: flag });
+
+    render(await DashboardPage());
+
+    expect(screen.getByTestId('your-move-slot')).toBeInTheDocument();
+    expect(mockYourMoveSlot).toHaveBeenCalledWith(
+      expect.objectContaining({ expertProfileId: 'profile-1', calendarNeedsReconnect: expected })
+    );
+  });
+
+  it('keeps the Your move rail when the checklist read fails, with no reconnect blocker', async () => {
+    mockGetCurrentUser.mockResolvedValue({
+      id: 'u-1',
+      activeMode: 'expert',
+      expertProfileId: 'profile-1',
+    });
+    mockGetChecklistStatus.mockRejectedValue(new Error('boom'));
+
+    render(await DashboardPage());
+
+    expect(mockYourMoveSlot).toHaveBeenCalledWith(
+      expect.objectContaining({ calendarNeedsReconnect: false })
     );
   });
 });

@@ -44,7 +44,12 @@ vi.mock('@balo/db', () => ({
   AUTO_ACCEPT_DAYS: 7,
 }));
 
-import { loadClientPortfolio, loadExpertPortfolio, loadAdminPortfolio } from './portfolio-view';
+import {
+  loadClientPortfolio,
+  loadExpertPortfolio,
+  loadAdminPortfolio,
+  summaryIsUnread,
+} from './portfolio-view';
 import type { SessionUser } from '@/lib/auth/session';
 
 const NOW = new Date('2026-06-16T12:00:00.000Z');
@@ -97,6 +102,9 @@ function invitationRow(overrides: Record<string, unknown> = {}): Record<string, 
     title: 'Experience Cloud portal',
     companyId: 'company-9',
     companyName: 'Harbour Health',
+    clientBillingConfirmedAt: null,
+    expertTermsConfirmedAt: null,
+    currentProposalStatus: null,
     newestEoiAt: null,
     ...overrides,
   };
@@ -411,10 +419,15 @@ describe('loadExpertPortfolio', () => {
     expect(invitation?.needsYou).toBe(true);
     expect(invitation?.nudgeLabel).toBe('Submit your EOI');
     expect(invitation?.href).toBe('/projects/req-9');
+    expect(invitation?.moveKind).toBe('invitation');
+    expect(invitation?.relationshipId).toBe('rel-1');
+    expect(invitation?.delivery).toBeUndefined();
 
     const engagement = dto.rows.find((r) => r.kind === 'engagement');
     expect(engagement?.href).toBe('/engagements/eng-live?from=inbox');
     expect(engagement?.stage).toBe('kicked');
+    expect(engagement?.moveKind).toBeNull();
+    expect(engagement?.delivery).toBeNull();
   });
 
   it('dedups: a kicked-off invitation superseded by its engagement renders ONE engagement row', async () => {
@@ -471,9 +484,17 @@ describe('loadExpertPortfolio', () => {
     const note = dto.rows.find((r) => r.id === 'eng-note');
     expect(note?.needsYou).toBe(true);
     expect(note?.nudgeLabel).toBe('Northwind requested changes');
+    expect(note?.moveKind).toBe('delivery_changes');
+    expect(note?.delivery).toEqual({
+      changeRequestNote: 'Please revise the data model.',
+      milestonesDone: 0,
+      milestonesTotal: 0,
+    });
     const pending = dto.rows.find((r) => r.id === 'eng-pa');
     expect(pending?.needsYou).toBe(false);
     expect(pending?.nudgeLabel).toBe('Awaiting Northwind review');
+    expect(pending?.moveKind).toBeNull();
+    expect(pending?.delivery).toBeNull();
     // Expert-lens counterpart slot shows the client company.
     expect(note?.companyName).toBe('Northwind');
   });
@@ -653,5 +674,62 @@ describe('BAL-541 (D9) — Balo owner never leaks into a client/expert portfolio
     const card = invitedColumn?.items.find((i) => i.id === 'req-owned');
     expect(card?.baloOwner).toEqual({ userId: OWNER_SENTINEL, name: 'Adeeb Khan' });
     expect(mockFindNamesByIds).toHaveBeenCalledWith([OWNER_SENTINEL]);
+  });
+});
+
+describe('portfolio rows — kickoff and proposal-changes rules', () => {
+  const expertUser = { ...USER, expertProfileId: 'expert-1' };
+
+  it('an accepted expert with terms confirmed is awaiting kickoff, not needs-you', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([
+      invitationRow({
+        relationshipStatus: 'accepted',
+        requestStatus: 'accepted',
+        expertTermsConfirmedAt: day(1),
+      }),
+    ]);
+    mockListPortfolioEngagements.mockResolvedValue([]);
+
+    const dto = await loadExpertPortfolio(expertUser, ['expert'], NOW);
+    expect(dto.rows[0]).toMatchObject({
+      needsYou: false,
+      nudgeLabel: 'Awaiting kickoff',
+      moveKind: null,
+    });
+    expect(dto.tiles.needs).toBe(0);
+  });
+
+  it('a changes_requested current proposal surfaces as a needs-you changes_requested row', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([
+      invitationRow({
+        relationshipStatus: 'proposal_submitted',
+        requestStatus: 'proposal_submitted',
+        currentProposalStatus: 'changes_requested',
+      }),
+    ]);
+    mockListPortfolioEngagements.mockResolvedValue([]);
+
+    const dto = await loadExpertPortfolio(expertUser, ['expert'], NOW);
+    expect(dto.rows[0]).toMatchObject({
+      needsYou: true,
+      nudgeLabel: 'Revise your proposal',
+      moveKind: 'changes_requested',
+      relationshipId: 'rel-1',
+    });
+    expect(dto.tiles.needs).toBe(1);
+  });
+});
+
+describe('summaryIsUnread', () => {
+  const summary = (inbound: Date | null, readAt: Date | null) =>
+    ({ latestInboundActivityAt: inbound, lastReadAt: readAt }) as Parameters<
+      typeof summaryIsUnread
+    >[0];
+
+  it('is unread only when inbound activity is newer than the read mark', () => {
+    expect(summaryIsUnread(summary(null, null))).toBe(false);
+    expect(summaryIsUnread(summary(day(1), null))).toBe(true);
+    expect(summaryIsUnread(summary(day(2), day(1)))).toBe(false);
+    expect(summaryIsUnread(summary(day(1), day(2)))).toBe(true);
   });
 });

@@ -13,6 +13,7 @@ const EXPECTED_FILES = [
   'buying-credit.md',
   'connecting-your-calendar.md',
   'dashboard-up-next.md',
+  'dashboard-your-move.md',
   'joining-a-call.md',
   'pausing-new-work.md',
   'project-requests-for-experts.md',

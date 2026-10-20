@@ -1917,3 +1917,140 @@ describe('BAL-424 invariants', () => {
     expect(columns).toContain('senderUserId');
   });
 });
+
+describe('conversationsRepository.countUnreadForViewer', () => {
+  const base = Date.parse('2026-06-16T00:00:00Z');
+
+  it('returns an empty Map for no ids', async () => {
+    const viewer = await userFactory();
+    const result = await conversationsRepository.countUnreadForViewer({
+      conversationIds: [],
+      viewerUserId: viewer.id,
+    });
+    expect(result.size).toBe(0);
+  });
+
+  it('counts all inbound with no watermark, excluding own and soft-deleted activity', async () => {
+    const { conversationId } = await requestExpertRelationshipFactory();
+    const viewer = await userFactory();
+    const other = await userFactory();
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: other.id,
+      createdAt: new Date(base + 1000),
+    });
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: viewer.id,
+      createdAt: new Date(base),
+    });
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: other.id,
+      createdAt: new Date(base - 5000),
+      deletedAt: new Date(),
+    });
+    await conversationFileFactory({
+      conversationId,
+      uploadedByUserId: other.id,
+      createdAt: new Date(base + 2000),
+    });
+    await conversationFileFactory({
+      conversationId,
+      uploadedByUserId: other.id,
+      createdAt: new Date(base - 6000),
+      deletedAt: new Date(),
+    });
+    await conversationFileFactory({
+      conversationId,
+      uploadedByUserId: viewer.id,
+      createdAt: new Date(base - 7000),
+    });
+
+    const result = await conversationsRepository.countUnreadForViewer({
+      conversationIds: [conversationId],
+      viewerUserId: viewer.id,
+    });
+    expect(result.get(conversationId)).toEqual({
+      unreadCount: 2,
+      earliestUnreadAt: new Date(base + 1000),
+    });
+  });
+
+  it('excludes activity at or before the watermark and takes the earliest across messages and files', async () => {
+    const { conversationId } = await requestExpertRelationshipFactory();
+    const viewer = await userFactory();
+    const other = await userFactory();
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: other.id,
+      createdAt: new Date(base),
+    });
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: other.id,
+      createdAt: new Date(base + 3000),
+    });
+    await conversationFileFactory({
+      conversationId,
+      uploadedByUserId: other.id,
+      createdAt: new Date(base + 2000),
+    });
+    await conversationsRepository.markThreadRead({
+      conversationId,
+      userId: viewer.id,
+      at: new Date(base),
+    });
+
+    const result = await conversationsRepository.countUnreadForViewer({
+      conversationIds: [conversationId],
+      viewerUserId: viewer.id,
+    });
+    expect(result.get(conversationId)).toEqual({
+      unreadCount: 2,
+      earliestUnreadAt: new Date(base + 2000),
+    });
+  });
+
+  it('treats a soft-deleted read state as never read', async () => {
+    const { conversationId } = await requestExpertRelationshipFactory();
+    const viewer = await userFactory();
+    const other = await userFactory();
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: other.id,
+      createdAt: new Date(base),
+    });
+    await db.insert(conversationReadStates).values({
+      conversationId,
+      userId: viewer.id,
+      lastReadAt: new Date(base + 5000),
+      deletedAt: new Date(),
+    });
+
+    const result = await conversationsRepository.countUnreadForViewer({
+      conversationIds: [conversationId],
+      viewerUserId: viewer.id,
+    });
+    expect(result.get(conversationId)?.unreadCount).toBe(1);
+  });
+
+  it('answers two conversations in one call, with a zero entry for a quiet one', async () => {
+    const { conversationId: busy } = await requestExpertRelationshipFactory();
+    const { conversationId: quiet } = await requestExpertRelationshipFactory();
+    const viewer = await userFactory();
+    const other = await userFactory();
+    await conversationMessageFactory({
+      conversationId: busy,
+      senderUserId: other.id,
+      createdAt: new Date(base),
+    });
+
+    const result = await conversationsRepository.countUnreadForViewer({
+      conversationIds: [busy, quiet],
+      viewerUserId: viewer.id,
+    });
+    expect(result.get(busy)?.unreadCount).toBe(1);
+    expect(result.get(quiet)).toEqual({ unreadCount: 0, earliestUnreadAt: null });
+  });
+});

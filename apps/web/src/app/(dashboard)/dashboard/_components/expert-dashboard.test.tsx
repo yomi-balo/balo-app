@@ -7,14 +7,11 @@ vi.mock('./getting-started-checklist', () => ({
 vi.mock('./celebration-card', () => ({
   CelebrationCard: () => <div data-testid="celebration" />,
 }));
-vi.mock('./metric-cards', () => ({
-  MetricCards: () => <div data-testid="metric-cards" />,
+vi.mock('./earnings-card', () => ({
+  EarningsCard: () => <div data-testid="earnings" />,
 }));
 vi.mock('./ghost-clients-card', () => ({
   GhostClientsCard: () => <div data-testid="ghost-clients" />,
-}));
-vi.mock('./calendar-disconnected-banner', () => ({
-  CalendarDisconnectedBanner: () => <div data-testid="banner" />,
 }));
 
 import { ExpertDashboard } from './expert-dashboard';
@@ -40,60 +37,43 @@ function status(overrides: Partial<ChecklistStatus> = {}): ChecklistStatus {
 }
 
 describe('ExpertDashboard (BAL-566 R2/D13)', () => {
-  it('shows the banner only when calendarNeedsReconnect is true, and it is the first element', () => {
-    render(
-      <ExpertDashboard
-        checklistStatus={status({ calendarNeedsReconnect: true })}
-        userName="Priya"
-        upNext={<div data-testid="up-next" />}
-      />
-    );
-    const container = screen.getByTestId('banner').closest('div')?.parentElement;
-    expect(screen.getByTestId('banner')).toBeInTheDocument();
-    expect(container?.firstElementChild).toBe(screen.getByTestId('banner'));
-  });
-
-  it('hides the banner when calendarNeedsReconnect is false', () => {
-    render(
-      <ExpertDashboard
-        checklistStatus={status({ calendarNeedsReconnect: false })}
-        userName="Priya"
-        upNext={<div data-testid="up-next" />}
-      />
-    );
-    expect(screen.queryByTestId('banner')).toBeNull();
-  });
-
-  it('hides the banner when checklistStatus is null', () => {
-    render(
-      <ExpertDashboard
-        checklistStatus={null}
-        userName="Priya"
-        upNext={<div data-testid="up-next" />}
-      />
-    );
-    expect(screen.queryByTestId('banner')).toBeNull();
-  });
-
-  it('the grid holds upNext then the Clients card, and MetricCards sits after the grid', () => {
+  it('places the Your move rail after the header and before the Up next grid', () => {
     render(
       <ExpertDashboard
         checklistStatus={status()}
         userName="Priya"
-        upNext={<div data-testid="up-next">Up next slot</div>}
+        upNext={<div data-testid="up-next" />}
+        yourMove={<div data-testid="your-move" />}
+      />
+    );
+    const header = screen.getByText('Welcome back, Priya');
+    const yourMove = screen.getByTestId('your-move');
+    const upNext = screen.getByTestId('up-next');
+    expect(
+      header.compareDocumentPosition(yourMove) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      yourMove.compareDocumentPosition(upNext) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('the grid holds upNext, then a column of the Earnings and Clients cards', () => {
+    render(
+      <ExpertDashboard
+        checklistStatus={status()}
+        userName="Priya"
+        upNext={<div data-testid="up-next" />}
+        yourMove={null}
       />
     );
     const upNext = screen.getByTestId('up-next');
+    const earnings = screen.getByTestId('earnings');
     const clients = screen.getByTestId('ghost-clients');
-    const metrics = screen.getByTestId('metric-cards');
 
-    // Same grid parent, upNext before clients.
-    expect(upNext.parentElement).toBe(clients.parentElement);
-    const gridChildren = [...(upNext.parentElement?.children ?? [])];
-    expect(gridChildren.indexOf(upNext)).toBeLessThan(gridChildren.indexOf(clients));
-
-    // MetricCards is a sibling AFTER the grid in document order.
-    expect(upNext.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(earnings.parentElement).toBe(clients.parentElement);
+    expect(upNext.parentElement).toBe(earnings.parentElement?.parentElement);
+    const column = [...(earnings.parentElement?.children ?? [])];
+    expect(column.indexOf(earnings)).toBeLessThan(column.indexOf(clients));
   });
 
   it('renders the checklist when incomplete, the celebration card when complete', () => {
@@ -102,6 +82,7 @@ describe('ExpertDashboard (BAL-566 R2/D13)', () => {
         checklistStatus={status({ allComplete: false })}
         userName="Priya"
         upNext={null}
+        yourMove={null}
       />
     );
     expect(screen.getByTestId('checklist')).toBeInTheDocument();
@@ -111,6 +92,7 @@ describe('ExpertDashboard (BAL-566 R2/D13)', () => {
         checklistStatus={status({ allComplete: true })}
         userName="Priya"
         upNext={null}
+        yourMove={null}
       />
     );
     expect(screen.getByTestId('celebration')).toBeInTheDocument();

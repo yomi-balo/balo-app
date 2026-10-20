@@ -112,7 +112,7 @@ function openRelationshipIds(row: PortfolioRequestRow): string[] {
 }
 
 /** A thread is unread when inbound activity is newer than the viewer's read mark. */
-function summaryIsUnread(summary: ThreadSummary): boolean {
+export function summaryIsUnread(summary: ThreadSummary): boolean {
   const inboundAt = summary.latestInboundActivityAt;
   if (inboundAt === null) return false;
   const lastReadAt = summary.lastReadAt;
@@ -253,6 +253,7 @@ function toClientRowView(
     recencyAtIso: recencyAt.toISOString(),
     signal: signal.freshestSignal,
     kind: 'request',
+    moveKind: null,
   };
 }
 
@@ -262,7 +263,7 @@ function toExpertRowView(
   signal: RequestThreadSignal,
   now: Date
 ): PortfolioRowView {
-  const { needsYou, nudgeLabel } = needsYouForExpert(invitation, signal);
+  const { needsYou, nudgeLabel, moveKind } = needsYouForExpert(invitation, signal);
   // BAL-540 — a closed REQUEST always wins the chip, even though the relationship itself is
   // `declined` by the close cascade (which `stageChipForRelationship` alone would read as
   // stage `'invited'` — RELATIONSHIP_STATUS_TO_STAGE has no `'closed'` arm, since a relationship
@@ -292,6 +293,8 @@ function toExpertRowView(
     recencyAtIso: recencyAt.toISOString(),
     signal: signal.freshestSignal,
     kind: 'request',
+    moveKind,
+    relationshipId: invitation.relationshipId,
   };
 }
 
@@ -321,7 +324,7 @@ function toEngagementRowView(
       ? formatAutoAcceptLabel(e.completionRequestedAt)
       : null;
 
-  const { needsYou, nudgeLabel, href, progressLabel } = deriveEngagementRow({
+  const { needsYou, nudgeLabel, href, progressLabel, moveKind } = deriveEngagementRow({
     engagementId: e.id,
     status: e.status,
     lens,
@@ -349,6 +352,15 @@ function toEngagementRowView(
     recencyAtIso: recencyAt.toISOString(),
     signal: null,
     kind: 'engagement',
+    moveKind,
+    delivery:
+      moveKind === 'delivery_changes' && e.changeRequestNote !== null
+        ? {
+            changeRequestNote: e.changeRequestNote,
+            milestonesDone: e.completedMilestones,
+            milestonesTotal: e.totalMilestones,
+          }
+        : null,
   };
 }
 
