@@ -138,12 +138,14 @@ describe('INVARIANT: an open receivable refuses a new Case BOOKING and never an 
     // R2-F8 / D8.6 — anchored on the CALLS inside `resolveBookingInput`, never on an import line
     // or the service-error mapper (which already names `'idempotency_key_conflict'` further up the
     // file). Mutation proof: move the funding guard above the replay probe and this fails.
+    // The slice is the function body, so a bare call name (no `await` prefix) cannot match an
+    // import; the calls may be wrapped in `timeBookingPhase(…)`.
     const route = scan(MEETINGS_ROUTE);
     const pipeline = sliceFunction(route, 'async function resolveBookingInput(');
-    const probeIdx = pipeline.indexOf('await lookupBookingReplay(');
+    const probeIdx = pipeline.indexOf('lookupBookingReplay(');
     const conflictIdx = pipeline.indexOf("'idempotency_key_conflict'", probeIdx);
     const fundingIdx = pipeline.indexOf('checkCaseBookingFunding(', conflictIdx);
-    const perPairIdx = pipeline.indexOf('await enforceExpertScopedGuards(', fundingIdx);
+    const perPairIdx = pipeline.indexOf('enforceExpertScopedGuards(', fundingIdx);
     expect(probeIdx).toBeGreaterThanOrEqual(0);
     expect(conflictIdx).toBeGreaterThan(probeIdx);
     expect(fundingIdx).toBeGreaterThan(conflictIdx);

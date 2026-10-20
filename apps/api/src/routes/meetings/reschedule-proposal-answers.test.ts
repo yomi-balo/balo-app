@@ -316,7 +316,8 @@ describe('POST /meetings/:meetingId/reschedule-proposals/:proposalId (BAL-411 an
           currentStart: CURRENT_START,
           currentEnd: CURRENT_END,
           hasVendorEvent: true,
-        })
+        }),
+        undefined
       );
     });
 

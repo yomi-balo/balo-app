@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
+  mockLog,
+  mockRequestLog,
   mockAuthorizeMeetingBooking,
   mockBookAndProvisionMeeting,
   mockLookupBookingReplay,
@@ -61,6 +63,21 @@ const {
     }
   }
   return {
+    mockLog: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // Fastify's per-request logger: `child` returns itself so `request.log` is this object.
+    mockRequestLog: Object.assign(
+      {
+        trace: vi.fn(),
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        fatal: vi.fn(),
+        level: 'info',
+        silent: vi.fn(),
+      },
+      { child: vi.fn() }
+    ),
     mockAuthorizeMeetingBooking: vi.fn(),
     mockBookAndProvisionMeeting: vi.fn(),
     mockLookupBookingReplay: vi.fn(),
@@ -78,7 +95,7 @@ const {
 });
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => mockLog,
 }));
 vi.mock('@balo/db', () => ({
   MatchModeDiscoveryNotBookableError,
@@ -127,8 +144,13 @@ vi.mock('../../services/availability/window-availability.js', () => ({
 // `@balo/shared/meetings` is NOT mocked — the real `validateBookingWindow` is what the
 // window rows of the error table are actually asserting.
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import { meetingsRoutes } from './index.js';
+import {
+  BOOKING_PHASES,
+  BOOKING_PHASE_TIMING_MESSAGE,
+  type BookingPhaseRecorder,
+} from '../../services/meetings/booking-phase-timing.js';
 
 const USER_ID = '55555555-5555-4555-8555-555555555555';
 const CONTEXT_ID = '33333333-3333-4333-8333-333333333333';
@@ -193,7 +215,8 @@ describe('POST /meetings', () => {
   }
 
   beforeAll(async () => {
-    app = Fastify({ logger: false });
+    mockRequestLog.child.mockImplementation(() => mockRequestLog);
+    app = Fastify({ loggerInstance: mockRequestLog as unknown as FastifyBaseLogger });
     await app.register(meetingsRoutes);
     await app.ready();
   });
@@ -299,7 +322,8 @@ describe('POST /meetings', () => {
         engagementType: null,
         userId: USER_ID,
       }),
-      expect.anything()
+      expect.anything(),
+      expect.objectContaining({ phaseRecorder: expect.anything() })
     );
     // The 10/hr per-(user, expert) limit and the availability read both ran for this label —
     // exactly what Ruling 1 wants (a `request_interaction` call DOES block the calendar).
@@ -308,7 +332,8 @@ describe('POST /meetings', () => {
       expect.any(Date),
       expect.any(Date),
       expect.any(Date),
-      undefined
+      undefined,
+      { onVendorBusyRead: expect.any(Function) }
     );
   });
 
@@ -329,7 +354,8 @@ describe('POST /meetings', () => {
         engagementType: 'project',
         userId: USER_ID,
       }),
-      expect.anything()
+      expect.anything(),
+      expect.objectContaining({ phaseRecorder: expect.anything() })
     );
   });
 
@@ -344,7 +370,8 @@ describe('POST /meetings', () => {
       expect(res.statusCode).toBe(201);
       expect(mockBookAndProvisionMeeting).toHaveBeenCalledWith(
         expect.objectContaining({ bookingIdempotencyKey: undefined }),
-        expect.anything()
+        expect.anything(),
+        expect.objectContaining({ phaseRecorder: expect.anything() })
       );
     });
 
@@ -354,7 +381,8 @@ describe('POST /meetings', () => {
       expect(res.statusCode).toBe(201);
       expect(mockBookAndProvisionMeeting).toHaveBeenCalledWith(
         expect.objectContaining({ bookingIdempotencyKey: KEY }),
-        expect.anything()
+        expect.anything(),
+        expect.objectContaining({ phaseRecorder: expect.anything() })
       );
     });
 
@@ -840,12 +868,14 @@ describe('POST /meetings', () => {
       // route never supplies one, so it always arrives as `undefined` here. Byte-identical
       // runtime behaviour to before — `isWindowAvailableForExpert`'s 5th parameter is optional
       // and `undefined` is its "omitted" value — but the call now carries 5 arguments, not 4.
+      // BAL-607 adds a 6th: the booking route's vendor free/busy timing hook.
       expect(mockIsWindowAvailableForExpert).toHaveBeenCalledWith(
         EXPERT_PROFILE_ID,
         new Date(START),
         new Date(END),
         expect.any(Date),
-        undefined
+        undefined,
+        { onVendorBusyRead: expect.any(Function) }
       );
     });
 
@@ -927,6 +957,166 @@ describe('POST /meetings', () => {
   });
 
   // ── The no-echo rule, made mechanical ─────────────────────────────────────
+
+  // ── BAL-607 — one phase-timing line per FRESH booking 201 ────────────────────
+
+  describe('booking phase timings', () => {
+    const KEY = 'b'.repeat(64);
+
+    /** The service mock for a FRESH create: records the phases the real service would. */
+    function freshCreate(
+      result: Record<string, unknown> = {
+        meeting: bookedMeeting(),
+        provisioned: true,
+        dailyRoomName: ROOM_NAME,
+        joinUrl: JOIN_URL,
+      }
+    ): void {
+      mockBookAndProvisionMeeting.mockImplementation(
+        (_input: unknown, _log: unknown, deps: { phaseRecorder: BookingPhaseRecorder }) => {
+          deps.phaseRecorder.record('bookingTransaction', 11);
+          deps.phaseRecorder.record('venue', 22);
+          deps.phaseRecorder.record('calendar', 33);
+          return Promise.resolve(result);
+        }
+      );
+    }
+
+    function timingCalls(): unknown[][] {
+      return mockRequestLog.info.mock.calls.filter(
+        ([, message]) => message === BOOKING_PHASE_TIMING_MESSAGE
+      );
+    }
+
+    it('logs exactly one line with ids, every phase key and totalMs on a fresh 201', async () => {
+      freshCreate();
+      mockIsWindowAvailableForExpert.mockImplementation(
+        (
+          ...args: [
+            unknown,
+            unknown,
+            unknown,
+            unknown,
+            unknown,
+            { onVendorBusyRead?: (ms: number) => void }?,
+          ]
+        ) => {
+          args[5]?.onVendorBusyRead?.(42);
+          return Promise.resolve(true);
+        }
+      );
+
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(201);
+      const calls = timingCalls();
+      expect(calls).toHaveLength(1);
+      const [fields] = calls[0] ?? [];
+      expect(fields).toEqual({
+        meetingId: MEETING_ID,
+        contextType: 'case',
+        contextId: CONTEXT_ID,
+        userId: USER_ID,
+        tenancyGateMs: expect.any(Number),
+        replayProbeMs: expect.any(Number),
+        expertEligibilityMs: expect.any(Number),
+        caseFundingMs: expect.any(Number),
+        expertGuardsMs: expect.any(Number),
+        vendorFreeBusyMs: 42,
+        bookingTransactionMs: 11,
+        venueMs: 22,
+        calendarMs: 33,
+        totalMs: expect.any(Number),
+      });
+      expect(Object.keys(fields as object)).toHaveLength(4 + BOOKING_PHASES.length + 1);
+    });
+
+    it('still logs when the venue failed (provisioned:false is still a 201)', async () => {
+      freshCreate({
+        meeting: bookedMeeting(),
+        provisioned: false,
+        dailyRoomName: null,
+        joinUrl: null,
+      });
+
+      const res = await post(body());
+
+      expect(res.statusCode).toBe(201);
+      expect(timingCalls()).toHaveLength(1);
+    });
+
+    it('writes the line through the request logger, never the module logger', async () => {
+      freshCreate();
+
+      await post(body());
+
+      expect(timingCalls()).toHaveLength(1);
+      expect(
+        mockLog.info.mock.calls.filter(([, message]) => message === BOOKING_PHASE_TIMING_MESSAGE)
+      ).toHaveLength(0);
+    });
+
+    it('still answers 201 when the timing line cannot be written', async () => {
+      freshCreate();
+      mockRequestLog.info.mockImplementation((_fields: unknown, message?: string) => {
+        if (message === BOOKING_PHASE_TIMING_MESSAGE) throw new Error('log sink down');
+      });
+
+      try {
+        const res = await post(body());
+
+        expect(res.statusCode).toBe(201);
+        expect(res.json()).toMatchObject({ meetingId: MEETING_ID });
+        expect(mockLog.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ meetingId: MEETING_ID, error: 'log sink down' }),
+          'Booking phase timing line could not be written'
+        );
+      } finally {
+        mockRequestLog.info.mockImplementation(() => undefined);
+      }
+    });
+
+    it('reports null for phases that did not run (no key, not a case)', async () => {
+      mockAuthorizeMeetingBooking.mockResolvedValue({
+        ok: true,
+        companyId: 'company_1',
+        engagementType: 'project',
+        expertProfileId: EXPERT_PROFILE_ID,
+      });
+      freshCreate();
+
+      await post(body({ contextType: 'project_kickoff' }));
+
+      const [fields] = timingCalls()[0] ?? [];
+      expect(fields).toMatchObject({ replayProbeMs: null, caseFundingMs: null });
+    });
+
+    it('logs nothing for a route-probe replay (the service never records bookingTransaction)', async () => {
+      mockLookupBookingReplay.mockResolvedValue({ kind: 'match', meeting: bookedMeeting() });
+
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(201);
+      expect(timingCalls()).toHaveLength(0);
+    });
+
+    it('logs nothing for a service-side replay (201 without bookingTransaction)', async () => {
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(201);
+      expect(mockBookAndProvisionMeeting).toHaveBeenCalledTimes(1);
+      expect(timingCalls()).toHaveLength(0);
+    });
+
+    it('logs nothing on a 409 refusal', async () => {
+      mockIsWindowAvailableForExpert.mockResolvedValue(false);
+
+      const res = await post(body());
+
+      expect(res.statusCode).toBe(409);
+      expect(timingCalls()).toHaveLength(0);
+    });
+  });
 
   describe('no response body leaks a uuid from a typed error message', () => {
     /**

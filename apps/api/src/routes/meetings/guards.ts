@@ -22,6 +22,7 @@ import {
   isWindowAvailableForExpert,
   type ExcludeMeetingWindow,
 } from '../../services/availability/window-availability.js';
+import type { ResolverInputHooks } from '../../services/availability/load-resolver-inputs.js';
 
 const log = createLogger('meetings-route-guards');
 
@@ -172,6 +173,9 @@ export async function enforceBookingRateLimit(
  * `excludeMeeting` (BAL-409, optional) — threaded straight to `isWindowAvailableForExpert` so a
  * reschedule of meeting M does not collide with M's own booking. Omitted (the booking route's
  * call), this is byte-identical to the pre-BAL-409 behaviour.
+ *
+ * `availabilityHooks` (optional) — threaded as the trailing argument to the same call; only the
+ * booking route's phase timing passes it.
  */
 export async function enforceExpertScopedGuards(
   params: {
@@ -180,10 +184,18 @@ export async function enforceExpertScopedGuards(
     scheduledStart: Date;
     scheduledEnd: Date;
     excludeMeeting?: ExcludeMeetingWindow;
+    availabilityHooks?: ResolverInputHooks;
   },
   reply: FastifyReply
 ): Promise<boolean> {
-  const { userId, expertProfileId, scheduledStart, scheduledEnd, excludeMeeting } = params;
+  const {
+    userId,
+    expertProfileId,
+    scheduledStart,
+    scheduledEnd,
+    excludeMeeting,
+    availabilityHooks,
+  } = params;
 
   if (
     await enforceBookingRateLimit(BOOKING_EXPERT_RATE_LIMIT, `${userId}:${expertProfileId}`, reply)
@@ -196,7 +208,8 @@ export async function enforceExpertScopedGuards(
     scheduledStart,
     scheduledEnd,
     new Date(),
-    excludeMeeting
+    excludeMeeting,
+    availabilityHooks
   );
   if (!available) {
     log.info(

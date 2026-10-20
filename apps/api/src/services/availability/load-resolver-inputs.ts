@@ -15,11 +15,29 @@ export type BusyBlocksOutcome =
   | { readonly ok: true; readonly value: BusyBlock[] }
   | { readonly ok: false; readonly error: unknown };
 
+/**
+ * Optional observers for the shared loader. `onVendorBusyRead` receives the wall-clock ms of the
+ * vendor free/busy read whether it resolved or rejected; it is never called on the
+ * `busyBlocksOverride` path, which never consults the vendor port.
+ */
+export interface ResolverInputHooks {
+  readonly onVendorBusyRead?: (elapsedMs: number) => void;
+}
+
 export interface LoadedResolverInputs {
   rules: AvailabilityRuleRow[];
   baloConsultations: ConsultationWindowRow[];
   overrides: OverrideDateRange[];
   busyOutcome: BusyBlocksOutcome;
+}
+
+/** Runs the timing observer; its failure must never alter the vendor outcome, so it is dropped. */
+function reportVendorBusyElapsed(hook: (elapsedMs: number) => void, elapsedMs: number): void {
+  try {
+    hook(elapsedMs);
+  } catch {
+    // Observer-only: a timing hook has no say over the vendor result.
+  }
 }
 
 /**
@@ -46,22 +64,36 @@ export interface LoadedResolverInputs {
  * is short-circuited straight into an already-`ok` outcome — so a seeded environment's
  * advertised answer accounts for synthetic blocks while the booking gate (which never passes
  * this) does not.
+ *
+ * `hooks.onVendorBusyRead` is an observer only: it is chained onto the vendor read BEFORE the
+ * tagging `.then`, and a throw from it is swallowed. A throwing hook therefore never changes the
+ * vendor outcome — a successful read stays `ok`, and a genuine vendor error still reaches the
+ * caller unchanged (the vendor read itself still fails closed).
  */
 export async function loadResolverInputs(
   expertProfileId: string,
   loadFrom: Date,
   loadTo: Date,
-  busyBlocksOverride?: BusyBlock[]
+  busyBlocksOverride?: BusyBlock[],
+  hooks?: ResolverInputHooks
 ): Promise<LoadedResolverInputs> {
   // ⚠ Scan C (`invariants/sync-token-parity.test.ts`) greps for the exact contiguous
   // substring `vendorBusyProvider.listBusyBlocks` on a non-comment code line — keep that call
   // on ONE physical line if this is ever reformatted; splitting the member access across
   // lines (as a pure `prettier`-style break would) makes the scan blind, not the call wrong.
+  const onVendorBusyRead = hooks?.onVendorBusyRead;
+  const startedAt = Date.now();
   const vendorBusyRead =
     busyBlocksOverride === undefined
       ? vendorBusyProvider.listBusyBlocks(expertProfileId, loadFrom, loadTo)
       : Promise.resolve(busyBlocksOverride);
-  const busyBlocksSource: Promise<BusyBlocksOutcome> = vendorBusyRead.then(
+  const observedVendorBusyRead =
+    busyBlocksOverride === undefined && onVendorBusyRead !== undefined
+      ? vendorBusyRead.finally(() =>
+          reportVendorBusyElapsed(onVendorBusyRead, Date.now() - startedAt)
+        )
+      : vendorBusyRead;
+  const busyBlocksSource: Promise<BusyBlocksOutcome> = observedVendorBusyRead.then(
     (value): BusyBlocksOutcome => ({ ok: true, value }),
     (error: unknown): BusyBlocksOutcome => ({ ok: false, error })
   );

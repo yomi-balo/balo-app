@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockListRules, mockListConfirmedInRange, mockListUpcoming } = vi.hoisted(() => ({
   mockListRules: vi.fn(),
@@ -18,6 +18,10 @@ import { vendorBusyProvider, VendorBusyUnavailableError } from './vendor-busy.js
 const EXPERT_PROFILE_ID = '66666666-6666-4666-8666-666666666666';
 const FROM = new Date('2026-09-06T00:00:00.000Z');
 const TO = new Date('2026-09-08T00:00:00.000Z');
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -79,5 +83,101 @@ describe('loadResolverInputs', () => {
 
     expect(spy).not.toHaveBeenCalled();
     expect(result.busyOutcome).toEqual({ ok: true, value: override });
+  });
+
+  describe('hooks.onVendorBusyRead', () => {
+    const VENDOR_LATENCY_MS = 250;
+
+    function slowVendor(outcome: 'resolve' | 'reject', error?: unknown): void {
+      vi.spyOn(vendorBusyProvider, 'listBusyBlocks').mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            setTimeout(
+              () => (outcome === 'resolve' ? resolve([]) : reject(error)),
+              VENDOR_LATENCY_MS
+            );
+          })
+      );
+    }
+
+    it('reports the elapsed vendor read ms when the read resolves', async () => {
+      vi.useFakeTimers();
+      slowVendor('resolve');
+      const onVendorBusyRead = vi.fn();
+
+      const pending = loadResolverInputs(EXPERT_PROFILE_ID, FROM, TO, undefined, {
+        onVendorBusyRead,
+      });
+      await vi.advanceTimersByTimeAsync(VENDOR_LATENCY_MS);
+      const result = await pending;
+
+      expect(onVendorBusyRead).toHaveBeenCalledTimes(1);
+      expect(onVendorBusyRead).toHaveBeenCalledWith(VENDOR_LATENCY_MS);
+      expect(result.busyOutcome).toEqual({ ok: true, value: [] });
+    });
+
+    it('reports the elapsed vendor read ms when the read rejects, and still tags the failure', async () => {
+      vi.useFakeTimers();
+      const err = new VendorBusyUnavailableError(EXPERT_PROFILE_ID, 'unreadable connection');
+      slowVendor('reject', err);
+      const onVendorBusyRead = vi.fn();
+
+      const pending = loadResolverInputs(EXPERT_PROFILE_ID, FROM, TO, undefined, {
+        onVendorBusyRead,
+      });
+      await vi.advanceTimersByTimeAsync(VENDOR_LATENCY_MS);
+      const result = await pending;
+
+      expect(onVendorBusyRead).toHaveBeenCalledTimes(1);
+      expect(onVendorBusyRead).toHaveBeenCalledWith(VENDOR_LATENCY_MS);
+      expect(result.busyOutcome).toEqual({ ok: false, error: err });
+    });
+
+    it('never calls the hook on the busyBlocksOverride path', async () => {
+      const onVendorBusyRead = vi.fn();
+
+      await loadResolverInputs(EXPERT_PROFILE_ID, FROM, TO, [], { onVendorBusyRead });
+
+      expect(onVendorBusyRead).not.toHaveBeenCalled();
+    });
+
+    it('a throwing hook on a successful read leaves the outcome ok', async () => {
+      const busy = [
+        { startAt: new Date('2026-09-07T13:00:00Z'), endAt: new Date('2026-09-07T14:00:00Z') },
+      ];
+      vi.spyOn(vendorBusyProvider, 'listBusyBlocks').mockResolvedValue(busy);
+
+      const result = await loadResolverInputs(EXPERT_PROFILE_ID, FROM, TO, undefined, {
+        onVendorBusyRead: () => {
+          throw new Error('hook blew up');
+        },
+      });
+
+      expect(result.busyOutcome).toEqual({ ok: true, value: busy });
+    });
+
+    it('a throwing hook on a vendor reject still surfaces the original vendor error', async () => {
+      const vendorError = new VendorBusyUnavailableError(
+        EXPERT_PROFILE_ID,
+        'unreadable connection'
+      );
+      vi.spyOn(vendorBusyProvider, 'listBusyBlocks').mockRejectedValue(vendorError);
+
+      const result = await loadResolverInputs(EXPERT_PROFILE_ID, FROM, TO, undefined, {
+        onVendorBusyRead: () => {
+          throw new Error('hook blew up');
+        },
+      });
+
+      expect(result.busyOutcome).toEqual({ ok: false, error: vendorError });
+    });
+
+    it('is a no-op when hooks are supplied without onVendorBusyRead', async () => {
+      vi.spyOn(vendorBusyProvider, 'listBusyBlocks').mockResolvedValue([]);
+
+      const result = await loadResolverInputs(EXPERT_PROFILE_ID, FROM, TO, undefined, {});
+
+      expect(result.busyOutcome).toEqual({ ok: true, value: [] });
+    });
   });
 });

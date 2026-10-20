@@ -351,7 +351,8 @@ describe('POST /meetings/:meetingId/reschedule (BAL-409)', () => {
         currentStart: CURRENT_START,
         currentEnd: CURRENT_END,
         hasVendorEvent: true,
-      })
+      }),
+      undefined
     );
   });
 
@@ -381,7 +382,8 @@ describe('POST /meetings/:meetingId/reschedule (BAL-409)', () => {
       new Date(NEW_START),
       new Date(NEW_END),
       expect.any(Date),
-      expect.objectContaining({ hasVendorEvent: false })
+      expect.objectContaining({ hasVendorEvent: false }),
+      undefined
     );
   });
 

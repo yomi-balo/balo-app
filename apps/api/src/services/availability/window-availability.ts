@@ -10,7 +10,7 @@ import {
 } from './resolver-inputs.js';
 import type { BusyBlock } from './types.js';
 import { isWindowBookable } from './resolver.js';
-import { loadResolverInputs } from './load-resolver-inputs.js';
+import { loadResolverInputs, type ResolverInputHooks } from './load-resolver-inputs.js';
 import { VendorBusyUnavailableError } from './vendor-busy.js';
 
 /**
@@ -92,13 +92,17 @@ const log = createLogger('availability-window-check');
  * consultation read and — when it actually wrote a vendor event — the vendor busy read, so a
  * reschedule of a meeting does not collide with itself. Omitted, this is byte-identical to the
  * booking-gate behaviour that shipped before BAL-409.
+ *
+ * `hooks` (optional) is forwarded to the shared loader and exists for the booking route's phase
+ * timing only; every other caller omits it.
  */
 export async function isWindowAvailableForExpert(
   expertProfileId: string,
   start: Date,
   end: Date,
   now: Date,
-  excludeMeeting?: ExcludeMeetingWindow
+  excludeMeeting?: ExcludeMeetingWindow,
+  hooks?: ResolverInputHooks
 ): Promise<boolean> {
   const settings = await expertsRepository.findResolverSettings(expertProfileId);
   if (!settings) {
@@ -136,7 +140,9 @@ export async function isWindowAvailableForExpert(
   const { rules, baloConsultations, overrides, busyOutcome } = await loadResolverInputs(
     expertProfileId,
     loadFrom,
-    loadTo
+    loadTo,
+    undefined,
+    hooks
   );
 
   if (!busyOutcome.ok) {

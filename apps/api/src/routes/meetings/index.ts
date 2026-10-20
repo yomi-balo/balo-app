@@ -154,11 +154,17 @@ import {
 } from '@balo/db';
 import { validateBookingWindow } from '@balo/shared/meetings';
 import { createLogger } from '@balo/shared/logging';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 import { requireAuth } from '../../lib/require-auth.js';
 import { parseBodyOr400, resolveUserId } from '../../lib/route-helpers.js';
 import { authorizeMeetingBooking } from '../../services/meetings/authorize-meeting-booking.js';
+import {
+  BOOKING_PHASE_TIMING_MESSAGE,
+  createBookingPhaseTimer,
+  timeBookingPhase,
+  type BookingPhaseTimer,
+} from '../../services/meetings/booking-phase-timing.js';
 import { checkExpertBookingEligibility } from '../../services/meetings/expert-booking-eligibility.js';
 import {
   checkCaseBookingFunding,
@@ -259,24 +265,27 @@ function bookingErrorResponse(error: unknown): { status: number; error: string }
 async function resolveBookingInput(
   request: FastifyRequest,
   reply: FastifyReply,
-  userId: string
+  userId: string,
+  timer: BookingPhaseTimer
 ): Promise<BookAndProvisionInput | null> {
-  const booking = await authorizeBookingRequest(request, reply, userId);
+  const booking = await authorizeBookingRequest(request, reply, userId, timer);
   if (booking === null) return null;
   const { parsed, scheduledStart, scheduledEnd, authorized } = booking;
-  const { contextType, contextId } = parsed;
+  const { contextType, contextId, bookingIdempotencyKey } = parsed;
 
   // BAL-400 (S3/M1) — resolved HERE, after the gate and before the funding guard and the two
   // expert-scoped guards. BAL-474 (D8.6): ONE classified probe — `none` / `match` / `conflict`.
   const replay: BookingReplayLookup =
-    parsed.bookingIdempotencyKey === undefined
+    bookingIdempotencyKey === undefined
       ? { kind: 'none' }
-      : await lookupBookingReplay(parsed.bookingIdempotencyKey, {
-          contextType,
-          contextId,
-          scheduledStart,
-          scheduledEnd,
-        });
+      : await timeBookingPhase(timer, 'replayProbe', () =>
+          lookupBookingReplay(bookingIdempotencyKey, {
+            contextType,
+            contextId,
+            scheduledStart,
+            scheduledEnd,
+          })
+        );
   if (replay.kind === 'conflict') {
     // The key names a DIFFERENT window or case. Answered BEFORE any funding check, so a mismatched
     // key gets the conflict answer — never a funding refusal — and the service's own mapping of the
@@ -290,10 +299,10 @@ async function resolveBookingInput(
   // paused expert is NOT refused here: see `checkExpertBookingEligibility`. A replay is already
   // booked and is never re-checked.
   if (!replaying && authorized.expertProfileId !== null) {
-    const eligibility = await checkExpertBookingEligibility({
-      contextType,
-      expertProfileId: authorized.expertProfileId,
-    });
+    const { expertProfileId } = authorized;
+    const eligibility = await timeBookingPhase(timer, 'expertEligibility', () =>
+      checkExpertBookingEligibility({ contextType, expertProfileId })
+    );
     if (!eligibility.ok) {
       reply.code(409).send({ error: 'expert_unavailable' });
       return null;
@@ -304,13 +313,16 @@ async function resolveBookingInput(
   // refused before any write. A replay is already booked and is never re-checked; only a Case books
   // against credit.
   if (!replaying && contextType === 'case' && authorized.expertProfileId !== null) {
-    const funding = await checkCaseBookingFunding({
-      companyId: authorized.companyId,
-      expertProfileId: authorized.expertProfileId,
-      scheduledStart,
-      scheduledEnd,
-      now: new Date(),
-    });
+    const { companyId, expertProfileId } = authorized;
+    const funding = await timeBookingPhase(timer, 'caseFunding', () =>
+      checkCaseBookingFunding({
+        companyId,
+        expertProfileId,
+        scheduledStart,
+        scheduledEnd,
+        now: new Date(),
+      })
+    );
     if (!funding.ok) {
       reply.code(CASE_FUNDING_ERROR_STATUS[funding.code]).send({ error: funding.code });
       return null;
@@ -321,12 +333,21 @@ async function resolveBookingInput(
   // limit against and none to check availability on. The repository throws
   // `MatchModeDiscoveryNotBookableError`, which maps to `409 discovery_not_routed` — so this is
   // a skip, not a bypass.
+  const scopedExpertProfileId = authorized.expertProfileId;
   if (
     !replaying &&
-    authorized.expertProfileId !== null &&
-    (await enforceExpertScopedGuards(
-      { userId, expertProfileId: authorized.expertProfileId, scheduledStart, scheduledEnd },
-      reply
+    scopedExpertProfileId !== null &&
+    (await timeBookingPhase(timer, 'expertGuards', () =>
+      enforceExpertScopedGuards(
+        {
+          userId,
+          expertProfileId: scopedExpertProfileId,
+          scheduledStart,
+          scheduledEnd,
+          availabilityHooks: { onVendorBusyRead: (ms) => timer.record('vendorFreeBusy', ms) },
+        },
+        reply
+      )
     ))
   ) {
     return null;
@@ -339,7 +360,7 @@ async function resolveBookingInput(
     scheduledEnd,
     engagementType: authorized.engagementType,
     userId,
-    bookingIdempotencyKey: parsed.bookingIdempotencyKey,
+    bookingIdempotencyKey,
   };
 }
 
@@ -356,7 +377,8 @@ type AuthorizedBooking = Extract<Awaited<ReturnType<typeof authorizeMeetingBooki
 async function authorizeBookingRequest(
   request: FastifyRequest,
   reply: FastifyReply,
-  userId: string
+  userId: string,
+  timer: BookingPhaseTimer
 ): Promise<{
   parsed: CreateMeetingBody;
   scheduledStart: Date;
@@ -379,7 +401,9 @@ async function authorizeBookingRequest(
     return null;
   }
 
-  const authorized = await authorizeMeetingBooking({ contextType, contextId, userId });
+  const authorized = await timeBookingPhase(timer, 'tenancyGate', () =>
+    authorizeMeetingBooking({ contextType, contextId, userId })
+  );
   if (!authorized.ok) {
     reply.code(GATE_ERROR_STATUS[authorized.code]).send({ error: authorized.code });
     return null;
@@ -387,17 +411,55 @@ async function authorizeBookingRequest(
   return { parsed, scheduledStart, scheduledEnd, authorized };
 }
 
+/**
+ * BAL-607 — the one info line per FRESH booking, written after the 201 is sent. A fresh create is
+ * exactly when the service recorded `bookingTransaction`: both replay returns skip it, as does
+ * every refusal (those never reach this call). Ids and durations only (ADR-1044 §4).
+ *
+ * ⚠ Logged through the REQUEST logger so Fastify's `reqId` attaches and the line joins that
+ * request's `responseTime`. `totalMs` starts at handler entry, so it excludes the `requireAuth`
+ * preHandler and the body parse. A throw here is swallowed: the booking has committed and the
+ * response is already sent, so a logging failure must not reach the error handler.
+ */
+function logBookingPhaseTimings(
+  requestLog: FastifyBaseLogger,
+  timer: BookingPhaseTimer,
+  meetingId: string,
+  input: BookAndProvisionInput,
+  userId: string
+): void {
+  if (!timer.hasRecorded('bookingTransaction')) return;
+  try {
+    requestLog.info(
+      {
+        meetingId,
+        contextType: input.contextType,
+        contextId: input.contextId,
+        userId,
+        ...timer.fields(),
+      },
+      BOOKING_PHASE_TIMING_MESSAGE
+    );
+  } catch (error) {
+    log.warn(
+      { meetingId, error: error instanceof Error ? error.message : String(error) },
+      'Booking phase timing line could not be written'
+    );
+  }
+}
+
 export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
   // POST /meetings — book a meeting and provision its Daily room.
   fastify.post('/meetings', { preHandler: [requireAuth] }, async (request, reply) => {
+    const timer = createBookingPhaseTimer();
     const userId = resolveUserId(request, reply);
     if (userId === null) return;
 
-    const input = await resolveBookingInput(request, reply, userId);
+    const input = await resolveBookingInput(request, reply, userId, timer);
     if (input === null) return;
 
     try {
-      const result = await bookAndProvisionMeeting(input, request.log);
+      const result = await bookAndProvisionMeeting(input, request.log, { phaseRecorder: timer });
 
       // ⚠ 201 EVEN WHEN `provisioned` IS FALSE. The booking committed and the slot is
       // blocked; the join url is a MISSING ARTEFACT, not a failure. `provisioned: false` renders
@@ -414,6 +476,7 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
         dailyRoomName: result.dailyRoomName,
         joinUrl: result.joinUrl,
       });
+      logBookingPhaseTimings(request.log, timer, result.meeting.id, input, userId);
     } catch (error) {
       const mapped = bookingErrorResponse(error);
       log.error(

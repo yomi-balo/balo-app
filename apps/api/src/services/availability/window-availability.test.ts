@@ -270,6 +270,24 @@ describe('BAL-396 §9.4 — the booking gate FAILS CLOSED on an untrustworthy ve
   });
 });
 
+describe('hooks are forwarded to the shared loader', () => {
+  it('invokes onVendorBusyRead once for the vendor read', async () => {
+    const spy = vi.spyOn(vendorBusyProvider, 'listBusyBlocks').mockResolvedValue([]);
+    const onVendorBusyRead = vi.fn();
+
+    await expect(
+      isWindowAvailableForExpert(EXPERT_PROFILE_ID, START, END, NOW, undefined, {
+        onVendorBusyRead,
+      })
+    ).resolves.toBe(true);
+
+    expect(onVendorBusyRead).toHaveBeenCalledTimes(1);
+    expect(onVendorBusyRead).toHaveBeenCalledWith(expect.any(Number));
+
+    spy.mockRestore();
+  });
+});
+
 describe('it performs no write', () => {
   it('never reaches the availability-cache upsert', async () => {
     // ⚠ THE REASON THIS MODULE EXISTS RATHER THAN A CALL TO `resolveAndCacheAvailability`: that
