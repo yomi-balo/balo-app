@@ -130,7 +130,7 @@ export function SignupStep({
                     label="Create a password"
                     autoComplete="new-password"
                     disabled={isSubmitting}
-                    showRequirements={true}
+                    showRequirements
                     {...field}
                   />
                 </FormControl>

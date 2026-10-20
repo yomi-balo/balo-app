@@ -22,7 +22,7 @@ interface InputPasswordProps extends Omit<React.ComponentProps<'input'>, 'type'>
   showRequirements?: boolean;
 }
 
-const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
+const InputPassword = React.forwardRef<HTMLInputElement, Readonly<InputPasswordProps>>(
   (
     { label, showRequirements = false, className, id: externalId, value, onChange, ...props },
     ref
@@ -78,7 +78,7 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
             variant="ghost"
             size="icon"
             className="focus-visible:ring-ring absolute top-0 right-0 h-full px-3 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-2"
-            onClick={() => setIsVisible(!isVisible)}
+            onClick={() => setIsVisible((visible) => !visible)}
           >
             {isVisible ? (
               <Eye className="text-muted-foreground h-4 w-4" />
