@@ -18,7 +18,7 @@ them (a line covered in either report counts as covered):
 
 | Report                           | Produced by                                                             | Covers                                               |
 | -------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------- |
-| `coverage/lcov.info`             | CI: `vitest --merge-reports` over 4 shards; local: `pnpm test:coverage` | app + package source exercised by unit tests         |
+| `coverage/lcov.info`             | CI: `vitest --merge-reports` over 8 shards; local: `pnpm test:coverage` | app + package source exercised by unit tests         |
 | `coverage-integration/lcov.info` | `pnpm test:integration:coverage`                                        | `packages/db/src/repositories/**` via Testcontainers |
 
 Both reports emit **repo-root-relative `SF:` paths** (e.g. `SF:packages/db/src/repositories/experts.ts`)
@@ -29,7 +29,7 @@ so Sonar (base dir = repo root) resolves them. They are wired into the scan via
 ### CI job graph
 
 ```
-unit-tests-shard ×4 → unit-tests (merge; coverage-unit + Codecov) ──┐  (no Sonar step)
+unit-tests-shard ×8 → unit-tests (merge; coverage-unit + Codecov) ──┐  (no Sonar step)
 integration-tests (runs WITH coverage; uploads coverage-integration) ┤
                                                                      ▼
                   sonarcloud  (needs: [unit-tests, integration-tests])
