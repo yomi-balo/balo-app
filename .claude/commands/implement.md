@@ -218,7 +218,7 @@ Only run this phase if the feature includes user-facing UI.
 - how to get the diff, excluding generated snapshots, for example `git diff --cached -- . ':(exclude)packages/db/drizzle/meta/*_snapshot.json'`;
 - the context files to read: the plan and the decisions file;
 - the gates the orchestrator has already run, so reviewers don't re-run them;
-- what is out of scope: deferred follow-ups, MJ-owned copy, and untouched code;
+- what is out of scope: deferred follow-ups, MJ-owned copy, and untouched code. Factual drift in a help guide is not copy and stays in scope (see `review.md` §9);
 - the reply format: verdict first, then findings ranked by severity with `file:line`, in 300 words or fewer.
 
 Each spawn prompt adds only that agent's focus areas.
@@ -265,7 +265,8 @@ claude -p --model claude-opus-5-5 --effort xhigh \
 
 - reconcile it against each reviewer's list so no finding is dropped;
 - rule on any design choice a finding leaves open, and record the ruling in the file;
-- route each finding to the agent that owns its files: resume that builder, or use fresh fixers split by disjoint path partition when transcripts are large (see **Context budget**).
+- route each finding to the agent that owns its files: resume that builder, or use fresh fixers split by disjoint path partition when transcripts are large (see **Context budget**);
+- route a help-guide finding (`review.md` §9) to the builder whose change made the guide wrong, and add the guide to that package's Owns list. After a guide edit, run `pnpm --filter web help:generate` and stage the regenerated file.
 
 After the fixers finish, check their work: look for scope creep, and for tests whose assertions were inverted. Then stage the result and **resume each reviewer that requested changes** with a narrow re-check of its own findings. A reviewer that passed doesn't re-run. Apply trivial LOW leftovers yourself; they don't need another round.
 
@@ -318,7 +319,7 @@ Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a
      --title "<same as the commit subject>" \
      --body-file <path-to-body.md>
    ```
-   The PR body should cover: what & why (link the Linear ticket), what's built, any approved scope additions, security/quality notes, testing (and what's deferred to CI — e.g. integration tests, the production build), and the deliberately-stubbed boundary. End the body with:
+   The PR body should cover: what & why (link the Linear ticket), what's built, any approved scope additions, security/quality notes, any help-guide edits (so MJ can check them), testing (and what's deferred to CI — e.g. integration tests, the production build), and the deliberately-stubbed boundary. End the body with:
    `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
 5. **Report the PR URL.** Then offer to watch CI and/or move the Linear ticket to In Review with the PR attached.
 6. **Worktree cleanup (offer, never auto-run).** Leave the worktree in place until the PR merges. After merge, offer to remove it: `git worktree remove ../balo-app-bal-<NNN>` (only add `--force`, and only if the user confirms discarding leftover changes). Never remove a worktree that still has uncommitted or unmerged work.
