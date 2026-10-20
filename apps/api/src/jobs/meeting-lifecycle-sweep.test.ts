@@ -29,6 +29,7 @@ const {
   mockFindCapturingForMeeting,
   mockCountFailedByStage,
   mockTransaction,
+  mockApplyRecordedVisit,
 } = vi.hoisted(() => ({
   mockListCandidates: vi.fn(),
   mockListStranded: vi.fn(),
@@ -58,6 +59,7 @@ const {
   mockFindCapturingForMeeting: vi.fn(),
   mockCountFailedByStage: vi.fn(),
   mockTransaction: vi.fn(),
+  mockApplyRecordedVisit: vi.fn(),
 }));
 
 /** See the `./recording-capture.js` mock below — a stand-in cap, not the real constant. */
@@ -109,6 +111,7 @@ vi.mock('@balo/analytics/server', () => ({
 vi.mock('../services/meetings/presence-writer.js', () => ({
   resolvePresenceEffect: mockResolvePresenceEffect,
   applyPresenceEffect: mockApplyPresenceEffect,
+  applyRecordedVisit: mockApplyRecordedVisit,
   closePresenceEffectForRow: mockClosePresenceEffectForRow,
   reconcileMeetingStatus: mockReconcileMeetingStatus,
 }));
@@ -1964,7 +1967,8 @@ describe('the pre-termination backfill of sub-tick visits', () => {
     mockResolvePresenceEffect.mockResolvedValue(
       openEffect(OTHER_USER_ID, 'expert', EXPERT_VISIT.joinedAt)
     );
-    mockTransaction.mockImplementation(async (work: (tx: unknown) => Promise<void>) => work(TX));
+    mockApplyRecordedVisit.mockResolvedValue('recorded');
+    mockTransaction.mockImplementation(async (work: (tx: unknown) => Promise<unknown>) => work(TX));
     mockSettleSessionlessCaseMeeting.mockResolvedValue({
       kind: 'not_billable',
       reason: 'not_a_case_meeting',
@@ -1998,19 +2002,12 @@ describe('the pre-termination backfill of sub-tick visits', () => {
       participantId: EXPERT_CLAIM,
       at: EXPERT_VISIT.joinedAt,
     });
-    // Open and close commit together, at Daily's recorded instants.
+    // ONE already-closed row at Daily's recorded instants — never an open followed by a close.
     expect(mockTransaction).toHaveBeenCalledTimes(1);
-    expect(mockApplyPresenceEffect.mock.calls).toEqual([
-      [TX, openEffect(OTHER_USER_ID, 'expert', EXPERT_VISIT.joinedAt)],
-      [
-        TX,
-        {
-          ...openEffect(OTHER_USER_ID, 'expert', EXPERT_VISIT.joinedAt),
-          action: 'close',
-          at: EXPERT_VISIT.leftAt,
-        },
-      ],
+    expect(mockApplyRecordedVisit.mock.calls).toEqual([
+      [TX, openEffect(OTHER_USER_ID, 'expert', EXPERT_VISIT.joinedAt), EXPERT_VISIT.leftAt],
     ]);
+    expect(mockApplyPresenceEffect).not.toHaveBeenCalled();
     // Both sides were present, so the empty room ends as an abandoned wait (outcome resolved by
     // settlement from presence), never as the expert's missed call.
     expect(mockEndMeeting).toHaveBeenCalledWith(
@@ -2136,6 +2133,140 @@ describe('the pre-termination backfill of sub-tick visits', () => {
       expect.objectContaining({ terminalRule: { rule: 'idle_end', arm: null } })
     );
     expect(result.terminated).toBe(1);
+  });
+
+  it('makes no history read before a no-show — a backfilled client visit would leave the expert-held room matching no rule', async () => {
+    const expertHolding = presenceRow({ id: 'row-2', userId: OTHER_USER_ID, party: 'expert' });
+    mockListByMeeting.mockResolvedValue([expertHolding]);
+    const getRoomSessionLeaves = vi.fn().mockResolvedValue(history(new Map(), [CLIENT_VISIT]));
+
+    const result = await runMeetingLifecycleSweep(
+      at(DEFAULT_MEETING_TIMERS.noShowFloorMs / MINUTE),
+      () => {},
+      historyReader(getRoomSessionLeaves)
+    );
+
+    expect(getRoomSessionLeaves).not.toHaveBeenCalled();
+    expect(mockApplyRecordedVisit).not.toHaveBeenCalled();
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: 'no_show_client',
+        terminalRule: { rule: 'no_show', arm: null },
+      })
+    );
+    expect(result.terminated).toBe(1);
+  });
+
+  it('a backfill that leaves no rule due keeps the meeting open; the next due tick reads again and writes nothing', async () => {
+    /** The expert came late, between the 10:09 and 10:10 ticks, and left again. */
+    const lateVisit = {
+      claim: EXPERT_CLAIM,
+      joinedAt: new Date(at(9).getTime() + 10 * SECOND),
+      leftAt: new Date(at(9).getTime() + 40 * SECOND),
+    };
+    const lateRow = presenceRow({
+      id: 'row-2',
+      userId: OTHER_USER_ID,
+      party: 'expert',
+      joinedAt: lateVisit.joinedAt,
+      leftAt: lateVisit.leftAt,
+    });
+    mockResolvePresenceEffect.mockResolvedValue(
+      openEffect(OTHER_USER_ID, 'expert', lateVisit.joinedAt)
+    );
+    mockListByMeeting
+      .mockResolvedValueOnce([CLIENT_SEEN])
+      .mockResolvedValueOnce([CLIENT_SEEN])
+      .mockResolvedValue([CLIENT_SEEN, lateRow]);
+    const getRoomSessionLeaves = vi
+      .fn()
+      .mockResolvedValue(history(new Map(), [CLIENT_VISIT, lateVisit]));
+    const sweeper = historyReader(getRoomSessionLeaves);
+
+    // The missed call is cancelled, and the empty-room window runs from the expert's leave.
+    const first = await runMeetingLifecycleSweep(NOW, () => {}, sweeper);
+
+    expect(first).toMatchObject({ terminated: 0, intervalsOpened: 1 });
+    expect(mockApplyRecordedVisit).toHaveBeenCalledTimes(1);
+    expect(mockEndMeeting).not.toHaveBeenCalled();
+    // The reminders pass ran on the corrected presence: the expert came, so no absence alert.
+    expect(mockScheduleExpertAbsent).not.toHaveBeenCalled();
+
+    const idleDue = new Date(lateVisit.leftAt.getTime() + DEFAULT_MEETING_TIMERS.idleEndEmptyMs);
+    const second = await runMeetingLifecycleSweep(idleDue, () => {}, sweeper);
+
+    expect(getRoomSessionLeaves).toHaveBeenCalledTimes(2);
+    expect(mockApplyRecordedVisit).toHaveBeenCalledTimes(1);
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalRule: { rule: 'abandoned_wait', arm: null } })
+    );
+    expect(second).toMatchObject({ terminated: 1, intervalsOpened: 0 });
+  });
+
+  it('records a client visit before an abandoned wait ends, so settlement reads a client-attended call', async () => {
+    const expertSeen = presenceRow({
+      id: 'row-2',
+      userId: OTHER_USER_ID,
+      party: 'expert',
+      joinedAt: at(0),
+      leftAt: at(5),
+    });
+    const clientVisit = {
+      claim: CLIENT_CLAIM,
+      joinedAt: new Date(at(1).getTime() + 10 * SECOND),
+      leftAt: new Date(at(1).getTime() + 40 * SECOND),
+    };
+    mockListByMeeting.mockResolvedValue([expertSeen]);
+    mockResolvePresenceEffect.mockResolvedValue(
+      openEffect(USER_ID, 'client', clientVisit.joinedAt)
+    );
+    const getRoomSessionLeaves = vi.fn().mockResolvedValue(history(new Map(), [clientVisit]));
+
+    await runMeetingLifecycleSweep(
+      new Date(at(5).getTime() + DEFAULT_MEETING_TIMERS.idleEndEmptyMs),
+      () => {},
+      historyReader(getRoomSessionLeaves)
+    );
+
+    expect(mockApplyRecordedVisit).toHaveBeenCalledWith(
+      TX,
+      openEffect(USER_ID, 'client', clientVisit.joinedAt),
+      clientVisit.leftAt
+    );
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalRule: { rule: 'abandoned_wait', arm: null } })
+    );
+    // The row exists before settlement reads presence.
+    const [recordedOrder] = mockApplyRecordedVisit.mock.invocationCallOrder;
+    const [settledOrder] = mockSettleSessionlessCaseMeeting.mock.invocationCallOrder;
+    expect(recordedOrder).toBeLessThan(settledOrder ?? 0);
+  });
+
+  it('records EVERY visit of a participant with no interval, in one transaction', async () => {
+    const secondVisit = {
+      claim: EXPERT_CLAIM,
+      joinedAt: new Date(at(4).getTime() + 5 * SECOND),
+      leftAt: new Date(at(4).getTime() + 15 * SECOND),
+    };
+    mockResolvePresenceEffect.mockImplementation(async ({ at: joinedAt }: { at: Date }) =>
+      openEffect(OTHER_USER_ID, 'expert', joinedAt)
+    );
+    const getRoomSessionLeaves = vi
+      .fn()
+      .mockResolvedValue(history(new Map(), [CLIENT_VISIT, EXPERT_VISIT, secondVisit]));
+
+    const result = await runMeetingLifecycleSweep(
+      NOW,
+      () => {},
+      historyReader(getRoomSessionLeaves)
+    );
+
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockApplyRecordedVisit.mock.calls).toEqual([
+      [TX, openEffect(OTHER_USER_ID, 'expert', EXPERT_VISIT.joinedAt), EXPERT_VISIT.leftAt],
+      [TX, openEffect(OTHER_USER_ID, 'expert', secondVisit.joinedAt), secondVisit.leftAt],
+    ]);
+    expect(result.intervalsOpened).toBe(2);
   });
 });
 

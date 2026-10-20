@@ -52,6 +52,7 @@ import { isReleasedSettlementCode } from '../services/credit-session/released-se
 import { settleSessionlessCaseMeeting } from '../services/credit-session/settle-sessionless-case-meeting.js';
 import {
   applyPresenceEffect,
+  applyRecordedVisit,
   closePresenceEffectForRow,
   reconcileMeetingStatus,
   resolvePresenceEffect,
@@ -82,9 +83,9 @@ import {
  *      `reconcileMeetingStatus`, so the FORWARD status transitions are repaired too — see
  *      `repairStatusAndReload` for the stranding that omitting this produced.
  *   2. **TERMINATE** — `resolveTerminalRule` per candidate; on a match, `endMeeting` + the
- *      matching analytics event. Before a pre-live rule ends an in-window meeting, one capped
- *      session-history read backfills the visits no per-minute roster read saw (see
- *      `backfillSubTickVisits`), and the rules decide on the corrected presence.
+ *      matching analytics event. Before `missed_call` or `abandoned_wait` ends an in-window
+ *      meeting, one capped session-history read backfills the visits no per-minute roster read
+ *      saw (see `backfillSubTickVisits`), and the rules decide on the corrected presence.
  *   3. **ARM** — the two absence promises, `first_wins` so repeated ticks are a cheap no-op.
  *
  * ── ⚠⚠ WHY RECONCILIATION EXISTS AT ALL, AND WHAT IT BUYS ───────────────────────────────
@@ -157,13 +158,14 @@ export const MAX_ROOM_PRESENCE_READS_PER_TICK = 20;
  * ⚠ THE SESSION-HISTORY READ CAP PER TICK. `GET /meetings?room=` sits in Daily's analytics rate
  * tier (~2/s, 50 per 30s), a far tighter tier than the 20/s the per-room presence read lives in,
  * so it has its own cap. One read per STRANDED candidate that has an identity-bearing interval to
- * close, and one per in-window candidate a pre-live terminal rule is due on (the sub-tick backfill,
+ * close, and one per in-window candidate `missed_call` or `abandoned_wait` is due on (the backfill,
  * see `backfillSubTickVisits`); in-window candidates are processed first, so they spend it first.
  * 5 reads a tick is 5 per 60s: about 0.08/s against the ~2/s tier, and 5 of the 50-per-30s
- * allowance, leaving the rest of the tier to everything else that reads `/meetings`. A strand backlog drains five meetings a minute, which is slower than
- * the 50-row stranded batch but fine for a population that is rare. A candidate past the cap
- * skips reconciliation AND its terminal rules for the tick (it stays selected, oldest first, and
- * retries), and the sweep warns with the deferred count. A history read that FAILS is not a
+ * allowance, leaving the rest of the tier to everything else that reads `/meetings`. A strand
+ * backlog drains five meetings a minute, which is slower than the 50-row stranded batch but fine
+ * for a population that is rare. A candidate past the cap skips reconciliation AND its terminal
+ * rules for the tick (it stays selected, oldest first, and retries), and the sweep warns with the
+ * deferred count. A history read that FAILS is not a
  * deferral: the closes fall back to the booked end and the terminal rules run.
  */
 export const MAX_SESSION_HISTORY_READS_PER_TICK = 5;
@@ -689,15 +691,19 @@ function claimFor(userId: string | null, meetingGuestId: string | null): string 
 }
 
 /**
- * The terminal rules a sub-tick visit can overturn: the three pre-live rules, which read WHO EVER
- * JOINED. `missed_call` turns on whether the expert ever came, `no_show` on whether a client side
- * ever came, and `abandoned_wait` settles from the presence shape. `idle_end` and `overrun_stop`
- * own an `in_progress` meeting whose both sides were already observed, and `venue_unavailable`
- * has no room to read.
+ * The terminal rules a backfill runs before. `missed_call` turns on whether the expert ever came,
+ * and `abandoned_wait` settles from the presence shape (a client-side visit makes it `held`).
+ * `idle_end` and `overrun_stop` own an `in_progress` meeting whose both sides were already
+ * observed, and `venue_unavailable` has no room to read.
+ *
+ * ⚠⚠ `no_show` IS DELIBERATELY ABSENT. It is due only while the expert still holds the room and no
+ * client was ever recorded, so backfilling a client visit (a pre-start audio check is the usual
+ * one) flips `clientSideEverPresent` and leaves a pre-live meeting the expert still holds, which no
+ * rule matches until the expert leaves — the accepted gap `lifecycle.ts` names, with no ceiling.
+ * Until the webhooks arrive (BAL-518) such a meeting keeps today's no-show and its floor.
  */
 const BACKFILL_BEFORE_RULES: ReadonlySet<MeetingTerminalRuleName> = new Set([
   'missed_call',
-  'no_show',
   'abandoned_wait',
 ]);
 
@@ -728,8 +734,9 @@ const NOTHING_BACKFILLED: BackfillOutcome = { kind: 'none' };
  *
  * ⚠ `party` IS STILL DERIVED SERVER-SIDE by `resolvePresenceEffect`, never from the history body;
  * an unmappable claim resolves to no identity and is skipped, since nothing could deduplicate it.
- * Each visit's open and close commit together, so a fault never leaves a backdated OPEN interval
- * for the reconciler to close at the tick instant.
+ * Each visit is ONE insert of an already-closed row (`applyRecordedVisit`), never an open then a
+ * close: a concurrent writer's live interval for the same participant is never touched. The visits
+ * commit together, so a partial write cannot hide the rest of a claim's visits from the next read.
  *
  * ⚠ A FAILED READ IS NOT A DEFERRAL. Termination proceeds on the presence the sweep observed, as
  * it did before this pass existed; only a spent budget of our own holds the candidate a tick.
@@ -796,13 +803,16 @@ async function backfillSubTickVisits(
     return NOTHING_BACKFILLED;
   }
 
-  await db.transaction(async (tx) => {
-    for (const { visit, open } of missed) {
-      await applyPresenceEffect(tx, open);
-      await applyPresenceEffect(tx, { ...open, action: 'close', at: visit.leftAt });
+  const written = await db.transaction(async (tx) => {
+    const recorded: typeof missed = [];
+    for (const entry of missed) {
+      if ((await applyRecordedVisit(tx, entry.open, entry.visit.leftAt)) === 'recorded') {
+        recorded.push(entry);
+      }
     }
+    return recorded;
   });
-  for (const { visit, open } of missed) {
+  for (const { visit, open } of written) {
     logger.warn(
       {
         meetingId: meeting.id,
@@ -815,7 +825,7 @@ async function backfillSubTickVisits(
       'Backfilled a visit no sweep tick observed — Daily recorded it between two roster reads'
     );
   }
-  return { kind: 'backfilled', opened: missed.length };
+  return written.length === 0 ? NOTHING_BACKFILLED : { kind: 'backfilled', opened: written.length };
 }
 
 /**

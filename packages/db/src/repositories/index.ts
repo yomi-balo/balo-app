@@ -807,6 +807,7 @@ export {
   InvalidPresenceTimestampError,
   type OpenPresenceInput,
   type ClosePresenceInput,
+  type InsertClosedPresenceInput,
   type PresenceIdentity,
   type PresenceWindow,
 } from './meeting-presence';
