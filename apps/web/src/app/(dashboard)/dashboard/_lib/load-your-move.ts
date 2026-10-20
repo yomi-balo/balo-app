@@ -13,23 +13,38 @@ import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { loadExpertPortfolio, summaryIsUnread } from '@/lib/projects-inbox/portfolio-view';
 import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
-import { buildYourMoveCards, type YourMoveMessageThread } from './build-your-move-cards';
+import {
+  buildYourMoveCards,
+  type YourMoveActionItem,
+  type YourMoveMessageThread,
+  type YourMoveParty,
+} from './build-your-move-cards';
 import type { YourMoveCardView } from './your-move-view-types';
 
-interface ThreadRef {
+export interface ThreadRef {
   readonly ref: ConversationContextRef;
-  readonly companyName: string;
+  readonly party: YourMoveParty;
 }
 
-function isNeedsYouMove(row: PortfolioRowView): boolean {
-  return row.needsYou && row.moveKind !== null && row.moveKind !== undefined;
+/** True when the row already renders as a project card on either side. */
+export function isNeedsYouMove(row: PortfolioRowView): boolean {
+  return (
+    row.needsYou &&
+    ((row.moveKind !== null && row.moveKind !== undefined) ||
+      (row.clientMoveKind !== null && row.clientMoveKind !== undefined))
+  );
 }
 
-/** The conversations the Messages card may count: every open relationship, engagement and case
- *  the expert is in, minus those already shown as a project card. */
-function collectThreadRefs(
+/**
+ * The conversations the Messages card may count: the open threads each row names (`threadRefs`,
+ * already filtered to open relationships and live engagements) plus the open cases, minus rows
+ * already shown as a project card. `counterparty` says who the other party is: the row's client
+ * company (expert rail) or the thread's delivering expert (company rail).
+ */
+export function collectThreadRefs(
   rows: readonly PortfolioRowView[],
-  caseRefs: readonly ThreadRef[]
+  caseRefs: readonly ThreadRef[],
+  counterparty: 'company' | 'expert'
 ): ThreadRef[] {
   const byKey = new Map<string, ThreadRef>();
   const add = (entry: ThreadRef): void => {
@@ -37,13 +52,13 @@ function collectThreadRefs(
   };
   for (const row of rows) {
     if (isNeedsYouMove(row)) continue;
-    const companyName = row.companyName ?? '';
-    if (row.kind === 'engagement') {
-      add({ ref: { contextType: 'engagement', contextId: row.id }, companyName });
-    } else if (row.relationshipId !== null && row.relationshipId !== undefined) {
+    for (const thread of row.threadRefs ?? []) {
       add({
-        ref: { contextType: 'relationship', contextId: row.relationshipId },
-        companyName,
+        ref: { contextType: thread.contextType, contextId: thread.contextId },
+        party:
+          counterparty === 'company'
+            ? { kind: 'company', name: row.companyName ?? '' }
+            : { kind: 'expert', expertProfileId: thread.expertProfileId },
       });
     }
   }
@@ -51,7 +66,7 @@ function collectThreadRefs(
   return [...byKey.values()];
 }
 
-async function loadMessageThreads(
+export async function loadMessageThreads(
   refs: readonly ThreadRef[],
   viewerUserId: string
 ): Promise<YourMoveMessageThread[]> {
@@ -59,14 +74,14 @@ async function loadMessageThreads(
   const idByKey = await conversationsRepository.conversationIdsForContexts(
     refs.map((entry) => entry.ref)
   );
-  const companyByConversation = new Map<string, string>();
+  const partyByConversation = new Map<string, YourMoveParty>();
   for (const entry of refs) {
     const conversationId = idByKey.get(conversationContextKey(entry.ref));
     if (conversationId !== undefined) {
-      companyByConversation.set(conversationId, entry.companyName);
+      partyByConversation.set(conversationId, entry.party);
     }
   }
-  const conversationIds = [...companyByConversation.keys()];
+  const conversationIds = [...partyByConversation.keys()];
   if (conversationIds.length === 0) return [];
 
   const [summaries, counts] = await Promise.all([
@@ -81,13 +96,15 @@ async function loadMessageThreads(
     const latestActivityAt = summary.latestMessage?.createdAt ?? summary.latestInboundActivityAt;
     if (count === undefined || latestActivityAt === null) continue;
     const latest = summary.latestMessage;
+    const party = partyByConversation.get(summary.conversationId);
+    if (party === undefined) continue;
     threads.push({
-      companyName: companyByConversation.get(summary.conversationId) ?? '',
+      party,
       unreadCount: count.unreadCount,
       earliestUnreadAt: count.earliestUnreadAt,
       latestInbound:
         latest !== null && latest.senderUserId !== viewerUserId
-          ? { body: latest.body, at: latest.createdAt }
+          ? { body: latest.body, at: latest.createdAt, senderFirstName: latest.senderFirstName }
           : null,
       latestActivityAt,
     });
@@ -129,7 +146,7 @@ export async function loadExpertYourMove(input: {
     .map((row) => row.id);
   const caseRefs: ThreadRef[] = openCases.rows.map((c) => ({
     ref: { contextType: 'engagement', contextId: c.engagementId },
-    companyName: c.companyName,
+    party: { kind: 'company', name: c.companyName },
   }));
 
   const [details, messages] = await Promise.all([
@@ -137,7 +154,7 @@ export async function loadExpertYourMove(input: {
       expertProfileId,
       projectRequestIds: requestIds,
     }),
-    loadMessageThreads(collectThreadRefs(rows, caseRefs), user.id),
+    loadMessageThreads(collectThreadRefs(rows, caseRefs, 'company'), user.id),
   ]);
 
   for (const id of requestIds) {
@@ -149,10 +166,21 @@ export async function loadExpertYourMove(input: {
     }
   }
 
+  const mappedActionItems: YourMoveActionItem[] = actionItems.map((item) => ({
+    engagementId: item.engagementId,
+    engagementType: item.engagementType,
+    engagementTitle: item.engagementTitle,
+    party: { kind: 'company', name: item.companyName },
+    body: item.body,
+    dueAt: item.dueAt,
+    createdAt: item.createdAt,
+  }));
+
   return buildYourMoveCards({
     rows,
     details,
-    actionItems,
+    actionItems: mappedActionItems,
+    expertNames: new Map(),
     messages,
     calendarNeedsReconnect,
     now,

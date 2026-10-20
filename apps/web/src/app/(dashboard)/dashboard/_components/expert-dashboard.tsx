@@ -6,6 +6,7 @@ import { GettingStartedChecklist } from './getting-started-checklist';
 import { CelebrationCard } from './celebration-card';
 import { EarningsCard } from './earnings-card';
 import { GhostClientsCard } from './ghost-clients-card';
+import { DashboardRefreshOnFocus } from './dashboard-refresh-on-focus';
 import { track, EXPERT_SETUP_EVENTS } from '@/lib/analytics';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
 import type { ChecklistStatus } from '@/lib/actions/expert-checklist';
@@ -64,6 +65,7 @@ export function ExpertDashboard({
 
   return (
     <div>
+      <DashboardRefreshOnFocus />
       {/* Page header */}
       <motion.div
         initial={{ y: 16, opacity: 0 }}

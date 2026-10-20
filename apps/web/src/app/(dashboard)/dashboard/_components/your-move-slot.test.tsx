@@ -2,9 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 
 vi.mock('./your-move', () => ({
-  YourMove: ({ data }: { data: { kind: string; cards: unknown[] } }) => (
-    <div data-testid="your-move">{`${data.kind}:${data.cards.length}`}</div>
-  ),
+  YourMove: ({
+    data,
+    workspaceType,
+  }: {
+    data: { kind: string; cards: unknown[] };
+    workspaceType: string;
+  }) => <div data-testid="your-move">{`${workspaceType}:${data.kind}:${data.cards.length}`}</div>,
 }));
 
 const mockLoad = vi.fn();
@@ -40,7 +44,7 @@ describe('YourMoveSlot', () => {
       user: { id: 'u-1', expertProfileId: 'profile-1' },
       calendarNeedsReconnect: false,
     });
-    expect(screen.getByTestId('your-move')).toHaveTextContent('ready:2');
+    expect(screen.getByTestId('your-move')).toHaveTextContent('expert:ready:2');
   });
 
   it('renders the error state, keeping the calendar blocker, when the read throws', async () => {
@@ -48,7 +52,7 @@ describe('YourMoveSlot', () => {
     render(
       await YourMoveSlot({ user: USER, expertProfileId: 'profile-1', calendarNeedsReconnect: true })
     );
-    expect(screen.getByTestId('your-move')).toHaveTextContent('error:1');
+    expect(screen.getByTestId('your-move')).toHaveTextContent('expert:error:1');
     expect(log.error).toHaveBeenCalled();
   });
 
@@ -61,6 +65,6 @@ describe('YourMoveSlot', () => {
         calendarNeedsReconnect: false,
       })
     );
-    expect(screen.getByTestId('your-move')).toHaveTextContent('error:0');
+    expect(screen.getByTestId('your-move')).toHaveTextContent('expert:error:0');
   });
 });

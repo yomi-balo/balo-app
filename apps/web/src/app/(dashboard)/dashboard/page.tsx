@@ -15,15 +15,14 @@ import { DashboardWalletSlot } from './_components/dashboard-wallet-slot';
 import { CompanyUpNextSlot } from './_components/company-up-next-slot';
 import { ExpertUpNextSlot } from './_components/expert-up-next-slot';
 import { UpNextCardSkeleton } from './_components/up-next-card-skeleton';
+import { DashboardRefreshOnFocus } from './_components/dashboard-refresh-on-focus';
+import { CompanyYourMoveSlot } from './_components/company-your-move-slot';
 import { YourMoveSlot } from './_components/your-move-slot';
 import { YourMoveSkeleton } from './_components/your-move-skeleton';
 import { ApplicationReviewBannerSlot } from './_components/application-review-banner-slot';
 import { resolveUpNextFooterLinks } from './_lib/up-next-footer-links';
 import { log } from '@/lib/logging';
 import type { UpNextFooterLink } from './_lib/up-next-view-types';
-
-// Stable keys for the placeholder metric cards below (avoids array-index keys).
-const METRIC_PLACEHOLDER_KEYS = ['activity', 'engagements', 'spend'];
 
 /**
  * The expert-workspace branch. Unchanged checklist try/catch + `log.warn`; the new Up next slot
@@ -71,8 +70,8 @@ async function renderExpertDashboard(
 }
 
 /**
- * The company-workspace branch. Up next leads at 2fr, with the wallet and promo link beside it
- * at 1fr (D13); the metrics grid sits below, unchanged.
+ * The company-workspace branch: header, Your move, then Up next at 2fr with the wallet and promo
+ * link beside it at 1fr.
  */
 async function renderCompanyDashboard(
   footerLinks: readonly UpNextFooterLink[]
@@ -84,10 +83,13 @@ async function renderCompanyDashboard(
 
   return (
     <div>
+      <DashboardRefreshOnFocus />
       <div className="mb-8">
-        <h1 className="text-foreground text-2xl font-semibold">Dashboard</h1>
+        <h1 className="text-foreground text-2xl font-semibold">
+          Welcome back, {actor.firstName ?? 'there'}
+        </h1>
         <p className="text-muted-foreground mt-1 text-sm">
-          Welcome back. Here is an overview of your activity.
+          Here’s what’s happening across {companyName}.
         </p>
       </div>
 
@@ -96,6 +98,12 @@ async function renderCompanyDashboard(
       <Suspense fallback={null}>
         <ApplicationReviewBannerSlot userId={actor.id} email={actor.email} />
       </Suspense>
+
+      <div className="mb-4">
+        <Suspense fallback={<YourMoveSkeleton />}>
+          <CompanyYourMoveSlot user={actor} companyId={companyId} companyName={companyName} />
+        </Suspense>
+      </div>
 
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Suspense fallback={<UpNextCardSkeleton />}>
@@ -127,21 +135,6 @@ async function renderCompanyDashboard(
             </span>
           </Link>
         </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {METRIC_PLACEHOLDER_KEYS.map((slot) => (
-          <div
-            key={slot}
-            className="border-border bg-card text-card-foreground rounded-xl border p-6"
-          >
-            <div className="space-y-3">
-              <div className="bg-muted h-4 w-24 animate-pulse rounded" />
-              <div className="bg-muted h-8 w-16 animate-pulse rounded" />
-              <div className="bg-muted h-3 w-32 animate-pulse rounded" />
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );

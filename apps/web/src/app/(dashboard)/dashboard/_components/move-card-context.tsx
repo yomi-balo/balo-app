@@ -1,5 +1,14 @@
-import { AlertCircle, Check, Clock, PenLine, Square } from 'lucide-react';
+import Link from 'next/link';
+import { AlertCircle, Check, ChevronRight, Clock, PenLine, Square } from 'lucide-react';
+import type { DashboardYourMoveTarget } from '@balo/analytics/events';
 import { cn } from '@/lib/utils';
+import type { ViewerClock } from '@/hooks/use-viewer-clock';
+import {
+  yourMoveAutoAccepts,
+  yourMoveMilestonesComplete,
+  yourMoveWas,
+} from '../_lib/your-move-copy';
+import { formatYourMoveDay, formatYourMoveDayTime } from '../_lib/your-move-dates';
 import type { YourMoveContext, YourMoveGateState } from '../_lib/your-move-view-types';
 
 type ContextOf<T extends YourMoveContext['type']> = Extract<YourMoveContext, { type: T }>;
@@ -111,6 +120,17 @@ function Gates({ context }: Readonly<{ context: ContextOf<'gates'> }>): React.JS
   );
 }
 
+function GatesWithNote({ context }: Readonly<{ context: ContextOf<'gates'> }>): React.JSX.Element {
+  return (
+    <div>
+      <Gates context={context} />
+      {context.note !== null && (
+        <p className="text-muted-foreground mt-2.5 text-[12.5px] leading-snug">{context.note}</p>
+      )}
+    </div>
+  );
+}
+
 function Delivery({ context }: Readonly<{ context: ContextOf<'delivery'> }>): React.JSX.Element {
   const pct = context.total > 0 ? Math.round((context.done / context.total) * 100) : 0;
   return (
@@ -162,10 +182,142 @@ function Items({ context }: Readonly<{ context: ContextOf<'items'> }>): React.JS
   );
 }
 
+function Stats({ context }: Readonly<{ context: ContextOf<'stats'> }>): React.JSX.Element {
+  return (
+    <dl className="m-0 grid grid-cols-3 gap-2">
+      {context.stats.map((stat) => (
+        <div key={stat.label} className="bg-violet/5 rounded-[10px] px-[9px] py-2">
+          <dt className="text-muted-foreground text-[11.5px]">{stat.label}</dt>
+          <dd className="text-foreground m-0 mt-0.5 text-[13.5px] font-semibold">{stat.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+interface RescheduleProps {
+  readonly context: ContextOf<'reschedule'>;
+  readonly href: string;
+  readonly clock: ViewerClock | null;
+  readonly onNavigate: (target: DashboardYourMoveTarget) => void;
+}
+
+function Reschedule({
+  context,
+  href,
+  clock,
+  onNavigate,
+}: Readonly<RescheduleProps>): React.JSX.Element {
+  return (
+    <div>
+      <p className="text-muted-foreground mb-2 text-[12.5px] line-through">
+        {clock === null ? (
+          <span aria-hidden="true">&nbsp;</span>
+        ) : (
+          yourMoveWas(formatYourMoveDayTime(context.wasIso, clock.timeZone))
+        )}
+      </p>
+      <div className="flex flex-col gap-1.5">
+        {context.optionIsos.map((iso) =>
+          clock === null ? (
+            <span
+              key={iso}
+              aria-hidden="true"
+              className="bg-primary/10 block h-11 rounded-lg motion-safe:animate-pulse"
+            />
+          ) : (
+            <Link
+              key={iso}
+              href={href}
+              aria-label={`Choose ${formatYourMoveDayTime(iso, clock.timeZone)} on the case page`}
+              onClick={() => onNavigate('card')}
+              className="bg-primary/10 text-primary focus-visible:ring-ring flex h-11 items-center justify-between rounded-lg px-[11px] text-[13px] font-semibold no-underline focus-visible:ring-2 focus-visible:outline-none"
+            >
+              {formatYourMoveDayTime(iso, clock.timeZone)}
+              <ChevronRight className="size-[15px]" aria-hidden="true" />
+            </Link>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Completion({
+  context,
+  clock,
+}: Readonly<{ context: ContextOf<'completion'>; clock: ViewerClock | null }>): React.JSX.Element {
+  const pct = context.total > 0 ? Math.round((context.done / context.total) * 100) : 0;
+  return (
+    <div>
+      <div aria-hidden="true" className="bg-muted h-1.5 overflow-hidden rounded-full">
+        <div className="bg-success h-full" style={{ width: `${pct}%` }} />
+      </div>
+      <p className="text-foreground mt-2 text-[13px] font-semibold">
+        {yourMoveMilestonesComplete(context.done, context.total)}
+      </p>
+      {context.autoAcceptIso !== null && (
+        <p className="text-muted-foreground mt-0.5 min-h-4 text-[12.5px]">
+          {clock === null ? (
+            <span aria-hidden="true">&nbsp;</span>
+          ) : (
+            yourMoveAutoAccepts(formatYourMoveDay(context.autoAcceptIso, clock.timeZone))
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter((part) => part !== '')
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
+}
+
+function People({ context }: Readonly<{ context: ContextOf<'people'> }>): React.JSX.Element {
+  return (
+    <ul className="m-0 flex list-none flex-col gap-2 p-0">
+      {context.people.map((person) => (
+        <li key={person.email} className="flex min-w-0 items-center gap-[9px]">
+          <span
+            aria-hidden="true"
+            className="bg-violet/20 text-foreground inline-flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+          >
+            {initialsOf(person.name)}
+          </span>
+          <span className="min-w-0">
+            <span className="text-foreground block truncate text-[13px] font-semibold">
+              {person.name}
+            </span>
+            <span className="text-muted-foreground block truncate text-xs">{person.email}</span>
+          </span>
+        </li>
+      ))}
+      {context.more > 0 && (
+        <li className="text-muted-foreground pl-[37px] text-[12.5px]">{context.more} more</li>
+      )}
+    </ul>
+  );
+}
+
+interface MoveCardContextProps {
+  readonly context: YourMoveContext;
+  readonly href: string;
+  readonly clock: ViewerClock | null;
+  readonly onNavigate: (target: DashboardYourMoveTarget) => void;
+}
+
 /** The read-only body of a Your move card: one shape per context type. */
 export function MoveCardContext({
   context,
-}: Readonly<{ context: YourMoveContext }>): React.JSX.Element {
+  href,
+  clock,
+  onNavigate,
+}: Readonly<MoveCardContextProps>): React.JSX.Element {
   switch (context.type) {
     case 'brief':
       return <Brief context={context} />;
@@ -192,10 +344,18 @@ export function MoveCardContext({
         </div>
       );
     case 'gates':
-      return <Gates context={context} />;
+      return <GatesWithNote context={context} />;
     case 'delivery':
       return <Delivery context={context} />;
     case 'items':
       return <Items context={context} />;
+    case 'stats':
+      return <Stats context={context} />;
+    case 'reschedule':
+      return <Reschedule context={context} href={href} clock={clock} onNavigate={onNavigate} />;
+    case 'completion':
+      return <Completion context={context} clock={clock} />;
+    case 'people':
+      return <People context={context} />;
   }
 }

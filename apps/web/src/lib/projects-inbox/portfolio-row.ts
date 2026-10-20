@@ -2,6 +2,7 @@ import type {
   PortfolioRequestRow,
   PortfolioInvitationRow,
   PortfolioProjectEngagementView,
+  ProposalStatus,
 } from '@balo/db';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
@@ -60,6 +61,25 @@ export type ExpertMoveKind =
   | 'kickoff_terms'
   | 'delivery_changes';
 
+/**
+ * Which client-side action a needs-you row is asking for. Set by the same branch that sets
+ * `needsYou`, so `needsYou === (clientMoveKind !== null)` on every client row; consumers map it
+ * to a card and never parse `stage` or `nudgeLabel`.
+ */
+export type ClientMoveKind =
+  | 'exploratory_call'
+  | 'eoi_reply'
+  | 'proposal_review'
+  | 'kickoff_billing'
+  | 'completion';
+
+/** One message thread a row can open: a request relationship or a delivery engagement. */
+export interface PortfolioThreadRef {
+  contextType: 'relationship' | 'engagement';
+  contextId: string;
+  expertProfileId: string | null;
+}
+
 /** A serialisable portfolio row — what crosses the RSC boundary to the client. */
 export interface PortfolioRowView {
   id: string;
@@ -79,10 +99,23 @@ export interface PortfolioRowView {
   /** ISO recency timestamp (sort key already applied server-side). */
   recencyAtIso: string;
   /** Freshest inbound signal preview, or null. */
-  signal?: { from: string; messagePreview: string } | null;
+  signal?: { from: string; messagePreview: string; relationshipId?: string } | null;
   kind: 'request' | 'engagement';
   /** The expert-side action this row asks for; null when `needsYou` is false (client rows: null). */
   moveKind?: ExpertMoveKind | null;
+  /** The client-side action this row asks for; null when `needsYou` is false (expert rows: unset). */
+  clientMoveKind?: ClientMoveKind | null;
+  /** Open message threads this row can open; empty when the row has none. */
+  threadRefs?: PortfolioThreadRef[];
+  /** The delivering expert's profile id on a client engagement row; unset elsewhere. */
+  expertProfileId?: string | null;
+  /** Completion review facts on a client `pending_acceptance` engagement row; null otherwise. */
+  completion?: {
+    milestonesDone: number;
+    milestonesTotal: number;
+    completionRequestedAtIso: string;
+    autoAcceptAtIso: string;
+  } | null;
   /** The expert's relationship id on an expert request row; unset elsewhere. */
   relationshipId?: string | null;
   /** The client's change request on a `delivery_changes` engagement row; null otherwise. */
@@ -290,7 +323,7 @@ export interface RequestThreadSignal {
    */
   awaitingViewerReply: boolean;
   /** Freshest inbound preview ({from, messagePreview}) or null. */
-  freshestSignal: { from: string; messagePreview: string } | null;
+  freshestSignal: { from: string; messagePreview: string; relationshipId?: string } | null;
 }
 
 const EMPTY_SIGNAL: RequestThreadSignal = {
@@ -299,9 +332,25 @@ const EMPTY_SIGNAL: RequestThreadSignal = {
   freshestSignal: null,
 };
 
-/** Count of relationships at `proposal_submitted` — "Review N proposals". */
+/**
+ * A submitted proposal awaits the client's review unless the client already asked for changes —
+ * then the move is the expert's. The one definition of "awaiting client review".
+ */
+export function proposalAwaitsClientReview(
+  relationshipStatus: string,
+  currentProposalStatus: ProposalStatus | null
+): boolean {
+  return (
+    relationshipStatus === 'proposal_submitted' && currentProposalStatus !== 'changes_requested'
+  );
+}
+
+/** Count of relationships awaiting the client's proposal review — "Review N proposals". */
 function proposalSubmittedCount(row: PortfolioRequestRow): number {
-  return row.relationships.filter((r) => r.status === 'proposal_submitted').length;
+  return row.relationships.filter((r) => {
+    const [current] = r.proposals;
+    return proposalAwaitsClientReview(r.status, current?.status ?? null);
+  }).length;
 }
 
 /** The freshest single expert first name for "Reply to {expert}". */
@@ -316,43 +365,58 @@ interface NeedsYouResult {
   nudgeLabel: string;
 }
 
+/** Client-lens result: the needs-you decision plus the typed reason (null when not needed). */
+export type ClientNeedsYouResult = NeedsYouResult & { clientMoveKind: ClientMoveKind | null };
+
 /** Expert-lens result: the needs-you decision plus the typed reason (null when not needed). */
 export type ExpertNeedsYouResult = NeedsYouResult & { moveKind: ExpertMoveKind | null };
 
-function clientNeedsYou(row: PortfolioRequestRow, signal: RequestThreadSignal): NeedsYouResult {
+function clientNeedsYou(
+  row: PortfolioRequestRow,
+  signal: RequestThreadSignal
+): ClientNeedsYouResult {
   switch (row.status) {
     case 'draft':
     case 'requested':
-      return { needsYou: false, nudgeLabel: 'Waiting on Balo' };
+      return { needsYou: false, nudgeLabel: 'Waiting on Balo', clientMoveKind: null };
     case 'exploratory_meeting_requested':
-      return { needsYou: true, nudgeLabel: 'Book exploratory call' };
+      return {
+        needsYou: true,
+        nudgeLabel: 'Book exploratory call',
+        clientMoveKind: 'exploratory_call',
+      };
     case 'experts_invited':
-      return { needsYou: false, nudgeLabel: 'Waiting on experts' };
+      return { needsYou: false, nudgeLabel: 'Waiting on experts', clientMoveKind: null };
     case 'eoi_submitted': {
       const needsYou = signal.anyUnread || signal.awaitingViewerReply;
       return {
         needsYou,
         nudgeLabel: needsYou ? `Reply to ${awaitingExpertName(signal)}` : 'In conversation',
+        clientMoveKind: needsYou ? 'eoi_reply' : null,
       };
     }
     case 'proposal_requested':
-      return { needsYou: false, nudgeLabel: 'Proposal in progress' };
+      return { needsYou: false, nudgeLabel: 'Proposal in progress', clientMoveKind: null };
     case 'proposal_submitted': {
       const count = proposalSubmittedCount(row);
+      if (count === 0) {
+        return { needsYou: false, nudgeLabel: 'Waiting on expert', clientMoveKind: null };
+      }
       const label = count > 1 ? `Review ${count} proposals` : 'Review proposal';
-      return { needsYou: true, nudgeLabel: label };
+      return { needsYou: true, nudgeLabel: label, clientMoveKind: 'proposal_review' };
     }
     case 'accepted': {
       const gateOwed = row.clientBillingConfirmedAt === null;
       return {
         needsYou: gateOwed,
         nudgeLabel: gateOwed ? 'Confirm billing' : 'Awaiting kickoff',
+        clientMoveKind: gateOwed ? 'kickoff_billing' : null,
       };
     }
     case 'kickoff_approved':
-      return { needsYou: false, nudgeLabel: 'Live project' };
+      return { needsYou: false, nudgeLabel: 'Live project', clientMoveKind: null };
     case 'closed':
-      return { needsYou: false, nudgeLabel: 'Closed' };
+      return { needsYou: false, nudgeLabel: 'Closed', clientMoveKind: null };
     default:
       return assertNeverStatus(row.status);
   }
@@ -477,8 +541,10 @@ export function needsYouFor(
   row: PortfolioRequestRow,
   signal: RequestThreadSignal = EMPTY_SIGNAL,
   now: Date = new Date()
-): NeedsYouResult {
-  return lens === 'client' ? clientNeedsYou(row, signal) : adminNeedsYou(row, now);
+): ClientNeedsYouResult {
+  return lens === 'client'
+    ? clientNeedsYou(row, signal)
+    : { ...adminNeedsYou(row, now), clientMoveKind: null };
 }
 
 /** Expert invitation-row needs-you + nudge resolution (per-relationship). */
@@ -519,6 +585,7 @@ export interface EngagementRowDeriv {
   href: string;
   progressLabel: string | null;
   moveKind: ExpertMoveKind | null;
+  clientMoveKind: ClientMoveKind | null;
 }
 
 /**
@@ -556,6 +623,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
             href,
             progressLabel,
             moveKind: 'delivery_changes',
+            clientMoveKind: null,
           };
         }
         return {
@@ -564,9 +632,17 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
           href,
           progressLabel,
           moveKind: null,
+          clientMoveKind: null,
         };
       }
-      return { needsYou: false, nudgeLabel: 'In delivery', href, progressLabel, moveKind: null };
+      return {
+        needsYou: false,
+        nudgeLabel: 'In delivery',
+        href,
+        progressLabel,
+        moveKind: null,
+        clientMoveKind: null,
+      };
     }
     case 'pending_acceptance': {
       if (input.lens === 'client') {
@@ -574,7 +650,14 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
           input.autoAcceptLabel === null
             ? 'Review project completion'
             : `Review project completion — auto-accepts ${input.autoAcceptLabel}`;
-        return { needsYou: true, nudgeLabel, href, progressLabel: null, moveKind: null };
+        return {
+          needsYou: true,
+          nudgeLabel,
+          href,
+          progressLabel: null,
+          moveKind: null,
+          clientMoveKind: 'completion',
+        };
       }
       return {
         needsYou: false,
@@ -582,6 +665,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
         href,
         progressLabel: null,
         moveKind: null,
+        clientMoveKind: null,
       };
     }
     case 'completed':
@@ -591,6 +675,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
         href,
         progressLabel: null,
         moveKind: null,
+        clientMoveKind: null,
       };
     case 'cancelled':
       return {
@@ -599,6 +684,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
         href,
         progressLabel: null,
         moveKind: null,
+        clientMoveKind: null,
       };
     default:
       return assertNeverStatus(input.status);

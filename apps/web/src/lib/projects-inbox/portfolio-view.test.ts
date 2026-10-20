@@ -720,6 +720,245 @@ describe('portfolio rows — kickoff and proposal-changes rules', () => {
   });
 });
 
+/** A hydrated relationship row as `PortfolioRequestRow` carries it. */
+function relationshipRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'rel-1',
+    expertProfileId: 'expert-1',
+    status: 'eoi_submitted',
+    invitedAt: day(5),
+    updatedAt: day(5),
+    proposalRequestedAt: null,
+    expressionsOfInterest: [],
+    conversationMessages: [],
+    proposals: [],
+    ...overrides,
+  };
+}
+
+function summaryFor(
+  relationshipId: string,
+  sender: string,
+  inboundDaysAgo: number
+): Record<string, unknown> {
+  return {
+    conversationId: convIdFor(relationshipId),
+    latestMessage: {
+      id: `m-${relationshipId}`,
+      body: `<p>Note from ${relationshipId}</p>`,
+      createdAt: day(inboundDaysAgo),
+      senderUserId: sender,
+      senderFirstName: 'Priya',
+    },
+    latestInboundActivityAt: day(inboundDaysAgo),
+    fileCount: 0,
+    lastReadAt: null,
+  };
+}
+
+describe('freshest inbound signal (shared fold)', () => {
+  it('client lens skips a thread whose latest message is the viewer, and falls through to the next inbound thread', async () => {
+    mockListByCompany.mockResolvedValue([
+      requestRow({
+        id: 'req-s',
+        status: 'eoi_submitted',
+        relationships: [relationshipRow({ id: 'rel-own' }), relationshipRow({ id: 'rel-in' })],
+      }),
+    ]);
+    mockListThreadSummaries.mockResolvedValue([
+      summaryFor('rel-own', 'user-1', 1),
+      summaryFor('rel-in', 'other-user', 3),
+    ]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.rows[0]?.signal).toMatchObject({
+      messagePreview: 'Note from rel-in',
+      relationshipId: 'rel-in',
+    });
+  });
+
+  it('client lens returns a null signal when the viewer sent the only latest message', async () => {
+    mockListByCompany.mockResolvedValue([
+      requestRow({
+        id: 'req-s',
+        status: 'eoi_submitted',
+        relationships: [relationshipRow({ id: 'rel-own' })],
+      }),
+    ]);
+    mockListThreadSummaries.mockResolvedValue([summaryFor('rel-own', 'user-1', 1)]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.rows[0]?.signal).toBeNull();
+  });
+
+  it('expert lens skips a thread whose latest message is the viewer', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([invitationRow({ relationshipId: 'rel-x' })]);
+    mockListThreadSummaries.mockResolvedValue([summaryFor('rel-x', 'user-1', 1)]);
+    const dto = await loadExpertPortfolio(
+      { ...USER, expertProfileId: 'expert-1' },
+      ['expert'],
+      NOW
+    );
+    expect(dto.rows[0]?.signal).toBeNull();
+  });
+
+  it('expert lens previews an inbound message and names its relationship', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([invitationRow({ relationshipId: 'rel-x' })]);
+    mockListThreadSummaries.mockResolvedValue([summaryFor('rel-x', 'client-user', 1)]);
+    const dto = await loadExpertPortfolio(
+      { ...USER, expertProfileId: 'expert-1' },
+      ['expert'],
+      NOW
+    );
+    expect(dto.rows[0]?.signal).toMatchObject({ relationshipId: 'rel-x' });
+  });
+});
+
+describe('client row move kind, thread refs and engagement facts', () => {
+  it('sets clientMoveKind and lists only open relationships as thread refs with their expert', async () => {
+    mockListByCompany.mockResolvedValue([
+      requestRow({
+        id: 'req-t',
+        status: 'proposal_submitted',
+        relationships: [
+          relationshipRow({ id: 'rel-a', expertProfileId: 'ex-a', status: 'proposal_submitted' }),
+          relationshipRow({ id: 'rel-b', expertProfileId: 'ex-b', status: 'declined' }),
+        ],
+      }),
+    ]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.rows[0]).toMatchObject({
+      needsYou: true,
+      clientMoveKind: 'proposal_review',
+      threadRefs: [{ contextType: 'relationship', contextId: 'rel-a', expertProfileId: 'ex-a' }],
+    });
+  });
+
+  it('a changes_requested proposal reads "Waiting on expert" and is not needs-you', async () => {
+    mockListByCompany.mockResolvedValue([
+      requestRow({
+        id: 'req-c',
+        status: 'proposal_submitted',
+        relationships: [
+          relationshipRow({
+            id: 'rel-a',
+            status: 'proposal_submitted',
+            proposals: [{ status: 'changes_requested' }],
+          }),
+        ],
+      }),
+    ]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.rows[0]).toMatchObject({
+      needsYou: false,
+      nudgeLabel: 'Waiting on expert',
+      clientMoveKind: null,
+    });
+  });
+
+  it('a declined relationship yields no thread refs', async () => {
+    mockListByCompany.mockResolvedValue([
+      requestRow({
+        id: 'req-closed',
+        status: 'closed',
+        relationships: [relationshipRow({ id: 'rel-a', status: 'declined' })],
+      }),
+    ]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.closedRows[0]?.threadRefs).toEqual([]);
+  });
+
+  it('client pending_acceptance engagement carries completion, expert profile and a thread ref', async () => {
+    mockListPortfolioEngagements.mockResolvedValue([
+      engagementView({
+        id: 'eng-pa',
+        status: 'pending_acceptance',
+        completionRequestedAt: day(1),
+        totalMilestones: 4,
+        completedMilestones: 4,
+      }),
+    ]);
+    mockListByCompany.mockResolvedValue([]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.rows[0]).toMatchObject({
+      clientMoveKind: 'completion',
+      expertProfileId: 'expert-1',
+      completion: {
+        milestonesDone: 4,
+        milestonesTotal: 4,
+        completionRequestedAtIso: day(1).toISOString(),
+        autoAcceptAtIso: new Date(day(1).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      threadRefs: [{ contextType: 'engagement', contextId: 'eng-pa', expertProfileId: 'expert-1' }],
+    });
+  });
+
+  it('client pending_acceptance without a completion request has null completion', async () => {
+    mockListPortfolioEngagements.mockResolvedValue([
+      engagementView({ id: 'eng-pa', status: 'pending_acceptance', completionRequestedAt: null }),
+    ]);
+    mockListByCompany.mockResolvedValue([]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.rows[0]?.completion).toBeNull();
+  });
+
+  it('completed and cancelled engagements have no thread refs; active ones have one', async () => {
+    mockListByCompany.mockResolvedValue([]);
+    mockListPortfolioEngagements.mockResolvedValue([
+      engagementView({ id: 'eng-done', status: 'completed' }),
+      engagementView({ id: 'eng-off', status: 'cancelled' }),
+      engagementView({ id: 'eng-live', status: 'active' }),
+    ]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    const refs = Object.fromEntries(dto.rows.map((r) => [r.id, r.threadRefs]));
+    expect(refs['eng-done']).toEqual([]);
+    expect(refs['eng-off']).toEqual([]);
+    expect(refs['eng-live']).toHaveLength(1);
+  });
+
+  it('expert rows carry no client move kind or client-only engagement fields', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([]);
+    mockListPortfolioEngagements.mockResolvedValue([
+      engagementView({ id: 'eng-pa', status: 'pending_acceptance', completionRequestedAt: day(1) }),
+    ]);
+    const dto = await loadExpertPortfolio(
+      { ...USER, expertProfileId: 'expert-1' },
+      ['expert'],
+      NOW
+    );
+    expect(dto.rows[0]?.clientMoveKind).toBeNull();
+    expect(dto.rows[0]?.completion).toBeUndefined();
+    expect(dto.rows[0]?.expertProfileId).toBeUndefined();
+  });
+});
+
+describe('expert thread refs', () => {
+  const expertUser = { ...USER, expertProfileId: 'expert-1' };
+  const refsFor = async (overrides: Record<string, unknown>): Promise<unknown> => {
+    mockListInvitationsByExpert.mockResolvedValue([invitationRow(overrides)]);
+    const dto = await loadExpertPortfolio(expertUser, ['expert'], NOW);
+    return [...dto.rows, ...dto.closedRows][0]?.threadRefs;
+  };
+
+  it('an undecided request with an open relationship has one ref', async () => {
+    expect(await refsFor({ relationshipStatus: 'eoi_submitted' })).toEqual([
+      { contextType: 'relationship', contextId: 'rel-1', expertProfileId: null },
+    ]);
+  });
+
+  it('the accepted relationship on a decided request keeps its ref', async () => {
+    expect(
+      await refsFor({ relationshipStatus: 'accepted', requestStatus: 'accepted' })
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ['not selected', { relationshipStatus: 'proposal_submitted', requestStatus: 'accepted' }],
+    ['declined', { relationshipStatus: 'declined' }],
+    ['closed request', { relationshipStatus: 'accepted', requestStatus: 'closed' }],
+  ])('%s has no refs', async (_name, overrides) => {
+    expect(await refsFor(overrides)).toEqual([]);
+  });
+});
+
 describe('summaryIsUnread', () => {
   const summary = (inbound: Date | null, readAt: Date | null) =>
     ({ latestInboundActivityAt: inbound, lastReadAt: readAt }) as Parameters<

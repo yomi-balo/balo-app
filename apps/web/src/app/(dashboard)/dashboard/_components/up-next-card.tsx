@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button';
 import { track, DASHBOARD_EVENTS } from '@/lib/analytics';
 import { DASHBOARD_UP_NEXT_MEETING_TYPES } from '@balo/analytics/events';
 import { useViewerClock } from '@/hooks/use-viewer-clock';
-import { useRefreshOnFocus } from '@/hooks/use-refresh-on-focus';
 import { resolveUpNextRowTiming } from '../_lib/up-next-presentation';
 import {
   UP_NEXT_COPY,
@@ -43,7 +42,6 @@ export function UpNextCard({
   footerLinks,
 }: Readonly<UpNextCardProps>): React.JSX.Element {
   const clock = useViewerClock();
-  useRefreshOnFocus();
   const router = useRouter();
   const viewedRef = useRef(false);
 

@@ -34,6 +34,7 @@ import {
   type AdminTriageCard,
   type PortfolioDTO,
   type PortfolioRowView,
+  type PortfolioThreadRef,
   type RequestThreadSignal,
   type StageKey,
 } from './portfolio-row';
@@ -125,43 +126,62 @@ function summaryAwaitsReply(summary: ThreadSummary, viewerUserId: string): boole
   return latest !== null && latest.senderUserId !== viewerUserId;
 }
 
+/** A hydrated thread summary paired with the relationship it belongs to. */
+interface ResolvedSummary {
+  relationshipId: string;
+  summary: ThreadSummary;
+}
+
 /** Resolve the open-thread summaries the loader hydrated for a request. */
 function resolveSummaries(
   relationshipIds: string[],
   summaryById: Map<string, ThreadSummary>
-): ThreadSummary[] {
-  const resolved: ThreadSummary[] = [];
+): ResolvedSummary[] {
+  const resolved: ResolvedSummary[] = [];
   for (const relationshipId of relationshipIds) {
     const summary = summaryById.get(relationshipId);
     if (summary === undefined) {
       log.warn('Portfolio thread summary missing for open relationship', { relationshipId });
       continue;
     }
-    resolved.push(summary);
+    resolved.push({ relationshipId, summary });
   }
   return resolved;
 }
 
 /**
- * The freshest inbound signal preview across a request's threads, or null.
- * `from` is the sender's real first name when known (from the batched summary),
- * falling back to the lens's counterpart label when the name is unset.
+ * The freshest inbound signal preview across a request's threads, or null. Only a thread whose
+ * latest message the counterparty sent can win, so the viewer's own message is never previewed as
+ * inbound. `from` is the sender's real first name when known (from the batched summary), falling
+ * back to the lens's counterpart label when the name is unset; `relationshipId` names the
+ * winning thread.
  */
 function freshestInboundSignal(
-  summaries: ThreadSummary[],
+  resolved: ResolvedSummary[],
+  viewerUserId: string,
   counterpartLabel: string
-): { from: string; messagePreview: string } | null {
-  const ranked = summaries
-    .filter((s) => s.latestInboundActivityAt !== null && s.latestMessage !== null)
+): { from: string; messagePreview: string; relationshipId: string } | null {
+  const ranked = resolved
+    .filter(
+      ({ summary }) =>
+        summary.latestInboundActivityAt !== null &&
+        summary.latestMessage !== null &&
+        summary.latestMessage.senderUserId !== viewerUserId
+    )
     .sort(
       (a, b) =>
-        (b.latestInboundActivityAt?.getTime() ?? 0) - (a.latestInboundActivityAt?.getTime() ?? 0)
+        (b.summary.latestInboundActivityAt?.getTime() ?? 0) -
+        (a.summary.latestInboundActivityAt?.getTime() ?? 0)
     );
-  for (const summary of ranked) {
+  for (const { relationshipId, summary } of ranked) {
     const latest = summary.latestMessage;
     const preview = latest === null ? null : previewOfHtml(latest.body);
     if (preview !== null && latest !== null) {
-      return { from: latest.senderFirstName ?? counterpartLabel, messagePreview: preview };
+      return {
+        from: latest.senderFirstName ?? counterpartLabel,
+        messagePreview: preview,
+        relationshipId,
+      };
     }
   }
   return null;
@@ -178,11 +198,11 @@ function foldSignal(
   viewerUserId: string,
   counterpartLabel: string
 ): RequestThreadSignal {
-  const summaries = resolveSummaries(relationshipIds, summaryById);
+  const resolved = resolveSummaries(relationshipIds, summaryById);
   return {
-    anyUnread: summaries.some(summaryIsUnread),
-    awaitingViewerReply: summaries.some((s) => summaryAwaitsReply(s, viewerUserId)),
-    freshestSignal: freshestInboundSignal(summaries, counterpartLabel),
+    anyUnread: resolved.some(({ summary }) => summaryIsUnread(summary)),
+    awaitingViewerReply: resolved.some(({ summary }) => summaryAwaitsReply(summary, viewerUserId)),
+    freshestSignal: freshestInboundSignal(resolved, viewerUserId, counterpartLabel),
   };
 }
 
@@ -237,7 +257,7 @@ function toClientRowView(
   now: Date
 ): PortfolioRowView {
   const recencyAt = requestRecencyAt(row);
-  const { needsYou, nudgeLabel } = needsYouFor('client', row, signal, now);
+  const { needsYou, nudgeLabel, clientMoveKind } = needsYouFor('client', row, signal, now);
   const chip = stageChipFor(row.status);
   return {
     id: row.id,
@@ -254,7 +274,37 @@ function toClientRowView(
     signal: signal.freshestSignal,
     kind: 'request',
     moveKind: null,
+    clientMoveKind,
+    threadRefs: row.relationships
+      .filter((r) => isThreadOpenStatus(r.status))
+      .map((r) => ({
+        contextType: 'relationship' as const,
+        contextId: r.id,
+        expertProfileId: r.expertProfileId,
+      })),
   };
+}
+
+/**
+ * The expert's one thread on a request row. Empty when the thread is closed, the request is
+ * closed, or the request was decided for another expert ("Not selected").
+ */
+function expertThreadRefs(invitation: PortfolioInvitationRow): PortfolioThreadRef[] {
+  const requestDecided =
+    invitation.requestStatus === 'accepted' || invitation.requestStatus === 'kickoff_approved';
+  const open =
+    isThreadOpenStatus(invitation.relationshipStatus) &&
+    invitation.requestStatus !== 'closed' &&
+    (!requestDecided || invitation.relationshipStatus === 'accepted');
+  return open
+    ? [
+        {
+          contextType: 'relationship',
+          contextId: invitation.relationshipId,
+          expertProfileId: null,
+        },
+      ]
+    : [];
 }
 
 /** Build an expert invitation row view from a flat invitation + its signal. */
@@ -295,6 +345,7 @@ function toExpertRowView(
     kind: 'request',
     moveKind,
     relationshipId: invitation.relationshipId,
+    threadRefs: expertThreadRefs(invitation),
   };
 }
 
@@ -324,18 +375,41 @@ function toEngagementRowView(
       ? formatAutoAcceptLabel(e.completionRequestedAt)
       : null;
 
-  const { needsYou, nudgeLabel, href, progressLabel, moveKind } = deriveEngagementRow({
-    engagementId: e.id,
-    status: e.status,
-    lens,
-    hasChangeRequest: e.status === 'active' && e.changeRequestNote !== null,
-    counterpartName,
-    totalMilestones: e.totalMilestones,
-    completedMilestones: e.completedMilestones,
-    autoAcceptLabel,
-  });
+  const { needsYou, nudgeLabel, href, progressLabel, moveKind, clientMoveKind } =
+    deriveEngagementRow({
+      engagementId: e.id,
+      status: e.status,
+      lens,
+      hasChangeRequest: e.status === 'active' && e.changeRequestNote !== null,
+      counterpartName,
+      totalMilestones: e.totalMilestones,
+      completedMilestones: e.completedMilestones,
+      autoAcceptLabel,
+    });
 
   const recencyAt = e.lastActivityAt ?? e.createdAt;
+
+  const completion: PortfolioRowView['completion'] =
+    lens === 'client' && e.status === 'pending_acceptance' && e.completionRequestedAt !== null
+      ? {
+          milestonesDone: e.completedMilestones,
+          milestonesTotal: e.totalMilestones,
+          completionRequestedAtIso: e.completionRequestedAt.toISOString(),
+          autoAcceptAtIso: new Date(
+            e.completionRequestedAt.getTime() + AUTO_ACCEPT_MS
+          ).toISOString(),
+        }
+      : null;
+  const threadRefs: PortfolioThreadRef[] =
+    e.status === 'active' || e.status === 'pending_acceptance'
+      ? [
+          {
+            contextType: 'engagement',
+            contextId: e.id,
+            expertProfileId: lens === 'client' ? e.expertProfileId : null,
+          },
+        ]
+      : [];
 
   return {
     id: e.id,
@@ -353,6 +427,9 @@ function toEngagementRowView(
     signal: null,
     kind: 'engagement',
     moveKind,
+    clientMoveKind: lens === 'client' ? clientMoveKind : null,
+    threadRefs,
+    ...(lens === 'client' ? { expertProfileId: e.expertProfileId, completion } : {}),
     delivery:
       moveKind === 'delivery_changes' && e.changeRequestNote !== null
         ? {

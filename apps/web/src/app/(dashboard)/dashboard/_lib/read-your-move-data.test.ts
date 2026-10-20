@@ -5,6 +5,7 @@ vi.mock('@/lib/logging', () => ({
   log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
+import { buildCalendarCards } from './build-your-move-cards';
 import { readYourMoveData } from './read-your-move-data';
 import { log } from '@/lib/logging';
 import type { YourMoveCardView } from './your-move-view-types';
@@ -19,17 +20,16 @@ describe('readYourMoveData', () => {
   it('wraps a successful read as ready', async () => {
     const cards: YourMoveCardView[] = [];
     const result = await readYourMoveData(() => Promise.resolve(cards), {
-      calendarNeedsReconnect: false,
+      fallbackCards: [],
       logContext: { userId: 'u-1' },
     });
     expect(result).toEqual({ kind: 'ready', cards });
     expect(log.error).not.toHaveBeenCalled();
   });
 
-  it('logs a failed read and keeps the calendar blocker', async () => {
+  it('logs a failed read and keeps the fallback cards', async () => {
     const result = await readYourMoveData(() => Promise.reject(new Error('db down')), {
-      calendarNeedsReconnect: true,
-      now: NOW,
+      fallbackCards: buildCalendarCards({ calendarNeedsReconnect: true, now: NOW }),
       logContext: { userId: 'u-1' },
     });
     expect(result.kind).toBe('error');
@@ -40,9 +40,9 @@ describe('readYourMoveData', () => {
     );
   });
 
-  it('returns no cards on error when the calendar is connected', async () => {
+  it('returns no cards on error when there are no fallback cards', async () => {
     const result = await readYourMoveData(() => Promise.reject('boom'), {
-      calendarNeedsReconnect: false,
+      fallbackCards: [],
       logContext: {},
     });
     expect(result).toEqual({ kind: 'error', cards: [] });

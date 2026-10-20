@@ -23,6 +23,14 @@ export const DASHBOARD_YOUR_MOVE_CARD_KINDS = [
   'delivery_changes',
   'action_items',
   'messages',
+  'receivable',
+  'reschedule',
+  'completion',
+  'kickoff_billing',
+  'exploratory_call',
+  'eoi_reply',
+  'proposal_review',
+  'join_requests',
 ] as const;
 export type DashboardYourMoveCardKind = (typeof DASHBOARD_YOUR_MOVE_CARD_KINDS)[number];
 
@@ -36,6 +44,12 @@ export const DASHBOARD_YOUR_MOVE_CHIPS = [
   'delivery',
   'action_items',
   'messages',
+  'billing',
+  'new_times',
+  'work_to_review',
+  'calls',
+  'replies',
+  'team',
 ] as const;
 export type DashboardYourMoveChip = (typeof DASHBOARD_YOUR_MOVE_CHIPS)[number];
 
@@ -89,12 +103,14 @@ export interface DashboardEventMap {
     card_kinds: DashboardYourMoveCardKind[];
   };
   [DASHBOARD_EVENTS.YOUR_MOVE_CLICKED]: {
+    workspace_type: Workspace['type'];
     target: DashboardYourMoveTarget;
     card_kind: DashboardYourMoveCardKind;
     /** 1-based position in the visible (filtered) list. */
     position: number;
   };
   [DASHBOARD_EVENTS.YOUR_MOVE_FILTERED]: {
+    workspace_type: Workspace['type'];
     chip: DashboardYourMoveChip;
     /** Cards remaining after the filter is applied. */
     card_count: number;

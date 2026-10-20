@@ -14,6 +14,10 @@ vi.mock('./ghost-clients-card', () => ({
   GhostClientsCard: () => <div data-testid="ghost-clients" />,
 }));
 
+vi.mock('./dashboard-refresh-on-focus', () => ({
+  DashboardRefreshOnFocus: () => <div data-testid="refresh-on-focus" />,
+}));
+
 import { ExpertDashboard } from './expert-dashboard';
 import type { ChecklistStatus } from '@/lib/actions/expert-checklist';
 
@@ -55,6 +59,18 @@ describe('ExpertDashboard (BAL-566 R2/D13)', () => {
     expect(
       yourMove.compareDocumentPosition(upNext) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it('mounts the refresh-on-focus listener exactly once', () => {
+    render(
+      <ExpertDashboard
+        checklistStatus={status()}
+        userName="Priya"
+        upNext={<div data-testid="up-next" />}
+        yourMove={null}
+      />
+    );
+    expect(screen.getAllByTestId('refresh-on-focus')).toHaveLength(1);
   });
 
   it('the grid holds upNext, then a column of the Earnings and Clients cards', () => {

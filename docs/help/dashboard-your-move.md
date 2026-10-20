@@ -10,7 +10,7 @@ updated: 2026-10-20
 related: [dashboard-up-next, project-requests-for-experts]
 ---
 
-Your move sits at the top of your dashboard and gathers everything that is waiting on you into
+Your move sits on your dashboard and gathers everything that is waiting on you into
 one row of cards, most pressing first. Scroll sideways to see them all.
 
 ## What shows up

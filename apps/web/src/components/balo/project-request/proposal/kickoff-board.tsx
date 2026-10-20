@@ -94,12 +94,12 @@ function actionLabelFor(party: KickoffLens): 'Complete' | 'Approve' {
 }
 
 /** Notice shown on the client billing row for a member who can't complete it (never absence-framed). */
-const MEMBER_BLOCKED_SUB =
+export const KICKOFF_MEMBER_BLOCKED_SUB =
   'A company owner or admin needs to add these billing details before kickoff.';
 
 /** A row's sub-copy: the member notice for a blocked billing row, else done/outstanding. */
 function rowSubCopy(task: KickoffTaskDef, done: boolean, blocked: boolean): string {
-  if (blocked) return MEMBER_BLOCKED_SUB;
+  if (blocked) return KICKOFF_MEMBER_BLOCKED_SUB;
   return done ? task.doneCopy : task.outstandingCopy;
 }
 

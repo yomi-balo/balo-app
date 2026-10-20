@@ -427,7 +427,7 @@ describe('rescheduleProposalsRepository.findLivePendingByMeetingIds', () => {
    * say WHO suggested the new times. The key-set assertion is what keeps it a PROJECTION: a
    * future `with:` hydration, or one more "harmless" column, fails here rather than in review.
    */
-  it('carries proposedByUserId — and EXACTLY the six projected keys, never a hydrated row', async () => {
+  it('carries proposedByUserId and createdAt — and EXACTLY the seven projected keys, never a hydrated row', async () => {
     const start = new Date(Date.now() + 24 * HOUR_MS);
     const { proposal, meetingId, proposedByUserId } = await rescheduleProposalFactory({
       options: [{ scheduledStart: start, scheduledEnd: new Date(start.getTime() + HOUR_MS) }],
@@ -440,6 +440,7 @@ describe('rescheduleProposalsRepository.findLivePendingByMeetingIds', () => {
 
     expect(found.proposalId).toBe(proposal.id);
     expect(found.proposedByUserId).toBe(proposedByUserId);
+    expect(found.createdAt.getTime()).toBe(proposal.createdAt.getTime());
     expect(Object.keys(found).sort()).toEqual(
       [
         'proposalId',
@@ -448,9 +449,10 @@ describe('rescheduleProposalsRepository.findLivePendingByMeetingIds', () => {
         'originalScheduledStart',
         'expiresAt',
         'proposedByUserId',
+        'createdAt',
       ].sort()
     );
-    expect(Object.keys(found)).toHaveLength(6);
+    expect(Object.keys(found)).toHaveLength(7);
   });
 
   it('skips SOFT-DELETED and NON-PENDING proposals, and returns [] for an empty id list', async () => {
@@ -474,6 +476,40 @@ describe('rescheduleProposalsRepository.findLivePendingByMeetingIds', () => {
 
     const rows = await rescheduleProposalsRepository.findLivePendingByMeetingIds([meetingId]);
     expect(rows.map((row) => row.proposalId)).toEqual([proposal.id]);
+  });
+});
+
+describe('rescheduleProposalsRepository.listLiveOptionStartsByProposalIds', () => {
+  it('returns live option starts in position order, excluding deleted options', async () => {
+    const start = new Date(Date.now() + 24 * HOUR_MS);
+    const second = new Date(start.getTime() + 2 * HOUR_MS);
+    const { proposal } = await rescheduleProposalFactory({
+      options: [
+        { scheduledStart: start, scheduledEnd: new Date(start.getTime() + HOUR_MS) },
+        { scheduledStart: second, scheduledEnd: new Date(second.getTime() + HOUR_MS) },
+        {
+          scheduledStart: new Date(start.getTime() + 4 * HOUR_MS),
+          scheduledEnd: new Date(start.getTime() + 5 * HOUR_MS),
+          deletedAt: new Date(),
+        },
+      ],
+    });
+    const other = await rescheduleProposalFactory();
+
+    const result = await rescheduleProposalsRepository.listLiveOptionStartsByProposalIds([
+      proposal.id,
+    ]);
+    expect(result.get(proposal.id)?.map((d) => d.getTime())).toEqual([
+      start.getTime(),
+      second.getTime(),
+    ]);
+    expect(result.has(other.proposal.id)).toBe(false);
+  });
+
+  it('returns an empty Map for empty ids', async () => {
+    expect((await rescheduleProposalsRepository.listLiveOptionStartsByProposalIds([])).size).toBe(
+      0
+    );
   });
 });
 

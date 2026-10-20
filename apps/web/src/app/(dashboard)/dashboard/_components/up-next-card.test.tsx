@@ -12,11 +12,6 @@ vi.mock('@/hooks/use-viewer-clock', () => ({
   useViewerClock: () => mockUseViewerClock(),
 }));
 
-const mockUseRefreshOnFocus = vi.fn();
-vi.mock('@/hooks/use-refresh-on-focus', () => ({
-  useRefreshOnFocus: () => mockUseRefreshOnFocus(),
-}));
-
 import { UpNextCard } from './up-next-card';
 import { track, DASHBOARD_EVENTS } from '@/lib/analytics';
 import { UP_NEXT_COPY, upNextStartsIn } from '../_lib/up-next-copy';

@@ -7,6 +7,7 @@ import {
   DASHBOARD_YOUR_MOVE_CARD_KINDS,
   DASHBOARD_YOUR_MOVE_CHIPS,
   DASHBOARD_YOUR_MOVE_TARGETS,
+  type DashboardEventMap,
 } from './dashboard';
 
 describe('DASHBOARD_EVENTS (BAL-566 / BAL-600, client)', () => {
@@ -66,7 +67,7 @@ describe('DASHBOARD_UP_NEXT_ROW_STATES', () => {
 });
 
 describe('DASHBOARD_YOUR_MOVE_CARD_KINDS', () => {
-  it('is exactly the nine card kinds', () => {
+  it('is exactly the seventeen card kinds', () => {
     expect(DASHBOARD_YOUR_MOVE_CARD_KINDS).toEqual([
       'calendar_reconnect',
       'invitation',
@@ -77,12 +78,20 @@ describe('DASHBOARD_YOUR_MOVE_CARD_KINDS', () => {
       'delivery_changes',
       'action_items',
       'messages',
+      'receivable',
+      'reschedule',
+      'completion',
+      'kickoff_billing',
+      'exploratory_call',
+      'eoi_reply',
+      'proposal_review',
+      'join_requests',
     ]);
   });
 });
 
 describe('DASHBOARD_YOUR_MOVE_CHIPS', () => {
-  it('is exactly the nine filter chips', () => {
+  it('is exactly the fifteen filter chips', () => {
     expect(DASHBOARD_YOUR_MOVE_CHIPS).toEqual([
       'all',
       'calendar',
@@ -93,6 +102,12 @@ describe('DASHBOARD_YOUR_MOVE_CHIPS', () => {
       'delivery',
       'action_items',
       'messages',
+      'billing',
+      'new_times',
+      'work_to_review',
+      'calls',
+      'replies',
+      'team',
     ]);
   });
 });
@@ -100,5 +115,31 @@ describe('DASHBOARD_YOUR_MOVE_CHIPS', () => {
 describe('DASHBOARD_YOUR_MOVE_TARGETS', () => {
   it('is exactly the two click targets', () => {
     expect(DASHBOARD_YOUR_MOVE_TARGETS).toEqual(['card', 'action']);
+  });
+});
+
+describe('Your move payloads carry workspace_type', () => {
+  it('viewed, clicked and filtered all accept both workspace types', () => {
+    const viewed: DashboardEventMap[typeof DASHBOARD_EVENTS.YOUR_MOVE_VIEWED] = {
+      workspace_type: 'company',
+      card_count: 1,
+      card_kinds: ['receivable'],
+    };
+    const clicked: DashboardEventMap[typeof DASHBOARD_EVENTS.YOUR_MOVE_CLICKED] = {
+      workspace_type: 'expert',
+      target: 'card',
+      card_kind: 'messages',
+      position: 1,
+    };
+    const filtered: DashboardEventMap[typeof DASHBOARD_EVENTS.YOUR_MOVE_FILTERED] = {
+      workspace_type: 'company',
+      chip: 'team',
+      card_count: 2,
+    };
+    expect([viewed.workspace_type, clicked.workspace_type, filtered.workspace_type]).toEqual([
+      'company',
+      'expert',
+      'company',
+    ]);
   });
 });

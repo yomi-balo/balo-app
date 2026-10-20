@@ -334,6 +334,7 @@ export {
   type ActionItemStatus,
   type ActionItemAssigneeParty,
   type ExpertOpenActionItemRow,
+  type ClientOpenActionItemRow,
 } from './action-items';
 export type { ActionItem, NewActionItem } from '../schema';
 // ── Transcript pipeline (BAL-387 / ADR-1013 + ADR-1043) ────────────────────
@@ -384,6 +385,7 @@ export type {
   PortfolioRequestRow,
   PortfolioInvitationRow,
   ExpertMoveDetail,
+  ClientMoveDetail,
 } from './projects-inbox';
 export type {
   RequestExpertRelationship,

@@ -1,3 +1,4 @@
+import { buildCalendarCards } from '../_lib/build-your-move-cards';
 import { loadExpertYourMove } from '../_lib/load-your-move';
 import { readYourMoveData } from '../_lib/read-your-move-data';
 import { YourMove } from './your-move';
@@ -18,9 +19,9 @@ export async function YourMoveSlot({
   const data = await readYourMoveData(
     () => loadExpertYourMove({ user: { ...user, expertProfileId }, calendarNeedsReconnect }),
     {
-      calendarNeedsReconnect,
+      fallbackCards: buildCalendarCards({ calendarNeedsReconnect, now: new Date() }),
       logContext: { userId: user.id, expertProfileId },
     }
   );
-  return <YourMove data={data} />;
+  return <YourMove data={data} workspaceType="expert" />;
 }

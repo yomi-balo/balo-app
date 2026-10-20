@@ -98,6 +98,7 @@ function proposal(
     originalScheduledStart: new Date(NOW.getTime() + 60 * MIN),
     expiresAt: new Date(NOW.getTime() + 24 * 60 * MIN),
     proposedByUserId: EXPERT_USER_ID,
+    createdAt: NOW,
     ...overrides,
   };
 }
