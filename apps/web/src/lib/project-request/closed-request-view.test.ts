@@ -198,6 +198,18 @@ describe('deriveClosedTracks', () => {
     expect(tracks[0]?.finalChip).toBe('declined');
   });
 
+  it('finalChip is expert_passed for expert_declined, opened or not', () => {
+    for (const openedAt of [null, new Date('2025-01-02T00:00:00Z')]) {
+      const tracks = deriveClosedTracks(
+        request({
+          relationships: [relationship({ declineReason: 'expert_declined', openedAt })],
+        })
+      );
+      expect(tracks[0]?.finalChip).toBe('expert_passed');
+      expect(tracks[0]?.endedLabel).toBe('Passed before the request closed');
+    }
+  });
+
   it('falls back to "Invited expert" when the expert has no name', () => {
     const tracks = deriveClosedTracks(
       request({

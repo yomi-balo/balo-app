@@ -35,6 +35,18 @@ describe('ExpertEndedTrackView', () => {
     expect(screen.getByText('Closed 5 Sept 2026')).toBeInTheDocument();
   });
 
+  it.each([true, false])(
+    'passed (hadProposal=%s): says the expert passed, never that the client chose another direction',
+    (hadProposal) => {
+      render(<ExpertEndedTrackView view={view({ mode: 'passed', hadProposal })} />);
+      expect(screen.getByText('You passed on this project')).toBeInTheDocument();
+      expect(screen.getByText(/Balo is looking for other experts/)).toBeInTheDocument();
+      expect(screen.getByText('Passed 5 Sept 2026')).toBeInTheDocument();
+      expect(screen.queryByText(/chosen a different direction/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/proposal/i)).not.toBeInTheDocument();
+    }
+  );
+
   it('always offers a way back to the projects list', () => {
     render(<ExpertEndedTrackView view={view()} />);
     const link = screen.getByRole('link', { name: /Back to your projects/i });

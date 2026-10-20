@@ -1512,6 +1512,55 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('project-track-passed (BAL-604)', () => {
+    const data = {
+      title: 'CPQ implementation',
+      clientCompanyName: 'Acme Corp',
+      expertName: 'Priya Nair',
+      projectRequestId: 'req-1',
+      fromStatus: 'eoi_submitted',
+    };
+
+    it('renders the staff copy, naming the stage, and deep-links to the request', () => {
+      const result = getInAppTemplate('project-track-passed-admin', data);
+      expect(result.title).toBe('Expert passed');
+      expect(result.body).toBe(
+        'Priya Nair passed on “CPQ implementation” (Acme Corp) after expressing interest — Balo can invite someone else.'
+      );
+      expect(result.actionUrl).toBe('/projects/req-1');
+    });
+
+    it.each([
+      ['invited', 'before responding to the invitation'],
+      ['proposal_requested', 'after a proposal was requested'],
+    ])('names the %s stage in the staff copy', (fromStatus, phrase) => {
+      const result = getInAppTemplate('project-track-passed-admin', { ...data, fromStatus });
+      expect(result.body).toContain(`(Acme Corp) ${phrase} —`);
+    });
+
+    it('renders the client copy and deep-links to the request', () => {
+      const result = getInAppTemplate('project-track-passed-client', data);
+      expect(result.title).toBe('Expert no longer available');
+      expect(result.body).toBe(
+        'Priya Nair is no longer available for “CPQ implementation”. Balo is looking for other experts.'
+      );
+      expect(result.actionUrl).toBe('/projects/req-1');
+    });
+
+    it('falls back to neutral wording and no link when the payload is sparse', () => {
+      const admin = getInAppTemplate('project-track-passed-admin', {});
+      expect(admin.body).toBe(
+        'An expert passed on “a project” (the client) — Balo can invite someone else.'
+      );
+      expect(admin.actionUrl).toBeUndefined();
+      const client = getInAppTemplate('project-track-passed-client', {});
+      expect(client.body).toBe(
+        'An expert is no longer available for “your project”. Balo is looking for other experts.'
+      );
+      expect(client.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('project-request-owner-assigned (BAL-541)', () => {
     it('names the request title and client company, and deep-links to the request', () => {
       const result = getInAppTemplate('project-request-owner-assigned', {

@@ -392,7 +392,7 @@ describe('approveKickoffAction', () => {
     expect(log.error).toHaveBeenCalledWith('Failed to approve kickoff', expect.any(Object));
   });
 
-  // fix round R1 — `projectEngagementsRepository.materializeFromKickoff` is one of the eleven
+  // fix round R1 — `projectEngagementsRepository.materializeFromKickoff` is one of the twelve
   // writers serialised on the per-request advisory lock (`_shared/request-lock.ts`) — the
   // single LARGEST transaction of that set.
   it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {

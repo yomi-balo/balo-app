@@ -95,7 +95,7 @@ describe('PROJECT_EVENTS review blocked', () => {
 });
 
 describe('PROJECT_SERVER_EVENTS', () => {
-  it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386)', () => {
+  it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386 / BAL-604)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([
       'REQUEST_ACCESS_DENIED',
       'PROJECT_PROPOSAL_SUBMITTED',
@@ -105,6 +105,7 @@ describe('PROJECT_SERVER_EVENTS', () => {
       'PROPOSAL_SHARE_CREATED',
       'PROPOSAL_SHARE_OPENED',
       'PROPOSAL_SHARE_REVOKED',
+      'PROJECT_TRACK_PASSED',
     ]);
   });
 
@@ -114,6 +115,10 @@ describe('PROJECT_SERVER_EVENTS', () => {
     for (const value of Object.values(PROJECT_SERVER_EVENTS)) {
       expect(value).toMatch(/^[a-z]+(_[a-z]+)*$/);
     }
+  });
+
+  it('maps PROJECT_TRACK_PASSED to project_track_passed (BAL-604)', () => {
+    expect(PROJECT_SERVER_EVENTS.PROJECT_TRACK_PASSED).toBe('project_track_passed');
   });
 
   it('maps the constants to their exact event names', () => {

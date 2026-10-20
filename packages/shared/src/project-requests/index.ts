@@ -76,6 +76,39 @@ export function narrowToDeclinableRelationshipStatus(
 }
 
 /**
+ * BAL-604 — the relationship statuses an EXPERT may pass on a project FROM: every declinable
+ * stage BEFORE the expert has put a proposal in front of the client. NOT `proposal_submitted`
+ * (the client is now judging a live proposal), and never `accepted` / `declined` (terminal).
+ *
+ * ⚠ A SUBSET OF {@link DECLINABLE_RELATIONSHIP_STATUSES}, PINNED BY `satisfies`. A pass ends the
+ * track through the same `→ declined` edge a client decline uses, so a stage that is not
+ * declinable cannot be passable — naming one here is a compile error.
+ *
+ * One definition behind the repository's guard (`requestExpertRelationshipsRepository.passTrack`),
+ * the Server Action, the request-detail mount, the notification payload and the analytics event.
+ */
+export const PASSABLE_RELATIONSHIP_STATUSES = [
+  'invited',
+  'eoi_submitted',
+  'proposal_requested',
+] as const satisfies readonly DeclinableRelationshipStatus[];
+
+/** The stage an expert passed FROM. @see PASSABLE_RELATIONSHIP_STATUSES */
+export type PassableRelationshipStatus = (typeof PASSABLE_RELATIONSHIP_STATUSES)[number];
+
+/**
+ * THE passable narrowing — `null` for `proposal_submitted` / `accepted` / `declined` / anything
+ * unrecognised. Value-returning rather than throwing, for the same reason as
+ * {@link narrowToDeclinableRelationshipStatus}: display call sites render whatever row they
+ * hold, and the write boundaries decide for themselves what a `null` means.
+ */
+export function narrowToPassableRelationshipStatus(
+  status: string
+): PassableRelationshipStatus | null {
+  return PASSABLE_RELATIONSHIP_STATUSES.find((candidate) => candidate === status) ?? null;
+}
+
+/**
  * Which part of a submitted proposal a client's change request targets. Mirrors the DB
  * `proposal_change_section` pgEnum (`packages/db/src/schema/enums.ts`), which is the source of
  * truth and which the `proposals.section` column enforces.

@@ -136,6 +136,14 @@ const hasRecipientId: NonNullable<NotificationRule['condition']> = (ctx) =>
   typeof ctx.payload.recipientId === 'string';
 
 /**
+ * BAL-604 — `project.track_passed`'s CLIENT gate: tell the client only when they could have seen
+ * the track. An `invited` expert never expressed interest, so the client has nothing to be told
+ * about. The stage is the publisher's `fromStatus` (one of `PASSABLE_RELATIONSHIP_STATUSES`).
+ */
+const passedAfterClientSawTrack: NonNullable<NotificationRule['condition']> = (ctx) =>
+  ctx.payload.fromStatus === 'eoi_submitted' || ctx.payload.fromStatus === 'proposal_requested';
+
+/**
  * BAL-572 — `engagement.case_closed`'s EXPERT gate: the +30d inactivity sweep only, never a
  * client's deliberate `resolved` close. The expert already knows when they mark a case
  * resolved; a quiet close is the one they were not part of deciding.
@@ -725,6 +733,14 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // BAL-540 — one track ended. Single expert, resolved from `payload.expertProfileId` via the
   // resolver's `data.expert` hydration — the `project.proposal_requested` shape exactly.
   'project.track_declined': emailAndInApp('expert', 'project-track-declined'),
+  // BAL-604 — the delivering expert passed. NOTHING to the expert (the toast covers them). TWO arms:
+  //  · `admin_users` — over `data.adminUserIds` (the Balo owner, else every platform admin; the
+  //    resolver fills it from `payload.baloOwnerUserId`). Always, so Balo can invite someone else.
+  //  · `client` — via `payload.recipientId`, only once the client had seen the track.
+  'project.track_passed': [
+    ...emailAndInApp('admin_users', 'project-track-passed-admin'),
+    ...emailAndInApp('client', 'project-track-passed-client', passedAfterClientSawTrack),
+  ],
   // BAL-541 (D11): a Balo staffer was assigned as a request's Balo owner. IN-APP ONLY, to the
   // NEW owner alone (recipient:'self' via payload.userId) — this is Balo's own internal
   // staffing and neither client nor expert has a reason to learn it, so there is no other

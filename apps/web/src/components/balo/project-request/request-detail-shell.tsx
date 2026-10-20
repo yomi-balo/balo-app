@@ -1,4 +1,5 @@
 import { Lock, Shield, User, Users } from 'lucide-react';
+import { narrowToPassableRelationshipStatus } from '@balo/shared/project-requests';
 import { cn } from '@/lib/utils';
 import type { RequestDetailView } from '@/lib/project-request/request-detail-view';
 import {
@@ -16,6 +17,7 @@ import { AdminFeeOverridePanel } from './admin-fee-override-panel';
 import { RequestDetailAnalytics } from './request-detail-analytics';
 import { StatusStepper } from './status-stepper';
 import { EoiEntry } from './eoi-entry';
+import { PassOnRequestControl } from './pass-on-request-control';
 import { ProposalSlot } from './proposal-slot';
 import { KickoffBoard } from './proposal/kickoff-board';
 import { AdminKickoffBillingPanel } from './proposal/admin-kickoff-billing-panel';
@@ -126,6 +128,27 @@ const LENS_META = {
 } as const;
 
 const STATUS_LABEL_BEFORE_INVITE = new Set<string>(BEFORE_INVITE_STATUSES);
+
+/**
+ * BAL-604 — the expert's "Pass on this project" control, or null when the viewer is not an expert
+ * or their own track is not at a passable stage.
+ */
+function buildExpertPassControl(
+  view: RequestDetailView,
+  ctx: RequestViewerContext
+): React.JSX.Element | null {
+  if (ctx.lens !== 'expert') return null;
+  const status = narrowToPassableRelationshipStatus(view.viewerRelationshipStatus ?? '');
+  if (status === null) return null;
+  return (
+    <PassOnRequestControl
+      key={`pass-${view.id}`}
+      requestId={view.id}
+      requestTitle={view.title}
+      relationshipStatus={status}
+    />
+  );
+}
 
 /** "Viewing as {lens}" line + phase pill (participants only) + the BAL-540 close control. */
 function LensLine({
@@ -280,6 +303,11 @@ export function RequestDetailShell({
       compact
     />
   ) : null;
+
+  // Mounted below the expert's main action; keyed by request (with a prefix, since it is a sibling
+  // of the EOI card keyed by the bare id) so a confirm dialog never lingers across
+  // /projects/A → /projects/B. The gated and closed branches never mount it.
+  const expertPassControl = buildExpertPassControl(view, ctx);
 
   return (
     <div>
@@ -450,6 +478,7 @@ export function RequestDetailShell({
                 initialMessageHtml={view.viewerEoi.messageHtml}
               />
             )}
+            {expertPassControl}
           </div>
         )}
 
@@ -472,6 +501,7 @@ export function RequestDetailShell({
                           />
                         </div>
                         {expertCompactEoi}
+                        {expertPassControl}
                       </>
                     )}
                     {/* Kickoff board for BOTH client + winning expert (null otherwise). */}
@@ -522,6 +552,7 @@ export function RequestDetailShell({
                     />
                   </div>
                   {expertCompactEoi}
+                  {expertPassControl}
                 </>
               )}
               {/* Kickoff board for BOTH client + winning expert (null otherwise). */}

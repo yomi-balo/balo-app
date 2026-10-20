@@ -5,6 +5,7 @@
  */
 import type {
   DeclinableRelationshipStatus,
+  PassableRelationshipStatus,
   ProjectRequestCloseReason,
   ProjectBriefFailureReason,
   ProjectRequestEntryPoint,
@@ -466,6 +467,8 @@ export const PROJECT_SERVER_EVENTS = {
   PROPOSAL_SHARE_CREATED: 'project_proposal_share_created',
   PROPOSAL_SHARE_OPENED: 'project_proposal_share_opened',
   PROPOSAL_SHARE_REVOKED: 'project_proposal_share_revoked',
+  // BAL-604: the delivering expert passed on a project. SERVER-SIDE, from the Server Action.
+  PROJECT_TRACK_PASSED: 'project_track_passed',
 } as const;
 
 /** Why a would-be participant was denied. Extend as more terminal-negative
@@ -473,6 +476,13 @@ export const PROJECT_SERVER_EVENTS = {
 export type ProjectRequestAccessDenialReason = 'declined_relationship';
 
 export interface ProjectServerEventMap {
+  // BAL-604: `distinct_id` is the passing expert; `from_status` is the stage they passed from.
+  [PROJECT_SERVER_EVENTS.PROJECT_TRACK_PASSED]: {
+    request_id: string;
+    relationship_id: string;
+    from_status: PassableRelationshipStatus;
+    distinct_id: string;
+  };
   [PROJECT_SERVER_EVENTS.REQUEST_ACCESS_DENIED]: {
     request_id: string;
     reason: ProjectRequestAccessDenialReason;

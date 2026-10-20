@@ -36,6 +36,8 @@ import {
   ProjectRequestClosedClientEmail,
 } from './project-request-closed.js';
 import { ProjectTrackDeclinedEmail } from './project-track-declined.js';
+import { ProjectTrackPassedAdminEmail } from './project-track-passed-admin.js';
+import { ProjectTrackPassedClientEmail } from './project-track-passed-client.js';
 import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
 import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import { CompletionRequestEmail } from './engagement-completion-requested.js';
@@ -893,6 +895,40 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         data.stage === 'invited'
           ? `${sanitizeSubjectTitle(companyName)} withdrew an invitation: ${sanitizeSubjectTitle(title)}`
           : `${sanitizeSubjectTitle(companyName)} isn't proceeding with you: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // BAL-604 — the delivering expert passed. Balo staff copy (invite someone else) …
+  'project-track-passed-admin': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const expertName = (data.expertName as string) ?? 'An expert';
+    return {
+      component: React.createElement(ProjectTrackPassedAdminEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+        clientCompanyName: (data.clientCompanyName as string) ?? 'The client',
+        expertName,
+        fromStatus: data.fromStatus,
+      }),
+      subject: `${sanitizeSubjectTitle(expertName)} passed on: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // … and the client copy (only sent once the client had seen the track).
+  'project-track-passed-client': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    const expertName = (data.expertName as string) ?? 'An expert';
+    return {
+      component: React.createElement(ProjectTrackPassedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+        expertName,
+      }),
+      subject: `${sanitizeSubjectTitle(expertName)} is no longer available: ${sanitizeSubjectTitle(title)}`,
     };
   },
 

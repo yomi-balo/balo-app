@@ -760,6 +760,47 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('project.track_passed (BAL-604)', () => {
+    const validPayload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440090',
+      projectRequestId: '550e8400-e29b-41d4-a716-446655440091',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440092',
+      title: 'CPQ implementation',
+      clientCompanyName: 'Acme Corp',
+      expertName: 'Ada Lovelace',
+      fromStatus: 'eoi_submitted',
+      recipientId: '550e8400-e29b-41d4-a716-446655440093',
+      baloOwnerUserId: '550e8400-e29b-41d4-a716-446655440094',
+    };
+    const parse = (payload: Record<string, unknown>) =>
+      publishBodySchema.safeParse({ event: 'project.track_passed', payload });
+
+    it('accepts a valid payload, with or without a Balo owner', () => {
+      expect(parse(validPayload).success).toBe(true);
+      expect(parse({ ...validPayload, baloOwnerUserId: null }).success).toBe(true);
+    });
+
+    it.each(['invited', 'eoi_submitted', 'proposal_requested'])('accepts fromStatus %s', (s) => {
+      expect(parse({ ...validPayload, fromStatus: s }).success).toBe(true);
+    });
+
+    it.each(['proposal_submitted', 'accepted', 'declined'])('rejects fromStatus %s', (s) => {
+      expect(parse({ ...validPayload, fromStatus: s }).success).toBe(false);
+    });
+
+    it('rejects an unknown key (strict payload)', () => {
+      expect(
+        parse({ ...validPayload, userId: '550e8400-e29b-41d4-a716-446655440095' }).success
+      ).toBe(false);
+    });
+
+    it('rejects a missing baloOwnerUserId and a non-UUID recipientId', () => {
+      const { baloOwnerUserId: _owner, ...rest } = validPayload;
+      expect(parse(rest).success).toBe(false);
+      expect(parse({ ...validPayload, recipientId: 'not-a-uuid' }).success).toBe(false);
+    });
+  });
+
   it('rejects calendar.auth_error — a server-only event with no publish arm by design', () => {
     // calendar.auth_error is published only from within the API (never via the
     // /notifications/publish route), so it is intentionally absent from the union.

@@ -242,7 +242,7 @@ export async function approveKickoffAction(
     return { success: true, engagementId };
   } catch (error) {
     // ⚠ fix round R1 — `projectEngagementsRepository.materializeFromKickoff` is one of the
-    // eleven writers serialised on the per-request advisory lock (`_shared/request-lock.ts`) —
+    // twelve writers serialised on the per-request advisory lock (`_shared/request-lock.ts`) —
     // the single LARGEST transaction of that set. A 55P03 here means the kickoff never
     // materialised and a retry queues again. WARN + retryable copy, checked BEFORE the generic
     // fallback below — never `log.error` for an expected-rare, self-healing event.

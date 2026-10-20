@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   DECLINABLE_RELATIONSHIP_STATUSES,
   narrowToDeclinableRelationshipStatus,
+  PASSABLE_RELATIONSHIP_STATUSES,
+  narrowToPassableRelationshipStatus,
   PROJECT_REQUEST_CLOSE_REASONS,
   BALO_CLOSE_REASONS,
   narrowToProjectRequestCloseReason,
@@ -36,6 +38,29 @@ describe('narrowToDeclinableRelationshipStatus', () => {
 
   it('returns null for an unrecognised string', () => {
     expect(narrowToDeclinableRelationshipStatus('not_a_real_status')).toBeNull();
+  });
+});
+
+describe('narrowToPassableRelationshipStatus (BAL-604)', () => {
+  it.each(PASSABLE_RELATIONSHIP_STATUSES)('accepts %s', (status) => {
+    expect(narrowToPassableRelationshipStatus(status)).toBe(status);
+  });
+
+  it('is the declinable set minus proposal_submitted, in lifecycle order', () => {
+    expect([...PASSABLE_RELATIONSHIP_STATUSES]).toStrictEqual(
+      DECLINABLE_RELATIONSHIP_STATUSES.filter((status) => status !== 'proposal_submitted')
+    );
+  });
+
+  it.each(['proposal_submitted', 'accepted', 'declined'])(
+    'returns null for %s (a proposal is in front of the client, or the track is terminal)',
+    (status) => {
+      expect(narrowToPassableRelationshipStatus(status)).toBeNull();
+    }
+  );
+
+  it('returns null for an unrecognised string', () => {
+    expect(narrowToPassableRelationshipStatus('not_a_real_status')).toBeNull();
   });
 });
 

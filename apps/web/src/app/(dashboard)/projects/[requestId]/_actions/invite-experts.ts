@@ -238,7 +238,7 @@ export async function inviteExpertsAction(
 
     return buildSuccessResult(request, invited, transitioned);
   } catch (error) {
-    // ⚠ fix round R1 — `requestExpertRelationshipsRepository.invite` is one of the eleven
+    // ⚠ fix round R1 — `requestExpertRelationshipsRepository.invite` is one of the twelve
     // writers serialised on the per-request advisory lock (`_shared/request-lock.ts`) — it is
     // the racer named in `close()`'s own KNOWN RESIDUAL block. A 55P03 here means the invite
     // never wrote anything and a retry queues again. WARN + retryable copy, checked BEFORE the

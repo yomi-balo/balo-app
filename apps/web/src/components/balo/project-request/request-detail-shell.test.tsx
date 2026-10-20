@@ -37,6 +37,9 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/submit-eoi', () => ({
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/withdraw-eoi', () => ({
   withdrawEoiAction: vi.fn(),
 }));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/pass-on-request', () => ({
+  passOnRequestAction: vi.fn(),
+}));
 
 // Conversation-stage Server Actions (BAL-271) — mocked so the shell renders in
 // JSDOM without touching @balo/db / auth / R2 modules at runtime.
@@ -126,6 +129,7 @@ import { RequestDetailShell } from './request-detail-shell';
 import { track, BILLING_EVENTS } from '@/lib/analytics';
 import { ConversationStage } from './conversation/conversation-stage';
 import { EoiEntry } from './eoi-entry';
+import { PassOnRequestControl } from './pass-on-request-control';
 import { BaloPanel } from './balo-panel';
 import { thread as conversationThread } from '@/test/fixtures/conversation';
 import type { RequestRelationshipView } from '@/lib/project-request/request-detail-view';
@@ -820,6 +824,113 @@ const ALL_STATUSES: ProjectRequestStatus[] = [
   'kickoff_approved',
   'closed',
 ];
+
+describe('RequestDetailShell — PassOnRequestControl mounting (BAL-604)', () => {
+  const expertCtx = ctx({
+    lens: 'expert',
+    isOwner: false,
+    isInvitedExpert: true,
+    relationshipId: 'rel-1',
+    canSeeContact: true,
+  });
+  const PASS_BUTTON = { name: 'Pass on this project' };
+
+  it('Phase 1: renders for an invited expert, keyed by request id', () => {
+    const tree = RequestDetailShell({
+      view: view({
+        status: 'experts_invited',
+        viewerEoi: { hasLiveEoi: false, messageHtml: null },
+        viewerRelationshipStatus: 'invited',
+      }),
+      ctx: expertCtx,
+    });
+    const controls = findAllOfType(tree, PassOnRequestControl);
+    expect(controls).toHaveLength(1);
+    expect(controls[0]?.key).toBe('pass-req-1');
+    expect(controls[0]?.props).toEqual({
+      requestId: 'req-1',
+      requestTitle: 'CPQ implementation',
+      relationshipStatus: 'invited',
+    });
+  });
+
+  it('Phase 1: renders in the DOM below the EOI card', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'experts_invited',
+          viewerEoi: { hasLiveEoi: false, messageHtml: null },
+          viewerRelationshipStatus: 'invited',
+        })}
+        ctx={expertCtx}
+      />
+    );
+    expect(screen.getByRole('button', PASS_BUTTON)).toBeInTheDocument();
+  });
+
+  it.each(['eoi_submitted', 'proposal_requested'] as const)(
+    'Phase 2 at %s: mounts at both the mobile sheet and the desktop column',
+    (status) => {
+      const tree = RequestDetailShell({
+        view: view({
+          status,
+          viewerEoi: { hasLiveEoi: true, messageHtml: '<p>My pitch</p>' },
+          viewerRelationshipStatus: status,
+        }),
+        ctx: expertCtx,
+        conversation: conversation(),
+      });
+      const controls = findAllOfType(tree, PassOnRequestControl);
+      expect(controls).toHaveLength(2);
+      for (const control of controls) expect(control.key).toBe('pass-req-1');
+    }
+  );
+
+  it('is absent once the proposal is submitted', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'proposal_submitted',
+          viewerEoi: { hasLiveEoi: true, messageHtml: '<p>My pitch</p>' },
+          viewerRelationshipStatus: 'proposal_submitted',
+        })}
+        ctx={expertCtx}
+        conversation={conversation()}
+      />
+    );
+    expect(screen.queryByRole('button', PASS_BUTTON)).not.toBeInTheDocument();
+  });
+
+  it('is absent for the client lens', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'experts_invited', viewerRelationshipStatus: 'invited' })}
+        ctx={ctx()}
+      />
+    );
+    expect(screen.queryByRole('button', PASS_BUTTON)).not.toBeInTheDocument();
+  });
+
+  it('is absent for the admin lens', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'experts_invited', viewerRelationshipStatus: 'invited' })}
+        ctx={ctx({ lens: 'admin', archetype: 'observer', isOwner: false })}
+      />
+    );
+    expect(screen.queryByRole('button', PASS_BUTTON)).not.toBeInTheDocument();
+  });
+
+  it('is absent when the request is still gated from the expert', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'requested', viewerRelationshipStatus: 'invited' })}
+        ctx={expertCtx}
+      />
+    );
+    expect(screen.queryByRole('button', PASS_BUTTON)).not.toBeInTheDocument();
+  });
+});
 
 describe('RequestDetailShell — renders for every status', () => {
   it.each(ALL_STATUSES)('renders without throwing for status=%s (client)', (status) => {
