@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import type { BookIntroCallResult } from '@/lib/booking/actions/book-intro-call-types';

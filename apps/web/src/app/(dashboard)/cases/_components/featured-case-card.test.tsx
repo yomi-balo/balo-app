@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen } from '@/test/utils';
 import { FeaturedCaseCard } from './featured-case-card';
 import type { CasesIndexCardView } from '../_lib/cases-index-view-types';

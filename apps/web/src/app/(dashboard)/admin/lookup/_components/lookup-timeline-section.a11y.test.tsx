@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen, waitFor } from '@/test/utils';
 import { LookupTimelineSection } from './lookup-timeline-section';
 

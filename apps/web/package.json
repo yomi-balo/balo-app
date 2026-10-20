@@ -9,10 +9,10 @@
     "start": "next start",
     "lint": "eslint --max-warnings 0",
     "check-types": "next typegen && tsc --noEmit",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "help:generate": "vitest run src/lib/help/compiler/help-content.generated.test.ts --update"
+    "test": "vitest --root ../.. --project 'web*'",
+    "test:run": "vitest run --root ../.. --project 'web*'",
+    "test:coverage": "vitest run --root ../.. --project 'web*' --coverage --coverage.reportsDirectory=apps/web/coverage",
+    "help:generate": "vitest run --config vitest.node.config.ts src/lib/help/compiler/help-content.generated.test.ts --update"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",

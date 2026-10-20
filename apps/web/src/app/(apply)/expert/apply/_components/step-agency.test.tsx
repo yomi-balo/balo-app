@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { createRef } from 'react';
 import type { ReferenceData } from '../_actions/load-draft';
 import type { ApplicationWithRelations } from '@balo/db';

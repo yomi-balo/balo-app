@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { ConversationMessageView } from '@/lib/conversations/conversation-view-types';
 import type {
   MeetingGuestChatPanelActions,

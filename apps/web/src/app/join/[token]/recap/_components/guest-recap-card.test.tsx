@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import {
   GUEST_RECAP_ENVELOPE_NOTE,
   GUEST_RECAP_INDEX_LINK_LABEL,

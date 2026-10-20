@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';
 import type { MeetingGuestPanelRegistration } from '@/lib/meetings/meeting-panels';
 import { GuestFilesPanel } from './guest-files-panel';

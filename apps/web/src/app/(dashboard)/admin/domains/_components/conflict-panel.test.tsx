@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { ConflictPanel } from './conflict-panel';
 import type { ConflictOwnerView } from '../_lib/staff-domain-types';
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen, fireEvent } from '@/test/utils';
 import { MeetingBlock } from './meeting-block';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';

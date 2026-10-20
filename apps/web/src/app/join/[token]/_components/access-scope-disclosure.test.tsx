@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 import { AccessScopeDisclosure } from './access-scope-disclosure';
 

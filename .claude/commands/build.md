@@ -105,7 +105,7 @@ SonarCloud enforces **≥ 80% coverage on new code**. Every new source file need
 - Mock `motion/react` (framer-motion) in component tests — it causes issues in JSDOM
 - Mock `sonner` toast and analytics `track` function
 - Use `vi.mock()` for external dependencies, not inline mocks
-- Check `apps/web/src/test/setup.ts` for global mocks already configured
+- Check `apps/web/src/test/setup.mocks.ts` for global mocks already configured
 
 ## Code Quality Rules
 

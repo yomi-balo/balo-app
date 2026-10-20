@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor, within } from '@/test/utils';
 import { CancelConsultationDialog } from './cancel-consultation-dialog';

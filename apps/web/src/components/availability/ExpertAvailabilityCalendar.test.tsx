@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { MAX_AVAILABILITY_WINDOW_DAYS } from '@balo/shared/availability';
 import { render, screen, waitFor } from '@/test/utils';

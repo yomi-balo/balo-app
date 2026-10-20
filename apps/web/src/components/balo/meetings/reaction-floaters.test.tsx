@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { ReactionFloater } from './use-meeting-realtime';
 import { ReactionFloaters } from './reaction-floaters';
 

@@ -10,8 +10,8 @@ import path from 'path';
  * unfalsifiable in that project — which is how BAL-568's "two calls are two reads" assertion came
  * to pass for a reason unrelated to production. This project loads React's **server** build, the
  * only one where `cache()` has a scope to work in, so a `.react-server.test.ts` suite under `src`
- * can render through `react-server-dom-webpack/server` and measure the real thing. The default
- * project EXCLUDES those files (see `vitest.config.ts`), and the root `vitest.config.ts` lists this
+ * can render through `react-server-dom-webpack/server` and measure the real thing. The `web-node`
+ * project EXCLUDES those files (see `vitest.node.config.ts`), and the root `vitest.config.ts` lists this
  * config beside `apps/web`, so `pnpm test:run` / `pnpm test:coverage` run both.
  *
  * ⚠⚠ IT TAKES **TWO** KNOBS, AND EACH WAS MEASURED — they are not belt-and-braces:

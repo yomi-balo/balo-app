@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MeetingFrameElementProvider } from './meeting-frame-element';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';

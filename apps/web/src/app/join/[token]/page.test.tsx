@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'node:crypto';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen } from '@/test/utils';
 
 const RAW_TOKEN = 'k7Qm2ZtXpA9wLd3Vc1Rb8YvNhKsE0uJt';

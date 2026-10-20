@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
 import { track, END_OF_CALL_EVENTS } from '@/lib/analytics';

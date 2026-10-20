@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { ExpertCardData } from '@/components/expert/expert-card.types';
 import { ExpertsSection } from './experts-section';
 

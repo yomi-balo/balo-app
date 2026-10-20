@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import AdminPartyDomainsError from './error';
 
 describe('AdminPartyDomainsError', () => {

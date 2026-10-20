@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import {
   GUEST_RECAP_INDEX_EMPTY_BODY,
   GUEST_RECAP_INDEX_EMPTY_TITLE,

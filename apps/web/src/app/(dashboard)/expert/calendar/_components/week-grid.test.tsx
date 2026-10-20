@@ -3,7 +3,7 @@
  *   TZ=UTC pnpm exec vitest run --project web "src/app/(dashboard)/expert/calendar"
  */
 import { describe, it, expect, vi } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen, within, fireEvent } from '@/test/utils';
 import { MEETING_OVERRUN_GRACE_MINUTES } from '@balo/shared/engagements';
 import { WeekGrid } from './week-grid';

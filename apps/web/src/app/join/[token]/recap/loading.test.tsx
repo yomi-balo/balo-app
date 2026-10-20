@@ -1,7 +1,7 @@
 import { Suspense } from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 
 import GuestRecapIndexLoading from './loading';
 import MeetingRecapLoading from './[meetingId]/loading';

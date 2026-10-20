@@ -16,9 +16,13 @@ Test what breaks expensively. Skip what breaks cheaply. Balo is a marketplace ha
 ```
 balo-app/
 ├── apps/web/                     # Vitest (jsdom) + Testing Library
-│   ├── src/test/setup.ts         # Global setup, RTL cleanup, mocks
+│   ├── src/test/setup.mocks.ts   # Environment-neutral global mocks (logging, analytics); both projects
+│   ├── src/test/setup.ts         # jsdom-only setup: jest-dom, RTL cleanup, observer stubs
+│   ├── src/test/axe.ts           # Import `axe` from here (registers toHaveNoViolations)
 │   ├── src/test/utils.tsx        # Custom render with providers
 │   └── src/**/*.test.{ts,tsx}    # Colocated with source files
+│                                 # `.test.ts` = `web-node` (node), `.test.tsx` = `web` (jsdom);
+│                                 # a DOM-needing test is `.tsx`
 ├── apps/api/                     # Vitest (node) + Fastify inject
 │   └── src/**/*.test.ts          # Colocated with source files
 ├── packages/db/                  # Vitest (node) + test database
@@ -228,12 +232,8 @@ describe('AuthModal', () => {
 Add a11y assertions to component tests for any user-facing interactive component:
 
 ```typescript
-// Add to apps/web/src/test/setup.ts (once, globally) — NOT per-test file
-import { expect } from 'vitest';
-import { toHaveNoViolations } from 'jest-axe';
-expect.extend(toHaveNoViolations);
+import { axe } from '@/test/axe'; // registers `toHaveNoViolations` on import
 
-// Then in any component test — no import needed:
 it('has no accessibility violations', async () => {
   const { container } = render(<AuthModal defaultView="login" open onOpenChange={vi.fn()} />);
   expect(await axe(container)).toHaveNoViolations();
@@ -242,7 +242,7 @@ it('has no accessibility violations', async () => {
 
 Install: `pnpm --filter web add -D jest-axe @types/jest-axe`
 
-**Note:** `jest-axe` uses Vitest's `expect` — the `toHaveNoViolations` matcher works with Vitest's `expect.extend`. Do not call `expect.extend(toHaveNoViolations)` per-test file; it will get repetitive and is likely to be skipped.
+**Note:** There is no global registration. `@/test/axe` calls `expect.extend(toHaveNoViolations)` once on import, so only a11y suites pay the axe-core load. Never import `jest-axe` directly in a test file: the matcher would not be registered ("Invalid Chai property").
 
 ## API Integration Tests (Vitest + Fastify inject)
 
@@ -829,7 +829,7 @@ When a Linear task includes "Write tests per the testing skill", use this decisi
 When adding new providers to the app (e.g., QueryClientProvider, ThemeProvider):
 
 - Update `apps/web/src/test/utils.tsx` → add provider to `AllProviders` wrapper
-- Update `apps/web/src/test/setup.ts` → add any global mocks needed
+- Update `apps/web/src/test/setup.mocks.ts` → add any global `vi.mock`s needed
 
 When adding new external service integrations:
 

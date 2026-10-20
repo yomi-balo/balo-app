@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
 import { render, screen, waitFor } from '@/test/utils';

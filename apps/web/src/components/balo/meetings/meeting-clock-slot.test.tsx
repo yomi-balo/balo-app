@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { MeetingClocks } from '@balo/shared/meetings';
 import { MeetingClockSlot, type MeetingClockState } from './meeting-clock-slot';
 

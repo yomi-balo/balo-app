@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { toast } from 'sonner';
 import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';

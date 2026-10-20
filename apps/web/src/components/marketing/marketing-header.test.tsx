@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { MARKETING_EVENTS, track } from '@/lib/analytics';
 import { MarketingHeader } from './marketing-header';
 import type { MarketingViewer } from './marketing-viewer';

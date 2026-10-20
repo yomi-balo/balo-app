@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render } from '@/test/utils';
 import { ApplicationEditForm } from './application-edit-form';
 import type { StaffEditModel, StaffEditReference } from '../../_lib/staff-edit-model';
 
 /**
  * BAL-593 §[F] — follows the established `jest-axe` pattern
- * (`admin/lookup/_components/lookup-drill-in.a11y.test.tsx`): the matcher is already registered
- * globally in `apps/web/src/test/setup.ts`.
+ * (`admin/lookup/_components/lookup-drill-in.a11y.test.tsx`): the matcher is registered
+ * by `@/test/axe` on import.
  */
 
 const MODEL: StaffEditModel = {

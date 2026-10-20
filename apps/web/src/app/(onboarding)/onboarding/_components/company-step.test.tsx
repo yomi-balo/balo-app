@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { track, AUTH_EVENTS, ONBOARDING_EVENTS, DOMAIN_JOIN_EVENTS } from '@/lib/analytics';
 import type { AuthMethodSignal } from '@/lib/auth/auth-method';
 import {

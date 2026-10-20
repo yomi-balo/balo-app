@@ -2,7 +2,7 @@ import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, within, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import { toast } from 'sonner';
 import type { ExpertProfileView } from '@/components/expert/profile';

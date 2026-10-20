@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import type { Workspace, CompanyWorkspace } from '@balo/shared/workspaces';
 import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';

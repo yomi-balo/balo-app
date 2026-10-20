@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -110,6 +110,17 @@ function seedWaiting(startedAt = Date.now()): void {
   globalThis.sessionStorage.setItem(TOKEN_KEY, LOBBY_TOKEN);
   globalThis.sessionStorage.setItem(WAIT_KEY, String(startedAt));
 }
+
+/**
+ * ⚠ WARM THE CALL-SURFACE CHUNK BEFORE ANY ASSERTION WINDOW OPENS. The `admitted` state mounts
+ * `MeetingFrame` through `next/dynamic`, and the first import of `meeting-frame-impl` transforms
+ * its whole module graph — ~900 ms on an idle machine, against `waitFor`'s 1000 ms default. On a
+ * cold or loaded CI worker the first admitted-state test timed out while every later one, with the
+ * chunk cached, took ~20 ms. Paying the import here keeps that cost out of the tests' timing.
+ */
+beforeAll(async () => {
+  await import('@/components/balo/meetings/meeting-frame-impl');
+});
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -36,7 +36,7 @@ vi.mock('motion/react', async () => {
   };
 });
 
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { ReferralInviteSection } from './referral-invite-section';
 import { sendReferralInvitesAction } from '../_actions/send-referral-invites';
 import { toast } from 'sonner';

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, screen } from '@/test/utils';
 import { MEETING_OVERRUN_GRACE_MINUTES } from '@balo/shared/engagements';
 import { AgendaList } from './agenda-list';

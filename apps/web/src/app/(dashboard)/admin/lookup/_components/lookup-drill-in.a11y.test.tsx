@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { render, waitFor, screen } from '@/test/utils';
 import type { LookupSelection } from '../_lib/lookup-view';
 import { LookupDrillIn } from './lookup-drill-in';
@@ -9,7 +9,7 @@ import { LookupDrillIn } from './lookup-drill-in';
  * controls, exercised together via `LookupDrillIn`) is exactly the case for an automated a11y
  * assertion. Follows the established `jest-axe` pattern
  * (`apps/web/src/components/booking/booking-flow-dialog.a11y.test.tsx`) — no new dependency,
- * the matcher is already registered globally in `apps/web/src/test/setup.ts`.
+ * the matcher is registered by `@/test/axe` on import.
  */
 
 const { mockAction, mockTimelineAction } = vi.hoisted(() => ({

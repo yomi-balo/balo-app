@@ -4,7 +4,7 @@ import { track, MARKETING_HOME_EVENTS } from '@/lib/analytics';
 import { useMarketingHomeTracking } from './use-marketing-home-tracking';
 
 /**
- * BAL-493 — `@/lib/analytics` is globally mocked in `src/test/setup.ts` (which re-exports the
+ * BAL-493 — `@/lib/analytics` is globally mocked in `src/test/setup.mocks.ts` (which re-exports the
  * REAL constants), so these assertions pin the actual event VALUES, not a stub's.
  */
 const trackMock = vi.mocked(track);

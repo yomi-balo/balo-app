@@ -249,7 +249,7 @@ trackServer(EXPERT_PAYOUT_SERVER_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED, {
 
 **Testing:**
 
-- Global mock in `apps/web/src/test/setup.ts` silences analytics in all tests
+- Global mock in `apps/web/src/test/setup.mocks.ts` silences analytics in all tests
 - Client: `import { track } from '@/lib/analytics'; expect(track).toHaveBeenCalledWith(AUTH_EVENTS.LOGIN_COMPLETED, { ... })`
 - Server: mock `posthog-node` and assert `capture` was called with the correct `distinctId`, `event`, and `properties`
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import { CAPABILITIES } from '@balo/shared/authz';
 import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
 import type { NavContext } from './nav-registry';

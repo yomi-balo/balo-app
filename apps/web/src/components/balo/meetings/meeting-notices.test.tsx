@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from '@/test/axe';
 import type { MeetingExitReason } from '@/lib/meetings/meeting-route-context';
 import {
   CALL_ACCESS_ENDED_BODY,
