@@ -897,11 +897,11 @@ export const projectRequestsRepository = {
    * statement (fix round R6; see that file's own docblock for exactly what precedes it).
    * Every `@balo/db` transaction that writes two or more of `proposals` /
    * `request_expert_relationships` / `project_requests` for the SAME request, or inserts an
-   * open proposal onto one (fix round R3), takes the identical lock first — ELEVEN writers in
+   * open proposal onto one (fix round R3), takes the identical lock first — TWELVE writers in
    * total (orchestrator D13):
    * `proposalsRepository.submit`, `.createDraft`, `.promoteToSubmit`, `.accept`, `.resubmit`;
    * this method; `requestExpertRelationshipsRepository.invite`, `.declineTrack`,
-   * `.transitionStatus`; `expressionsOfInterestRepository.submit`; and
+   * `.passTrack`, `.transitionStatus`; `expressionsOfInterestRepository.submit`; and
    * `projectEngagementsRepository.materializeFromKickoff`. (`createProjectRequest` is the one
    * named exemption — see `_shared/request-lock.ts`.) Because all of them queue on one
    * per-request gate, no two of them ever interleave their row-lock acquisition on this request —

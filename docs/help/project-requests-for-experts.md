@@ -28,9 +28,8 @@ Here's what happens when you pass:
 
 - **The request leaves your projects.** It disappears from your projects list and from **Your
   move**, and Balo looks for other experts.
-- **The client may be told.** If the client could already see you on the request (you'd expressed
-  interest, or they asked for you directly), they're told you're no longer available. If not,
-  they aren't notified.
+- **The client may be told.** If the client can already see you on the request, they're told
+  you're no longer available. If not, they aren't notified.
 - **Any draft proposal is withdrawn.**
 - **Your files stay readable.** Anything you had access to stays exactly as it was.
 
