@@ -127,10 +127,10 @@ export const projectRequestCloseReasonEnum = pgEnum('project_request_close_reaso
  * (`requestExpertRelationshipsRepository.passTrack`). The type was born a standalone
  * `CREATE TYPE` (migration 0086) with the first three labels.
  *
- * ⚠ `expert_declined` IS `ALTER TYPE … ADD VALUE`-BORN (migration 0109), so it IS subject to
+ * ⚠ `expert_declined` IS `ALTER TYPE … ADD VALUE`-BORN (migration 0110), so it IS subject to
  * the one-transaction hazard: drizzle-orm's migrator runs every pending migration in ONE
  * transaction, and a label added that way is unusable until that transaction commits. It must
- * therefore never appear in a CHECK, an index predicate or a column DEFAULT — in 0109 or in any
+ * therefore never appear in a CHECK, an index predicate or a column DEFAULT — in 0110 or in any
  * later migration (the `credit_duration_source` note below states the same rule). Literals at
  * QUERY time are always safe.
  *
