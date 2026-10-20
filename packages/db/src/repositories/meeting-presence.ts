@@ -105,6 +105,16 @@ export interface ClosePresenceInput extends PresenceIdentity {
   window?: PresenceWindow;
 }
 
+export interface InsertClosedPresenceInput extends PresenceIdentity {
+  meetingId: string;
+  /** ⚠ MUST BE SERVER-DERIVED — the same obligation as {@link OpenPresenceInput.party}. */
+  party: MeetingParticipantParty;
+  joinedAt: Date;
+  leftAt: Date;
+  /** BAL-134's R10 clamp, applied to `leftAt` exactly as `close()` applies it. */
+  window?: PresenceWindow;
+}
+
 /**
  * Thrown when a presence instant is not a finite time.
  *
@@ -519,6 +529,47 @@ export const meetingPresenceRepository = {
       .where(and(eq(meetingPresence.id, open.id), isNull(meetingPresence.leftAt)))
       .returning();
     return updated;
+  },
+
+  /**
+   * Record an interval that is ALREADY OVER, in ONE insert — for attendance learned after the fact
+   * (the lifecycle sweep's backfill of a visit Daily recorded between two of its roster reads).
+   *
+   * ⚠ NOT `open` + `close`. `open` answers a conflict with the participant's EXISTING open interval,
+   * so a close that followed it would land on that LIVE interval and truncate it. A closed row is
+   * outside both partial unique indexes (they cover `left_at IS NULL` only), so this insert never
+   * conflicts and never touches another row.
+   *
+   * `leftAt` takes `close()`'s clamp under a window; without one an inverted pair raises `23514`.
+   */
+  async insertClosed(
+    input: InsertClosedPresenceInput,
+    exec: DbExecutor = db
+  ): Promise<MeetingPresence> {
+    if (input.userId !== null && input.meetingGuestId !== null) {
+      throw new InvalidPresenceIdentityError(input.meetingId);
+    }
+    assertFiniteInstant('joined_at', input.joinedAt);
+    assertFiniteInstant('left_at', input.leftAt);
+    assertFiniteWindow(input.window);
+
+    const [row] = await exec
+      .insert(meetingPresence)
+      .values({
+        meetingId: input.meetingId,
+        userId: input.userId,
+        meetingGuestId: input.meetingGuestId,
+        party: input.party,
+        joinedAt: input.joinedAt,
+        leftAt: clampLeftAt(input.leftAt, input.joinedAt, input.window),
+      })
+      .returning();
+    if (row === undefined) {
+      throw new Error(
+        `meetingPresence.insertClosed returned no row for meeting ${input.meetingId}`
+      );
+    }
+    return row;
   },
 
   /**

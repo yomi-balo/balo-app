@@ -633,6 +633,88 @@ describe('meetingPresenceRepository — the write-side window (BAL-474 Rule A: j
   });
 });
 
+// ── insertClosed: attendance learned after the fact ────────────────────────────────────────
+
+describe('meetingPresenceRepository.insertClosed', () => {
+  it('records an already-closed interval at its exact instants, in one row', async () => {
+    const { meeting } = await meetingFactory();
+    const expert = await userFactory();
+    const joinedAt = new Date(at(2).getTime() + 7_000);
+    const leftAt = new Date(at(2).getTime() + 24_000);
+
+    const row = await meetingPresenceRepository.insertClosed({
+      meetingId: meeting.id,
+      userId: expert.id,
+      meetingGuestId: null,
+      party: 'expert',
+      joinedAt,
+      leftAt,
+    });
+
+    expect(row.party).toBe('expert');
+    expect(row.joinedAt.getTime()).toBe(joinedAt.getTime());
+    expect(row.leftAt?.getTime()).toBe(leftAt.getTime());
+    expect(await meetingPresenceRepository.listOpen(meeting.id)).toHaveLength(0);
+  });
+
+  it('⚠ never touches the participant’s LIVE interval — it inserts beside it', async () => {
+    const { meeting } = await meetingFactory();
+    const client = await userFactory();
+    const live = await join(meeting.id, client.id, 'client', 5);
+
+    await meetingPresenceRepository.insertClosed({
+      meetingId: meeting.id,
+      userId: client.id,
+      meetingGuestId: null,
+      party: 'client',
+      joinedAt: at(1),
+      leftAt: at(2),
+    });
+
+    const open = await meetingPresenceRepository.listOpen(meeting.id);
+    expect(open.map((row) => row.id)).toEqual([live.id]);
+    expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(2);
+  });
+
+  it('applies close()’s window clamp to the leave', async () => {
+    const { meeting } = await meetingFactory();
+    const guest = await meetingGuestFactory({ meetingId: meeting.id });
+
+    const row = await meetingPresenceRepository.insertClosed({
+      meetingId: meeting.id,
+      userId: null,
+      meetingGuestId: guest.guest.id,
+      party: 'client',
+      joinedAt: at(0),
+      leftAt: at(600),
+      window: { notAfter: at(90) },
+    });
+
+    expect(row.leftAt?.getTime()).toBe(at(90).getTime());
+  });
+
+  it('rejects both identities, and non-finite instants, before writing anything', async () => {
+    const { meeting } = await meetingFactory();
+    const user = await userFactory();
+    const base = {
+      meetingId: meeting.id,
+      userId: user.id,
+      meetingGuestId: null,
+      party: 'client' as const,
+      joinedAt: at(0),
+      leftAt: at(1),
+    };
+
+    await expect(
+      meetingPresenceRepository.insertClosed({ ...base, meetingGuestId: user.id })
+    ).rejects.toThrow(InvalidPresenceIdentityError);
+    await expect(
+      meetingPresenceRepository.insertClosed({ ...base, leftAt: new Date(Number.NaN) })
+    ).rejects.toThrow(InvalidPresenceTimestampError);
+    expect(await meetingPresenceRepository.listByMeeting(meeting.id)).toHaveLength(0);
+  });
+});
+
 // ── BAL-134: closeAllOpen + listOpen ───────────────────────────────────────────────────────
 
 describe('meetingPresenceRepository.closeAllOpen / listOpen', () => {

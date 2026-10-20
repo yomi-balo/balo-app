@@ -426,6 +426,58 @@ export async function applyPresenceEffect(
   }
 }
 
+/** What {@link applyRecordedVisit} did. */
+export type RecordedVisitWriteOutcome = 'recorded' | 'invalid_timestamp';
+
+/**
+ * Write a resolved `open` effect as an interval that is ALREADY OVER at `leftAt`, in one insert —
+ * the lifecycle sweep's backfill of a visit Daily recorded between two of its roster reads.
+ *
+ * ⚠ NEVER AS `open` THEN `close`. `open` answers a conflict with the participant's existing open
+ * interval, so the close would land on that LIVE interval and truncate it; see
+ * `meetingPresenceRepository.insertClosed`. `party` is the effect's, so it is still the one
+ * {@link resolvePresenceEffect} derived server-side.
+ */
+export async function applyRecordedVisit(
+  exec: PresenceExecutor,
+  effect: PresenceEffect,
+  leftAt: Date
+): Promise<RecordedVisitWriteOutcome> {
+  try {
+    await meetingPresenceRepository.insertClosed(
+      {
+        meetingId: effect.meetingId,
+        userId: effect.userId,
+        meetingGuestId: effect.meetingGuestId,
+        party: effect.party,
+        joinedAt: effect.at,
+        leftAt,
+        window: effect.window,
+      },
+      exec
+    );
+    log.info(
+      { meetingId: effect.meetingId, party: effect.party, kind: effect.identityKind },
+      'Presence interval recorded after the fact'
+    );
+    return 'recorded';
+  } catch (error) {
+    if (error instanceof Error && error.name === 'InvalidPresenceTimestampError') {
+      log.error(
+        {
+          meetingId: effect.meetingId,
+          kind: effect.identityKind,
+          error: error.message,
+          stack: error.stack,
+        },
+        'Recorded visit carried a non-finite timestamp — refusing the presence write'
+      );
+      return 'invalid_timestamp';
+    }
+    throw error;
+  }
+}
+
 /** What {@link reconcileMeetingStatus} moved the meeting to, or `null` for no transition. */
 export type MeetingStatusTransition = 'waiting_for_participants' | 'in_progress' | null;
 

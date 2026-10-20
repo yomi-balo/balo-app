@@ -690,6 +690,36 @@ describe('getRoomSessionLeaves (BAL-584)', () => {
     ]);
   });
 
+  it('returns every recorded visit, one per participant entry, across sessions', async () => {
+    stubSessions([
+      session([
+        { user_id: CLIENT, join_time: JOIN_SECONDS, duration: 24 },
+        { user_id: EXPERT, join_time: JOIN_SECONDS + 11, duration: 17 },
+      ]),
+      session([{ user_id: CLIENT, join_time: JOIN_SECONDS + 300, duration: 60 }], { id: 'mtg-2' }),
+    ]);
+
+    const { visits } = await getRoomSessionLeaves(ROOM, { since: SINCE });
+
+    expect(visits).toEqual([
+      {
+        claim: CLIENT,
+        joinedAt: new Date(JOIN_SECONDS * 1000),
+        leftAt: new Date((JOIN_SECONDS + 24) * 1000),
+      },
+      {
+        claim: EXPERT,
+        joinedAt: new Date((JOIN_SECONDS + 11) * 1000),
+        leftAt: new Date((JOIN_SECONDS + 28) * 1000),
+      },
+      {
+        claim: CLIENT,
+        joinedAt: new Date((JOIN_SECONDS + 300) * 1000),
+        leftAt: new Date((JOIN_SECONDS + 360) * 1000),
+      },
+    ]);
+  });
+
   it('the LATEST recorded leave wins when a claim appears in several sessions', async () => {
     stubSessions([
       session([{ user_id: EXPERT, join_time: JOIN_SECONDS, duration: 600 }]),
@@ -715,9 +745,10 @@ describe('getRoomSessionLeaves (BAL-584)', () => {
       ),
     ]);
 
-    const { leaves } = await getRoomSessionLeaves(ROOM, { since: SINCE });
+    const { leaves, visits } = await getRoomSessionLeaves(ROOM, { since: SINCE });
 
     expect(leaves).toEqual(new Map());
+    expect(visits).toEqual([]);
   });
 
   it('answers an empty history for a room Daily has no record of', async () => {
@@ -725,6 +756,7 @@ describe('getRoomSessionLeaves (BAL-584)', () => {
 
     await expect(getRoomSessionLeaves(ROOM, { since: SINCE })).resolves.toEqual({
       leaves: new Map(),
+      visits: [],
     });
   });
 

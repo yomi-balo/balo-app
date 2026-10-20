@@ -7,6 +7,7 @@ const {
   mockFindLiveGuest,
   mockOpen,
   mockClose,
+  mockInsertClosed,
   mockListOpen,
   mockMarkWaiting,
   mockMarkInProgress,
@@ -22,6 +23,7 @@ const {
   mockFindLiveGuest: vi.fn(),
   mockOpen: vi.fn(),
   mockClose: vi.fn(),
+  mockInsertClosed: vi.fn(),
   mockListOpen: vi.fn(),
   mockMarkWaiting: vi.fn(),
   mockMarkInProgress: vi.fn(),
@@ -38,7 +40,12 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 vi.mock('@balo/db', () => ({
   meetingGuestsRepository: { findLiveById: mockFindLiveGuest },
-  meetingPresenceRepository: { open: mockOpen, close: mockClose, listOpen: mockListOpen },
+  meetingPresenceRepository: {
+    open: mockOpen,
+    close: mockClose,
+    insertClosed: mockInsertClosed,
+    listOpen: mockListOpen,
+  },
   meetingsRepository: {
     markWaitingForParticipants: mockMarkWaiting,
     markInProgress: mockMarkInProgress,
@@ -67,6 +74,7 @@ vi.mock('../credit-session/start-billing.js', () => ({
 import { dailyParticipantIdFor } from '@balo/shared/meetings';
 import {
   applyPresenceEffect,
+  applyRecordedVisit,
   closePresenceEffectForRow,
   presenceWindowFor,
   reconcileMeetingStatus,
@@ -482,6 +490,59 @@ describe('applyPresenceEffect', () => {
     mockOpen.mockRejectedValue(new Error('connection reset'));
 
     await expect(applyPresenceEffect(EXEC, EFFECT)).rejects.toThrow('connection reset');
+  });
+});
+
+describe('applyRecordedVisit', () => {
+  const EFFECT = {
+    action: 'open' as const,
+    meetingId: MEETING_ID,
+    userId: USER_ID,
+    meetingGuestId: null,
+    party: 'expert' as const,
+    at: START,
+    window: { notAfter: END },
+    identityKind: 'user' as const,
+  };
+  const LEFT_AT = new Date(START.getTime() + 17_000);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInsertClosed.mockResolvedValue({ id: 'row-1', joinedAt: START, leftAt: LEFT_AT });
+  });
+
+  it('records ONE closed interval with the derived party and the window, and never opens or closes', async () => {
+    await expect(applyRecordedVisit(EXEC, EFFECT, LEFT_AT)).resolves.toBe('recorded');
+
+    expect(mockInsertClosed).toHaveBeenCalledWith(
+      {
+        meetingId: MEETING_ID,
+        userId: USER_ID,
+        meetingGuestId: null,
+        party: 'expert',
+        joinedAt: START,
+        leftAt: LEFT_AT,
+        window: { notAfter: END },
+      },
+      EXEC
+    );
+    expect(mockOpen).not.toHaveBeenCalled();
+    expect(mockClose).not.toHaveBeenCalled();
+  });
+
+  it('answers an InvalidPresenceTimestampError rather than throwing it', async () => {
+    const invalid = new Error('meeting_presence.left_at must be a finite timestamp');
+    invalid.name = 'InvalidPresenceTimestampError';
+    mockInsertClosed.mockRejectedValue(invalid);
+
+    await expect(applyRecordedVisit(EXEC, EFFECT, LEFT_AT)).resolves.toBe('invalid_timestamp');
+    expect(mockError).toHaveBeenCalled();
+  });
+
+  it('any OTHER error propagates', async () => {
+    mockInsertClosed.mockRejectedValue(new Error('connection reset'));
+
+    await expect(applyRecordedVisit(EXEC, EFFECT, LEFT_AT)).rejects.toThrow('connection reset');
   });
 });
 
