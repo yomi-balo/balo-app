@@ -56,7 +56,7 @@ describe('signInSchema', () => {
 describe('unifiedSignUpSchema', () => {
   const validInput = {
     email: 'john@example.com',
-    password: 'Passw0rd!', // NOSONAR — test fixture, not a real credential
+    password: 'kettle violet harbour', // NOSONAR — test fixture, not a real credential
   };
 
   describe('valid input', () => {
@@ -64,8 +64,16 @@ describe('unifiedSignUpSchema', () => {
       expect(unifiedSignUpSchema.safeParse(validInput).success).toBe(true);
     });
 
-    it('accepts password at exactly 8 chars meeting all requirements', () => {
-      const pwd = 'Passw1d!'; // NOSONAR — test fixture, not a real credential
+    it('accepts a password of exactly 10 characters', () => {
+      const pwd = 'abcdefghij'; // NOSONAR — test fixture, not a real credential
+      expect(unifiedSignUpSchema.safeParse({ ...validInput, password: pwd }).success).toBe(true);
+    });
+
+    it.each([
+      ['all lowercase', 'kettleviolet'],
+      ['all uppercase', 'KETTLEVIOLET'],
+      ['no digit or symbol', 'KettleViolet'],
+    ])('accepts a %s password (no composition rules)', (_label, pwd) => {
       expect(unifiedSignUpSchema.safeParse({ ...validInput, password: pwd }).success).toBe(true);
     });
   });
@@ -90,11 +98,8 @@ describe('unifiedSignUpSchema', () => {
 
   describe('password validation', () => {
     it.each([
-      ['Aa1bbbb', 'Password must be at least 8 characters'], // too short
-      ['PASSWORD1', 'Must contain a lowercase letter'], // NOSONAR — no lowercase
-      ['password1', 'Must contain an uppercase letter'], // NOSONAR — no uppercase
-      ['Passwords', 'Must contain a number'], // NOSONAR — no digit
-      ['Passw0rds', 'Must contain a special character'], // NOSONAR — no special character
+      ['Aa1!bbbbb', 'Password must be at least 10 characters'], // NOSONAR — 9 characters
+      ['Aa1!', 'Password must be at least 10 characters'], // NOSONAR — far too short
     ])('rejects "%s" with expected error', (pwd, expectedMsg) => {
       const result = unifiedSignUpSchema.safeParse({ ...validInput, password: pwd }); // NOSONAR
       expect(result.success).toBe(false);

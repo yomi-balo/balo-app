@@ -139,7 +139,7 @@ export function PasswordStep({
                     label="Password"
                     autoComplete="current-password"
                     disabled={isSubmitting}
-                    showStrength={false}
+                    showRequirements={false}
                     autoFocus
                     {...field}
                   />
