@@ -25,6 +25,7 @@ const EXPECTED_FILES = [
   'weekly-schedule.md',
   'what-happens-after-you-apply.md',
   'your-cases.md',
+  'your-live-status.md',
 ];
 
 /** Publishing is a reviewed decision: flipping a guide means adding it here too. */

@@ -8,6 +8,7 @@ import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';
 import { track } from '@/lib/analytics';
 import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
 import { resolveMoreItems, type NavContext } from './nav-registry';
+import type { LiveStatusView } from '@/lib/expert/live-status-view';
 
 /**
  * BAL-501 — `MobileMoreSheet`'s own suite.
@@ -80,6 +81,7 @@ function buildSidebarValue(opts: {
   activeWorkspaceKey?: string | null;
   checklistCompletedCount?: number;
   checklistAllComplete?: boolean;
+  liveStatus?: LiveStatusView | null;
 }): Record<string, unknown> {
   return {
     navContext: navContextFor(
@@ -94,6 +96,7 @@ function buildSidebarValue(opts: {
     userName: 'Jane Doe',
     userInitials: 'JD',
     userAvatarUrl: null,
+    liveStatus: opts.liveStatus ?? null,
   };
 }
 
@@ -348,5 +351,64 @@ describe('MobileMoreSheet (BAL-501)', () => {
       rules: { region: { enabled: false }, 'page-has-heading-one': { enabled: false } },
     });
     expect(results).toHaveNoViolations();
+  });
+
+  describe('BAL-603 — live status', () => {
+    const PAUSED: LiveStatusView = { state: 'paused', fixItem: null, publicProfileHref: null };
+
+    it('shows the pill and dot under a single expert workspace', () => {
+      renderSheet(
+        buildSidebarValue({
+          workspaceType: 'expert',
+          workspaces: [EXPERT_WORKSPACE],
+          activeWorkspaceKey: EXPERT_WORKSPACE.key,
+          liveStatus: PAUSED,
+        })
+      );
+      expect(screen.getByRole('button', { name: 'Bookings paused' })).toBeInTheDocument();
+      expect(document.querySelectorAll('[data-live-dot="paused"]')).toHaveLength(1);
+    });
+
+    it('shows the pill and dot on the expert row when there are several workspaces', () => {
+      renderSheet(
+        buildSidebarValue({
+          workspaceType: 'expert',
+          workspaces: [EXPERT_WORKSPACE, SINGLE_COMPANY_WORKSPACE],
+          activeWorkspaceKey: EXPERT_WORKSPACE.key,
+          liveStatus: PAUSED,
+        })
+      );
+      expect(screen.getByRole('button', { name: 'Bookings paused' })).toBeInTheDocument();
+      expect(document.querySelectorAll('[data-live-dot="paused"]')).toHaveLength(1);
+    });
+
+    it('shows neither without a live status', () => {
+      renderSheet(
+        buildSidebarValue({
+          workspaceType: 'expert',
+          workspaces: [EXPERT_WORKSPACE],
+          activeWorkspaceKey: EXPERT_WORKSPACE.key,
+        })
+      );
+      expect(document.querySelector('[data-live-state]')).toBeNull();
+      expect(document.querySelector('[data-live-dot]')).toBeNull();
+    });
+
+    it('closes the sheet before navigating from the pill action', async () => {
+      const user = userEvent.setup();
+      const onNavigate = vi.fn();
+      renderSheet(
+        buildSidebarValue({
+          workspaceType: 'expert',
+          workspaces: [EXPERT_WORKSPACE],
+          activeWorkspaceKey: EXPERT_WORKSPACE.key,
+          liveStatus: PAUSED,
+        }),
+        onNavigate
+      );
+      await user.click(screen.getByRole('button', { name: 'Bookings paused' }));
+      await user.click(screen.getByRole('link', { name: 'Reconnect calendar' }));
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
   });
 });

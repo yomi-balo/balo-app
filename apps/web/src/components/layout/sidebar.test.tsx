@@ -7,6 +7,7 @@ import type { Workspace } from '@balo/shared/workspaces';
 import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';
 import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
 import type { NavContext } from './nav-registry';
+import type { LiveStatusView } from '@/lib/expert/live-status-view';
 
 /**
  * BAL-495 — THE PINNING RENDER TEST.
@@ -135,6 +136,7 @@ function renderSidebar(opts: {
   activeWorkspaceKey?: string;
   isCollapsed?: boolean;
   isStaff?: boolean;
+  liveStatus?: LiveStatusView | null;
 }): ReturnType<typeof render> {
   sidebarValue = {
     activeMode: opts.mode,
@@ -147,6 +149,7 @@ function renderSidebar(opts: {
     workspaces: opts.workspaces ?? [SINGLE_COMPANY_WORKSPACE],
     activeWorkspaceKey: opts.activeWorkspaceKey ?? SINGLE_COMPANY_WORKSPACE.key,
     isCollapsed: opts.isCollapsed ?? false,
+    liveStatus: opts.liveStatus ?? null,
     // Stateful by construction: mutates the module-level `sidebarValue` so a subsequent
     // `rerender(<Sidebar />)` observes the flip. `useSidebar` is mocked as `() => sidebarValue`,
     // so this closure reassigning the outer binding is what makes the collapse toggle testable.
@@ -450,5 +453,48 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).not.toContain(
       '/admin/staff-access'
     );
+  });
+
+  describe('BAL-603 — live status', () => {
+    const LIVE: LiveStatusView = {
+      state: 'live',
+      fixItem: null,
+      publicProfileHref: '/experts/dana',
+    };
+
+    it('renders the pill with zero workspaces (it does not depend on the switcher)', () => {
+      renderSidebar({ mode: 'expert', canManageCompany: false, workspaces: [], liveStatus: LIVE });
+      expect(screen.getByRole('button', { name: 'Live' })).toBeInTheDocument();
+    });
+
+    it('renders no pill without a live status', () => {
+      renderSidebar({ mode: 'expert', canManageCompany: false });
+      expect(document.querySelector('[data-live-state]')).toBeNull();
+    });
+
+    it('hides the pill when collapsed but keeps the avatar dot', () => {
+      renderSidebar({
+        mode: 'expert',
+        canManageCompany: false,
+        isCollapsed: true,
+        workspaces: [EXPERT_WORKSPACE],
+        activeWorkspaceKey: EXPERT_WORKSPACE.key,
+        liveStatus: LIVE,
+      });
+      expect(document.querySelector('[data-live-state]')).toBeNull();
+      expect(document.querySelector('[data-live-dot="live"]')).not.toBeNull();
+    });
+
+    it('shows the dot beside the pill when expanded', () => {
+      renderSidebar({
+        mode: 'expert',
+        canManageCompany: false,
+        workspaces: [EXPERT_WORKSPACE],
+        activeWorkspaceKey: EXPERT_WORKSPACE.key,
+        liveStatus: LIVE,
+      });
+      expect(document.querySelector('[data-live-dot="live"]')).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'Live' })).toBeInTheDocument();
+    });
   });
 });

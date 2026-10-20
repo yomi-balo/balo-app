@@ -1,8 +1,15 @@
-import type { ExpertChecklistItemKey, ExpertSearchabilityTrigger } from '@balo/shared/experts';
+import type {
+  ExpertChecklistItemKey,
+  ExpertLiveState,
+  ExpertSearchabilityTrigger,
+  LiveStatusAction,
+} from '@balo/shared/experts';
 
 export const EXPERT_SETUP_EVENTS = {
   SETUP_STEP_COMPLETED: 'expert_setup_step_completed',
   SETUP_ALL_COMPLETE: 'expert_setup_all_complete',
+  LIVE_STATUS_OPENED: 'expert_live_status_opened',
+  LIVE_STATUS_ACTION: 'expert_live_status_action',
 } as const;
 
 export interface ExpertSetupEventMap {
@@ -13,6 +20,11 @@ export interface ExpertSetupEventMap {
     total: 6;
   };
   [EXPERT_SETUP_EVENTS.SETUP_ALL_COMPLETE]: Record<string, never>;
+  [EXPERT_SETUP_EVENTS.LIVE_STATUS_OPENED]: { state: ExpertLiveState };
+  [EXPERT_SETUP_EVENTS.LIVE_STATUS_ACTION]: {
+    state: ExpertLiveState;
+    action: LiveStatusAction;
+  };
 }
 
 /**
@@ -26,6 +38,7 @@ export interface ExpertSetupEventMap {
  */
 export const EXPERT_SETUP_SERVER_EVENTS = {
   SEARCHABILITY_CHANGED: 'expert_searchability_changed',
+  LIVE_CELEBRATION_VIEWED: 'expert_live_celebration_viewed',
 } as const;
 
 export interface ExpertSetupServerEventMap {
@@ -35,6 +48,10 @@ export interface ExpertSetupServerEventMap {
     trigger: ExpertSearchabilityTrigger;
     failing_items: ExpertChecklistItemKey[];
     previous_state: boolean;
+    distinct_id: string;
+  };
+  [EXPERT_SETUP_SERVER_EVENTS.LIVE_CELEBRATION_VIEWED]: {
+    expert_id: string;
     distinct_id: string;
   };
 }

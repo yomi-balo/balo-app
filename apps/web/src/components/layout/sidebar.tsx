@@ -8,6 +8,7 @@ import { useNavItemTracking } from './use-nav-item-tracking';
 import { NAV_BADGE_RENDERERS, type NavBadgeCounts } from './nav-badges';
 import { Logo } from './logo';
 import { WorkspaceSwitcher } from './workspace-switcher';
+import { LiveStatusPill } from './live-status/live-status-pill';
 import { UserMenu } from './user-menu';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -27,6 +28,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
     navContext,
     workspaces,
     activeWorkspaceKey,
+    liveStatus,
   } = useSidebar();
 
   const primaryItems = resolveNavItems(navContext, 'primary');
@@ -86,7 +88,16 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
           actorInitials={userInitials}
           actorAvatarUrl={userAvatarUrl}
           isCollapsed={isCollapsed}
+          liveState={liveStatus?.state ?? null}
         />
+        {/* BAL-603 — a SIBLING of the switcher, never inside it: the switcher renders nothing
+            with zero workspaces, and the pill must not depend on that. Aligned under the name
+            (`ml-[46px]` clears the 36px avatar + gap). Hidden collapsed; the avatar dot stays. */}
+        {!isCollapsed && liveStatus && (
+          <div className="mt-1 ml-[46px]">
+            <LiveStatusPill status={liveStatus} variant="sidebar" />
+          </div>
+        )}
       </div>
 
       {/* BAL-534 — THE SCROLL REGION. The outer `<aside>` is `h-screen` (`:201`) and this column

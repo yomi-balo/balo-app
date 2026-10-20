@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { GettingStartedChecklist } from './getting-started-checklist';
 import { CelebrationCard } from './celebration-card';
@@ -9,6 +9,7 @@ import { GhostClientsCard } from './ghost-clients-card';
 import { DashboardRefreshOnFocus } from './dashboard-refresh-on-focus';
 import { track, EXPERT_SETUP_EVENTS } from '@/lib/analytics';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
+import { publicProfileHrefFor } from '@/lib/expert/live-status-view';
 import type { ChecklistStatus } from '@/lib/actions/expert-checklist';
 
 interface ExpertDashboardProps {
@@ -27,6 +28,15 @@ export function ExpertDashboard({
   yourMove,
 }: Readonly<ExpertDashboardProps>): React.JSX.Element {
   const isAllComplete = checklistStatus?.allComplete ?? false;
+  const liveCelebrationSeen = checklistStatus?.liveCelebrationSeen ?? false;
+  // The card stamps "seen" as it mounts, and `DashboardRefreshOnFocus` then re-reads the status
+  // with `liveCelebrationSeen: true`. Latch so the card is not pulled out mid-visit.
+  const [celebrationLatched, setCelebrationLatched] = useState(false);
+  const shouldCelebrate = isAllComplete && !liveCelebrationSeen;
+  useEffect(() => {
+    if (shouldCelebrate) setCelebrationLatched(true);
+  }, [shouldCelebrate]);
+  const showCelebration = isAllComplete && (!liveCelebrationSeen || celebrationLatched);
   const prevItems = useRef<ChecklistStatus['items'] | null>(null);
   const prevAllComplete = useRef<boolean | null>(null);
 
@@ -80,12 +90,15 @@ export function ExpertDashboard({
       </motion.div>
 
       {/* Checklist or Celebration */}
-      {checklistStatus &&
-        (isAllComplete ? (
-          <CelebrationCard />
-        ) : (
-          <GettingStartedChecklist status={checklistStatus} />
-        ))}
+      {checklistStatus && showCelebration && (
+        <CelebrationCard
+          publicProfileHref={publicProfileHrefFor(
+            checklistStatus.username,
+            checklistStatus.searchable
+          )}
+        />
+      )}
+      {checklistStatus && !isAllComplete && <GettingStartedChecklist status={checklistStatus} />}
 
       {yourMove}
 

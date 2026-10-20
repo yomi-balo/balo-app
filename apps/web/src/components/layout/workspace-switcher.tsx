@@ -25,6 +25,9 @@ import {
   WORKSPACE_SECTION_LABEL_CLASSNAME,
 } from './workspace-row-parts';
 import { useWorkspaceSwitch } from './use-workspace-switch';
+import { LiveStatusDot } from './live-status/live-status-dot';
+import { liveStatusCopyFor } from './live-status/live-status-copy';
+import type { ExpertLiveState } from '@balo/shared/experts';
 
 /**
  * BAL-496 — the sidebar header's workspace switcher. Three render states by list length
@@ -43,9 +46,36 @@ export interface WorkspaceSwitcherProps {
   readonly actorInitials: string;
   readonly actorAvatarUrl: string | null;
   readonly isCollapsed: boolean;
+  /** BAL-603 — the expert's marketplace status, shown as a dot on the trigger avatar only. */
+  readonly liveState?: ExpertLiveState | null;
+}
+
+/** The trigger avatar with its status dot. Never used for menu rows. */
+function AvatarWithLiveDot({
+  liveState,
+  isCollapsed,
+  children,
+}: {
+  readonly liveState: ExpertLiveState | null;
+  readonly isCollapsed: boolean;
+  readonly children: React.ReactNode;
+}): React.JSX.Element {
+  if (liveState === null) return <>{children}</>;
+  // Collapsed, the pill is hidden: the dot carries the label (title + screen reader text).
+  // Expanded, the pill beside it already says it.
+  return (
+    <span
+      className="relative inline-flex shrink-0"
+      title={isCollapsed ? liveStatusCopyFor({ state: liveState, fixItem: null }).pill : undefined}
+    >
+      {children}
+      <LiveStatusDot state={liveState} ringClassName="ring-sidebar" announce={isCollapsed} />
+    </span>
+  );
 }
 
 interface StaticLabelProps {
+  readonly liveState: ExpertLiveState | null;
   readonly workspace: Workspace;
   readonly actorName: string;
   readonly actorInitials: string;
@@ -56,6 +86,7 @@ interface StaticLabelProps {
 /** D11 — length === 1: a plain, non-interactive label. No chevron, no button, no tabIndex,
  *  no role, no menu — nothing focusable, so there is no dead affordance. */
 function StaticWorkspaceLabel({
+  liveState,
   workspace,
   actorName,
   actorInitials,
@@ -75,11 +106,13 @@ function StaticWorkspaceLabel({
         isCollapsed ? 'min-h-[44px] min-w-[44px] justify-center' : 'w-full gap-2.5 px-2 py-1.5'
       )}
     >
-      <WorkspaceAvatar
-        workspace={workspace}
-        actorInitials={actorInitials}
-        actorAvatarUrl={actorAvatarUrl}
-      />
+      <AvatarWithLiveDot liveState={liveState} isCollapsed={isCollapsed}>
+        <WorkspaceAvatar
+          workspace={workspace}
+          actorInitials={actorInitials}
+          actorAvatarUrl={actorAvatarUrl}
+        />
+      </AvatarWithLiveDot>
       {!isCollapsed && <WorkspaceLabelStack workspace={workspace} actorName={actorName} />}
     </div>
   );
@@ -162,6 +195,7 @@ function SectionLabel({ children }: { readonly children: React.ReactNode }): Rea
 }
 
 interface WorkspaceMenuProps {
+  readonly liveState: ExpertLiveState | null;
   readonly workspaces: readonly Workspace[];
   readonly active: Workspace;
   readonly activeWorkspaceKey: string | null;
@@ -172,6 +206,7 @@ interface WorkspaceMenuProps {
 }
 
 function WorkspaceMenu({
+  liveState,
   workspaces,
   active,
   activeWorkspaceKey,
@@ -210,11 +245,13 @@ function WorkspaceMenu({
               : 'w-full gap-2.5 px-2 py-1.5 text-left'
           )}
         >
-          <WorkspaceAvatar
-            workspace={active}
-            actorInitials={actorInitials}
-            actorAvatarUrl={actorAvatarUrl}
-          />
+          <AvatarWithLiveDot liveState={liveState} isCollapsed={isCollapsed}>
+            <WorkspaceAvatar
+              workspace={active}
+              actorInitials={actorInitials}
+              actorAvatarUrl={actorAvatarUrl}
+            />
+          </AvatarWithLiveDot>
           {!isCollapsed && (
             <>
               <WorkspaceLabelStack workspace={active} actorName={actorName} />
@@ -287,10 +324,12 @@ export function WorkspaceSwitcher(props: WorkspaceSwitcherProps): React.JSX.Elem
   if (firstWorkspace === undefined) return null; // ── length === 0
 
   const active = props.workspaces.find((w) => w.key === props.activeWorkspaceKey) ?? firstWorkspace;
+  const liveState = active.type === 'expert' ? (props.liveState ?? null) : null;
 
   if (props.workspaces.length === 1) {
     return (
       <StaticWorkspaceLabel
+        liveState={liveState}
         workspace={active}
         actorName={props.actorName}
         actorInitials={props.actorInitials}
@@ -302,6 +341,7 @@ export function WorkspaceSwitcher(props: WorkspaceSwitcherProps): React.JSX.Elem
 
   return (
     <WorkspaceMenu
+      liveState={liveState}
       workspaces={props.workspaces}
       active={active}
       activeWorkspaceKey={props.activeWorkspaceKey}

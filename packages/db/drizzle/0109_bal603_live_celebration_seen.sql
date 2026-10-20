@@ -1,0 +1,1 @@
+ALTER TABLE "expert_profiles" ADD COLUMN "live_celebration_seen_at" timestamp with time zone;

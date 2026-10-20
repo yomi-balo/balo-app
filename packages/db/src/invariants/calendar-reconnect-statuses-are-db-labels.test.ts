@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { RECONNECT_NEEDED_CREDENTIAL_STATUSES } from '@balo/shared/experts';
+import { BUSY_READABLE_CREDENTIAL_STATUS } from '@balo/shared/calendar';
 import { CALENDAR_CREDENTIAL_STATUSES } from '../schema/calendar';
 
 /**
@@ -36,6 +37,10 @@ describe('invariant: RECONNECT_NEEDED_CREDENTIAL_STATUSES are real calendar_conn
   it('ACTIVE is a DB label and is NOT a reconnect status (the healthy state)', () => {
     expect(DB_LABELS).toContain('ACTIVE');
     expect(RECONNECT_NEEDED_CREDENTIAL_STATUSES.has('ACTIVE')).toBe(false);
+  });
+
+  it('BUSY_READABLE_CREDENTIAL_STATUS is a DB label', () => {
+    expect(DB_LABELS).toContain(BUSY_READABLE_CREDENTIAL_STATUS);
   });
 
   it('SYNC_PENDING is a DB label and is NOT a reconnect status (provisioning, not breakage)', () => {

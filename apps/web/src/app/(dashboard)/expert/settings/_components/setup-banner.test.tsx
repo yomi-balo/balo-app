@@ -25,6 +25,10 @@ function statusWithOpen(...open: ItemKey[]): ChecklistStatus {
     rateCents: 10000,
     availableForWork: true,
     calendarNeedsReconnect: false,
+    searchable: false,
+    username: 'dana',
+    liveCelebrationSeen: false,
+    liveStatus: null,
   };
 }
 

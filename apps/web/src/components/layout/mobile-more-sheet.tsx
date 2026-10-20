@@ -23,6 +23,9 @@ import {
 } from './workspace-presentation';
 import { useWorkspaceSwitch } from './use-workspace-switch';
 import { useLogout } from './use-logout';
+import { LiveStatusDot } from './live-status/live-status-dot';
+import { LiveStatusPill } from './live-status/live-status-pill';
+import type { LiveStatusView } from '@/lib/expert/live-status-view';
 
 interface MobileMoreSheetProps {
   /** `resolveMoreItems(navContext)` — the registry rows, IN ORDER, `account` included at its
@@ -42,6 +45,26 @@ interface MoreWorkspaceRowProps {
   readonly actorInitials: string;
   readonly actorAvatarUrl: string | null;
   readonly onSelect: (key: string) => void;
+  /** BAL-603 — set only on the expert workspace row, to show the status dot and pill. */
+  readonly liveStatus?: LiveStatusView | null;
+  readonly onNavigate?: () => void;
+}
+
+/** The avatar with its status dot (`ring-background`: the sheet's own surface). */
+function SheetAvatar({
+  liveStatus,
+  children,
+}: Readonly<{
+  liveStatus: LiveStatusView | null;
+  children: React.ReactNode;
+}>): React.JSX.Element {
+  if (liveStatus === null) return <>{children}</>;
+  return (
+    <span className="relative inline-flex shrink-0">
+      {children}
+      <LiveStatusDot state={liveStatus.state} ringClassName="ring-background" announce={false} />
+    </span>
+  );
 }
 
 /** D5-equivalent for the sheet — a representation row renders `disabled`, with the exact
@@ -53,6 +76,8 @@ function MoreWorkspaceRow({
   actorInitials,
   actorAvatarUrl,
   onSelect,
+  liveStatus = null,
+  onNavigate,
 }: Readonly<MoreWorkspaceRowProps>): React.JSX.Element {
   if (workspace.type === 'company' && workspace.via === 'representation') {
     return (
@@ -80,24 +105,33 @@ function MoreWorkspaceRow({
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(workspace.key)}
-      className="hover:bg-accent focus-visible:ring-ring flex min-h-[44px] w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none active:scale-[0.98] motion-reduce:transition-none"
-    >
-      <WorkspaceAvatar
-        workspace={workspace}
-        actorInitials={actorInitials}
-        actorAvatarUrl={actorAvatarUrl}
-      />
-      <WorkspaceLabelStack workspace={workspace} actorName={actorName} />
-      {isCurrent && (
-        <>
-          <Check className="text-primary ml-auto size-3.5 shrink-0" aria-hidden="true" />
-          <span className="sr-only">Current workspace</span>
-        </>
+    <>
+      <button
+        type="button"
+        onClick={() => onSelect(workspace.key)}
+        className="hover:bg-accent focus-visible:ring-ring flex min-h-[44px] w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none active:scale-[0.98] motion-reduce:transition-none"
+      >
+        <SheetAvatar liveStatus={liveStatus}>
+          <WorkspaceAvatar
+            workspace={workspace}
+            actorInitials={actorInitials}
+            actorAvatarUrl={actorAvatarUrl}
+          />
+        </SheetAvatar>
+        <WorkspaceLabelStack workspace={workspace} actorName={actorName} />
+        {isCurrent && (
+          <>
+            <Check className="text-primary ml-auto size-3.5 shrink-0" aria-hidden="true" />
+            <span className="sr-only">Current workspace</span>
+          </>
+        )}
+      </button>
+      {liveStatus && (
+        <div className="pl-[54px]">
+          <LiveStatusPill status={liveStatus} variant="sheet" onNavigate={onNavigate} />
+        </div>
       )}
-    </button>
+    </>
   );
 }
 
@@ -122,6 +156,7 @@ export function MobileMoreSheet({
     userName,
     userInitials,
     userAvatarUrl,
+    liveStatus,
   } = useSidebar();
   const router = useRouter();
   const trackNavItem = useNavItemTracking('more_sheet', navContext.workspaceType);
@@ -179,6 +214,8 @@ export function MobileMoreSheet({
       ? null
       : (workspaces.find((w) => w.key === activeWorkspaceKey) ?? firstWorkspace);
   const expertWorkspace = workspaces.find((w) => w.type === 'expert');
+  // BAL-603 — the status belongs to the EXPERT workspace identity row, wherever that row renders.
+  const activeLiveStatus = active?.type === 'expert' ? liveStatus : null;
   const companyWorkspaces = workspaces.filter((w): w is CompanyWorkspace => w.type === 'company');
 
   return (
@@ -245,13 +282,22 @@ export function MobileMoreSheet({
       )}
 
       {workspaces.length === 1 && active !== null && (
-        <div className="flex items-center gap-2.5 px-2 py-1.5">
-          <WorkspaceAvatar
-            workspace={active}
-            actorInitials={userInitials}
-            actorAvatarUrl={userAvatarUrl}
-          />
-          <WorkspaceLabelStack workspace={active} actorName={userName} />
+        <div>
+          <div className="flex items-center gap-2.5 px-2 py-1.5">
+            <SheetAvatar liveStatus={activeLiveStatus}>
+              <WorkspaceAvatar
+                workspace={active}
+                actorInitials={userInitials}
+                actorAvatarUrl={userAvatarUrl}
+              />
+            </SheetAvatar>
+            <WorkspaceLabelStack workspace={active} actorName={userName} />
+          </div>
+          {activeLiveStatus && (
+            <div className="pl-[54px]">
+              <LiveStatusPill status={activeLiveStatus} variant="sheet" onNavigate={onNavigate} />
+            </div>
+          )}
         </div>
       )}
 
@@ -267,6 +313,8 @@ export function MobileMoreSheet({
                 actorInitials={userInitials}
                 actorAvatarUrl={userAvatarUrl}
                 onSelect={handleWorkspaceSelect}
+                liveStatus={liveStatus}
+                onNavigate={onNavigate}
               />
             </div>
           )}
