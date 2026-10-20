@@ -593,10 +593,24 @@ const dailyMeetingSessionsResponseSchema = z.object({
 /** The explicit page size of {@link getRoomSessionLeaves}; one room has a handful of sessions. */
 const SESSION_HISTORY_LIMIT = 100;
 
+/** One recorded attendance: a claim's join and leave in one session. */
+export interface RecordedVisit {
+  /** The Daily `user_id` claim, as `dailyParticipantIdFor` mints it. */
+  readonly claim: string;
+  readonly joinedAt: Date;
+  readonly leftAt: Date;
+}
+
 /** What {@link getRoomSessionLeaves} reads out of one room's session history. */
 export interface RoomSessionHistory {
   /** Each claim's latest recorded leave. */
   readonly leaves: ReadonlyMap<string, Date>;
+  /**
+   * Every recorded attendance, in the order Daily returned it. The lifecycle sweep backfills
+   * from these the visits that started and ended between two of its ticks, which its
+   * once-a-minute roster read never sees.
+   */
+  readonly visits: readonly RecordedVisit[];
 }
 
 /**
@@ -609,8 +623,10 @@ export interface RoomSessionHistory {
  *
  * It exists for the lifecycle sweep's STRANDED reconciler closes: a dropped `participant.left`
  * webhook leaves an interval open for days, and closing it at the tick instant would record every
- * one of those days as presence. `/meetings` sits in Daily's analytics rate tier (~2/s, 50 per
- * 30s), which is why the sweep makes at most `MAX_SESSION_HISTORY_READS_PER_TICK` of these reads.
+ * one of those days as presence. Its second consumer is the sweep's pre-termination backfill,
+ * which reads `visits` for attendance too brief for any per-minute roster read to have seen.
+ * `/meetings` sits in Daily's analytics rate tier (~2/s, 50 per 30s), which is why the sweep
+ * makes at most `MAX_SESSION_HISTORY_READS_PER_TICK` of these reads.
  *
  * `since` bounds the read (`timeframe_start`), so a room reused over weeks answers only the
  * sessions that can matter.
@@ -643,25 +659,27 @@ export async function getRoomSessionLeaves(
   return collectSessionHistory(data);
 }
 
-/** Folds validated sessions into each claim's latest recorded leave. */
+/** Folds validated sessions into each claim's latest recorded leave and its recorded visits. */
 function collectSessionHistory(
   data: z.infer<typeof dailyMeetingSessionsResponseSchema>['data']
 ): RoomSessionHistory {
   const leaves = new Map<string, Date>();
+  const visits: RecordedVisit[] = [];
   for (const session of data) {
     for (const participant of session.participants) {
       const claim = participant.user_id;
       const leftAt = recordedLeaveOf(participant);
-      if (typeof claim !== 'string' || leftAt === null) {
+      if (typeof claim !== 'string' || leftAt === null || participant.join_time === undefined) {
         continue;
       }
+      visits.push({ claim, joinedAt: new Date(participant.join_time * 1000), leftAt });
       const known = leaves.get(claim);
       if (known === undefined || leftAt.getTime() > known.getTime()) {
         leaves.set(claim, leftAt);
       }
     }
   }
-  return { leaves };
+  return { leaves, visits };
 }
 
 /** `join_time + duration` (both seconds) as an instant, or `null` when either is missing or non-finite. */

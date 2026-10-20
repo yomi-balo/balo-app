@@ -28,6 +28,7 @@ const {
   mockEnqueueRecordingStop,
   mockFindCapturingForMeeting,
   mockCountFailedByStage,
+  mockTransaction,
 } = vi.hoisted(() => ({
   mockListCandidates: vi.fn(),
   mockListStranded: vi.fn(),
@@ -56,6 +57,7 @@ const {
   mockEnqueueRecordingStop: vi.fn(),
   mockFindCapturingForMeeting: vi.fn(),
   mockCountFailedByStage: vi.fn(),
+  mockTransaction: vi.fn(),
 }));
 
 /** See the `./recording-capture.js` mock below — a stand-in cap, not the real constant. */
@@ -65,7 +67,7 @@ vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: mockDebug, info: mockInfo, warn: mockWarn, error: mockErrorLog }),
 }));
 vi.mock('@balo/db', () => ({
-  db: {},
+  db: { transaction: mockTransaction },
   meetingsRepository: {
     listLifecycleCandidates: mockListCandidates,
     listStrandedLifecycleCandidates: mockListStranded,
@@ -236,11 +238,12 @@ const UNSTUBBED_ROOM_READ = async (): Promise<Participants> => {
   throw new Error('per-room read not stubbed');
 };
 
-/** What the session-history read answers: the recorded leaves. */
+/** What the session-history read answers: the recorded leaves and visits. */
 function history(
-  leaves: ReadonlyMap<string, Date> = new Map()
+  leaves: ReadonlyMap<string, Date> = new Map(),
+  visits: Awaited<ReturnType<PresenceReader['getRoomSessionLeaves']>>['visits'] = []
 ): Awaited<ReturnType<PresenceReader['getRoomSessionLeaves']>> {
-  return { leaves };
+  return { leaves, visits };
 }
 
 /** The session-history read when Daily has no record: no recorded leaves. */
@@ -1897,6 +1900,242 @@ describe('overrun_stop — the Arm B hard ceiling (BAL-585)', () => {
 
     await runMeetingLifecycleSweep(at(330), () => {}, EMPTY_READER);
     expect(mockEndMeeting).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the pre-termination backfill of sub-tick visits', () => {
+  const CLIENT_CLAIM = dailyParticipantIdFor('user', USER_ID);
+  const EXPERT_CLAIM = dailyParticipantIdFor('user', OTHER_USER_ID);
+  const SECOND = 1_000;
+  /** The incident's shape: the client was in the room for the 10:02 tick and gone by 10:03. */
+  const CLIENT_SEEN = presenceRow({ party: 'client', joinedAt: at(2), leftAt: at(3) });
+  const CLIENT_VISIT = {
+    claim: CLIENT_CLAIM,
+    joinedAt: new Date(at(2).getTime() - 4 * SECOND),
+    leftAt: new Date(at(2).getTime() + 20 * SECOND),
+  };
+  /** The expert arrived after the 10:02 tick and left before the 10:03 one. */
+  const EXPERT_VISIT = {
+    claim: EXPERT_CLAIM,
+    joinedAt: new Date(at(2).getTime() + 7 * SECOND),
+    leftAt: new Date(at(2).getTime() + 24 * SECOND),
+  };
+  const EXPERT_BACKFILLED = presenceRow({
+    id: 'row-2',
+    userId: OTHER_USER_ID,
+    party: 'expert',
+    joinedAt: EXPERT_VISIT.joinedAt,
+    leftAt: EXPERT_VISIT.leftAt,
+  });
+  const TX = { tx: true };
+  /** The missed-call window has elapsed. */
+  const NOW = at(DEFAULT_MEETING_TIMERS.missedCallTerminationMs / MINUTE);
+
+  function openEffect(userId: string | null, party: string, joinedAt: Date) {
+    return {
+      action: 'open',
+      meetingId: MEETING_ID,
+      userId,
+      meetingGuestId: null,
+      party,
+      at: joinedAt,
+      window: { notAfter: at(90) },
+      identityKind: userId === null ? 'unknown' : 'user',
+    };
+  }
+
+  function historyReader(
+    getRoomSessionLeaves: PresenceReader['getRoomSessionLeaves']
+  ): PresenceReader {
+    return reader({}, UNSTUBBED_ROOM_READ, getRoomSessionLeaves);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListStranded.mockResolvedValue([]);
+    mockListCandidates.mockResolvedValue([meeting()]);
+    mockFindMeetingById.mockResolvedValue(meeting());
+    mockListByMeeting.mockResolvedValue([CLIENT_SEEN]);
+    mockHasLinkGuest.mockResolvedValue(false);
+    mockListContexts.mockResolvedValue([]);
+    mockEndMeeting.mockResolvedValue({ meeting: meeting({ status: 'ended' }), closedIntervals: 0 });
+    mockDeleteRoom.mockResolvedValue('deleted');
+    mockApplyPresenceEffect.mockResolvedValue('opened');
+    mockResolvePresenceEffect.mockResolvedValue(
+      openEffect(OTHER_USER_ID, 'expert', EXPERT_VISIT.joinedAt)
+    );
+    mockTransaction.mockImplementation(async (work: (tx: unknown) => Promise<void>) => work(TX));
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'not_a_case_meeting',
+    });
+    mockFindCapturingForMeeting.mockResolvedValue(undefined);
+    mockCountFailedByStage.mockResolvedValue(0);
+  });
+
+  it('INCIDENT SHAPE — an expert visit between two ticks is recorded, so the meeting is not ended as a missed call', async () => {
+    mockListByMeeting
+      .mockResolvedValueOnce([CLIENT_SEEN])
+      .mockResolvedValueOnce([CLIENT_SEEN])
+      .mockResolvedValue([CLIENT_SEEN, EXPERT_BACKFILLED]);
+    const getRoomSessionLeaves = vi
+      .fn()
+      .mockResolvedValue(history(new Map(), [CLIENT_VISIT, EXPERT_VISIT]));
+
+    const result = await runMeetingLifecycleSweep(
+      NOW,
+      () => {},
+      historyReader(getRoomSessionLeaves)
+    );
+
+    expect(getRoomSessionLeaves).toHaveBeenCalledTimes(1);
+    expect(getRoomSessionLeaves).toHaveBeenCalledWith(ROOM, { since: at(-60) });
+    // Only the claim Balo holds no interval for is resolved; party comes from the writer.
+    expect(mockResolvePresenceEffect).toHaveBeenCalledTimes(1);
+    expect(mockResolvePresenceEffect).toHaveBeenCalledWith({
+      action: 'open',
+      meeting: expect.objectContaining({ id: MEETING_ID }),
+      participantId: EXPERT_CLAIM,
+      at: EXPERT_VISIT.joinedAt,
+    });
+    // Open and close commit together, at Daily's recorded instants.
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockApplyPresenceEffect.mock.calls).toEqual([
+      [TX, openEffect(OTHER_USER_ID, 'expert', EXPERT_VISIT.joinedAt)],
+      [
+        TX,
+        {
+          ...openEffect(OTHER_USER_ID, 'expert', EXPERT_VISIT.joinedAt),
+          action: 'close',
+          at: EXPERT_VISIT.leftAt,
+        },
+      ],
+    ]);
+    // Both sides were present, so the empty room ends as an abandoned wait (outcome resolved by
+    // settlement from presence), never as the expert's missed call.
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: null,
+        terminalRule: { rule: 'abandoned_wait', arm: null },
+      })
+    );
+    expect(mockTrackServer).not.toHaveBeenCalledWith('meeting_missed_call', expect.anything());
+    expect(result).toMatchObject({ terminated: 1, intervalsOpened: 1 });
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        participantId: EXPERT_CLAIM,
+        party: 'expert',
+        rule: 'missed_call',
+      }),
+      'Backfilled a visit no sweep tick observed — Daily recorded it between two roster reads'
+    );
+  });
+
+  it('writes nothing for a claim Balo already holds an interval for — the read is idempotent', async () => {
+    mockListByMeeting.mockResolvedValue([CLIENT_SEEN, EXPERT_BACKFILLED]);
+    const getRoomSessionLeaves = vi
+      .fn()
+      .mockResolvedValue(history(new Map(), [CLIENT_VISIT, EXPERT_VISIT]));
+
+    const result = await runMeetingLifecycleSweep(
+      NOW,
+      () => {},
+      historyReader(getRoomSessionLeaves)
+    );
+
+    expect(getRoomSessionLeaves).toHaveBeenCalledTimes(1);
+    expect(mockResolvePresenceEffect).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalRule: { rule: 'abandoned_wait', arm: null } })
+    );
+    expect(result).toMatchObject({ terminated: 1, intervalsOpened: 0 });
+  });
+
+  it('a FAILED history read still ends the meeting on the presence the sweep observed', async () => {
+    const getRoomSessionLeaves = vi.fn().mockRejectedValue(new Error('rate limited'));
+
+    const result = await runMeetingLifecycleSweep(
+      NOW,
+      () => {},
+      historyReader(getRoomSessionLeaves)
+    );
+
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'missed_call' })
+    );
+    expect(result.terminated).toBe(1);
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        rule: 'missed_call',
+        error: 'rate limited',
+      }),
+      'Daily session-history read failed — terminating on the presence the sweep observed'
+    );
+  });
+
+  it('never backfills a claim that resolves to no identity — nothing could deduplicate it', async () => {
+    mockResolvePresenceEffect.mockResolvedValue(
+      openEffect(null, 'observer', EXPERT_VISIT.joinedAt)
+    );
+    const getRoomSessionLeaves = vi
+      .fn()
+      .mockResolvedValue(history(new Map(), [{ ...EXPERT_VISIT, claim: 'not-a-claim' }]));
+
+    await runMeetingLifecycleSweep(NOW, () => {}, historyReader(getRoomSessionLeaves));
+
+    expect(mockResolvePresenceEffect).toHaveBeenCalledTimes(1);
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'missed_call' })
+    );
+  });
+
+  it('defers a candidate past the history-read cap rather than ending it unread', async () => {
+    const ids = Array.from(
+      { length: MAX_SESSION_HISTORY_READS_PER_TICK + 1 },
+      (_unused, index) => `4444444${index}-4444-4444-8444-444444444444`
+    );
+    mockListCandidates.mockResolvedValue(
+      ids.map((id) => {
+        const room = dailyRoomNameForMeeting(id);
+        return meeting({ id, dailyRoomName: room, joinUrl: `https://balo.daily.co/${room}` });
+      })
+    );
+    const getRoomSessionLeaves = vi.fn().mockResolvedValue(history());
+
+    const result = await runMeetingLifecycleSweep(
+      NOW,
+      () => {},
+      historyReader(getRoomSessionLeaves)
+    );
+
+    expect(getRoomSessionLeaves).toHaveBeenCalledTimes(MAX_SESSION_HISTORY_READS_PER_TICK);
+    expect(result.terminated).toBe(MAX_SESSION_HISTORY_READS_PER_TICK);
+  });
+
+  it('makes no history read before a rule a sub-tick visit cannot change (idle end)', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      presenceRow({ party: 'expert', leftAt: at(3) }),
+      presenceRow({ id: 'row-2', userId: OTHER_USER_ID, joinedAt: at(1), leftAt: at(3) }),
+    ]);
+    const getRoomSessionLeaves = vi.fn().mockResolvedValue(history());
+
+    const result = await runMeetingLifecycleSweep(
+      at(30),
+      () => {},
+      historyReader(getRoomSessionLeaves)
+    );
+
+    expect(getRoomSessionLeaves).not.toHaveBeenCalled();
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalRule: { rule: 'idle_end', arm: null } })
+    );
+    expect(result.terminated).toBe(1);
   });
 });
 
