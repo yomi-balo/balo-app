@@ -123,6 +123,28 @@ export function TaxonomyMultiSelect({
     }
   }, []);
 
+  /**
+   * ⚠ A modal Dialog/Sheet's scroll lock (react-remove-scroll) sits on the Radix OVERLAY and
+   * exempts the dialog content only by DOM containment. The portalled list is neither inside the
+   * overlay's React tree nor inside the content's DOM, so the lock's `document` wheel/touchmove
+   * listener cancels every scroll over it — only dragging the scrollbar works. Stopping those
+   * events at the list keeps them from reaching that listener; `body` stays locked, so nothing
+   * behind the dialog scrolls. A callback ref, not an effect on `open`: Radix's Portal mounts the
+   * content a commit AFTER `open` flips, so an effect would still see a null ref.
+   */
+  const attachContent = useCallback((node: HTMLDivElement | null): (() => void) | undefined => {
+    contentRef.current = node;
+    if (!node) return undefined;
+    const stop = (event: Event): void => event.stopPropagation();
+    node.addEventListener('wheel', stop, { passive: true });
+    node.addEventListener('touchmove', stop, { passive: true });
+    return () => {
+      contentRef.current = null;
+      node.removeEventListener('wheel', stop);
+      node.removeEventListener('touchmove', stop);
+    };
+  }, []);
+
   const multiGroup = taxonomy.groups.length >= 2;
   const trimmed = query.trim();
   const filteredGroups = useMemo(() => {
@@ -261,7 +283,7 @@ export function TaxonomyMultiSelect({
             ancestor's `overflow: hidden`, and the booking confirm step wraps this field in a
             height-animating clipped container. Still never reflows the sections below. */}
         <PopoverContent
-          ref={contentRef}
+          ref={attachContent}
           id={`taxonomy-browse-${fieldId}`}
           data-testid={`taxonomy-browse-${fieldId}`}
           align="start"

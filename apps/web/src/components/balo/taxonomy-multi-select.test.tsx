@@ -84,6 +84,39 @@ describe('TaxonomyMultiSelect', () => {
     expect(screen.getByTestId('clipping-ancestor')).not.toContainElement(popup);
   });
 
+  /**
+   * ⚠ Stands in for a modal Dialog/Sheet's scroll lock, which cancels wheel/touchmove from a
+   * `document` listener. If the portalled list lets those events bubble there, trackpad scrolling
+   * the list inside the project-request panel or booking dialog is dead.
+   */
+  it('keeps wheel and touchmove inside the popup from reaching a document scroll lock', async () => {
+    const user = userEvent.setup();
+    const lock = vi.fn();
+    document.addEventListener('wheel', lock);
+    document.addEventListener('touchmove', lock);
+    try {
+      render(
+        <TaxonomyMultiSelect
+          {...BASE}
+          selectedIds={new Set()}
+          onToggle={vi.fn()}
+          onClear={vi.fn()}
+        />
+      );
+      await openBrowse(user);
+      const option = screen.getByRole('button', { name: 'Data Migration' });
+      fireEvent.wheel(option, { deltaY: 60 });
+      fireEvent.touchMove(option);
+      expect(lock).not.toHaveBeenCalled();
+
+      fireEvent.wheel(screen.getByPlaceholderText('Filter project types…'), { deltaY: 60 });
+      expect(lock).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener('wheel', lock);
+      document.removeEventListener('touchmove', lock);
+    }
+  });
+
   it('keeps focus in the search input when the popup opens, so typing is uninterrupted', async () => {
     const user = userEvent.setup();
     render(
