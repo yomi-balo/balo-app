@@ -102,6 +102,8 @@ export interface PortfolioRowView {
   /** Freshest inbound signal preview, or null. */
   signal?: { from: string; messagePreview: string; relationshipId?: string } | null;
   kind: 'request' | 'engagement';
+  /** Engagement rows only; unset on request rows. Consumers never parse `nudgeLabel`. */
+  deliveryState?: EngagementDeliveryState | null;
   /** The expert-side action this row asks for; null when `needsYou` is false (client rows: null). */
   moveKind?: ExpertMoveKind | null;
   /** The client-side action this row asks for; null when `needsYou` is false (expert rows: unset). */
@@ -571,6 +573,17 @@ export function needsYouForExpert(
 
 // ── Engagement-row deriver (post-kickoff delivery, D6) ─────────────
 
+/**
+ * The delivery state a track groups on. `active` splits on the change note, because the raw
+ * status cannot tell "Changes requested" (waiting) from "In delivery" (in progress).
+ */
+export type EngagementDeliveryState =
+  | 'in_delivery'
+  | 'changes_requested'
+  | 'pending_acceptance'
+  | 'completed'
+  | 'cancelled';
+
 /** The engagement status the deriver switches on (schema-derived; import type only). */
 type EngagementRowStatus = PortfolioProjectEngagementView['status'];
 
@@ -600,6 +613,7 @@ export interface EngagementRowDeriv {
   progressLabel: string | null;
   moveKind: ExpertMoveKind | null;
   clientMoveKind: ClientMoveKind | null;
+  deliveryState: EngagementDeliveryState;
 }
 
 /**
@@ -638,6 +652,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
             progressLabel,
             moveKind: 'delivery_changes',
             clientMoveKind: null,
+            deliveryState: 'changes_requested',
           };
         }
         return {
@@ -647,6 +662,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
           progressLabel,
           moveKind: null,
           clientMoveKind: null,
+          deliveryState: 'changes_requested',
         };
       }
       return {
@@ -656,6 +672,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
         progressLabel,
         moveKind: null,
         clientMoveKind: null,
+        deliveryState: 'in_delivery',
       };
     }
     case 'pending_acceptance': {
@@ -671,6 +688,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
           progressLabel: null,
           moveKind: null,
           clientMoveKind: 'completion',
+          deliveryState: 'pending_acceptance',
         };
       }
       return {
@@ -680,6 +698,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
         progressLabel: null,
         moveKind: null,
         clientMoveKind: null,
+        deliveryState: 'pending_acceptance',
       };
     }
     case 'completed':
@@ -690,6 +709,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
         progressLabel: null,
         moveKind: null,
         clientMoveKind: null,
+        deliveryState: 'completed',
       };
     case 'cancelled':
       return {
@@ -699,6 +719,7 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
         progressLabel: null,
         moveKind: null,
         clientMoveKind: null,
+        deliveryState: 'cancelled',
       };
     default:
       return assertNeverStatus(input.status);

@@ -376,7 +376,7 @@ function toEngagementRowView(
       ? formatAutoAcceptLabel(e.completionRequestedAt)
       : null;
 
-  const { needsYou, nudgeLabel, href, progressLabel, moveKind, clientMoveKind } =
+  const { needsYou, nudgeLabel, href, progressLabel, moveKind, clientMoveKind, deliveryState } =
     deriveEngagementRow({
       engagementId: e.id,
       status: e.status,
@@ -427,6 +427,7 @@ function toEngagementRowView(
     recencyAtIso: recencyAt.toISOString(),
     signal: null,
     kind: 'engagement',
+    deliveryState,
     moveKind,
     clientMoveKind: lens === 'client' ? clientMoveKind : null,
     threadRefs,

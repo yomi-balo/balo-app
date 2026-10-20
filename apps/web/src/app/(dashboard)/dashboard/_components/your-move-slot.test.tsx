@@ -6,9 +6,19 @@ vi.mock('./your-move', () => ({
     data,
     workspaceType,
   }: {
-    data: { kind: string; cards: unknown[] };
+    data: { kind: string; cards: unknown[]; rows?: unknown };
     workspaceType: string;
-  }) => <div data-testid="your-move">{`${workspaceType}:${data.kind}:${data.cards.length}`}</div>,
+  }) => (
+    <div data-testid="your-move" data-has-rows={String('rows' in data)}>
+      {`${workspaceType}:${data.kind}:${data.cards.length}`}
+    </div>
+  ),
+}));
+
+vi.mock('./project-track', () => ({
+  ProjectTrack: ({ view }: { view: { workspaceType: string; stages: unknown[] } }) => (
+    <div data-testid="project-track">{`${view.workspaceType}:${view.stages.length}`}</div>
+  ),
 }));
 
 const mockLoad = vi.fn();
@@ -26,13 +36,25 @@ import type { SessionUser } from '@/lib/auth/session';
 
 const USER = { id: 'u-1' } as SessionUser;
 
+const LIVE_ROWS = [
+  {
+    id: 'p1',
+    href: '/projects/p1',
+    title: 'Project 1',
+    companyName: 'Northwind',
+    stage: 'eoi',
+    needsYou: true,
+    kind: 'request',
+  },
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('YourMoveSlot', () => {
   it('loads for the expert profile and renders the rail with the cards', async () => {
-    mockLoad.mockResolvedValue([{ id: 'c1' }, { id: 'c2' }]);
+    mockLoad.mockResolvedValue({ cards: [{ id: 'c1' }, { id: 'c2' }], rows: LIVE_ROWS });
     render(
       await YourMoveSlot({
         user: USER,
@@ -44,7 +66,23 @@ describe('YourMoveSlot', () => {
       user: { id: 'u-1', expertProfileId: 'profile-1' },
       calendarNeedsReconnect: false,
     });
+    expect(mockLoad).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('your-move')).toHaveTextContent('expert:ready:2');
+    expect(screen.getByTestId('project-track')).toHaveTextContent('expert:5');
+    expect(screen.getByTestId('your-move')).toHaveAttribute('data-has-rows', 'false');
+  });
+
+  it('renders no track when the read has no live rows', async () => {
+    mockLoad.mockResolvedValue({ cards: [], rows: [] });
+    render(
+      await YourMoveSlot({
+        user: USER,
+        expertProfileId: 'profile-1',
+        calendarNeedsReconnect: false,
+      })
+    );
+    expect(screen.getByTestId('your-move')).toBeInTheDocument();
+    expect(screen.queryByTestId('project-track')).not.toBeInTheDocument();
   });
 
   it('renders the error state, keeping the calendar blocker, when the read throws', async () => {
@@ -53,6 +91,7 @@ describe('YourMoveSlot', () => {
       await YourMoveSlot({ user: USER, expertProfileId: 'profile-1', calendarNeedsReconnect: true })
     );
     expect(screen.getByTestId('your-move')).toHaveTextContent('expert:error:1');
+    expect(screen.queryByTestId('project-track')).not.toBeInTheDocument();
     expect(log.error).toHaveBeenCalled();
   });
 

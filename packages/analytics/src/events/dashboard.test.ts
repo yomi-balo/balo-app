@@ -7,12 +7,15 @@ import {
   DASHBOARD_YOUR_MOVE_CARD_KINDS,
   DASHBOARD_YOUR_MOVE_CHIPS,
   DASHBOARD_YOUR_MOVE_TARGETS,
+  DASHBOARD_TRACK_STAGES,
+  DASHBOARD_TRACK_TURNS,
   type DashboardEventMap,
 } from './dashboard';
 
 describe('DASHBOARD_EVENTS (BAL-566 / BAL-600, client)', () => {
   it('exposes exactly the dashboard events, sorted', () => {
     expect(Object.keys(DASHBOARD_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'TRACK_CLICKED',
       'UP_NEXT_CLICKED',
       'UP_NEXT_VIEWED',
       'YOUR_MOVE_CLICKED',
@@ -27,6 +30,7 @@ describe('DASHBOARD_EVENTS (BAL-566 / BAL-600, client)', () => {
     expect(DASHBOARD_EVENTS.YOUR_MOVE_VIEWED).toBe('dashboard_your_move_viewed');
     expect(DASHBOARD_EVENTS.YOUR_MOVE_CLICKED).toBe('dashboard_your_move_clicked');
     expect(DASHBOARD_EVENTS.YOUR_MOVE_FILTERED).toBe('dashboard_your_move_filtered');
+    expect(DASHBOARD_EVENTS.TRACK_CLICKED).toBe('dashboard_track_clicked');
   });
 
   it('every value carries the dashboard_ prefix and a snake_case shape', () => {
@@ -115,6 +119,34 @@ describe('DASHBOARD_YOUR_MOVE_CHIPS', () => {
 describe('DASHBOARD_YOUR_MOVE_TARGETS', () => {
   it('is exactly the two click targets', () => {
     expect(DASHBOARD_YOUR_MOVE_TARGETS).toEqual(['card', 'action']);
+  });
+});
+
+describe('track vocabularies', () => {
+  it('pins the stage keys and turns', () => {
+    expect(DASHBOARD_TRACK_STAGES).toEqual([
+      'invited',
+      'eoi',
+      'matching',
+      'interest',
+      'proposal',
+      'kickoff',
+      'delivery',
+    ]);
+    expect(DASHBOARD_TRACK_TURNS).toEqual(['your_move', 'in_progress', 'waiting']);
+  });
+
+  it('track clicked carries workspace_type, stage and turn and no ids', () => {
+    const clicked: DashboardEventMap[typeof DASHBOARD_EVENTS.TRACK_CLICKED] = {
+      workspace_type: 'expert',
+      stage: 'proposal',
+      turn: 'your_move',
+    };
+    expect(Object.keys(clicked).sort((a, b) => a.localeCompare(b))).toEqual([
+      'stage',
+      'turn',
+      'workspace_type',
+    ]);
   });
 });
 

@@ -311,6 +311,7 @@ describe('loadClientPortfolio', () => {
     const dto = await loadClientPortfolio(USER, ['client'], NOW);
     expect(dto.rows).toHaveLength(1);
     expect(dto.rows[0]?.kind).toBe('request');
+    expect(dto.rows[0]?.deliveryState).toBeUndefined();
     expect(dto.rows[0]?.id).toBe('req-K');
   });
 
@@ -357,6 +358,7 @@ describe('loadClientPortfolio', () => {
     const dto = await loadClientPortfolio(USER, ['client'], NOW);
     const row = dto.rows.find((r) => r.id === 'eng-pa');
     expect(row?.needsYou).toBe(true);
+    expect(row?.deliveryState).toBe('pending_acceptance');
     // completionRequestedAt = day(1) (2026-06-15) + AUTO_ACCEPT_DAYS(7) = 2026-06-22,
     // UTC-formatted "22 Jun" — locks the 7-day window + UTC "D MMM" format.
     expect(row?.nudgeLabel).toBe('Review project completion — auto-accepts 22 Jun');

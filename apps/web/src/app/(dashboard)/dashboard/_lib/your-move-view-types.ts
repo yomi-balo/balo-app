@@ -1,8 +1,14 @@
-import type { DashboardYourMoveCardKind, DashboardYourMoveChip } from '@balo/analytics/events';
+import type {
+  DashboardTrackStage,
+  DashboardTrackTurn,
+  DashboardYourMoveCardKind,
+  DashboardYourMoveChip,
+} from '@balo/analytics/events';
+import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 
 /**
- * The Your move rail's client-safe view model. Types and constants only: imported by the
- * server-only builder and by the client rail. NO money (budget, price, rate, balance) crosses
+ * The Your move rail's and project track's client-safe view model. Types and constants only:
+ * imported by the server-side builders and by the client rail and track. NO money (budget, price, rate, balance) crosses
  * this boundary. The counterparty follows a per-side rule: expert cards name the client company,
  * never a person; client cards name the expert as "person, agency" (Balo on the exploratory call,
  * the company on Team, a hold line on Billing). Team cards may carry requester names and emails.
@@ -99,6 +105,18 @@ export type YourMoveData = {
   readonly kind: 'ready' | 'error';
   readonly cards: readonly YourMoveCardView[];
 };
+
+/** What the loaders return: the rail's cards plus the live rows the track is built from. */
+export interface YourMoveRead {
+  readonly cards: readonly YourMoveCardView[];
+  readonly rows: readonly PortfolioRowView[];
+}
+
+/**
+ * The server-side read result. Rows carry person names, so they stay on the server: the slot
+ * builds the track view from them and hands the client rail only `YourMoveData`.
+ */
+export type YourMoveReadData = YourMoveData & { readonly rows: readonly PortfolioRowView[] };
 
 export const YOUR_MOVE_CARD_VIEW_KEYS = [
   'id',
@@ -328,3 +346,47 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     side: 'client',
   },
 };
+
+/** One project on the "Where your projects stand" track. The only row data that reaches it. */
+export interface ProjectTrackToken {
+  readonly id: string;
+  readonly label: string;
+  readonly title: string;
+  readonly href: string;
+  readonly turn: DashboardTrackTurn;
+}
+
+export interface ProjectTrackStage {
+  readonly key: DashboardTrackStage;
+  readonly label: string;
+  readonly tokens: readonly ProjectTrackToken[];
+  readonly hasYourMove: boolean;
+}
+
+export interface ProjectTrackView {
+  readonly workspaceType: YourMoveWorkspaceType;
+  readonly stages: readonly ProjectTrackStage[];
+}
+
+interface TrackCopy {
+  readonly title: string;
+  readonly sub: string;
+  readonly waiting: string;
+}
+
+export const PROJECT_TRACK_COPY: Record<YourMoveWorkspaceType, TrackCopy> = {
+  expert: {
+    title: 'Where your projects stand',
+    sub: 'Every live project, and whose move it is.',
+    waiting: 'Waiting on client',
+  },
+  company: {
+    title: 'Where your projects stand',
+    sub: 'Every open request and project, and whose move it is.',
+    waiting: 'Waiting on others',
+  },
+};
+
+export const PROJECT_TRACK_YOUR_MOVE = 'Your move';
+export const PROJECT_TRACK_IN_PROGRESS = 'In progress';
+export const PROJECT_TRACK_NONE = 'None';

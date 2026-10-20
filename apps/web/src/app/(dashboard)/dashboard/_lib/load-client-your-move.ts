@@ -30,7 +30,7 @@ import {
   loadMessageThreads,
   type ThreadRef,
 } from './load-your-move';
-import type { YourMoveCardView } from './your-move-view-types';
+import type { YourMoveRead } from './your-move-view-types';
 
 interface Gates {
   readonly billing: boolean;
@@ -150,7 +150,7 @@ export async function loadClientYourMove(input: {
   companyId: string;
   companyName: string;
   now?: Date;
-}): Promise<readonly YourMoveCardView[]> {
+}): Promise<YourMoveRead> {
   const { user, companyId, companyName } = input;
   const now = input.now ?? new Date();
 
@@ -220,7 +220,7 @@ export async function loadClientYourMove(input: {
     expertParties.map((party) => [party.expertProfileId, party])
   );
 
-  return buildClientYourMoveCards({
+  const cards = buildClientYourMoveCards({
     rows,
     details,
     expertNames,
@@ -233,4 +233,5 @@ export async function loadClientYourMove(input: {
     messages,
     now,
   });
+  return { cards, rows };
 }

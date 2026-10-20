@@ -603,6 +603,23 @@ describe('needsYouForExpert', () => {
   });
 });
 
+describe('deriveEngagementRow deliveryState', () => {
+  it.each([
+    ['client', 'active', true, 'changes_requested'],
+    ['expert', 'active', true, 'changes_requested'],
+    ['client', 'active', false, 'in_delivery'],
+    ['expert', 'active', false, 'in_delivery'],
+    ['client', 'pending_acceptance', false, 'pending_acceptance'],
+    ['expert', 'pending_acceptance', false, 'pending_acceptance'],
+    ['client', 'completed', false, 'completed'],
+    ['expert', 'cancelled', false, 'cancelled'],
+  ] as const)('%s lens, %s, change note %s -> %s', (lens, status, hasChangeRequest, expected) => {
+    expect(
+      deriveEngagementRow(makeEngagementInput({ lens, status, hasChangeRequest })).deliveryState
+    ).toBe(expected);
+  });
+});
+
 describe('deriveEngagementRow', () => {
   it('client active no-note, 3/5 → In delivery with progress + inbox href', () => {
     const res = deriveEngagementRow(
@@ -620,6 +637,7 @@ describe('deriveEngagementRow', () => {
       href: '/engagements/eng-1?from=inbox',
       moveKind: null,
       clientMoveKind: null,
+      deliveryState: 'in_delivery',
     });
   });
 
