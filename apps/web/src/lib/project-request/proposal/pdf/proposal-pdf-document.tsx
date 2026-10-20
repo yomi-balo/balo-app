@@ -280,6 +280,7 @@ function MilestoneRow({
   showValue: boolean;
   currency: string;
 }>): React.JSX.Element {
+  const valueCents = milestone.valueCents ?? 0;
   const description = richTextToPdf(milestone.descriptionHtml);
   const hasAcceptance =
     milestone.acceptanceCriteria !== null && milestone.acceptanceCriteria !== '';
@@ -289,10 +290,8 @@ function MilestoneRow({
         <Text style={styles.milestoneTitle}>
           {index + 1}. {milestone.title}
         </Text>
-        {showValue && milestone.valueCents !== null ? (
-          <Text style={styles.milestoneValue}>
-            {formatWholeCurrency(milestone.valueCents, currency)}
-          </Text>
+        {showValue && valueCents > 0 ? (
+          <Text style={styles.milestoneValue}>{formatWholeCurrency(valueCents, currency)}</Text>
         ) : null}
       </View>
       {description.length > 0 ? <View style={styles.richWrap}>{description}</View> : null}

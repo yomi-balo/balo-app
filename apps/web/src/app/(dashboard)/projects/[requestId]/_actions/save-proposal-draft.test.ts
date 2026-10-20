@@ -201,6 +201,39 @@ describe('saveProposalDraftAction', () => {
     );
   });
 
+  it.each([
+    ['milestones', mockSetMilestones],
+    ['installments', mockSetInstallments],
+  ])(
+    'warns and returns stale copy when the %s write hits a submitted proposal',
+    async (_label, setter) => {
+      mockFindCurrent.mockResolvedValue({ id: PROPOSAL_ID });
+      setter.mockRejectedValue(new ProposalNotDraftError('submitted'));
+
+      const result = await saveProposalDraftAction(VALID_INPUT);
+
+      expect(result).toEqual({ success: false, error: 'This proposal can no longer be edited.' });
+      expect(log.warn).toHaveBeenCalledWith(
+        'Proposal draft autosave rejected (no longer a draft)',
+        expect.objectContaining({
+          requestId: REQUEST_ID,
+          relationshipId: REL_ID,
+          status: 'submitted',
+        })
+      );
+      expect(log.error).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not write installments once the milestone write is refused', async () => {
+    mockFindCurrent.mockResolvedValue({ id: PROPOSAL_ID });
+    mockSetMilestones.mockRejectedValue(new ProposalNotDraftError('submitted'));
+
+    await saveProposalDraftAction(VALID_INPUT);
+
+    expect(mockSetInstallments).not.toHaveBeenCalled();
+  });
+
   // ── The track ended under the autosave (BAL-540 fix round / Qodo #10) ─────────────
   // `createDraft` now refuses a declined relationship / closed request. The action must
   // treat that as expected-stale — WARN + the existing stale copy — not as a server fault.

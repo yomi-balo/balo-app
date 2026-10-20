@@ -12,7 +12,9 @@ import { plainTextLength } from '@/components/balo/rich-text/plain-text';
  * Mirrors the composer's `summaryReadiness`:
  *  - overview non-empty (post-sanitise);
  *  - ≥1 milestone, every milestone titled;
- *  - Fixed → installments sum to 100 (≥1) AND every milestone has a value;
+ *  - Fixed → price > 0, installments sum to 100 (≥1), AND milestone amounts are
+ *    all-or-none: either every milestone is unvalued, or every milestone has a
+ *    positive value and the values add up to the price;
  *  - T&M → deposit + rate present AND every milestone has an effort estimate
  *    (mirrors the `tm_missing_effort` server guard; installments not required).
  *
@@ -35,6 +37,18 @@ export interface ReadinessInstallment {
   pct: number;
 }
 
+/** Amounts are optional on a Fixed proposal, but all-or-none and summing to the price. */
+function milestoneAmountsAddUp(milestones: ReadinessMilestone[], priceCents: number): boolean {
+  const valued = milestones.flatMap((m) => (m.valueCents === null ? [] : [m.valueCents]));
+  if (valued.length === 0) {
+    return true;
+  }
+  if (valued.length !== milestones.length || valued.some((v) => v <= 0)) {
+    return false;
+  }
+  return valued.reduce((sum, v) => sum + v, 0) === priceCents;
+}
+
 export function validateProposalReadiness(input: {
   overview: string;
   pricingMethod: 'fixed' | 'tm';
@@ -42,6 +56,7 @@ export function validateProposalReadiness(input: {
   installments: ReadinessInstallment[];
   depositCents: number | null;
   rateCents: number | null;
+  priceCents: number;
 }): ReadinessResult {
   if (plainTextLength(input.overview) === 0) {
     return { ready: false, error: 'Add an overview before submitting.' };
@@ -54,11 +69,14 @@ export function validateProposalReadiness(input: {
   }
 
   if (input.pricingMethod === 'fixed') {
+    if (input.priceCents <= 0) {
+      return { ready: false, error: 'Set your project price before submitting.' };
+    }
     if (input.installments.length === 0 || !installmentsSumTo100(input.installments)) {
       return { ready: false, error: 'Payment installments must total 100%.' };
     }
-    if (input.milestones.some((m) => m.valueCents === null)) {
-      return { ready: false, error: 'Every milestone needs a value.' };
+    if (!milestoneAmountsAddUp(input.milestones, input.priceCents)) {
+      return { ready: false, error: 'Milestone amounts must add up to your project price.' };
     }
     return { ready: true };
   }

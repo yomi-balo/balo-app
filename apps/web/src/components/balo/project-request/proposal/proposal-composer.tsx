@@ -1,36 +1,34 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, RotateCcw } from 'lucide-react';
-import { sumEstimatedMinutes } from '@balo/shared/pricing';
-import { cn } from '@/lib/utils';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+import { MessageSquare, Paperclip } from 'lucide-react';
+import { toast } from 'sonner';
+import { Textarea } from '@/components/ui/textarea';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
-import { formatWholeCurrency } from '@/lib/utils/currency';
 import { saveProposalDraftAction } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type { ResubmitProposalInput } from '@/app/(dashboard)/projects/[requestId]/_actions/resubmit-proposal';
-import { ComposerTabStrip, type ComposerTabId } from './composer-tab-strip';
-import { OverviewTab } from './overview-tab';
-import { MilestonesTab } from './milestones-tab';
-import { PaymentTermsTab } from './payment-terms-tab';
-import { AttachmentsTab } from './attachments-tab';
-import { ProposalSummaryCard, type SaveStatus } from './proposal-summary-card';
-import { SubmitProposalDialog } from './submit-proposal-dialog';
+import { ChangeRequestNote, CHANGE_SECTION_NOUN, asChangeSection } from './change-request-note';
+import { ComposerBriefCard } from './composer-brief-card';
+import { jumpToField } from './composer-jump';
+import { ComposerMobileBar } from './composer-mobile-bar';
+import { ComposerPropertyBar } from './composer-property-bar';
+import { ComposerSection } from './composer-section';
+import { OverviewSection } from './overview-section';
+import { MilestonesSection } from './milestones-section';
+import { PricingSection } from './pricing-section';
+import { AttachmentsSection } from './attachments-section';
+import { useProposalDocumentUpload } from './proposal-document-uploader';
+import { ProposalSummaryCard } from './proposal-summary-card';
+import { ProposalPreview } from './proposal-preview';
+import { ProposalSent } from './proposal-sent';
+import { useSendProposal } from './use-send-proposal';
+import { usePageFileDrop } from './use-page-file-drop';
+import { draftToReviewDoc } from './proposal-draft-preview';
+import type { ProposalExpertIdentity } from './proposal-review-types';
 import {
+  COMPOSER_TARGET,
   computeTotalCents,
-  installmentsSum,
-  nextDraftKey,
   seedInstallments,
   summaryReadiness,
   toSavePayload,
@@ -39,24 +37,38 @@ import {
   type ProposalInstallmentDraft,
   type ProposalMilestoneDraft,
   type ProposalPricingMethod,
+  type ReadinessIssue,
 } from './proposal-composer-state';
 
 /**
  * The client's change request (A6.4 / BAL-290) — present ONLY in revise mode. Its
  * presence switches the composer to resubmit: autosave is disabled (local-only
- * edits until the atomic resubmit), the nudge + pinned warning card render, and
- * the submit CTA becomes "Resubmit as v{n}".
+ * edits until the atomic resubmit), the change note renders beside its section, and
+ * Send becomes "Resend".
  */
 interface ComposerChangeRequest {
   note: string;
-  /** The DB `proposalChangeSectionEnum` value (`general` → no pill). */
+  /** The DB `proposalChangeSectionEnum` value (`general` → the whole proposal). */
   section: string;
 }
 
-interface ProposalComposerProps {
+export interface ProposalComposerProps {
   requestId: string;
   relationshipId: string;
   clientFirstName: string;
+  /** The client's full name, for attribution ("{clientName} @ {companyName}"). */
+  clientName: string;
+  /** The client company this proposal is for. */
+  companyName: string;
+  requestTitle: string;
+  /** One-line plain-text summary of the request, shown on the collapsed brief card. */
+  requestSummary: string;
+  /** The full brief, rendered on the server through the sanitised rich-text path. */
+  requestDescription: React.ReactNode;
+  /** The page header (back link, title, version chip), shown only while editing. */
+  header: React.ReactNode;
+  /** The expert as the client sees them, for the preview document. */
+  expert: ProposalExpertIdentity;
   /** Fully-hydrated initial snapshot from the server loader (never fetches here). */
   initialState: ProposalDraftState;
   /** Revise mode (A6.4 / BAL-290): the client's change request to address. */
@@ -69,43 +81,100 @@ interface ProposalComposerProps {
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
-/** Friendly section labels for the pinned changes-card pill (mirrors ChangesModal). */
-const SECTION_LABELS: Record<string, string> = {
-  milestones: 'Milestones / deliverables',
-  pricing: 'Pricing',
-  payment_terms: 'Payment terms',
-  timeline: 'Timeline',
+type ComposerMode = 'edit' | 'preview' | 'sent';
+type JumpSource = 'rail' | 'cta' | 'mobile_bar' | 'shortcut';
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+const SAVE_LABEL = {
+  saving: 'Saving…',
+  saved: 'Saved as draft',
+  error: "Couldn't save draft",
+} as const;
+
+const REVISE_NOTE = 'Not saved until you resend';
+
+/** The outcome of one save round: whether it landed and the draft id it resolved to. */
+interface SaveOutcome {
+  ok: boolean;
+  proposalId: string | null;
+}
+
+const METHOD_TOAST_ID = 'proposal-method-switch';
+const MILESTONE_PRICING_TOAST_ID = 'proposal-milestone-pricing';
+const milestoneRemovedToastId = (key: string): string => `proposal-milestone-removed-${key}`;
+
+const METHOD_SWITCH_TOAST: Record<ProposalPricingMethod, string> = {
+  tm: 'Switched to time and materials. Your fixed amounts come back if you switch again.',
+  fixed: 'Switched to fixed price. Your hour estimates come back if you switch again.',
 };
 
+function toastWithUndo(message: string, onUndo: () => void, id: string): void {
+  toast(message, { id, action: { label: 'Undo', onClick: onUndo } });
+}
+
+function milestoneHasContent(milestone: ProposalMilestoneDraft): boolean {
+  return (
+    milestone.title.trim().length > 0 ||
+    milestone.descriptionHtml.trim().length > 0 ||
+    (milestone.valueCents ?? 0) > 0
+  );
+}
+
+interface NotedSectionProps {
+  /** The change note pinned above the section, when this section is the one it is about. */
+  note: React.ReactNode;
+  children: React.ReactNode;
+}
+
+/** A section with its change note above it; without a note it renders the section untouched. */
+function NotedSection({ note, children }: Readonly<NotedSectionProps>): React.JSX.Element {
+  if (note === null) return <>{children}</>;
+  return (
+    <div className="pt-11 [&>section]:pt-0">
+      {note}
+      {children}
+    </div>
+  );
+}
+
 /**
- * The expert proposal composer (A6.2 / BAL-288). Owns the single
+ * The expert proposal composer (A6.2 / BAL-288, reshaped by BAL-610). One page in a
+ * fixed order — property bar, brief, overview, milestones, pricing, exclusions,
+ * attachments — beside a jump-to checklist rail. It owns the single
  * `ProposalDraftState`, a debounced best-effort autosave (race-guarded via a
- * monotonic `saveSeq`; no concurrent saves — coalesces a dirty-during-save into
- * one trailing save), tab selection, the mobile summary sheet, and the submit
- * dialog. The 4 tabs receive slice setters — no per-tab local form state, so the
- * summary card and cross-tab dependencies stay coherent.
+ * monotonic `saveSeq`; no concurrent saves — coalesces a dirty-during-save into one
+ * trailing save), and a `mode` machine: `edit` → `preview` → `sent`. A successful
+ * send routes to `?sent=` so the page serves the confirmation; the local `sent` mode is
+ * the fallback while that navigation lands. The edit tree stays mounted (hidden) during
+ * `preview`, so expanded rows and the scroll position survive "Back to editing".
  */
 export function ProposalComposer({
   requestId,
   relationshipId,
   clientFirstName,
+  clientName,
+  companyName,
+  requestTitle,
+  requestSummary,
+  requestDescription,
+  header,
+  expert,
   initialState,
   changeRequest,
   fromProposalId,
   currentVersion,
 }: Readonly<ProposalComposerProps>): React.JSX.Element {
   const [state, setState] = useState<ProposalDraftState>(initialState);
-  const [activeTab, setActiveTab] = useState<ComposerTabId>('overview');
+  const [mode, setMode] = useState<ComposerMode>('edit');
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [submitOpen, setSubmitOpen] = useState(false);
-  // Fixed→T&M one-time confirm (BAL-294): switching to T&M makes the total derived,
-  // so a typed Fixed price stops binding — confirm before discarding it.
-  const [switchConfirmOpen, setSwitchConfirmOpen] = useState(false);
+  const [nudgeKey, setNudgeKey] = useState(0);
+  const [addressed, setAddressed] = useState(false);
+  const [sentVersion, setSentVersion] = useState(1);
+  const editScrollYRef = useRef(0);
+  const removedToastIdsRef = useRef(new Set<string>());
 
   // Revise mode (A6.4 / BAL-290): a change request switches the composer to a
-  // local-only resubmit — autosave is disabled, the submit CTA becomes "Resubmit
-  // as v{n}", and the confirm dialog calls `resubmitProposalAction`.
+  // local-only resubmit — autosave is disabled and Send calls `resubmitProposalAction`.
   const reviseMode = changeRequest !== undefined;
   const nextVersion = (currentVersion ?? 1) + 1;
 
@@ -114,15 +183,14 @@ export function ProposalComposer({
   stateRef.current = state;
   const proposalIdRef = useRef<string | null>(initialState.proposalId);
   const saveSeqRef = useRef(0);
-  const inFlightRef = useRef(false);
+  const savePromiseRef = useRef<Promise<SaveOutcome> | null>(null);
+  const savedKeyRef = useRef<string | null>(null);
   const dirtyDuringSaveRef = useRef(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Skip the autosave the very first render fires (hydrated state isn't dirty).
   const hydratedRef = useRef(false);
 
   const totalCents = useMemo(() => computeTotalCents(state), [state]);
-  const totalEstimatedMinutes = useMemo(() => sumEstimatedMinutes(state.milestones), [state]);
-  const installmentSum = useMemo(() => installmentsSum(state), [state]);
   const readiness = useMemo(() => summaryReadiness(state), [state]);
 
   const termsDocuments = useMemo(
@@ -134,49 +202,58 @@ export function ProposalComposer({
     [state.documents]
   );
 
-  /**
-   * Run one autosave against the LATEST state. Race-guarded: a stale response
-   * (seq < latest) never clobbers a newer proposalId. Coalesces concurrent
-   * requests — only one save in flight; a dirty-during-save fires one trailing.
-   */
-  const runSave = useCallback(async (): Promise<string | null> => {
-    if (inFlightRef.current) {
-      dirtyDuringSaveRef.current = true;
-      return proposalIdRef.current;
-    }
-    inFlightRef.current = true;
+  /** One save round against the LATEST state; never throws. */
+  const saveOnce = useCallback(async (): Promise<SaveOutcome> => {
     saveSeqRef.current += 1;
     const seq = saveSeqRef.current;
     setSaveStatus('saving');
-
-    let resolvedId = proposalIdRef.current;
     try {
       const payload = toSavePayload(stateRef.current, requestId, relationshipId);
+      const key = JSON.stringify(payload);
       const result = await saveProposalDraftAction(payload);
-      if (seq === saveSeqRef.current) {
-        if (result.success) {
-          resolvedId = result.proposalId;
-          proposalIdRef.current = result.proposalId;
-          if (stateRef.current.proposalId === null) {
-            setState((prev) => ({ ...prev, proposalId: result.proposalId }));
-          }
-          setSaveStatus('saved');
-        } else {
-          setSaveStatus('error');
-        }
+      if (!result.success) {
+        if (seq === saveSeqRef.current) setSaveStatus('error');
+        return { ok: false, proposalId: proposalIdRef.current };
       }
+      proposalIdRef.current = result.proposalId;
+      savedKeyRef.current = key;
+      if (seq === saveSeqRef.current) {
+        if (stateRef.current.proposalId === null) {
+          setState((prev) => ({ ...prev, proposalId: result.proposalId }));
+        }
+        setSaveStatus('saved');
+      }
+      return { ok: true, proposalId: result.proposalId };
     } catch {
       if (seq === saveSeqRef.current) setSaveStatus('error');
-    } finally {
-      inFlightRef.current = false;
+      return { ok: false, proposalId: proposalIdRef.current };
     }
-
-    if (dirtyDuringSaveRef.current) {
-      dirtyDuringSaveRef.current = false;
-      return runSave();
-    }
-    return resolvedId;
   }, [requestId, relationshipId]);
+
+  /**
+   * Run an autosave against the LATEST state. Only one save is in flight: a caller that
+   * arrives mid-save gets that save's promise, and flags it to run one trailing round
+   * so the newest state lands before the promise settles.
+   */
+  const runSave = useCallback((): Promise<SaveOutcome> => {
+    const pending = savePromiseRef.current;
+    if (pending !== null) {
+      dirtyDuringSaveRef.current = true;
+      return pending;
+    }
+    const run = (async (): Promise<SaveOutcome> => {
+      let outcome: SaveOutcome;
+      do {
+        dirtyDuringSaveRef.current = false;
+        outcome = await saveOnce();
+      } while (dirtyDuringSaveRef.current);
+      return outcome;
+    })().finally(() => {
+      savePromiseRef.current = null;
+    });
+    savePromiseRef.current = run;
+    return run;
+  }, [saveOnce]);
 
   // Debounced autosave on every state change (skips the initial hydration render).
   // DISABLED entirely in revise mode (A6.4): revise edits are local-only until the
@@ -209,6 +286,7 @@ export function ProposalComposer({
     state.cadence,
     state.milestones,
     state.installments,
+    state.milestonePricingEnabled,
     runSave,
   ]);
 
@@ -218,24 +296,40 @@ export function ProposalComposer({
    */
   const ensureProposalId = useCallback(async (): Promise<string | null> => {
     if (proposalIdRef.current !== null) return proposalIdRef.current;
-    return runSave();
+    return (await runSave()).proposalId;
   }, [runSave]);
 
-  // Flush a final save before submit (Q2) — returns the id the server will submit.
+  /**
+   * Flush a final save before submit (Q2) and return the id the server will submit, or
+   * null when the save failed so the send aborts. A save already in flight is awaited
+   * first; another runs only if the draft changed since that one began.
+   */
   const flushBeforeSubmit = useCallback(async (): Promise<string | null> => {
     if (debounceRef.current !== null) clearTimeout(debounceRef.current);
-    return runSave();
-  }, [runSave]);
+    const pending = savePromiseRef.current;
+    if (pending !== null) {
+      const settled = await pending;
+      if (!settled.ok) return null;
+      const latestKey = JSON.stringify(toSavePayload(stateRef.current, requestId, relationshipId));
+      if (latestKey === savedKeyRef.current) return settled.proposalId;
+    }
+    const outcome = await runSave();
+    return outcome.ok ? outcome.proposalId : null;
+  }, [runSave, requestId, relationshipId]);
 
-  // ── Slice setters threaded to the tabs (no per-tab form state) ──
+  const handleRetrySave = useCallback((): void => {
+    flushBeforeSubmit();
+  }, [flushBeforeSubmit]);
+
+  // ── Slice setters threaded to the sections (no per-section form state) ──
   const setOverview = useCallback((overview: string): void => {
     setState((prev) => ({ ...prev, overview }));
   }, []);
 
   /**
-   * Fire `PROPOSAL_PRICING_METHOD_SWITCHED` for a committed method change. Uses the
-   * proposalId ref (may be null on a never-saved draft → empty string for the typed
-   * property). `had_typed_price` reflects whether a typed Fixed price existed.
+   * Fire `PROPOSAL_PRICING_METHOD_SWITCHED` for a method change. Uses the proposalId
+   * ref (may be null on a never-saved draft → empty string for the typed property).
+   * `had_typed_price` reflects whether a typed Fixed price existed at switch time.
    */
   const trackMethodSwitch = useCallback(
     (from: ProposalPricingMethod, to: ProposalPricingMethod, hadTypedPrice: boolean): void => {
@@ -250,61 +344,57 @@ export function ProposalComposer({
   );
 
   /**
-   * Apply a committed switch INTO T&M (BAL-294). The typed `fixedPriceCents` is
-   * RETAINED in state (ignored under T&M by `computeTotalCents`, restored on a
-   * switch back) — mirrors the "keep valueCents, just hide" convention.
+   * Switch the pricing method immediately, then offer Undo (BAL-610; the BAL-294
+   * confirm dialog is gone). The typed `fixedPriceCents`, per-milestone values and
+   * hour estimates are all kept in state, so a switch back restores them. T&M → Fixed
+   * pre-fills a blank price with the last derived T&M total (only when above 0) and
+   * seeds the payment schedule when it is empty. Undo is a no-op unless the method is
+   * still the one the switch chose, and reverts only the fields still holding what the
+   * switch set, so later edits survive it.
    */
-  const applyTmSwitch = useCallback(
-    (hadTypedPrice: boolean): void => {
-      setState((prev) => ({ ...prev, pricingMethod: 'tm' }));
-      trackMethodSwitch('fixed', 'tm', hadTypedPrice);
+  const setPricingMethod = useCallback(
+    (next: ProposalPricingMethod): void => {
+      const prev = stateRef.current;
+      const from = prev.pricingMethod;
+      if (next === from) return;
+
+      const before = { fixedPriceCents: prev.fixedPriceCents, installments: prev.installments };
+      const derivedTotal = computeTotalCents(prev);
+      const hadTypedPrice =
+        from === 'fixed' && prev.fixedPriceCents !== null && prev.fixedPriceCents !== 0;
+      const applied =
+        next === 'tm'
+          ? before
+          : {
+              fixedPriceCents: prev.fixedPriceCents ?? (derivedTotal > 0 ? derivedTotal : null),
+              installments: prev.installments.length === 0 ? seedInstallments() : prev.installments,
+            };
+
+      setState((current) => ({ ...current, pricingMethod: next, ...applied }));
+      trackMethodSwitch(from, next, hadTypedPrice);
+      toastWithUndo(
+        METHOD_SWITCH_TOAST[next],
+        () => {
+          if (stateRef.current.pricingMethod !== next) return;
+          setState((current) => ({
+            ...current,
+            pricingMethod: from,
+            fixedPriceCents:
+              current.fixedPriceCents === applied.fixedPriceCents
+                ? before.fixedPriceCents
+                : current.fixedPriceCents,
+            installments:
+              current.installments === applied.installments
+                ? before.installments
+                : current.installments,
+          }));
+          trackMethodSwitch(next, from, hadTypedPrice);
+        },
+        METHOD_TOAST_ID
+      );
     },
     [trackMethodSwitch]
   );
-
-  /**
-   * Pricing-method change interceptor (the dumb OverviewTab calls this). Asymmetric
-   * (BAL-294):
-   *  - T&M → Fixed: no dialog. Pre-fill the now-unlocked `fixedPriceCents` with the
-   *    LAST derived T&M total when it hasn't been typed yet, so the expert sees a
-   *    sensible starting figure instead of a blank field.
-   *  - Fixed → T&M: if a non-zero typed price exists, open the ONE-TIME confirm
-   *    dialog (the typed total stops binding once T&M derives it); else switch
-   *    immediately. The confirmed path runs through `confirmTmSwitch`.
-   */
-  const setPricingMethod = useCallback(
-    (pricingMethod: ProposalPricingMethod): void => {
-      const prev = stateRef.current;
-      if (pricingMethod === prev.pricingMethod) return;
-
-      if (pricingMethod === 'fixed') {
-        // T&M → Fixed: pre-fill the typed price with the last derived total if blank.
-        setState((current) => ({
-          ...current,
-          pricingMethod: 'fixed',
-          fixedPriceCents:
-            current.fixedPriceCents === null ? computeTotalCents(prev) : current.fixedPriceCents,
-        }));
-        trackMethodSwitch('tm', 'fixed', false);
-        return;
-      }
-
-      // Fixed → T&M: confirm only when a non-zero typed price would be discarded.
-      if (prev.fixedPriceCents !== null && prev.fixedPriceCents !== 0) {
-        setSwitchConfirmOpen(true);
-        return;
-      }
-      applyTmSwitch(false);
-    },
-    [trackMethodSwitch, applyTmSwitch]
-  );
-
-  // Confirmed Fixed→T&M (the dialog's primary action). Switches + fires the event
-  // with `had_typed_price: true` (the dialog only opens when a typed price existed).
-  const confirmTmSwitch = useCallback((): void => {
-    setSwitchConfirmOpen(false);
-    applyTmSwitch(true);
-  }, [applyTmSwitch]);
 
   const setFixedPrice = useCallback((fixedPriceCents: number | null): void => {
     setState((prev) => ({ ...prev, fixedPriceCents }));
@@ -314,42 +404,108 @@ export function ProposalComposer({
     setState((prev) => ({ ...prev, timeframeWeeks }));
   }, []);
 
-  const setExclusions = useCallback((exclusions: string): void => {
-    setState((prev) => ({ ...prev, exclusions }));
-  }, []);
+  const handleExclusionsChange = useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
+      const exclusions = event.target.value;
+      setState((prev) => ({ ...prev, exclusions }));
+    },
+    []
+  );
 
-  const setMilestones = useCallback((milestones: ProposalMilestoneDraft[]): void => {
-    setState((prev) => ({ ...prev, milestones }));
-  }, []);
-
-  const addMilestone = useCallback((): void => {
-    setState((prev) => ({
-      ...prev,
-      milestones: [
-        ...prev.milestones,
-        {
-          key: nextDraftKey(),
-          title: '',
-          descriptionHtml: '',
-          acceptanceCriteria: '',
-          valueCents: prev.pricingMethod === 'fixed' ? 0 : null,
-          // Seed effort to 0 under T&M (parallel to the Fixed value seed) so a fresh
-          // T&M milestone is coherent (has effort) rather than blocking readiness.
-          estimatedMinutes: prev.pricingMethod === 'tm' ? 0 : null,
+  /**
+   * Removing one milestone that holds content offers Undo, which puts it back at its
+   * index (skipped if it is already back).
+   */
+  const offerMilestoneRestore = useCallback(
+    (removed: ProposalMilestoneDraft, index: number): void => {
+      const toastId = milestoneRemovedToastId(removed.key);
+      removedToastIdsRef.current.add(toastId);
+      toastWithUndo(
+        'Milestone removed.',
+        () => {
+          setState((prev) => {
+            if (prev.milestones.some((m) => m.key === removed.key)) return prev;
+            const at = Math.min(index, prev.milestones.length);
+            return {
+              ...prev,
+              milestones: [...prev.milestones.slice(0, at), removed, ...prev.milestones.slice(at)],
+            };
+          });
         },
-      ],
-    }));
+        toastId
+      );
+    },
+    []
+  );
+
+  const setMilestones = useCallback(
+    (milestones: ProposalMilestoneDraft[]): void => {
+      const previous = stateRef.current.milestones;
+      setState((prev) => ({ ...prev, milestones }));
+      if (milestones.length !== previous.length - 1) return;
+      const keep = new Set(milestones.map((m) => m.key));
+      const index = previous.findIndex((m) => !keep.has(m.key));
+      const removed = previous[index];
+      if (removed !== undefined && milestoneHasContent(removed)) {
+        offerMilestoneRestore(removed, index);
+      }
+    },
+    [offerMilestoneRestore]
+  );
+
+  const trackMilestonePricingToggled = useCallback((enabled: boolean): void => {
+    track(PROJECT_EVENTS.PROPOSAL_MILESTONE_PRICING_TOGGLED, {
+      proposal_id: proposalIdRef.current ?? '',
+      enabled,
+      milestone_count: stateRef.current.milestones.length,
+    });
   }, []);
+
+  /**
+   * The "Price each milestone" switch. Turning it OFF nulls every amount (the project
+   * price stays) and, when any amount was set, offers Undo to restore the amounts by
+   * milestone key (rows added since keep their own amount) and the switch.
+   */
+  const toggleMilestonePricing = useCallback(
+    (enabled: boolean): void => {
+      trackMilestonePricingToggled(enabled);
+      if (enabled) {
+        toast.dismiss(MILESTONE_PRICING_TOAST_ID);
+        setState((prev) => ({ ...prev, milestonePricingEnabled: true }));
+        return;
+      }
+
+      const amountsByKey = new Map(
+        stateRef.current.milestones.map((m) => [m.key, m.valueCents] as const)
+      );
+      const hadAmounts = [...amountsByKey.values()].some((value) => (value ?? 0) > 0);
+      setState((prev) => ({
+        ...prev,
+        milestonePricingEnabled: false,
+        milestones: prev.milestones.map((m) => ({ ...m, valueCents: null })),
+      }));
+      if (!hadAmounts) return;
+      toastWithUndo(
+        'Milestone amounts removed. Your project price stays the same.',
+        () => {
+          setState((prev) => ({
+            ...prev,
+            milestonePricingEnabled: true,
+            milestones: prev.milestones.map((m) => ({
+              ...m,
+              valueCents: amountsByKey.get(m.key) ?? m.valueCents,
+            })),
+          }));
+          trackMilestonePricingToggled(true);
+        },
+        MILESTONE_PRICING_TOAST_ID
+      );
+    },
+    [trackMilestonePricingToggled]
+  );
 
   const setInstallments = useCallback((installments: ProposalInstallmentDraft[]): void => {
     setState((prev) => ({ ...prev, installments }));
-  }, []);
-
-  const addInstallment = useCallback((): void => {
-    setState((prev) => ({
-      ...prev,
-      installments: [...prev.installments, { key: nextDraftKey(), label: '', pct: 0 }],
-    }));
   }, []);
 
   const setDeposit = useCallback((depositCents: number | null): void => {
@@ -382,13 +538,136 @@ export function ProposalComposer({
     }));
   }, []);
 
-  const openSubmit = useCallback((): void => {
-    setSheetOpen(false);
-    setSubmitOpen(true);
+  // One upload pipeline per document kind, shared by the page-wide drop, the
+  // Attachments section and the Terms popover.
+  const refUpload = useProposalDocumentUpload({
+    requestId,
+    relationshipId,
+    kind: 'ref',
+    documents: refDocuments,
+    ensureProposalId,
+    onAdded: addDocument,
+    onRemoved: removeDocument,
+  });
+  const termsUpload = useProposalDocumentUpload({
+    requestId,
+    relationshipId,
+    kind: 'terms',
+    single: true,
+    documents: termsDocuments,
+    ensureProposalId,
+    onAdded: addDocument,
+    onRemoved: removeDocument,
+  });
+  const { dragActive } = usePageFileDrop({
+    enabled: mode === 'edit',
+    onFiles: refUpload.uploadFiles,
+  });
+
+  // ── Jump + preview ──
+  const softIssues = useMemo<ReadinessIssue[]>(() => {
+    if (changeRequest === undefined || addressed) return [];
+    const noun = CHANGE_SECTION_NOUN[asChangeSection(changeRequest.section)];
+    return [
+      {
+        id: 'change_request',
+        label: `${clientFirstName}'s note on ${noun} isn't marked as addressed`,
+        targetId: COMPOSER_TARGET.changeNote,
+      },
+    ];
+  }, [changeRequest, addressed, clientFirstName]);
+
+  const handleJump = useCallback((issue: ReadinessIssue, source: JumpSource): void => {
+    jumpToField(issue.targetId);
+    track(PROJECT_EVENTS.PROPOSAL_CHECKLIST_JUMPED, {
+      proposal_id: proposalIdRef.current ?? '',
+      issue_id: issue.id,
+      source,
+    });
   }, []);
 
-  // Revise mode: build the FULL resubmit payload from the latest state at confirm
-  // time (same body as the autosave/submit, extended with `fromProposalId`).
+  /**
+   * "Preview and send": with readiness issues left, jump to the first and replay the
+   * checklist nudge; otherwise open the full-page preview. Reads the latest state from
+   * the ref so the keyboard shortcut and both CTAs share one stable callback.
+   */
+  const goPreview = useCallback(
+    (source: JumpSource): void => {
+      const latest = stateRef.current;
+      const [firstIssue] = summaryReadiness(latest).issues;
+      if (firstIssue !== undefined) {
+        handleJump(firstIssue, source);
+        setNudgeKey((key) => key + 1);
+        return;
+      }
+      track(PROJECT_EVENTS.PROPOSAL_PREVIEW_OPENED, {
+        proposal_id: proposalIdRef.current ?? '',
+        pricing_method: latest.pricingMethod,
+        is_resubmit: reviseMode,
+        milestone_count: latest.milestones.length,
+        milestones_priced: latest.pricingMethod === 'fixed' && latest.milestonePricingEnabled,
+      });
+      editScrollYRef.current = globalThis.scrollY;
+      setMode('preview');
+    },
+    [handleJump, reviseMode]
+  );
+
+  const handleRailJump = useCallback(
+    (issue: ReadinessIssue): void => handleJump(issue, 'rail'),
+    [handleJump]
+  );
+  const handleRailPreview = useCallback((): void => goPreview('cta'), [goPreview]);
+  const handleMobilePreview = useCallback((): void => goPreview('mobile_bar'), [goPreview]);
+  const handleMobileJumpFirst = useCallback((): void => {
+    const [firstIssue] = summaryReadiness(stateRef.current).issues;
+    if (firstIssue !== undefined) handleJump(firstIssue, 'mobile_bar');
+  }, [handleJump]);
+  const handleBackToEdit = useCallback((): void => setMode('edit'), []);
+  const handleGoToNote = useCallback((): void => {
+    jumpToField(COMPOSER_TARGET.changeNote);
+  }, []);
+  const toggleAddressed = useCallback((): void => setAddressed((current) => !current), []);
+
+  // ⌘/Ctrl+Enter previews (edit mode only; never mid-IME composition). Registered in
+  // the capture phase and stopped there so an editor never sees the key and inserts a
+  // hard break.
+  useEffect(() => {
+    if (mode !== 'edit') return;
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Enter' || event.isComposing) return;
+      if (!event.metaKey && !event.ctrlKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      goPreview('shortcut');
+    };
+    globalThis.addEventListener('keydown', handleKeyDown, true);
+    return () => globalThis.removeEventListener('keydown', handleKeyDown, true);
+  }, [mode, goPreview]);
+
+  // Each mode is its own screen: start it at the top, except coming back to the edit
+  // tree, which returns to where the expert left it.
+  const previousModeRef = useRef(mode);
+  useEffect(() => {
+    if (previousModeRef.current === mode) return;
+    previousModeRef.current = mode;
+    globalThis.scrollTo(0, mode === 'edit' ? editScrollYRef.current : 0);
+  }, [mode]);
+
+  // An Undo toast edits the draft, so none outlives the edit screen.
+  const dismissUndoToasts = useCallback((): void => {
+    toast.dismiss(METHOD_TOAST_ID);
+    toast.dismiss(MILESTONE_PRICING_TOAST_ID);
+    for (const id of removedToastIdsRef.current) toast.dismiss(id);
+    removedToastIdsRef.current.clear();
+  }, []);
+  useEffect(() => {
+    if (mode !== 'edit') dismissUndoToasts();
+  }, [mode, dismissUndoToasts]);
+  useEffect(() => dismissUndoToasts, [dismissUndoToasts]);
+
+  // Revise mode: build the FULL resubmit payload from the latest state at send time
+  // (same body as the autosave/submit, extended with `fromProposalId`).
   const buildResubmitPayload = useCallback((): ResubmitProposalInput => {
     return {
       ...toSavePayload(stateRef.current, requestId, relationshipId),
@@ -396,222 +675,240 @@ export function ProposalComposer({
     };
   }, [requestId, relationshipId, fromProposalId]);
 
-  // If a fresh draft ever loses its seed (shouldn't happen), keep one installment.
-  const ensuredInstallments =
-    state.installments.length === 0 ? seedInstallments() : state.installments;
+  const handleSent = useCallback((version: number): void => {
+    setSentVersion(version);
+    setMode('sent');
+  }, []);
 
-  const tabIssues: Partial<Record<ComposerTabId, boolean>> = useMemo(() => {
-    const overviewIssue = readiness.issues.includes('Add an overview');
-    const milestoneIssue =
-      readiness.issues.includes('Add at least one milestone') ||
-      readiness.issues.includes('A milestone is missing a title') ||
-      readiness.issues.includes('A milestone is missing a value') ||
-      readiness.issues.includes('A milestone is missing an effort estimate');
-    const paymentIssue = readiness.issues.some(
-      (i) => i.startsWith('Payment terms') || i === 'Add a deposit' || i === 'Add an hourly rate'
-    );
-    return {
-      overview: overviewIssue,
-      milestones: milestoneIssue,
-      payment: paymentIssue,
-    };
-  }, [readiness.issues]);
+  const { send, pending } = useSendProposal({
+    requestId,
+    relationshipId,
+    companyName,
+    onBeforeSubmit: flushBeforeSubmit,
+    resubmit: reviseMode ? { nextVersion, getPayload: buildResubmitPayload } : undefined,
+    onSent: handleSent,
+  });
 
-  const summaryCard = (
-    <ProposalSummaryCard
-      state={state}
-      totalCents={totalCents}
-      readiness={readiness}
-      clientFirstName={clientFirstName}
-      termsDocumentCount={termsDocuments.length}
-      saveStatus={saveStatus}
-      submitting={submitOpen}
-      onSubmit={openSubmit}
-      reviseMode={reviseMode}
-      nextVersion={nextVersion}
-    />
+  const previewDoc = useMemo(
+    () =>
+      mode === 'preview'
+        ? draftToReviewDoc(state, {
+            requestId,
+            relationshipId,
+            version: reviseMode ? nextVersion : 1,
+            expert,
+          })
+        : null,
+    [mode, state, requestId, relationshipId, reviseMode, nextVersion, expert]
   );
 
-  // The pinned section pill text — omitted for `general` (no specific area).
-  const sectionLabel = changeRequest ? SECTION_LABELS[changeRequest.section] : undefined;
-
-  return (
-    <div className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both grid grid-cols-1 items-start gap-5 duration-500 motion-reduce:animate-none lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
-      <div className="space-y-4">
-        {changeRequest !== undefined && (
-          <div className="space-y-3">
-            {/* Nudge banner — frames the revise + new-version expectation. */}
-            <div className="border-info/30 bg-info/10 rounded-2xl border p-4">
-              <p className="text-foreground flex items-center gap-2 text-sm font-semibold">
-                <RotateCcw className="text-info h-4 w-4" aria-hidden="true" />
-                Revise your proposal
-              </p>
-              <p className="text-muted-foreground mt-1 text-[13px] leading-relaxed">
-                {clientFirstName} requested changes. They&apos;ll see this as version {nextVersion}.
-              </p>
-            </div>
-
-            {/* Pinned warning changes-card — the client's note (+ section pill). */}
-            <div className="border-warning/30 bg-warning/10 rounded-2xl border p-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-warning text-xs font-semibold tracking-wide uppercase">
-                  {clientFirstName}&apos;s request
-                </p>
-                {sectionLabel !== undefined && (
-                  <span className="border-warning/40 text-warning rounded-full border px-2 py-0.5 text-[11px] font-medium">
-                    {sectionLabel}
-                  </span>
-                )}
-              </div>
-              <p className="text-foreground/90 mt-2 text-[13.5px] leading-relaxed whitespace-pre-wrap">
-                {changeRequest.note}
-              </p>
-            </div>
-          </div>
-        )}
-
-        <ComposerTabStrip active={activeTab} onChange={setActiveTab} issues={tabIssues} />
-
-        <div
-          key={activeTab}
-          role="tabpanel"
-          id={`composer-panel-${activeTab}`}
-          aria-labelledby={`composer-tab-${activeTab}`}
-          className="border-border bg-card animate-in fade-in fill-mode-both rounded-2xl border p-5 duration-300 motion-reduce:animate-none sm:p-6"
-        >
-          {activeTab === 'overview' && (
-            <OverviewTab
-              overview={state.overview}
-              onOverviewChange={setOverview}
-              pricingMethod={state.pricingMethod}
-              onPricingMethodChange={setPricingMethod}
-              timeframeWeeks={state.timeframeWeeks}
-              onTimeframeChange={setTimeframe}
-              exclusions={state.exclusions}
-              onExclusionsChange={setExclusions}
-            />
-          )}
-          {activeTab === 'milestones' && (
-            <MilestonesTab
-              milestones={state.milestones}
-              pricingMethod={state.pricingMethod}
-              onChange={setMilestones}
-              onAdd={addMilestone}
-            />
-          )}
-          {activeTab === 'payment' && (
-            <PaymentTermsTab
-              pricingMethod={state.pricingMethod}
-              totalCents={totalCents}
-              currency={state.currency}
-              fixedPriceCents={state.fixedPriceCents}
-              onFixedPriceChange={setFixedPrice}
-              totalEstimatedMinutes={totalEstimatedMinutes}
-              installments={ensuredInstallments}
-              installmentSum={installmentSum}
-              onInstallmentsChange={setInstallments}
-              onAddInstallment={addInstallment}
-              depositCents={state.depositCents}
-              onDepositChange={setDeposit}
-              rateCents={state.rateCents}
-              onRateChange={setRate}
-              cadence={state.cadence}
-              onCadenceChange={setCadence}
-              requestId={requestId}
-              relationshipId={relationshipId}
-              termsDocuments={termsDocuments}
-              ensureProposalId={ensureProposalId}
-              onDocumentAdded={addDocument}
-              onDocumentRemoved={removeDocument}
-            />
-          )}
-          {activeTab === 'attachments' && (
-            <AttachmentsTab
-              requestId={requestId}
-              relationshipId={relationshipId}
-              documents={refDocuments}
-              ensureProposalId={ensureProposalId}
-              onAdded={addDocument}
-              onRemoved={removeDocument}
-            />
-          )}
-        </div>
-
-        {/* Mobile: collapsed summary bar → bottom sheet. */}
+  // ── Render ──
+  // Only the two outcomes worth interrupting for are live: a failed save (assertive,
+  // with a next step) and a save that landed (polite, once per transition). "Saving…"
+  // and the revise note are plain text.
+  const statusNode = reviseMode ? (
+    <span className="text-muted-foreground text-[13px]">{REVISE_NOTE}</span>
+  ) : (
+    <span className="text-[13px]">
+      {saveStatus === 'saving' && (
+        <span className="text-muted-foreground">{SAVE_LABEL.saving}</span>
+      )}
+      <span role="status" className="text-muted-foreground">
+        {saveStatus === 'saved' ? SAVE_LABEL.saved : null}
+      </span>
+      <span role="alert" className="text-destructive">
+        {saveStatus === 'error' ? SAVE_LABEL.error : null}
+      </span>
+      {saveStatus === 'error' && (
         <button
           type="button"
-          onClick={() => setSheetOpen(true)}
-          className={cn(
-            'border-border bg-card focus-visible:ring-ring flex w-full items-center justify-between rounded-2xl border p-4 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none lg:hidden',
-            readiness.ready ? 'border-success/40' : 'border-warning/40'
-          )}
+          onClick={handleRetrySave}
+          className="text-primary focus-visible:ring-ring -my-2 ml-1 inline-flex min-h-11 items-center rounded px-2 font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
         >
-          <span className="min-w-0">
-            <span className="text-foreground block text-sm font-semibold">
-              {state.pricingMethod === 'fixed'
-                ? formatWholeCurrency(totalCents, state.currency)
-                : `~${formatWholeCurrency(totalCents, state.currency)}`}
-              {' · '}
-              {state.milestones.length} milestone{state.milestones.length === 1 ? '' : 's'}
-              {state.timeframeWeeks !== null && ` · ~${state.timeframeWeeks} wks`}
-            </span>
-            <span
-              className={cn(
-                'block text-[12px] font-medium',
-                readiness.ready ? 'text-success' : 'text-warning'
-              )}
-            >
-              {readiness.ready ? 'Ready to submit' : `${readiness.issues.length} to finish`}
-            </span>
-          </span>
-          <ChevronRight className="text-muted-foreground h-5 w-5 shrink-0" aria-hidden="true" />
+          Retry
         </button>
-      </div>
+      )}
+    </span>
+  );
 
-      {/* Desktop: sticky summary card. */}
-      <div className="hidden lg:sticky lg:top-6 lg:block">{summaryCard}</div>
+  const noteSection = changeRequest ? asChangeSection(changeRequest.section) : null;
+  const changeNote = changeRequest ? (
+    <ChangeRequestNote
+      section={changeRequest.section}
+      clientName={clientName}
+      company={noteSection === 'timeline' ? companyName : undefined}
+      note={changeRequest.note}
+      addressed={addressed}
+      onToggle={toggleAddressed}
+    />
+  ) : null;
+  const noteFor = (...sections: string[]): React.ReactNode =>
+    noteSection !== null && sections.includes(noteSection) ? changeNote : null;
 
-      {/* Mobile summary sheet. */}
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent
-          side="bottom"
-          aria-describedby={undefined}
-          className="max-h-[88vh] gap-0 overflow-y-auto rounded-t-2xl lg:hidden"
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none">
+      {mode !== 'sent' && (
+        <div hidden={mode !== 'edit'}>
+          {header}
+          <div className="grid grid-cols-1 items-start gap-y-8 pb-28 lg:grid-cols-[minmax(0,1fr)_18.75rem] lg:gap-x-14 lg:pb-0">
+            <div className="min-w-0">
+              <ComposerPropertyBar
+                pricingMethod={state.pricingMethod}
+                onPricingMethodChange={setPricingMethod}
+                timeframeWeeks={state.timeframeWeeks}
+                onTimeframeChange={setTimeframe}
+                termsDocuments={termsDocuments}
+                termsUpload={termsUpload}
+                trailing={mode === 'edit' ? statusNode : null}
+              />
+
+              {noteFor('timeline')}
+
+              {reviseMode && (
+                <div className="bg-info/10 mb-5 flex items-center justify-between gap-3 rounded-xl px-3.5 py-2.5 text-sm">
+                  <span className="text-foreground/80 flex items-center gap-2">
+                    <MessageSquare className="size-3.5 shrink-0" aria-hidden="true" />
+                    {noteSection === 'timeline'
+                      ? clientName
+                      : `${clientName} @ ${companyName}`}{' '}
+                    asked for one change.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleGoToNote}
+                    className="text-primary focus-visible:ring-ring inline-flex min-h-11 shrink-0 items-center rounded text-[13.5px] font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                  >
+                    Go to note
+                  </button>
+                </div>
+              )}
+
+              <ComposerBriefCard
+                clientFirstName={clientFirstName}
+                summary={requestSummary}
+                body={requestDescription}
+              />
+
+              <NotedSection note={noteFor('general')}>
+                <OverviewSection
+                  overview={state.overview}
+                  onOverviewChange={setOverview}
+                  companyName={companyName}
+                />
+              </NotedSection>
+
+              <NotedSection note={noteFor('milestones')}>
+                <MilestonesSection
+                  milestones={state.milestones}
+                  pricingMethod={state.pricingMethod}
+                  milestonePricingEnabled={state.milestonePricingEnabled}
+                  fixedPriceCents={state.fixedPriceCents}
+                  totalCents={totalCents}
+                  currency={state.currency}
+                  onChange={setMilestones}
+                  onToggleMilestonePricing={toggleMilestonePricing}
+                  onSetPrice={setFixedPrice}
+                />
+              </NotedSection>
+
+              <NotedSection note={noteFor('pricing', 'payment_terms')}>
+                <PricingSection
+                  state={state}
+                  totalCents={totalCents}
+                  companyName={companyName}
+                  onFixedPriceChange={setFixedPrice}
+                  onInstallmentsChange={setInstallments}
+                  onDepositChange={setDeposit}
+                  onRateChange={setRate}
+                  onCadenceChange={setCadence}
+                />
+              </NotedSection>
+
+              <ComposerSection
+                id="proposal-section-exclusions"
+                title="Not included"
+                optional
+                help="Anything explicitly out of scope, so there are no surprises later."
+              >
+                <Textarea
+                  id="proposal-exclusions"
+                  aria-label="What's not included"
+                  value={state.exclusions}
+                  onChange={handleExclusionsChange}
+                  rows={3}
+                  placeholder="Migrating historical quotes from your spreadsheets"
+                />
+              </ComposerSection>
+
+              <AttachmentsSection documents={refDocuments} upload={refUpload} />
+            </div>
+
+            <aside aria-label="Proposal summary" className="hidden lg:sticky lg:top-6 lg:block">
+              <ProposalSummaryCard
+                state={state}
+                totalCents={totalCents}
+                readiness={readiness}
+                softIssues={softIssues}
+                termsAttached={termsDocuments.length > 0}
+                reviseMode={reviseMode}
+                nudgeKey={nudgeKey}
+                onJump={handleRailJump}
+                onPreview={handleRailPreview}
+              />
+            </aside>
+          </div>
+
+          <ComposerMobileBar
+            state={state}
+            totalCents={totalCents}
+            readiness={readiness}
+            reviseMode={reviseMode}
+            onJumpFirst={handleMobileJumpFirst}
+            onPreview={handleMobilePreview}
+          />
+        </div>
+      )}
+
+      {mode === 'preview' && previewDoc !== null && (
+        <div className="mx-auto max-w-3xl">
+          {reviseMode && (
+            <p className="text-muted-foreground mb-3 text-right text-[13px]">{REVISE_NOTE}</p>
+          )}
+          <ProposalPreview
+            doc={previewDoc}
+            requestTitle={requestTitle}
+            companyName={companyName}
+            reviseMode={reviseMode}
+            pending={pending}
+            onBack={handleBackToEdit}
+            onSend={send}
+          />
+        </div>
+      )}
+
+      {mode === 'sent' && (
+        <div className="mx-auto max-w-3xl">
+          <ProposalSent
+            requestId={requestId}
+            companyName={companyName}
+            clientName={clientName}
+            reviseMode={reviseMode}
+            version={sentVersion}
+          />
+        </div>
+      )}
+
+      {dragActive && (
+        <div
+          role="status"
+          className="bg-background/85 pointer-events-none fixed inset-0 z-[60] grid place-items-center"
         >
-          <SheetHeader className="sr-only">
-            <SheetTitle>Proposal summary</SheetTitle>
-          </SheetHeader>
-          <div className="p-4">{summaryCard}</div>
-        </SheetContent>
-      </Sheet>
-
-      {/* Fixed→T&M one-time confirm (BAL-294): the typed total stops binding. */}
-      <AlertDialog open={switchConfirmOpen} onOpenChange={setSwitchConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Switch to Time &amp; materials?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Switching to T&amp;M recalculates your total from estimated hours — your typed fixed
-              price won&apos;t apply. You can switch back to restore it.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep fixed price</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmTmSwitch}>Switch to T&amp;M</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <SubmitProposalDialog
-        open={submitOpen}
-        onOpenChange={setSubmitOpen}
-        requestId={requestId}
-        relationshipId={relationshipId}
-        proposalId={state.proposalId}
-        clientFirstName={clientFirstName}
-        onBeforeSubmit={flushBeforeSubmit}
-        resubmit={reviseMode ? { nextVersion, getPayload: buildResubmitPayload } : undefined}
-      />
+          <div className="border-primary bg-card text-primary flex items-center gap-2.5 rounded-2xl border-2 border-dashed px-6 py-4 font-medium">
+            <Paperclip className="size-[18px]" aria-hidden="true" />
+            Drop to attach to your proposal
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -31,6 +31,7 @@ import { applyBaloFee } from '@balo/shared/pricing';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import type {
   ProposalReviewDoc,
+  ProposalExpertIdentity,
   AdminProposalPricing,
 } from '@/components/balo/project-request/proposal/proposal-review-types';
 
@@ -88,6 +89,26 @@ function buildAdminPricing(proposal: Proposal): AdminProposalPricing {
 }
 
 /**
+ * The expert as the proposal header shows them, from the fields
+ * `findByIdWithRelations` hydrates on a relationship. `company` and `headline` are
+ * still NOT on that graph and degrade to `null` (the read components omit those rows
+ * when null — do NOT invent fields). Shared by {@link hydrateReviewDoc} and the
+ * composer page so the preview shows the identity the client will see.
+ */
+export function expertIdentityOf(relationship: Relationship): ProposalExpertIdentity {
+  const expertUser = relationship.expertProfile.user;
+  return {
+    name: fullNameOf(expertUser.firstName, expertUser.lastName, 'Your expert'),
+    initials: initialsOf(expertUser.firstName, expertUser.lastName),
+    company: null,
+    headline: null,
+    // BAL-422 — `numeric` ⇒ string off the driver, so one shared parse.
+    rating: parseRatingAverage(relationship.expertProfile.ratingAverage),
+    ratingCount: relationship.expertProfile.ratingCount,
+  };
+}
+
+/**
  * Map a persisted proposal (+ its children) into the serialisable, presentation-
  * only {@link ProposalReviewDoc} the read/submitted views render, resolving money
  * for `audience` (see the module doc). Expert identity is derived from the fields
@@ -113,7 +134,6 @@ export function hydrateReviewDoc(
   relationship: Relationship,
   audience: ProposalAudience
 ): ProposalReviewDoc {
-  const expertUser = relationship.expertProfile.user;
   // Client sees the grossed-up figure; expert + admin-base stay at the raw quote.
   const priceFn =
     audience === 'client'
@@ -150,17 +170,7 @@ export function hydrateReviewDoc(
       sizeBytes: d.sizeBytes,
       kind: d.kind,
     })),
-    expert: {
-      name: fullNameOf(expertUser.firstName, expertUser.lastName, 'Your expert'),
-      initials: initialsOf(expertUser.firstName, expertUser.lastName),
-      // Still not hydrated by `findByIdWithRelations` — degrade gracefully (the read
-      // components omit these rows when null). Do NOT invent fields.
-      company: null,
-      headline: null,
-      // BAL-422 — hydrated now. `numeric` ⇒ string off the driver, so one shared parse.
-      rating: parseRatingAverage(relationship.expertProfile.ratingAverage),
-      ratingCount: relationship.expertProfile.ratingCount,
-    },
+    expert: expertIdentityOf(relationship),
   };
 
   // Admin lens ONLY: attach the fee/margin breakdown. Expert/client docs never get

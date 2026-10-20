@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import { proposalPaymentInstallments, type ProposalPaymentInstallment } from '../schema';
+import { lockDraftProposalTx } from './_shared/proposal-draft-lock';
 
 /** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -79,11 +80,13 @@ export async function listByProposalTx(
 
 export const proposalPaymentInstallmentsRepository = {
   /**
-   * Replace-all the payment-installment set for a proposal in ONE transaction:
-   * soft-delete the existing LIVE rows, then insert the new ordered set with
-   * `sortOrder = index`. Mirrors `proposalMilestonesRepository.setForProposal` —
-   * the caller sends the complete intended list. Returns the new live rows in
-   * order. Empty input clears the set.
+   * Replace-all the payment-installment set for a DRAFT proposal in ONE
+   * transaction: lock the proposal header `FOR UPDATE` and require a live `draft`
+   * (`lockDraftProposalTx` — throws `ProposalNotDraftError` otherwise), then
+   * soft-delete the existing LIVE rows and insert the new ordered set with
+   * `sortOrder = index`. Mirrors `proposalMilestonesRepository.setForProposal`
+   * (including why the header lock is taken) — the caller sends the complete
+   * intended list. Returns the new live rows in order. Empty input clears the set.
    *
    * BOUNDARY: does NOT enforce sum-to-100 (use `installmentsSumTo100` at submit
    * time). The per-row 0–100 CHECK is the DB backstop.
@@ -93,6 +96,8 @@ export const proposalPaymentInstallmentsRepository = {
     installments: ProposalPaymentInstallmentInput[];
   }): Promise<ProposalPaymentInstallment[]> {
     return db.transaction(async (tx) => {
+      await lockDraftProposalTx(tx, input.proposalId);
+
       await tx
         .update(proposalPaymentInstallments)
         .set({ deletedAt: new Date(), updatedAt: new Date() })

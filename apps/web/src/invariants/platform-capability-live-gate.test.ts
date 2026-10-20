@@ -131,7 +131,7 @@ const ALLOWLIST: readonly { rel: string; reason: string; proof: string }[] = [
     rel: 'app/dev/_actions/fast-forward.ts',
     reason:
       'Dev-only: a NODE_ENV allow-list refusal runs before the capability check, and its nested staff actions (invite-experts.ts, request-proposal-as-admin.ts) run their own live gate.',
-    proof: 'FAST_FORWARD_ALLOWED_NODE_ENVS.includes(',
+    proof: 'FAST_FORWARD_ALLOWED_NODE_ENVS.has(',
   },
   {
     rel: 'lib/auth/actions/impersonation.ts',

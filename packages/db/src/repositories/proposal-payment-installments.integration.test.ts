@@ -2,12 +2,18 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { proposalPaymentInstallments } from '../schema';
-import { proposalFactory } from '../test/factories';
+import { proposalPaymentInstallments, proposals } from '../schema';
+import { proposalFactory, type ProposalFactoryResult } from '../test/factories';
 import {
   proposalPaymentInstallmentsRepository,
   installmentsSumTo100,
 } from './proposal-payment-installments';
+import { ProposalNotDraftError } from './_shared/proposal-draft-lock';
+
+/** `setForProposal` writes only onto a live draft, so these suites seed one. */
+async function draftProposal(): Promise<ProposalFactoryResult> {
+  return proposalFactory({ values: { status: 'draft' } });
+}
 
 describe('installmentsSumTo100', () => {
   it('is true when the integer percentages sum to exactly 100', () => {
@@ -25,7 +31,7 @@ describe('installmentsSumTo100', () => {
 
 describe('proposalPaymentInstallmentsRepository.setForProposal', () => {
   it('inserts an ordered set with sortOrder 0..n-1', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
 
     const rows = await proposalPaymentInstallmentsRepository.setForProposal({
       proposalId: proposal.id,
@@ -42,7 +48,7 @@ describe('proposalPaymentInstallmentsRepository.setForProposal', () => {
   });
 
   it('replace-all soft-deletes the prior set and returns only the new live rows in order', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
     const firstSet = await proposalPaymentInstallmentsRepository.setForProposal({
       proposalId: proposal.id,
       installments: [{ label: 'Old', pct: 100 }],
@@ -65,13 +71,13 @@ describe('proposalPaymentInstallmentsRepository.setForProposal', () => {
       .from(proposalPaymentInstallments)
       .where(eq(proposalPaymentInstallments.proposalId, proposal.id));
     expect(all).toHaveLength(3);
-    const oldIds = firstSet.map((i) => i.id);
-    const oldOnDisk = all.filter((r) => oldIds.includes(r.id));
+    const oldIds = new Set(firstSet.map((i) => i.id));
+    const oldOnDisk = all.filter((r) => oldIds.has(r.id));
     expect(oldOnDisk.every((r) => r.deletedAt !== null)).toBe(true);
   });
 
   it('rejects a per-row pct outside 0..100 (CHECK) and rolls the set back', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
 
     await expect(
       proposalPaymentInstallmentsRepository.setForProposal({
@@ -90,19 +96,57 @@ describe('proposalPaymentInstallmentsRepository.setForProposal', () => {
     expect(await proposalPaymentInstallmentsRepository.listByProposal(proposal.id)).toHaveLength(0);
   });
 
-  it('throws (FK 23503) for an unknown proposalId', async () => {
+  it('refuses an unknown proposalId (ProposalNotDraftError, null status) before any write', async () => {
+    const err = await proposalPaymentInstallmentsRepository
+      .setForProposal({ proposalId: randomUUID(), installments: [{ label: 'Orphan', pct: 100 }] })
+      .catch((error: unknown) => error);
+    expect(err).toBeInstanceOf(ProposalNotDraftError);
+    expect((err as ProposalNotDraftError).status).toBeNull();
+  });
+});
+
+describe('proposalPaymentInstallmentsRepository.setForProposal — draft-only', () => {
+  it.each(['submitted', 'changes_requested'] as const)(
+    'refuses a %s proposal and leaves its live installments untouched',
+    async (status) => {
+      const { proposal } = await draftProposal();
+      await proposalPaymentInstallmentsRepository.setForProposal({
+        proposalId: proposal.id,
+        installments: [{ label: 'Checked at submit', pct: 100 }],
+      });
+      await db.update(proposals).set({ status }).where(eq(proposals.id, proposal.id));
+
+      const err = await proposalPaymentInstallmentsRepository
+        .setForProposal({
+          proposalId: proposal.id,
+          installments: [{ label: 'Late autosave', pct: 40 }],
+        })
+        .catch((error: unknown) => error);
+
+      expect(err).toBeInstanceOf(ProposalNotDraftError);
+      expect((err as ProposalNotDraftError).status).toBe(status);
+      const live = await proposalPaymentInstallmentsRepository.listByProposal(proposal.id);
+      expect(live.map((i) => [i.label, i.pct])).toEqual([['Checked at submit', 100]]);
+    }
+  );
+
+  it('refuses a soft-deleted draft', async () => {
+    const { proposal } = await draftProposal();
+    await db.update(proposals).set({ deletedAt: new Date() }).where(eq(proposals.id, proposal.id));
+
     await expect(
       proposalPaymentInstallmentsRepository.setForProposal({
-        proposalId: randomUUID(),
-        installments: [{ label: 'Orphan', pct: 100 }],
+        proposalId: proposal.id,
+        installments: [{ label: 'Ghost', pct: 100 }],
       })
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(ProposalNotDraftError);
+    expect(await proposalPaymentInstallmentsRepository.listByProposal(proposal.id)).toHaveLength(0);
   });
 });
 
 describe('proposalPaymentInstallmentsRepository.listByProposal', () => {
   it('returns live rows ordered by sortOrder asc and excludes soft-deleted', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
     const rows = await proposalPaymentInstallmentsRepository.setForProposal({
       proposalId: proposal.id,
       installments: [

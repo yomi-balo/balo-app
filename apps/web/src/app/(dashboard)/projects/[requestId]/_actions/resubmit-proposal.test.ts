@@ -258,6 +258,45 @@ describe('resubmitProposalAction', () => {
       expect(mockResubmit).not.toHaveBeenCalled();
     });
 
+    it('rejects Fixed at a zero price', async () => {
+      const result = await resubmitProposalAction({ ...VALID_INPUT, priceCents: 0 });
+      expect(result).toEqual({
+        success: false,
+        error: 'Set your project price before submitting.',
+      });
+      expect(mockResubmit).not.toHaveBeenCalled();
+    });
+
+    it('rejects Fixed when the milestone amounts do not add up to the price', async () => {
+      const result = await resubmitProposalAction({
+        ...VALID_INPUT,
+        milestones: [
+          { title: 'M1', descriptionHtml: '<p>d</p>', acceptanceCriteria: 'done', valueCents: 100 },
+          { title: 'M2', descriptionHtml: '<p>d</p>', acceptanceCriteria: 'done', valueCents: 200 },
+        ],
+      });
+      expect(result).toEqual({
+        success: false,
+        error: 'Milestone amounts must add up to your project price.',
+      });
+      expect(mockResubmit).not.toHaveBeenCalled();
+    });
+
+    it('accepts Fixed when no milestone carries an amount', async () => {
+      const result = await resubmitProposalAction({
+        ...VALID_INPUT,
+        milestones: [
+          {
+            title: 'M1',
+            descriptionHtml: '<p>d</p>',
+            acceptanceCriteria: 'done',
+            valueCents: null,
+          },
+        ],
+      });
+      expect(result.success).toBe(true);
+    });
+
     it('rejects T&M missing deposit/rate', async () => {
       const result = await resubmitProposalAction({
         ...VALID_INPUT,

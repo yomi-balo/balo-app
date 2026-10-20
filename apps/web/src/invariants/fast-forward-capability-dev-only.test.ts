@@ -97,7 +97,7 @@ const EXPECTED_CONSUMERS: readonly string[] = [DEFINITION_FILE, EXPECTED_CONSUME
  * indices.
  */
 const GATE_CLAUSES: readonly string[] = [
-  'FAST_FORWARD_ALLOWED_NODE_ENVS.includes(',
+  'FAST_FORWARD_ALLOWED_NODE_ENVS.has(',
   'requireOnboardedUser(',
   'hasPlatformCapability(',
 ];
@@ -207,7 +207,7 @@ describe('invariant: FAST_FORWARD_REQUEST has exactly one consumer, and it gates
         label: 'missing requireOnboardedUser(',
         code: [
           'async function resolveFastForwardOperator() {',
-          "  if (!FAST_FORWARD_ALLOWED_NODE_ENVS.includes(process.env.NODE_ENV ?? '')) return null;",
+          "  if (!FAST_FORWARD_ALLOWED_NODE_ENVS.has(process.env.NODE_ENV ?? '')) return null;",
           '  const user = await getSession();',
           '  if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST)) return null;',
           '  return user;',
@@ -218,7 +218,7 @@ describe('invariant: FAST_FORWARD_REQUEST has exactly one consumer, and it gates
         label: 'missing hasPlatformCapability(',
         code: [
           'async function resolveFastForwardOperator() {',
-          "  if (!FAST_FORWARD_ALLOWED_NODE_ENVS.includes(process.env.NODE_ENV ?? '')) return null;",
+          "  if (!FAST_FORWARD_ALLOWED_NODE_ENVS.has(process.env.NODE_ENV ?? '')) return null;",
           '  const user = await requireOnboardedUser();',
           '  return user;',
           '}',

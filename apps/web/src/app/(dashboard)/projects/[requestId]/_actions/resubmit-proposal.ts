@@ -14,7 +14,7 @@ import {
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
-import { requireOnboardedUser } from '@/lib/auth/session';
+import { requireOnboardedUser, type SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from '@/lib/sanitize/project-html';
 import {
@@ -169,6 +169,37 @@ function sanitiseContent(input: ResubmitProposalInput): SanitisedContent {
   };
 }
 
+/** Readiness re-validation over the sanitised payload (a sanitiser can empty the overview). */
+function validateResubmitReadiness(
+  data: ResubmitProposalInput,
+  sanitised: SanitisedContent
+): ReturnType<typeof validateProposalReadiness> {
+  return validateProposalReadiness({
+    overview: sanitised.overview,
+    pricingMethod: data.pricingMethod,
+    milestones: sanitised.milestones.map((m) => ({
+      title: m.title,
+      valueCents: m.valueCents ?? null,
+      estimatedMinutes: m.estimatedMinutes ?? null,
+    })),
+    installments: sanitised.installments,
+    depositCents: data.depositCents ?? null,
+    rateCents: data.rateCents ?? null,
+    priceCents: data.priceCents,
+  });
+}
+
+/** The failure result for a repo coherence rejection (rule is analytics-only, never rendered). */
+function coherenceFailure(args: {
+  rule: string;
+  pricingMethod: 'fixed' | 'tm';
+  proposalId: string;
+  relationshipId: string;
+}): ResubmitProposalResult {
+  log.warn('Proposal coherence rejected', args);
+  return { success: false, error: COHERENCE_COPY, coherence: args };
+}
+
 /**
  * Best-effort carryover of v1's documents onto v2. Each v1 R2 object is copied to a
  * FRESH key (the `proposal_documents.r2Key` index is globally unique, so the source
@@ -200,6 +231,66 @@ async function carryOverDocuments(fromProposalId: string, toProposalId: string):
       });
     }
   }
+}
+
+type GrantedAccess = Extract<Awaited<ReturnType<typeof resolveConversationAccess>>, { ok: true }>;
+
+/**
+ * Everything AFTER the version bump committed: best-effort document carryover, the business-event
+ * log, the fire-and-forget client notification, revalidation, and the success result.
+ */
+async function finishResubmit(args: {
+  access: GrantedAccess;
+  user: SessionUser;
+  requestId: string;
+  relationshipId: string;
+  fromProposalId: string;
+  proposal: Proposal;
+}): Promise<ResubmitProposalResult> {
+  const { access, user, requestId, relationshipId, fromProposalId, proposal: v2 } = args;
+
+  // Document carryover (best-effort, AFTER the header + children commit — a missing
+  // attachment must never fail the resubmit).
+  await carryOverDocuments(fromProposalId, v2.id);
+
+  // Key business event (after the version bump).
+  log.info('Proposal resubmitted', {
+    requestId,
+    relationshipId,
+    fromProposalId,
+    newProposalId: v2.id,
+    version: v2.version,
+  });
+
+  // Notify the CLIENT (fire-and-forget) — AFTER the commit. `recipient` for the expert lens is
+  // `{ role:'client', userId: request.createdByUserId }`.
+  if (access.recipient.role === 'client') {
+    publishNotificationEvent('project.proposal_resubmitted', {
+      correlationId: `${v2.id}--v${v2.version}`,
+      projectRequestId: requestId,
+      relationshipId,
+      recipientId: access.recipient.userId,
+      expertName: displayName(user),
+      projectTitle: access.request.title,
+      version: v2.version,
+      priceCents: v2.priceCents,
+      currency: v2.currency,
+    }).catch(() => {
+      // publishNotificationEvent logs internally.
+    });
+  }
+
+  // Revalidate the request-detail page AND the proposal surface.
+  revalidatePath(`/projects/${requestId}`);
+  revalidatePath(`/projects/${requestId}/proposal/${relationshipId}`);
+
+  return {
+    success: true,
+    proposalId: v2.id,
+    version: v2.version,
+    expertProfileId: access.relationship.expertProfileId,
+    analytics: { priceCents: v2.priceCents, currency: v2.currency },
+  };
 }
 
 /**
@@ -258,18 +349,7 @@ export async function resubmitProposalAction(
 
     // Server-side readiness re-validation (post-sanitise — a sanitiser can empty
     // the overview). Mirrors the composer's gating + submit-proposal's re-check.
-    const readiness = validateProposalReadiness({
-      overview: sanitised.overview,
-      pricingMethod: data.pricingMethod,
-      milestones: sanitised.milestones.map((m) => ({
-        title: m.title,
-        valueCents: m.valueCents ?? null,
-        estimatedMinutes: m.estimatedMinutes ?? null,
-      })),
-      installments: sanitised.installments,
-      depositCents: data.depositCents ?? null,
-      rateCents: data.rateCents ?? null,
-    });
+    const readiness = validateResubmitReadiness(data, sanitised);
     if (!readiness.ready) {
       return { success: false, error: readiness.error };
     }
@@ -297,68 +377,21 @@ export async function resubmitProposalAction(
       return { success: false, error: STALE_PROPOSAL };
     }
     if (outcome.kind === 'coherence') {
-      log.warn('Proposal coherence rejected', {
+      return coherenceFailure({
         rule: outcome.error.rule,
         pricingMethod: data.pricingMethod,
         proposalId: fromProposalId,
         relationshipId,
       });
-      return {
-        success: false,
-        error: COHERENCE_COPY,
-        coherence: {
-          rule: outcome.error.rule,
-          pricingMethod: data.pricingMethod,
-          proposalId: fromProposalId,
-          relationshipId,
-        },
-      };
     }
-    const v2 = outcome.proposal;
-
-    // (b) Document carryover (best-effort, AFTER the header + children commit — a
-    //     missing attachment must never fail the resubmit).
-    await carryOverDocuments(fromProposalId, v2.id);
-
-    // Key business event (after the version bump).
-    log.info('Proposal resubmitted', {
+    return await finishResubmit({
+      access,
+      user,
       requestId,
       relationshipId,
       fromProposalId,
-      newProposalId: v2.id,
-      version: v2.version,
+      proposal: outcome.proposal,
     });
-
-    // Notify the CLIENT (fire-and-forget) — AFTER the commit. `recipient` for the
-    // expert lens is `{ role:'client', userId: request.createdByUserId }`.
-    const recipientId = access.recipient.role === 'client' ? access.recipient.userId : undefined;
-    if (recipientId !== undefined) {
-      publishNotificationEvent('project.proposal_resubmitted', {
-        correlationId: `${v2.id}--v${v2.version}`,
-        projectRequestId: requestId,
-        relationshipId,
-        recipientId,
-        expertName: displayName(user),
-        projectTitle: access.request.title,
-        version: v2.version,
-        priceCents: v2.priceCents,
-        currency: v2.currency,
-      }).catch(() => {
-        // publishNotificationEvent logs internally.
-      });
-    }
-
-    // Revalidate the request-detail page AND the proposal surface.
-    revalidatePath(`/projects/${requestId}`);
-    revalidatePath(`/projects/${requestId}/proposal/${relationshipId}`);
-
-    return {
-      success: true,
-      proposalId: v2.id,
-      version: v2.version,
-      expertProfileId: access.relationship.expertProfileId,
-      analytics: { priceCents: v2.priceCents, currency: v2.currency },
-    };
   } catch (error) {
     // ⚠ fix round R1 — `proposalsRepository.resubmit` is one of the twelve writers serialised
     // on the per-request advisory lock (`_shared/request-lock.ts`); a 55P03 here means the

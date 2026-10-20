@@ -24,6 +24,7 @@ const EXPECTED_FILES = [
   'turning-a-case-into-a-project.md',
   'weekly-schedule.md',
   'what-happens-after-you-apply.md',
+  'writing-and-sending-a-proposal.md',
   'your-cases.md',
   'your-live-status.md',
 ];

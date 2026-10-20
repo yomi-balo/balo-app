@@ -32,8 +32,16 @@ import {
   InvalidRelationshipTransitionError,
   requestExpertRelationshipsRepository,
 } from './request-expert-relationships';
-import { proposalMilestonesRepository } from './proposal-milestones';
-import { proposalPaymentInstallmentsRepository } from './proposal-payment-installments';
+import {
+  insertMilestonesTx,
+  proposalMilestonesRepository,
+  type ProposalMilestoneInput,
+} from './proposal-milestones';
+import {
+  insertInstallmentsTx,
+  proposalPaymentInstallmentsRepository,
+  type ProposalPaymentInstallmentInput,
+} from './proposal-payment-installments';
 import { auditEventsRepository } from './audit-events';
 
 /**
@@ -60,6 +68,24 @@ async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
  */
 async function seedActorId(): Promise<string> {
   return (await userFactory()).id;
+}
+
+/**
+ * Seed children straight onto a NON-draft proposal. `setForProposal` refuses anything but a
+ * live draft, and the accept-path suites deliberately build submitted proposals (some of them
+ * incoherent) that no draft→submit path could produce.
+ */
+async function seedChildrenOnSubmitted(
+  proposalId: string,
+  children: {
+    milestones?: ProposalMilestoneInput[];
+    installments?: ProposalPaymentInstallmentInput[];
+  }
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await insertMilestonesTx(tx, proposalId, children.milestones ?? []);
+    await insertInstallmentsTx(tx, proposalId, children.installments ?? []);
+  });
 }
 
 describe('proposalsRepository.submit', () => {
@@ -1633,7 +1659,7 @@ describe('proposalsRepository.promoteToSubmit — coherence guard (BAL-293)', ()
 
     const err = await proposalsRepository
       .promoteToSubmit({ proposalId, relationshipId, actorUserId: await seedActorId() })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('fixed_requires_installments');
 
@@ -1655,7 +1681,7 @@ describe('proposalsRepository.promoteToSubmit — coherence guard (BAL-293)', ()
 
     const err = await proposalsRepository
       .promoteToSubmit({ proposalId, relationshipId, actorUserId: await seedActorId() })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('tm_has_installments');
 
@@ -1673,7 +1699,7 @@ describe('proposalsRepository.promoteToSubmit — coherence guard (BAL-293)', ()
 
     const err = await proposalsRepository
       .promoteToSubmit({ proposalId, relationshipId, actorUserId: await seedActorId() })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('tm_missing_rate');
 
@@ -1697,7 +1723,7 @@ describe('proposalsRepository.promoteToSubmit — coherence guard (BAL-293)', ()
 
     const err = await proposalsRepository
       .promoteToSubmit({ proposalId, relationshipId, actorUserId: await seedActorId() })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('fixed_milestone_values_exceed_price');
 
@@ -1707,7 +1733,7 @@ describe('proposalsRepository.promoteToSubmit — coherence guard (BAL-293)', ()
     expect(rel?.status).toBe('proposal_requested');
   });
 
-  it('PROMOTES a coherent fixed draft (installments=100, milestone values ≤ price)', async () => {
+  it('PROMOTES a coherent fixed draft (installments=100, milestone values sum to the price)', async () => {
     const { proposalId, relationshipId } = await seedPromotableDraft({
       pricingMethod: 'fixed',
       priceCents: 100_000,
@@ -1752,7 +1778,7 @@ describe('proposalsRepository.submit — coherence guard (BAL-293)', () => {
         pricingMethod: 'fixed',
         priceCents: 100_000,
       })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('fixed_requires_installments');
 
@@ -1804,8 +1830,7 @@ describe('proposalsRepository.accept — coherence guard (BAL-293)', () => {
       cadence: 'monthly',
     });
     await db.update(proposals).set({ pricingMethod: 'fixed' }).where(eq(proposals.id, proposal.id));
-    await proposalPaymentInstallmentsRepository.setForProposal({
-      proposalId: proposal.id,
+    await seedChildrenOnSubmitted(proposal.id, {
       installments: [
         { label: 'Upfront', pct: 60 },
         { label: 'End', pct: 30 },
@@ -1814,7 +1839,7 @@ describe('proposalsRepository.accept — coherence guard (BAL-293)', () => {
 
     const err = await proposalsRepository
       .accept({ id: proposal.id, actorUserId: await seedActorId() })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('installments_not_100');
 
@@ -1847,12 +1872,8 @@ describe('proposalsRepository.accept — coherence guard (BAL-293)', () => {
       .update(proposals)
       .set({ pricingMethod: 'fixed', priceCents: 100_000 })
       .where(eq(proposals.id, proposal.id));
-    await proposalMilestonesRepository.setForProposal({
-      proposalId: proposal.id,
+    await seedChildrenOnSubmitted(proposal.id, {
       milestones: [{ title: 'Build', valueCents: 100_000 }],
-    });
-    await proposalPaymentInstallmentsRepository.setForProposal({
-      proposalId: proposal.id,
       installments: [{ label: 'Upfront', pct: 100 }],
     });
 
@@ -1899,7 +1920,7 @@ describe('proposalsRepository.resubmit — coherence guard (BAL-293)', () => {
           { label: 'End', pct: 30 },
         ],
       })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('installments_not_100');
 
@@ -1990,6 +2011,261 @@ describe('proposalsRepository drafts stay free of the coherence guard (BAL-293)'
   });
 });
 
+// ── Fixed pricing completeness at submit time (price > 0; values all-or-none = price) ──
+
+/** The promote was refused: the proposal is still a draft and the spine did not move. */
+async function expectStillDraft(proposalId: string, relationshipId: string): Promise<void> {
+  const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposalId));
+  expect(raw?.status).toBe('draft');
+  const rel = await requestExpertRelationshipsRepository.findById(relationshipId);
+  expect(rel?.status).toBe('proposal_requested');
+}
+
+/** A fixed draft created through `createDraft`, with one 100% installment and the given milestones. */
+async function createFixedDraft(
+  priceCents: number,
+  milestones: { title: string; valueCents?: number | null }[]
+): Promise<{ proposalId: string; relationshipId: string }> {
+  const { relationship } = await requestExpertRelationshipFactory({
+    values: { status: 'proposal_requested' },
+  });
+  const draft = await proposalsRepository.createDraft({
+    relationshipId: relationship.id,
+    overview: '<p>Fixed draft.</p>',
+    pricingMethod: 'fixed',
+    priceCents,
+  });
+  await proposalMilestonesRepository.setForProposal({ proposalId: draft.id, milestones });
+  await proposalPaymentInstallmentsRepository.setForProposal({
+    proposalId: draft.id,
+    installments: [{ label: 'On completion', pct: 100 }],
+  });
+  return { proposalId: draft.id, relationshipId: relationship.id };
+}
+
+async function promoteError(ids: { proposalId: string; relationshipId: string }): Promise<unknown> {
+  return proposalsRepository
+    .promoteToSubmit({ ...ids, actorUserId: await seedActorId() })
+    .catch((error: unknown) => error);
+}
+
+describe('proposalsRepository.promoteToSubmit — Fixed pricing completeness', () => {
+  it('rejects an A$0 fixed draft (fixed_price_not_positive), leaving it a draft', async () => {
+    const ids = await createFixedDraft(0, [{ title: 'Build' }]);
+
+    const err = await promoteError(ids);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('fixed_price_not_positive');
+    await expectStillDraft(ids.proposalId, ids.relationshipId);
+  });
+
+  it('rejects a partially priced fixed draft (fixed_milestone_values_partial_or_mismatch)', async () => {
+    const ids = await createFixedDraft(100_000, [
+      { title: 'Discovery', valueCents: 60_000 },
+      { title: 'Build' },
+    ]);
+
+    const err = await promoteError(ids);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('fixed_milestone_values_partial_or_mismatch');
+    await expectStillDraft(ids.proposalId, ids.relationshipId);
+  });
+
+  it('rejects a fixed draft whose milestone values sum to less than the price', async () => {
+    const ids = await createFixedDraft(100_000, [
+      { title: 'Discovery', valueCents: 60_000 },
+      { title: 'Build', valueCents: 30_000 },
+    ]);
+
+    const err = await promoteError(ids);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('fixed_milestone_values_partial_or_mismatch');
+    await expectStillDraft(ids.proposalId, ids.relationshipId);
+  });
+
+  it('PROMOTES a fixed draft whose milestones are all unvalued, at a positive price', async () => {
+    const ids = await createFixedDraft(100_000, [{ title: 'Discovery' }, { title: 'Build' }]);
+
+    const submitted = await proposalsRepository.promoteToSubmit({
+      ...ids,
+      actorUserId: await seedActorId(),
+    });
+    expect(submitted.status).toBe('submitted');
+  });
+
+  it('an autosave that zeroes the price still saves, and the promote that follows refuses it', async () => {
+    const ids = await createFixedDraft(100_000, [{ title: 'Build' }]);
+
+    const autosaved = await proposalsRepository.updateDraft({
+      proposalId: ids.proposalId,
+      overview: '<p>Fixed draft.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 0,
+    });
+    expect(autosaved.status).toBe('draft');
+    expect(autosaved.priceCents).toBe(0);
+
+    const err = await promoteError(ids);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('fixed_price_not_positive');
+    await expectStillDraft(ids.proposalId, ids.relationshipId);
+  });
+
+  it('an autosave that leaves one milestone unpriced still saves, and the promote that follows refuses it', async () => {
+    const ids = await createFixedDraft(100_000, [
+      { title: 'Discovery', valueCents: 60_000 },
+      { title: 'Build', valueCents: 40_000 },
+    ]);
+
+    const autosaved = await proposalMilestonesRepository.setForProposal({
+      proposalId: ids.proposalId,
+      milestones: [
+        { title: 'Discovery', valueCents: 60_000 },
+        { title: 'Build', valueCents: null },
+      ],
+    });
+    expect(autosaved.map((m) => m.valueCents)).toEqual([60_000, null]);
+
+    const err = await promoteError(ids);
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect((err as ProposalCoherenceError).rule).toBe('fixed_milestone_values_partial_or_mismatch');
+    await expectStillDraft(ids.proposalId, ids.relationshipId);
+  });
+});
+
+describe('proposalsRepository.promoteToSubmit — a late autosave cannot rewrite the children', () => {
+  it('refuses child writes that land after the promote, keeping the children the submit checked', async () => {
+    const ids = await createFixedDraft(100_000, [{ title: 'Build', valueCents: 100_000 }]);
+    await proposalsRepository.promoteToSubmit({ ...ids, actorUserId: await seedActorId() });
+
+    const milestoneErr = await proposalMilestonesRepository
+      .setForProposal({
+        proposalId: ids.proposalId,
+        milestones: [{ title: 'Build', valueCents: null }],
+      })
+      .catch((error: unknown) => error);
+    const installmentErr = await proposalPaymentInstallmentsRepository
+      .setForProposal({
+        proposalId: ids.proposalId,
+        installments: [{ label: 'Upfront', pct: 40 }],
+      })
+      .catch((error: unknown) => error);
+
+    expect(milestoneErr).toBeInstanceOf(ProposalNotDraftError);
+    expect((milestoneErr as ProposalNotDraftError).status).toBe('submitted');
+    expect(installmentErr).toBeInstanceOf(ProposalNotDraftError);
+    const milestones = await proposalMilestonesRepository.listByProposal(ids.proposalId);
+    expect(milestones.map((m) => m.valueCents)).toEqual([100_000]);
+    const installments = await proposalPaymentInstallmentsRepository.listByProposal(ids.proposalId);
+    expect(installments.map((i) => i.pct)).toEqual([100]);
+  });
+});
+
+/** A relationship whose v1 (tm, coherent) sits at `changes_requested` — `resubmit`'s input. */
+async function seedChangesRequestedV1(): Promise<{ relationshipId: string; v1Id: string }> {
+  const { relationship } = await requestExpertRelationshipFactory({
+    values: { status: 'proposal_requested' },
+  });
+  const v1 = await proposalsRepository.submit({
+    relationshipId: relationship.id,
+    actorUserId: await seedActorId(),
+    overview: '<p>v1.</p>',
+    pricingMethod: 'tm',
+    priceCents: 0,
+    depositCents: 0,
+    rateCents: 18_000,
+    cadence: 'monthly',
+  });
+  const client = await userFactory();
+  await proposalsRepository.requestChanges({
+    proposalId: v1.id,
+    requestedByUserId: client.id,
+    note: 'Revise pricing.',
+  });
+  return { relationshipId: relationship.id, v1Id: v1.id };
+}
+
+describe('proposalsRepository.resubmit — Fixed pricing completeness', () => {
+  it.each([
+    {
+      rule: 'fixed_price_not_positive',
+      priceCents: 0,
+      milestones: [{ title: 'Build', valueCents: null }],
+    },
+    {
+      rule: 'fixed_milestone_values_partial_or_mismatch',
+      priceCents: 100_000,
+      milestones: [
+        { title: 'Discovery', valueCents: 60_000 },
+        { title: 'Build', valueCents: null },
+      ],
+    },
+  ])(
+    'rejects a $rule payload: v1 stays current, no v2 row',
+    async ({ rule, priceCents, milestones }) => {
+      const { relationshipId, v1Id } = await seedChangesRequestedV1();
+
+      const err = await proposalsRepository
+        .resubmit({
+          relationshipId,
+          overview: '<p>v2.</p>',
+          pricingMethod: 'fixed',
+          priceCents,
+          milestones,
+          installments: [{ label: 'On completion', pct: 100 }],
+        })
+        .catch((error: unknown) => error);
+      expect(err).toBeInstanceOf(ProposalCoherenceError);
+      expect((err as ProposalCoherenceError).rule).toBe(rule);
+
+      const all = await db
+        .select()
+        .from(proposals)
+        .where(eq(proposals.relationshipId, relationshipId));
+      expect(all).toHaveLength(1);
+      const [raw] = all;
+      expect(raw?.id).toBe(v1Id);
+      expect(raw?.isCurrent).toBe(true);
+      expect(raw?.status).toBe('changes_requested');
+    }
+  );
+});
+
+describe('proposalsRepository.accept — Fixed pricing completeness is not re-checked', () => {
+  it('ACCEPTS a submitted fixed proposal with only some milestones priced', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    await db
+      .update(proposals)
+      .set({ pricingMethod: 'fixed', priceCents: 100_000 })
+      .where(eq(proposals.id, proposal.id));
+    await seedChildrenOnSubmitted(proposal.id, {
+      milestones: [
+        { title: 'Discovery', valueCents: 60_000 },
+        { title: 'Build', valueCents: null },
+      ],
+      installments: [{ label: 'Upfront', pct: 100 }],
+    });
+
+    const accepted = await proposalsRepository.accept({
+      id: proposal.id,
+      actorUserId: await seedActorId(),
+    });
+    expect(accepted.status).toBe('accepted');
+  });
+});
+
 // ── BAL-294: T&M estimated-effort + derived-total coherence (rollback proofs) ──
 
 describe('proposalsRepository.promoteToSubmit — T&M effort/total coherence (BAL-294)', () => {
@@ -2038,7 +2314,7 @@ describe('proposalsRepository.promoteToSubmit — T&M effort/total coherence (BA
 
     const err = await proposalsRepository
       .promoteToSubmit({ proposalId, relationshipId, actorUserId: await seedActorId() })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('tm_missing_effort');
 
@@ -2065,7 +2341,7 @@ describe('proposalsRepository.promoteToSubmit — T&M effort/total coherence (BA
 
     const err = await proposalsRepository
       .promoteToSubmit({ proposalId, relationshipId, actorUserId: await seedActorId() })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('tm_total_mismatch');
 
@@ -2091,8 +2367,7 @@ describe('proposalsRepository.accept — T&M effort/total coherence (BAL-294)', 
       rateCents: 18_000,
       cadence: 'monthly',
     });
-    await proposalMilestonesRepository.setForProposal({
-      proposalId: proposal.id,
+    await seedChildrenOnSubmitted(proposal.id, {
       milestones: [{ title: 'Build', estimatedMinutes: 300 }], // 5h × 18_000 = 90_000
     });
     await db.update(proposals).set({ priceCents: 90_000 }).where(eq(proposals.id, proposal.id));
@@ -2120,14 +2395,13 @@ describe('proposalsRepository.accept — T&M effort/total coherence (BAL-294)', 
       cadence: 'monthly',
     });
     // Attach a milestone with NO effort → the accept coherence guard rejects it.
-    await proposalMilestonesRepository.setForProposal({
-      proposalId: proposal.id,
+    await seedChildrenOnSubmitted(proposal.id, {
       milestones: [{ title: 'No effort', estimatedMinutes: null }],
     });
 
     const err = await proposalsRepository
       .accept({ id: proposal.id, actorUserId: await seedActorId() })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('tm_missing_effort');
 
@@ -2218,7 +2492,7 @@ describe('proposalsRepository.resubmit — T&M effort/total coherence (BAL-294)'
         milestones: [{ title: 'No effort', estimatedMinutes: null }],
         installments: [],
       })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('tm_missing_effort');
 

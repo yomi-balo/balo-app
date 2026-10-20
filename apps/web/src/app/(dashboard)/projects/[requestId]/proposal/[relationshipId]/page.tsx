@@ -23,17 +23,22 @@ import {
   resolveRequestLens,
   type RequestViewerContext,
 } from '@/lib/project-request/resolve-request-lens';
+import { RichText } from '@/components/balo/project-request/rich-text';
+import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import { ProposalComposer } from '@/components/balo/project-request/proposal/proposal-composer';
 import {
   emptyDraftState,
+  hydrateMilestonePricing,
   nextDraftKey,
   seedInstallments,
   type ProposalDraftState,
 } from '@/components/balo/project-request/proposal/proposal-composer-state';
+import { ProposalSent } from '@/components/balo/project-request/proposal/proposal-sent';
 import { ProposalReview } from '@/components/balo/project-request/proposal/proposal-review';
 import { SubmittedView } from '@/components/balo/project-request/proposal/submitted-view';
 import type { ProposalReviewDoc } from '@/components/balo/project-request/proposal/proposal-review-types';
 import {
+  expertIdentityOf,
   hydrateReviewDoc,
   type ProposalAudience,
 } from '@/lib/project-request/proposal-audience-view';
@@ -42,6 +47,7 @@ import type { SharedLinkView } from '@/lib/project-request/proposal/share-view-t
 
 interface ProposalComposerPageProps {
   params: Promise<{ requestId: string; relationshipId: string }>;
+  searchParams: Promise<{ sent?: string | string[] }>;
 }
 
 type Relationship = ProjectRequestWithRelations['relationships'][number];
@@ -67,9 +73,26 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
+/** `?sent=` as a positive integer, or `null` for anything else (absent, repeated, malformed). */
+function parseSentVersion(value: string | string[] | undefined): number | null {
+  if (typeof value !== 'string' || !/^[1-9]\d{0,8}$/.test(value)) {
+    return null;
+  }
+  return Number(value);
+}
+
 function firstNameOf(firstName: string | null, fallback: string): string {
   const trimmed = (firstName ?? '').trim();
   return trimmed.length > 0 ? trimmed : fallback;
+}
+
+/** Full name from first/last, or the fallback when both are blank. */
+function fullNameOf(firstName: string | null, lastName: string | null, fallback: string): string {
+  const full = [firstName, lastName]
+    .map((part) => (part ?? '').trim())
+    .filter((part) => part.length > 0)
+    .join(' ');
+  return full.length > 0 ? full : fallback;
 }
 
 /** Map a share-link row to the client-safe view (BAL-386) — token/hash never cross. */
@@ -113,6 +136,10 @@ function hydrateDraftState(
   }
 
   const isFixed = draft.pricingMethod === 'fixed';
+  // "Price each milestone" is on only when a milestone carries a positive amount. With it
+  // off, every amount hydrates as null so legacy 0-seeded drafts never surface "A$0" and
+  // the next save persists null.
+  const milestonePricingEnabled = isFixed && hydrateMilestonePricing(milestones);
   const hydratedMilestones =
     milestones.length > 0
       ? milestones.map((m) => ({
@@ -120,7 +147,7 @@ function hydrateDraftState(
           title: m.title,
           descriptionHtml: m.descriptionHtml ?? '',
           acceptanceCriteria: m.acceptanceCriteria ?? '',
-          valueCents: m.valueCents,
+          valueCents: milestonePricingEnabled ? m.valueCents : null,
           estimatedMinutes: m.estimatedMinutes,
         }))
       : emptyDraftState().milestones;
@@ -144,6 +171,7 @@ function hydrateDraftState(
     fixedPriceCents: isFixed ? draft.priceCents : null,
     cadence: draft.cadence ?? 'monthly',
     milestones: hydratedMilestones,
+    milestonePricingEnabled,
     installments: isFixed ? hydratedInstallments : [],
     documents: documents.map(documentToView),
   };
@@ -190,36 +218,90 @@ async function hydrateComposerState(proposal: Proposal | undefined): Promise<Pro
   return hydrateDraftState(proposal, milestones, installments, documents);
 }
 
-/** Shared composer page chrome (back link + heading) — title/subtitle vary by mode. */
-function ComposerShell({
+/** Outer layout wrapper shared by the composer and its in-place sent screen. */
+function ComposerShell({ children }: Readonly<{ children: React.ReactNode }>): React.JSX.Element {
+  return <div className="mx-auto max-w-6xl">{children}</div>;
+}
+
+/**
+ * The composer header: back link, "Proposal for {company}" (with the version chip when
+ * revising) and the request title as the page heading. Passed into the composer, which
+ * shows it only while editing; the server cannot know the client-side mode.
+ */
+function ComposerHeader({
   requestId,
-  backTitle,
-  heading,
-  subtitle,
-  children,
+  requestTitle,
+  companyName,
+  revise,
 }: Readonly<{
   requestId: string;
-  backTitle: string;
-  heading: string;
-  subtitle: string;
-  children: React.ReactNode;
+  requestTitle: string;
+  companyName: string;
+  revise?: { nextVersion: number };
 }>): React.JSX.Element {
   return (
-    <div className="mx-auto max-w-6xl">
-      <div className="mb-5">
-        <Link
-          href={`/projects/${requestId}`}
-          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
-        >
-          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          Back to {backTitle}
-        </Link>
-        <h1 className="text-foreground mt-3 text-2xl font-semibold">{heading}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{subtitle}</p>
+    <div className="mb-5">
+      <Link
+        href={`/projects/${requestId}`}
+        className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+        Back to {requestTitle}
+      </Link>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <p className="text-muted-foreground text-[13px]">
+          Proposal for <span className="text-foreground font-medium">{companyName}</span>
+        </p>
+        {revise !== undefined && (
+          <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5 text-xs font-medium">
+            Version {revise.nextVersion}
+          </span>
+        )}
       </div>
-      {children}
+      <h1 className="text-foreground mt-1 text-2xl font-semibold tracking-tight sm:text-[30px]">
+        {requestTitle}
+      </h1>
     </div>
   );
+}
+
+/** The client company's display name, with the expert-lens fallback. */
+function companyNameOf(request: ProjectRequestWithRelations): string {
+  return request.company?.name ?? 'the client';
+}
+
+/** The requesting client's full name, falling back to their first name. */
+function clientNameOf(request: ProjectRequestWithRelations): string {
+  return fullNameOf(
+    request.createdByUser.firstName,
+    request.createdByUser.lastName,
+    firstNameOf(request.createdByUser.firstName, 'the client')
+  );
+}
+
+/** Props both composer mounts share, derived from the request and the viewed relationship. */
+function composerBriefProps(
+  request: ProjectRequestWithRelations,
+  relationship: Relationship
+): {
+  clientFirstName: string;
+  clientName: string;
+  companyName: string;
+  requestTitle: string;
+  requestSummary: string;
+  requestDescription: React.ReactNode;
+  expert: ReturnType<typeof expertIdentityOf>;
+} {
+  const clientFirstName = firstNameOf(request.createdByUser.firstName, 'the client');
+  return {
+    clientFirstName,
+    clientName: clientNameOf(request),
+    companyName: companyNameOf(request),
+    requestTitle: request.title,
+    requestSummary: htmlToPlainText(request.description),
+    requestDescription: <RichText html={request.description} size="sm" />,
+    expert: expertIdentityOf(relationship),
+  };
 }
 
 /**
@@ -230,24 +312,27 @@ function ComposerShell({
 async function renderComposer(
   requestId: string,
   relationshipId: string,
-  request: ProjectRequestWithRelations
+  request: ProjectRequestWithRelations,
+  relationship: Relationship
 ): Promise<React.JSX.Element> {
   const draft = await proposalsRepository.findCurrentByRelationship(relationshipId);
   const initialState = await hydrateComposerState(draft);
-  const clientFirstName = firstNameOf(request.createdByUser.firstName, 'the client');
+  const brief = composerBriefProps(request, relationship);
 
   return (
-    <ComposerShell
-      requestId={requestId}
-      backTitle={request.title}
-      heading="Build your proposal"
-      subtitle={`Draft your scope, milestones, and pricing for ${clientFirstName}. Everything saves as you go.`}
-    >
+    <ComposerShell>
       <ProposalComposer
         requestId={requestId}
         relationshipId={relationshipId}
-        clientFirstName={clientFirstName}
         initialState={initialState}
+        header={
+          <ComposerHeader
+            requestId={requestId}
+            requestTitle={brief.requestTitle}
+            companyName={brief.companyName}
+          />
+        }
+        {...brief}
       />
     </ComposerShell>
   );
@@ -264,6 +349,7 @@ async function renderReviseComposer(
   requestId: string,
   relationshipId: string,
   request: ProjectRequestWithRelations,
+  relationship: Relationship,
   current: Proposal
 ): Promise<React.JSX.Element> {
   const [initialState, changeRequests] = await Promise.all([
@@ -272,22 +358,25 @@ async function renderReviseComposer(
   ]);
   // `listByProposal` returns newest-first — the most recent note frames the revise.
   const [latest] = changeRequests;
-  const clientFirstName = firstNameOf(request.createdByUser.firstName, 'the client');
+  const brief = composerBriefProps(request, relationship);
   const changeRequest =
     latest === undefined ? undefined : { note: latest.note, section: latest.section };
 
   return (
-    <ComposerShell
-      requestId={requestId}
-      backTitle={request.title}
-      heading="Revise your proposal"
-      subtitle={`Address ${clientFirstName}'s feedback, then resubmit as version ${current.version + 1}.`}
-    >
+    <ComposerShell>
       <ProposalComposer
         requestId={requestId}
         relationshipId={relationshipId}
-        clientFirstName={clientFirstName}
         initialState={initialState}
+        header={
+          <ComposerHeader
+            requestId={requestId}
+            requestTitle={brief.requestTitle}
+            companyName={brief.companyName}
+            revise={{ nextVersion: current.version + 1 }}
+          />
+        }
+        {...brief}
         changeRequest={changeRequest}
         fromProposalId={current.id}
         currentVersion={current.version}
@@ -344,14 +433,15 @@ async function renderExpertSurface(
   request: ProjectRequestWithRelations,
   requestId: string,
   relationshipId: string,
-  clientFirstName: string
+  clientFirstName: string,
+  sent: number | null
 ): Promise<React.JSX.Element | null> {
   if (ctx.lens !== 'expert' || ctx.relationshipId !== relationshipId) {
     return null;
   }
   // Composer: the draft surface while the client is awaiting a proposal.
   if (relationship.status === 'proposal_requested') {
-    return renderComposer(requestId, relationshipId, request);
+    return renderComposer(requestId, relationshipId, request, relationship);
   }
   // Revise composer (A6.4 / BAL-290): the relationship stays `proposal_submitted`
   // while the CURRENT proposal is `changes_requested` — re-enter the composer to
@@ -359,7 +449,22 @@ async function renderExpertSurface(
   if (SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
     const current = await proposalsRepository.findCurrentByRelationship(relationshipId);
     if (current !== undefined && current.status === 'changes_requested') {
-      return renderReviseComposer(requestId, relationshipId, request, current);
+      return renderReviseComposer(requestId, relationshipId, request, relationship, current);
+    }
+    // The in-place sent screen: the send redirects to `?sent={version}`, which only
+    // renders when it names the latest version.
+    if (current !== undefined && sent !== null && sent === current.version) {
+      return (
+        <ComposerShell>
+          <ProposalSent
+            requestId={requestId}
+            companyName={companyNameOf(request)}
+            clientName={clientNameOf(request)}
+            reviseMode={current.version > 1}
+            version={current.version}
+          />
+        </ComposerShell>
+      );
     }
   }
   // Submitted view: read-only "awaiting the client" once a proposal exists.
@@ -493,8 +598,10 @@ async function renderAdminSurface(
  */
 export default async function ProposalComposerPage({
   params,
+  searchParams,
 }: Readonly<ProposalComposerPageProps>): Promise<React.JSX.Element> {
   const { requestId, relationshipId } = await params;
+  const sent = parseSentVersion((await searchParams).sent);
 
   const user = await getCurrentUser();
   if (!user) {
@@ -540,7 +647,8 @@ export default async function ProposalComposerPage({
     request,
     requestId,
     relationshipId,
-    clientFirstName
+    clientFirstName,
+    sent
   );
   if (expert !== null) return expert;
 

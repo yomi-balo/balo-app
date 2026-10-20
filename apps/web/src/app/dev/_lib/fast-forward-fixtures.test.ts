@@ -79,6 +79,7 @@ describe('fastForwardProposalDraft', () => {
     const readiness = validateProposalReadiness({
       overview: draft.overview,
       pricingMethod: draft.pricingMethod,
+      priceCents: draft.priceCents,
       milestones: draft.milestones.map((m) => ({
         title: m.title,
         valueCents: m.valueCents ?? null,

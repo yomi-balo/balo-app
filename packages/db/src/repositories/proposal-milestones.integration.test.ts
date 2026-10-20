@@ -2,13 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { proposalMilestones } from '../schema';
-import { proposalFactory } from '../test/factories';
+import { proposalMilestones, proposals } from '../schema';
+import { proposalFactory, type ProposalFactoryResult } from '../test/factories';
 import { proposalMilestonesRepository } from './proposal-milestones';
+import { ProposalNotDraftError } from './_shared/proposal-draft-lock';
+
+/** `setForProposal` writes only onto a live draft, so these suites seed one. */
+async function draftProposal(): Promise<ProposalFactoryResult> {
+  return proposalFactory({ values: { status: 'draft' } });
+}
 
 describe('proposalMilestonesRepository.setForProposal', () => {
   it('inserts an ordered set with sortOrder 0..n-1 and honours nullable valueCents', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
 
     const rows = await proposalMilestonesRepository.setForProposal({
       proposalId: proposal.id,
@@ -35,7 +41,7 @@ describe('proposalMilestonesRepository.setForProposal', () => {
   });
 
   it('replace-all soft-deletes the prior set and returns only the new live rows in order', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
 
     const firstSet = await proposalMilestonesRepository.setForProposal({
       proposalId: proposal.id,
@@ -58,13 +64,13 @@ describe('proposalMilestonesRepository.setForProposal', () => {
       .from(proposalMilestones)
       .where(eq(proposalMilestones.proposalId, proposal.id));
     expect(all).toHaveLength(5);
-    const oldIds = firstSet.map((m) => m.id);
-    const oldOnDisk = all.filter((r) => oldIds.includes(r.id));
+    const oldIds = new Set(firstSet.map((m) => m.id));
+    const oldOnDisk = all.filter((r) => oldIds.has(r.id));
     expect(oldOnDisk.every((r) => r.deletedAt !== null)).toBe(true);
   });
 
   it('an empty input clears the set', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
     await proposalMilestonesRepository.setForProposal({
       proposalId: proposal.id,
       milestones: [{ title: 'Solo' }],
@@ -78,17 +84,16 @@ describe('proposalMilestonesRepository.setForProposal', () => {
     expect(await proposalMilestonesRepository.listByProposal(proposal.id)).toHaveLength(0);
   });
 
-  it('throws (FK 23503) for an unknown proposalId', async () => {
-    await expect(
-      proposalMilestonesRepository.setForProposal({
-        proposalId: randomUUID(),
-        milestones: [{ title: 'Orphan' }],
-      })
-    ).rejects.toThrow();
+  it('refuses an unknown proposalId (ProposalNotDraftError, null status) before any write', async () => {
+    const err = await proposalMilestonesRepository
+      .setForProposal({ proposalId: randomUUID(), milestones: [{ title: 'Orphan' }] })
+      .catch((error: unknown) => error);
+    expect(err).toBeInstanceOf(ProposalNotDraftError);
+    expect((err as ProposalNotDraftError).status).toBeNull();
   });
 
   it('rejects a negative valueCents (CHECK) and rolls the set back', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
 
     await expect(
       proposalMilestonesRepository.setForProposal({
@@ -101,7 +106,7 @@ describe('proposalMilestonesRepository.setForProposal', () => {
   });
 
   it('round-trips estimatedMinutes (present + null) — BAL-294', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
 
     const rows = await proposalMilestonesRepository.setForProposal({
       proposalId: proposal.id,
@@ -125,7 +130,7 @@ describe('proposalMilestonesRepository.setForProposal', () => {
   });
 
   it('rejects a negative estimatedMinutes (CHECK proposal_milestone_estimated_minutes_nonneg) and rolls the set back — BAL-294', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
 
     await expect(
       proposalMilestonesRepository.setForProposal({
@@ -138,9 +143,48 @@ describe('proposalMilestonesRepository.setForProposal', () => {
   });
 });
 
+describe('proposalMilestonesRepository.setForProposal — draft-only', () => {
+  it.each(['submitted', 'changes_requested'] as const)(
+    'refuses a %s proposal and leaves its live milestones untouched',
+    async (status) => {
+      const { proposal } = await draftProposal();
+      await proposalMilestonesRepository.setForProposal({
+        proposalId: proposal.id,
+        milestones: [{ title: 'Checked at submit', valueCents: 100_000 }],
+      });
+      await db.update(proposals).set({ status }).where(eq(proposals.id, proposal.id));
+
+      const err = await proposalMilestonesRepository
+        .setForProposal({
+          proposalId: proposal.id,
+          milestones: [{ title: 'Late autosave', valueCents: null }],
+        })
+        .catch((error: unknown) => error);
+
+      expect(err).toBeInstanceOf(ProposalNotDraftError);
+      expect((err as ProposalNotDraftError).status).toBe(status);
+      const live = await proposalMilestonesRepository.listByProposal(proposal.id);
+      expect(live.map((m) => [m.title, m.valueCents])).toEqual([['Checked at submit', 100_000]]);
+    }
+  );
+
+  it('refuses a soft-deleted draft', async () => {
+    const { proposal } = await draftProposal();
+    await db.update(proposals).set({ deletedAt: new Date() }).where(eq(proposals.id, proposal.id));
+
+    await expect(
+      proposalMilestonesRepository.setForProposal({
+        proposalId: proposal.id,
+        milestones: [{ title: 'Ghost' }],
+      })
+    ).rejects.toBeInstanceOf(ProposalNotDraftError);
+    expect(await proposalMilestonesRepository.listByProposal(proposal.id)).toHaveLength(0);
+  });
+});
+
 describe('proposalMilestonesRepository.listByProposal', () => {
   it('returns live rows ordered by sortOrder asc and excludes soft-deleted', async () => {
-    const { proposal } = await proposalFactory();
+    const { proposal } = await draftProposal();
     const rows = await proposalMilestonesRepository.setForProposal({
       proposalId: proposal.id,
       milestones: [{ title: 'A' }, { title: 'B' }, { title: 'C' }],

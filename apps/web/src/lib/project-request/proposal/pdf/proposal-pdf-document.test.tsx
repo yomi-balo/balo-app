@@ -291,6 +291,27 @@ describe('ProposalPdfDocument — conditional branches', () => {
     expect(text).toContain('Additional terms attached: MSA.pdf');
   });
 
+  it('renders no milestone amount for a null or zero value, and still renders a positive one', () => {
+    const doc = clientDoc(
+      {},
+      {
+        milestones: [
+          makeMilestone({ id: 'ms-1', title: 'Discovery', valueCents: null }),
+          makeMilestone({ id: 'ms-2', title: 'Build', valueCents: 0 }),
+          makeMilestone({ id: 'ms-3', title: 'Handover', valueCents: 80_000 }),
+        ],
+      }
+    );
+    const text = renderTree(doc);
+    expect(text).toContain('1. Discovery');
+    expect(text).toContain('2. Build');
+    // 80_000 marked up 25% = 100_000 → A$1,000; the null and 0 rows add no amount text.
+    expect(text).toContain('3. HandoverA$1,000');
+    expect(text).not.toContain('1. DiscoveryA$');
+    expect(text).not.toContain('2. BuildA$');
+    expect(text).not.toContain('A$0');
+  });
+
   it('renders a full-amount line (not an empty box) for a Fixed proposal with zero installments', () => {
     const doc = clientDoc({}, { installments: [] });
     const text = renderTree(doc);

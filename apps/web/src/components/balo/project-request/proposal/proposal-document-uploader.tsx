@@ -1,9 +1,8 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
-import { FileText, Loader2, Trash2, Upload, X } from 'lucide-react';
+import { FileText, Loader2, Paperclip, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 import { putWithProgress, formatBytes } from '@/components/balo/document-uploader/upload-file';
 import {
   PROPOSAL_DOCUMENT_ALLOWED_CONTENT_TYPES,
@@ -16,12 +15,15 @@ import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId
 
 export type ProposalDocumentKind = 'terms' | 'ref';
 
-interface ProposalDocumentUploaderProps {
+interface UseProposalDocumentUploadArgs {
   requestId: string;
   relationshipId: string;
-  /** Documents of THIS uploader's kind. Owned by the composer. */
-  documents: ProposalDocumentView[];
   kind: ProposalDocumentKind;
+  /** Single-document mode (the terms supplement): one file at a time, the
+   *  server soft-deletes the one it replaces. */
+  single?: boolean;
+  /** Documents of THIS controller's kind. Owned by the composer. */
+  documents: ProposalDocumentView[];
   /**
    * Resolves the proposalId, FORCING a draft-create first if none exists yet
    * (documents require a persisted draft — plan edge-case 5). Returns null if the
@@ -30,14 +32,19 @@ interface ProposalDocumentUploaderProps {
   ensureProposalId: () => Promise<string | null>;
   onAdded: (document: ProposalDocumentView) => void;
   onRemoved: (documentId: string) => void;
-  /** Single-doc mode (the terms supplement) — one max, "Replace" affordance. */
-  single?: boolean;
-  /** Disabled while the proposal is no longer editable (defensive). */
-  disabled?: boolean;
-  labelId: string;
 }
 
-/** True when the browser file is within the client-safe allow-list + cap. */
+export interface ProposalDocumentUploadController {
+  /** 0–100 while a batch is uploading, else null. */
+  progress: number | null;
+  removingId: string | null;
+  /** Uploads the files one after another; each rejected file gets its own toast. */
+  uploadFiles: (files: File[]) => Promise<void>;
+  remove: (documentId: string) => Promise<void>;
+}
+
+/** Null when the browser file is within the client-safe allow-list + cap, else
+ *  the message to toast. */
 function validateFile(file: File): string | null {
   if (!PROPOSAL_DOCUMENT_ALLOWED_CONTENT_TYPES.has(file.type)) {
     return `${file.name} isn't a supported file type.`;
@@ -48,53 +55,37 @@ function validateFile(file: File): string | null {
   return null;
 }
 
+function successMessage(added: number, single: boolean): string {
+  if (single) return 'Your terms are attached';
+  return added === 1 ? 'Attachment added' : `${added} files attached`;
+}
+
 /**
- * Shared proposal-document uploader (A6.2 / BAL-288): presign → XHR PUT (with
- * progress) → confirm. Used for general `ref` attachments AND the single `terms`
- * supplement (`single`). Client-side allow-list + cap are UX pre-checks; the
- * confirm action HEAD-verifies in R2 as the source of truth.
+ * Proposal-document upload pipeline (A6.2 / BAL-288): presign → XHR PUT (with
+ * progress) → confirm, plus removal. One controller per kind (`ref` attachments,
+ * the single `terms` supplement); the composer owns both so the page-wide drop,
+ * the Attachments section and the terms popover share one pipeline. Client-side
+ * allow-list + cap are UX pre-checks; the confirm action HEAD-verifies in R2 as the
+ * source of truth.
  */
-export function ProposalDocumentUploader({
+export function useProposalDocumentUpload({
   requestId,
   relationshipId,
-  documents,
   kind,
+  single = false,
+  documents,
   ensureProposalId,
   onAdded,
   onRemoved,
-  single = false,
-  disabled = false,
-  labelId,
-}: Readonly<ProposalDocumentUploaderProps>): React.JSX.Element {
-  const inputRef = useRef<HTMLInputElement>(null);
+}: Readonly<UseProposalDocumentUploadArgs>): ProposalDocumentUploadController {
   const [progress, setProgress] = useState<number | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
-  const uploading = progress !== null;
-  const [firstDocument] = documents;
-  const atCapacity = single && firstDocument !== undefined;
-
-  const handlePick = useCallback((): void => {
-    if (disabled || uploading) return;
-    inputRef.current?.click();
-  }, [disabled, uploading]);
-
-  const uploadFile = useCallback(
-    async (file: File): Promise<void> => {
-      const validationError = validateFile(file);
-      if (validationError !== null) {
-        toast.error(validationError);
-        return;
-      }
-
-      setProgress(0);
+  /** One presign → PUT → confirm. Returns true when the document was attached. */
+  const uploadOne = useCallback(
+    async (file: File, proposalId: string): Promise<boolean> => {
       try {
-        const proposalId = await ensureProposalId();
-        if (proposalId === null) {
-          toast.error("Couldn't prepare your proposal. Please try again.");
-          return;
-        }
-
+        setProgress(0);
         const presign = await requestProposalDocumentUploadAction({
           requestId,
           relationshipId,
@@ -105,14 +96,10 @@ export function ProposalDocumentUploader({
         });
         if (!presign.success) {
           toast.error(presign.error);
-          return;
+          return false;
         }
 
-        await putWithProgress({
-          url: presign.presignedUrl,
-          file,
-          onProgress: setProgress,
-        });
+        await putWithProgress({ url: presign.presignedUrl, file, onProgress: setProgress });
 
         const confirmed = await confirmProposalDocumentUploadAction({
           requestId,
@@ -126,32 +113,49 @@ export function ProposalDocumentUploader({
         });
         if (!confirmed.success) {
           toast.error(confirmed.error);
-          return;
+          return false;
         }
 
         onAdded(confirmed.document);
-        toast.success(single ? 'Terms supplement attached' : 'Attachment added');
+        return true;
       } catch {
         toast.error("Couldn't upload that file. Please try again.");
+        return false;
+      }
+    },
+    [requestId, relationshipId, kind, onAdded]
+  );
+
+  const uploadFiles = useCallback(
+    async (files: File[]): Promise<void> => {
+      const candidates = single ? files.slice(0, 1) : files;
+      const valid = candidates.filter((file) => {
+        const validationError = validateFile(file);
+        if (validationError !== null) toast.error(validationError);
+        return validationError === null;
+      });
+      if (valid.length === 0) return;
+
+      setProgress(0);
+      try {
+        const proposalId = await ensureProposalId();
+        if (proposalId === null) {
+          toast.error("Couldn't prepare your proposal. Please try again.");
+          return;
+        }
+        let added = 0;
+        for (const file of valid) {
+          if (await uploadOne(file, proposalId)) added += 1;
+        }
+        if (added > 0) toast.success(successMessage(added, single));
       } finally {
         setProgress(null);
       }
     },
-    [ensureProposalId, requestId, relationshipId, kind, onAdded, single]
+    [ensureProposalId, single, uploadOne]
   );
 
-  const handleChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>): void => {
-      const file = event.target.files?.[0];
-      // Reset the input so re-picking the same file fires `change` again.
-      event.target.value = '';
-      if (file === undefined) return;
-      uploadFile(file);
-    },
-    [uploadFile]
-  );
-
-  const handleRemove = useCallback(
+  const remove = useCallback(
     async (documentId: string): Promise<void> => {
       setRemovingId(documentId);
       try {
@@ -180,13 +184,67 @@ export function ProposalDocumentUploader({
     [documents, requestId, relationshipId, onRemoved]
   );
 
+  return { progress, removingId, uploadFiles, remove };
+}
+
+interface ProposalDocumentUploaderViewProps {
+  controller: ProposalDocumentUploadController;
+  /** Documents of the controller's kind. */
+  documents: ProposalDocumentView[];
+  /** Id of the element that names the file input. */
+  labelId: string;
+  /** Single-document mode: one file max, the picker turns into "Replace". */
+  single?: boolean;
+  /** Picker copy; defaults per mode. Ignored when replacing in single mode. */
+  pickLabel?: string;
+  /** Disabled while the proposal is no longer editable (defensive). */
+  disabled?: boolean;
+}
+
+/**
+ * Document list, upload progress bar and dashed picker for one
+ * {@link useProposalDocumentUpload} controller. In single mode with a file already
+ * attached the picker stays and reads "Replace your terms".
+ */
+export function ProposalDocumentUploaderView({
+  controller,
+  documents,
+  labelId,
+  single = false,
+  pickLabel,
+  disabled = false,
+}: Readonly<ProposalDocumentUploaderViewProps>): React.JSX.Element {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const { progress, removingId, uploadFiles, remove } = controller;
+  const uploading = progress !== null;
+  const replacing = single && documents.length > 0;
+  const defaultLabel = single ? 'Attach your terms' : 'Attach a file';
+  const label = replacing ? 'Replace your terms' : (pickLabel ?? defaultLabel);
+
+  const handlePick = useCallback((): void => {
+    inputRef.current?.click();
+  }, []);
+
+  const handleChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>): void => {
+      const files = Array.from(event.target.files ?? []);
+      // Reset the input so re-picking the same file fires `change` again.
+      event.target.value = '';
+      if (files.length === 0) return;
+      uploadFiles(files);
+    },
+    [uploadFiles]
+  );
+
   return (
     <div className="space-y-3">
       <input
         ref={inputRef}
         type="file"
+        multiple={!single}
         accept={PROPOSAL_DOCUMENT_ACCEPT}
         className="sr-only"
+        tabIndex={-1}
         aria-labelledby={labelId}
         onChange={handleChange}
         disabled={disabled || uploading}
@@ -199,32 +257,31 @@ export function ProposalDocumentUploader({
             return (
               <li
                 key={doc.id}
-                className="border-border bg-card flex items-center gap-2.5 rounded-[10px] border px-3 py-2.5"
+                className="group border-border bg-card flex items-center gap-2.5 rounded-xl border py-2 pr-2 pl-3"
               >
-                <span className="bg-primary/10 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-                  <FileText className="text-primary h-3.5 w-3.5" aria-hidden="true" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="text-foreground block truncate text-[13px] font-semibold">
-                    {doc.fileName}
-                  </span>
-                  <span className="text-muted-foreground block text-[11px]">
+                <FileText className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-sm">
+                  {doc.fileName}
+                  <span className="text-muted-foreground ml-2 text-[13px]">
                     {formatBytes(doc.sizeBytes)}
                   </span>
+                </span>
+                <span className="bg-muted text-muted-foreground shrink-0 rounded-full px-2.5 py-0.5 text-[12.5px] whitespace-nowrap">
+                  {doc.kind === 'terms' ? 'Your terms' : 'Reference'}
                 </span>
                 <button
                   type="button"
                   onClick={() => {
-                    handleRemove(doc.id);
+                    remove(doc.id);
                   }}
                   disabled={isRemoving || disabled}
                   aria-label={`Remove ${doc.fileName}`}
-                  className="text-muted-foreground hover:text-destructive focus-visible:ring-ring flex h-8 w-8 items-center justify-center rounded-lg transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
+                  className="text-muted-foreground hover:bg-muted hover:text-destructive focus-visible:ring-ring flex size-11 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 sm:size-8"
                 >
                   {isRemoving ? (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                   ) : (
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    <Trash2 className="size-4" aria-hidden="true" />
                   )}
                 </button>
               </li>
@@ -237,45 +294,27 @@ export function ProposalDocumentUploader({
         <div className="space-y-1.5" aria-live="polite">
           <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
             <div
-              className="bg-primary h-full rounded-full transition-[width]"
+              className="bg-primary h-full rounded-full transition-[width] motion-reduce:transition-none"
               style={{ width: `${progress}%` }}
             />
           </div>
-          <p className="text-muted-foreground text-[11px]">Uploading… {progress}%</p>
+          <p className="text-muted-foreground text-[12px]">Uploading… {progress}%</p>
         </div>
       )}
 
-      {!atCapacity && (
-        <button
-          type="button"
-          onClick={handlePick}
-          disabled={disabled || uploading}
-          className={cn(
-            'border-border text-foreground hover:bg-muted/50 focus-visible:ring-ring inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-dashed px-4 text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60'
-          )}
-        >
-          {uploading ? (
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <Upload className="h-4 w-4" aria-hidden="true" />
-          )}
-          {single ? 'Attach terms supplement' : 'Attach a file'}
-        </button>
-      )}
-
-      {atCapacity && firstDocument !== undefined && (
-        <button
-          type="button"
-          onClick={() => {
-            handleRemove(firstDocument.id);
-          }}
-          disabled={disabled || removingId !== null}
-          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-md text-[12px] font-medium focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60"
-        >
-          <X className="h-3.5 w-3.5" aria-hidden="true" />
-          Remove to replace
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={handlePick}
+        disabled={disabled || uploading}
+        className="border-border text-muted-foreground hover:bg-muted/50 focus-visible:ring-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-[14px] border-[1.5px] border-dashed p-4 text-center text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60"
+      >
+        {uploading ? (
+          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+        ) : (
+          <Paperclip className="size-4" aria-hidden="true" />
+        )}
+        {label}
+      </button>
     </div>
   );
 }

@@ -163,8 +163,9 @@ type PersistResult = { ok: true } | { ok: false; error: string };
  * Step 8 — re-sanitise every rich-text field and re-persist the draft so
  * "what's submitted equals what's stored". A concurrent submit can flip the row
  * out of `draft` between the initial `findById` and these writes; the repository
- * surfaces that as `ProposalNotDraftError` (TOCTOU), which maps to the friendly
- * stale-UI copy rather than the generic failure.
+ * surfaces that as `ProposalNotDraftError` (TOCTOU) from the header write AND from
+ * both child `setForProposal` writes, which maps to the friendly stale-UI copy
+ * rather than the generic failure.
  */
 async function sanitiseAndPersistDraft(
   draft: Proposal,
@@ -207,21 +208,25 @@ async function sanitiseAndPersistDraft(
       rateCents: draft.rateCents ?? undefined,
       cadence: draft.cadence ?? undefined,
     });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId: draft.id,
+      milestones: sanitisedMilestones,
+    });
+    await proposalPaymentInstallmentsRepository.setForProposal({
+      proposalId: draft.id,
+      installments: persistedInstallments,
+    });
   } catch (error) {
     if (error instanceof ProposalNotDraftError) {
+      log.warn('Proposal submit persist rejected (no longer a draft)', {
+        proposalId: draft.id,
+        relationshipId: draft.relationshipId,
+        status: error.status,
+      });
       return { ok: false, error: STALE_PROPOSAL };
     }
     throw error;
   }
-
-  await proposalMilestonesRepository.setForProposal({
-    proposalId: draft.id,
-    milestones: sanitisedMilestones,
-  });
-  await proposalPaymentInstallmentsRepository.setForProposal({
-    proposalId: draft.id,
-    installments: persistedInstallments,
-  });
 
   return { ok: true };
 }
@@ -313,6 +318,7 @@ async function runSubmit(
     installments,
     depositCents: draft.depositCents,
     rateCents: draft.rateCents,
+    priceCents: draft.priceCents,
   });
   if (!readiness.ready) {
     return { success: false, error: readiness.error };
