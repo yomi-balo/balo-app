@@ -205,7 +205,40 @@ describe('deriveThreadActions — header proposal slot', () => {
       thread: thread({ relationshipStatus: 'proposal_submitted' }),
       nudgeIsProposal: false,
     });
-    expect(expert.headerProposal).toEqual({ kind: 'view', label: 'View submitted' });
+    expect(expert.headerProposal).toEqual({ kind: 'view', label: 'View submitted proposal' });
+  });
+
+  it('open change request: the expert gets a live Revise CTA; the client keeps View proposal', () => {
+    const revising = thread({
+      relationshipStatus: 'proposal_submitted',
+      changeRequest: {
+        requestedBy: 'Dana @ Northwind',
+        notePreview: 'More detail',
+        nextVersion: 2,
+      },
+    });
+
+    const expert = deriveThreadActions({
+      lens: 'expert',
+      requestStatus: 'proposal_submitted',
+      thread: revising,
+      nudgeIsProposal: false,
+    });
+    expect(expert.headerProposal).toEqual({
+      kind: 'build',
+      label: 'Revise proposal',
+      quiet: false,
+    });
+    expect(expert.railProposal).toEqual({ kind: 'build', label: 'Revise proposal', quiet: false });
+
+    const client = deriveThreadActions({
+      lens: 'client',
+      requestStatus: 'proposal_submitted',
+      thread: revising,
+      nudgeIsProposal: false,
+    });
+    expect(client.headerProposal).toEqual({ kind: 'view', label: 'View proposal' });
+    expect(client.railProposal).toEqual({ kind: 'view', label: 'View proposal', quiet: false });
   });
 
   it('hides the slot entirely once the call gate closes', () => {

@@ -51,7 +51,7 @@ interface ThreadHeaderProps {
  * The client's "Request proposal" CTA is
  * LIVE (BAL-272 / A5) when `onRequestProposal` is provided; the expert's "Build
  * proposal" CTA is LIVE (BAL-288 / A6.2) when `onBuildProposal` is provided; the
- * "View proposal"/"View submitted" CTA is LIVE (BAL-289 / A6.3) when
+ * "View proposal"/"View submitted proposal" CTA is LIVE (BAL-289 / A6.3) when
  * `onViewProposal` is provided. Deliberate cut (recorded): no rating/role
  * subline — that data isn't hydrated.
  */

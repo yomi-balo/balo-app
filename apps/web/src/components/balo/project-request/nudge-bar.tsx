@@ -1,17 +1,14 @@
 import { cn } from '@/lib/utils';
 import { NUDGE_ICONS, type NudgeIconName } from './nudge-icons';
 import type { RequestLens, ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
-import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
+import type {
+  RelationshipStatus,
+  ThreadChangeRequestView,
+} from '@/lib/project-request/conversation-view-types';
 import { RequestCard } from './request-card';
-import { NudgeActions } from './nudge-actions';
+import { NudgeActions, type NudgeButtonDescriptor } from './nudge-actions';
 
 type NudgeVariant = 'action' | 'waiting' | 'done' | 'commit';
-
-interface NudgeButton {
-  label: string;
-  /** ⚠ A TOKEN, never a component — this object crosses into `NudgeActions` ('use client'). */
-  icon: NudgeIconName;
-}
 
 export interface NudgeContent {
   variant: NudgeVariant;
@@ -19,8 +16,8 @@ export interface NudgeContent {
   icon: NudgeIconName;
   headline: string;
   sub?: string;
-  primary?: NudgeButton;
-  secondary?: NudgeButton;
+  primary?: NudgeButtonDescriptor;
+  secondary?: NudgeButtonDescriptor;
 }
 
 interface NudgeBarProps {
@@ -300,6 +297,23 @@ function expertCellFor(viewerRelationshipStatus: RelationshipStatus): NudgeConte
 }
 
 /**
+ * The client sent the viewer's proposal back. The relationship stays
+ * `proposal_submitted` through the changes loop, so this cell keys on the open
+ * change request — without it the expert reads "with the client" while the client
+ * waits on them. The CTA wires itself (`action`): `WIRED` is keyed by REQUEST
+ * status, which cannot tell this cell from the plain waiting one.
+ */
+function reviseProposalNudge(changeRequest: ThreadChangeRequestView): NudgeContent {
+  return {
+    variant: 'action',
+    icon: 'fileText',
+    headline: `${changeRequest.requestedBy} requested changes to your proposal`,
+    sub: `“${changeRequest.notePreview}” — revise and resubmit as version ${changeRequest.nextVersion}.`,
+    primary: { label: 'Revise proposal', icon: 'fileText', action: 'build-proposal' },
+  };
+}
+
+/**
  * The whole expert-lens page nudge, keyed on the viewer's OWN relationship —
  * never the request aggregate (max-progress; another expert's progress must not
  * change this viewer's cell). Routes the three BAL-286 / BAL-272 false-prompt
@@ -324,7 +338,9 @@ function expertCellFor(viewerRelationshipStatus: RelationshipStatus): NudgeConte
  *     (`deriveThreadStage(viewerRelationshipStatus, status)` ∈ {'won','not_selected'}).
  *     Any future winner/loser page prompt MUST branch on that derived outcome
  *     here, never on `status`, or it lies to losing experts again.
- *  3. Proposal phase (`eoi_submitted` / `proposal_requested` / `proposal_submitted`)
+ *  3. Open change request on the viewer's current proposal → the revise cell
+ *     ({@link reviseProposalNudge}), ahead of the plain `proposal_submitted` one.
+ *  4. Proposal phase (`eoi_submitted` / `proposal_requested` / `proposal_submitted`)
  *     → keyed per-thread via {@link expertCellFor} (BAL-272 divergence fix).
  *
  * Anything else (pre-proposal request statuses — `experts_invited`, exploratory…)
@@ -333,10 +349,14 @@ function expertCellFor(viewerRelationshipStatus: RelationshipStatus): NudgeConte
  */
 function expertNudgeFor(
   status: ProjectRequestStatus,
-  viewerRelationshipStatus: RelationshipStatus
+  viewerRelationshipStatus: RelationshipStatus,
+  viewerChangeRequest: ThreadChangeRequestView | null
 ): NudgeContent | null {
   if (viewerRelationshipStatus === 'declined') return null;
   if (status === 'accepted' || status === 'kickoff_approved') return null;
+  if (viewerRelationshipStatus === 'proposal_submitted' && viewerChangeRequest !== null) {
+    return reviseProposalNudge(viewerChangeRequest);
+  }
   if (RELATIONSHIP_KEYED_EXPERT_STATUSES.has(status)) {
     return expertCellFor(viewerRelationshipStatus);
   }
@@ -352,15 +372,17 @@ function expertNudgeFor(
  * aggregate (it carries another expert's progress and would show this viewer a
  * false prompt) — see {@link expertNudgeFor} for the full mapping (BAL-272 +
  * BAL-286). Without it (client/admin lenses, or an expert with no relationship)
- * the request status keys the map as before.
+ * the request status keys the map as before. `viewerChangeRequest` is the open
+ * change request on the viewer-expert's own thread (`ConversationThreadView.changeRequest`).
  */
 export function nudgeFor(
   lens: RequestLens,
   status: ProjectRequestStatus,
-  viewerRelationshipStatus: RelationshipStatus | null = null
+  viewerRelationshipStatus: RelationshipStatus | null = null,
+  viewerChangeRequest: ThreadChangeRequestView | null = null
 ): NudgeContent | null {
   if (lens === 'expert' && viewerRelationshipStatus !== null) {
-    return expertNudgeFor(status, viewerRelationshipStatus);
+    return expertNudgeFor(status, viewerRelationshipStatus, viewerChangeRequest);
   }
   return NUDGES_BY_LENS[lens][status] ?? null;
 }

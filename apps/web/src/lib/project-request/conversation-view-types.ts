@@ -202,6 +202,22 @@ export interface ConversationThreadView {
    * is removed from header/rail (plan §12.3/§12.4).
    */
   bookedCall: { meetingId: string; scheduledStartIso: string } | null;
+  /**
+   * The client's open change request on this thread's CURRENT proposal — non-null while that
+   * proposal is `changes_requested`. The relationship stays `proposal_submitted` throughout the
+   * changes loop, so `relationshipStatus` alone cannot tell "with the client" from "back with
+   * the expert to revise"; every revise-aware nudge and CTA keys on this instead.
+   */
+  changeRequest: ThreadChangeRequestView | null;
+}
+
+export interface ThreadChangeRequestView {
+  /** Retrospective attribution of who asked — "Dana @ Northwind" (person @ client company). */
+  requestedBy: string;
+  /** The client's note, whitespace-collapsed and clipped for nudge display. */
+  notePreview: string;
+  /** The version number a resubmit will create. */
+  nextVersion: number;
 }
 
 /**

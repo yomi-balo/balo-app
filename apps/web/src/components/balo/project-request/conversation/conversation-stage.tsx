@@ -206,18 +206,23 @@ function trackProposalCtaClick(
 
 /**
  * Open the expert proposal composer for `threadId`. No-op unless the thread is at
- * `proposal_requested` (defence-in-depth — the Build CTA only renders then). At
- * module scope so the `handleBuildProposal` callback stays branch-free.
+ * `proposal_requested`, or `proposal_submitted` with an open change request (the
+ * route renders the revise composer then) — defence-in-depth, the Build/Revise CTA
+ * only renders in those states. At module scope so the `handleBuildProposal`
+ * callback stays branch-free.
  */
 function openProposalComposer(args: {
   push: (href: string) => void;
   requestId: string;
   threadId: string | null;
   status: string | undefined;
+  revising: boolean;
   surface?: 'header' | 'rail';
 }): void {
-  const { push, requestId, threadId, status, surface } = args;
-  if (threadId === null || status !== 'proposal_requested') return;
+  const { push, requestId, threadId, status, revising, surface } = args;
+  const composable =
+    status === 'proposal_requested' || (status === 'proposal_submitted' && revising);
+  if (threadId === null || !composable) return;
   trackProposalCtaClick(surface, requestId, threadId);
   push(`/projects/${requestId}/proposal/${threadId}`);
 }
@@ -890,8 +895,9 @@ export function ConversationStage({
 
   // ── Build proposal (BAL-288 / A6.2 — expert lens only) ─────────────────
   // Opens the proposal composer for the active thread. Gated to the expert
-  // lens AND a `proposal_requested` relationship (defence-in-depth: the Build
-  // CTA only renders at that state). `surface` (`header`/`rail`) feeds the
+  // lens AND a `proposal_requested` relationship, or a `proposal_submitted` one
+  // with an open change request (defence-in-depth: the Build/Revise CTA only
+  // renders at those states). `surface` (`header`/`rail`) feeds the
   // existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel; the nudge surface (no
   // matching surface value on that event) navigates without re-firing it.
   const handleBuildProposal = useCallback(
@@ -901,10 +907,17 @@ export function ConversationStage({
         requestId,
         threadId: activeThreadId,
         status: activeThread?.relationshipStatus,
+        revising: activeThread?.changeRequest != null,
         surface,
       });
     },
-    [activeThreadId, activeThread?.relationshipStatus, requestId, router]
+    [
+      activeThreadId,
+      activeThread?.relationshipStatus,
+      activeThread?.changeRequest,
+      requestId,
+      router,
+    ]
   );
   const handleHeaderBuild = useCallback(
     (): void => handleBuildProposal('header'),

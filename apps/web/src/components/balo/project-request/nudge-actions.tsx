@@ -19,6 +19,12 @@ export interface NudgeButtonDescriptor {
    * object and crashed the render. See `./nudge-icons` for the full account.
    */
   icon: NudgeIconName;
+  /**
+   * Wires this button directly, overriding the `WIRED` lookup — for a cell the
+   * `${lens}:${status}` key cannot single out (it is keyed by REQUEST status, so
+   * two cells for one status would otherwise share wiring).
+   */
+  action?: WiredAction;
 }
 
 interface NudgeActionsProps {
@@ -125,8 +131,8 @@ export function NudgeActions({
     return undefined;
   };
 
-  const primaryHandler = handlerFor(wired.primary);
-  const secondaryHandler = handlerFor(wired.secondary);
+  const primaryHandler = handlerFor(primary?.action ?? wired.primary);
+  const secondaryHandler = handlerFor(secondary?.action ?? wired.secondary);
   // Token → component on THIS side of the boundary (the descriptor carries only a name).
   const PrimaryIcon = primary ? NUDGE_ICONS[primary.icon] : null;
   const SecondaryIcon = secondary ? NUDGE_ICONS[secondary.icon] : null;

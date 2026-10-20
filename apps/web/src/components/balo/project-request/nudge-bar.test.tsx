@@ -290,6 +290,27 @@ describe('NudgeBar', () => {
       fireEvent.click(cta);
       expect(mockPush).not.toHaveBeenCalled();
     });
+
+    it('the revise cell wires its own CTA at request proposal_submitted (no WIRED entry there)', () => {
+      const nudge = nudgeFor('expert', 'proposal_submitted', 'proposal_submitted', {
+        requestedBy: 'Dana @ Northwind',
+        notePreview: 'Add more deliverables',
+        nextVersion: 2,
+      })!;
+      render(
+        <NudgeBar
+          nudge={nudge}
+          lens="expert"
+          status="proposal_submitted"
+          requestId={REQUEST_ID}
+          viewerRelationshipId={RELATIONSHIP_ID}
+        />
+      );
+      const cta = screen.getByRole('button', { name: /Revise proposal/i });
+      expect(cta).toBeEnabled();
+      fireEvent.click(cta);
+      expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/${RELATIONSHIP_ID}`);
+    });
   });
 
   describe('nudgeFor', () => {
@@ -334,6 +355,20 @@ describe('NudgeBar', () => {
       expect(nudgeFor('expert', 'proposal_submitted', 'eoi_submitted')?.headline).toBe(
         'Offer the client a time to talk'
       );
+    });
+
+    it('an open change request on the viewer proposal swaps the waiting cell for the revise cell', () => {
+      const nudge = nudgeFor('expert', 'proposal_submitted', 'proposal_submitted', {
+        requestedBy: 'Dana @ Northwind',
+        notePreview: 'Add more deliverables',
+        nextVersion: 2,
+      });
+      expect(nudge).toMatchObject({
+        variant: 'action',
+        headline: 'Dana @ Northwind requested changes to your proposal',
+        sub: '“Add more deliverables” — revise and resubmit as version 2.',
+        primary: { label: 'Revise proposal', action: 'build-proposal' },
+      });
     });
 
     it("an invited-but-quiet expert gets the EOI cell, never another expert's aggregate", () => {

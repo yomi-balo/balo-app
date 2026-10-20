@@ -5,6 +5,9 @@ import {
   conversationsRepository,
   expertsRepository,
   meetingsRepository,
+  proposalChangeRequestsRepository,
+  proposalsRepository,
+  usersRepository,
   type ConversationContextRef,
   type ConversationFile,
   type ContextMeetingSummary,
@@ -21,10 +24,12 @@ import {
   pickDefaultThread,
   pickUpcomingContextMeeting,
   previewOfHtml,
+  previewOfPlainText,
   type ConversationFileView,
   type ConversationMessageView,
   type ConversationThreadView,
   type ConversationView,
+  type ThreadChangeRequestView,
 } from './conversation-view-types';
 
 /**
@@ -148,6 +153,40 @@ async function hydrateUsernames(
 }
 
 /**
+ * The open change request per thread, keyed by relationship id — only threads whose CURRENT
+ * proposal is `changes_requested` appear. One read for the request's proposals; the
+ * note + requester reads run only for the (few) threads actually in a revision loop.
+ */
+async function loadChangeRequests(
+  request: ProjectRequestWithRelations,
+  relationshipIds: ReadonlySet<string>
+): Promise<Map<string, ThreadChangeRequestView>> {
+  const proposals = await proposalsRepository.listByRequest(request.id);
+  const awaitingRevision = proposals.filter(
+    (p) => p.isCurrent && p.status === 'changes_requested' && relationshipIds.has(p.relationshipId)
+  );
+  const entries = await Promise.all(
+    awaitingRevision.map(async (proposal) => {
+      // `listByProposal` returns newest-first — the most recent note is the open ask.
+      const [latest] = await proposalChangeRequestsRepository.listByProposal(proposal.id);
+      if (latest === undefined) return null;
+      const requester = await usersRepository.findById(latest.requestedByUserId);
+      const firstName = requester?.firstName?.trim() ?? '';
+      const companyName = request.company.name.trim();
+      const requestedBy =
+        [firstName, companyName].filter((part) => part.length > 0).join(' @ ') || 'The client';
+      const view: ThreadChangeRequestView = {
+        requestedBy,
+        notePreview: previewOfPlainText(latest.note.replaceAll(/\s+/g, ' ').trim()),
+        nextVersion: proposal.version + 1,
+      };
+      return [proposal.relationshipId, view] as const;
+    })
+  );
+  return new Map(entries.filter((entry) => entry !== null));
+}
+
+/**
  * Build the full `ConversationView` for a participant viewer. Open threads =
  * live relationships in `THREAD_OPEN_RELATIONSHIP_STATUSES` (the expert lens
  * additionally sees ONLY their own). Thread order is invite order
@@ -192,7 +231,7 @@ export async function loadConversationView(
     return [{ relationship, conversationId }];
   });
 
-  const [summaries, usernames, bookedCallsByRelationship] = await Promise.all([
+  const [summaries, usernames, bookedCallsByRelationship, changeRequests] = await Promise.all([
     conversationsRepository.listThreadSummaries({
       conversationIds: openThreads.map((t) => t.conversationId),
       viewerUserId: user.id,
@@ -209,6 +248,7 @@ export async function loadConversationView(
       contextType: 'request_interaction',
       contextIds: openThreads.map((t) => t.relationship.id),
     }),
+    loadChangeRequests(request, new Set(openThreads.map((t) => t.relationship.id))),
   ]);
   const summaryById = new Map(summaries.map((s) => [s.conversationId, s]));
 
@@ -275,6 +315,7 @@ export async function loadConversationView(
         ctx.lens === 'client' && liveEoi !== undefined ? liveEoi.submittedAt.toISOString() : null,
       availabilitySharedAtIso: relationship.availabilitySharedAt?.toISOString() ?? null,
       bookedCall: pickBookedCall(relationship.id),
+      changeRequest: changeRequests.get(relationship.id) ?? null,
     };
   });
 

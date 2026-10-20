@@ -1026,17 +1026,47 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
     );
   });
 
-  it("expert + proposal_submitted: 'View submitted' is LIVE — pushes the submitted route (A6.3)", async () => {
+  it("expert + proposal_submitted: 'View submitted proposal' is LIVE — pushes the submitted route (A6.3)", async () => {
     const user = userEvent.setup();
     renderStage(
       view({ threads: [thread({ relationshipStatus: 'proposal_submitted' })] }),
       'expert'
     );
-    const [headerCta] = screen.getAllByRole('button', { name: 'View submitted' });
+    const [headerCta] = screen.getAllByRole('button', { name: 'View submitted proposal' });
     expect(headerCta).toBeDefined();
     expect(headerCta).toBeEnabled();
     await user.click(headerCta as HTMLElement);
     expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
+  });
+
+  it('expert + open change request: header and nudge Revise CTAs push the revise composer', async () => {
+    const user = userEvent.setup();
+    renderStage(
+      view({
+        threads: [
+          thread({
+            relationshipStatus: 'proposal_submitted',
+            changeRequest: {
+              requestedBy: 'Dana @ Northwind',
+              notePreview: 'Add more deliverables',
+              nextVersion: 2,
+            },
+          }),
+        ],
+      }),
+      'expert'
+    );
+    expect(screen.queryByRole('button', { name: 'View submitted proposal' })).toBeNull();
+    expect(
+      screen.getAllByText('Dana @ Northwind requested changes to your proposal').length
+    ).toBeGreaterThan(0);
+    const ctas = screen.getAllByRole('button', { name: /Revise proposal/ });
+    expect(ctas.length).toBeGreaterThan(1);
+    for (const cta of ctas) {
+      mockPush.mockClear();
+      await user.click(cta);
+      expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
+    }
   });
 });
 

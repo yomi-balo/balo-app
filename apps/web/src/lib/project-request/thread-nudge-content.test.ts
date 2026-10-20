@@ -4,6 +4,12 @@ import { thread as baseThread } from '@/test/fixtures/conversation';
 import type { ConversationThreadView } from './conversation-view-types';
 
 /** This suite's default thread carries fresh inbound activity. */
+const CHANGE_REQUEST = {
+  requestedBy: 'Dana @ Northwind',
+  notePreview: 'Add more deliverables',
+  nextVersion: 2,
+};
+
 function thread(overrides: Partial<ConversationThreadView> = {}): ConversationThreadView {
   return baseThread({
     latestMessagePreview: 'Quick question about CPQ scope',
@@ -73,6 +79,19 @@ describe('threadNudgeFor — client lens', () => {
     expect(nudge?.headline).toBe("Priya's proposal is ready");
     expect(nudge?.primary).toMatchObject({ label: "Accept Priya's proposal", action: 'stub' });
     expect(nudge?.secondary).toMatchObject({ label: 'View full proposal', action: 'stub' });
+  });
+
+  it('open change request → waiting on the revision, never "proposal is ready"', () => {
+    const nudge = threadNudgeFor(
+      'client',
+      'proposal_submitted',
+      thread({ relationshipStatus: 'proposal_submitted', changeRequest: CHANGE_REQUEST })
+    );
+    expect(nudge?.variant).toBe('waiting');
+    expect(nudge?.headline).toBe('Priya is revising the proposal');
+    expect(nudge?.sub).toBe("Changes requested — you'll be notified when version 2 is in.");
+    expect(nudge?.primary).toBeUndefined();
+    expect(nudge?.secondary?.action).toBe('reply');
   });
 
   it('BAL-272 divergence: thread B stays on the meet/reply cell while thread A is requested', () => {
@@ -187,6 +206,20 @@ describe('threadNudgeFor — expert lens', () => {
       thread({ relationshipStatus: 'proposal_submitted' })
     );
     expect(nudge?.variant).toBe('waiting');
+    expect(nudge?.secondary?.action).toBe('reply');
+  });
+
+  it('open change request → revise action naming the requester and quoting the note', () => {
+    const nudge = threadNudgeFor(
+      'expert',
+      'proposal_submitted',
+      thread({ relationshipStatus: 'proposal_submitted', changeRequest: CHANGE_REQUEST }),
+      'Northwind'
+    );
+    expect(nudge?.variant).toBe('action');
+    expect(nudge?.headline).toBe('Dana @ Northwind requested changes to your proposal');
+    expect(nudge?.sub).toBe('“Add more deliverables” — revise and resubmit as version 2.');
+    expect(nudge?.primary).toMatchObject({ label: 'Revise proposal', action: 'build' });
     expect(nudge?.secondary?.action).toBe('reply');
   });
 
