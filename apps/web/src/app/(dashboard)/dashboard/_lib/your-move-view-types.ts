@@ -2,9 +2,13 @@ import type { DashboardYourMoveCardKind, DashboardYourMoveChip } from '@balo/ana
 
 /**
  * The Your move rail's client-safe view model. Types and constants only: imported by the
- * server-only builder and by the client rail. NO money (budget, price, rate, balance) and no
- * person's name crosses this boundary; the counterparty is always a company.
+ * server-only builder and by the client rail. NO money (budget, price, rate, balance) crosses
+ * this boundary. The counterparty follows a per-side rule: expert cards name the client company,
+ * never a person; client cards name the expert as "person, agency" (Balo on the exploratory call,
+ * the company on Team, a hold line on Billing). Team cards may carry requester names and emails.
  */
+
+export type YourMoveWorkspaceType = 'company' | 'expert';
 
 export type YourMoveGateState = 'done' | 'yours' | 'pending';
 
@@ -28,6 +32,7 @@ export type YourMoveContext =
   | {
       readonly type: 'gates';
       readonly gates: readonly { readonly label: string; readonly state: YourMoveGateState }[];
+      readonly note: string | null;
     }
   | {
       readonly type: 'delivery';
@@ -39,15 +44,47 @@ export type YourMoveContext =
       readonly type: 'items';
       readonly items: readonly { readonly text: string; readonly overdue: boolean }[];
       readonly more: number;
+    }
+  | {
+      readonly type: 'stats';
+      readonly stats: readonly { readonly label: string; readonly value: string }[];
+    }
+  | {
+      readonly type: 'reschedule';
+      readonly wasIso: string;
+      readonly optionIsos: readonly string[];
+    }
+  | {
+      readonly type: 'completion';
+      readonly done: number;
+      readonly total: number;
+      readonly autoAcceptIso: string | null;
+    }
+  | {
+      readonly type: 'people';
+      readonly people: readonly { readonly name: string; readonly email: string }[];
+      readonly more: number;
     };
+
+/** A fact whose day is formatted in the viewer's device zone, client-side. */
+export interface YourMoveFactAt {
+  readonly template: 'reply_by' | 'since' | 'marked_complete';
+  readonly iso: string;
+}
 
 export interface YourMoveCardView {
   readonly id: string;
   readonly kind: DashboardYourMoveCardKind;
   readonly title: string;
-  /** The client company (or a short status line on the calendar card). Never a person. */
+  /**
+   * Expert kinds: the client company (or a short status line on the calendar card), never a
+   * person. Client kinds: "person, agency", Balo, the company, or a hold line.
+   */
   readonly counterparty: string;
+  /** Server-formatted relative fact. Never set together with `factAt`. */
   readonly fact: string | null;
+  /** A dated fact rendered in the viewer's zone. Never set together with `fact`. */
+  readonly factAt: YourMoveFactAt | null;
   readonly factTone: 'muted' | 'warning';
   readonly actionLabel: string;
   readonly href: string;
@@ -69,6 +106,7 @@ export const YOUR_MOVE_CARD_VIEW_KEYS = [
   'title',
   'counterparty',
   'fact',
+  'factAt',
   'factTone',
   'actionLabel',
   'href',
@@ -103,11 +141,19 @@ export const YOUR_MOVE_CONTEXT_KEYS = [
   'text',
   'overdue',
   'more',
+  'stats',
+  'value',
+  'wasIso',
+  'optionIsos',
+  'autoAcceptIso',
+  'people',
+  'name',
+  'email',
 ] as const;
 
 type ContextKeysOf<T> = T extends unknown ? keyof T : never;
 type _MissingContextKey = Exclude<
-  ContextKeysOf<YourMoveContext> | 'state' | 'text' | 'overdue',
+  ContextKeysOf<YourMoveContext> | 'state' | 'text' | 'overdue' | 'value' | 'name' | 'email',
   (typeof YOUR_MOVE_CONTEXT_KEYS)[number]
 >;
 export const ASSERT_YOUR_MOVE_CONTEXT_KEYS_COMPLETE =
@@ -123,6 +169,8 @@ export interface YourMoveKindMeta {
   readonly tier: 0 | 1 | 2;
   readonly action: string;
   readonly tone: YourMoveTone;
+  /** Which workspace's rail the kind appears on. */
+  readonly side: 'expert' | 'client' | 'both';
 }
 
 export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKindMeta> = {
@@ -133,6 +181,7 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 0,
     action: 'Reconnect calendar',
     tone: 'warning',
+    side: 'expert',
   },
   invitation: {
     label: 'Project invitation',
@@ -141,6 +190,7 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 1,
     action: 'Review invitation',
     tone: 'violet',
+    side: 'expert',
   },
   eoi_followup: {
     label: 'Interest sent',
@@ -149,6 +199,7 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 1,
     action: 'Propose times',
     tone: 'violet',
+    side: 'expert',
   },
   proposal_requested: {
     label: 'Proposal requested',
@@ -157,6 +208,7 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 1,
     action: 'Write proposal',
     tone: 'violet',
+    side: 'expert',
   },
   changes_requested: {
     label: 'Proposal changes',
@@ -165,6 +217,7 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 1,
     action: 'Revise proposal',
     tone: 'violet',
+    side: 'expert',
   },
   kickoff_terms: {
     label: 'Kickoff',
@@ -173,6 +226,7 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 1,
     action: 'Confirm terms',
     tone: 'violet',
+    side: 'expert',
   },
   delivery_changes: {
     label: 'Delivery changes',
@@ -181,6 +235,7 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 1,
     action: 'Open project',
     tone: 'violet',
+    side: 'expert',
   },
   action_items: {
     label: 'Action items',
@@ -189,6 +244,7 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 2,
     action: 'View items',
     tone: 'primary',
+    side: 'both',
   },
   messages: {
     label: 'Messages',
@@ -197,5 +253,78 @@ export const YOUR_MOVE_KIND_META: Record<DashboardYourMoveCardKind, YourMoveKind
     tier: 2,
     action: 'Open messages',
     tone: 'slate',
+    side: 'both',
+  },
+  receivable: {
+    label: 'Billing',
+    chip: 'billing',
+    chipLabel: 'Billing',
+    tier: 0,
+    action: 'Settle balance',
+    tone: 'warning',
+    side: 'client',
+  },
+  reschedule: {
+    label: 'New times suggested',
+    chip: 'new_times',
+    chipLabel: 'New times',
+    tier: 1,
+    action: 'Choose a time',
+    tone: 'primary',
+    side: 'client',
+  },
+  completion: {
+    label: 'Work to review',
+    chip: 'work_to_review',
+    chipLabel: 'Work to review',
+    tier: 1,
+    action: 'Review work',
+    tone: 'violet',
+    side: 'client',
+  },
+  kickoff_billing: {
+    label: 'Kickoff',
+    chip: 'kickoff',
+    chipLabel: 'Kickoff',
+    tier: 1,
+    action: 'Confirm billing',
+    tone: 'violet',
+    side: 'client',
+  },
+  exploratory_call: {
+    label: 'Exploratory call',
+    chip: 'calls',
+    chipLabel: 'Calls',
+    tier: 1,
+    action: 'Book a call',
+    tone: 'violet',
+    side: 'client',
+  },
+  eoi_reply: {
+    label: 'In conversation',
+    chip: 'replies',
+    chipLabel: 'Replies',
+    tier: 1,
+    action: 'Reply',
+    tone: 'violet',
+    side: 'client',
+  },
+  proposal_review: {
+    label: 'Proposal to review',
+    chip: 'proposals',
+    chipLabel: 'Proposals',
+    tier: 1,
+    action: 'Review proposal',
+    tone: 'violet',
+    side: 'client',
+  },
+  join_requests: {
+    label: 'Team',
+    chip: 'team',
+    chipLabel: 'Team',
+    tier: 1,
+    action: 'Review requests',
+    tone: 'slate',
+    side: 'client',
   },
 };

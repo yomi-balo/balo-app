@@ -10,6 +10,7 @@ import {
   needsYouFor,
   needsYouForExpert,
   deriveEngagementRow,
+  proposalAwaitsClientReview,
   adminStallDays,
   rowMatchesFilter,
   tilesFromRows,
@@ -33,6 +34,7 @@ function makeRelationship(overrides: Partial<RelationshipRow> = {}): Relationshi
     proposalRequestedAt: null,
     expressionsOfInterest: [],
     conversationMessages: [],
+    proposals: [],
     ...overrides,
   };
 }
@@ -187,7 +189,7 @@ describe('requestRecencyAt', () => {
 describe('needsYouFor — client lens', () => {
   it('requested → not needs-you, waiting on Balo', () => {
     const res = needsYouFor('client', makeRequest({ status: 'requested' }), SIGNAL_QUIET, NOW);
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Waiting on Balo' });
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Waiting on Balo', clientMoveKind: null });
   });
 
   it('exploratory_meeting_requested → needs-you, book the call (no expert is invited yet)', () => {
@@ -197,7 +199,11 @@ describe('needsYouFor — client lens', () => {
       SIGNAL_QUIET,
       NOW
     );
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Book exploratory call' });
+    expect(res).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Book exploratory call',
+      clientMoveKind: 'exploratory_call',
+    });
   });
 
   it('experts_invited → waiting on experts', () => {
@@ -231,7 +237,107 @@ describe('needsYouFor — client lens', () => {
       ],
     });
     const res = needsYouFor('client', row, SIGNAL_QUIET, NOW);
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Review 2 proposals' });
+    expect(res).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Review 2 proposals',
+      clientMoveKind: 'proposal_review',
+    });
+  });
+
+  it('proposal_submitted with every proposal at changes_requested → waiting on expert, not needs-you', () => {
+    const row = makeRequest({
+      status: 'proposal_submitted',
+      relationships: [
+        makeRelationship({
+          id: 'r1',
+          status: 'proposal_submitted',
+          proposals: [{ status: 'changes_requested' }],
+        }),
+        makeRelationship({
+          id: 'r2',
+          status: 'proposal_submitted',
+          proposals: [{ status: 'changes_requested' }],
+        }),
+      ],
+    });
+    expect(needsYouFor('client', row, SIGNAL_QUIET, NOW)).toEqual({
+      needsYou: false,
+      nudgeLabel: 'Waiting on expert',
+      clientMoveKind: null,
+    });
+  });
+
+  it('proposal_submitted with a mixed set counts only the proposals still awaiting review', () => {
+    const row = makeRequest({
+      status: 'proposal_submitted',
+      relationships: [
+        makeRelationship({
+          id: 'r1',
+          status: 'proposal_submitted',
+          proposals: [{ status: 'changes_requested' }],
+        }),
+        makeRelationship({
+          id: 'r2',
+          status: 'proposal_submitted',
+          proposals: [{ status: 'submitted' }],
+        }),
+      ],
+    });
+    expect(needsYouFor('client', row, SIGNAL_QUIET, NOW)).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Review proposal',
+      clientMoveKind: 'proposal_review',
+    });
+  });
+
+  it('needsYou holds exactly when clientMoveKind is set, over every request status × signal', () => {
+    const statuses: ProjectRequestStatus[] = [
+      'draft',
+      'requested',
+      'exploratory_meeting_requested',
+      'experts_invited',
+      'eoi_submitted',
+      'proposal_requested',
+      'proposal_submitted',
+      'accepted',
+      'kickoff_approved',
+      'closed',
+    ];
+    for (const status of statuses) {
+      for (const signal of [SIGNAL_UNREAD, SIGNAL_QUIET]) {
+        for (const clientBillingConfirmedAt of [null, day(1)]) {
+          const res = needsYouFor(
+            'client',
+            makeRequest({
+              status,
+              clientBillingConfirmedAt,
+              relationships: [makeRelationship({ status: 'proposal_submitted' })],
+            }),
+            signal,
+            NOW
+          );
+          expect(res.needsYou).toBe(res.clientMoveKind !== null);
+        }
+      }
+    }
+  });
+
+  it.each([
+    ['exploratory_meeting_requested', 'exploratory_call'],
+    ['eoi_submitted', 'eoi_reply'],
+    ['accepted', 'kickoff_billing'],
+  ] as const)('%s needs-you → clientMoveKind %s', (status, kind) => {
+    const res = needsYouFor('client', makeRequest({ status }), SIGNAL_UNREAD, NOW);
+    expect(res.clientMoveKind).toBe(kind);
+  });
+
+  it('the admin lens never carries a client move kind', () => {
+    expect(
+      needsYouFor('admin', makeRequest({ status: 'requested' }), SIGNAL_QUIET, NOW)
+    ).toMatchObject({
+      needsYou: true,
+      clientMoveKind: null,
+    });
   });
 
   it('accepted with billing unconfirmed → needs-you, confirm billing', () => {
@@ -241,7 +347,11 @@ describe('needsYouFor — client lens', () => {
       SIGNAL_QUIET,
       NOW
     );
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Confirm billing' });
+    expect(res).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Confirm billing',
+      clientMoveKind: 'kickoff_billing',
+    });
   });
 
   it('accepted with billing confirmed → not needs-you', () => {
@@ -261,12 +371,24 @@ describe('needsYouFor — client lens', () => {
       SIGNAL_QUIET,
       NOW
     );
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Live project' });
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Live project', clientMoveKind: null });
   });
 
   it('closed → not needs-you, closed (BAL-540 — the largest silent surface, now a compile error)', () => {
     const res = needsYouFor('client', makeRequest({ status: 'closed' }), SIGNAL_UNREAD, NOW);
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed' });
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed', clientMoveKind: null });
+  });
+});
+
+describe('proposalAwaitsClientReview', () => {
+  it.each([
+    ['proposal_submitted', null, true],
+    ['proposal_submitted', 'submitted', true],
+    ['proposal_submitted', 'changes_requested', false],
+    ['accepted', 'submitted', false],
+    ['eoi_submitted', null, false],
+  ] as const)('%s with current proposal %s → %s', (relationship, proposal, expected) => {
+    expect(proposalAwaitsClientReview(relationship, proposal)).toBe(expected);
   });
 });
 
@@ -474,6 +596,7 @@ describe('deriveEngagementRow', () => {
       progressLabel: '3 of 5 milestones',
       href: '/engagements/eng-1?from=inbox',
       moveKind: null,
+      clientMoveKind: null,
     });
   });
 
@@ -548,6 +671,27 @@ describe('deriveEngagementRow', () => {
     });
   });
 
+  it('client lens: needsYou holds exactly when clientMoveKind is set, and only pending_acceptance is completion', () => {
+    for (const status of ['active', 'pending_acceptance', 'completed', 'cancelled'] as const) {
+      for (const hasChangeRequest of [false, true]) {
+        const res = deriveEngagementRow(
+          makeEngagementInput({ lens: 'client', status, hasChangeRequest })
+        );
+        expect(res.needsYou).toBe(res.clientMoveKind !== null);
+        expect(res.clientMoveKind).toBe(status === 'pending_acceptance' ? 'completion' : null);
+      }
+    }
+  });
+
+  it('expert lens never carries a client move kind', () => {
+    for (const status of ['active', 'pending_acceptance', 'completed', 'cancelled'] as const) {
+      expect(
+        deriveEngagementRow(makeEngagementInput({ lens: 'expert', status, hasChangeRequest: true }))
+          .clientMoveKind
+      ).toBeNull();
+    }
+  });
+
   it('client pending_acceptance with null autoAcceptLabel → fallback copy', () => {
     const res = deriveEngagementRow(
       makeEngagementInput({ lens: 'client', status: 'pending_acceptance', autoAcceptLabel: null })
@@ -599,7 +743,7 @@ describe('deriveEngagementRow', () => {
 describe('adminNeedsYou + adminStallDays', () => {
   it('requested → triage, needs-you', () => {
     const res = needsYouFor('admin', makeRequest({ status: 'requested' }), SIGNAL_QUIET, NOW);
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Triage' });
+    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Triage', clientMoveKind: null });
   });
 
   it('experts_invited quiet beyond threshold → stalled needs-you with day count', () => {
@@ -612,7 +756,11 @@ describe('adminNeedsYou + adminStallDays', () => {
   it('exploratory_meeting_requested quiet beyond threshold → awaiting booking, never an EOI stall', () => {
     const row = makeRequest({ status: 'exploratory_meeting_requested', updatedAt: day(5) });
     const res = needsYouFor('admin', row, SIGNAL_QUIET, NOW);
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Awaiting client booking' });
+    expect(res).toEqual({
+      needsYou: false,
+      nudgeLabel: 'Awaiting client booking',
+      clientMoveKind: null,
+    });
   });
 
   it('experts_invited recent → not stalled', () => {
@@ -628,7 +776,7 @@ describe('adminNeedsYou + adminStallDays', () => {
       expertTermsConfirmedAt: null,
     });
     const res = needsYouFor('admin', row, SIGNAL_QUIET, NOW);
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Kickoff gate' });
+    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Kickoff gate', clientMoveKind: null });
   });
 
   it('adminStallDays returns null below the threshold', () => {

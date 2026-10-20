@@ -43,6 +43,9 @@ vi.mock('./_components/expert-dashboard', () => ({
     </div>
   ),
 }));
+vi.mock('./_components/dashboard-refresh-on-focus', () => ({
+  DashboardRefreshOnFocus: () => <div data-testid="refresh-on-focus" />,
+}));
 vi.mock('./_components/dashboard-wallet-slot', () => ({
   DashboardWalletSlot: () => <div data-testid="wallet-slot" />,
 }));
@@ -58,6 +61,13 @@ vi.mock('./_components/your-move-slot', () => ({
 }));
 vi.mock('./_components/your-move-skeleton', () => ({
   YourMoveSkeleton: () => <div data-testid="your-move-skeleton" />,
+}));
+const mockCompanyYourMoveSlot = vi.fn();
+vi.mock('./_components/company-your-move-slot', () => ({
+  CompanyYourMoveSlot: (props: unknown) => {
+    mockCompanyYourMoveSlot(props);
+    return <div data-testid="company-your-move-slot" />;
+  },
 }));
 vi.mock('./_components/expert-up-next-slot', () => ({
   ExpertUpNextSlot: () => <div data-testid="expert-up-next-slot" />,
@@ -87,29 +97,53 @@ function precedes(a: Element, b: Element): boolean {
 }
 
 describe('DashboardPage — company branch', () => {
-  it('F4: renders Up next, then the wallet slot, then the promo link, then the metric placeholders, in real DOM order', async () => {
+  it('renders the header, then Your move, then Up next, then the wallet slot, then the promo link, in real DOM order', async () => {
     mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
-    mockRequireUser.mockResolvedValue({ id: 'u-1' });
+    mockRequireUser.mockResolvedValue({ id: 'u-1', firstName: 'Dana' });
     mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
 
-    const element = await DashboardPage();
-    const { container } = render(element);
+    const { container } = render(await DashboardPage());
 
+    const header = screen.getByRole('heading', { name: 'Welcome back, Dana' });
+    const yourMove = screen.getByTestId('company-your-move-slot');
     const upNext = screen.getByTestId('company-up-next-slot');
     const wallet = screen.getByTestId('wallet-slot');
     const promo = screen.getByText('Have a promo code?');
-    const metricGrid = container.querySelector('.mt-4.grid');
-    expect(screen.getByText('Dashboard')).toBeInTheDocument();
-    expect(wallet).toBeInTheDocument(); // non-vacuity: the wallet slot really renders
-    expect(metricGrid).not.toBeNull();
-    if (metricGrid === null) throw new Error('metric placeholder grid not found');
 
+    expect(precedes(header, yourMove)).toBe(true);
+    expect(precedes(yourMove, upNext)).toBe(true);
     expect(precedes(upNext, wallet)).toBe(true);
     expect(precedes(wallet, promo)).toBe(true);
-    expect(precedes(promo, metricGrid)).toBe(true);
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+    expect(mockCompanyYourMoveSlot).toHaveBeenCalledWith({
+      user: { id: 'u-1', firstName: 'Dana' },
+      companyId: 'co-1',
+      companyName: 'Northwind',
+    });
   });
 
-  it('mounts the under-review banner slot for the actor, above Up next', async () => {
+  it('mounts the refresh-on-focus listener exactly once', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
+    mockRequireUser.mockResolvedValue({ id: 'u-1', firstName: 'Dana' });
+    mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
+
+    render(await DashboardPage());
+
+    expect(screen.getAllByTestId('refresh-on-focus')).toHaveLength(1);
+  });
+
+  it('greets by first name with the company in the sub-line, falling back to "there"', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
+    mockRequireUser.mockResolvedValue({ id: 'u-1', firstName: null });
+    mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
+
+    render(await DashboardPage());
+
+    expect(screen.getByRole('heading', { name: 'Welcome back, there' })).toBeInTheDocument();
+    expect(screen.getByText('Here’s what’s happening across Northwind.')).toBeInTheDocument();
+  });
+
+  it('mounts the under-review banner slot for the actor, above Your move', async () => {
     mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
     mockRequireUser.mockResolvedValue({ id: 'u-1', email: 'dana@northwind.test' });
     mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
@@ -121,7 +155,7 @@ describe('DashboardPage — company branch', () => {
       userId: 'u-1',
       email: 'dana@northwind.test',
     });
-    expect(precedes(banner, screen.getByTestId('company-up-next-slot'))).toBe(true);
+    expect(precedes(banner, screen.getByTestId('company-your-move-slot'))).toBe(true);
   });
 
   it('does not render the expert dashboard when activeMode is client', async () => {

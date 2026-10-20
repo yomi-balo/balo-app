@@ -11,7 +11,7 @@ import {
 const MONEY = /budget|price|amount|rate|cents|fee|balance|currency/i;
 
 describe('YourMoveCardView key set', () => {
-  it('is exactly the eleven card fields', () => {
+  it('is exactly the twelve card fields', () => {
     expect([...YOUR_MOVE_CARD_VIEW_KEYS].sort((a, b) => a.localeCompare(b))).toEqual(
       [
         'actionLabel',
@@ -19,6 +19,7 @@ describe('YourMoveCardView key set', () => {
         'context',
         'deadline',
         'fact',
+        'factAt',
         'factTone',
         'href',
         'id',
@@ -51,8 +52,21 @@ describe('YOUR_MOVE_KIND_META', () => {
     }
   });
 
-  it('puts only the calendar blocker in tier 0', () => {
+  it('puts only the calendar and billing blockers in tier 0', () => {
     const tier0 = Object.entries(YOUR_MOVE_KIND_META).filter(([, m]) => m.tier === 0);
-    expect(tier0.map(([k]) => k)).toEqual(['calendar_reconnect']);
+    expect(tier0.map(([k]) => k).sort((a, b) => a.localeCompare(b))).toEqual([
+      'calendar_reconnect',
+      'receivable',
+    ]);
+  });
+
+  it('gives every kind a side, with the shared kinds on both', () => {
+    for (const meta of Object.values(YOUR_MOVE_KIND_META)) {
+      expect(['expert', 'client', 'both']).toContain(meta.side);
+    }
+    expect(YOUR_MOVE_KIND_META.action_items.side).toBe('both');
+    expect(YOUR_MOVE_KIND_META.messages.side).toBe('both');
+    expect(YOUR_MOVE_KIND_META.calendar_reconnect.side).toBe('expert');
+    expect(YOUR_MOVE_KIND_META.join_requests.side).toBe('client');
   });
 });

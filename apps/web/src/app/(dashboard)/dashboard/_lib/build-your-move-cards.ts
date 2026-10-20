@@ -1,6 +1,10 @@
-import type { ExpertMoveDetail, ExpertOpenActionItemRow } from '@balo/db';
+import type { ExpertMoveDetail } from '@balo/db';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import { expertSettingsHrefFor } from '@/lib/constants/expert-checklist';
+import {
+  expertCounterpartyLabels,
+  type ExpertCounterpartyNameFields,
+} from '@/lib/meetings/expert-counterparty';
 import { formatPostedRelative } from '@/lib/project-request/request-detail-view';
 import type { ExpertMoveKind, PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 import {
@@ -18,6 +22,7 @@ import {
   yourMoveCompaniesSentence,
   yourMoveDraftSaved,
   yourMoveEoiSentence,
+  yourMoveExpertCounterparty,
   yourMoveInterestFact,
   yourMoveInvitedFact,
   yourMoveOverdueFact,
@@ -37,26 +42,66 @@ const ACTION_ITEMS_SHOWN = 2;
 const EXCERPT_MAX_CHARS = 240;
 const SNIPPET_MAX_CHARS = 140;
 
-/** One unread conversation, already resolved to the client company (never a sender name). */
+/** The other party on a thread or action item: the client company, or the delivering expert. */
+export type YourMoveParty =
+  | { readonly kind: 'company'; readonly name: string }
+  | { readonly kind: 'expert'; readonly expertProfileId: string | null };
+
+const UNNAMED_EXPERT = 'An expert';
+
+/** Resolves a party to its display name and org line. A missing expert reads "An expert". */
+export function partyLabels(
+  party: YourMoveParty,
+  expertNames: ReadonlyMap<string, ExpertCounterpartyNameFields>
+): { readonly name: string; readonly org: string | null } {
+  if (party.kind === 'company') return { name: party.name, org: null };
+  const fields =
+    party.expertProfileId === null ? undefined : expertNames.get(party.expertProfileId);
+  if (fields === undefined) return { name: UNNAMED_EXPERT, org: null };
+  const { personName, agencyLabel } = expertCounterpartyLabels(fields);
+  return { name: personName, org: agencyLabel };
+}
+
+/** One open action item, shared by both rails: the other party is a {@link YourMoveParty}. */
+export interface YourMoveActionItem {
+  readonly engagementId: string;
+  readonly engagementType: 'case' | 'project';
+  readonly engagementTitle: string | null;
+  readonly party: YourMoveParty;
+  readonly body: string;
+  readonly dueAt: Date | null;
+  readonly createdAt: Date;
+}
+
+/** One unread conversation, already resolved to its other party. */
 export interface YourMoveMessageThread {
-  readonly companyName: string;
+  readonly party: YourMoveParty;
   readonly unreadCount: number;
   readonly earliestUnreadAt: Date | null;
-  /** The newest message when it is inbound; null when the newest message is the viewer's. */
-  readonly latestInbound: { readonly body: string; readonly at: Date } | null;
+  /**
+   * The newest message when it is inbound; null when the newest message is the viewer's.
+   * `senderFirstName` is the actual sender's first name, which can be a teammate or Balo staff
+   * rather than the thread's counterparty.
+   */
+  readonly latestInbound: {
+    readonly body: string;
+    readonly at: Date;
+    readonly senderFirstName: string | null;
+  } | null;
   readonly latestActivityAt: Date;
 }
 
 export interface BuildYourMoveCardsInput {
   readonly rows: readonly PortfolioRowView[];
   readonly details: ReadonlyMap<string, ExpertMoveDetail>;
-  readonly actionItems: readonly ExpertOpenActionItemRow[];
+  readonly actionItems: readonly YourMoveActionItem[];
+  readonly expertNames: ReadonlyMap<string, ExpertCounterpartyNameFields>;
   readonly messages: readonly YourMoveMessageThread[];
   readonly calendarNeedsReconnect: boolean;
   readonly now: Date;
 }
 
-function cut(text: string, max: number): string {
+export function cut(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
 }
 
@@ -84,7 +129,7 @@ function factFor(moveKind: ExpertMoveKind, rel: string): string | null {
   }
 }
 
-function dedupe(values: readonly string[]): string[] {
+export function dedupe(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
@@ -175,6 +220,7 @@ function kickoffContext({ detail }: ProjectContextInput): ProjectContext {
           state: detail.requestStatus === 'kickoff_approved' ? 'done' : 'pending',
         },
       ],
+      note: null,
     },
     actionLabel: null,
   };
@@ -226,17 +272,24 @@ function projectCards(
     const { moveKind } = row;
     if (!row.needsYou || moveKind === null || moveKind === undefined) continue;
     const kind = cardKindFor(moveKind);
-    const { context, actionLabel } = projectContext(row, moveKind, details.get(row.id), now);
+    const detail = details.get(row.id);
+    const { context, actionLabel } = projectContext(row, moveKind, detail, now);
+    const asked =
+      moveKind === 'changes_requested' ? (detail?.latestChangeRequest?.createdAt ?? null) : null;
     cards.push({
       id: row.id,
       kind,
       title: row.title,
       counterparty: row.companyName ?? '',
-      fact: factFor(moveKind, row.updatedRelative),
+      fact: factFor(
+        moveKind,
+        asked === null ? row.updatedRelative : formatPostedRelative(asked, now)
+      ),
+      factAt: null,
       factTone: 'muted',
       actionLabel: actionLabel ?? YOUR_MOVE_KIND_META[kind].action,
       href: row.href ?? '/projects',
-      waitingSince: row.recencyAtIso,
+      waitingSince: asked === null ? row.recencyAtIso : asked.toISOString(),
       deadline: null,
       context,
     });
@@ -258,6 +311,7 @@ export function buildCalendarCards(input: {
       title: YOUR_MOVE_CALENDAR_TITLE,
       counterparty: YOUR_MOVE_CALENDAR_COUNTERPARTY,
       fact: null,
+      factAt: null,
       factTone: 'muted',
       actionLabel: YOUR_MOVE_KIND_META.calendar_reconnect.action,
       href: expertSettingsHrefFor('calendar'),
@@ -268,7 +322,7 @@ export function buildCalendarCards(input: {
   ];
 }
 
-function compareActionItems(a: ExpertOpenActionItemRow, b: ExpertOpenActionItemRow, now: Date) {
+function compareActionItems(a: YourMoveActionItem, b: YourMoveActionItem, now: Date) {
   const nowMs = now.getTime();
   const overdueA = a.dueAt !== null && a.dueAt.getTime() < nowMs;
   const overdueB = b.dueAt !== null && b.dueAt.getTime() < nowMs;
@@ -280,8 +334,12 @@ function compareActionItems(a: ExpertOpenActionItemRow, b: ExpertOpenActionItemR
   return a.createdAt.getTime() - b.createdAt.getTime();
 }
 
-function actionItemCards(items: readonly ExpertOpenActionItemRow[], now: Date): YourMoveCardView[] {
-  const byEngagement = new Map<string, ExpertOpenActionItemRow[]>();
+export function actionItemCards(
+  items: readonly YourMoveActionItem[],
+  expertNames: ReadonlyMap<string, ExpertCounterpartyNameFields>,
+  now: Date
+): YourMoveCardView[] {
+  const byEngagement = new Map<string, YourMoveActionItem[]>();
   for (const item of items) {
     const group = byEngagement.get(item.engagementId);
     if (group === undefined) byEngagement.set(item.engagementId, [item]);
@@ -295,12 +353,14 @@ function actionItemCards(items: readonly ExpertOpenActionItemRow[], now: Date): 
     if (first === undefined) continue;
     const overdueCount = sorted.filter((i) => i.dueAt !== null && i.dueAt.getTime() < nowMs).length;
     const oldest = Math.min(...sorted.map((i) => i.createdAt.getTime()));
+    const { name, org } = partyLabels(first.party, expertNames);
     cards.push({
       id: `action_items-${engagementId}`,
       kind: 'action_items',
       title: first.engagementTitle ?? YOUR_MOVE_ONGOING_ENGAGEMENT,
-      counterparty: first.companyName,
+      counterparty: yourMoveExpertCounterparty({ personName: name, agencyLabel: org }),
       fact: overdueCount > 0 ? yourMoveOverdueFact(overdueCount) : null,
+      factAt: null,
       factTone: overdueCount > 0 ? 'warning' : 'muted',
       actionLabel: YOUR_MOVE_KIND_META.action_items.action,
       href:
@@ -320,7 +380,12 @@ function actionItemCards(items: readonly ExpertOpenActionItemRow[], now: Date): 
   return cards;
 }
 
-function messageCards(threads: readonly YourMoveMessageThread[], now: Date): YourMoveCardView[] {
+export function messageCards(
+  threads: readonly YourMoveMessageThread[],
+  expertNames: ReadonlyMap<string, ExpertCounterpartyNameFields>,
+  now: Date,
+  quoteFrom: 'party' | 'sender' = 'party'
+): YourMoveCardView[] {
   const unread = threads.filter((t) => t.unreadCount > 0);
   if (unread.length === 0) return [];
   const byFreshest = [...unread].sort(
@@ -333,24 +398,39 @@ function messageCards(threads: readonly YourMoveMessageThread[], now: Date): You
     .map((d) => d.getTime());
   const featured = byFreshest.find((t) => t.latestInbound !== null);
   const inbound = featured?.latestInbound ?? null;
+  const featuredLabels = featured === undefined ? null : partyLabels(featured.party, expertNames);
   return [
     {
       id: 'messages',
       kind: 'messages',
       title: yourMoveUnreadTitle(total, unread.length),
-      counterparty: yourMoveCompaniesSentence(dedupe(byFreshest.map((t) => t.companyName))),
+      counterparty: yourMoveCompaniesSentence(
+        dedupe(
+          byFreshest.map((t) => {
+            const labels = partyLabels(t.party, expertNames);
+            return labels.org ?? labels.name;
+          })
+        )
+      ),
       fact: null,
+      factAt: null,
       factTone: 'muted',
       actionLabel: YOUR_MOVE_KIND_META.messages.action,
       href: '/messages',
       waitingSince: (earliest.length > 0 ? new Date(Math.min(...earliest)) : now).toISOString(),
       deadline: null,
       context:
-        featured === undefined || inbound === null
+        featuredLabels === null || inbound === null
           ? null
           : {
               type: 'message',
-              from: featured.companyName,
+              from:
+                quoteFrom === 'sender' && inbound.senderFirstName !== null
+                  ? inbound.senderFirstName
+                  : yourMoveExpertCounterparty({
+                      personName: featuredLabels.name,
+                      agencyLabel: featuredLabels.org,
+                    }),
               at: formatPostedRelative(inbound.at, now),
               snippet: cut(htmlToPlainText(inbound.body), SNIPPET_MAX_CHARS),
             },
@@ -375,11 +455,11 @@ export function sortYourMoveCards(cards: readonly YourMoveCardView[]): YourMoveC
 }
 
 export function buildYourMoveCards(input: BuildYourMoveCardsInput): YourMoveCardView[] {
-  const { rows, details, actionItems, messages, calendarNeedsReconnect, now } = input;
+  const { rows, details, actionItems, expertNames, messages, calendarNeedsReconnect, now } = input;
   return sortYourMoveCards([
     ...buildCalendarCards({ calendarNeedsReconnect, now }),
     ...projectCards(rows, details, now),
-    ...actionItemCards(actionItems, now),
-    ...messageCards(messages, now),
+    ...actionItemCards(actionItems, expertNames, now),
+    ...messageCards(messages, expertNames, now),
   ]);
 }

@@ -12,7 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { track, CALENDAR_EVENTS, DASHBOARD_EVENTS } from '@/lib/analytics';
-import { useRefreshOnFocus } from '@/hooks/use-refresh-on-focus';
+import { useViewerClock } from '@/hooks/use-viewer-clock';
 import {
   YOUR_MOVE_EMPTY,
   YOUR_MOVE_ERROR,
@@ -25,6 +25,7 @@ import {
   YOUR_MOVE_KIND_META,
   type YourMoveCardView,
   type YourMoveData,
+  type YourMoveWorkspaceType,
 } from '../_lib/your-move-view-types';
 import { MoveCard } from './move-card';
 
@@ -77,10 +78,16 @@ function FilterChip({
 
 const PANEL_CLASS = 'bg-primary/5 border-primary/15 rounded-[18px] border';
 
-export function YourMove({ data }: Readonly<{ data: YourMoveData }>): React.JSX.Element {
+interface YourMoveProps {
+  readonly data: YourMoveData;
+  readonly workspaceType: YourMoveWorkspaceType;
+}
+
+export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): React.JSX.Element {
   const router = useRouter();
   const [retrying, startRetry] = useTransition();
-  useRefreshOnFocus();
+  const clock = useViewerClock();
+  const [overflows, setOverflows] = useState(false);
   const viewedRef = useRef(false);
   const railRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<DashboardYourMoveChip>('all');
@@ -100,13 +107,28 @@ export function YourMove({ data }: Readonly<{ data: YourMoveData }>): React.JSX.
     if (viewedRef.current || data.kind !== 'ready') return;
     viewedRef.current = true;
     track(DASHBOARD_EVENTS.YOUR_MOVE_VIEWED, {
-      workspace_type: 'expert',
+      workspace_type: workspaceType,
       card_count: data.cards.length,
       card_kinds: DASHBOARD_YOUR_MOVE_CARD_KINDS.filter((kind) =>
         data.cards.some((card) => card.kind === kind)
       ),
     });
-  }, [data]);
+  }, [data, workspaceType]);
+
+  const railPresent = data.kind === 'ready' && visible.length > 0;
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!railPresent || rail === null) {
+      setOverflows(false);
+      return;
+    }
+    const measure = (): void => setOverflows(rail.scrollWidth > rail.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(rail);
+    return () => observer.disconnect();
+  }, [railPresent, activeFilter, visible.length]);
 
   const handleFilter = (chip: DashboardYourMoveChip): void => {
     setFilter(chip);
@@ -115,7 +137,11 @@ export function YourMove({ data }: Readonly<{ data: YourMoveData }>): React.JSX.
       chip === 'all'
         ? cards.length
         : cards.filter((card) => YOUR_MOVE_KIND_META[card.kind].chip === chip).length;
-    track(DASHBOARD_EVENTS.YOUR_MOVE_FILTERED, { chip, card_count: count });
+    track(DASHBOARD_EVENTS.YOUR_MOVE_FILTERED, {
+      workspace_type: workspaceType,
+      chip,
+      card_count: count,
+    });
   };
 
   const handleNavigate = (
@@ -123,7 +149,12 @@ export function YourMove({ data }: Readonly<{ data: YourMoveData }>): React.JSX.
     position: number,
     target: DashboardYourMoveTarget
   ): void => {
-    track(DASHBOARD_EVENTS.YOUR_MOVE_CLICKED, { target, card_kind: card.kind, position });
+    track(DASHBOARD_EVENTS.YOUR_MOVE_CLICKED, {
+      workspace_type: workspaceType,
+      target,
+      card_kind: card.kind,
+      position,
+    });
     if (card.kind === 'calendar_reconnect' && target === 'action') {
       track(CALENDAR_EVENTS.CONNECT_CTA_CLICKED, { source: 'dashboard_banner' });
     }
@@ -177,24 +208,26 @@ export function YourMove({ data }: Readonly<{ data: YourMoveData }>): React.JSX.
             </p>
           )}
         </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            aria-label="Scroll back"
-            onClick={() => scroll(-1)}
-            className="bg-card text-foreground border-primary/15 focus-visible:ring-ring hidden size-9 items-center justify-center rounded-full border focus-visible:ring-2 focus-visible:outline-none sm:flex"
-          >
-            <ChevronLeft className="size-[18px]" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label="Scroll forward"
-            onClick={() => scroll(1)}
-            className="bg-card text-foreground border-primary/15 focus-visible:ring-ring hidden size-9 items-center justify-center rounded-full border focus-visible:ring-2 focus-visible:outline-none sm:flex"
-          >
-            <ChevronRight className="size-[18px]" aria-hidden="true" />
-          </button>
-        </div>
+        {railPresent && overflows && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              aria-label="Scroll back"
+              onClick={() => scroll(-1)}
+              className="bg-card text-foreground border-primary/15 focus-visible:ring-ring hidden size-9 items-center justify-center rounded-full border focus-visible:ring-2 focus-visible:outline-none sm:flex"
+            >
+              <ChevronLeft className="size-[18px]" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              aria-label="Scroll forward"
+              onClick={() => scroll(1)}
+              className="bg-card text-foreground border-primary/15 focus-visible:ring-ring hidden size-9 items-center justify-center rounded-full border focus-visible:ring-2 focus-visible:outline-none sm:flex"
+            >
+              <ChevronRight className="size-[18px]" aria-hidden="true" />
+            </button>
+          </div>
+        )}
       </div>
 
       {groups.length > 1 && (
@@ -236,6 +269,7 @@ export function YourMove({ data }: Readonly<{ data: YourMoveData }>): React.JSX.
               key={card.id}
               card={card}
               featured={activeFilter === 'all' && index === 0}
+              clock={clock}
               onNavigate={(target) => handleNavigate(card, index + 1, target)}
             />
           ))}

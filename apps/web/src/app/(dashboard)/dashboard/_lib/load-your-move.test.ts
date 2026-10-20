@@ -34,14 +34,19 @@ vi.mock('@/lib/projects-inbox/portfolio-view', () => ({
   summaryIsUnread: (s: { unread: boolean }) => s.unread,
 }));
 
-import { loadExpertYourMove } from './load-your-move';
+import { collectThreadRefs, loadExpertYourMove } from './load-your-move';
+import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 import type { SessionUser } from '@/lib/auth/session';
 
 const NOW = new Date('2026-10-20T10:00:00.000Z');
 const USER = { id: 'user-1', expertProfileId: 'ep-1' } as SessionUser & { expertProfileId: string };
 
 function portfolioRow(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  const isEngagement = over.kind === 'engagement';
   return {
+    threadRefs: isEngagement
+      ? [{ contextType: 'engagement', contextId: id, expertProfileId: null }]
+      : [{ contextType: 'relationship', contextId: `rel-${id}`, expertProfileId: null }],
     id,
     href: `/projects/${id}`,
     title: id,
@@ -105,7 +110,7 @@ describe('loadExpertYourMove', () => {
       rows: [
         portfolioRow('need-1', { needsYou: true, moveKind: 'invitation' }),
         portfolioRow('quiet'),
-        portfolioRow('eng-q', { kind: 'engagement', relationshipId: undefined }),
+        portfolioRow('eng-q', { kind: 'engagement' }),
         portfolioRow('eng-n', {
           kind: 'engagement',
           needsYou: true,
@@ -166,5 +171,34 @@ describe('loadExpertYourMove', () => {
     m.loadExpertPortfolio.mockResolvedValue({ rows: [], closedRows: [] });
     const cards = await loadExpertYourMove({ user: USER, calendarNeedsReconnect: true, now: NOW });
     expect(cards.map((c) => c.kind)).toEqual(['calendar_reconnect']);
+  });
+});
+
+describe('collectThreadRefs', () => {
+  const asRows = (rows: Record<string, unknown>[]): PortfolioRowView[] =>
+    rows as unknown as PortfolioRowView[];
+
+  it('skips needs-you rows on both sides and rows with no open thread', () => {
+    const rows = asRows([
+      portfolioRow('expert-card', { needsYou: true, moveKind: 'invitation' }),
+      portfolioRow('client-card', { needsYou: true, clientMoveKind: 'eoi_reply' }),
+      portfolioRow('closed', { threadRefs: [] }),
+      portfolioRow('quiet'),
+    ]);
+    const refs = collectThreadRefs(rows, [], 'company');
+    expect(refs.map((r) => r.ref.contextId)).toEqual(['rel-quiet']);
+    expect(refs[0]?.party).toEqual({ kind: 'company', name: 'Northwind' });
+  });
+
+  it('names the delivering expert as the party on the company rail', () => {
+    const rows = asRows([
+      portfolioRow('quiet', {
+        threadRefs: [{ contextType: 'engagement', contextId: 'e1', expertProfileId: 'ep-9' }],
+      }),
+    ]);
+    expect(collectThreadRefs(rows, [], 'expert')[0]?.party).toEqual({
+      kind: 'expert',
+      expertProfileId: 'ep-9',
+    });
   });
 });

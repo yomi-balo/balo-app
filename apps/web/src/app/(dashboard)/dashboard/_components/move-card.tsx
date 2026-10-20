@@ -1,17 +1,26 @@
 import Link from 'next/link';
 import {
   Briefcase,
+  CalendarClock,
   CalendarX2,
+  CheckCircle2,
+  Compass,
+  CreditCard,
+  FileText,
   Handshake,
   ListChecks,
   Mail,
   MessageSquare,
   PenLine,
+  UserPlus,
+  Users,
   type LucideIcon,
 } from 'lucide-react';
 import type { DashboardYourMoveCardKind, DashboardYourMoveTarget } from '@balo/analytics/events';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import type { ViewerClock } from '@/hooks/use-viewer-clock';
+import { formatYourMoveFactAt } from '../_lib/your-move-dates';
 import {
   YOUR_MOVE_KIND_META,
   type YourMoveCardView,
@@ -29,6 +38,14 @@ const KIND_ICON: Record<DashboardYourMoveCardKind, LucideIcon> = {
   delivery_changes: Briefcase,
   action_items: ListChecks,
   messages: MessageSquare,
+  receivable: CreditCard,
+  reschedule: CalendarClock,
+  completion: CheckCircle2,
+  kickoff_billing: Handshake,
+  exploratory_call: Compass,
+  eoi_reply: Users,
+  proposal_review: FileText,
+  join_requests: UserPlus,
 };
 
 const TONE_CLASSES: Record<YourMoveTone, { tile: string; label: string; band: string }> = {
@@ -46,15 +63,25 @@ const TONE_CLASSES: Record<YourMoveTone, { tile: string; label: string; band: st
   },
 };
 
+function factText(card: YourMoveCardView, clock: ViewerClock | null): React.ReactNode {
+  if (card.fact !== null) return card.fact;
+  if (card.factAt === null) return '';
+  if (clock === null) return <span aria-hidden="true">&nbsp;</span>;
+  return formatYourMoveFactAt(card.factAt, clock.timeZone);
+}
+
 interface MoveCardProps {
   readonly card: YourMoveCardView;
   readonly featured: boolean;
+  /** The viewer's device clock; null until it resolves, so dated facts render nothing server-side. */
+  readonly clock: ViewerClock | null;
   readonly onNavigate: (target: DashboardYourMoveTarget) => void;
 }
 
 export function MoveCard({
   card,
   featured,
+  clock,
   onNavigate,
 }: Readonly<MoveCardProps>): React.JSX.Element {
   const meta = YOUR_MOVE_KIND_META[card.kind];
@@ -107,7 +134,14 @@ export function MoveCard({
           </h3>
           <p className="text-muted-foreground mt-[3px] truncate text-[13px]">{card.counterparty}</p>
         </div>
-        {card.context !== null && <MoveCardContext context={card.context} />}
+        {card.context !== null && (
+          <MoveCardContext
+            context={card.context}
+            href={card.href}
+            clock={clock}
+            onNavigate={onNavigate}
+          />
+        )}
       </div>
       <div
         className={cn(
@@ -135,7 +169,7 @@ export function MoveCard({
               : 'text-muted-foreground font-medium'
           )}
         >
-          {card.fact ?? ''}
+          {factText(card, clock)}
         </span>
         <Button
           asChild

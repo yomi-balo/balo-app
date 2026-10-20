@@ -9,6 +9,7 @@ import {
   ne,
   notInArray,
   or,
+  sql,
   type SQL,
 } from 'drizzle-orm';
 import { db } from '../client';
@@ -21,6 +22,7 @@ import {
   projectRequests,
   projectTags,
   proposalChangeRequests,
+  proposalMilestones,
   proposals,
   requestExpertRelationships,
 } from '../schema';
@@ -81,7 +83,8 @@ function expertCanSeeRelationship(): SQL | undefined {
 }
 
 /** Local alias — the per-expert relationship status enum value. */
-type RequestExpertRelationshipStatus = (typeof requestExpertRelationships.$inferSelect)['status'];
+export type RequestExpertRelationshipStatus =
+  (typeof requestExpertRelationships.$inferSelect)['status'];
 
 /**
  * The shared hydrated `with:` graph behind BOTH the client lens (`listByCompany`)
@@ -155,6 +158,13 @@ async function queryPortfolioRequests(filter: {
             where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
             columns: { id: true, submittedAt: true },
             orderBy: (t, { desc: childDesc }) => [childDesc(t.submittedAt)],
+            limit: 1,
+          },
+          // Status of the relationship's LIVE current proposal (at most one row).
+          proposals: {
+            where: (t, { and: childAnd, eq: childEq, isNull: childIsNull }) =>
+              childAnd(childEq(t.isCurrent, true), childIsNull(t.deletedAt)),
+            columns: { status: true },
             limit: 1,
           },
         },
@@ -493,6 +503,118 @@ export const projectsInboxRepository = {
     }
     return result;
   },
+
+  /**
+   * Client "Your move" detail batch. For the given project requests of ONE company: the request's
+   * expert-terms gate plus, per live non-declined relationship, the LIVE current proposal's
+   * status, version, timeframe, live milestone count and submission time. Scoped by
+   * `companyId`, so another company's request id is absent. No price or fee column is selected.
+   * Two fixed queries regardless of input size (the milestone count is one grouped `count(*)`);
+   * empty input returns an empty Map without touching the DB.
+   */
+  async listClientMoveDetails(input: {
+    companyId: string;
+    projectRequestIds: readonly string[];
+  }): Promise<Map<string, ClientMoveDetail>> {
+    const result = new Map<string, ClientMoveDetail>();
+    if (input.projectRequestIds.length === 0) {
+      return result;
+    }
+
+    const rows = await db
+      .select({
+        projectRequestId: projectRequests.id,
+        expertTermsConfirmedAt: projectRequests.expertTermsConfirmedAt,
+        relationshipId: requestExpertRelationships.id,
+        expertProfileId: requestExpertRelationships.expertProfileId,
+        relationshipStatus: requestExpertRelationships.status,
+        proposalId: proposals.id,
+        proposalStatus: proposals.status,
+        proposalVersion: proposals.version,
+        timeframeWeeks: proposals.timeframeWeeks,
+        submittedAt: proposals.submittedAt,
+      })
+      .from(projectRequests)
+      .leftJoin(
+        requestExpertRelationships,
+        and(
+          eq(requestExpertRelationships.projectRequestId, projectRequests.id),
+          isNull(requestExpertRelationships.deletedAt),
+          ne(requestExpertRelationships.status, 'declined')
+        )
+      )
+      .leftJoin(
+        proposals,
+        and(
+          eq(proposals.relationshipId, requestExpertRelationships.id),
+          eq(proposals.isCurrent, true),
+          isNull(proposals.deletedAt)
+        )
+      )
+      .where(
+        and(
+          eq(projectRequests.companyId, input.companyId),
+          inArray(projectRequests.id, [...input.projectRequestIds]),
+          isNull(projectRequests.deletedAt)
+        )
+      )
+      .orderBy(asc(requestExpertRelationships.createdAt), asc(requestExpertRelationships.id));
+
+    const proposalIds = rows.flatMap((row) => (row.proposalId === null ? [] : [row.proposalId]));
+    const countRows =
+      proposalIds.length === 0
+        ? []
+        : await db
+            .select({
+              proposalId: proposalMilestones.proposalId,
+              milestoneCount: sql<number>`count(*)`.mapWith(Number),
+            })
+            .from(proposalMilestones)
+            .where(
+              and(
+                inArray(proposalMilestones.proposalId, proposalIds),
+                isNull(proposalMilestones.deletedAt)
+              )
+            )
+            .groupBy(proposalMilestones.proposalId);
+    const milestoneCountByProposal = new Map(
+      countRows.map((row) => [row.proposalId, row.milestoneCount])
+    );
+
+    for (const row of rows) {
+      const detail = result.get(row.projectRequestId) ?? {
+        projectRequestId: row.projectRequestId,
+        expertTermsConfirmedAt: row.expertTermsConfirmedAt,
+        relationships: [],
+      };
+      if (
+        row.relationshipId !== null &&
+        row.expertProfileId !== null &&
+        row.relationshipStatus !== null
+      ) {
+        detail.relationships.push({
+          relationshipId: row.relationshipId,
+          expertProfileId: row.expertProfileId,
+          status: row.relationshipStatus,
+          currentProposal:
+            row.proposalId === null ||
+            row.proposalStatus === null ||
+            row.proposalVersion === null ||
+            row.submittedAt === null
+              ? null
+              : {
+                  status: row.proposalStatus,
+                  version: row.proposalVersion,
+                  timeframeWeeks: row.timeframeWeeks,
+                  milestoneCount: milestoneCountByProposal.get(row.proposalId) ?? 0,
+                  submittedAt: row.submittedAt,
+                },
+        });
+      }
+      result.set(row.projectRequestId, detail);
+    }
+    return result;
+  },
 };
 
 /**
@@ -542,4 +664,25 @@ export interface ExpertMoveDetail {
     section: ProposalChangeSection;
     createdAt: Date;
   } | null;
+}
+
+/**
+ * Everything a client's "Your move" card needs beyond the portfolio row. Deliberately has no
+ * budget, price or fee field.
+ */
+export interface ClientMoveDetail {
+  projectRequestId: string;
+  expertTermsConfirmedAt: Date | null;
+  relationships: {
+    relationshipId: string;
+    expertProfileId: string;
+    status: RequestExpertRelationshipStatus;
+    currentProposal: {
+      status: ProposalStatus;
+      version: number;
+      timeframeWeeks: number | null;
+      milestoneCount: number;
+      submittedAt: Date;
+    } | null;
+  }[];
 }

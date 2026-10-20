@@ -95,6 +95,10 @@ const PINNED_FILES: readonly string[] = [
   '_components/your-move-skeleton.tsx',
   '_components/move-card.tsx',
   '_components/move-card-context.tsx',
+  '_lib/build-client-move-cards.ts',
+  '_lib/load-client-your-move.ts',
+  '_lib/your-move-dates.ts',
+  '_components/company-your-move-slot.tsx',
 ];
 
 const VIEW_GATE_TOKENS: readonly string[] = [

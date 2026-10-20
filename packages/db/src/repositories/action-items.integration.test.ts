@@ -2,12 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { asc, eq } from 'drizzle-orm';
 import { db } from '../client';
-import { actionItems, auditEvents, projectRequests, type AuditEvent } from '../schema';
+import {
+  actionItems,
+  auditEvents,
+  expertProfiles,
+  projectRequests,
+  users,
+  type AuditEvent,
+} from '../schema';
 import type { ProjectDeliveryStatus } from './_shared/engagement-supertype';
 import {
   caseEngagementFactory,
   engagementFactory,
   actionItemFactory,
+  agencyFactory,
   expertDraftFactory,
   meetingFactory,
   projectRequestFactory,
@@ -724,6 +732,122 @@ describe('actionItemsRepository.listOpenAssignedToExpert', () => {
     });
 
     const rows = await actionItemsRepository.listOpenAssignedToExpert(expert.id);
+    expect(rows.map((r) => r.actionItemId)).toEqual([first.actionItem.id, second.actionItem.id]);
+  });
+});
+
+describe('actionItemsRepository.listOpenAssignedToClient', () => {
+  it('returns only the company’s open, client-assigned, live items on active case/project engagements', async () => {
+    const expertUser = await userFactory({ firstName: 'Maya', lastName: 'Patel' });
+    const expert = await expertDraftFactory({ userId: expertUser.id });
+    const { engagement: mine, companyId } = await caseEngagementFactory({
+      expertProfileId: expert.id,
+      caseValues: { title: 'Flow debugging' },
+    });
+    const { engagement: otherCompany } = await caseEngagementFactory({
+      expertProfileId: expert.id,
+    });
+    const { engagement: completedCase } = await caseEngagementFactory({
+      companyId,
+      values: { status: 'completed' },
+    });
+    const { engagement: deletedCase } = await caseEngagementFactory({
+      companyId,
+      values: { deletedAt: new Date() },
+    });
+
+    const due = new Date('2026-12-01T00:00:00.000Z');
+    const { actionItem: included } = await actionItemFactory({
+      engagementId: mine.id,
+      values: { assigneeParty: 'client', dueAt: due, body: 'Share the org chart' },
+    });
+    await actionItemFactory({
+      engagementId: mine.id,
+      values: { assigneeParty: 'client', status: 'done' },
+    });
+    await actionItemFactory({ engagementId: mine.id, values: { assigneeParty: 'expert' } });
+    await actionItemFactory({ engagementId: mine.id, values: { assigneeParty: null } });
+    await actionItemFactory({
+      engagementId: mine.id,
+      values: { assigneeParty: 'client', deletedAt: new Date() },
+    });
+    await actionItemFactory({
+      engagementId: otherCompany.id,
+      values: { assigneeParty: 'client' },
+    });
+    await actionItemFactory({
+      engagementId: completedCase.id,
+      values: { assigneeParty: 'client' },
+    });
+    await actionItemFactory({ engagementId: deletedCase.id, values: { assigneeParty: 'client' } });
+
+    const rows = await actionItemsRepository.listOpenAssignedToClient(companyId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actionItemId: included.id,
+      engagementId: mine.id,
+      engagementType: 'case',
+      engagementTitle: 'Flow debugging',
+      expertProfileId: expert.id,
+      expertFirstName: 'Maya',
+      expertLastName: 'Patel',
+      agencyName: null,
+      body: 'Share the org chart',
+    });
+    expect(rows[0]?.dueAt?.getTime()).toBe(due.getTime());
+  });
+
+  it('carries the expert’s agency name, and null names when the expert user is soft-deleted', async () => {
+    const agency = await agencyFactory({ name: 'Brightline Advisory' });
+    const expertUser = await userFactory({ firstName: 'Maya', lastName: 'Patel' });
+    const expert = await expertDraftFactory({ userId: expertUser.id });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id })
+      .where(eq(expertProfiles.id, expert.id));
+    const { engagement, companyId } = await caseEngagementFactory({ expertProfileId: expert.id });
+    await actionItemFactory({ engagementId: engagement.id, values: { assigneeParty: 'client' } });
+
+    const withAgency = await actionItemsRepository.listOpenAssignedToClient(companyId);
+    expect(withAgency[0]?.agencyName).toBe('Brightline Advisory');
+    expect(withAgency[0]?.expertFirstName).toBe('Maya');
+
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, expert.userId));
+    const afterDelete = await actionItemsRepository.listOpenAssignedToClient(companyId);
+    expect(afterDelete).toHaveLength(1);
+    expect(afterDelete[0]).toMatchObject({
+      expertFirstName: null,
+      expertLastName: null,
+      agencyName: 'Brightline Advisory',
+    });
+  });
+
+  it('titles a project item with its originating request’s title', async () => {
+    const request = await projectRequestFactory({ title: 'CPQ rollout' });
+    const { engagement } = await engagementFactory({
+      companyId: request.companyId,
+      projectValues: { projectRequestId: request.id },
+    });
+    await actionItemFactory({ engagementId: engagement.id, values: { assigneeParty: 'client' } });
+
+    const rows = await actionItemsRepository.listOpenAssignedToClient(request.companyId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.engagementType).toBe('project');
+    expect(rows[0]?.engagementTitle).toBe('CPQ rollout');
+  });
+
+  it('orders by engagement, then creation time', async () => {
+    const { engagement, companyId } = await caseEngagementFactory();
+    const first = await actionItemFactory({
+      engagementId: engagement.id,
+      values: { assigneeParty: 'client', createdAt: new Date('2026-06-01T00:00:00.000Z') },
+    });
+    const second = await actionItemFactory({
+      engagementId: engagement.id,
+      values: { assigneeParty: 'client', createdAt: new Date('2026-06-02T00:00:00.000Z') },
+    });
+
+    const rows = await actionItemsRepository.listOpenAssignedToClient(companyId);
     expect(rows.map((r) => r.actionItemId)).toEqual([first.actionItem.id, second.actionItem.id]);
   });
 });

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
@@ -11,6 +12,7 @@ import {
   projectRequestTags,
   projectRequests,
   proposalChangeRequests,
+  proposalMilestones,
   proposals,
 } from '../schema';
 import {
@@ -726,5 +728,184 @@ describe('projectsInboxRepository.listAll', () => {
     // so with nothing seeded here the platform-wide scan sees no live requests.
     const rows = await projectsInboxRepository.listAll();
     expect(rows).toEqual([]);
+  });
+});
+
+// ── listByCompany: current proposal status (client rule) ─────────────────
+
+describe('projectsInboxRepository.listByCompany — current proposal status', () => {
+  it('returns only the LIVE current proposal status per relationship', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) throw new Error('expected a direct request');
+    const relationship = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      values: { status: 'proposal_submitted' },
+    });
+    await proposalFactory({
+      relationship,
+      values: { version: 1, isCurrent: false, status: 'resubmitted' },
+    });
+    await proposalFactory({
+      relationship,
+      values: { version: 2, isCurrent: true, status: 'changes_requested' },
+    });
+    await proposalFactory({
+      relationship,
+      values: { version: 3, isCurrent: true, status: 'submitted', deletedAt: new Date() },
+    });
+
+    const rows = await projectsInboxRepository.listByCompany(request.companyId);
+    const [rel] = rows.find((r) => r.id === request.id)?.relationships ?? [];
+    expect(rel?.proposals).toEqual([{ status: 'changes_requested' }]);
+  });
+
+  it('returns an empty proposals array when the relationship has no proposal', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) throw new Error('expected a direct request');
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+
+    const rows = await projectsInboxRepository.listByCompany(request.companyId);
+    const [rel] = rows.find((r) => r.id === request.id)?.relationships ?? [];
+    expect(rel?.proposals).toEqual([]);
+  });
+});
+
+describe('projectsInboxRepository.listClientMoveDetails', () => {
+  it('returns an empty Map for empty ids', async () => {
+    const result = await projectsInboxRepository.listClientMoveDetails({
+      companyId: randomUUID(),
+      projectRequestIds: [],
+    });
+    expect(result.size).toBe(0);
+  });
+
+  it('returns version, timeframe, live milestone count and submittedAt of the current proposal', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) throw new Error('expected a direct request');
+    const relationship = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      values: { status: 'proposal_submitted' },
+    });
+    const submittedAt = new Date('2026-06-05T00:00:00.000Z');
+    const { proposal: v1 } = await proposalFactory({
+      relationship,
+      values: { version: 1, isCurrent: false, status: 'resubmitted' },
+    });
+    const { proposal: v2 } = await proposalFactory({
+      relationship,
+      values: { version: 2, isCurrent: true, timeframeWeeks: 6, submittedAt },
+    });
+    await db.insert(proposalMilestones).values([
+      { proposalId: v1.id, sortOrder: 0, title: 'Old' },
+      { proposalId: v2.id, sortOrder: 0, title: 'One' },
+      { proposalId: v2.id, sortOrder: 1, title: 'Two' },
+      { proposalId: v2.id, sortOrder: 2, title: 'Gone', deletedAt: new Date() },
+    ]);
+
+    const result = await projectsInboxRepository.listClientMoveDetails({
+      companyId: request.companyId,
+      projectRequestIds: [request.id],
+    });
+    const detail = result.get(request.id);
+    expect(detail?.expertTermsConfirmedAt).toBeNull();
+    expect(detail?.relationships).toHaveLength(1);
+    expect(detail?.relationships[0]).toEqual({
+      relationshipId: relationship.relationship.id,
+      expertProfileId: request.expertProfileId,
+      status: 'proposal_submitted',
+      currentProposal: {
+        status: 'submitted',
+        version: 2,
+        timeframeWeeks: 6,
+        milestoneCount: 2,
+        submittedAt,
+      },
+    });
+  });
+
+  it('gives a null current proposal and null timeframe through, with a zero milestone count', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) throw new Error('expected a direct request');
+    const noProposal = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+    const other = await expertDraftFactory();
+    const withProposal = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: other.id,
+      values: { status: 'proposal_submitted' },
+    });
+    await proposalFactory({ relationship: withProposal, values: { timeframeWeeks: null } });
+
+    const result = await projectsInboxRepository.listClientMoveDetails({
+      companyId: request.companyId,
+      projectRequestIds: [request.id],
+    });
+    const rels = result.get(request.id)?.relationships ?? [];
+    expect(rels).toHaveLength(2);
+    expect(
+      rels.find((r) => r.relationshipId === noProposal.relationship.id)?.currentProposal
+    ).toBeNull();
+    expect(
+      rels.find((r) => r.relationshipId === withProposal.relationship.id)?.currentProposal
+    ).toMatchObject({ timeframeWeeks: null, milestoneCount: 0 });
+  });
+
+  it('is company-scoped and excludes declined, soft-deleted relationships and requests', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) throw new Error('expected a direct request');
+    const declinedExpert = await expertDraftFactory();
+    const deletedExpert = await expertDraftFactory();
+    const live = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: declinedExpert.id,
+      values: { status: 'declined', declinedAt: new Date() },
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: deletedExpert.id,
+      values: { deletedAt: new Date() },
+    });
+    const deletedRequest = await projectRequestFactory({ companyId: request.companyId });
+    await db
+      .update(projectRequests)
+      .set({ deletedAt: new Date() })
+      .where(eq(projectRequests.id, deletedRequest.id));
+
+    const result = await projectsInboxRepository.listClientMoveDetails({
+      companyId: request.companyId,
+      projectRequestIds: [request.id, deletedRequest.id],
+    });
+    expect(result.has(deletedRequest.id)).toBe(false);
+    expect(result.get(request.id)?.relationships.map((r) => r.relationshipId)).toEqual([
+      live.relationship.id,
+    ]);
+
+    const wrongCompany = await projectsInboxRepository.listClientMoveDetails({
+      companyId: randomUUID(),
+      projectRequestIds: [request.id],
+    });
+    expect(wrongCompany.size).toBe(0);
+  });
+
+  it('returns a request with no relationships as an empty list', async () => {
+    const { companyId, createdByUserId } = await seedCompanyWithCreator();
+    const requestId = await seedCompanyRequest(companyId, createdByUserId);
+
+    const result = await projectsInboxRepository.listClientMoveDetails({
+      companyId,
+      projectRequestIds: [requestId],
+    });
+    expect(result.get(requestId)?.relationships).toEqual([]);
   });
 });

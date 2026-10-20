@@ -59,6 +59,8 @@ export interface LiveRescheduleProposalSummary {
    * `reference_drizzle_with_hydration_leaks_secrets`).
    */
   proposedByUserId: string;
+  /** When the proposal was made — the moment the client's turn began. */
+  createdAt: Date;
 }
 
 export interface AnswerRescheduleProposalInput {
@@ -316,6 +318,7 @@ export const rescheduleProposalsRepository = {
           // Un-aggregated beside `count(...)` because the GROUP BY is on the PRIMARY KEY
           // (Postgres functional dependency), exactly as the other three columns are.
           proposedByUserId: rescheduleProposals.proposedByUserId,
+          createdAt: rescheduleProposals.createdAt,
           // `count()` over the LEFT-joined live options. bigint on the wire ⇒ `mapWith(Number)`.
           optionCount: sql<number>`count(${rescheduleProposalOptions.id})`.mapWith(Number),
         })
@@ -338,6 +341,45 @@ export const rescheduleProposalsRepository = {
         // selected un-aggregated (Postgres functional dependency).
         .groupBy(rescheduleProposals.id)
     );
+  },
+
+  /**
+   * The live option start times of the given proposals, keyed by proposal id, in `position`
+   * order. Projected columns only (`proposalId`, `scheduledStart`); soft-deleted options are
+   * excluded and a proposal with no live option is absent. Empty input returns an empty Map
+   * without a query.
+   *
+   * ⚠ CALLER OBLIGATION: every proposal id passed in MUST already have come out of a
+   * company-scoped chain (e.g. {@link rescheduleProposalsRepository.findLivePendingByMeetingIds}
+   * over meetings the caller has resolved to its own company). This method adds NO scope
+   * predicate of its own, so an unverified id here reads another tenant's proposed times.
+   */
+  async listLiveOptionStartsByProposalIds(
+    proposalIds: readonly string[]
+  ): Promise<Map<string, Date[]>> {
+    const result = new Map<string, Date[]>();
+    if (proposalIds.length === 0) {
+      return result;
+    }
+    const rows = await db
+      .select({
+        proposalId: rescheduleProposalOptions.proposalId,
+        scheduledStart: rescheduleProposalOptions.scheduledStart,
+      })
+      .from(rescheduleProposalOptions)
+      .where(
+        and(
+          inArray(rescheduleProposalOptions.proposalId, [...proposalIds]),
+          isNull(rescheduleProposalOptions.deletedAt)
+        )
+      )
+      .orderBy(asc(rescheduleProposalOptions.proposalId), asc(rescheduleProposalOptions.position));
+    for (const row of rows) {
+      const starts = result.get(row.proposalId) ?? [];
+      starts.push(row.scheduledStart);
+      result.set(row.proposalId, starts);
+    }
+    return result;
   },
 
   /**

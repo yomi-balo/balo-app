@@ -1,6 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
-import { MoveCardContext } from './move-card-context';
+import userEvent from '@testing-library/user-event';
+import { MoveCardContext as Context } from './move-card-context';
+import type { ComponentProps } from 'react';
+import type { ViewerClock } from '@/hooks/use-viewer-clock';
+
+const SYDNEY: ViewerClock = {
+  now: new Date('2026-10-20T10:00:00.000Z'),
+  timeZone: 'Australia/Sydney',
+};
+
+/** Renders the context with the props every card passes; override per test. */
+function MoveCardContext(
+  props: Pick<ComponentProps<typeof Context>, 'context'> &
+    Partial<Omit<ComponentProps<typeof Context>, 'context'>>
+): React.JSX.Element {
+  return <Context href="/cases/e-1" clock={null} onNavigate={() => undefined} {...props} />;
+}
 
 describe('MoveCardContext', () => {
   it('brief: excerpt, tags and timeline', () => {
@@ -77,6 +93,7 @@ describe('MoveCardContext', () => {
             { label: 'Your terms', state: 'yours' },
             { label: 'Balo approval', state: 'pending' },
           ],
+          note: null,
         }}
       />
     );
@@ -124,5 +141,132 @@ describe('MoveCardContext', () => {
       />
     );
     expect(screen.queryByText(/more/)).toBeNull();
+  });
+
+  it('gates: renders the note under the steps only when set', () => {
+    const gates = [{ label: 'Your billing', state: 'yours' as const }];
+    const { rerender } = render(
+      <MoveCardContext context={{ type: 'gates', gates, note: 'An owner confirms billing.' }} />
+    );
+    expect(screen.getByText('An owner confirms billing.')).toBeInTheDocument();
+    rerender(<MoveCardContext context={{ type: 'gates', gates, note: null }} />);
+    expect(screen.queryByText('An owner confirms billing.')).toBeNull();
+  });
+
+  it('stats: a labelled definition list', () => {
+    render(
+      <MoveCardContext
+        context={{
+          type: 'stats',
+          stats: [
+            { label: 'Version', value: '2' },
+            { label: 'Timeframe', value: 'About 6 weeks' },
+          ],
+        }}
+      />
+    );
+    expect(screen.getByText('Version').tagName).toBe('DT');
+    expect(screen.getByText('About 6 weeks').tagName).toBe('DD');
+  });
+
+  it('reschedule: struck-through original and option links in the viewer zone', async () => {
+    const onNavigate = vi.fn();
+    render(
+      <MoveCardContext
+        clock={SYDNEY}
+        onNavigate={onNavigate}
+        context={{
+          type: 'reschedule',
+          wasIso: '2026-10-21T22:00:00.000Z',
+          optionIsos: ['2026-10-22T09:00:00.000Z', '2026-10-23T04:30:00.000Z'],
+        }}
+      />
+    );
+    expect(screen.getByText('Was Thu 22 Oct, 9:00 am')).toHaveClass('line-through');
+    const first = screen.getByRole('link', { name: 'Choose Thu 22 Oct, 8:00 pm on the case page' });
+    expect(first).toHaveAttribute('href', '/cases/e-1');
+    expect(first).toHaveClass('h-11');
+    expect(
+      screen.getByRole('link', { name: 'Choose Fri 23 Oct, 3:30 pm on the case page' })
+    ).toBeInTheDocument();
+    await userEvent.click(first);
+    expect(onNavigate).toHaveBeenCalledWith('card');
+  });
+
+  it('reschedule: with no clock renders no date text and no links', () => {
+    const { container } = render(
+      <MoveCardContext
+        context={{
+          type: 'reschedule',
+          wasIso: '2026-10-21T22:00:00.000Z',
+          optionIsos: ['2026-10-22T09:00:00.000Z'],
+        }}
+      />
+    );
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(container.textContent?.trim()).toBe('');
+  });
+
+  it('completion: progress, milestones line and the auto-accept day in the viewer zone', () => {
+    render(
+      <MoveCardContext
+        clock={SYDNEY}
+        context={{
+          type: 'completion',
+          done: 3,
+          total: 4,
+          autoAcceptIso: '2026-10-29T16:00:00.000Z',
+        }}
+      />
+    );
+    expect(screen.getByText('3 of 4 milestones complete')).toBeInTheDocument();
+    expect(screen.getByText('Accepted automatically on Fri 30 Oct')).toBeInTheDocument();
+  });
+
+  it('completion: with no clock the auto-accept day is not rendered; a null deadline hides the line', () => {
+    const { rerender } = render(
+      <MoveCardContext
+        context={{
+          type: 'completion',
+          done: 1,
+          total: 2,
+          autoAcceptIso: '2026-10-29T16:00:00.000Z',
+        }}
+      />
+    );
+    expect(screen.queryByText(/Accepted automatically/)).toBeNull();
+    rerender(
+      <MoveCardContext
+        clock={SYDNEY}
+        context={{ type: 'completion', done: 1, total: 2, autoAcceptIso: null }}
+      />
+    );
+    expect(screen.queryByText(/Accepted automatically/)).toBeNull();
+  });
+
+  it('completion: a zero total does not divide by zero', () => {
+    render(
+      <MoveCardContext context={{ type: 'completion', done: 0, total: 0, autoAcceptIso: null }} />
+    );
+    expect(screen.getByText('0 of 0 milestones complete')).toBeInTheDocument();
+  });
+
+  it('people: initials, name, email and the overflow count', () => {
+    render(
+      <MoveCardContext
+        context={{
+          type: 'people',
+          people: [
+            { name: 'Riley Morgan', email: 'riley@northwind.example' },
+            { name: 'Dana', email: 'dana@northwind.example' },
+          ],
+          more: 2,
+        }}
+      />
+    );
+    expect(screen.getByText('RM')).toBeInTheDocument();
+    expect(screen.getByText('D')).toBeInTheDocument();
+    expect(screen.getByText('riley@northwind.example')).toHaveClass('truncate');
+    expect(screen.getByText('2 more')).toBeInTheDocument();
   });
 });

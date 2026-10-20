@@ -4,13 +4,16 @@ import {
   actionItems,
   auditEvents,
   caseEngagements,
+  agencies,
   companies,
   engagements,
+  expertProfiles,
   projectEngagements,
   projectRequests,
   type ActionItem,
   type Engagement,
   type NewActionItem,
+  users,
 } from '../schema';
 import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
 import {
@@ -585,6 +588,92 @@ export const actionItemsRepository = {
         : []
     );
   },
+
+  /**
+   * The client dashboard's action items: every LIVE, open item assigned to the client side of an
+   * ACTIVE case or project engagement of `companyId`. Same shape and filters as
+   * {@link actionItemsRepository.listOpenAssignedToExpert} but scoped by company, and it carries
+   * the delivering expert's name columns (and agency name) instead of the company name. A
+   * soft-deleted expert USER keeps the row with null names (the filter sits in the LEFT JOIN
+   * condition). One query; ordered `engagement_id, created_at, id`.
+   */
+  async listOpenAssignedToClient(companyId: string): Promise<ClientOpenActionItemRow[]> {
+    const rows = await db
+      .select({
+        actionItemId: actionItems.id,
+        engagementId: actionItems.engagementId,
+        engagementType: engagements.engagementType,
+        caseTitle: caseEngagements.title,
+        requestTitle: projectRequests.title,
+        expertProfileId: engagements.expertProfileId,
+        expertFirstName: users.firstName,
+        expertLastName: users.lastName,
+        agencyName: agencies.name,
+        body: actionItems.body,
+        dueAt: actionItems.dueAt,
+        createdAt: actionItems.createdAt,
+      })
+      .from(actionItems)
+      .innerJoin(
+        engagements,
+        and(
+          eq(engagements.id, actionItems.engagementId),
+          eq(engagements.companyId, companyId),
+          eq(engagements.status, 'active'),
+          inArray(engagements.engagementType, ['case', 'project']),
+          isNull(engagements.deletedAt)
+        )
+      )
+      .leftJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
+      .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
+      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(
+        caseEngagements,
+        and(eq(caseEngagements.engagementId, engagements.id), isNull(caseEngagements.deletedAt))
+      )
+      .leftJoin(
+        projectEngagements,
+        and(
+          eq(projectEngagements.engagementId, engagements.id),
+          isNull(projectEngagements.deletedAt)
+        )
+      )
+      .leftJoin(
+        projectRequests,
+        and(
+          eq(projectRequests.id, projectEngagements.projectRequestId),
+          isNull(projectRequests.deletedAt)
+        )
+      )
+      .where(
+        and(
+          eq(actionItems.status, 'open'),
+          eq(actionItems.assigneeParty, 'client'),
+          isNull(actionItems.deletedAt)
+        )
+      )
+      .orderBy(asc(actionItems.engagementId), asc(actionItems.createdAt), asc(actionItems.id));
+
+    return rows.flatMap((row) =>
+      row.engagementType === 'case' || row.engagementType === 'project'
+        ? [
+            {
+              actionItemId: row.actionItemId,
+              engagementId: row.engagementId,
+              engagementType: row.engagementType,
+              engagementTitle: row.engagementType === 'case' ? row.caseTitle : row.requestTitle,
+              expertProfileId: row.expertProfileId,
+              expertFirstName: row.expertFirstName,
+              expertLastName: row.expertLastName,
+              agencyName: row.agencyName,
+              body: row.body,
+              dueAt: row.dueAt,
+              createdAt: row.createdAt,
+            },
+          ]
+        : []
+    );
+  },
 };
 
 /** One open, expert-assigned action item on an active case or project engagement. */
@@ -594,6 +683,21 @@ export interface ExpertOpenActionItemRow {
   engagementType: 'case' | 'project';
   engagementTitle: string | null;
   companyName: string;
+  body: string;
+  dueAt: Date | null;
+  createdAt: Date;
+}
+
+/** One open, client-assigned action item on an active case or project engagement. */
+export interface ClientOpenActionItemRow {
+  actionItemId: string;
+  engagementId: string;
+  engagementType: 'case' | 'project';
+  engagementTitle: string | null;
+  expertProfileId: string;
+  expertFirstName: string | null;
+  expertLastName: string | null;
+  agencyName: string | null;
   body: string;
   dueAt: Date | null;
   createdAt: Date;
