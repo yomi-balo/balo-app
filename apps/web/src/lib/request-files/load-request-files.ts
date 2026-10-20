@@ -9,6 +9,7 @@ import {
 } from '@balo/db';
 import {
   relationshipDeniesHosting,
+  requestFileVisibleToClient,
   requestFileVisibleToTrack,
   resolveRequestFileAudience,
   resolveRequestTrackFileAccess,
@@ -239,12 +240,9 @@ export async function loadRequestFiles(
   const tracks = await loadTrackDisplays(scope);
 
   if (scope.side === 'client') {
-    // An upload from a track the client cannot see (made before the track had opened) is not
-    // listed — the client is blind to that expert.
-    const visibleRows = rows.filter(
-      ({ file }) =>
-        file.side === 'client' || tracks.some((t) => t.relationshipId === file.expertRelationshipId)
-    );
+    // The same rule the download gate enforces — an upload from a track the client cannot see
+    // is neither listed nor fetchable.
+    const visibleRows = rows.filter(({ file }) => requestFileVisibleToClient(file, tracks));
     const files = visibleRows.map(({ file, grants }) =>
       toClientRequestFileView(
         toSerializerFile(file),

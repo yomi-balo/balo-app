@@ -4,6 +4,7 @@ import {
   resolveRequestTrackFileAccess,
   requestTrackIsLiveForFiles,
   trackCanReadAllAudienceShare,
+  requestFileVisibleToClient,
   requestFileVisibleToTrack,
   resolveRequestFileAudience,
   type RequestFileAudienceFacts,
@@ -46,6 +47,10 @@ function clientFile(over: Partial<RequestFileAudienceFacts> = {}): RequestFileAu
     deletedAt: null,
     ...over,
   };
+}
+
+function expertFile(over: Partial<RequestFileAudienceFacts> = {}): RequestFileAudienceFacts {
+  return clientFile({ side: 'expert', audience: 'own_track', ...over });
 }
 
 describe('resolveRequestTrackFileAccess', () => {
@@ -321,6 +326,46 @@ describe('requestFileVisibleToTrack', () => {
   it('fails closed on the unrepresentable client/own_track combination', () => {
     expect(
       requestFileVisibleToTrack(clientFile({ audience: 'own_track' }), track(), new Set(['rel_1']))
+    ).toBe(false);
+  });
+});
+
+describe('requestFileVisibleToClient', () => {
+  const opened = track({ relationshipId: 'rel_open', access: { kind: 'live' } });
+  const closed = track({ relationshipId: 'rel_closed', access: { kind: 'closed', closedAt: T1 } });
+  const unopened = track({ relationshipId: 'rel_unopened', access: { kind: 'unopened' } });
+
+  it('shows every live client-side file', () => {
+    expect(requestFileVisibleToClient(clientFile(), [])).toBe(true);
+  });
+
+  it('shows an upload from an opened track, live or closed', () => {
+    expect(
+      requestFileVisibleToClient(expertFile({ expertRelationshipId: 'rel_open' }), [opened])
+    ).toBe(true);
+    expect(
+      requestFileVisibleToClient(expertFile({ expertRelationshipId: 'rel_closed' }), [closed])
+    ).toBe(true);
+  });
+
+  it('hides an upload from a track missing from the visible set', () => {
+    expect(
+      requestFileVisibleToClient(expertFile({ expertRelationshipId: 'rel_unopened' }), [opened])
+    ).toBe(false);
+  });
+
+  it('hides an upload from an unopened track even when a caller passes it in', () => {
+    expect(
+      requestFileVisibleToClient(expertFile({ expertRelationshipId: 'rel_unopened' }), [unopened])
+    ).toBe(false);
+  });
+
+  it('hides a tombstone on either side', () => {
+    expect(requestFileVisibleToClient(clientFile({ deletedAt: T2 }), [opened])).toBe(false);
+    expect(
+      requestFileVisibleToClient(expertFile({ expertRelationshipId: 'rel_open', deletedAt: T2 }), [
+        opened,
+      ])
     ).toBe(false);
   });
 });

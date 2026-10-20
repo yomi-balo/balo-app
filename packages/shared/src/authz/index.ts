@@ -239,6 +239,7 @@ export {
   resolveRequestTrackFileAccess,
   requestTrackIsLiveForFiles,
   trackCanReadAllAudienceShare,
+  requestFileVisibleToClient,
   requestFileVisibleToTrack,
   resolveRequestFileAudience,
 } from './request-files';

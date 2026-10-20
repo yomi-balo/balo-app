@@ -54,8 +54,7 @@ export interface RequestTrackFileStanding
  *
  * ⚠ AN `invited` TRACK IS `unopened`, NOT LIVE. A client is blind to an expert until their
  * track opens (`relationshipIsOpened`), so files reach an expert at the same moment messages
- * do. This reverses ADR-1048's original "a late invitee inherits every prior share-to-all the
- * moment their track exists": inheritance now happens the moment the track OPENS.
+ * do, and a track inherits every prior share-to-all the moment it OPENS (ADR-1048 §1).
  */
 export type RequestTrackFileAccess =
   | { readonly kind: 'unopened' }
@@ -181,6 +180,28 @@ export function requestFileVisibleToTrack(
       // Unrepresentable for a client file (`request_shared_file_side_shape`) — fail closed.
       return false;
   }
+}
+
+/**
+ * ⚠⚠ THE ONE PER-FILE VISIBILITY RULE FOR THE CLIENT SIDE — the counterpart of
+ * {@link requestFileVisibleToTrack}. The list and the download gate both resolve through it,
+ * so what the client is shown and what the client can fetch cannot split.
+ *
+ * Every live client-side file is visible. An expert upload is visible only when its track is
+ * one the client can see: an upload from a track that has not opened (made before this rule)
+ * stays hidden, because the client is blind to that expert. `tracks` is fail-closed on its own
+ * — an unopened track in it admits nothing — so a caller passing unfiltered tracks still
+ * cannot leak.
+ */
+export function requestFileVisibleToClient(
+  file: Pick<RequestFileAudienceFacts, 'side' | 'expertRelationshipId' | 'deletedAt'>,
+  tracks: readonly Pick<RequestTrackRef, 'relationshipId' | 'access'>[]
+): boolean {
+  if (file.deletedAt !== null) return false;
+  if (file.side === 'client') return true;
+  return tracks.some(
+    (t) => t.access.kind !== 'unopened' && t.relationshipId === file.expertRelationshipId
+  );
 }
 
 /** How a track came to see a file — for the admin lens and the delete-time audit snapshot. */

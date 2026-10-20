@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { requestSharedFilesRepository } from '@balo/db';
-import { requestFileVisibleToTrack } from '@balo/shared/authz';
+import { requestFileVisibleToClient, requestFileVisibleToTrack } from '@balo/shared/authz';
 import { requireUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, REQUEST_FILE_SERVER_EVENTS } from '@/lib/analytics/server';
@@ -82,7 +82,11 @@ export async function getRequestFileDownloadAction(
       }
       viaAllAudience = found.file.side === 'client' && found.file.audience === 'all_live_tracks';
     }
-    // side === 'client': every live file on its own request is visible (ticket §Read rule).
+    // side === 'client': the list's own rule — every client-side file, plus uploads from tracks
+    // the client can see. An upload from an unopened track is FILE_GONE, as if it did not exist.
+    if (scope.side === 'client' && !requestFileVisibleToClient(found.file, scope.tracks)) {
+      return { success: false, error: FILE_GONE };
+    }
     // side === 'admin': every LIVE file — the read-only oversight lens reads tombstones in the
     // list view (`loadRequestFiles` still passes `includeDeleted: true`), but cannot download
     // one, because the bytes are gone (Ruling 1).

@@ -304,8 +304,9 @@ export function requestRecencyAt(row: PortfolioRequestRow): Date {
 
 /**
  * {@link requestRecencyAt} as the CLIENT may see it: folds only tracks that have opened
- * (`relationshipIsOpened`), so inviting an expert — or that expert's untouched row — never moves
- * the client's "updated" time or sort order.
+ * (`relationshipIsOpened`), so an unopened expert's row never moves the client's "updated" time
+ * or sort order. The request's own `updatedAt` still moves on the first invite (the status
+ * rollup to `experts_invited`): that is the request stage, which the client sees by design.
  */
 export function clientRequestRecencyAt(row: PortfolioRequestRow): Date {
   return requestRecencyAt({

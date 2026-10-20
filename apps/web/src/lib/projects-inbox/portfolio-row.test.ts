@@ -191,7 +191,11 @@ describe('requestRecencyAt', () => {
 });
 
 describe('clientRequestRecencyAt', () => {
-  /** Inviting an expert must not move the client's "updated" time — they cannot see invites. */
+  /**
+   * An unopened expert's own row must not move the client's "updated" time. The first invite
+   * still moves the request's `updatedAt` through the status rollup — the request stage, which
+   * the client does see — so this fixture holds `updatedAt` fixed and varies only the tracks.
+   */
   it('ignores a track that has not opened, unlike the staff fold', () => {
     const row = makeRequest({
       updatedAt: day(5),
