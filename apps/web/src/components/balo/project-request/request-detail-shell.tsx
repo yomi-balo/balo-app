@@ -246,7 +246,13 @@ export function RequestDetailShell({
     null;
   const nudge = isExpertGated
     ? EXPERT_GATED_NUDGE
-    : nudgeFor(ctx.lens, view.status, view.viewerRelationshipStatus, viewerChangeRequest);
+    : nudgeFor(
+        ctx.lens,
+        view.status,
+        view.viewerRelationshipStatus,
+        viewerChangeRequest,
+        view.onDirectLeg ? { companyName: view.companyName } : null
+      );
   // Health panel only once there are relationships (none before experts_invited).
   const showHealthPanel = ctx.archetype === 'observer' && view.relationships.length > 0;
 

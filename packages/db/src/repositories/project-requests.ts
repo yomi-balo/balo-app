@@ -9,6 +9,7 @@ import {
   projectRequestTags,
   projectRequestProducts,
   projectRequestDocuments,
+  requestExpertRelationships,
   users,
   type ProjectRequest,
   type ProjectRequestCloseReason,
@@ -18,6 +19,7 @@ import {
 import { auditEventsRepository } from './audit-events';
 import { conversationsRepository } from './conversations';
 import { cancelMeetingTx } from './_shared/cancel-meeting-tx';
+import { deriveRequestStatus } from './_shared/derive-request-status';
 import type { DbExecutor } from './_shared/db-executor';
 import { acquireRequestLock } from './_shared/request-lock';
 import { unionById } from './_shared/union-by-id';
@@ -45,6 +47,9 @@ type RelationshipStatus = RequestExpertRelationship['status'];
  * `advanceRelationshipStatus` (ADR-1025 / BAL-295) and written directly.
  */
 export const STATUS_TRANSITIONS: Record<ProjectRequestStatus, readonly ProjectRequestStatus[]> = {
+  // ⚠ A DIRECT request must not take `draft → requested` here: submitting one also invites its
+  // expert, which only `createProjectRequest` does. A path that submits a direct draft (or
+  // imports one) must write the `invited` relationship + conversation itself.
   draft: ['requested', 'closed'],
   requested: ['exploratory_meeting_requested', 'experts_invited', 'closed'],
   exploratory_meeting_requested: ['experts_invited', 'closed'],
@@ -271,12 +276,56 @@ export const projectRequestsRepository = {
    * `project_request.converted_from_case` audit row, LAST, inside the same transaction — so the
    * provenance outlives the `source_case_id` FK being nulled by a case hard-delete. An unknown
    * case id fails the FK and rolls the whole request back.
+   *
+   * A SUBMITTED DIRECT request (`sendTo = 'direct'`, status `requested`) is born with its target
+   * expert already invited: the `invited` relationship and its conversation are written here,
+   * and the row lands at `experts_invited` rather than `requested`. The client chose the expert,
+   * so there is nobody for staff to route it to — without the relationship the expert's lens
+   * (`resolveRequestLens`) denies them the very request they were notified about, and the admin
+   * pipeline panel has no one to list. A draft or `match` request is written as given.
+   *
+   * Takes no request lock: it is the named exemption in `_shared/request-lock.ts` (the request
+   * id is minted by this transaction's own INSERT, so nothing else can reach it until commit).
    */
   async createProjectRequest(input: CreateProjectRequestInput): Promise<ProjectRequest> {
+    const { expertProfileId } = input.request;
+    const directExpertProfileId =
+      (input.request.sendTo ?? 'direct') === 'direct' &&
+      (input.request.status ?? 'requested') === 'requested' &&
+      typeof expertProfileId === 'string'
+        ? expertProfileId
+        : null;
+
     return db.transaction(async (tx) => {
-      const [row] = await tx.insert(projectRequests).values(input.request).returning();
+      const [row] = await tx
+        .insert(projectRequests)
+        .values(
+          directExpertProfileId === null
+            ? input.request
+            : { ...input.request, status: deriveRequestStatus(['invited'], 'requested') }
+        )
+        .returning();
       if (row === undefined) {
         throw new Error('Failed to create project request');
+      }
+
+      if (directExpertProfileId !== null) {
+        const [relationship] = await tx
+          .insert(requestExpertRelationships)
+          .values({
+            projectRequestId: row.id,
+            expertProfileId: directExpertProfileId,
+            invitedByUserId: row.createdByUserId,
+          })
+          .returning({ id: requestExpertRelationships.id });
+        if (relationship === undefined) {
+          throw new Error('Failed to invite the direct expert');
+        }
+        // Eager, like `requestExpertRelationshipsRepository.invite` — see its BAL-424 note.
+        await conversationsRepository.ensureForContext(
+          { contextType: 'relationship', contextId: relationship.id },
+          tx
+        );
       }
 
       if (input.tagIds.length > 0) {
@@ -821,7 +870,8 @@ export const projectRequestsRepository = {
    * `proposalsRepository.submit`, `.createDraft`, `.promoteToSubmit`, `.accept`, `.resubmit`;
    * this method; `requestExpertRelationshipsRepository.invite`, `.declineTrack`,
    * `.transitionStatus`; `expressionsOfInterestRepository.submit`; and
-   * `projectEngagementsRepository.materializeFromKickoff`. Because all of them queue on one
+   * `projectEngagementsRepository.materializeFromKickoff`. (`createProjectRequest` is the one
+   * named exemption — see `_shared/request-lock.ts`.) Because all of them queue on one
    * per-request gate, no two of them ever interleave their row-lock acquisition on this request —
    * which makes the AB/BA cycle described below UNREACHABLE rather than merely detected-and-
    * retried. Both existing row-lock orders (`accept`'s and `promoteToSubmit`'s) stand unchanged;

@@ -359,6 +359,78 @@ describe('mapRequestToDetailView — viewerRelationshipStatus (BAL-272)', () => 
   });
 });
 
+describe('mapRequestToDetailView — onDirectLeg', () => {
+  const direct = (relationships = [rel()]) =>
+    request({ sendTo: 'direct', expertProfileId: 'expert-1', relationships });
+
+  it('is true for the client of a direct request', () => {
+    const view = mapRequestToDetailView(
+      direct(),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.onDirectLeg).toBe(true);
+  });
+
+  it('is false for the client once staff decline the chosen expert', () => {
+    const view = mapRequestToDetailView(
+      direct([rel({ status: 'declined' }), rel({ id: 'rel-2', expertProfileId: 'expert-2' })]),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.onDirectLeg).toBe(false);
+  });
+
+  it('is false for the client once staff remove the chosen expert', () => {
+    // A removed (soft-deleted) relationship is absent from the projection.
+    const view = mapRequestToDetailView(
+      direct([rel({ id: 'rel-2', expertProfileId: 'expert-2' })]),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.onDirectLeg).toBe(false);
+  });
+
+  it('is true for the expert the client chose', () => {
+    const view = mapRequestToDetailView(
+      direct(),
+      ctx({ lens: 'expert', relationshipId: 'rel-1' }),
+      NOW
+    );
+    expect(view.onDirectLeg).toBe(true);
+  });
+
+  it('is false for an expert Balo invited alongside the chosen one', () => {
+    const view = mapRequestToDetailView(
+      direct([rel(), rel({ id: 'rel-2', expertProfileId: 'expert-2' })]),
+      ctx({ lens: 'expert', relationshipId: 'rel-2' }),
+      NOW
+    );
+    expect(view.onDirectLeg).toBe(false);
+  });
+
+  it('is false for the admin lens and for every match request', () => {
+    expect(
+      mapRequestToDetailView(
+        direct(),
+        ctx({ lens: 'admin', archetype: 'observer', relationshipId: null }),
+        NOW
+      ).onDirectLeg
+    ).toBe(false);
+    expect(
+      mapRequestToDetailView(request(), ctx({ lens: 'client', relationshipId: null }), NOW)
+        .onDirectLeg
+    ).toBe(false);
+    expect(
+      mapRequestToDetailView(
+        request({ relationships: [rel()] }),
+        ctx({ lens: 'expert', relationshipId: 'rel-1' }),
+        NOW
+      ).onDirectLeg
+    ).toBe(false);
+  });
+});
+
 describe('mapRequestToDetailView — per-expert derived state (observer lens)', () => {
   const observerCtx = ctx({ lens: 'admin', archetype: 'observer' });
 

@@ -155,7 +155,8 @@ const CLIENT_NUDGES: NudgeMap = {
     variant: 'waiting',
     icon: 'clock',
     headline: 'Experts are reviewing your request',
-    sub: "We've invited specialists. You'll be notified the moment one expresses interest.",
+    // No notification promise: `project.eoi_submitted` reaches only the request's creator.
+    sub: "We've invited specialists. Their expressions of interest will appear here as they come in.",
     secondary: { label: 'Message Balo', icon: 'messageSquare' },
   },
   // accepted / kickoff_approved: the KickoffBoard (BAL-291) owns ALL kickoff
@@ -196,6 +197,37 @@ const EXPERT_NUDGES: NudgeMap = {
   // accepted / kickoff_approved: the KickoffBoard (BAL-291) owns ALL kickoff
   // messaging + actions for the winning expert, so no global nudge here.
 };
+
+/** The viewer is on the direct leg of a direct request (`view.onDirectLeg`). */
+export interface DirectLeg {
+  /** The client party — named, never the person, as their contact details are gated pre-EOI. */
+  companyName: string;
+}
+
+/**
+ * Direct-leg overrides. The client chose the expert, so neither side may be told Balo did the
+ * inviting.
+ */
+const DIRECT_CLIENT_NUDGES: NudgeMap = {
+  experts_invited: {
+    variant: 'waiting',
+    icon: 'clock',
+    headline: 'Your expert is reviewing your request',
+    sub: "It went straight to the expert you chose. Their expression of interest will appear here once it's in.",
+    secondary: { label: 'Message Balo', icon: 'messageSquare' },
+  },
+};
+
+function directExpertInvitedNudge({ companyName }: DirectLeg): NudgeContent {
+  return {
+    variant: 'action',
+    icon: 'send',
+    headline: 'Sent to you directly — submit your expression of interest',
+    sub: `${companyName} chose you for this one. A short, specific EOI starts the conversation.`,
+    primary: { label: 'Write your EOI', icon: 'send' },
+    secondary: { label: 'Re-read the brief', icon: 'fileText' },
+  };
+}
 
 /** Gated-expert nudge (before invite) — shown alongside the lock card. */
 export const EXPERT_GATED_NUDGE: NudgeContent = {
@@ -281,9 +313,14 @@ const RELATIONSHIP_KEYED_EXPERT_STATUSES = new Set<ProjectRequestStatus>([
  *  - the three proposal-phase statuses → their own cells;
  *  - anything else → null (defensive; never fall back to the aggregate).
  */
-function expertCellFor(viewerRelationshipStatus: RelationshipStatus): NudgeContent | null {
+function expertCellFor(
+  viewerRelationshipStatus: RelationshipStatus,
+  directLeg: DirectLeg | null
+): NudgeContent | null {
   if (viewerRelationshipStatus === 'invited') {
-    return EXPERT_NUDGES['experts_invited'] ?? null;
+    return directLeg === null
+      ? (EXPERT_NUDGES['experts_invited'] ?? null)
+      : directExpertInvitedNudge(directLeg);
   }
   if (
     viewerRelationshipStatus === 'eoi_submitted' ||
@@ -350,7 +387,8 @@ function reviseProposalNudge(changeRequest: ThreadChangeRequestView): NudgeConte
 function expertNudgeFor(
   status: ProjectRequestStatus,
   viewerRelationshipStatus: RelationshipStatus,
-  viewerChangeRequest: ThreadChangeRequestView | null
+  viewerChangeRequest: ThreadChangeRequestView | null,
+  directLeg: DirectLeg | null
 ): NudgeContent | null {
   if (viewerRelationshipStatus === 'declined') return null;
   if (status === 'accepted' || status === 'kickoff_approved') return null;
@@ -358,8 +396,10 @@ function expertNudgeFor(
     if (viewerRelationshipStatus === 'proposal_submitted' && viewerChangeRequest !== null) {
       return reviseProposalNudge(viewerChangeRequest);
     }
-    return expertCellFor(viewerRelationshipStatus);
+    return expertCellFor(viewerRelationshipStatus, directLeg);
   }
+  if (status === 'experts_invited' && directLeg !== null)
+    return directExpertInvitedNudge(directLeg);
   return EXPERT_NUDGES[status] ?? null;
 }
 
@@ -374,15 +414,20 @@ function expertNudgeFor(
  * BAL-286). Without it (client/admin lenses, or an expert with no relationship)
  * the request status keys the map as before. `viewerChangeRequest` is the open
  * change request on the viewer-expert's own thread (`ConversationThreadView.changeRequest`).
+ *
+ * `directLeg` (set when `view.onDirectLeg`) swaps in the direct-request copy for the client
+ * and the chosen expert, where the request-keyed cell would credit Balo with the invite.
  */
 export function nudgeFor(
   lens: RequestLens,
   status: ProjectRequestStatus,
   viewerRelationshipStatus: RelationshipStatus | null = null,
-  viewerChangeRequest: ThreadChangeRequestView | null = null
+  viewerChangeRequest: ThreadChangeRequestView | null = null,
+  directLeg: DirectLeg | null = null
 ): NudgeContent | null {
   if (lens === 'expert' && viewerRelationshipStatus !== null) {
-    return expertNudgeFor(status, viewerRelationshipStatus, viewerChangeRequest);
+    return expertNudgeFor(status, viewerRelationshipStatus, viewerChangeRequest, directLeg);
   }
-  return NUDGES_BY_LENS[lens][status] ?? null;
+  const direct = lens === 'client' && directLeg !== null ? DIRECT_CLIENT_NUDGES[status] : undefined;
+  return direct ?? NUDGES_BY_LENS[lens][status] ?? null;
 }

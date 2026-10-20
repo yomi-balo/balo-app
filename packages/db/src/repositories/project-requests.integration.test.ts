@@ -97,7 +97,7 @@ async function seedProduct(): Promise<string> {
 // ── createProjectRequest ────────────────────────────────────────────
 
 describe('projectRequestsRepository.createProjectRequest', () => {
-  it('creates a direct request with empty relation arrays, defaulting status/source/sendTo', async () => {
+  it('creates a direct request with empty relation arrays, defaulting source/sendTo', async () => {
     const { companyId, expertProfileId, createdByUserId } = await seedActors();
 
     const row = await projectRequestsRepository.createProjectRequest({
@@ -118,7 +118,7 @@ describe('projectRequestsRepository.createProjectRequest', () => {
     expect(row.expertProfileId).toBe(expertProfileId);
     expect(row.createdByUserId).toBe(createdByUserId);
     expect(row.sendTo).toBe('direct'); // default
-    expect(row.status).toBe('requested'); // default
+    expect(row.status).toBe('experts_invited'); // a submitted direct request invites its expert
     expect(row.source).toBe('manual'); // default
     expect(row.title).toBe('Lead routing rebuild');
     expect(row.createdAt).toBeInstanceOf(Date);
@@ -161,7 +161,7 @@ describe('projectRequestsRepository.createProjectRequest', () => {
     expect(row.baloFeeBps).toBe(2500);
   });
 
-  it('seeds no conversation thread or message on a direct submit (BAL-212: nothing auto-posts)', async () => {
+  it('invites the direct expert on submit but seeds no message (BAL-212: nothing auto-posts)', async () => {
     const { companyId, expertProfileId, createdByUserId } = await seedActors();
 
     const row = await projectRequestsRepository.createProjectRequest({
@@ -177,18 +177,41 @@ describe('projectRequestsRepository.createProjectRequest', () => {
       documents: [],
     });
 
-    // BAL-212 guard: submitting a direct request writes ONLY the request row.
-    // No per-expert relationship (conversation thread) is opened, so the
-    // originally-reported "Hi! The expert has submitted their interest in this
-    // project" auto-post is structurally impossible — there is no thread to
-    // post into until the expert submits an EOI (Phase 2), and from then on the
-    // only message-write path is the user's own composer. This test fails loudly
-    // if anyone re-introduces an auto-seeded thread or message on submit.
+    // The target expert is invited in the same transaction, attributed to the submitting
+    // client, and their thread is provisioned eagerly (as `invite()` does).
     const relationships = await db
-      .select({ id: requestExpertRelationships.id })
+      .select({
+        id: requestExpertRelationships.id,
+        expertProfileId: requestExpertRelationships.expertProfileId,
+        status: requestExpertRelationships.status,
+        invitedByUserId: requestExpertRelationships.invitedByUserId,
+      })
       .from(requestExpertRelationships)
       .where(eq(requestExpertRelationships.projectRequestId, row.id));
-    expect(relationships).toHaveLength(0);
+    expect(relationships).toEqual([
+      {
+        id: expect.any(String),
+        expertProfileId,
+        status: 'invited',
+        invitedByUserId: createdByUserId,
+      },
+    ]);
+    const [relationship] = relationships;
+    const contexts = await db
+      .select({ conversationId: conversationContexts.conversationId })
+      .from(conversationContexts)
+      .where(
+        and(
+          eq(conversationContexts.contextType, 'relationship'),
+          eq(conversationContexts.contextId, relationship?.id ?? '')
+        )
+      );
+    expect(contexts).toHaveLength(1);
+
+    // BAL-212 guard: the originally-reported "Hi! The expert has submitted their interest in
+    // this project" auto-post must stay impossible — the thread exists but is EMPTY, and the
+    // only message-write path is the user's own composer. Fails loudly if anyone re-introduces
+    // an auto-seeded message on submit.
 
     // BAL-424: messages reach the relationship through `conversation_contexts`, not an FK.
     const messages = await db
@@ -227,6 +250,12 @@ describe('projectRequestsRepository.createProjectRequest', () => {
 
     expect(row.sendTo).toBe('match');
     expect(row.expertProfileId).toBeNull();
+    expect(row.status).toBe('requested');
+    const relationships = await db
+      .select({ id: requestExpertRelationships.id })
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.projectRequestId, row.id));
+    expect(relationships).toHaveLength(0);
   });
 
   it('inserts tags, products, and documents in one transaction with the parent', async () => {
@@ -351,6 +380,12 @@ describe('projectRequestsRepository.createProjectRequest', () => {
 
     expect(row.source).toBe('quickstart');
     expect(row.status).toBe('draft');
+    // A draft is not submitted, so its expert is not invited yet.
+    const relationships = await db
+      .select({ id: requestExpertRelationships.id })
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.projectRequestId, row.id));
+    expect(relationships).toHaveLength(0);
   });
 
   // ── routing CHECK constraint (both directions) ──────────────────────

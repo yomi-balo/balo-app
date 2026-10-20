@@ -154,8 +154,8 @@ export async function seedBookingParties(): Promise<BookingParties> {
 
   // BAL-433 — the two contexts BAL-129 never needed. `project_kickoff` (and, artificially,
   // `package_session`) anchor on an engagement of kind `project`; `request_interaction` anchors
-  // on the request↔expert relationship, which is created through the same repository the invite
-  // flow uses so the conversation row it also writes is real.
+  // on the request↔expert relationship — the one `createProjectRequest` writes for the direct
+  // request's expert, together with its conversation row.
   const projectEngagement = await projectEngagementsRepository.create({
     companyId: company.id,
     expertProfileId: profile.id,
@@ -163,13 +163,9 @@ export async function seedBookingParties(): Promise<BookingParties> {
     priceCents: 500_000,
   });
 
-  const relationship = await requestExpertRelationshipsRepository.invite({
-    projectRequestId: directRequest.id,
-    expertProfileId: profile.id,
-    invitedByUserId: memberUser.id,
-  });
+  const [relationship] = await requestExpertRelationshipsRepository.listByRequest(directRequest.id);
   if (relationship === undefined) {
-    throw new Error('fixture: relationship invite returned no row');
+    throw new Error('fixture: direct request has no relationship');
   }
 
   return {
