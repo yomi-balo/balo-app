@@ -105,7 +105,7 @@ export function ResetPasswordForm({ token }: Readonly<ResetPasswordFormProps>): 
                           autoComplete="new-password"
                           autoFocus
                           disabled={isSubmitting}
-                          showStrength={true}
+                          showRequirements={true}
                           {...field}
                         />
                       </FormControl>
@@ -125,7 +125,7 @@ export function ResetPasswordForm({ token }: Readonly<ResetPasswordFormProps>): 
                           label="Confirm password"
                           autoComplete="new-password"
                           disabled={isSubmitting}
-                          showStrength={false}
+                          showRequirements={false}
                           {...field}
                         />
                       </FormControl>

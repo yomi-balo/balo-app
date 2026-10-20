@@ -22,8 +22,11 @@ describe('mapWorkOSError', () => {
       ['user_suspended', 'Your account has been suspended. Please contact support.'],
       ['email_already_exists', 'Invalid email or password. Please try again.'],
       ['user_creation_failed', 'Could not create your account. Please try again.'],
-      ['password_too_short', 'Password must be at least 8 characters.'],
-      ['password_too_weak', 'Please choose a stronger password.'],
+      ['password_too_short', 'Password must be at least 10 characters.'],
+      [
+        'password_too_weak',
+        'That password is too common or easy to guess. Try something longer and less predictable.',
+      ],
       ['password_reset_expired', 'This password reset link has expired. Please request a new one.'],
       ['oauth_failed', 'Could not connect to the authentication provider. Please try again.'],
       ['rate_limit_exceeded', 'Too many attempts. Please wait a moment and try again.'],
@@ -59,6 +62,22 @@ describe('mapWorkOSError', () => {
       ['invalid credentials provided', 'Invalid email or password. Please try again.'],
       ['rate limit hit', 'Too many attempts. Please wait a moment and try again.'],
       ['too many requests', 'Too many attempts. Please wait a moment and try again.'],
+      [
+        'Password does not meet strength requirements.',
+        'That password is too common or easy to guess. Try something longer and less predictable.',
+      ],
+      [
+        'Password has appeared in a data breach.',
+        'That password is too common or easy to guess. Try something longer and less predictable.',
+      ],
+      [
+        'Password has been pwned.',
+        'That password is too common or easy to guess. Try something longer and less predictable.',
+      ],
+      [
+        'Password is compromised.',
+        'That password is too common or easy to guess. Try something longer and less predictable.',
+      ],
     ])('matches message containing "%s"', (message, expected) => {
       expect(mapWorkOSError(new Error(message))).toBe(expected);
     });

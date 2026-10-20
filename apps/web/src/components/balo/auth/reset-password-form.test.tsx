@@ -65,7 +65,7 @@ import { track, AUTH_EVENTS } from '@/lib/analytics';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-const TEST_PASSWORD = 'SecurePass1'; // NOSONAR — test fixture
+const TEST_PASSWORD = 'SecurePass1!'; // NOSONAR — test fixture
 
 /** Helper to find the password input fields by their `name` attribute. */
 function getPasswordInput(container: HTMLElement): HTMLInputElement {

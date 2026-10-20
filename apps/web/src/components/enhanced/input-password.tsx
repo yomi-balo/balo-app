@@ -1,10 +1,11 @@
 'use client';
 
 /**
- * Password input with strength meter — adapted from @shadcn-space/input-04.
+ * Password input with a requirements checklist — adapted from @shadcn-space/input-04.
  * Registry source: shadcn-space/input/input-04.tsx
  * Balo adaptations: forwardRef for RHF, floating label (from input-09),
- * semantic color tokens (destructive/warning/info/success), h-11 density.
+ * semantic color tokens, h-11 density. No strength score: WorkOS decides
+ * strength on submit, so a local score would promise what the server may refuse.
  */
 
 import * as React from 'react';
@@ -12,54 +13,27 @@ import { CheckCircle2, Eye, EyeClosed, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { PASSWORD_MIN_LENGTH } from '@/components/balo/auth/schemas';
 
 interface InputPasswordProps extends Omit<React.ComponentProps<'input'>, 'type'> {
   /** Floating label text */
   label: string;
-  /** Show the strength indicator + requirements below the field */
-  showStrength?: boolean;
+  /** Show the password requirements below the field */
+  showRequirements?: boolean;
 }
 
 const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
-  ({ label, showStrength = false, className, id: externalId, value, onChange, ...props }, ref) => {
+  (
+    { label, showRequirements = false, className, id: externalId, value, onChange, ...props },
+    ref
+  ) => {
     const [isVisible, setIsVisible] = React.useState(false);
     const internalId = React.useId();
     const id = externalId ?? internalId;
 
     const pwd = typeof value === 'string' ? value : '';
 
-    const validations = [
-      { text: 'At least 8 characters', valid: pwd.length >= 8 },
-      { text: 'Contains lowercase letter', valid: /[a-z]/.test(pwd) },
-      { text: 'Contains uppercase letter', valid: /[A-Z]/.test(pwd) },
-      { text: 'Contains a number', valid: /\d/.test(pwd) },
-    ];
-
-    const strength = validations.filter((v) => v.valid).length;
-
-    const getStrengthColor = (score: number): string => {
-      if (score === 0) return 'bg-muted';
-      if (score <= 1) return 'bg-destructive';
-      if (score <= 2) return 'bg-warning';
-      if (score <= 3) return 'bg-info';
-      return 'bg-success';
-    };
-
-    const getStrengthText = (score: number): string => {
-      if (score === 0) return '';
-      if (score <= 1) return 'Weak';
-      if (score <= 2) return 'Moderate';
-      if (score <= 3) return 'Strong';
-      return 'Very Strong';
-    };
-
-    const getStrengthTextColor = (score: number): string => {
-      if (score === 0) return 'text-muted-foreground';
-      if (score <= 1) return 'text-destructive';
-      if (score <= 2) return 'text-warning';
-      if (score <= 3) return 'text-info';
-      return 'text-success';
-    };
+    const meetsMinLength = pwd.length >= PASSWORD_MIN_LENGTH;
 
     return (
       <div className="w-full space-y-3">
@@ -115,41 +89,26 @@ const InputPassword = React.forwardRef<HTMLInputElement, InputPasswordProps>(
           </Button>
         </div>
 
-        {/* Strength meter + validation checklist (input-04 pattern) */}
-        {showStrength && pwd.length > 0 && (
-          <div className="space-y-2">
-            <div className="bg-secondary h-1 w-full overflow-hidden rounded-full">
-              <div
-                className={cn(
-                  'h-full transition-all duration-500 ease-out',
-                  getStrengthColor(strength)
-                )}
-                style={{ width: `${(strength / 4) * 100}%` }}
-              />
+        {/* Requirements (input-04 checklist pattern). Length is the only rule checkable
+            here — WorkOS scores guessability and checks breaches on submit. */}
+        {showRequirements && pwd.length > 0 && (
+          <div className="space-y-1.5 text-xs">
+            <div
+              className={cn(
+                'flex items-center gap-2 transition-colors duration-200',
+                meetsMinLength ? 'text-success' : 'text-muted-foreground'
+              )}
+            >
+              {meetsMinLength ? (
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <X className="h-3.5 w-3.5 shrink-0" />
+              )}
+              At least {PASSWORD_MIN_LENGTH} characters
             </div>
-            <div className="flex items-center justify-between text-xs font-medium">
-              <span className="text-muted-foreground">Password must contain</span>
-              <span className={getStrengthTextColor(strength)}>{getStrengthText(strength)}</span>
-            </div>
-
-            <div className="space-y-1.5 pt-1">
-              {validations.map((v) => (
-                <div
-                  key={v.text}
-                  className={cn(
-                    'flex items-center gap-2 text-xs transition-colors duration-200',
-                    v.valid ? 'text-success' : 'text-muted-foreground'
-                  )}
-                >
-                  {v.valid ? (
-                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                  ) : (
-                    <X className="h-3.5 w-3.5 shrink-0" />
-                  )}
-                  {v.text}
-                </div>
-              ))}
-            </div>
+            <p className="text-muted-foreground">
+              Avoid common passwords. A few unrelated words make a strong one.
+            </p>
           </div>
         )}
       </div>

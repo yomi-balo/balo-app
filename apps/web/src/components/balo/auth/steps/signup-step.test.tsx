@@ -32,7 +32,7 @@ import { SignupStep } from './signup-step';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-const TEST_PASSWORD = 'SecurePass1'; // NOSONAR — test fixture
+const TEST_PASSWORD = 'SecurePass1!'; // NOSONAR — test fixture
 const EMAIL = 'dana@northwind.test';
 
 function makeProps(overrides: Partial<React.ComponentProps<typeof SignupStep>> = {}) {

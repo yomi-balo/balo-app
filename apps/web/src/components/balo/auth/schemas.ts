@@ -19,13 +19,18 @@ export const emailSchema = z.object({
 });
 export type EmailFormData = z.infer<typeof emailSchema>;
 
+/**
+ * Mirrors the WorkOS password policy: minimum length 10, strength score >= 3,
+ * breached-password check, no composition rules. Only the length is checkable
+ * here; WorkOS rejects guessable or breached passwords and `mapWorkOSError`
+ * explains why.
+ */
+export const PASSWORD_MIN_LENGTH = 10;
+
 /** Shared password requirements — single source of truth for signup + reset */
 const passwordField = z
   .string()
-  .min(8, 'Password must be at least 8 characters')
-  .regex(/[a-z]/, 'Must contain a lowercase letter')
-  .regex(/[A-Z]/, 'Must contain an uppercase letter')
-  .regex(/\d/, 'Must contain a number');
+  .min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
 
 /** Unified sign-up schema -- no firstName/lastName (collected in onboarding) */
 export const unifiedSignUpSchema = z.object({

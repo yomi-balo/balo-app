@@ -73,7 +73,7 @@ import type { UnifiedSignUpFormData } from '@/components/balo/auth/schemas';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-const TEST_PASSWORD = 'Passw0rd'; // NOSONAR — test fixture, not a real credential
+const TEST_PASSWORD = 'kettle violet harbour'; // NOSONAR — test fixture, not a real credential
 
 function validInput(): UnifiedSignUpFormData {
   return { email: 'jane@example.com', password: TEST_PASSWORD };
@@ -143,7 +143,7 @@ describe('signUpAction', () => {
       const result = await signUpAction({ ...validInput(), password: 'Ab1' }); // NOSONAR
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('at least 8 characters');
+        expect(result.error).toContain('at least 10 characters');
       }
     });
 
