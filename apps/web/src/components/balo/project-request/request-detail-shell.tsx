@@ -544,10 +544,9 @@ export function RequestDetailShell({
       </div>
 
       {/* BAL-431 / ADR-1048 — the request-file audience panel. ONE mount point for EVERY
-          lens/phase (rendered whenever the request has at least one relationship) — it is
-          deliberately NOT nested inside the phase-2 conversation branch above: an `invited`
-          expert on a Phase-1 request must still see share-to-all files (the ticket's headline
-          scenario). `requestFilesView` is `null` when the loader found no lens or no files. */}
+          lens/phase — deliberately NOT nested inside the phase-2 conversation branch above.
+          `requestFilesView` is `null` when the loader found no lens, or the viewer is an
+          expert whose track has not opened (no EOI yet). */}
       {requestFilesView && (
         <div
           className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mt-5 duration-500 motion-reduce:animate-none"

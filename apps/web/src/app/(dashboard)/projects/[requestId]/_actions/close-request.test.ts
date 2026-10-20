@@ -182,6 +182,7 @@ describe('closeRequestAction', () => {
           relationshipId: 'rel-1',
           expertProfileId: 'expert-1',
           previousStatus: 'proposal_submitted',
+          openedAt: new Date('2026-08-01T00:00:00Z'),
           declineAuditId: 'decline-1',
         },
       ],
@@ -214,6 +215,7 @@ describe('closeRequestAction', () => {
             relationshipId: 'rel-1',
             expertProfileId: 'expert-1',
             previousStatus: 'eoi_submitted',
+            openedAt: new Date('2026-08-01T00:00:00Z'),
             declineAuditId: 'decline-1',
           },
         ],
@@ -233,6 +235,36 @@ describe('closeRequestAction', () => {
         tracksEnded: 1,
       },
     });
+  });
+
+  /** The client counts only the experts it could see; a never-opened track is not in the toast. */
+  it('counts only opened tracks in the browser-bound track counts', async () => {
+    mockClose.mockResolvedValue(
+      closeResult({
+        previousStatus: 'eoi_submitted',
+        declinedTracks: [
+          {
+            relationshipId: 'rel-1',
+            expertProfileId: 'expert-1',
+            previousStatus: 'eoi_submitted',
+            openedAt: new Date('2026-08-01T00:00:00Z'),
+            declineAuditId: 'decline-1',
+          },
+          {
+            relationshipId: 'rel-2',
+            expertProfileId: 'expert-2',
+            previousStatus: 'invited',
+            openedAt: null,
+            declineAuditId: 'decline-2',
+          },
+        ],
+      })
+    );
+
+    const result = await closeRequestAction(VALID_INPUT);
+    if (!result.success) throw new Error('expected success');
+    expect(result.analytics.tracksEnded).toBe(1);
+    expect(result.analytics.openTracks).toBe(1);
   });
 
   it('maps a Postgres deadlock (40P01) to retryable copy and a WARN, not an error', async () => {

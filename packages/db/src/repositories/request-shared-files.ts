@@ -202,6 +202,7 @@ async function loadTrackRefs(
       declinedAt: requestExpertRelationships.declinedAt,
       deletedAt: requestExpertRelationships.deletedAt,
       notSelectedAt: requestExpertRelationships.notSelectedAt,
+      openedAt: requestExpertRelationships.openedAt,
     })
     .from(requestExpertRelationships)
     .where(

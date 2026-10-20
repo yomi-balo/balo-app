@@ -170,6 +170,7 @@ import {
 } from '@balo/db';
 import { CAPABILITIES, relationshipDeniesHosting, roleHasCapability } from '@balo/shared/authz';
 import type { RelationshipHostingStatus } from '@balo/shared/authz';
+import { relationshipIsOpened, type RelationshipOpenedFact } from '@balo/shared/project-requests';
 import { createLogger } from '@balo/shared/logging';
 import {
   resolveContextOwner,
@@ -347,7 +348,7 @@ async function loadSubject(
       // these checks exist to catch. Routes through the EXISTING `resolveContextOwner` two-hop
       // (`@balo/shared/meetings`) rather than re-deriving it — see that module's axis
       // warning (the EXPERT comes from the relationship, the COMPANY from the request).
-      let relationship: RelationshipHostingStatus | undefined;
+      let relationship: (RelationshipHostingStatus & RelationshipOpenedFact) | undefined;
       let request: { status: string } | undefined;
       const reads: MeetingContextOwnerReads = {
         findEngagement: (id) => engagementsRepository.findById(id),
@@ -372,6 +373,14 @@ async function loadSubject(
           'Meeting booking denied — the relationship that owns this context is declined'
         );
         return undefined; // §7 — collapses into `context_not_found` on the wire
+      }
+      // A client and an expert interact only once the expert's track has opened (their EOI).
+      if (!relationshipIsOpened(relationship)) {
+        log.warn(
+          { contextType, contextId },
+          'Meeting booking denied — the relationship that owns this context has not opened'
+        );
+        return undefined; // collapses into `context_not_found` on the wire, like a decline
       }
       /**
        * ⚠⚠ THE REQUEST-LIFECYCLE GATE — THE `subject.status !== 'active'` CHECK'S EXACT TWIN,

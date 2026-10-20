@@ -20,6 +20,7 @@ function relationship(overrides: Partial<Relationship> = {}): Relationship {
     declinedAt: new Date('2025-01-05T00:00:00Z'),
     declineReason: 'request_closed',
     declinedByUserId: 'user-admin',
+    openedAt: null,
     expertProfile: {
       id: 'expert-1',
       ratingAverage: null,
@@ -146,24 +147,25 @@ describe('deriveClosedTracks', () => {
     expect(tracks[0]?.endedLabel).toContain('closed');
   });
 
-  it('finalChip is invite_withdrawn for a deliberate decline with no live EOI (never past a bare invite)', () => {
+  it('finalChip is invite_withdrawn for a deliberate decline before the track opened (a bare invite)', () => {
     for (const reason of ['client_declined', 'balo_declined'] as const) {
       const tracks = deriveClosedTracks(
         request({
-          relationships: [relationship({ declineReason: reason, expressionsOfInterest: [] })],
+          relationships: [relationship({ declineReason: reason, openedAt: null })],
         })
       );
       expect(tracks[0]?.finalChip).toBe('invite_withdrawn');
     }
   });
 
-  it('finalChip is declined for a deliberate decline that had reached at least eoi_submitted', () => {
+  it('finalChip is declined for a deliberate decline after the track opened', () => {
     for (const reason of ['client_declined', 'balo_declined'] as const) {
       const tracks = deriveClosedTracks(
         request({
           relationships: [
             relationship({
               declineReason: reason,
+              openedAt: new Date('2025-01-02T00:00:00Z'),
               expressionsOfInterest: [
                 {
                   id: 'eoi-1',
@@ -177,6 +179,23 @@ describe('deriveClosedTracks', () => {
       );
       expect(tracks[0]?.finalChip).toBe('declined');
     }
+  });
+
+  // A withdrawn EOI leaves no live EOI row, but the track HAD opened — it was a real decline,
+  // not a withdrawn invite.
+  it('finalChip is declined for an opened track whose EOI was later withdrawn', () => {
+    const tracks = deriveClosedTracks(
+      request({
+        relationships: [
+          relationship({
+            declineReason: 'client_declined',
+            openedAt: new Date('2025-01-02T00:00:00Z'),
+            expressionsOfInterest: [],
+          }),
+        ],
+      })
+    );
+    expect(tracks[0]?.finalChip).toBe('declined');
   });
 
   it('falls back to "Invited expert" when the expert has no name', () => {

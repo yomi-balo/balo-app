@@ -34,6 +34,9 @@ export * from './document-key';
 // and `packages/db`'s seed-integrity test must agree on it, and neither may import the other.
 export * from './taxonomy-label';
 
+// The client-visibility rule: a client sees an expert only once their track has opened.
+export * from './client-visibility';
+
 /**
  * The relationship statuses a track can actually be declined FROM — i.e. exactly the sources
  * whose `RELATIONSHIP_STATUS_TRANSITIONS` entry carries a `'declined'` edge. NOT `accepted`

@@ -114,6 +114,7 @@ function makeRelationship(): Relationship {
     declinedAt: null,
     declinedByUserId: null,
     declineReason: null,
+    openedAt: NOW,
     expertProfile: {
       id: 'exp-1',
       // ⚠ `rating_average` is `numeric(2,1)`, so Drizzle's relational `columns:` hands back

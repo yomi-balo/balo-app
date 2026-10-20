@@ -26,6 +26,7 @@ const REL_ID = 'b0000000-0000-4000-8000-000000000002';
 const OTHER_REL_ID = 'b0000000-0000-4000-8000-000000000003';
 const EXPERT_PROFILE_ID = 'e0000000-0000-4000-8000-000000000004';
 const OTHER_EXPERT_PROFILE_ID = 'e0000000-0000-4000-8000-000000000005';
+const OPENED_AT = new Date('2026-07-01T00:00:00.000Z');
 
 const mockFindByIdWithRelations = vi.fn();
 const mockListByRequest = vi.fn();
@@ -94,7 +95,10 @@ function narrowRequest(
   };
 }
 
-/** The FULL relationship row `listByRequest` returns — all three closure columns present. */
+/**
+ * The FULL relationship row `listByRequest` returns — all three closure columns present, plus
+ * `openedAt` (an opened track by default).
+ */
 function fullRelationship(
   overrides: Partial<{
     id: string;
@@ -103,6 +107,7 @@ function fullRelationship(
     declinedAt: Date | null;
     deletedAt: Date | null;
     notSelectedAt: Date | null;
+    openedAt: Date | null;
   }> = {}
 ): unknown {
   return {
@@ -112,6 +117,7 @@ function fullRelationship(
     declinedAt: null,
     deletedAt: null,
     notSelectedAt: null,
+    openedAt: OPENED_AT,
     ...overrides,
   };
 }
@@ -306,15 +312,14 @@ describe('authorizeRequestFileScope', () => {
    * `declinedAt`, no `deletedAt`, no `notSelectedAt`. Resolving standing from THAT row yields
    * `{ kind: 'closed', closedAt: null }` for every track, because `resolveRequestTrackFileAccess`
    * fails closed when the columns are absent (`undefined !== null`). Only the FULL re-read can
-   * produce a LIVE track. So a gate that dropped the second read would report this live,
-   * `invited` expert as CLOSED — and they would lose every share-to-all file the moment their
-   * track existed, which is ADR-1048's headline scenario.
+   * produce a LIVE track. So a gate that dropped the second read would report this live expert
+   * as CLOSED — and they would lose every share-to-all file.
    */
   it('resolves LIVE standing from the full re-read, not from the narrow render graph', async () => {
     mockFindByIdWithRelations.mockResolvedValue(
-      narrowRequest([{ id: REL_ID, expertProfileId: EXPERT_PROFILE_ID, status: 'invited' }])
+      narrowRequest([{ id: REL_ID, expertProfileId: EXPERT_PROFILE_ID, status: 'eoi_submitted' }])
     );
-    mockListByRequest.mockResolvedValue([fullRelationship({ status: 'invited' })]);
+    mockListByRequest.mockResolvedValue([fullRelationship({ status: 'eoi_submitted' })]);
 
     const scope = await authorizeRequestFileScope(
       sessionUser({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
@@ -323,13 +328,57 @@ describe('authorizeRequestFileScope', () => {
 
     if (!scope.ok || scope.side !== 'expert') throw new Error('expected the expert arm');
     expect(mockListByRequest).toHaveBeenCalledWith(REQUEST_ID);
-    // `invited` IS live for files (Ruling 2) — and unreachable without the second read.
     expect(scope.viewer.access).toEqual({ kind: 'live' });
-    expect(scope.viewer.standing).toEqual({
-      status: 'invited',
+    expect(scope.viewer.standing).toStrictEqual({
+      status: 'eoi_submitted',
       declinedAt: null,
       notSelectedAt: null,
+      openedAt: OPENED_AT,
     });
+  });
+
+  /**
+   * An `invited` expert is NOT denied by the gate — the brief's documents download through it
+   * (`get-request-document-download.ts`). Their FILE access is denied by the access value.
+   */
+  it('admits an unopened (`invited`) expert with `unopened` access rather than denying them', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      narrowRequest([{ id: REL_ID, expertProfileId: EXPERT_PROFILE_ID, status: 'invited' }])
+    );
+    mockListByRequest.mockResolvedValue([fullRelationship({ status: 'invited', openedAt: null })]);
+
+    const scope = await authorizeRequestFileScope(
+      sessionUser({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      REQUEST_ID
+    );
+
+    if (!scope.ok || scope.side !== 'expert') throw new Error('expected the expert arm');
+    expect(scope.viewer.access).toEqual({ kind: 'unopened' });
+  });
+
+  /** ⚠ THE CLIENT IS BLIND TO AN EXPERT WHOSE TRACK HAS NOT OPENED — they never enter scope. */
+  it('never hands the client arm a track that has not opened', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(narrowRequest([]));
+    mockListByRequest.mockResolvedValue([
+      fullRelationship(),
+      fullRelationship({
+        id: OTHER_REL_ID,
+        expertProfileId: OTHER_EXPERT_PROFILE_ID,
+        status: 'invited',
+        openedAt: null,
+      }),
+      fullRelationship({
+        id: 'b0000000-0000-4000-8000-000000000004',
+        status: 'declined',
+        declinedAt: OPENED_AT,
+        openedAt: null,
+      }),
+    ]);
+
+    const scope = await authorizeRequestFileScope(sessionUser(), REQUEST_ID);
+
+    if (!scope.ok || scope.side !== 'client') throw new Error('expected the client arm');
+    expect(scope.tracks.map((t) => t.relationshipId)).toStrictEqual([REL_ID]);
   });
 
   /**

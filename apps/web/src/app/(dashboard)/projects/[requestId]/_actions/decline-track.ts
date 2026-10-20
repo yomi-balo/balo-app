@@ -9,7 +9,10 @@ import {
   requestExpertRelationshipsRepository,
   InvalidRelationshipTransitionError,
 } from '@balo/db';
-import type { DeclinableRelationshipStatus } from '@balo/shared/project-requests';
+import {
+  relationshipIsOpened,
+  type DeclinableRelationshipStatus,
+} from '@balo/shared/project-requests';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
@@ -90,9 +93,11 @@ export async function declineTrackAction(
       return { success: false, error: PERMISSION_DENIED, code: 'denied' };
     }
 
-    // IDOR guard — the relationship must belong to THIS request.
+    // IDOR guard — the relationship must belong to THIS request. A track that has not opened is
+    // invisible to the client, so it answers exactly as a missing one. `openedAt` is never
+    // cleared once stamped, so this read-time check cannot be raced into a stale "opened".
     const relationship = request.relationships.find((r) => r.id === relationshipId);
-    if (relationship === undefined) {
+    if (relationship === undefined || !relationshipIsOpened(relationship)) {
       return { success: false, error: NOT_DECLINABLE, code: 'not_declinable' };
     }
 

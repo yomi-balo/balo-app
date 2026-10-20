@@ -23,6 +23,7 @@ function standing(over: Partial<RequestTrackFileStanding> = {}): RequestTrackFil
     declinedAt: null,
     deletedAt: null,
     notSelectedAt: null,
+    openedAt: T0,
     ...over,
   };
 }
@@ -49,27 +50,54 @@ function clientFile(over: Partial<RequestFileAudienceFacts> = {}): RequestFileAu
 
 describe('resolveRequestTrackFileAccess', () => {
   /**
-   * ⚠ THE HEADLINE SCENARIO (ADR-1048 §1). A track at `invited` is LIVE for files, so a late
-   * invitee inherits every prior share-to-all the moment their track exists. This is exactly
-   * where "live for files" diverges from `isThreadOpenStatus`, which excludes `invited` by
-   * design and is pinned by its own test in `apps/web`. Do not reconcile the two.
+   * ⚠ THE CLIENT-VISIBILITY RULE. A client is blind to an expert whose track has not opened
+   * (no EOI yet), so an `invited` track has no file standing at all — not live, and no
+   * historical read either.
    */
-  it('treats `invited` as LIVE — the late-invitee headline scenario', () => {
-    expect(resolveRequestTrackFileAccess(standing({ status: 'invited' }))).toEqual({
-      kind: 'live',
-    });
-    expect(requestTrackIsLiveForFiles(standing({ status: 'invited' }))).toBe(true);
+  it('treats an UNOPENED (`invited`) track as unopened — no file access of any kind', () => {
+    const access = resolveRequestTrackFileAccess(standing({ status: 'invited', openedAt: null }));
+    expect(access).toEqual({ kind: 'unopened' });
+    expect(requestTrackIsLiveForFiles(standing({ status: 'invited', openedAt: null }))).toBe(false);
+    expect(trackCanReadAllAudienceShare(access, T0)).toBe(false);
   });
 
-  it.each([
-    ['invited'],
-    ['eoi_submitted'],
-    ['proposal_requested'],
-    ['proposal_submitted'],
-    ['accepted'],
-  ])('treats a non-declined, non-deleted, non-swept `%s` track as live', (status) => {
-    expect(requestTrackIsLiveForFiles(standing({ status }))).toBe(true);
+  /**
+   * ⚠ DECLINE ERASES THE STATUS HISTORY, `openedAt` DOES NOT. A track declined straight from
+   * `invited` must not be handed the historical read a declined-after-EOI track keeps: every
+   * share made before its decline would otherwise leak to an expert the client never saw.
+   */
+  it('gives a track DECLINED BEFORE IT OPENED no historical read', () => {
+    const neverOpened = resolveRequestTrackFileAccess(
+      standing({ status: 'declined', declinedAt: T2, openedAt: null })
+    );
+    expect(neverOpened).toEqual({ kind: 'unopened' });
+    expect(trackCanReadAllAudienceShare(neverOpened, T1)).toBe(false);
+
+    const openedThenDeclined = resolveRequestTrackFileAccess(
+      standing({ status: 'declined', declinedAt: T2, openedAt: T0 })
+    );
+    expect(openedThenDeclined).toEqual({ kind: 'closed', closedAt: T2 });
+    expect(trackCanReadAllAudienceShare(openedThenDeclined, T1)).toBe(true);
   });
+
+  /**
+   * Inheritance on opening: the moment an `invited` track opens it is live, and a live track
+   * reads every share-to-all regardless of when it was made.
+   */
+  it('lets a track that has just OPENED read share-to-all files made before it opened', () => {
+    const access = resolveRequestTrackFileAccess(
+      standing({ status: 'eoi_submitted', openedAt: T2 })
+    );
+    expect(access).toEqual({ kind: 'live' });
+    expect(trackCanReadAllAudienceShare(access, T1)).toBe(true);
+  });
+
+  it.each([['eoi_submitted'], ['proposal_requested'], ['proposal_submitted'], ['accepted']])(
+    'treats a non-declined, non-deleted, non-swept `%s` track as live',
+    (status) => {
+      expect(requestTrackIsLiveForFiles(standing({ status }))).toBe(true);
+    }
+  );
 
   it('closes a DECLINED track at `declinedAt`', () => {
     expect(resolveRequestTrackFileAccess(standing({ status: 'declined', declinedAt: T2 }))).toEqual(
@@ -184,6 +212,31 @@ describe('requestFileVisibleToTrack', () => {
   });
 
   /**
+   * ⚠ AN UNOPENED TRACK SEES NOTHING — not a share-to-all, not a grant (one made before this
+   * rule existed), not its own upload. The client cannot see this expert.
+   */
+  it('hides every file from an UNOPENED track, whatever the audience', () => {
+    const unopened = track({ access: { kind: 'unopened' } });
+    expect(requestFileVisibleToTrack(clientFile(), unopened, NO_GRANTS)).toBe(false);
+    expect(
+      requestFileVisibleToTrack(clientFile({ audience: 'grants' }), unopened, new Set(['rel_1']))
+    ).toBe(false);
+    expect(
+      requestFileVisibleToTrack(
+        {
+          side: 'expert',
+          audience: 'own_track',
+          expertRelationshipId: 'rel_1',
+          createdAt: T1,
+          deletedAt: null,
+        },
+        unopened,
+        NO_GRANTS
+      )
+    ).toBe(false);
+  });
+
+  /**
    * ⚠ THE CROSS-TRACK INVARIANT (ADR-1048 §7), as a pure rule. A sibling candidate's upload
    * is never visible: the comparison is against the viewer's OWN relationship id, taken from
    * the gate.
@@ -282,6 +335,23 @@ describe('resolveRequestFileAudience', () => {
       access: { kind: 'closed', closedAt: T0 },
     }),
   ];
+
+  it('leaves an UNOPENED track out of every audience', () => {
+    const withUnopened = [
+      ...TRACKS,
+      track({ relationshipId: 'rel_4', expertProfileId: 'exp_4', access: { kind: 'unopened' } }),
+    ];
+    expect(
+      resolveRequestFileAudience(clientFile(), withUnopened, new Set()).map((e) => e.relationshipId)
+    ).toEqual(['rel_1', 'rel_2']);
+    expect(
+      resolveRequestFileAudience(
+        clientFile({ audience: 'grants' }),
+        withUnopened,
+        new Set(['rel_4'])
+      )
+    ).toEqual([]);
+  });
 
   it('labels an ALL_LIVE_TRACKS share with `all_live_tracks` and excludes the closed track', () => {
     expect(resolveRequestFileAudience(clientFile({ createdAt: T1 }), TRACKS, new Set())).toEqual([

@@ -1,4 +1,5 @@
 import type { ProjectRequestWithRelations } from '@balo/db';
+import { relationshipIsOpened } from '@balo/shared/project-requests';
 import { formatBudgetRange } from '@/lib/utils/currency';
 import type { RequestViewerContext, ProjectRequestStatus } from './resolve-request-lens';
 import type { RelationshipStatus } from './conversation-view-types';
@@ -349,6 +350,35 @@ function deriveLiveTracksForClose(
 }
 
 /**
+ * The graph as the CLIENT may see it: only experts whose track has opened
+ * (`relationshipIsOpened`). Every other lens reads the full graph.
+ */
+function clientVisibleRequest(
+  request: ProjectRequestWithRelations,
+  ctx: RequestViewerContext
+): ProjectRequestWithRelations {
+  if (ctx.lens !== 'client') return request;
+  return { ...request, relationships: request.relationships.filter(relationshipIsOpened) };
+}
+
+/**
+ * The closed banner's counts. The audit row counts every track the close ended; a client counts
+ * only the ones it could see, re-derived from the narrowed graph (the close cascade stamps
+ * `request_closed` on exactly the tracks it ended).
+ */
+function closedSummaryInputFor(
+  visible: ProjectRequestWithRelations,
+  ctx: RequestViewerContext,
+  input: ClosedSummaryInput | null
+): ClosedSummaryInput | null {
+  if (input === null || ctx.lens !== 'client') return input;
+  const tracksEnded = visible.relationships.filter(
+    (r) => r.declineReason === 'request_closed'
+  ).length;
+  return { ...input, counts: { ...input.counts, tracksEnded } };
+}
+
+/**
  * Pure mapper: hydrated DB graph → fully serializable view-model the leaf
  * components consume. Mirrors `mapProfileToView`.
  *
@@ -369,6 +399,7 @@ export function mapRequestToDetailView(
    */
   closedSummaryInput: ClosedSummaryInput | null = null
 ): RequestDetailView {
+  const visible = clientVisibleRequest(request, ctx);
   return {
     id: request.id,
     title: request.title,
@@ -401,13 +432,17 @@ export function mapRequestToDetailView(
     viewerRelationshipStatus: deriveViewerRelationshipStatus(request, ctx),
     onDirectLeg: deriveOnDirectLeg(request, ctx),
     kickoff: deriveKickoffView(request, ctx),
-    liveTracksForClose: deriveLiveTracksForClose(request, ctx),
-    closed: deriveClosedSummary(request, ctx, closedSummaryInput),
+    liveTracksForClose: deriveLiveTracksForClose(visible, ctx),
+    closed: deriveClosedSummary(
+      request,
+      ctx,
+      closedSummaryInputFor(visible, ctx, closedSummaryInput)
+    ),
     // BAL-540 — the closed-track list's AUDIENCE narrowing lives here, with every other
     // per-lens projection choice this mapper makes; `deriveClosedTracks` itself is
     // context-free (see its docblock: it is scanned by the ADR-1029 capability invariant, so
     // it may not name a lens). An expert never sees the counterparty track list — their own
     // closed-state surface is `resolve-ended-track-view.ts`.
-    closedTracks: ctx.lens === 'expert' ? [] : deriveClosedTracks(request),
+    closedTracks: ctx.lens === 'expert' ? [] : deriveClosedTracks(visible),
   };
 }

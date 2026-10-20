@@ -28,6 +28,7 @@ const CLIENT_USER_ID = 'u0000000-0000-4000-8000-000000000006';
 /** ⚠ A SMALL CAP, on purpose: the loader compares `rows.length === <the constant>`, so what is
  *  under test is the COMPARISON, not the number 200. A small value keeps the fixture honest. */
 const CAP = 3;
+const OPENED_AT = new Date('2026-01-01T00:00:00.000Z');
 
 const mockListForRequest = vi.fn();
 const mockListByRequest = vi.fn();
@@ -117,7 +118,12 @@ function requestRow(relationships: unknown[]): unknown {
 function fullRel(
   id: string,
   expertProfileId: string,
-  overrides: Partial<{ status: string; declinedAt: Date | null; notSelectedAt: Date | null }> = {}
+  overrides: Partial<{
+    status: string;
+    declinedAt: Date | null;
+    notSelectedAt: Date | null;
+    openedAt: Date | null;
+  }> = {}
 ): unknown {
   return {
     id,
@@ -126,6 +132,7 @@ function fullRel(
     declinedAt: null,
     deletedAt: null,
     notSelectedAt: null,
+    openedAt: OPENED_AT,
     ...overrides,
   };
 }
@@ -215,7 +222,12 @@ describe('loadRequestFiles', () => {
         relationshipId: REL_ID,
         expertProfileId: EXPERT_PROFILE_ID,
         access: { kind: 'live' },
-        standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+        standing: {
+          status: 'proposal_submitted',
+          declinedAt: null,
+          notSelectedAt: null,
+          openedAt: OPENED_AT,
+        },
       },
     });
     mockListForRequest.mockResolvedValue([
@@ -263,7 +275,12 @@ describe('loadRequestFiles', () => {
         relationshipId: REL_ID,
         expertProfileId: EXPERT_PROFILE_ID,
         access: { kind: 'live' },
-        standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+        standing: {
+          status: 'proposal_submitted',
+          declinedAt: null,
+          notSelectedAt: null,
+          openedAt: OPENED_AT,
+        },
       },
     });
     mockListForRequest.mockResolvedValue([]);
@@ -294,6 +311,7 @@ describe('loadRequestFiles', () => {
           status: 'proposal_submitted',
           declinedAt: null,
           notSelectedAt: closedAt,
+          openedAt: OPENED_AT,
         },
       },
     });
@@ -315,7 +333,12 @@ describe('loadRequestFiles', () => {
         relationshipId: REL_ID,
         expertProfileId: EXPERT_PROFILE_ID,
         access: { kind: 'closed', closedAt },
-        standing: { status: 'declined', declinedAt: closedAt, notSelectedAt: null },
+        standing: {
+          status: 'declined',
+          declinedAt: closedAt,
+          notSelectedAt: null,
+          openedAt: OPENED_AT,
+        },
       },
     });
     mockListForRequest.mockResolvedValue([]);
@@ -343,7 +366,12 @@ describe('loadRequestFiles', () => {
           relationshipId: REL_ID,
           expertProfileId: EXPERT_PROFILE_ID,
           access: { kind: 'live' },
-          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
         },
         {
           relationshipId: OTHER_REL_ID,
@@ -353,6 +381,7 @@ describe('loadRequestFiles', () => {
             status: 'proposal_submitted',
             declinedAt: null,
             notSelectedAt: closedAt,
+            openedAt: OPENED_AT,
           },
         },
       ],
@@ -407,13 +436,23 @@ describe('loadRequestFiles', () => {
           relationshipId: REL_ID,
           expertProfileId: EXPERT_PROFILE_ID,
           access: { kind: 'live' },
-          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
         },
         {
           relationshipId: OTHER_REL_ID,
           expertProfileId: OTHER_EXPERT_PROFILE_ID,
           access: { kind: 'live' },
-          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
         },
       ],
     });
@@ -443,6 +482,80 @@ describe('loadRequestFiles', () => {
     });
   });
 
+  // ── The client-visibility rule: unopened tracks ──
+
+  /** An expert with no EOI yet has no file plane — the panel does not render for them. */
+  it('expert arm: returns null for a viewer whose track has not opened', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'expert',
+      request: requestRow([narrowRel(REL_ID, EXPERT_PROFILE_ID, 'Wei')]),
+      viewer: {
+        relationshipId: REL_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        access: { kind: 'unopened' },
+        standing: { status: 'invited', declinedAt: null, notSelectedAt: null, openedAt: null },
+      },
+    });
+    mockListForRequest.mockResolvedValue([{ file: fileRow(), grants: [] }]);
+
+    expect(await loadRequestFiles(USER, REQUEST_ID)).toBeNull();
+  });
+
+  /**
+   * ⚠ THE CLIENT IS BLIND TO AN UNOPENED TRACK. The gate already drops it from `tracks`; the
+   * loader's second read must not re-admit it as a pickable name, and an upload that track made
+   * before this rule existed is not listed.
+   */
+  it('client arm: never lists an unopened track or its uploads', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      companyId: 'c1',
+      request: requestRow([
+        narrowRel(REL_ID, EXPERT_PROFILE_ID, 'Wei'),
+        narrowRel(OTHER_REL_ID, OTHER_EXPERT_PROFILE_ID, 'Benny'),
+      ]),
+      tracks: [
+        {
+          relationshipId: REL_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
+        },
+      ],
+    });
+    mockListByRequest.mockResolvedValue([
+      fullRel(REL_ID, EXPERT_PROFILE_ID),
+      fullRel(OTHER_REL_ID, OTHER_EXPERT_PROFILE_ID, { status: 'invited', openedAt: null }),
+    ]);
+    mockListForRequest.mockResolvedValue([
+      { file: fileRow(), grants: [] },
+      {
+        file: fileRow({
+          id: 'f0000000-0000-4000-8000-000000000009',
+          fileName: 'benny-notes.pdf',
+          side: 'expert',
+          audience: 'own_track',
+          expertRelationshipId: OTHER_REL_ID,
+        }),
+        grants: [],
+      },
+    ]);
+
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+
+    if (view?.lens !== 'client') throw new Error('expected the client lens');
+    expect(view.liveTracks).toStrictEqual([{ relationshipId: REL_ID, trackName: 'Wei' }]);
+    expect(view.files.map((f) => f.fileName)).toStrictEqual(['Requirements.pdf']);
+    expect(JSON.stringify(view)).not.toContain('Benny');
+  });
+
   // ── Admin arm ──
 
   /** ⚠ TOMBSTONES ARE THE ADMIN LENS'S EXPLICITLY-NAMED PATH — never a relaxed predicate. */
@@ -457,7 +570,12 @@ describe('loadRequestFiles', () => {
           relationshipId: REL_ID,
           expertProfileId: EXPERT_PROFILE_ID,
           access: { kind: 'live' },
-          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
         },
       ],
     });
@@ -556,7 +674,12 @@ describe('loadRequestFiles', () => {
           relationshipId: REL_ID,
           expertProfileId: EXPERT_PROFILE_ID,
           access: { kind: 'live' },
-          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
         },
       ],
     });
@@ -593,7 +716,12 @@ describe('loadRequestFiles', () => {
           relationshipId: REL_ID,
           expertProfileId: EXPERT_PROFILE_ID,
           access: { kind: 'live' },
-          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
         },
       ],
     });
@@ -636,13 +764,23 @@ describe('loadRequestFiles', () => {
           relationshipId: REL_ID,
           expertProfileId: EXPERT_PROFILE_ID,
           access: { kind: 'live' },
-          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
         },
         {
           relationshipId: OTHER_REL_ID,
           expertProfileId: OTHER_EXPERT_PROFILE_ID,
           access: { kind: 'live' },
-          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+          standing: {
+            status: 'proposal_submitted',
+            declinedAt: null,
+            notSelectedAt: null,
+            openedAt: OPENED_AT,
+          },
         },
       ],
     });

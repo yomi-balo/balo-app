@@ -379,11 +379,12 @@ export default async function RequestDetailPage({
   // case surface (`cases/[engagementId]/page.tsx`).
   const viewerEmailDomain = extractEmailDomain(user.email);
 
-  // BAL-431 / ADR-1048 — the request-file audience panel. Rendered for EVERY lens whenever the
+  // BAL-431 / ADR-1048 — the request-file audience panel. Loaded for EVERY lens whenever the
   // request has at least one relationship — deliberately NOT gated on `requestPhase(...) ===
-  // 'phase2'` (an `invited` expert must see share-to-all files the moment their track exists,
-  // the ticket's headline scenario). `loadRequestFiles` runs its own `authorizeRequestFileScope`
-  // gate internally, so the load is authorization-complete on its own.
+  // 'phase2'`. The loader decides who gets a panel: an expert whose track has not opened gets
+  // `null` (no panel), and the client lists only experts whose tracks have opened.
+  // `loadRequestFiles` runs its own `authorizeRequestFileScope` gate internally, so the load is
+  // authorization-complete on its own.
   let requestFilesView: RequestFilesView | null = null;
   if (request.relationships.length > 0) {
     requestFilesView = await loadRequestFiles(user, requestId);

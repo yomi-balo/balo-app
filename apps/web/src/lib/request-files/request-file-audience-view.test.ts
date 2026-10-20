@@ -65,7 +65,7 @@ const CLOSED_TRACK: RequestFileSerializerTrack = {
 describe('toExpertRequestFileView — the concealment boundary', () => {
   const viewer = {
     relationshipId: 'rel_priya',
-    invitedAt: new Date('2026-07-01T00:00:00Z'),
+    joinedAt: new Date('2026-07-01T00:00:00Z'),
     access: { kind: 'live' as const },
   };
 
@@ -102,13 +102,13 @@ describe('toExpertRequestFileView — the concealment boundary', () => {
   it('computes sharedBeforeYouJoined from dates only, never audience', () => {
     const before = toExpertRequestFileView(overWideClientFile(), 'Acme Corp', {
       ...viewer,
-      invitedAt: new Date('2026-09-01T00:00:00Z'),
+      joinedAt: new Date('2026-09-01T00:00:00Z'),
     });
     expect(before.sharedBeforeYouJoined).toBe(true);
 
     const after = toExpertRequestFileView(overWideClientFile(), 'Acme Corp', {
       ...viewer,
-      invitedAt: new Date('2026-01-01T00:00:00Z'),
+      joinedAt: new Date('2026-01-01T00:00:00Z'),
     });
     expect(after.sharedBeforeYouJoined).toBe(false);
   });
@@ -266,7 +266,7 @@ describe('three-lens table — one input row, three audience-shaped outputs', ()
     ) as unknown as Record<string, unknown>;
     const expertView = toExpertRequestFileView(file, 'Acme Corp', {
       relationshipId: 'rel_priya',
-      invitedAt: new Date('2026-01-01T00:00:00Z'),
+      joinedAt: new Date('2026-01-01T00:00:00Z'),
       access: { kind: 'live' },
     }) as unknown as Record<string, unknown>;
 

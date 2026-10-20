@@ -4,6 +4,7 @@ import type {
   PortfolioProjectEngagementView,
   ProposalStatus,
 } from '@balo/db';
+import { relationshipIsOpened } from '@balo/shared/project-requests';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import { QUIET_THRESHOLD_DAYS } from '@/lib/project-request/request-detail-view';
@@ -299,6 +300,18 @@ export function requestRecencyAt(row: PortfolioRequestRow): Date {
   // `updatedAt` seeds the fold (always present); `createdAt` is implicitly
   // covered because `updatedAt >= createdAt` for every row.
   return maxDate(row.updatedAt, relationshipActivity);
+}
+
+/**
+ * {@link requestRecencyAt} as the CLIENT may see it: folds only tracks that have opened
+ * (`relationshipIsOpened`), so inviting an expert — or that expert's untouched row — never moves
+ * the client's "updated" time or sort order.
+ */
+export function clientRequestRecencyAt(row: PortfolioRequestRow): Date {
+  return requestRecencyAt({
+    ...row,
+    relationships: row.relationships.filter(relationshipIsOpened),
+  });
 }
 
 /** Whole days between two instants (floored, never negative-clamped here). */

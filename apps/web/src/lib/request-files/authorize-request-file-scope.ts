@@ -15,11 +15,13 @@ import { log } from '@/lib/logging';
 /**
  * THE REQUEST-FILE SCOPE GATE (BAL-431 / ADR-1048 §4, layer 2) — the replacement for
  * `resolveConversationAccess` on the file plane. It CANNOT be reused: that gate DENIES admin
- * observers (`resolve-conversation-access.ts:120`, `archetype !== 'participant'`) and gates on
- * `isThreadOpenStatus`, which excludes `invited` — both fatal here, since the admin lens is a
- * real reader and an `invited` expert must see share-to-all files the moment their track
- * exists. It also WRITES (`ensureForContext`); this gate performs no writes on any path, which
- * is what lets the download action sit on `READ_ONLY_ALLOWLIST` behind a bare `requireUser()`.
+ * observers (`resolve-conversation-access.ts:120`, `archetype !== 'participant'`) and denies
+ * an `invited` expert outright — both fatal here, since the admin lens is a real reader and an
+ * `invited` expert still downloads the brief's documents through this gate
+ * (`get-request-document-download.ts`). An unopened track's FILE access is denied by its
+ * `access` value (`{ kind: 'unopened' }`), never by this gate. It also WRITES
+ * (`ensureForContext`); this gate performs no writes on any path, which is what lets the
+ * download action sit on `READ_ONLY_ALLOWLIST` behind a bare `requireUser()`.
  *
  * ⚠ AUTHORIZATION COMPLETES BEFORE ANY FILE ROW IS READ. Every one of upload / confirm / list /
  * download / revoke / delete calls this FIRST, then layer 3 (containment + the per-file
@@ -37,6 +39,8 @@ export interface RequestTrackStanding {
   readonly status: string;
   readonly declinedAt: Date | null;
   readonly notSelectedAt: Date | null;
+  /** When the track opened — the expert's "joined" instant for "Shared before you joined". */
+  readonly openedAt: Date | null;
 }
 
 /** A resolved track ref plus its raw standing columns. Assignable to `RequestTrackRef`. */
@@ -51,7 +55,9 @@ export type RequestFileScope =
       request: ProjectRequestWithRelations;
       companyId: string;
       /**
-       * Every NON-WITHDRAWN track on the request — LIVE AND CLOSED — with resolved standing.
+       * Every NON-WITHDRAWN track that has OPENED — LIVE AND CLOSED — with resolved standing.
+       * An unopened track (`relationshipIsOpened`) is never handed to the client arm: the client
+       * cannot see that expert at all.
        * ⚠ FILTER ON `access.kind === 'live'` BEFORE OFFERING ANY TRACK AS A SHARE TARGET; a
        * closed track handed to a picker or a grant list is a direct ADR-1048 §7 invariant-4
        * violation. (`listByRequest` filters `deleted_at IS NULL`, so a withdrawn track is
@@ -116,6 +122,7 @@ async function loadTracks(projectRequestId: string): Promise<RequestFileTrack[]>
       status: relationship.status,
       declinedAt: relationship.declinedAt,
       notSelectedAt: relationship.notSelectedAt,
+      openedAt: relationship.openedAt,
     },
   }));
 }
@@ -159,7 +166,10 @@ export async function authorizeRequestFileScope(
     if (!allowed) {
       return denied(user, requestId, 'client_capability_denied');
     }
-    const tracks = await loadTracks(requestId);
+    // The client is blind to an expert whose track has not opened — they never enter the scope.
+    const tracks = (await loadTracks(requestId)).filter(
+      (track) => track.access.kind !== 'unopened'
+    );
     return { ok: true, side: 'client', request, companyId: request.companyId, tracks };
   }
 

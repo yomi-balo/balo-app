@@ -154,7 +154,7 @@ describe('RequestFileRow', () => {
       );
       const text = container.textContent ?? '';
       for (const forbidden of [
-        'Everyone invited',
+        'All interested experts',
         'Their conversation only',
         'No experts have access',
         'Visible now to:',

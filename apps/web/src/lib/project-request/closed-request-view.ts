@@ -4,6 +4,7 @@ import type {
   RelationshipDeclineReason,
 } from '@balo/db';
 import { personWithOrgLabel } from '@balo/shared/parties';
+import { relationshipIsOpened } from '@balo/shared/project-requests';
 import type { RequestViewerContext } from './resolve-request-lens';
 
 /**
@@ -105,14 +106,15 @@ function initialsFor(name: string): string {
 }
 
 /**
- * `declineReason` (+ EOI presence) → the frozen track's final chip + ended-label (design ref
- * `TrackCard`, `:484-496`; plan §6.3's exact rule): `request_closed` ⇒ `ended_request_closed`;
- * otherwise a deliberate per-track decline — `invite_withdrawn` when the track never got past
- * a bare invite (no live EOI), `declined` when it had at least reached `eoi_submitted`.
+ * `declineReason` (+ whether the track opened) → the frozen track's final chip + ended-label
+ * (design ref `TrackCard`, `:484-496`; plan §6.3's exact rule): `request_closed` ⇒
+ * `ended_request_closed`; otherwise a deliberate per-track decline — `invite_withdrawn` when the
+ * track never opened (a bare invite), `declined` when it had. Only staff ever see an
+ * `invite_withdrawn` track: the client's graph holds opened tracks only.
  */
 function finalChipFor(
   declineReason: RelationshipDeclineReason | null,
-  hasLiveEoi: boolean
+  opened: boolean
 ): {
   finalChip: ClosedTrackView['finalChip'];
   endedLabel: string;
@@ -125,7 +127,7 @@ function finalChipFor(
   }
   // `client_declined` / `balo_declined` — a deliberate per-track decline BEFORE the request
   // itself closed.
-  if (!hasLiveEoi) {
+  if (!opened) {
     return {
       finalChip: 'invite_withdrawn',
       endedLabel: 'Invite withdrawn before the request closed',
@@ -155,8 +157,10 @@ export function deriveClosedTracks(request: ProjectRequestWithRelations): Closed
     const { user } = relationship.expertProfile;
     const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
     const expertName = full.length > 0 ? full : 'Invited expert';
-    const hasLiveEoi = relationship.expressionsOfInterest.length > 0;
-    const { finalChip, endedLabel } = finalChipFor(relationship.declineReason, hasLiveEoi);
+    const { finalChip, endedLabel } = finalChipFor(
+      relationship.declineReason,
+      relationshipIsOpened(relationship)
+    );
     return {
       relationshipId: relationship.id,
       expertName,

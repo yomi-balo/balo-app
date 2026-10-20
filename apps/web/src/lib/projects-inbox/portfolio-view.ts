@@ -23,6 +23,7 @@ import {
   needsYouFor,
   needsYouForExpert,
   requestRecencyAt,
+  clientRequestRecencyAt,
   stageChipFor,
   stageChipForRelationship,
   stageLabelFor,
@@ -256,7 +257,7 @@ function toClientRowView(
   signal: RequestThreadSignal,
   now: Date
 ): PortfolioRowView {
-  const recencyAt = requestRecencyAt(row);
+  const recencyAt = clientRequestRecencyAt(row);
   const { needsYou, nudgeLabel, clientMoveKind } = needsYouFor('client', row, signal, now);
   const chip = stageChipFor(row.status);
   return {

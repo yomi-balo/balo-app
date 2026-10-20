@@ -17,12 +17,16 @@ type RelOverrides = Omit<Partial<Relationship>, 'status'> & { status?: string };
 
 /** Build a single hydrated relationship row with the A2 last-activity fields. */
 function rel(overrides: RelOverrides = {}): Relationship {
+  const status = overrides.status ?? 'eoi_submitted';
   return {
     id: 'rel-1',
     expertProfileId: 'expert-1',
     status: 'eoi_submitted',
     invitedAt: new Date('2025-01-08T00:00:00Z'),
     updatedAt: new Date('2025-01-08T00:00:00Z'),
+    // An engaged track has opened, as production's advance stamps it.
+    openedAt:
+      status === 'invited' || status === 'declined' ? null : new Date('2025-01-08T00:00:00Z'),
     expertProfile: {
       id: 'expert-1',
       user: { id: 'user-expert', firstName: 'Priya', lastName: 'Nair' },
@@ -655,7 +659,13 @@ describe('mapRequestToDetailView — BAL-540 closed summary + closed tracks', ()
       closedByUserId: 'user-admin',
       closeReason: 'unfilled',
       closeNote: 'Two of three tracks went quiet.',
-      relationships: [rel({ status: 'declined', declineReason: 'request_closed' })],
+      relationships: [
+        rel({
+          status: 'declined',
+          declineReason: 'request_closed',
+          openedAt: new Date('2025-01-08T00:00:00Z'),
+        }),
+      ],
       ...overrides,
     } as Partial<ProjectRequestWithRelations>);
   }
@@ -709,6 +719,56 @@ describe('mapRequestToDetailView — BAL-540 closed summary + closed tracks', ()
     expect(view.closedTracks).toEqual([]); // expert never sees the counterparty track list
   });
 
+  /**
+   * ⚠ THE CLIENT IS BLIND TO EXPERTS WHOSE TRACK NEVER OPENED — no name in the closed list, and
+   * not in the "N tracks ended" count either, even though the audit row counted them.
+   */
+  it('hides never-opened tracks from the client closed list and count; staff see them all', () => {
+    const req = closedRequest({
+      relationships: [
+        rel({
+          id: 'rel-opened',
+          status: 'declined',
+          declineReason: 'request_closed',
+          openedAt: new Date('2025-01-08T00:00:00Z'),
+        }),
+        rel({
+          id: 'rel-invited',
+          status: 'declined',
+          declineReason: 'request_closed',
+          openedAt: null,
+          expertProfile: {
+            id: 'expert-2',
+            user: { id: 'user-expert-2', firstName: 'Benny', lastName: 'Legros' },
+          } as Relationship['expertProfile'],
+        }),
+      ],
+    });
+    const input = { ...CLOSED_INPUT, counts: { ...CLOSED_INPUT.counts, tracksEnded: 2 } };
+
+    const clientView = mapRequestToDetailView(
+      req,
+      ctx({ lens: 'client', archetype: 'participant', relationshipId: null }),
+      NOW,
+      input
+    );
+    expect(clientView.closedTracks.map((t) => t.relationshipId)).toStrictEqual(['rel-opened']);
+    expect(clientView.closed?.counts.tracksEnded).toBe(1);
+    expect(JSON.stringify(clientView)).not.toContain('Benny');
+
+    const adminView = mapRequestToDetailView(
+      req,
+      ctx({ lens: 'admin', archetype: 'observer', relationshipId: null, canSeeStaffOnly: true }),
+      NOW,
+      input
+    );
+    expect(adminView.closedTracks.map((t) => t.relationshipId)).toStrictEqual([
+      'rel-opened',
+      'rel-invited',
+    ]);
+    expect(adminView.closed?.counts.tracksEnded).toBe(2);
+  });
+
   it('close_note IS populated for a viewer holding canSeeStaffOnly (D11)', () => {
     const view = mapRequestToDetailView(
       closedRequest(),
@@ -717,6 +777,44 @@ describe('mapRequestToDetailView — BAL-540 closed summary + closed tracks', ()
       CLOSED_INPUT
     );
     expect(view.closed?.note).toBe('Two of three tracks went quiet.');
+  });
+});
+
+describe('mapRequestToDetailView — the close sheet lists only tracks the client can see', () => {
+  const live = request({
+    status: 'eoi_submitted',
+    relationships: [
+      rel({ id: 'rel-opened', status: 'eoi_submitted' }),
+      rel({
+        id: 'rel-invited',
+        status: 'invited',
+        expertProfile: {
+          id: 'expert-2',
+          user: { id: 'user-expert-2', firstName: 'Benny', lastName: 'Legros' },
+        } as Relationship['expertProfile'],
+      }),
+    ],
+  });
+
+  it('omits an invited (unopened) expert from the client close sheet', () => {
+    const view = mapRequestToDetailView(
+      live,
+      ctx({ lens: 'client', archetype: 'participant', relationshipId: null }),
+      NOW
+    );
+    expect(view.liveTracksForClose.map((t) => t.expertName)).toStrictEqual(['Priya Nair']);
+  });
+
+  it('keeps every track on the staff close sheet', () => {
+    const view = mapRequestToDetailView(
+      live,
+      ctx({ lens: 'admin', archetype: 'observer', relationshipId: null }),
+      NOW
+    );
+    expect(view.liveTracksForClose.map((t) => t.expertName)).toStrictEqual([
+      'Priya Nair',
+      'Benny Legros',
+    ]);
   });
 });
 

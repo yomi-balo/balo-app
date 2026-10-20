@@ -4,6 +4,7 @@ import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import {
   requestRecencyAt,
+  clientRequestRecencyAt,
   stageChipFor,
   stageChipForRelationship,
   stageDistribution,
@@ -25,6 +26,7 @@ const day = (n: number): Date => new Date(NOW.getTime() - n * 24 * 60 * 60 * 100
 type RelationshipRow = PortfolioRequestRow['relationships'][number];
 
 function makeRelationship(overrides: Partial<RelationshipRow> = {}): RelationshipRow {
+  const status = overrides.status ?? 'invited';
   return {
     id: 'rel-1',
     expertProfileId: 'expert-1',
@@ -32,6 +34,8 @@ function makeRelationship(overrides: Partial<RelationshipRow> = {}): Relationshi
     invitedAt: day(10),
     updatedAt: day(10),
     proposalRequestedAt: null,
+    // An engaged track has opened, as production's advance stamps it.
+    openedAt: status === 'invited' || status === 'declined' ? null : day(10),
     expressionsOfInterest: [],
     conversationMessages: [],
     proposals: [],
@@ -183,6 +187,21 @@ describe('requestRecencyAt', () => {
       ],
     });
     expect(requestRecencyAt(row).getTime()).toBe(day(2).getTime());
+  });
+});
+
+describe('clientRequestRecencyAt', () => {
+  /** Inviting an expert must not move the client's "updated" time — they cannot see invites. */
+  it('ignores a track that has not opened, unlike the staff fold', () => {
+    const row = makeRequest({
+      updatedAt: day(5),
+      relationships: [
+        makeRelationship({ id: 'rel-opened', status: 'eoi_submitted', updatedAt: day(4) }),
+        makeRelationship({ id: 'rel-invited', invitedAt: day(1), updatedAt: day(1) }),
+      ],
+    });
+    expect(clientRequestRecencyAt(row).getTime()).toBe(day(4).getTime());
+    expect(requestRecencyAt(row).getTime()).toBe(day(1).getTime());
   });
 });
 

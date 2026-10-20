@@ -37,12 +37,12 @@ const shareButton = (): HTMLElement => screen.getByRole('button', { name: /^Shar
 describe('ShareFileSheet', () => {
   it('pluralises the live-expert count on the everyone-invited option', () => {
     setup({ liveTracks: [TRACKS[0]!] });
-    expect(screen.getByText(/Everyone invited · 1 expert$/)).toBeInTheDocument();
+    expect(screen.getByText(/All interested experts · 1$/)).toBeInTheDocument();
   });
 
   it('uses the plural form for more than one live expert', () => {
     setup();
-    expect(screen.getByText(/Everyone invited · 2 experts$/)).toBeInTheDocument();
+    expect(screen.getByText(/All interested experts · 2$/)).toBeInTheDocument();
   });
 
   /**
@@ -123,7 +123,7 @@ describe('ShareFileSheet', () => {
     await user.upload(screen.getByLabelText('File'), pdf());
     await user.click(screen.getByRole('button', { name: /Only specific experts/ }));
     await user.click(screen.getByRole('checkbox', { name: 'Wei Zhang' }));
-    await user.click(screen.getByRole('button', { name: /Everyone invited/ }));
+    await user.click(screen.getByRole('button', { name: /All interested experts/ }));
     await user.click(shareButton());
     expect(onSubmit).toHaveBeenCalledWith('all_live_tracks', [], expect.any(File));
   });
@@ -132,7 +132,7 @@ describe('ShareFileSheet', () => {
     const user = userEvent.setup();
     setup({ liveTracks: [] });
     await user.click(screen.getByRole('button', { name: /Only specific experts/ }));
-    expect(screen.getByText('No live experts to pick from.')).toBeInTheDocument();
+    expect(screen.getByText('No experts have expressed interest yet.')).toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
 

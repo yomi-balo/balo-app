@@ -203,12 +203,17 @@ async function seedCommittedRequest(): Promise<Seed> {
   // cleanup bookkeeping above: a committed admin user is visible to every other suite in the
   // run and breaks the unscoped platform-role query in `users.integration.test.ts`.
   const inviter = await userFactory();
-  const first = await requestExpertRelationshipFactory({ invitedByUserId: inviter.id });
+  // Opened (`eoi_submitted`) tracks — an `invited` track has no file standing at all.
+  const first = await requestExpertRelationshipFactory({
+    invitedByUserId: inviter.id,
+    values: { status: 'eoi_submitted' },
+  });
   const secondExpert = await expertDraftFactory();
   const second = await requestExpertRelationshipFactory({
     projectRequestId: first.projectRequestId,
     expertProfileId: secondExpert.id,
     invitedByUserId: inviter.id,
+    values: { status: 'eoi_submitted' },
   });
   const client = await userFactory();
 

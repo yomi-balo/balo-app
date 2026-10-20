@@ -45,8 +45,8 @@ type RequestLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * `.declineTrack`, `.transitionStatus`; `expressionsOfInterestRepository.submit`;
  * `projectEngagementsRepository.materializeFromKickoff` — ELEVEN writers (orchestrator D13).
  * ONE NAMED EXEMPTION: `projectRequestsRepository.createProjectRequest` writes `project_requests`
- * and, for a submitted direct request, that request's first `request_expert_relationships` row,
- * WITHOUT this lock. Both rows hang off a request id this transaction's own INSERT creates, so no
+ * and, for a submitted direct request, that request's first `request_expert_relationships` row
+ * and its automatic EOI (via `advanceRelationshipStatus`), WITHOUT this lock. Both rows hang off a request id this transaction's own INSERT creates, so no
  * other writer can reference the request until commit — there is nothing to serialise against.
  * Because all eleven queue on one per-request gate, no two of them ever interleave their
  * row-lock acquisition on the same request, so the documented row-lock orders (`accept`:

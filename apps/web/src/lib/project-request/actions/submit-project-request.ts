@@ -201,7 +201,8 @@ export const submitProjectRequestAction = withAuth(
       }
 
       // 5. Persist request + tags + products + documents in one transaction. A direct request
-      //    is stored at `experts_invited` with its expert's relationship — see the repository.
+      //    is stored at `eoi_submitted` with its expert's relationship and automatic EOI — see
+      //    the repository.
       const created = await projectRequestsRepository.createProjectRequest({
         request: {
           companyId: session.user.companyId,

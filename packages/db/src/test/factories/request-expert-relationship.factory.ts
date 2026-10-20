@@ -11,7 +11,11 @@ interface RequestExpertRelationshipFactoryOverrides {
   expertProfileId?: string;
   /** Inviter (admin). Defaults to a fresh admin user. */
   invitedByUserId?: string;
-  /** Row-level overrides (status, declinedAt, deletedAt, …). */
+  /**
+   * Row-level overrides (status, declinedAt, deletedAt, …). An engaged `status` (past
+   * `invited`, not `declined`) defaults `openedAt` to now, as production's advance would stamp
+   * it; a `declined` row stays unopened unless `openedAt` is passed (declined AFTER opening).
+   */
   values?: Partial<NewRequestExpertRelationship>;
 }
 
@@ -57,12 +61,16 @@ export async function requestExpertRelationshipFactory(
   const invitedByUserId =
     overrides.invitedByUserId ?? (await userFactory({ platformRole: 'admin' })).id;
 
+  const status = overrides.values?.status ?? 'invited';
+  const engaged = status !== 'invited' && status !== 'declined';
+
   const [relationship] = await db
     .insert(requestExpertRelationships)
     .values({
       projectRequestId,
       expertProfileId,
       invitedByUserId,
+      ...(engaged ? { openedAt: new Date() } : {}),
       ...overrides.values,
     })
     .returning();

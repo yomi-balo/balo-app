@@ -100,10 +100,10 @@ export function ShareFileSheet({
             <Users className="text-primary mt-0.5 h-4 w-4" aria-hidden="true" />
             <span>
               <span className="block text-sm font-medium">
-                Everyone invited · {liveTracks.length} expert{liveTracks.length === 1 ? '' : 's'}
+                All interested experts · {liveTracks.length}
               </span>
               <span className="text-muted-foreground block text-xs">
-                Experts invited later will also see this file.
+                Experts who express interest later will also see this file.
               </span>
             </span>
           </button>
@@ -143,7 +143,7 @@ export function ShareFileSheet({
               ))}
               {liveTracks.length === 0 && (
                 <p className="text-muted-foreground px-2 py-1.5 text-xs">
-                  No live experts to pick from.
+                  No experts have expressed interest yet.
                 </p>
               )}
             </div>
