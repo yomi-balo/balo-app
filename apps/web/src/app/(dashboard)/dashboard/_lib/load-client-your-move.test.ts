@@ -133,7 +133,7 @@ describe('capability gates', () => {
     m.findByCompanyId.mockResolvedValue({ id: 'w-1' });
     m.readHoldStatus.mockResolvedValue({ onHold: true, amountToClearMinor: 100 });
     m.findOpenByCompany.mockResolvedValue([{ openedAt: NOW }]);
-    const cards = await loadClientYourMove(INPUT);
+    const { cards } = await loadClientYourMove(INPUT);
     expect(m.findByCompanyId).not.toHaveBeenCalled();
     expect(m.readHoldStatus).not.toHaveBeenCalled();
     expect(m.findOpenByCompany).not.toHaveBeenCalled();
@@ -146,7 +146,7 @@ describe('capability gates', () => {
     m.listOpenAssignedToClient.mockResolvedValue([
       { engagementId: 'e', engagementType: 'case', expertProfileId: 'ep-1' },
     ]);
-    const cards = await loadClientYourMove(INPUT);
+    const { cards } = await loadClientYourMove(INPUT);
     expect(m.listOpenAssignedToClient).not.toHaveBeenCalled();
     expect(m.listOpenCases).not.toHaveBeenCalled();
     expect(m.listCaseTrailMeetings).not.toHaveBeenCalled();
@@ -163,7 +163,7 @@ describe('capability gates', () => {
     m.listPendingByParty.mockResolvedValue([
       { createdAt: NOW, requester: { firstName: 'R', lastName: null, email: 'r@x.example' } },
     ]);
-    const cards = await loadClientYourMove(INPUT);
+    const { cards } = await loadClientYourMove(INPUT);
     expect(m.listPendingByParty).not.toHaveBeenCalled();
     expect(cards.find((c) => c.kind === 'join_requests')).toBeUndefined();
   });
@@ -179,12 +179,11 @@ describe('capability gates', () => {
 
   it('project cards stay ungated: with every gate false they still render', async () => {
     allow();
-    m.loadClientPortfolio.mockResolvedValue({
-      rows: [portfolioRow('need-1', { needsYou: true, clientMoveKind: 'exploratory_call' })],
-      closedRows: [],
-    });
-    const cards = await loadClientYourMove(INPUT);
+    const rows = [portfolioRow('need-1', { needsYou: true, clientMoveKind: 'exploratory_call' })];
+    m.loadClientPortfolio.mockResolvedValue({ rows, closedRows: [] });
+    const { cards, rows: returnedRows } = await loadClientYourMove(INPUT);
     expect(cards.map((c) => c.id)).toEqual(['need-1']);
+    expect(returnedRows).toBe(rows);
     expect(m.listClientMoveDetails).toHaveBeenCalledWith({
       companyId: 'co-1',
       projectRequestIds: ['need-1'],
@@ -194,7 +193,7 @@ describe('capability gates', () => {
 
 describe('billing hold', () => {
   it('no wallet gives no card and no hold read', async () => {
-    const cards = await loadClientYourMove(INPUT);
+    const { cards } = await loadClientYourMove(INPUT);
     expect(m.readHoldStatus).not.toHaveBeenCalled();
     expect(cards).toEqual([]);
   });
@@ -203,7 +202,7 @@ describe('billing hold', () => {
     m.findByCompanyId.mockResolvedValue({ id: 'w-1' });
     m.readHoldStatus.mockResolvedValue({ onHold: true, amountToClearMinor: 0 });
     m.findOpenByCompany.mockResolvedValue([{ openedAt: NOW }]);
-    expect(await loadClientYourMove(INPUT)).toEqual([]);
+    expect((await loadClientYourMove(INPUT)).cards).toEqual([]);
     expect(m.findOpenByCompany).not.toHaveBeenCalled();
   });
 
@@ -214,7 +213,7 @@ describe('billing hold', () => {
       { openedAt: new Date('2026-10-17T12:00:00.000Z') },
       { openedAt: new Date('2026-10-19T12:00:00.000Z') },
     ]);
-    const cards = await loadClientYourMove(INPUT);
+    const { cards } = await loadClientYourMove(INPUT);
     const [card] = cards;
     expect(card?.kind).toBe('receivable');
     expect(card?.factAt).toEqual({ template: 'since', iso: '2026-10-17T12:00:00.000Z' });
@@ -250,7 +249,7 @@ describe('reschedule options', () => {
     m.findExpertPartyNames.mockResolvedValue([
       { expertProfileId: 'ep-1', firstName: 'Jordan', lastName: 'Lee', agencyName: 'Summit Labs' },
     ]);
-    const cards = await loadClientYourMove(INPUT);
+    const { cards } = await loadClientYourMove(INPUT);
     expect(m.listLiveOptionStartsByProposalIds).toHaveBeenCalledWith(['p-live']);
     expect(cards.map((c) => c.id)).toEqual(['reschedule-p-live']);
     expect(cards[0]).toMatchObject({
@@ -281,7 +280,7 @@ describe('team, action items and names', () => {
         requester: { firstName: 'Riley', lastName: 'Morgan', email: 'riley@northwind.example' },
       },
     ]);
-    const [card] = await loadClientYourMove(INPUT);
+    const [card] = (await loadClientYourMove(INPUT)).cards;
     expect(card?.context).toEqual({
       type: 'people',
       people: [{ name: 'Riley Morgan', email: 'riley@northwind.example' }],
@@ -306,7 +305,7 @@ describe('team, action items and names', () => {
     m.findExpertPartyNames.mockResolvedValue([
       { expertProfileId: 'ep-2', firstName: 'Sam', lastName: 'Rivera', agencyName: null },
     ]);
-    const [card] = await loadClientYourMove(INPUT);
+    const [card] = (await loadClientYourMove(INPUT)).cards;
     expect(card).toMatchObject({ kind: 'action_items', counterparty: 'Sam Rivera' });
     expect(m.findExpertPartyNames).toHaveBeenCalledTimes(1);
     expect(m.findExpertPartyNames).toHaveBeenCalledWith(['ep-2']);
@@ -361,7 +360,7 @@ describe('messages', () => {
         agencyName: 'Cirrus Partners',
       },
     ]);
-    const cards = await loadClientYourMove(INPUT);
+    const { cards } = await loadClientYourMove(INPUT);
     const messages = cards.find((c) => c.kind === 'messages');
     expect(messages).toMatchObject({
       title: '2 unread in 1 conversation',

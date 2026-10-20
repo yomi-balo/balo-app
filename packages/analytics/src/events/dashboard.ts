@@ -11,6 +11,7 @@ export const DASHBOARD_EVENTS = {
   YOUR_MOVE_VIEWED: 'dashboard_your_move_viewed',
   YOUR_MOVE_CLICKED: 'dashboard_your_move_clicked',
   YOUR_MOVE_FILTERED: 'dashboard_your_move_filtered',
+  TRACK_CLICKED: 'dashboard_track_clicked',
 } as const;
 
 export const DASHBOARD_YOUR_MOVE_CARD_KINDS = [
@@ -68,6 +69,20 @@ export const DASHBOARD_UP_NEXT_MEETING_TYPES = [
 ] as const satisfies readonly MeetingContextTypeWithHolder[];
 export type DashboardUpNextMeetingType = (typeof DASHBOARD_UP_NEXT_MEETING_TYPES)[number];
 
+export const DASHBOARD_TRACK_STAGES = [
+  'invited',
+  'eoi',
+  'matching',
+  'interest',
+  'proposal',
+  'kickoff',
+  'delivery',
+] as const;
+export type DashboardTrackStage = (typeof DASHBOARD_TRACK_STAGES)[number];
+
+export const DASHBOARD_TRACK_TURNS = ['your_move', 'in_progress', 'waiting'] as const;
+export type DashboardTrackTurn = (typeof DASHBOARD_TRACK_TURNS)[number];
+
 export const DASHBOARD_UP_NEXT_TARGETS = [
   'row',
   'join',
@@ -114,5 +129,10 @@ export interface DashboardEventMap {
     chip: DashboardYourMoveChip;
     /** Cards remaining after the filter is applied. */
     card_count: number;
+  };
+  [DASHBOARD_EVENTS.TRACK_CLICKED]: {
+    workspace_type: Workspace['type'];
+    stage: DashboardTrackStage;
+    turn: DashboardTrackTurn;
   };
 }

@@ -6,7 +6,7 @@ category:
   expert: getting-started
 order: 5
 published: false
-updated: 2026-10-20
+updated: 2026-10-21
 related: [dashboard-up-next, project-requests-for-experts]
 ---
 
@@ -37,3 +37,7 @@ sent, the terms are confirmed, the action item is completed. Opening a card or r
 notification doesn't clear it. Once the thing is done, the card leaves on its own.
 
 When nothing is waiting on you, the row shows a single line instead.
+
+## Where your projects stand
+
+Below Your move, every live project sits under its stage (invited, interest sent, proposal, kickoff or delivery), marked your move, waiting on the client, or in progress; select one to open it.

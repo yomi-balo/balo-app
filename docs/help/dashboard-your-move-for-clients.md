@@ -6,7 +6,7 @@ category:
   client: getting-started
 order: 5
 published: false
-updated: 2026-10-20
+updated: 2026-10-21
 related: [dashboard-up-next, requesting-a-project]
 ---
 
@@ -37,3 +37,7 @@ work is reviewed, the proposal is answered. Opening a card or reading a notifica
 it. Once the thing is done, the card leaves on its own.
 
 When nothing is waiting on you, the row shows a single line instead.
+
+## Where your projects stand
+
+Below Your move, every live project sits under its stage (matching, interest, proposals, kickoff or delivery), marked your move, waiting on others, or in progress; select one to open it.

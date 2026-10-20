@@ -75,17 +75,23 @@ beforeEach(() => {
 
 describe('loadExpertYourMove', () => {
   it('loads the portfolio once, uses rows only, and asks for details of needs-you requests only', async () => {
+    const rows = [
+      portfolioRow('need-1', { needsYou: true, moveKind: 'invitation' }),
+      portfolioRow('quiet'),
+      portfolioRow('eng-1', { needsYou: true, moveKind: 'delivery_changes', kind: 'engagement' }),
+    ];
     m.loadExpertPortfolio.mockResolvedValue({
-      rows: [
-        portfolioRow('need-1', { needsYou: true, moveKind: 'invitation' }),
-        portfolioRow('quiet'),
-        portfolioRow('eng-1', { needsYou: true, moveKind: 'delivery_changes', kind: 'engagement' }),
-      ],
+      rows,
       closedRows: [portfolioRow('closed', { needsYou: true, moveKind: 'invitation' })],
     });
-    const cards = await loadExpertYourMove({ user: USER, calendarNeedsReconnect: false, now: NOW });
+    const { cards, rows: returnedRows } = await loadExpertYourMove({
+      user: USER,
+      calendarNeedsReconnect: false,
+      now: NOW,
+    });
 
     expect(m.loadExpertPortfolio).toHaveBeenCalledTimes(1);
+    expect(returnedRows).toBe(rows);
     expect(m.listExpertMoveDetails).toHaveBeenCalledWith({
       expertProfileId: 'ep-1',
       projectRequestIds: ['need-1'],
@@ -154,7 +160,11 @@ describe('loadExpertYourMove', () => {
     m.countUnreadForViewer.mockResolvedValue(
       new Map([['conv-1', { unreadCount: 2, earliestUnreadAt: NOW }]])
     );
-    const cards = await loadExpertYourMove({ user: USER, calendarNeedsReconnect: false, now: NOW });
+    const { cards } = await loadExpertYourMove({
+      user: USER,
+      calendarNeedsReconnect: false,
+      now: NOW,
+    });
     const messages = cards.find((c) => c.kind === 'messages');
     expect(messages?.title).toBe('2 unread in 1 conversation');
     expect(JSON.stringify(cards)).not.toContain('Dana');
@@ -169,7 +179,11 @@ describe('loadExpertYourMove', () => {
 
   it('adds the calendar blocker when the calendar needs reconnecting', async () => {
     m.loadExpertPortfolio.mockResolvedValue({ rows: [], closedRows: [] });
-    const cards = await loadExpertYourMove({ user: USER, calendarNeedsReconnect: true, now: NOW });
+    const { cards } = await loadExpertYourMove({
+      user: USER,
+      calendarNeedsReconnect: true,
+      now: NOW,
+    });
     expect(cards.map((c) => c.kind)).toEqual(['calendar_reconnect']);
   });
 });

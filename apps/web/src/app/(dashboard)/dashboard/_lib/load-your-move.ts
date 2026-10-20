@@ -19,7 +19,7 @@ import {
   type YourMoveMessageThread,
   type YourMoveParty,
 } from './build-your-move-cards';
-import type { YourMoveCardView } from './your-move-view-types';
+import type { YourMoveRead } from './your-move-view-types';
 
 export interface ThreadRef {
   readonly ref: ConversationContextRef;
@@ -120,7 +120,7 @@ export async function loadExpertYourMove(input: {
   user: SessionUser & { expertProfileId: string };
   calendarNeedsReconnect: boolean;
   now?: Date;
-}): Promise<readonly YourMoveCardView[]> {
+}): Promise<YourMoveRead> {
   const { user, calendarNeedsReconnect } = input;
   const now = input.now ?? new Date();
   const { expertProfileId } = user;
@@ -176,7 +176,7 @@ export async function loadExpertYourMove(input: {
     createdAt: item.createdAt,
   }));
 
-  return buildYourMoveCards({
+  const cards = buildYourMoveCards({
     rows,
     details,
     actionItems: mappedActionItems,
@@ -185,4 +185,5 @@ export async function loadExpertYourMove(input: {
     calendarNeedsReconnect,
     now,
   });
+  return { cards, rows };
 }

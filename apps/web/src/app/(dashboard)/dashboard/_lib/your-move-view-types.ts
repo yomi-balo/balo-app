@@ -1,4 +1,5 @@
 import type { DashboardYourMoveCardKind, DashboardYourMoveChip } from '@balo/analytics/events';
+import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 
 /**
  * The Your move rail's client-safe view model. Types and constants only: imported by the
@@ -99,6 +100,18 @@ export type YourMoveData = {
   readonly kind: 'ready' | 'error';
   readonly cards: readonly YourMoveCardView[];
 };
+
+/** What the loaders return: the rail's cards plus the live rows the track is built from. */
+export interface YourMoveRead {
+  readonly cards: readonly YourMoveCardView[];
+  readonly rows: readonly PortfolioRowView[];
+}
+
+/**
+ * The server-side read result. Rows carry person names, so they stay on the server: the slot
+ * builds the track view from them and hands the client rail only `YourMoveData`.
+ */
+export type YourMoveReadData = YourMoveData & { readonly rows: readonly PortfolioRowView[] };
 
 export const YOUR_MOVE_CARD_VIEW_KEYS = [
   'id',

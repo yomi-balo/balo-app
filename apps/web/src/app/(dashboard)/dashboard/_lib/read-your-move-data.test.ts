@@ -8,6 +8,7 @@ vi.mock('@/lib/logging', () => ({
 import { buildCalendarCards } from './build-your-move-cards';
 import { readYourMoveData } from './read-your-move-data';
 import { log } from '@/lib/logging';
+import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 import type { YourMoveCardView } from './your-move-view-types';
 
 const NOW = new Date('2026-10-20T10:00:00.000Z');
@@ -19,11 +20,12 @@ beforeEach(() => {
 describe('readYourMoveData', () => {
   it('wraps a successful read as ready', async () => {
     const cards: YourMoveCardView[] = [];
-    const result = await readYourMoveData(() => Promise.resolve(cards), {
+    const rows = [{ id: 'p1' }] as PortfolioRowView[];
+    const result = await readYourMoveData(() => Promise.resolve({ cards, rows }), {
       fallbackCards: [],
       logContext: { userId: 'u-1' },
     });
-    expect(result).toEqual({ kind: 'ready', cards });
+    expect(result).toEqual({ kind: 'ready', cards, rows });
     expect(log.error).not.toHaveBeenCalled();
   });
 
@@ -34,6 +36,7 @@ describe('readYourMoveData', () => {
     });
     expect(result.kind).toBe('error');
     expect(result.cards.map((c) => c.kind)).toEqual(['calendar_reconnect']);
+    expect(result.rows).toEqual([]);
     expect(log.error).toHaveBeenCalledWith(
       'Dashboard your move read failed',
       expect.objectContaining({ userId: 'u-1', error: 'db down' })
@@ -45,7 +48,7 @@ describe('readYourMoveData', () => {
       fallbackCards: [],
       logContext: {},
     });
-    expect(result).toEqual({ kind: 'error', cards: [] });
+    expect(result).toEqual({ kind: 'error', cards: [], rows: [] });
     expect(log.error).toHaveBeenCalledWith(
       'Dashboard your move read failed',
       expect.objectContaining({ error: 'boom' })
