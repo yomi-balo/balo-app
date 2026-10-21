@@ -390,7 +390,7 @@ describe('submitProposalAction', () => {
     });
   });
 
-  // fix round R1 — `proposalsRepository.promoteToSubmit` is one of the eleven writers
+  // fix round R1 — `proposalsRepository.promoteToSubmit` is one of the twelve writers
   // serialised on the per-request advisory lock (`_shared/request-lock.ts`).
   it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
     mockPromote.mockRejectedValue(

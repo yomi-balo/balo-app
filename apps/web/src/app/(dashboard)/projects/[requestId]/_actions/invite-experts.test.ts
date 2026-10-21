@@ -318,7 +318,7 @@ describe('inviteExpertsAction', () => {
     expect(mockTransitionStatus).not.toHaveBeenCalled();
   });
 
-  // fix round R1 — `requestExpertRelationshipsRepository.invite` is one of the eleven writers
+  // fix round R1 — `requestExpertRelationshipsRepository.invite` is one of the twelve writers
   // serialised on the per-request advisory lock (`_shared/request-lock.ts`) — the racer named
   // in `close()`'s own KNOWN RESIDUAL block.
   it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {

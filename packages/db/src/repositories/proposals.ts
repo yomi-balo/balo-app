@@ -955,7 +955,7 @@ export const proposalsRepository = {
    * its NEGATIVE CONTROL: it asserts the method is still DISCOVERABLE as a `db.transaction(`
    * call site AND that it does NOT open with one of the three `acquireRequestLock*` helpers.
    * Deleting the method, or making it lock-first, fails that control — and locking would
-   * additionally break the eleven-writer set-equality alongside it. The guard below is placed
+   * additionally break the twelve-writer set-equality alongside it. The guard below is placed
    * OUTSIDE the transaction, which satisfies both.
    */
   async transitionStatus(input: {

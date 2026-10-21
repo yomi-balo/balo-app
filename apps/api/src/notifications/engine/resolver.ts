@@ -110,6 +110,25 @@ async function hydrateAgencyProvisioned(
 }
 
 /**
+ * BAL-604: resolve the `admin_users` fan-out for `project.track_passed`. The publisher names only
+ * the Balo owner (`baloOwnerUserId`); this is the one home of the fallback admin set, so web never
+ * spells a platform-role list. The owner is used only while they are STILL a platform admin: a
+ * demoted or departed owner (or none) falls back to every admin, so the alert never goes to someone
+ * who can no longer act on it. The event is deliberately NOT in `ADMIN_FANOUT_EVENTS`, which would
+ * overwrite the owner with all admins.
+ */
+async function hydrateTrackPassedAdmins(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (event !== 'project.track_passed') return;
+  const owner = payload.baloOwnerUserId;
+  const admins = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
+  data.adminUserIds = typeof owner === 'string' && admins.includes(owner) ? [owner] : admins;
+}
+
+/**
  * BAL-380: hydrate the company's MANAGE_BILLING holders for the credit dormancy/expiry
  * fan-out (dispatcher resolves recipient:'company_billing_admins' from
  * `data.billingUserIds`). Extracted so `resolveContext` stays under the
@@ -329,6 +348,9 @@ export async function resolveContext(
 
   // BAL-348: agency.provisioned hydration (extracted — see hydrateAgencyProvisioned).
   await hydrateAgencyProvisioned(event, payload, data);
+
+  // BAL-604: project.track_passed admin recipients (extracted — see hydrateTrackPassedAdmins).
+  await hydrateTrackPassedAdmins(event, payload, data);
 
   // BAL-289: project.proposal_accepted ALSO fans out to the non-selected experts —
   // the OTHER live 'submitted' proposals on the same request, excluding the accepted

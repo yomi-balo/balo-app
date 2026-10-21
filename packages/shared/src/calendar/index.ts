@@ -13,3 +13,13 @@ export { EXPERT_CALENDAR_SETTINGS_PATH } from './settings-path';
 // BAL-475 §6 — the ONE definition of RFC 5545 §3.3.11 TEXT escaping. No `.js` extension —
 // see the note above.
 export { escapeIcsText } from './ics-text';
+
+// BAL-603 — the ONE busy-read trust rule (`listBusyBlocks` fails closed on it; web derives the
+// "Bookings paused" status from it). No `.js` extension — see the note above.
+export {
+  BUSY_READABLE_CREDENTIAL_STATUS,
+  type BusyReadTargetState,
+  isConsideredForBusyRead,
+  isUnreadable,
+  unreadableBusyReadTargets,
+} from './busy-read';

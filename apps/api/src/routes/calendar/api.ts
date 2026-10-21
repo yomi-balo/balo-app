@@ -8,11 +8,11 @@ import {
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { disconnectProvider } from '../../services/calendar/apiroc-connection.js';
 import { pickBookingWriteTarget } from '../../services/calendar/booking-write-target.js';
-import { isConsideredForBusyRead } from '../../services/availability/vendor-busy.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { enqueueSubscriptionReconcile } from '../../jobs/calendar-subscription-reconcile.js';
 import { reconcileExpertSearchability } from '../../services/experts/searchability.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
+import { isConsideredForBusyRead } from '@balo/shared/calendar';
 import type { CalendarProvider, SubCalendar, CalendarConnection } from './types.js';
 
 // ── Validation schemas ──────────────────────────────────────────
@@ -135,13 +135,13 @@ async function reconcileAfterDisconnect(
       actorUserId: null,
       publishNotification: true,
     });
-  } catch (reconcileErr: unknown) {
+  } catch (error: unknown) {
     log.error(
       {
         expertProfileId,
         provider,
-        error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
-        stack: reconcileErr instanceof Error ? reconcileErr.stack : undefined,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       },
       'searchability_reconcile_failed'
     );
@@ -209,11 +209,11 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
         );
 
         return reply.send({ connections });
-      } catch (err: unknown) {
+      } catch (error: unknown) {
         request.log.error(
           {
             expertProfileId,
-            error: err instanceof Error ? err.message : String(err),
+            error: error instanceof Error ? error.message : String(error),
           },
           'Failed to fetch calendar connection'
         );
@@ -281,13 +281,13 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
         });
 
         return reply.send({ success: true });
-      } catch (err: unknown) {
+      } catch (error: unknown) {
         request.log.error(
           {
             expertProfileId,
             provider,
-            error: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : undefined,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
           },
           'Failed to disconnect calendar'
         );
@@ -343,12 +343,12 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
         await enqueueSubscriptionReconcile(connection.id, { force: false }, request.log);
 
         return reply.send({ success: true });
-      } catch (err: unknown) {
+      } catch (error: unknown) {
         request.log.error(
           {
             expertProfileId,
             calendarId,
-            error: err instanceof Error ? err.message : String(err),
+            error: error instanceof Error ? error.message : String(error),
           },
           'Failed to toggle conflict check'
         );
@@ -414,12 +414,12 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
           targetCalendarId
         );
         return reply.send({ success: true });
-      } catch (err: unknown) {
+      } catch (error: unknown) {
         request.log.error(
           {
             expertProfileId,
             targetCalendarId,
-            error: err instanceof Error ? err.message : String(err),
+            error: error instanceof Error ? error.message : String(error),
           },
           'Failed to set target calendar'
         );

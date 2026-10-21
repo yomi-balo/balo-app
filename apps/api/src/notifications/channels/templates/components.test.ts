@@ -867,6 +867,67 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(html.split('decided not to proceed').length - 1).toBe(1);
   });
 
+  it('resolves project-track-passed-admin naming the expert, client and title (BAL-604)', async () => {
+    const { component, subject } = getEmailTemplate('project-track-passed-admin', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      clientCompanyName: 'Acme Corp',
+      expertName: 'Priya Nair',
+      fromStatus: 'proposal_requested',
+      recipientName: 'Sam',
+    });
+    const html = await render(component);
+    expect(subject).toBe('Priya Nair passed on: CPQ implementation');
+    expect(html).toContain(
+      'Priya Nair passed on CPQ implementation for Acme Corp after a proposal was requested.'
+    );
+    expect(html).toContain('Balo can invite someone else');
+    expect(html).toContain('/projects/req-1');
+    expect(html).not.toContain('undefined');
+  });
+
+  it.each([
+    [true, 'Priya Nair passed on CPQ implementation for Acme Corp on a direct request.'],
+    [false, 'Priya Nair passed on CPQ implementation for Acme Corp after expressing interest.'],
+  ])(
+    'project-track-passed-admin with onDirectLeg %s names the right clause (BAL-604)',
+    async (onDirectLeg, sentence) => {
+      const { component } = getEmailTemplate('project-track-passed-admin', {
+        title: 'CPQ implementation',
+        projectRequestId: 'req-1',
+        clientCompanyName: 'Acme Corp',
+        expertName: 'Priya Nair',
+        fromStatus: 'eoi_submitted',
+        onDirectLeg,
+        recipientName: 'Sam',
+      });
+      expect(await render(component)).toContain(sentence);
+    }
+  );
+
+  it('resolves project-track-passed-client with the no-longer-available copy (BAL-604)', async () => {
+    const { component, subject } = getEmailTemplate('project-track-passed-client', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      expertName: 'Priya Nair',
+      recipientName: 'Dana',
+    });
+    const html = await render(component);
+    expect(subject).toBe('Priya Nair is no longer available: CPQ implementation');
+    expect(html).toContain('Priya Nair is no longer available for this project.');
+    expect(html).toContain('Balo is looking for other experts');
+    expect(html).not.toContain('undefined');
+  });
+
+  it('falls back to neutral names for sparse project-track-passed payloads (BAL-604)', async () => {
+    for (const name of ['project-track-passed-admin', 'project-track-passed-client']) {
+      const { component, subject } = getEmailTemplate(name, {});
+      const html = await render(component);
+      expect(subject).toContain('An expert');
+      expect(html).not.toContain('undefined');
+    }
+  });
+
   it('resolves expert-referral-invited with an inviter-named subject (BAL-325)', () => {
     const { component, subject } = getEmailTemplate('expert-referral-invited', {
       inviterName: 'Ada Lovelace',
@@ -928,6 +989,8 @@ describe('sanitizeSubjectTitle', () => {
       'project-request-closed-expert',
       'project-request-closed-client',
       'project-track-declined',
+      'project-track-passed-admin',
+      'project-track-passed-client',
     ];
     for (const name of templateNames) {
       const { subject } = getEmailTemplate(name, {

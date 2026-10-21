@@ -623,6 +623,9 @@ export interface ApplicationAgency {
  *  - `stripeConnectId` — a payments identifier no application surface renders (pre-existing
  *    over-hydration; the `agency` relation already excluded its own copy).
  *  - `searchVector` — a generated `tsvector`, never read through Drizzle.
+ *  - `liveCelebrationSeenAt` — a UI acknowledgement for the post-approval go-live card (BAL-603),
+ *    read only through `expertSearchabilityRepository.loadInputs`; no application surface
+ *    renders it.
  *
  * KEPT, AND WHY (each decision column earns its place on an applicant-facing read):
  *  - `applicationStatus` — `/expert/apply/page.tsx` routes on it; the staff page gates its
@@ -638,7 +641,7 @@ export interface ApplicationAgency {
  */
 export type ApplicationProfile = Omit<
   ExpertProfile,
-  'declineNote' | 'stripeConnectId' | 'searchVector'
+  'declineNote' | 'stripeConnectId' | 'searchVector' | 'liveCelebrationSeenAt'
 >;
 
 /**
@@ -1472,6 +1475,37 @@ export const expertsRepository = {
   ): Promise<{ changed: boolean }> {
     if (executor !== undefined) return setAvailableForWorkTx(executor, input);
     return db.transaction((tx) => setAvailableForWorkTx(tx, input));
+  },
+
+  /**
+   * BAL-603 — stamp the one-time go-live card as seen. A single conditional UPDATE:
+   *
+   *     UPDATE expert_profiles SET live_celebration_seen_at = now(), updated_at = now()
+   *      WHERE id = $id AND user_id = $userId AND live_celebration_seen_at IS NULL
+   *  RETURNING id
+   *
+   * Returns `true` only when this call set the column; a repeat, a racing second tab, a profile
+   * owned by another user or an unknown id all return `false` and change nothing. The `user_id`
+   * predicate scopes the write to the caller's own profile. A UI acknowledgement, so no audit
+   * row and no executor parameter.
+   */
+  async markLiveCelebrationSeen(input: {
+    expertProfileId: string;
+    userId: string;
+  }): Promise<boolean> {
+    const now = new Date();
+    const updated = await db
+      .update(expertProfiles)
+      .set({ liveCelebrationSeenAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(expertProfiles.id, input.expertProfileId),
+          eq(expertProfiles.userId, input.userId),
+          isNull(expertProfiles.liveCelebrationSeenAt)
+        )
+      )
+      .returning({ id: expertProfiles.id });
+    return updated.length > 0;
   },
 
   /**

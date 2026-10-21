@@ -69,6 +69,10 @@ const STATUS: ChecklistStatus = {
   rateCents: 313,
   availableForWork: true,
   calendarNeedsReconnect: false,
+  searchable: false,
+  username: 'dana',
+  liveCelebrationSeen: false,
+  liveStatus: null,
 };
 
 const EXPERT_USER = { id: 'user-1', expertProfileId: 'ep-1', verticalId: 'v-1' };

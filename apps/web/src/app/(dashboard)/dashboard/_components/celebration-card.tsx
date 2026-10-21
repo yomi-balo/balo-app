@@ -1,8 +1,11 @@
 'use client';
 
+import { useEffect } from 'react';
+import * as Sentry from '@sentry/nextjs';
 import { motion } from 'motion/react';
-import { Zap } from 'lucide-react';
+import { ExternalLink, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { markLiveCelebrationSeenAction } from '../_actions/mark-live-celebration-seen';
 
 const CONFETTI_COLORS = [
   '#2563EB',
@@ -28,9 +31,25 @@ const itemVariants = {
   visible: { y: 0, opacity: 1, transition: { duration: 0.4, ease: 'easeOut' as const } },
 };
 
-export function CelebrationCard(): React.JSX.Element {
+interface CelebrationCardProps {
+  /** `null` when the expert has no username yet — the card then omits its button. */
+  publicProfileHref: string | null;
+}
+
+export function CelebrationCard({
+  publicProfileHref,
+}: Readonly<CelebrationCardProps>): React.JSX.Element {
+  // Stamp "seen" once the card is on screen — never during render, which also runs on a Link
+  // prefetch. The action is conditional server-side, so a StrictMode double-call stamps once.
+  useEffect(() => {
+    markLiveCelebrationSeenAction().catch((error: unknown) => {
+      Sentry.captureException(error);
+    });
+  }, []);
+
   return (
-    <motion.div
+    <motion.section
+      aria-label="You're live on the marketplace"
       variants={containerVariants}
       initial="hidden"
       animate="visible"
@@ -39,7 +58,7 @@ export function CelebrationCard(): React.JSX.Element {
       {/* Confetti particles */}
       {CONFETTI_COLORS.map((color, i) => (
         <div
-          key={i}
+          key={color}
           className="pointer-events-none absolute"
           style={{
             left: `${15 + i * 10}%`,
@@ -74,15 +93,25 @@ export function CelebrationCard(): React.JSX.Element {
       </motion.p>
 
       {/* CTA */}
-      <motion.div variants={itemVariants} className="mt-6">
-        <Button
-          className="text-white"
-          style={{ background: 'linear-gradient(135deg, #059669, #0891B2)' }}
-          disabled
-        >
-          View your public profile
-        </Button>
-      </motion.div>
-    </motion.div>
+      {publicProfileHref !== null && (
+        <motion.div variants={itemVariants} className="mt-6">
+          <Button
+            asChild
+            className="text-white"
+            style={{ background: 'linear-gradient(135deg, #059669, #0891B2)' }}
+          >
+            <a href={publicProfileHref} target="_blank" rel="noopener noreferrer">
+              View your public profile
+              <ExternalLink size={14} aria-hidden="true" />
+              <span className="sr-only"> (opens in new tab)</span>
+            </a>
+          </Button>
+        </motion.div>
+      )}
+
+      <motion.p variants={itemVariants} className="text-subtle-foreground mt-3.5 text-xs">
+        From now on, your status sits next to your name.
+      </motion.p>
+    </motion.section>
   );
 }

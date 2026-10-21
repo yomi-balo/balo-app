@@ -1,4 +1,4 @@
-import type { ProjectRequestWithRelations } from '@balo/db';
+import type { ProjectRequestWithRelations, RelationshipDeclineReason } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 
 /**
@@ -13,7 +13,7 @@ import type { SessionUser } from '@/lib/auth/session';
  * conversation, no action. Pure + synchronous.
  */
 export interface EndedTrackView {
-  mode: 'declined' | 'request_closed';
+  mode: 'declined' | 'request_closed' | 'passed';
   relationshipId: string;
   title: string;
   companyName: string;
@@ -21,12 +21,29 @@ export interface EndedTrackView {
   hadProposal: boolean;
 }
 
+function modeFor(declineReason: RelationshipDeclineReason): EndedTrackView['mode'] {
+  switch (declineReason) {
+    case 'request_closed':
+      return 'request_closed';
+    case 'client_declined':
+    case 'balo_declined':
+      return 'declined';
+    case 'expert_declined':
+      return 'passed';
+    default: {
+      const unreachable: never = declineReason;
+      return unreachable;
+    }
+  }
+}
+
 /**
  * Returns non-null only when `user.expertProfileId` matches a LIVE relationship whose status
  * is `declined`. `mode` reads the relationship's `declineReason`: `'request_closed'` (the
- * whole request ended) vs a deliberate per-track decline (`'client_declined'` /
+ * whole request ended), a deliberate per-track decline (`'client_declined'` /
  * `'balo_declined'`, both surfaced as `mode: 'declined'` — the expert's copy does not
- * distinguish WHO declined them, only whether it was their own track or the whole request).
+ * distinguish WHO declined them), or `'expert_declined'` (`mode: 'passed'` — the expert's own
+ * choice to pass on the project).
  * `endedAtIso` reads `declinedAt`; a relationship with no `declinedAt`/`declineReason` yet
  * (a data anomaly — every `declined` row is stamped by `advanceRelationshipStatus` — OR a
  * pre-BAL-540 fixture/row that predates the D3 attribution columns) resolves to `null` rather
@@ -46,8 +63,7 @@ export function resolveEndedTrackView(
   // row that predates the D3 attribution columns, not only an explicit `null`.
   if (!relationship.declinedAt || !relationship.declineReason) return null;
 
-  const mode: EndedTrackView['mode'] =
-    relationship.declineReason === 'request_closed' ? 'request_closed' : 'declined';
+  const mode = modeFor(relationship.declineReason);
 
   return {
     mode,

@@ -40,21 +40,22 @@ type RequestLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * producers of a live `proposals` row and nothing else in the same transaction, so a
  * membership test that checked only "two or more tables" would have wrongly excluded them —
  * which is the exact bug this ticket exists to fix, repeated at the rule's own definition).
- * The eleven: `proposalsRepository.submit`, `.createDraft`, `.promoteToSubmit`, `.accept`,
+ * The twelve: `proposalsRepository.submit`, `.createDraft`, `.promoteToSubmit`, `.accept`,
  * `.resubmit`; `projectRequestsRepository.close`; `requestExpertRelationshipsRepository.invite`,
- * `.declineTrack`, `.transitionStatus`; `expressionsOfInterestRepository.submit`;
- * `projectEngagementsRepository.materializeFromKickoff` — ELEVEN writers (orchestrator D13).
+ * `.declineTrack`, `.passTrack`, `.transitionStatus`; `expressionsOfInterestRepository.submit`;
+ * `projectEngagementsRepository.materializeFromKickoff` — TWELVE writers (orchestrator D13, plus
+ * BAL-604's `passTrack`).
  * ONE NAMED EXEMPTION: `projectRequestsRepository.createProjectRequest` writes `project_requests`
  * and, for a submitted direct request, that request's first `request_expert_relationships` row
  * and its automatic EOI (via `advanceRelationshipStatus`), WITHOUT this lock. All three rows hang
  * off a request id this transaction's own INSERT creates, so no other writer can reference the
  * request until commit — there is nothing to serialise against.
- * Because all eleven queue on one per-request gate, no two of them ever interleave their
+ * Because all twelve queue on one per-request gate, no two of them ever interleave their
  * row-lock acquisition on the same request, so the documented row-lock orders (`accept`:
  * proposal → relationship → request; `promoteToSubmit`: relationship → request → proposal;
- * `close` / `declineTrack`: proposals → relationships → request; `materializeFromKickoff`:
- * request → relationships) can never form the AB/BA cycle that made them individually
- * deadlock-prone.
+ * `close` / `declineTrack` / `passTrack`: proposals → relationships → request;
+ * `materializeFromKickoff`: request → relationships) can never form the AB/BA cycle that made
+ * them individually deadlock-prone.
  *
  * ⚠ WHAT THIS DOES NOT PROVE. Not "the system is deadlock-free" — row locks are still locks.
  * What holds is narrower: all row-lock acquisition on a given request's proposals /

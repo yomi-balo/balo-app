@@ -267,6 +267,37 @@ describe('expertSearchabilityRepository.loadInputs — projection', () => {
     expect(deriveExpertChecklist(after.inputs)).toEqual(deriveExpertChecklist(before.inputs));
   });
 
+  /**
+   * BAL-603 — `username` and `liveCelebrationSeenAt` ride on the snapshot for the live-status
+   * badge and the one-time go-live card, as top-level siblings of `availableForWork`. NOT
+   * checklist inputs: stamping the card must never move the checklist.
+   */
+  it('returns username and liveCelebrationSeenAt, NULL and then set, outside the checklist inputs', async () => {
+    const expert = await expertDraftFactory();
+    await db.update(expertProfiles).set({ username: null }).where(eq(expertProfiles.id, expert.id));
+    const before = await loadOrFail(expert.id);
+
+    expect(before.username).toBeNull();
+    expect(before.liveCelebrationSeenAt).toBeNull();
+
+    await db
+      .update(expertProfiles)
+      .set({ username: 'live-status-slug' })
+      .where(eq(expertProfiles.id, expert.id));
+    const stamped = await expertsRepository.markLiveCelebrationSeen({
+      expertProfileId: expert.id,
+      userId: expert.userId,
+    });
+    expect(stamped).toBe(true);
+    const after = await loadOrFail(expert.id);
+
+    expect(after.username).toBe('live-status-slug');
+    expect(after.liveCelebrationSeenAt).toBeInstanceOf(Date);
+    expect(after.inputs).toEqual(before.inputs);
+    expect(Object.keys(after.inputs)).not.toContain('username');
+    expect(Object.keys(after.inputs)).not.toContain('liveCelebrationSeenAt');
+  });
+
   it('returns the empty-checklist shape for a bare expert (no nulls-as-crashes)', async () => {
     const expert = await expertDraftFactory();
 

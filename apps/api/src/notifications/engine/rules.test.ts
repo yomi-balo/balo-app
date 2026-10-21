@@ -715,6 +715,60 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('project.track_passed (BAL-604)', () => {
+    const rules = notificationRules['project.track_passed'] ?? [];
+    const adminRules = rules.filter((r) => r.recipient === 'admin_users');
+    const clientRules = rules.filter((r) => r.recipient === 'client');
+
+    it('has exactly the admin and client arms — nothing to the expert', () => {
+      expect(rules).toHaveLength(4);
+      expect(adminRules).toHaveLength(2);
+      expect(clientRules).toHaveLength(2);
+      expect(rules.some((r) => r.recipient === 'expert')).toBe(false);
+    });
+
+    it('gives admin_users email + in-app with no gating condition', () => {
+      for (const rule of adminRules) {
+        expect(rule.template).toBe('project-track-passed-admin');
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeUndefined();
+      }
+      expect(adminRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+
+    it('gives the client email + in-app, gated on clientSawTrack (the track was opened)', () => {
+      expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+      const ctx = (
+        payload: Record<string, unknown>
+      ): Parameters<NonNullable<NotificationRule['condition']>>[0] => ({
+        event: 'project.track_passed',
+        payload,
+        data: {},
+      });
+      for (const rule of clientRules) {
+        expect(rule.template).toBe('project-track-passed-client');
+        const condition = rule.condition;
+        expect(condition).toBeDefined();
+        if (!condition) continue;
+        expect(condition(ctx({ clientSawTrack: true, fromStatus: 'eoi_submitted' }))).toBe(true);
+        // The stage no longer decides: an opened track fires whatever stage it passed from…
+        expect(condition(ctx({ clientSawTrack: true, fromStatus: 'invited' }))).toBe(true);
+        // …and an unopened one never does, even from a stage that used to qualify.
+        expect(condition(ctx({ clientSawTrack: false, fromStatus: 'eoi_submitted' }))).toBe(false);
+        expect(condition(ctx({ clientSawTrack: false, fromStatus: 'invited' }))).toBe(false);
+        // Strictly `true`: a missing or truthy-but-not-boolean value stays silent.
+        expect(condition(ctx({ fromStatus: 'proposal_requested' }))).toBe(false);
+        expect(condition(ctx({ clientSawTrack: 'true' }))).toBe(false);
+      }
+    });
+  });
+
   describe('project.request_owner_assigned (BAL-541)', () => {
     it('is in-app only, to self, immediate', () => {
       const rules = notificationRules['project.request_owner_assigned'];

@@ -1,5 +1,12 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
-import { PROJECT_EVENTS, PROJECT_SERVER_EVENTS, type ProjectEventMap } from './project';
+import {
+  PROJECT_EVENTS,
+  PROJECT_SERVER_EVENTS,
+  PROJECT_TRACK_PASS_SURFACES,
+  type ProjectEventMap,
+  type ProjectServerEventMap,
+  type ProjectTrackPassSurface,
+} from './project';
 
 describe('PROJECT_EVENTS.BILLING_REMINDER_SENT (BAL-324)', () => {
   it('maps to the feature-prefixed snake_case event name', () => {
@@ -95,7 +102,7 @@ describe('PROJECT_EVENTS review blocked', () => {
 });
 
 describe('PROJECT_SERVER_EVENTS', () => {
-  it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386)', () => {
+  it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386 / BAL-604)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([
       'REQUEST_ACCESS_DENIED',
       'PROJECT_PROPOSAL_SUBMITTED',
@@ -105,6 +112,7 @@ describe('PROJECT_SERVER_EVENTS', () => {
       'PROPOSAL_SHARE_CREATED',
       'PROPOSAL_SHARE_OPENED',
       'PROPOSAL_SHARE_REVOKED',
+      'PROJECT_TRACK_PASSED',
     ]);
   });
 
@@ -114,6 +122,17 @@ describe('PROJECT_SERVER_EVENTS', () => {
     for (const value of Object.values(PROJECT_SERVER_EVENTS)) {
       expect(value).toMatch(/^[a-z]+(_[a-z]+)*$/);
     }
+  });
+
+  it('maps PROJECT_TRACK_PASSED to project_track_passed (BAL-604)', () => {
+    expect(PROJECT_SERVER_EVENTS.PROJECT_TRACK_PASSED).toBe('project_track_passed');
+  });
+
+  it('records which entry point the expert passed from (BAL-604)', () => {
+    expect(PROJECT_TRACK_PASS_SURFACES).toEqual(['nudge', 'control']);
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_TRACK_PASSED]['surface']
+    >().toEqualTypeOf<ProjectTrackPassSurface>();
   });
 
   it('maps the constants to their exact event names', () => {

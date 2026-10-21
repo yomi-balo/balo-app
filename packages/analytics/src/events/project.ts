@@ -5,6 +5,7 @@
  */
 import type {
   DeclinableRelationshipStatus,
+  PassableRelationshipStatus,
   ProjectRequestCloseReason,
   ProjectBriefFailureReason,
   ProjectRequestEntryPoint,
@@ -466,13 +467,31 @@ export const PROJECT_SERVER_EVENTS = {
   PROPOSAL_SHARE_CREATED: 'project_proposal_share_created',
   PROPOSAL_SHARE_OPENED: 'project_proposal_share_opened',
   PROPOSAL_SHARE_REVOKED: 'project_proposal_share_revoked',
+  // BAL-604: the delivering expert passed on a project. SERVER-SIDE, from the Server Action.
+  PROJECT_TRACK_PASSED: 'project_track_passed',
 } as const;
 
 /** Why a would-be participant was denied. Extend as more terminal-negative
  *  relationship statuses (removed/withdrawn) gain analytics. */
 export type ProjectRequestAccessDenialReason = 'declined_relationship';
 
+/**
+ * BAL-604: the entry point an expert passed from — the direct-request choice nudge, or the quiet
+ * "Pass on this project" control on any other passable track.
+ */
+export const PROJECT_TRACK_PASS_SURFACES = ['nudge', 'control'] as const;
+export type ProjectTrackPassSurface = (typeof PROJECT_TRACK_PASS_SURFACES)[number];
+
 export interface ProjectServerEventMap {
+  // BAL-604: `distinct_id` is the passing expert; `from_status` is the stage they passed from;
+  // `surface` is the entry point they passed from.
+  [PROJECT_SERVER_EVENTS.PROJECT_TRACK_PASSED]: {
+    request_id: string;
+    relationship_id: string;
+    from_status: PassableRelationshipStatus;
+    surface: ProjectTrackPassSurface;
+    distinct_id: string;
+  };
   [PROJECT_SERVER_EVENTS.REQUEST_ACCESS_DENIED]: {
     request_id: string;
     reason: ProjectRequestAccessDenialReason;

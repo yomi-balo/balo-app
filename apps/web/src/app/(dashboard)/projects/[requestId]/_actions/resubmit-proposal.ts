@@ -360,7 +360,7 @@ export async function resubmitProposalAction(
       analytics: { priceCents: v2.priceCents, currency: v2.currency },
     };
   } catch (error) {
-    // ⚠ fix round R1 — `proposalsRepository.resubmit` is one of the eleven writers serialised
+    // ⚠ fix round R1 — `proposalsRepository.resubmit` is one of the twelve writers serialised
     // on the per-request advisory lock (`_shared/request-lock.ts`); a 55P03 here means the
     // resubmit never wrote anything and a retry queues again. WARN + retryable copy, checked
     // BEFORE the generic fallback below — never `log.error` for an expected-rare, self-healing

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   deriveWorkspaces,
+  findActiveWorkspace,
+  liveStatusForActiveWorkspace,
   parseWorkspaceKey,
   companyWorkspaceKey,
   EXPERT_WORKSPACE,
@@ -559,5 +561,44 @@ describe('derivation at scale', () => {
     expect(companyWorkspaces(result.workspaces).map((w) => w.name)).toEqual(
       memberships.map((m) => m.name)
     );
+  });
+});
+
+describe('findActiveWorkspace / liveStatusForActiveWorkspace', () => {
+  const company: CompanyWorkspace = {
+    type: 'company',
+    key: 'company:11111111-1111-4111-8111-111111111111',
+    companyId: '11111111-1111-4111-8111-111111111111',
+    name: 'Northwind',
+    via: 'membership',
+    isPersonal: false,
+    role: 'owner',
+  };
+  const STATUS = { state: 'live' };
+
+  it('returns null for an empty list and passes the status through (no switcher)', () => {
+    expect(findActiveWorkspace([], null)).toBeNull();
+    expect(liveStatusForActiveWorkspace([], null, STATUS)).toBe(STATUS);
+  });
+
+  it('passes the status through when the expert workspace is active', () => {
+    expect(liveStatusForActiveWorkspace([company, EXPERT_WORKSPACE], 'expert', STATUS)).toBe(
+      STATUS
+    );
+  });
+
+  it('drops the status when a company workspace is active', () => {
+    expect(
+      liveStatusForActiveWorkspace([company, EXPERT_WORKSPACE], company.key, STATUS)
+    ).toBeNull();
+  });
+
+  it('falls back to the first workspace for an unmatched key', () => {
+    expect(findActiveWorkspace([company, EXPERT_WORKSPACE], 'stale')).toBe(company);
+    expect(liveStatusForActiveWorkspace([company, EXPERT_WORKSPACE], 'stale', STATUS)).toBeNull();
+  });
+
+  it('keeps a null status null', () => {
+    expect(liveStatusForActiveWorkspace([EXPERT_WORKSPACE], 'expert', null)).toBeNull();
   });
 });

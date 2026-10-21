@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Workspace } from '@balo/shared/workspaces';
+import type { LiveStatusView } from '@/lib/expert/live-status-view';
 import type { NavContext } from './nav-registry';
 
 interface SidebarContextValue {
@@ -44,6 +45,11 @@ interface SidebarContextValue {
    * representation workspace (R1).
    */
   activeWorkspaceKey: string | null;
+  /**
+   * BAL-603 — the expert's marketplace status (pill + avatar dot), resolved server-side in the
+   * layout. `null` outside the expert view, before first go-live, or when the lookup failed.
+   */
+  liveStatus: LiveStatusView | null;
 }
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
@@ -61,6 +67,7 @@ interface SidebarProviderProps {
   navContext: NavContext;
   workspaces: readonly Workspace[];
   activeWorkspaceKey: string | null;
+  liveStatus?: LiveStatusView | null;
 }
 
 export function SidebarProvider({
@@ -74,6 +81,7 @@ export function SidebarProvider({
   navContext,
   workspaces,
   activeWorkspaceKey,
+  liveStatus = null,
 }: SidebarProviderProps): React.JSX.Element {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -104,6 +112,7 @@ export function SidebarProvider({
       navContext,
       workspaces,
       activeWorkspaceKey,
+      liveStatus,
     }),
     [
       isCollapsed,
@@ -117,6 +126,7 @@ export function SidebarProvider({
       navContext,
       workspaces,
       activeWorkspaceKey,
+      liveStatus,
     ]
   );
 

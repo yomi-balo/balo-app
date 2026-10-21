@@ -106,14 +106,17 @@ export function cut(text: string, max: number): string {
 }
 
 function cardKindFor(moveKind: ExpertMoveKind): DashboardYourMoveCardKind {
-  return moveKind === 'eoi_propose_times' || moveKind === 'eoi_reply_owed'
-    ? 'eoi_followup'
-    : moveKind;
+  if (moveKind === 'eoi_propose_times' || moveKind === 'eoi_reply_owed') return 'eoi_followup';
+  // The chosen expert on a direct request never sent interest themselves — the client's ask is
+  // an invitation, so it reads as one rather than as "Interest sent".
+  if (moveKind === 'direct_request') return 'invitation';
+  return moveKind;
 }
 
 function factFor(moveKind: ExpertMoveKind, rel: string): string | null {
   switch (moveKind) {
     case 'invitation':
+    case 'direct_request':
       return yourMoveInvitedFact(rel);
     case 'eoi_propose_times':
     case 'eoi_reply_owed':
@@ -245,6 +248,7 @@ const PROJECT_CONTEXT_BUILDERS: Record<
   (input: ProjectContextInput) => ProjectContext
 > = {
   invitation: invitationContext,
+  direct_request: invitationContext,
   eoi_reply_owed: replyOwedContext,
   eoi_propose_times: ({ row }) => introSentence(row),
   proposal_requested: proposalRequestedContext,

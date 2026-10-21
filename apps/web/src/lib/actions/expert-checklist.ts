@@ -4,8 +4,16 @@ import { cache } from 'react';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { APPROVED_EXPERT_REQUIRED_ERROR, resolveApprovedExpert } from '@/lib/auth/approved-expert';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
-import { expertSearchabilityRepository } from '@balo/db';
-import { calendarConnectionNeedsReconnect, deriveExpertChecklist } from '@balo/shared/experts';
+import { calendarRepository, expertSearchabilityRepository } from '@balo/db';
+import { unreadableBusyReadTargets } from '@balo/shared/calendar';
+import {
+  calendarConnectionNeedsReconnect,
+  deriveExpertChecklist,
+  deriveExpertLiveStatus,
+  isExpertLiveStatusVisible,
+  type ExpertChecklistItemKey,
+  type ExpertLiveStatus,
+} from '@balo/shared/experts';
 import { log } from '@/lib/logging';
 import { reconcileFromRead } from '@/lib/expert/searchability';
 
@@ -34,6 +42,17 @@ export interface ChecklistStatus {
    * a paused expert still counts as set up, so the dashboard only softens its availability row.
    */
   availableForWork: boolean;
+  /** BAL-603 — the post-reconcile `searchable` value: what search and the public profile now see. */
+  searchable: boolean;
+  /** BAL-603 — the public-profile slug; `null` until the expert picks one. */
+  username: string | null;
+  /** BAL-603 — the one-time go-live card has been shown (`live_celebration_seen_at` is set). */
+  liveCelebrationSeen: boolean;
+  /**
+   * BAL-603 — the sidebar status, or `null` before the expert first went live or when the
+   * busy-read lookup failed (hide the badge rather than show a false "Live").
+   */
+  liveStatus: ExpertLiveStatus | null;
 }
 
 /**
@@ -99,6 +118,7 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
   // matches). Best-effort: a reconcile failure must never break the render, which is why
   // BOTH the write and its post-commit effects are inside this one try/catch rather than
   // letting it propagate.
+  let searchable = snapshot.currentSearchable;
   try {
     await reconcileFromRead({
       expertProfileId,
@@ -108,6 +128,8 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
       actorImpersonating,
       actorImpersonatorUserId,
     });
+    // D4 — post-reconcile: the value this very render just wrote, not the stale snapshot.
+    searchable = derivation.allComplete;
   } catch (error) {
     log.error('Expert searchability reconcile failed', {
       expertProfileId,
@@ -117,6 +139,16 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     });
   }
 
+  const liveCelebrationSeen = snapshot.liveCelebrationSeenAt !== null;
+  const liveStatus = await resolveLiveStatus({
+    expertProfileId,
+    allComplete: derivation.allComplete,
+    failingItems: derivation.failingItems,
+    liveCelebrationSeen,
+    searchable,
+    availableForWork: snapshot.availableForWork,
+  });
+
   return {
     items: derivation.items,
     completedCount: derivation.completedCount,
@@ -124,5 +156,39 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     rateCents: snapshot.rateCents,
     calendarNeedsReconnect: calendarConnectionNeedsReconnect(snapshot.inputs.calendarConnections),
     availableForWork: snapshot.availableForWork,
+    searchable,
+    username: snapshot.username,
+    liveCelebrationSeen,
+    liveStatus,
   };
 });
+
+/**
+ * BAL-603 — the busy-read lookup only runs where it can change the answer (visible, listed and
+ * accepting work). A failed lookup yields `null` so the badge hides instead of claiming "Live".
+ * ⚠ Read-only: the go-live stamp is never written here, because this also runs on a Link prefetch.
+ */
+async function resolveLiveStatus(input: {
+  expertProfileId: string;
+  allComplete: boolean;
+  failingItems: readonly ExpertChecklistItemKey[];
+  liveCelebrationSeen: boolean;
+  searchable: boolean;
+  availableForWork: boolean;
+}): Promise<ExpertLiveStatus | null> {
+  const { expertProfileId, ...rest } = input;
+  let hasUnreadableBusyTarget = false;
+  if (isExpertLiveStatusVisible(rest) && rest.searchable && rest.availableForWork) {
+    try {
+      const targets = await calendarRepository.listBusyReadTargets(expertProfileId);
+      hasUnreadableBusyTarget = unreadableBusyReadTargets(targets).length > 0;
+    } catch (error) {
+      log.warn('Live status busy-read failed', {
+        expertProfileId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+  return deriveExpertLiveStatus({ ...rest, hasUnreadableBusyTarget });
+}

@@ -54,7 +54,8 @@
  * (`invariants/sync-token-parity.test.ts`) — the parity table (apiroc skill) is handled by
  * PARSING every wire shape tolerantly (`toBusyBlocks`), never by branching on `provider`.
  */
-import { calendarRepository, type BusyReadTarget, type CalendarCredentialStatus } from '@balo/db';
+import { calendarRepository } from '@balo/db';
+import { isConsideredForBusyRead, unreadableBusyReadTargets } from '@balo/shared/calendar';
 import type { FreeBusySlot } from '@apiroc/unified-calendar-api-node-sdk';
 import { createLogger } from '@balo/shared/logging';
 import { fromZonedTime } from 'date-fns-tz';
@@ -97,40 +98,6 @@ export class VendorBusyUnavailableError extends Error {
  */
 export interface VendorBusyProvider {
   listBusyBlocks(expertProfileId: string, from: Date, to: Date): Promise<BusyBlock[]>;
-}
-
-const READABLE_STATUS: CalendarCredentialStatus = 'ACTIVE';
-
-/**
- * A connection whose read cannot be trusted — not `ACTIVE`, or `ACTIVE` with no sub-calendar
- * rows at all (never provisioned). Distinct from "provisioned but every sub-calendar has
- * `conflict_check = false`", which is a readable connection that simply contributes nothing
- * (the expert's explicit choice, §9.4) — that case is handled by the `calendarIds.length`
- * filter below, not by this predicate.
- */
-function isUnreadable(target: {
-  credentialStatus: CalendarCredentialStatus;
-  provisioned: boolean;
-}): boolean {
-  return target.credentialStatus !== READABLE_STATUS || !target.provisioned;
-}
-
-/**
- * round-2 fix #5 — a PROVISIONED connection with no conflict-checked calendar is the expert's
- * explicit choice (§9.4) and its data is irrelevant regardless of whether its credential later
- * expires — an expert with one healthy connection and a second they deliberately opted every
- * calendar out of must not go entirely unbookable the moment that second credential expires.
- * An UNPROVISIONED connection is never excluded here even though its `calendarIds` is also
- * `[]` structurally — Balo has never listed its calendars, so we don't know what
- * conflict-checked calendars might be hidden there, and it must still be checked (`isUnreadable`).
- *
- * Exported so GET `/api/calendar/connection` can answer "would breaking THIS connection block
- * bookings?" with the same rule `listBusyBlocks` applies, instead of re-deriving it.
- */
-export function isConsideredForBusyRead(
-  target: Pick<BusyReadTarget, 'provisioned' | 'calendarIds'>
-): boolean {
-  return !target.provisioned || target.calendarIds.length > 0;
 }
 
 /**
@@ -294,16 +261,16 @@ async function fetchBusyForTarget(
   for (let attempt = 1; attempt <= FREE_BUSY_MAX_ATTEMPTS; attempt += 1) {
     try {
       return await fetchBusyOnce(target, from, to);
-    } catch (err: unknown) {
-      lastError = err;
+    } catch (error: unknown) {
+      lastError = error;
       const isLastAttempt = attempt === FREE_BUSY_MAX_ATTEMPTS;
-      if (isLastAttempt || !isImmediatelyRetryable(err)) break;
+      if (isLastAttempt || !isImmediatelyRetryable(error)) break;
       log.warn(
         {
           endUserAccountId: target.endUserAccountId,
           attempt,
           maxAttempts: FREE_BUSY_MAX_ATTEMPTS,
-          kind: err instanceof ApirocError ? err.kind : undefined,
+          kind: error instanceof ApirocError ? error.kind : undefined,
         },
         'apiroc_busy_read_retrying'
       );
@@ -329,10 +296,11 @@ export const vendorBusyProvider: VendorBusyProvider = {
     }
 
     // ⚠ round-2 fix #5 — apply the "contributes nothing" filter FIRST, before computing
-    // `unreadable`, not after. See `isConsideredForBusyRead`'s docblock for why.
+    // `unreadable`, not after. See `isConsideredForBusyRead`'s docblock in
+    // `@balo/shared/calendar` (busy-read.ts) for why.
     const consideredTargets = targets.filter(isConsideredForBusyRead);
 
-    const unreadable = consideredTargets.filter(isUnreadable);
+    const unreadable = unreadableBusyReadTargets(targets);
     if (unreadable.length > 0) {
       log.warn(
         {

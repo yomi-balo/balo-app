@@ -16,7 +16,7 @@ import { log } from '@/lib/logging';
  *
  * ⚠ fix round F5 — THE FOLLOW-UP TICKET HAS LANDED. This docblock used to point at "the
  * follow-up ticket that serialises the five writers properly" as future work; that ticket is
- * BAL-546 (this change), and the serialised set it landed is ELEVEN writers, not five — see
+ * BAL-546 (this change), and the serialised set it landed is TWELVE writers, not five — see
  * `packages/db/src/repositories/_shared/request-lock.ts` for the full named list. The
  * per-request advisory lock now makes the AB/BA cycle described above unreachable for every
  * writer in that set; this mapping is kept as a cheap backstop over the strictly smaller
@@ -72,7 +72,7 @@ export const CONCURRENT_RETRY_MESSAGE = 'Something ran at the same moment — pl
  * True when `error` carries a non-empty string `detail`. postgres-js copies the server's
  * `PG_DIAG_MESSAGE_DETAIL` onto the thrown error, and on a 40P01 that field is the ONLY place
  * the useful part lives: "Process 123 waits for ShareLock on transaction 456; blocked by
- * process 789." — i.e. WHICH two of the eleven serialised writers (`_shared/request-lock.ts`)
+ * process 789." — i.e. WHICH two of the twelve serialised writers (`_shared/request-lock.ts`)
  * collided. A 55P03 rejection (fix round F1) typically carries no comparable `detail`, so this
  * simply returns `undefined` for it and the caller logs without one. Same structural narrowing
  * shape as {@link isDeadlockDetected}: an `in` guard plus a `typeof`, no `any`, no assertion.
@@ -117,7 +117,7 @@ function describeNonErrorRejection(error: unknown): string {
  * `error` / `stack` here the original is simply lost (CLAUDE.md's caught-error-boundary rule).
  * `detail` rides along when postgres-js supplied one, because on a deadlock it names the two
  * colliding processes and is the difference between "a deadlock happened" and knowing which
- * pair of the eleven writers to serialise first. `sqlstate` rides along too (fix round R5): the
+ * pair of the twelve writers to serialise first. `sqlstate` rides along too (fix round R5): the
  * four callers of {@link deadlockFailure} used to hardcode "(40P01)" into their log message even
  * though this helper also catches 55P03, mislabelling every real lock timeout as a deadlock in
  * Axiom — the actual SQLSTATE is now a logged field instead, so the message text no longer has
@@ -152,7 +152,7 @@ function logAndBuildRetryFailure(
  * ⚠ fix round R1/D6 — STAYS SCOPED TO THESE FOUR CALLERS. The 40P01 arm here predates the
  * per-request advisory lock (BAL-540) and is kept as a cheap backstop over the residual left by
  * writers outside the serialised set (orchestrator D6) — it is deliberately NOT extended to the
- * seven other writers newly reachable by 55P03. Those seven use {@link lockContentionFailure}
+ * eight other writers newly reachable by 55P03. Those eight use {@link lockContentionFailure}
  * instead, which maps 55P03 only.
  */
 export function deadlockFailure(
@@ -168,12 +168,12 @@ export function deadlockFailure(
 }
 
 /**
- * The 55P03-only arm for the SEVEN request-domain action paths that reach the per-request
+ * The 55P03-only arm for the EIGHT request-domain action paths that reach the per-request
  * advisory lock (`_shared/request-lock.ts`) but predate — and are NOT — one of the four original
  * BAL-540 close/decline actions (fix round R1).
  *
  * WHY 55P03 ONLY, NOT ALSO 40P01 (unlike {@link deadlockFailure}). SQLSTATE 55P03 is NEW on
- * these seven paths: it did not exist before this ticket added `SET LOCAL lock_timeout` to the
+ * these eight paths: it did not exist before this ticket added `SET LOCAL lock_timeout` to the
  * advisory-lock gate wait, so before this fix they simply waited, unbounded, with no failure
  * mode to map at all. 40P01, by contrast, was never reachable here and orchestrator D6
  * deliberately did not extend that mapping to writers outside the original four — doing so here

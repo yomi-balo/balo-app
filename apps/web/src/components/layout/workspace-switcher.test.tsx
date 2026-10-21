@@ -328,4 +328,73 @@ describe('WorkspaceSwitcher', () => {
     // `document.body` — that trips axe's `region` landmark rule (an isolated-render artefact).
     expect(await axe(screen.getByRole('menu'))).toHaveNoViolations();
   });
+
+  describe('BAL-603 — live status dot', () => {
+    it('shows no dot without a live state', () => {
+      render(<WorkspaceSwitcher {...baseProps()} />);
+      expect(document.querySelector('[data-live-dot]')).toBeNull();
+    });
+
+    it('puts the dot on the trigger avatar of a multi-workspace switcher', () => {
+      render(
+        <WorkspaceSwitcher
+          {...baseProps({ activeWorkspaceKey: EXPERT_WORKSPACE.key, liveState: 'paused' })}
+        />
+      );
+      expect(document.querySelectorAll('[data-live-dot="paused"]')).toHaveLength(1);
+    });
+
+    it('puts the dot on the static single-workspace label', () => {
+      render(
+        <WorkspaceSwitcher
+          {...baseProps({
+            workspaces: [EXPERT_WORKSPACE],
+            activeWorkspaceKey: EXPERT_WORKSPACE.key,
+            liveState: 'live',
+          })}
+        />
+      );
+      expect(document.querySelectorAll('[data-live-dot="live"]')).toHaveLength(1);
+    });
+
+    it('shows no dot when the active workspace is a company', () => {
+      render(<WorkspaceSwitcher {...baseProps({ liveState: 'live' })} />);
+      expect(document.querySelector('[data-live-dot]')).toBeNull();
+    });
+
+    it('labels the collapsed dot with a title and screen reader text', () => {
+      render(
+        <WorkspaceSwitcher
+          {...baseProps({
+            activeWorkspaceKey: EXPERT_WORKSPACE.key,
+            liveState: 'paused',
+            isCollapsed: true,
+          })}
+        />
+      );
+      expect(document.querySelector('[title="Bookings paused"]')).not.toBeNull();
+      expect(screen.getByText('Marketplace status: Bookings paused')).toBeInTheDocument();
+    });
+
+    it('does not announce the dot when expanded (the pill does)', () => {
+      render(
+        <WorkspaceSwitcher
+          {...baseProps({ activeWorkspaceKey: EXPERT_WORKSPACE.key, liveState: 'paused' })}
+        />
+      );
+      expect(screen.queryByText(/Marketplace status/)).toBeNull();
+    });
+
+    it('keeps the dot off the menu rows', async () => {
+      const user = userEvent.setup();
+      render(
+        <WorkspaceSwitcher
+          {...baseProps({ activeWorkspaceKey: EXPERT_WORKSPACE.key, liveState: 'away' })}
+        />
+      );
+      await user.click(screen.getByRole('button'));
+      const menu = screen.getByRole('menu');
+      expect(menu.querySelector('[data-live-dot]')).toBeNull();
+    });
+  });
 });

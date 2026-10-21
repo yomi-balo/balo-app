@@ -5,7 +5,9 @@ vi.mock('./getting-started-checklist', () => ({
   GettingStartedChecklist: () => <div data-testid="checklist" />,
 }));
 vi.mock('./celebration-card', () => ({
-  CelebrationCard: () => <div data-testid="celebration" />,
+  CelebrationCard: ({ publicProfileHref }: { publicProfileHref: string | null }) => (
+    <div data-testid="celebration" data-href={publicProfileHref ?? ''} />
+  ),
 }));
 vi.mock('./earnings-card', () => ({
   EarningsCard: () => <div data-testid="earnings" />,
@@ -36,6 +38,10 @@ function status(overrides: Partial<ChecklistStatus> = {}): ChecklistStatus {
     rateCents: 313,
     availableForWork: true,
     calendarNeedsReconnect: false,
+    searchable: true,
+    username: 'dana',
+    liveCelebrationSeen: false,
+    liveStatus: null,
     ...overrides,
   };
 }
@@ -112,5 +118,44 @@ describe('ExpertDashboard (BAL-566 R2/D13)', () => {
       />
     );
     expect(screen.getByTestId('celebration')).toBeInTheDocument();
+  });
+
+  describe('BAL-603 — one-time go-live card', () => {
+    const base = { userName: 'Priya', upNext: null, yourMove: null } as const;
+
+    it('shows the card for a complete, unseen expert with the profile href', () => {
+      render(<ExpertDashboard {...base} checklistStatus={status()} />);
+      expect(screen.getByTestId('celebration')).toHaveAttribute('data-href', '/experts/dana');
+    });
+
+    it('passes no href when the expert is not searchable', () => {
+      render(<ExpertDashboard {...base} checklistStatus={status({ searchable: false })} />);
+      expect(screen.getByTestId('celebration')).toHaveAttribute('data-href', '');
+    });
+
+    it('renders neither card nor checklist once seen', () => {
+      render(<ExpertDashboard {...base} checklistStatus={status({ liveCelebrationSeen: true })} />);
+      expect(screen.queryByTestId('celebration')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('checklist')).not.toBeInTheDocument();
+    });
+
+    it('keeps the card when the status refreshes to seen after mount', () => {
+      const { rerender } = render(<ExpertDashboard {...base} checklistStatus={status()} />);
+      rerender(
+        <ExpertDashboard {...base} checklistStatus={status({ liveCelebrationSeen: true })} />
+      );
+      expect(screen.getByTestId('celebration')).toBeInTheDocument();
+    });
+
+    it('shows the checklist, not the card, after a post-live regression', () => {
+      render(
+        <ExpertDashboard
+          {...base}
+          checklistStatus={status({ allComplete: false, liveCelebrationSeen: true })}
+        />
+      );
+      expect(screen.getByTestId('checklist')).toBeInTheDocument();
+      expect(screen.queryByTestId('celebration')).not.toBeInTheDocument();
+    });
   });
 });

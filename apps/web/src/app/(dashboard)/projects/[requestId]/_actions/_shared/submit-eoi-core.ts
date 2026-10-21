@@ -14,6 +14,7 @@ import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { lockContentionFailure } from './deadlock';
+import { expertDisplayName } from './expert-display-name';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -54,13 +55,6 @@ function isUniqueViolation(error: unknown): boolean {
     'code' in error &&
     (error as { code: unknown }).code === '23505'
   );
-}
-
-/** Invited expert's display name for the client-facing notification body. */
-function expertDisplayName(relationship: Relationship): string {
-  const { user } = relationship.expertProfile;
-  const full = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
-  return full.length > 0 ? full : 'An expert';
 }
 
 /**
@@ -180,7 +174,7 @@ export async function runSubmitEoi(
       timeToEoiMs: Date.now() - rel.invitedAt.getTime(),
     };
   } catch (error) {
-    // ⚠ fix round R1 — `expressionsOfInterestRepository.submit` is one of the eleven writers
+    // ⚠ fix round R1 — `expressionsOfInterestRepository.submit` is one of the twelve writers
     // serialised on the per-request advisory lock (`_shared/request-lock.ts`); a 55P03 here
     // means the EOI never wrote anything and a retry queues again. WARN + retryable copy,
     // checked BEFORE the log.error below — never `log.error` for an expected-rare, self-healing

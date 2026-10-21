@@ -129,6 +129,11 @@ export interface ConversationThreadSummary {
    * Null when the other party has never written/shared anything.
    */
   latestInboundActivityAt: Date | null;
+  /**
+   * Newest LIVE message the VIEWER sent. Null when the viewer has never written in the thread
+   * (their own files do not count).
+   */
+  latestOutboundMessageAt: Date | null;
   /** LIVE file count for the thread. */
   fileCount: number;
   /** The VIEWER's live read watermark. Null when they have never marked read. */
@@ -755,6 +760,7 @@ export const conversationsRepository = {
    *   file NOT from the viewer): the viewer's own activity never makes a thread unread, and
    *   a file can arrive without a message (nothing auto-posts), so files count toward
    *   inbound;
+   * - `latestOutboundMessageAt` — newest live message FROM the viewer ("have I written here?");
    * - `fileCount`  — live files, any uploader (Files pill badge);
    * - `lastReadAt` — the VIEWER's live watermark from `conversation_read_states`.
    *
@@ -814,6 +820,23 @@ export const conversationsRepository = {
       )
       .groupBy(conversationMessages.conversationId)
       .as('inbound_message');
+
+    // Newest live message per thread sent BY the viewer — the mirror of the leg above.
+    const outboundMessageSq = db
+      .select({
+        conversationId: conversationMessages.conversationId,
+        latestAt: max(conversationMessages.createdAt).as('latest_outbound_message_at'),
+      })
+      .from(conversationMessages)
+      .where(
+        and(
+          inArray(conversationMessages.conversationId, input.conversationIds),
+          isNull(conversationMessages.deletedAt),
+          eq(conversationMessages.senderUserId, input.viewerUserId)
+        )
+      )
+      .groupBy(conversationMessages.conversationId)
+      .as('outbound_message');
 
     // Newest live file per thread NOT uploaded by the viewer.
     const inboundFileSq = db
@@ -876,6 +899,7 @@ export const conversationsRepository = {
         latestMessageSenderFirstName: users.firstName,
         latestInboundMessageAt: inboundMessageSq.latestAt,
         latestInboundFileAt: inboundFileSq.latestAt,
+        latestOutboundMessageAt: outboundMessageSq.latestAt,
         fileCount: fileCountSq.fileCount,
         lastReadAt: readStateSq.lastReadAt,
       })
@@ -884,6 +908,7 @@ export const conversationsRepository = {
       .leftJoin(users, eq(users.id, latestMessageSq.senderUserId))
       .leftJoin(inboundMessageSq, eq(inboundMessageSq.conversationId, conversations.id))
       .leftJoin(inboundFileSq, eq(inboundFileSq.conversationId, conversations.id))
+      .leftJoin(outboundMessageSq, eq(outboundMessageSq.conversationId, conversations.id))
       .leftJoin(fileCountSq, eq(fileCountSq.conversationId, conversations.id))
       .leftJoin(readStateSq, eq(readStateSq.conversationId, conversations.id))
       .where(
@@ -916,6 +941,7 @@ export const conversationsRepository = {
           row?.latestInboundMessageAt ?? null,
           row?.latestInboundFileAt ?? null
         ),
+        latestOutboundMessageAt: row?.latestOutboundMessageAt ?? null,
         fileCount: row?.fileCount ?? 0,
         lastReadAt: row?.lastReadAt ?? null,
       };

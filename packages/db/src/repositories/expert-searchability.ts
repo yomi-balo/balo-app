@@ -111,6 +111,16 @@ export interface ExpertSearchabilitySnapshot {
    * NOT a checklist input: a paused expert stays searchable.
    */
   readonly availableForWork: boolean;
+  /**
+   * BAL-603 — the public-profile slug, for the live-status "View public profile" link. NOT a
+   * checklist input. NULL means no profile link is offered.
+   */
+  readonly username: string | null;
+  /**
+   * BAL-603 — when the one-time go-live card was first seen (NULL until then). NOT a checklist
+   * input: it gates the card and the post-live badge visibility.
+   */
+  readonly liveCelebrationSeenAt: Date | null;
 }
 
 // ── The audit vocabulary ─────────────────────────────────────────
@@ -280,6 +290,8 @@ export const expertSearchabilityRepository = {
         rateCents: expertProfiles.rateCents,
         searchable: expertProfiles.searchable,
         availableForWork: expertProfiles.availableForWork,
+        username: expertProfiles.username,
+        liveCelebrationSeenAt: expertProfiles.liveCelebrationSeenAt,
         avatarUrl: users.avatarUrl,
         phoneVerifiedAt: users.phoneVerifiedAt,
         userDeletedAt: users.deletedAt,
@@ -318,6 +330,8 @@ export const expertSearchabilityRepository = {
       currentSearchable: row.searchable,
       rateCents: row.rateCents,
       availableForWork: row.availableForWork,
+      username: row.username,
+      liveCelebrationSeenAt: row.liveCelebrationSeenAt,
     };
   },
 

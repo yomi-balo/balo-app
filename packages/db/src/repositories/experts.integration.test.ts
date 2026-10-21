@@ -1245,6 +1245,83 @@ describe('expertsRepository.setAvailableForWork', () => {
   });
 });
 
+// ── markLiveCelebrationSeen (BAL-603) ───────────────────────────────
+
+async function liveCelebrationSeenAtOf(expertProfileId: string): Promise<Date | null | undefined> {
+  const row = await db.query.expertProfiles.findFirst({
+    where: eq(expertProfiles.id, expertProfileId),
+    columns: { liveCelebrationSeenAt: true },
+  });
+  return row?.liveCelebrationSeenAt;
+}
+
+describe('expertsRepository.markLiveCelebrationSeen', () => {
+  it('the first stamp returns true and sets the timestamp; a repeat returns false and leaves it unchanged', async () => {
+    const expert = await searchExpertFactory({ username: uniq('celebrate'), searchable: true });
+    expect(await liveCelebrationSeenAtOf(expert.id)).toBeNull();
+
+    const first = await expertsRepository.markLiveCelebrationSeen({
+      expertProfileId: expert.id,
+      userId: expert.userId,
+    });
+    expect(first).toBe(true);
+    const stamped = await liveCelebrationSeenAtOf(expert.id);
+    expect(stamped).toBeInstanceOf(Date);
+
+    const second = await expertsRepository.markLiveCelebrationSeen({
+      expertProfileId: expert.id,
+      userId: expert.userId,
+    });
+    expect(second).toBe(false);
+    expect(await liveCelebrationSeenAtOf(expert.id)).toEqual(stamped);
+  });
+
+  it('writes no audit row', async () => {
+    const expert = await searchExpertFactory({
+      username: uniq('celebrate-audit'),
+      searchable: true,
+    });
+
+    await expertsRepository.markLiveCelebrationSeen({
+      expertProfileId: expert.id,
+      userId: expert.userId,
+    });
+
+    const rows = await db
+      .select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(eq(auditEvents.entityId, expert.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('a userId that does not own the profile returns false and the column stays NULL', async () => {
+    const expert = await searchExpertFactory({
+      username: uniq('celebrate-other'),
+      searchable: true,
+    });
+    const other = await userFactory();
+
+    const result = await expertsRepository.markLiveCelebrationSeen({
+      expertProfileId: expert.id,
+      userId: other.id,
+    });
+
+    expect(result).toBe(false);
+    expect(await liveCelebrationSeenAtOf(expert.id)).toBeNull();
+  });
+
+  it('an unknown expert profile id returns false', async () => {
+    const user = await userFactory();
+
+    const result = await expertsRepository.markLiveCelebrationSeen({
+      expertProfileId: randomUUID(),
+      userId: user.id,
+    });
+
+    expect(result).toBe(false);
+  });
+});
+
 // ── countWorkInFlight (BAL-591) ─────────────────────────────────────
 
 const HOUR_MS = 3_600_000;

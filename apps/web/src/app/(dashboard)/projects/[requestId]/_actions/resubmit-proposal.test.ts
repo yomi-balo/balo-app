@@ -487,7 +487,7 @@ describe('resubmitProposalAction', () => {
     expect(log.error).toHaveBeenCalledWith('Resubmit proposal failed', expect.any(Object));
   });
 
-  // fix round R1 — `proposalsRepository.resubmit` is one of the eleven writers serialised on
+  // fix round R1 — `proposalsRepository.resubmit` is one of the twelve writers serialised on
   // the per-request advisory lock (`_shared/request-lock.ts`) — the LIVE insert-based producer
   // of open proposals (orchestrator D3).
   it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {

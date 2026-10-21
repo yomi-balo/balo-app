@@ -692,10 +692,49 @@ describe('conversationsRepository.listThreadSummaries', () => {
         conversationId,
         latestMessage: null,
         latestInboundActivityAt: null,
+        latestOutboundMessageAt: null,
         fileCount: 0,
         lastReadAt: null,
       },
     ]);
+  });
+
+  it('latestOutboundMessageAt is the viewer’s newest LIVE message, whoever wrote last', async () => {
+    const { conversationId } = await requestExpertRelationshipFactory();
+    const viewer = await userFactory();
+    const other = await userFactory();
+    const base = Date.parse('2026-06-03T00:00:00Z');
+
+    const own = await conversationMessageFactory({
+      conversationId,
+      senderUserId: viewer.id,
+      createdAt: new Date(base),
+    });
+    // A newer own message that was deleted, and a newer message from the other party: neither
+    // moves the viewer's outbound instant.
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: viewer.id,
+      createdAt: new Date(base + 1000),
+      deletedAt: new Date(base + 1500),
+    });
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: other.id,
+      createdAt: new Date(base + 2000),
+    });
+
+    const [asViewer] = await conversationsRepository.listThreadSummaries({
+      conversationIds: [conversationId],
+      viewerUserId: viewer.id,
+    });
+    expect(asViewer?.latestOutboundMessageAt?.getTime()).toBe(own.createdAt.getTime());
+
+    const [asStranger] = await conversationsRepository.listThreadSummaries({
+      conversationIds: [conversationId],
+      viewerUserId: (await userFactory()).id,
+    });
+    expect(asStranger?.latestOutboundMessageAt).toBeNull();
   });
 
   it('I12 — batches N threads in input order: latest any-sender message, inbound excludes viewer, files count toward inbound', async () => {
@@ -762,6 +801,7 @@ describe('conversationsRepository.listThreadSummaries', () => {
     expect(summaryA.latestInboundActivityAt?.getTime()).toBe(aInboundFile.createdAt.getTime());
     expect(summaryA.fileCount).toBe(1);
     expect(summaryA.lastReadAt?.getTime()).toBe(aReadAt.getTime());
+    expect(summaryA.latestOutboundMessageAt?.getTime()).toBe(aViewerMsg.createdAt.getTime());
 
     // B: no messages at all; inbound = the OTHER party's older file (the viewer's newer
     // upload is excluded); fileCount counts both.
@@ -769,6 +809,8 @@ describe('conversationsRepository.listThreadSummaries', () => {
     expect(summaryB.latestInboundActivityAt?.getTime()).toBe(bInboundFile.createdAt.getTime());
     expect(summaryB.fileCount).toBe(2);
     expect(summaryB.lastReadAt).toBeNull();
+    // The viewer's own upload is not a message.
+    expect(summaryB.latestOutboundMessageAt).toBeNull();
 
     // Unknown ids still get exactly one empty element, in input order.
     const unknown = randomUUID();

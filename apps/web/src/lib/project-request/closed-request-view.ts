@@ -91,7 +91,7 @@ export interface ClosedTrackView {
   expertName: string;
   expertInitials: string;
   partyLabel: string;
-  finalChip: 'invite_withdrawn' | 'declined' | 'ended_request_closed';
+  finalChip: 'invite_withdrawn' | 'declined' | 'ended_request_closed' | 'expert_passed';
   endedLabel: string;
 }
 
@@ -108,9 +108,11 @@ function initialsFor(name: string): string {
 /**
  * `declineReason` (+ whether the track opened) → the frozen track's final chip + ended-label
  * (design ref `TrackCard`, `:484-496`; plan §6.3's exact rule): `request_closed` ⇒
- * `ended_request_closed`; otherwise a deliberate per-track decline — `invite_withdrawn` when the
+ * `ended_request_closed`; `expert_declined` ⇒ `expert_passed` whether or not the track opened
+ * (the expert chose it); otherwise a deliberate per-track decline — `invite_withdrawn` when the
  * track never opened (a bare invite), `declined` when it had. Only staff ever see an
- * `invite_withdrawn` track: the client's graph holds opened tracks only.
+ * `invite_withdrawn` track, or an `expert_passed` one that never opened: the client's graph
+ * holds opened tracks only.
  */
 function finalChipFor(
   declineReason: RelationshipDeclineReason | null,
@@ -119,21 +121,29 @@ function finalChipFor(
   finalChip: ClosedTrackView['finalChip'];
   endedLabel: string;
 } {
-  if (declineReason === 'request_closed') {
-    return {
-      finalChip: 'ended_request_closed',
-      endedLabel: 'Ended when the request closed · files as they were',
-    };
+  switch (declineReason) {
+    case 'request_closed':
+      return {
+        finalChip: 'ended_request_closed',
+        endedLabel: 'Ended when the request closed · files as they were',
+      };
+    case 'expert_declined':
+      return { finalChip: 'expert_passed', endedLabel: 'Passed before the request closed' }; // pending-MJ
+    case null:
+    case 'client_declined':
+    case 'balo_declined':
+      // A deliberate per-track decline BEFORE the request itself closed.
+      return opened
+        ? { finalChip: 'declined', endedLabel: 'Declined before the request closed' }
+        : {
+            finalChip: 'invite_withdrawn',
+            endedLabel: 'Invite withdrawn before the request closed',
+          };
+    default: {
+      const unreachable: never = declineReason;
+      return unreachable;
+    }
   }
-  // `client_declined` / `balo_declined` — a deliberate per-track decline BEFORE the request
-  // itself closed.
-  if (!opened) {
-    return {
-      finalChip: 'invite_withdrawn',
-      endedLabel: 'Invite withdrawn before the request closed',
-    };
-  }
-  return { finalChip: 'declined', endedLabel: 'Declined before the request closed' };
 }
 
 /**

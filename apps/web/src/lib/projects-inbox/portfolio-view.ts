@@ -204,6 +204,9 @@ function foldSignal(
     anyUnread: resolved.some(({ summary }) => summaryIsUnread(summary)),
     awaitingViewerReply: resolved.some(({ summary }) => summaryAwaitsReply(summary, viewerUserId)),
     freshestSignal: freshestInboundSignal(resolved, viewerUserId, counterpartLabel),
+    viewerHasSentMessage: resolved.some(
+      ({ summary }) => (summary.latestOutboundMessageAt ?? null) !== null
+    ),
   };
 }
 

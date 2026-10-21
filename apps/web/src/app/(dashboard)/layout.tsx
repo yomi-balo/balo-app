@@ -15,6 +15,7 @@ import { MobileTabBar } from '@/components/layout/mobile-tab-bar';
 import { CreditsChipSlot } from '@/components/layout/credits-chip-slot';
 import { CreditsChipSkeleton } from '@/components/layout/credits-chip';
 import { creditsChipIsInScope } from '@/components/layout/credits-chip-scope';
+import { buildLiveStatusView, type LiveStatusView } from '@/lib/expert/live-status-view';
 import { log } from '@/lib/logging';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
@@ -41,11 +42,13 @@ export default async function DashboardLayout({
   // Fetch checklist status only for expert mode users with a profile
   let checklistCompletedCount = 0;
   let checklistAllComplete = false;
+  let liveStatus: LiveStatusView | null = null;
   if (user?.activeMode === 'expert' && user.expertProfileId) {
     try {
       const status = await getChecklistStatus();
       checklistCompletedCount = status.completedCount;
       checklistAllComplete = status.allComplete;
+      liveStatus = buildLiveStatusView(status);
     } catch (error) {
       log.warn('Failed to fetch checklist status for layout', {
         userId: user.id,
@@ -100,6 +103,7 @@ export default async function DashboardLayout({
       navContext={navContext}
       workspaces={workspaces}
       activeWorkspaceKey={activeWorkspaceKey}
+      liveStatus={liveStatus}
     >
       <AnalyticsIdentify {...analyticsIdentifyPropsFor(user)} />
       <BreadcrumbProvider>

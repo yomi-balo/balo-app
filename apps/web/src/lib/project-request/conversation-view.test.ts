@@ -147,6 +147,7 @@ function summary(overrides: Record<string, unknown> = {}): Record<string, unknow
     conversationId: convIdFor('rel-1'),
     latestMessage: null,
     latestInboundActivityAt: null,
+    latestOutboundMessageAt: null,
     fileCount: 0,
     lastReadAt: null,
     ...overrides,
@@ -476,6 +477,27 @@ describe('loadConversationView', () => {
     const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
     expect(view.threads[0]?.unread).toBe(false);
     expect(view.threads[0]?.latestMessageFromViewer).toBe(true);
+  });
+
+  it('viewerHasSentMessage follows the viewer’s newest own message, whoever wrote last', async () => {
+    mockListThreadSummaries.mockResolvedValue([summary()]);
+    const quiet = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    expect(quiet.threads[0]?.viewerHasSentMessage).toBe(false);
+
+    mockListThreadSummaries.mockResolvedValue([
+      summary({
+        latestMessage: {
+          id: 'm-2',
+          body: '<p>theirs</p>',
+          createdAt: new Date('2026-06-09T11:00:00Z'),
+          senderUserId: 'someone-else',
+        },
+        latestOutboundMessageAt: new Date('2026-06-09T10:00:00Z'),
+      }),
+    ]);
+    const wrote = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    expect(wrote.threads[0]?.latestMessageFromViewer).toBe(false);
+    expect(wrote.threads[0]?.viewerHasSentMessage).toBe(true);
   });
 
   it('truncates the preview to 140 plain-text chars', async () => {

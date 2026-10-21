@@ -24,7 +24,9 @@ import {
   requestExpertRelationshipFactory,
 } from '../test/factories';
 import { projectsInboxRepository } from './projects-inbox';
+import { projectRequestsRepository } from './project-requests';
 import { referenceDataRepository } from './reference-data';
+import { requestExpertRelationshipsRepository } from './request-expert-relationships';
 
 /**
  * Integration coverage for the A7 tri-lens aggregation reads (BAL-274). One real
@@ -337,6 +339,112 @@ describe('projectsInboxRepository.listInvitationsByExpert', () => {
     const expert = await expertDraftFactory();
     expect(await projectsInboxRepository.listInvitationsByExpert(expert.id)).toEqual([]);
   });
+
+  it('marks only the direct request’s chosen expert as onDirectLeg, and carries availabilitySharedAt', async () => {
+    const chosen = await expertDraftFactory();
+    const alongside = await expertDraftFactory();
+    const direct = await projectRequestFactory({
+      status: 'eoi_submitted',
+      sendTo: 'direct',
+      expertProfileId: chosen.id,
+    });
+    const match = await projectRequestFactory({
+      status: 'eoi_submitted',
+      sendTo: 'match',
+      expertProfileId: null,
+    });
+    const sharedAt = new Date('2026-03-02T00:00:00.000Z');
+    await requestExpertRelationshipFactory({
+      projectRequestId: direct.id,
+      expertProfileId: chosen.id,
+      values: { status: 'eoi_submitted', availabilitySharedAt: sharedAt },
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: direct.id,
+      expertProfileId: alongside.id,
+      values: { status: 'eoi_submitted' },
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: match.id,
+      expertProfileId: chosen.id,
+      values: { status: 'eoi_submitted' },
+    });
+
+    const chosenRows = await projectsInboxRepository.listInvitationsByExpert(chosen.id);
+    const onDirect = chosenRows.find((r) => r.projectRequestId === direct.id);
+    const onMatch = chosenRows.find((r) => r.projectRequestId === match.id);
+    expect(onDirect?.onDirectLeg).toBe(true);
+    expect(onDirect?.availabilitySharedAt?.getTime()).toBe(sharedAt.getTime());
+    expect(onMatch?.onDirectLeg).toBe(false);
+    expect(onMatch?.availabilitySharedAt).toBeNull();
+
+    const [alongsideRow] = await projectsInboxRepository.listInvitationsByExpert(alongside.id);
+    expect(alongsideRow?.projectRequestId).toBe(direct.id);
+    expect(alongsideRow?.onDirectLeg).toBe(false);
+  });
+});
+
+describe('projectsInboxRepository.listInvitationsByExpert — declined tracks on a closed request', () => {
+  /** A direct request at `eoi_submitted` with its chosen expert's live track. */
+  async function seedDirectTrack() {
+    const request = await projectRequestFactory({ status: 'eoi_submitted' });
+    const { relationship, expertProfileId } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId ?? undefined,
+      values: { status: 'eoi_submitted' },
+    });
+    return { requestId: request.id, relationshipId: relationship.id, expertProfileId };
+  }
+
+  async function closeRequest(requestId: string): Promise<void> {
+    await projectRequestsRepository.close({
+      requestId,
+      actorUserId: (await userFactory()).id,
+      actorKind: 'client',
+      reason: 'withdrawn',
+      note: null,
+    });
+  }
+
+  it('keeps a request the expert passed on out of the list after it closes', async () => {
+    const { requestId, relationshipId, expertProfileId } = await seedDirectTrack();
+    await requestExpertRelationshipsRepository.passTrack({
+      relationshipId,
+      actorUserId: (await userFactory()).id,
+    });
+    await closeRequest(requestId);
+
+    expect((await projectRequestsRepository.findById(requestId))?.status).toBe('closed');
+    const rows = await projectsInboxRepository.listInvitationsByExpert(expertProfileId);
+    expect(rows.map((r) => r.projectRequestId)).not.toContain(requestId);
+  });
+
+  it('still lists a track the close cascade declined, for the Closed group', async () => {
+    const { requestId, relationshipId, expertProfileId } = await seedDirectTrack();
+    await closeRequest(requestId);
+
+    const rows = await projectsInboxRepository.listInvitationsByExpert(expertProfileId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      relationshipId,
+      requestStatus: 'closed',
+      relationshipStatus: 'declined',
+    });
+  });
+
+  it('keeps a client-declined track out of the list after the request closes', async () => {
+    const { requestId, relationshipId, expertProfileId } = await seedDirectTrack();
+    await requestExpertRelationshipsRepository.declineTrack({
+      relationshipId,
+      actorUserId: (await userFactory()).id,
+      reason: 'client_declined',
+    });
+    await closeRequest(requestId);
+
+    expect((await projectRequestsRepository.findById(requestId))?.status).toBe('closed');
+    const rows = await projectsInboxRepository.listInvitationsByExpert(expertProfileId);
+    expect(rows.map((r) => r.projectRequestId)).not.toContain(requestId);
+  });
 });
 
 describe('projectsInboxRepository.listInvitationsByExpert — kickoff gates + current proposal', () => {
@@ -595,13 +703,13 @@ describe('projectsInboxRepository.listExpertMoveDetails', () => {
     expect(result.size).toBe(0);
   });
 
-  it('omits a declined relationship on a CLOSED request, which the inbox list still returns as history', async () => {
+  it('omits a cascade-declined relationship on a CLOSED request, which the inbox list still returns as history', async () => {
     const expert = await expertDraftFactory();
     const request = await projectRequestFactory({ status: 'closed' });
     await requestExpertRelationshipFactory({
       projectRequestId: request.id,
       expertProfileId: expert.id,
-      values: { status: 'declined', declinedAt: new Date() },
+      values: { status: 'declined', declinedAt: new Date(), declineReason: 'request_closed' },
     });
 
     const details = await projectsInboxRepository.listExpertMoveDetails({

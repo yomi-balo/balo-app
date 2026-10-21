@@ -79,6 +79,8 @@ export {
   PROJECT_SERVER_EVENTS,
   type ProjectServerEventMap,
   type ProjectRequestAccessDenialReason,
+  PROJECT_TRACK_PASS_SURFACES,
+  type ProjectTrackPassSurface,
 } from './project';
 export {
   CONVERSATION_EVENTS,

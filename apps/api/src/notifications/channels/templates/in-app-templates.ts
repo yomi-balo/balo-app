@@ -6,6 +6,7 @@ import {
 import { buildBillingEmailChangedCopy } from './billing-email-changed.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
+import { passedStageClause } from './project-track-passed-stage.js';
 import { partyDomainAddedBody, partyDomainsPath } from './party-domain-ownership.js';
 import { consultationClause } from './review-email-shared.js';
 import {
@@ -1601,6 +1602,38 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     return {
       title: 'Not proceeding',
       body,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  /**
+   * BAL-604 — the delivering expert passed on a project. Staff copy: Balo can invite someone else.
+   * REGISTER (pending-MJ): factual, gender-neutral; the expert is named, the client by company.
+   */
+  'project-track-passed-admin': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const companyName = (data.clientCompanyName as string) ?? 'the client';
+    const expertName = (data.expertName as string) ?? 'An expert';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    const stageClause = passedStageClause(data.fromStatus, data.onDirectLeg);
+    return {
+      title: 'Expert passed',
+      body: `${expertName} passed on “${title}” (${companyName})${stageClause} — Balo can invite someone else.`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  /**
+   * BAL-604 — client copy, sent only once the client had seen the track (the rule's condition).
+   * REGISTER (pending-MJ): calm; Balo is already finding other experts.
+   */
+  'project-track-passed-client': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    const expertName = (data.expertName as string) ?? 'An expert';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Expert no longer available',
+      body: `${expertName} is no longer available for “${title}”. Balo is looking for other experts.`,
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },
