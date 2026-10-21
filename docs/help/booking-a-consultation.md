@@ -35,6 +35,11 @@ under the form, with the smallest amount that covers the call already selected. 
 card or add a new one, and the call books as soon as the credit lands. Nothing you've entered is
 lost along the way. See [Buying credit](/help/buying-credit) for more on topping up.
 
+When your company has no payment on hold, you'll also see **Pay after the call** beside the top-up. Choose it if you'd rather not top up first. Nothing is charged now,
+and any time beyond your balance is charged to the card after the call. Choosing it switches your
+team's low-balance setting to **Keep me going**, and you can change that setting any time in
+Billing settings.
+
 If you can't manage billing yourself, you'll see **Save and finish later** instead. It lets your
 company's billing admins know a top-up is needed, and when you were starting a new case it keeps
 your booking details on this device so you can pick up where you left off. It doesn't hold the

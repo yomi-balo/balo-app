@@ -34,8 +34,9 @@ already used the code, we'll say so: "You've already used this code."
 ## Paying for your top-up
 
 You're charged in AUD — your bank sets the final rate. If your company already has a card saved,
-it's shown under **Payment method**, and you can use **Change** to pay with a different one. A new
-card is entered securely and Balo never sees your card number.
+it's shown under **Payment method**, and you can use **Change** to pay with a different one. If a
+consultation is running on the saved card, you can switch to a different card once that call ends.
+A new card is entered securely and Balo never sees your card number.
 
 Your credit stays valid for 12 months from the last time your balance was used or topped up, so
 any activity — a consultation, a top-up or a promo code — keeps the whole balance fresh.

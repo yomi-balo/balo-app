@@ -1132,20 +1132,23 @@ describe('PayAction', () => {
         expect(onFailure).toHaveBeenCalledWith('declined');
       });
 
-      it.each(['stripe_error', 'saved_card_error', 'invalid_input', 'settlement_outstanding'])(
-        'start %s -> error',
-        async (code) => {
-          mockStartPurchaseAction.mockResolvedValue({ ok: false, error: code });
-          const onFailure = vi.fn();
-          renderAction({ extra: { onFailure } });
+      it.each([
+        'stripe_error',
+        'saved_card_error',
+        'invalid_input',
+        'settlement_outstanding',
+        'card_change_refused',
+      ])('start %s -> error', async (code) => {
+        mockStartPurchaseAction.mockResolvedValue({ ok: false, error: code });
+        const onFailure = vi.fn();
+        renderAction({ extra: { onFailure } });
 
-          await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
 
-          await screen.findByRole('alert');
-          expect(onFailure).toHaveBeenCalledTimes(1);
-          expect(onFailure).toHaveBeenCalledWith('error');
-        }
-      );
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledTimes(1);
+        expect(onFailure).toHaveBeenCalledWith('error');
+      });
 
       it('new-card card_error -> declined', async () => {
         mockConfirmPayment.mockResolvedValue({
@@ -1380,6 +1383,26 @@ describe('PayAction', () => {
         await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
 
         expect(await screen.findByRole('alert')).toHaveTextContent('Custom outstanding.');
+      });
+
+      it('shows the cause-neutral card-swap copy for card_change_refused', async () => {
+        mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'card_change_refused' });
+        renderAction({});
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent("We can't swap the card on file");
+        expect(alert).not.toHaveTextContent('low-balance setting');
+      });
+
+      it('overrides the card_change_refused start error', async () => {
+        mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'card_change_refused' });
+        renderAction({ extra: { errorCopy: { card_change_refused: 'Custom swap.' } } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Custom swap.');
       });
 
       it('keeps the default copy for an outcome it has no key for', async () => {

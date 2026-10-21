@@ -29,7 +29,7 @@ interface FundingAmountPickerProps {
 const CHIP_BASE =
   'relative flex min-h-[58px] flex-col items-center justify-center rounded-xl border-[1.5px] px-1.5 py-2.5 transition-colors duration-150 focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-default disabled:opacity-60 motion-reduce:transition-none';
 
-function chipClass(selected: boolean): string {
+export function chipClass(selected: boolean): string {
   return cn(
     CHIP_BASE,
     selected
@@ -39,7 +39,7 @@ function chipClass(selected: boolean): string {
 }
 
 /** The index a radiogroup key moves to, or `null` for a key that is not a navigation key. */
-function nextRadioIndex(key: string, index: number, count: number): number | null {
+export function nextRadioIndex(key: string, index: number, count: number): number | null {
   switch (key) {
     case 'ArrowRight':
     case 'ArrowDown':

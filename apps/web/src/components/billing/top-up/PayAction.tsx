@@ -76,7 +76,7 @@ interface PayActionProps {
    * Overrides the buyer-facing message for the listed outcomes only. `declined` replaces the
    * message of a `card_declined` refusal alone (any other card error keeps Stripe's own message),
    * `auth_failed` replaces the message of any authentication failure, and `settlement_outstanding`
-   * replaces the start error of that name. Every other failure keeps its default copy, including the ambiguous
+   * and `card_change_refused` replace the start error of that name. Every other failure keeps its default copy, including the ambiguous
    * saved-card copy that must never claim nothing was charged.
    */
   readonly errorCopy?: PayActionErrorCopy;
@@ -85,7 +85,7 @@ interface PayActionProps {
 export type PayActionFailureReason = 'declined' | 'auth_failed' | 'error';
 
 export type PayActionErrorCopy = Partial<
-  Record<'declined' | 'auth_failed' | 'settlement_outstanding', string>
+  Record<'declined' | 'auth_failed' | 'settlement_outstanding' | 'card_change_refused', string>
 >;
 
 /** The two halves of the Server Action's result, named so the charge helpers can take one. */
@@ -153,6 +153,10 @@ const START_ERROR_COPY: Record<string, string> = {
   // the top-up itself is never what was blocked — the buyer just has to leave the setting alone.
   settlement_outstanding:
     "We can't change your low-balance setting while a consultation is running — no charge was made. Leave it as it is and your top-up will go through.",
+  // UNCLEARED MJ — placeholder copy. A new card was refused while a consultation runs on the
+  // card on file; the action returns before the PaymentIntent exists, so no charge was made.
+  card_change_refused:
+    "We can't swap the card on file while a consultation on it is running — no charge was made. Pay with your saved card, or try again after the call.",
 };
 
 /**
@@ -540,8 +544,8 @@ export function PayAction({
         });
       }
       const message =
-        (start.error === 'settlement_outstanding'
-          ? errorCopy?.settlement_outstanding
+        (start.error === 'settlement_outstanding' || start.error === 'card_change_refused'
+          ? errorCopy?.[start.error]
           : undefined) ??
         START_ERROR_COPY[start.error] ??
         START_ERROR_COPY.stripe_error ??

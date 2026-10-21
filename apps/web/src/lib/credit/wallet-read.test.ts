@@ -410,7 +410,7 @@ describe('projectWalletSnapshot', () => {
 });
 
 describe('projectBookingTopUpWallet', () => {
-  it('carries the saved card and no low-balance preference', () => {
+  it('carries the saved card and the stored top-up figures, no mode', () => {
     const wallet = {
       id: 'wallet-1',
       lowBalanceMode: 'auto_topup',
@@ -427,6 +427,7 @@ describe('projectBookingTopUpWallet', () => {
 
     expect(projectBookingTopUpWallet(wallet)).toEqual({
       savedCard: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2028, mandateActive: false },
+      lowBalanceFigures: { topupReloadMinor: 30_000, topupThresholdMinor: 5_000 },
     });
   });
 
@@ -448,7 +449,10 @@ describe('projectBookingTopUpWallet', () => {
   });
 
   it('has no card when no wallet row exists', () => {
-    expect(projectBookingTopUpWallet(undefined)).toEqual({ savedCard: null });
+    expect(projectBookingTopUpWallet(undefined)).toEqual({
+      savedCard: null,
+      lowBalanceFigures: { topupReloadMinor: 10_000, topupThresholdMinor: 2_000 },
+    });
   });
 });
 

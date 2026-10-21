@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
-import { resolveFundingDisposition } from './funding-disposition';
+import { offersPayAfter, resolveFundingDisposition } from './funding-disposition';
 import { refusedView } from './funding-fixtures';
 
 describe('resolveFundingDisposition', () => {
@@ -64,5 +64,23 @@ describe('resolveFundingDisposition', () => {
         })
       )
     ).toBe('inline');
+  });
+});
+
+describe('offersPayAfter', () => {
+  it.each([
+    ['setup', true],
+    ['reserved', true],
+    ['hold', false],
+  ] as const)('for a manager on the %s arm is %s', (arm, expected) => {
+    expect(offersPayAfter(refusedView({ arm }))).toBe(expected);
+  });
+
+  it('is false for a member on every arm', () => {
+    for (const arm of ['setup', 'reserved', 'hold'] as const) {
+      expect(offersPayAfter(refusedView({ arm, canManageBilling: false, wallet: null }))).toBe(
+        false
+      );
+    }
   });
 });

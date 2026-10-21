@@ -119,6 +119,7 @@ import {
   getTopUpCreditStatusAction,
   armSavedCardMandateAction,
   startCardCaptureAction,
+  getWalletMandateStatusAction,
   removeSavedCardAction,
   saveBillingEmailAction,
   type StartPurchaseInput,
@@ -187,6 +188,61 @@ describe('credit actions', () => {
       expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
       // Provisioning is a WRITE — it must never run ahead of the capability gate.
       expect(mockEnsureForCompany).not.toHaveBeenCalled();
+    });
+
+    describe('card-swap guard', () => {
+      const withCard = {
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+        lowBalanceMode: 'notify_only',
+      };
+
+      it('refuses a new card over a stored card during a live session, before any write', async () => {
+        mockEnsureForCompany.mockResolvedValue(withCard);
+        mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+        const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
+
+        expect(res).toEqual({ ok: false, error: 'card_change_refused' });
+        expect(mockUpdateConfig).not.toHaveBeenCalled();
+        expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
+        expect(mockLogWarn).toHaveBeenCalledWith(
+          'Card swap refused on purchase — consultation live on the stored card',
+          expect.objectContaining({ walletId: 'wallet-1', companyId: 'company-1' })
+        );
+      });
+
+      it('lets a FIRST card through during a live session', async () => {
+        mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+        const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
+
+        expect(res).toMatchObject({ ok: true });
+      });
+
+      it('lets a saved card through during a live session', async () => {
+        mockEnsureForCompany.mockResolvedValue(withCard);
+        mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+        const res = await startPurchaseAction(
+          baseStartInput({
+            paymentMethodSource: 'saved_card',
+            config: undefined,
+            lowBalance: 'keep',
+          })
+        );
+
+        expect(res).toMatchObject({ ok: true });
+      });
+
+      it('lets a new card through when no session is live', async () => {
+        mockEnsureForCompany.mockResolvedValue(withCard);
+
+        const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
+
+        expect(res).toMatchObject({ ok: true });
+      });
     });
 
     it('rejects an out-of-range amount as invalid_input', async () => {
@@ -586,7 +642,9 @@ describe('credit actions', () => {
     it('⚠⚠ R4: REFUSES the card-backed → notify_only flip mid-session, and charges NOTHING', async () => {
       cardBackedWalletMidSession();
 
-      const res = await startPurchaseAction(baseStartInput({ config: notifyOnlyConfig() }));
+      const res = await startPurchaseAction(
+        baseStartInput({ config: notifyOnlyConfig(), paymentMethodSource: 'saved_card' })
+      );
 
       expect(res).toEqual({ ok: false, error: 'settlement_outstanding' });
       expect(mockUpdateConfig).not.toHaveBeenCalled();
@@ -601,6 +659,7 @@ describe('credit actions', () => {
       // the current mode straight back. This is the ordinary in-call top-up.
       const res = await startPurchaseAction(
         baseStartInput({
+          paymentMethodSource: 'saved_card',
           config: {
             lowBalanceMode: 'keep_going',
             topupReloadMinor: 30_000,
@@ -653,7 +712,7 @@ describe('credit actions', () => {
       });
       mockHasActiveSessionForWallet.mockResolvedValue(true);
 
-      const res = await startPurchaseAction(baseStartInput());
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
 
       expect(res).toMatchObject({ ok: true });
       expect(mockUpdateConfig).toHaveBeenCalledWith(
@@ -680,7 +739,9 @@ describe('credit actions', () => {
     it('R4: the refusal is WARNED with the wallet + company, never silently swallowed', async () => {
       cardBackedWalletMidSession();
 
-      await startPurchaseAction(baseStartInput({ config: notifyOnlyConfig() }));
+      await startPurchaseAction(
+        baseStartInput({ config: notifyOnlyConfig(), paymentMethodSource: 'saved_card' })
+      );
 
       expect(mockLogWarn).toHaveBeenCalledWith(
         'Low-balance disarm refused — a session is live on the wallet',
@@ -702,7 +763,11 @@ describe('credit actions', () => {
         for (const paymentMethodSource of ['new_card', 'saved_card'] as const) {
           vi.clearAllMocks();
           mockHasCapability.mockResolvedValue(true);
-          mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', lowBalanceMode: 'keep_going' });
+          mockEnsureForCompany.mockResolvedValue({
+            id: 'wallet-1',
+            lowBalanceMode: 'keep_going',
+            stripePaymentMethodId: null,
+          });
           mockCreatePurchaseIntent.mockResolvedValue({
             outcome: 'needs_client_confirmation',
             clientSecret: 'pi_secret',
@@ -754,7 +819,9 @@ describe('credit actions', () => {
           });
           expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1', 'user-1');
           expect(mockUpdateConfig).not.toHaveBeenCalled();
-          expect(mockHasActiveSessionForWallet).not.toHaveBeenCalled();
+          // Only the card-swap guard consults the session here, never the mode-disarm guard.
+          expect(mockHasActiveSessionForWallet).toHaveBeenCalledTimes(1);
+          expect(mockHasActiveSessionForWallet).toHaveBeenCalledWith('wallet-1');
         }
       });
 
@@ -830,7 +897,7 @@ describe('credit actions', () => {
         });
         mockHasActiveSessionForWallet.mockResolvedValue(true);
 
-        const res = await startPurchaseAction(keepInput());
+        const res = await startPurchaseAction(keepInput({ paymentMethodSource: 'saved_card' }));
 
         expect(res).toMatchObject({ ok: true });
         expect(mockCreatePurchaseIntent).toHaveBeenCalled();
@@ -1665,6 +1732,70 @@ describe('credit actions', () => {
         'Top-up credit status read failed',
         expect.objectContaining({ error: 'pool exhausted' })
       );
+    });
+  });
+
+  describe('getWalletMandateStatusAction', () => {
+    const live = {
+      id: 'wallet-1',
+      mandateStatus: 'active',
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+    };
+
+    it('gates on MANAGE_BILLING and reads nothing', async () => {
+      mockHasCapability.mockResolvedValue(false);
+      expect(await getWalletMandateStatusAction()).toEqual({ status: 'unauthorized' });
+      expect(mockFindByCompanyId).not.toHaveBeenCalled();
+    });
+
+    it('never provisions a wallet', async () => {
+      await getWalletMandateStatusAction();
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
+    });
+
+    it('is pending when there is no wallet row', async () => {
+      mockFindByCompanyId.mockResolvedValue(undefined);
+      expect(await getWalletMandateStatusAction()).toEqual({ status: 'pending' });
+    });
+
+    it('is active only when the mandate is live with a card on file', async () => {
+      mockFindByCompanyId.mockResolvedValue(live);
+      expect(await getWalletMandateStatusAction()).toEqual({ status: 'active' });
+
+      mockFindByCompanyId.mockResolvedValue({ ...live, stripePaymentMethodId: null });
+      expect(await getWalletMandateStatusAction()).toEqual({ status: 'pending' });
+    });
+
+    it('is failed for a failed mandate', async () => {
+      mockFindByCompanyId.mockResolvedValue({ ...live, mandateStatus: 'failed' });
+      expect(await getWalletMandateStatusAction()).toEqual({ status: 'failed' });
+    });
+
+    it.each(['pending', 'requires_action', null])(
+      'reports %s as pending',
+      async (mandateStatus) => {
+        mockFindByCompanyId.mockResolvedValue({ ...live, mandateStatus });
+        expect(await getWalletMandateStatusAction()).toEqual({ status: 'pending' });
+      }
+    );
+
+    it('logs and returns error when the read throws', async () => {
+      mockFindByCompanyId.mockRejectedValue(new Error('pool exhausted'));
+      expect(await getWalletMandateStatusAction()).toEqual({ status: 'error' });
+      expect(mockLogError).toHaveBeenCalledWith(
+        'Wallet mandate status read failed',
+        expect.objectContaining({ error: 'pool exhausted' })
+      );
+    });
+
+    it('refuses under impersonation', async () => {
+      mockRequireUser.mockResolvedValue({
+        id: 'user-1',
+        isImpersonating: true,
+        impersonatorUserId: 'admin-1',
+      });
+      expect(await getWalletMandateStatusAction()).toEqual({ status: 'unauthorized' });
     });
   });
 

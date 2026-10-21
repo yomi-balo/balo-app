@@ -303,13 +303,19 @@ export function projectWalletSnapshot(wallet: CreditWallet): WalletSnapshot {
 }
 
 /**
- * Project a wallet row (or its absence) into what the booking flow's inline top-up needs: the
- * chargeable saved card. The booking top-up is a pure top-up that leaves the low-balance
- * setting alone, so no preference is carried. A company with no wallet row yet has no card.
- * Never the row itself.
+ * Project a wallet row (or its absence) into what the booking flow's inline funding needs: the
+ * chargeable saved card and the stored top-up figures (the defaults when there is no row), which
+ * Pay after sends back unchanged when it switches the mode. The top-up method itself leaves the
+ * low-balance setting alone. A company with no wallet row yet has no card. Never the row itself.
  */
 export function projectBookingTopUpWallet(wallet: CreditWallet | undefined): BookingTopUpWallet {
-  return { savedCard: wallet === undefined ? null : projectSavedCard(wallet) };
+  return {
+    savedCard: wallet === undefined ? null : projectSavedCard(wallet),
+    lowBalanceFigures: {
+      topupReloadMinor: wallet?.topupReloadMinor ?? DEFAULT_TOPUP_RELOAD_MINOR,
+      topupThresholdMinor: wallet?.topupThresholdMinor ?? DEFAULT_TOPUP_THRESHOLD_MINOR,
+    },
+  };
 }
 
 // ── BAL-522: the billing-email projection ────────────────────────────────────────────────

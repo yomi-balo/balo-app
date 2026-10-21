@@ -58,7 +58,8 @@ import {
   type BookingDraftScope,
 } from './booking-draft';
 import { findFirstInvalidField } from './focus-first-invalid';
-import { BookingFundingBlock, type FundedTopUp } from './funding/booking-funding-block';
+import { BookingFundingBlock } from './funding/booking-funding-block';
+import type { FundedVia } from '@/lib/booking/actions/booking-funding-types';
 import { resolveFundingDisposition, type RefusedFundingView } from './funding/funding-disposition';
 import {
   BALANCE_NOW_COVERS_COPY,
@@ -66,7 +67,7 @@ import {
   fundedHardFailureBody,
   fundedPartialFollowUp,
   fundedSessionFollowUp,
-  staleSlotTopUpFollowUp,
+  staleSlotFundedFollowUp,
 } from './funding/funding-copy';
 import { useBookingFunding } from './funding/use-booking-funding';
 import { guardStripeOutsideInteraction } from './funding/stripe-outside-guard';
@@ -548,30 +549,27 @@ function inlineRefusal(view: BookingFundingView | null): RefusedFundingView | nu
   return resolveFundingDisposition(view) === 'inline' ? view : null;
 }
 
-/** The line under the stale-slot banner once a top-up has landed, else `null`. */
-function staleSlotFollowUp(staleSlot: boolean, topUp: FundedTopUp | null): string | null {
-  if (!staleSlot || topUp === null) return null;
-  return staleSlotTopUpFollowUp(topUp.creditedMinor, topUp.companyName);
+/** The line under the stale-slot banner once funding has landed, else `null`. */
+function staleSlotFollowUp(staleSlot: boolean, funded: FundedVia | null): string | null {
+  if (!staleSlot || funded === null) return null;
+  return staleSlotFundedFollowUp(funded);
 }
 
-/** A line about the top-up that landed, built by `build`, or `null` when none did. */
-function fundedLine(
-  topUp: FundedTopUp | null,
-  build: (creditedMinor: number, companyName: string | null) => string
-): string | null {
-  return topUp === null ? null : build(topUp.creditedMinor, topUp.companyName);
+/** A line about the funding that landed, built by `build`, or `null` when none did. */
+function fundedLine(funded: FundedVia | null, build: (funded: FundedVia) => string): string | null {
+  return funded === null ? null : build(funded);
 }
 
 /**
  * The hard-failure panel's copy: the one set for this failure when there is one, else the
- * landed-top-up body (which never says nothing was charged), else the panel's own defaults.
+ * landed-funding body (which never says nothing was charged), else the panel's own defaults.
  */
 function hardFailureCopy(
   failure: HardFailurePanelCopy | null,
-  topUp: FundedTopUp | null
+  funded: FundedVia | null
 ): HardFailurePanelCopy | null {
   if (failure !== null) return failure;
-  const body = fundedLine(topUp, fundedHardFailureBody);
+  const body = fundedLine(funded, fundedHardFailureBody);
   return body === null ? null : { body };
 }
 
@@ -695,8 +693,8 @@ export function BookingFlowDialog(
   const [fundingCaseSaved, setFundingCaseSaved] = useState<CaseSavedNote | null>(null);
   /** BAL-608 — the company a full-panel setup refusal checked, for the panel's switch-and-top-up. */
   const [fundingCompany, setFundingCompany] = useState<BookingSetupFailure['company'] | null>(null);
-  /** BAL-608 — what the last landed top-up left in the balance, for the stale-slot follow-up. */
-  const [fundedTopUp, setFundedTopUp] = useState<FundedTopUp | null>(null);
+  /** BAL-608 — how the last funding landed, for the stale-slot follow-up. */
+  const [funded, setFunded] = useState<FundedVia | null>(null);
   /** BAL-608 — true while the fields on screen were restored from this device. */
   const [draftRestored, setDraftRestored] = useState(false);
   /** BAL-608 — true while a top-up, or the booking after it, locks the time, company and case. */
@@ -828,7 +826,7 @@ export function BookingFlowDialog(
     setIsSwitching(false);
     setFundingCaseSaved(null);
     setFundingCompany(null);
-    setFundedTopUp(null);
+    setFunded(null);
     setDraftRestored(false);
     setFundingBusy(false);
     setSavedCompanyName(null);
@@ -936,7 +934,7 @@ export function BookingFlowDialog(
       }
 
       setStaleSlot(false);
-      setFundedTopUp(null);
+      setFunded(null);
       setPhase('confirm');
     },
     [slot, recovered]
@@ -944,7 +942,7 @@ export function BookingFlowDialog(
 
   const handleChangeTime = useCallback(() => {
     setStaleSlot(false);
-    setFundedTopUp(null);
+    setFunded(null);
     setPhase('pick_time');
   }, []);
 
@@ -1131,7 +1129,7 @@ export function BookingFlowDialog(
 
   /**
    * Resolves `true` once the consultation is booked. Every other end (a validation stop, a
-   * refusal, a thrown error) resolves `false`, which is what lets a funded top-up know whether
+   * refusal, a thrown error) resolves `false`, which is what lets a funded booking know whether
    * its booking landed.
    */
   const handleSubmit = useCallback(async (): Promise<boolean> => {
@@ -1202,7 +1200,7 @@ export function BookingFlowDialog(
         description: `${result.durationMinutes}-minute consultation with ${expert.firstName ?? expert.name} confirmed.`,
       });
       if (draftScope !== null) clearBookingDrafts(draftScope);
-      setFundedTopUp(null);
+      setFunded(null);
       setFundingCaseSaved(null);
       setPhase('booked');
       return true;
@@ -1403,8 +1401,8 @@ export function BookingFlowDialog(
    * refusal re-reads it on its own way out, so that read is not repeated here.
    */
   const handleFunded = useCallback(
-    async (topUp: FundedTopUp): Promise<boolean> => {
-      setFundedTopUp(topUp);
+    async (via: FundedVia): Promise<boolean> => {
+      setFunded(via);
       refusalReadFundingRef.current = false;
       const booked = await handleSubmit();
       if (!booked && !refusalReadFundingRef.current) await refreshFunding();
@@ -1561,7 +1559,7 @@ export function BookingFlowDialog(
                 viewerEmailDomain={viewerEmailDomain}
                 clientCompanyName={clientCompanyName}
                 staleSlot={staleSlot}
-                staleSlotFollowUp={staleSlotFollowUp(staleSlot, fundedTopUp)}
+                staleSlotFollowUp={staleSlotFollowUp(staleSlot, funded)}
                 fundingSection={
                   inlineFundingView === null ? null : (
                     <BookingFundingBlock
@@ -1622,7 +1620,7 @@ export function BookingFlowDialog(
           {phase === 'error_hard' && (
             <motion.div key="error_hard" {...pageTransition}>
               <HardFailurePanel
-                {...hardFailureCopy(hardFailure, fundedTopUp)}
+                {...hardFailureCopy(hardFailure, funded)}
                 onRetry={() => {
                   setHardFailure(null);
                   setPhase('confirm');
@@ -1644,7 +1642,7 @@ export function BookingFlowDialog(
             <motion.div key="error_session" {...pageTransition}>
               <SessionExpiredPanel
                 caseTitle={sessionExpiredCaseTitle}
-                followUp={fundedLine(fundedTopUp, fundedSessionFollowUp)}
+                followUp={fundedLine(funded, fundedSessionFollowUp)}
                 onSignIn={handleReauthenticate}
                 onClose={onClose}
               />
@@ -1654,7 +1652,7 @@ export function BookingFlowDialog(
             <motion.div key="error_partial" {...pageTransition}>
               <PartialFailurePanel
                 caseTitle={recovered.title}
-                followUp={fundedLine(fundedTopUp, fundedPartialFollowUp)}
+                followUp={fundedLine(funded, fundedPartialFollowUp)}
                 onRetry={handleRetryAfterPartial}
                 onChooseDifferentTime={handleChooseDifferentTimeAfterPartial}
                 onFinishLater={onClose}

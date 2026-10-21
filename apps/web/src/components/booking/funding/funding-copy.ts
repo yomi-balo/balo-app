@@ -1,5 +1,10 @@
 import { TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
 import { GENERIC_NO_CHARGE_COPY } from '@/components/billing/top-up/PayAction';
+import { CARD_BACKED_MODE_TITLE } from '@/components/billing/top-up/LowBalanceModePicker';
+import { describeSavedCard } from '@/components/billing/top-up/SavedCardRow';
+import type { SavedCard } from '@/components/billing/top-up/types';
+import type { BookingFundingMethodProperty } from '@balo/analytics/events';
+import type { FundedVia } from '@/lib/booking/actions/booking-funding-types';
 import {
   formatAud,
   formatAudShort,
@@ -9,7 +14,8 @@ import { BALANCE_PANEL_COPY, companyLabels, type CompanyLabels } from '../bookin
 import type { RefusedFundingView } from './funding-disposition';
 
 /**
- * ⚠ UNCLEARED MJ CHECKPOINT (BAL-608 AC13). Every string in this module is placeholder copy
+ * ⚠ UNCLEARED MJ CHECKPOINT (BAL-608 AC13, extended to BAL-609 by {@link PAY_AFTER_COPY},
+ * {@link payAfterConsentLine} and the pay-after arms of the funded-line functions). Every string in this module is placeholder copy
  * awaiting the owner's sign-off, EXCEPT the manager and heading strings of the reserved and hold
  * arms, which are {@link BALANCE_PANEL_COPY} (copy v2.1, owner-approved) and are read from it,
  * never retyped here.
@@ -25,6 +31,9 @@ import type { RefusedFundingView } from './funding-disposition';
  *    billing admins know". No second notice goes out — Save's notice shares the gate's hourly
  *    `booking-funding:{company}:{booker}:{kind}:{hour}` correlationId and is deduped — so only
  *    the tense is in question.
+ *  · {@link payAfterConsentLine}'s "Change it anytime in Billing settings" (and the help guide's
+ *    "change that setting any time") overclaims: BAL-523 refuses switching back to Just notify me
+ *    while a consultation is live.
  */
 
 export interface FundingBlockCopy {
@@ -60,19 +69,47 @@ function topUpLandedLine(creditedMinor: number, companyName: string | null): str
   return `Your top-up went through and ${formatAud(creditedMinor)} is in ${co.mid} balance.`;
 }
 
-/** The hard-failure panel body after a top-up landed: it never claims nothing was charged. */
-export function fundedHardFailureBody(creditedMinor: number, companyName: string | null): string {
-  return `We couldn't finish your booking. ${topUpLandedLine(creditedMinor, companyName)} Trying again won't charge you again.`;
+/** The company by name, or "your team" when it has none. */
+function partyName(companyName: string | null): string {
+  return companyName ?? 'your team';
 }
 
-/** The line under the partial-failure panel after a top-up landed. */
-export function fundedPartialFollowUp(creditedMinor: number, companyName: string | null): string {
-  return `${topUpLandedLine(creditedMinor, companyName)} Trying again won't charge you again.`;
+/** The card a Pay-after booking set up, as it reads at the start of a sentence. */
+function payAfterCardLead(card: SavedCard | null): string {
+  return card === null ? 'Your card' : describeSavedCard(card);
 }
 
-/** The line under the session-expired panel after a top-up landed. */
-export function fundedSessionFollowUp(creditedMinor: number, companyName: string | null): string {
-  return `${topUpLandedLine(creditedMinor, companyName)} Sign in and you won't be charged again.`;
+/** What landed before a later step failed: the top-up, or the card set up to pay after the call. */
+function landedLine(funded: FundedVia): string {
+  if (funded.method === 'topup') return topUpLandedLine(funded.creditedMinor, funded.companyName);
+  return `${payAfterCardLead(funded.card)} is set up for ${partyName(funded.companyName)}. Nothing was charged.`;
+}
+
+/** The hard-failure panel body after funding landed: it never claims nothing was charged for a top-up. */
+export function fundedHardFailureBody(funded: FundedVia): string {
+  const tail =
+    funded.method === 'topup'
+      ? "Trying again won't charge you again."
+      : 'Try again when you are ready.';
+  return `We couldn't finish your booking. ${landedLine(funded)} ${tail}`;
+}
+
+/** The line under the partial-failure panel after funding landed. */
+export function fundedPartialFollowUp(funded: FundedVia): string {
+  const tail =
+    funded.method === 'topup'
+      ? "Trying again won't charge you again."
+      : 'Try again when you are ready.';
+  return `${landedLine(funded)} ${tail}`;
+}
+
+/** The line under the session-expired panel after funding landed. */
+export function fundedSessionFollowUp(funded: FundedVia): string {
+  const tail =
+    funded.method === 'topup'
+      ? "Sign in and you won't be charged again."
+      : 'Sign in and pick up where you left off.';
+  return `${landedLine(funded)} ${tail}`;
 }
 
 /** The body of the saved-for-later result, by whether the typed details were kept on this device. */
@@ -98,6 +135,8 @@ export const BOOKING_PAY_ERROR_COPY = {
   auth_failed:
     "Your bank didn't confirm the payment, so nothing was charged. Try again or use a different card.",
   settlement_outstanding: GENERIC_NO_CHARGE_COPY,
+  card_change_refused:
+    "There's a consultation running on the card on file, so it can't be swapped right now. Nothing was charged. Pay with the saved card, or try again after the call.",
 } as const;
 
 /** The payment succeeded but the balance has not caught up yet. Never invites a second payment. */
@@ -106,10 +145,87 @@ export function creditPendingCopy(companyName: string | null): string {
   return `Your payment went through and is being added to ${co.mid} balance. Press Book now to finish — you won't be charged again.`;
 }
 
-/** After the top-up landed but the time was taken: the money is kept, and the line says so. */
-export function staleSlotTopUpFollowUp(creditedMinor: number, companyName: string | null): string {
+/** After funding landed but the time was taken: what is kept is kept, and the line says so. */
+export function staleSlotFundedFollowUp(funded: FundedVia): string {
+  const co = companyLabels(funded.companyName);
+  if (funded.method === 'topup') {
+    return `Your top-up went through, so ${formatAud(funded.creditedMinor)} is in ${co.mid} balance for the next time you choose.`;
+  }
+  return `${payAfterCardLead(funded.card)} is set up and ready for the next time you choose.`;
+}
+
+const SETUP_FAILED_LINE =
+  "Your card couldn't be set up, so nothing was charged and nothing was booked.";
+
+const SWITCHED_NOTE =
+  'Your low-balance setting is now Keep me going, and it only takes effect once a card is confirmed.';
+
+/** Pay after the call: the picker cards, the CTAs, the stage text and the failure lines. */
+export const PAY_AFTER_COPY = {
+  methodGroupLabel: 'How to pay',
+  topup: {
+    title: 'Top up now',
+    description: (companyName: string | null): string =>
+      `Add funds to ${companyLabels(companyName).mid} balance. Each consultation draws from it.`,
+  },
+  payAfter: {
+    title: 'Pay after the call',
+    description: 'No charge now. Time beyond the balance is charged to a card after each call.',
+  },
+  ctaSaved: 'Book and pay after the call',
+  ctaNew: 'Add card & book',
+  cardSaved: 'Your new card is saved. Press below to finish setting up and book.',
+  stage: {
+    setting_up_saved: 'Setting up…',
+    setting_up_new: 'Saving your card…',
+    authenticating: 'Waiting for your bank…',
+    awaiting_mandate: 'Confirming your card…',
+    booking: 'Booking…',
+  },
+  errors: {
+    declined:
+      'Your card was declined, so nothing was charged and nothing was booked. Try a different card or check with your bank.',
+    auth_failed:
+      "Your bank didn't confirm the card, so nothing was charged and nothing was booked. Try again or use a different card.",
+    setup_failed:
+      "Your card couldn't be set up, so nothing was charged and nothing was booked. What you've entered is still here.",
+    setup_failed_saved: `${SETUP_FAILED_LINE} ${SWITCHED_NOTE}`,
+    mode_failed:
+      "Your card is saved, but we couldn't switch the low-balance setting to Keep me going, so nothing was booked. Nothing was charged. Try again.",
+    settlement_outstanding:
+      "There's consultation time in progress on the card on file. Once that call ends you can add a different card. Nothing was charged.",
+    error: GENERIC_NO_CHARGE_COPY,
+  },
+  switchedNote: SWITCHED_NOTE,
+  unconfirmed:
+    "We're still confirming your card with your bank. Nothing has been charged and nothing is booked yet.",
+  checkAgain: 'Check again',
+  switchedToast: (companyName: string | null): string =>
+    `${CARD_BACKED_MODE_TITLE.keep_going} is on for ${partyName(companyName)}.`,
+} as const;
+
+/**
+ * The consent shown before the press. It describes what the booking changes and what the card is
+ * charged for; it never says the setting is what makes the card chargeable.
+ */
+export function payAfterConsentLine(companyName: string | null, card: SavedCard | null): string {
   const co = companyLabels(companyName);
-  return `Your top-up went through, so ${formatAud(creditedMinor)} is in ${co.mid} balance for the next time you choose.`;
+  const cardName = card === null ? 'this card' : describeSavedCard(card);
+  return `By booking, you switch ${co.mid} low-balance setting to ${CARD_BACKED_MODE_TITLE.keep_going} and let Balo charge ${cardName} for consultation time beyond the balance, after each call. Change it anytime in Billing settings.`;
+}
+
+/** The header band while "Pay after the call" is selected: no top-up figure, on either arm. */
+function payAfterBandCopy(view: RefusedFundingView): FundingBlockCopy {
+  if (view.arm === 'reserved') {
+    return {
+      heading: 'Pay after the call for this one',
+      body: `Part of ${companyLabels(view.company.name).mid} balance is set aside for upcoming consultations. Choose a card to charge after the call and this one books straight away. Nothing is charged now.`,
+    };
+  }
+  return {
+    heading: 'Pay after the call',
+    body: 'Choose a card to charge after the call and this one books straight away. Nothing is charged now.',
+  };
 }
 
 type Audience = 'manager' | 'member';
@@ -198,7 +314,12 @@ const COPY: Readonly<Record<RefusedFundingView['arm'], Readonly<Record<Audience,
  * member who can only save the booking for later). `draftKept` says whether Save keeps the typed
  * details on this device, which a booking on an already-chosen case does not.
  */
-export function fundingBlockCopy(view: RefusedFundingView, draftKept = true): FundingBlockCopy {
+export function fundingBlockCopy(
+  view: RefusedFundingView,
+  draftKept = true,
+  method: BookingFundingMethodProperty = 'topup'
+): FundingBlockCopy {
+  if (method === 'pay_after') return payAfterBandCopy(view);
   const company = companyLabels(view.company.name);
   const figureMinor =
     view.arm === 'reserved'

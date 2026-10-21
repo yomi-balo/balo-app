@@ -4,6 +4,7 @@ import {
   BOOKING_FUNDING_BLOCK_REASONS,
   type BookingEventMap,
   type BookingFundingFailureReason,
+  type BookingFundingMethodProperty,
 } from './booking';
 
 describe('BOOKING_EVENTS', () => {
@@ -20,6 +21,7 @@ describe('BOOKING_EVENTS', () => {
       'FLOW_OPENED',
       'FUNDED',
       'FUNDING_FAILED',
+      'FUNDING_METHOD_SELECTED',
       'FUNDING_SHOWN',
       'GUESTS_INVITED',
       'RESCHEDULE_PROPOSAL_ANSWERED',
@@ -50,6 +52,7 @@ describe('BOOKING_EVENTS', () => {
     expect(BOOKING_EVENTS.FUNDING_SHOWN).toBe('booking_funding_shown');
     expect(BOOKING_EVENTS.FUNDED).toBe('booking_funded');
     expect(BOOKING_EVENTS.FUNDING_FAILED).toBe('booking_funding_failed');
+    expect(BOOKING_EVENTS.FUNDING_METHOD_SELECTED).toBe('booking_funding_method_selected');
     expect(BOOKING_EVENTS.SAVED_FOR_LATER).toBe('booking_saved_for_later');
   });
 
@@ -78,12 +81,31 @@ describe('BOOKING_FUNDING_BLOCK_REASONS', () => {
 });
 
 describe('BookingFundingFailureReason', () => {
-  it('names every way an inline top-up can end without a booked consultation', () => {
+  it('names every way an inline funding attempt can end without a booked consultation', () => {
     expectTypeOf<
-      'declined' | 'auth_failed' | 'credit_timeout' | 'booking_failed' | 'error'
+      | 'declined'
+      | 'auth_failed'
+      | 'credit_timeout'
+      | 'booking_failed'
+      | 'setup_failed'
+      | 'mandate_timeout'
+      | 'settlement_outstanding'
+      | 'error'
     >().toEqualTypeOf<BookingFundingFailureReason>();
     expectTypeOf<
       BookingEventMap[typeof BOOKING_EVENTS.FUNDING_FAILED]['reason']
     >().toEqualTypeOf<BookingFundingFailureReason>();
+  });
+});
+
+describe('BookingFundingMethodProperty', () => {
+  it('is the funded and method-selected method vocabulary', () => {
+    expectTypeOf<'topup' | 'pay_after'>().toEqualTypeOf<BookingFundingMethodProperty>();
+    expectTypeOf<
+      BookingEventMap[typeof BOOKING_EVENTS.FUNDED]['method']
+    >().toEqualTypeOf<BookingFundingMethodProperty>();
+    expectTypeOf<
+      BookingEventMap[typeof BOOKING_EVENTS.FUNDING_METHOD_SELECTED]['method']
+    >().toEqualTypeOf<BookingFundingMethodProperty>();
   });
 });
