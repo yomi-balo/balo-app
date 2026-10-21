@@ -32,6 +32,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startCalendarSubscriptionReconcileWorker },
     { startCalendarSubscriptionMonitorWorker, registerCalendarSubscriptionMonitorCron },
     { startMeetingCalendarAmendWorker },
+    { startBookingCalendarProjectionWorker },
     { startRecordingCaptureWorker },
     { startRecordingIngestWorker },
     { startRecordingCleanupSourceWorker },
@@ -66,6 +67,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./calendar-subscription-reconcile.js'),
     import('./calendar-subscription-monitor.js'),
     import('./meeting-calendar-amend.js'),
+    import('./booking-calendar-projection-job.js'),
     import('./recording-capture.js'),
     import('./recording-ingest.js'),
     import('./recording-cleanup-source.js'),
@@ -148,6 +150,9 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // BAL-409 — the retrying, converging Apiroc calendar amend for a client-initiated reschedule.
   // Trigger-driven (enqueued from `rescheduleMeeting`'s post-commit block), no cron of its own.
   startMeetingCalendarAmendWorker();
+  // BAL-607: the booking calendar projection, moved off the `POST /meetings` request path.
+  // Enqueued from `bookAndProvisionMeeting` on a fresh create only, no cron.
+  startBookingCalendarProjectionWorker();
   // BAL-473 (ADR-1013 amendment): the recording pipeline workers — event-triggered, no cron.
   startRecordingCaptureWorker();
   startRecordingIngestWorker();

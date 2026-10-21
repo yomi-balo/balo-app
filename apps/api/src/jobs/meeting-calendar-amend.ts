@@ -59,16 +59,21 @@ const MAX_RATE_LIMIT_DEFERRALS = 10;
  *
  * `audit_events` is append-only, so its row id is unique per SUCCESSFUL MOVE. Retries of the same
  * move still collapse to one amend (the point of a jobId); genuinely distinct moves never do.
+ *
+ * `amendKey` is per WRITE: either a `meeting.rescheduled` audit id, or
+ * `bookingCalendarProjectionJobId(meetingId)` when the booking projection job finds the window
+ * moved while it ran (one projection per meeting, ever). The job id stays
+ * `buildJobId('meeting-calendar-amend', amendKey)`.
  */
 export function enqueueMeetingCalendarAmend(
   meetingId: string,
   expertProfileId: string,
-  rescheduleAuditId: string
+  amendKey: string
 ): Promise<void> {
   const queue = getQueue(MEETING_CALENDAR_AMEND_QUEUE);
   return queue
     .add('amend', { meetingId, expertProfileId } satisfies MeetingCalendarAmendJobData, {
-      jobId: buildJobId('meeting-calendar-amend', rescheduleAuditId),
+      jobId: buildJobId('meeting-calendar-amend', amendKey),
       attempts: 5,
       backoff: { type: 'exponential', delay: 10_000 },
       removeOnComplete: { count: 1000 },
@@ -101,7 +106,7 @@ export async function processMeetingCalendarAmend(
   // 1. Missing or soft-deleted ⇒ converged, nothing to amend.
   const meeting = await meetingsRepository.findById(meetingId);
   if (meeting === undefined) {
-    job.log(`Meeting ${meetingId} not found (or soft-deleted) — converged, nothing to amend`);
+    await job.log(`Meeting ${meetingId} not found (or soft-deleted) — converged, nothing to amend`);
     return;
   }
 
@@ -111,7 +116,7 @@ export async function processMeetingCalendarAmend(
   //    post-commit. It publishes the `METHOD:CANCEL` fan-out, calls `deleteConsultationEvent`
   //    and retires every party's row. A cancelled meeting is still not this job's to AMEND.
   if (meeting.status === 'cancelled') {
-    job.log(
+    await job.log(
       `Meeting ${meetingId} is cancelled — the vendor calendar delete belongs to withdrawMeetingCalendarProjection, not this job`
     );
     return;
@@ -133,7 +138,7 @@ export async function processMeetingCalendarAmend(
   //    address a vendor event that does not exist.
   const row = await meetingCalendarEventsRepository.findLiveExpertProviderEvent(meetingId);
   if (row === undefined) {
-    job.log(
+    await job.log(
       `Meeting ${meetingId} has no live expert-party PROVIDER event — converged, nothing to amend`
     );
     return;
@@ -160,7 +165,7 @@ export async function processMeetingCalendarAmend(
       startAt: meeting.scheduledStart,
       endAt: meeting.scheduledEnd,
     });
-    job.log(`Meeting ${meetingId} calendar event amended to the current window`);
+    await job.log(`Meeting ${meetingId} calendar event amended to the current window`);
   } catch (error) {
     await handleAmendError(job, error, { meetingId, expertProfileId }, token);
   }

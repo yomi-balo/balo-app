@@ -23,7 +23,7 @@ import {
  * withhold a calendar entry from a meeting that legitimately exists.
  *
  * ⚠ NEVER THROWS. The booking has already committed by the time anything here runs
- * (`provision-meeting.ts`'s post-commit projection), so every failure degrades to `undefined`
+ * (`jobs/booking-calendar-projection-job.ts`'s projection), so every failure degrades to `undefined`
  * plus a log line. A best-effort projection must never be able to reject the promise a
  * committed booking returns on.
  */

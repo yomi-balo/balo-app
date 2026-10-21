@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
+import type { Job } from 'bullmq';
 import type { FastifyBaseLogger } from 'fastify';
 
 /**
@@ -66,6 +67,10 @@ import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import type { ProvisionedRoom, RoomProvisioner } from '../daily/rooms.js';
 import { seedBookingParties, type BookingParties } from '../../test/fixtures/booking-graph.js';
 import { authorizeMeetingBooking } from './authorize-meeting-booking.js';
+import {
+  processBookingCalendarProjection,
+  type BookingCalendarProjectionJobData,
+} from '../../jobs/booking-calendar-projection-job.js';
 import { rescheduleMeeting } from './meeting-availability.js';
 import { bookAndProvisionMeeting, provisionMeeting } from './provision-meeting.js';
 
@@ -117,6 +122,31 @@ const USER_ID = 'booking-actor';
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+/** Every `project-booking-calendar` enqueue so far, drained or not. */
+function projectionEnqueues(): unknown[][] {
+  return mockQueueAdd.mock.calls.filter((call) => call[0] === 'project-booking-calendar');
+}
+
+const drainedProjectionCalls = new WeakSet<object>();
+
+/**
+ * Runs the calendar projection job for every booking enqueued since the last drain, in-process.
+ * Booking no longer projects inline (BAL-607), so a test that reads calendar rows or invites
+ * must drain first. Each enqueue is run once; the invites the job publishes land on the same
+ * mocked queue the assertions already read.
+ */
+async function drainBookingCalendarProjections(): Promise<void> {
+  const pending = projectionEnqueues().filter((call) => !drainedProjectionCalls.has(call));
+  for (const call of pending) {
+    drainedProjectionCalls.add(call);
+    const [, data, opts] = call as [string, BookingCalendarProjectionJobData, { jobId: string }];
+    await processBookingCalendarProjection({
+      id: opts.jobId,
+      data,
+    } as Job<BookingCalendarProjectionJobData>);
+  }
+}
 
 // ── The cases ────────────────────────────────────────────────────────────────
 
@@ -664,6 +694,8 @@ describe('BAL-433 — every bookable context projects, and the ICS fallback is p
         { provisioner: recordingProvisioner() }
       );
 
+      await drainBookingCalendarProjections();
+
       // ⚠ BAL-475 — every fresh booking now writes TWO live rows: the pre-existing EXPERT-party
       // row (BAL-433) and the new CLIENT-party row (`recordClientCalendarEntry`).
       const rows = await calendarRowsFor(result.meeting.id);
@@ -727,6 +759,7 @@ describe('BAL-433 — every bookable context projects, and the ICS fallback is p
       );
       meetingIds.push(result.meeting.id);
     }
+    await drainBookingCalendarProjections();
 
     expect(new Set(meetingIds).size).toBe(5);
     // BAL-475 — each of the 5 bookings now writes 2 rows (client + expert) ⇒ 10 total, 10
@@ -763,6 +796,7 @@ describe('BAL-433 — every bookable context projects, and the ICS fallback is p
       log,
       { provisioner: recordingProvisioner() }
     );
+    await drainBookingCalendarProjections();
 
     await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(result.meeting.id, 'expert');
     await meetingCalendarEventsRepository.recordIcsDelivery({
@@ -855,6 +889,7 @@ describe('BAL-475 — calendar invites against a real database', () => {
       log,
       { provisioner: recordingProvisioner() }
     );
+    await drainBookingCalendarProjections();
 
     const invites = calendarInviteEnqueues();
     expect(invites).toHaveLength(2);
@@ -883,6 +918,7 @@ describe('BAL-475 — calendar invites against a real database', () => {
       log,
       { provisioner: recordingProvisioner() }
     );
+    await drainBookingCalendarProjections();
 
     const invites = calendarInviteEnqueues();
     expect(invites).toHaveLength(2);
@@ -907,9 +943,13 @@ describe('BAL-475 — calendar invites against a real database', () => {
     };
 
     await bookAndProvisionMeeting(input, log, { provisioner: recordingProvisioner() });
+    expect(projectionEnqueues()).toHaveLength(1);
+    await drainBookingCalendarProjections();
     expect(calendarInviteEnqueues()).toHaveLength(2);
 
     await bookAndProvisionMeeting(input, log, { provisioner: recordingProvisioner() });
+    expect(projectionEnqueues()).toHaveLength(1);
+    await drainBookingCalendarProjections();
     expect(calendarInviteEnqueues()).toHaveLength(2);
   });
 
@@ -930,6 +970,7 @@ describe('BAL-475 — calendar invites against a real database', () => {
       log,
       { provisioner: recordingProvisioner() }
     );
+    await drainBookingCalendarProjections();
 
     const guestExpiresAt = new Date(END.getTime() + 24 * 60 * 60 * 1000);
     const [admittedGuest] = await meetingGuestsRepository.createMany({
@@ -1051,6 +1092,7 @@ describe('BAL-475 — calendar invites against a real database', () => {
       log,
       { provisioner: recordingProvisioner() }
     );
+    await drainBookingCalendarProjections();
     const expertProfile = await expertsRepository.findDisplayProfileById(parties.expertProfileId);
     if (expertProfile === undefined) throw new Error('fixture: expert profile not found');
 

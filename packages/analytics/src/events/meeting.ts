@@ -336,9 +336,10 @@ export interface MeetingServerEventMap {
   };
 
   /**
-   * BAL-433 — one booking, one party, one calendar-delivery outcome. Fires once per FRESH
-   * create, immediately after the projection returns; never on an idempotent replay (the
-   * replay path never reaches the projection at all).
+   * BAL-433 — one booking, one party, one calendar-delivery outcome. Emitted by
+   * `jobs/booking-calendar-projection-job.ts`, once per party per fresh booking, immediately
+   * after the projection returns; never on an idempotent replay (the replay path never
+   * enqueues the job).
    *
    * ⚠ NO PII. Ids, one context label and two closed enums — no title, no company name, no
    * address, no provider name.
@@ -347,8 +348,8 @@ export interface MeetingServerEventMap {
     meeting_id: string;
     context_type: MeetingBookingContextType;
     /**
-     * `'expert'` IN SLICE 1 ONLY. Since BAL-475, `runPostCommitCalendarSteps`
-     * (`services/meetings/provision-meeting.ts`) emits this event TWICE per fresh booking —
+     * `'expert'` IN SLICE 1 ONLY. Since BAL-475, the projection job
+     * (`jobs/booking-calendar-projection-job.ts`) emits this event TWICE per fresh booking —
      * once per party — because `calendar_connections` is keyed on `expert_profile_id`, so the
      * CLIENT party can only ever be delivered an ICS (`recordClientCalendarEntry`, always
      * `'ics'` or `'failed'` — see `delivery` below), never a `provider_event`.
@@ -358,8 +359,8 @@ export interface MeetingServerEventMap {
      * `provider_event` — written into a connected calendar (EXPERT party only). `ics` —
      * ADR-1044 Ruling 1: no writable connection, so the condition is RECORDED and BAL-475
      * delivers the ICS from it; also the ONLY value the CLIENT party ever reports on success.
-     * `skipped` — no expert, or no live context/company to describe (EXPERT party only; the
-     * client party never skips). `failed` — the projection (or `recordClientCalendarEntry`)
+     * `skipped` — no expert, or no live context/company to describe (EXPERT party), or, for
+     * BOTH parties, the meeting was cancelled or removed before the job ran. `failed` — the projection (or `recordClientCalendarEntry`)
      * threw and was swallowed; the booking still stands.
      *
      * ⚠ SINCE BAL-475 (U3, ADR-1044 Ruling 1 amendment), `failed` ALSO covers an EXPERT party

@@ -10,6 +10,11 @@
  * non-case context, a `match`-routed discovery) is `null`, never an absent key, so one Axiom
  * query covers every booking.
  *
+ * `serviceReplayProbe` is the booking service's own idempotency lookup (the route's `replayProbe`
+ * is a separate, earlier read), recorded only when a key is present. `bookingTransaction` times the
+ * `bookMeeting` call alone and is recorded only after a fresh create, so neither replay path
+ * records it.
+ *
  * ⚠ DURATIONS ONLY. The line this feeds carries ids and closed enums alongside these numbers
  * (ADR-1044 §4); nothing in this module can carry a name, an email or a vendor payload.
  */
@@ -21,9 +26,9 @@ export const BOOKING_PHASES = [
   'caseFunding',
   'expertGuards',
   'vendorFreeBusy',
+  'serviceReplayProbe',
   'bookingTransaction',
   'venue',
-  'calendar',
 ] as const;
 
 export type BookingPhase = (typeof BOOKING_PHASES)[number];
@@ -47,8 +52,11 @@ export interface BookingPhaseTimer extends BookingPhaseRecorder {
 
 /**
  * Starts the request clock. `totalMs` is `now()` at `fields()` time minus `now()` at creation, so
- * work outside a named phase (the per-user rate limit, the body parse, the window check) counts
- * in the total only. `record` overwrites: each phase runs at most once per request.
+ * work outside a named phase (the per-user rate limit, the `parseBodyOr400` Zod validation, the
+ * window check) counts in the total only. Fastify's JSON content-type parse runs before the handler
+ * creates this clock, so it is EXCLUDED from `totalMs`; the `parseBodyOr400` validation runs
+ * inside the handler, so it is INCLUDED.
+ * `record` overwrites: each phase runs at most once per request.
  */
 export function createBookingPhaseTimer(now: () => number = Date.now): BookingPhaseTimer {
   const startedAt = now();

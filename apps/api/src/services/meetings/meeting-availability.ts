@@ -279,6 +279,52 @@ async function publishGuestRescheduledNotifications(
 }
 
 /**
+ * The ONE place a failed `meeting-calendar-amend` enqueue is logged and surfaced. Called by the
+ * reschedule path and by the booking projection job (window moved while it ran), so
+ * `calendar.amend_failed` has a single raise site.
+ *
+ * ⚠ ADDITIVE to the `log.error`, never a replacement. THE ENQUEUE CATCH ONLY:
+ * `meeting-calendar-amend.ts`'s `handleAmendError` terminal path is deliberately NOT a second
+ * raise site — the XOR invariant forbids two, and that residual is ADR-1021's amendment
+ * territory. Best-effort: `raiseAdminAlert` swallows its own failure so a queue-write problem
+ * can never block the caller.
+ * ⚠ PERSISTED text (`admin_alerts.detail`), unlike the log line: never the raw error, which may
+ * itself wrap a vendor body (the `sanitize-error.ts` doctrine).
+ */
+export async function reportCalendarAmendEnqueueFailure(
+  input: {
+    meetingId: string;
+    expertProfileId: string;
+    newStart: Date;
+    trigger: 'reschedule' | 'booking_projection';
+    error: unknown;
+  },
+  log: FastifyBaseLogger
+): Promise<void> {
+  const { meetingId, expertProfileId, newStart, trigger, error } = input;
+  const message = error instanceof Error ? error.message : String(error);
+  log.error({ meetingId, error: message }, 'Failed to enqueue meeting-calendar-amend job');
+  await raiseAdminAlert({
+    kind: 'calendar.amend_failed',
+    entityType: 'meeting',
+    entityId: meetingId,
+    detail: {
+      title:
+        trigger === 'reschedule'
+          ? 'Calendar amend could not be enqueued after a reschedule'
+          : 'Calendar amend could not be enqueued after a booking projection',
+      entityLabel: `Meeting ${meetingId}`,
+      evidence: `The retrying, converging Apiroc amend job failed to enqueue: ${sanitizedErrorMessage(error)}`,
+      facts: [
+        ['Meeting', meetingId],
+        ['Expert profile', expertProfileId],
+        ['New start', newStart.toISOString()],
+      ],
+    },
+  });
+}
+
+/**
  * RESCHEDULE: move the meeting and its projection together, then rebuild — the old window
  * must not stay advertised as booked, nor the new one as free.
  *
@@ -325,37 +371,21 @@ export async function rescheduleMeeting(
   // committed, and the meter sweep's beyond-window pass retries.
   await releaseCreditHoldBestEffort(meetingId, log);
 
-  if (result.expertProfileId !== null) {
-    await enqueueMeetingCalendarAmend(
-      meetingId,
-      result.expertProfileId,
-      result.rescheduleAuditId
-    ).catch(async (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      log.error({ meetingId, error: message }, 'Failed to enqueue meeting-calendar-amend job');
-      // BAL-548 / ADR-1055 (R7) — ADDITIVE to the log.error above, never a replacement. THE
-      // ENQUEUE CATCH ONLY: `meeting-calendar-amend.ts`'s `handleAmendError` terminal path is
-      // deliberately NOT a second raise site — the XOR invariant forbids two, and that residual
-      // is ADR-1021's amendment territory for a future slice. Best-effort: `raiseAdminAlert`
-      // swallows its own failure so a queue-write problem can never block this reschedule.
-      // A-F5 — PERSISTED text (admin_alerts.detail), unlike the log.error above: never the raw
-      // error, which may itself wrap a vendor body (the `sanitize-error.ts` doctrine).
-      await raiseAdminAlert({
-        kind: 'calendar.amend_failed',
-        entityType: 'meeting',
-        entityId: meetingId,
-        detail: {
-          title: 'Calendar amend could not be enqueued after a reschedule',
-          entityLabel: `Meeting ${meetingId}`,
-          evidence: `The retrying, converging Apiroc amend job failed to enqueue: ${sanitizedErrorMessage(error)}`,
-          facts: [
-            ['Meeting', meetingId],
-            ['Expert profile', result.expertProfileId ?? 'unknown'],
-            ['New start', result.meeting.scheduledStart.toISOString()],
-          ],
-        },
-      });
-    });
+  const { expertProfileId } = result;
+  if (expertProfileId !== null) {
+    await enqueueMeetingCalendarAmend(meetingId, expertProfileId, result.rescheduleAuditId).catch(
+      (error: unknown) =>
+        reportCalendarAmendEnqueueFailure(
+          {
+            meetingId,
+            expertProfileId,
+            newStart: result.meeting.scheduledStart,
+            trigger: 'reschedule',
+            error,
+          },
+          log
+        )
+    );
   }
 
   await publishGuestRescheduledNotifications(
@@ -701,7 +731,7 @@ export async function tearDownCancelledMeetings(
 
   for (const entry of entries) {
     const meeting = await meetingsRepository.findById(entry.meetingId);
-    if (meeting === undefined || meeting.status !== 'cancelled') {
+    if (meeting?.status !== 'cancelled') {
       skipped += 1;
       continue;
     }

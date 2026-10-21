@@ -970,13 +970,14 @@ describe('POST /meetings', () => {
         provisioned: true,
         dailyRoomName: ROOM_NAME,
         joinUrl: JOIN_URL,
-      }
+      },
+      keyed = false
     ): void {
       mockBookAndProvisionMeeting.mockImplementation(
         (_input: unknown, _log: unknown, deps: { phaseRecorder: BookingPhaseRecorder }) => {
+          if (keyed) deps.phaseRecorder.record('serviceReplayProbe', 7);
           deps.phaseRecorder.record('bookingTransaction', 11);
           deps.phaseRecorder.record('venue', 22);
-          deps.phaseRecorder.record('calendar', 33);
           return Promise.resolve(result);
         }
       );
@@ -989,7 +990,7 @@ describe('POST /meetings', () => {
     }
 
     it('logs exactly one line with ids, every phase key and totalMs on a fresh 201', async () => {
-      freshCreate();
+      freshCreate(undefined, true);
       mockIsWindowAvailableForExpert.mockImplementation(
         (
           ...args: [
@@ -1023,12 +1024,13 @@ describe('POST /meetings', () => {
         caseFundingMs: expect.any(Number),
         expertGuardsMs: expect.any(Number),
         vendorFreeBusyMs: 42,
+        serviceReplayProbeMs: 7,
         bookingTransactionMs: 11,
         venueMs: 22,
-        calendarMs: 33,
         totalMs: expect.any(Number),
       });
       expect(Object.keys(fields as object)).toHaveLength(4 + BOOKING_PHASES.length + 1);
+      expect(fields).not.toHaveProperty('calendarMs');
     });
 
     it('still logs when the venue failed (provisioned:false is still a 201)', async () => {
@@ -1071,8 +1073,31 @@ describe('POST /meetings', () => {
           expect.objectContaining({ meetingId: MEETING_ID, error: 'log sink down' }),
           'Booking phase timing line could not be written'
         );
+        expect(mockLog.error).not.toHaveBeenCalledWith(expect.anything(), 'Meeting booking failed');
       } finally {
         mockRequestLog.info.mockImplementation(() => undefined);
+      }
+    });
+
+    it('answers exactly one 201 and logs no booking failure when both the line and its warn throw', async () => {
+      freshCreate();
+      mockRequestLog.info.mockImplementation((_fields: unknown, message?: string) => {
+        if (message === BOOKING_PHASE_TIMING_MESSAGE) throw new Error('log sink down');
+      });
+      mockLog.warn.mockImplementation(() => {
+        throw new Error('warn sink down');
+      });
+
+      try {
+        const res = await post(body());
+
+        expect(res.statusCode).toBe(201);
+        expect(res.json()).toMatchObject({ meetingId: MEETING_ID });
+        expect(mockBookAndProvisionMeeting).toHaveBeenCalledTimes(1);
+        expect(mockLog.error).not.toHaveBeenCalledWith(expect.anything(), 'Meeting booking failed');
+      } finally {
+        mockRequestLog.info.mockImplementation(() => undefined);
+        mockLog.warn.mockImplementation(() => undefined);
       }
     });
 
@@ -1093,6 +1118,25 @@ describe('POST /meetings', () => {
 
     it('logs nothing for a route-probe replay (the service never records bookingTransaction)', async () => {
       mockLookupBookingReplay.mockResolvedValue({ kind: 'match', meeting: bookedMeeting() });
+
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(201);
+      expect(timingCalls()).toHaveLength(0);
+    });
+
+    it('logs nothing for a service pre-probe replay (serviceReplayProbe recorded, bookingTransaction not)', async () => {
+      mockBookAndProvisionMeeting.mockImplementation(
+        (_input: unknown, _log: unknown, deps: { phaseRecorder: BookingPhaseRecorder }) => {
+          deps.phaseRecorder.record('serviceReplayProbe', 7);
+          return Promise.resolve({
+            meeting: bookedMeeting(),
+            provisioned: true,
+            dailyRoomName: ROOM_NAME,
+            joinUrl: JOIN_URL,
+          });
+        }
+      );
 
       const res = await post(body({ bookingIdempotencyKey: KEY }));
 

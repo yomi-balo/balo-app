@@ -33,9 +33,9 @@ describe('createBookingPhaseTimer', () => {
       caseFundingMs: null,
       expertGuardsMs: null,
       vendorFreeBusyMs: null,
+      serviceReplayProbeMs: null,
       bookingTransactionMs: null,
       venueMs: null,
-      calendarMs: null,
       totalMs: 0,
     });
     expect(BOOKING_PHASES).toHaveLength(9);
@@ -48,7 +48,8 @@ describe('createBookingPhaseTimer', () => {
 
     const fields = timer.fields();
     expect(fields.venueMs).toBe(120);
-    expect(fields.calendarMs).toBeNull();
+    expect(fields.tenancyGateMs).toBeNull();
+    expect(fields).not.toHaveProperty('calendarMs');
   });
 
   it('overwrites a phase recorded twice', () => {

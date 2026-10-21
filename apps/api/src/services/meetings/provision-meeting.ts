@@ -152,12 +152,12 @@ import type { FastifyBaseLogger } from 'fastify';
 import { DailyApiError, DailyRoomNotPrivateError } from '../daily/errors.js';
 import type { RoomProvisioner, RoomTeardown } from '../daily/rooms.js';
 import { dailyRoomProvisioner, dailyRoomTeardown } from '../daily/rooms.js';
-import { publishBookingCalendarInvites } from '../calendar-invites/publish-calendar-invites.js';
 import {
-  projectBookingCalendarEvent,
-  recordClientCalendarEntry,
-  type ExpertCalendarDelivery,
-} from '../consultation-events/booking-calendar-projection.js';
+  bookingCalendarProjectionJobId,
+  enqueueBookingCalendarProjection,
+} from '../../jobs/booking-calendar-projection-job.js';
+import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
+import { raiseAdminAlert } from '../admin-alerts/raise.js';
 import type { BookableEngagementType } from './authorize-meeting-booking.js';
 import { timeBookingPhase, type BookingPhaseRecorder } from './booking-phase-timing.js';
 import { bookMeeting } from './meeting-availability.js';
@@ -224,10 +224,11 @@ export interface ProvisionMeetingDeps {
   /** Defaults to the live `dailyRoomTeardown`; tests substitute their own. */
   teardown?: RoomTeardown;
   /**
-   * BAL-607 — receives `bookingTransaction`, `venue` and `calendar` elapsed ms from
-   * `bookAndProvisionMeeting` on a FRESH create only. Only the booking route passes it;
-   * `provisionMeeting` and both replay returns ignore it, so a recorder that never saw
-   * `bookingTransaction` identifies a replay.
+   * BAL-607 — receives `serviceReplayProbe` (when a key is present), `bookingTransaction` and
+   * `venue` elapsed ms from `bookAndProvisionMeeting`. `bookingTransaction` and `venue` are
+   * recorded on a FRESH create only. Only the booking route passes it; `provisionMeeting` and
+   * both replay returns ignore it, so a recorder that never saw `bookingTransaction`
+   * identifies a replay.
    */
   phaseRecorder?: BookingPhaseRecorder;
 }
@@ -608,14 +609,17 @@ export async function bookAndProvisionMeeting(
   log: FastifyBaseLogger,
   deps: ProvisionMeetingDeps = {}
 ): Promise<BookAndProvisionResult> {
-  const bookingStartedAt = Date.now();
-  if (input.bookingIdempotencyKey !== undefined) {
-    const replay = await replayByIdempotencyKey(input.bookingIdempotencyKey, input, log, deps);
+  const { bookingIdempotencyKey } = input;
+  if (bookingIdempotencyKey !== undefined) {
+    const replay = await timeBookingPhase(deps.phaseRecorder, 'serviceReplayProbe', () =>
+      replayByIdempotencyKey(bookingIdempotencyKey, input, log, deps)
+    );
     if (replay !== null) {
       return replay;
     }
   }
 
+  const bookingStartedAt = Date.now();
   let created: CreatedMeeting;
   try {
     created = await bookMeeting(
@@ -661,153 +665,107 @@ export async function bookAndProvisionMeeting(
     )
   );
 
-  // BAL-400 (D2) / BAL-283 / BAL-433 / BAL-475 — the calendar pipeline, run ONLY on a fresh
-  // create and never on a replay: `provisionMeeting` (the replay path) never reaches here,
-  // matching the availability-cache rebuild's own "the replay path skips it anyway" rule —
-  // re-running this on a replay would call `events.create` a SECOND time and, per apiroc
-  // skill §M1, could strand a first vendor event rather than merely re-stamping Balo's own
-  // row (and would enqueue a duplicate pair of calendar invites).
+  // BAL-400 (D2) / BAL-607 — the calendar pipeline is ENQUEUED here, never run: the expert
+  // projection, the client ICS row, both analytics emits and the invite publish all live in
+  // `jobs/booking-calendar-projection-job.ts`, which owns their order.
   //
-  // ⚠ NO GATE. As of BAL-433 EVERY bookable context projects — the registry
+  // This line is reached only on a fresh create: both replay paths above return before it, and
+  // `provisionMeeting` (the replay and repair entry point) never reaches it. That is the
+  // enqueue's idempotency guarantee, and the apiroc skill §M1 is why it matters: re-running the
+  // projection on a replay would call `events.create` a SECOND time and could strand a first
+  // vendor event rather than merely re-stamping Balo's own row (and would duplicate the invites).
+  //
+  // ⚠ NO GATE. EVERY bookable context projects: the registry
   // (`services/consultation-events/calendar-context-registry.ts`) is TOTAL over
   // `MeetingBookingContextType`, so a sixth bookable label fails `tsc` there rather than
-  // silently reaching no calendar. `isCalendarProjectedContext` is gone; do not reintroduce
-  // one, and do not re-add a per-context resolver here — the pipeline lives under
-  // `services/consultation-events/` and `services/calendar-invites/`.
+  // silently reaching no calendar.
   //
   // ⚠ IT NEVER THROWS (D2c) — the booking above has already committed and must not be undone
-  // by a best-effort projection or a best-effort invite publish. See
-  // `runPostCommitCalendarSteps`'s own docblock for the step order (load-bearing: the invite
-  // publisher reads the rows the first two steps write).
-  await timeBookingPhase(deps.phaseRecorder, 'calendar', () =>
-    runPostCommitCalendarSteps(created, input, log)
-  );
+  // by a best-effort projection.
+  await enqueueProjectionOrAlert(created, input, log);
 
   return { meeting: created.meeting, ...venue };
 }
 
 /**
- * BAL-475 — expert projection → client row → both analytics emits → invites. Order is
- * load-bearing: `publishBookingCalendarInvites` READS the LIVE `meeting_calendar_events` rows
- * the first two steps write, so it must run after both. Extracted from
- * `bookAndProvisionMeeting` purely to keep that function under SonarCloud's cognitive-
- * complexity limit — every line here was inline there before this ticket. Never throws:
- * `projectBookingCalendarEventSafely`, `recordClientCalendarEntry` and
- * `publishBookingCalendarInvites` each own that contract independently.
+ * The request path waits at most this long for the projection job to be queued. A hung Redis
+ * connection must not hold a committed booking's 201 hostage.
  */
-async function runPostCommitCalendarSteps(
+export const PROJECTION_ENQUEUE_TIMEOUT_MS = 2000;
+
+/** Rejects with a "timed out" error after the bound; the timer never outlives the race. */
+async function enqueueWithinTimeout(enqueue: Promise<void>): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Enqueue timed out after ${PROJECTION_ENQUEUE_TIMEOUT_MS}ms`));
+    }, PROJECTION_ENQUEUE_TIMEOUT_MS);
+    timer.unref();
+  });
+  try {
+    await Promise.race([enqueue, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const PROJECTION_ENQUEUE_FAILED_NEXT_STEP =
+  'Nothing may have been queued. If the job does not exist in `booking-calendar-projection`, re-enqueue it via `enqueueBookingCalendarProjection`. If it does exist (a timed-out add that landed late), no action is needed.';
+
+/**
+ * Hands the committed booking to the calendar projection job, waiting at most
+ * {@link PROJECTION_ENQUEUE_TIMEOUT_MS}. Never throws: an enqueue failure (Redis down, or the
+ * add timing out and possibly landing late — the jobId makes any re-add a no-op) is logged and
+ * raised as an admin alert, because nothing re-drives a booking whose projection was never
+ * queued — the expert gets no external calendar entry and nobody is sent an invite until
+ * someone acts on the alert.
+ *
+ * ⚠ The persisted alert text carries `sanitizedErrorMessage`, never the raw error, which may
+ * wrap a vendor or connection URL; the `log.error` line keeps the raw message.
+ */
+async function enqueueProjectionOrAlert(
   created: CreatedMeeting,
   input: BookAndProvisionInput,
   log: FastifyBaseLogger
 ): Promise<void> {
-  // ⚠ `input.contextType` is a `MeetingBookingContextType`; `projectBookingCalendarEvent` /
-  // `recordClientCalendarEntry` / `publishBookingCalendarInvites` each take a
-  // `CalendarProjectedContextType`. Today the `Extract` makes them identical, so every call
-  // below compiles with NO cast and NO runtime branch. If the two ever drift, THIS FUNCTION is
-  // where `tsc` says so — the exhaustiveness guarantee working.
-  const expertDelivery = await projectBookingCalendarEventSafely(created, input, log);
-  trackServer(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED, {
-    meeting_id: created.meeting.id,
-    context_type: input.contextType,
-    party: 'expert',
-    delivery: expertDelivery,
-    distinct_id: input.userId,
-  });
-
-  const clientDelivery = await recordClientCalendarEntry(
-    created.meeting.id,
-    input.contextType,
-    input.contextId,
-    log
-  );
-  trackServer(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED, {
-    meeting_id: created.meeting.id,
-    context_type: input.contextType,
-    party: 'client',
-    delivery: clientDelivery,
-    distinct_id: input.userId,
-  });
-
-  await publishBookingCalendarInvitesSafely(created, input, log);
-}
-
-/**
- * The projection call, with the call site's own belt on top of its braces.
- *
- * ⚠ `projectBookingCalendarEvent`'s CONTRACT IS ALREADY "NEVER THROWS" (ADR-1044 D2c) and its
- * two callees each own a `try`/`catch`. This wrapper is DEFENCE IN DEPTH, kept deliberately
- * across BAL-433's refactor: before it, the per-context resolvers lived in this module and
- * each carried its own `catch`, so a violation of that contract could not turn a COMMITTED
- * booking into a rejected promise. `POST /meetings` maps an unrecognised throw to a 500 — and
- * this module's header is explicit that telling the client "this failed" about a booking that
- * exists and blocks an expert is the WORST of the available outcomes, because the user rebooks
- * and now two slots are blocked. Losing that guarantee to a refactor would have been silent.
- *
- * It reports `'failed'` — the same value the projection itself returns for a swallowed error —
- * so the analytics emit stays unconditional and one outcome vocabulary covers both paths.
- */
-async function projectBookingCalendarEventSafely(
-  created: CreatedMeeting,
-  input: BookAndProvisionInput,
-  log: FastifyBaseLogger
-): Promise<ExpertCalendarDelivery> {
+  const meetingId = created.meeting.id;
   try {
-    return await projectBookingCalendarEvent(created, input.contextType, input.contextId, log);
+    await enqueueWithinTimeout(
+      enqueueBookingCalendarProjection({
+        meetingId,
+        expertProfileId: created.expertProfileId,
+        contextType: input.contextType,
+        contextId: input.contextId,
+        userId: input.userId,
+      })
+    );
   } catch (error) {
     log.error(
       {
-        meetingId: created.meeting.id,
-        // ⚠ `party` + `deliveryMode` ARE THE CORRELATION KEYS, NOT DECORATION. This path
-        // returns BEFORE `projectBookingCalendarEvent` can emit its outcome line, so this is
-        // the ONLY Axiom record of a contract-violation projection. Without these two keys an
-        // Axiom query filtered on `deliveryMode` silently undercounts failures — while the
-        // PostHog emit at the call site carries both, so the two sources would disagree
-        // exactly when someone is debugging an incident. ⚠ NO `sequence` HERE, STILL — BAL-475
-        // put SEQUENCE on the calendar-invite publish/delivery lines, never on a PROJECTION
-        // line; this line reports a projection, not a send.
-        party: 'expert',
-        deliveryMode: 'failed' satisfies ExpertCalendarDelivery,
+        meetingId,
         contextType: input.contextType,
         contextId: input.contextId,
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       },
-      'The expert calendar projection threw despite its never-throws contract — booking stands'
+      'Failed to enqueue booking-calendar-projection job'
     );
-    return 'failed';
-  }
-}
-
-/**
- * BAL-475 — `publishBookingCalendarInvites`'s own contract is ALREADY "never throws" (every
- * one of its three publishers try/catches its per-recipient enqueue). This wrapper is DEFENCE
- * IN DEPTH, matching `projectBookingCalendarEventSafely`'s precedent immediately above: a
- * violation of that contract must still never turn a COMMITTED booking into a rejected
- * promise. Logged and swallowed, never rethrown.
- */
-async function publishBookingCalendarInvitesSafely(
-  created: CreatedMeeting,
-  input: BookAndProvisionInput,
-  log: FastifyBaseLogger
-): Promise<void> {
-  try {
-    await publishBookingCalendarInvites(
-      {
-        meetingId: created.meeting.id,
-        contextType: input.contextType,
-        expertProfileId: created.expertProfileId,
+    const queuedAs = bookingCalendarProjectionJobId(meetingId);
+    await raiseAdminAlert({
+      kind: 'calendar.projection_enqueue_failed',
+      entityType: 'meeting',
+      entityId: meetingId,
+      detail: {
+        title: 'Calendar projection could not be enqueued after a booking',
+        entityLabel: `Meeting ${meetingId}`,
+        evidence: `The booking calendar projection job failed to enqueue: ${sanitizedErrorMessage(error)}. ${PROJECTION_ENQUEUE_FAILED_NEXT_STEP}`,
+        facts: [
+          ['Meeting', meetingId],
+          ['Expert profile', created.expertProfileId ?? 'none'],
+          ['Start', created.meeting.scheduledStart.toISOString()],
+          ['Job id', queuedAs],
+        ],
       },
-      log
-    );
-  } catch (error) {
-    log.error(
-      {
-        meetingId: created.meeting.id,
-        contextType: input.contextType,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      },
-      'Calendar invite publish threw despite its never-throws contract — booking stands'
-    );
+    });
   }
 }
