@@ -64,7 +64,10 @@ export const BOOKING_EVENTS = {
   FUNDING_SHOWN: 'booking_funding_shown',
   /** The inline top-up was credited and the booking went on to submit. */
   FUNDED: 'booking_funded',
-  /** The inline top-up did not end in a credited balance. */
+  /**
+   * The inline top-up did not end in a booked consultation: it was never credited, or it was
+   * credited and the booking that followed did not land (`reason: 'booking_failed'`).
+   */
   FUNDING_FAILED: 'booking_funding_failed',
   /** A member without billing rights saved the draft and left it for a billing admin. */
   SAVED_FOR_LATER: 'booking_saved_for_later',
@@ -74,14 +77,20 @@ export const BOOKING_EVENTS = {
 export type BookingFundingArmProperty = 'setup' | 'reserved' | 'hold';
 
 /**
- * Why an inline top-up did not end in a credited balance.
+ * Why an inline top-up did not end in a booked consultation.
  *
  *  · `declined`       — the card was refused.
  *  · `auth_failed`    — the card challenge (3DS) did not complete.
  *  · `credit_timeout` — the charge went through but the credit had not landed when polling stopped.
+ *  · `booking_failed` — the credit landed, but the booking that followed was refused or failed.
  *  · `error`          — anything else, including outcomes that are ambiguous about the charge.
  */
-export type BookingFundingFailureReason = 'declined' | 'auth_failed' | 'credit_timeout' | 'error';
+export type BookingFundingFailureReason =
+  | 'declined'
+  | 'auth_failed'
+  | 'credit_timeout'
+  | 'booking_failed'
+  | 'error';
 
 /**
  * WHERE the credential was found dead, which decides what the user loses.

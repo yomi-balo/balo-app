@@ -6,6 +6,11 @@ import { useTopUpCreditPoll } from '@/components/billing/top-up/use-topup-credit
 interface CreditAwaiterProps {
   readonly paymentIntentId: string;
   readonly promoCodeId: string | null;
+  /**
+   * The purchase re-armed the wallet's mandate on a new card: wait for it to be live as well, so
+   * the booking that follows does not read the gap before the SetupIntent's webhook lands.
+   */
+  readonly awaitMandate: boolean;
   /** The wallet carries this payment's ledger entry. `promoGranted` is `true` only if the bonus landed too. */
   readonly onCredited: (promoGranted: boolean) => void;
   /** The poll window closed, or the read was not permitted, without the credit being seen. */
@@ -22,10 +27,13 @@ interface CreditAwaiterProps {
 export function CreditAwaiter({
   paymentIntentId,
   promoCodeId,
+  awaitMandate,
   onCredited,
   onUnconfirmed,
 }: Readonly<CreditAwaiterProps>): null {
-  const { status, promoGranted } = useTopUpCreditPoll(paymentIntentId, promoCodeId);
+  const { status, promoGranted } = useTopUpCreditPoll(paymentIntentId, promoCodeId, {
+    awaitMandate,
+  });
   const reportedRef = useRef(false);
 
   useEffect(() => {

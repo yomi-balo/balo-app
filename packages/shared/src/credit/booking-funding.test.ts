@@ -312,10 +312,16 @@ describe('suggestCaseBookingTopUpMinor', () => {
     );
   });
 
-  /** Apply a top-up of `topUpMinor` to a refusal snapshot, as the webhook credit would. */
+  /**
+   * Apply a top-up of `topUpMinor` to a refusal snapshot, as the webhook credit would. `mandate`
+   * says what the top-up did to an active mandate: it `survives` (the saved card was charged, or a
+   * new card re-armed it), or it is `lost` (a new card replaced the card it was captured against
+   * and nothing re-armed it).
+   */
   function applyTopUp(
     snapshot: BookingFundingSnapshot,
-    topUpMinor: number
+    topUpMinor: number,
+    mandate: 'survives' | 'lost' = 'survives'
   ): BookingFundingSnapshot {
     if (snapshot.kind === 'no_wallet') {
       const { topUpPricing } = snapshot;
@@ -331,7 +337,7 @@ describe('suggestCaseBookingTopUpMinor', () => {
       const { topUpPricing, hold } = snapshot;
       if (topUpMinor < hold.amountToClearMinor) return snapshot;
       const availableMinor = topUpPricing.availableMinor + topUpMinor;
-      return topUpPricing.mandateActive
+      return topUpPricing.mandateActive && mandate === 'survives'
         ? { kind: 'mandate', walletId: snapshot.walletId }
         : {
             kind: 'no_mandate',
@@ -413,6 +419,37 @@ describe('suggestCaseBookingTopUpMinor', () => {
     expect(failures).toEqual([]);
     // Positive control — the grid exercises suggestions above the minimum, not only the floor.
     expect(aboveMinimum).toBeGreaterThan(20);
+  });
+
+  it('grid property: a hold suggestion that leans on the mandate is refused once the mandate is lost, as a balance refusal whose own suggestion then books', () => {
+    const failures: string[] = [];
+    let refusedWhenLost = 0;
+    for (const { label, snapshot, booking } of grid()) {
+      if (snapshot.kind !== 'on_hold' || !snapshot.topUpPricing.mandateActive) continue;
+      if (assessCaseBookingFunding(snapshot, booking).ok) continue;
+      const suggested = suggestCaseBookingTopUpMinor(snapshot, booking);
+      const lost = applyTopUp(snapshot, suggested, 'lost');
+      const verdict = assessCaseBookingFunding(lost, booking);
+      if (verdict.ok) continue;
+      refusedWhenLost += 1;
+      // The hold is cleared either way: what is left is a balance refusal, never a second hold.
+      if (
+        verdict.reason !== 'no_mandate_insufficient_balance' &&
+        verdict.reason !== 'reserved_by_upcoming'
+      ) {
+        failures.push(`${label}: refused as ${verdict.reason}`);
+        continue;
+      }
+      // The re-read after that refusal suggests again, and that figure books.
+      const again = suggestCaseBookingTopUpMinor(lost, booking);
+      if (!assessCaseBookingFunding(applyTopUp(lost, again), booking).ok) {
+        failures.push(`${label}: still refused after a second top-up of ${again}`);
+      }
+    }
+    expect(failures).toEqual([]);
+    // Positive control — losing the mandate does refuse bookings the hold figure alone was sized
+    // for, which is why a new card on this arm must re-arm the mandate.
+    expect(refusedWhenLost).toBeGreaterThan(20);
   });
 });
 

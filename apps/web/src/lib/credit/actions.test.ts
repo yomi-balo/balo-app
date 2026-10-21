@@ -719,6 +719,75 @@ describe('credit actions', () => {
         }
       });
 
+      it('re-arms an ACTIVE mandate on a NEW card, without writing any config', async () => {
+        // The purchase webhook clears a mandate whose card changed (`applySavedCardDisplay`).
+        // Without this arm a booking top-up on a new card would leave a card-backed mode inert.
+        for (const lowBalanceMode of ['keep_going', 'auto_topup'] as const) {
+          vi.clearAllMocks();
+          mockHasCapability.mockResolvedValue(true);
+          mockEnsureForCompany.mockResolvedValue({
+            id: 'wallet-1',
+            lowBalanceMode,
+            mandateStatus: 'active',
+          });
+          mockCreatePurchaseIntent.mockResolvedValue({
+            outcome: 'needs_client_confirmation',
+            clientSecret: 'pi_secret',
+            paymentIntentId: 'pi_1',
+          });
+          mockCreateMandateSetupIntent.mockResolvedValue({
+            clientSecret: 'seti_secret',
+            setupIntentId: 'seti_new_card',
+          });
+
+          const res = await startPurchaseAction(keepInput({ paymentMethodSource: 'new_card' }));
+
+          expect(res).toMatchObject({
+            ok: true,
+            mandate: {
+              outcome: 'requires_action',
+              clientSecret: 'seti_secret',
+              setupIntentId: 'seti_new_card',
+            },
+          });
+          expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1', 'user-1');
+          expect(mockUpdateConfig).not.toHaveBeenCalled();
+          expect(mockHasActiveSessionForWallet).not.toHaveBeenCalled();
+        }
+      });
+
+      it.each([
+        {
+          name: 'a saved card (the mandate already belongs to it)',
+          wallet: { lowBalanceMode: 'keep_going', mandateStatus: 'active' },
+          paymentMethodSource: 'saved_card',
+        },
+        {
+          name: 'a new card with no active mandate',
+          wallet: { lowBalanceMode: 'keep_going', mandateStatus: null },
+          paymentMethodSource: 'new_card',
+        },
+        {
+          name: 'a new card with a pending mandate',
+          wallet: { lowBalanceMode: 'auto_topup', mandateStatus: 'pending' },
+          paymentMethodSource: 'new_card',
+        },
+        {
+          name: 'a new card on a mode that is not card-backed',
+          wallet: { lowBalanceMode: 'notify_only', mandateStatus: 'active' },
+          paymentMethodSource: 'new_card',
+        },
+      ] as const)('stays not_required for $name', async ({ wallet, paymentMethodSource }) => {
+        mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', ...wallet });
+
+        const res = await startPurchaseAction(keepInput({ paymentMethodSource }));
+
+        expect(res).toMatchObject({ ok: true, mandate: { outcome: 'not_required' } });
+        expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
+        expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+        expect(mockUpdateConfig).not.toHaveBeenCalled();
+      });
+
       it('still creates the purchase intent with the same clientRequestId', async () => {
         const res = await startPurchaseAction(keepInput({ promoCode: 'WELCOME' }));
 
@@ -1441,7 +1510,29 @@ describe('credit actions', () => {
         status: 'credited',
         balanceMinor: 137_500,
         promoGranted: null, // no promo asked about
+        mandateActive: false,
       });
+    });
+
+    it('reports mandateActive by the same predicate the booking gate reads', async () => {
+      mockFindByIdempotencyKey.mockResolvedValue({ id: 'le_1', walletId: 'wallet-1' });
+      const live = {
+        id: 'wallet-1',
+        balanceMinor: 30_000,
+        mandateStatus: 'active',
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+      };
+
+      mockFindByCompanyId.mockResolvedValue(live);
+      expect(await getTopUpCreditStatusAction('pi_1')).toMatchObject({ mandateActive: true });
+
+      // The purchase webhook cleared the mandate when the new card replaced the old one.
+      mockFindByCompanyId.mockResolvedValue({ ...live, mandateStatus: null });
+      expect(await getTopUpCreditStatusAction('pi_1')).toMatchObject({ mandateActive: false });
+
+      mockFindByCompanyId.mockResolvedValue({ ...live, stripePaymentMethodId: null });
+      expect(await getTopUpCreditStatusAction('pi_1')).toMatchObject({ mandateActive: false });
     });
 
     it('answers promoGranted TRUE only when the grant key is in the ledger', async () => {
@@ -1457,7 +1548,12 @@ describe('credit actions', () => {
 
       const res = await getTopUpCreditStatusAction('pi_1', PROMO_ID);
 
-      expect(res).toEqual({ status: 'credited', balanceMinor: 105_000, promoGranted: true });
+      expect(res).toEqual({
+        status: 'credited',
+        balanceMinor: 105_000,
+        promoGranted: true,
+        mandateActive: false,
+      });
       // The grant key is checked against the ACTOR's wallet — the wallet id is half the key.
       expect(mockFindByIdempotencyKey).toHaveBeenCalledWith(`promo:wallet-1:${PROMO_ID}`);
     });
@@ -1470,7 +1566,12 @@ describe('credit actions', () => {
 
       const res = await getTopUpCreditStatusAction('pi_1', '550e8400-e29b-41d4-a716-446655440077');
 
-      expect(res).toEqual({ status: 'credited', balanceMinor: 100_000, promoGranted: false });
+      expect(res).toEqual({
+        status: 'credited',
+        balanceMinor: 100_000,
+        promoGranted: false,
+        mandateActive: false,
+      });
     });
 
     it('answers promoGranted FALSE (never an error) for a malformed promoCodeId', async () => {

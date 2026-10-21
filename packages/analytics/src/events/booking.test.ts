@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { BOOKING_EVENTS, BOOKING_FUNDING_BLOCK_REASONS } from './booking';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import {
+  BOOKING_EVENTS,
+  BOOKING_FUNDING_BLOCK_REASONS,
+  type BookingEventMap,
+  type BookingFundingFailureReason,
+} from './booking';
 
 describe('BOOKING_EVENTS', () => {
   it('exposes exactly the booking CLIENT events (guards against accidental drift)', () => {
@@ -69,5 +74,16 @@ describe('BOOKING_FUNDING_BLOCK_REASONS', () => {
     for (const value of BOOKING_FUNDING_BLOCK_REASONS) {
       expect(value).toMatch(/^[a-z0-9]+(_[a-z0-9]+)*$/);
     }
+  });
+});
+
+describe('BookingFundingFailureReason', () => {
+  it('names every way an inline top-up can end without a booked consultation', () => {
+    expectTypeOf<
+      'declined' | 'auth_failed' | 'credit_timeout' | 'booking_failed' | 'error'
+    >().toEqualTypeOf<BookingFundingFailureReason>();
+    expectTypeOf<
+      BookingEventMap[typeof BOOKING_EVENTS.FUNDING_FAILED]['reason']
+    >().toEqualTypeOf<BookingFundingFailureReason>();
   });
 });

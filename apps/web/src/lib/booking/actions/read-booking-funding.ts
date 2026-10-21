@@ -21,9 +21,9 @@ import type { BookingFundingRequest, BookingFundingView } from './booking-fundin
  * (`saveBookingForLaterAction`), both through `enforceBookingFunding`.
  *
  * ⚠ THE VIEW CARRIES NO RATE, ESTIMATE, AVAILABLE OR RESERVED FIGURE — only the top-up the client
- * would make (`BookingFundingView`). The wallet (saved card + current low-balance preference) and
- * the first-time flag are read only for a billing manager of the ACTIVE workspace company, the one
- * audience that can top up inline; everyone else gets `wallet: null`.
+ * would make (`BookingFundingView`). The wallet (the saved card only — `BookingTopUpWallet`)
+ * and the first-time flag are read only for a billing manager of the ACTIVE workspace company,
+ * the one audience that can top up inline; everyone else gets `wallet: null`.
  *
  * ⚠ A READ ERROR IS NOT A REFUSAL. Anything unreadable is `unavailable`, which renders nothing
  * inline, so the gate decides at submit exactly as it did before this view existed.

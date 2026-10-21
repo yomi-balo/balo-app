@@ -17,6 +17,14 @@ import type { RefusedFundingView } from './funding-disposition';
  * Copy rules held throughout: gender-neutral, no rate and no estimate (the only money named is
  * the top-up itself, and never on the setup arm), and nothing claims a billing admin was told
  * before the member has pressed Save.
+ *
+ * Cases for the owner to rule on at that sign-off:
+ *  · {@link MEMBER_TAIL} / {@link MEMBER_TAIL_NO_DRAFT} after a SUBMIT-TIME refusal. The submit
+ *    went through `enforceBookingFunding`, which has already told the billing admins, yet the
+ *    member block re-rendered by that refusal still says "Save this booking and we'll let your
+ *    billing admins know". No second notice goes out — Save's notice shares the gate's hourly
+ *    `booking-funding:{company}:{booker}:{kind}:{hour}` correlationId and is deduped — so only
+ *    the tense is in question.
  */
 
 export interface FundingBlockCopy {

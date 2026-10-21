@@ -133,6 +133,7 @@ describe('BookingFundingBlock', () => {
       status: 'credited',
       balanceMinor: 30_000,
       promoGranted: null,
+      mandateActive: false,
     });
   });
 
@@ -200,7 +201,7 @@ describe('BookingFundingBlock', () => {
       expect(screen.getByRole('button', { name: 'Top up & book' })).toBeDisabled();
 
       await userEvent.type(input, '350');
-      expect(screen.getByText('Use whole hundreds, like A$400.')).toBeInTheDocument();
+      expect(screen.getByText('Use A$100 steps, like A$400.')).toBeInTheDocument();
       expect(input).toHaveAttribute('aria-invalid', 'true');
       expect(screen.getByRole('button', { name: 'Top up & book' })).toBeDisabled();
 
@@ -218,6 +219,23 @@ describe('BookingFundingBlock', () => {
       await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
       expect(onBeforePay).toHaveBeenCalledTimes(1);
       expect(startPurchaseAction).not.toHaveBeenCalled();
+    });
+
+    it('locks the amount, promo and payment method while the charge is in flight', async () => {
+      const start = deferred<Awaited<ReturnType<typeof startPurchaseAction>>>();
+      vi.mocked(startPurchaseAction).mockReturnValue(start.promise);
+      renderBlock(savedCardView());
+      expect(screen.getByRole('radio', { name: /A\$1,000/ })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /Have a promo code/ })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Change' })).toBeEnabled();
+
+      await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
+
+      await waitFor(() => expect(screen.getByRole('radio', { name: /A\$1,000/ })).toBeDisabled());
+      expect(screen.getByRole('button', { name: /Have a promo code/ })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Change' })).toBeDisabled();
+      start.resolve({ ok: false, error: 'card_declined' });
+      await waitFor(() => expect(screen.getByRole('radio', { name: /A\$1,000/ })).toBeEnabled());
     });
 
     it('disables the action while the dialog gates it', () => {
@@ -266,6 +284,7 @@ describe('BookingFundingBlock', () => {
         status: 'credited',
         balanceMinor: 30_000,
         promoGranted: null,
+        mandateActive: false,
       });
       poll.resolve({ status: 'pending', balanceMinor: 0 });
       await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1), { timeout: 4_000 });
@@ -283,6 +302,7 @@ describe('BookingFundingBlock', () => {
         status: 'credited',
         balanceMinor: 35_000,
         promoGranted: true,
+        mandateActive: false,
       });
       const { onFunded } = renderBlock(savedCardView());
       await userEvent.click(screen.getByRole('button', { name: /Have a promo code/ }));
@@ -305,6 +325,7 @@ describe('BookingFundingBlock', () => {
         status: 'credited',
         balanceMinor: 30_000,
         promoGranted: false,
+        mandateActive: false,
       });
       const { onFunded } = renderBlock(savedCardView());
       await userEvent.click(screen.getByRole('button', { name: /Have a promo code/ }));
@@ -315,6 +336,72 @@ describe('BookingFundingBlock', () => {
       await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
       await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1));
       expect(onFunded).toHaveBeenCalledWith({ creditedMinor: 30_000, companyName: 'Northwind' });
+    });
+
+    it('waits for a mandate re-armed on the new card to be live before booking', async () => {
+      vi.mocked(startPurchaseAction).mockResolvedValue({
+        ok: true,
+        outcome: 'needs_client_confirmation',
+        clientSecret: 'pi_secret',
+        paymentIntentId: 'pi_1',
+        mandate: {
+          outcome: 'requires_action',
+          clientSecret: 'seti_secret',
+          setupIntentId: 'seti_1',
+        },
+        walletId: 'wallet-1',
+      });
+      vi.mocked(getTopUpCreditStatusAction)
+        .mockResolvedValueOnce({
+          status: 'credited',
+          balanceMinor: 30_000,
+          promoGranted: null,
+          mandateActive: false,
+        })
+        .mockResolvedValue({
+          status: 'credited',
+          balanceMinor: 30_000,
+          promoGranted: null,
+          mandateActive: true,
+        });
+      const { onFunded } = renderBlock(managerView());
+      await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
+
+      await waitFor(() => expect(getTopUpCreditStatusAction).toHaveBeenCalledTimes(1));
+      expect(mockStripeApi.confirmSetup).toHaveBeenCalledTimes(1);
+      expect(onFunded).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Adding to balance…' })).toBeDisabled();
+
+      await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1), { timeout: 4_000 });
+      expect(getTopUpCreditStatusAction).toHaveBeenCalledTimes(2);
+      expect(startPurchaseAction).toHaveBeenCalledTimes(1);
+    });
+
+    it('books straight after the credit when the mandate was not captured', async () => {
+      vi.mocked(startPurchaseAction).mockResolvedValue({
+        ok: true,
+        outcome: 'needs_client_confirmation',
+        clientSecret: 'pi_secret',
+        paymentIntentId: 'pi_1',
+        mandate: {
+          outcome: 'requires_action',
+          clientSecret: 'seti_secret',
+          setupIntentId: 'seti_1',
+        },
+        walletId: 'wallet-1',
+      });
+      mockStripeApi.confirmSetup.mockResolvedValueOnce({ error: { type: 'card_error' } });
+      vi.mocked(getTopUpCreditStatusAction).mockResolvedValue({
+        status: 'credited',
+        balanceMinor: 30_000,
+        promoGranted: null,
+        mandateActive: false,
+      });
+      const { onFunded } = renderBlock(managerView());
+      await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
+
+      await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1));
+      expect(getTopUpCreditStatusAction).toHaveBeenCalledTimes(1);
     });
 
     it('offers Book now when the credit cannot be confirmed, and never charges again', async () => {
@@ -343,6 +430,28 @@ describe('BookingFundingBlock', () => {
       expect(await screen.findByRole('button', { name: ctaName('A\\$300') })).toBeEnabled();
     });
 
+    it('closes FUNDED out as a failed booking when the booking after the credit does not land', async () => {
+      const onFunded = vi.fn(async () => false);
+      renderBlock(savedCardView(), { onFunded });
+      await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
+      await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1));
+
+      await waitFor(() =>
+        expect(trackedPayloads(BOOKING_EVENTS.FUNDING_FAILED)).toEqual([
+          { reason: 'booking_failed' },
+        ])
+      );
+      expect(trackedPayloads(BOOKING_EVENTS.FUNDED)).toHaveLength(1);
+    });
+
+    it('never reports a failed booking when the booking lands', async () => {
+      const { onFunded } = renderBlock(savedCardView());
+      await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
+      await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1));
+
+      expect(trackedPayloads(BOOKING_EVENTS.FUNDING_FAILED)).toEqual([]);
+    });
+
     it('reports a booking that throws and returns to the pay action', async () => {
       const failure = new Error('book failed');
       const onFunded = vi.fn(async () => {
@@ -354,6 +463,9 @@ describe('BookingFundingBlock', () => {
         expect(mockCaptureException).toHaveBeenCalledWith(failure, expect.anything())
       );
       expect(await screen.findByRole('button', { name: ctaName('A\\$300') })).toBeEnabled();
+      expect(trackedPayloads(BOOKING_EVENTS.FUNDING_FAILED)).toEqual([
+        { reason: 'booking_failed' },
+      ]);
     });
 
     it('shows the decline copy and never books', async () => {
@@ -586,7 +698,11 @@ describe('BookingFundingBlock', () => {
       await userEvent.click(
         screen.getAllByRole('button', { name: ctaName('A\\$300') })[1] as HTMLElement
       );
-      await waitFor(() => expect(trackedPayloads(BOOKING_EVENTS.FUNDING_FAILED)).toHaveLength(1));
+      await waitFor(() =>
+        expect(trackedPayloads(BOOKING_EVENTS.FUNDING_FAILED)).toContainEqual({
+          reason: 'declined',
+        })
+      );
 
       const payloads = [
         ...trackedPayloads(BOOKING_EVENTS.FUNDING_SHOWN),

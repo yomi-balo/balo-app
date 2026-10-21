@@ -274,3 +274,66 @@ describe('useTopUpCreditPoll — teardown', () => {
     expect(mockGetStatus).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('useTopUpCreditPoll — awaitMandate', () => {
+  const credited = (mandateActive: boolean) => ({
+    status: 'credited',
+    balanceMinor: 30_000,
+    promoGranted: null,
+    mandateActive,
+  });
+
+  it('without awaitMandate, a credit with no live mandate is still terminal', async () => {
+    mockGetStatus.mockResolvedValue(credited(false));
+    const { result } = renderHook(() => useTopUpCreditPoll('pi_1'));
+
+    await waitFor(() => expect(result.current.status).toBe('credited'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TOPUP_POLL_WINDOW_MS);
+    });
+    expect(mockGetStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps polling past the credit until the mandate is live, then stops', async () => {
+    mockGetStatus.mockResolvedValueOnce(credited(false)).mockResolvedValue(credited(true));
+    const { result } = renderHook(() => useTopUpCreditPoll('pi_1', null, { awaitMandate: true }));
+
+    await waitFor(() => expect(mockGetStatus).toHaveBeenCalledTimes(1));
+    expect(result.current.status).toBe('pending');
+    expect(result.current.balanceMinor).toBe(30_000);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TOPUP_POLL_FAST_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current.status).toBe('credited'));
+    expect(mockGetStatus).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TOPUP_POLL_WINDOW_MS);
+    });
+    expect(mockGetStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('ends credited, never unconfirmed, when the window closes after the credit was seen', async () => {
+    mockGetStatus.mockResolvedValue(credited(false));
+    const { result } = renderHook(() => useTopUpCreditPoll('pi_1', null, { awaitMandate: true }));
+    await waitFor(() => expect(mockGetStatus).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TOPUP_POLL_WINDOW_MS + TOPUP_POLL_SLOW_INTERVAL_MS);
+    });
+
+    expect(result.current.status).toBe('credited');
+  });
+
+  it('still ends unconfirmed when the credit itself was never seen', async () => {
+    const { result } = renderHook(() => useTopUpCreditPoll('pi_1', null, { awaitMandate: true }));
+    await waitFor(() => expect(mockGetStatus).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TOPUP_POLL_WINDOW_MS + TOPUP_POLL_SLOW_INTERVAL_MS);
+    });
+
+    expect(result.current.status).toBe('unconfirmed');
+  });
+});

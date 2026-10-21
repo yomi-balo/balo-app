@@ -116,6 +116,7 @@ describe('TopUpComposer', () => {
       status: 'credited',
       balanceMinor: 150_000,
       promoGranted: null,
+      mandateActive: false,
     });
   });
 
@@ -340,6 +341,7 @@ describe('TopUpComposer', () => {
       status: 'credited',
       balanceMinor: 137_500,
       promoGranted: null,
+      mandateActive: false,
     });
     render(
       <TopUpComposer

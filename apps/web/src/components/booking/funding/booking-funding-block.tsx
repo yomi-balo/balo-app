@@ -69,6 +69,8 @@ interface PendingTopUp {
   readonly amountMinor: number;
   readonly promoMinor: number;
   readonly savedCard: boolean;
+  /** The purchase re-armed the wallet's mandate, so the booking waits for it to be live. */
+  readonly mandateCaptured: boolean;
 }
 
 /** The amount that will be charged, or `null` while "Other" holds nothing usable. */
@@ -342,6 +344,7 @@ function ManagerFunding({
         amountMinor: completion.amountMinor,
         promoMinor: completion.promoMinor,
         savedCard: wallet.savedCard !== null && source === 'saved_card',
+        mandateCaptured: completion.mandateCaptured,
       });
       setStage('awaiting_credit');
     },
@@ -361,7 +364,10 @@ function ManagerFunding({
       } catch (error) {
         Sentry.captureException(error, { tags: { feature: 'booking', step: 'funded_book' } });
       }
-      if (booked || !mountedRef.current) return;
+      if (booked) return;
+      // `FUNDED` fired before the outcome was known; this closes it out as a failed booking.
+      track(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'booking_failed' });
+      if (!mountedRef.current) return;
       // The credit has landed but the booking has not, and the block is still on screen: the
       // payment's key is spent, so the next press is a new attempt rather than a replay of it.
       rotate();
@@ -452,33 +458,28 @@ function ManagerFunding({
         <FundingSection view={view} caseSaved={caseSaved} draftKept>
           <div className="flex flex-col gap-[18px] p-4 sm:p-[18px]">
             {stripeConfigured ? (
-              <>
-                <fieldset
-                  disabled={pending !== null}
-                  className="m-0 min-w-0 space-y-[18px] border-0 p-0"
-                >
-                  <FundingAmountPicker
-                    chips={buildAmountChips(suggested)}
-                    amountMinor={amountMinor}
-                    onAmountChange={setAmountMinor}
-                    other={other}
-                    onOtherChange={setOther}
-                    otherValue={otherValue}
-                    onOtherValueChange={setOtherValue}
-                    otherError={parsedOther !== null && !parsedOther.ok ? parsedOther.error : null}
-                    minMinor={suggested}
-                    effectiveMinor={effectiveMinor}
-                    promoMinor={promoMinor}
-                    companyLabel={companyLabels(companyName).mid}
-                  />
-                  <PromoField promo={promo} onApplied={handleApplied} onRemoved={handleRemoved} />
-                </fieldset>
+              <fieldset disabled={busy} className="m-0 min-w-0 space-y-[18px] border-0 p-0">
+                <FundingAmountPicker
+                  chips={buildAmountChips(suggested)}
+                  amountMinor={amountMinor}
+                  onAmountChange={setAmountMinor}
+                  other={other}
+                  onOtherChange={setOther}
+                  otherValue={otherValue}
+                  onOtherValueChange={setOtherValue}
+                  otherError={parsedOther !== null && !parsedOther.ok ? parsedOther.error : null}
+                  minMinor={suggested}
+                  effectiveMinor={effectiveMinor}
+                  promoMinor={promoMinor}
+                  companyLabel={companyLabels(companyName).mid}
+                />
+                <PromoField promo={promo} onApplied={handleApplied} onRemoved={handleRemoved} />
                 <PaymentMethodSection
                   savedCard={wallet.savedCard}
                   source={source}
                   onSourceChange={handleSourceChange}
                 />
-              </>
+              </fieldset>
             ) : (
               <p className="text-muted-foreground text-sm font-medium">
                 Card payments aren&apos;t configured right now. Please try again later.
@@ -510,6 +511,7 @@ function ManagerFunding({
             key={pollAttempt}
             paymentIntentId={pending.paymentIntentId}
             promoCodeId={pending.promoCodeId}
+            awaitMandate={pending.mandateCaptured}
             onCredited={handleCredited}
             onUnconfirmed={handleUnconfirmed}
           />

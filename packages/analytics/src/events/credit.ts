@@ -62,7 +62,10 @@ export interface CreditEventMap {
      * churn a live PostHog property (and every dashboard built on it) for no gain.
      */
     funding_method: 'card' | 'invoice';
-    /** Absent on a pure top-up (booking surface), which neither reads nor writes the setting. */
+    /**
+     * Absent on a pure top-up (booking surface), which writes no setting. Such a purchase may
+     * still re-arm the wallet's EXISTING mandate on a new card; it never changes the mode.
+     */
     low_balance_mode?: 'auto_topup' | 'keep_going' | 'notify_only';
     /** Top-up redesign — new card entered, or the card already on file. */
     payment_method_source?: PaymentMethodSourceProperty;

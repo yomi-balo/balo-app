@@ -15,6 +15,7 @@ import {
 import {
   isCardBackedLowBalanceMode,
   isAbsentPaymentMethodId,
+  isWalletMandateActive,
   type CardBackedModeWriteGuard,
 } from '@balo/shared/credit';
 import { requireOnboardedUser, getCompanyContext } from '@/lib/auth/session';
@@ -97,7 +98,9 @@ const startPurchaseSchema = z
     /**
      * What this purchase does to the wallet's low-balance setting. `persist` (the default, and
      * every billing-page caller) writes `config` and may arm an off-session mandate. `keep` is a
-     * PURE top-up: it writes no config, attempts no mandate, and leaves the setting as it was.
+     * PURE top-up: it writes no config and leaves the setting as it was. Its only mandate work is
+     * re-arming an EXISTING active mandate when a new card replaces the one it was captured
+     * against (see `resolvePurchaseMandate`).
      */
     lowBalance: z.enum(['persist', 'keep']).default('persist'),
     /**
@@ -223,6 +226,13 @@ export type TopUpCreditStatusResult =
        * surface exists to remove; smaller scope.
        */
       promoGranted: boolean | null;
+      /**
+       * Whether the wallet's off-session mandate is live at this read (`isWalletMandateActive`,
+       * the predicate the booking gate reads). A purchase that re-arms a mandate on a new card
+       * can be credited before the SetupIntent's webhook re-activates it, so a caller about to
+       * book on that mandate waits for this as well as for the credit.
+       */
+      mandateActive: boolean;
     };
 
 export type ValidatePromoResult =
@@ -637,8 +647,18 @@ async function persistPurchaseConfig(
 }
 
 /**
- * The mandate result for a purchase. A `keep` purchase (no config) attempted no mandate work, so
- * it is `not_required`; otherwise it follows {@link resolveMandateOutcome}.
+ * The mandate result for a purchase. A `persist` purchase follows {@link resolveMandateOutcome}
+ * for the mode it writes.
+ *
+ * A `keep` purchase (no config) writes no preference and is `not_required` — with ONE exception:
+ * a NEW card on a wallet whose card-backed mode has an ACTIVE mandate. The purchase webhook
+ * (`applySavedCardDisplay`) clears a mandate whose card has changed, so without a fresh consent
+ * the standing mode would go inert and anything relying on it (a booking whose shortfall assumed
+ * the mandate covers it, teammates' sessions) would be refused. That arm re-arms the EXISTING
+ * mode on the new card: it opens a SetupIntent the browser confirms against the card just
+ * charged, the consent step, and still writes no config. Every other `keep` purchase — a saved
+ * card (the mandate already belongs to it), no active mandate, or a non-card-backed mode — has
+ * nothing to re-arm.
  */
 async function resolvePurchaseMandate(
   wallet: CreditWallet,
@@ -648,7 +668,20 @@ async function resolvePurchaseMandate(
   actorUserId: string
 ): Promise<MandateOutcome> {
   if (config === undefined) {
-    return { outcome: 'not_required' };
+    const rearmsExistingMandate =
+      paymentMethodSource === 'new_card' &&
+      wallet.mandateStatus === 'active' &&
+      isCardBackedLowBalanceMode(wallet.lowBalanceMode);
+    if (!rearmsExistingMandate) {
+      return { outcome: 'not_required' };
+    }
+    return resolveMandateOutcome(
+      wallet,
+      wallet.lowBalanceMode,
+      paymentMethodSource,
+      clientRequestId,
+      actorUserId
+    );
   }
   return resolveMandateOutcome(
     wallet,
@@ -661,8 +694,9 @@ async function resolvePurchaseMandate(
 
 /**
  * Start a card top-up: gate MANAGE_BILLING, resolve the wallet, persist low-balance config
- * (unless `lowBalance: 'keep'`, a pure top-up that writes no config and attempts no mandate, so
- * `settlement_outstanding` cannot arise), then charge. `new_card` creates the on-session
+ * (unless `lowBalance: 'keep'`, a pure top-up that writes no config, so
+ * `settlement_outstanding` cannot arise, and attempts no mandate beyond re-arming an existing one
+ * on a new card — see {@link resolvePurchaseMandate}), then charge. `new_card` creates the on-session
  * PaymentIntent (deferred flow) and returns its `clientSecret` for the client to confirm with Stripe.js; `saved_card` has the api create AND
  * confirm the PaymentIntent against the wallet's stored payment method, so the browser only runs
  * 3DS if asked. The wallet is credited by the shipped BAL-382 webhook — this NEVER writes the
@@ -911,6 +945,7 @@ export async function getTopUpCreditStatusAction(
       status: 'credited',
       balanceMinor: wallet.balanceMinor,
       promoGranted: await resolvePromoGranted(wallet.id, promoCodeId),
+      mandateActive: isWalletMandateActive(wallet),
     };
   } catch (error) {
     log.error('Top-up credit status read failed', {

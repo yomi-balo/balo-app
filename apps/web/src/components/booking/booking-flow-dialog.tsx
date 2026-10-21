@@ -710,6 +710,8 @@ export function BookingFlowDialog(
    */
   const openRef = useRef(open);
   openRef.current = open;
+  /** Set when a submit's funding refusal has already re-read the pre-flight — see `handleFunded`. */
+  const refusalReadFundingRef = useRef(false);
   /** Frozen true the moment ANY submit creates a real case row (D4b) — see `handleSubmit`. */
   const caseAlreadyCreatedRef = useRef(false);
 
@@ -1019,6 +1021,7 @@ export function BookingFlowDialog(
     async (outcome: FundingRefusalOutcome): Promise<void> => {
       if (!isFullPanelOutcome(outcome)) {
         const holdRefusal = outcome.kind === 'balance' && outcome.variant === 'hold';
+        refusalReadFundingRef.current = true;
         const view = await refreshFunding({ onCoveredHold: holdRefusal ? 'refuse' : 'defer' });
         if (view?.kind === 'clear') {
           toast.info(BALANCE_NOW_COVERS_COPY);
@@ -1395,13 +1398,15 @@ export function BookingFlowDialog(
   /**
    * The wallet shows the top-up, so book with the SAME nonce as the refused submit. When the
    * booking does not land (the time went, or the gate refused again) the pre-flight is re-read,
-   * so a credit that has landed clears the block before any second payment is offered.
+   * so a credit that has landed clears the block before any second payment is offered. A funding
+   * refusal re-reads it on its own way out, so that read is not repeated here.
    */
   const handleFunded = useCallback(
     async (topUp: FundedTopUp): Promise<boolean> => {
       setFundedTopUp(topUp);
+      refusalReadFundingRef.current = false;
       const booked = await handleSubmit();
-      if (!booked) await refreshFunding();
+      if (!booked && !refusalReadFundingRef.current) await refreshFunding();
       return booked;
     },
     [handleSubmit, refreshFunding]
@@ -1690,7 +1695,10 @@ export function BookingFlowDialog(
 
   if (isMobile) {
     return (
-      <Sheet open={open} onOpenChange={(next) => !next && !isSwitching && handleAbandon()}>
+      <Sheet
+        open={open}
+        onOpenChange={(next) => !next && !isSwitching && !fundingBusy && handleAbandon()}
+      >
         <SheetContent side="bottom" className="max-h-[94dvh] overflow-hidden rounded-t-2xl p-0">
           <SheetTitle className="sr-only">Book a consultation with {expert.name}</SheetTitle>
           <SheetDescription className="sr-only">
@@ -1703,7 +1711,10 @@ export function BookingFlowDialog(
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && !isSwitching && handleAbandon()}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => !next && !isSwitching && !fundingBusy && handleAbandon()}
+    >
       {/* Same width, same reason, as reschedule-dialog.tsx — Step 1 embeds the identical
           calendar and was squeezed the same way at 640px. */}
       <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[min(92vw,840px)]">

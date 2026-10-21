@@ -41,8 +41,8 @@ your booking details on this device so you can pick up where you left off. It do
 time, so the slot is only yours once the call is booked.
 
 If you manage billing but you're booking for a company other than the one you're viewing, the
-button reads **Switch to {Company} and top up**. It switches you to that company so you can top up
-there.
+button reads **Switch to _your company's name_ and top up**. It switches you to that company so
+you can top up there.
 
 If the amount needed is very large, you'll see the full billing window instead. **Top up** takes
 you to billing to add credit, or **Set up billing** if the company isn't set up to pay yet.

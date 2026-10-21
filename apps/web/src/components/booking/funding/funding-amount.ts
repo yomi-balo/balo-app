@@ -10,6 +10,14 @@ export function buildAmountChips(suggestedMinor: number): readonly number[] {
   return [suggestedMinor, ...TIERS_MINOR.filter((tier) => tier > suggestedMinor)];
 }
 
+/** The valid amount nearest to `amountMinor`, for the step message's example. */
+function nearestStepAmount(amountMinor: number, minMinor: number): number {
+  const { step, max } = TOP_UP_LIMITS_MINOR;
+  const nearest = Math.round(amountMinor / step) * step;
+  const lowest = Math.ceil(minMinor / step) * step;
+  return Math.min(Math.max(nearest, lowest), max);
+}
+
 export type OtherAmountResult =
   | { readonly ok: true; readonly amountMinor: number }
   | { readonly ok: false; readonly error: string };
@@ -36,12 +44,14 @@ export function parseOtherAmount(raw: string, minMinor: number): OtherAmountResu
     };
   }
   if (amountMinor % TOP_UP_LIMITS_MINOR.step !== 0) {
-    return { ok: false, error: 'Use whole hundreds, like A$400.' };
+    const step = formatAudShort(TOP_UP_LIMITS_MINOR.step);
+    const example = formatAudShort(nearestStepAmount(amountMinor, minMinor));
+    return { ok: false, error: `Use ${step} steps, like ${example}.` };
   }
   return { ok: true, amountMinor };
 }
 
 /** The helper line under the "Other" field while it holds no error. */
 export function otherAmountHint(minMinor: number): string {
-  return `Between ${formatAudShort(minMinor)} and ${formatAudShort(TOP_UP_LIMITS_MINOR.max)}, in A$100 steps.`;
+  return `Between ${formatAudShort(minMinor)} and ${formatAudShort(TOP_UP_LIMITS_MINOR.max)}, in ${formatAudShort(TOP_UP_LIMITS_MINOR.step)} steps.`;
 }
