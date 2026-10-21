@@ -65,7 +65,9 @@ vi.mock('@balo/db', () => ({
   ProposalTrackNotOpenError,
 }));
 
+import { z } from 'zod';
 import { saveProposalDraftAction } from './save-proposal-draft';
+import { proposalDraftBaseFields } from './proposal-schema';
 import { log } from '@/lib/logging';
 
 const USER = { id: 'user-expert', firstName: 'Ada', lastName: 'L' };
@@ -79,6 +81,29 @@ const VALID_INPUT = {
   milestones: [{ title: 'M1', descriptionHtml: '<p>d</p>', valueCents: 1000 }],
   installments: [{ label: 'Upfront', pct: 100 }],
 };
+
+/** Every optional header field the composer clears by sending `null`. */
+const CLEARED_HEADER = {
+  timeframeWeeks: null,
+  exclusions: null,
+  depositCents: null,
+  rateCents: null,
+  cadence: null,
+};
+
+describe('proposalDraftBaseFields', () => {
+  const schema = z.object(proposalDraftBaseFields);
+
+  it('accepts null for every optional header field', () => {
+    const parsed = schema.safeParse({ ...VALID_INPUT, ...CLEARED_HEADER });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toMatchObject(CLEARED_HEADER);
+  });
+
+  it('still accepts the optional header fields omitted', () => {
+    expect(schema.safeParse(VALID_INPUT).success).toBe(true);
+  });
+});
 
 describe('saveProposalDraftAction', () => {
   beforeEach(() => {
@@ -154,6 +179,23 @@ describe('saveProposalDraftAction', () => {
       expect.objectContaining({ proposalId: PROPOSAL_ID, overview: '<p>scope</p>' })
     );
     expect(mockCreateDraft).not.toHaveBeenCalled();
+  });
+
+  it('passes cleared optional header fields through to updateDraft as null', async () => {
+    mockFindCurrent.mockResolvedValue({ id: PROPOSAL_ID });
+    const result = await saveProposalDraftAction({ ...VALID_INPUT, ...CLEARED_HEADER });
+    expect(result).toEqual({ success: true, proposalId: PROPOSAL_ID });
+    expect(mockUpdateDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ proposalId: PROPOSAL_ID, ...CLEARED_HEADER })
+    );
+  });
+
+  it('passes null optional header fields through to createDraft', async () => {
+    const result = await saveProposalDraftAction({ ...VALID_INPUT, ...CLEARED_HEADER });
+    expect(result).toEqual({ success: true, proposalId: PROPOSAL_ID });
+    expect(mockCreateDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ relationshipId: REL_ID, ...CLEARED_HEADER })
+    );
   });
 
   it('recovers from a create race (23505) by adopting the concurrent draft via updateDraft', async () => {

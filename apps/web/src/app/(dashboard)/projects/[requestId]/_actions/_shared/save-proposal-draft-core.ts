@@ -37,17 +37,17 @@ const ONLY_EXPERT = 'Only the expert can build a proposal.';
 const STALE_DRAFT = 'This proposal can no longer be edited.';
 const GENERIC_FAILURE = "Couldn't save your draft. Please try again.";
 
-/** The header columns shared by `createDraft` / `updateDraft`. */
+/** The header columns shared by `createDraft` / `updateDraft`; `null` clears an optional column. */
 type DraftHeader = {
   overview: string;
   pricingMethod: 'fixed' | 'tm';
   priceCents: number;
   currency?: string;
-  timeframeWeeks?: number;
-  exclusions?: string;
-  depositCents?: number;
-  rateCents?: number;
-  cadence?: 'monthly' | 'fortnightly';
+  timeframeWeeks?: number | null;
+  exclusions?: string | null;
+  depositCents?: number | null;
+  rateCents?: number | null;
+  cadence?: 'monthly' | 'fortnightly' | null;
 };
 
 /**

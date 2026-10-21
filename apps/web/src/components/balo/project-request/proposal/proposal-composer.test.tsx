@@ -1351,6 +1351,49 @@ describe('ProposalComposer — removing a milestone', () => {
     expect(screen.getByLabelText('Milestone 3 title')).toHaveValue('Launch');
   });
 
+  it.each([
+    ['only a "Done when"', { acceptanceCriteria: 'Sign-off from the client' }],
+    ['only a "Done when" as editor HTML', { acceptanceCriteria: '<p>Sign-off</p>' }],
+    ['only an hour estimate', { estimatedMinutes: 90 }],
+  ])('offers Undo for a milestone holding %s', async (_label, content) => {
+    const user = userEvent.setup();
+    const draft = readyDraft();
+    const milestone = {
+      ...firstMilestone(draft),
+      key: nextDraftKey(),
+      title: '',
+      valueCents: null,
+      ...content,
+    };
+    renderComposer({ ...draft, milestones: [...draft.milestones, milestone] });
+    vi.mocked(toast).mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Remove milestone 2' }));
+
+    expect(toast).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ action: { label: 'Undo', onClick: expect.any(Function) } })
+    );
+  });
+
+  it('shows no Undo for a milestone whose only "Done when" is an empty paragraph', async () => {
+    const user = userEvent.setup();
+    const draft = readyDraft();
+    const milestone = {
+      ...firstMilestone(draft),
+      key: nextDraftKey(),
+      title: '',
+      valueCents: null,
+      acceptanceCriteria: '<p></p>',
+    };
+    renderComposer({ ...draft, milestones: [...draft.milestones, milestone] });
+    vi.mocked(toast).mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Remove milestone 2' }));
+
+    expect(toast).not.toHaveBeenCalled();
+  });
+
   it('shows no Undo for an empty milestone', async () => {
     const user = userEvent.setup();
     const draft = readyDraft();

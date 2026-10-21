@@ -504,11 +504,11 @@ export const proposalsRepository = {
     pricingMethod: PricingMethod;
     priceCents: number;
     currency?: string;
-    timeframeWeeks?: number;
-    exclusions?: string;
-    depositCents?: number;
-    rateCents?: number;
-    cadence?: ProposalCadence;
+    timeframeWeeks?: number | null;
+    exclusions?: string | null;
+    depositCents?: number | null;
+    rateCents?: number | null;
+    cadence?: ProposalCadence | null;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
@@ -597,6 +597,11 @@ export const proposalsRepository = {
    * silently overwrite the submitted proposal — throws `ProposalNotDraftError`
    * (missing/soft-deleted/non-draft). On success touches `updatedAt`.
    *
+   * The optional header columns (`timeframeWeeks`, `exclusions`, `depositCents`,
+   * `rateCents`, `cadence`) take `null` to CLEAR the column; `undefined` leaves it
+   * unchanged, because Drizzle's `.set()` skips `undefined` keys. The composer sends
+   * `null` for every cleared field, so a value the expert removed never survives.
+   *
    * BOUNDARY: writes ONLY the proposal header. Milestones / installments /
    * documents are persisted via their own `setForProposal` / document repos by the
    * action, NOT here — keeping autosave a single-row write. Both `setForProposal`
@@ -608,11 +613,11 @@ export const proposalsRepository = {
     pricingMethod: PricingMethod;
     priceCents: number;
     currency?: string;
-    timeframeWeeks?: number;
-    exclusions?: string;
-    depositCents?: number;
-    rateCents?: number;
-    cadence?: ProposalCadence;
+    timeframeWeeks?: number | null;
+    exclusions?: string | null;
+    depositCents?: number | null;
+    rateCents?: number | null;
+    cadence?: ProposalCadence | null;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       await lockDraftProposalTx(tx, input.proposalId);
@@ -1044,11 +1049,11 @@ export const proposalsRepository = {
     pricingMethod: PricingMethod;
     priceCents: number;
     currency?: string;
-    timeframeWeeks?: number;
-    exclusions?: string;
-    depositCents?: number;
-    rateCents?: number;
-    cadence?: ProposalCadence;
+    timeframeWeeks?: number | null;
+    exclusions?: string | null;
+    depositCents?: number | null;
+    rateCents?: number | null;
+    cadence?: ProposalCadence | null;
     milestones: ProposalMilestoneInput[];
     installments: ProposalPaymentInstallmentInput[];
   }): Promise<Proposal> {

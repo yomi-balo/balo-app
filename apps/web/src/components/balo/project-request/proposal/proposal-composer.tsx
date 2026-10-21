@@ -5,6 +5,7 @@ import { MessageSquare, Paperclip } from 'lucide-react';
 import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
+import { isDescriptionEmpty, isRichTextHtml } from '@/components/balo/rich-text/plain-text';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { saveProposalDraftAction } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
@@ -117,11 +118,19 @@ function toastWithUndo(message: string, onUndo: () => void, id: string): void {
   toast(message, { id, action: { label: 'Undo', onClick: onUndo } });
 }
 
+/** True when a text or editor-HTML value carries visible text (`<p></p>` counts as empty). */
+function hasText(value: string): boolean {
+  return isRichTextHtml(value) ? !isDescriptionEmpty(value) : value.trim().length > 0;
+}
+
+/** A milestone worth an Undo on removal: any typed text, an amount, or an hour estimate. */
 function milestoneHasContent(milestone: ProposalMilestoneDraft): boolean {
   return (
-    milestone.title.trim().length > 0 ||
-    milestone.descriptionHtml.trim().length > 0 ||
-    (milestone.valueCents ?? 0) > 0
+    hasText(milestone.title) ||
+    hasText(milestone.descriptionHtml) ||
+    hasText(milestone.acceptanceCriteria) ||
+    (milestone.valueCents ?? 0) > 0 ||
+    (milestone.estimatedMinutes ?? 0) > 0
   );
 }
 

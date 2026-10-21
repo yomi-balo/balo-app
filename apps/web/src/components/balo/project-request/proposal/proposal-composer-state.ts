@@ -522,8 +522,9 @@ export function summaryReadiness(state: ProposalDraftState): ReadinessResult {
 
 /**
  * Serialise composer state → the autosave action payload (replace-all milestone +
- * installment lists every save). T&M-only commercial fields are omitted under
- * Fixed and vice-versa, mirroring the schema's nullable columns; partial-draft
+ * installment lists every save). A cleared optional header field is sent as `null`
+ * — never omitted — so the save clears the stored column: an empty timeframe or
+ * exclusions, and the T&M-only deposit/rate/cadence under Fixed. Partial-draft
  * tolerant (the autosave action never enforces readiness).
  */
 export function toSavePayload(
@@ -539,11 +540,11 @@ export function toSavePayload(
     pricingMethod: state.pricingMethod,
     priceCents: computeTotalCents(state),
     currency: state.currency,
-    timeframeWeeks: state.timeframeWeeks ?? undefined,
-    exclusions: state.exclusions.trim().length > 0 ? state.exclusions : undefined,
-    depositCents: !isFixed && state.depositCents !== null ? state.depositCents : undefined,
-    rateCents: !isFixed && state.rateCents !== null ? state.rateCents : undefined,
-    cadence: isFixed ? undefined : state.cadence,
+    timeframeWeeks: state.timeframeWeeks,
+    exclusions: state.exclusions.trim().length > 0 ? state.exclusions : null,
+    depositCents: isFixed ? null : state.depositCents,
+    rateCents: isFixed ? null : state.rateCents,
+    cadence: isFixed ? null : state.cadence,
     milestones: state.milestones.map((m) => ({
       title: m.title,
       descriptionHtml: m.descriptionHtml.trim().length > 0 ? m.descriptionHtml : null,

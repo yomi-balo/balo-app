@@ -177,7 +177,7 @@ async function sanitiseAndPersistDraft(
   }
 
   const sanitisedExclusions =
-    draft.exclusions === null ? undefined : sanitizeProjectHtml(draft.exclusions);
+    draft.exclusions === null ? null : sanitizeProjectHtml(draft.exclusions);
 
   const sanitisedMilestones: ProposalMilestoneInput[] = milestones.map((m) => ({
     title: m.title,
@@ -199,11 +199,11 @@ async function sanitiseAndPersistDraft(
       pricingMethod: draft.pricingMethod,
       priceCents: draft.priceCents,
       currency: draft.currency,
-      timeframeWeeks: draft.timeframeWeeks ?? undefined,
+      timeframeWeeks: draft.timeframeWeeks,
       exclusions: sanitisedExclusions,
-      depositCents: draft.depositCents ?? undefined,
-      rateCents: draft.rateCents ?? undefined,
-      cadence: draft.cadence ?? undefined,
+      depositCents: draft.depositCents,
+      rateCents: draft.rateCents,
+      cadence: draft.cadence,
     });
     await proposalMilestonesRepository.setForProposal({
       proposalId: draft.id,

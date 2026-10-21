@@ -1341,6 +1341,73 @@ describe('proposalsRepository.updateDraft', () => {
     expect(updated.updatedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
   });
 
+  it('clears every optional header column when it is sent as null', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: relationship.id,
+      overview: '<p>T&amp;M draft.</p>',
+      pricingMethod: 'tm',
+      priceCents: 500000,
+      timeframeWeeks: 6,
+      exclusions: '<p>Excludes data migration.</p>',
+      depositCents: 100000,
+      rateCents: 25000,
+      cadence: 'fortnightly',
+    });
+    expect(draft.timeframeWeeks).toBe(6);
+    expect(draft.exclusions).toBe('<p>Excludes data migration.</p>');
+    expect(draft.depositCents).toBe(100000);
+    expect(draft.rateCents).toBe(25000);
+    expect(draft.cadence).toBe('fortnightly');
+
+    await proposalsRepository.updateDraft({
+      proposalId: draft.id,
+      overview: '<p>Switched to Fixed.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 500000,
+      timeframeWeeks: null,
+      exclusions: null,
+      depositCents: null,
+      rateCents: null,
+      cadence: null,
+    });
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, draft.id));
+    expect(raw?.pricingMethod).toBe('fixed');
+    expect(raw?.timeframeWeeks).toBeNull();
+    expect(raw?.exclusions).toBeNull();
+    expect(raw?.depositCents).toBeNull();
+    expect(raw?.rateCents).toBeNull();
+    expect(raw?.cadence).toBeNull();
+  });
+
+  it('leaves an optional header column unchanged when it is omitted', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: relationship.id,
+      overview: '<p>v0.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 0,
+      timeframeWeeks: 3,
+      exclusions: '<p>Excludes training.</p>',
+    });
+
+    await proposalsRepository.updateDraft({
+      proposalId: draft.id,
+      overview: '<p>v1.</p>',
+      pricingMethod: 'fixed',
+      priceCents: 1000,
+    });
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, draft.id));
+    expect(raw?.timeframeWeeks).toBe(3);
+    expect(raw?.exclusions).toBe('<p>Excludes training.</p>');
+  });
+
   it('leaves baloFeeBps unchanged (fee is immutable within a version)', async () => {
     // Seed a request with a non-default fee so the snapshot is observable.
     const request = await projectRequestFactory({ baloFeeBps: 3000 });

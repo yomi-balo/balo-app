@@ -148,12 +148,10 @@ interface SanitisedContent {
  * and each milestone description + the exclusions via `sanitizeProjectHtml`.
  */
 function sanitiseContent(input: ResubmitProposalInput): SanitisedContent {
+  const exclusions = input.exclusions ?? '';
   return {
     overview: sanitizeProposalOverviewHtml(input.overview),
-    exclusions:
-      input.exclusions === undefined || input.exclusions.length === 0
-        ? undefined
-        : sanitizeProjectHtml(input.exclusions),
+    exclusions: exclusions.length === 0 ? undefined : sanitizeProjectHtml(exclusions),
     milestones: input.milestones.map((m) => ({
       title: m.title,
       descriptionHtml:
@@ -205,33 +203,34 @@ function coherenceFailure(args: {
  * key can't be reused) and re-registered on v2. A per-doc failure is warn-logged and
  * skipped — a missing attachment must NEVER fail the resubmit (the header + children
  * are already committed).
+ *
+ * Sequential on purpose: v2's attachments are listed by `createdAt`, so inserting
+ * one at a time in v1's order keeps them in the order the client saw on v1.
  */
 async function carryOverDocuments(fromProposalId: string, toProposalId: string): Promise<void> {
   const v1Docs = await proposalDocumentsRepository.listByProposal(fromProposalId);
-  await Promise.all(
-    v1Docs.map(async (doc) => {
-      try {
-        const destKey = generateProposalDocumentKey(toProposalId, doc.uploadedByUserId);
-        await copyProposalDocumentObject(doc.r2Key, destKey);
-        await proposalDocumentsRepository.addDocument({
-          proposalId: toProposalId,
-          r2Key: destKey,
-          fileName: doc.fileName,
-          contentType: doc.contentType,
-          sizeBytes: doc.sizeBytes,
-          kind: doc.kind,
-          uploadedByUserId: doc.uploadedByUserId,
-        });
-      } catch (error) {
-        log.warn('Proposal document carryover failed (skipped)', {
-          fromProposalId,
-          toProposalId,
-          sourceDocumentId: doc.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    })
-  );
+  for (const doc of v1Docs) {
+    try {
+      const destKey = generateProposalDocumentKey(toProposalId, doc.uploadedByUserId);
+      await copyProposalDocumentObject(doc.r2Key, destKey);
+      await proposalDocumentsRepository.addDocument({
+        proposalId: toProposalId,
+        r2Key: destKey,
+        fileName: doc.fileName,
+        contentType: doc.contentType,
+        sizeBytes: doc.sizeBytes,
+        kind: doc.kind,
+        uploadedByUserId: doc.uploadedByUserId,
+      });
+    } catch (error) {
+      log.warn('Proposal document carryover failed (skipped)', {
+        fromProposalId,
+        toProposalId,
+        sourceDocumentId: doc.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 type GrantedAccess = Extract<Awaited<ReturnType<typeof resolveConversationAccess>>, { ok: true }>;

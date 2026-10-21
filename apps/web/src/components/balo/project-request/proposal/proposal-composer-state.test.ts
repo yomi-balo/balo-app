@@ -412,10 +412,19 @@ describe('toSavePayload — Fixed', () => {
     expect(payload.milestones).toHaveLength(2);
     expect(payload.milestones[0]?.valueCents).toBe(400_000);
     expect(payload.installments).toHaveLength(2);
-    // T&M fields omitted under Fixed.
-    expect(payload.depositCents).toBeUndefined();
-    expect(payload.rateCents).toBeUndefined();
-    expect(payload.cadence).toBeUndefined();
+    // T&M fields sent as null under Fixed, so a Fixed save clears them.
+    expect(payload.depositCents).toBeNull();
+    expect(payload.rateCents).toBeNull();
+    expect(payload.cadence).toBeNull();
+  });
+
+  it('nulls the T&M terms after a T&M→Fixed switch that left them in state', () => {
+    const s = { ...readyTm(), pricingMethod: 'fixed' as const };
+    const payload = toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID);
+    expect(s.depositCents).not.toBeNull();
+    expect(payload.depositCents).toBeNull();
+    expect(payload.rateCents).toBeNull();
+    expect(payload.cadence).toBeNull();
   });
 
   it('priceCents follows the typed price, decoupled from the milestone valueCents sum', () => {
@@ -446,13 +455,13 @@ describe('toSavePayload — Fixed', () => {
     expect(payload.milestones[1]?.acceptanceCriteria).toBeNull();
   });
 
-  it('omits exclusions and timeframe when absent', () => {
+  it('sends null for a cleared timeframe and emptied exclusions', () => {
     const s = readyFixed();
-    s.exclusions = '';
+    s.exclusions = '   ';
     s.timeframeWeeks = null;
     const payload = toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID);
-    expect(payload.exclusions).toBeUndefined();
-    expect(payload.timeframeWeeks).toBeUndefined();
+    expect(payload.exclusions).toBeNull();
+    expect(payload.timeframeWeeks).toBeNull();
   });
 });
 
@@ -465,6 +474,13 @@ describe('toSavePayload — T&M', () => {
     expect(payload.depositCents).toBe(200_000);
     expect(payload.rateCents).toBe(25_000);
     expect(payload.cadence).toBe('fortnightly');
+  });
+
+  it('sends null for a cleared deposit and rate', () => {
+    const s = { ...readyTm(), depositCents: null, rateCents: null };
+    const payload = toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID);
+    expect(payload.depositCents).toBeNull();
+    expect(payload.rateCents).toBeNull();
   });
 
   it('persists per-milestone estimatedMinutes and derives priceCents from effort × rate', () => {
