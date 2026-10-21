@@ -731,7 +731,7 @@ export async function tearDownCancelledMeetings(
 
   for (const entry of entries) {
     const meeting = await meetingsRepository.findById(entry.meetingId);
-    if (meeting === undefined || meeting.status !== 'cancelled') {
+    if (meeting?.status !== 'cancelled') {
       skipped += 1;
       continue;
     }

@@ -152,7 +152,10 @@ import type { FastifyBaseLogger } from 'fastify';
 import { DailyApiError, DailyRoomNotPrivateError } from '../daily/errors.js';
 import type { RoomProvisioner, RoomTeardown } from '../daily/rooms.js';
 import { dailyRoomProvisioner, dailyRoomTeardown } from '../daily/rooms.js';
-import { enqueueBookingCalendarProjection } from '../../jobs/booking-calendar-projection-job.js';
+import {
+  bookingCalendarProjectionJobId,
+  enqueueBookingCalendarProjection,
+} from '../../jobs/booking-calendar-projection-job.js';
 import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
 import { raiseAdminAlert } from '../admin-alerts/raise.js';
 import type { BookableEngagementType } from './authorize-meeting-booking.js';
@@ -685,10 +688,37 @@ export async function bookAndProvisionMeeting(
 }
 
 /**
- * Hands the committed booking to the calendar projection job. Never throws: an enqueue failure
- * (Redis down) is logged and raised as an admin alert, because nothing re-drives a booking whose
- * projection was never queued — the expert gets no external calendar entry and nobody is
- * sent an invite until someone acts on the alert.
+ * The request path waits at most this long for the projection job to be queued. A hung Redis
+ * connection must not hold a committed booking's 201 hostage.
+ */
+export const PROJECTION_ENQUEUE_TIMEOUT_MS = 2000;
+
+/** Rejects with a "timed out" error after the bound; the timer never outlives the race. */
+async function enqueueWithinTimeout(enqueue: Promise<void>): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Enqueue timed out after ${PROJECTION_ENQUEUE_TIMEOUT_MS}ms`));
+    }, PROJECTION_ENQUEUE_TIMEOUT_MS);
+    timer.unref();
+  });
+  try {
+    await Promise.race([enqueue, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const PROJECTION_ENQUEUE_FAILED_NEXT_STEP =
+  'Nothing may have been queued. If the job does not exist in `booking-calendar-projection`, re-enqueue it via `enqueueBookingCalendarProjection`. If it does exist (a timed-out add that landed late), no action is needed.';
+
+/**
+ * Hands the committed booking to the calendar projection job, waiting at most
+ * {@link PROJECTION_ENQUEUE_TIMEOUT_MS}. Never throws: an enqueue failure (Redis down, or the
+ * add timing out and possibly landing late — the jobId makes any re-add a no-op) is logged and
+ * raised as an admin alert, because nothing re-drives a booking whose projection was never
+ * queued — the expert gets no external calendar entry and nobody is sent an invite until
+ * someone acts on the alert.
  *
  * ⚠ The persisted alert text carries `sanitizedErrorMessage`, never the raw error, which may
  * wrap a vendor or connection URL; the `log.error` line keeps the raw message.
@@ -700,13 +730,15 @@ async function enqueueProjectionOrAlert(
 ): Promise<void> {
   const meetingId = created.meeting.id;
   try {
-    await enqueueBookingCalendarProjection({
-      meetingId,
-      expertProfileId: created.expertProfileId,
-      contextType: input.contextType,
-      contextId: input.contextId,
-      userId: input.userId,
-    });
+    await enqueueWithinTimeout(
+      enqueueBookingCalendarProjection({
+        meetingId,
+        expertProfileId: created.expertProfileId,
+        contextType: input.contextType,
+        contextId: input.contextId,
+        userId: input.userId,
+      })
+    );
   } catch (error) {
     log.error(
       {
@@ -718,6 +750,7 @@ async function enqueueProjectionOrAlert(
       },
       'Failed to enqueue booking-calendar-projection job'
     );
+    const queuedAs = bookingCalendarProjectionJobId(meetingId);
     await raiseAdminAlert({
       kind: 'calendar.projection_enqueue_failed',
       entityType: 'meeting',
@@ -725,11 +758,12 @@ async function enqueueProjectionOrAlert(
       detail: {
         title: 'Calendar projection could not be enqueued after a booking',
         entityLabel: `Meeting ${meetingId}`,
-        evidence: `The booking calendar projection job failed to enqueue: ${sanitizedErrorMessage(error)}`,
+        evidence: `The booking calendar projection job failed to enqueue: ${sanitizedErrorMessage(error)}. ${PROJECTION_ENQUEUE_FAILED_NEXT_STEP}`,
         facts: [
           ['Meeting', meetingId],
           ['Expert profile', created.expertProfileId ?? 'none'],
           ['Start', created.meeting.scheduledStart.toISOString()],
+          ['Job id', queuedAs],
         ],
       },
     });

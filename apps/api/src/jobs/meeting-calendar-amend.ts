@@ -106,7 +106,7 @@ export async function processMeetingCalendarAmend(
   // 1. Missing or soft-deleted ⇒ converged, nothing to amend.
   const meeting = await meetingsRepository.findById(meetingId);
   if (meeting === undefined) {
-    job.log(`Meeting ${meetingId} not found (or soft-deleted) — converged, nothing to amend`);
+    await job.log(`Meeting ${meetingId} not found (or soft-deleted) — converged, nothing to amend`);
     return;
   }
 
@@ -116,7 +116,7 @@ export async function processMeetingCalendarAmend(
   //    post-commit. It publishes the `METHOD:CANCEL` fan-out, calls `deleteConsultationEvent`
   //    and retires every party's row. A cancelled meeting is still not this job's to AMEND.
   if (meeting.status === 'cancelled') {
-    job.log(
+    await job.log(
       `Meeting ${meetingId} is cancelled — the vendor calendar delete belongs to withdrawMeetingCalendarProjection, not this job`
     );
     return;
@@ -138,7 +138,7 @@ export async function processMeetingCalendarAmend(
   //    address a vendor event that does not exist.
   const row = await meetingCalendarEventsRepository.findLiveExpertProviderEvent(meetingId);
   if (row === undefined) {
-    job.log(
+    await job.log(
       `Meeting ${meetingId} has no live expert-party PROVIDER event — converged, nothing to amend`
     );
     return;
@@ -165,7 +165,7 @@ export async function processMeetingCalendarAmend(
       startAt: meeting.scheduledStart,
       endAt: meeting.scheduledEnd,
     });
-    job.log(`Meeting ${meetingId} calendar event amended to the current window`);
+    await job.log(`Meeting ${meetingId} calendar event amended to the current window`);
   } catch (error) {
     await handleAmendError(job, error, { meetingId, expertProfileId }, token);
   }

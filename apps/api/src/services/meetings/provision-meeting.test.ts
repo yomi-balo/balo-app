@@ -58,6 +58,8 @@ vi.mock('@balo/analytics/server', () => ({
 vi.mock('./meeting-availability.js', () => ({ bookMeeting: mockBookMeeting }));
 // A missing mock here would let the real module open a Redis-backed queue on every fresh create.
 vi.mock('../../jobs/booking-calendar-projection-job.js', () => ({
+  bookingCalendarProjectionJobId: (meetingId: string) =>
+    `booking-calendar-projection--${meetingId}`,
   enqueueBookingCalendarProjection: mockEnqueueBookingCalendarProjection,
 }));
 vi.mock('../admin-alerts/raise.js', () => ({ raiseAdminAlert: mockRaiseAdminAlert }));
@@ -75,6 +77,7 @@ import {
   bookAndProvisionMeeting,
   provisionMeeting,
   BookingIdempotencyKeyConflictError,
+  PROJECTION_ENQUEUE_TIMEOUT_MS,
   type BookAndProvisionInput,
 } from './provision-meeting.js';
 
@@ -1296,7 +1299,11 @@ describe('bookAndProvisionMeeting — the calendar projection enqueue (BAL-607)'
         ['Meeting', MEETING_ID],
         ['Expert profile', 'expert_1'],
         ['Start', START.toISOString()],
+        ['Job id', `booking-calendar-projection--${MEETING_ID}`],
       ]);
+      expect(input.detail.evidence).toContain('Nothing may have been queued');
+      expect(input.detail.evidence).toContain('enqueueBookingCalendarProjection');
+      expect(input.detail.evidence).toContain('no action is needed');
     });
 
     it('a booking with no expert reports "none" in the facts', async () => {
@@ -1312,6 +1319,63 @@ describe('bookAndProvisionMeeting — the calendar projection enqueue (BAL-607)'
 
       const [[input]] = mockRaiseAdminAlert.mock.calls;
       expect(input.detail.facts).toContainEqual(['Expert profile', 'none']);
+    });
+  });
+
+  describe('the enqueue time bound', () => {
+    it('a never-settling add resolves the booking after the bound, with the alert', async () => {
+      mockEnqueueBookingCalendarProjection.mockReturnValue(new Promise<void>(() => undefined));
+
+      const pending = bookAndProvisionMeeting(bookInput('case'), log, {
+        provisioner: fakeProvisioner(),
+      });
+      await vi.advanceTimersByTimeAsync(PROJECTION_ENQUEUE_TIMEOUT_MS);
+      const result = await pending;
+
+      expect(PROJECTION_ENQUEUE_TIMEOUT_MS).toBe(2000);
+      expect(result).toMatchObject({
+        meeting: expect.objectContaining({ id: MEETING_ID }),
+        provisioned: true,
+      });
+      expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meetingId: MEETING_ID,
+          error: expect.stringContaining('timed out'),
+        }),
+        'Failed to enqueue booking-calendar-projection job'
+      );
+      expect(mockRaiseAdminAlert).toHaveBeenCalledTimes(1);
+      const [[input]] = mockRaiseAdminAlert.mock.calls;
+      expect(input.kind).toBe('calendar.projection_enqueue_failed');
+      expect(input.detail.evidence).toContain('timed out');
+      expect(input.detail.evidence).toContain('a timed-out add that landed late');
+    });
+
+    it('does not time out before the bound elapses', async () => {
+      mockEnqueueBookingCalendarProjection.mockReturnValue(new Promise<void>(() => undefined));
+
+      let settled = false;
+      const pending = bookAndProvisionMeeting(bookInput('case'), log, {
+        provisioner: fakeProvisioner(),
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(PROJECTION_ENQUEUE_TIMEOUT_MS - 1);
+
+      expect(settled).toBe(false);
+      expect(mockRaiseAdminAlert).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(settled).toBe(true);
+    });
+
+    it('a fast add raises no alert and leaves no timer pending', async () => {
+      await bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() });
+
+      expect(mockRaiseAdminAlert).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 });

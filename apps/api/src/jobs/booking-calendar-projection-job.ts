@@ -11,6 +11,8 @@ import type { MeetingBookingContextType } from '@balo/shared/meetings';
 import type { FastifyBaseLogger } from 'fastify';
 import { createRedisConnection } from '../lib/redis.js';
 import { buildJobId, getQueue } from '../lib/queue.js';
+import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
+import { raiseAdminAlert } from '../services/admin-alerts/raise.js';
 import { publishBookingCalendarInvites } from '../services/calendar-invites/publish-calendar-invites.js';
 import {
   logCalendarProjectionOutcome,
@@ -361,6 +363,44 @@ export async function processBookingCalendarProjection(
   await publishBookingCalendarInvitesSafely(data);
 }
 
+const STALLED_EVIDENCE =
+  "The projection job stalled and was not re-run. The job may have partly run (an expert vendor event may exist) — check the expert's calendar before re-driving.";
+const FAILED_BEFORE_PROJECTING_EVIDENCE =
+  'The projection job failed before projecting — nothing ran.';
+
+/**
+ * Raises the admin alert for a failed projection job. Nothing re-runs it (`attempts: 1`,
+ * `maxStalledCount: 0`), so without the alert a booking would silently keep no external
+ * calendar entry and send no invite.
+ *
+ * BullMQ words a stalled job's `failedReason` with "stalled"; any other failure can only come
+ * from P1's read, the one unguarded await ahead of the first vendor call.
+ */
+async function raiseProjectionFailedAlert(
+  job: Job<BookingCalendarProjectionJobData>,
+  error: Error
+): Promise<void> {
+  const { meetingId, expertProfileId } = job.data;
+  const queuedAs = job.id ?? bookingCalendarProjectionJobId(meetingId);
+  const stalled = error.message.toLowerCase().includes('stalled');
+  await raiseAdminAlert({
+    kind: 'calendar.projection_failed',
+    entityType: 'meeting',
+    entityId: meetingId,
+    detail: {
+      title: 'Calendar projection failed after a booking',
+      entityLabel: `Meeting ${meetingId}`,
+      evidence: `${stalled ? STALLED_EVIDENCE : FAILED_BEFORE_PROJECTING_EVIDENCE} (${sanitizedErrorMessage(error)}). Re-drive with \`job.retry()\` on the kept failed job \`${queuedAs}\` in queue \`${BOOKING_CALENDAR_PROJECTION_QUEUE}\`. Adding the same jobId again is a no-op while the failed job is retained.`,
+      facts: [
+        ['Meeting', meetingId],
+        ['Expert profile', expertProfileId ?? 'none'],
+        ['Job id', queuedAs],
+        ['Failure', stalled ? 'stalled' : 'error'],
+      ],
+    },
+  });
+}
+
 export function startBookingCalendarProjectionWorker(): Worker<BookingCalendarProjectionJobData> {
   const worker = new Worker<BookingCalendarProjectionJobData>(
     BOOKING_CALENDAR_PROJECTION_QUEUE,
@@ -377,6 +417,13 @@ export function startBookingCalendarProjectionWorker(): Worker<BookingCalendarPr
       { meetingId: job?.data.meetingId, error: err.message, stack: err.stack },
       'Booking calendar projection failed — not retried'
     );
+    if (job === undefined) return;
+    raiseProjectionFailedAlert(job, err).catch((alertError: unknown) => {
+      logger.error(
+        { meetingId: job.data.meetingId, ...errorFields(alertError) },
+        'Could not raise the calendar.projection_failed alert'
+      );
+    });
   });
 
   return worker;

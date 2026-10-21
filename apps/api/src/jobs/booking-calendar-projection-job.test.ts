@@ -24,6 +24,7 @@ const {
   mockWithdraw,
   mockEnqueueAmend,
   mockReportAmendFailure,
+  mockRaiseAdminAlert,
   mockLog,
   workerCapture,
 } = vi.hoisted(() => ({
@@ -39,6 +40,7 @@ const {
   mockWithdraw: vi.fn(),
   mockEnqueueAmend: vi.fn(),
   mockReportAmendFailure: vi.fn(),
+  mockRaiseAdminAlert: vi.fn(),
   mockLog: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   workerCapture: {
     queueName: null as string | null,
@@ -107,6 +109,8 @@ vi.mock('../services/meetings/withdraw-meeting-calendar.js', () => ({
 vi.mock('./meeting-calendar-amend.js', () => ({
   enqueueMeetingCalendarAmend: mockEnqueueAmend,
 }));
+
+vi.mock('../services/admin-alerts/raise.js', () => ({ raiseAdminAlert: mockRaiseAdminAlert }));
 
 vi.mock('../services/meetings/meeting-availability.js', () => ({
   reportCalendarAmendEnqueueFailure: mockReportAmendFailure,
@@ -178,6 +182,7 @@ beforeEach(() => {
   mockWithdraw.mockResolvedValue(undefined);
   mockEnqueueAmend.mockResolvedValue(undefined);
   mockReportAmendFailure.mockResolvedValue(undefined);
+  mockRaiseAdminAlert.mockResolvedValue(undefined);
 });
 
 describe('enqueueBookingCalendarProjection', () => {
@@ -247,6 +252,95 @@ describe('startBookingCalendarProjectionWorker', () => {
       { meetingId: undefined, error: 'boom', stack: expect.any(String) },
       expect.any(String)
     );
+  });
+
+  describe('the calendar.projection_failed alert', () => {
+    const JOB_ID = bookingCalendarProjectionJobId(MEETING_ID);
+
+    it('a job with no record raises nothing', () => {
+      startBookingCalendarProjectionWorker();
+
+      workerCapture.handlers.failed?.(undefined, new Error('boom'));
+
+      expect(mockRaiseAdminAlert).not.toHaveBeenCalled();
+    });
+
+    it('a stalled job tells ops it may have partly run, and how to re-drive it', () => {
+      startBookingCalendarProjectionWorker();
+
+      workerCapture.handlers.failed?.(
+        { id: JOB_ID, data: DATA },
+        new Error('job stalled more than allowable limit')
+      );
+
+      expect(mockRaiseAdminAlert).toHaveBeenCalledTimes(1);
+      const [[input]] = mockRaiseAdminAlert.mock.calls;
+      expect(input).toMatchObject({
+        kind: 'calendar.projection_failed',
+        entityType: 'meeting',
+        entityId: MEETING_ID,
+      });
+      expect(input.detail.title).toBe('Calendar projection failed after a booking');
+      expect(input.detail.entityLabel).toBe(`Meeting ${MEETING_ID}`);
+      expect(input.detail.evidence).toContain('may have partly run');
+      expect(input.detail.evidence).toContain("check the expert's calendar before re-driving");
+      expect(input.detail.evidence).not.toContain('nothing ran');
+      expect(input.detail.evidence).toContain(
+        `\`job.retry()\` on the kept failed job \`${JOB_ID}\``
+      );
+      expect(input.detail.evidence).toContain('queue `booking-calendar-projection`');
+      expect(input.detail.facts).toEqual([
+        ['Meeting', MEETING_ID],
+        ['Expert profile', EXPERT_ID],
+        ['Job id', JOB_ID],
+        ['Failure', 'stalled'],
+      ]);
+    });
+
+    it('any other failure says nothing ran', () => {
+      startBookingCalendarProjectionWorker();
+
+      workerCapture.handlers.failed?.(
+        { id: JOB_ID, data: { ...DATA, expertProfileId: null } },
+        new Error('connect failed to https://db.internal/secret')
+      );
+
+      const [[input]] = mockRaiseAdminAlert.mock.calls;
+      expect(input.detail.evidence).toContain('nothing ran');
+      expect(input.detail.evidence).not.toContain('partly run');
+      expect(input.detail.evidence).toContain('[redacted-url]');
+      expect(input.detail.evidence).not.toContain('https://db.internal');
+      expect(input.detail.facts).toEqual([
+        ['Meeting', MEETING_ID],
+        ['Expert profile', 'none'],
+        ['Job id', JOB_ID],
+        ['Failure', 'error'],
+      ]);
+    });
+
+    it('falls back to the derived job id when the record carries none', () => {
+      startBookingCalendarProjectionWorker();
+
+      workerCapture.handlers.failed?.({ data: DATA }, new Error('boom'));
+
+      const [[input]] = mockRaiseAdminAlert.mock.calls;
+      expect(input.detail.facts).toContainEqual(['Job id', JOB_ID]);
+    });
+
+    it('swallows a throw from raising the alert and logs it', async () => {
+      mockRaiseAdminAlert.mockRejectedValueOnce(new Error('queue down'));
+      startBookingCalendarProjectionWorker();
+
+      expect(() =>
+        workerCapture.handlers.failed?.({ id: JOB_ID, data: DATA }, new Error('boom'))
+      ).not.toThrow();
+      await vi.waitFor(() => {
+        expect(mockLog.error).toHaveBeenCalledWith(
+          { meetingId: MEETING_ID, error: 'queue down', stack: expect.any(String) },
+          'Could not raise the calendar.projection_failed alert'
+        );
+      });
+    });
   });
 });
 
