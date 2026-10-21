@@ -47,6 +47,18 @@ const EXISTING_CASE_ICON = (
   </span>
 );
 
+/**
+ * Whether the dropdown renders at all: only when there is something to switch to. The one
+ * definition, shared by `step-confirm.tsx` (render) and `booking-flow-dialog.tsx` (the
+ * `CASE_CHOICE_SHOWN` event), so the event never fires for a dropdown nobody saw.
+ */
+export function hasCaseChoice(
+  openCases: readonly OpenCaseForExpert[] | null,
+  offerNewCase: boolean
+): openCases is readonly OpenCaseForExpert[] {
+  return openCases !== null && openCases.length > 0 && (offerNewCase || openCases.length > 1);
+}
+
 export interface CaseChoiceSectionProps {
   openCases: readonly OpenCaseForExpert[];
   /** `null` ⇒ "Start a new case". A `string` ⇒ that case's `engagementId`. */

@@ -11,7 +11,7 @@ import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
 import { buildProductNameMap, type ProductTaxonomy } from '@/lib/search/taxonomy';
 import type { EligibleCompany } from '@balo/shared/credit';
 import { formatSlotDateTime } from './format';
-import { CaseChoiceSection } from './case-choice-section';
+import { CaseChoiceSection, hasCaseChoice } from './case-choice-section';
 import { CaseContextCard } from './case-context-card';
 import { CompanyPicker, CompanyPickerErrorBanner } from './company-picker';
 import { GuestInviteComposer, type GuestDraft } from './guest-invite-composer';
@@ -194,10 +194,8 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
   const productIdSet = useMemo(() => new Set(productIds), [productIds]);
 
   const isNewCase = caseSelection.kind === 'new';
-  // Shown only when there is something to switch to. It names the selected case in full, so the
-  // read-only case card would repeat it.
-  const showsCaseChoice =
-    openCases !== null && openCases.length > 0 && (offerNewCase || openCases.length > 1);
+  // The dropdown names the selected case in full, so the read-only case card would repeat it.
+  const showsCaseChoice = hasCaseChoice(openCases, offerNewCase);
   const selectedEngagementId =
     caseSelection.kind === 'existing' ? caseSelection.engagementId : null;
   const trimmedTitle = title.trim();

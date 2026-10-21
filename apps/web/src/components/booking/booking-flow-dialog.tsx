@@ -34,6 +34,7 @@ import { companyWorkspaceKey } from '@balo/shared/workspaces';
 import { BookingHeader, type BookingStep } from './booking-header';
 import { StepPickTime } from './step-pick-time';
 import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confirm';
+import { hasCaseChoice } from './case-choice-section';
 import { StepBooked } from './step-booked';
 import { StepSavedForLater } from './step-saved-for-later';
 import { OnboardingRoutingState } from './onboarding-routing-state';
@@ -722,7 +723,11 @@ export function BookingFlowDialog(
   const fixedCase = entry.mode === 'fixed_case' ? entry.fixedCase : null;
   const newCaseAllowed = entry.mode === 'chooser' || entry.newCaseAllowed;
 
-  const draftOwner = resolveDraftOwner(entry) ?? loadedDraftOwner;
+  // Entry point 3 keeps a draft only while a NEW case is selected: a follow-up into an existing
+  // case is not what "Save and finish later" saves, and must never overwrite or clear a new-case
+  // draft the client left on the profile.
+  const draftOwner =
+    resolveDraftOwner(entry) ?? (caseSelection.kind === 'new' ? loadedDraftOwner : null);
   const draftScope = useMemo(
     () => buildDraftScope(draftOwner, expert.expertProfileId),
     [draftOwner, expert.expertProfileId]
@@ -799,6 +804,42 @@ export function BookingFlowDialog(
       return true;
     },
     [draftScope, handleCompanyIdChange]
+  );
+
+  /**
+   * Entry point 3 opens on its own case, so a saved new-case draft — typed here or on the
+   * profile — comes back when the client switches the dropdown to "Start a new case", never by
+   * flipping the case they opened from. Only into empty fields: nothing typed is overwritten.
+   */
+  const handleCaseSelectionChange = useCallback(
+    (selection: CaseSelection): void => {
+      setCaseSelection(selection);
+      if (entry.mode !== 'fixed_case' || selection.kind !== 'new' || companyId === null) return;
+      const nothingTyped =
+        title === '' &&
+        isDescriptionEmpty(descriptionHtml) &&
+        productIds.length === 0 &&
+        guests.length === 0;
+      const scope = buildDraftScope(loadedDraftOwner, expert.expertProfileId);
+      if (!nothingTyped || scope === null) return;
+      const draft = readBookingDraft(scope, [companyId]);
+      if (draft === null) return;
+      setTitle(draft.title);
+      setDescriptionHtml(draft.descriptionHtml);
+      setProductIds(draft.productIds);
+      setGuests(draft.guests);
+      setDraftRestored(true);
+    },
+    [
+      entry.mode,
+      companyId,
+      title,
+      descriptionHtml,
+      productIds,
+      guests,
+      loadedDraftOwner,
+      expert.expertProfileId,
+    ]
   );
 
   // ── reset all transient state once per open→close→open cycle (ProjectRequestPanel precedent) ──
@@ -920,10 +961,10 @@ export function BookingFlowDialog(
 
   const caseChoiceShownFiredRef = useRef(false);
   useEffect(() => {
-    if (openCases === null || openCases.length === 0 || caseChoiceShownFiredRef.current) return;
+    if (!hasCaseChoice(openCases, newCaseAllowed) || caseChoiceShownFiredRef.current) return;
     caseChoiceShownFiredRef.current = true;
     track(BOOKING_EVENTS.CASE_CHOICE_SHOWN, { open_case_count: openCases.length });
-  }, [openCases]);
+  }, [openCases, newCaseAllowed]);
 
   const companyShownFiredRef = useRef(false);
   useEffect(() => {
@@ -1580,7 +1621,7 @@ export function BookingFlowDialog(
                     ? caseSelection
                     : { kind: 'existing', engagementId: recovered.engagementId }
                 }
-                onCaseSelectionChange={setCaseSelection}
+                onCaseSelectionChange={handleCaseSelectionChange}
                 caseContextSummary={caseContextSummary}
                 title={title}
                 onTitleChange={setTitle}
@@ -1622,7 +1663,9 @@ export function BookingFlowDialog(
                 }
                 fundingBusy={fundingBusy}
                 preflightPending={fundingStatus === 'loading'}
-                draftNotice={draftRestored ? { onClear: handleClearDraft } : null}
+                draftNotice={
+                  draftRestored && draftScope !== null ? { onClear: handleClearDraft } : null
+                }
                 submitting={submitting}
                 submitDisabled={submitDisabled}
                 onBack={handleBack}

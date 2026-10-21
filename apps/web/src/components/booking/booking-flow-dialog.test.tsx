@@ -237,6 +237,14 @@ const SINGLE_COMPANY_NO_CASES: BookingContext = {
   resolvedCaseCount: 0,
 };
 
+// Radix Select needs the Pointer Capture APIs jsdom lacks (`company-picker.test.tsx`).
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn();
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
+});
+
 beforeEach(() => {
   mockIsMobile.mockReturnValue(false);
   mockBookConsultationAction.mockReset();
@@ -530,14 +538,6 @@ describe('BookingFlowDialog — entry point 3 (fixed case)', () => {
 });
 
 describe('BookingFlowDialog — entry point 3 switching case from the dropdown', () => {
-  // Radix Select needs the Pointer Capture APIs jsdom lacks (`company-picker.test.tsx`).
-  beforeAll(() => {
-    Element.prototype.scrollIntoView = vi.fn();
-    Element.prototype.hasPointerCapture = vi.fn();
-    Element.prototype.setPointerCapture = vi.fn();
-    Element.prototype.releasePointerCapture = vi.fn();
-  });
-
   const THIS_CASE = {
     engagementId: 'engagement-9',
     title: 'Flow interview loop',
@@ -600,6 +600,25 @@ describe('BookingFlowDialog — entry point 3 switching case from the dropdown',
     await user.click(dropdown);
     expect(await screen.findByRole('option', { name: /Duplicate cleanup/ })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Start a new case/ })).toBeNull();
+  });
+
+  it('reports the case choice only when the dropdown is on screen', async () => {
+    const user = userEvent.setup();
+    loadsOpenCases([THIS_CASE]);
+    renderFromCase({ newCaseAllowed: false });
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await vi.waitFor(() => expect(refetchBookingContextAction).toHaveBeenCalled());
+    expect(screen.getByText('Flow interview loop')).toBeInTheDocument();
+    expect(track).not.toHaveBeenCalledWith('booking_case_choice_shown', expect.anything());
+  });
+
+  it('reports the case choice once the dropdown appears', async () => {
+    const user = userEvent.setup();
+    loadsOpenCases([OTHER_CASE, THIS_CASE]);
+    renderFromCase({ newCaseAllowed: false });
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await screen.findByRole('combobox', { name: 'Which case is this for?' });
+    expect(track).toHaveBeenCalledWith('booking_case_choice_shown', { open_case_count: 2 });
   });
 
   it('a quick-pick time lands on confirm with the same dropdown, this case preselected', async () => {
@@ -2363,9 +2382,9 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       expect(screen.getByRole('combobox')).toBeDisabled();
     });
 
-    it('keeps a draft for a booking started in a case once its context names the booker', async () => {
-      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
-      vi.mocked(refetchBookingContextAction).mockResolvedValueOnce({
+    /** Entry point 3 from the case surface, with its background context read listing this case. */
+    function renderFromCaseWithContext(): ReturnType<typeof render> {
+      vi.mocked(refetchBookingContextAction).mockResolvedValue({
         ok: true,
         context: {
           ...(SINGLE_COMPANY_NO_CASES as Extract<BookingContext, { arm: 'single_company' }>),
@@ -2380,7 +2399,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
           ],
         },
       });
-      renderDialog({
+      return renderDialog({
         mode: 'fixed_case',
         newCaseAllowed: true,
         fixedCase: {
@@ -2395,7 +2414,69 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
           durationMinutes: 30,
         },
       });
+    }
+
+    async function switchCase(
+      user: ReturnType<typeof userEvent.setup>,
+      option: RegExp
+    ): Promise<void> {
+      await user.click(await screen.findByRole('combobox', { name: 'Which case is this for?' }));
+      await user.click(await screen.findByRole('option', { name: option }));
+    }
+
+    it('a follow-up into this case keeps no draft, and leaves a profile draft alone', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
+      mockSaveBookingForLaterAction.mockResolvedValue({ ok: true });
+      writeBookingDraft(SCOPE, DRAFT);
+      renderFromCaseWithContext();
+
+      await screen.findByRole('combobox', { name: 'Which case is this for?' });
+      expect(await screen.findByText('no draft')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Stub save' }));
+      await screen.findByText('Saved for later');
+
+      expect(readBookingDraft(SCOPE, ['company-1'])?.title).toBe('Seeded title');
+    });
+
+    it('a new case saved from a case page comes back there, on switching to Start a new case', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
+      mockSaveBookingForLaterAction.mockResolvedValue({ ok: true });
+      const { unmount } = renderFromCaseWithContext();
+
+      await switchCase(user, /Start a new case/);
       expect(await screen.findByText('draft kept')).toBeInTheDocument();
+      await fillForm(user);
+      await user.click(screen.getByRole('button', { name: 'Stub save' }));
+      await screen.findByText('Saved for later');
+      unmount();
+
+      renderFromCaseWithContext();
+      const dropdown = await screen.findByRole('combobox', { name: 'Which case is this for?' });
+      // Reopened on this case: the draft does not flip the case the client opened from.
+      expect(dropdown).toHaveTextContent('Flow interview loop');
+      expect(screen.queryByLabelText(/^Title/)).not.toBeInTheDocument();
+
+      await switchCase(user, /Start a new case/);
+      expect(screen.getByLabelText(/^Title/)).toHaveValue('Migration planning');
+      expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+    });
+
+    it('switching to a new case never overwrites what the client already typed', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
+      writeBookingDraft(SCOPE, DRAFT);
+      renderFromCaseWithContext();
+
+      await switchCase(user, /Start a new case/);
+      expect(screen.getByLabelText(/^Title/)).toHaveValue('Seeded title');
+      await user.clear(screen.getByLabelText(/^Title/));
+      await user.type(screen.getByLabelText(/^Title/), 'Typed here');
+
+      await switchCase(user, /Flow interview loop/);
+      await switchCase(user, /Start a new case/);
+      expect(screen.getByLabelText(/^Title/)).toHaveValue('Typed here');
     });
 
     it('passes whether a draft is kept: yes for the chooser, no for a fixed case whose context never loaded', async () => {
