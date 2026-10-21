@@ -34,6 +34,7 @@ import { companyWorkspaceKey } from '@balo/shared/workspaces';
 import { BookingHeader, type BookingStep } from './booking-header';
 import { StepPickTime } from './step-pick-time';
 import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confirm';
+import { hasCaseChoice } from './case-choice-section';
 import { StepBooked } from './step-booked';
 import { StepSavedForLater } from './step-saved-for-later';
 import { OnboardingRoutingState } from './onboarding-routing-state';
@@ -495,7 +496,8 @@ function buildFundingRequest(params: {
   };
 }
 
-/** The signed-in booker's id, for chooser entries that carry one; drafts exist only for those. */
+/** The signed-in booker's id, for chooser entries that carry one. Entry point 3 learns it from
+ *  its background context read instead (`loadedDraftOwner`). */
 function resolveDraftOwner(entry: BookingEntry): string | null {
   if (entry.mode !== 'chooser') return null;
   const { context } = entry;
@@ -703,6 +705,8 @@ export function BookingFlowDialog(
   const [fundingInFlight, setFundingInFlight] = useState(false);
   /** BAL-608 — the company name the saved-for-later result names. */
   const [savedCompanyName, setSavedCompanyName] = useState<string | null>(null);
+  /** Entry point 3 — the booker, once the background context read names them; keys the draft. */
+  const [loadedDraftOwner, setLoadedDraftOwner] = useState<string | null>(null);
 
   const openFiredRef = useRef(false);
   /**
@@ -717,8 +721,13 @@ export function BookingFlowDialog(
   const caseAlreadyCreatedRef = useRef(false);
 
   const fixedCase = entry.mode === 'fixed_case' ? entry.fixedCase : null;
+  const newCaseAllowed = entry.mode === 'chooser' || entry.newCaseAllowed;
 
-  const draftOwner = resolveDraftOwner(entry);
+  // Entry point 3 keeps a draft only while a NEW case is selected: a follow-up into an existing
+  // case is not what "Save and finish later" saves, and must never overwrite or clear a new-case
+  // draft the client left on the profile.
+  const draftOwner =
+    resolveDraftOwner(entry) ?? (caseSelection.kind === 'new' ? loadedDraftOwner : null);
   const draftScope = useMemo(
     () => buildDraftScope(draftOwner, expert.expertProfileId),
     [draftOwner, expert.expertProfileId]
@@ -797,6 +806,42 @@ export function BookingFlowDialog(
     [draftScope, handleCompanyIdChange]
   );
 
+  /**
+   * Entry point 3 opens on its own case, so a saved new-case draft — typed here or on the
+   * profile — comes back when the client switches the dropdown to "Start a new case", never by
+   * flipping the case they opened from. Only into empty fields: nothing typed is overwritten.
+   */
+  const handleCaseSelectionChange = useCallback(
+    (selection: CaseSelection): void => {
+      setCaseSelection(selection);
+      if (entry.mode !== 'fixed_case' || selection.kind !== 'new' || companyId === null) return;
+      const nothingTyped =
+        title === '' &&
+        isDescriptionEmpty(descriptionHtml) &&
+        productIds.length === 0 &&
+        guests.length === 0;
+      const scope = buildDraftScope(loadedDraftOwner, expert.expertProfileId);
+      if (!nothingTyped || scope === null) return;
+      const draft = readBookingDraft(scope, [companyId]);
+      if (draft === null) return;
+      setTitle(draft.title);
+      setDescriptionHtml(draft.descriptionHtml);
+      setProductIds(draft.productIds);
+      setGuests(draft.guests);
+      setDraftRestored(true);
+    },
+    [
+      entry.mode,
+      companyId,
+      title,
+      descriptionHtml,
+      productIds,
+      guests,
+      loadedDraftOwner,
+      expert.expertProfileId,
+    ]
+  );
+
   // ── reset all transient state once per open→close→open cycle (ProjectRequestPanel precedent) ──
   useEffect(() => {
     if (!open) {
@@ -830,9 +875,10 @@ export function BookingFlowDialog(
     setDraftRestored(false);
     setFundingBusy(false);
     setSavedCompanyName(null);
+    setLoadedDraftOwner(null);
 
     if (entry.mode === 'fixed_case') {
-      setPhase('confirm');
+      setPhase(entry.presetSlot === null ? 'pick_time' : 'confirm');
       setSlot(entry.presetSlot);
       setCaseSelection({ kind: 'existing', engagementId: entry.fixedCase.engagementId });
       setCompanies(null);
@@ -869,6 +915,41 @@ export function BookingFlowDialog(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset fires once per open, by design
   }, [open]);
 
+  // The case page opens on its own case — from "Book again" and from a quick-pick time alike —
+  // and the client's other open cases with this expert load behind it, so the same dropdown can
+  // switch case or (unless the expert has paused new work) start a new one. Only a
+  // single-company context that still lists this case offers the dropdown — otherwise the case
+  // stays fixed. The same read names the booker, so a new case typed here keeps its draft.
+  useEffect(() => {
+    if (!open || entry.mode !== 'fixed_case') return;
+    const { engagementId } = entry.fixedCase;
+    let cancelled = false;
+    refetchBookingContextAction({ expertProfileId: expert.expertProfileId })
+      .then((result) => {
+        if (cancelled || !result.ok) return;
+        const { context } = result;
+        if (context.arm !== 'single_company') return;
+        if (!context.openCases.some((c) => c.engagementId === engagementId)) return;
+        setCompanies([context.company]);
+        setCompanyId(context.company.id);
+        setOpenCases(context.openCases);
+        setResolvedCaseCount(context.resolvedCaseCount);
+        setLoadedDraftOwner(context.viewerUserId);
+      })
+      .catch((error: unknown) => {
+        // Silent degrade: the dialog still books into this case.
+        Sentry.captureException(error, {
+          level: 'warning',
+          tags: { feature: 'booking', step: 'fixed_case_context' },
+          extra: { expertProfileId: expert.expertProfileId },
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open, like the reset above
+  }, [open]);
+
   useEffect(() => {
     if (phase !== 'confirm') return;
     track(BOOKING_EVENTS.CONFIRM_VIEWED, {
@@ -880,10 +961,10 @@ export function BookingFlowDialog(
 
   const caseChoiceShownFiredRef = useRef(false);
   useEffect(() => {
-    if (openCases === null || openCases.length === 0 || caseChoiceShownFiredRef.current) return;
+    if (!hasCaseChoice(openCases, newCaseAllowed) || caseChoiceShownFiredRef.current) return;
     caseChoiceShownFiredRef.current = true;
     track(BOOKING_EVENTS.CASE_CHOICE_SHOWN, { open_case_count: openCases.length });
-  }, [openCases]);
+  }, [openCases, newCaseAllowed]);
 
   const companyShownFiredRef = useRef(false);
   useEffect(() => {
@@ -946,13 +1027,16 @@ export function BookingFlowDialog(
     setPhase('pick_time');
   }, []);
 
+  // A preset slot was the whole reason the dialog opened, so Back leaves rather than offering
+  // a calendar the client never asked for.
+  const backCloses = entry.mode === 'fixed_case' && entry.presetSlot !== null;
   const handleBack = useCallback(() => {
-    if (entry.mode === 'fixed_case') {
+    if (backCloses) {
       onClose();
       return;
     }
     setPhase('pick_time');
-  }, [entry.mode, onClose]);
+  }, [backCloses, onClose]);
 
   const handleRetryCompanies = useCallback(async () => {
     // M3 — `requireOnboardedUser()` inside the action can still reject (an expired session);
@@ -1454,17 +1538,18 @@ export function BookingFlowDialog(
       openedAtIso: match.createdAt,
     };
   }
+  const fixedCaseSelected =
+    fixedCase !== null &&
+    caseSelection.kind === 'existing' &&
+    caseSelection.engagementId === fixedCase.engagementId;
   const caseContextSummary: FixedCaseSummary | null =
-    recovered ?? fixedCase ?? resolveChooserCaseContext();
+    recovered ?? (fixedCaseSelected ? fixedCase : resolveChooserCaseContext());
 
-  const showCaseEscapeHatch = entry.mode === 'chooser' && recovered === null;
-  // The chooser is hidden once EITHER a partial-failure recovery pinned the case (avoids a
-  // confusing "nothing selected" radio state — the new case isn't in `openCases` yet) OR
-  // entry point 3 already fixed it (D4a #3 — no chooser in the tree at all).
-  let effectiveOpenCases: readonly OpenCaseForExpert[] | null = null;
-  if (recovered === null && entry.mode === 'chooser') {
-    effectiveOpenCases = openCases;
-  }
+  // The chooser is hidden once a partial-failure recovery pinned the case (avoids a confusing
+  // "nothing selected" state — the new case isn't in `openCases` yet). Entry point 3 shows it
+  // only once its background context read has listed the client's open cases.
+  const effectiveOpenCases: readonly OpenCaseForExpert[] | null =
+    recovered === null ? openCases : null;
 
   const showResolvedCaseNote =
     entry.mode === 'chooser' &&
@@ -1529,15 +1614,15 @@ export function BookingFlowDialog(
                 expertFirstName={expert.firstName}
                 onChangeTime={handleChangeTime}
                 openCases={effectiveOpenCases}
+                offerNewCase={newCaseAllowed}
                 caseChoiceLoading={caseChoiceLoading}
                 caseSelection={
                   recovered === null
                     ? caseSelection
                     : { kind: 'existing', engagementId: recovered.engagementId }
                 }
-                onCaseSelectionChange={setCaseSelection}
+                onCaseSelectionChange={handleCaseSelectionChange}
                 caseContextSummary={caseContextSummary}
-                showCaseEscapeHatch={showCaseEscapeHatch}
                 title={title}
                 onTitleChange={setTitle}
                 descriptionHtml={descriptionHtml}
@@ -1578,7 +1663,9 @@ export function BookingFlowDialog(
                 }
                 fundingBusy={fundingBusy}
                 preflightPending={fundingStatus === 'loading'}
-                draftNotice={draftRestored ? { onClear: handleClearDraft } : null}
+                draftNotice={
+                  draftRestored && draftScope !== null ? { onClear: handleClearDraft } : null
+                }
                 submitting={submitting}
                 submitDisabled={submitDisabled}
                 onBack={handleBack}

@@ -39,7 +39,12 @@ import { relativeDay } from './relative-day';
  * this variant (a discriminated union, not an optional prop every other variant ignores).
  * `relativeDays` is not offered here: no range consumer collapses to "Today"/"Tomorrow".
  */
-export type LocalDateTimeVariant = 'full' | 'day-month' | 'day-month-time' | 'day-month-time-range';
+export type LocalDateTimeVariant =
+  | 'full'
+  | 'day-month'
+  | 'day-month-dash-time'
+  | 'day-month-time'
+  | 'day-month-time-range';
 
 type LocalDateTimeSharedProps = Readonly<{
   iso: string;
@@ -113,15 +118,22 @@ export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
 }
 
 type NonRangeVariant = Exclude<LocalDateTimeVariant, 'day-month-time-range'>;
+/** Composed from two `Intl` calls rather than one option set — see `formatIn`. */
+type ComposedVariant = 'day-month-dash-time';
 
 /**
  * ⚠ A LOOKUP OBJECT, NOT A NESTED TERNARY (SonarCloud). Each entry is the `Intl` option set
  * for one variant:
  *   · `full`           — "Tue 29 Jul 2026, 2:14 pm" (the recap's meta line)
- *   · `day-month`      — "12 Jun" (the case header's "Opened", the consultation row)
+ *   · `day-month`      — "12 Jun" (the case header's "Opened")
  *   · `day-month-time` — "Tue 4 Aug, 10:00" (the upcoming-consultation nudge)
+ *
+ * `day-month-dash-time` — "21 Oct – 9:15 pm" (a past consultation row) — has no entry: `Intl`
+ * joins a date and a time with a locale-chosen separator, so `formatIn` composes it instead.
  */
-const VARIANT_OPTIONS: Readonly<Record<NonRangeVariant, Intl.DateTimeFormatOptions>> = {
+const VARIANT_OPTIONS: Readonly<
+  Record<Exclude<NonRangeVariant, ComposedVariant>, Intl.DateTimeFormatOptions>
+> = {
   full: {
     weekday: 'short',
     day: 'numeric',
@@ -172,6 +184,10 @@ function labelFor(
 }
 
 function formatIn(iso: string, timeZone: string, variant: NonRangeVariant): string {
+  if (variant === 'day-month-dash-time') {
+    const { clock, period } = timeParts(iso, timeZone);
+    return `${formatIn(iso, timeZone, 'day-month')} – ${clock} ${period}`;
+  }
   return new Intl.DateTimeFormat('en-AU', {
     timeZone,
     ...VARIANT_OPTIONS[variant],

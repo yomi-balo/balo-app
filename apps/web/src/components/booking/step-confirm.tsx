@@ -11,7 +11,7 @@ import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
 import { buildProductNameMap, type ProductTaxonomy } from '@/lib/search/taxonomy';
 import type { EligibleCompany } from '@balo/shared/credit';
 import { formatSlotDateTime } from './format';
-import { CaseChoiceSection } from './case-choice-section';
+import { CaseChoiceSection, hasCaseChoice } from './case-choice-section';
 import { CaseContextCard } from './case-context-card';
 import { CompanyPicker, CompanyPickerErrorBanner } from './company-picker';
 import { GuestInviteComposer, type GuestDraft } from './guest-invite-composer';
@@ -34,8 +34,11 @@ export interface StepConfirmProps {
   expertFirstName: string | null;
   onChangeTime: () => void;
 
-  /** `null` when entry point 3 fixed the case — the whole case-choice section is absent (D4a #3). */
+  /** `null` (or empty) ⇒ no case dropdown: nothing to choose, a pinned recovery, or entry point 3
+   *  before its open cases have loaded. */
   openCases: readonly OpenCaseForExpert[] | null;
+  /** `false` keeps "Start a new case" out of the dropdown — the expert has paused new work. */
+  offerNewCase: boolean;
   /**
    * UX-3 (BAL-400 round 2) — true only while a company (re)selection's open-cases read is in
    * flight. Design §Case choice section "Loading": a 2-row skeleton appears above the
@@ -51,8 +54,6 @@ export interface StepConfirmProps {
    * `openCases`). `null` while `caseSelection.kind === 'new'`.
    */
   caseContextSummary: FixedCaseSummary | null;
-  /** Entry point 3 has no "wrong case" escape (the client explicitly chose it). */
-  showCaseEscapeHatch: boolean;
 
   title: string;
   onTitleChange: (title: string) => void;
@@ -154,11 +155,11 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
     expertFirstName,
     onChangeTime,
     openCases,
+    offerNewCase,
     caseChoiceLoading,
     caseSelection,
     onCaseSelectionChange,
     caseContextSummary,
-    showCaseEscapeHatch,
     title,
     onTitleChange,
     descriptionHtml,
@@ -193,6 +194,8 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
   const productIdSet = useMemo(() => new Set(productIds), [productIds]);
 
   const isNewCase = caseSelection.kind === 'new';
+  // The dropdown names the selected case in full, so the read-only case card would repeat it.
+  const showsCaseChoice = hasCaseChoice(openCases, offerNewCase);
   const selectedEngagementId =
     caseSelection.kind === 'existing' ? caseSelection.engagementId : null;
   const trimmedTitle = title.trim();
@@ -244,7 +247,7 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
         </div>
       )}
 
-      {openCases !== null && openCases.length > 0 && (
+      {showsCaseChoice && (
         <LockableGroup locked={fundingBusy}>
           <CaseChoiceSection
             openCases={openCases}
@@ -255,6 +258,7 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
               )
             }
             expertFirstName={expertFirstName}
+            offerNewCase={offerNewCase}
           />
         </LockableGroup>
       )}
@@ -343,17 +347,12 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
             transition={{ duration: 0.22, ease: 'easeOut' }}
             className="space-y-3 overflow-hidden"
           >
-            {caseContextSummary !== null && (
-              <LockableGroup locked={fundingBusy}>
-                <CaseContextCard
-                  title={caseContextSummary.title}
-                  consultationCount={caseContextSummary.consultationCount}
-                  openedAtIso={caseContextSummary.openedAtIso}
-                  onSwitchToNew={
-                    showCaseEscapeHatch ? () => onCaseSelectionChange({ kind: 'new' }) : undefined
-                  }
-                />
-              </LockableGroup>
+            {caseContextSummary !== null && !showsCaseChoice && (
+              <CaseContextCard
+                title={caseContextSummary.title}
+                consultationCount={caseContextSummary.consultationCount}
+                openedAtIso={caseContextSummary.openedAtIso}
+              />
             )}
             {clientCompanyName !== null && hasMultipleEligibleCompanies && (
               <p className="text-muted-foreground text-xs">

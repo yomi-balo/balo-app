@@ -1,8 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { CaseChoiceSection, type CaseChoiceSectionProps } from './case-choice-section';
 import type { OpenCaseForExpert } from './types';
+
+// Radix Select drives the open/select interaction through Pointer Capture APIs jsdom doesn't
+// implement — stub them so the listbox can open (established pattern, `company-picker.test.tsx`).
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn();
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
+});
 
 function makeCase(overrides: Partial<OpenCaseForExpert> = {}): OpenCaseForExpert {
   return {
@@ -28,122 +37,55 @@ function renderSection(over: Partial<CaseChoiceSectionProps> = {}) {
   return { ...utils, onSelect };
 }
 
+const TEN_CASES = Array.from({ length: 10 }, (_, i) =>
+  makeCase({ engagementId: `e-${i + 1}`, title: `Case ${i + 1}` })
+);
+
 describe('CaseChoiceSection', () => {
-  it('always shows "Start a new case" first, default-selected', () => {
+  it('is one labelled dropdown showing "Start a new case" when nothing is selected', () => {
     renderSection({ openCases: [makeCase()] });
-    const newCaseRadio = screen.getByRole('radio', { name: /Start a new case/i });
-    expect(newCaseRadio).toHaveAttribute('aria-checked', 'true');
+    const trigger = screen.getByRole('combobox', { name: 'Which case is this for?' });
+    expect(trigger).toHaveTextContent('Start a new case');
+    expect(trigger).toHaveTextContent('For a new issue with Amara.');
   });
 
-  it('renders exactly 2 cards with 1 open case', () => {
-    renderSection({ openCases: [makeCase()] });
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
+  it('shows the selected case in full in the closed dropdown', () => {
+    renderSection({ openCases: [makeCase()], selectedEngagementId: 'e-1' });
+    const trigger = screen.getByRole('combobox', { name: 'Which case is this for?' });
+    expect(trigger).toHaveTextContent('Flow interview loop');
+    expect(trigger).toHaveTextContent('2 consultations');
+    expect(trigger).not.toHaveTextContent('Start a new case');
   });
 
-  it('caps display at 4 existing cases + "Show N more"', () => {
-    const cases = Array.from({ length: 6 }, (_, i) =>
-      makeCase({ engagementId: `e-${i}`, title: `Case ${i}` })
-    );
-    renderSection({ openCases: cases });
-    // 1 (new) + 4 visible existing = 5 radios initially.
-    expect(screen.getAllByRole('radio')).toHaveLength(5);
-    expect(screen.getByRole('button', { name: 'Show 2 more' })).toBeInTheDocument();
+  it('stays one control however many cases are open — nothing listed until it is opened', () => {
+    renderSection({ openCases: TEN_CASES });
+    expect(screen.getAllByRole('combobox')).toHaveLength(1);
+    expect(screen.queryByText('Case 7')).not.toBeInTheDocument();
   });
 
-  it('expands the rest on "Show N more"', async () => {
+  it('lists "Start a new case" first, then every open case', async () => {
     const user = userEvent.setup();
-    const cases = Array.from({ length: 6 }, (_, i) =>
-      makeCase({ engagementId: `e-${i}`, title: `Case ${i}` })
-    );
-    renderSection({ openCases: cases });
-    await user.click(screen.getByRole('button', { name: 'Show 2 more' }));
-    expect(screen.getAllByRole('radio')).toHaveLength(7);
-    expect(screen.queryByRole('button', { name: /Show \d+ more/ })).not.toBeInTheDocument();
+    renderSection({ openCases: TEN_CASES });
+    await user.click(screen.getByRole('combobox'));
+    const options = await screen.findAllByRole('option');
+    expect(options).toHaveLength(11);
+    expect(options[0]).toHaveTextContent('Start a new case');
+    expect(options[10]).toHaveTextContent('Case 10');
   });
 
-  it('calls onSelect(null) for the new-case card and onSelect(engagementId) for an existing one', async () => {
+  it('calls onSelect(engagementId) for an existing case', async () => {
     const user = userEvent.setup();
-    const { onSelect } = renderSection({ openCases: [makeCase({ engagementId: 'e-9' })] });
-    await user.click(screen.getByRole('radio', { name: /Case 9|Flow interview loop/i }));
-    expect(onSelect).toHaveBeenCalledWith('e-9');
-    await user.click(screen.getByRole('radio', { name: /Start a new case/i }));
+    const { onSelect } = renderSection({ openCases: TEN_CASES });
+    await user.click(screen.getByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: /Case 3/ }));
+    expect(onSelect).toHaveBeenCalledWith('e-3');
+  });
+
+  it('calls onSelect(null) for "Start a new case"', async () => {
+    const user = userEvent.setup();
+    const { onSelect } = renderSection({ openCases: TEN_CASES, selectedEngagementId: 'e-2' });
+    await user.click(screen.getByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: /Start a new case/ }));
     expect(onSelect).toHaveBeenCalledWith(null);
-  });
-
-  it('marks the matching existing card selected via selectedEngagementId', () => {
-    renderSection({ openCases: [makeCase({ engagementId: 'e-5' })], selectedEngagementId: 'e-5' });
-    expect(screen.getByRole('radio', { name: /Flow interview loop/i })).toHaveAttribute(
-      'aria-checked',
-      'true'
-    );
-    expect(screen.getByRole('radio', { name: /Start a new case/i })).toHaveAttribute(
-      'aria-checked',
-      'false'
-    );
-  });
-});
-
-// UX-5 (BAL-400 round 2) — the cards are real `role="radio"` in a `role="radiogroup"`, which
-// promises the WAI-ARIA APG roving-tabindex + arrow-key pattern. Before this fix, EVERY card
-// was independently Tab-focusable and no arrow key did anything — a conformance mismatch
-// between the announced role and the actual behavior.
-describe('CaseChoiceSection — roving tabindex + arrow-key navigation (UX-5)', () => {
-  it('puts ONLY the selected card in the Tab order', () => {
-    renderSection({
-      openCases: [makeCase({ engagementId: 'e-1' }), makeCase({ engagementId: 'e-2' })],
-      selectedEngagementId: 'e-2',
-    });
-    const radios = screen.getAllByRole('radio');
-    for (const radio of radios) {
-      expect(radio).toHaveAttribute(
-        'tabIndex',
-        radio.getAttribute('aria-checked') === 'true' ? '0' : '-1'
-      );
-    }
-  });
-
-  it('ArrowDown moves selection AND focus from "Start a new case" to the next card', async () => {
-    const user = userEvent.setup();
-    const { onSelect } = renderSection({ openCases: [makeCase({ engagementId: 'e-1' })] });
-    const newCaseRadio = screen.getByRole('radio', { name: /Start a new case/i });
-    newCaseRadio.focus();
-    await user.keyboard('{ArrowDown}');
-    expect(onSelect).toHaveBeenCalledWith('e-1');
-  });
-
-  it('ArrowUp from the first card wraps to the LAST visible card', async () => {
-    const user = userEvent.setup();
-    const { onSelect } = renderSection({
-      openCases: [makeCase({ engagementId: 'e-1' }), makeCase({ engagementId: 'e-2' })],
-    });
-    const newCaseRadio = screen.getByRole('radio', { name: /Start a new case/i });
-    newCaseRadio.focus();
-    await user.keyboard('{ArrowUp}');
-    expect(onSelect).toHaveBeenCalledWith('e-2');
-  });
-
-  it('ArrowRight/ArrowLeft behave the same as Down/Up', async () => {
-    const user = userEvent.setup();
-    const { onSelect } = renderSection({ openCases: [makeCase({ engagementId: 'e-1' })] });
-    const newCaseRadio = screen.getByRole('radio', { name: /Start a new case/i });
-    newCaseRadio.focus();
-    await user.keyboard('{ArrowRight}');
-    expect(onSelect).toHaveBeenCalledWith('e-1');
-  });
-
-  it('End jumps to the last card, Home jumps back to "Start a new case"', async () => {
-    const user = userEvent.setup();
-    const { onSelect } = renderSection({
-      openCases: [
-        makeCase({ engagementId: 'e-1', title: 'Case one' }),
-        makeCase({ engagementId: 'e-2', title: 'Case two' }),
-      ],
-      selectedEngagementId: 'e-1',
-    });
-    screen.getByRole('radio', { name: /Case one/i }).focus();
-    await user.keyboard('{End}');
-    expect(onSelect).toHaveBeenLastCalledWith('e-2');
-    await user.keyboard('{Home}');
-    expect(onSelect).toHaveBeenLastCalledWith(null);
   });
 });

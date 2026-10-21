@@ -60,9 +60,8 @@ interface CaseNudgeProps {
   counterpartyLabel: string;
   /** `/experts/{username}`, or `null` ⇒ the booking CTA does not render. */
   bookAgainHref: string | null;
-  /** BAL-591 — set for an open case with a paused expert: the CTA books in-page (existing work)
-   *  instead of linking to a profile that would refuse a new booking. Independent of
-   *  `bookAgainHref`, which only the link path needs. */
+  /** Set for an open case: the CTA books in-page (existing work, case fixed) instead of linking
+   *  out to the profile. Independent of `bookAgainHref`, which only the link path needs. */
   onBookFollowUp?: () => void;
   onMarkResolved: () => void;
   onDismissAsk: () => void;

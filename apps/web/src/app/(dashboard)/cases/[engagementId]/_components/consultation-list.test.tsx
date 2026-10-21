@@ -332,11 +332,17 @@ describe('ConsultationList — relative days, on appointments only', () => {
     expect(firstTimeElement().textContent).not.toMatch(/Today|Tomorrow/);
   });
 
-  /** A terminal row shows no clock time either — the duration already carries the detail. */
-  it('shows no clock time on a terminal row', async () => {
+  /** A terminal row carries its time too — two calls on one day are otherwise identical. */
+  it('shows the date and the time, joined by a dash, on a terminal row', async () => {
     renderList([makeRow({ state: 'held', scheduledStartIso: '2026-06-09T09:00:00.000Z' })]);
-    await waitFor(() => expect(firstTimeElement().textContent).toContain('9 Jun'));
-    expect(firstTimeElement().textContent).not.toMatch(/\d:\d{2}/);
+    await waitFor(() => expect(firstTimeElement().textContent).toContain('9 June – 9:00 am'));
+  });
+
+  /** …and stays absolute: a past call earlier today is a record, never "Today at …". */
+  it('never says "Today" on a terminal row from earlier today', async () => {
+    renderList([makeRow({ state: 'held', scheduledStartIso: '2026-06-11T09:00:00.000Z' })]);
+    await waitFor(() => expect(firstTimeElement().textContent).toContain('11 June – 9:00 am'));
+    expect(firstTimeElement().textContent).not.toMatch(/Today/);
   });
 });
 

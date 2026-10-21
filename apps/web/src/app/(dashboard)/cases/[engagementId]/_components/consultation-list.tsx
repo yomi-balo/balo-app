@@ -363,12 +363,12 @@ function ConsultationRow({
             )}
           >
             {row.ordinal !== null && <span className="sr-only">Consultation {row.ordinal}: </span>}
-            {/* ⚠ Time and relative day on appointments only — several calls booked on one day
-                are otherwise indistinguishable. Past rows keep the compact date; the duration is
-                already on the row and the recap carries the full timestamp. */}
+            {/* ⚠ Every row carries its time — several calls on one day are otherwise
+                indistinguishable. Relative day ("Today at …") on appointments only; a past row
+                is a record, so it stays absolute ("21 Oct – 9:15 pm"). */}
             <LocalDateTime
               iso={row.scheduledStartIso}
-              variant={FORWARD_LOOKING.has(row.state) ? 'day-month-time' : 'day-month'}
+              variant={FORWARD_LOOKING.has(row.state) ? 'day-month-time' : 'day-month-dash-time'}
               relativeDays={FORWARD_LOOKING.has(row.state)}
               now={now}
             />

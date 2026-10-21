@@ -47,6 +47,12 @@ vi.mock('./_lib/load-case', () => ({
   loadCase: (...a: unknown[]) => mockLoadCase(...a),
 }));
 
+const PRODUCTS_TAXONOMY = { groups: [{ category: 'Clouds', items: [] }] };
+const mockLoadTaxonomy = vi.fn();
+vi.mock('@/lib/search/load-taxonomy', () => ({
+  loadSearchTaxonomyCached: () => mockLoadTaxonomy(),
+}));
+
 const mockTrack = vi.fn();
 // ⚠ THE EVENT CONSTANTS COME FROM SOURCE, NOT A HAND-RESTATED LITERAL — the `page.test.tsx`
 // precedent next door. A rename in `packages/analytics/src/events/recap.ts` must fail HERE
@@ -72,6 +78,7 @@ vi.mock('./_components/case-surface', () => ({
 }));
 
 import CasePage, { generateMetadata } from './page';
+import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
 
 // ── fixtures ─────────────────────────────────────────────────────────────────────────────
 
@@ -444,5 +451,49 @@ describe('generateMetadata — the anti-oracle contract', () => {
   it('AWAITS params here too, and runs the full gate before specialising', async () => {
     await generateMetadata(props());
     expect(mockLoadCase).toHaveBeenCalledWith(ENGAGEMENT_ID, USER_ID);
+  });
+});
+
+describe("CasePage — the booking dialog's product taxonomy", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, email: USER_EMAIL });
+    mockLoadTaxonomy.mockResolvedValue(PRODUCTS_TAXONOMY);
+  });
+
+  async function taxonomyFor(view: CaseSurfaceView): Promise<unknown> {
+    mockLoadCase.mockResolvedValue(view);
+    render(await CasePage(props()));
+    const [call] = mockCaseSurfaceProps.mock.calls;
+    return (call?.[0] as { productsTaxonomy?: unknown } | undefined)?.productsTaxonomy;
+  }
+
+  it('reaches the surface for a client on an open case with an available expert', async () => {
+    expect(await taxonomyFor(CLIENT_VIEW)).toBe(PRODUCTS_TAXONOMY);
+  });
+
+  it.each([
+    [
+      'a paused expert',
+      { ...CLIENT_VIEW, party: { ...CLIENT_VIEW.party, availableForWork: false } },
+    ],
+    ['a closed case', closedView('resolved')],
+    ['the expert lens', EXPERT_VIEW],
+  ])('is empty for %s — no new case can be booked there', async (_label, view) => {
+    expect(await taxonomyFor(view)).toBe(EMPTY_TAXONOMY);
+  });
+
+  it('starts the read before the case has loaded, so it adds no wait', async () => {
+    let resolveCase: (view: CaseSurfaceView) => void = () => {};
+    mockLoadCase.mockReturnValue(
+      new Promise<CaseSurfaceView>((resolve) => {
+        resolveCase = resolve;
+      })
+    );
+    const page = CasePage(props());
+    await vi.waitFor(() => expect(mockLoadCase).toHaveBeenCalled());
+    expect(mockLoadTaxonomy).toHaveBeenCalledTimes(1);
+    resolveCase(CLIENT_VIEW);
+    await page;
   });
 });

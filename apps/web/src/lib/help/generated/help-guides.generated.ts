@@ -13,7 +13,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "client": "calls"
     },
     "order": 1,
-    "updated": "2026-10-21",
+    "updated": "2026-10-22",
     "related": [
       "your-cases",
       "joining-a-call",
@@ -33,7 +33,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<ol>\n<li>Open the expert's profile and choose <strong>Book a consultation</strong>.</li>\n<li>On <strong>Choose a time</strong>, pick a slot from their open times. Times show in your device's timezone.</li>\n<li>Under <strong>How long do you need?</strong>, choose 15, 30, 45 or 60 minutes. The longest option is capped\nat the length of the slot you picked.</li>\n<li>On <strong>Review &amp; confirm</strong>, check the details and choose <strong>Confirm &amp; book</strong>.</li>\n</ol>",
+            "html": "<ol>\n<li>Open the expert's profile and choose <strong>Book a consultation</strong>.</li>\n<li>On <strong>Choose a time</strong>, pick a slot from their open times. Times show in your device's timezone.</li>\n<li>Under <strong>How long do you need?</strong>, choose 15, 30, 45 or 60 minutes. The longest option is capped\nat the length of the slot you picked.</li>\n<li>On <strong>Review &amp; confirm</strong>, check the details and choose <strong>Confirm &amp; book</strong>.</li>\n</ol>\n<p>You can also book from an open case's page with <strong>Book with {name} again</strong>. Their calendar opens\nright there, with that case already chosen.</p>",
             "id": "s1-b0"
           }
         ],
@@ -63,7 +63,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>If you belong to more than one company, first choose which one pays under <strong>Bill this session\nto</strong>. Open cases are listed per company, so the case choice appears once you've picked.</p>\n<p>If you already have an open case with this expert, the confirm step asks which case the call is\nfor. Choose an existing case, or <strong>Start a new case</strong> for a new issue with that expert. If you\nhave no open case with them, there's nothing to choose and the call starts a new one.</p>",
+            "html": "<p>If you belong to more than one company, first choose which one pays under <strong>Bill this session\nto</strong>. Open cases are listed per company, so the case choice appears once you've picked.</p>\n<p>If you already have an open case with this expert, the confirm step asks which case the call is\nfor. Pick from the list: an existing case, or <strong>Start a new case</strong> for a new issue with that\nexpert. Booking from the expert's profile starts on <strong>Start a new case</strong>; booking from a case's\npage starts on that case. If you have no open case with them, there's nothing to choose and the\ncall starts a new one.</p>",
             "id": "s3-b0"
           }
         ],
@@ -135,7 +135,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Experts can pause new work for a while. When they do, their profile shows \"Not taking on new work\nright now\" instead of open times, and you can't start a new case with them. You can:</p>\n<ul>\n<li><strong>Find a similar expert</strong>, which searches for experts with similar experience who are available.</li>\n<li><strong>Get matched for a project</strong>, and our team introduces a matched expert.</li>\n<li><strong>Send them a message</strong>, which still reaches them.</li>\n</ul>\n<p>If you already have an open case with that expert, you can still book follow-up consultations on\nit. Book it from that case's page, using <strong>Book with {name} again</strong> or <strong>Book a consultation</strong>,\nwhich opens the next open time on the case.</p>",
+            "html": "<p>Experts can pause new work for a while. When they do, their profile shows \"Not taking on new work\nright now\" instead of open times, and you can't start a new case with them. You can:</p>\n<ul>\n<li><strong>Find a similar expert</strong>, which searches for experts with similar experience who are available.</li>\n<li><strong>Get matched for a project</strong>, and our team introduces a matched expert.</li>\n<li><strong>Send them a message</strong>, which still reaches them.</li>\n</ul>\n<p>If you already have an open case with that expert, you can still book follow-up consultations on\nit. Book it from that case's page, using <strong>Book with {name} again</strong> or <strong>Book a consultation</strong>,\nwhich opens their calendar right there, already attached to the case. You can switch to another\nof your open cases with them, but not start a new one.</p>",
             "id": "s7-b0"
           }
         ],
