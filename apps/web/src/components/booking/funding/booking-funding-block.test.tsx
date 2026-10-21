@@ -89,6 +89,7 @@ function renderBlock(
     onBack: vi.fn(),
     draftKept: true,
     onBusyChange: vi.fn(),
+    onInFlightChange: vi.fn(),
     ...overrides,
   };
   return { ...props, ...render(<BookingFundingBlock {...props} />) };
@@ -609,6 +610,21 @@ describe('BookingFundingBlock', () => {
       const busy = await screen.findByRole('button', { name: 'Adding to balance…' });
       await waitFor(() => expect(busy.parentElement).toHaveFocus());
       poll.resolve({ status: 'pending', balanceMinor: 0 });
+    });
+
+    it('reports in-flight only while something runs: an unconfirmed credit is busy, not in flight', async () => {
+      vi.mocked(getTopUpCreditStatusAction).mockResolvedValueOnce({ status: 'unauthorized' });
+      const onBusyChange = vi.fn();
+      const onInFlightChange = vi.fn();
+      renderBlock(savedCardView(), { onBusyChange, onInFlightChange });
+      expect(onInFlightChange).toHaveBeenLastCalledWith(false);
+
+      await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
+
+      await waitFor(() => expect(onInFlightChange).toHaveBeenCalledWith(true));
+      await screen.findByRole('button', { name: 'Book now' });
+      await waitFor(() => expect(onInFlightChange).toHaveBeenLastCalledWith(false));
+      expect(onBusyChange).toHaveBeenLastCalledWith(true);
     });
 
     it('reports busy from the payment until the block returns to the pay action', async () => {

@@ -729,6 +729,8 @@ describe('credit actions', () => {
             id: 'wallet-1',
             lowBalanceMode,
             mandateStatus: 'active',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: 'pm_old',
           });
           mockCreatePurchaseIntent.mockResolvedValue({
             outcome: 'needs_client_confirmation',
@@ -768,13 +770,28 @@ describe('credit actions', () => {
           paymentMethodSource: 'new_card',
         },
         {
+          name: "a new card whose 'active' mandate has no payment method behind it",
+          wallet: {
+            lowBalanceMode: 'keep_going',
+            mandateStatus: 'active',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: null,
+          },
+          paymentMethodSource: 'new_card',
+        },
+        {
           name: 'a new card with a pending mandate',
           wallet: { lowBalanceMode: 'auto_topup', mandateStatus: 'pending' },
           paymentMethodSource: 'new_card',
         },
         {
           name: 'a new card on a mode that is not card-backed',
-          wallet: { lowBalanceMode: 'notify_only', mandateStatus: 'active' },
+          wallet: {
+            lowBalanceMode: 'notify_only',
+            mandateStatus: 'active',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: 'pm_old',
+          },
           paymentMethodSource: 'new_card',
         },
       ] as const)('stays not_required for $name', async ({ wallet, paymentMethodSource }) => {

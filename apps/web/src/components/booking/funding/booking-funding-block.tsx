@@ -59,6 +59,13 @@ export interface BookingFundingBlockProps {
    * so the dialog can lock the controls that would change what is being paid for.
    */
   readonly onBusyChange: (busy: boolean) => void;
+  /**
+   * Reports `true` only while something is genuinely running — the payment, the wait for the
+   * credit, or the booking — so the dialog can refuse to close mid-flight. Narrower than
+   * `onBusyChange`: a payment whose credit could not be confirmed is busy (the amount is fixed)
+   * but not in flight, and the client may close the dialog there.
+   */
+  readonly onInFlightChange: (inFlight: boolean) => void;
 }
 
 type Stage = 'pay' | 'awaiting_credit' | 'booking' | 'credit_unconfirmed';
@@ -249,7 +256,14 @@ function MemberFunding({
 
 type ManagerFundingProps = Pick<
   BookingFundingBlockProps,
-  'view' | 'caseSaved' | 'ctaDisabled' | 'onBeforePay' | 'onFunded' | 'onBack' | 'onBusyChange'
+  | 'view'
+  | 'caseSaved'
+  | 'ctaDisabled'
+  | 'onBeforePay'
+  | 'onFunded'
+  | 'onBack'
+  | 'onBusyChange'
+  | 'onInFlightChange'
 > & { readonly wallet: BookingTopUpWallet; readonly suggestedMinor: number };
 
 /**
@@ -266,6 +280,7 @@ function ManagerFunding({
   onFunded,
   onBack,
   onBusyChange,
+  onInFlightChange,
 }: Readonly<ManagerFundingProps>) {
   const companyName = view.company.name;
   const stripeConfigured = isStripeConfigured();
@@ -291,6 +306,14 @@ function ManagerFunding({
     onBusyChange(busy);
   }, [busy, onBusyChange]);
   useEffect(() => () => onBusyChange(false), [onBusyChange]);
+  // `paying` is reported by the pay action, which unmounts once the payment completes, so it is
+  // read only while that action is on screen.
+  const inFlight =
+    (stage === 'pay' && paying) || stage === 'awaiting_credit' || stage === 'booking';
+  useEffect(() => {
+    onInFlightChange(inFlight);
+  }, [inFlight, onInFlightChange]);
+  useEffect(() => () => onInFlightChange(false), [onInFlightChange]);
 
   // The button that held focus is replaced as the stage moves on; the slot keeps it.
   const stageRef = useRef(stage);
@@ -541,6 +564,7 @@ export function BookingFundingBlock({
   onBack,
   draftKept,
   onBusyChange,
+  onInFlightChange,
 }: Readonly<BookingFundingBlockProps>): React.JSX.Element | null {
   const shownKey = `${view.arm}:${view.company.id}`;
   const shownKeyRef = useRef<string | null>(null);
@@ -580,6 +604,7 @@ export function BookingFundingBlock({
       onFunded={onFunded}
       onBack={onBack}
       onBusyChange={onBusyChange}
+      onInFlightChange={onInFlightChange}
     />
   );
 }

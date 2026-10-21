@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { act, render, screen, within } from '@/test/utils';
+import { act, fireEvent, render, screen, within } from '@/test/utils';
 import { toast } from 'sonner';
 import { track } from '@/lib/analytics';
 import type { BookConsultationResult } from '@/lib/booking/actions/types';
@@ -152,6 +152,7 @@ vi.mock('./funding/booking-funding-block', () => ({
     onSaveForLater: () => Promise<void>;
     draftKept: boolean;
     onBusyChange: (busy: boolean) => void;
+    onInFlightChange: (inFlight: boolean) => void;
   }) => (
     <div data-testid="funding-block" data-arm={props.view.arm}>
       <span>
@@ -161,6 +162,15 @@ vi.mock('./funding/booking-funding-block', () => ({
       <span>{props.draftKept ? 'draft kept' : 'no draft'}</span>
       <button type="button" onClick={() => props.onBusyChange(true)}>
         Stub busy
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          props.onBusyChange(true);
+          props.onInFlightChange(true);
+        }}
+      >
+        Stub in flight
       </button>
       <button type="button" onClick={() => mockBlockBeforePay(props.onBeforePay())}>
         Stub before pay
@@ -2208,7 +2218,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
     it.each([
       ['dialog', false],
       ['sheet', true],
-    ])('Escape while the funding block is busy is ignored (%s)', async (_label, mobile) => {
+    ])('Escape while a top-up is in flight is ignored (%s)', async (_label, mobile) => {
       mockIsMobile.mockReturnValue(mobile);
       const user = userEvent.setup();
       const onClose = vi.fn();
@@ -2217,11 +2227,50 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       await user.click(screen.getByText('Pick 9:00am slot'));
       await screen.findByTestId('funding-block');
 
-      await user.click(screen.getByRole('button', { name: 'Stub busy' }));
+      await user.click(screen.getByRole('button', { name: 'Stub in flight' }));
       await user.keyboard('{Escape}');
 
       expect(onClose).not.toHaveBeenCalled();
       expect(screen.getByTestId('funding-block')).toBeInTheDocument();
+    });
+
+    it.each([
+      ['dialog', false],
+      ['sheet', true],
+    ])(
+      'Escape closes when the block is busy but nothing is in flight, as after an unconfirmed credit (%s)',
+      async (_label, mobile) => {
+        mockIsMobile.mockReturnValue(mobile);
+        const user = userEvent.setup();
+        const onClose = vi.fn();
+        mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+        renderDialog(undefined, onClose);
+        await user.click(screen.getByText('Pick 9:00am slot'));
+        await screen.findByTestId('funding-block');
+
+        await user.click(screen.getByRole('button', { name: 'Stub busy' }));
+        await user.keyboard('{Escape}');
+
+        expect(onClose).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it('a click on a Stripe frame outside the modal never dismisses it, even when idle', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog(undefined, onClose);
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      const stripeFrame = document.createElement('iframe');
+      stripeFrame.setAttribute('name', '__privateStripeFrame7');
+      document.body.append(stripeFrame);
+
+      fireEvent.pointerDown(stripeFrame);
+      fireEvent.focusIn(stripeFrame);
+
+      expect(onClose).not.toHaveBeenCalled();
+      stripeFrame.remove();
     });
 
     it.each([

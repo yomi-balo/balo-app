@@ -69,6 +69,7 @@ import {
   staleSlotTopUpFollowUp,
 } from './funding/funding-copy';
 import { useBookingFunding } from './funding/use-booking-funding';
+import { guardStripeOutsideInteraction } from './funding/stripe-outside-guard';
 import type {
   BookingContext,
   BookingEntry,
@@ -700,6 +701,8 @@ export function BookingFlowDialog(
   const [draftRestored, setDraftRestored] = useState(false);
   /** BAL-608 — true while a top-up, or the booking after it, locks the time, company and case. */
   const [fundingBusy, setFundingBusy] = useState(false);
+  /** BAL-608 — true while a top-up's payment, credit wait or booking runs; the dialog stays open. */
+  const [fundingInFlight, setFundingInFlight] = useState(false);
   /** BAL-608 — the company name the saved-for-later result names. */
   const [savedCompanyName, setSavedCompanyName] = useState<string | null>(null);
 
@@ -1573,6 +1576,7 @@ export function BookingFlowDialog(
                       onBack={handleBack}
                       draftKept={draftScope !== null}
                       onBusyChange={setFundingBusy}
+                      onInFlightChange={setFundingInFlight}
                     />
                   )
                 }
@@ -1693,13 +1697,21 @@ export function BookingFlowDialog(
     </div>
   );
 
+  // Stripe's 3DS and Link frames live on `body`, outside this modal; see `stripe-outside-guard`.
+  const guardOutside = guardStripeOutsideInteraction(fundingInFlight);
+
   if (isMobile) {
     return (
       <Sheet
         open={open}
-        onOpenChange={(next) => !next && !isSwitching && !fundingBusy && handleAbandon()}
+        onOpenChange={(next) => !next && !isSwitching && !fundingInFlight && handleAbandon()}
       >
-        <SheetContent side="bottom" className="max-h-[94dvh] overflow-hidden rounded-t-2xl p-0">
+        <SheetContent
+          side="bottom"
+          className="max-h-[94dvh] overflow-hidden rounded-t-2xl p-0"
+          onInteractOutside={guardOutside}
+          onPointerDownOutside={guardOutside}
+        >
           <SheetTitle className="sr-only">Book a consultation with {expert.name}</SheetTitle>
           <SheetDescription className="sr-only">
             Pick a time, review the details, and confirm your consultation.
@@ -1713,11 +1725,15 @@ export function BookingFlowDialog(
   return (
     <Dialog
       open={open}
-      onOpenChange={(next) => !next && !isSwitching && !fundingBusy && handleAbandon()}
+      onOpenChange={(next) => !next && !isSwitching && !fundingInFlight && handleAbandon()}
     >
       {/* Same width, same reason, as reschedule-dialog.tsx — Step 1 embeds the identical
           calendar and was squeezed the same way at 640px. */}
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[min(92vw,840px)]">
+      <DialogContent
+        className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[min(92vw,840px)]"
+        onInteractOutside={guardOutside}
+        onPointerDownOutside={guardOutside}
+      >
         <DialogTitle className="sr-only">Book a consultation with {expert.name}</DialogTitle>
         <DialogDescription className="sr-only">
           Pick a time, review the details, and confirm your consultation.

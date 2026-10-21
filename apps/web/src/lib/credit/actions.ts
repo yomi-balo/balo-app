@@ -651,7 +651,8 @@ async function persistPurchaseConfig(
  * for the mode it writes.
  *
  * A `keep` purchase (no config) writes no preference and is `not_required` — with ONE exception:
- * a NEW card on a wallet whose card-backed mode has an ACTIVE mandate. The purchase webhook
+ * a NEW card on a wallet whose card-backed mode has an ACTIVE mandate (`isWalletMandateActive`,
+ * the same predicate the booking gate reads). The purchase webhook
  * (`applySavedCardDisplay`) clears a mandate whose card has changed, so without a fresh consent
  * the standing mode would go inert and anything relying on it (a booking whose shortfall assumed
  * the mandate covers it, teammates' sessions) would be refused. That arm re-arms the EXISTING
@@ -670,7 +671,7 @@ async function resolvePurchaseMandate(
   if (config === undefined) {
     const rearmsExistingMandate =
       paymentMethodSource === 'new_card' &&
-      wallet.mandateStatus === 'active' &&
+      isWalletMandateActive(wallet) &&
       isCardBackedLowBalanceMode(wallet.lowBalanceMode);
     if (!rearmsExistingMandate) {
       return { outcome: 'not_required' };
