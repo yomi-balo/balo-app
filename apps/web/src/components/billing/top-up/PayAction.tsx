@@ -5,10 +5,11 @@ import { useElements, useStripe } from '@stripe/react-stripe-js';
 import { ArrowRight, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { track, CREDIT_EVENTS } from '@/lib/analytics';
+import { track, CREDIT_EVENTS, type CreditSurfaceProperty } from '@/lib/analytics';
 import {
   startPurchaseAction,
   type StartPurchaseInput,
+  type LowBalanceMode,
   type StartPurchaseResult,
   type MandateOutcome,
 } from '@/lib/credit/actions';
@@ -22,7 +23,11 @@ interface PayActionProps {
   readonly promoMinor: number;
   readonly promoCode: string | null;
   readonly promoCodeId: string | null;
-  readonly lowBalanceMode: StartPurchaseInput['config']['lowBalanceMode'];
+  /**
+   * The low-balance preference this purchase carries. Omitted by a pure top-up (the booking
+   * surface), whose purchase event then carries no mode.
+   */
+  readonly lowBalanceMode?: LowBalanceMode;
   readonly paymentMethodSource: PaymentMethodSource;
   /**
    * Block Pay when the composer's configuration is invalid (e.g. an out-of-range auto-top-up
@@ -44,7 +49,44 @@ interface PayActionProps {
    * to change something. The composer owns the key, so the composer does the rotating.
    */
   readonly onCardDeclined: () => void;
+  /** Button label while idle. Defaults to `Pay {amount}`. */
+  readonly idleLabel?: string;
+  /** Button label while a payment is in flight. Defaults to `Processing…`. */
+  readonly processingLabel?: string;
+  /** Which surface hosts this Pay; stamped on the purchase events it fires. Defaults to `billing`. */
+  readonly surface?: CreditSurfaceProperty;
+  /**
+   * Runs on a Pay press before anything is tracked or charged. Returning `false` abandons the
+   * press — no event, no `startPurchaseAction`.
+   */
+  readonly beforeStart?: () => boolean;
+  /**
+   * Fired once per failed attempt, with the outcome class. `declined` and `auth_failed` PROVE
+   * nothing was charged; `error` is everything else, including outcomes that are ambiguous about
+   * the charge. A failure of the Payment Element's own validation (`elements.submit`) fires nothing.
+   */
+  readonly onFailure?: (reason: PayActionFailureReason) => void;
+  /**
+   * Fired with `true` while a payment is in flight and `false` once the button is idle again, so
+   * a host can lock the controls around it. A host that unmounts this button mid-flight owns the
+   * idle state from then on.
+   */
+  readonly onProcessingChange?: (processing: boolean) => void;
+  /**
+   * Overrides the buyer-facing message for the listed outcomes only. `declined` replaces the
+   * message of a `card_declined` refusal alone (any other card error keeps Stripe's own message),
+   * `auth_failed` replaces the message of any authentication failure, and `settlement_outstanding`
+   * replaces the start error of that name. Every other failure keeps its default copy, including the ambiguous
+   * saved-card copy that must never claim nothing was charged.
+   */
+  readonly errorCopy?: PayActionErrorCopy;
 }
+
+export type PayActionFailureReason = 'declined' | 'auth_failed' | 'error';
+
+export type PayActionErrorCopy = Partial<
+  Record<'declined' | 'auth_failed' | 'settlement_outstanding', string>
+>;
 
 /** The two halves of the Server Action's result, named so the charge helpers can take one. */
 type StartSuccess = Extract<StartPurchaseResult, { ok: true }>;
@@ -62,6 +104,10 @@ type StartFailure = Extract<StartPurchaseResult, { ok: false }>;
  */
 const SAVED_CARD_ERROR_COPY =
   'Something went wrong finishing your top-up — check your balance before trying again.';
+
+/** The default message for a failure that carries none of its own. Only true where nothing was charged. */
+export const GENERIC_NO_CHARGE_COPY =
+  "That didn't go through — no charge was made. Want to try again?";
 
 /**
  * The ONLY Stripe.js error types that PROVE the 3DS step did not complete — the client-side twin
@@ -142,6 +188,13 @@ export function PayAction({
   onComplete,
   onUseDifferentCard,
   onCardDeclined,
+  idleLabel,
+  processingLabel = 'Processing…',
+  surface = 'billing',
+  beforeStart,
+  onFailure,
+  onProcessingChange,
+  errorCopy,
 }: Readonly<PayActionProps>) {
   const stripe = useStripe();
   const elements = useElements();
@@ -157,14 +210,30 @@ export function PayAction({
 
   // Keep the PaymentElement's displayed amount in sync as the slider moves (deferred flow).
   useEffect(() => {
-    if (elements) elements.update({ amount: amountMinor });
+    if (elements) void elements.update({ amount: amountMinor });
   }, [elements, amountMinor]);
 
-  const fail = useCallback((message: string | null) => {
-    setShake(true);
-    setError(message ?? "That didn't go through — no charge was made. Want to try again?");
-    setStatus('idle');
-  }, []);
+  useEffect(() => {
+    onProcessingChange?.(status === 'processing');
+  }, [status, onProcessingChange]);
+
+  /**
+   * `overridable` is `false` for a decline that is not a plain `card_declined` (an incorrect CVC,
+   * an expired card): `errorCopy.declined` names a refused card, so those keep Stripe's message.
+   */
+  const fail = useCallback(
+    (message: string | null, reason?: PayActionFailureReason, overridable = true) => {
+      const override =
+        overridable && (reason === 'declined' || reason === 'auth_failed')
+          ? errorCopy?.[reason]
+          : undefined;
+      setShake(true);
+      setError(override ?? message ?? GENERIC_NO_CHARGE_COPY);
+      setStatus('idle');
+      if (reason) onFailure?.(reason);
+    },
+    [errorCopy, onFailure]
+  );
 
   /**
    * Finish the card-backed mandate and report whether it is genuinely captured.
@@ -282,7 +351,7 @@ export function PayAction({
   const confirmNewCard = useCallback(
     async (clientSecret: string): Promise<{ paymentMethodId: string | null } | null> => {
       if (!stripe || !elements) {
-        fail(null);
+        fail(null, 'error');
         return null;
       }
       // BAL-529 §G — origin + pathname, matching `captureMandate`'s `confirmSetup` above. NOT
@@ -300,7 +369,16 @@ export function PayAction({
         redirect: 'if_required',
       });
       if (payError) {
-        fail(payError.message ?? null);
+        let reason: PayActionFailureReason = 'error';
+        if (payError.type === 'card_error') {
+          reason =
+            payError.code === 'payment_intent_authentication_failure' ? 'auth_failed' : 'declined';
+        }
+        fail(
+          payError.message ?? null,
+          reason,
+          reason !== 'declined' || payError.code === 'card_declined'
+        );
         return null;
       }
       if (
@@ -308,7 +386,7 @@ export function PayAction({
         paymentIntent.status !== 'succeeded' &&
         paymentIntent.status !== 'processing'
       ) {
-        fail(null);
+        fail(null, 'error');
         return null;
       }
       const method = paymentIntent?.payment_method;
@@ -340,14 +418,14 @@ export function PayAction({
   const resolveNextActionOutcome = useCallback(
     async (clientSecret: string): Promise<boolean> => {
       if (!stripe) {
-        fail(SAVED_CARD_ERROR_COPY);
+        fail(SAVED_CARD_ERROR_COPY, 'error');
         return false;
       }
       try {
         const { paymentIntent, error: retrieveError } =
           await stripe.retrievePaymentIntent(clientSecret);
         if (retrieveError || !paymentIntent) {
-          fail(SAVED_CARD_ERROR_COPY);
+          fail(SAVED_CARD_ERROR_COPY, 'error');
           return false;
         }
         if (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing') {
@@ -358,10 +436,10 @@ export function PayAction({
         // Provably still unpaid (`requires_payment_method` / `canceled` / a stale
         // `requires_action`): the cached answer on this key is worthless, so rotate.
         onCardDeclined();
-        fail(SAVED_CARD_ERROR_COPY);
+        fail(SAVED_CARD_ERROR_COPY, 'error');
         return false;
       } catch {
-        fail(SAVED_CARD_ERROR_COPY);
+        fail(SAVED_CARD_ERROR_COPY, 'error');
         return false;
       }
     },
@@ -404,7 +482,7 @@ export function PayAction({
             return resolveNextActionOutcome(clientSecret);
           }
           onCardDeclined();
-          fail(actionError.message ?? SAVED_CARD_ERROR_COPY);
+          fail(actionError.message ?? SAVED_CARD_ERROR_COPY, 'auth_failed');
           return false;
         }
         if (
@@ -417,7 +495,7 @@ export function PayAction({
           // as a completed purchase. Every status reachable here is PROVABLY unpaid, so rotating
           // is safe — but the copy still must not claim nothing was charged.
           onCardDeclined();
-          fail(SAVED_CARD_ERROR_COPY);
+          fail(SAVED_CARD_ERROR_COPY, 'error');
           return false;
         }
         return true;
@@ -458,24 +536,34 @@ export function PayAction({
         track(CREDIT_EVENTS.PURCHASE_DECLINED, {
           amount_minor: amountMinor,
           decline_code: start.declineCode ?? null,
+          surface,
         });
       }
-      fail(START_ERROR_COPY[start.error] ?? START_ERROR_COPY.stripe_error ?? null);
+      const message =
+        (start.error === 'settlement_outstanding'
+          ? errorCopy?.settlement_outstanding
+          : undefined) ??
+        START_ERROR_COPY[start.error] ??
+        START_ERROR_COPY.stripe_error ??
+        null;
+      fail(message, start.error === 'card_declined' ? 'declined' : 'error');
     },
-    [amountMinor, fail, onCardDeclined]
+    [amountMinor, surface, errorCopy, fail, onCardDeclined]
   );
 
   const onPay = useCallback(async () => {
     if (!stripe || status === 'processing') return;
     // The new-card path needs an Elements instance to submit; the saved-card path does not.
     if (!usingSavedCard && !elements) return;
+    if (beforeStart && !beforeStart()) return;
 
     track(CREDIT_EVENTS.PURCHASE_STARTED, {
       amount_minor: amountMinor,
       promo_applied: promoMinor > 0,
       funding_method: 'card',
-      low_balance_mode: lowBalanceMode,
+      ...(lowBalanceMode === undefined ? {} : { low_balance_mode: lowBalanceMode }),
       payment_method_source: paymentMethodSource,
+      surface,
     });
 
     setStatus('processing');
@@ -509,11 +597,14 @@ export function PayAction({
       promoMinor,
       promoCode,
       promoCodeId,
-      lowBalanceMode,
+      // Only the billing receipt reads this; a pure top-up has no receipt.
+      lowBalanceMode: lowBalanceMode ?? 'notify_only',
       mandateCaptured,
       paymentIntentId: start.paymentIntentId,
     });
   }, [
+    beforeStart,
+    surface,
     stripe,
     elements,
     status,
@@ -574,11 +665,11 @@ export function PayAction({
       >
         {status === 'processing' ? (
           <>
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" /> Processing…
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" /> {processingLabel}
           </>
         ) : (
           <>
-            Pay {formatAud(amountMinor)}{' '}
+            {idleLabel ?? `Pay ${formatAud(amountMinor)}`}{' '}
             <ArrowRight className="size-4" strokeWidth={2.6} aria-hidden="true" />
           </>
         )}

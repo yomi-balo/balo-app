@@ -25,6 +25,7 @@ import type {
   SavedCard,
   WalletSnapshot,
 } from '@/components/billing/top-up/types';
+import type { BookingTopUpWallet } from '@/lib/booking/actions/booking-funding-types';
 
 /**
  * BAL-402 — SERVER-ONLY shared wallet reads for the client-lens credit surfaces (ADR-1040).
@@ -301,6 +302,16 @@ export function projectWalletSnapshot(wallet: CreditWallet): WalletSnapshot {
   };
 }
 
+/**
+ * Project a wallet row (or its absence) into what the booking flow's inline top-up needs: the
+ * chargeable saved card. The booking top-up is a pure top-up that leaves the low-balance
+ * setting alone, so no preference is carried. A company with no wallet row yet has no card.
+ * Never the row itself.
+ */
+export function projectBookingTopUpWallet(wallet: CreditWallet | undefined): BookingTopUpWallet {
+  return { savedCard: wallet === undefined ? null : projectSavedCard(wallet) };
+}
+
 // ── BAL-522: the billing-email projection ────────────────────────────────────────────────
 
 /** BAL-522 — the settings surface's billing-email projection. Serialisable; no Date, no row. */
@@ -339,7 +350,7 @@ export function projectBillingEmail(
   company: CompanyBillingIdentity | undefined,
   setBy: { name: string | null; isFormerMember: boolean }
 ): BillingEmailSnapshot {
-  if (company === undefined || company.billingEmail === null) {
+  if (company?.billingEmail == null) {
     return { email: null, source: null, setAt: null, setByName: null, setByIsFormerMember: false };
   }
   return {

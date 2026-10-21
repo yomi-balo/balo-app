@@ -8,7 +8,6 @@ import {
   companiesRepository,
   expertsRepository,
   meetingsRepository,
-  partyMembershipsRepository,
   referenceDataRepository,
   isUniqueViolation,
 } from '@balo/db';
@@ -18,7 +17,6 @@ import {
   type BookingReplayClassification,
   type BookingReplayProbe,
 } from '@balo/shared/meetings';
-import { CAPABILITIES } from '@/lib/authz';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
@@ -28,6 +26,7 @@ import { deriveBookingIdempotencyKey } from '../booking-idempotency';
 import { bookingSlotSchema, MS_PER_MINUTE } from '../booking-slot-schema';
 import { sanitizeCaseDescription } from '../sanitize-case-description';
 import { authorizeCaseAttach } from '../authorize-case-attach';
+import { resolveBillingCompanyId } from '../resolve-billing-company';
 import {
   enforceBookingFunding,
   type BookingFundingRefusal,
@@ -106,14 +105,14 @@ const caseChoiceSchema = z.discriminatedUnion('kind', [
       kind: z.literal('new'),
       title: z.string().trim().min(1).max(160),
       descriptionHtml: z.string().max(MAX_DESCRIPTION_HTML),
-      productIds: z.array(z.string().uuid()).max(MAX_PRODUCTS),
-      companyId: z.string().uuid().optional(),
+      productIds: z.array(z.uuid()).max(MAX_PRODUCTS),
+      companyId: z.uuid().optional(),
     })
     .strict(),
   z
     .object({
       kind: z.literal('existing'),
-      engagementId: z.string().uuid(),
+      engagementId: z.uuid(),
     })
     .strict(),
 ]);
@@ -134,14 +133,14 @@ const caseChoiceSchema = z.discriminatedUnion('kind', [
  */
 const bookConsultationSchema = z
   .object({
-    expertProfileId: z.string().uuid(),
+    expertProfileId: z.uuid(),
     slot: bookingSlotSchema,
-    bookingNonce: z.string().uuid(),
+    bookingNonce: z.uuid(),
     guests: z
       .array(
         z
           .object({
-            email: z.string().trim().toLowerCase().email(),
+            email: z.string().trim().toLowerCase().pipe(z.email()),
             name: z.string().trim().min(1).max(120).optional(),
           })
           .strict()
@@ -211,6 +210,7 @@ function fundingRefusalFailure(
       ok: false,
       ...where,
       code: refusal.canManageBilling ? 'funding_setup_required' : 'funding_admins_notified',
+      setup: { kind: refusal.setupKind, company: refusal.billingCompany },
     };
   }
   if (refusal.reason === 'on_hold') {
@@ -237,43 +237,6 @@ function fundingRefusalFailure(
       company: refusal.billingCompany,
     },
   };
-}
-
-/** Resolve which company bills this booking (Decision 5's fail-closed IDOR guard). */
-async function resolveBillingCompanyId(
-  userId: string,
-  requestedCompanyId: string | undefined
-): Promise<
-  | { ok: true; companyId: string }
-  | {
-      ok: false;
-      code: 'no_eligible_company' | 'company_selection_required' | 'company_not_eligible';
-    }
-> {
-  const eligible = await partyMembershipsRepository.listCapabilityEligibleCompanies(
-    userId,
-    CAPABILITIES.CONSUME_CREDITS
-  );
-  if (eligible.length === 0) {
-    return { ok: false, code: 'no_eligible_company' };
-  }
-  if (eligible.length > 1) {
-    if (requestedCompanyId === undefined) {
-      return { ok: false, code: 'company_selection_required' };
-    }
-    const match = eligible.find((company) => company.id === requestedCompanyId);
-    if (match === undefined) {
-      return { ok: false, code: 'company_not_eligible' };
-    }
-    return { ok: true, companyId: match.id };
-  }
-  const [only] = eligible;
-  if (only === undefined) {
-    // Unreachable (length === 1 above), guarded rather than asserted for
-    // `noUncheckedIndexedAccess`.
-    return { ok: false, code: 'no_eligible_company' };
-  }
-  return { ok: true, companyId: only.id };
 }
 
 /**
@@ -982,7 +945,7 @@ async function completeBooking(params: {
 
   // Fire-and-forget (BAL-279 durability lives inside `publishNotificationEvent`). Only reached
   // on a real 201 — nothing is notified until a meeting exists (Decision 3).
-  publishNotificationEvent('booking.confirmed', {
+  void publishNotificationEvent('booking.confirmed', {
     correlationId: meetingId,
     meetingId,
     engagementId,

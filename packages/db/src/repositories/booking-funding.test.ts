@@ -145,19 +145,81 @@ describe('bookingFundingRepository.readSnapshot — one snapshot', () => {
       expertProfileId: EXPERT_ID,
       now: new Date(),
     });
-    expect(snapshot).toEqual({ kind: 'on_hold', walletId: WALLET_ID, hold });
-    expect(mockFindRateCentsById).not.toHaveBeenCalled();
+    expect(snapshot).toEqual({
+      kind: 'on_hold',
+      walletId: WALLET_ID,
+      hold,
+      topUpPricing: {
+        expertRateCents: 33_600,
+        availableMinor: 30_000,
+        reservable: [],
+        mandateActive: true,
+      },
+    });
   });
 
-  it('no wallet ⇒ no_wallet, and nothing else is read', async () => {
-    mockFindByCompanyId.mockResolvedValue(undefined);
+  it('an open hold carries the pricing read on the snapshot transaction, mandateActive false without a mandate', async () => {
+    const hold = { ...NOT_ON_HOLD, onHold: true, openReceivableCount: 1, amountToClearMinor: 500 };
+    const rows = [{ meetingId: 'm-1' }];
+    mockReadHoldStatus.mockResolvedValue(hold);
+    mockListReservableCaseBookings.mockResolvedValue(rows);
+    const now = new Date();
+    const snapshot = await bookingFundingRepository.readSnapshot({
+      companyId: COMPANY_ID,
+      expertProfileId: EXPERT_ID,
+      now,
+    });
+    expect(snapshot).toEqual({
+      kind: 'on_hold',
+      walletId: WALLET_ID,
+      hold,
+      topUpPricing: {
+        expertRateCents: 33_600,
+        availableMinor: 30_000,
+        reservable: rows,
+        mandateActive: false,
+      },
+    });
+    expect(mockFindRateCentsById).toHaveBeenCalledWith(EXPERT_ID, TX);
+    expect(mockGetAvailableForBooking).toHaveBeenCalledWith(WALLET_ID, TX);
+    expect(mockListReservableCaseBookings).toHaveBeenCalledWith({ companyId: COMPANY_ID, now }, TX);
+  });
+
+  it('an open hold on an unknown expert prices as unpriceable (null rate)', async () => {
+    const hold = { ...NOT_ON_HOLD, onHold: true, openReceivableCount: 1, amountToClearMinor: 500 };
+    mockReadHoldStatus.mockResolvedValue(hold);
+    mockFindRateCentsById.mockResolvedValue(undefined);
     const snapshot = await bookingFundingRepository.readSnapshot({
       companyId: COMPANY_ID,
       expertProfileId: EXPERT_ID,
       now: new Date(),
     });
-    expect(snapshot).toEqual({ kind: 'no_wallet' });
+    expect(snapshot).toMatchObject({ kind: 'on_hold', topUpPricing: { expertRateCents: null } });
+  });
+
+  it('no wallet ⇒ reads rate + reservable on the TX, never the hold or the balance', async () => {
+    mockFindByCompanyId.mockResolvedValue(undefined);
+    const rows = [{ meetingId: 'm-1' }];
+    mockListReservableCaseBookings.mockResolvedValue(rows);
+    const now = new Date();
+    const snapshot = await bookingFundingRepository.readSnapshot({
+      companyId: COMPANY_ID,
+      expertProfileId: EXPERT_ID,
+      now,
+    });
+    expect(snapshot).toEqual({
+      kind: 'no_wallet',
+      topUpPricing: {
+        expertRateCents: 33_600,
+        availableMinor: 0,
+        reservable: rows,
+        mandateActive: false,
+      },
+    });
+    expect(mockFindRateCentsById).toHaveBeenCalledWith(EXPERT_ID, TX);
+    expect(mockListReservableCaseBookings).toHaveBeenCalledWith({ companyId: COMPANY_ID, now }, TX);
     expect(mockReadHoldStatus).not.toHaveBeenCalled();
+    expect(mockGetAvailableForBooking).not.toHaveBeenCalled();
   });
 
   it('an unknown expert ⇒ unknown_expert (fail closed), before any balance read', async () => {

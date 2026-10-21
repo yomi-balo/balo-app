@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { act, render, screen, within } from '@/test/utils';
+import { act, fireEvent, render, screen, within } from '@/test/utils';
 import { toast } from 'sonner';
 import { track } from '@/lib/analytics';
 import type { BookConsultationResult } from '@/lib/booking/actions/types';
 import { SESSION_EXPIRED_MESSAGE } from '@/lib/auth/auth-error-copy';
+import { refetchOpenCasesAction } from '@/lib/booking/actions/refetch-open-cases';
+import { TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
+import { companyWorkspaceKey } from '@balo/shared/workspaces';
+import { readBookingDraft, writeBookingDraft, type BookingDraft } from './booking-draft';
+import { refusedView } from './funding/funding-fixtures';
 import type { BookingFlowExpert, BookingContext } from './types';
 
 vi.mock('motion/react', async () => {
@@ -12,7 +17,7 @@ vi.mock('motion/react', async () => {
   return createMotionStub();
 });
 vi.mock('sonner', () => ({
-  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 const { mockRouterPush } = vi.hoisted(() => ({ mockRouterPush: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockRouterPush }) }));
@@ -122,6 +127,76 @@ vi.mock('@/lib/booking/actions/refetch-booking-context', () => ({
   refetchBookingContextAction: vi.fn().mockResolvedValue({ ok: false }),
 }));
 
+const { mockReadBookingFundingAction, mockSaveBookingForLaterAction, mockBlockBeforePay } =
+  vi.hoisted(() => ({
+    mockReadBookingFundingAction: vi.fn(),
+    mockSaveBookingForLaterAction: vi.fn(),
+    mockBlockBeforePay: vi.fn(),
+  }));
+vi.mock('@/lib/booking/actions/read-booking-funding', () => ({
+  readBookingFundingAction: (input: unknown) => mockReadBookingFundingAction(input),
+}));
+vi.mock('@/lib/booking/actions/save-booking-for-later', () => ({
+  saveBookingForLaterAction: (input: unknown) => mockSaveBookingForLaterAction(input),
+}));
+
+// The block's internals are covered by its own test; here a stub exposes its callbacks so the
+// dialog's wiring (draft, nonce, refresh, Save) is what is under test.
+vi.mock('./funding/booking-funding-block', () => ({
+  BookingFundingBlock: (props: {
+    view: { arm: string; canManageBilling: boolean };
+    caseSaved: { caseTitle: string } | null;
+    ctaDisabled: boolean;
+    onBeforePay: () => boolean;
+    onFunded: (topUp: { creditedMinor: number; companyName: string | null }) => Promise<boolean>;
+    onSaveForLater: () => Promise<void>;
+    draftKept: boolean;
+    onBusyChange: (busy: boolean) => void;
+    onInFlightChange: (inFlight: boolean) => void;
+  }) => (
+    <div data-testid="funding-block" data-arm={props.view.arm}>
+      <span>
+        {props.caseSaved === null ? 'no case saved' : `case saved: ${props.caseSaved.caseTitle}`}
+      </span>
+      <span>{props.ctaDisabled ? 'cta disabled' : 'cta enabled'}</span>
+      <span>{props.draftKept ? 'draft kept' : 'no draft'}</span>
+      <button type="button" onClick={() => props.onBusyChange(true)}>
+        Stub busy
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          props.onBusyChange(true);
+          props.onInFlightChange(true);
+        }}
+      >
+        Stub in flight
+      </button>
+      <button type="button" onClick={() => mockBlockBeforePay(props.onBeforePay())}>
+        Stub before pay
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          props
+            .onFunded({ creditedMinor: 30_000, companyName: 'Northwind Industrial' })
+            .catch(() => {});
+        }}
+      >
+        Stub funded
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          props.onSaveForLater().catch(() => {});
+        }}
+      >
+        Stub save
+      </button>
+    </div>
+  ),
+}));
+
 import { BookingFlowDialog } from './booking-flow-dialog';
 
 const EXPERT: BookingFlowExpert = {
@@ -137,6 +212,7 @@ const EXPERT: BookingFlowExpert = {
 
 const SINGLE_COMPANY_NO_CASES: BookingContext = {
   arm: 'single_company',
+  viewerUserId: 'user-1',
   company: { id: 'company-1', name: 'Northwind Industrial', logoUrl: null },
   openCases: [],
   resolvedCaseCount: 0,
@@ -152,6 +228,12 @@ beforeEach(() => {
   vi.mocked(track).mockClear();
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
+  vi.mocked(toast.info).mockClear();
+  mockReadBookingFundingAction.mockReset();
+  mockReadBookingFundingAction.mockResolvedValue({ kind: 'clear' });
+  mockSaveBookingForLaterAction.mockReset();
+  mockBlockBeforePay.mockReset();
+  globalThis.localStorage.clear();
 });
 
 afterEach(() => {
@@ -656,6 +738,11 @@ describe('BookingFlowDialog — failure panels + idempotent retry', () => {
   });
 
   describe('funding pre-condition (BAL-478)', () => {
+    // An unreadable pre-flight is the fallback to today's full panel, which is what these prove.
+    beforeEach(() => {
+      mockReadBookingFundingAction.mockResolvedValue({ kind: 'unavailable' });
+    });
+
     async function submitWithFundingResult(
       user: ReturnType<typeof userEvent.setup>,
       result: Extract<BookConsultationResult, { ok: false }>
@@ -892,6 +979,11 @@ describe('BookingFlowDialog — the nonce freeze/un-freeze after a meeting-hop f
 
 describe('BookingFlowDialog — the balance refusals (BAL-474: D6.1 hold, D6.5 reservation)', () => {
   const HELD_COMPANY = { id: 'company-1', name: 'Northwind Industrial', isActive: true };
+
+  // An unreadable pre-flight is the fallback to today's full panel, which is what these prove.
+  beforeEach(() => {
+    mockReadBookingFundingAction.mockResolvedValue({ kind: 'unavailable' });
+  });
 
   type FailureResult = Extract<BookConsultationResult, { ok: false }>;
 
@@ -1326,6 +1418,1056 @@ describe('BookingFlowDialog — the balance refusals (BAL-474: D6.1 hold, D6.5 r
 
       await screen.findByText('One thing to settle first');
       expect(document.body.textContent).not.toContain('is saved in your Cases');
+    });
+  });
+});
+
+describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)', () => {
+  type FailureResult = Extract<BookConsultationResult, { ok: false }>;
+
+  const COMPANY = { id: 'company-1', name: 'Northwind Industrial', isActive: true };
+  const OTHER_COMPANY = { id: 'company-2', name: 'Acme Corp', isActive: false };
+  const SCOPE = { ownerUserId: 'user-1', expertProfileId: 'expert-1' };
+  const MANAGER_VIEW = refusedView({
+    company: COMPANY,
+    wallet: { savedCard: null },
+  });
+  const MEMBER_VIEW = refusedView({ canManageBilling: false, wallet: null, company: COMPANY });
+  const DRAFT: BookingDraft = {
+    title: 'Seeded title',
+    descriptionHtml: '<p>Seeded description</p>',
+    productIds: [],
+    guests: [],
+    caseSelection: { kind: 'new' },
+    companyId: 'company-1',
+  };
+
+  const SETUP_FAILURE: FailureResult = {
+    ok: false,
+    stage: 'funding',
+    code: 'funding_setup_required',
+    setup: { kind: 'no_wallet', company: COMPANY },
+  };
+  const SLOT_GONE: FailureResult = {
+    ok: false,
+    stage: 'meeting',
+    code: 'slot_unavailable',
+    engagementId: 'engagement-6',
+    caseTitle: 'Migration planning',
+  };
+
+  function renderDialog(
+    entry: React.ComponentProps<typeof BookingFlowDialog>['entry'] = {
+      mode: 'chooser',
+      context: SINGLE_COMPANY_NO_CASES,
+    },
+    onClose = vi.fn()
+  ): ReturnType<typeof render> {
+    return render(
+      <BookingFlowDialog
+        open
+        onClose={onClose}
+        expert={EXPERT}
+        source="profile"
+        entry={entry}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+      />
+    );
+  }
+
+  async function fillForm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+    await user.type(
+      screen.getByLabelText("What you'd like to discuss"),
+      'A real problem statement.'
+    );
+  }
+
+  async function reachConfirm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await fillForm(user);
+  }
+
+  describe('the pre-flight and the inline block', () => {
+    it('AC1/AC2: reads the pre-flight on Review & confirm, renders the block under the billing line, and never calls Save', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog();
+
+      expect(mockReadBookingFundingAction).not.toHaveBeenCalled();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      const block = await screen.findByTestId('funding-block');
+      expect(mockReadBookingFundingAction).toHaveBeenCalledWith({
+        expertProfileId: 'expert-1',
+        slot: {
+          startIso: '2026-06-05T09:00:00.000Z',
+          endIso: '2026-06-05T09:30:00.000Z',
+          durationMinutes: 30,
+        },
+        caseChoice: { kind: 'new', companyId: 'company-1' },
+      });
+      const billing = screen.getByText(/Charged only for time used/);
+      expect(
+        billing.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Confirm & book/ })).not.toBeInTheDocument();
+      expect(mockSaveBookingForLaterAction).not.toHaveBeenCalled();
+    });
+
+    it('shows the normal Confirm CTA when the pre-flight is clear, unavailable or still loading', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockReturnValue(new Promise(() => {}));
+      renderDialog();
+
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      expect(screen.getByRole('button', { name: /Confirm & book/ })).toBeInTheDocument();
+      expect(screen.queryByTestId('funding-block')).not.toBeInTheDocument();
+    });
+
+    it('re-reads when the client changes the time', async () => {
+      const user = userEvent.setup();
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByRole('button', { name: /Confirm & book/ });
+      expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(1);
+
+      await user.click(screen.getByRole('button', { name: 'See other times' }));
+      await user.click(screen.getByText('Pick 10:00am slot'));
+
+      await vi.waitFor(() => expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(2));
+    });
+
+    it('reads against the chosen existing case on the fixed-case entry', async () => {
+      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
+      renderDialog({
+        mode: 'fixed_case',
+        fixedCase: {
+          engagementId: 'engagement-9',
+          title: 'Flow interview loop',
+          consultationCount: 2,
+          openedAtIso: '2026-06-01T00:00:00.000Z',
+        },
+        presetSlot: {
+          startIso: '2026-06-05T09:00:00.000Z',
+          endIso: '2026-06-05T09:30:00.000Z',
+          durationMinutes: 30,
+        },
+      });
+
+      expect(await screen.findByTestId('funding-block')).toBeInTheDocument();
+      expect(mockReadBookingFundingAction).toHaveBeenCalledWith(
+        expect.objectContaining({ caseChoice: { kind: 'existing', engagementId: 'engagement-9' } })
+      );
+    });
+
+    it('does not call the pre-flight for a multi-company client until a company is chosen', async () => {
+      const user = userEvent.setup();
+      renderDialog({
+        mode: 'chooser',
+        context: {
+          arm: 'choose_company',
+          viewerUserId: 'user-1',
+          companies: [
+            { id: 'company-1', name: 'Northwind Industrial', logoUrl: null },
+            { id: 'company-2', name: 'Acme Corp', logoUrl: null },
+          ],
+        },
+      });
+
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      expect(screen.getByRole('button', { name: /Confirm & book/ })).toBeDisabled();
+      expect(mockReadBookingFundingAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pay → credit → book', () => {
+    it('AC1: the form fields stay the same mounted node through the funded booking attempt', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue(SLOT_GONE);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+      const titleInput = screen.getByLabelText(/^Title/);
+      const description = screen.getByLabelText("What you'd like to discuss");
+
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+      await screen.findByText('This time was just booked by someone else.');
+
+      expect(screen.getByLabelText(/^Title/)).toBe(titleInput);
+      expect(screen.getByLabelText("What you'd like to discuss")).toBe(description);
+      expect(titleInput).toHaveValue('Migration planning');
+    });
+
+    it('AC7: the booking after funding carries the SAME bookingNonce as the refused submit', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction
+        .mockResolvedValueOnce({ kind: 'clear' })
+        .mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction
+        .mockResolvedValueOnce(SETUP_FAILURE)
+        .mockResolvedValueOnce(successResult());
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+      await screen.findByTestId('funding-block');
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+
+      await vi.waitFor(() => expect(mockBookConsultationAction).toHaveBeenCalledTimes(2));
+      const [refused, funded] = mockBookConsultationAction.mock.calls.map(
+        ([input]) => input as { bookingNonce: string; slot: unknown; caseChoice: unknown }
+      );
+      expect(funded?.bookingNonce).toBe(refused?.bookingNonce);
+      expect(funded?.slot).toEqual(refused?.slot);
+      expect(funded?.caseChoice).toEqual(refused?.caseChoice);
+    });
+
+    it('a funded booking that lands moves to the booked step and clears the draft', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue(successResult());
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+      await user.click(screen.getByRole('button', { name: 'Stub before pay' }));
+      expect(readBookingDraft(SCOPE, ['company-1'])?.title).toBe('Migration planning');
+
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+
+      expect(await screen.findByText(/Discuss migration plan/)).toBeInTheDocument();
+      expect(readBookingDraft(SCOPE, ['company-1'])).toBeNull();
+    });
+
+    it('AC8: slot_unavailable after funding shows the banner with the top-up line, then re-reads the pre-flight', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue(SLOT_GONE);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+      const readsBefore = mockReadBookingFundingAction.mock.calls.length;
+
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+
+      expect(
+        await screen.findByText('This time was just booked by someone else.')
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Your top-up went through, so .*300/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Northwind Industrial/, { selector: 'span.block' })
+      ).toBeInTheDocument();
+      await vi.waitFor(() =>
+        expect(mockReadBookingFundingAction.mock.calls.length).toBeGreaterThan(readsBefore)
+      );
+    });
+
+    it('a landed credit clears the block after a failed booking, leaving the normal CTA', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction
+        .mockResolvedValueOnce(MANAGER_VIEW)
+        .mockResolvedValue({ kind: 'clear' });
+      mockBookConsultationAction.mockResolvedValue(SLOT_GONE);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+
+      expect(await screen.findByRole('button', { name: /Confirm & book/ })).toBeInTheDocument();
+      expect(screen.queryByTestId('funding-block')).not.toBeInTheDocument();
+    });
+
+    it('onBeforePay validates: with no title it refuses, shows the error and writes no draft', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+
+      await user.click(screen.getByRole('button', { name: 'Stub before pay' }));
+
+      expect(mockBlockBeforePay).toHaveBeenCalledWith(false);
+      expect(await screen.findByText('Give this a short title.')).toBeInTheDocument();
+      expect(readBookingDraft(SCOPE, ['company-1'])).toBeNull();
+    });
+
+    it('onBeforePay on a valid form writes the draft and allows the charge', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+
+      await user.click(screen.getByRole('button', { name: 'Stub before pay' }));
+
+      expect(mockBlockBeforePay).toHaveBeenCalledWith(true);
+      expect(readBookingDraft(SCOPE, ['company-1'])).toEqual(
+        expect.objectContaining({ title: 'Migration planning', companyId: 'company-1' })
+      );
+      const raw = JSON.stringify(Object.entries(globalThis.localStorage));
+      expect(raw).not.toContain('startIso');
+    });
+  });
+
+  describe('submit-time refusals', () => {
+    it('a manager of the active company gets the inline block with the case-saved line, not the full panel', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction
+        .mockResolvedValueOnce({ kind: 'clear' })
+        .mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue({
+        ...SETUP_FAILURE,
+        stage: 'meeting',
+        engagementId: 'engagement-6',
+        caseTitle: 'Migration planning',
+      });
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+
+      expect(await screen.findByTestId('funding-block')).toBeInTheDocument();
+      expect(screen.getByText('case saved: Migration planning')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Set up billing' })).not.toBeInTheDocument();
+    });
+
+    it('a hold refusal re-reads the pre-flight as a refusal so a failed heal reproduces its fallback', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction
+        .mockResolvedValueOnce({ kind: 'clear' })
+        .mockResolvedValue(refusedView({ ...MANAGER_VIEW, arm: 'hold', topUpNeededMinor: null }));
+      mockBookConsultationAction.mockResolvedValue({
+        ok: false,
+        stage: 'funding',
+        code: 'hold_top_up_required',
+        balance: {
+          variant: 'hold',
+          topUpNeededMinor: 27_500,
+          reservedBookingCount: null,
+          company: COMPANY,
+        },
+      });
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+
+      const block = await screen.findByTestId('funding-block');
+      expect(block).toHaveAttribute('data-arm', 'hold');
+      expect(mockReadBookingFundingAction).toHaveBeenLastCalledWith(
+        expect.objectContaining({ onCoveredHold: 'refuse' })
+      );
+    });
+
+    it('a non-hold refusal re-reads with onCoveredHold defer', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction
+        .mockResolvedValueOnce({ kind: 'clear' })
+        .mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue(SETUP_FAILURE);
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+      await screen.findByTestId('funding-block');
+
+      expect(mockReadBookingFundingAction).toHaveBeenLastCalledWith(
+        expect.objectContaining({ onCoveredHold: 'defer' })
+      );
+    });
+
+    it('a refusal the pre-flight now clears leaves the normal CTA, with no panel', async () => {
+      const user = userEvent.setup();
+      mockBookConsultationAction.mockResolvedValue(SETUP_FAILURE);
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+
+      await vi.waitFor(() => expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole('button', { name: /Confirm & book/ })).toBeEnabled();
+      expect(screen.queryByText('One setup step first')).not.toBeInTheDocument();
+    });
+
+    it('AC10: a billing manager of a NON-active company keeps the setup panel with "Switch to {Co} and top up"', async () => {
+      const user = userEvent.setup();
+      mockSwitchWorkspaceAction.mockResolvedValue({ success: true });
+      mockBookConsultationAction.mockResolvedValue({
+        ...SETUP_FAILURE,
+        setup: {
+          kind: 'no_wallet',
+          company: { id: 'company-1', name: 'Acme Corp', isActive: false },
+        },
+      });
+      renderDialog();
+      await reachConfirm(user);
+      const readsBefore = mockReadBookingFundingAction.mock.calls.length;
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+
+      expect(await screen.findByText('One setup step first')).toBeInTheDocument();
+      expect(mockReadBookingFundingAction.mock.calls).toHaveLength(readsBefore);
+      await user.click(screen.getByRole('button', { name: 'Switch to Acme Corp and top up' }));
+
+      expect(mockSwitchWorkspaceAction).toHaveBeenCalledWith(companyWorkspaceKey('company-1'));
+      await vi.waitFor(() => expect(mockRouterPush).toHaveBeenCalledWith('/billing/top-up'));
+      expect(readBookingDraft(SCOPE, ['company-1'])?.title).toBe('Migration planning');
+    });
+
+    it('AC10: a hold figure above the single top-up maximum keeps BookingBalancePanel', async () => {
+      const user = userEvent.setup();
+      mockBookConsultationAction.mockResolvedValue({
+        ok: false,
+        stage: 'funding',
+        code: 'hold_top_up_required',
+        balance: {
+          variant: 'hold',
+          topUpNeededMinor: TOP_UP_LIMITS_MINOR.max + TOP_UP_LIMITS_MINOR.step,
+          reservedBookingCount: null,
+          company: COMPANY,
+        },
+      });
+      renderDialog();
+      await reachConfirm(user);
+      const readsBefore = mockReadBookingFundingAction.mock.calls.length;
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+
+      expect(await screen.findByText('One thing to settle first')).toBeInTheDocument();
+      expect(screen.getByText(/top-ups totalling/)).toBeInTheDocument();
+      expect(mockReadBookingFundingAction.mock.calls).toHaveLength(readsBefore);
+      expect(screen.queryByTestId('funding-block')).not.toBeInTheDocument();
+    });
+
+    it('the balance panel for a non-active company writes the draft before it switches', async () => {
+      const user = userEvent.setup();
+      mockSwitchWorkspaceAction.mockResolvedValue({ success: true });
+      mockBookConsultationAction.mockResolvedValue({
+        ok: false,
+        stage: 'funding',
+        code: 'reserved_top_up_required',
+        balance: {
+          variant: 'reserved',
+          topUpNeededMinor: 7_500,
+          reservedBookingCount: 2,
+          company: OTHER_COMPANY,
+        },
+      });
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+      await user.click(
+        await screen.findByRole('button', { name: /Switch to Acme Corp and top up/ })
+      );
+
+      expect(readBookingDraft(SCOPE, ['company-1'])?.title).toBe('Migration planning');
+    });
+
+    it('a pre-flight that cannot be read falls back to the full panel for a member refusal', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue({ kind: 'unavailable' });
+      mockBookConsultationAction.mockResolvedValue({
+        ok: false,
+        stage: 'funding',
+        code: 'funding_admins_notified',
+        setup: { kind: 'no_wallet', company: COMPANY },
+      });
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+
+      expect(await screen.findByText('One setup step first')).toBeInTheDocument();
+    });
+  });
+
+  describe('Save and finish later', () => {
+    async function openMemberBlock(
+      user: ReturnType<typeof userEvent.setup>,
+      onClose = vi.fn()
+    ): Promise<void> {
+      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
+      renderDialog(undefined, onClose);
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+    }
+
+    it('saves, tracks, toasts and shows the saved-for-later view; closing it fires no ABANDONED', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      mockSaveBookingForLaterAction.mockResolvedValue({ ok: true });
+      await openMemberBlock(user, onClose);
+      await fillForm(user);
+
+      await user.click(screen.getByRole('button', { name: 'Stub save' }));
+
+      expect(await screen.findByText('Saved for later')).toBeInTheDocument();
+      expect(screen.getByText(/Northwind Industrial's billing admins/)).toBeInTheDocument();
+      expect(mockSaveBookingForLaterAction).toHaveBeenCalledWith(
+        expect.objectContaining({ expertProfileId: 'expert-1' })
+      );
+      expect(track).toHaveBeenCalledWith('booking_saved_for_later', {});
+      expect(toast.success).toHaveBeenCalledWith('Saved for later');
+      expect(readBookingDraft(SCOPE, ['company-1'])?.title).toBe('Migration planning');
+
+      await user.keyboard('{Escape}');
+
+      expect(onClose).toHaveBeenCalled();
+      expect(track).not.toHaveBeenCalledWith('booking_abandoned', expect.anything());
+    });
+
+    it('the Done button closes the saved view', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      mockSaveBookingForLaterAction.mockResolvedValue({ ok: true });
+      await openMemberBlock(user, onClose);
+      await fillForm(user);
+      await user.click(screen.getByRole('button', { name: 'Stub save' }));
+
+      await user.click(await screen.findByRole('button', { name: 'Done' }));
+
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it('does not save an invalid form', async () => {
+      const user = userEvent.setup();
+      await openMemberBlock(user);
+
+      await user.click(screen.getByRole('button', { name: 'Stub save' }));
+
+      expect(mockSaveBookingForLaterAction).not.toHaveBeenCalled();
+      expect(await screen.findByText('Give this a short title.')).toBeInTheDocument();
+    });
+
+    it('not_refused says it can be booked now and re-reads the pre-flight', async () => {
+      const user = userEvent.setup();
+      mockSaveBookingForLaterAction.mockResolvedValue({ ok: false, reason: 'not_refused' });
+      await openMemberBlock(user);
+      await fillForm(user);
+      const readsBefore = mockReadBookingFundingAction.mock.calls.length;
+
+      await user.click(screen.getByRole('button', { name: 'Stub save' }));
+
+      await vi.waitFor(() =>
+        expect(toast.info).toHaveBeenCalledWith('Good news — this can be booked now.')
+      );
+      await vi.waitFor(() =>
+        expect(mockReadBookingFundingAction.mock.calls.length).toBeGreaterThan(readsBefore)
+      );
+      expect(screen.queryByText('Saved for later')).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ['refused', { ok: false, reason: 'refused' }],
+      ['failed', { ok: false, reason: 'failed' }],
+    ])(
+      'a %s save toasts the keep-on-device error and stays on the form',
+      async (_label, result) => {
+        const user = userEvent.setup();
+        mockSaveBookingForLaterAction.mockResolvedValue(result);
+        await openMemberBlock(user);
+        await fillForm(user);
+
+        await user.click(screen.getByRole('button', { name: 'Stub save' }));
+
+        await vi.waitFor(() =>
+          expect(toast.error).toHaveBeenCalledWith(
+            "We couldn't let your billing admins know just now. What you typed is still saved on this device."
+          )
+        );
+        expect(screen.getByTestId('funding-block')).toBeInTheDocument();
+      }
+    );
+
+    it('a thrown save is captured and toasts the same error', async () => {
+      const user = userEvent.setup();
+      mockSaveBookingForLaterAction.mockRejectedValue(new Error('network'));
+      await openMemberBlock(user);
+      await fillForm(user);
+
+      await user.click(screen.getByRole('button', { name: 'Stub save' }));
+
+      await vi.waitFor(() => expect(mockCaptureException).toHaveBeenCalled());
+      expect(toast.error).toHaveBeenCalled();
+    });
+  });
+
+  describe('landed top-up follow-ups, locks and focus', () => {
+    async function fundAndFail(
+      user: ReturnType<typeof userEvent.setup>,
+      failure: BookConsultationResult
+    ): Promise<void> {
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue(failure);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+    }
+
+    it('a hard failure after a landed top-up says the top-up is in the balance and never "Nothing was charged"', async () => {
+      const user = userEvent.setup();
+      await fundAndFail(user, { ok: false, stage: 'validation', code: 'invalid_request' });
+
+      expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+      expect(screen.getByText(/Your top-up went through and .*300.* is in/)).toBeInTheDocument();
+      expect(screen.getByText(/Trying again won't charge you again/)).toBeInTheDocument();
+      expect(document.body.textContent).not.toContain('Nothing was charged');
+    });
+
+    it('a partial failure after a landed top-up carries the same follow-up', async () => {
+      const user = userEvent.setup();
+      await fundAndFail(user, {
+        ok: false,
+        stage: 'meeting',
+        code: 'invalid_request',
+        engagementId: 'engagement-6',
+        caseTitle: 'Migration planning',
+      });
+
+      expect(await screen.findByText(/we just couldn't lock in the time/)).toBeInTheDocument();
+      expect(screen.getByText(/Your top-up went through and .*300/)).toBeInTheDocument();
+    });
+
+    it('a session-expired panel after a landed top-up says nothing more will be charged', async () => {
+      const user = userEvent.setup();
+      await fundAndFail(user, { ok: false, stage: 'validation', code: 'session_expired' });
+
+      expect(await screen.findByText('Sign in to finish booking')).toBeInTheDocument();
+      expect(screen.getByText(/Sign in and you won't be charged again/)).toBeInTheDocument();
+    });
+
+    it('a hard failure with no top-up keeps the default no-charge copy', async () => {
+      const user = userEvent.setup();
+      mockBookConsultationAction.mockResolvedValue({
+        ok: false,
+        stage: 'validation',
+        code: 'invalid_request',
+      });
+      renderDialog();
+      await reachConfirm(user);
+      await user.click(await screen.findByRole('button', { name: /Confirm & book/ }));
+
+      expect(await screen.findByText(/Nothing was charged/)).toBeInTheDocument();
+    });
+
+    it('a re-read that clears after a refused submit toasts and leaves the CTA live', async () => {
+      const user = userEvent.setup();
+      mockBookConsultationAction.mockResolvedValue(SETUP_FAILURE);
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+
+      await vi.waitFor(() =>
+        expect(toast.info).toHaveBeenCalledWith(
+          'Your balance now covers this booking — press Confirm & book.'
+        )
+      );
+      expect(screen.getByRole('button', { name: /Confirm & book/ })).toBeEnabled();
+    });
+
+    it('after a credited top-up whose booking failed, the cleared pre-flight books with no new payment', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction
+        .mockResolvedValueOnce(MANAGER_VIEW)
+        .mockResolvedValue({ kind: 'clear' });
+      mockBookConsultationAction
+        .mockResolvedValueOnce(SLOT_GONE)
+        .mockResolvedValueOnce(successResult());
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+      await user.click(await screen.findByRole('button', { name: /Confirm & book/ }));
+
+      expect(await screen.findByText(/Discuss migration plan/)).toBeInTheDocument();
+      expect(mockBookConsultationAction).toHaveBeenCalledTimes(2);
+    });
+
+    it('locks the time, the case and the company while the block reports a payment under way', async () => {
+      const user = userEvent.setup();
+      writeBookingDraft(SCOPE, DRAFT);
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog({
+        mode: 'chooser',
+        context: {
+          arm: 'choose_company',
+          viewerUserId: 'user-1',
+          companies: [
+            { id: 'company-1', name: 'Northwind Industrial', logoUrl: null },
+            { id: 'company-2', name: 'Acme Corp', logoUrl: null },
+          ],
+        },
+      });
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      expect(screen.getByRole('button', { name: 'See other times' })).toBeEnabled();
+      expect(screen.getByRole('combobox')).toBeEnabled();
+
+      await user.click(screen.getByRole('button', { name: 'Stub busy' }));
+
+      expect(screen.getByRole('button', { name: 'See other times' })).toBeDisabled();
+      expect(screen.getByRole('combobox')).toBeDisabled();
+    });
+
+    it('passes whether a draft is kept: yes for the chooser, no for the fixed case', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
+      const { unmount } = renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      expect(await screen.findByText('draft kept')).toBeInTheDocument();
+      unmount();
+
+      renderDialog({
+        mode: 'fixed_case',
+        fixedCase: {
+          engagementId: 'engagement-9',
+          title: 'Flow interview loop',
+          consultationCount: 2,
+          openedAtIso: '2026-06-01T00:00:00.000Z',
+        },
+        presetSlot: {
+          startIso: '2026-06-05T09:00:00.000Z',
+          endIso: '2026-06-05T09:30:00.000Z',
+          durationMinutes: 30,
+        },
+      });
+      expect(await screen.findByText('no draft')).toBeInTheDocument();
+    });
+
+    it('the saved-for-later view drops the on-device claim when no draft was written', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
+      mockSaveBookingForLaterAction.mockResolvedValue({ ok: true });
+      renderDialog({
+        mode: 'fixed_case',
+        fixedCase: {
+          engagementId: 'engagement-9',
+          title: 'Flow interview loop',
+          consultationCount: 2,
+          openedAtIso: '2026-06-01T00:00:00.000Z',
+        },
+        presetSlot: {
+          startIso: '2026-06-05T09:00:00.000Z',
+          endIso: '2026-06-05T09:30:00.000Z',
+          durationMinutes: 30,
+        },
+      });
+      await screen.findByTestId('funding-block');
+
+      await user.click(screen.getByRole('button', { name: 'Stub save' }));
+
+      expect(await screen.findByText('Saved for later')).toBeInTheDocument();
+      expect(screen.queryByText(/saved on this device/)).not.toBeInTheDocument();
+    });
+
+    it('Save on an invalid form focuses the first invalid field', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+
+      await user.click(screen.getByRole('button', { name: 'Stub before pay' }));
+      expect(screen.getByLabelText(/^Title/)).toHaveFocus();
+
+      await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+      await user.click(screen.getByRole('button', { name: 'Stub before pay' }));
+      expect(screen.getByLabelText("What you'd like to discuss")).toHaveFocus();
+    });
+
+    it('Clear toasts that the saved details are gone', async () => {
+      const user = userEvent.setup();
+      writeBookingDraft(SCOPE, DRAFT);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+
+      expect(toast.success).toHaveBeenCalledWith('Cleared what was saved on this device.');
+    });
+
+    it('disables Confirm & book with a busy mark while the pre-flight is answering', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockReturnValue(new Promise(() => {}));
+      renderDialog();
+
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      const confirm = screen.getByRole('button', { name: /Confirm & book/ });
+      expect(confirm).toBeDisabled();
+      expect(confirm).toHaveAttribute('aria-busy', 'true');
+    });
+  });
+
+  describe('a top-up in flight holds the dialog open', () => {
+    it.each([
+      ['dialog', false],
+      ['sheet', true],
+    ])('Escape while a top-up is in flight is ignored (%s)', async (_label, mobile) => {
+      mockIsMobile.mockReturnValue(mobile);
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog(undefined, onClose);
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+
+      await user.click(screen.getByRole('button', { name: 'Stub in flight' }));
+      await user.keyboard('{Escape}');
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId('funding-block')).toBeInTheDocument();
+    });
+
+    it.each([
+      ['dialog', false],
+      ['sheet', true],
+    ])(
+      'Escape closes when the block is busy but nothing is in flight, as after an unconfirmed credit (%s)',
+      async (_label, mobile) => {
+        mockIsMobile.mockReturnValue(mobile);
+        const user = userEvent.setup();
+        const onClose = vi.fn();
+        mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+        renderDialog(undefined, onClose);
+        await user.click(screen.getByText('Pick 9:00am slot'));
+        await screen.findByTestId('funding-block');
+
+        await user.click(screen.getByRole('button', { name: 'Stub busy' }));
+        await user.keyboard('{Escape}');
+
+        expect(onClose).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it('a click on a Stripe frame outside the modal never dismisses it, even when idle', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog(undefined, onClose);
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      const stripeFrame = document.createElement('iframe');
+      stripeFrame.setAttribute('name', '__privateStripeFrame7');
+      document.body.append(stripeFrame);
+
+      fireEvent.pointerDown(stripeFrame);
+      fireEvent.focusIn(stripeFrame);
+
+      expect(onClose).not.toHaveBeenCalled();
+      stripeFrame.remove();
+    });
+
+    it.each([
+      ['dialog', false],
+      ['sheet', true],
+    ])('Escape closes while the funding block is idle (%s)', async (_label, mobile) => {
+      mockIsMobile.mockReturnValue(mobile);
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      renderDialog(undefined, onClose);
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+
+      await user.keyboard('{Escape}');
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('a funded booking refused again', () => {
+    it('re-reads the pre-flight once, not once per caller', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue(SETUP_FAILURE);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+      const readsBefore = mockReadBookingFundingAction.mock.calls.length;
+
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+
+      await vi.waitFor(() => expect(mockBookConsultationAction).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() =>
+        expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(readsBefore + 1)
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(readsBefore + 1);
+      expect(screen.getByTestId('funding-block')).toBeInTheDocument();
+    });
+
+    it('still re-reads the pre-flight once when the booking fails for another reason', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue(SLOT_GONE);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+      const readsBefore = mockReadBookingFundingAction.mock.calls.length;
+
+      await user.click(screen.getByRole('button', { name: 'Stub funded' }));
+
+      await vi.waitFor(() =>
+        expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(readsBefore + 1)
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(readsBefore + 1);
+    });
+  });
+
+  describe('AC9: the on-device draft', () => {
+    it('restores a seeded draft on open, starts on pick_time, shows the notice on confirm, and Clear empties the fields', async () => {
+      const user = userEvent.setup();
+      writeBookingDraft(SCOPE, DRAFT);
+      renderDialog();
+
+      expect(screen.getByText('Pick 9:00am slot')).toBeInTheDocument();
+      expect(screen.queryByText('Filled in from your last visit')).not.toBeInTheDocument();
+
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      expect(screen.getByLabelText(/^Title/)).toHaveValue('Seeded title');
+      expect(screen.getByLabelText("What you'd like to discuss")).toHaveValue('Seeded description');
+      expect(screen.getByText('Filled in from your last visit')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+
+      expect(screen.getByLabelText(/^Title/)).toHaveValue('');
+      expect(screen.getByLabelText("What you'd like to discuss")).toHaveValue('');
+      expect(screen.queryByText('Filled in from your last visit')).not.toBeInTheDocument();
+      expect(readBookingDraft(SCOPE, ['company-1'])).toBeNull();
+    });
+
+    it('a successful booking clears the draft', async () => {
+      const user = userEvent.setup();
+      writeBookingDraft(SCOPE, DRAFT);
+      mockBookConsultationAction.mockResolvedValue(successResult());
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+
+      await screen.findByText(/Discuss migration plan/);
+      expect(readBookingDraft(SCOPE, ['company-1'])).toBeNull();
+    });
+
+    it("never restores another user's draft", async () => {
+      const user = userEvent.setup();
+      writeBookingDraft({ ownerUserId: 'user-2', expertProfileId: 'expert-1' }, DRAFT);
+      renderDialog();
+
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      expect(screen.getByLabelText(/^Title/)).toHaveValue('');
+    });
+
+    it('the fixed-case entry neither reads nor restores a draft', async () => {
+      writeBookingDraft(SCOPE, DRAFT);
+      renderDialog({
+        mode: 'fixed_case',
+        fixedCase: {
+          engagementId: 'engagement-9',
+          title: 'Flow interview loop',
+          consultationCount: 2,
+          openedAtIso: '2026-06-01T00:00:00.000Z',
+        },
+        presetSlot: {
+          startIso: '2026-06-05T09:00:00.000Z',
+          endIso: '2026-06-05T09:30:00.000Z',
+          durationMinutes: 30,
+        },
+      });
+
+      expect(screen.queryByText('Filled in from your last visit')).not.toBeInTheDocument();
+      expect(readBookingDraft(SCOPE, ['company-1'])?.title).toBe('Seeded title');
+    });
+
+    it('restores an existing-case choice only while that case is still open', async () => {
+      const user = userEvent.setup();
+      writeBookingDraft(SCOPE, {
+        ...DRAFT,
+        caseSelection: { kind: 'existing', engagementId: 'engagement-3' },
+      });
+      renderDialog({
+        mode: 'chooser',
+        context: {
+          ...(SINGLE_COMPANY_NO_CASES as Extract<BookingContext, { arm: 'single_company' }>),
+          openCases: [
+            {
+              engagementId: 'engagement-3',
+              title: 'Flow interview loop',
+              createdAt: '2026-06-01T00:00:00.000Z',
+              lastActivityAt: '2026-06-02T00:00:00.000Z',
+              consultationCount: 2,
+            },
+          ],
+        },
+      });
+
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      expect(screen.getByText(/Not the right case/)).toBeInTheDocument();
+      expect(screen.queryByLabelText(/^Title/)).not.toBeInTheDocument();
+    });
+
+    it('falls back to a new case when the drafted case is no longer open', async () => {
+      const user = userEvent.setup();
+      writeBookingDraft(SCOPE, {
+        ...DRAFT,
+        caseSelection: { kind: 'existing', engagementId: 'engagement-gone' },
+      });
+      renderDialog();
+
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      expect(screen.getByLabelText(/^Title/)).toHaveValue('Seeded title');
+    });
+
+    it('a multi-company draft re-selects its company and re-reads that company’s open cases', async () => {
+      const user = userEvent.setup();
+      writeBookingDraft(SCOPE, { ...DRAFT, companyId: 'company-2' });
+      renderDialog({
+        mode: 'chooser',
+        context: {
+          arm: 'choose_company',
+          viewerUserId: 'user-1',
+          companies: [
+            { id: 'company-1', name: 'Northwind Industrial', logoUrl: null },
+            { id: 'company-2', name: 'Acme Corp', logoUrl: null },
+          ],
+        },
+      });
+
+      await user.click(screen.getByText('Pick 9:00am slot'));
+
+      expect(vi.mocked(refetchOpenCasesAction)).toHaveBeenCalledWith({
+        expertProfileId: 'expert-1',
+        companyId: 'company-2',
+      });
+      expect(screen.getByLabelText(/^Title/)).toHaveValue('Seeded title');
+      expect(screen.getByRole('combobox')).toHaveTextContent('Acme Corp');
     });
   });
 });

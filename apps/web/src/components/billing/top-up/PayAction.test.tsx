@@ -26,7 +26,7 @@ vi.mock('@/lib/credit/actions', () => ({
   startPurchaseAction: (...args: unknown[]) => mockStartPurchaseAction(...args),
 }));
 
-import { PayAction } from './PayAction';
+import { PayAction, GENERIC_NO_CHARGE_COPY } from './PayAction';
 import { track, CREDIT_EVENTS } from '@/lib/analytics';
 import type { StartPurchaseInput, LowBalanceMode } from '@/lib/credit/actions';
 import type { PaymentMethodSource } from '@/lib/credit/api-client';
@@ -46,6 +46,7 @@ function renderAction(overrides: {
   onUseDifferentCard?: () => void;
   onCardDeclined?: () => void;
   disabled?: boolean;
+  extra?: Partial<React.ComponentProps<typeof PayAction>>;
 }) {
   const onComplete = overrides.onComplete ?? vi.fn();
   const onUseDifferentCard = overrides.onUseDifferentCard ?? vi.fn();
@@ -74,6 +75,7 @@ function renderAction(overrides: {
       onComplete={onComplete}
       onUseDifferentCard={onUseDifferentCard}
       onCardDeclined={onCardDeclined}
+      {...overrides.extra}
     />
   );
   return { onComplete, onUseDifferentCard, onCardDeclined };
@@ -774,6 +776,7 @@ describe('PayAction', () => {
     expect(track).toHaveBeenCalledWith(CREDIT_EVENTS.PURCHASE_DECLINED, {
       amount_minor: 100_000,
       decline_code: 'insufficient_funds',
+      surface: 'billing',
     });
   });
 
@@ -887,7 +890,11 @@ describe('PayAction', () => {
 
     expect(track).toHaveBeenCalledWith(
       CREDIT_EVENTS.PURCHASE_STARTED,
-      expect.objectContaining({ payment_method_source: 'new_card', funding_method: 'card' })
+      expect.objectContaining({
+        payment_method_source: 'new_card',
+        funding_method: 'card',
+        surface: 'billing',
+      })
     );
   });
 
@@ -1013,5 +1020,387 @@ describe('PayAction', () => {
         confirmParams: { return_url: 'http://localhost:3000/billing/top-up' },
       })
     );
+  });
+  // ── Surface, labels, gating and failure reasons (inline funding reuse) ──────
+
+  describe('extension props', () => {
+    it('stamps the host surface on the started and declined events', async () => {
+      mockStartPurchaseAction.mockResolvedValue({
+        ok: false,
+        error: 'card_declined',
+        declineCode: 'insufficient_funds',
+      });
+      renderAction({ extra: { surface: 'booking' } });
+
+      await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+      await screen.findByRole('alert');
+      expect(track).toHaveBeenCalledWith(
+        CREDIT_EVENTS.PURCHASE_STARTED,
+        expect.objectContaining({ surface: 'booking' })
+      );
+      expect(track).toHaveBeenCalledWith(CREDIT_EVENTS.PURCHASE_DECLINED, {
+        amount_minor: 100_000,
+        decline_code: 'insufficient_funds',
+        surface: 'booking',
+      });
+    });
+
+    it('omits low_balance_mode from the started event when no mode is passed', async () => {
+      renderAction({ extra: { lowBalanceMode: undefined, surface: 'booking' } });
+
+      await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+      const started = vi
+        .mocked(track)
+        .mock.calls.find(([e]) => e === CREDIT_EVENTS.PURCHASE_STARTED);
+      expect(started).toBeDefined();
+      expect(started?.[1]).not.toHaveProperty('low_balance_mode');
+    });
+
+    it('keeps low_balance_mode on the started event when a mode is passed', async () => {
+      renderAction({ lowBalanceMode: 'auto_topup' });
+
+      await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+      expect(track).toHaveBeenCalledWith(
+        CREDIT_EVENTS.PURCHASE_STARTED,
+        expect.objectContaining({ low_balance_mode: 'auto_topup' })
+      );
+    });
+
+    it('renders the idle label in place of Pay {amount}', () => {
+      renderAction({ extra: { idleLabel: 'Pay and book' } });
+      expect(screen.getByRole('button', { name: /Pay and book/ })).toBeInTheDocument();
+      expect(screen.queryByText(/A\$1,000/)).not.toBeInTheDocument();
+    });
+
+    it('renders the processing label while the charge is in flight', async () => {
+      mockStartPurchaseAction.mockReturnValue(new Promise(() => undefined));
+      renderAction({ extra: { processingLabel: 'Paying…' } });
+
+      await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+      expect(await screen.findByRole('button', { name: /Paying…/ })).toBeDisabled();
+    });
+
+    it('abandons the press when beforeStart returns false: no event, no charge', async () => {
+      const beforeStart = vi.fn(() => false);
+      const { onComplete } = renderAction({ extra: { beforeStart } });
+
+      await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+      expect(beforeStart).toHaveBeenCalledTimes(1);
+      expect(mockStartPurchaseAction).not.toHaveBeenCalled();
+      expect(mockSubmit).not.toHaveBeenCalled();
+      expect(track).not.toHaveBeenCalled();
+      expect(onComplete).not.toHaveBeenCalled();
+    });
+
+    it('reports the processing state to the host and clears it when the attempt fails', async () => {
+      mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'stripe_error' });
+      const onProcessingChange = vi.fn();
+      renderAction({ extra: { onProcessingChange } });
+      expect(onProcessingChange).toHaveBeenLastCalledWith(false);
+
+      await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+      await waitFor(() => expect(onProcessingChange).toHaveBeenCalledWith(true));
+      await waitFor(() => expect(onProcessingChange).toHaveBeenLastCalledWith(false));
+    });
+
+    it('proceeds when beforeStart returns true', async () => {
+      const beforeStart = vi.fn(() => true);
+      const { onComplete } = renderAction({ extra: { beforeStart } });
+
+      await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+      await waitFor(() => expect(onComplete).toHaveBeenCalled());
+      expect(mockStartPurchaseAction).toHaveBeenCalledTimes(1);
+    });
+
+    describe('onFailure reasons', () => {
+      it('start card_declined -> declined', async () => {
+        mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'card_declined' });
+        const onFailure = vi.fn();
+        renderAction({ paymentMethodSource: 'saved_card', extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledTimes(1);
+        expect(onFailure).toHaveBeenCalledWith('declined');
+      });
+
+      it.each(['stripe_error', 'saved_card_error', 'invalid_input', 'settlement_outstanding'])(
+        'start %s -> error',
+        async (code) => {
+          mockStartPurchaseAction.mockResolvedValue({ ok: false, error: code });
+          const onFailure = vi.fn();
+          renderAction({ extra: { onFailure } });
+
+          await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+          await screen.findByRole('alert');
+          expect(onFailure).toHaveBeenCalledTimes(1);
+          expect(onFailure).toHaveBeenCalledWith('error');
+        }
+      );
+
+      it('new-card card_error -> declined', async () => {
+        mockConfirmPayment.mockResolvedValue({
+          error: { type: 'card_error', code: 'card_declined', message: 'Declined.' },
+        });
+        const onFailure = vi.fn();
+        renderAction({ extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith('declined');
+      });
+
+      it('new-card payment_intent_authentication_failure -> auth_failed', async () => {
+        mockConfirmPayment.mockResolvedValue({
+          error: {
+            type: 'card_error',
+            code: 'payment_intent_authentication_failure',
+            message: 'Unable to authenticate.',
+          },
+        });
+        const onFailure = vi.fn();
+        renderAction({ extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith('auth_failed');
+      });
+
+      it('new-card non-card error type -> error', async () => {
+        mockConfirmPayment.mockResolvedValue({
+          error: { type: 'api_connection_error', message: 'Network down.' },
+        });
+        const onFailure = vi.fn();
+        renderAction({ extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith('error');
+      });
+
+      it('new-card status that is not succeeded -> error', async () => {
+        mockConfirmPayment.mockResolvedValue({
+          paymentIntent: { status: 'requires_action', payment_method: 'pm_123' },
+        });
+        const onFailure = vi.fn();
+        renderAction({ extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith('error');
+      });
+
+      it('saved-card definite 3DS card_error -> auth_failed', async () => {
+        mockStartPurchaseAction.mockResolvedValue({
+          ok: true,
+          outcome: 'requires_action',
+          clientSecret: 'pi_3ds_secret',
+          paymentIntentId: 'pi_3ds',
+          mandate: { outcome: 'not_required' },
+          walletId: 'wallet-1',
+        });
+        mockHandleNextAction.mockResolvedValue({
+          error: { type: 'card_error', message: 'Unable to authenticate your payment method' },
+        });
+        const onFailure = vi.fn();
+        renderAction({ paymentMethodSource: 'saved_card', extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith('auth_failed');
+      });
+
+      it('saved-card ambiguous 3DS error that retrieves as unpaid -> error, with the ambiguous copy', async () => {
+        mockStartPurchaseAction.mockResolvedValue({
+          ok: true,
+          outcome: 'requires_action',
+          clientSecret: 'pi_3ds_secret',
+          paymentIntentId: 'pi_3ds',
+          mandate: { outcome: 'not_required' },
+          walletId: 'wallet-1',
+        });
+        mockHandleNextAction.mockResolvedValue({
+          error: { type: 'api_connection_error', message: 'socket' },
+        });
+        const onFailure = vi.fn();
+        renderAction({
+          paymentMethodSource: 'saved_card',
+          extra: { onFailure, errorCopy: { declined: 'D', auth_failed: 'A' } },
+        });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        const alert = await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith('error');
+        expect(alert).toHaveTextContent(/check your balance before trying again/i);
+      });
+
+      it('saved-card unreadable intent after a rejection -> error', async () => {
+        mockStartPurchaseAction.mockResolvedValue({
+          ok: true,
+          outcome: 'requires_action',
+          clientSecret: 'pi_3ds_secret',
+          paymentIntentId: 'pi_3ds',
+          mandate: { outcome: 'not_required' },
+          walletId: 'wallet-1',
+        });
+        mockHandleNextAction.mockRejectedValue(new Error('does not require any action'));
+        mockRetrievePaymentIntent.mockResolvedValue({ error: { message: 'unreadable' } });
+        const onFailure = vi.fn();
+        renderAction({ paymentMethodSource: 'saved_card', extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith('error');
+      });
+
+      it('saved-card non-succeeded intent with no error -> error', async () => {
+        mockStartPurchaseAction.mockResolvedValue({
+          ok: true,
+          outcome: 'requires_action',
+          clientSecret: 'pi_3ds_secret',
+          paymentIntentId: 'pi_3ds',
+          mandate: { outcome: 'not_required' },
+          walletId: 'wallet-1',
+        });
+        mockHandleNextAction.mockResolvedValue({ paymentIntent: { status: 'requires_action' } });
+        const onFailure = vi.fn();
+        renderAction({ paymentMethodSource: 'saved_card', extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await screen.findByRole('alert');
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith('error');
+      });
+
+      it('fires nothing when the Payment Element rejects its own validation', async () => {
+        mockSubmit.mockResolvedValue({ error: { message: 'Your card number is incomplete.' } });
+        const onFailure = vi.fn();
+        renderAction({ extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(/incomplete/i);
+        expect(onFailure).not.toHaveBeenCalled();
+        expect(mockStartPurchaseAction).not.toHaveBeenCalled();
+      });
+
+      it('fires nothing on success', async () => {
+        const onFailure = vi.fn();
+        const { onComplete } = renderAction({ extra: { onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        await waitFor(() => expect(onComplete).toHaveBeenCalled());
+        expect(onFailure).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('errorCopy', () => {
+      it('overrides a declined start error, and only for declined', async () => {
+        mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'card_declined' });
+        renderAction({
+          paymentMethodSource: 'saved_card',
+          extra: { errorCopy: { declined: 'Declined. Nothing was charged.' } },
+        });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+          'Declined. Nothing was charged.'
+        );
+      });
+
+      it('overrides the new-card message for declined and auth_failed outcomes', async () => {
+        mockConfirmPayment.mockResolvedValue({
+          error: {
+            type: 'card_error',
+            code: 'payment_intent_authentication_failure',
+            message: 'Stripe words.',
+          },
+        });
+        renderAction({
+          extra: { errorCopy: { declined: 'D copy', auth_failed: 'Auth copy' } },
+        });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Auth copy');
+      });
+
+      it('overrides the declined copy for a card_declined refusal only', async () => {
+        mockConfirmPayment.mockResolvedValue({
+          error: { type: 'card_error', code: 'card_declined', message: 'Stripe words.' },
+        });
+        renderAction({ extra: { errorCopy: { declined: 'D copy' } } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('D copy');
+      });
+
+      it('keeps Stripe’s own message for another card error, still reported as declined', async () => {
+        mockConfirmPayment.mockResolvedValue({
+          error: {
+            type: 'card_error',
+            code: 'incorrect_cvc',
+            message: "Your card's security code is incorrect.",
+          },
+        });
+        const onFailure = vi.fn();
+        renderAction({ extra: { errorCopy: { declined: 'D copy' }, onFailure } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+          "Your card's security code is incorrect."
+        );
+        expect(onFailure).toHaveBeenCalledWith('declined');
+      });
+
+      it('overrides the settlement_outstanding start error', async () => {
+        mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'settlement_outstanding' });
+        renderAction({ extra: { errorCopy: { settlement_outstanding: 'Custom outstanding.' } } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Custom outstanding.');
+      });
+
+      it('keeps the default copy for an outcome it has no key for', async () => {
+        mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'stripe_error' });
+        renderAction({ extra: { errorCopy: { declined: 'D copy' } } });
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(/couldn't start the payment/i);
+      });
+
+      it('exports the generic no-charge copy it falls back to', async () => {
+        mockConfirmPayment.mockResolvedValue({
+          paymentIntent: { status: 'requires_action', payment_method: 'pm_123' },
+        });
+        renderAction({});
+
+        await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(GENERIC_NO_CHARGE_COPY);
+      });
+    });
   });
 });

@@ -56,7 +56,9 @@ export const TOPUP_POLL_WINDOW_MS = 45_000;
 /**
  *  · `pending`     — still asking. The honest FIRST PAINT: the webhook is asynchronous, so
  *                    "not confirmed yet" is the normal case, not an error.
- *  · `credited`    — the actor's own wallet carries the `manual_purchase:{piId}` entry.
+ *  · `credited`    — the actor's own wallet carries the `manual_purchase:{piId}` entry (and,
+ *                    with `awaitMandate`, its mandate is live too — or the window closed after
+ *                    the credit was seen, which is still a credit).
  *  · `unconfirmed` — terminal WITHOUT confirmation (the window closed, or the read said
  *                    `unauthorized`). The money is safe; the balance is not yet provable.
  */
@@ -79,9 +81,20 @@ function isDocumentVisible(): boolean {
   return globalThis.document?.visibilityState !== 'hidden';
 }
 
+export interface TopUpCreditPollOptions {
+  /**
+   * Keep polling past the credit until the wallet's mandate is live. For a purchase that re-armed
+   * a mandate on a new card: its SetupIntent's webhook can land after the credit's, and a caller
+   * about to book on that mandate must not read the gap. If the window closes first, the poll
+   * still ends `credited` — the credit was seen; only the mandate was not.
+   */
+  readonly awaitMandate?: boolean;
+}
+
 export function useTopUpCreditPoll(
   paymentIntentId: string,
-  promoCodeId: string | null = null
+  promoCodeId: string | null = null,
+  { awaitMandate = false }: TopUpCreditPollOptions = {}
 ): TopUpCreditPollState {
   const [status, setStatus] = useState<TopUpCreditPollStatus>('pending');
   const [balanceMinor, setBalanceMinor] = useState<number | null>(null);
@@ -92,6 +105,8 @@ export function useTopUpCreditPoll(
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Successful or failed, every settled read counts toward the cadence tier. */
   const readCountRef = useRef(0);
+  /** The credit has been read while the poll waits on the mandate. */
+  const creditSeenRef = useRef(false);
   const deadlineRef = useRef(0);
   const tickRef = useRef<() => void>(() => {});
 
@@ -121,7 +136,7 @@ export function useTopUpCreditPoll(
     if (stoppedRef.current) return;
     const remaining = deadlineRef.current - Date.now();
     if (remaining <= 0) {
-      stop('unconfirmed');
+      stop(creditSeenRef.current ? 'credited' : 'unconfirmed');
       return;
     }
     if (!isDocumentVisible()) return;
@@ -141,13 +156,18 @@ export function useTopUpCreditPoll(
       if (result.status === 'credited') {
         setBalanceMinor(result.balanceMinor);
         setPromoGranted(result.promoGranted);
+        if (awaitMandate && !result.mandateActive) {
+          creditSeenRef.current = true;
+          schedule();
+          return;
+        }
         stop('credited');
         return;
       }
       if (result.status === 'unauthorized') {
         // A capability answer will not change on the next tick. Stop without ever claiming a
         // balance — the caller's copy says the money is safe, which remains true.
-        stop('unconfirmed');
+        stop(creditSeenRef.current ? 'credited' : 'unconfirmed');
         return;
       }
       if (result.status === 'pending') {
@@ -157,7 +177,7 @@ export function useTopUpCreditPoll(
       // figure, and a blip must not repaint a real balance as 0.
       schedule();
     },
-    [schedule, stop]
+    [schedule, stop, awaitMandate]
   );
 
   const tick = useCallback((): void => {
@@ -181,6 +201,7 @@ export function useTopUpCreditPoll(
     isMountedRef.current = true;
     stoppedRef.current = false;
     readCountRef.current = 0;
+    creditSeenRef.current = false;
     deadlineRef.current = Date.now() + TOPUP_POLL_WINDOW_MS;
     setStatus('pending');
     setBalanceMinor(null);

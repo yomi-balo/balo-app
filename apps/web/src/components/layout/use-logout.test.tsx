@@ -6,6 +6,7 @@ import {
   rememberPendingHomeProject,
 } from '@/lib/marketing/pending-home-project';
 import { rememberSetupIntent, readRememberedSetupIntent } from '@/lib/stripe/setup-intent-return';
+import { readBookingDraft, writeBookingDraft } from '@/components/booking/booking-draft';
 import { useLogout } from './use-logout';
 
 // Matches `use-recent-lookups.test.tsx`'s own precedent of hardcoding this literal rather than
@@ -129,6 +130,34 @@ describe('useLogout', () => {
     expect(globalThis.localStorage.getItem('balo:project-draft:expert-123')).toEqual(
       JSON.stringify({ title: 'Existing expert-bound draft' })
     );
+  });
+
+  it('clears every on-device booking draft synchronously, and nothing else', () => {
+    vi.useFakeTimers();
+    const draft = {
+      title: 'Migration planning',
+      descriptionHtml: '<p>Details</p>',
+      productIds: [],
+      guests: [{ email: 'sam@northwind.com' }],
+      caseSelection: { kind: 'new' } as const,
+      companyId: 'company-1',
+    };
+    writeBookingDraft({ ownerUserId: 'user-1', expertProfileId: 'expert-1' }, draft);
+    writeBookingDraft({ ownerUserId: 'user-2', expertProfileId: 'expert-2' }, draft);
+    globalThis.localStorage.setItem('balo:project-draft:expert-123', 'keep');
+
+    const { result } = renderHook(() => useLogout());
+    result.current();
+
+    // Asserted BEFORE the 500ms `analytics.reset()` timer: the sweep is not deferred.
+    expect(
+      readBookingDraft({ ownerUserId: 'user-1', expertProfileId: 'expert-1' }, ['company-1'])
+    ).toBeNull();
+    expect(
+      readBookingDraft({ ownerUserId: 'user-2', expertProfileId: 'expert-2' }, ['company-1'])
+    ).toBeNull();
+    expect(globalThis.localStorage.getItem('balo:project-draft:expert-123')).toBe('keep');
+    expect(analytics.reset).not.toHaveBeenCalled();
   });
 
   it('tracks LOGOUT_COMPLETED and calls logoutAction', () => {

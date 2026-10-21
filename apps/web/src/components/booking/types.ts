@@ -28,9 +28,16 @@ export interface OpenCaseForExpert {
 export type BookingContext =
   | { readonly arm: 'onboarding_required' }
   | { readonly arm: 'company_read_failed' }
-  | { readonly arm: 'choose_company'; readonly companies: readonly EligibleCompany[] }
+  | {
+      readonly arm: 'choose_company';
+      readonly companies: readonly EligibleCompany[];
+      /** The signed-in booker — the owner key of the on-device draft. */
+      readonly viewerUserId: string;
+    }
   | {
       readonly arm: 'single_company';
+      /** The signed-in booker — the owner key of the on-device draft. */
+      readonly viewerUserId: string;
       readonly company: EligibleCompany;
       readonly openCases: readonly OpenCaseForExpert[];
       readonly resolvedCaseCount: number;

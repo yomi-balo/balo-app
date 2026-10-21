@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { track, CREDIT_EVENTS } from '@/lib/analytics';
 import type { WalletSnapshot, SavedCard } from './types';
 
 const mockPush = vi.fn();
@@ -115,6 +116,7 @@ describe('TopUpComposer', () => {
       status: 'credited',
       balanceMinor: 150_000,
       promoGranted: null,
+      mandateActive: false,
     });
   });
 
@@ -196,6 +198,17 @@ describe('TopUpComposer', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /keep visa •••• 4242 instead/i }));
     expect(await pressPayAndReadRequestId()).not.toBe(second);
+  });
+
+  it('tags the payment-method change with the billing surface', async () => {
+    render(<TopUpComposer wallet={wallet({ savedCard: SAVED_CARD })} fx={null} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /change/i }));
+
+    expect(track).toHaveBeenCalledWith(CREDIT_EVENTS.PAYMENT_METHOD_CHANGED, {
+      to: 'new_card',
+      surface: 'billing',
+    });
   });
 
   it('REGENERATES the clientRequestId after a card DECLINE (no cached-402 replay)', async () => {
@@ -328,6 +341,7 @@ describe('TopUpComposer', () => {
       status: 'credited',
       balanceMinor: 137_500,
       promoGranted: null,
+      mandateActive: false,
     });
     render(
       <TopUpComposer

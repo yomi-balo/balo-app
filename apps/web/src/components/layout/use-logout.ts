@@ -14,6 +14,7 @@ import { forgetSetupIntent } from '@/lib/stripe/setup-intent-return';
 // `@/lib/admin-lookup/recent-storage`, imported by both this hook and that route's hook.
 import { clearStoredRecentLookups } from '@/lib/admin-lookup/recent-storage';
 import { clearEntryPointDraft } from '@/components/balo/project-request/panel/use-project-draft';
+import { clearAllBookingDrafts } from '@/components/booking/booking-draft';
 
 /**
  * BAL-501 (D10) — the three-step logout sequence, extracted verbatim from
@@ -92,6 +93,9 @@ export function useLogout(): () => void {
     clearEntryPointDraft('projects');
     clearEntryPointDraft('engagement');
     forgetPendingHomeProject();
+    // The booking drafts hold a client's typed title, description and guest emails, keyed by user
+    // and expert. Synchronous and prefix-wide, so none outlives the person who typed it.
+    clearAllBookingDrafts();
     // Defer reset so PostHog flushes the event with the user's identity
     setTimeout(() => analytics.reset(), 500);
     // Fire-and-forget: the action ends in `redirect('/')`, which the router performs.

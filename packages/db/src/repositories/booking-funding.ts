@@ -1,6 +1,7 @@
 import {
   isWalletMandateActive,
   type BookingFundingSnapshot,
+  type BookingTopUpPricing,
   type CardRemovalSnapshot,
 } from '@balo/shared/credit';
 import { db } from '../client';
@@ -36,6 +37,12 @@ import { meetingsRepository } from './meetings';
  * a live mandate then short-circuits the rate, balance and reservation reads (D6.5 — the card
  * funds anything above the credit).
  *
+ * THE TWO REFUSAL ARMS THAT RETURN EARLY (`no_wallet`, `on_hold`) still read the pricing figures
+ * the inline top-up is sized from (`topUpPricing`: the expert's rate, the available balance, the
+ * reservable bookings, whether a mandate is live), on the SAME transaction and after the arm's own
+ * reads. The verdict ignores them, so the gate's behaviour is unchanged; a clear or `mandate`
+ * snapshot still reads nothing extra.
+ *
  * `repositories-never-notify`: this file publishes nothing and logs nothing.
  */
 
@@ -56,6 +63,30 @@ export interface CardRemovalSnapshotInput {
 }
 
 /**
+ * The figures a top-up suggestion is priced from, on the snapshot's executor: the expert's rate,
+ * the wallet's available balance (zero without a wallet) and the reservable Case bookings.
+ */
+async function readTopUpPricing(
+  tx: DbExecutor,
+  input: BookingFundingSnapshotInput,
+  wallet: { readonly id: string; readonly mandateActive: boolean } | undefined
+): Promise<BookingTopUpPricing> {
+  const expert = await expertsRepository.findRateCentsById(input.expertProfileId, tx);
+  const availableMinor =
+    wallet === undefined ? 0 : await creditHoldsRepository.getAvailableForBooking(wallet.id, tx);
+  const reservable = await meetingsRepository.listReservableCaseBookings(
+    { companyId: input.companyId, now: input.now },
+    tx
+  );
+  return {
+    expertRateCents: expert === undefined ? null : expert.rateCents,
+    availableMinor,
+    reservable,
+    mandateActive: wallet?.mandateActive ?? false,
+  };
+}
+
+/**
  * The snapshot body, on a caller-supplied executor. Exported for the two-connection concurrency
  * proof (`booking-funding.concurrency.integration.test.ts`), which must run it on its OWN
  * repeatable-read transaction: under the single-connection integration harness a nested
@@ -68,13 +99,20 @@ export async function readSnapshotInTx(
 ): Promise<BookingFundingSnapshot> {
   const wallet = await creditWalletsRepository.findByCompanyId(input.companyId, tx);
   if (wallet === undefined) {
-    return { kind: 'no_wallet' };
+    return {
+      kind: 'no_wallet',
+      topUpPricing: await readTopUpPricing(tx, input, undefined),
+    };
   }
 
   // D6.1 — the hold BEFORE the mandate (an open receivable brakes a mandate holder too).
   const hold = await creditReceivablesRepository.readHoldStatus({ walletId: wallet.id }, tx);
   if (hold.onHold) {
-    return { kind: 'on_hold', walletId: wallet.id, hold };
+    const topUpPricing = await readTopUpPricing(tx, input, {
+      id: wallet.id,
+      mandateActive: isWalletMandateActive(wallet),
+    });
+    return { kind: 'on_hold', walletId: wallet.id, hold, topUpPricing };
   }
 
   // D6.5 — a live mandate funds anything above the credit; nothing below it is read.

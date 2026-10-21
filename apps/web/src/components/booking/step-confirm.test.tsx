@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
 import type { EligibleCompany } from '@balo/shared/credit';
@@ -65,6 +66,9 @@ function renderStepConfirm(over: Partial<StepConfirmProps> = {}) {
     viewerEmailDomain: null,
     clientCompanyName: null,
     staleSlot: false,
+    staleSlotFollowUp: null,
+    fundingSection: null,
+    draftNotice: null,
     submitting: false,
     submitDisabled: false,
     onBack: vi.fn(),
@@ -195,5 +199,100 @@ describe('StepConfirm — the case-choice loading skeleton (UX-3)', () => {
     });
     expect(screen.queryByTestId('case-choice-skeleton')).not.toBeInTheDocument();
     expect(screen.getByText('Which case is this for?')).toBeInTheDocument();
+  });
+});
+
+describe('StepConfirm — inline funding section, draft notice and stale-slot follow-up (BAL-608)', () => {
+  it('shows the normal Back / Confirm row when there is no funding section', () => {
+    renderStepConfirm();
+
+    expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirm & book/ })).toBeInTheDocument();
+  });
+
+  it('renders the funding section after the billing line and omits the Back / Confirm row', () => {
+    renderStepConfirm({ fundingSection: <div data-testid="funding-section">Top up</div> });
+
+    const section = screen.getByTestId('funding-section');
+    const billing = screen.getByText(/Charged only for time used/);
+    expect(
+      billing.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Confirm & book/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the company hint and the cancellation line beside the funding section', () => {
+    renderStepConfirm({
+      fundingSection: <div>Top up</div>,
+      caseSelection: { kind: 'new' },
+      companies: COMPANIES,
+      companyId: null,
+    });
+
+    expect(screen.getByText('Choose which account this is billed to')).toBeInTheDocument();
+    expect(screen.getByText(/Free to cancel/i)).toBeInTheDocument();
+  });
+
+  it('locks the time and the attached-case escape while a funding step is under way', () => {
+    renderStepConfirm({ fundingBusy: true });
+
+    expect(screen.getByRole('button', { name: 'See other times' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Not the right case/ })).toBeDisabled();
+  });
+
+  it('locks the company picker while a funding step is under way', () => {
+    renderStepConfirm({
+      fundingBusy: true,
+      caseSelection: { kind: 'new' },
+      caseContextSummary: null,
+      companies: COMPANIES,
+      companyId: COMPANIES[0]?.id ?? null,
+    });
+
+    expect(screen.getByRole('combobox')).toBeDisabled();
+  });
+
+  it('leaves the time live when nothing is under way', () => {
+    renderStepConfirm();
+
+    expect(screen.getByRole('button', { name: 'See other times' })).toBeEnabled();
+  });
+
+  it('disables Confirm & book with a busy mark while the pre-flight is answering', () => {
+    renderStepConfirm({ preflightPending: true });
+
+    const confirm = screen.getByRole('button', { name: /Confirm & book/ });
+    expect(confirm).toBeDisabled();
+    expect(confirm).toHaveAttribute('aria-busy', 'true');
+  });
+
+  it('shows no draft notice by default', () => {
+    renderStepConfirm();
+
+    expect(screen.queryByText('Filled in from your last visit')).not.toBeInTheDocument();
+  });
+
+  it('fires onClear from the draft notice', async () => {
+    const user = userEvent.setup();
+    const onClear = vi.fn();
+    renderStepConfirm({ draftNotice: { onClear } });
+
+    expect(screen.getByText('Filled in from your last visit')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the follow-up under the stale-slot banner', () => {
+    renderStepConfirm({
+      staleSlot: true,
+      staleSlotFollowUp: 'Your top-up went through, so A$300 is in Northwind balance.',
+    });
+
+    expect(screen.getByText('This time was just booked by someone else.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Your top-up went through, so A$300 is in Northwind balance.')
+    ).toBeInTheDocument();
   });
 });

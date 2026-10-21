@@ -88,19 +88,65 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
     const expertProfileId = await expertAt(EXPERT_HOURLY_700);
     // A company id with no wallet row (the factory's company carries one; use a fresh company).
     const { companyId } = await caseEngagementFactory({ expertProfileId });
-    expect(await snapshotFor({ companyId }, expertProfileId)).toEqual({ kind: 'no_wallet' });
+    const snapshot = await snapshotFor({ companyId }, expertProfileId);
+    expect(snapshot).toEqual({
+      kind: 'no_wallet',
+      topUpPricing: {
+        expertRateCents: EXPERT_HOURLY_700,
+        availableMinor: 0,
+        reservable: [],
+        mandateActive: false,
+      },
+    });
     // …and a company WITH a wallet does not read as no_wallet.
     expect((await snapshotFor(booker, expertProfileId)).kind).not.toBe('no_wallet');
   });
 
-  it('on_hold — an open receivable, carrying the hold status (read BEFORE the mandate)', async () => {
-    const booker = await company({
-      balanceMinor: 0,
-      mandateStatus: 'active',
-      stripeCustomerId: 'cus_snapshot',
-      stripePaymentMethodId: 'pm_snapshot',
-    });
+  it('no_wallet — prices the booked expert and the company’s upcoming bookings, even without a wallet', async () => {
     const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const { engagement, companyId } = await caseEngagementFactory({ expertProfileId });
+    const { start, end } = window(120, 30);
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { status: 'scheduled', scheduledStart: start, scheduledEnd: end },
+    });
+
+    const snapshot = await snapshotFor({ companyId }, expertProfileId);
+    expect(snapshot).toEqual({
+      kind: 'no_wallet',
+      topUpPricing: {
+        expertRateCents: EXPERT_HOURLY_700,
+        availableMinor: 0,
+        reservable: [
+          {
+            meetingId: meeting.id,
+            scheduledStart: start,
+            scheduledEnd: end,
+            expertProfileId,
+            expertRateCents: EXPERT_HOURLY_700,
+          },
+        ],
+        mandateActive: false,
+      },
+    });
+    // A rate-less or unknown expert is unpriceable, not an error.
+    const rateless = await expertAt(null);
+    expect(await snapshotFor({ companyId }, rateless)).toMatchObject({
+      kind: 'no_wallet',
+      topUpPricing: { expertRateCents: null },
+    });
+    expect(await snapshotFor({ companyId }, '00000000-0000-4000-8000-000000000000')).toMatchObject({
+      kind: 'no_wallet',
+      topUpPricing: { expertRateCents: null },
+    });
+  });
+
+  /** Drives the wallet to a −5,000 balance with one open receivable, from `startingBalanceMinor`. */
+  async function openHold(
+    booker: Company,
+    expertProfileId: string,
+    startingBalanceMinor = 0
+  ): Promise<void> {
     const opened = await creditSessionsRepository.open({
       walletId: booker.walletId,
       companyId: booker.companyId,
@@ -114,7 +160,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
       walletId: booker.walletId,
       entryType: 'consume',
       reason: 'session_consume',
-      amountMinor: -5_000,
+      amountMinor: -(startingBalanceMinor + 5_000),
       idempotencyKey: `session_consume:${opened.session.id}:snapshot`,
       memberId: booker.memberId,
       sessionId: opened.session.id,
@@ -126,6 +172,18 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
       amountMinor: 5_000,
       reason: 'settlement_declined',
     });
+  }
+
+  it('on_hold — an open receivable, carrying the hold status and the top-up pricing (read BEFORE the mandate)', async () => {
+    const booker = await company({
+      balanceMinor: 0,
+      mandateStatus: 'active',
+      stripeCustomerId: 'cus_snapshot',
+      stripePaymentMethodId: 'pm_snapshot',
+    });
+    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    await openHold(booker, expertProfileId);
+    const upcoming = await bookCase(booker, expertProfileId, 120, 30);
 
     const snapshot = await snapshotFor(booker, expertProfileId);
     expect(snapshot).toMatchObject({
@@ -136,6 +194,33 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
         openReceivableCount: 1,
         balanceMinor: -5_000,
         amountToClearMinor: 5_000,
+      },
+    });
+    if (snapshot.kind !== 'on_hold') throw new Error('expected on_hold');
+    expect(snapshot.topUpPricing).toMatchObject({
+      expertRateCents: EXPERT_HOURLY_700,
+      availableMinor: -5_000,
+      mandateActive: true,
+    });
+    expect(snapshot.topUpPricing.reservable).toHaveLength(1);
+    expect(snapshot.topUpPricing.reservable[0]).toMatchObject({
+      meetingId: upcoming.meetingId,
+      expertRateCents: EXPERT_HOURLY_700,
+    });
+  });
+
+  it('on_hold — without a mandate the pricing says so', async () => {
+    const booker = await company({ balanceMinor: 30_000 });
+    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    await openHold(booker, expertProfileId, 30_000);
+
+    expect(await snapshotFor(booker, expertProfileId)).toMatchObject({
+      kind: 'on_hold',
+      topUpPricing: {
+        expertRateCents: EXPERT_HOURLY_700,
+        availableMinor: -5_000,
+        reservable: [],
+        mandateActive: false,
       },
     });
   });

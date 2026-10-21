@@ -121,6 +121,29 @@ const ENGAGEMENT_ID = '44444444-4444-4444-8444-444444444444';
 const OTHER_EXPERT_PROFILE_ID = '99999999-9999-4999-8999-999999999999';
 const OTHER_COMPANY_ID = '88888888-8888-4888-8888-888888888888';
 const PRODUCT_ID = '77777777-7777-4777-8777-777777777777';
+const UNFUNDED_COMPANY = { id: COMPANY_ID, name: 'Northwind', isActive: true };
+
+/** The gate's unfunded refusal, with the fields the setup block is rendered from. */
+function unfundedRefusal(
+  canManageBilling: boolean,
+  setupKind: 'no_wallet' | 'no_mandate_insufficient_balance' = 'no_wallet'
+): Record<string, unknown> {
+  return {
+    ok: false,
+    reason: 'unfunded',
+    canManageBilling,
+    billingCompany: UNFUNDED_COMPANY,
+    suggestedTopUpMinor: 30_000,
+    setupKind,
+  };
+}
+
+/** What the action hands the client for that refusal. */
+function setupOf(
+  setupKind: 'no_wallet' | 'no_mandate_insufficient_balance' = 'no_wallet'
+): Record<string, unknown> {
+  return { kind: setupKind, company: UNFUNDED_COMPANY };
+}
 /** ⚠ THE SERVER'S window — deliberately NOT the slot `NEW_CASE_INPUT` submits. */
 const SERVER_START = '2026-09-01T06:00:00.000Z';
 const SERVER_END = '2026-09-01T06:45:00.000Z';
@@ -781,15 +804,16 @@ describe('bookConsultationAction', () => {
     });
 
     it('new-case arm: a zero-arm refusal writes NOTHING', async () => {
-      mockEnforceBookingFunding.mockResolvedValue({
-        ok: false,
-        reason: 'unfunded',
-        canManageBilling: false,
-      });
+      mockEnforceBookingFunding.mockResolvedValue(unfundedRefusal(false));
 
       const result = await bookConsultationAction(NEW_CASE_INPUT);
 
-      expect(result).toEqual({ ok: false, stage: 'funding', code: 'funding_admins_notified' });
+      expect(result).toEqual({
+        ok: false,
+        stage: 'funding',
+        code: 'funding_admins_notified',
+        setup: setupOf(),
+      });
       expect(mockCreate).not.toHaveBeenCalled();
       expect(mockPostBookMeeting).not.toHaveBeenCalled();
       expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
@@ -830,15 +854,16 @@ describe('bookConsultationAction', () => {
         expertProfileId: OTHER_EXPERT_PROFILE_ID,
         title: 'Existing case',
       });
-      mockEnforceBookingFunding.mockResolvedValue({
-        ok: false,
-        reason: 'unfunded',
-        canManageBilling: false,
-      });
+      mockEnforceBookingFunding.mockResolvedValue(unfundedRefusal(false));
 
       const result = await bookConsultationAction(EXISTING_CASE_INPUT);
 
-      expect(result).toEqual({ ok: false, stage: 'funding', code: 'funding_admins_notified' });
+      expect(result).toEqual({
+        ok: false,
+        stage: 'funding',
+        code: 'funding_admins_notified',
+        setup: setupOf(),
+      });
       expect(mockEnforceBookingFunding).toHaveBeenCalledWith(
         expect.objectContaining({
           companyId: OTHER_COMPANY_ID,
@@ -855,28 +880,30 @@ describe('bookConsultationAction', () => {
         expertProfileId: EXPERT_PROFILE_ID,
         title: 'Already created case',
       });
-      mockEnforceBookingFunding.mockResolvedValue({
-        ok: false,
-        reason: 'unfunded',
-        canManageBilling: false,
-      });
+      mockEnforceBookingFunding.mockResolvedValue(unfundedRefusal(false));
 
       const result = await bookConsultationAction(NEW_CASE_INPUT);
 
-      expect(result).toEqual({ ok: false, stage: 'funding', code: 'funding_admins_notified' });
+      expect(result).toEqual({
+        ok: false,
+        stage: 'funding',
+        code: 'funding_admins_notified',
+        setup: setupOf(),
+      });
       expect(mockPostBookMeeting).not.toHaveBeenCalled();
     });
 
     it('canManageBilling:true maps to funding_setup_required', async () => {
-      mockEnforceBookingFunding.mockResolvedValue({
-        ok: false,
-        reason: 'unfunded',
-        canManageBilling: true,
-      });
+      mockEnforceBookingFunding.mockResolvedValue(unfundedRefusal(true));
 
       const result = await bookConsultationAction(NEW_CASE_INPUT);
 
-      expect(result).toEqual({ ok: false, stage: 'funding', code: 'funding_setup_required' });
+      expect(result).toEqual({
+        ok: false,
+        stage: 'funding',
+        code: 'funding_setup_required',
+        setup: setupOf(),
+      });
     });
 
     it("reason:'unavailable' maps to the generic case-hop failure, NOT a funding code", async () => {
@@ -1231,7 +1258,7 @@ describe('bookConsultationAction', () => {
 
       it('booking_unfunded ⇒ the re-run unfunded ⇒ the BAL-478 code at stage:meeting, naming the saved case', async () => {
         apiRefuses('booking_unfunded');
-        gateThen({ ok: false, reason: 'unfunded', canManageBilling: true });
+        gateThen(unfundedRefusal(true, 'no_mandate_insufficient_balance'));
 
         const result = await bookConsultationAction(NEW_CASE_INPUT);
 
@@ -1241,6 +1268,7 @@ describe('bookConsultationAction', () => {
           code: 'funding_setup_required',
           engagementId: ENGAGEMENT_ID,
           caseTitle: 'Need help with a flow',
+          setup: setupOf('no_mandate_insufficient_balance'),
         });
       });
 

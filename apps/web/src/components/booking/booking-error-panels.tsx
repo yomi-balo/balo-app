@@ -112,10 +112,13 @@ export function ExpertUnavailablePanel({
  */
 export function SessionExpiredPanel({
   caseTitle,
+  followUp = null,
   onSignIn,
   onClose,
 }: Readonly<{
   caseTitle: string | null;
+  /** What happened to money already moved (a top-up that went through), shown under the body. */
+  followUp?: string | null;
   onSignIn: () => void;
   onClose: () => void;
 }>): React.JSX.Element {
@@ -131,6 +134,9 @@ export function SessionExpiredPanel({
             ? 'Your session timed out, so nothing was booked — and nothing was saved. Sign in and your time is still there to pick.'
             : `Your session timed out before we could lock in the time. “${caseTitle}” is saved — sign in and pick up right where you left off.`}
         </p>
+        {followUp !== null && (
+          <p className="text-muted-foreground text-sm leading-relaxed">{followUp}</p>
+        )}
       </div>
       {/* `min-h-11` — the booking surface's own touch target, which `size="sm"` does not meet.
           These two are the only way out of a dead session, so they are the last controls that
@@ -184,12 +190,26 @@ export function FundingSetupPanel({
   onManageBilling,
   onClose,
   caseSaved = null,
+  company = null,
+  isSwitching = false,
+  onSwitchAndTopUp,
 }: Readonly<{
   canManageBilling: boolean;
   onManageBilling: () => void;
   onClose: () => void;
   caseSaved?: CaseSavedNote | null;
+  /**
+   * The company the refusal is about. When a billing manager's refusing company is not the active
+   * workspace, the primary button switches to it and tops up, instead of sending them to billing
+   * for a workspace they are not in.
+   */
+  company?: { name: string | null; isActive: boolean } | null;
+  /** True while the workspace switch behind the primary button is in flight. */
+  isSwitching?: boolean;
+  onSwitchAndTopUp?: () => void;
 }>): React.JSX.Element {
+  const switchesWorkspace =
+    canManageBilling && company !== null && !company.isActive && onSwitchAndTopUp !== undefined;
   return (
     <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
       <span className="bg-info/10 flex h-14 w-14 items-center justify-center rounded-xl p-4">
@@ -206,10 +226,28 @@ export function FundingSetupPanel({
       </div>
       {canManageBilling ? (
         <div className="flex flex-col items-center gap-2">
-          <Button className="min-h-11" onClick={onManageBilling}>
-            Set up billing
-          </Button>
-          <Button variant="ghost" size="sm" className="min-h-11" onClick={onClose}>
+          {switchesWorkspace ? (
+            <Button
+              className="min-h-11"
+              onClick={onSwitchAndTopUp}
+              disabled={isSwitching}
+              aria-busy={isSwitching}
+            >
+              {isSwitching ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+              {topUpButtonLabel(false, company.name)}
+            </Button>
+          ) : (
+            <Button className="min-h-11" onClick={onManageBilling}>
+              Set up billing
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="min-h-11"
+            onClick={onClose}
+            disabled={isSwitching}
+          >
             I&apos;ll do this later
           </Button>
         </div>
@@ -258,7 +296,7 @@ type BalanceAudience = 'manager' | 'member';
 type BalanceArm = 'figure' | 'large' | 'fallback';
 
 /** The company, spelled for the two positions a sentence can name it in. */
-interface CompanyLabels {
+export interface CompanyLabels {
   /** At the start of a sentence: "Northwind's" / "Your team's". */
   readonly start: string;
   /** Anywhere else: "Northwind's" / "your team's". */
@@ -360,14 +398,14 @@ export function bookingSwitchFailedCopy(companyName: string | null): string {
     : BOOKING_SWITCH_FAILED_COPY.named(companyName);
 }
 
-function companyLabels(companyName: string | null): CompanyLabels {
+export function companyLabels(companyName: string | null): CompanyLabels {
   if (companyName === null) {
     return { start: "Your team's", mid: "your team's" };
   }
   return { start: `${companyName}'s`, mid: `${companyName}'s` };
 }
 
-function topUpButtonLabel(companyIsActive: boolean, companyName: string | null): string {
+export function topUpButtonLabel(companyIsActive: boolean, companyName: string | null): string {
   if (companyIsActive) return 'Top up';
   if (companyName === null) return 'Switch company and top up';
   return `Switch to ${companyName} and top up`;
@@ -504,11 +542,14 @@ export function BookingBalancePanel(props: Readonly<BookingBalancePanelProps>): 
 /** Partial failure — case created, meeting/provisioning failed. Warning-toned. */
 export function PartialFailurePanel({
   caseTitle,
+  followUp = null,
   onRetry,
   onChooseDifferentTime,
   onFinishLater,
 }: Readonly<{
   caseTitle: string;
+  /** What happened to money already moved (a top-up that went through), shown under the body. */
+  followUp?: string | null;
   onRetry: () => void;
   onChooseDifferentTime: () => void;
   onFinishLater: () => void;
@@ -525,6 +566,9 @@ export function PartialFailurePanel({
         <p className="text-muted-foreground text-sm leading-relaxed">
           &ldquo;{caseTitle}&rdquo; is ready. Try booking this slot again, or pick a different time.
         </p>
+        {followUp !== null && (
+          <p className="text-muted-foreground text-sm leading-relaxed">{followUp}</p>
+        )}
       </div>
       <div className="flex flex-col items-center gap-2">
         <Button onClick={onRetry}>Try again</Button>
@@ -542,7 +586,12 @@ export function PartialFailurePanel({
 /** Stale slot at submit — inline, not full-panel; everything else in the form is preserved. */
 export function StaleSlotBanner({
   onChooseNewTime,
-}: Readonly<{ onChooseNewTime: () => void }>): React.JSX.Element {
+  followUp = null,
+}: Readonly<{
+  onChooseNewTime: () => void;
+  /** A second, muted line: what happened to money already moved (a top-up that went through). */
+  followUp?: string | null;
+}>): React.JSX.Element {
   return (
     <div
       role="alert"
@@ -552,6 +601,9 @@ export function StaleSlotBanner({
         <AlertTriangle className="text-warning h-4 w-4 shrink-0" aria-hidden="true" />
         <p className="text-foreground text-xs font-medium">
           This time was just booked by someone else.
+          {followUp !== null && (
+            <span className="text-muted-foreground mt-0.5 block font-normal">{followUp}</span>
+          )}
         </p>
       </div>
       <Button variant="outline" size="sm" onClick={onChooseNewTime}>

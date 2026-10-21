@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { BOOKING_EVENTS, BOOKING_FUNDING_BLOCK_REASONS } from './booking';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import {
+  BOOKING_EVENTS,
+  BOOKING_FUNDING_BLOCK_REASONS,
+  type BookingEventMap,
+  type BookingFundingFailureReason,
+} from './booking';
 
 describe('BOOKING_EVENTS', () => {
   it('exposes exactly the booking CLIENT events (guards against accidental drift)', () => {
@@ -13,11 +18,15 @@ describe('BOOKING_EVENTS', () => {
       'COMPANY_SELECTION_SHOWN',
       'CONFIRM_VIEWED',
       'FLOW_OPENED',
+      'FUNDED',
+      'FUNDING_FAILED',
+      'FUNDING_SHOWN',
       'GUESTS_INVITED',
       'RESCHEDULE_PROPOSAL_ANSWERED',
       'RESCHEDULE_PROPOSAL_SLOT_LOST',
       'RESCHEDULE_PROPOSED',
       'RESCHEDULED',
+      'SAVED_FOR_LATER',
       'SESSION_EXPIRED',
     ]);
   });
@@ -38,6 +47,10 @@ describe('BOOKING_EVENTS', () => {
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSED).toBe('reschedule_proposed');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_ANSWERED).toBe('reschedule_proposal_answered');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_SLOT_LOST).toBe('reschedule_proposal_slot_lost');
+    expect(BOOKING_EVENTS.FUNDING_SHOWN).toBe('booking_funding_shown');
+    expect(BOOKING_EVENTS.FUNDED).toBe('booking_funded');
+    expect(BOOKING_EVENTS.FUNDING_FAILED).toBe('booking_funding_failed');
+    expect(BOOKING_EVENTS.SAVED_FOR_LATER).toBe('booking_saved_for_later');
   });
 
   it('uses snake_case event values throughout', () => {
@@ -61,5 +74,16 @@ describe('BOOKING_FUNDING_BLOCK_REASONS', () => {
     for (const value of BOOKING_FUNDING_BLOCK_REASONS) {
       expect(value).toMatch(/^[a-z0-9]+(_[a-z0-9]+)*$/);
     }
+  });
+});
+
+describe('BookingFundingFailureReason', () => {
+  it('names every way an inline top-up can end without a booked consultation', () => {
+    expectTypeOf<
+      'declined' | 'auth_failed' | 'credit_timeout' | 'booking_failed' | 'error'
+    >().toEqualTypeOf<BookingFundingFailureReason>();
+    expectTypeOf<
+      BookingEventMap[typeof BOOKING_EVENTS.FUNDING_FAILED]['reason']
+    >().toEqualTypeOf<BookingFundingFailureReason>();
   });
 });

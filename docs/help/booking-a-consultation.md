@@ -6,7 +6,7 @@ category:
   client: calls
 order: 1
 published: true
-updated: 2026-10-17
+updated: 2026-10-21
 related: [your-cases, joining-a-call, buying-credit]
 ---
 
@@ -24,12 +24,29 @@ that expert stay together.
 
 ![The How long do you need? step after picking a time, with the 15, 30, 45 and 60 minute options highlighted.](01)
 
-Your company's funding is checked when you choose **Confirm & book**, before anything is booked.
-It passes when your company has an active card on file. Without a card, your available balance
-needs to cover this call plus your company's other booked calls. If neither is in place you'll see
-**One setup step first**: **Set up billing** takes you to billing, or **I'll do this later** closes
-the window with nothing booked. If you can't manage billing yourself, your billing admins are
-told. See [Buying credit](/help/buying-credit) for how to top up.
+## If your balance is low when you book
+
+Your company's funding is checked as **Review & confirm** opens, before anything is booked. It
+passes when your company has an active card on file. Without a card, your available balance needs
+to cover this call plus your company's other booked calls.
+
+If it doesn't and you manage billing for the company you're booking for, a top-up appears right
+under the form, with the smallest amount that covers the call already selected. Pay with a saved
+card or add a new one, and the call books as soon as the credit lands. Nothing you've entered is
+lost along the way. See [Buying credit](/help/buying-credit) for more on topping up.
+
+If you can't manage billing yourself, you'll see **Save and finish later** instead. It lets your
+company's billing admins know a top-up is needed, and when you were starting a new case it keeps
+your booking details on this device so you can pick up where you left off. It doesn't hold the
+time, so the slot is only yours once the call is booked.
+
+If you manage billing but you're booking for a company other than the one you're viewing, the
+button reads **Switch to _your company's name_ and top up**. It switches you to that company so
+you can top up there.
+
+If the amount needed is very large, you'll see the full billing window instead. **Top up** takes
+you to billing to add credit, or **Set up billing** if the company isn't set up to pay yet.
+**I'll do this later** closes the window with nothing booked.
 
 ## Choosing which case
 

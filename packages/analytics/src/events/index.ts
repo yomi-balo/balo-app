@@ -162,6 +162,7 @@ export {
 export {
   CREDIT_EVENTS,
   type CreditEventMap,
+  type CreditSurfaceProperty,
   CREDIT_SERVER_EVENTS,
   type CreditServerEventMap,
   type FxDisplayQuoteCode,
@@ -323,6 +324,7 @@ export {
   BOOKING_SERVER_EVENTS,
   type BookingServerEventMap,
   type BookingFundingBlockReason,
+  type BookingFundingArmProperty,
 } from './booking';
 // BAL-494 / ADR-1053 — `WORKSPACE_SERVER_EVENTS` is SERVER-ONLY: the switch is decided and
 // dispatched entirely in `switchWorkspace()` (apps/web); no browser code ever emits it.

@@ -137,6 +137,23 @@ export interface BookingBalanceFailure {
   };
 }
 
+/**
+ * What the funding block needs to render the zero-arm (`funding_setup_required` /
+ * `funding_admins_notified`): which unfunded condition applies, and the company that was checked.
+ * `no_wallet` is a company that has never held credit; the other is one with a wallet that is
+ * short of this booking.
+ */
+export interface BookingSetupFailure {
+  readonly kind: 'no_wallet' | 'no_mandate_insufficient_balance';
+  readonly company: {
+    readonly id: string;
+    /** `null` ⇒ the name read failed; the panel says "your team". */
+    readonly name: string | null;
+    /** True ⇒ already the active workspace, so Top-up needs no switch. */
+    readonly isActive: boolean;
+  };
+}
+
 export type BookConsultationResult =
   | {
       ok: true;
@@ -179,4 +196,6 @@ export type BookConsultationResult =
        * `engagementId`/`caseTitle` ride along so the panel can say the case is saved.
        */
       balance?: BookingBalanceFailure;
+      /** Present iff `code` is `funding_setup_required` or `funding_admins_notified`. */
+      setup?: BookingSetupFailure;
     };

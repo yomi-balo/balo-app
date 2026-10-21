@@ -85,6 +85,7 @@ describe('loadBookingContext', () => {
     if (result.arm === 'choose_company') {
       expect(result.companies).toHaveLength(2);
       expect(result.expert.firstName).toBe('Dana');
+      expect(result.viewerUserId).toBe(USER_ID);
     }
     expect(mockListOpenForCompanyAndExpert).not.toHaveBeenCalled();
   });
@@ -109,6 +110,7 @@ describe('loadBookingContext', () => {
     expect(result.arm).toBe('single_company');
     if (result.arm === 'single_company') {
       expect(result.company).toEqual({ id: 'company-1', name: 'Northwind', logoUrl: null });
+      expect(result.viewerUserId).toBe(USER_ID);
       expect(result.openCases).toHaveLength(1);
       expect(result.resolvedCaseCount).toBe(2);
     }

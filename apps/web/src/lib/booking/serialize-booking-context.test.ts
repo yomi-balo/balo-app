@@ -23,12 +23,14 @@ describe('serializeBookingContext', () => {
   it('keeps companies but DROPS the arm-carried expert field on choose_company', () => {
     const context: BookingContext = {
       arm: 'choose_company',
+      viewerUserId: 'user-1',
       companies: [{ id: 'company-1', name: 'Northwind', logoUrl: null }],
       expert: EXPERT_DISPLAY,
     };
     const result = serializeBookingContext(context);
     expect(result).toEqual({
       arm: 'choose_company',
+      viewerUserId: 'user-1',
       companies: [{ id: 'company-1', name: 'Northwind', logoUrl: null }],
     });
     expect('expert' in result).toBe(false);
@@ -37,6 +39,7 @@ describe('serializeBookingContext', () => {
   it('converts single_company Date fields to ISO strings and drops expert', () => {
     const context: BookingContext = {
       arm: 'single_company',
+      viewerUserId: 'user-1',
       company: { id: 'company-1', name: 'Northwind', logoUrl: null },
       resolvedCaseCount: 3,
       openCases: [
@@ -53,6 +56,7 @@ describe('serializeBookingContext', () => {
     const result = serializeBookingContext(context);
     expect(result).toEqual({
       arm: 'single_company',
+      viewerUserId: 'user-1',
       company: { id: 'company-1', name: 'Northwind', logoUrl: null },
       resolvedCaseCount: 3,
       openCases: [
@@ -71,6 +75,7 @@ describe('serializeBookingContext', () => {
   it('serializes an EMPTY single_company openCases array to an empty array, not undefined', () => {
     const context: BookingContext = {
       arm: 'single_company',
+      viewerUserId: 'user-1',
       company: { id: 'company-1', name: 'Northwind', logoUrl: null },
       resolvedCaseCount: 0,
       openCases: [],

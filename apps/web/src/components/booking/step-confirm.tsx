@@ -17,6 +17,7 @@ import { CompanyPicker, CompanyPickerErrorBanner } from './company-picker';
 import { GuestInviteComposer, type GuestDraft } from './guest-invite-composer';
 import { BillingLine, CancellationLine } from './billing-line';
 import { StaleSlotBanner } from './booking-error-panels';
+import { BOOKING_FIELD_IDS } from './focus-first-invalid';
 import type { FixedCaseSummary, OpenCaseForExpert } from './types';
 
 export interface ConfirmSlot {
@@ -83,6 +84,23 @@ export interface StepConfirmProps {
   clientCompanyName: string | null;
 
   staleSlot: boolean;
+  /** The top-up line shown under the stale-slot banner after a top-up landed. `null` otherwise. */
+  staleSlotFollowUp: string | null;
+
+  /**
+   * The inline funding fix, rendered after the billing line. Non-null replaces the Back /
+   * Confirm row: the block carries its own Back and its own primary action.
+   */
+  fundingSection: React.ReactNode | null;
+  /**
+   * True while a payment, or the booking that follows it, is under way. The controls that would
+   * change what is being paid for (the time, the company, the case) are locked.
+   */
+  fundingBusy?: boolean;
+  /** True while the funding pre-flight is still answering; Confirm & book waits for it. */
+  preflightPending?: boolean;
+  /** Shown when the fields were restored from this device; `null` otherwise. */
+  draftNotice: { onClear: () => void } | null;
 
   submitting: boolean;
   submitDisabled: boolean;
@@ -91,6 +109,39 @@ export interface StepConfirmProps {
 }
 
 const TITLE_MAX = 160;
+
+/** Disables every control inside it while `locked`, without changing the layout. */
+function LockableGroup({
+  locked,
+  children,
+}: Readonly<{ locked: boolean; children: React.ReactNode }>): React.JSX.Element {
+  return (
+    <fieldset disabled={locked} className="m-0 min-w-0 border-0 p-0">
+      {children}
+    </fieldset>
+  );
+}
+
+function ConfirmLabel({
+  submitting,
+  preflightPending,
+}: Readonly<{ submitting: boolean; preflightPending: boolean }>): React.JSX.Element {
+  if (submitting) {
+    return (
+      <>
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Booking…
+      </>
+    );
+  }
+  return (
+    <>
+      {preflightPending && (
+        <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+      )}
+      Confirm &amp; book
+    </>
+  );
+}
 
 /**
  * BAL-400 Step 2 — both confirm shapes (new / attach), the case-choice section, and the
@@ -127,6 +178,11 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
     viewerEmailDomain,
     clientCompanyName,
     staleSlot,
+    staleSlotFollowUp,
+    fundingSection,
+    fundingBusy = false,
+    preflightPending = false,
+    draftNotice,
     submitting,
     submitDisabled,
     onBack,
@@ -147,7 +203,20 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
 
   return (
     <div className="space-y-5 p-6">
-      {staleSlot && <StaleSlotBanner onChooseNewTime={onChangeTime} />}
+      {draftNotice !== null && (
+        <p className="text-muted-foreground flex items-center gap-2 text-xs">
+          <span>Filled in from your last visit</span>
+          <button
+            type="button"
+            onClick={draftNotice.onClear}
+            className="text-primary focus-visible:ring-ring relative rounded font-semibold before:absolute before:-inset-3 before:content-[''] hover:opacity-80 focus-visible:ring-2 focus-visible:outline-none"
+          >
+            Clear
+          </button>
+        </p>
+      )}
+
+      {staleSlot && <StaleSlotBanner onChooseNewTime={onChangeTime} followUp={staleSlotFollowUp} />}
 
       <div className="border-border bg-muted/30 flex items-center justify-between rounded-xl border p-4">
         <div>
@@ -161,7 +230,8 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
         <button
           type="button"
           onClick={onChangeTime}
-          className="text-primary focus-visible:ring-ring rounded-md text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
+          disabled={fundingBusy}
+          className="text-primary focus-visible:ring-ring rounded-md text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
         >
           See other times
         </button>
@@ -175,16 +245,18 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
       )}
 
       {openCases !== null && openCases.length > 0 && (
-        <CaseChoiceSection
-          openCases={openCases}
-          selectedEngagementId={selectedEngagementId}
-          onSelect={(id) =>
-            onCaseSelectionChange(
-              id === null ? { kind: 'new' } : { kind: 'existing', engagementId: id }
-            )
-          }
-          expertFirstName={expertFirstName}
-        />
+        <LockableGroup locked={fundingBusy}>
+          <CaseChoiceSection
+            openCases={openCases}
+            selectedEngagementId={selectedEngagementId}
+            onSelect={(id) =>
+              onCaseSelectionChange(
+                id === null ? { kind: 'new' } : { kind: 'existing', engagementId: id }
+              )
+            }
+            expertFirstName={expertFirstName}
+          />
+        </LockableGroup>
       )}
 
       <AnimatePresence mode="wait" initial={false}>
@@ -198,11 +270,14 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
             className="space-y-5 overflow-hidden"
           >
             <div className="space-y-2">
-              <label htmlFor="booking-title" className="text-foreground text-sm font-semibold">
+              <label
+                htmlFor={BOOKING_FIELD_IDS.title}
+                className="text-foreground text-sm font-semibold"
+              >
                 Title <span className="text-destructive">*</span>
               </label>
               <Input
-                id="booking-title"
+                id={BOOKING_FIELD_IDS.title}
                 value={title}
                 onChange={(e) => onTitleChange(e.target.value)}
                 placeholder="In a few words, what's this about?"
@@ -220,12 +295,14 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
               <p className="text-foreground text-sm font-semibold">
                 Description <span className="text-destructive">*</span>
               </p>
-              <RichTextEditor
-                value={descriptionHtml}
-                onChange={onDescriptionChange}
-                placeholder="What would you like to discuss?"
-                ariaLabel="What you'd like to discuss"
-              />
+              <div id={BOOKING_FIELD_IDS.description}>
+                <RichTextEditor
+                  value={descriptionHtml}
+                  onChange={onDescriptionChange}
+                  placeholder="What would you like to discuss?"
+                  ariaLabel="What you'd like to discuss"
+                />
+              </div>
               {showValidation && descriptionEmpty && (
                 <p role="alert" className="text-destructive text-xs">
                   Add a few words about what you&apos;d like to discuss.
@@ -267,14 +344,16 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
             className="space-y-3 overflow-hidden"
           >
             {caseContextSummary !== null && (
-              <CaseContextCard
-                title={caseContextSummary.title}
-                consultationCount={caseContextSummary.consultationCount}
-                openedAtIso={caseContextSummary.openedAtIso}
-                onSwitchToNew={
-                  showCaseEscapeHatch ? () => onCaseSelectionChange({ kind: 'new' }) : undefined
-                }
-              />
+              <LockableGroup locked={fundingBusy}>
+                <CaseContextCard
+                  title={caseContextSummary.title}
+                  consultationCount={caseContextSummary.consultationCount}
+                  openedAtIso={caseContextSummary.openedAtIso}
+                  onSwitchToNew={
+                    showCaseEscapeHatch ? () => onCaseSelectionChange({ kind: 'new' }) : undefined
+                  }
+                />
+              </LockableGroup>
             )}
             {clientCompanyName !== null && hasMultipleEligibleCompanies && (
               <p className="text-muted-foreground text-xs">
@@ -294,27 +373,33 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
       />
 
       {isNewCase && companies !== null && companies.length > 1 && (
-        <CompanyPicker companies={companies} value={companyId} onChange={onCompanyIdChange} />
+        <LockableGroup locked={fundingBusy}>
+          <CompanyPicker companies={companies} value={companyId} onChange={onCompanyIdChange} />
+        </LockableGroup>
       )}
       {isNewCase && companyReadFailed && <CompanyPickerErrorBanner onRetry={onRetryCompanies} />}
 
       <BillingLine />
 
+      {fundingSection}
+
       <div className="flex flex-col gap-2">
-        <div className="flex gap-2">
-          <Button type="button" variant="outline" onClick={onBack} disabled={submitting}>
-            <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Back
-          </Button>
-          <Button type="button" className="flex-1" onClick={onSubmit} disabled={submitDisabled}>
-            {submitting ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Booking…
-              </>
-            ) : (
-              'Confirm & book'
-            )}
-          </Button>
-        </div>
+        {fundingSection === null && (
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={onBack} disabled={submitting}>
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Back
+            </Button>
+            <Button
+              type="button"
+              className="flex-1"
+              onClick={onSubmit}
+              disabled={submitDisabled || preflightPending}
+              aria-busy={preflightPending || undefined}
+            >
+              <ConfirmLabel submitting={submitting} preflightPending={preflightPending} />
+            </Button>
+          </div>
+        )}
         {isNewCase && companies !== null && companies.length > 1 && companyId === null && (
           <p className="text-muted-foreground text-center text-xs">
             Choose which account this is billed to

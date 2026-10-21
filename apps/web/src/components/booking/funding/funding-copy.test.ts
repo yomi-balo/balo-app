@@ -1,0 +1,247 @@
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/credit/actions', () => ({ startPurchaseAction: vi.fn() }));
+
+import { BALANCE_PANEL_COPY, companyLabels } from '../booking-error-panels';
+import { GENERIC_NO_CHARGE_COPY } from '@/components/billing/top-up/PayAction';
+import {
+  BOOKING_PAY_ERROR_COPY,
+  FUNDING_AUD_LINE,
+  BALANCE_NOW_COVERS_COPY,
+  DRAFT_CLEARED_COPY,
+  FUNDING_STAGE_COPY,
+  MEMBER_TAIL,
+  MEMBER_TAIL_NO_DRAFT,
+  creditPendingCopy,
+  fundedHardFailureBody,
+  fundedPartialFollowUp,
+  fundedSessionFollowUp,
+  fundingBlockCopy,
+  savedForLaterBody,
+  staleSlotTopUpFollowUp,
+} from './funding-copy';
+import { refusedView } from './funding-fixtures';
+import type { RefusedFundingView } from './funding-disposition';
+
+const CO = companyLabels('Northwind');
+const BALANCE = {
+  company: CO,
+  amount: 'A$275.00',
+  maxTopUp: 'A$10,000',
+  count: '2 upcoming consultations',
+};
+
+const holdFigure = (overrides: Partial<RefusedFundingView> = {}) =>
+  refusedView({ arm: 'hold', topUpNeededMinor: 27_500, ...overrides });
+const holdFallback = (overrides: Partial<RefusedFundingView> = {}) =>
+  refusedView({ arm: 'hold', topUpNeededMinor: null, ...overrides });
+const reserved = (overrides: Partial<RefusedFundingView> = {}) =>
+  refusedView({
+    arm: 'reserved',
+    topUpNeededMinor: 27_500,
+    reservedBookingCount: 2,
+    firstTime: false,
+    ...overrides,
+  });
+const asMember = { canManageBilling: false, wallet: null } as const;
+
+describe('fundingBlockCopy — manager reserved and hold strings are the approved panel copy', () => {
+  it('reserved', () => {
+    expect(fundingBlockCopy(reserved())).toEqual({
+      heading: BALANCE_PANEL_COPY.reserved.heading.figure(BALANCE),
+      body: BALANCE_PANEL_COPY.reserved.body.manager.figure(BALANCE),
+    });
+  });
+
+  it('hold with a figure', () => {
+    expect(fundingBlockCopy(holdFigure())).toEqual({
+      heading: BALANCE_PANEL_COPY.hold.heading.figure(BALANCE),
+      body: BALANCE_PANEL_COPY.hold.body.manager.figure(BALANCE),
+    });
+  });
+
+  it('hold with the failed-heal fallback', () => {
+    const fallback = BALANCE_PANEL_COPY.hold.body.manager.fallback;
+    const heading = BALANCE_PANEL_COPY.hold.heading.fallback;
+    expect(fallback).toBeDefined();
+    expect(heading).toBeDefined();
+    expect(fundingBlockCopy(holdFallback())).toEqual({
+      heading: heading?.({ ...BALANCE, amount: '' }),
+      body: fallback?.({ ...BALANCE, amount: '' }),
+    });
+  });
+});
+
+describe('fundingBlockCopy — setup arm', () => {
+  it('first time, manager', () => {
+    expect(fundingBlockCopy(refusedView())).toEqual({
+      heading: 'One setup step first',
+      body: "Consultations are paid from Northwind's balance. Top up now and this one books straight after.",
+    });
+  });
+
+  it('returning, manager', () => {
+    expect(fundingBlockCopy(refusedView({ firstTime: false }))).toEqual({
+      heading: "Northwind's balance needs a top-up for this one",
+      body: 'Top up now and this one books straight after.',
+    });
+  });
+
+  it('names an unnamed company as "your team"', () => {
+    expect(
+      fundingBlockCopy(
+        refusedView({ company: { id: 'c', name: null, isActive: true }, firstTime: false })
+      ).heading
+    ).toBe("Your team's balance needs a top-up for this one");
+  });
+
+  it.each([true, false])('member (firstTime=%s)', (firstTime) => {
+    expect(fundingBlockCopy(refusedView({ ...asMember, firstTime }))).toEqual({
+      heading: 'A billing admin needs to set this up',
+      body: `Booking needs a payment method on file or enough credit in Northwind's balance, and only billing admins can add either. ${MEMBER_TAIL}`,
+    });
+  });
+
+  it('never states a figure', () => {
+    for (const view of [
+      refusedView(),
+      refusedView({ firstTime: false }),
+      refusedView({ ...asMember }),
+    ]) {
+      const { heading, body } = fundingBlockCopy(view);
+      expect(`${heading} ${body}`).not.toContain('A$');
+    }
+  });
+});
+
+describe('fundingBlockCopy — member bodies', () => {
+  it('reserved', () => {
+    expect(fundingBlockCopy(reserved({ ...asMember }))).toEqual({
+      heading: BALANCE_PANEL_COPY.reserved.heading.figure(BALANCE),
+      body: `Part of Northwind's balance is set aside for 2 upcoming consultations, so there isn't enough left to book this one, and only billing admins can top up. ${MEMBER_TAIL}`,
+    });
+  });
+
+  it('hold with a figure', () => {
+    expect(fundingBlockCopy(holdFigure({ ...asMember }))).toEqual({
+      heading: BALANCE_PANEL_COPY.hold.heading.figure(BALANCE),
+      body: `Northwind's balance needs a top-up of A$275.00 or more before new consultations can be booked, and only billing admins can top up. ${MEMBER_TAIL}`,
+    });
+  });
+
+  it('hold fallback', () => {
+    expect(fundingBlockCopy(holdFallback({ ...asMember }))).toEqual({
+      heading: 'An earlier hold is still clearing',
+      body: `An earlier hold is still on Northwind's account, although the balance already covers it. It lifts automatically within a day, or at once with any top-up. ${MEMBER_TAIL}`,
+    });
+  });
+
+  it('reserved falls back to the suggested amount when the figure is missing', () => {
+    const copy = fundingBlockCopy(
+      reserved({ topUpNeededMinor: null, suggestedTopUpMinor: 60_000 })
+    );
+    expect(copy.body).toContain('A$600.00');
+  });
+});
+
+describe('no copy claims a billing admin was already told', () => {
+  const VIEWS = [
+    refusedView(),
+    refusedView({ firstTime: false }),
+    refusedView({ ...asMember }),
+    reserved(),
+    reserved({ ...asMember }),
+    holdFigure(),
+    holdFigure({ ...asMember }),
+    holdFallback(),
+    holdFallback({ ...asMember }),
+  ];
+
+  it.each(VIEWS.map((view, index) => [index, view] as const))('view %i', (_index, view) => {
+    const { heading, body } = fundingBlockCopy(view);
+    expect(`${heading} ${body}`).not.toMatch(/notified/i);
+  });
+
+  it('the member tail promises Save, not a past notification', () => {
+    expect(MEMBER_TAIL).not.toMatch(/notified/i);
+    expect(MEMBER_TAIL).toContain("we'll let your billing admins know");
+  });
+
+  it('the no-draft tail keeps the Save promise and drops the on-device sentence', () => {
+    expect(MEMBER_TAIL_NO_DRAFT).toBe("Save this booking and we'll let your billing admins know.");
+    expect(
+      fundingBlockCopy(refusedView({ ...asMember }), false).body.endsWith(MEMBER_TAIL_NO_DRAFT)
+    ).toBe(true);
+  });
+});
+
+describe('payment copy', () => {
+  it('maps settlement_outstanding to the generic no-charge line', () => {
+    expect(BOOKING_PAY_ERROR_COPY.settlement_outstanding).toBe(GENERIC_NO_CHARGE_COPY);
+  });
+
+  it('the decline and authentication lines say nothing was charged', () => {
+    expect(BOOKING_PAY_ERROR_COPY.declined).toContain('nothing was charged');
+    expect(BOOKING_PAY_ERROR_COPY.auth_failed).toContain('nothing was charged');
+  });
+
+  it('the pending line never invites a second payment', () => {
+    expect(creditPendingCopy('Northwind')).toBe(
+      "Your payment went through and is being added to Northwind's balance. Press Book now to finish — you won't be charged again."
+    );
+    expect(creditPendingCopy(null)).toContain("your team's balance");
+  });
+
+  it('the stale-slot follow-up names the credited amount', () => {
+    expect(staleSlotTopUpFollowUp(60_000, 'Northwind')).toBe(
+      "Your top-up went through, so A$600.00 is in Northwind's balance for the next time you choose."
+    );
+  });
+
+  it('the AUD line states the currency', () => {
+    expect(FUNDING_AUD_LINE).toBe("You'll be charged in AUD — your bank sets the final rate.");
+  });
+
+  it('no payment string quotes a rate', () => {
+    const all = [
+      ...Object.values(BOOKING_PAY_ERROR_COPY),
+      creditPendingCopy('Northwind'),
+      staleSlotTopUpFollowUp(60_000, 'Northwind'),
+    ].join(' ');
+    expect(all).not.toMatch(/\/hr|per hour|per minute|rate:/i);
+  });
+});
+
+describe('copy for a landed top-up and the stage text', () => {
+  it('the failure lines say the top-up is in the balance and never claim nothing was charged', () => {
+    const lines = [
+      fundedHardFailureBody(30_000, 'Northwind'),
+      fundedPartialFollowUp(30_000, 'Northwind'),
+      fundedSessionFollowUp(30_000, 'Northwind'),
+    ];
+    for (const line of lines) {
+      expect(line).toContain("A$300.00 is in Northwind's balance");
+      expect(line).not.toMatch(/nothing was charged/i);
+      expect(line).toMatch(/won't (charge you )?again|won't be charged again/);
+    }
+    expect(fundedHardFailureBody(30_000, null)).toContain("your team's balance");
+  });
+
+  it('the saved-for-later body claims the device draft only when one was kept', () => {
+    expect(savedForLaterBody('Northwind', 'Amara', true)).toContain('saved on this device');
+    expect(savedForLaterBody('Northwind', null, true)).toContain('this expert');
+    expect(savedForLaterBody('Northwind', 'Amara', false)).toBe(
+      "We've told Northwind's billing admins this booking is waiting on them."
+    );
+  });
+
+  it('names each stage', () => {
+    expect(FUNDING_STAGE_COPY).toEqual({
+      processing: 'Processing payment…',
+      awaiting_credit: 'Adding to balance…',
+      booking: 'Booking…',
+    });
+    expect(BALANCE_NOW_COVERS_COPY).toContain('Confirm & book');
+    expect(DRAFT_CLEARED_COPY).toMatch(/cleared/i);
+  });
+});

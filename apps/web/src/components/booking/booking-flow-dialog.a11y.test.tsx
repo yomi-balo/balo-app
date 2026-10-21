@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { axe } from '@/test/axe';
-import { render } from '@/test/utils';
+import { render, screen } from '@/test/utils';
 import type { BookingFlowExpert, BookingContext } from './types';
 
 vi.mock('motion/react', async () => {
@@ -8,7 +8,7 @@ vi.mock('motion/react', async () => {
   return createMotionStub();
 });
 vi.mock('sonner', () => ({
-  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('@/hooks/use-auth-modal', () => ({
@@ -31,7 +31,26 @@ vi.mock('@/lib/booking/actions/refetch-booking-context', () => ({
   refetchBookingContextAction: vi.fn().mockResolvedValue({ ok: false }),
 }));
 
+// The funding block is rendered for real on a member's view, so the top-up modules it imports
+// need their server actions and Stripe loader stubbed (a member never reaches either).
+vi.mock('@/lib/credit/actions', () => ({
+  validatePromoAction: vi.fn(),
+  startPurchaseAction: vi.fn(),
+  getTopUpCreditStatusAction: vi.fn(),
+}));
+vi.mock('@/lib/stripe/loader', () => ({ getStripe: vi.fn() }));
+const { mockReadBookingFundingAction } = vi.hoisted(() => ({
+  mockReadBookingFundingAction: vi.fn(),
+}));
+vi.mock('@/lib/booking/actions/read-booking-funding', () => ({
+  readBookingFundingAction: (input: unknown) => mockReadBookingFundingAction(input),
+}));
+vi.mock('@/lib/booking/actions/save-booking-for-later', () => ({
+  saveBookingForLaterAction: vi.fn(),
+}));
+
 import { BookingFlowDialog } from './booking-flow-dialog';
+import { refusedView } from './funding/funding-fixtures';
 import { StepBooked } from './step-booked';
 import { BookingBalancePanel, FundingSetupPanel } from './booking-error-panels';
 
@@ -48,12 +67,18 @@ const EXPERT: BookingFlowExpert = {
 
 const SINGLE_COMPANY: BookingContext = {
   arm: 'single_company',
+  viewerUserId: 'user-1',
   company: { id: 'company-1', name: 'Northwind Industrial', logoUrl: null },
   openCases: [],
   resolvedCaseCount: 0,
 };
 
 describe('BookingFlowDialog — accessibility', () => {
+  beforeEach(() => {
+    mockReadBookingFundingAction.mockReset();
+    mockReadBookingFundingAction.mockResolvedValue({ kind: 'clear' });
+  });
+
   it('has no violations on the new-case confirm shape', async () => {
     const { container } = render(
       <BookingFlowDialog
@@ -79,6 +104,38 @@ describe('BookingFlowDialog — accessibility', () => {
         onMessage={vi.fn()}
       />
     );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('has no violations with the inline funding block on a member view', async () => {
+    mockReadBookingFundingAction.mockResolvedValue(
+      refusedView({ canManageBilling: false, wallet: null })
+    );
+    const { container } = render(
+      <BookingFlowDialog
+        open
+        onClose={vi.fn()}
+        expert={EXPERT}
+        source="case_quick_pick"
+        entry={{
+          mode: 'fixed_case',
+          fixedCase: {
+            engagementId: 'engagement-9',
+            title: 'Flow interview loop',
+            consultationCount: 2,
+            openedAtIso: '2026-06-01T00:00:00.000Z',
+          },
+          presetSlot: {
+            startIso: '2026-06-05T09:00:00.000Z',
+            endIso: '2026-06-05T09:30:00.000Z',
+            durationMinutes: 30,
+          },
+        }}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+      />
+    );
+    await screen.findByRole('button', { name: 'Save and finish later' });
     expect(await axe(container)).toHaveNoViolations();
   });
 

@@ -58,6 +58,7 @@ import {
   resolveBillingAdminLabel,
   projectSavedCard,
   projectWalletSnapshot,
+  projectBookingTopUpWallet,
   projectBillingEmail,
   walletHasEverHeldCredit,
   UNPROVISIONED_WALLET,
@@ -405,6 +406,49 @@ describe('projectWalletSnapshot', () => {
       topupReloadMinor: 30_000,
       topupThresholdMinor: 5_000,
     });
+  });
+});
+
+describe('projectBookingTopUpWallet', () => {
+  it('carries the saved card and no low-balance preference', () => {
+    const wallet = {
+      id: 'wallet-1',
+      lowBalanceMode: 'auto_topup',
+      topupReloadMinor: 30_000,
+      topupThresholdMinor: 5_000,
+      cardBrand: 'visa',
+      cardLast4: '4242',
+      cardExpMonth: 8,
+      cardExpYear: 2028,
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+      mandateStatus: 'pending',
+    } as unknown as CreditWallet;
+
+    expect(projectBookingTopUpWallet(wallet)).toEqual({
+      savedCard: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2028, mandateActive: false },
+    });
+  });
+
+  it('has no card when the row has display columns but no payment-method id', () => {
+    const wallet = {
+      lowBalanceMode: 'notify_only',
+      topupReloadMinor: 10_000,
+      topupThresholdMinor: 2_000,
+      cardBrand: 'visa',
+      cardLast4: '4242',
+      cardExpMonth: 8,
+      cardExpYear: 2028,
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: null,
+      mandateStatus: null,
+    } as unknown as CreditWallet;
+
+    expect(projectBookingTopUpWallet(wallet).savedCard).toBeNull();
+  });
+
+  it('has no card when no wallet row exists', () => {
+    expect(projectBookingTopUpWallet(undefined)).toEqual({ savedCard: null });
   });
 });
 

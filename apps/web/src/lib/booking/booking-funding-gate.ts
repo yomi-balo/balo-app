@@ -5,6 +5,7 @@ import { bookingFundingRepository, companiesRepository } from '@balo/db';
 import {
   assessCaseBookingFunding,
   estimatedMinutesForWindow,
+  suggestCaseBookingTopUpMinor,
   type CaseBookingFundingVerdict,
 } from '@balo/shared/credit';
 import type { BookingFundingBlockKind } from '@balo/shared/notifications';
@@ -44,10 +45,11 @@ import { resolveBookingExpertDisplay } from './load-booking-context';
  * (`book-consultation.ts`): a refusal must leave no case, no engagement, no meeting.
  *
  * ⚠ THE SNAPSHOT READS THE WALLET AND ITS HOLD FIRST. A live mandate then short-circuits before
- * the rate, balance and reservation reads. Pinned where that ordering lives, in
- * `packages/db/src/repositories/booking-funding.test.ts` ("reads the hold BEFORE the mandate…":
- * one hold read; no rate, balance or reservation read). This gate's own test mocks `readSnapshot`
- * whole and cannot see it.
+ * the rate, balance and reservation reads, while the two refusal arms that return early
+ * (`no_wallet`, `on_hold`) carry the top-up pricing the suggested amount needs. Pinned where that
+ * ordering lives, in `packages/db/src/repositories/booking-funding.test.ts` ("reads the hold
+ * BEFORE the mandate…": one hold read; no rate, balance or reservation read). This gate's own
+ * test mocks `readSnapshot` whole and cannot see it.
  *
  * ⚠ A COVERED HOLD IS HEALED, NEVER SHOWN. A hold whose debt the balance already covers is
  * cleared by the API guard's locked correction, which owns the coverage decision. This gate
@@ -59,6 +61,12 @@ import { resolveBookingExpertDisplay } from './load-booking-context';
  * admins were told; that promise is kept only if the publish sits at the point the refusal is
  * determined. A caller cannot forget it. The correlationId carries the block kind, so one kind's
  * notice is never swallowed by another's in the same hour.
+ *
+ * ⚠⚠ TWO ENTRY POINTS, ONE VERDICT. {@link assessBookingFunding} reads, decides and maps the
+ * refusal to its result and the effects it OWNS (log lines + the fan-out notice) — and runs none
+ * of them, so a pre-flight can show the funding fix without telling anybody anything.
+ * {@link enforceBookingFunding} is assess + run the effects: the refusal point (submit, a member's
+ * Save). Only a caller that is actually refusing a booking may use it.
  *
  * ⚠ A READ ERROR IS NOT A REFUSAL. `'unavailable'` fails the booking closed on the generic
  * `booking_failed` path and publishes NOTHING — we must never tell a company's billing admins
@@ -84,34 +92,46 @@ export interface BillingCompany {
   readonly isActive: boolean;
 }
 
+/** What every determined refusal carries so a caller can render the fix without a second read. */
+interface RefusalDetail {
+  readonly canManageBilling: boolean;
+  /** The company whose balance refused the booking — what a top-up must target. */
+  readonly billingCompany: BillingCompany;
+  /**
+   * The smallest single top-up after which this booking passes (`suggestCaseBookingTopUpMinor`).
+   * May exceed the top-up maximum; the caller decides what to do with such a figure. Never shown
+   * to a non-manager and never part of a notice or an analytics event.
+   */
+  readonly suggestedTopUpMinor: number;
+}
+
 export type BookingFundingResult =
   | { readonly ok: true }
-  /** Determined zero-arm. The billing-admin fan-out HAS been published by the time this returns. */
-  | { readonly ok: false; readonly reason: 'unfunded'; readonly canManageBilling: boolean }
+  /** Determined zero-arm. `setupKind` tells a company with no wallet from one that is short. */
+  | (RefusalDetail & {
+      readonly ok: false;
+      readonly reason: 'unfunded';
+      readonly setupKind: 'no_wallet' | 'no_mandate_insufficient_balance';
+    })
   /**
    * D6.1 — an open receivable refuses the booking. `topUpNeededMinor` is the figure that clears
    * it, always > 0; `null` ⇒ the failed-heal fallback (a covered hold the API could not clear).
-   * Fan-out published.
    */
-  | {
+  | (RefusalDetail & {
       readonly ok: false;
       readonly reason: 'on_hold';
-      readonly canManageBilling: boolean;
-      readonly billingCompany: BillingCompany;
       readonly topUpNeededMinor: number | null;
-    }
+    })
   /**
    * D6.5 — planned consultations set part of the credit aside. `topUpNeededMinor` > 0 by
-   * construction. Fan-out published.
+   * construction.
    */
-  | {
+  | (RefusalDetail & {
       readonly ok: false;
       readonly reason: 'reserved';
-      readonly canManageBilling: boolean;
-      readonly billingCompany: BillingCompany;
       readonly topUpNeededMinor: number;
       readonly reservedBookingCount: number;
-    }
+    })
   /** A read failed — we do NOT know the company is unfunded. Fail closed, notify nobody. */
   | { readonly ok: false; readonly reason: 'unavailable' };
 
@@ -140,6 +160,8 @@ type FundingVerdictOutcome =
       readonly verdict: CaseBookingFundingVerdict;
       /** The instant the snapshot was read — the "as of" every figure is dated with. */
       readonly asOf: Date;
+      /** The size of the top-up that would clear a refusal; `0` and unused when the verdict is ok. */
+      readonly suggestedTopUpMinor: number;
     }
   | { readonly kind: 'unavailable' };
 
@@ -157,11 +179,13 @@ async function resolveFundingVerdict(
       expertProfileId: input.expertProfileId,
       now: asOf,
     });
-    const verdict = assessCaseBookingFunding(snapshot, {
+    const window = {
       scheduledStart: new Date(input.slot.startIso),
       scheduledEnd: new Date(input.slot.endIso),
-    });
-    return { kind: 'verdict', verdict, asOf };
+    };
+    const verdict = assessCaseBookingFunding(snapshot, window);
+    const suggestedTopUpMinor = verdict.ok ? 0 : suggestCaseBookingTopUpMinor(snapshot, window);
+    return { kind: 'verdict', verdict, asOf, suggestedTopUpMinor };
   } catch (error) {
     log.error('Booking funding pre-check read failed — failing CLOSED', {
       userId: input.actorUserId,
@@ -249,7 +273,7 @@ async function publishFundingBlocked(
     const hourBucket = Math.floor(Date.now() / FUNDING_NOTICE_WINDOW_MS);
     const expertDisplay = await resolveBookingExpertDisplay(input.expertProfileId);
 
-    publishNotificationEvent('booking.funding_blocked', {
+    void publishNotificationEvent('booking.funding_blocked', {
       correlationId: `booking-funding:${input.companyId}:${input.actorUserId}:${notice.blockKind}:${hourBucket}`,
       companyId: input.companyId,
       requestedByUserId: input.actorUserId,
@@ -290,42 +314,89 @@ async function publishFundingBlocked(
   }
 }
 
+/** One structured log line a refusal (or a pass-through) owes; emitted only by {@link runEffects}. */
+interface FundingLogLine {
+  readonly level: 'info' | 'warn';
+  readonly message: string;
+  readonly context: Record<string, unknown>;
+}
+
+/** What {@link assessBookingFunding} decided should happen, and did not do. */
+interface FundingEffects {
+  readonly logs: readonly FundingLogLine[];
+  /** `null` ⇒ nothing is published (a pass, an unavailable read, a deferred covered hold). */
+  readonly notice: FundingBlockNotice | null;
+}
+
+interface AssessedFunding {
+  readonly result: BookingFundingResult;
+  readonly effects: FundingEffects;
+}
+
+const NO_EFFECTS: FundingEffects = { logs: [], notice: null };
+
+function passed(logs: readonly FundingLogLine[] = []): AssessedFunding {
+  return { result: { ok: true }, effects: { logs, notice: null } };
+}
+
 /**
- * The unfunded outcome (BAL-478): resolve the actor's capability, fan out, and return the
- * refusal. DELIBERATELY called outside {@link resolveFundingVerdict}'s try/catch — see the
- * module docblock.
+ * The unfunded outcome (BAL-478): resolve the actor's capability and the billing company, and
+ * describe the refusal. DELIBERATELY called outside {@link resolveFundingVerdict}'s try/catch —
+ * see the module docblock.
  */
-async function refuseUnfunded(
+async function mapUnfunded(
   input: EnforceBookingFundingInput,
-  reason: 'no_wallet' | 'no_mandate_insufficient_balance',
-  asOf: Date,
-  estimateMinor?: number,
-  availableMinor?: number
-): Promise<BookingFundingResult> {
-  const canManageBilling = await resolveCanManageBilling(input);
+  params: {
+    readonly setupKind: 'no_wallet' | 'no_mandate_insufficient_balance';
+    readonly asOf: Date;
+    readonly suggestedTopUpMinor: number;
+    readonly estimateMinor?: number;
+    readonly availableMinor?: number;
+  }
+): Promise<AssessedFunding> {
+  const { setupKind, asOf, suggestedTopUpMinor, estimateMinor, availableMinor } = params;
+  const [canManageBilling, billingCompany] = await Promise.all([
+    resolveCanManageBilling(input),
+    resolveBillingCompany(input),
+  ]);
 
-  // `estimateMinor`/`availableMinor` are the ONLY place the shortfall exists: the panel, the
-  // email, the in-app notice and PostHog all deliberately carry no money figure on this arm.
-  log.warn('Booking refused before any write — funding pre-condition unmet', {
-    userId: input.actorUserId,
-    companyId: input.companyId,
-    expertProfileId: input.expertProfileId,
-    reason,
-    canManageBilling,
-    estimateMinor,
-    availableMinor,
-  });
-
-  await publishFundingBlocked(input, {
-    reason,
-    blockKind: 'unfunded',
-    canManageBilling,
-    topUpNeededMinor: null,
-    reservedBookingCount: null,
-    asOfIso: asOf.toISOString(),
-  });
-
-  return { ok: false, reason: 'unfunded', canManageBilling };
+  return {
+    result: {
+      ok: false,
+      reason: 'unfunded',
+      canManageBilling,
+      billingCompany,
+      suggestedTopUpMinor,
+      setupKind,
+    },
+    effects: {
+      // `estimateMinor`/`availableMinor` are the ONLY place the shortfall exists: the panel, the
+      // email, the in-app notice and PostHog all deliberately carry no money figure on this arm.
+      logs: [
+        {
+          level: 'warn',
+          message: 'Booking refused before any write — funding pre-condition unmet',
+          context: {
+            userId: input.actorUserId,
+            companyId: input.companyId,
+            expertProfileId: input.expertProfileId,
+            reason: setupKind,
+            canManageBilling,
+            estimateMinor,
+            availableMinor,
+          },
+        },
+      ],
+      notice: {
+        reason: setupKind,
+        blockKind: 'unfunded',
+        canManageBilling,
+        topUpNeededMinor: null,
+        reservedBookingCount: null,
+        asOfIso: asOf.toISOString(),
+      },
+    },
+  };
 }
 
 /** The two balance refusals: D6.1's hold and D6.5's reservation. */
@@ -335,63 +406,78 @@ type BalanceRefusal =
       /** `null` ⇒ the failed-heal fallback. */
       readonly topUpNeededMinor: number | null;
       readonly asOf: Date;
+      readonly suggestedTopUpMinor: number;
     }
   | {
       readonly blockKind: 'reserved_by_upcoming';
       readonly topUpNeededMinor: number;
       readonly reservedBookingCount: number;
       readonly asOf: Date;
+      readonly suggestedTopUpMinor: number;
     };
 
 /**
- * The balance outcome (D6.1 / D6.5): resolve the capability and the company, log the figures
- * (the only place they are logged), fan out, and return the refusal. Runs OUTSIDE the verdict's
- * try/catch, like {@link refuseUnfunded}.
+ * The balance outcome (D6.1 / D6.5): resolve the capability and the company and describe the
+ * refusal, its log line (the only place the figures are logged) and its fan-out. Runs OUTSIDE the
+ * verdict's try/catch, like {@link mapUnfunded}.
  */
-async function refuseOnBalance(
+async function mapOnBalance(
   input: EnforceBookingFundingInput,
-  refusal: BalanceRefusal
-): Promise<BookingFundingResult> {
+  refusal: BalanceRefusal,
+  precedingLogs: readonly FundingLogLine[] = []
+): Promise<AssessedFunding> {
   const canManageBilling = await resolveCanManageBilling(input);
   const billingCompany = await resolveBillingCompany(input);
   const reservedBookingCount =
     refusal.blockKind === 'reserved_by_upcoming' ? refusal.reservedBookingCount : null;
-
-  log.warn('Booking refused before any write — balance pre-condition unmet', {
-    userId: input.actorUserId,
-    companyId: input.companyId,
-    expertProfileId: input.expertProfileId,
-    blockKind: refusal.blockKind,
+  const detail: RefusalDetail = {
     canManageBilling,
-    topUpNeededMinor: refusal.topUpNeededMinor,
-    reservedBookingCount,
-  });
+    billingCompany,
+    suggestedTopUpMinor: refusal.suggestedTopUpMinor,
+  };
 
-  await publishFundingBlocked(input, {
-    reason: refusal.blockKind,
-    blockKind: refusal.blockKind,
-    canManageBilling,
-    topUpNeededMinor: refusal.topUpNeededMinor,
-    reservedBookingCount,
-    asOfIso: refusal.asOf.toISOString(),
-  });
+  const effects: FundingEffects = {
+    logs: [
+      ...precedingLogs,
+      {
+        level: 'warn',
+        message: 'Booking refused before any write — balance pre-condition unmet',
+        context: {
+          userId: input.actorUserId,
+          companyId: input.companyId,
+          expertProfileId: input.expertProfileId,
+          blockKind: refusal.blockKind,
+          canManageBilling,
+          topUpNeededMinor: refusal.topUpNeededMinor,
+          reservedBookingCount,
+        },
+      },
+    ],
+    notice: {
+      reason: refusal.blockKind,
+      blockKind: refusal.blockKind,
+      canManageBilling,
+      topUpNeededMinor: refusal.topUpNeededMinor,
+      reservedBookingCount,
+      asOfIso: refusal.asOf.toISOString(),
+    },
+  };
 
   if (refusal.blockKind === 'reserved_by_upcoming') {
     return {
-      ok: false,
-      reason: 'reserved',
-      canManageBilling,
-      billingCompany,
-      topUpNeededMinor: refusal.topUpNeededMinor,
-      reservedBookingCount: refusal.reservedBookingCount,
+      result: {
+        ok: false,
+        reason: 'reserved',
+        ...detail,
+        topUpNeededMinor: refusal.topUpNeededMinor,
+        reservedBookingCount: refusal.reservedBookingCount,
+      },
+      effects,
     };
   }
   return {
-    ok: false,
-    reason: 'on_hold',
-    canManageBilling,
-    billingCompany,
-    topUpNeededMinor: refusal.topUpNeededMinor,
+    result: { ok: false, reason: 'on_hold', ...detail, topUpNeededMinor: refusal.topUpNeededMinor },
+    effects,
   };
 }
 
@@ -401,90 +487,150 @@ async function refuseOnBalance(
  * answered `account_on_hold` and this snapshot STILL sees a covered hold: the heal failed, so
  * the refusal is the no-figure fallback.
  */
-async function settleCoveredHold(
+async function mapCoveredHold(
   input: EnforceBookingFundingInput,
-  asOf: Date
-): Promise<BookingFundingResult> {
+  asOf: Date,
+  suggestedTopUpMinor: number
+): Promise<AssessedFunding> {
   if (input.onCoveredHold === 'defer') {
-    log.info('A covered hold is still open — the booking API heals it before booking', {
-      userId: input.actorUserId,
-      companyId: input.companyId,
-    });
-    return { ok: true };
+    return passed([
+      {
+        level: 'info',
+        message: 'A covered hold is still open — the booking API heals it before booking',
+        context: { userId: input.actorUserId, companyId: input.companyId },
+      },
+    ]);
   }
-  log.warn('A covered hold could not be cleared by the booking API — showing the fallback', {
-    userId: input.actorUserId,
-    companyId: input.companyId,
-  });
-  return refuseOnBalance(input, { blockKind: 'account_on_hold', topUpNeededMinor: null, asOf });
+  return mapOnBalance(
+    input,
+    { blockKind: 'account_on_hold', topUpNeededMinor: null, asOf, suggestedTopUpMinor },
+    [
+      {
+        level: 'warn',
+        message: 'A covered hold could not be cleared by the booking API — showing the fallback',
+        context: { userId: input.actorUserId, companyId: input.companyId },
+      },
+    ]
+  );
 }
 
-/** Map one verdict onto the gate's result, running the refusal's side effects. */
-async function settleVerdict(
+/** Map one verdict onto the gate's result and the effects it owes. Runs none of them. */
+async function mapVerdict(
   input: EnforceBookingFundingInput,
-  verdict: CaseBookingFundingVerdict,
-  asOf: Date
-): Promise<BookingFundingResult> {
+  outcome: Extract<FundingVerdictOutcome, { kind: 'verdict' }>
+): Promise<AssessedFunding> {
+  const { verdict, asOf, suggestedTopUpMinor } = outcome;
   if (verdict.ok) {
     if (verdict.arm === 'rate_missing') {
       // A rate-less expert is NOT a funding refusal. The balance arm is unevaluable, so the gate
       // passes rather than blaming the client for the expert's misconfiguration. That condition
       // already has an owner (the expert checklist + admission's `expert_rate_missing` alarm).
-      log.warn('Booking funding pre-check skipped — expert has no rate', {
-        userId: input.actorUserId,
-        companyId: input.companyId,
-        expertProfileId: input.expertProfileId,
-      });
+      return passed([
+        {
+          level: 'warn',
+          message: 'Booking funding pre-check skipped — expert has no rate',
+          context: {
+            userId: input.actorUserId,
+            companyId: input.companyId,
+            expertProfileId: input.expertProfileId,
+          },
+        },
+      ]);
     }
-    return { ok: true };
+    return passed();
   }
   if (verdict.reason === 'reserved_by_upcoming') {
-    return refuseOnBalance(input, {
+    return mapOnBalance(input, {
       blockKind: 'reserved_by_upcoming',
       topUpNeededMinor: verdict.topUpNeededMinor,
       reservedBookingCount: verdict.reservedBookingCount,
       asOf,
+      suggestedTopUpMinor,
     });
   }
   if (verdict.reason === 'no_mandate_insufficient_balance') {
-    return refuseUnfunded(
-      input,
-      'no_mandate_insufficient_balance',
+    return mapUnfunded(input, {
+      setupKind: 'no_mandate_insufficient_balance',
       asOf,
-      verdict.estimateMinor,
-      verdict.availableMinor
-    );
+      suggestedTopUpMinor,
+      estimateMinor: verdict.estimateMinor,
+      availableMinor: verdict.availableMinor,
+    });
   }
   if (verdict.reason === 'account_on_hold') {
-    return refuseOnBalance(input, {
+    return mapOnBalance(input, {
       blockKind: 'account_on_hold',
       topUpNeededMinor: verdict.hold.amountToClearMinor,
       asOf,
+      suggestedTopUpMinor,
     });
   }
   if (verdict.reason === 'covered_hold') {
-    return settleCoveredHold(input, asOf);
+    return mapCoveredHold(input, asOf, suggestedTopUpMinor);
   }
   if (verdict.reason === 'no_wallet') {
-    return refuseUnfunded(input, 'no_wallet', asOf);
+    return mapUnfunded(input, { setupKind: 'no_wallet', asOf, suggestedTopUpMinor });
   }
   // An UNKNOWN, client-supplied `expertProfileId` is NOT the same condition as a known expert who
   // simply has no rate set: it has no owner, and there is no reason to let an unfunded company
   // hold a slot against an id that names nothing. Fail closed.
-  log.warn('Booking funding pre-check found no matching expert profile — failing CLOSED', {
-    userId: input.actorUserId,
-    companyId: input.companyId,
-    expertProfileId: input.expertProfileId,
-  });
-  return { ok: false, reason: 'unavailable' };
+  return {
+    result: { ok: false, reason: 'unavailable' },
+    effects: {
+      ...NO_EFFECTS,
+      logs: [
+        {
+          level: 'warn',
+          message: 'Booking funding pre-check found no matching expert profile — failing CLOSED',
+          context: {
+            userId: input.actorUserId,
+            companyId: input.companyId,
+            expertProfileId: input.expertProfileId,
+          },
+        },
+      ],
+    },
+  };
 }
 
+async function assess(input: EnforceBookingFundingInput): Promise<AssessedFunding> {
+  const outcome = await resolveFundingVerdict(input);
+  if (outcome.kind === 'unavailable') {
+    return { result: { ok: false, reason: 'unavailable' }, effects: NO_EFFECTS };
+  }
+  return mapVerdict(input, outcome);
+}
+
+/** Emit the log lines, then the fan-out. The only place a refusal's side effects run. */
+async function runEffects(
+  input: EnforceBookingFundingInput,
+  effects: FundingEffects
+): Promise<void> {
+  for (const line of effects.logs) {
+    log[line.level](line.message, line.context);
+  }
+  if (effects.notice !== null) {
+    await publishFundingBlocked(input, effects.notice);
+  }
+}
+
+/**
+ * The read-only pre-flight: the same read, verdict and result as {@link enforceBookingFunding},
+ * with no log line for the refusal, no fan-out and no analytics event. Safe to call as a view
+ * opens. (The capability and name reads still log their own caught failures.)
+ */
+export async function assessBookingFunding(
+  input: EnforceBookingFundingInput
+): Promise<BookingFundingResult> {
+  const { result } = await assess(input);
+  return result;
+}
+
+/** The refusal point: assess, then run the effects the refusal owes. */
 export async function enforceBookingFunding(
   input: EnforceBookingFundingInput
 ): Promise<BookingFundingResult> {
-  const outcome = await resolveFundingVerdict(input);
-  if (outcome.kind === 'unavailable') {
-    return { ok: false, reason: 'unavailable' };
-  }
-  return settleVerdict(input, outcome.verdict, outcome.asOf);
+  const { result, effects } = await assess(input);
+  await runEffects(input, effects);
+  return result;
 }
