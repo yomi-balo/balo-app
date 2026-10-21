@@ -64,7 +64,7 @@ export function HeroCard({ row, lens, index }: Readonly<HeroCardProps>): React.J
         {row.companyName && (
           <span className="text-muted-foreground text-xs">{row.companyName}</span>
         )}
-        <StageChip stage={row.stage} label={row.stageLabel} />
+        <StageChip stage={row.stage} lens={lens} label={row.stageLabel} />
         <span className="text-muted-foreground text-xs">{row.updatedRelative}</span>
       </div>
       {row.signal && (

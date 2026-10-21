@@ -97,7 +97,7 @@ export function PipelineKanban({
             className="w-[230px] shrink-0"
           >
             <div className="flex items-center gap-2 px-1 pb-2">
-              <StageChip stage={column.stage} label={column.label} />
+              <StageChip stage={column.stage} lens="admin" label={column.label} />
               <span className="text-muted-foreground text-xs font-bold">{items.length}</span>
             </div>
             <div className="bg-muted flex min-h-[110px] flex-col gap-2 rounded-2xl p-2">

@@ -26,7 +26,6 @@ import {
   clientRequestRecencyAt,
   stageChipFor,
   stageChipForRelationship,
-  stageLabelFor,
   adminStallDays,
   tilesFromRows,
   type AdminKanbanCard,
@@ -39,6 +38,7 @@ import {
   type RequestThreadSignal,
   type StageKey,
 } from './portfolio-row';
+import { participantStageLabel } from './project-stages';
 
 /**
  * portfolio-view — the `server-only` loaders for the A7 portfolio dashboard
@@ -269,7 +269,7 @@ function toClientRowView(
     title: row.title,
     companyName: row.company.name,
     stage: chip.key,
-    stageLabel: chip.label,
+    stageLabel: participantStageLabel('client', chip.key),
     needsYou,
     nudgeLabel,
     unread: signal.anyUnread,
@@ -339,7 +339,7 @@ function toExpertRowView(
     title: invitation.title,
     companyName: invitation.companyName,
     stage: chip.key,
-    stageLabel: chip.label,
+    stageLabel: participantStageLabel('expert', chip.key),
     needsYou,
     nudgeLabel,
     unread: signal.anyUnread,
@@ -421,7 +421,7 @@ function toEngagementRowView(
     title: e.projectRequest?.title ?? 'Ongoing engagement',
     companyName: counterpartName,
     stage: 'kicked',
-    stageLabel: stageLabelFor('kicked'),
+    stageLabel: participantStageLabel(lens, 'kicked'),
     needsYou,
     nudgeLabel,
     progressLabel,

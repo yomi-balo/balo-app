@@ -1,10 +1,14 @@
 'use client';
 
+import { useCallback, useId, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'motion/react';
-import type { DashboardTrackTurn } from '@balo/analytics/events';
+import type { DashboardTrackStage, DashboardTrackTurn } from '@balo/analytics/events';
 import { cn } from '@/lib/utils';
 import { track, DASHBOARD_EVENTS } from '@/lib/analytics';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { TURN_EXPLANATIONS, stageLensOfWorkspace } from '@/lib/projects-inbox/project-stages';
+import { TrackTermPanel, TrackTermPopover, TrackTermToggle } from './track-term';
 import {
   PROJECT_TRACK_COPY,
   PROJECT_TRACK_IN_PROGRESS,
@@ -107,16 +111,40 @@ function StageNode({ stage }: Readonly<{ stage: ProjectTrackStage }>): React.JSX
   );
 }
 
+type TermTarget = 'stage' | 'legend';
+type TermVia = 'hover' | 'click' | 'tap';
+
+/** What the track's term triggers need: which surface they render, and how an open is recorded. */
+interface TermControls {
+  readonly isMobile: boolean;
+  readonly openTerm: string | null;
+  readonly panelId: (termId: string) => string;
+  readonly toggle: (
+    termId: string,
+    target: TermTarget,
+    key: DashboardTrackStage | DashboardTrackTurn
+  ) => void;
+  readonly opened: (
+    target: TermTarget,
+    key: DashboardTrackStage | DashboardTrackTurn,
+    via: TermVia
+  ) => void;
+}
+
 function StageItem({
   stage,
   isLast,
   workspaceType,
+  terms,
 }: Readonly<{
   stage: ProjectTrackStage;
   isLast: boolean;
   workspaceType: YourMoveWorkspaceType;
+  terms: TermControls;
 }>): React.JSX.Element {
   const count = stage.tokens.length;
+  const termId = `stage:${stage.key}`;
+  const mobileOpen = terms.isMobile && terms.openTerm === termId;
   return (
     <li className="relative grid grid-cols-[30px_minmax(0,1fr)] gap-x-3 pb-4 last:pb-0 md:block md:pr-3 md:pb-0">
       {!isLast && (
@@ -128,9 +156,26 @@ function StageItem({
       <StageNode stage={stage} />
       <div className="min-w-0 pt-[5px] md:pt-0">
         <span className="text-foreground block text-[13.5px] font-semibold md:mt-2.5">
-          {stage.label}
+          {terms.isMobile ? (
+            <TrackTermToggle
+              term={stage.label}
+              open={mobileOpen}
+              controls={terms.panelId(termId)}
+              onToggle={() => terms.toggle(termId, 'stage', stage.key)}
+            />
+          ) : (
+            <TrackTermPopover
+              term={stage.label}
+              explanation={stage.explanation}
+              align="start"
+              onOpened={(via) => terms.opened('stage', stage.key, via)}
+            />
+          )}
           <span className="sr-only">{`, ${count} ${count === 1 ? 'project' : 'projects'}`}</span>
         </span>
+        {mobileOpen && (
+          <TrackTermPanel id={terms.panelId(termId)}>{stage.explanation}</TrackTermPanel>
+        )}
         <div
           className={cn(
             'flex flex-wrap gap-1.5 md:mt-2.5 md:flex-col md:items-start',
@@ -160,6 +205,35 @@ const LEGEND: readonly DashboardTrackTurn[] = ['your_move', 'waiting', 'in_progr
 export function ProjectTrack({ view }: Readonly<{ view: ProjectTrackView }>): React.JSX.Element {
   const { workspaceType, stages } = view;
   const copy = PROJECT_TRACK_COPY[workspaceType];
+  const lens = stageLensOfWorkspace(workspaceType);
+  const isMobile = useIsMobile(768);
+  const [openTerm, setOpenTerm] = useState<string | null>(null);
+  const idBase = useId();
+  const panelId = useCallback((termId: string): string => `${idBase}-${termId}`, [idBase]);
+  const opened = useCallback(
+    (target: TermTarget, key: DashboardTrackStage | DashboardTrackTurn, via: TermVia): void => {
+      track(DASHBOARD_EVENTS.TRACK_TERM_OPENED, {
+        workspace_type: workspaceType,
+        target,
+        key,
+        via,
+      });
+    },
+    [workspaceType]
+  );
+  const toggle = useCallback(
+    (termId: string, target: TermTarget, key: DashboardTrackStage | DashboardTrackTurn): void => {
+      if (openTerm === termId) {
+        setOpenTerm(null);
+        return;
+      }
+      setOpenTerm(termId);
+      opened(target, key, 'tap');
+    },
+    [openTerm, opened]
+  );
+  const terms: TermControls = { isMobile, openTerm, panelId, toggle, opened };
+  const openLegendTurn = LEGEND.find((turn) => isMobile && openTerm === `legend:${turn}`);
   const legendLabel: Record<DashboardTrackTurn, string> = {
     your_move: PROJECT_TRACK_YOUR_MOVE,
     waiting: copy.waiting,
@@ -192,11 +266,35 @@ export function ProjectTrack({ view }: Readonly<{ view: ProjectTrackView }>): Re
                 aria-hidden="true"
                 className={cn('size-2 rounded-full', TURN_STYLE[turn].dot)}
               />
-              {legendLabel[turn]}
+              {isMobile ? (
+                <TrackTermToggle
+                  term={legendLabel[turn]}
+                  open={openTerm === `legend:${turn}`}
+                  controls={panelId(`legend:${turn}`)}
+                  onToggle={() => toggle(`legend:${turn}`, 'legend', turn)}
+                />
+              ) : (
+                <TrackTermPopover
+                  term={legendLabel[turn]}
+                  explanation={TURN_EXPLANATIONS[lens][turn]}
+                  align="end"
+                  onOpened={(via) => opened('legend', turn, via)}
+                />
+              )}
             </li>
           ))}
         </ul>
       </div>
+      {openLegendTurn !== undefined && (
+        <div className="-mt-3.5 mb-4">
+          <TrackTermPanel
+            id={panelId(`legend:${openLegendTurn}`)}
+            title={legendLabel[openLegendTurn]}
+          >
+            {TURN_EXPLANATIONS[lens][openLegendTurn]}
+          </TrackTermPanel>
+        </div>
+      )}
       <ol className="md:grid md:grid-cols-5">
         {stages.map((stage, index) => (
           <StageItem
@@ -204,6 +302,7 @@ export function ProjectTrack({ view }: Readonly<{ view: ProjectTrackView }>): Re
             stage={stage}
             isLast={index === stages.length - 1}
             workspaceType={workspaceType}
+            terms={terms}
           />
         ))}
       </ol>

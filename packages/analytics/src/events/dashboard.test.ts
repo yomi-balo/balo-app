@@ -16,6 +16,7 @@ describe('DASHBOARD_EVENTS (BAL-566 / BAL-600, client)', () => {
   it('exposes exactly the dashboard events, sorted', () => {
     expect(Object.keys(DASHBOARD_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'TRACK_CLICKED',
+      'TRACK_TERM_OPENED',
       'UP_NEXT_CLICKED',
       'UP_NEXT_VIEWED',
       'YOUR_MOVE_CLICKED',
@@ -31,6 +32,7 @@ describe('DASHBOARD_EVENTS (BAL-566 / BAL-600, client)', () => {
     expect(DASHBOARD_EVENTS.YOUR_MOVE_CLICKED).toBe('dashboard_your_move_clicked');
     expect(DASHBOARD_EVENTS.YOUR_MOVE_FILTERED).toBe('dashboard_your_move_filtered');
     expect(DASHBOARD_EVENTS.TRACK_CLICKED).toBe('dashboard_track_clicked');
+    expect(DASHBOARD_EVENTS.TRACK_TERM_OPENED).toBe('dashboard_track_term_opened');
   });
 
   it('every value carries the dashboard_ prefix and a snake_case shape', () => {
@@ -145,6 +147,23 @@ describe('track vocabularies', () => {
     expect(Object.keys(clicked).sort((a, b) => a.localeCompare(b))).toEqual([
       'stage',
       'turn',
+      'workspace_type',
+    ]);
+  });
+});
+
+describe('track term opened', () => {
+  it('carries workspace_type, target and key and no ids', () => {
+    const opened: DashboardEventMap[typeof DASHBOARD_EVENTS.TRACK_TERM_OPENED] = {
+      workspace_type: 'company',
+      target: 'stage',
+      key: 'matching',
+      via: 'hover',
+    };
+    expect(Object.keys(opened).sort((a, b) => a.localeCompare(b))).toEqual([
+      'key',
+      'target',
+      'via',
       'workspace_type',
     ]);
   });

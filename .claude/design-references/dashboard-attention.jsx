@@ -10,6 +10,9 @@
  *      still tells the expert where things are.
  *   3. The "You're live" card shows ONCE; from then on a live status badge under the sidebar
  *      workspace switcher carries the status.
+ *   4. Stage explanations: hover, click, tap or focus a stage name or a legend item on the
+ *      track to see one sentence on what it means. The track and the Projects inbox share one
+ *      stage vocabulary (see the "Stage vocabulary" build note).
  *
  * ⚠ ONE DEFINITION OF "NEEDS YOU". Project-side cards and every track token come from the
  * Projects inbox loaders (`loadExpertPortfolio` / `loadClientPortfolio`) and its rule table
@@ -20,7 +23,7 @@
  * Toolbar: Lens · Scenario · Viewport · Build notes. Colours stand in for repo tokens
  * (primary, violet, success, warning); CC uses the tokens, never these hex values.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -586,6 +589,46 @@ const tok = (label, title, turn, href) => ({ label, title, turn, href });
 
 const EXPERT_STAGES = ['Invited', 'Interest sent', 'Proposal', 'Kickoff', 'Delivery'];
 const CLIENT_STAGES = ['Matching', 'Interest', 'Proposals', 'Kickoff', 'Delivery'];
+
+/**
+ * One sentence per stage, written to the viewer. ONE HOME in the app: the shared stage
+ * vocabulary module beside the StageKey mapping, read by the track AND the Projects inbox
+ * chips, so the two can never name a stage differently.
+ */
+export const STAGE_INFO = {
+  expert: {
+    Invited:
+      "Balo invited you to this project. Read the brief and send your interest if it's a fit.",
+    'Interest sent':
+      "You've told the client you're interested. Next, you talk and they may ask for a proposal.",
+    Proposal: 'The client asked you for a proposal, or is reviewing the one you sent.',
+    Kickoff:
+      'Your proposal was accepted. The project starts once you, the client and Balo have each confirmed.',
+    Delivery:
+      'The project is underway. You deliver the milestones and the client reviews the work.',
+  },
+  client: {
+    Matching: 'Balo is finding experts for your request, or wants a quick call with you first.',
+    Interest: 'Experts are interested. Talk with them and ask the ones you like for a proposal.',
+    Proposals: 'Experts are writing proposals, or have sent them for you to review.',
+    Kickoff:
+      "You've accepted a proposal. The project starts once you, the expert and Balo have each confirmed.",
+    Delivery: 'The project is underway. You review the work when the expert marks it complete.',
+  },
+};
+
+export const TURN_INFO = {
+  expert: {
+    you: 'Something here is waiting on you.',
+    waiting: "You've done your part. The client, or Balo, is up next.",
+    progress: 'Work is underway and nobody is blocked.',
+  },
+  client: {
+    you: 'Something here is waiting on you.',
+    waiting: "You've done your part. The expert, or Balo, is up next.",
+    progress: 'Work is underway and nobody is blocked.',
+  },
+};
 
 const P = {
   northwind: tok(
@@ -1841,6 +1884,129 @@ export function YourMove({ rows, mobile }) {
 
 // ─── Where your projects stand ───────────────────────────────────────────────────────
 
+/**
+ * A term with a one-sentence explanation. The term itself is the trigger (a button with a
+ * dotted underline). Click, tap, Enter or Space toggles it; with a mouse it also opens after a
+ * short hover and closes on leave; Escape and focus loss close it. Nothing interactive inside,
+ * and it is never nested in a link. In the app: `components/ui/popover.tsx`.
+ */
+export function InfoTerm({ term, description, align = 'left', defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const openedByHover = useRef(false);
+  const timer = useRef(null);
+  const rootRef = useRef(null);
+  const id = useId();
+
+  // Safari never focuses a clicked button, so blur alone cannot dismiss it: close on any pointer
+  // down outside (Radix Popover's outside-pointer dismissal does this in the app).
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (rootRef.current && !rootRef.current.contains(e.target)) {
+        openedByHover.current = false;
+        setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+
+  const onPointerEnter = (e) => {
+    if (e.pointerType !== 'mouse') return;
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      openedByHover.current = true;
+      setOpen(true);
+    }, 300);
+  };
+  const onPointerLeave = (e) => {
+    if (e.pointerType !== 'mouse') return;
+    clearTimeout(timer.current);
+    if (openedByHover.current) setOpen(false);
+  };
+  const onClick = () => {
+    if (openedByHover.current && open) {
+      openedByHover.current = false; // a click on a hover-opened term pins it open
+      return;
+    }
+    openedByHover.current = false;
+    setOpen((v) => !v);
+  };
+
+  return (
+    <span
+      ref={rootRef}
+      style={{ position: 'relative', display: 'inline-block' }}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        data-info-term={term}
+        onClick={onClick}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setOpen(false);
+        }}
+        style={{
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          margin: 0,
+          font: 'inherit',
+          color: 'inherit',
+          cursor: 'help',
+          textDecoration: 'underline dotted',
+          textDecorationColor: T.subtle,
+          textUnderlineOffset: 3,
+        }}
+      >
+        {children ?? term}
+      </button>
+      {open && (
+        <span
+          id={id}
+          role="note"
+          data-info-for={term}
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: align === 'right' ? 'auto' : 0,
+            right: align === 'right' ? 0 : 'auto',
+            zIndex: 25,
+            width: 240,
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: T.card,
+            border: `1px solid ${T.border}`,
+            boxShadow: '0 10px 28px rgba(15,23,42,0.14)',
+            textAlign: 'left',
+            fontSize: 12.5,
+            lineHeight: 1.45,
+            fontWeight: 400,
+            color: T.muted,
+          }}
+        >
+          <span
+            style={{
+              display: 'block',
+              marginBottom: 2,
+              fontSize: 13,
+              fontWeight: 600,
+              color: T.fg,
+            }}
+          >
+            {term}
+          </span>
+          {description}
+        </span>
+      )}
+    </span>
+  );
+}
+
 const TURN_STYLE = {
   you: {
     bg: T.primarySoft,
@@ -1935,7 +2101,58 @@ function StageNode({ stage }) {
   );
 }
 
-export function Pipeline({ lens, stages, mobile }) {
+/**
+ * Mobile only. The term toggles its explanation INLINE (no floating popover: nothing to clip at
+ * the screen edge, nothing to dismiss). A 44px-tall hit area that does not move the layout: the
+ * negative margins give back what the min-height adds. In the app: `components/ui/collapsible.tsx`.
+ */
+function TermToggle({ term, open, onToggle, controls }) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={controls}
+      data-info-term={term}
+      onClick={onToggle}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        minHeight: 44,
+        margin: '-12px 0',
+        padding: 0,
+        background: 'none',
+        border: 'none',
+        font: 'inherit',
+        color: open ? T.primary : 'inherit',
+        cursor: 'pointer',
+        textDecoration: 'underline dotted',
+        textDecorationColor: open ? T.primary : T.subtle,
+        textUnderlineOffset: 3,
+        WebkitTapHighlightColor: 'transparent',
+      }}
+    >
+      {term}
+    </button>
+  );
+}
+
+const inlineInfo = {
+  margin: '8px 0 0',
+  padding: '8px 10px',
+  borderRadius: 8,
+  background: T.bg,
+  border: `1px solid ${T.border}`,
+  fontSize: 12.5,
+  lineHeight: 1.45,
+  fontWeight: 400,
+  color: T.muted,
+};
+
+export function Pipeline({ lens, stages, mobile, defaultOpenStage = null }) {
+  // Mobile: one explanation open at a time across stages and legend ('stage:Invited', 'legend:you').
+  const [openTerm, setOpenTerm] = useState(defaultOpenStage ? `stage:${defaultOpenStage}` : null);
+  const toggle = (key) => setOpenTerm((cur) => (cur === key ? null : key));
+  const openLegend = openTerm?.startsWith('legend:') ? openTerm.slice(7) : null;
   const c = COPY[lens];
   const legend = [
     { turn: 'you', label: 'Your move' },
@@ -1990,11 +2207,32 @@ export function Pipeline({ lens, stages, mobile }) {
                 aria-hidden="true"
                 style={{ width: 8, height: 8, borderRadius: '50%', ...TURN_STYLE[l.turn].dot }}
               />
-              {l.label}
+              {mobile ? (
+                <TermToggle
+                  term={l.label}
+                  open={openTerm === `legend:${l.turn}`}
+                  onToggle={() => toggle(`legend:${l.turn}`)}
+                  controls={`legend-info-${lens}`}
+                />
+              ) : (
+                <InfoTerm term={l.label} description={TURN_INFO[lens][l.turn]} align="right" />
+              )}
             </li>
           ))}
         </ul>
       </div>
+      {mobile && openLegend && (
+        <p
+          id={`legend-info-${lens}`}
+          data-info-for={legend.find((l) => l.turn === openLegend).label}
+          style={{ ...inlineInfo, margin: '-6px 0 16px' }}
+        >
+          <span style={{ display: 'block', fontWeight: 600, color: T.fg }}>
+            {legend.find((l) => l.turn === openLegend).label}
+          </span>
+          {TURN_INFO[lens][openLegend]}
+        </p>
+      )}
 
       {mobile ? (
         <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -2025,8 +2263,18 @@ export function Pipeline({ lens, stages, mobile }) {
               <StageNode stage={s} />
               <div style={{ minWidth: 0, paddingTop: 5 }}>
                 <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: T.fg }}>
-                  {s.label}
+                  <TermToggle
+                    term={s.label}
+                    open={openTerm === `stage:${s.label}`}
+                    onToggle={() => toggle(`stage:${s.label}`)}
+                    controls={`stage-info-${lens}-${i}`}
+                  />
                 </span>
+                {openTerm === `stage:${s.label}` && (
+                  <p id={`stage-info-${lens}-${i}`} data-info-for={s.label} style={inlineInfo}>
+                    {STAGE_INFO[lens][s.label]}
+                  </p>
+                )}
                 <div
                   style={{
                     display: 'flex',
@@ -2078,7 +2326,12 @@ export function Pipeline({ lens, stages, mobile }) {
                   color: T.fg,
                 }}
               >
-                {s.label}
+                <InfoTerm
+                  term={s.label}
+                  description={STAGE_INFO[lens][s.label]}
+                  align={i >= stages.length - 2 ? 'right' : 'left'}
+                  defaultOpen={defaultOpenStage === s.label}
+                />
               </span>
               <div
                 style={{
@@ -3071,6 +3324,15 @@ const TURN_SPECS = {
   ],
 };
 
+const EXPLANATION_RULES = [
+  'Every stage name and legend item on the track is a trigger for one sentence on what it means. The trigger is the term itself (a button with a dotted underline), never an extra icon.',
+  'Desktop (horizontal track): a popover (`components/ui/popover.tsx`). Click, Enter or Space toggles it; with a mouse it also opens after about 300 ms of hover and closes on leave, and a click on a hover-opened term keeps it open. A click outside, Escape and focus loss close it; do not rely on blur alone, because Safari never focuses a clicked button. Content: the term in bold and the sentence, nothing interactive. Position it with Radix collision handling (`collisionPadding`) so it never clips; the fixed alignment in this reference is a stand-in.',
+  'Mobile (vertical stepper): no floating popover. Tapping a stage name opens its sentence inline, under the name and above its tokens; tapping a legend item opens its sentence in one block under the legend. One explanation open at a time; tapping the open term closes it, and the open term turns primary. Button with `aria-expanded` / `aria-controls` (`components/ui/collapsible.tsx` semantics). Nothing to clip at the screen edge and nothing to dismiss.',
+  'Mobile tap targets: every term gets a 44px-tall hit area without moving the layout (negative margins give back the extra height). Tokens keep their own taps.',
+  'ONE stage vocabulary: labels and sentences live in a shared module in `lib/projects-inbox/` beside the StageKey mapping. The track reads it, and the Projects inbox chips take their labels from it, so an invited expert’s inbox chip reads “Invited”, not “Experts invited”. The admin kanban and triage keep their own staff labels.',
+  'The Projects inbox shows the shared labels but no explanations: its rows are links, so a chip inside one cannot be a button.',
+];
+
 const RULES_V2 = [
   'A card exists while someone is waiting on the viewer. Cards come from record state, never from `user_notifications`: reading or clearing a notification never removes a card.',
   'One read model, one arm per card kind. Each arm starts from parent records the viewer can already open, gates with `hasCapability`, and only then joins children. A card never links to a page the viewer can’t open.',
@@ -3169,12 +3431,14 @@ function NotesPanel({ lens }) {
       </div>
       <h3 style={{ margin: '20px 0 8px', fontSize: 14, fontWeight: 600 }}>Whose move, by stage</h3>
       <p style={{ margin: '0 0 8px', fontSize: 13, lineHeight: 1.5 }}>{TURN_RULE}</p>
+      <h3 style={{ margin: '20px 0 8px', fontSize: 14, fontWeight: 600 }}>Stage vocabulary</h3>
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
           <thead>
             <tr>
-              <th style={th}>Track stage</th>
+              <th style={th}>Stage</th>
               <th style={th}>Inbox `StageKey`s</th>
+              <th style={th}>Explanation</th>
             </tr>
           </thead>
           <tbody>
@@ -3182,11 +3446,31 @@ function NotesPanel({ lens }) {
               <tr key={stage}>
                 <td style={{ ...td, fontWeight: 600, whiteSpace: 'nowrap' }}>{stage}</td>
                 <td style={td}>{keys}</td>
+                <td style={td}>{STAGE_INFO[lens][stage]}</td>
+              </tr>
+            ))}
+            {[
+              ['you', 'Your move'],
+              ['waiting', COPY[lens].waiting],
+              ['progress', 'In progress'],
+            ].map(([turn, label]) => (
+              <tr key={turn}>
+                <td style={{ ...td, fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</td>
+                <td style={td}>Legend</td>
+                <td style={td}>{TURN_INFO[lens][turn]}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <h3 style={{ margin: '20px 0 8px', fontSize: 14, fontWeight: 600 }}>Stage explanations</h3>
+      <ul style={{ margin: 0, paddingLeft: 18 }}>
+        {EXPLANATION_RULES.map((r) => (
+          <li key={r} style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 4 }}>
+            {r}
+          </li>
+        ))}
+      </ul>
       {lens === 'expert' && (
         <>
           <h3 style={{ margin: '20px 0 8px', fontSize: 14, fontWeight: 600 }}>Live status badge</h3>

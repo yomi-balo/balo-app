@@ -174,6 +174,23 @@ beforeEach(() => {
 });
 
 describe('loadClientPortfolio', () => {
+  it('labels request rows with the shared client vocabulary', async () => {
+    mockListByCompany.mockResolvedValue([
+      requestRow({ id: 'a', status: 'experts_invited' }),
+      requestRow({ id: 'b', status: 'eoi_submitted' }),
+      requestRow({ id: 'c', status: 'proposal_submitted' }),
+    ]);
+    mockListThreadSummaries.mockResolvedValue([]);
+
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+
+    const labelOf = (id: string): string | undefined =>
+      dto.rows.find((r) => r.id === id)?.stageLabel;
+    expect(labelOf('a')).toBe('Matching');
+    expect(labelOf('b')).toBe('Interest');
+    expect(labelOf('c')).toBe('Proposals');
+  });
+
   it('returns an empty DTO with isEmpty when the company has no requests or engagements', async () => {
     mockListByCompany.mockResolvedValue([]);
     const dto = await loadClientPortfolio(USER, ['client'], NOW);
@@ -302,6 +319,7 @@ describe('loadClientPortfolio', () => {
     expect(dto.rows).toHaveLength(1);
     expect(dto.rows[0]?.kind).toBe('engagement');
     expect(dto.rows[0]?.id).toBe('eng-K');
+    expect(dto.rows[0]?.stageLabel).toBe('Delivery');
     // The superseded request row is gone.
     expect(dto.rows.some((r) => r.kind === 'request' && r.id === 'req-K')).toBe(false);
   });
@@ -409,6 +427,24 @@ describe('loadClientPortfolio', () => {
 
 describe('loadExpertPortfolio', () => {
   const expertUser = { ...USER, expertProfileId: 'expert-1' };
+
+  it('labels rows with the shared participant vocabulary', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([
+      invitationRow({ projectRequestId: 'req-inv', relationshipStatus: 'invited' }),
+      invitationRow({ projectRequestId: 'req-eoi', relationshipStatus: 'eoi_submitted' }),
+    ]);
+    mockListPortfolioEngagements.mockResolvedValue([
+      engagementView({ id: 'eng-live', projectRequestId: 'req-live' }),
+    ]);
+
+    const dto = await loadExpertPortfolio(expertUser, ['expert'], NOW);
+
+    const labelOf = (id: string): string | undefined =>
+      dto.rows.find((r) => r.id === id)?.stageLabel;
+    expect(labelOf('req-inv')).toBe('Invited');
+    expect(labelOf('req-eoi')).toBe('Interest sent');
+    expect(dto.rows.find((r) => r.kind === 'engagement')?.stageLabel).toBe('Delivery');
+  });
 
   it('combines invitations + delivery engagements (no collision → both render)', async () => {
     mockListInvitationsByExpert.mockResolvedValue([invitationRow()]);
@@ -611,6 +647,15 @@ describe('loadAdminPortfolio', () => {
 
     const delivery = dto.kanban.find((c) => c.stage === 'kicked');
     expect(delivery?.label).toBe('In delivery');
+    expect(dto.kanban.map((c) => c.label)).toEqual([
+      'Exploratory call',
+      'Inviting',
+      'Conversations',
+      'Proposal requested',
+      'Proposals',
+      'Kickoff gate',
+      'In delivery',
+    ]);
     expect(delivery?.items.map((i) => i.id)).toEqual(['eng-active', 'eng-pa']);
     expect(delivery?.items.find((i) => i.id === 'eng-active')?.href).toBe(
       '/engagements/eng-active?from=inbox'

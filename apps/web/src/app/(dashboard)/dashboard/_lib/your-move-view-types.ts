@@ -359,6 +359,7 @@ export interface ProjectTrackToken {
 export interface ProjectTrackStage {
   readonly key: DashboardTrackStage;
   readonly label: string;
+  readonly explanation: string;
   readonly tokens: readonly ProjectTrackToken[];
   readonly hasYourMove: boolean;
 }
