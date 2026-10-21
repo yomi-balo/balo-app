@@ -206,17 +206,15 @@ describe('desktop stage and legend explanations', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
-  describe('hover', () => {
+  describe('hover boundary', () => {
     beforeEach(() => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.useFakeTimers();
     });
     afterEach(() => {
       vi.useRealTimers();
     });
 
-    it('opens a mouse hover after 300ms and not before it, and closes on leave', async () => {
-      vi.useRealTimers();
-      vi.useFakeTimers();
+    it('opens a mouse hover after 300ms and not before it, and closes on leave', () => {
       render(<ProjectTrack view={EXPERT_VIEW} />);
       const trigger = screen.getByRole('button', { name: 'Kickoff' });
       fireEvent.pointerEnter(trigger, { pointerType: 'mouse' });
@@ -228,8 +226,24 @@ describe('desktop stage and legend explanations', () => {
         vi.advanceTimersByTime(1);
       });
       expect(screen.getByRole('dialog', { name: 'Kickoff' })).toBeInTheDocument();
+      expect(track).toHaveBeenCalledTimes(1);
+      expect(track).toHaveBeenCalledWith(DASHBOARD_EVENTS.TRACK_TERM_OPENED, {
+        workspace_type: 'expert',
+        target: 'stage',
+        key: 'kickoff',
+        via: 'hover',
+      });
       fireEvent.pointerLeave(trigger, { pointerType: 'mouse' });
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('hover', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
     });
 
     it('does not open when the pointer leaves before the delay', async () => {
@@ -253,13 +267,15 @@ describe('desktop stage and legend explanations', () => {
         vi.advanceTimersByTime(310);
       });
       expect(await screen.findByRole('dialog')).toBeInTheDocument();
+      expect(track).toHaveBeenCalledTimes(1);
       await user.click(trigger);
       await user.unhover(trigger);
       expect(screen.getByRole('dialog', { name: 'Kickoff' })).toBeInTheDocument();
+      expect(track).toHaveBeenCalledTimes(1);
     });
   });
 
-  it('tracks each open once with workspace, target and key only', async () => {
+  it('tracks each open once with workspace, target, key and via only', async () => {
     const user = userEvent.setup();
     render(<ProjectTrack view={EXPERT_VIEW} />);
     await user.click(screen.getByRole('button', { name: 'Interest sent' }));
@@ -269,11 +285,13 @@ describe('desktop stage and legend explanations', () => {
       workspace_type: 'expert',
       target: 'stage',
       key: 'eoi',
+      via: 'click',
     });
     expect(track).toHaveBeenNthCalledWith(2, DASHBOARD_EVENTS.TRACK_TERM_OPENED, {
       workspace_type: 'expert',
       target: 'legend',
       key: 'your_move',
+      via: 'click',
     });
   });
 
@@ -329,6 +347,7 @@ describe('mobile stage and legend explanations', () => {
       workspace_type: 'company',
       target: 'stage',
       key: 'interest',
+      via: 'tap',
     });
   });
 
@@ -359,6 +378,7 @@ describe('mobile stage and legend explanations', () => {
       workspace_type: 'expert',
       target: 'legend',
       key: 'in_progress',
+      via: 'tap',
     });
   });
 

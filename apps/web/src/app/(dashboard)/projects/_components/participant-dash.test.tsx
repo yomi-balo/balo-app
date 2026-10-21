@@ -115,7 +115,7 @@ describe('ParticipantDash', () => {
     const user = userEvent.setup();
     render(<ParticipantDash dto={DTO} />);
 
-    await user.click(screen.getByRole('button', { name: /kicked off/i }));
+    await user.click(screen.getByRole('button', { name: /^delivery/i }));
 
     expect(trackMock).toHaveBeenCalledWith(PROJECTS_INBOX_EVENTS.INBOX_FILTER_APPLIED, {
       lens: 'client',
@@ -149,8 +149,8 @@ describe('ParticipantDash', () => {
     render(<ParticipantDash dto={DTO} />);
 
     // Re-query between clicks: each render replaces the tile DOM node.
-    await user.click(screen.getByRole('button', { name: /kicked off/i })); // → kicked
-    await user.click(screen.getByRole('button', { name: /kicked off/i })); // → back to all
+    await user.click(screen.getByRole('button', { name: /^delivery/i })); // → kicked
+    await user.click(screen.getByRole('button', { name: /^delivery/i })); // → back to all
 
     const lastCall = trackMock.mock.calls.at(-1);
     expect(lastCall?.[1]).toMatchObject({ filter: 'all', result_count: 3 });

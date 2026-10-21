@@ -158,10 +158,12 @@ describe('track term opened', () => {
       workspace_type: 'company',
       target: 'stage',
       key: 'matching',
+      via: 'hover',
     };
     expect(Object.keys(opened).sort((a, b) => a.localeCompare(b))).toEqual([
       'key',
       'target',
+      'via',
       'workspace_type',
     ]);
   });

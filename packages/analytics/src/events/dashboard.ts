@@ -141,5 +141,7 @@ export interface DashboardEventMap {
     target: 'stage' | 'legend';
     /** The stage for a `stage` target, the turn for a `legend` target. */
     key: DashboardTrackStage | DashboardTrackTurn;
+    /** How it opened: mouse hover or click/keyboard on desktop, a tap on mobile. */
+    via: 'hover' | 'click' | 'tap';
   };
 }

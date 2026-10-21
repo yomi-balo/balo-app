@@ -32,7 +32,7 @@ const EXPECTED = {
     [
       'eoi',
       'Interest sent',
-      'You’ve told the client you’re interested. Next, you talk and they may ask for a proposal.',
+      'You’ve told the client you’re interested, or they asked you directly. Next, you talk and they may ask for a proposal.',
     ],
     [
       'proposal',
@@ -59,7 +59,7 @@ const EXPECTED = {
     [
       'interest',
       'Interest',
-      'Experts are interested. Talk with them and ask the ones you like for a proposal.',
+      'Experts are interested, or the expert you asked directly is looking at your request. Talk with them and ask the ones you like for a proposal.',
     ],
     [
       'proposal',

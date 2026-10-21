@@ -88,7 +88,7 @@ export function ParticipantDash({ dto }: Readonly<ParticipantDashProps>): React.
     },
     {
       key: 'kicked',
-      label: 'Kicked off',
+      label: 'Delivery',
       count: dto.tiles.kicked,
       icon: Check,
       tone: 'text-success',

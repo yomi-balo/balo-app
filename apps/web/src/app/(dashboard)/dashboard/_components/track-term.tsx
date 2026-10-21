@@ -13,7 +13,7 @@ interface TrackTermPopoverProps {
   readonly term: string;
   readonly explanation: string;
   readonly align: 'start' | 'end';
-  readonly onOpened: () => void;
+  readonly onOpened: (via: 'hover' | 'click') => void;
 }
 
 /** Desktop trigger: the term itself, with its one sentence in a popover. */
@@ -41,13 +41,15 @@ export function TrackTermPopover({
     (byHover: boolean): void => {
       openedByHover.current = byHover;
       setOpen(true);
-      onOpened();
+      onOpened(byHover ? 'hover' : 'click');
     },
     [onOpened]
   );
 
   const handleClick = useCallback(
     (event: React.MouseEvent): void => {
+      // Stops Radix's own onOpenToggle (composeEventHandlers skips default-prevented events);
+      // otherwise each click would toggle twice.
       event.preventDefault();
       clearHoverTimer();
       if (open && openedByHover.current) {

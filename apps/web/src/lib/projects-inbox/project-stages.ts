@@ -29,7 +29,7 @@ export const PARTICIPANT_STAGES: Record<ParticipantStageLens, readonly Participa
       key: 'eoi',
       label: 'Interest sent',
       explanation:
-        'You’ve told the client you’re interested. Next, you talk and they may ask for a proposal.',
+        'You’ve told the client you’re interested, or they asked you directly. Next, you talk and they may ask for a proposal.',
     },
     {
       key: 'proposal',
@@ -60,7 +60,7 @@ export const PARTICIPANT_STAGES: Record<ParticipantStageLens, readonly Participa
       key: 'interest',
       label: 'Interest',
       explanation:
-        'Experts are interested. Talk with them and ask the ones you like for a proposal.',
+        'Experts are interested, or the expert you asked directly is looking at your request. Talk with them and ask the ones you like for a proposal.',
     },
     {
       key: 'proposal',

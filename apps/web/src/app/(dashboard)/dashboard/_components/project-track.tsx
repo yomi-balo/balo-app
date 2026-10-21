@@ -112,6 +112,7 @@ function StageNode({ stage }: Readonly<{ stage: ProjectTrackStage }>): React.JSX
 }
 
 type TermTarget = 'stage' | 'legend';
+type TermVia = 'hover' | 'click' | 'tap';
 
 /** What the track's term triggers need: which surface they render, and how an open is recorded. */
 interface TermControls {
@@ -123,7 +124,11 @@ interface TermControls {
     target: TermTarget,
     key: DashboardTrackStage | DashboardTrackTurn
   ) => void;
-  readonly opened: (target: TermTarget, key: DashboardTrackStage | DashboardTrackTurn) => void;
+  readonly opened: (
+    target: TermTarget,
+    key: DashboardTrackStage | DashboardTrackTurn,
+    via: TermVia
+  ) => void;
 }
 
 function StageItem({
@@ -163,7 +168,7 @@ function StageItem({
               term={stage.label}
               explanation={stage.explanation}
               align="start"
-              onOpened={() => terms.opened('stage', stage.key)}
+              onOpened={(via) => terms.opened('stage', stage.key, via)}
             />
           )}
           <span className="sr-only">{`, ${count} ${count === 1 ? 'project' : 'projects'}`}</span>
@@ -206,8 +211,13 @@ export function ProjectTrack({ view }: Readonly<{ view: ProjectTrackView }>): Re
   const idBase = useId();
   const panelId = useCallback((termId: string): string => `${idBase}-${termId}`, [idBase]);
   const opened = useCallback(
-    (target: TermTarget, key: DashboardTrackStage | DashboardTrackTurn): void => {
-      track(DASHBOARD_EVENTS.TRACK_TERM_OPENED, { workspace_type: workspaceType, target, key });
+    (target: TermTarget, key: DashboardTrackStage | DashboardTrackTurn, via: TermVia): void => {
+      track(DASHBOARD_EVENTS.TRACK_TERM_OPENED, {
+        workspace_type: workspaceType,
+        target,
+        key,
+        via,
+      });
     },
     [workspaceType]
   );
@@ -218,7 +228,7 @@ export function ProjectTrack({ view }: Readonly<{ view: ProjectTrackView }>): Re
         return;
       }
       setOpenTerm(termId);
-      opened(target, key);
+      opened(target, key, 'tap');
     },
     [openTerm, opened]
   );
@@ -268,7 +278,7 @@ export function ProjectTrack({ view }: Readonly<{ view: ProjectTrackView }>): Re
                   term={legendLabel[turn]}
                   explanation={TURN_EXPLANATIONS[lens][turn]}
                   align="end"
-                  onOpened={() => opened('legend', turn)}
+                  onOpened={(via) => opened('legend', turn, via)}
                 />
               )}
             </li>
