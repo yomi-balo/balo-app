@@ -13,7 +13,7 @@ import {
   acquireRequestLockViaRelationshipTx,
 } from './_shared/request-lock';
 import { recordProposalAccepted } from './_shared/proposal-audit';
-import { lockDraftProposalTx, ProposalNotDraftError } from './_shared/proposal-draft-lock';
+import { lockDraftProposalTx } from './_shared/proposal-draft-lock';
 import { advanceRelationshipStatus } from './request-expert-relationships';
 import {
   insertMilestonesTx,
@@ -110,7 +110,7 @@ export class InvalidProposalTransitionError extends Error {
  * `_shared/proposal-draft-lock.ts` (the child repositories throw it too) and
  * re-exported here so existing imports keep working.
  */
-export { ProposalNotDraftError };
+export { ProposalNotDraftError } from './_shared/proposal-draft-lock';
 
 /**
  * BAL-540 fix round — thrown by `createDraft` when the track it would attach to is no longer

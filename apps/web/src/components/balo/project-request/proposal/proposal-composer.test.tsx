@@ -1232,7 +1232,7 @@ describe('ProposalComposer — save status', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByText('Saved as draft')).toBeInTheDocument();
-    expect(saveProposalDraftAction.mock.calls.length).toBe(callsBefore + 1);
+    expect(saveProposalDraftAction.mock.calls).toHaveLength(callsBefore + 1);
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
 
@@ -1244,17 +1244,17 @@ describe('ProposalComposer — save status', () => {
     await user.type(screen.getByLabelText('Proposal overview'), ' x');
 
     const saving = await screen.findByText('Saving…', {}, { timeout: 2000 });
-    expect(saving.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+    expect(saving.closest('output, [role="status"], [role="alert"], [aria-live]')).toBeNull();
 
     await act(async () => inFlight.resolve({ success: true, proposalId: 'p1' }));
     const saved = await screen.findByText('Saved as draft');
-    expect(saved).toHaveAttribute('role', 'status');
+    expect(screen.getAllByRole('status')).toContain(saved);
   });
 
   it('does not announce the revise note', () => {
     renderReviseComposer(readyDraft());
     const note = screen.getByText('Not saved until you resend');
-    expect(note.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+    expect(note.closest('output, [role="status"], [role="alert"], [aria-live]')).toBeNull();
   });
 });
 

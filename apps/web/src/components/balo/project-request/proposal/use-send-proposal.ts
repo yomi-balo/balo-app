@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { submitProposalAction } from '@/app/(dashboard)/projects/[requestId]/_actions/submit-proposal';
@@ -183,7 +184,8 @@ export function useSendProposal({
         } else {
           await runResubmit(resubmit);
         }
-      } catch {
+      } catch (error: unknown) {
+        Sentry.captureException(error);
         toast.error(
           isResubmit
             ? 'Could not resubmit your proposal. Please try again.'
@@ -194,7 +196,9 @@ export function useSendProposal({
         setPending(false);
       }
     };
-    run();
+    run().catch((error: unknown) => {
+      Sentry.captureException(error);
+    });
   }, [resubmit, runResubmit, runSubmit, isResubmit]);
 
   return { send, pending };

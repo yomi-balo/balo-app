@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageSquare, Paperclip } from 'lucide-react';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/textarea';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
@@ -272,7 +273,9 @@ export function ProposalComposer({
     }
     if (debounceRef.current !== null) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      runSave();
+      runSave().catch((error: unknown) => {
+        Sentry.captureException(error);
+      });
     }, AUTOSAVE_DEBOUNCE_MS);
     return () => {
       if (debounceRef.current !== null) clearTimeout(debounceRef.current);
@@ -323,7 +326,9 @@ export function ProposalComposer({
   }, [runSave, requestId, relationshipId]);
 
   const handleRetrySave = useCallback((): void => {
-    flushBeforeSubmit();
+    flushBeforeSubmit().catch((error: unknown) => {
+      Sentry.captureException(error);
+    });
   }, [flushBeforeSubmit]);
 
   // ── Slice setters threaded to the sections (no per-section form state) ──
@@ -724,9 +729,9 @@ export function ProposalComposer({
       {saveStatus === 'saving' && (
         <span className="text-muted-foreground">{SAVE_LABEL.saving}</span>
       )}
-      <span role="status" className="text-muted-foreground">
+      <output className="text-muted-foreground">
         {saveStatus === 'saved' ? SAVE_LABEL.saved : null}
-      </span>
+      </output>
       <span role="alert" className="text-destructive">
         {saveStatus === 'error' ? SAVE_LABEL.error : null}
       </span>
@@ -911,15 +916,12 @@ export function ProposalComposer({
       )}
 
       {dragActive && (
-        <div
-          role="status"
-          className="bg-background/85 pointer-events-none fixed inset-0 z-[60] grid place-items-center"
-        >
+        <output className="bg-background/85 pointer-events-none fixed inset-0 z-[60] grid place-items-center">
           <div className="border-primary bg-card text-primary flex items-center gap-2.5 rounded-2xl border-2 border-dashed px-6 py-4 font-medium">
             <Paperclip className="size-[18px]" aria-hidden="true" />
             Drop to attach to your proposal
           </div>
-        </div>
+        </output>
       )}
     </div>
   );

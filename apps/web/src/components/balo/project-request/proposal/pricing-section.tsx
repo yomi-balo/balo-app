@@ -196,7 +196,8 @@ function FixedPricing({
       />
 
       <span className="mb-2 block text-sm font-medium">Payment schedule</span>
-      <div role="group" aria-label="Payment presets" className="mb-3 flex flex-wrap gap-1.5">
+      <fieldset className="m-0 mb-3 flex min-w-0 flex-wrap gap-1.5 border-0 p-0">
+        <legend className="sr-only">Payment presets</legend>
         {INSTALLMENT_PRESETS.map((preset) => {
           const on = activePreset === preset.key;
           return (
@@ -216,7 +217,7 @@ function FixedPricing({
             </button>
           );
         })}
-      </div>
+      </fieldset>
 
       {installments.length > 0 && (
         <ul className="border-border overflow-hidden rounded-[14px] border">
@@ -281,8 +282,7 @@ function FixedPricing({
           Add payment
         </button>
         {installments.length > 0 && (
-          <span
-            role="status"
+          <output
             className={cn(
               'inline-flex items-center gap-1.5 text-[13.5px]',
               sum === 100 ? 'text-success-strong' : 'text-warning-strong'
@@ -290,7 +290,7 @@ function FixedPricing({
           >
             {sum === 100 && <Check className="size-3.5" aria-hidden="true" />}
             {sumLine(sum)}
-          </span>
+          </output>
         )}
       </div>
     </>
@@ -339,10 +339,9 @@ function TimeAndMaterials({
         <span id="proposal-cadence-label" className="mb-1.5 block text-sm font-medium">
           Invoices
         </span>
-        <div
-          role="group"
+        <fieldset
           aria-labelledby="proposal-cadence-label"
-          className="bg-muted inline-flex gap-0.5 rounded-[10px] p-[3px]"
+          className="bg-muted m-0 inline-flex min-w-0 gap-0.5 rounded-[10px] border-0 p-[3px]"
         >
           {CADENCE_OPTIONS.map((option) => {
             const on = state.cadence === option.value;
@@ -363,7 +362,7 @@ function TimeAndMaterials({
               </button>
             );
           })}
-        </div>
+        </fieldset>
       </div>
 
       {rateCents === null || totalMinutes === 0 ? (

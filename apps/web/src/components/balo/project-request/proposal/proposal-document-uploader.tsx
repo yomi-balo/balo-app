@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { FileText, Loader2, Paperclip, Trash2 } from 'lucide-react';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { putWithProgress, formatBytes } from '@/components/balo/document-uploader/upload-file';
 import {
@@ -231,7 +232,10 @@ export function ProposalDocumentUploaderView({
       // Reset the input so re-picking the same file fires `change` again.
       event.target.value = '';
       if (files.length === 0) return;
-      uploadFiles(files);
+      uploadFiles(files).catch((error: unknown) => {
+        Sentry.captureException(error);
+        toast.error("Couldn't upload that file. Please try again.");
+      });
     },
     [uploadFiles]
   );
@@ -272,7 +276,9 @@ export function ProposalDocumentUploaderView({
                 <button
                   type="button"
                   onClick={() => {
-                    remove(doc.id);
+                    remove(doc.id).catch((error: unknown) => {
+                      Sentry.captureException(error);
+                    });
                   }}
                   disabled={isRemoving || disabled}
                   aria-label={`Remove ${doc.fileName}`}

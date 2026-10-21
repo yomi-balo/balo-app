@@ -273,19 +273,19 @@ function AllocationLine({
 
   if (allocation.kind === 'no_price') {
     return (
-      <p role="status" className={cn(base, 'text-muted-foreground')}>
+      <output className={cn(base, 'text-muted-foreground')}>
         Milestones add up to{' '}
         <strong className="font-semibold">{fmt(allocation.allocatedCents)}</strong>. Set your
         project price below.
-      </p>
+      </output>
     );
   }
   if (allocation.kind === 'balanced') {
     return (
-      <p role="status" className={cn(base, 'text-success-strong')}>
+      <output className={cn(base, 'text-success-strong')}>
         <Check className="size-3.5" aria-hidden="true" />
         Adds up to your {fmt(allocation.priceCents)} price
-      </p>
+      </output>
     );
   }
   const { diffCents, priceCents, allocatedCents, allPriced } = allocation;
@@ -294,7 +294,7 @@ function AllocationLine({
       ? `${fmt(diffCents)} of your ${fmt(priceCents)} price left to assign`
       : `${fmt(-diffCents)} over your ${fmt(priceCents)} price`;
   return (
-    <div role="status" className={cn(base, 'text-warning-strong')}>
+    <output className={cn(base, 'text-warning-strong')}>
       <span>{message}</span>
       {allPriced && (
         <button
@@ -305,7 +305,7 @@ function AllocationLine({
           Set price to {fmt(allocatedCents)}
         </button>
       )}
-    </div>
+    </output>
   );
 }
 
@@ -406,12 +406,7 @@ export function MilestonesSection({
           return;
         }
         const current = milestones[index];
-        if (
-          event.key === 'Backspace' &&
-          current !== undefined &&
-          current.title === '' &&
-          milestones.length > 1
-        ) {
+        if (event.key === 'Backspace' && current?.title === '' && milestones.length > 1) {
           event.preventDefault();
           const neighbour = milestones[index === 0 ? 1 : index - 1];
           remove(index);

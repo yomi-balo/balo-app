@@ -150,10 +150,7 @@ async function loadSubmittableDraft(
 ): Promise<Proposal | undefined> {
   const draft = await proposalsRepository.findById(proposalId);
   const submittable =
-    draft !== undefined &&
-    draft.status === 'draft' &&
-    draft.relationshipId === relationshipId &&
-    draft.isCurrent;
+    draft?.status === 'draft' && draft.relationshipId === relationshipId && draft.isCurrent;
   return submittable ? draft : undefined;
 }
 

@@ -125,8 +125,7 @@ async function loadCurrentChangesRequestedProposal(
 ): Promise<Proposal | undefined> {
   const proposal = await proposalsRepository.findCurrentByRelationship(relationshipId);
   if (
-    proposal === undefined ||
-    proposal.id !== fromProposalId ||
+    proposal?.id !== fromProposalId ||
     proposal.status !== 'changes_requested' ||
     !proposal.isCurrent
   ) {
@@ -209,28 +208,30 @@ function coherenceFailure(args: {
  */
 async function carryOverDocuments(fromProposalId: string, toProposalId: string): Promise<void> {
   const v1Docs = await proposalDocumentsRepository.listByProposal(fromProposalId);
-  for (const doc of v1Docs) {
-    try {
-      const destKey = generateProposalDocumentKey(toProposalId, doc.uploadedByUserId);
-      await copyProposalDocumentObject(doc.r2Key, destKey);
-      await proposalDocumentsRepository.addDocument({
-        proposalId: toProposalId,
-        r2Key: destKey,
-        fileName: doc.fileName,
-        contentType: doc.contentType,
-        sizeBytes: doc.sizeBytes,
-        kind: doc.kind,
-        uploadedByUserId: doc.uploadedByUserId,
-      });
-    } catch (error) {
-      log.warn('Proposal document carryover failed (skipped)', {
-        fromProposalId,
-        toProposalId,
-        sourceDocumentId: doc.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  await Promise.all(
+    v1Docs.map(async (doc) => {
+      try {
+        const destKey = generateProposalDocumentKey(toProposalId, doc.uploadedByUserId);
+        await copyProposalDocumentObject(doc.r2Key, destKey);
+        await proposalDocumentsRepository.addDocument({
+          proposalId: toProposalId,
+          r2Key: destKey,
+          fileName: doc.fileName,
+          contentType: doc.contentType,
+          sizeBytes: doc.sizeBytes,
+          kind: doc.kind,
+          uploadedByUserId: doc.uploadedByUserId,
+        });
+      } catch (error) {
+        log.warn('Proposal document carryover failed (skipped)', {
+          fromProposalId,
+          toProposalId,
+          sourceDocumentId: doc.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })
+  );
 }
 
 type GrantedAccess = Extract<Awaited<ReturnType<typeof resolveConversationAccess>>, { ok: true }>;

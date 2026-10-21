@@ -450,17 +450,12 @@ async function renderExpertSurface(
   // revise and resubmit as v{n+1}.
   if (SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
     const current = await proposalsRepository.findCurrentByRelationship(relationshipId);
-    if (current !== undefined && current.status === 'changes_requested') {
+    if (current?.status === 'changes_requested') {
       return renderReviseComposer(requestId, relationshipId, request, relationship, current);
     }
     // The in-place sent screen: the send redirects to `?sent={version}`, which only
     // renders when it names the latest version and that version is still awaiting the client.
-    if (
-      current !== undefined &&
-      current.status === 'submitted' &&
-      sent !== null &&
-      sent === current.version
-    ) {
+    if (current?.status === 'submitted' && sent !== null && sent === current.version) {
       return (
         <ComposerShell>
           <ProposalSent
