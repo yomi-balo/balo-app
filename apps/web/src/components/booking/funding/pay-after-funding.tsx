@@ -70,7 +70,7 @@ const FAILURE_REASON: Readonly<Record<PayAfterFailure, BookingFundingFailureReas
 function failureCopy(reason: PayAfterFailure, modeSwitched: boolean): string {
   if (reason === 'arm_failed') return PAY_AFTER_COPY.errors.setup_failed_saved;
   const line = PAY_AFTER_COPY.errors[reason];
-  return modeSwitched ? `${line} ${PAY_AFTER_COPY.switchedNote}` : line;
+  return modeSwitched && reason !== 'mode_failed' ? `${line} ${PAY_AFTER_COPY.switchedNote}` : line;
 }
 
 function unconfirmedText(modeSwitched: boolean): string {
@@ -130,6 +130,7 @@ function PayAfterBody({
   const usedSavedCardRef = useRef(false);
   const modeSwitchedRef = useRef(false);
   const cardReadyRef = useRef(false);
+  const [cardReady, setCardReady] = useState(false);
   const ctaSlotRef = useRef<HTMLDivElement>(null);
 
   const usingSavedCard = wallet.savedCard !== null && source === 'saved_card';
@@ -241,7 +242,10 @@ function PayAfterBody({
   }, [wallet.lowBalanceFigures, bookNow, fail]);
 
   const handleActive = useCallback(() => {
-    cardReadyRef.current = !usedSavedCardRef.current;
+    if (!usedSavedCardRef.current) {
+      cardReadyRef.current = true;
+      setCardReady(true);
+    }
     switchThenBook().catch(() => undefined);
   }, [switchThenBook]);
   const handlePress = useCallback(async () => {
@@ -281,7 +285,7 @@ function PayAfterBody({
     handlePress().catch(() => undefined);
   }, [handlePress]);
 
-  const idleLabel = usingSavedCard ? PAY_AFTER_COPY.ctaSaved : PAY_AFTER_COPY.ctaNew;
+  const idleLabel = usingSavedCard || cardReady ? PAY_AFTER_COPY.ctaSaved : PAY_AFTER_COPY.ctaNew;
   let cta: React.ReactNode;
   if (stage === 'unconfirmed') {
     cta = (
@@ -309,7 +313,9 @@ function PayAfterBody({
     );
   } else {
     cta = (
-      <BusyButton label={stageText(stage, usedSavedCardRef.current, modeSwitchedRef.current)} />
+      <BusyButton
+        label={stageText(stage, usedSavedCardRef.current || cardReady, modeSwitchedRef.current)}
+      />
     );
   }
 
@@ -319,13 +325,20 @@ function PayAfterBody({
         <div className="flex flex-col gap-[18px] p-4 sm:p-[18px]">
           <fieldset disabled={busy} className="m-0 min-w-0 space-y-[18px] border-0 p-0">
             {methodPicker}
-            <PaymentMethodSection
-              savedCard={wallet.savedCard}
-              source={source}
-              onSourceChange={handleSourceChange}
-            />
+            {cardReady ? (
+              <p className="text-sm leading-relaxed">{PAY_AFTER_COPY.cardSaved}</p>
+            ) : (
+              <PaymentMethodSection
+                savedCard={wallet.savedCard}
+                source={source}
+                onSourceChange={handleSourceChange}
+              />
+            )}
             <p className="text-muted-foreground text-xs leading-relaxed">
-              {payAfterConsentLine(companyName, usingSavedCard ? wallet.savedCard : null)}
+              {payAfterConsentLine(
+                companyName,
+                usingSavedCard && !cardReady ? wallet.savedCard : null
+              )}
             </p>
             {error !== null && (
               <p role="alert" className="text-destructive-strong text-sm font-medium">
@@ -342,7 +355,7 @@ function PayAfterBody({
         </p>
       )}
       <div role="status" aria-live="polite" className="sr-only">
-        {stageText(stage, usedSavedCardRef.current, modeSwitchedRef.current)}
+        {stageText(stage, usedSavedCardRef.current || cardReady, modeSwitchedRef.current)}
       </div>
 
       <FundingFooter onBack={onBack} backDisabled={inFlight} slotRef={ctaSlotRef}>

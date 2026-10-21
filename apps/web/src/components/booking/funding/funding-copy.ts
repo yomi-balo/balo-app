@@ -174,6 +174,7 @@ export const PAY_AFTER_COPY = {
   },
   ctaSaved: 'Book and pay after the call',
   ctaNew: 'Add card & book',
+  cardSaved: 'Your new card is saved. Press below to finish setting up and book.',
   stage: {
     setting_up_saved: 'Setting up…',
     setting_up_new: 'Saving your card…',

@@ -215,7 +215,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>You're charged in AUD — your bank sets the final rate. If your company already has a card saved,\nit's shown under <strong>Payment method</strong>, and you can use <strong>Change</strong> to pay with a different one. A new\ncard is entered securely and Balo never sees your card number.</p>\n<p>Your credit stays valid for 12 months from the last time your balance was used or topped up, so\nany activity — a consultation, a top-up or a promo code — keeps the whole balance fresh.</p>",
+            "html": "<p>You're charged in AUD — your bank sets the final rate. If your company already has a card saved,\nit's shown under <strong>Payment method</strong>, and you can use <strong>Change</strong> to pay with a different one. If a\nconsultation is running on the saved card, you can switch to a different card once that call ends.\nA new card is entered securely and Balo never sees your card number.</p>\n<p>Your credit stays valid for 12 months from the last time your balance was used or topped up, so\nany activity — a consultation, a top-up or a promo code — keeps the whole balance fresh.</p>",
             "id": "s3-b0"
           }
         ],

@@ -261,7 +261,19 @@ describe('PayAfterFunding', () => {
       expect(props.onFunded).not.toHaveBeenCalled();
       expect(payloads(BOOKING_EVENTS.FUNDING_FAILED)).toEqual([{ reason: 'setup_failed' }]);
 
-      await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaNew }));
+      expect(screen.queryByTestId('payment-element')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Change' })).not.toBeInTheDocument();
+      expect(screen.getByText(PAY_AFTER_COPY.cardSaved)).toBeInTheDocument();
+      expect(screen.getByText(payAfterConsentLine('Northwind', null))).toBeInTheDocument();
+      let release: (value: { ok: true }) => void = () => undefined;
+      vi.mocked(saveLowBalanceConfigAction).mockImplementationOnce(
+        () => new Promise((resolve) => (release = resolve))
+      );
+      await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaSaved }));
+      expect(
+        await screen.findByRole('button', { name: PAY_AFTER_COPY.stage.setting_up_saved })
+      ).toBeInTheDocument();
+      release({ ok: true });
       await waitFor(() => expect(props.onFunded).toHaveBeenCalled());
       expect(startCardCaptureAction).toHaveBeenCalledTimes(1);
       expect(mockStripeApi.confirmSetup).toHaveBeenCalledTimes(1);
@@ -408,6 +420,29 @@ describe('PayAfterFunding', () => {
       const alert = await screen.findByRole('alert');
       expect(alert).toHaveTextContent(PAY_AFTER_COPY.errors.error);
       expect(alert).toHaveTextContent(PAY_AFTER_COPY.switchedNote);
+    });
+
+    it('gives the plain mode_failed line when a new card follows a saved-card failure', async () => {
+      vi.mocked(armSavedCardMandateAction).mockResolvedValue({
+        ok: true,
+        outcome: 'requires_action',
+        clientSecret: 'seti_secret',
+      });
+      vi.mocked(resolveSetupIntentNextAction).mockResolvedValue(false);
+      renderBlock(view(SAVED_CARD, { firstTime: false }));
+      await choosePayAfter();
+      await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaSaved }));
+      await screen.findByRole('alert');
+      await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+      vi.mocked(saveLowBalanceConfigAction).mockResolvedValue({
+        ok: false,
+        error: 'no_saved_card',
+      });
+      await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaNew }));
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent(PAY_AFTER_COPY.errors.mode_failed)
+      );
+      expect(screen.getByRole('alert')).not.toHaveTextContent(PAY_AFTER_COPY.switchedNote);
     });
 
     it('adds the note to the unconfirmed panel after the switch', async () => {
