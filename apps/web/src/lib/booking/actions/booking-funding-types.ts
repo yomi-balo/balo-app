@@ -19,10 +19,34 @@ export interface BookingFundingRequest {
   caseChoice: { kind: 'new'; companyId?: string } | { kind: 'existing'; engagementId: string };
 }
 
-/** What the top-up controls need: the card on file. The booking top-up never touches the low-balance setting. */
+/**
+ * What the funding controls need: the card on file, and the stored top-up figures. The TOP-UP
+ * method never touches the low-balance setting; Pay after switches it to `keep_going` and sends
+ * `lowBalanceFigures` back unchanged.
+ */
 export interface BookingTopUpWallet {
   savedCard: SavedCard | null;
+  lowBalanceFigures: {
+    readonly topupReloadMinor: number;
+    readonly topupThresholdMinor: number;
+  };
 }
+
+/**
+ * How the inline funding block ended a successful attempt. `card` is `null` for a new card: the
+ * client never learns the brand or last4.
+ */
+export type FundedVia =
+  | {
+      readonly method: 'topup';
+      readonly creditedMinor: number;
+      readonly companyName: string | null;
+    }
+  | {
+      readonly method: 'pay_after';
+      readonly card: SavedCard | null;
+      readonly companyName: string | null;
+    };
 
 /**
  * The read-only pre-flight's answer.

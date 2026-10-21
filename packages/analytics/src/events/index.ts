@@ -325,6 +325,8 @@ export {
   type BookingServerEventMap,
   type BookingFundingBlockReason,
   type BookingFundingArmProperty,
+  type BookingFundingMethodProperty,
+  type BookingFundingFailureReason,
 } from './booking';
 // BAL-494 / ADR-1053 — `WORKSPACE_SERVER_EVENTS` is SERVER-ONLY: the switch is decided and
 // dispatched entirely in `switchWorkspace()` (apps/web); no browser code ever emits it.

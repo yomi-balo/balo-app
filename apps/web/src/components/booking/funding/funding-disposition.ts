@@ -26,3 +26,11 @@ export function resolveFundingDisposition(view: BookingFundingView | null): Fund
     view.wallet === null;
   return cannotTopUpHere ? 'panel' : 'inline';
 }
+
+/**
+ * Whether "Pay after the call" is offered beside the top-up: a billing manager, on the setup and
+ * reserved arms. An open hold is cleared by a payment, so it never offers the alternative.
+ */
+export function offersPayAfter(view: RefusedFundingView): boolean {
+  return view.canManageBilling && view.arm !== 'hold';
+}

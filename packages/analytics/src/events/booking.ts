@@ -69,6 +69,8 @@ export const BOOKING_EVENTS = {
    * credited and the booking that followed did not land (`reason: 'booking_failed'`).
    */
   FUNDING_FAILED: 'booking_funding_failed',
+  /** The viewer switched the inline funding method (the default selection fires nothing). */
+  FUNDING_METHOD_SELECTED: 'booking_funding_method_selected',
   /** A member without billing rights saved the draft and left it for a billing admin. */
   SAVED_FOR_LATER: 'booking_saved_for_later',
 } as const;
@@ -76,13 +78,19 @@ export const BOOKING_EVENTS = {
 /** Which funding situation the inline block is resolving. */
 export type BookingFundingArmProperty = 'setup' | 'reserved' | 'hold';
 
+/** Which way the inline block funds the booking: a top-up now, or a card charged after the call. */
+export type BookingFundingMethodProperty = 'topup' | 'pay_after';
+
 /**
- * Why an inline top-up did not end in a booked consultation.
+ * Why an inline funding attempt did not end in a booked consultation.
  *
  *  · `declined`       — the card was refused.
  *  · `auth_failed`    — the card challenge (3DS) did not complete.
  *  · `credit_timeout` — the charge went through but the credit had not landed when polling stopped.
  *  · `booking_failed` — the credit landed, but the booking that followed was refused or failed.
+ *  · `setup_failed`   — Pay after: the card could not be set up for charging after the call.
+ *  · `mandate_timeout` — Pay after: the card was set up but the mandate had not turned active when polling stopped.
+ *  · `settlement_outstanding` — Pay after: a consultation is live on the card on file, so a new card was refused.
  *  · `error`          — anything else, including outcomes that are ambiguous about the charge.
  */
 export type BookingFundingFailureReason =
@@ -90,6 +98,9 @@ export type BookingFundingFailureReason =
   | 'auth_failed'
   | 'credit_timeout'
   | 'booking_failed'
+  | 'setup_failed'
+  | 'mandate_timeout'
+  | 'settlement_outstanding'
   | 'error';
 
 /**
@@ -226,8 +237,11 @@ export interface BookingEventMap {
     can_manage_billing: boolean;
   };
   [BOOKING_EVENTS.FUNDED]: {
-    method: 'topup';
+    method: BookingFundingMethodProperty;
     saved_card: boolean;
+  };
+  [BOOKING_EVENTS.FUNDING_METHOD_SELECTED]: {
+    method: BookingFundingMethodProperty;
   };
   [BOOKING_EVENTS.FUNDING_FAILED]: {
     reason: BookingFundingFailureReason;

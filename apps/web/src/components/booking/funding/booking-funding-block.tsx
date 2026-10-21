@@ -1,11 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Sentry from '@sentry/nextjs';
-import { ChevronLeft, Loader2, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import type { BookingFundingMethodProperty } from '@balo/analytics/events';
 import { track, BOOKING_EVENTS, CREDIT_EVENTS } from '@/lib/analytics';
 import type { StartPurchaseInput } from '@/lib/credit/actions';
 import type { PaymentMethodSource } from '@/lib/credit/api-client';
@@ -16,25 +15,28 @@ import { PromoField, type AppliedPromo } from '@/components/billing/top-up/Promo
 import { TopUpElements, isStripeConfigured } from '@/components/billing/top-up/TopUpElements';
 import { usePurchaseRequestId } from '@/components/billing/top-up/use-purchase-request-id';
 import type { PurchaseCompletion } from '@/components/billing/top-up/types';
-import type { BookingTopUpWallet } from '@/lib/booking/actions/booking-funding-types';
-import { caseSavedCopy, companyLabels, type CaseSavedNote } from '../booking-error-panels';
+import type { BookingTopUpWallet, FundedVia } from '@/lib/booking/actions/booking-funding-types';
+import { companyLabels, type CaseSavedNote } from '../booking-error-panels';
 import { CreditAwaiter } from './credit-awaiter';
 import { buildAmountChips, parseOtherAmount, type OtherAmountResult } from './funding-amount';
 import { FundingAmountPicker } from './funding-amount-picker';
 import {
+  BusyButton,
+  CTA_GRADIENT,
+  FundingFooter,
+  FundingSection,
+  useMountedRef,
+} from './funding-frame';
+import { FundingMethodPicker } from './funding-method-picker';
+import {
   BOOKING_PAY_ERROR_COPY,
   FUNDING_AUD_LINE,
   FUNDING_STAGE_COPY,
+  PAY_AFTER_COPY,
   creditPendingCopy,
-  fundingBlockCopy,
 } from './funding-copy';
-import type { RefusedFundingView } from './funding-disposition';
-
-/** What a successful top-up leaves in the balance, for the line shown once the booking lands. */
-export interface FundedTopUp {
-  readonly creditedMinor: number;
-  readonly companyName: string | null;
-}
+import { offersPayAfter, type RefusedFundingView } from './funding-disposition';
+import { PayAfterFunding } from './pay-after-funding';
 
 export interface BookingFundingBlockProps {
   readonly view: RefusedFundingView;
@@ -45,10 +47,11 @@ export interface BookingFundingBlockProps {
   /** The dialog validates the form and writes the draft. `false` abandons the press with no charge. */
   readonly onBeforePay: () => boolean;
   /**
-   * Books the consultation with the SAME nonce. Called only after the wallet shows the credit.
-   * Resolves `true` once the consultation is booked, `false` when it is not.
+   * Books the consultation with the SAME nonce. Called only after the wallet shows the credit
+   * (top-up) or an active mandate (pay after). Resolves `true` once the consultation is booked,
+   * `false` when it is not.
    */
-  readonly onFunded: (topUp: FundedTopUp) => Promise<boolean>;
+  readonly onFunded: (funded: FundedVia) => Promise<boolean>;
   /** The member arm: keep the draft on this device and tell the billing admins. */
   readonly onSaveForLater: () => Promise<void>;
   readonly onBack: () => void;
@@ -94,114 +97,6 @@ function stageStatusText(stage: Stage, paying: boolean, companyName: string | nu
   if (stage === 'pay') return paying ? FUNDING_STAGE_COPY.processing : '';
   if (stage === 'credit_unconfirmed') return creditPendingCopy(companyName);
   return FUNDING_STAGE_COPY[stage];
-}
-
-const CTA_GRADIENT = 'from-primary bg-gradient-to-br to-violet-600 text-white';
-
-/** Tracks whether the component is still mounted, for state updates after an awaited booking. */
-function useMountedRef(): React.RefObject<boolean> {
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-  return mountedRef;
-}
-
-interface FundingSectionProps {
-  readonly view: RefusedFundingView;
-  readonly caseSaved: CaseSavedNote | null;
-  readonly draftKept: boolean;
-  readonly children?: React.ReactNode;
-}
-
-/** The framed block: a header band (icon, heading, body) and, for a manager, the controls below. */
-function FundingSection({ view, caseSaved, draftKept, children }: Readonly<FundingSectionProps>) {
-  const headingId = useId();
-  const reduceMotion = useReducedMotion();
-  const copy = fundingBlockCopy(view, draftKept);
-  return (
-    <motion.section
-      aria-labelledby={headingId}
-      initial={reduceMotion ? false : { opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="border-primary/20 bg-card overflow-hidden rounded-[14px] border"
-    >
-      <div
-        className={cn(
-          'bg-primary/5 flex items-start gap-3 px-[18px] py-4',
-          children !== undefined && 'border-border border-b'
-        )}
-      >
-        <span className="bg-primary/10 flex size-9 shrink-0 items-center justify-center rounded-[10px]">
-          <Wallet className="text-primary size-[18px]" aria-hidden="true" />
-        </span>
-        <div className="min-w-0">
-          <h3 id={headingId} className="text-foreground text-[15px] leading-snug font-semibold">
-            {copy.heading}
-          </h3>
-          <p className="text-muted-foreground mt-1 text-[13.5px] leading-relaxed">{copy.body}</p>
-          {caseSaved !== null && (
-            <p className="text-muted-foreground mt-1.5 text-[13.5px] leading-relaxed">
-              {caseSavedCopy(caseSaved)}
-            </p>
-          )}
-        </div>
-      </div>
-      {children}
-    </motion.section>
-  );
-}
-
-interface FundingFooterProps {
-  readonly onBack: () => void;
-  readonly backDisabled: boolean;
-  /** The primary-action slot, focusable so focus survives the action being swapped. */
-  readonly slotRef?: React.Ref<HTMLDivElement>;
-  readonly children: React.ReactNode;
-}
-
-/** `[Back] [primary action]`, bottom-aligned so an error above the action does not skew Back. */
-function FundingFooter({ onBack, backDisabled, slotRef, children }: Readonly<FundingFooterProps>) {
-  return (
-    <div className="flex items-end gap-2">
-      <Button
-        type="button"
-        variant="outline"
-        className="min-h-11"
-        onClick={onBack}
-        disabled={backDisabled}
-      >
-        <ChevronLeft className="size-4" aria-hidden="true" />
-        Back
-      </Button>
-      <div
-        ref={slotRef}
-        tabIndex={slotRef === undefined ? undefined : -1}
-        className="min-w-0 flex-1 focus:outline-none"
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function BusyButton({ label }: Readonly<{ label: string }>) {
-  return (
-    <Button
-      type="button"
-      size="lg"
-      disabled
-      aria-busy="true"
-      className={cn('min-h-11 w-full', CTA_GRADIENT)}
-    >
-      <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-      {label}
-    </Button>
-  );
 }
 
 type MemberFundingProps = Pick<
@@ -264,7 +159,12 @@ type ManagerFundingProps = Pick<
   | 'onBack'
   | 'onBusyChange'
   | 'onInFlightChange'
-> & { readonly wallet: BookingTopUpWallet; readonly suggestedMinor: number };
+> & {
+  readonly wallet: BookingTopUpWallet;
+  readonly suggestedMinor: number;
+  /** The method picker, when this block offers more than one method. */
+  readonly methodPicker?: React.ReactNode;
+};
 
 /**
  * A billing manager pays here: pick an amount, pay, wait for the wallet to show the credit, then
@@ -281,6 +181,7 @@ function ManagerFunding({
   onBack,
   onBusyChange,
   onInFlightChange,
+  methodPicker,
 }: Readonly<ManagerFundingProps>) {
   const companyName = view.company.name;
   const stripeConfigured = isStripeConfigured();
@@ -381,6 +282,7 @@ function ManagerFunding({
       let booked = false;
       try {
         booked = await onFunded({
+          method: 'topup',
           creditedMinor: topUp.amountMinor + (promoGranted ? topUp.promoMinor : 0),
           companyName,
         });
@@ -482,6 +384,7 @@ function ManagerFunding({
           <div className="flex flex-col gap-[18px] p-4 sm:p-[18px]">
             {stripeConfigured ? (
               <fieldset disabled={busy} className="m-0 min-w-0 space-y-[18px] border-0 p-0">
+                {methodPicker}
                 <FundingAmountPicker
                   chips={buildAmountChips(suggested)}
                   amountMinor={amountMinor}
@@ -544,12 +447,70 @@ function ManagerFunding({
   );
 }
 
+type ManagerFundingMethodsProps = Omit<ManagerFundingProps, 'methodPicker'>;
+
+/**
+ * A billing manager's choice of method. The default is "Top up now"; the picker appears only where
+ * pay after is offered (setup and reserved arms) and card payments are configured. Switching
+ * remounts the other method's controls afresh.
+ */
+function ManagerFundingMethods(props: Readonly<ManagerFundingMethodsProps>) {
+  const { view, wallet, suggestedMinor, onFunded } = props;
+  const [method, setMethod] = useState<BookingFundingMethodProperty>('topup');
+  const offered = offersPayAfter(view) && isStripeConfigured();
+
+  // Switching swaps the whole controls, which remounts the picker; focus follows the choice.
+  const refocusPickerRef = useRef(false);
+  useEffect(() => {
+    if (!refocusPickerRef.current) return;
+    refocusPickerRef.current = false;
+    globalThis.document
+      .querySelector<HTMLElement>(
+        `[role="radiogroup"][aria-label="${PAY_AFTER_COPY.methodGroupLabel}"] [aria-checked="true"]`
+      )
+      ?.focus();
+  }, [method]);
+
+  const handleMethodChange = useCallback((next: BookingFundingMethodProperty) => {
+    refocusPickerRef.current = true;
+    setMethod(next);
+    track(BOOKING_EVENTS.FUNDING_METHOD_SELECTED, { method: next });
+  }, []);
+
+  const methodPicker = offered ? (
+    <FundingMethodPicker
+      method={method}
+      onMethodChange={handleMethodChange}
+      companyName={view.company.name}
+    />
+  ) : undefined;
+
+  if (offered && method === 'pay_after') {
+    return (
+      <PayAfterFunding
+        view={view}
+        wallet={wallet}
+        caseSaved={props.caseSaved}
+        ctaDisabled={props.ctaDisabled}
+        onBeforePay={props.onBeforePay}
+        onFunded={onFunded}
+        onBack={props.onBack}
+        onBusyChange={props.onBusyChange}
+        onInFlightChange={props.onInFlightChange}
+        methodPicker={methodPicker}
+      />
+    );
+  }
+  return <ManagerFunding {...props} suggestedMinor={suggestedMinor} methodPicker={methodPicker} />;
+}
+
 /**
  * The funding fix shown inline on Review & confirm when the pre-flight refused the booking.
  *
- * A billing manager of the active company tops up here and the booking follows; a member saves
- * the booking for a billing admin. The block never books on its own say-so: `onFunded` is called
- * only after the wallet shows the credit, and a Stripe return is not credit.
+ * A billing manager of the active company tops up here and the booking follows, or (setup and
+ * reserved arms) chooses to pay after the call; a member saves the booking for a billing admin.
+ * The block never books on its own say-so: `onFunded` is called only after the wallet shows the
+ * credit or an active mandate, and a Stripe return is neither.
  *
  * Renders nothing for a manager whose view carries no wallet; `resolveFundingDisposition` sends
  * that case to the full panel.
@@ -593,7 +554,7 @@ export function BookingFundingBlock({
   // Keyed on the amount the booking needs: a re-read that changes it starts the controls afresh,
   // so a stale amount or promo is never charged against a different shortfall.
   return (
-    <ManagerFunding
+    <ManagerFundingMethods
       key={view.suggestedTopUpMinor}
       view={view}
       wallet={view.wallet}

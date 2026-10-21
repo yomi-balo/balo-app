@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('motion/react', async () => {
@@ -59,13 +59,15 @@ import {
 import { SAVED_CARD, refusedView } from './funding-fixtures';
 import type { RefusedFundingView } from './funding-disposition';
 
+const FIGURES = { topupReloadMinor: 10_000, topupThresholdMinor: 2_000 };
+
 function managerView(overrides: Partial<RefusedFundingView> = {}): RefusedFundingView {
-  return refusedView({ wallet: { savedCard: null }, ...overrides });
+  return refusedView({ wallet: { savedCard: null, lowBalanceFigures: FIGURES }, ...overrides });
 }
 
 function savedCardView(overrides: Partial<RefusedFundingView> = {}): RefusedFundingView {
   return managerView({
-    wallet: { savedCard: SAVED_CARD },
+    wallet: { savedCard: SAVED_CARD, lowBalanceFigures: FIGURES },
     firstTime: false,
     ...overrides,
   });
@@ -155,7 +157,9 @@ describe('BookingFundingBlock', () => {
 
     it('offers the suggested amount, the tiers above it, and Other', () => {
       renderBlock(managerView({ suggestedTopUpMinor: 60_000 }));
-      const labels = screen.getAllByRole('radio').map((radio) => radio.textContent);
+      const labels = within(screen.getByRole('radiogroup', { name: 'Amount' }))
+        .getAllByRole('radio')
+        .map((radio) => radio.textContent);
       expect(labels).toEqual(['A$600Minimum', 'A$1,000', 'A$5,000', 'Other']);
       expect(screen.getByRole('button', { name: ctaName('A\\$600') })).toBeInTheDocument();
     });
@@ -289,7 +293,11 @@ describe('BookingFundingBlock', () => {
       });
       poll.resolve({ status: 'pending', balanceMinor: 0 });
       await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1), { timeout: 4_000 });
-      expect(onFunded).toHaveBeenCalledWith({ creditedMinor: 30_000, companyName: 'Northwind' });
+      expect(onFunded).toHaveBeenCalledWith({
+        method: 'topup',
+        creditedMinor: 30_000,
+        companyName: 'Northwind',
+      });
       expect(startPurchaseAction).toHaveBeenCalledTimes(1);
     });
 
@@ -313,7 +321,11 @@ describe('BookingFundingBlock', () => {
 
       await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
       await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1));
-      expect(onFunded).toHaveBeenCalledWith({ creditedMinor: 35_000, companyName: 'Northwind' });
+      expect(onFunded).toHaveBeenCalledWith({
+        method: 'topup',
+        creditedMinor: 35_000,
+        companyName: 'Northwind',
+      });
     });
 
     it('credits the amount alone when the promo grant was skipped', async () => {
@@ -336,7 +348,11 @@ describe('BookingFundingBlock', () => {
 
       await userEvent.click(screen.getByRole('button', { name: ctaName('A\\$300') }));
       await waitFor(() => expect(onFunded).toHaveBeenCalledTimes(1));
-      expect(onFunded).toHaveBeenCalledWith({ creditedMinor: 30_000, companyName: 'Northwind' });
+      expect(onFunded).toHaveBeenCalledWith({
+        method: 'topup',
+        creditedMinor: 30_000,
+        companyName: 'Northwind',
+      });
     });
 
     it('waits for a mandate re-armed on the new card to be live before booking', async () => {
@@ -495,7 +511,9 @@ describe('BookingFundingBlock', () => {
   describe('amount radiogroup keyboard', () => {
     it('has one tab stop, on the selected option', () => {
       renderBlock(managerView());
-      const tabStops = screen.getAllByRole('radio').filter((radio) => radio.tabIndex === 0);
+      const tabStops = within(screen.getByRole('radiogroup', { name: 'Amount' }))
+        .getAllByRole('radio')
+        .filter((radio) => radio.tabIndex === 0);
       expect(tabStops).toHaveLength(1);
       expect(tabStops[0]).toHaveAttribute('aria-checked', 'true');
     });
@@ -760,5 +778,66 @@ describe('BookingFundingBlock', () => {
       expect(text, file).not.toContain('@balo/db');
       expect(text, file).not.toContain('Ledger');
     }
+  });
+
+  describe('funding method picker', () => {
+    const method = (name: RegExp) => screen.getByRole('radio', { name });
+
+    it('offers both methods on the setup arm, defaulting to Top up now', () => {
+      renderBlock(managerView());
+      expect(screen.getByRole('radiogroup', { name: 'How to pay' })).toBeInTheDocument();
+      expect(method(/Top up now/)).toHaveAttribute('aria-checked', 'true');
+      expect(method(/Pay after the call/)).toHaveAttribute('aria-checked', 'false');
+      expect(screen.getByRole('radiogroup', { name: 'Amount' })).toBeInTheDocument();
+    });
+
+    it('offers both methods on the reserved arm', () => {
+      renderBlock(
+        managerView({ arm: 'reserved', topUpNeededMinor: 27_500, reservedBookingCount: 2 })
+      );
+      expect(screen.getByRole('radiogroup', { name: 'How to pay' })).toBeInTheDocument();
+    });
+
+    it('is absent on the hold arm', () => {
+      renderBlock(managerView({ arm: 'hold', topUpNeededMinor: 27_500 }));
+      expect(screen.queryByRole('radiogroup', { name: 'How to pay' })).not.toBeInTheDocument();
+    });
+
+    it('is absent for a member', () => {
+      renderBlock(memberView());
+      expect(screen.queryByRole('radiogroup', { name: 'How to pay' })).not.toBeInTheDocument();
+    });
+
+    it('is absent when Stripe is not configured', () => {
+      delete process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+      try {
+        renderBlock(managerView());
+        expect(screen.queryByRole('radiogroup', { name: 'How to pay' })).not.toBeInTheDocument();
+      } finally {
+        process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = 'pk_test_123';
+      }
+    });
+
+    it('switches to Pay after, tracks the choice once, and swaps the controls', async () => {
+      renderBlock(managerView());
+      expect(trackedPayloads(BOOKING_EVENTS.FUNDING_METHOD_SELECTED)).toEqual([]);
+      await userEvent.click(method(/Pay after the call/));
+      expect(trackedPayloads(BOOKING_EVENTS.FUNDING_METHOD_SELECTED)).toEqual([
+        { method: 'pay_after' },
+      ]);
+      expect(screen.queryByRole('radiogroup', { name: 'Amount' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add card & book' })).toBeInTheDocument();
+      expect(method(/Pay after the call/)).toHaveAttribute('aria-checked', 'true');
+      await userEvent.click(method(/Top up now/));
+      expect(screen.getByRole('radiogroup', { name: 'Amount' })).toBeInTheDocument();
+    });
+
+    it('moves between the methods with the arrow keys', async () => {
+      renderBlock(managerView());
+      method(/Top up now/).focus();
+      await userEvent.keyboard('{ArrowRight}');
+      expect(method(/Pay after the call/)).toHaveFocus();
+      expect(method(/Pay after the call/)).toHaveAttribute('aria-checked', 'true');
+    });
   });
 });

@@ -12,7 +12,7 @@ import { autoTopupConfigErrors } from '@/lib/credit/display-constants';
 import type { LowBalanceMode } from '@/lib/credit/actions';
 import { armSavedCardMandateAction, saveLowBalanceConfigAction } from '@/lib/credit/actions';
 import { isCardBackedLowBalanceMode, type CardBackedLowBalanceMode } from '@balo/shared/credit';
-import { getStripe } from '@/lib/stripe/loader';
+import { resolveSetupIntentNextAction } from '@/lib/stripe/resolve-setup-next-action';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 
 export interface LowBalanceDraft {
@@ -191,31 +191,6 @@ function sameDraft(a: LowBalanceDraft, b: LowBalanceDraft): boolean {
 }
 
 /**
- * Resolve a `requires_action` mandate confirmation inline via `stripe.handleNextAction` (3DS),
- * mirroring `PayAction.captureMandate`'s abandoned-challenge rule: an abandoned challenge comes
- * back with NO error but the intent still `requires_action`, which must NOT count as captured —
- * that would tell the client automatic charging is on when it is not. Never throws; an
- * unconfigured key, a null Stripe instance, or a rejected `handleNextAction` all resolve `false`
- * (the warning state), never an unhandled rejection.
- */
-async function resolveRequiresAction(clientSecret: string): Promise<boolean> {
-  const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-  if (!publishableKey) {
-    return false;
-  }
-  try {
-    const stripe = await getStripe(publishableKey);
-    if (stripe === null) {
-      return false;
-    }
-    const { setupIntent, error } = await stripe.handleNextAction({ clientSecret });
-    return !error && setupIntent?.status === 'succeeded';
-  } catch {
-    return false;
-  }
-}
-
-/**
  * BAL-516 — "When your balance runs low", explicit-Save idiom (design "Save pattern"). Local
  * `draft` seeds from `initialConfig`; `baseline` re-seeds on a successful save; `isDirty` = draft
  * ≠ baseline. On failure the draft is NEVER reverted (design: "do not revert the client's typed
@@ -313,7 +288,7 @@ export function LowBalanceSection({
       result.ok &&
       (result.outcome === 'captured' ||
         (result.outcome === 'requires_action' &&
-          (await resolveRequiresAction(result.clientSecret))));
+          (await resolveSetupIntentNextAction(result.clientSecret))));
 
     if (!captured) {
       setArmWarning(true);

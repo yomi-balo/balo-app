@@ -148,7 +148,11 @@ vi.mock('./funding/booking-funding-block', () => ({
     caseSaved: { caseTitle: string } | null;
     ctaDisabled: boolean;
     onBeforePay: () => boolean;
-    onFunded: (topUp: { creditedMinor: number; companyName: string | null }) => Promise<boolean>;
+    onFunded: (
+      funded:
+        | { method: 'topup'; creditedMinor: number; companyName: string | null }
+        | { method: 'pay_after'; card: null; companyName: string | null }
+    ) => Promise<boolean>;
     onSaveForLater: () => Promise<void>;
     draftKept: boolean;
     onBusyChange: (busy: boolean) => void;
@@ -179,11 +183,25 @@ vi.mock('./funding/booking-funding-block', () => ({
         type="button"
         onClick={() => {
           props
-            .onFunded({ creditedMinor: 30_000, companyName: 'Northwind Industrial' })
+            .onFunded({
+              method: 'topup',
+              creditedMinor: 30_000,
+              companyName: 'Northwind Industrial',
+            })
             .catch(() => {});
         }}
       >
         Stub funded
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          props
+            .onFunded({ method: 'pay_after', card: null, companyName: 'Northwind Industrial' })
+            .catch(() => {});
+        }}
+      >
+        Stub funded pay after
       </button>
       <button
         type="button"
@@ -1430,7 +1448,10 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
   const SCOPE = { ownerUserId: 'user-1', expertProfileId: 'expert-1' };
   const MANAGER_VIEW = refusedView({
     company: COMPANY,
-    wallet: { savedCard: null },
+    wallet: {
+      savedCard: null,
+      lowBalanceFigures: { topupReloadMinor: 10_000, topupThresholdMinor: 2_000 },
+    },
   });
   const MEMBER_VIEW = refusedView({ canManageBilling: false, wallet: null, company: COMPANY });
   const DRAFT: BookingDraft = {
@@ -1667,6 +1688,47 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       await vi.waitFor(() =>
         expect(mockReadBookingFundingAction.mock.calls.length).toBeGreaterThan(readsBefore)
       );
+    });
+
+    it('slot_unavailable after Pay after shows the card line with no AUD figure', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction.mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction.mockResolvedValue(SLOT_GONE);
+      renderDialog();
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await screen.findByTestId('funding-block');
+      await fillForm(user);
+
+      await user.click(screen.getByRole('button', { name: 'Stub funded pay after' }));
+
+      expect(
+        await screen.findByText('This time was just booked by someone else.')
+      ).toBeInTheDocument();
+      expect(screen.getByText(/set up and ready for the next time you choose/)).toBeInTheDocument();
+      expect(screen.queryByText(/top-up went through/)).not.toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/\$\s?\d|AUD/);
+    });
+
+    it('a pay_after funding re-submits with the SAME bookingNonce', async () => {
+      const user = userEvent.setup();
+      mockReadBookingFundingAction
+        .mockResolvedValueOnce({ kind: 'clear' })
+        .mockResolvedValue(MANAGER_VIEW);
+      mockBookConsultationAction
+        .mockResolvedValueOnce(SETUP_FAILURE)
+        .mockResolvedValueOnce(successResult());
+      renderDialog();
+      await reachConfirm(user);
+
+      await user.click(screen.getByRole('button', { name: /Confirm & book/ }));
+      await screen.findByTestId('funding-block');
+      await user.click(screen.getByRole('button', { name: 'Stub funded pay after' }));
+
+      await vi.waitFor(() => expect(mockBookConsultationAction).toHaveBeenCalledTimes(2));
+      const [refused, funded] = mockBookConsultationAction.mock.calls.map(
+        ([input]) => input as { bookingNonce: string }
+      );
+      expect(funded?.bookingNonce).toBe(refused?.bookingNonce);
     });
 
     it('a landed credit clears the block after a failed booking, leaving the normal CTA', async () => {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_TOPUP_RELOAD_MINOR, DEFAULT_TOPUP_THRESHOLD_MINOR } from '@balo/shared/pricing';
 import type { BookingFundingResult } from '../booking-funding-gate';
 
 const mockRequireOnboardedUser = vi.fn();
@@ -233,7 +234,13 @@ describe('readBookingFundingAction', () => {
         topUpNeededMinor: null,
         reservedBookingCount: null,
         suggestedTopUpMinor: 30_000,
-        wallet: { savedCard: null },
+        wallet: {
+          savedCard: null,
+          lowBalanceFigures: {
+            topupReloadMinor: DEFAULT_TOPUP_RELOAD_MINOR,
+            topupThresholdMinor: DEFAULT_TOPUP_THRESHOLD_MINOR,
+          },
+        },
       });
       expect(mockFindByCompanyId).toHaveBeenCalledWith(COMPANY_ID);
     });

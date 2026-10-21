@@ -20,7 +20,10 @@ export function refusedView(overrides: Partial<RefusedFundingView> = {}): Refuse
     topUpNeededMinor: null,
     reservedBookingCount: null,
     suggestedTopUpMinor: 30_000,
-    wallet: { savedCard: null },
+    wallet: {
+      savedCard: null,
+      lowBalanceFigures: { topupReloadMinor: 10_000, topupThresholdMinor: 2_000 },
+    },
     ...overrides,
   };
 }

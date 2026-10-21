@@ -18,8 +18,13 @@ import {
   fundedSessionFollowUp,
   fundingBlockCopy,
   savedForLaterBody,
-  staleSlotTopUpFollowUp,
+  staleSlotFundedFollowUp,
+  PAY_AFTER_COPY,
+  payAfterConsentLine,
 } from './funding-copy';
+import type { SavedCard } from '@/components/billing/top-up/types';
+import { SAVED_CARD } from './funding-fixtures';
+import type { FundedVia } from '@/lib/booking/actions/booking-funding-types';
 import { refusedView } from './funding-fixtures';
 import type { RefusedFundingView } from './funding-disposition';
 
@@ -30,6 +35,17 @@ const BALANCE = {
   maxTopUp: 'A$10,000',
   count: '2 upcoming consultations',
 };
+
+const topUp = (creditedMinor: number, companyName: string | null): FundedVia => ({
+  method: 'topup',
+  creditedMinor,
+  companyName,
+});
+const payAfter = (card: SavedCard | null, companyName: string | null): FundedVia => ({
+  method: 'pay_after',
+  card,
+  companyName,
+});
 
 const holdFigure = (overrides: Partial<RefusedFundingView> = {}) =>
   refusedView({ arm: 'hold', topUpNeededMinor: 27_500, ...overrides });
@@ -193,7 +209,7 @@ describe('payment copy', () => {
   });
 
   it('the stale-slot follow-up names the credited amount', () => {
-    expect(staleSlotTopUpFollowUp(60_000, 'Northwind')).toBe(
+    expect(staleSlotFundedFollowUp(topUp(60_000, 'Northwind'))).toBe(
       "Your top-up went through, so A$600.00 is in Northwind's balance for the next time you choose."
     );
   });
@@ -206,7 +222,7 @@ describe('payment copy', () => {
     const all = [
       ...Object.values(BOOKING_PAY_ERROR_COPY),
       creditPendingCopy('Northwind'),
-      staleSlotTopUpFollowUp(60_000, 'Northwind'),
+      staleSlotFundedFollowUp(topUp(60_000, 'Northwind')),
     ].join(' ');
     expect(all).not.toMatch(/\/hr|per hour|per minute|rate:/i);
   });
@@ -215,16 +231,16 @@ describe('payment copy', () => {
 describe('copy for a landed top-up and the stage text', () => {
   it('the failure lines say the top-up is in the balance and never claim nothing was charged', () => {
     const lines = [
-      fundedHardFailureBody(30_000, 'Northwind'),
-      fundedPartialFollowUp(30_000, 'Northwind'),
-      fundedSessionFollowUp(30_000, 'Northwind'),
+      fundedHardFailureBody(topUp(30_000, 'Northwind')),
+      fundedPartialFollowUp(topUp(30_000, 'Northwind')),
+      fundedSessionFollowUp(topUp(30_000, 'Northwind')),
     ];
     for (const line of lines) {
       expect(line).toContain("A$300.00 is in Northwind's balance");
       expect(line).not.toMatch(/nothing was charged/i);
       expect(line).toMatch(/won't (charge you )?again|won't be charged again/);
     }
-    expect(fundedHardFailureBody(30_000, null)).toContain("your team's balance");
+    expect(fundedHardFailureBody(topUp(30_000, null))).toContain("your team's balance");
   });
 
   it('the saved-for-later body claims the device draft only when one was kept', () => {
@@ -243,5 +259,101 @@ describe('copy for a landed top-up and the stage text', () => {
     });
     expect(BALANCE_NOW_COVERS_COPY).toContain('Confirm & book');
     expect(DRAFT_CLEARED_COPY).toMatch(/cleared/i);
+  });
+});
+
+describe('copy for a landed Pay after', () => {
+  const funded = payAfter(SAVED_CARD, 'Northwind');
+  const newCard = payAfter(null, null);
+
+  it('every follow-up names the card, says nothing was charged and quotes no AUD figure', () => {
+    const lines = [
+      fundedHardFailureBody(funded),
+      fundedPartialFollowUp(funded),
+      fundedSessionFollowUp(funded),
+    ];
+    for (const line of lines) {
+      expect(line).toContain('Visa •••• 4242 is set up for Northwind. Nothing was charged.');
+      expect(line).not.toMatch(/A\$/);
+    }
+  });
+
+  it('falls back to "Your card" and "your team" for a new card and an unnamed company', () => {
+    expect(fundedPartialFollowUp(newCard)).toContain(
+      'Your card is set up for your team. Nothing was charged.'
+    );
+  });
+
+  it('the stale-slot line says the card is ready for the next time', () => {
+    expect(staleSlotFundedFollowUp(funded)).toBe(
+      'Visa •••• 4242 is set up and ready for the next time you choose.'
+    );
+    expect(staleSlotFundedFollowUp(newCard)).toBe(
+      'Your card is set up and ready for the next time you choose.'
+    );
+  });
+});
+
+describe('PAY_AFTER_COPY', () => {
+  it('pins the placeholder strings', () => {
+    expect(PAY_AFTER_COPY.payAfter.title).toBe('Pay after the call');
+    expect(PAY_AFTER_COPY.topup.description('Northwind')).toBe(
+      "Add funds to Northwind's balance. Each consultation draws from it."
+    );
+    expect(PAY_AFTER_COPY.ctaSaved).toBe('Book and pay after the call');
+    expect(PAY_AFTER_COPY.ctaNew).toBe('Add card & book');
+    expect(PAY_AFTER_COPY.stage).toEqual({
+      setting_up_saved: 'Setting up…',
+      setting_up_new: 'Saving your card…',
+      authenticating: 'Waiting for your bank…',
+      awaiting_mandate: 'Confirming your card…',
+      booking: 'Booking…',
+    });
+    expect(PAY_AFTER_COPY.errors.setup_failed).toBe(
+      "Your card couldn't be set up, so nothing was charged and nothing was booked. What you've entered is still here."
+    );
+    expect(PAY_AFTER_COPY.switchedToast('Northwind')).toBe('Keep me going is on for Northwind.');
+  });
+
+  it('every failure line says nothing was charged', () => {
+    for (const line of Object.values(PAY_AFTER_COPY.errors)) {
+      expect(line).toMatch(/nothing was charged|no charge was made/i);
+    }
+  });
+});
+
+describe('pay-after header band', () => {
+  it.each([
+    ['setup', refusedView()],
+    ['reserved', reserved()],
+  ])('on the %s arm has its own copy and no top-up figure', (_arm, view) => {
+    const copy = fundingBlockCopy(view, true, 'pay_after');
+    expect(copy).not.toEqual(fundingBlockCopy(view, true));
+    expect(`${copy.heading} ${copy.body}`).not.toMatch(/A\$|Top up/);
+    expect(copy.body).toContain('Nothing is charged now.');
+  });
+
+  it('the top-up method keeps the existing band', () => {
+    expect(fundingBlockCopy(refusedView(), true, 'topup')).toEqual(fundingBlockCopy(refusedView()));
+  });
+
+  it('the card-swap refusal gives a recovery path', () => {
+    expect(BOOKING_PAY_ERROR_COPY.card_change_refused).toContain('Nothing was charged.');
+    expect(BOOKING_PAY_ERROR_COPY.card_change_refused).toContain('try again after the call');
+  });
+});
+
+describe('payAfterConsentLine', () => {
+  it('names the company, the setting and the card, in the future tense', () => {
+    expect(payAfterConsentLine('Northwind', SAVED_CARD)).toBe(
+      "By booking, you switch Northwind's low-balance setting to Keep me going and let Balo charge Visa •••• 4242 for consultation time beyond the balance, after each call. Change it anytime in Billing settings."
+    );
+  });
+
+  it('says "this card" for a new card and never says the setting makes the card chargeable', () => {
+    const line = payAfterConsentLine(null, null);
+    expect(line).toContain("your team's low-balance setting");
+    expect(line).toContain('charge this card');
+    expect(line).not.toMatch(/so (that )?(the|your) card|makes? .* chargeable/i);
   });
 });

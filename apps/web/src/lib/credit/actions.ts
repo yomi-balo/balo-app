@@ -195,7 +195,14 @@ export type StartPurchaseResult =
          * The buyer's recovery is to leave the low-balance setting alone and press Pay again —
          * topping up mid-call is never itself blocked.
          */
-        | 'settlement_outstanding';
+        | 'settlement_outstanding'
+        /**
+         * The composer asked to enter a NEW card while the wallet already holds one and a
+         * consultation is live on it. Returned BEFORE any write or `createPurchaseIntent`, so NO
+         * CHARGE WAS MADE. Distinct from `settlement_outstanding`, whose copy blames the
+         * low-balance setting. A first card (no stored payment method) is never refused.
+         */
+        | 'card_change_refused';
       /** Stripe's specific refusal reason, when it gave one (`card_declined` only). */
       declineCode?: string;
     };
@@ -264,6 +271,10 @@ export type SaveConfigResult =
       error: 'unauthorized' | 'invalid_input' | 'no_saved_card' | 'settlement_outstanding';
     };
 
+export type WalletMandateStatusResult = {
+  status: 'active' | 'pending' | 'failed' | 'unauthorized' | 'error';
+};
+
 export type NudgeResult = { ok: true } | { ok: false; error: 'error' };
 
 /**
@@ -278,6 +289,7 @@ type BillingActorCaller =
   | 'saveLowBalanceConfigAction'
   | 'armSavedCardMandateAction'
   | 'startCardCaptureAction'
+  | 'getWalletMandateStatusAction'
   | 'removeSavedCardAction'
   | 'saveBillingEmailAction';
 
@@ -694,6 +706,46 @@ async function resolvePurchaseMandate(
 }
 
 /**
+ * A NEW card would replace the one on file while a consultation is live on it — the same swap
+ * `startCardCaptureAction` refuses. A first card (nothing stored) is never refused, and the
+ * session read is skipped unless both other conditions hold.
+ */
+async function refusesLiveCardSwap(
+  wallet: CreditWallet,
+  paymentMethodSource: PaymentMethodSource
+): Promise<boolean> {
+  if (paymentMethodSource !== 'new_card' || wallet.stripePaymentMethodId === null) {
+    return false;
+  }
+  return creditSessionsRepository.hasActiveSessionForWallet(wallet.id);
+}
+
+/** The success result for a started purchase; only a non-`complete` outcome carries a client secret. */
+function purchaseStarted(
+  purchase: Awaited<ReturnType<typeof createPurchaseIntent>>,
+  mandate: MandateOutcome,
+  walletId: string
+): StartPurchaseResult {
+  if (purchase.outcome === 'complete') {
+    return {
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: purchase.paymentIntentId,
+      mandate,
+      walletId,
+    };
+  }
+  return {
+    ok: true,
+    outcome: purchase.outcome,
+    clientSecret: purchase.clientSecret,
+    paymentIntentId: purchase.paymentIntentId,
+    mandate,
+    walletId,
+  };
+}
+
+/**
  * Start a card top-up: gate MANAGE_BILLING, resolve the wallet, persist low-balance config
  * (unless `lowBalance: 'keep'`, a pure top-up that writes no config, so
  * `settlement_outstanding` cannot arise, and attempts no mandate beyond re-arming an existing one
@@ -721,6 +773,14 @@ export async function startPurchaseAction(
     }
 
     const wallet = await ensureWallet(actor.companyId);
+
+    if (await refusesLiveCardSwap(wallet, input.paymentMethodSource)) {
+      log.warn('Card swap refused on purchase — consultation live on the stored card', {
+        walletId: wallet.id,
+        companyId: actor.companyId,
+      });
+      return { ok: false, error: 'card_change_refused' };
+    }
 
     // Config is a preference — persist it regardless of payment outcome. A `keep` purchase has no
     // config to persist (see `startPurchaseSchema`), so it skips this block entirely: the
@@ -786,23 +846,7 @@ export async function startPurchaseAction(
       actor.userId
     );
 
-    if (purchase.outcome === 'complete') {
-      return {
-        ok: true,
-        outcome: 'complete',
-        paymentIntentId: purchase.paymentIntentId,
-        mandate,
-        walletId: wallet.id,
-      };
-    }
-    return {
-      ok: true,
-      outcome: purchase.outcome,
-      clientSecret: purchase.clientSecret,
-      paymentIntentId: purchase.paymentIntentId,
-      mandate,
-      walletId: wallet.id,
-    };
+    return purchaseStarted(purchase, mandate, wallet.id);
   } catch (error) {
     const mapped = mapPurchaseFailure(error);
     if (mapped?.error === 'card_declined') {
@@ -888,6 +932,36 @@ async function resolvePromoGranted(
     deriveIdempotencyKey({ reason: 'promo', walletId, promoCodeId: parsedPromoId.data })
   );
   return grant !== undefined;
+}
+
+/**
+ * Where the wallet's off-session mandate stands, for the booking surface's "wait until it is
+ * ACTIVE" poll. `active` is `isWalletMandateActive` (the webhook-written state, never the
+ * client's return); `failed` is a terminal setup failure; every other state, and an absent
+ * wallet row, is `pending`. `findByCompanyId`, never `ensureWallet`: a polled read must not mint
+ * a wallet. Carries no card facts and no Stripe ids.
+ */
+export async function getWalletMandateStatusAction(): Promise<WalletMandateStatusResult> {
+  try {
+    const actor = await requireBillingActor('getWalletMandateStatusAction');
+    if (actor === null) {
+      return { status: 'unauthorized' };
+    }
+    const wallet = await creditWalletsRepository.findByCompanyId(actor.companyId);
+    if (wallet === undefined) {
+      return { status: 'pending' };
+    }
+    if (isWalletMandateActive(wallet)) {
+      return { status: 'active' };
+    }
+    return { status: wallet.mandateStatus === 'failed' ? 'failed' : 'pending' };
+  } catch (error) {
+    log.error('Wallet mandate status read failed', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return { status: 'error' };
+  }
 }
 
 export async function getTopUpCreditStatusAction(

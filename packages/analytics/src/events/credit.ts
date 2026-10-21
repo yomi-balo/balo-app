@@ -81,7 +81,10 @@ export interface CreditEventMap {
     credit_status?: CreditStatusProperty;
   };
   [CREDIT_EVENTS.PROMO_REDEEMED]: { code: string; bonus_minor: number };
-  [CREDIT_EVENTS.MANDATE_CAPTURED]: { low_balance_mode: 'auto_topup' | 'keep_going' };
+  [CREDIT_EVENTS.MANDATE_CAPTURED]: {
+    low_balance_mode: 'auto_topup' | 'keep_going';
+    surface?: CreditSurfaceProperty;
+  };
   [CREDIT_EVENTS.PAYMENT_METHOD_CHANGED]: {
     to: PaymentMethodSourceProperty;
     surface?: CreditSurfaceProperty;
