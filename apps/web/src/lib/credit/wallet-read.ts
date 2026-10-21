@@ -350,7 +350,7 @@ export function projectBillingEmail(
   company: CompanyBillingIdentity | undefined,
   setBy: { name: string | null; isFormerMember: boolean }
 ): BillingEmailSnapshot {
-  if (company === undefined || company.billingEmail === null) {
+  if (company?.billingEmail == null) {
     return { email: null, source: null, setAt: null, setByName: null, setByIsFormerMember: false };
   }
   return {

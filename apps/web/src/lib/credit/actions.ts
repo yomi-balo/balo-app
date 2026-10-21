@@ -921,7 +921,7 @@ export async function getTopUpCreditStatusAction(
     const entry = await creditLedgerRepository.findByIdempotencyKey(
       deriveIdempotencyKey({ reason: 'manual_purchase', paymentIntentId: parsed.data })
     );
-    const credited = entry !== undefined && entry.walletId === wallet.id;
+    const credited = entry?.walletId === wallet.id;
 
     if (entry !== undefined && !credited) {
       // Someone asked about a PaymentIntent whose credit landed on a DIFFERENT wallet. Benign
@@ -1158,11 +1158,7 @@ export async function armSavedCardMandateAction(
     // wrong mandate arm or a bypassed guard. Reusing the write predicate here would couple two
     // call sites that check the same columns for unrelated reasons, for a case that cannot
     // currently occur; left as `=== null` on purpose, not by oversight.
-    if (
-      wallet === undefined ||
-      wallet.stripeCustomerId === null ||
-      wallet.stripePaymentMethodId === null
-    ) {
+    if (wallet?.stripeCustomerId == null || wallet.stripePaymentMethodId === null) {
       return { ok: false, error: 'no_saved_card' };
     }
 
@@ -1485,7 +1481,9 @@ export async function nudgeBillingAdminAction(): Promise<NudgeResult> {
 
 // ── BAL-522: the company billing-email field ──────────────────────────────────────────────
 
-const billingEmailSchema = z.object({ billingEmail: z.string().trim().min(1).email().max(254) });
+const billingEmailSchema = z.object({
+  billingEmail: z.string().trim().min(1).max(254).pipe(z.email()),
+});
 
 /**
  * Outcome of an explicit billing-email change from `/settings/billing`.

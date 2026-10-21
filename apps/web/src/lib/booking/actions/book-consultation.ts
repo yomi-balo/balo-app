@@ -105,14 +105,14 @@ const caseChoiceSchema = z.discriminatedUnion('kind', [
       kind: z.literal('new'),
       title: z.string().trim().min(1).max(160),
       descriptionHtml: z.string().max(MAX_DESCRIPTION_HTML),
-      productIds: z.array(z.string().uuid()).max(MAX_PRODUCTS),
-      companyId: z.string().uuid().optional(),
+      productIds: z.array(z.uuid()).max(MAX_PRODUCTS),
+      companyId: z.uuid().optional(),
     })
     .strict(),
   z
     .object({
       kind: z.literal('existing'),
-      engagementId: z.string().uuid(),
+      engagementId: z.uuid(),
     })
     .strict(),
 ]);
@@ -133,14 +133,14 @@ const caseChoiceSchema = z.discriminatedUnion('kind', [
  */
 const bookConsultationSchema = z
   .object({
-    expertProfileId: z.string().uuid(),
+    expertProfileId: z.uuid(),
     slot: bookingSlotSchema,
-    bookingNonce: z.string().uuid(),
+    bookingNonce: z.uuid(),
     guests: z
       .array(
         z
           .object({
-            email: z.string().trim().toLowerCase().email(),
+            email: z.string().trim().toLowerCase().pipe(z.email()),
             name: z.string().trim().min(1).max(120).optional(),
           })
           .strict()
@@ -945,7 +945,7 @@ async function completeBooking(params: {
 
   // Fire-and-forget (BAL-279 durability lives inside `publishNotificationEvent`). Only reached
   // on a real 201 — nothing is notified until a meeting exists (Decision 3).
-  publishNotificationEvent('booking.confirmed', {
+  void publishNotificationEvent('booking.confirmed', {
     correlationId: meetingId,
     meetingId,
     engagementId,

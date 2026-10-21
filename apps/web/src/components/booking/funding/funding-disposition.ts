@@ -17,7 +17,7 @@ export type FundingDisposition = 'none' | 'inline' | 'panel';
  *    pay with. Those keep the full panel.
  */
 export function resolveFundingDisposition(view: BookingFundingView | null): FundingDisposition {
-  if (view === null || view.kind !== 'refused') return 'none';
+  if (view?.kind !== 'refused') return 'none';
   if (!view.canManageBilling) return 'inline';
   const cannotTopUpHere =
     !view.company.isActive ||

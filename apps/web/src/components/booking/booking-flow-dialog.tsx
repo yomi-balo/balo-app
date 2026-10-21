@@ -931,9 +931,7 @@ export function BookingFlowDialog(
       const sameAsPreviousSlot =
         slot !== null && slot.startIso === newSlot.startIso && slot.endIso === newSlot.endIso;
 
-      if (!caseAlreadyCreatedRef.current) {
-        setNonce(randomNonce());
-      } else if (recovered !== null && !sameAsPreviousSlot) {
+      if (!caseAlreadyCreatedRef.current || (recovered !== null && !sameAsPreviousSlot)) {
         setNonce(randomNonce());
       }
 

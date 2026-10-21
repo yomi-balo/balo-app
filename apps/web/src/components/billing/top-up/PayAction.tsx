@@ -210,7 +210,7 @@ export function PayAction({
 
   // Keep the PaymentElement's displayed amount in sync as the slider moves (deferred flow).
   useEffect(() => {
-    if (elements) elements.update({ amount: amountMinor });
+    if (elements) void elements.update({ amount: amountMinor });
   }, [elements, amountMinor]);
 
   useEffect(() => {
