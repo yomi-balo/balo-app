@@ -832,6 +832,12 @@ describe('BookingFundingBlock', () => {
       expect(screen.getByRole('radiogroup', { name: 'Amount' })).toBeInTheDocument();
     });
 
+    it('tracks nothing when the selected method is clicked again', async () => {
+      renderBlock(managerView());
+      await userEvent.click(method(/Top up now/));
+      expect(trackedPayloads(BOOKING_EVENTS.FUNDING_METHOD_SELECTED)).toEqual([]);
+    });
+
     it('moves between the methods with the arrow keys', async () => {
       renderBlock(managerView());
       method(/Top up now/).focus();

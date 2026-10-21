@@ -31,6 +31,9 @@ import type { RefusedFundingView } from './funding-disposition';
  *    billing admins know". No second notice goes out — Save's notice shares the gate's hourly
  *    `booking-funding:{company}:{booker}:{kind}:{hour}` correlationId and is deduped — so only
  *    the tense is in question.
+ *  · {@link payAfterConsentLine}'s "Change it anytime in Billing settings" (and the help guide's
+ *    "change that setting any time") overclaims: BAL-523 refuses switching back to Just notify me
+ *    while a consultation is live.
  */
 
 export interface FundingBlockCopy {
@@ -151,6 +154,12 @@ export function staleSlotFundedFollowUp(funded: FundedVia): string {
   return `${payAfterCardLead(funded.card)} is set up and ready for the next time you choose.`;
 }
 
+const SETUP_FAILED_LINE =
+  "Your card couldn't be set up, so nothing was charged and nothing was booked.";
+
+const SWITCHED_NOTE =
+  'Your low-balance setting is now Keep me going, and it only takes effect once a card is confirmed.';
+
 /** Pay after the call: the picker cards, the CTAs, the stage text and the failure lines. */
 export const PAY_AFTER_COPY = {
   methodGroupLabel: 'How to pay',
@@ -179,12 +188,14 @@ export const PAY_AFTER_COPY = {
       "Your bank didn't confirm the card, so nothing was charged and nothing was booked. Try again or use a different card.",
     setup_failed:
       "Your card couldn't be set up, so nothing was charged and nothing was booked. What you've entered is still here.",
-    setup_failed_saved:
-      "Your card couldn't be set up, so nothing was charged and nothing was booked. Your low-balance setting is now Keep me going, and it only takes effect once a card is confirmed.",
+    setup_failed_saved: `${SETUP_FAILED_LINE} ${SWITCHED_NOTE}`,
+    mode_failed:
+      "Your card is saved, but we couldn't switch the low-balance setting to Keep me going, so nothing was booked. Nothing was charged. Try again.",
     settlement_outstanding:
       "There's consultation time in progress on the card on file. Once that call ends you can add a different card. Nothing was charged.",
     error: GENERIC_NO_CHARGE_COPY,
   },
+  switchedNote: SWITCHED_NOTE,
   unconfirmed:
     "We're still confirming your card with your bank. Nothing has been charged and nothing is booked yet.",
   checkAgain: 'Check again',

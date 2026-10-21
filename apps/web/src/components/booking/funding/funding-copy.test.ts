@@ -312,6 +312,12 @@ describe('PAY_AFTER_COPY', () => {
     expect(PAY_AFTER_COPY.errors.setup_failed).toBe(
       "Your card couldn't be set up, so nothing was charged and nothing was booked. What you've entered is still here."
     );
+    expect(PAY_AFTER_COPY.errors.setup_failed_saved).toBe(
+      `Your card couldn't be set up, so nothing was charged and nothing was booked. ${PAY_AFTER_COPY.switchedNote}`
+    );
+    expect(PAY_AFTER_COPY.switchedNote).toBe(
+      'Your low-balance setting is now Keep me going, and it only takes effect once a card is confirmed.'
+    );
     expect(PAY_AFTER_COPY.switchedToast('Northwind')).toBe('Keep me going is on for Northwind.');
   });
 

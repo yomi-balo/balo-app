@@ -11,6 +11,7 @@ export type PayAfterFailure =
   | 'declined'
   | 'auth_failed'
   | 'setup_failed'
+  | 'mode_failed'
   | 'arm_failed'
   | 'settlement_outstanding'
   | 'error';
@@ -40,6 +41,8 @@ export async function switchToKeepGoing(figures: Figures): Promise<StepResult> {
 export interface ArmSavedCardHooks {
   /** Called once the bank's challenge is about to open, so the block can say it is waiting. */
   readonly onAuthenticating: () => void;
+  /** Called right after the low-balance mode is switched, before the mandate is armed. */
+  readonly onSwitched: () => void;
 }
 
 /**
@@ -53,6 +56,7 @@ export async function armSavedCard(
 ): Promise<StepResult> {
   const switched = await switchToKeepGoing(figures);
   if (!switched.ok) return switched;
+  hooks.onSwitched();
   const armed = await armSavedCardMandateAction({ clientRequestId: crypto.randomUUID() });
   if (!armed.ok) return { ok: false, reason: 'arm_failed' };
   if (armed.outcome === 'captured') return OK;

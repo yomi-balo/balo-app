@@ -194,7 +194,9 @@ describe('PayAfterFunding', () => {
       const props = renderBlock(view(SAVED_CARD, { firstTime: false }));
       await choosePayAfter();
       await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaSaved }));
-      expect(await screen.findByRole('alert')).toHaveTextContent(PAY_AFTER_COPY.errors.auth_failed);
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(PAY_AFTER_COPY.errors.auth_failed);
+      expect(alert).toHaveTextContent(PAY_AFTER_COPY.switchedNote);
       expect(props.onFunded).not.toHaveBeenCalled();
       expect(payloads(BOOKING_EVENTS.FUNDING_FAILED)).toEqual([{ reason: 'auth_failed' }]);
     });
@@ -238,24 +240,32 @@ describe('PayAfterFunding', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent(
         PAY_AFTER_COPY.errors.setup_failed
       );
+      expect(screen.getByRole('alert')).not.toHaveTextContent(PAY_AFTER_COPY.switchedNote);
       expect(saveLowBalanceConfigAction).not.toHaveBeenCalled();
       expect(props.onFunded).not.toHaveBeenCalled();
       expect(payloads(BOOKING_EVENTS.FUNDING_FAILED)).toEqual([{ reason: 'setup_failed' }]);
       expect(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaNew })).toBeEnabled();
     });
 
-    it('does not book when the mode write fails after the mandate is active', async () => {
-      vi.mocked(saveLowBalanceConfigAction).mockResolvedValue({
+    it('says the card is saved when the mode write fails, then retries without capturing again', async () => {
+      vi.mocked(saveLowBalanceConfigAction).mockResolvedValueOnce({
         ok: false,
         error: 'no_saved_card',
       });
       const props = renderBlock(view(null));
       await choosePayAfter();
       await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaNew }));
-      expect(await screen.findByRole('alert')).toHaveTextContent(
-        PAY_AFTER_COPY.errors.setup_failed
-      );
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(PAY_AFTER_COPY.errors.mode_failed);
+      expect(alert).not.toHaveTextContent(PAY_AFTER_COPY.switchedNote);
       expect(props.onFunded).not.toHaveBeenCalled();
+      expect(payloads(BOOKING_EVENTS.FUNDING_FAILED)).toEqual([{ reason: 'setup_failed' }]);
+
+      await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaNew }));
+      await waitFor(() => expect(props.onFunded).toHaveBeenCalled());
+      expect(startCardCaptureAction).toHaveBeenCalledTimes(1);
+      expect(mockStripeApi.confirmSetup).toHaveBeenCalledTimes(1);
+      expect(saveLowBalanceConfigAction).toHaveBeenCalledTimes(2);
     });
 
     it('never writes the mode when the confirm errors', async () => {
@@ -388,6 +398,27 @@ describe('PayAfterFunding', () => {
         PAY_AFTER_COPY.errors.setup_failed
       );
       expect(screen.getByRole('alert')).not.toHaveTextContent('Keep me going');
+    });
+
+    it('adds the note to the generic line when arming throws after the switch', async () => {
+      vi.mocked(armSavedCardMandateAction).mockRejectedValue(new Error('boom'));
+      renderBlock(view(SAVED_CARD, { firstTime: false }));
+      await choosePayAfter();
+      await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaSaved }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(PAY_AFTER_COPY.errors.error);
+      expect(alert).toHaveTextContent(PAY_AFTER_COPY.switchedNote);
+    });
+
+    it('adds the note to the unconfirmed panel after the switch', async () => {
+      vi.mocked(getWalletMandateStatusAction).mockResolvedValue({ status: 'unauthorized' });
+      renderBlock(view(SAVED_CARD, { firstTime: false }));
+      await choosePayAfter();
+      await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaSaved }));
+      await screen.findByRole('button', { name: 'Check again' });
+      expect(
+        screen.getAllByText(`${PAY_AFTER_COPY.unconfirmed} ${PAY_AFTER_COPY.switchedNote}`).length
+      ).toBeGreaterThan(0);
     });
   });
 

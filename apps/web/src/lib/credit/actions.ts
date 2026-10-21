@@ -279,7 +279,7 @@ export type NudgeResult = { ok: true } | { ok: false; error: 'error' };
 
 /**
  * Which of this file's actions is asking. Named as a union rather than a bare `string` so a typo
- * fails `tsc` and adding a NINTH billing-gated action is a deliberate edit here — a small,
+ * fails `tsc` and adding another billing-gated action is a deliberate edit here — a small,
  * deliberate speed bump in front of the fail-closed default below.
  */
 type BillingActorCaller =
@@ -323,7 +323,7 @@ type BillingActor = { userId: string; companyId: string; name: string | null } |
  * BAL-528 — DESTRUCTIVE MONEY ACTIONS REFUSE UNDER AN IMPERSONATED SESSION, AND THE DEFAULT IS
  * REFUSAL. The `workos-auth` skill blocks purchases, credit spend and payment-method changes under
  * impersonation, and explicitly PERMITS billing *reads*. Both halves are expressed here rather than
- * at six call sites, so a ninth billing-gated action inherits the refusal by writing nothing.
+ * at each call site, so a new billing-gated action inherits the refusal by writing nothing.
  * `null` is returned — never a throw — because every caller wraps this in a `try` whose `catch`
  * renders generic retry copy, and a permanent refusal reported as "please try again" is the exact
  * defect BAL-523/BAL-524 spent two rounds removing. The two callers naming

@@ -471,11 +471,15 @@ function ManagerFundingMethods(props: Readonly<ManagerFundingMethodsProps>) {
       ?.focus();
   }, [method]);
 
-  const handleMethodChange = useCallback((next: BookingFundingMethodProperty) => {
-    refocusPickerRef.current = true;
-    setMethod(next);
-    track(BOOKING_EVENTS.FUNDING_METHOD_SELECTED, { method: next });
-  }, []);
+  const handleMethodChange = useCallback(
+    (next: BookingFundingMethodProperty) => {
+      if (next === method) return;
+      refocusPickerRef.current = true;
+      setMethod(next);
+      track(BOOKING_EVENTS.FUNDING_METHOD_SELECTED, { method: next });
+    },
+    [method]
+  );
 
   const methodPicker = offered ? (
     <FundingMethodPicker

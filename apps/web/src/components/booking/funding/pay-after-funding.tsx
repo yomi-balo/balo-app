@@ -60,17 +60,31 @@ const FAILURE_REASON: Readonly<Record<PayAfterFailure, BookingFundingFailureReas
   declined: 'declined',
   auth_failed: 'auth_failed',
   setup_failed: 'setup_failed',
+  mode_failed: 'setup_failed',
   arm_failed: 'setup_failed',
   settlement_outstanding: 'settlement_outstanding',
   error: 'error',
 };
 
-function stageText(stage: PayAfterStage, usingSavedCard: boolean): string {
+/** The line for a failure; once the mode has been switched, it also says the setting changed. */
+function failureCopy(reason: PayAfterFailure, modeSwitched: boolean): string {
+  if (reason === 'arm_failed') return PAY_AFTER_COPY.errors.setup_failed_saved;
+  const line = PAY_AFTER_COPY.errors[reason];
+  return modeSwitched ? `${line} ${PAY_AFTER_COPY.switchedNote}` : line;
+}
+
+function unconfirmedText(modeSwitched: boolean): string {
+  return modeSwitched
+    ? `${PAY_AFTER_COPY.unconfirmed} ${PAY_AFTER_COPY.switchedNote}`
+    : PAY_AFTER_COPY.unconfirmed;
+}
+
+function stageText(stage: PayAfterStage, usingSavedCard: boolean, modeSwitched = false): string {
   switch (stage) {
     case 'idle':
       return '';
     case 'unconfirmed':
-      return PAY_AFTER_COPY.unconfirmed;
+      return unconfirmedText(modeSwitched);
     case 'setting_up':
       return usingSavedCard
         ? PAY_AFTER_COPY.stage.setting_up_saved
@@ -114,6 +128,8 @@ function PayAfterBody({
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const usedSavedCardRef = useRef(false);
+  const modeSwitchedRef = useRef(false);
+  const cardReadyRef = useRef(false);
   const ctaSlotRef = useRef<HTMLDivElement>(null);
 
   const usingSavedCard = wallet.savedCard !== null && source === 'saved_card';
@@ -155,8 +171,7 @@ function PayAfterBody({
       if (!silent)
         track(BOOKING_EVENTS.FUNDING_FAILED, { reason: reasonOverride ?? FAILURE_REASON[reason] });
       if (!mountedRef.current) return;
-      const copy = PAY_AFTER_COPY.errors[reason === 'arm_failed' ? 'setup_failed_saved' : reason];
-      setError(silent ? null : copy);
+      setError(silent ? null : failureCopy(reason, modeSwitchedRef.current));
       setStage('idle');
     },
     [mountedRef]
@@ -168,6 +183,9 @@ function PayAfterBody({
       if (usedSavedCardRef.current) {
         return await armSavedCard(wallet.lowBalanceFigures, {
           onAuthenticating: () => setStage('authenticating'),
+          onSwitched: () => {
+            modeSwitchedRef.current = true;
+          },
         });
       }
       return await captureNewCard(stripe, elements);
@@ -181,21 +199,6 @@ function PayAfterBody({
       return { ok: false, reason: 'error' };
     }
   }, [stripe, elements, wallet.lowBalanceFigures]);
-
-  const handlePress = useCallback(async () => {
-    if (!onBeforePay()) return;
-    setError(null);
-    usedSavedCardRef.current = usingSavedCard;
-    setStage('setting_up');
-    const result = await runSetup();
-    if (!mountedRef.current) return;
-    if (!result.ok) {
-      fail(result.reason, undefined, result.silent === true);
-      return;
-    }
-    setAttempt((value) => value + 1);
-    setStage('awaiting_mandate');
-  }, [onBeforePay, usingSavedCard, runSetup, mountedRef, fail]);
 
   const bookNow = useCallback(async () => {
     const savedCard = usedSavedCardRef.current;
@@ -219,26 +222,47 @@ function PayAfterBody({
     if (mountedRef.current) setStage('idle');
   }, [companyName, wallet.savedCard, onFunded, mountedRef]);
 
-  const handleActive = useCallback(() => {
-    const proceed = async (): Promise<void> => {
-      if (!usedSavedCardRef.current) {
-        let switched: StepResult = { ok: false, reason: 'setup_failed' };
-        try {
-          switched = await switchToKeepGoing(wallet.lowBalanceFigures);
-        } catch (error_) {
-          Sentry.captureException(error_, {
-            tags: { feature: 'booking', step: 'pay_after_switch_mode' },
-          });
-        }
-        if (!switched.ok) {
-          fail('setup_failed');
-          return;
-        }
+  const switchThenBook = useCallback(async (): Promise<void> => {
+    if (!usedSavedCardRef.current) {
+      let switched: StepResult = { ok: false, reason: 'mode_failed' };
+      try {
+        switched = await switchToKeepGoing(wallet.lowBalanceFigures);
+      } catch (error_) {
+        Sentry.captureException(error_, {
+          tags: { feature: 'booking', step: 'pay_after_switch_mode' },
+        });
       }
-      await bookNow();
-    };
-    proceed().catch(() => undefined);
+      if (!switched.ok) {
+        fail('mode_failed');
+        return;
+      }
+    }
+    await bookNow();
   }, [wallet.lowBalanceFigures, bookNow, fail]);
+
+  const handleActive = useCallback(() => {
+    cardReadyRef.current = !usedSavedCardRef.current;
+    switchThenBook().catch(() => undefined);
+  }, [switchThenBook]);
+  const handlePress = useCallback(async () => {
+    if (!onBeforePay()) return;
+    setError(null);
+    usedSavedCardRef.current = !cardReadyRef.current && usingSavedCard;
+    setStage('setting_up');
+    if (cardReadyRef.current) {
+      await switchThenBook();
+      return;
+    }
+    const result = await runSetup();
+    if (!mountedRef.current) return;
+    if (!result.ok) {
+      fail(result.reason, undefined, result.silent === true);
+      return;
+    }
+    setAttempt((value) => value + 1);
+    setStage('awaiting_mandate');
+  }, [onBeforePay, usingSavedCard, runSetup, mountedRef, fail, switchThenBook]);
+
   // A saved card was already switched to Keep me going before its mandate failed.
   const handleFailed = useCallback(
     () => fail(usedSavedCardRef.current ? 'arm_failed' : 'setup_failed'),
@@ -284,7 +308,9 @@ function PayAfterBody({
       </Button>
     );
   } else {
-    cta = <BusyButton label={stageText(stage, usedSavedCardRef.current)} />;
+    cta = (
+      <BusyButton label={stageText(stage, usedSavedCardRef.current, modeSwitchedRef.current)} />
+    );
   }
 
   return (
@@ -312,11 +338,11 @@ function PayAfterBody({
 
       {stage === 'unconfirmed' && (
         <p className="text-muted-foreground bg-muted/50 rounded-lg px-3 py-2.5 text-sm leading-relaxed">
-          {PAY_AFTER_COPY.unconfirmed}
+          {unconfirmedText(modeSwitchedRef.current)}
         </p>
       )}
       <div role="status" aria-live="polite" className="sr-only">
-        {stageText(stage, usedSavedCardRef.current)}
+        {stageText(stage, usedSavedCardRef.current, modeSwitchedRef.current)}
       </div>
 
       <FundingFooter onBack={onBack} backDisabled={inFlight} slotRef={ctaSlotRef}>

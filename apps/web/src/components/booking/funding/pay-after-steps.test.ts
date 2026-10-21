@@ -19,7 +19,7 @@ import { resolveSetupIntentNextAction } from '@/lib/stripe/resolve-setup-next-ac
 import { armSavedCard, captureNewCard, switchToKeepGoing } from './pay-after-steps';
 
 const FIGURES = { topupReloadMinor: 10_000, topupThresholdMinor: 2_000 };
-const hooks = { onAuthenticating: vi.fn() };
+const hooks = { onAuthenticating: vi.fn(), onSwitched: vi.fn() };
 
 const confirmSetup = vi.fn();
 const submit = vi.fn();
@@ -76,6 +76,7 @@ describe('pay-after steps', () => {
       });
       await expect(armSavedCard(FIGURES, hooks)).resolves.toEqual({ ok: true });
       expect(order).toEqual(['save', 'arm']);
+      expect(hooks.onSwitched).toHaveBeenCalledTimes(1);
       expect(armSavedCardMandateAction).toHaveBeenCalledWith({
         clientRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
       });
@@ -91,6 +92,7 @@ describe('pay-after steps', () => {
         reason: 'setup_failed',
       });
       expect(armSavedCardMandateAction).not.toHaveBeenCalled();
+      expect(hooks.onSwitched).not.toHaveBeenCalled();
     });
 
     it.each(['failed', 'no_saved_card', 'unauthorized'] as const)(
