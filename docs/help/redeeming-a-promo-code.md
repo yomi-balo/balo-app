@@ -6,7 +6,7 @@ category:
   client: credit-billing
 order: 2
 published: false
-updated: 2026-10-17
+updated: 2026-10-21
 related: [buying-credit, booking-a-consultation]
 ---
 
@@ -15,8 +15,8 @@ payment required.
 
 ## How to redeem
 
-From your dashboard, open the "Have a promo code?" card to reach the redeem screen — or go
-straight to **/redeem**.
+From your dashboard, choose **Have a promo code?** at the bottom of your wallet card to reach the
+redeem screen — or go straight to **/redeem**.
 
 Type your code (codes aren't case-sensitive) and choose **Redeem**. You only need to be an
 owner or admin of your company to redeem — if you aren't, ask a teammate who is.

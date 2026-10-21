@@ -53,7 +53,7 @@ export function CelebrationCard({
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      className="border-border bg-card relative mb-5 overflow-hidden rounded-xl border px-8 py-12 text-center"
+      className="border-border bg-card relative mb-4 overflow-hidden rounded-2xl border px-8 py-12 text-center shadow-sm"
     >
       {/* Confetti particles */}
       {CONFETTI_COLORS.map((color, i) => (

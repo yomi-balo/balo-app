@@ -40,6 +40,18 @@ export const LOW_BALANCE_MINOR = 5_000;
 export const WALLET_CARD_CHROME =
   'bg-card w-full max-w-[380px] rounded-2xl border p-5 shadow-[0_1px_2px_rgba(15,23,41,0.04),0_6px_20px_rgba(15,23,41,0.04)]';
 
+/**
+ * Dashboard-only override passed as `className` over {@link WALLET_CARD_CHROME}: `cn`/twMerge
+ * resolves `max-w-none` over the 380px cap and `shadow-sm` over the arbitrary shadow, so the
+ * wallet fills its column and shares the dashboard card elevation, and `lg:flex-1` lets the last
+ * side-column card grow to the Up next card's height on desktop. Used by the loading and error
+ * states, which stay block layouts. `/settings/billing` never passes it.
+ */
+export const DASHBOARD_WALLET_SLOT_CLASS = 'max-w-none shadow-sm lg:flex-1';
+
+/** {@link DASHBOARD_WALLET_SLOT_CLASS} plus a flex column, for the resting (holder/member) cards. */
+export const DASHBOARD_WALLET_RESTING_SLOT_CLASS = `flex flex-col ${DASHBOARD_WALLET_SLOT_CLASS}`;
+
 /** The holder wallet resting-state discriminant, derived purely from the AUD-minor balance. */
 export type WalletRestingState = 'healthy' | 'low' | 'zero';
 

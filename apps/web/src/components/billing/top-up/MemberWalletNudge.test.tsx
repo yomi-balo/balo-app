@@ -70,6 +70,40 @@ describe('MemberWalletNudge', () => {
     expect(container.firstElementChild).toHaveClass('max-w-[380px]');
   });
 
+  it('lets a passed className override the width cap', () => {
+    const { container } = render(
+      <MemberWalletNudge
+        balanceMinor={134_700}
+        adminLabel="Sam"
+        fx={null}
+        hasEverHeldCredit
+        className="max-w-none"
+      />
+    );
+    expect(container.firstElementChild).toHaveClass('max-w-none');
+    expect(container.firstElementChild).not.toHaveClass('max-w-[380px]');
+  });
+
+  it.each([
+    ['low', 1_820],
+    ['zero', 0],
+    ['healthy', 134_700],
+  ])('renders the footer after the action on the %s state', (_state, balanceMinor) => {
+    render(
+      <MemberWalletNudge
+        balanceMinor={balanceMinor}
+        adminLabel="Sam"
+        fx={null}
+        hasEverHeldCredit
+        footer={<a href="/redeem">Promo</a>}
+      />
+    );
+    const footer = screen.getByRole('link', { name: 'Promo' });
+    const action =
+      screen.queryByRole('button') ?? screen.getByText(/start a consultation anytime/i);
+    expect(action.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('invokes onNudgeClick with the resting state on press (low)', async () => {
     mockNudge.mockResolvedValue({ ok: true });
     const onNudgeClick = vi.fn();

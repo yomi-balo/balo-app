@@ -31,7 +31,7 @@ export function GhostConsultationsCard(): React.JSX.Element {
       initial={{ y: 12, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.35, delay: 0.2, ease: 'easeOut' }}
-      className="border-border bg-card relative overflow-hidden rounded-xl border"
+      className="border-border bg-card relative overflow-hidden rounded-2xl border shadow-sm"
     >
       {/* Card content */}
       <div className="p-6">

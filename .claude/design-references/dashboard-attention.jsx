@@ -13,6 +13,9 @@
  *   4. Stage explanations: hover, click, tap or focus a stage name or a legend item on the
  *      track to see one sentence on what it means. The track and the Projects inbox share one
  *      stage vocabulary (see the "Stage vocabulary" build note).
+ *   5. Layout (both lenses): Up next and the side column (client wallet; expert earnings and
+ *      clients) lead, then Your move, then the track. Cards in a row share outer edges and end
+ *      on the same line (see the "Layout" build note).
  *
  * ⚠ ONE DEFINITION OF "NEEDS YOU". Project-side cards and every track token come from the
  * Projects inbox loaders (`loadExpertPortfolio` / `loadClientPortfolio`) and its rule table
@@ -43,6 +46,7 @@ import {
   ExternalLink,
   FileText,
   FolderKanban,
+  Gift,
   Handshake,
   LayoutGrid,
   LifeBuoy,
@@ -2359,7 +2363,7 @@ export function Pipeline({ lens, stages, mobile, defaultOpenStage = null }) {
 
 // ─── Up next (shipped, BAL-566 — context only) ───────────────────────────────────────
 
-function UpNextCard({ lens, rows }) {
+function UpNextCard({ lens, rows, fill = false }) {
   const links =
     lens === 'expert'
       ? [{ label: 'Open calendar', href: '/expert/calendar' }]
@@ -2368,7 +2372,11 @@ function UpNextCard({ lens, rows }) {
           { label: 'Projects', href: '/projects' },
         ];
   return (
-    <section aria-labelledby="up-next-heading" style={card}>
+    <section
+      aria-labelledby="up-next-heading"
+      data-card="up-next"
+      style={{ ...card, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+    >
       <h2 id="up-next-heading" style={cardTitle}>
         Up next
       </h2>
@@ -2462,10 +2470,11 @@ function UpNextCard({ lens, rows }) {
           </div>
         ))
       )}
+      {/* Spacer: pins the footer links to the bottom when the row stretches the card. */}
+      <div aria-hidden="true" style={{ flex: fill ? 1 : 0, minHeight: 6 }} />
       <div
         style={{
           borderTop: `1px solid ${T.border}`,
-          marginTop: 6,
           padding: '12px 0 10px',
           display: 'flex',
           gap: 18,
@@ -2533,9 +2542,13 @@ function EarningsCard({ earnings }) {
   );
 }
 
-function TopClientsCard() {
+function TopClientsCard({ grow = false }) {
   return (
-    <section aria-labelledby="top-clients-heading" style={{ ...card, paddingBottom: 18 }}>
+    <section
+      aria-labelledby="top-clients-heading"
+      data-card="top-clients"
+      style={{ ...card, paddingBottom: 18, flex: grow ? 1 : undefined }}
+    >
       <h2 id="top-clients-heading" style={{ ...cardTitle, fontSize: 15 }}>
         Top clients
       </h2>
@@ -2561,32 +2574,110 @@ function TopClientsCard() {
   );
 }
 
-function WalletCard() {
+function WalletCard({ grow = false }) {
   return (
-    <section aria-labelledby="wallet-heading" style={{ ...card, paddingBottom: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Wallet size={16} color={T.muted} aria-hidden="true" />
-        <h2 id="wallet-heading" style={{ ...cardTitle, fontSize: 15 }}>
-          Credit balance
-        </h2>
-      </div>
+    <section
+      aria-labelledby="wallet-heading"
+      data-card="wallet"
+      style={{
+        ...card,
+        padding: 20,
+        flex: grow ? 1 : undefined,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <h2
+        id="wallet-heading"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          margin: 0,
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: T.muted,
+        }}
+      >
+        <Wallet size={12} aria-hidden="true" />
+        Wallet
+      </h2>
       <p
         style={{
-          margin: '10px 0 2px',
-          fontSize: 26,
+          margin: '14px 0 0',
+          fontSize: 34,
+          lineHeight: 1,
           fontWeight: 600,
+          letterSpacing: '-0.02em',
           color: T.fg,
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        A$1,250.00
+        A$1,900.00
       </p>
-      <p style={{ margin: '0 0 14px', fontSize: 12.5, color: T.muted }}>
-        Shipped wallet card, unchanged.
-      </p>
-      <ButtonLink href="/settings/billing" onClick={preventNav}>
+      <a
+        href="/billing/top-up"
+        onClick={preventNav}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: 44,
+          marginTop: 16,
+          borderRadius: 10,
+          border: `1px solid ${T.panelBorder}`,
+          background: T.primarySoft,
+          color: T.primary,
+          fontSize: 14,
+          fontWeight: 600,
+          textDecoration: 'none',
+        }}
+      >
         Top up
-      </ButtonLink>
+      </a>
+      {/* The promo entry point lives inside the wallet card now (the widget's `action` slot),
+          so the side column is one card and lines up with Up next. */}
+      <div aria-hidden="true" style={{ flex: grow ? 1 : 0, minHeight: 14 }} />
+      <a
+        href="/redeem"
+        onClick={preventNav}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          paddingTop: 14,
+          borderTop: `1px solid ${T.border}`,
+          textDecoration: 'none',
+          minHeight: 44,
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            width: 32,
+            height: 32,
+            flexShrink: 0,
+            borderRadius: 8,
+            background: T.primarySoft,
+            color: T.primary,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Gift size={15} />
+        </span>
+        <span style={{ minWidth: 0 }}>
+          <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: T.fg }}>
+            Have a promo code?
+          </span>
+          <span style={{ display: 'block', fontSize: 12, color: T.muted }}>
+            Redeem it to add credit — no card needed.
+          </span>
+        </span>
+      </a>
     </section>
   );
 }
@@ -3004,10 +3095,10 @@ export function DashboardPreview({ lens, scenario, viewport }) {
     lens === 'expert' ? (
       <>
         <EarningsCard earnings={data.earnings} />
-        <TopClientsCard />
+        <TopClientsCard grow={!mobile} />
       </>
     ) : (
-      <WalletCard />
+      <WalletCard grow={!mobile} />
     );
 
   return (
@@ -3072,8 +3163,7 @@ export function DashboardPreview({ lens, scenario, viewport }) {
             <p style={{ margin: '4px 0 0', fontSize: 14, color: T.muted }}>{c.headerSub}</p>
           </div>
           {data.celebrate && <CelebrationCard mobile={mobile} />}
-          <YourMove key={`${lens}-${scenario}`} rows={data.rows} mobile={mobile} />
-          <Pipeline lens={lens} stages={data.pipeline} mobile={mobile} />
+          {/* Top row: Up next beside the side column. Both columns stretch to the row height. */}
           {mobile ? (
             <>
               <UpNextCard lens={lens} rows={data.upNext} />
@@ -3081,17 +3171,22 @@ export function DashboardPreview({ lens, scenario, viewport }) {
             </>
           ) : (
             <div
+              data-row="top"
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)',
                 gap: 16,
-                alignItems: 'start',
+                alignItems: 'stretch',
               }}
             >
-              <UpNextCard lens={lens} rows={data.upNext} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>{side}</div>
+              <UpNextCard lens={lens} rows={data.upNext} fill />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+                {side}
+              </div>
             </div>
           )}
+          <YourMove key={`${lens}-${scenario}`} rows={data.rows} mobile={mobile} />
+          <Pipeline lens={lens} stages={data.pipeline} mobile={mobile} />
         </div>
       </main>
     </div>
@@ -3324,6 +3419,14 @@ const TURN_SPECS = {
   ],
 };
 
+const LAYOUT_RULES = [
+  'Order, both lenses: header → (expert: the one-time go-live card or the setup checklist) → top row: Up next (2fr) beside the side column (1fr; client: the wallet; expert: Earnings, then Top clients) → Your move → Where your projects stand.',
+  'The two top-row columns stretch to the same height. Up next pins its footer links to the bottom of its card; the last card in the side column grows. Both columns end on one line, whatever the content.',
+  'Every card in a row shares the row’s outer edges: no card carries its own max-width. On the dashboard the wallet slot drops `WALLET_CARD_CHROME`’s 380px cap (holder widget, member nudge and loading fallback alike, so BAL-405’s one-chrome rule still holds within the slot); `/settings/billing` keeps the cap.',
+  'Client: the promo-code entry point moves inside the wallet card, under Top up, through the widget’s `action` slot. The side column becomes one card, and the separate rounded-xl promo card goes.',
+  'Every dashboard card: rounded-2xl, the shared border and shadow, 16px between rows and between columns. Mobile: one column in the same order.',
+];
+
 const EXPLANATION_RULES = [
   'Every stage name and legend item on the track is a trigger for one sentence on what it means. The trigger is the term itself (a button with a dotted underline), never an extra icon.',
   'Desktop (horizontal track): a popover (`components/ui/popover.tsx`). Click, Enter or Space toggles it; with a mouse it also opens after about 300 ms of hover and closes on leave, and a click on a hover-opened term keeps it open. A click outside, Escape and focus loss close it; do not rely on blur alone, because Safari never focuses a clicked button. Content: the term in bold and the sentence, nothing interactive. Position it with Radix collision handling (`collisionPadding`) so it never clips; the fixed alignment in this reference is a stand-in.',
@@ -3382,6 +3485,14 @@ function NotesPanel({ lens }) {
       <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Build notes, {lens} lens</h2>
       <ul style={{ margin: '12px 0 0', paddingLeft: 18 }}>
         {RULES_V2.map((r) => (
+          <li key={r} style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 4 }}>
+            {r}
+          </li>
+        ))}
+      </ul>
+      <h3 style={{ margin: '20px 0 8px', fontSize: 14, fontWeight: 600 }}>Layout</h3>
+      <ul style={{ margin: 0, paddingLeft: 18 }}>
+        {LAYOUT_RULES.map((r) => (
           <li key={r} style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 4 }}>
             {r}
           </li>

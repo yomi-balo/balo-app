@@ -52,6 +52,8 @@ interface WalletWidgetProps {
   action?: React.ReactNode;
   onRetry?: () => void;
   className?: string;
+  /** Makes the resting footer a growing flex column so `action` can pin to the card bottom. */
+  growFooter?: boolean;
 }
 
 /** Border token per state: amber for `low`, primary hairline for `session`, neutral otherwise. */
@@ -159,6 +161,7 @@ export function WalletWidget({
   action,
   onRetry,
   className,
+  growFooter = false,
 }: Readonly<WalletWidgetProps>): React.JSX.Element {
   const isSession = state === 'session';
   const liveBalance = useLiveBalance(isSession, balanceMinor, ratePerMinuteMinor);
@@ -239,7 +242,7 @@ export function WalletWidget({
         ) : null}
       </div>
 
-      <div className="mt-4">
+      <div className={growFooter ? 'mt-4 flex flex-1 flex-col' : 'mt-4'}>
         {isSession ? (
           <div className="text-muted-foreground/80 flex items-center gap-1.5 text-[12.5px] font-medium">
             <Clock className="size-3" strokeWidth={2.2} aria-hidden />

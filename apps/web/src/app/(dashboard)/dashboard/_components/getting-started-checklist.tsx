@@ -110,7 +110,7 @@ export function GettingStartedChecklist({
       initial={{ y: 16, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.4, delay: 0.1, ease: 'easeOut' }}
-      className="border-border bg-card mb-5 overflow-hidden rounded-xl border"
+      className="border-border bg-card mb-4 overflow-hidden rounded-2xl border shadow-sm"
     >
       {/* Header section */}
       <div className="from-primary/5 dark:from-primary/10 bg-gradient-to-r to-purple-500/5 p-6 dark:to-purple-500/10">

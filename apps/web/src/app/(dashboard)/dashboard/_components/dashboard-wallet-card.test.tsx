@@ -77,6 +77,47 @@ describe('DashboardWalletCard — holder lens', () => {
   });
 });
 
+describe('DashboardWalletCard — promo entry and chrome', () => {
+  it('holder: the promo link follows Top up', () => {
+    render(<DashboardWalletCard data={{ kind: 'holder', balanceMinor: 34_700, fx: null }} />);
+
+    const promo = screen.getByRole('link', { name: /have a promo code/i });
+    expect(promo).toHaveAttribute('href', '/redeem');
+    const topUp = screen.getByRole('link', { name: /top up/i });
+    expect(topUp.compareDocumentPosition(promo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('member: the promo entry renders exactly once', () => {
+    render(
+      <DashboardWalletCard
+        data={{ kind: 'member', balanceMinor: 1_820, adminLabel: 'Sam', hasEverHeldCredit: true }}
+      />
+    );
+    expect(screen.getAllByText('Have a promo code?')).toHaveLength(1);
+  });
+
+  it('error: no promo entry', () => {
+    render(<DashboardWalletCard data={{ kind: 'error' }} />);
+    expect(screen.queryByText('Have a promo code?')).toBeNull();
+  });
+
+  it.each([
+    ['holder', { kind: 'holder', balanceMinor: 34_700, fx: null }],
+    ['member', { kind: 'member', balanceMinor: 1_820, adminLabel: 'Sam', hasEverHeldCredit: true }],
+    ['error', { kind: 'error' }],
+  ] as const)('%s root fills the column and grows', (_lens, data) => {
+    const { container } = render(<DashboardWalletCard data={data} />);
+    const root = container.firstElementChild;
+    expect(root).toHaveClass('max-w-none', 'shadow-sm', 'lg:flex-1');
+    expect(root).not.toHaveClass('max-w-[380px]');
+    if (data.kind === 'error') {
+      expect(root).not.toHaveClass('flex-col');
+    } else {
+      expect(root).toHaveClass('flex', 'flex-col');
+    }
+  });
+});
+
 describe('DashboardWalletCard — member lens', () => {
   it('renders the team-balance nudge and fires wallet_widget_viewed with the member lens', () => {
     render(

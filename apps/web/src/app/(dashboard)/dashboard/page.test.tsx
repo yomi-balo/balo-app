@@ -46,8 +46,12 @@ vi.mock('./_components/expert-dashboard', () => ({
 vi.mock('./_components/dashboard-refresh-on-focus', () => ({
   DashboardRefreshOnFocus: () => <div data-testid="refresh-on-focus" />,
 }));
+let walletSuspends = false;
 vi.mock('./_components/dashboard-wallet-slot', () => ({
-  DashboardWalletSlot: () => <div data-testid="wallet-slot" />,
+  DashboardWalletSlot: () => {
+    if (walletSuspends) throw new Promise(() => {});
+    return <div data-testid="wallet-slot" />;
+  },
 }));
 vi.mock('./_components/company-up-next-slot', () => ({
   CompanyUpNextSlot: () => <div data-testid="company-up-next-slot" />,
@@ -87,6 +91,7 @@ import DashboardPage from './page';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  walletSuspends = false;
   mockBuildNavContext.mockResolvedValue({ workspaceType: 'company', capabilities: [] });
   mockResolveUpNextFooterLinks.mockReturnValue([]);
 });
@@ -97,7 +102,7 @@ function precedes(a: Element, b: Element): boolean {
 }
 
 describe('DashboardPage — company branch', () => {
-  it('renders the header, then Your move, then Up next, then the wallet slot, then the promo link, in real DOM order', async () => {
+  it('renders the header, then Up next, then the wallet slot, then Your move, in real DOM order', async () => {
     mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
     mockRequireUser.mockResolvedValue({ id: 'u-1', firstName: 'Dana' });
     mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
@@ -108,18 +113,59 @@ describe('DashboardPage — company branch', () => {
     const yourMove = screen.getByTestId('company-your-move-slot');
     const upNext = screen.getByTestId('company-up-next-slot');
     const wallet = screen.getByTestId('wallet-slot');
-    const promo = screen.getByText('Have a promo code?');
 
-    expect(precedes(header, yourMove)).toBe(true);
-    expect(precedes(yourMove, upNext)).toBe(true);
+    expect(precedes(header, upNext)).toBe(true);
     expect(precedes(upNext, wallet)).toBe(true);
-    expect(precedes(wallet, promo)).toBe(true);
+    expect(precedes(wallet, yourMove)).toBe(true);
+    expect(screen.queryByText('Have a promo code?')).toBeNull();
     expect(container.querySelector('.animate-pulse')).toBeNull();
     expect(mockCompanyYourMoveSlot).toHaveBeenCalledWith({
       user: { id: 'u-1', firstName: 'Dana' },
       companyId: 'co-1',
       companyName: 'Northwind',
     });
+  });
+
+  it('places the application-review banner before Up next', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
+    mockRequireUser.mockResolvedValue({ id: 'u-1', firstName: 'Dana', email: 'd@x.co' });
+    mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
+
+    render(await DashboardPage());
+
+    expect(
+      precedes(
+        screen.getByTestId('application-review-banner-slot'),
+        screen.getByTestId('company-up-next-slot')
+      )
+    ).toBe(true);
+  });
+
+  it('stretches the top-row grid so both columns share one height', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
+    mockRequireUser.mockResolvedValue({ id: 'u-1', firstName: 'Dana' });
+    mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
+
+    render(await DashboardPage());
+
+    const grid = screen.getByTestId('company-up-next-slot').closest('.grid');
+    expect(grid).toHaveClass('items-stretch');
+    expect(grid).not.toHaveClass('items-start');
+  });
+
+  it('renders a full-width wallet loading fallback without a promo entry', async () => {
+    walletSuspends = true;
+    mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
+    mockRequireUser.mockResolvedValue({ id: 'u-1', firstName: 'Dana' });
+    mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
+
+    render(await DashboardPage());
+
+    const fallback = screen.getByLabelText('Loading wallet balance');
+    expect(fallback).toHaveClass('max-w-none', 'shadow-sm');
+    expect(fallback).not.toHaveClass('max-w-[380px]');
+    expect(fallback).not.toHaveClass('flex-col');
+    expect(screen.queryByText('Have a promo code?')).toBeNull();
   });
 
   it('mounts the refresh-on-focus listener exactly once', async () => {
