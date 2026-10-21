@@ -287,6 +287,7 @@ function composerBriefProps(
   clientFirstName: string;
   clientName: string;
   companyName: string;
+  clientCompanyName: string | null;
   requestTitle: string;
   requestSummary: string;
   requestDescription: React.ReactNode;
@@ -297,6 +298,7 @@ function composerBriefProps(
     clientFirstName,
     clientName: clientNameOf(request),
     companyName: companyNameOf(request),
+    clientCompanyName: request.company?.name ?? null,
     requestTitle: request.title,
     requestSummary: htmlToPlainText(request.description),
     requestDescription: <RichText html={request.description} size="sm" />,
@@ -452,13 +454,19 @@ async function renderExpertSurface(
       return renderReviseComposer(requestId, relationshipId, request, relationship, current);
     }
     // The in-place sent screen: the send redirects to `?sent={version}`, which only
-    // renders when it names the latest version.
-    if (current !== undefined && sent !== null && sent === current.version) {
+    // renders when it names the latest version and that version is still awaiting the client.
+    if (
+      current !== undefined &&
+      current.status === 'submitted' &&
+      sent !== null &&
+      sent === current.version
+    ) {
       return (
         <ComposerShell>
           <ProposalSent
             requestId={requestId}
             companyName={companyNameOf(request)}
+            clientCompanyName={request.company?.name ?? null}
             clientName={clientNameOf(request)}
             reviseMode={current.version > 1}
             version={current.version}

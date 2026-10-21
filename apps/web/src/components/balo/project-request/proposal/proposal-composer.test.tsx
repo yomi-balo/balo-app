@@ -116,6 +116,7 @@ function renderComposer(
       clientFirstName="Priya"
       clientName="Priya Shah"
       companyName="Northwind"
+      clientCompanyName="Northwind"
       requestTitle="Quote-to-cash rebuild"
       requestSummary="Rebuild our quoting flow."
       requestDescription={<p>The full brief body</p>}
@@ -443,6 +444,60 @@ describe('ProposalComposer — autosave and slice setters', () => {
         expect(last.installments?.map((i) => i.pct)).toEqual([50, 50]);
       },
       { timeout: 3000 }
+    );
+  });
+});
+
+describe('ProposalComposer — One per milestone stays in step with the milestones', () => {
+  function threeMilestoneDraft(): ProposalDraftState {
+    const base = readyDraft();
+    const titles = ['Discovery', 'Build', 'Launch'];
+    return {
+      ...base,
+      fixedPriceCents: 0,
+      milestonePricingEnabled: false,
+      milestones: titles.map((title) => ({
+        key: nextDraftKey(),
+        title,
+        descriptionHtml: '',
+        acceptanceCriteria: '',
+        valueCents: null,
+        estimatedMinutes: null,
+      })),
+    };
+  }
+
+  it('regenerates the payments when a milestone is added, keeping the preset highlighted', async () => {
+    const user = userEvent.setup();
+    renderComposer(threeMilestoneDraft());
+
+    const preset = screen.getByRole('button', { name: 'One per milestone' });
+    await user.click(preset);
+    expect(screen.getAllByLabelText(/^Payment \d+ name$/i)).toHaveLength(3);
+
+    await user.click(screen.getByRole('button', { name: /add milestone/i }));
+
+    expect(screen.getAllByLabelText(/^Payment \d+ name$/i)).toHaveLength(4);
+    expect(screen.getByRole('button', { name: 'One per milestone' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+
+  it('stops following once a payment is edited by hand', async () => {
+    const user = userEvent.setup();
+    renderComposer(threeMilestoneDraft());
+
+    await user.click(screen.getByRole('button', { name: 'One per milestone' }));
+    const [firstName] = screen.getAllByLabelText(/^Payment \d+ name$/i);
+    if (firstName === undefined) throw new Error('expected payment rows');
+    await user.type(firstName, 'x');
+    await user.click(screen.getByRole('button', { name: /add milestone/i }));
+
+    expect(screen.getAllByLabelText(/^Payment \d+ name$/i)).toHaveLength(3);
+    expect(screen.getByRole('button', { name: 'One per milestone' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
     );
   });
 });
@@ -1311,6 +1366,34 @@ describe('ProposalComposer — removing a milestone', () => {
     await user.click(screen.getByRole('button', { name: 'Remove milestone 2' }));
 
     expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProposalComposer — attribution without a company', () => {
+  it('names the bare client in the revise summary and the note', () => {
+    renderComposer(readyDraft(), {
+      companyName: 'the client',
+      clientCompanyName: null,
+      changeRequest: { section: 'pricing', note: 'Please trim the price.' },
+      fromProposalId: FROM_PROPOSAL_ID,
+      currentVersion: 1,
+    });
+
+    expect(screen.getByText('Priya Shah asked for one change.')).toBeInTheDocument();
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument();
+  });
+
+  it('names the bare client on a timeline note', () => {
+    renderComposer(readyDraft(), {
+      companyName: 'the client',
+      clientCompanyName: null,
+      changeRequest: { section: 'timeline', note: 'Can this land sooner?' },
+      fromProposalId: FROM_PROPOSAL_ID,
+      currentVersion: 1,
+    });
+
+    expect(screen.getByText('Priya Shah')).toBeInTheDocument();
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument();
   });
 });
 

@@ -7,6 +7,7 @@ import {
   type ProposalChangeSection,
 } from '@balo/shared/project-requests';
 import { COMPOSER_TARGET } from './proposal-composer-state';
+import { personAtCompany } from './proposal-format';
 
 type ChangeSection = ProposalChangeSection;
 
@@ -45,7 +46,7 @@ interface ChangeRequestNoteProps {
   section: string;
   clientName: string;
   /** The client company, named alongside the person on the first mention only. */
-  company?: string;
+  company?: string | null;
   note: string;
   addressed: boolean;
   onToggle: () => void;
@@ -83,7 +84,7 @@ export function ChangeRequestNote({
       <div className="min-w-0">
         <p className="text-foreground/80 text-sm">
           <strong className="text-foreground font-semibold">
-            {company === undefined ? clientName : `${clientName} @ ${company}`}
+            {personAtCompany(clientName, company)}
           </strong>{' '}
           asked for a change to {SECTION_PHRASE[asChangeSection(section)]}
         </p>

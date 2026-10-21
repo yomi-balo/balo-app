@@ -15,6 +15,7 @@ import {
   presetInstallments,
   seedInstallments,
   summaryReadiness,
+  syncPerMilestoneInstallments,
   toSavePayload,
   type ProposalDraftState,
   type ReadinessIssueId,
@@ -664,6 +665,116 @@ describe('installment presets', () => {
   it('matchInstallmentPreset returns null for a custom schedule', () => {
     const installments = [{ key: nextDraftKey(), label: 'Upfront', pct: 100 }];
     expect(matchInstallmentPreset({ ...blank, installments })).toBeNull();
+  });
+});
+
+describe('syncPerMilestoneInstallments', () => {
+  function perMilestoneDraft(count: number, priced = false): ProposalDraftState {
+    const base = readyFixed();
+    const milestones = Array.from({ length: count }, (_, i) => ({
+      ...blankMilestone('fixed'),
+      title: `Stage ${i + 1}`,
+      valueCents: priced ? (i + 1) * 100_000 : null,
+    }));
+    const draft = { ...base, milestones, milestonePricingEnabled: priced };
+    return { ...draft, installments: presetInstallments('per-milestone', draft) };
+  }
+
+  const shape = (s: ProposalDraftState): [string, number][] =>
+    s.installments.map((i) => [i.label, i.pct]);
+
+  it('regenerates the payments when a milestone is added', () => {
+    const prev = perMilestoneDraft(3);
+    const next = { ...prev, milestones: [...prev.milestones, blankMilestone('fixed')] };
+
+    const synced = syncPerMilestoneInstallments(prev, next);
+
+    expect(shape(synced)).toEqual([
+      ['Stage 1', 25],
+      ['Stage 2', 25],
+      ['Stage 3', 25],
+      ['Milestone 4', 25],
+    ]);
+    expect(matchInstallmentPreset(synced)).toBe('per-milestone');
+  });
+
+  it('follows a removal, a reorder and a rename', () => {
+    const prev = perMilestoneDraft(3);
+    const [first, second, third] = prev.milestones;
+    if (first === undefined || second === undefined || third === undefined) {
+      throw new Error('expected three milestones');
+    }
+
+    const removed = syncPerMilestoneInstallments(prev, { ...prev, milestones: [first, third] });
+    expect(shape(removed)).toEqual([
+      ['Stage 1', 50],
+      ['Stage 3', 50],
+    ]);
+
+    const reordered = syncPerMilestoneInstallments(prev, {
+      ...prev,
+      milestones: [third, first, second],
+    });
+    expect(reordered.installments.map((i) => i.label)).toEqual(['Stage 3', 'Stage 1', 'Stage 2']);
+
+    const renamed = syncPerMilestoneInstallments(prev, {
+      ...prev,
+      milestones: [{ ...first, title: 'Kick-off' }, second, third],
+    });
+    expect(renamed.installments.map((i) => i.label)).toEqual(['Kick-off', 'Stage 2', 'Stage 3']);
+  });
+
+  it('follows an amount change and the pricing switch', () => {
+    const prev = perMilestoneDraft(2, true);
+    const [first, second] = prev.milestones;
+    if (first === undefined || second === undefined) throw new Error('expected two milestones');
+    expect(shape(prev)).toEqual([
+      ['Stage 1', 33],
+      ['Stage 2', 67],
+    ]);
+
+    const repriced = syncPerMilestoneInstallments(prev, {
+      ...prev,
+      milestones: [{ ...first, valueCents: 300_000 }, second],
+    });
+    expect(shape(repriced).map(([, pct]) => pct)).toEqual([60, 40]);
+
+    const switchedOff = syncPerMilestoneInstallments(prev, {
+      ...prev,
+      milestonePricingEnabled: false,
+      milestones: prev.milestones.map((m) => ({ ...m, valueCents: null })),
+    });
+    expect(shape(switchedOff).map(([, pct]) => pct)).toEqual([50, 50]);
+  });
+
+  it('keeps the existing row keys by position', () => {
+    const prev = perMilestoneDraft(2);
+    const next = { ...prev, milestones: [...prev.milestones, blankMilestone('fixed')] };
+
+    const synced = syncPerMilestoneInstallments(prev, next);
+
+    expect(synced.installments.slice(0, 2).map((i) => i.key)).toEqual(
+      prev.installments.map((i) => i.key)
+    );
+    expect(synced.installments).toHaveLength(3);
+  });
+
+  it('leaves a hand-edited schedule alone', () => {
+    const prev = perMilestoneDraft(2);
+    const edited = {
+      ...prev,
+      installments: prev.installments.map((i, idx) => (idx === 0 ? { ...i, pct: 70 } : i)),
+    };
+    const next = { ...edited, milestones: [...edited.milestones, blankMilestone('fixed')] };
+
+    expect(syncPerMilestoneInstallments(edited, next)).toBe(next);
+  });
+
+  it('leaves another preset alone', () => {
+    const prev = { ...readyFixed(), installments: presetInstallments('50-50', readyFixed()) };
+    const next = { ...prev, milestones: [...prev.milestones, blankMilestone('fixed')] };
+
+    expect(syncPerMilestoneInstallments(prev, next)).toBe(next);
   });
 });
 

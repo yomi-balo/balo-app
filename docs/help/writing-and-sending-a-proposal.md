@@ -49,8 +49,9 @@ that's where you begin.
 
 Then choose **Payment schedule**. The presets are **One payment**, **30 / 70**, **50 / 50**,
 **30 / 40 / 30** and **One per milestone**. **One per milestone** creates one payment for each of
-your milestones, split in proportion to their amounts, or evenly if you haven't priced them. The
-preset you've chosen stays highlighted until you edit a payment by hand.
+your milestones, split in proportion to their amounts, or evenly if you haven't priced them, and it
+keeps up as you add, remove, rename or reprice milestones. The preset you've chosen stays
+highlighted until you edit a payment by hand.
 
 You can edit the name and percentage of any payment, and choose **Add payment** to add another; it
 starts with whatever percentage is left to assign. The payments need to add up to 100%.

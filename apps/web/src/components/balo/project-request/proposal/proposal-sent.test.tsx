@@ -14,11 +14,16 @@ import { ProposalSent } from './proposal-sent';
 
 const REQUEST_ID = '11111111-1111-1111-1111-111111111111';
 
-function renderSent(reviseMode: boolean, version: number): void {
+function renderSent(
+  reviseMode: boolean,
+  version: number,
+  clientCompanyName: string | null = 'Northwind'
+): void {
   render(
     <ProposalSent
       requestId={REQUEST_ID}
       companyName="Northwind"
+      clientCompanyName={clientCompanyName}
       clientName="Dana"
       reviseMode={reviseMode}
       version={version}
@@ -40,6 +45,13 @@ describe('ProposalSent', () => {
     expect(
       screen.getByText(/Dana @ Northwind has an email and a notification/)
     ).toBeInTheDocument();
+  });
+
+  it('uses the bare name when the request has no company', () => {
+    renderSent(false, 1, null);
+
+    expect(screen.getByText(/^Dana has an email and a notification/)).toBeInTheDocument();
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument();
   });
 
   it('names the version in revise mode', () => {

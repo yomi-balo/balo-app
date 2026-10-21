@@ -240,6 +240,25 @@ export function matchInstallmentPreset(
   return match?.key ?? null;
 }
 
+/**
+ * Carries a milestone-affecting change (`next`, built from `prev`) through to the
+ * payment schedule: when `prev`'s installments matched the "One per milestone"
+ * preset, they are regenerated from `next`'s milestones (labels and shares), reusing
+ * the existing row keys by position. Once the schedule has been edited by hand, or
+ * another preset is active, `next` is returned untouched.
+ */
+export function syncPerMilestoneInstallments(
+  prev: ProposalDraftState,
+  next: ProposalDraftState
+): ProposalDraftState {
+  if (matchInstallmentPreset(prev) !== 'per-milestone') return next;
+  const installments = presetInstallments('per-milestone', next).map((row, i) => ({
+    ...row,
+    key: prev.installments[i]?.key ?? row.key,
+  }));
+  return { ...next, installments };
+}
+
 type MilestoneAllocation =
   | { kind: 'no_price'; allocatedCents: number }
   | { kind: 'balanced'; priceCents: number }

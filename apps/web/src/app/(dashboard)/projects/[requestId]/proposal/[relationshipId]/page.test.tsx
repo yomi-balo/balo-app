@@ -413,6 +413,7 @@ describe('ProposalSurfacePage (RSC) — expert composer branch', () => {
       clientFirstName: 'Dana',
       clientName: 'Dana Whitfield',
       companyName: 'Northwind Industrial',
+      clientCompanyName: 'Northwind Industrial',
       requestTitle: REQUEST_TITLE,
       requestSummary: 'Brief',
       expert: {
@@ -477,6 +478,7 @@ describe('ProposalSurfacePage (RSC) — expert composer branch', () => {
 
     const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(props.companyName).toBe('the client');
+    expect(props.clientCompanyName).toBeNull();
     expect(props.clientName).toBe('Dana');
     expect(screen.getByText('the client')).toBeInTheDocument();
   });
@@ -640,10 +642,44 @@ describe('ProposalSurfacePage (RSC) — in-place sent screen (?sent)', () => {
     expect(mockSent.mock.calls[0]?.[0]).toEqual({
       requestId: REQUEST_ID,
       companyName: 'Northwind Industrial',
+      clientCompanyName: 'Northwind Industrial',
       clientName: 'Dana Whitfield',
       reviseMode: false,
       version: 1,
     });
+  });
+
+  it('passes no company to the person attribution when the request has none', async () => {
+    seedSubmitted(1);
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        company: undefined,
+        relationships: [relationship({ status: 'proposal_submitted' })],
+      })
+    );
+
+    await renderPage({ sent: '1' });
+
+    expect(mockSent.mock.calls[0]?.[0]).toMatchObject({
+      companyName: 'the client',
+      clientCompanyName: null,
+    });
+  });
+
+  it('falls through to the submitted view when the matching version has been decided', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'accepted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'accepted', version: 1 }));
+    seedChildren();
+
+    await renderPage({ sent: '1' });
+
+    expect(screen.getByTestId('submitted-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('sent-stub')).not.toBeInTheDocument();
+    expect(mockSent).not.toHaveBeenCalled();
   });
 
   it('marks a resend (version above 1) as revise mode', async () => {

@@ -25,12 +25,14 @@ import { ProposalSent } from './proposal-sent';
 import { useSendProposal } from './use-send-proposal';
 import { usePageFileDrop } from './use-page-file-drop';
 import { draftToReviewDoc } from './proposal-draft-preview';
+import { personAtCompany } from './proposal-format';
 import type { ProposalExpertIdentity } from './proposal-review-types';
 import {
   COMPOSER_TARGET,
   computeTotalCents,
   seedInstallments,
   summaryReadiness,
+  syncPerMilestoneInstallments,
   toSavePayload,
   type ProposalCadenceValue,
   type ProposalDraftState,
@@ -56,10 +58,12 @@ export interface ProposalComposerProps {
   requestId: string;
   relationshipId: string;
   clientFirstName: string;
-  /** The client's full name, for attribution ("{clientName} @ {companyName}"). */
+  /** The client's full name, for attribution ("{clientName} @ {clientCompanyName}"). */
   clientName: string;
-  /** The client company this proposal is for. */
+  /** The client company this proposal is for, with the "the client" fallback for prospective copy. */
   companyName: string;
+  /** The client company's real name, or null when the request has none — person attribution only. */
+  clientCompanyName: string | null;
   requestTitle: string;
   /** One-line plain-text summary of the request, shown on the collapsed brief card. */
   requestSummary: string;
@@ -154,6 +158,7 @@ export function ProposalComposer({
   clientFirstName,
   clientName,
   companyName,
+  clientCompanyName,
   requestTitle,
   requestSummary,
   requestDescription,
@@ -426,10 +431,10 @@ export function ProposalComposer({
           setState((prev) => {
             if (prev.milestones.some((m) => m.key === removed.key)) return prev;
             const at = Math.min(index, prev.milestones.length);
-            return {
+            return syncPerMilestoneInstallments(prev, {
               ...prev,
               milestones: [...prev.milestones.slice(0, at), removed, ...prev.milestones.slice(at)],
-            };
+            });
           });
         },
         toastId
@@ -441,7 +446,7 @@ export function ProposalComposer({
   const setMilestones = useCallback(
     (milestones: ProposalMilestoneDraft[]): void => {
       const previous = stateRef.current.milestones;
-      setState((prev) => ({ ...prev, milestones }));
+      setState((prev) => syncPerMilestoneInstallments(prev, { ...prev, milestones }));
       if (milestones.length !== previous.length - 1) return;
       const keep = new Set(milestones.map((m) => m.key));
       const index = previous.findIndex((m) => !keep.has(m.key));
@@ -471,7 +476,9 @@ export function ProposalComposer({
       trackMilestonePricingToggled(enabled);
       if (enabled) {
         toast.dismiss(MILESTONE_PRICING_TOAST_ID);
-        setState((prev) => ({ ...prev, milestonePricingEnabled: true }));
+        setState((prev) =>
+          syncPerMilestoneInstallments(prev, { ...prev, milestonePricingEnabled: true })
+        );
         return;
       }
 
@@ -479,23 +486,27 @@ export function ProposalComposer({
         stateRef.current.milestones.map((m) => [m.key, m.valueCents] as const)
       );
       const hadAmounts = [...amountsByKey.values()].some((value) => (value ?? 0) > 0);
-      setState((prev) => ({
-        ...prev,
-        milestonePricingEnabled: false,
-        milestones: prev.milestones.map((m) => ({ ...m, valueCents: null })),
-      }));
+      setState((prev) =>
+        syncPerMilestoneInstallments(prev, {
+          ...prev,
+          milestonePricingEnabled: false,
+          milestones: prev.milestones.map((m) => ({ ...m, valueCents: null })),
+        })
+      );
       if (!hadAmounts) return;
       toastWithUndo(
         'Milestone amounts removed. Your project price stays the same.',
         () => {
-          setState((prev) => ({
-            ...prev,
-            milestonePricingEnabled: true,
-            milestones: prev.milestones.map((m) => ({
-              ...m,
-              valueCents: amountsByKey.get(m.key) ?? m.valueCents,
-            })),
-          }));
+          setState((prev) =>
+            syncPerMilestoneInstallments(prev, {
+              ...prev,
+              milestonePricingEnabled: true,
+              milestones: prev.milestones.map((m) => ({
+                ...m,
+                valueCents: amountsByKey.get(m.key) ?? m.valueCents,
+              })),
+            })
+          );
           trackMilestonePricingToggled(true);
         },
         MILESTONE_PRICING_TOAST_ID
@@ -736,7 +747,7 @@ export function ProposalComposer({
     <ChangeRequestNote
       section={changeRequest.section}
       clientName={clientName}
-      company={noteSection === 'timeline' ? companyName : undefined}
+      company={noteSection === 'timeline' ? clientCompanyName : undefined}
       note={changeRequest.note}
       addressed={addressed}
       onToggle={toggleAddressed}
@@ -770,7 +781,7 @@ export function ProposalComposer({
                     <MessageSquare className="size-3.5 shrink-0" aria-hidden="true" />
                     {noteSection === 'timeline'
                       ? clientName
-                      : `${clientName} @ ${companyName}`}{' '}
+                      : personAtCompany(clientName, clientCompanyName)}{' '}
                     asked for one change.
                   </span>
                   <button
@@ -891,6 +902,7 @@ export function ProposalComposer({
           <ProposalSent
             requestId={requestId}
             companyName={companyName}
+            clientCompanyName={clientCompanyName}
             clientName={clientName}
             reviseMode={reviseMode}
             version={sentVersion}

@@ -137,7 +137,7 @@ export async function runSaveProposalDraft(
     }));
 
     // Both child writers lock the header and refuse a non-draft with
-    // `ProposalNotDraftError` — the same stale branch as `updateDraft` below.
+    // `ProposalNotDraftError` — the same stale branch as `updateDraft` above.
     await proposalMilestonesRepository.setForProposal({ proposalId, milestones });
     await proposalPaymentInstallmentsRepository.setForProposal({ proposalId, installments });
 

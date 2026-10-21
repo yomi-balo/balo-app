@@ -5,11 +5,14 @@ import { Check, Eye } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { personAtCompany } from './proposal-format';
 
 interface ProposalSentProps {
   requestId: string;
   /** The client company the proposal went to. */
   companyName: string;
+  /** The company's real name, or null when the request has none — person attribution only. */
+  clientCompanyName: string | null;
   /** The person at that company who reviews it. */
   clientName: string;
   /** Revise mode: the headline names the version instead of congratulating. */
@@ -26,6 +29,7 @@ interface ProposalSentProps {
 export function ProposalSent({
   requestId,
   companyName,
+  clientCompanyName,
   clientName,
   reviseMode,
   version,
@@ -58,9 +62,9 @@ export function ProposalSent({
           : `Nice work. Your proposal is with ${companyName}`}
       </h1>
       <p className="text-muted-foreground mb-6">
-        {clientName} @ {companyName} has an email and a notification in Balo. If they&apos;d like
-        changes, their notes will appear right beside the section they&apos;re about, so you can
-        update it and resend.
+        {personAtCompany(clientName, clientCompanyName)} has an email and a notification in Balo. If
+        they&apos;d like changes, their notes will appear right beside the section they&apos;re
+        about, so you can update it and resend.
       </p>
       <div className="flex flex-wrap justify-center gap-2.5">
         <Button

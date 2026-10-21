@@ -28,3 +28,11 @@ export function formatProposalAmount(cents: number, currency: string): string {
     maximumFractionDigits: 2,
   }).format(centsToDollars(cents));
 }
+
+/**
+ * A person named with their company ("Dana @ Northwind Industrial"), or the bare name
+ * when the request has no company.
+ */
+export function personAtCompany(name: string, company: string | null | undefined): string {
+  return company === null || company === undefined ? name : `${name} @ ${company}`;
+}
