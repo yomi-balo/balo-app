@@ -67,7 +67,7 @@ export function ListRow({
           {row.companyName && (
             <span className="text-muted-foreground text-xs">{row.companyName}</span>
           )}
-          <StageChip stage={row.stage} label={row.stageLabel} />
+          <StageChip stage={row.stage} lens={lens} label={row.stageLabel} />
           {row.progressLabel && (
             <span className="text-muted-foreground text-xs tabular-nums">{row.progressLabel}</span>
           )}

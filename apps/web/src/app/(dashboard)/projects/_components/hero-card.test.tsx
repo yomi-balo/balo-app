@@ -31,7 +31,7 @@ const ROW: PortfolioRowView = {
   title: 'CPQ implementation',
   companyName: 'Northwind Industrial',
   stage: 'prop_in',
-  stageLabel: 'Proposals in',
+  stageLabel: 'Proposals',
   needsYou: true,
   nudgeLabel: 'Review 2 proposals',
   unread: true,
@@ -51,7 +51,7 @@ describe('HeroCard', () => {
     render(<HeroCard row={ROW} lens="client" index={0} />);
     expect(screen.getByText('CPQ implementation')).toBeInTheDocument();
     expect(screen.getByText('Review 2 proposals')).toBeInTheDocument();
-    expect(screen.getByText('Proposals in')).toBeInTheDocument();
+    expect(screen.getByText('Proposals')).toBeInTheDocument();
     expect(screen.getByText(/proposal submitted/i)).toBeInTheDocument();
   });
 

@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen, within } from '@/test/utils';
+import { act, fireEvent, render, screen, waitFor, within } from '@/test/utils';
 import { axe } from '@/test/axe';
 import { track, DASHBOARD_EVENTS } from '@/lib/analytics';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { PARTICIPANT_STAGES, TURN_EXPLANATIONS } from '@/lib/projects-inbox/project-stages';
 import {
   PROJECT_TRACK_COPY,
   type ProjectTrackStage,
@@ -10,6 +12,9 @@ import {
   type ProjectTrackView,
 } from '../_lib/your-move-view-types';
 import { ProjectTrack } from './project-track';
+
+vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: vi.fn() }));
+const useIsMobileMock = vi.mocked(useIsMobile);
 
 function token(id: string, over: Partial<ProjectTrackToken> = {}): ProjectTrackToken {
   return {
@@ -25,9 +30,17 @@ function token(id: string, over: Partial<ProjectTrackToken> = {}): ProjectTrackT
 function stage(
   key: ProjectTrackStage['key'],
   label: string,
-  tokens: ProjectTrackToken[] = []
+  tokens: ProjectTrackToken[] = [],
+  lens: 'expert' | 'client' = 'expert'
 ): ProjectTrackStage {
-  return { key, label, tokens, hasYourMove: tokens.some((t) => t.turn === 'your_move') };
+  const explanation = PARTICIPANT_STAGES[lens].find((s) => s.key === key)?.explanation ?? '';
+  return {
+    key,
+    label,
+    explanation,
+    tokens,
+    hasYourMove: tokens.some((t) => t.turn === 'your_move'),
+  };
 }
 
 const EXPERT_VIEW: ProjectTrackView = {
@@ -44,16 +57,17 @@ const EXPERT_VIEW: ProjectTrackView = {
 const COMPANY_VIEW: ProjectTrackView = {
   workspaceType: 'company',
   stages: [
-    stage('matching', 'Matching', [token('m', { label: 'Same', title: 'Same' })]),
-    stage('interest', 'Interest'),
-    stage('proposal', 'Proposals'),
-    stage('kickoff', 'Kickoff'),
-    stage('delivery', 'Delivery'),
+    stage('matching', 'Matching', [token('m', { label: 'Same', title: 'Same' })], 'client'),
+    stage('interest', 'Interest', [], 'client'),
+    stage('proposal', 'Proposals', [], 'client'),
+    stage('kickoff', 'Kickoff', [], 'client'),
+    stage('delivery', 'Delivery', [], 'client'),
   ],
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useIsMobileMock.mockReturnValue(false);
 });
 
 describe('ProjectTrack', () => {
@@ -125,5 +139,236 @@ describe('ProjectTrack', () => {
   it('has no accessibility violations', async () => {
     const { container } = render(<ProjectTrack view={EXPERT_VIEW} />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('desktop stage and legend explanations', () => {
+  const STAGES = EXPERT_VIEW.stages;
+
+  it('opens a popover with the term and its sentence for every stage and legend item', async () => {
+    const user = userEvent.setup();
+    for (const view of [EXPERT_VIEW, COMPANY_VIEW]) {
+      const lens = view.workspaceType === 'expert' ? 'expert' : 'client';
+      const { unmount } = render(<ProjectTrack view={view} />);
+      for (const s of view.stages) {
+        await user.click(screen.getByRole('button', { name: s.label }));
+        const dialog = await screen.findByRole('dialog', { name: s.label });
+        expect(within(dialog).getByText(s.explanation)).toBeInTheDocument();
+        await user.keyboard('{Escape}');
+      }
+      for (const [turn, label] of [
+        ['your_move', 'Your move'],
+        ['waiting', PROJECT_TRACK_COPY[view.workspaceType].waiting],
+        ['in_progress', 'In progress'],
+      ] as const) {
+        await user.click(screen.getByRole('button', { name: label }));
+        const dialog = await screen.findByRole('dialog', { name: label });
+        expect(within(dialog).getByText(TURN_EXPLANATIONS[lens][turn])).toBeInTheDocument();
+        await user.keyboard('{Escape}');
+      }
+      unmount();
+    }
+  });
+
+  it('opens with Enter and Space', async () => {
+    const user = userEvent.setup();
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    screen.getByRole('button', { name: 'Proposal' }).focus();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByRole('dialog', { name: 'Proposal' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.keyboard(' ');
+    expect(await screen.findByRole('dialog', { name: 'Proposal' })).toBeInTheDocument();
+  });
+
+  it('toggles closed on a second click', async () => {
+    const user = userEvent.setup();
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    const trigger = screen.getByRole('button', { name: 'Invited' });
+    await user.click(trigger);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await user.click(trigger);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('closes on an outside pointerdown with no focus change, and on Tab away', async () => {
+    const user = userEvent.setup();
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    await user.click(screen.getByRole('button', { name: 'Invited' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Invited' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await user.tab();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  describe('hover', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('opens a mouse hover after 300ms and not before it, and closes on leave', async () => {
+      vi.useRealTimers();
+      vi.useFakeTimers();
+      render(<ProjectTrack view={EXPERT_VIEW} />);
+      const trigger = screen.getByRole('button', { name: 'Kickoff' });
+      fireEvent.pointerEnter(trigger, { pointerType: 'mouse' });
+      act(() => {
+        vi.advanceTimersByTime(299);
+      });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.getByRole('dialog', { name: 'Kickoff' })).toBeInTheDocument();
+      fireEvent.pointerLeave(trigger, { pointerType: 'mouse' });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('does not open when the pointer leaves before the delay', async () => {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<ProjectTrack view={EXPERT_VIEW} />);
+      const trigger = screen.getByRole('button', { name: 'Kickoff' });
+      await user.hover(trigger);
+      await user.unhover(trigger);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('keeps a hover-opened popover open when clicked, even after the pointer leaves', async () => {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<ProjectTrack view={EXPERT_VIEW} />);
+      const trigger = screen.getByRole('button', { name: 'Kickoff' });
+      await user.hover(trigger);
+      act(() => {
+        vi.advanceTimersByTime(310);
+      });
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+      await user.click(trigger);
+      await user.unhover(trigger);
+      expect(screen.getByRole('dialog', { name: 'Kickoff' })).toBeInTheDocument();
+    });
+  });
+
+  it('tracks each open once with workspace, target and key only', async () => {
+    const user = userEvent.setup();
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    await user.click(screen.getByRole('button', { name: 'Interest sent' }));
+    await user.click(screen.getByRole('button', { name: 'Your move' }));
+    expect(track).toHaveBeenCalledTimes(2);
+    expect(track).toHaveBeenNthCalledWith(1, DASHBOARD_EVENTS.TRACK_TERM_OPENED, {
+      workspace_type: 'expert',
+      target: 'stage',
+      key: 'eoi',
+    });
+    expect(track).toHaveBeenNthCalledWith(2, DASHBOARD_EVENTS.TRACK_TERM_OPENED, {
+      workspace_type: 'expert',
+      target: 'legend',
+      key: 'your_move',
+    });
+  });
+
+  it('names the trigger by the stage, keeps the sr-only count, and sits outside any link', () => {
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    for (const s of STAGES) {
+      const trigger = screen.getByRole('button', { name: s.label });
+      expect(trigger.closest('a')).toBeNull();
+    }
+    expect(screen.getByText(', 2 projects')).toBeInTheDocument();
+  });
+
+  it('has no accessibility violations with a popover open, on both lenses', async () => {
+    const user = userEvent.setup();
+    for (const view of [EXPERT_VIEW, COMPANY_VIEW]) {
+      const { container, unmount } = render(<ProjectTrack view={view} />);
+      await user.click(screen.getByRole('button', { name: view.stages[0]?.label ?? '' }));
+      await screen.findByRole('dialog');
+      expect(await axe(container)).toHaveNoViolations();
+      unmount();
+    }
+  });
+});
+
+describe('mobile stage and legend explanations', () => {
+  beforeEach(() => {
+    useIsMobileMock.mockReturnValue(true);
+  });
+
+  it('gives every trigger a 44px hit area and keeps it outside links', () => {
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    const triggers = screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-expanded'));
+    expect(triggers).toHaveLength(8);
+    for (const trigger of triggers) {
+      expect(trigger).toHaveClass('min-h-11');
+      expect(trigger.closest('a')).toBeNull();
+    }
+  });
+
+  it('opens the sentence inline with aria-expanded and aria-controls, and tracks it', async () => {
+    const user = userEvent.setup();
+    render(<ProjectTrack view={COMPANY_VIEW} />);
+    const trigger = screen.getByRole('button', { name: 'Interest' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).not.toHaveAttribute('aria-controls');
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    const panelId = trigger.getAttribute('aria-controls') ?? '';
+    const panel = document.getElementById(panelId);
+    expect(panel).toHaveTextContent(PARTICIPANT_STAGES.client[1]?.explanation ?? 'missing');
+    expect(trigger).toHaveClass('text-primary');
+    expect(track).toHaveBeenCalledWith(DASHBOARD_EVENTS.TRACK_TERM_OPENED, {
+      workspace_type: 'company',
+      target: 'stage',
+      key: 'interest',
+    });
+  });
+
+  it('keeps one open at a time and closes on a second tap', async () => {
+    const user = userEvent.setup();
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    const first = screen.getByRole('button', { name: 'Invited' });
+    const second = screen.getByRole('button', { name: 'Kickoff' });
+    await user.click(first);
+    await user.click(second);
+    expect(first).toHaveAttribute('aria-expanded', 'false');
+    expect(second).toHaveAttribute('aria-expanded', 'true');
+    await user.click(second);
+    expect(second).toHaveAttribute('aria-expanded', 'false');
+    expect(track).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders one block under the legend for a legend tap', async () => {
+    const user = userEvent.setup();
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    await user.click(screen.getByRole('button', { name: 'Waiting on client' }));
+    const sentence = screen.getAllByText(TURN_EXPLANATIONS.expert.waiting);
+    expect(sentence).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'In progress' }));
+    expect(screen.queryByText(TURN_EXPLANATIONS.expert.waiting)).not.toBeInTheDocument();
+    expect(screen.getByText(TURN_EXPLANATIONS.expert.in_progress)).toBeInTheDocument();
+    expect(track).toHaveBeenLastCalledWith(DASHBOARD_EVENTS.TRACK_TERM_OPENED, {
+      workspace_type: 'expert',
+      target: 'legend',
+      key: 'in_progress',
+    });
+  });
+
+  it('has no accessibility violations with a panel open, on both lenses', async () => {
+    const user = userEvent.setup();
+    for (const view of [EXPERT_VIEW, COMPANY_VIEW]) {
+      const { container, unmount } = render(<ProjectTrack view={view} />);
+      await user.click(screen.getByRole('button', { name: view.stages[0]?.label ?? '' }));
+      expect(await axe(container)).toHaveNoViolations();
+      unmount();
+    }
   });
 });

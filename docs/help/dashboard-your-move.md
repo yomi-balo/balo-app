@@ -41,3 +41,5 @@ When nothing is waiting on you, the row shows a single line instead.
 ## Where your projects stand
 
 Below Your move, every live project sits under its stage (invited, interest sent, proposal, kickoff or delivery), marked your move, waiting on the client, or in progress; select one to open it.
+
+Hover over or select a stage, or a legend item, to see what it means; on a phone, tap it.

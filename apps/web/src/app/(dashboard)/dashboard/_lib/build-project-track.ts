@@ -1,61 +1,15 @@
 import type { DashboardTrackStage, DashboardTrackTurn } from '@balo/analytics/events';
-import type { PortfolioRowView, StageKey } from '@/lib/projects-inbox/portfolio-row';
+import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
+import {
+  PARTICIPANT_STAGES,
+  participantStageFor,
+  stageLensOfWorkspace,
+} from '@/lib/projects-inbox/project-stages';
 import type {
   ProjectTrackToken,
   ProjectTrackView,
   YourMoveWorkspaceType,
 } from './your-move-view-types';
-
-interface StageDef {
-  readonly key: DashboardTrackStage;
-  readonly label: string;
-}
-
-const STAGE_DEFS: Record<YourMoveWorkspaceType, readonly StageDef[]> = {
-  expert: [
-    { key: 'invited', label: 'Invited' },
-    { key: 'eoi', label: 'Interest sent' },
-    { key: 'proposal', label: 'Proposal' },
-    { key: 'kickoff', label: 'Kickoff' },
-    { key: 'delivery', label: 'Delivery' },
-  ],
-  company: [
-    { key: 'matching', label: 'Matching' },
-    { key: 'interest', label: 'Interest' },
-    { key: 'proposal', label: 'Proposals' },
-    { key: 'kickoff', label: 'Kickoff' },
-    { key: 'delivery', label: 'Delivery' },
-  ],
-};
-
-/**
- * A `null` stage is dropped from the track. `requested`/`exploratory` are mapped on the expert
- * lens so nothing drops silently.
- */
-const STAGE_OF: Record<YourMoveWorkspaceType, Record<StageKey, DashboardTrackStage | null>> = {
-  expert: {
-    requested: 'invited',
-    exploratory: 'invited',
-    invited: 'invited',
-    eoi: 'eoi',
-    prop_req: 'proposal',
-    prop_in: 'proposal',
-    accepted: 'kickoff',
-    kicked: 'delivery',
-    closed: null,
-  },
-  company: {
-    requested: 'matching',
-    exploratory: 'matching',
-    invited: 'matching',
-    eoi: 'interest',
-    prop_req: 'proposal',
-    prop_in: 'proposal',
-    accepted: 'kickoff',
-    kicked: 'delivery',
-    closed: null,
-  },
-};
 
 /**
  * Same test the rail uses to emit a project card (`needsYou` plus this lens's move kind), so every
@@ -81,13 +35,13 @@ export function buildProjectTrack(
   rows: readonly PortfolioRowView[],
   workspaceType: YourMoveWorkspaceType
 ): ProjectTrackView | null {
-  const stageOf = STAGE_OF[workspaceType];
+  const lens = stageLensOfWorkspace(workspaceType);
   const tokensByStage = new Map<DashboardTrackStage, ProjectTrackToken[]>();
   let total = 0;
 
   for (const row of rows) {
-    const stage = stageOf[row.stage];
-    if (stage === null || isFinished(row)) continue;
+    const stage = participantStageFor(lens, row.stage)?.key;
+    if (stage === undefined || isFinished(row)) continue;
     const token: ProjectTrackToken = {
       id: row.id,
       label: workspaceType === 'expert' ? (row.companyName ?? row.title) : row.title,
@@ -105,9 +59,15 @@ export function buildProjectTrack(
 
   return {
     workspaceType,
-    stages: STAGE_DEFS[workspaceType].map(({ key, label }) => {
+    stages: PARTICIPANT_STAGES[lens].map(({ key, label, explanation }) => {
       const tokens = tokensByStage.get(key) ?? [];
-      return { key, label, tokens, hasYourMove: tokens.some((t) => t.turn === 'your_move') };
+      return {
+        key,
+        label,
+        explanation,
+        tokens,
+        hasYourMove: tokens.some((t) => t.turn === 'your_move'),
+      };
     }),
   };
 }

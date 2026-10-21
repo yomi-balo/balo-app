@@ -12,6 +12,7 @@ export const DASHBOARD_EVENTS = {
   YOUR_MOVE_CLICKED: 'dashboard_your_move_clicked',
   YOUR_MOVE_FILTERED: 'dashboard_your_move_filtered',
   TRACK_CLICKED: 'dashboard_track_clicked',
+  TRACK_TERM_OPENED: 'dashboard_track_term_opened',
 } as const;
 
 export const DASHBOARD_YOUR_MOVE_CARD_KINDS = [
@@ -134,5 +135,11 @@ export interface DashboardEventMap {
     workspace_type: Workspace['type'];
     stage: DashboardTrackStage;
     turn: DashboardTrackTurn;
+  };
+  [DASHBOARD_EVENTS.TRACK_TERM_OPENED]: {
+    workspace_type: Workspace['type'];
+    target: 'stage' | 'legend';
+    /** The stage for a `stage` target, the turn for a `legend` target. */
+    key: DashboardTrackStage | DashboardTrackTurn;
   };
 }

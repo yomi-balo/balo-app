@@ -9,6 +9,7 @@ import type {
 } from '@/lib/projects-inbox/portfolio-row';
 import { stageChipForRelationship } from '@/lib/projects-inbox/portfolio-row';
 import { buildClientYourMoveCards } from './build-client-move-cards';
+import { PARTICIPANT_STAGES } from '@/lib/projects-inbox/project-stages';
 import { buildProjectTrack } from './build-project-track';
 import { buildYourMoveCards } from './build-your-move-cards';
 import { PROJECT_TRACK_COPY, type ProjectTrackView } from './your-move-view-types';
@@ -86,6 +87,16 @@ describe('buildProjectTrack stages', () => {
       ['kickoff', 'Kickoff'],
       ['delivery', 'Delivery'],
     ]);
+  });
+
+  it.each([
+    ['expert', 'expert'],
+    ['company', 'client'],
+  ] as const)('%s workspace carries the shared explanation on every stage', (workspace, lens) => {
+    const view = buildProjectTrack([row('a')], workspace);
+    expect(view?.stages.map((s) => [s.key, s.label, s.explanation])).toEqual(
+      PARTICIPANT_STAGES[lens].map((s) => [s.key, s.label, s.explanation])
+    );
   });
 
   it.each(['expert', 'company'] as const)('%s lens maps every stage key', (lens) => {

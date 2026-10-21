@@ -14,7 +14,7 @@ function makeRow(overrides: Partial<PortfolioRowView> = {}): PortfolioRowView {
     title: 'Service Cloud migration',
     companyName: 'Northwind',
     stage: 'eoi',
-    stageLabel: 'In conversation',
+    stageLabel: 'Interest',
     needsYou: false,
     nudgeLabel: 'Waiting on experts',
     unread: false,
@@ -40,7 +40,7 @@ describe('ListRow', () => {
         last
       />
     );
-    expect(screen.getByText('In conversation')).toBeInTheDocument();
+    expect(screen.getByText('Interest')).toBeInTheDocument();
     expect(screen.getByText('Submit your EOI')).toBeInTheDocument();
   });
 

@@ -46,7 +46,7 @@ function makeRow(overrides: Partial<PortfolioRowView> = {}): PortfolioRowView {
     title: 'Row',
     companyName: 'Co',
     stage: 'invited',
-    stageLabel: 'Experts invited',
+    stageLabel: 'Matching',
     needsYou: false,
     nudgeLabel: 'Waiting on experts',
     unread: false,
@@ -62,7 +62,7 @@ const NEEDS_ROW = makeRow({
   id: 'needs-1',
   title: 'CPQ implementation',
   stage: 'prop_in',
-  stageLabel: 'Proposals in',
+  stageLabel: 'Proposals',
   needsYou: true,
   nudgeLabel: 'Review 2 proposals',
   unread: true,
@@ -72,7 +72,7 @@ const KICKED_ROW = makeRow({
   id: 'kick-1',
   title: 'Sales Cloud health check',
   stage: 'kicked',
-  stageLabel: 'Kicked off',
+  stageLabel: 'Delivery',
   nudgeLabel: 'Live project',
 });
 
@@ -107,7 +107,7 @@ describe('ParticipantDash', () => {
     render(<ParticipantDash dto={DTO} />);
     const list = screen.getByRole('region', { name: /all requests/i });
     // Stage chip + nudge chip both appear (nudge label is needs-you specific).
-    expect(within(list).getAllByText('Proposals in').length).toBeGreaterThan(0);
+    expect(within(list).getAllByText('Proposals').length).toBeGreaterThan(0);
     expect(within(list).getAllByText('Review 2 proposals').length).toBeGreaterThan(0);
   });
 
