@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Check, RotateCcw, Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatWholeCurrency } from '@/lib/utils/currency';
@@ -34,6 +34,11 @@ interface ProposalReviewProps {
   sharedLinksByRelationship?: Record<string, SharedLinkView[]>;
   /** True when the server-side share-link fetch failed — drives the card's error state. */
   shareLinksErrored?: boolean;
+  /**
+   * Open the accept confirmation on arrival (`?accept=1`, from the conversation nudge).
+   * Honoured only when the first-opened proposal is still `submitted`.
+   */
+  openAccept?: boolean;
 }
 
 /**
@@ -70,14 +75,23 @@ export function ProposalReview({
   clientCompanyName,
   sharedLinksByRelationship,
   shareLinksErrored = false,
+  openAccept = false,
 }: Readonly<ProposalReviewProps>): React.JSX.Element {
-  const initialId = useMemo(() => {
-    const matched = proposals.find((proposal) => proposal.relationshipId === activeRelationshipId);
-    return matched?.id ?? proposals[0]?.id ?? '';
-  }, [proposals, activeRelationshipId]);
+  const initial = useMemo(
+    () =>
+      proposals.find((proposal) => proposal.relationshipId === activeRelationshipId) ??
+      proposals[0],
+    [proposals, activeRelationshipId]
+  );
 
-  const [activeId, setActiveId] = useState(initialId);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [activeId, setActiveId] = useState(initial?.id ?? '');
+  const [modalOpen, setModalOpen] = useState(openAccept && initial?.status === 'submitted');
+
+  // Drop `?accept=1` once honoured, so a refresh or back-navigation doesn't reopen it.
+  useEffect(() => {
+    if (!openAccept) return;
+    window.history.replaceState(null, '', window.location.pathname);
+  }, [openAccept]);
   const [changesOpen, setChangesOpen] = useState(false);
 
   const active = proposals.find((proposal) => proposal.id === activeId) ?? proposals[0];

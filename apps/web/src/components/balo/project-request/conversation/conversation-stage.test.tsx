@@ -1120,6 +1120,33 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
     );
   });
 
+  it("client + proposal_submitted: the nudge's Accept opens the review with the confirmation up, View opens it plain", async () => {
+    const user = userEvent.setup();
+    render(
+      <ConversationStage
+        requestId={REQUEST_ID}
+        lens="client"
+        requestStatus="proposal_submitted"
+        view={view({ threads: [thread({ relationshipStatus: 'proposal_submitted' })] })}
+        requestTitle="CPQ implementation"
+        clientCompanyName="Northwind Industrial"
+        viewerEmailDomain="northwind.example"
+      />
+    );
+    await user.click(screen.getByRole('button', { name: "Accept Priya's proposal" }));
+    expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1?accept=1`);
+
+    mockPush.mockClear();
+    mockTrack.mockClear();
+    await user.click(screen.getByRole('button', { name: 'View full proposal' }));
+    expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
+    // The nudge surface navigates without firing the header/rail funnel event.
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED,
+      expect.anything()
+    );
+  });
+
   it("expert + proposal_submitted: 'View submitted proposal' is LIVE — pushes the submitted route (A6.3)", async () => {
     const user = userEvent.setup();
     renderStage(

@@ -23,9 +23,10 @@ import {
  * real data: names interpolate `thread.expertFirstName`; the design's demo
  * "last message" sub is carried by `thread.latestMessagePreview`.
  *
- * Pure + client-safe. `reply` (focus composer), `call` (mock action) and
- * `build` (open the proposal composer — BAL-288 / A6.2) are wired; `stub`
- * renders disabled (A5/A6.3/billing CTAs).
+ * Pure + client-safe. `reply` (focus composer), `call` (mock action), `build`
+ * (open the proposal composer — BAL-288 / A6.2), `view` (open the proposal
+ * surface) and `accept` (open the client review with the accept confirmation
+ * up) are wired; `stub` renders disabled (workspace/billing CTAs).
  *
  * KEYING (BAL-272): the pre-decision proposal cells (`eoi_submitted` /
  * `proposal_requested` / `proposal_submitted`) key off THIS THREAD's
@@ -36,7 +37,7 @@ import {
  * `stage` carries the per-thread outcome).
  */
 
-export type ThreadNudgeAction = 'reply' | 'call' | 'build' | 'stub';
+export type ThreadNudgeAction = 'reply' | 'call' | 'build' | 'view' | 'accept' | 'stub';
 
 export interface ThreadNudgeButton {
   label: string;
@@ -99,6 +100,9 @@ function clientNudge(
 ): ThreadNudgeContent | null {
   const name = thread.expertFirstName;
   const preview = thread.latestMessagePreview ?? undefined;
+  // The status cells quote the latest message only when it came from the expert — the
+  // viewer's own last word restates nothing they need, and reads as if it were the expert's.
+  const inboundPreview = thread.latestMessageFromViewer ? undefined : preview;
 
   // BAL-540 — the request closed. Checked BEFORE the decided-rank branch below: `closed`
   // outranks `accepted` (requestStatusRank), so without this arm a closed request whose
@@ -130,7 +134,7 @@ function clientNudge(
       variant: 'done',
       icon: Zap,
       headline: `${name} is your expert`,
-      sub: preview,
+      sub: inboundPreview,
       primary: { label: 'Open project workspace', icon: Briefcase, action: 'stub' },
     };
   }
@@ -193,7 +197,7 @@ function clientNudge(
       variant: 'waiting',
       icon: Clock,
       headline: `${name} is preparing the proposal`,
-      sub: preview,
+      sub: inboundPreview,
       secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
     };
   }
@@ -213,9 +217,10 @@ function clientNudge(
       variant: 'commit',
       icon: Check,
       headline: `${name}'s proposal is ready`,
-      sub: preview,
-      primary: { label: `Accept ${name}'s proposal`, icon: Check, action: 'stub' },
-      secondary: { label: 'View full proposal', icon: FileText, action: 'stub' },
+      sub: 'Read it in full, then accept it or ask for changes.',
+      // Accept never binds from here — it opens the review with the confirmation up.
+      primary: { label: `Accept ${name}'s proposal`, icon: Check, action: 'accept' },
+      secondary: { label: 'View full proposal', icon: FileText, action: 'view' },
     };
   }
 

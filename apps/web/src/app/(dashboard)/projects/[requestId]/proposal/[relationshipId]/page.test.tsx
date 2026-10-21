@@ -275,6 +275,7 @@ async function renderPage(
     requestId?: string;
     relationshipId?: string;
     sent?: string | string[];
+    accept?: string | string[];
   } = {}
 ): Promise<void> {
   const ui = await ProposalComposerPage({
@@ -282,7 +283,10 @@ async function renderPage(
       requestId: ids.requestId ?? REQUEST_ID,
       relationshipId: ids.relationshipId ?? RELATIONSHIP_ID,
     }),
-    searchParams: Promise.resolve(ids.sent === undefined ? {} : { sent: ids.sent }),
+    searchParams: Promise.resolve({
+      ...(ids.sent === undefined ? {} : { sent: ids.sent }),
+      ...(ids.accept === undefined ? {} : { accept: ids.accept }),
+    }),
   });
   render(ui);
 }
@@ -838,6 +842,30 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
     expect(firstDoc?.priceCents).toBe(1_500_000);
     // The fee/margin breakdown must NEVER reach the client audience.
     expect(firstDoc?.adminPricing).toBeUndefined();
+  });
+
+  it.each([
+    [undefined, false],
+    ['1', true],
+    ['yes', false],
+    [['1', '1'], false],
+  ] as const)('passes openAccept for ?accept=%j → %s', async (accept, expected) => {
+    mockGetCurrentUser.mockResolvedValue(user({ expertProfileId: undefined }));
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        relationships: [
+          relationship({ status: 'proposal_submitted' }),
+        ] as ProjectRequestWithRelations['relationships'],
+      })
+    );
+    mockResolveRequestLens.mockReturnValue(clientCtx());
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted' }));
+    seedChildren();
+
+    await renderPage({ accept: accept as string | string[] | undefined });
+
+    const props = mockReview.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props.openAccept).toBe(expected);
   });
 
   it('filters out relationships with no reviewable current proposal', async () => {
