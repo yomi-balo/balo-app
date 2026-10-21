@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen, waitFor } from '@/test/utils';
+import { act, render, screen, waitFor } from '@/test/utils';
 import {
   jsonResponse,
   okAvailabilityBody,
@@ -16,7 +16,6 @@ const { mockDialogProps, mockRefresh } = vi.hoisted(() => ({
   mockDialogProps: vi.fn(),
   mockRefresh: vi.fn(),
 }));
-vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn() } }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: mockRefresh }) }));
 vi.mock('@/components/booking', () => ({
   BookingFlowDialog: (props: BookingFlowDialogProps) => {
@@ -239,16 +238,22 @@ describe('CaseSlotQuickPick — an external follow-up request', () => {
     ],
   });
 
-  it('opens the existing_work dialog on the first slot once availability settles', async () => {
+  it('opens the existing_work dialog on its calendar, case fixed, without a preset slot', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
     render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />);
 
     await waitFor(() => {
       const props = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps | undefined;
       expect(props?.scope).toBe('existing_work');
-      expect(props?.entry).toMatchObject({
+      expect(props?.entry).toEqual({
         mode: 'fixed_case',
-        presetSlot: { startIso: '2026-06-05T09:00:00.000Z', durationMinutes: 60 },
+        fixedCase: {
+          engagementId: 'engagement-1',
+          title: 'Flow interview loop',
+          consultationCount: 2,
+          openedAtIso: '2026-06-12T09:00:00Z',
+        },
+        presetSlot: null,
       });
     });
   });
@@ -260,49 +265,40 @@ describe('CaseSlotQuickPick — an external follow-up request', () => {
     expect(mockDialogProps).not.toHaveBeenCalled();
   });
 
-  it('says so when the read succeeded but there is no open time to offer', async () => {
-    const { toast } = await import('sonner');
-    fetchMock.mockResolvedValue(jsonResponse(200, okAvailabilityBody({ slots: [] })));
-    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />);
-    await waitFor(() =>
-      expect(toast.info).toHaveBeenCalledWith('Amara has no open times right now.')
-    );
-    expect(toast.error).not.toHaveBeenCalled();
-    expect(mockDialogProps).not.toHaveBeenCalled();
-  });
+  it.each([
+    ['still loading', () => new Promise(() => {})],
+    ['failed', () => Promise.resolve(jsonResponse(503, {}))],
+    ['empty', () => Promise.resolve(jsonResponse(200, okAvailabilityBody({ slots: [] })))],
+  ])(
+    'opens the dialog even while the strip has nothing to show (%s) — the calendar owns those states',
+    async (_label, respond) => {
+      fetchMock.mockImplementation(respond);
+      render(
+        <CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />
+      );
+      expect(await screen.findByTestId('booking-dialog-stub')).toHaveTextContent('open');
+      expect(screen.queryByText('Book the next call')).not.toBeInTheDocument();
+    }
+  );
 
-  it('a failed read is an error toast with a retry, never "no open times"', async () => {
-    const { toast } = await import('sonner');
-    vi.mocked(toast.info).mockClear();
-    vi.mocked(toast.error).mockClear();
-    fetchMock.mockResolvedValue(jsonResponse(503, {}));
-    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />);
-    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
-    expect(toast.info).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't load Amara's times. Try again.",
-      expect.objectContaining({ action: expect.objectContaining({ label: 'Try again' }) })
-    );
-    expect(mockDialogProps).not.toHaveBeenCalled();
-  });
-
-  it('the retry re-reads availability and opens the dialog once slots arrive', async () => {
-    const { toast } = await import('sonner');
-    vi.mocked(toast.error).mockClear();
-    fetchMock.mockResolvedValueOnce(jsonResponse(503, {}));
+  it('a repeat request re-opens the dialog after it was closed', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
-    render(<CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />);
-    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
-    const options = vi.mocked(toast.error).mock.calls[0]?.[1] as unknown as {
-      action: { onClick: () => void };
-    };
-    options.action.onClick();
-    await waitFor(() => {
-      const props = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps | undefined;
-      expect(props?.entry).toMatchObject({
-        presetSlot: { startIso: '2026-06-05T09:00:00.000Z' },
-      });
-    });
+    const { rerender } = render(
+      <CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 1, source: 'book_again' }} />
+    );
+    await screen.findByTestId('booking-dialog-stub');
+    const first = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps;
+    act(() => first.onClose());
+    await waitFor(() =>
+      expect(screen.queryByTestId('booking-dialog-stub')).not.toBeInTheDocument()
+    );
+
+    rerender(
+      <CaseSlotQuickPick {...DEFAULT_PROPS} openRequest={{ seq: 2, source: 'case_nudge' }} />
+    );
+    expect(await screen.findByTestId('booking-dialog-stub')).toBeInTheDocument();
+    const second = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps;
+    expect(second.source).toBe('case_nudge');
   });
 
   it.each([

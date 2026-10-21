@@ -91,7 +91,12 @@ export interface PresetSlot {
  */
 export type BookingEntry =
   | { mode: 'chooser'; context: BookingContext }
-  | { mode: 'fixed_case'; fixedCase: FixedCaseSummary; presetSlot: PresetSlot };
+  | {
+      mode: 'fixed_case';
+      fixedCase: FixedCaseSummary;
+      /** `null` opens on Step 1's calendar; a slot jumps straight to confirm. */
+      presetSlot: PresetSlot | null;
+    };
 
 export interface BookingFlowDialogProps {
   open: boolean;

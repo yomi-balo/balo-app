@@ -656,8 +656,10 @@ describe('CaseSurface — every section composes on both lens arms', () => {
     for (const section of ['Conversation', 'Consultations', 'Action items', 'Files', 'People']) {
       expect(screen.getByRole('heading', { name: section })).toBeInTheDocument();
     }
-    // The rail's counterparty card, which carries the one forward action.
-    expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
+    // The rail's counterparty card, which carries the one forward action — in-page for the
+    // client on an open case, a profile link otherwise.
+    const role = lens === 'client' ? 'button' : 'link';
+    expect(screen.getByRole(role, { name: 'Book with Amara again' })).toBeInTheDocument();
   });
 
   it.each(LENSES)('passes the counterparty FIRST name down as the shared label, %s', (lens) => {
@@ -669,7 +671,8 @@ describe('CaseSurface — every section composes on both lens arms', () => {
       />
     );
     // `counterpartyFirstName` reaches the party card's CTA and the action-items heading alike.
-    expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
+    const role = lens === 'client' ? 'button' : 'link';
+    expect(screen.getByRole(role, { name: 'Book with Amara again' })).toBeInTheDocument();
     expect(screen.getByText('Yours')).toBeInTheDocument();
   });
 });
@@ -684,7 +687,7 @@ describe('CaseSurface — the conditional regions', () => {
   it('renders the ONE nudge the view chose, with its client-lens CTA', () => {
     render(<CaseSurface view={clientView({ nudge: { kind: 'nothing_booked' } })} />);
     expect(screen.getByText('Nothing booked yet')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Book a consultation' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Book a consultation' })).toBeInTheDocument();
   });
 
   it('renders the resolution ask with both of the surface-owned actions wired', () => {
@@ -1631,14 +1634,15 @@ describe('CaseSurface — the People card disclosure is lens-accurate (BAL-573)'
   });
 });
 
-describe('CaseSurface — follow-ups for a paused expert (BAL-591)', () => {
+describe('CaseSurface — follow-ups book in-page on an open case', () => {
   const PAUSED_PARTY = { ...BASE.party, availableForWork: false };
 
-  it('OPEN + paused: both CTAs book in-page by asking the quick-pick, never linking out', async () => {
+  it.each([
+    ['available', BASE.party],
+    ['paused (BAL-591)', PAUSED_PARTY],
+  ])('OPEN + %s: both CTAs ask the quick-pick, never linking out', async (_label, party) => {
     const user = userEvent.setup();
-    render(
-      <CaseSurface view={clientView({ party: PAUSED_PARTY, nudge: { kind: 'nothing_booked' } })} />
-    );
+    render(<CaseSurface view={clientView({ party, nudge: { kind: 'nothing_booked' } })} />);
     expect(screen.queryByRole('link', { name: 'Book with Amara again' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Book a consultation' })).not.toBeInTheDocument();
     expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 0');
@@ -1663,12 +1667,6 @@ describe('CaseSurface — follow-ups for a paused expert (BAL-591)', () => {
         })}
       />
     );
-    expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Book a consultation' })).toBeInTheDocument();
-  });
-
-  it('OPEN + available keeps the profile links', () => {
-    render(<CaseSurface view={clientView({ nudge: { kind: 'nothing_booked' } })} />);
     expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Book a consultation' })).toBeInTheDocument();
   });

@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Video } from 'lucide-react';
-import { toast } from 'sonner';
 import { useExpertAvailability } from '@/components/availability/use-expert-availability';
 import { SLOT_DURATION_LADDER, type SlotDurationMinutes } from '@balo/shared/availability';
 import type { BookingSource } from '@/lib/analytics';
 import { BookingFlowDialog, type BookingFlowExpert, type PresetSlot } from '@/components/booking';
+import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 
 const QUICK_PICK_WINDOW_DAYS = 7;
 const QUICK_PICK_COUNT = 3;
@@ -28,7 +28,7 @@ function formatPill(iso: string): string {
   return `${day} ${time}`;
 }
 
-/** An external ask to open the dialog on the first slot, tagged with the CTA that raised it. */
+/** An external ask to open the dialog on its calendar, tagged with the CTA that raised it. */
 export interface FollowUpRequest {
   /** Bumped per ask; `0` means nothing has been requested. */
   seq: number;
@@ -48,10 +48,12 @@ export interface CaseSlotQuickPickProps {
    * "same company as you" disclosure is honest from this entry point too. `null` when unknown.
    */
   viewerEmailDomain: string | null;
+  /** The dialog's product picker, for when the client switches to "Start a new case". */
+  productsTaxonomy?: ProductTaxonomy;
   /**
    * Raised by the case surface when a follow-up CTA elsewhere on the page (the party card's
    * "Book again", the nudge's "Book a consultation") asks this strip to open the booking dialog
-   * on the next available slot. Its `source` attributes the dialog's `FLOW_OPENED` event.
+   * on its calendar, case fixed. Its `source` attributes the dialog's `FLOW_OPENED` event.
    */
   openRequest?: FollowUpRequest;
 }
@@ -67,12 +69,12 @@ export interface CaseSlotQuickPickProps {
  * Tapping any pill jumps straight to the confirm step with the case FIXED — the case-choice
  * section is absent from the tree entirely, not defaulted or collapsed (D4a).
  *
- * Silently renders nothing when there is no ready availability (`not_configured`, empty
- * window, unreachable, error) — the party card's "Book with {expert} again" button is still
- * there, so hiding this convenience shortcut is not the "hide the whole section" anti-pattern
- * the balo-ui-skill warns against. On an open case with a paused expert that button routes
- * through THIS strip (`openRequest`), so a failed read is surfaced by toast with a retry rather
- * than swallowed.
+ * The pill strip silently renders nothing when there is no ready availability
+ * (`not_configured`, empty window, unreachable, error) — the party card's "Book with {expert}
+ * again" button is still there, so hiding this convenience shortcut is not the "hide the whole
+ * section" anti-pattern the balo-ui-skill warns against. That button routes through THIS
+ * component's dialog (`openRequest`), opened on Step 1's calendar, which owns its own empty and
+ * error states — so the dialog renders whether or not the strip does.
  */
 export function CaseSlotQuickPick({
   engagementId,
@@ -82,23 +84,26 @@ export function CaseSlotQuickPick({
   expertProfileId,
   expert,
   viewerEmailDomain,
+  productsTaxonomy,
   openRequest = NO_REQUEST,
-}: Readonly<CaseSlotQuickPickProps>): React.JSX.Element | null {
+}: Readonly<CaseSlotQuickPickProps>): React.JSX.Element {
   const { view, reload } = useExpertAvailability(
     expertProfileId,
     QUICK_PICK_WINDOW_DAYS,
     // A follow-up on an open case is existing work, so a paused expert still has real slots.
     'existing_work'
   );
-  const [dialog, setDialog] = useState<{ presetSlot: PresetSlot; source: BookingSource } | null>(
-    null
-  );
+  const [dialog, setDialog] = useState<{
+    presetSlot: PresetSlot | null;
+    source: BookingSource;
+  } | null>(null);
   const router = useRouter();
 
   /**
-   * The dialog opens over a server-rendered surface (pills, and the party-card / nudge CTAs for
-   * a paused expert), so the refresh is what makes the new booking visible. `BookingFlowDialogProps` has no success callback, so this fires on any
-   * close; refreshing after an abandoned booking is harmless.
+   * The dialog opens over a server-rendered surface (pills, and the party-card / nudge CTAs),
+   * so the refresh is what makes the new booking visible. `BookingFlowDialogProps` has no
+   * success callback, so this fires on any close; refreshing after an abandoned booking is
+   * harmless.
    */
   const handleDialogClose = useCallback((): void => {
     setDialog(null);
@@ -119,80 +124,45 @@ export function CaseSlotQuickPick({
           .slice(0, QUICK_PICK_COUNT)
       : [];
 
-  // Answers an external "book a follow-up" request once, on the first slot, as soon as the
-  // availability read settles. No slot to offer, or a failed read, is said out loud rather than
-  // swallowed; the failure toast's retry re-arms the request so slots arriving open the dialog.
+  // Answers each external "book a follow-up" request once, by opening the dialog on its calendar.
   const handledRequestRef = useRef(0);
-  const [firstPill] = pills;
   useEffect(() => {
     if (openRequest.seq === 0 || handledRequestRef.current === openRequest.seq) return;
-    if (view.kind === 'loading') return;
     handledRequestRef.current = openRequest.seq;
-    const name = expert.firstName ?? 'This expert';
-    if (view.kind === 'unavailable' || view.kind === 'error') {
-      toast.error(`Couldn't load ${name}'s times. Try again.`, {
-        action: {
-          label: 'Try again',
-          onClick: () => {
-            handledRequestRef.current = 0;
-            reload();
-          },
-        },
-      });
-      return;
-    }
-    if (firstPill === undefined) {
-      toast.info(`${name} has no open times right now.`);
-      return;
-    }
-    const start = new Date(firstPill.start);
-    setDialog({
-      presetSlot: {
-        startIso: start.toISOString(),
-        endIso: new Date(start.getTime() + firstPill.duration * 60_000).toISOString(),
-        durationMinutes: firstPill.duration,
-      },
-      source: openRequest.source,
-    });
-  }, [openRequest, view.kind, firstPill, expert.firstName, reload]);
-
-  if (view.kind !== 'ready') {
-    return null;
-  }
-
-  if (pills.length === 0) {
-    return null;
-  }
+    setDialog({ presetSlot: null, source: openRequest.source });
+  }, [openRequest]);
 
   return (
     <>
-      <div className="mt-3">
-        <p className="text-muted-foreground mb-1.5 text-xs font-medium">Book the next call</p>
-        <div className="flex flex-wrap gap-1.5">
-          {pills.map((pill) => (
-            <button
-              key={pill.start}
-              type="button"
-              onClick={() => {
-                const start = new Date(pill.start);
-                const end = new Date(start.getTime() + pill.duration * 60_000);
-                setDialog({
-                  presetSlot: {
-                    startIso: start.toISOString(),
-                    endIso: end.toISOString(),
-                    durationMinutes: pill.duration,
-                  },
-                  source: 'case_quick_pick',
-                });
-              }}
-              className="border-border bg-card hover:border-primary/40 hover:bg-primary/5 focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
-            >
-              <Video className="text-muted-foreground h-3 w-3" aria-hidden="true" />
-              {formatPill(pill.start)}
-            </button>
-          ))}
+      {pills.length > 0 && (
+        <div className="mt-3">
+          <p className="text-muted-foreground mb-1.5 text-xs font-medium">Book the next call</p>
+          <div className="flex flex-wrap gap-1.5">
+            {pills.map((pill) => (
+              <button
+                key={pill.start}
+                type="button"
+                onClick={() => {
+                  const start = new Date(pill.start);
+                  const end = new Date(start.getTime() + pill.duration * 60_000);
+                  setDialog({
+                    presetSlot: {
+                      startIso: start.toISOString(),
+                      endIso: end.toISOString(),
+                      durationMinutes: pill.duration,
+                    },
+                    source: 'case_quick_pick',
+                  });
+                }}
+                className="border-border bg-card hover:border-primary/40 hover:bg-primary/5 focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <Video className="text-muted-foreground h-3 w-3" aria-hidden="true" />
+                {formatPill(pill.start)}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
       {dialog !== null && (
         <BookingFlowDialog
           open
@@ -210,6 +180,7 @@ export function CaseSlotQuickPick({
             presetSlot: dialog.presetSlot,
           }}
           viewerEmailDomain={viewerEmailDomain}
+          productsTaxonomy={productsTaxonomy}
           onMessage={() => setDialog(null)}
           scope="existing_work"
         />

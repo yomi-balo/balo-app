@@ -10,6 +10,7 @@ import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
 import type { BookingFlowExpert } from '@/components/booking';
+import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { CaseEarningsBlock } from './case-earnings-block';
 import { CaseSlotQuickPick, type FollowUpRequest } from './case-slot-quick-pick';
 
@@ -53,10 +54,11 @@ interface CasePartyCardProps {
    * carries no email, by design) — it originates in the page's `getCurrentUser()` read.
    */
   viewerEmailDomain: string | null;
+  /** Forwarded to `CaseSlotQuickPick` for a new case started from the booking dialog. */
+  productsTaxonomy?: ProductTaxonomy;
   /**
-   * BAL-591 — set only when the case is OPEN and the expert has paused new work. The profile
-   * suppresses booking for a paused expert, so the CTA asks the case's own quick-pick dialog
-   * (`scope="existing_work"`) to open instead of linking out.
+   * Set whenever the case is OPEN (client lens): the CTA asks the case's own quick-pick dialog
+   * (`scope="existing_work"`) to open on its calendar instead of linking out to the profile.
    */
   onBookFollowUp?: () => void;
   /** Raised by `onBookFollowUp`'s owner; forwarded to `CaseSlotQuickPick`. */
@@ -75,6 +77,7 @@ export function CasePartyCard({
   consultationCount,
   openedAtIso,
   viewerEmailDomain,
+  productsTaxonomy,
   onBookFollowUp,
   followUpRequest,
 }: Readonly<CasePartyCardProps>): React.JSX.Element {
@@ -174,6 +177,7 @@ export function CasePartyCard({
           expertProfileId={expertProfileId}
           expert={quickPickExpert}
           viewerEmailDomain={viewerEmailDomain}
+          productsTaxonomy={productsTaxonomy}
           openRequest={followUpRequest}
         />
       )}

@@ -107,6 +107,6 @@ right now" instead of open times, and you can't start a new case with them. You 
 
 If you already have an open case with that expert, you can still book follow-up consultations on
 it. Book it from that case's page, using **Book with {name} again** or **Book a consultation**,
-which opens the next open time on the case.
+which opens their calendar right there, already attached to the case.
 
 ![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](06)

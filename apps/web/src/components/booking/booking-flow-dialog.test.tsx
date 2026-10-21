@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { act, fireEvent, render, screen, within } from '@/test/utils';
 import { toast } from 'sonner';
@@ -6,6 +6,7 @@ import { track } from '@/lib/analytics';
 import type { BookConsultationResult } from '@/lib/booking/actions/types';
 import { SESSION_EXPIRED_MESSAGE } from '@/lib/auth/auth-error-copy';
 import { refetchOpenCasesAction } from '@/lib/booking/actions/refetch-open-cases';
+import { refetchBookingContextAction } from '@/lib/booking/actions/refetch-booking-context';
 import { TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
 import { companyWorkspaceKey } from '@balo/shared/workspaces';
 import { readBookingDraft, writeBookingDraft, type BookingDraft } from './booking-draft';
@@ -486,10 +487,143 @@ describe('BookingFlowDialog — entry point 3 (fixed case)', () => {
     expect(screen.getByText('Flow interview loop')).toBeInTheDocument();
     expect(screen.queryByText('Which case is this for?')).not.toBeInTheDocument();
     expect(screen.queryByText('Start a new case')).not.toBeInTheDocument();
-    // D4a #3 — no "Not the right case?" escape either (the client explicitly chose this case).
-    expect(screen.queryByText(/Not the right case/)).not.toBeInTheDocument();
     // No title/description/products fields (attach-shape only).
     expect(screen.queryByLabelText(/^Title/)).not.toBeInTheDocument();
+  });
+
+  it('opens on the calendar without a preset slot, and Back returns to it rather than closing', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <BookingFlowDialog
+        open
+        onClose={onClose}
+        expert={EXPERT}
+        source="book_again"
+        entry={{
+          mode: 'fixed_case',
+          fixedCase: {
+            engagementId: 'engagement-9',
+            title: 'Flow interview loop',
+            consultationCount: 2,
+            openedAtIso: '2026-06-01T00:00:00.000Z',
+          },
+          presetSlot: null,
+        }}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    // The case stays fixed once a time is picked: its context card, never a chooser.
+    expect(screen.getByText('Flow interview loop')).toBeInTheDocument();
+    expect(screen.queryByText('Which case is this for?')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Title/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getByText('Pick 9:00am slot')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('BookingFlowDialog — entry point 3 switching case from the dropdown', () => {
+  // Radix Select needs the Pointer Capture APIs jsdom lacks (`company-picker.test.tsx`).
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.hasPointerCapture = vi.fn();
+    Element.prototype.setPointerCapture = vi.fn();
+    Element.prototype.releasePointerCapture = vi.fn();
+  });
+
+  const THIS_CASE = {
+    engagementId: 'engagement-9',
+    title: 'Flow interview loop',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    lastActivityAt: '2026-06-02T00:00:00.000Z',
+    consultationCount: 2,
+  };
+  const OTHER_CASE = {
+    engagementId: 'engagement-4',
+    title: 'Duplicate cleanup',
+    createdAt: '2026-05-01T00:00:00.000Z',
+    lastActivityAt: '2026-05-02T00:00:00.000Z',
+    consultationCount: 1,
+  };
+
+  function renderFromCase(): void {
+    render(
+      <BookingFlowDialog
+        open
+        onClose={vi.fn()}
+        expert={EXPERT}
+        source="book_again"
+        entry={{
+          mode: 'fixed_case',
+          fixedCase: {
+            engagementId: 'engagement-9',
+            title: 'Flow interview loop',
+            consultationCount: 2,
+            openedAtIso: '2026-06-01T00:00:00.000Z',
+          },
+          presetSlot: null,
+        }}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+      />
+    );
+  }
+
+  it('preselects this case, and can switch to another case or start a new one', async () => {
+    const user = userEvent.setup();
+    vi.mocked(refetchBookingContextAction).mockResolvedValueOnce({
+      ok: true,
+      context: {
+        ...(SINGLE_COMPANY_NO_CASES as Extract<BookingContext, { arm: 'single_company' }>),
+        openCases: [OTHER_CASE, THIS_CASE],
+      },
+    });
+    renderFromCase();
+    await user.click(screen.getByText('Pick 9:00am slot'));
+
+    const dropdown = await screen.findByRole('combobox', { name: 'Which case is this for?' });
+    expect(dropdown).toHaveTextContent('Flow interview loop');
+    expect(screen.queryByLabelText(/^Title/)).not.toBeInTheDocument();
+
+    await user.click(dropdown);
+    await user.click(await screen.findByRole('option', { name: /Duplicate cleanup/ }));
+    expect(dropdown).toHaveTextContent('Duplicate cleanup');
+
+    await user.click(dropdown);
+    await user.click(await screen.findByRole('option', { name: /Start a new case/ }));
+    expect(screen.getByLabelText(/^Title/)).toBeInTheDocument();
+  });
+
+  it('keeps the case fixed, card and all, when the open cases cannot be listed', async () => {
+    const user = userEvent.setup();
+    vi.mocked(refetchBookingContextAction).mockResolvedValueOnce({ ok: false });
+    renderFromCase();
+    await user.click(screen.getByText('Pick 9:00am slot'));
+
+    expect(screen.getByText('Flow interview loop')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Which case is this for?' })).toBeNull();
+  });
+
+  it('keeps the case fixed when the listed open cases do not include it', async () => {
+    const user = userEvent.setup();
+    vi.mocked(refetchBookingContextAction).mockResolvedValueOnce({
+      ok: true,
+      context: {
+        ...(SINGLE_COMPANY_NO_CASES as Extract<BookingContext, { arm: 'single_company' }>),
+        openCases: [OTHER_CASE],
+      },
+    });
+    renderFromCase();
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await vi.waitFor(() => expect(refetchBookingContextAction).toHaveBeenCalled());
+
+    expect(screen.getByText('Flow interview loop')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Which case is this for?' })).toBeNull();
   });
 });
 
@@ -2490,7 +2624,9 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
 
       await user.click(screen.getByText('Pick 9:00am slot'));
 
-      expect(screen.getByText(/Not the right case/)).toBeInTheDocument();
+      expect(screen.getByRole('combobox', { name: 'Which case is this for?' })).toHaveTextContent(
+        'Flow interview loop'
+      );
       expect(screen.queryByLabelText(/^Title/)).not.toBeInTheDocument();
     });
 

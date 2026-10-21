@@ -62,6 +62,23 @@ describe('LocalDateTime', () => {
     expect(resolvedOptionsSpy).not.toHaveBeenCalled();
   });
 
+  describe('day-month-dash-time', () => {
+    function rendered(iso: string, timeZone: string): string {
+      const { container } = render(
+        <LocalDateTime iso={iso} variant="day-month-dash-time" timeZone={timeZone} />
+      );
+      return container.querySelector('time')?.firstChild?.textContent ?? '';
+    }
+
+    it('joins the date and the clock time with a dash', () => {
+      expect(rendered('2026-10-21T10:15:00.000Z', 'Australia/Sydney')).toBe('21 Oct – 9:15 pm');
+    });
+
+    it('takes the date from the same zone as the time, across midnight', () => {
+      expect(rendered('2026-10-21T14:30:00.000Z', 'Australia/Sydney')).toBe('22 Oct – 1:30 am');
+    });
+  });
+
   describe('day-month-time-range', () => {
     function renderedRange(iso: string, timeZone: string, durationMinutes: number): HTMLElement {
       const { container } = render(

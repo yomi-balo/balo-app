@@ -46,7 +46,6 @@ function renderStepConfirm(over: Partial<StepConfirmProps> = {}) {
     caseSelection: { kind: 'existing', engagementId: 'engagement-1' },
     onCaseSelectionChange: vi.fn(),
     caseContextSummary: CASE_CONTEXT,
-    showCaseEscapeHatch: true,
     title: '',
     onTitleChange: vi.fn(),
     descriptionHtml: '',
@@ -234,11 +233,47 @@ describe('StepConfirm — inline funding section, draft notice and stale-slot fo
     expect(screen.getByText(/Free to cancel/i)).toBeInTheDocument();
   });
 
-  it('locks the time and the attached-case escape while a funding step is under way', () => {
-    renderStepConfirm({ fundingBusy: true });
+  it('locks the time and the case dropdown while a funding step is under way', () => {
+    renderStepConfirm({
+      fundingBusy: true,
+      openCases: [
+        {
+          engagementId: 'engagement-1',
+          title: 'Flow interview loop',
+          createdAt: '2026-06-12T09:00:00Z',
+          lastActivityAt: '2026-06-13T09:00:00Z',
+          consultationCount: 2,
+        },
+      ],
+    });
 
     expect(screen.getByRole('button', { name: 'See other times' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Not the right case/ })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Which case is this for?' })).toBeDisabled();
+  });
+
+  it('names the selected case in the dropdown alone — no repeated case card', () => {
+    renderStepConfirm({
+      openCases: [
+        {
+          engagementId: 'engagement-1',
+          title: 'Flow interview loop',
+          createdAt: '2026-06-12T09:00:00Z',
+          lastActivityAt: '2026-06-13T09:00:00Z',
+          consultationCount: 2,
+        },
+      ],
+    });
+
+    expect(screen.getByRole('combobox', { name: 'Which case is this for?' })).toHaveTextContent(
+      'Flow interview loop'
+    );
+    expect(screen.queryByText(/so far · opened/)).not.toBeInTheDocument();
+  });
+
+  it('shows the read-only case card when there is no dropdown', () => {
+    renderStepConfirm();
+    expect(screen.queryByRole('combobox', { name: 'Which case is this for?' })).toBeNull();
+    expect(screen.getByText(/so far · opened/)).toBeInTheDocument();
   });
 
   it('locks the company picker while a funding step is under way', () => {

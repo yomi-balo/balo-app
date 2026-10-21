@@ -7,19 +7,17 @@ export interface CaseContextCardProps {
   title: string;
   consultationCount: number;
   openedAtIso: string;
-  /**
-   * Absent for entry point 3 (the case-surface quick-pick) — the client explicitly chose this
-   * case by tapping its slot, so there is no "wrong case" to escape from (design §edge cases).
-   */
-  onSwitchToNew?: () => void;
 }
 
-/** BAL-400 §2.5 (attach shape) — the read-only case-context card, replacing title/description/products. */
+/**
+ * BAL-400 §2.5 (attach shape) — the read-only case-context card, replacing
+ * title/description/products wherever there is no case dropdown to switch from: a case-page
+ * booking before (or without) its open cases, and a pinned partial-failure recovery.
+ */
 export function CaseContextCard({
   title,
   consultationCount,
   openedAtIso,
-  onSwitchToNew,
 }: Readonly<CaseContextCardProps>): React.JSX.Element {
   return (
     <div className="border-border bg-muted/30 rounded-xl border p-4">
@@ -35,15 +33,6 @@ export function CaseContextCard({
           </p>
         </div>
       </div>
-      {onSwitchToNew !== undefined && (
-        <button
-          type="button"
-          onClick={onSwitchToNew}
-          className="text-primary focus-visible:ring-ring mt-3 inline-flex items-center rounded-md text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
-        >
-          Not the right case? Start a new one instead
-        </button>
-      )}
     </div>
   );
 }

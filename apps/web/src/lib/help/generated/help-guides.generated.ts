@@ -135,7 +135,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Experts can pause new work for a while. When they do, their profile shows \"Not taking on new work\nright now\" instead of open times, and you can't start a new case with them. You can:</p>\n<ul>\n<li><strong>Find a similar expert</strong>, which searches for experts with similar experience who are available.</li>\n<li><strong>Get matched for a project</strong>, and our team introduces a matched expert.</li>\n<li><strong>Send them a message</strong>, which still reaches them.</li>\n</ul>\n<p>If you already have an open case with that expert, you can still book follow-up consultations on\nit. Book it from that case's page, using <strong>Book with {name} again</strong> or <strong>Book a consultation</strong>,\nwhich opens the next open time on the case.</p>",
+            "html": "<p>Experts can pause new work for a while. When they do, their profile shows \"Not taking on new work\nright now\" instead of open times, and you can't start a new case with them. You can:</p>\n<ul>\n<li><strong>Find a similar expert</strong>, which searches for experts with similar experience who are available.</li>\n<li><strong>Get matched for a project</strong>, and our team introduces a matched expert.</li>\n<li><strong>Send them a message</strong>, which still reaches them.</li>\n</ul>\n<p>If you already have an open case with that expert, you can still book follow-up consultations on\nit. Book it from that case's page, using <strong>Book with {name} again</strong> or <strong>Book a consultation</strong>,\nwhich opens their calendar right there, already attached to the case.</p>",
             "id": "s7-b0"
           }
         ],

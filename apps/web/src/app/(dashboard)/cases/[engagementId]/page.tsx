@@ -7,6 +7,8 @@ import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server
 import type { CaseSurfaceState } from '@/lib/analytics/server';
 import type { CaseHeaderView } from '@/lib/cases/case-view-types';
 import { EntityCrumb } from '@/components/layout/breadcrumb-context';
+import { loadSearchTaxonomyCached } from '@/lib/search/load-taxonomy';
+import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
 import { loadCase } from './_lib/load-case';
 import { CaseSurface } from './_components/case-surface';
 
@@ -113,13 +115,23 @@ export default async function CasePage({
   // excludes `users.email`). Threaded so the case-surface quick-pick's guest disclosure (entry
   // point 3) is honest about same-domain access, same as the profile-page entry points.
   const viewerEmailDomain = extractEmailDomain(user.email);
+  // Only a client can book, and only into an open case — where "Start a new case" needs the
+  // product picker's taxonomy. Nobody else pays for the read.
+  const productsTaxonomy =
+    view.lens === 'client' && view.header.isOpen
+      ? await loadSearchTaxonomyCached()
+      : EMPTY_TAXONOMY;
 
   return (
     <>
       {/* BAL-499 — publishes the case's title into the top bar's breadcrumb trail. Safe here:
           this is the already-authorised return path, after every gate above and notFound(). */}
       <EntityCrumb label={view.header.title} />
-      <CaseSurface view={view} viewerEmailDomain={viewerEmailDomain} />
+      <CaseSurface
+        view={view}
+        viewerEmailDomain={viewerEmailDomain}
+        productsTaxonomy={productsTaxonomy}
+      />
     </>
   );
 }

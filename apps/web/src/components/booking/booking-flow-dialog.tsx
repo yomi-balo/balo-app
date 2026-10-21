@@ -832,7 +832,7 @@ export function BookingFlowDialog(
     setSavedCompanyName(null);
 
     if (entry.mode === 'fixed_case') {
-      setPhase('confirm');
+      setPhase(entry.presetSlot === null ? 'pick_time' : 'confirm');
       setSlot(entry.presetSlot);
       setCaseSelection({ kind: 'existing', engagementId: entry.fixedCase.engagementId });
       setCompanies(null);
@@ -867,6 +867,38 @@ export function BookingFlowDialog(
 
     track(BOOKING_EVENTS.FLOW_OPENED, { expert_id: expert.expertProfileId, source });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset fires once per open, by design
+  }, [open]);
+
+  // The case page opens on its own case; the client's other open cases with this expert load
+  // behind it, so the same dropdown can switch case or start a new one. Only a single-company
+  // context that still lists this case offers the dropdown — otherwise the case stays fixed.
+  useEffect(() => {
+    if (!open || entry.mode !== 'fixed_case') return;
+    const { engagementId } = entry.fixedCase;
+    let cancelled = false;
+    refetchBookingContextAction({ expertProfileId: expert.expertProfileId })
+      .then((result) => {
+        if (cancelled || !result.ok) return;
+        const { context } = result;
+        if (context.arm !== 'single_company') return;
+        if (!context.openCases.some((c) => c.engagementId === engagementId)) return;
+        setCompanies([context.company]);
+        setCompanyId(context.company.id);
+        setOpenCases(context.openCases);
+        setResolvedCaseCount(context.resolvedCaseCount);
+      })
+      .catch((error: unknown) => {
+        // Silent degrade: the dialog still books into this case.
+        Sentry.captureException(error, {
+          level: 'warning',
+          tags: { feature: 'booking', step: 'fixed_case_context' },
+          extra: { expertProfileId: expert.expertProfileId },
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open, like the reset above
   }, [open]);
 
   useEffect(() => {
@@ -946,13 +978,16 @@ export function BookingFlowDialog(
     setPhase('pick_time');
   }, []);
 
+  // A preset slot was the whole reason the dialog opened, so Back leaves rather than offering
+  // a calendar the client never asked for.
+  const backCloses = entry.mode === 'fixed_case' && entry.presetSlot !== null;
   const handleBack = useCallback(() => {
-    if (entry.mode === 'fixed_case') {
+    if (backCloses) {
       onClose();
       return;
     }
     setPhase('pick_time');
-  }, [entry.mode, onClose]);
+  }, [backCloses, onClose]);
 
   const handleRetryCompanies = useCallback(async () => {
     // M3 — `requireOnboardedUser()` inside the action can still reject (an expired session);
@@ -1454,17 +1489,18 @@ export function BookingFlowDialog(
       openedAtIso: match.createdAt,
     };
   }
+  const fixedCaseSelected =
+    fixedCase !== null &&
+    caseSelection.kind === 'existing' &&
+    caseSelection.engagementId === fixedCase.engagementId;
   const caseContextSummary: FixedCaseSummary | null =
-    recovered ?? fixedCase ?? resolveChooserCaseContext();
+    recovered ?? (fixedCaseSelected ? fixedCase : resolveChooserCaseContext());
 
-  const showCaseEscapeHatch = entry.mode === 'chooser' && recovered === null;
-  // The chooser is hidden once EITHER a partial-failure recovery pinned the case (avoids a
-  // confusing "nothing selected" radio state — the new case isn't in `openCases` yet) OR
-  // entry point 3 already fixed it (D4a #3 — no chooser in the tree at all).
-  let effectiveOpenCases: readonly OpenCaseForExpert[] | null = null;
-  if (recovered === null && entry.mode === 'chooser') {
-    effectiveOpenCases = openCases;
-  }
+  // The chooser is hidden once a partial-failure recovery pinned the case (avoids a confusing
+  // "nothing selected" state — the new case isn't in `openCases` yet). Entry point 3 shows it
+  // only once its background context read has listed the client's open cases.
+  const effectiveOpenCases: readonly OpenCaseForExpert[] | null =
+    recovered === null ? openCases : null;
 
   const showResolvedCaseNote =
     entry.mode === 'chooser' &&
@@ -1537,7 +1573,6 @@ export function BookingFlowDialog(
                 }
                 onCaseSelectionChange={setCaseSelection}
                 caseContextSummary={caseContextSummary}
-                showCaseEscapeHatch={showCaseEscapeHatch}
                 title={title}
                 onTitleChange={setTitle}
                 descriptionHtml={descriptionHtml}
