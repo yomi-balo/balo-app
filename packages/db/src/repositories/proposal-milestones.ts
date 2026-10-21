@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import { proposalMilestones, type ProposalMilestone } from '../schema';
+import { lockDraftProposalTx } from './_shared/proposal-draft-lock';
 
 /** Active transaction handle (matches `advanceProposalStatus` in proposals.ts). */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -70,12 +71,19 @@ export async function listByProposalTx(tx: DbTx, proposalId: string): Promise<Pr
 
 export const proposalMilestonesRepository = {
   /**
-   * Replace-all the milestone set for a proposal in ONE transaction: soft-delete
-   * the existing LIVE rows, then insert the new ordered set with
-   * `sortOrder = index`. Matches the composer's "edit the whole list" model — the
-   * caller always sends the complete intended list, never a partial patch. Returns
-   * the new live rows in order. An empty input clears the set (soft-deletes all,
-   * inserts nothing).
+   * Replace-all the milestone set for a DRAFT proposal in ONE transaction: lock the
+   * proposal header `FOR UPDATE` and require a live `draft` (`lockDraftProposalTx`
+   * — throws `ProposalNotDraftError` otherwise), then soft-delete the existing LIVE
+   * rows and insert the new ordered set with `sortOrder = index`. Matches the
+   * composer's "edit the whole list" model — the caller always sends the complete
+   * intended list, never a partial patch. Returns the new live rows in order. An
+   * empty input clears the set (soft-deletes all, inserts nothing).
+   *
+   * The header lock is what keeps a submitted proposal's milestones the ones the
+   * submit checked: an autosave either commits before `promoteToSubmit`'s locked
+   * re-read or is refused once the proposal is `submitted`. A non-draft version's
+   * children are written only inside its own transition (`resubmit`, via
+   * `insertMilestonesTx`).
    *
    * BOUNDARY: does NOT enforce milestone-value sum vs `priceCents` — that is a
    * submit-time repo/Zod rule (drafts are partial).
@@ -85,6 +93,8 @@ export const proposalMilestonesRepository = {
     milestones: ProposalMilestoneInput[];
   }): Promise<ProposalMilestone[]> {
     return db.transaction(async (tx) => {
+      await lockDraftProposalTx(tx, input.proposalId);
+
       await tx
         .update(proposalMilestones)
         .set({ deletedAt: new Date(), updatedAt: new Date() })

@@ -86,6 +86,41 @@ describe('ProposalDoc — Fixed pricing', () => {
   });
 });
 
+describe('ProposalDoc — milestone amounts are optional', () => {
+  function withValues(first: number | null, second: number | null): ProposalReviewDoc {
+    const base = baseDoc();
+    const [a, b] = base.milestones;
+    if (a === undefined || b === undefined) throw new Error('fixture needs two milestones');
+    return {
+      ...base,
+      milestones: [
+        { ...a, valueCents: first },
+        { ...b, valueCents: second },
+      ],
+    };
+  }
+
+  it('renders no amount for a null milestone value', () => {
+    render(<ProposalDoc doc={withValues(null, null)} />);
+    expect(screen.getByText('Discovery')).toBeInTheDocument();
+    expect(screen.queryByText('A$3,000')).not.toBeInTheDocument();
+    expect(screen.queryByText('A$7,000')).not.toBeInTheDocument();
+    expect(screen.queryByText('A$0')).not.toBeInTheDocument();
+  });
+
+  it('renders no amount for a zero milestone value', () => {
+    render(<ProposalDoc doc={withValues(0, 0)} />);
+    expect(screen.queryByText('A$0')).not.toBeInTheDocument();
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
+  });
+
+  it('still renders a positive amount beside a hidden one', () => {
+    render(<ProposalDoc doc={withValues(null, 700_000)} />);
+    expect(screen.getByText('A$7,000')).toBeInTheDocument();
+    expect(screen.queryByText('A$0')).not.toBeInTheDocument();
+  });
+});
+
 describe('ProposalDoc — Time & materials', () => {
   function tmDoc(): ProposalReviewDoc {
     return baseDoc({

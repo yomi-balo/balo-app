@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   assertProposalCoherent,
+  assertProposalSubmittable,
   assertEngagementTermsCoherent,
   ProposalCoherenceError,
   EngagementTermsCoherenceError,
@@ -62,9 +63,9 @@ function tmSnapshot(overrides: Partial<ProposalCoherenceSnapshot> = {}): Proposa
 function catchProposalError(snapshot: ProposalCoherenceSnapshot): ProposalCoherenceError {
   try {
     assertProposalCoherent(snapshot);
-  } catch (e) {
-    if (e instanceof ProposalCoherenceError) return e;
-    throw e;
+  } catch (error) {
+    if (error instanceof ProposalCoherenceError) return error;
+    throw error;
   }
   throw new Error('expected assertProposalCoherent to throw, but it did not');
 }
@@ -363,6 +364,157 @@ describe('assertProposalCoherent — fully-coherent snapshots', () => {
   it('does not throw on a fully-coherent tm snapshot', () => {
     expect(() => assertProposalCoherent(tmSnapshot())).not.toThrow();
   });
+
+  it('stays draft-tolerant: a partially priced fixed snapshot is coherent', () => {
+    expect(() =>
+      assertProposalCoherent(
+        fixedSnapshot({
+          milestones: [
+            { valueCents: 60_000, estimatedMinutes: null },
+            { valueCents: null, estimatedMinutes: null },
+          ],
+        })
+      )
+    ).not.toThrow();
+  });
+});
+
+// ── Submit-time guard (integrity clauses + Fixed pricing completeness) ──────
+
+/** Run the submit assert and return the caught `ProposalCoherenceError` (fails if none). */
+function catchSubmitError(snapshot: ProposalCoherenceSnapshot): ProposalCoherenceError {
+  try {
+    assertProposalSubmittable(snapshot);
+  } catch (error) {
+    if (error instanceof ProposalCoherenceError) return error;
+    throw error;
+  }
+  throw new Error('expected assertProposalSubmittable to throw, but it did not');
+}
+
+/** Fixed milestones carrying the given values (effort is T&M-only, so null). */
+function valued(...values: (number | null)[]): ProposalCoherenceSnapshot['milestones'] {
+  return values.map((valueCents) => ({ valueCents, estimatedMinutes: null }));
+}
+
+describe('assertProposalSubmittable — integrity clauses run first', () => {
+  it('surfaces installments_not_100 before fixed_price_not_positive', () => {
+    expect(
+      catchSubmitError(
+        fixedSnapshot({ priceCents: 0, milestones: valued(null), installments: [{ pct: 90 }] })
+      ).rule
+    ).toBe('installments_not_100');
+  });
+
+  it('keeps fixed_milestone_values_exceed_price ahead of the mismatch clause', () => {
+    expect(
+      catchSubmitError(fixedSnapshot({ priceCents: 100_000, milestones: valued(100_001) })).rule
+    ).toBe('fixed_milestone_values_exceed_price');
+  });
+
+  it('surfaces tm integrity failures unchanged (tm_total_mismatch)', () => {
+    expect(catchSubmitError(tmSnapshot({ priceCents: 1 })).rule).toBe('tm_total_mismatch');
+  });
+});
+
+describe('assertProposalSubmittable — fixed_price_not_positive', () => {
+  it('throws on a fixed price of 0 with every milestone unvalued', () => {
+    const err = catchSubmitError(fixedSnapshot({ priceCents: 0, milestones: valued(null, null) }));
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect(err.rule).toBe('fixed_price_not_positive');
+    expect(err.message).toBe('Fixed-price proposals require a price greater than zero.');
+  });
+
+  it('throws on a fixed price of 0 before the milestone clause (a 0-valued milestone)', () => {
+    expect(catchSubmitError(fixedSnapshot({ priceCents: 0, milestones: valued(0) })).rule).toBe(
+      'fixed_price_not_positive'
+    );
+  });
+
+  it('throws on a fixed price of 0 with no milestones', () => {
+    expect(catchSubmitError(fixedSnapshot({ priceCents: 0, milestones: [] })).rule).toBe(
+      'fixed_price_not_positive'
+    );
+  });
+
+  it('passes at a fixed price of 1 cent', () => {
+    expect(() =>
+      assertProposalSubmittable(fixedSnapshot({ priceCents: 1, milestones: valued(null) }))
+    ).not.toThrow();
+  });
+
+  it('does not apply to tm: a zero-milestone tm proposal at price 0 passes (legacy submit path)', () => {
+    expect(() =>
+      assertProposalSubmittable(tmSnapshot({ milestones: [], priceCents: 0 }))
+    ).not.toThrow();
+  });
+});
+
+describe('assertProposalSubmittable — fixed_milestone_values_partial_or_mismatch', () => {
+  it('throws when only some milestones are valued', () => {
+    const err = catchSubmitError(
+      fixedSnapshot({ priceCents: 100_000, milestones: valued(100_000, null) })
+    );
+    expect(err).toBeInstanceOf(ProposalCoherenceError);
+    expect(err.rule).toBe('fixed_milestone_values_partial_or_mismatch');
+    expect(err.message).toBe(
+      'Milestone values must be set on every milestone or on none, each above zero, and add up exactly to the proposal price.'
+    );
+  });
+
+  it('throws when a milestone is valued at 0 (0 is present, not "none")', () => {
+    expect(
+      catchSubmitError(fixedSnapshot({ priceCents: 100_000, milestones: valued(0, 100_000) })).rule
+    ).toBe('fixed_milestone_values_partial_or_mismatch');
+  });
+
+  it('throws when every milestone is valued at 0', () => {
+    expect(
+      catchSubmitError(fixedSnapshot({ priceCents: 100_000, milestones: valued(0, 0) })).rule
+    ).toBe('fixed_milestone_values_partial_or_mismatch');
+  });
+
+  it('throws when every milestone is valued but the sum is under the price', () => {
+    expect(
+      catchSubmitError(fixedSnapshot({ priceCents: 100_000, milestones: valued(60_000, 39_999) }))
+        .rule
+    ).toBe('fixed_milestone_values_partial_or_mismatch');
+  });
+
+  it('passes when every milestone is valued above 0 and the sum equals the price', () => {
+    expect(() =>
+      assertProposalSubmittable(
+        fixedSnapshot({ priceCents: 100_000, milestones: valued(60_000, 40_000) })
+      )
+    ).not.toThrow();
+  });
+
+  it('passes when every milestone is unvalued (the "none" case)', () => {
+    expect(() =>
+      assertProposalSubmittable(
+        fixedSnapshot({ priceCents: 100_000, milestones: valued(null, null) })
+      )
+    ).not.toThrow();
+  });
+
+  it('passes with no milestones at a positive price (≥1 milestone is a UX-layer rule)', () => {
+    expect(() =>
+      assertProposalSubmittable(fixedSnapshot({ priceCents: 100_000, milestones: [] }))
+    ).not.toThrow();
+  });
+
+  it('ignores milestone values on tm (values are Fixed-only)', () => {
+    expect(() =>
+      assertProposalSubmittable(
+        tmSnapshot({
+          milestones: [
+            { valueCents: 5_000, estimatedMinutes: 90 },
+            { valueCents: null, estimatedMinutes: 210 },
+          ],
+        })
+      )
+    ).not.toThrow();
+  });
 });
 
 // ── Engagement-terms (header-only) variant ──────────────────────────────────
@@ -392,9 +544,9 @@ function tmTerms(overrides: Partial<EngagementTermsSnapshot> = {}): EngagementTe
 function catchEngagementError(terms: EngagementTermsSnapshot): EngagementTermsCoherenceError {
   try {
     assertEngagementTermsCoherent(terms);
-  } catch (e) {
-    if (e instanceof EngagementTermsCoherenceError) return e;
-    throw e;
+  } catch (error) {
+    if (error instanceof EngagementTermsCoherenceError) return error;
+    throw error;
   }
   throw new Error('expected assertEngagementTermsCoherent to throw, but it did not');
 }

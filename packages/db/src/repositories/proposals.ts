@@ -13,6 +13,7 @@ import {
   acquireRequestLockViaRelationshipTx,
 } from './_shared/request-lock';
 import { recordProposalAccepted } from './_shared/proposal-audit';
+import { lockDraftProposalTx } from './_shared/proposal-draft-lock';
 import { advanceRelationshipStatus } from './request-expert-relationships';
 import {
   insertMilestonesTx,
@@ -24,7 +25,11 @@ import {
   listByProposalTx as listInstallmentsTx,
   type ProposalPaymentInstallmentInput,
 } from './proposal-payment-installments';
-import { assertProposalCoherent, type ProposalCoherenceSnapshot } from './proposal-coherence';
+import {
+  assertProposalCoherent,
+  assertProposalSubmittable,
+  type ProposalCoherenceSnapshot,
+} from './proposal-coherence';
 import type { PricingMethod, ProposalCadence, ProposalChangeSection } from './proposal-types';
 
 export type ProposalStatus = Proposal['status'];
@@ -100,23 +105,12 @@ export class InvalidProposalTransitionError extends Error {
 }
 
 /**
- * Thrown by `updateDraft` when the targeted proposal is not a live `draft`
- * (missing, soft-deleted, or already `submitted`/beyond). Guards a stale autosave
- * from silently overwriting a submitted proposal — the action surfaces it as
- * "This proposal can no longer be edited." Modelled on the repo's existing
- * `InvalidProposalTransitionError` (a typed, named domain error the action
- * `instanceof`-checks), not a bare `Error`.
+ * Thrown by `updateDraft` and by the milestone / installment `setForProposal` writers
+ * when the targeted proposal is not a live `draft`. Defined in
+ * `_shared/proposal-draft-lock.ts` (the child repositories throw it too) and
+ * re-exported here so existing imports keep working.
  */
-export class ProposalNotDraftError extends Error {
-  constructor(public readonly status: ProposalStatus | null) {
-    super(
-      status === null
-        ? 'Proposal not found or soft-deleted: cannot update a draft.'
-        : `Proposal is not a draft (status: ${status}): cannot update.`
-    );
-    this.name = 'ProposalNotDraftError';
-  }
-}
+export { ProposalNotDraftError } from './_shared/proposal-draft-lock';
 
 /**
  * BAL-540 fix round — thrown by `createDraft` when the track it would attach to is no longer
@@ -382,7 +376,7 @@ export const proposalsRepository = {
    * transaction — no longer caller-owned. Draft persistence (insert as `draft`) is
    * A6.2; this inserts directly as `submitted`.
    *
-   * COHERENCE (BAL-293): asserts `assertProposalCoherent` at the TOP of the tx,
+   * COHERENCE (BAL-293): asserts `assertProposalSubmittable` at the TOP of the tx,
    * built from the supplied header with EMPTY milestones/installments (this legacy
    * path carries no children). CONSEQUENCE: a `fixed` `submit()` trips
    * `fixed_requires_installments` — correct by design. The active fixed path is
@@ -405,12 +399,12 @@ export const proposalsRepository = {
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6; see
-      // `_shared/request-lock.ts`). Moves the pure `assertProposalCoherent` guard below to AFTER
-      // the lock — harmless, it is in-memory with no I/O.
+      // `_shared/request-lock.ts`). Moves the pure `assertProposalSubmittable` guard below to
+      // AFTER the lock — harmless, it is in-memory with no I/O.
       await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
 
-      // Coherence guard — supplied header, no children (legacy header-only insert).
-      assertProposalCoherent(
+      // Submit guard — supplied header, no children (legacy header-only insert).
+      assertProposalSubmittable(
         toCoherenceSnapshot(
           {
             pricingMethod: input.pricingMethod,
@@ -510,11 +504,11 @@ export const proposalsRepository = {
     pricingMethod: PricingMethod;
     priceCents: number;
     currency?: string;
-    timeframeWeeks?: number;
-    exclusions?: string;
-    depositCents?: number;
-    rateCents?: number;
-    cadence?: ProposalCadence;
+    timeframeWeeks?: number | null;
+    exclusions?: string | null;
+    depositCents?: number | null;
+    rateCents?: number | null;
+    cadence?: ProposalCadence | null;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
@@ -598,14 +592,20 @@ export const proposalsRepository = {
 
   /**
    * Update the header fields of an EXISTING current draft (the composer's debounced
-   * autosave). Locks the row FOR UPDATE and guards `status === 'draft'` so a stale
-   * autosave landing AFTER a submit can never silently overwrite the submitted
-   * proposal — throws `ProposalNotDraftError` (missing/soft-deleted/non-draft). On
-   * success touches `updatedAt`.
+   * autosave). Locks the row FOR UPDATE and guards `status === 'draft'`
+   * (`lockDraftProposalTx`) so a stale autosave landing AFTER a submit can never
+   * silently overwrite the submitted proposal — throws `ProposalNotDraftError`
+   * (missing/soft-deleted/non-draft). On success touches `updatedAt`.
+   *
+   * The optional header columns (`timeframeWeeks`, `exclusions`, `depositCents`,
+   * `rateCents`, `cadence`) take `null` to CLEAR the column; `undefined` leaves it
+   * unchanged, because Drizzle's `.set()` skips `undefined` keys. The composer sends
+   * `null` for every cleared field, so a value the expert removed never survives.
    *
    * BOUNDARY: writes ONLY the proposal header. Milestones / installments /
    * documents are persisted via their own `setForProposal` / document repos by the
-   * action, NOT here — keeping autosave a single-row write.
+   * action, NOT here — keeping autosave a single-row write. Both `setForProposal`
+   * writers take the same header lock + draft guard.
    */
   async updateDraft(input: {
     proposalId: string;
@@ -613,25 +613,14 @@ export const proposalsRepository = {
     pricingMethod: PricingMethod;
     priceCents: number;
     currency?: string;
-    timeframeWeeks?: number;
-    exclusions?: string;
-    depositCents?: number;
-    rateCents?: number;
-    cadence?: ProposalCadence;
+    timeframeWeeks?: number | null;
+    exclusions?: string | null;
+    depositCents?: number | null;
+    rateCents?: number | null;
+    cadence?: ProposalCadence | null;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
-      const [current] = await tx
-        .select()
-        .from(proposals)
-        .where(and(eq(proposals.id, input.proposalId), isNull(proposals.deletedAt)))
-        .for('update');
-
-      if (current === undefined) {
-        throw new ProposalNotDraftError(null);
-      }
-      if (current.status !== 'draft') {
-        throw new ProposalNotDraftError(current.status);
-      }
+      await lockDraftProposalTx(tx, input.proposalId);
 
       const [updated] = await tx
         .update(proposals)
@@ -712,9 +701,11 @@ export const proposalsRepository = {
 
       // 1b. COHERENCE (BAL-293): lock + re-read the live header + children INSIDE
       // the tx (the header/milestones/installments were written by the action's
-      // preceding updateDraft/setForProposal steps) and assert coherence BEFORE the
-      // flip. Throw → whole tx rolls back: proposal stays `draft`, relationship
-      // reverts. The header is taken `FOR UPDATE` (mirroring accept()) so the
+      // preceding updateDraft/setForProposal steps) and assert they are submittable
+      // (integrity + Fixed pricing completeness) BEFORE the flip. This read is what a
+      // draft autosave racing the web readiness check meets, so an A$0 or partially
+      // priced Fixed draft is refused here. Throw → whole tx rolls back: proposal
+      // stays `draft`, relationship reverts. The header is taken `FOR UPDATE` (mirroring accept()) so the
       // coherence snapshot is provably the row that advanceProposalStatus then flips
       // — no plain-read TOCTOU window before the lock. (Lock order is unchanged: the
       // relationship is already locked above, and advanceProposalStatus re-locks this
@@ -732,7 +723,7 @@ export const proposalsRepository = {
       }
       const milestones = await listMilestonesTx(tx, input.proposalId);
       const installments = await listInstallmentsTx(tx, input.proposalId);
-      assertProposalCoherent(toCoherenceSnapshot(header, milestones, installments));
+      assertProposalSubmittable(toCoherenceSnapshot(header, milestones, installments));
 
       // 2. Flip the proposal status through the guarded writer (draft → submitted).
       const advanced = await advanceProposalStatus(tx, {
@@ -880,6 +871,9 @@ export const proposalsRepository = {
       // COHERENCE (BAL-293): re-read the live children under the proposal's
       // FOR UPDATE lock and assert coherence BEFORE advancing either spine. Throw →
       // tx rolls back: proposal stays `submitted`, relationship `proposal_submitted`.
+      // Integrity clauses only — the Fixed pricing-completeness clauses gate submit
+      // (`assertProposalSubmittable`), so a proposal sent under earlier rules stays
+      // acceptable.
       const milestones = await listMilestonesTx(tx, current.id);
       const installments = await listInstallmentsTx(tx, current.id);
       assertProposalCoherent(toCoherenceSnapshot(current, milestones, installments));
@@ -1055,11 +1049,11 @@ export const proposalsRepository = {
     pricingMethod: PricingMethod;
     priceCents: number;
     currency?: string;
-    timeframeWeeks?: number;
-    exclusions?: string;
-    depositCents?: number;
-    rateCents?: number;
-    cadence?: ProposalCadence;
+    timeframeWeeks?: number | null;
+    exclusions?: string | null;
+    depositCents?: number | null;
+    rateCents?: number | null;
+    cadence?: ProposalCadence | null;
     milestones: ProposalMilestoneInput[];
     installments: ProposalPaymentInstallmentInput[];
   }): Promise<Proposal> {
@@ -1071,9 +1065,10 @@ export const proposalsRepository = {
       await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
 
       // COHERENCE (BAL-293): the caller supplies the full v2 header + children, so
-      // assert at the TOP of the tx, BEFORE the flip-then-insert. Throw → tx rolls
-      // back: v1 keeps `is_current`/`changes_requested`, no v2 row, no child writes.
-      assertProposalCoherent(
+      // assert they are submittable (integrity + Fixed pricing completeness) at the TOP
+      // of the tx, BEFORE the flip-then-insert. Throw → tx rolls back: v1 keeps
+      // `is_current`/`changes_requested`, no v2 row, no child writes.
+      assertProposalSubmittable(
         toCoherenceSnapshot(
           {
             pricingMethod: input.pricingMethod,

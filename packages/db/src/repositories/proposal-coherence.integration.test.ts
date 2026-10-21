@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   assertProposalCoherent,
+  assertProposalSubmittable,
   assertEngagementTermsCoherent,
   ProposalCoherenceError,
   EngagementTermsCoherenceError,
@@ -62,8 +63,8 @@ describe('assertProposalCoherent (public contract)', () => {
     let caught: unknown;
     try {
       assertProposalCoherent({ ...COHERENT_FIXED, installments: [{ pct: 60 }, { pct: 30 }] });
-    } catch (e) {
-      caught = e;
+    } catch (error) {
+      caught = error;
     }
     expect(caught).toBeInstanceOf(ProposalCoherenceError);
     expect((caught as ProposalCoherenceError).rule).toBe('installments_not_100');
@@ -77,8 +78,8 @@ describe('assertProposalCoherent (public contract)', () => {
         priceCents: 0,
         milestones: [{ valueCents: null, estimatedMinutes: null }],
       });
-    } catch (e) {
-      caught = e;
+    } catch (error) {
+      caught = error;
     }
     expect(caught).toBeInstanceOf(ProposalCoherenceError);
     expect((caught as ProposalCoherenceError).rule).toBe('tm_missing_effort');
@@ -89,11 +90,61 @@ describe('assertProposalCoherent (public contract)', () => {
     try {
       // 300 min × 18_000c/hr = 90_000c derived; priceCents 50_000 is well outside ±1.
       assertProposalCoherent({ ...COHERENT_TM, priceCents: 50_000 });
-    } catch (e) {
-      caught = e;
+    } catch (error) {
+      caught = error;
     }
     expect(caught).toBeInstanceOf(ProposalCoherenceError);
     expect((caught as ProposalCoherenceError).rule).toBe('tm_total_mismatch');
+  });
+});
+
+describe('assertProposalSubmittable (public contract)', () => {
+  /** Run the submit assert and return whatever it threw (undefined when it passed). */
+  function caughtBy(snapshot: ProposalCoherenceSnapshot): unknown {
+    try {
+      assertProposalSubmittable(snapshot);
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  }
+
+  it('does not throw on a coherent, fully priced fixed snapshot', () => {
+    expect(caughtBy(COHERENT_FIXED)).toBeUndefined();
+  });
+
+  it('does not throw on a coherent tm snapshot', () => {
+    expect(caughtBy(COHERENT_TM)).toBeUndefined();
+  });
+
+  it('throws fixed_price_not_positive on an A$0 fixed snapshot that the integrity guard accepts', () => {
+    const snapshot: ProposalCoherenceSnapshot = {
+      ...COHERENT_FIXED,
+      priceCents: 0,
+      milestones: [{ valueCents: null, estimatedMinutes: null }],
+    };
+    expect(() => assertProposalCoherent(snapshot)).not.toThrow();
+
+    const caught = caughtBy(snapshot);
+    expect(caught).toBeInstanceOf(ProposalCoherenceError);
+    expect((caught as ProposalCoherenceError).rule).toBe('fixed_price_not_positive');
+  });
+
+  it('throws fixed_milestone_values_partial_or_mismatch on a partially priced fixed snapshot that the integrity guard accepts', () => {
+    const snapshot: ProposalCoherenceSnapshot = {
+      ...COHERENT_FIXED,
+      milestones: [
+        { valueCents: 60_000, estimatedMinutes: null },
+        { valueCents: null, estimatedMinutes: null },
+      ],
+    };
+    expect(() => assertProposalCoherent(snapshot)).not.toThrow();
+
+    const caught = caughtBy(snapshot);
+    expect(caught).toBeInstanceOf(ProposalCoherenceError);
+    expect((caught as ProposalCoherenceError).rule).toBe(
+      'fixed_milestone_values_partial_or_mismatch'
+    );
   });
 });
 
@@ -114,8 +165,8 @@ describe('assertEngagementTermsCoherent (public contract)', () => {
     let caught: unknown;
     try {
       assertEngagementTermsCoherent({ ...COHERENT_TERMS, rateCents: null });
-    } catch (e) {
-      caught = e;
+    } catch (error) {
+      caught = error;
     }
     expect(caught).toBeInstanceOf(EngagementTermsCoherenceError);
     expect((caught as EngagementTermsCoherenceError).rule).toBe('tm_missing_rate');

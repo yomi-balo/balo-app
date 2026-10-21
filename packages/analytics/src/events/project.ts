@@ -68,10 +68,17 @@ export const PROJECT_EVENTS = {
   // carry the `project_` feature prefix to match every constant in this file (the
   // ticket's bare names `milestone_effort_estimated` / `proposal_pricing_method_switched`
   // map to these prefixed values). MILESTONE_EFFORT_ESTIMATED fires CLIENT-side once
-  // per submit (not per keystroke); PROPOSAL_PRICING_METHOD_SWITCHED fires on a
-  // committed pricing-method change (after the Fixed→T&M confirm dialog).
+  // per submit (not per keystroke); PROPOSAL_PRICING_METHOD_SWITCHED fires on the
+  // immediate pricing-method switch, and again (from/to reversed) when the toast's
+  // Undo restores the previous method.
   MILESTONE_EFFORT_ESTIMATED: 'project_milestone_effort_estimated',
   PROPOSAL_PRICING_METHOD_SWITCHED: 'project_proposal_pricing_method_switched',
+  // BAL-610: composer v2. MILESTONE_PRICING_TOGGLED fires on every "Price each
+  // milestone" switch change (including the Undo that re-enables it); CHECKLIST_JUMPED
+  // on every jump to a readiness item; PREVIEW_OPENED on entering the full-page preview.
+  PROPOSAL_MILESTONE_PRICING_TOGGLED: 'project_proposal_milestone_pricing_toggled',
+  PROPOSAL_CHECKLIST_JUMPED: 'project_proposal_checklist_jumped',
+  PROPOSAL_PREVIEW_OPENED: 'project_proposal_preview_opened',
   // BAL-324: an admin sent a "complete your billing details" reminder from the
   // kickoff board while the client-billing gate was still outstanding. Feature
   // prefix `project_` matches every constant here (the ticket's bare
@@ -331,8 +338,27 @@ export interface ProjectEventMap {
     proposal_id: string;
     from_method: 'fixed' | 'tm';
     to_method: 'fixed' | 'tm';
-    /** Whether a typed Fixed price existed at switch time (informs the confirm beat). */
+    /** Whether a typed Fixed price existed at switch time. */
     had_typed_price: boolean;
+  };
+  // BAL-610: composer v2.
+  [PROJECT_EVENTS.PROPOSAL_MILESTONE_PRICING_TOGGLED]: {
+    proposal_id: string;
+    enabled: boolean;
+    milestone_count: number;
+  };
+  [PROJECT_EVENTS.PROPOSAL_CHECKLIST_JUMPED]: {
+    proposal_id: string;
+    /** A web `ReadinessIssueId`; typed `string` because analytics cannot import from web. */
+    issue_id: string;
+    source: 'rail' | 'cta' | 'mobile_bar' | 'shortcut';
+  };
+  [PROJECT_EVENTS.PROPOSAL_PREVIEW_OPENED]: {
+    proposal_id: string;
+    pricing_method: 'fixed' | 'tm';
+    is_resubmit: boolean;
+    milestone_count: number;
+    milestones_priced: boolean;
   };
   // BAL-324: admin-initiated client-billing reminder from the kickoff board.
   [PROJECT_EVENTS.BILLING_REMINDER_SENT]: {

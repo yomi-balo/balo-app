@@ -58,7 +58,12 @@ const {
 } = vi.hoisted(() => {
   class InvalidProposalTransitionError extends Error {}
   class InvalidRelationshipTransitionError extends Error {}
-  class ProposalNotDraftError extends Error {}
+  class ProposalNotDraftError extends Error {
+    constructor(public readonly status: string | null) {
+      super('not a draft');
+      this.name = 'ProposalNotDraftError';
+    }
+  }
   class ProposalCoherenceError extends Error {
     public readonly rule: string;
     constructor(rule: string, message?: string) {
@@ -240,10 +245,73 @@ describe('submitProposalAction', () => {
       expect(mockPromote).not.toHaveBeenCalled();
     });
 
-    it('rejects Fixed when a milestone has no value', async () => {
-      mockListMilestones.mockResolvedValue([{ ...MILESTONES[0], valueCents: null }]);
+    it('rejects Fixed at a zero price', async () => {
+      mockFindById.mockResolvedValue({ ...DRAFT, priceCents: 0 });
       const result = await submitProposalAction(VALID_INPUT);
-      expect(result).toEqual({ success: false, error: 'Every milestone needs a value.' });
+      expect(result).toEqual({
+        success: false,
+        error: 'Set your project price before submitting.',
+      });
+      expect(mockPromote).not.toHaveBeenCalled();
+    });
+
+    it('rejects Fixed when one milestone is valued and another is not', async () => {
+      mockListMilestones.mockResolvedValue([
+        { ...MILESTONES[0], valueCents: 500000 },
+        { ...MILESTONES[0], title: 'M2', valueCents: null },
+      ]);
+      const result = await submitProposalAction(VALID_INPUT);
+      expect(result).toEqual({
+        success: false,
+        error: 'Milestone amounts must add up to your project price.',
+      });
+      expect(mockPromote).not.toHaveBeenCalled();
+    });
+
+    it('rejects Fixed when the milestone amounts sum to less than the price', async () => {
+      mockListMilestones.mockResolvedValue([
+        { ...MILESTONES[0], valueCents: 200000 },
+        { ...MILESTONES[0], title: 'M2', valueCents: 200000 },
+      ]);
+      const result = await submitProposalAction(VALID_INPUT);
+      expect(result).toEqual({
+        success: false,
+        error: 'Milestone amounts must add up to your project price.',
+      });
+      expect(mockPromote).not.toHaveBeenCalled();
+    });
+
+    it('rejects Fixed when a valued milestone is zero', async () => {
+      mockListMilestones.mockResolvedValue([
+        { ...MILESTONES[0], valueCents: 500000 },
+        { ...MILESTONES[0], title: 'M2', valueCents: 0 },
+      ]);
+      const result = await submitProposalAction(VALID_INPUT);
+      expect(result).toEqual({
+        success: false,
+        error: 'Milestone amounts must add up to your project price.',
+      });
+      expect(mockPromote).not.toHaveBeenCalled();
+    });
+
+    it('accepts Fixed when no milestone carries an amount', async () => {
+      mockListMilestones.mockResolvedValue([
+        { ...MILESTONES[0], valueCents: null },
+        { ...MILESTONES[0], title: 'M2', valueCents: null },
+      ]);
+      const result = await submitProposalAction(VALID_INPUT);
+      expect(result.success).toBe(true);
+      expect(mockPromote).toHaveBeenCalled();
+    });
+
+    it('accepts Fixed when the milestone amounts add up to the price', async () => {
+      mockListMilestones.mockResolvedValue([
+        { ...MILESTONES[0], valueCents: 200000 },
+        { ...MILESTONES[0], title: 'M2', valueCents: 300000 },
+      ]);
+      const result = await submitProposalAction(VALID_INPUT);
+      expect(result.success).toBe(true);
+      expect(mockPromote).toHaveBeenCalled();
     });
 
     it('accepts T&M with deposit + rate, effort on every milestone, and no installments', async () => {
@@ -373,6 +441,31 @@ describe('submitProposalAction', () => {
     // Never reached promotion.
     expect(mockPromote).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['milestones', mockSetMilestones],
+    ['installments', mockSetInstallments],
+  ])(
+    'maps a TOCTOU %s setForProposal (ProposalNotDraftError) to stale copy + a warn',
+    async (_label, setter) => {
+      setter.mockRejectedValue(new ProposalNotDraftError('submitted'));
+
+      expect(await submitProposalAction(VALID_INPUT)).toEqual({
+        success: false,
+        error: 'This proposal can no longer be submitted.',
+      });
+      expect(mockPromote).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalledWith(
+        'Proposal submit persist rejected (no longer a draft)',
+        {
+          proposalId: PROPOSAL_ID,
+          relationshipId: REL_ID,
+          status: 'submitted',
+        }
+      );
+      expect(log.error).not.toHaveBeenCalled();
+    }
+  );
 
   it('maps a stale promote (proposal transition) to stale copy', async () => {
     mockPromote.mockRejectedValue(new InvalidProposalTransitionError());

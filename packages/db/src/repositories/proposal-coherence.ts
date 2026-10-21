@@ -9,11 +9,17 @@
  * (`proposal_price_cents_nonneg`, `proposal_installment_pct_range`, …) and BELOW
  * the web inline `validateProposalReadiness` UX layer — defence-in-depth.
  *
- * The repository wires `assertProposalCoherent` into every COMMITTING proposal
- * path (`submit`, `promoteToSubmit`, `accept`, `resubmit`) and
- * `assertEngagementTermsCoherent` into the engagement seam (`create`,
- * `materializeFromKickoff`). Drafts (`createDraft`/`updateDraft`) stay UNVALIDATED
- * — they are deliberately allowed to be saved incomplete.
+ * The repository wires `assertProposalSubmittable` (the integrity clauses plus the
+ * Fixed pricing-completeness clauses) into the expert's SUBMIT transitions
+ * (`submit`, `promoteToSubmit`, `resubmit`), `assertProposalCoherent` (integrity
+ * clauses only) into the client's `accept`, and `assertEngagementTermsCoherent` into
+ * the engagement seam (`create`, `materializeFromKickoff`). Drafts
+ * (`createDraft`/`updateDraft`) stay UNVALIDATED — they are deliberately allowed to
+ * be saved incomplete, including at A$0 or with only some milestones priced.
+ *
+ * `accept` keeps the integrity-only guard so a proposal that was submitted under the
+ * earlier rules stays acceptable: the pricing-completeness clauses gate the act of
+ * submitting, not the client's decision on something already sent.
  *
  * The named-domain-error pattern mirrors `InvalidProposalTransitionError` /
  * `ProposalNotDraftError` (proposals.ts) / `KickoffGatesIncompleteError`
@@ -38,7 +44,10 @@ export type ProposalCoherenceRule =
   | 'tm_has_installments' // tm ⇒ NO installment rows (reject, don't silently drop)
   | 'fixed_milestone_values_exceed_price' // fixed ⇒ sum(present milestone valueCents) <= priceCents
   | 'tm_missing_effort' // tm ⇒ every live milestone has estimatedMinutes present & >= 0
-  | 'tm_total_mismatch'; // tm ⇒ priceCents == round(sum(estimatedMinutes)/60 × rateCents) ± N
+  | 'tm_total_mismatch' // tm ⇒ priceCents == round(sum(estimatedMinutes)/60 × rateCents) ± N
+  // Submit-only (`assertProposalSubmittable`), never checked on accept:
+  | 'fixed_price_not_positive' // fixed ⇒ priceCents > 0
+  | 'fixed_milestone_values_partial_or_mismatch'; // fixed ⇒ values all null, OR all > 0 summing to priceCents
 
 /**
  * The header-only subset for the engagement seam. These three are exactly the
@@ -87,9 +96,9 @@ export interface EngagementTermsSnapshot {
 }
 
 /**
- * Thrown by `assertProposalCoherent` when a committing proposal would be
- * incoherent. Carries the structured `rule` discriminant + a human-readable
- * message. Modelled on `InvalidProposalTransitionError`.
+ * Thrown by `assertProposalCoherent` / `assertProposalSubmittable` when a committing
+ * proposal would be incoherent. Carries the structured `rule` discriminant + a
+ * human-readable message. Modelled on `InvalidProposalTransitionError`.
  */
 export class ProposalCoherenceError extends Error {
   constructor(
@@ -143,6 +152,9 @@ const RULE_MESSAGES: Record<ProposalCoherenceRule, string> = {
     'The sum of milestone values must not exceed the proposal price.',
   tm_missing_effort: 'Time & materials proposals require an estimated effort on every milestone.',
   tm_total_mismatch: 'The total must equal the estimated effort multiplied by the hourly rate.',
+  fixed_price_not_positive: 'Fixed-price proposals require a price greater than zero.',
+  fixed_milestone_values_partial_or_mismatch:
+    'Milestone values must be set on every milestone or on none, each above zero, and add up exactly to the proposal price.',
 };
 
 /**
@@ -177,13 +189,15 @@ function checkHeaderTerms(t: HeaderTerms): EngagementTermsCoherenceRule | null {
  *      → `fixed_milestone_values_exceed_price`
  *   3. tm-only: `tm_has_installments` → `tm_missing_effort` → `tm_total_mismatch`
  *
- * NOTE (v1 scope): a `fixed` proposal whose milestones all have `null` valueCents
- * is COHERENT here (present-value sum 0 <= price). The "every fixed milestone needs
- * a value" rule lives ONLY in the web `validateProposalReadiness`, not in this
- * integrity guard. Likewise zero milestones is allowed by this guard (≥1 milestone
- * is a UX-layer rule): a `tm` proposal with NO milestones is vacuously coherent iff
- * `priceCents === 0` — the legacy header-only `submit()` path (empty milestones,
- * `priceCents` 0) MUST pass. The guard enforces exactly the nine listed clauses.
+ * NOTE (scope): this is the INTEGRITY guard. A `fixed` proposal at price 0, or with
+ * only some milestones valued (present-value sum <= price), is COHERENT here; the
+ * Fixed pricing-completeness rules ("price > 0" and "milestone values all-or-none,
+ * summing to price") are enforced at submit time by `assertProposalSubmittable` and
+ * mirrored in the web `validateProposalReadiness`. Zero milestones is allowed by
+ * this guard (≥1 milestone is a UX-layer rule): a `tm` proposal with NO milestones
+ * is vacuously coherent iff `priceCents === 0` — the legacy header-only `submit()`
+ * path (empty milestones, `priceCents` 0) MUST pass. The guard enforces exactly the
+ * nine listed clauses.
  */
 export function assertProposalCoherent(snapshot: ProposalCoherenceSnapshot): void {
   // 1. Shared header clauses.
@@ -245,6 +259,58 @@ export function assertProposalCoherent(snapshot: ProposalCoherenceSnapshot): voi
   const tolerance = snapshot.milestones.length;
   if (Math.abs(snapshot.priceCents - derived) > tolerance) {
     throw new ProposalCoherenceError('tm_total_mismatch', RULE_MESSAGES.tm_total_mismatch);
+  }
+}
+
+/**
+ * Fixed milestone amounts are optional but all-or-none: either every live milestone
+ * is unvalued (`null`), or every one carries a value above zero and the values add
+ * up EXACTLY to the price. Zero milestones is the vacuous "none" case. A value of 0
+ * counts as present (and so fails the "above zero" clause), matching the web
+ * readiness gate.
+ */
+function fixedMilestoneValuesAllOrNone(
+  milestones: ProposalCoherenceSnapshot['milestones'],
+  priceCents: number
+): boolean {
+  const valued = milestones.flatMap((m) => (m.valueCents === null ? [] : [m.valueCents]));
+  if (valued.length === 0) {
+    return true;
+  }
+  if (valued.length !== milestones.length || valued.some((v) => v <= 0)) {
+    return false;
+  }
+  return valued.reduce((sum, v) => sum + v, 0) === priceCents;
+}
+
+/**
+ * Assert a proposal may be SUBMITTED (first submit or a resubmitted version). Runs
+ * every `assertProposalCoherent` clause first, then the Fixed pricing-completeness
+ * clauses, throwing `ProposalCoherenceError` on the FIRST failure:
+ *   4. fixed-only: `fixed_price_not_positive` → `fixed_milestone_values_partial_or_mismatch`
+ *
+ * Called inside the submitting transaction, after the request lock and against the
+ * children read (or supplied) in that same transaction, so a draft autosave that
+ * lands between the web readiness check and the commit cannot slip an A$0 or
+ * partially priced Fixed proposal through. `tm` gains no clauses here.
+ */
+export function assertProposalSubmittable(snapshot: ProposalCoherenceSnapshot): void {
+  assertProposalCoherent(snapshot);
+
+  if (snapshot.pricingMethod !== 'fixed') {
+    return;
+  }
+  if (snapshot.priceCents <= 0) {
+    throw new ProposalCoherenceError(
+      'fixed_price_not_positive',
+      RULE_MESSAGES.fixed_price_not_positive
+    );
+  }
+  if (!fixedMilestoneValuesAllOrNone(snapshot.milestones, snapshot.priceCents)) {
+    throw new ProposalCoherenceError(
+      'fixed_milestone_values_partial_or_mismatch',
+      RULE_MESSAGES.fixed_milestone_values_partial_or_mismatch
+    );
   }
 }
 

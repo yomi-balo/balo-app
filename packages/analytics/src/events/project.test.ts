@@ -101,6 +101,34 @@ describe('PROJECT_EVENTS review blocked', () => {
   });
 });
 
+describe('PROJECT_EVENTS proposal composer v2 (BAL-610)', () => {
+  it('maps to the feature-prefixed snake_case event names', () => {
+    expect(PROJECT_EVENTS.PROPOSAL_MILESTONE_PRICING_TOGGLED).toBe(
+      'project_proposal_milestone_pricing_toggled'
+    );
+    expect(PROJECT_EVENTS.PROPOSAL_CHECKLIST_JUMPED).toBe('project_proposal_checklist_jumped');
+    expect(PROJECT_EVENTS.PROPOSAL_PREVIEW_OPENED).toBe('project_proposal_preview_opened');
+  });
+
+  it('follows the {feature}_{noun}_{past_tense_verb} convention', () => {
+    expect(PROJECT_EVENTS.PROPOSAL_MILESTONE_PRICING_TOGGLED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_EVENTS.PROPOSAL_CHECKLIST_JUMPED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_EVENTS.PROPOSAL_PREVIEW_OPENED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+  });
+
+  it('types the jump source, toggle and preview properties', () => {
+    expectTypeOf<
+      ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_CHECKLIST_JUMPED]['source']
+    >().toEqualTypeOf<'rail' | 'cta' | 'mobile_bar' | 'shortcut'>();
+    expectTypeOf<
+      ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_MILESTONE_PRICING_TOGGLED]['enabled']
+    >().toEqualTypeOf<boolean>();
+    expectTypeOf<
+      ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_PREVIEW_OPENED]['pricing_method']
+    >().toEqualTypeOf<'fixed' | 'tm'>();
+  });
+});
+
 describe('PROJECT_SERVER_EVENTS', () => {
   it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386 / BAL-604)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([

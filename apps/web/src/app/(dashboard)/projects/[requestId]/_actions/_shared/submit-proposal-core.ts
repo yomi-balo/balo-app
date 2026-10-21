@@ -150,10 +150,7 @@ async function loadSubmittableDraft(
 ): Promise<Proposal | undefined> {
   const draft = await proposalsRepository.findById(proposalId);
   const submittable =
-    draft !== undefined &&
-    draft.status === 'draft' &&
-    draft.relationshipId === relationshipId &&
-    draft.isCurrent;
+    draft?.status === 'draft' && draft.relationshipId === relationshipId && draft.isCurrent;
   return submittable ? draft : undefined;
 }
 
@@ -163,8 +160,9 @@ type PersistResult = { ok: true } | { ok: false; error: string };
  * Step 8 — re-sanitise every rich-text field and re-persist the draft so
  * "what's submitted equals what's stored". A concurrent submit can flip the row
  * out of `draft` between the initial `findById` and these writes; the repository
- * surfaces that as `ProposalNotDraftError` (TOCTOU), which maps to the friendly
- * stale-UI copy rather than the generic failure.
+ * surfaces that as `ProposalNotDraftError` (TOCTOU) from the header write AND from
+ * both child `setForProposal` writes, which maps to the friendly stale-UI copy
+ * rather than the generic failure.
  */
 async function sanitiseAndPersistDraft(
   draft: Proposal,
@@ -179,7 +177,7 @@ async function sanitiseAndPersistDraft(
   }
 
   const sanitisedExclusions =
-    draft.exclusions === null ? undefined : sanitizeProjectHtml(draft.exclusions);
+    draft.exclusions === null ? null : sanitizeProjectHtml(draft.exclusions);
 
   const sanitisedMilestones: ProposalMilestoneInput[] = milestones.map((m) => ({
     title: m.title,
@@ -201,27 +199,31 @@ async function sanitiseAndPersistDraft(
       pricingMethod: draft.pricingMethod,
       priceCents: draft.priceCents,
       currency: draft.currency,
-      timeframeWeeks: draft.timeframeWeeks ?? undefined,
+      timeframeWeeks: draft.timeframeWeeks,
       exclusions: sanitisedExclusions,
-      depositCents: draft.depositCents ?? undefined,
-      rateCents: draft.rateCents ?? undefined,
-      cadence: draft.cadence ?? undefined,
+      depositCents: draft.depositCents,
+      rateCents: draft.rateCents,
+      cadence: draft.cadence,
+    });
+    await proposalMilestonesRepository.setForProposal({
+      proposalId: draft.id,
+      milestones: sanitisedMilestones,
+    });
+    await proposalPaymentInstallmentsRepository.setForProposal({
+      proposalId: draft.id,
+      installments: persistedInstallments,
     });
   } catch (error) {
     if (error instanceof ProposalNotDraftError) {
+      log.warn('Proposal submit persist rejected (no longer a draft)', {
+        proposalId: draft.id,
+        relationshipId: draft.relationshipId,
+        status: error.status,
+      });
       return { ok: false, error: STALE_PROPOSAL };
     }
     throw error;
   }
-
-  await proposalMilestonesRepository.setForProposal({
-    proposalId: draft.id,
-    milestones: sanitisedMilestones,
-  });
-  await proposalPaymentInstallmentsRepository.setForProposal({
-    proposalId: draft.id,
-    installments: persistedInstallments,
-  });
 
   return { ok: true };
 }
@@ -313,6 +315,7 @@ async function runSubmit(
     installments,
     depositCents: draft.depositCents,
     rateCents: draft.rateCents,
+    priceCents: draft.priceCents,
   });
   if (!readiness.ready) {
     return { success: false, error: readiness.error };

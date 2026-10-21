@@ -64,7 +64,7 @@ import {
  *   • request_proposal  → `PROJECT_PROPOSAL_REQUESTED` + `PROJECT_REQUEST_STATUS_TRANSITIONED`
  *                          (`admin-health-panel.tsx`)
  *   • submit_proposal   → `MILESTONE_EFFORT_ESTIMATED` + `PROJECT_REQUEST_STATUS_TRANSITIONED`
- *                          (`submit-proposal-dialog.tsx`)
+ *                          (`use-send-proposal.ts`)
  *   • accept            → `PROJECT_REQUEST_STATUS_TRANSITIONED` (`accept-confirm-modal.tsx`)
  *   • close             → `PROJECT_REQUEST_CLOSED` (`close-request-sheet.tsx`)
  *   • decline_track     → `PROJECT_TRACK_DECLINED` (`decline-track-dialog.tsx`)
@@ -104,13 +104,13 @@ type OperatorGate = { ok: true; user: SessionUser } | { ok: false; error: string
  * it: an environment this code does not RECOGNISE is refused, so every unfamiliar or missing
  * value is denied by the same rule that denies production.
  */
-const FAST_FORWARD_ALLOWED_NODE_ENVS: readonly string[] = ['development', 'test'];
+const FAST_FORWARD_ALLOWED_NODE_ENVS: ReadonlySet<string> = new Set(['development', 'test']);
 
 /**
  * NON-EXPORTED, deliberately (§4.2): a `'use server'` file may export only async functions, so
  * this helper — unconstrained by that rule — is the ONE definition of the gate, called first by
  * all three exported actions below. Order is load-bearing:
- *  1. `FAST_FORWARD_ALLOWED_NODE_ENVS.includes(process.env.NODE_ENV ?? '')` refusal FIRST, before
+ *  1. `FAST_FORWARD_ALLOWED_NODE_ENVS.has(process.env.NODE_ENV ?? '')` refusal FIRST, before
  *     any identity or capability work — the production-inertness this token's own docblock
  *     promises (`platform.ts`) depends on this running before `hasPlatformCapability` is ever
  *     reached in a production process.
@@ -123,7 +123,7 @@ const FAST_FORWARD_ALLOWED_NODE_ENVS: readonly string[] = ['development', 'test'
  * Pinned by `apps/web/src/invariants/fast-forward-capability-dev-only.test.ts`.
  */
 async function resolveFastForwardOperator(): Promise<OperatorGate> {
-  if (!FAST_FORWARD_ALLOWED_NODE_ENVS.includes(process.env.NODE_ENV ?? '')) {
+  if (!FAST_FORWARD_ALLOWED_NODE_ENVS.has(process.env.NODE_ENV ?? '')) {
     return { ok: false, error: 'The fast-forward is not available in production.' };
   }
 
@@ -400,6 +400,24 @@ export type FastForwardRequestResult =
   | { success: true; from: string; to: string; steps: FastForwardStepReport[] }
   | { success: false; error: string; steps?: FastForwardStepReport[] };
 
+/** The refusal copy for an operator input the plan needs but did not receive, if any. */
+function missingPlanInput(
+  steps: readonly FastForwardStep[],
+  expertProfileId: string | undefined,
+  relationshipId: string | undefined
+): string | undefined {
+  const [firstStep] = steps;
+  if (firstStep === 'invite') {
+    return expertProfileId === undefined
+      ? 'Pick an expert to invite before fast-forwarding to that status.'
+      : undefined;
+  }
+  if (relationshipId === undefined && steps.some((step) => NEEDS_RELATIONSHIP_STEPS.has(step))) {
+    return 'Pick a track before fast-forwarding to that status.';
+  }
+  return undefined;
+}
+
 /**
  * §7.1 — the step loop. Re-reads the request graph BEFORE every step (the previous step's
  * atomic rollup derivation moved it), executes steps sequentially, and stops at the first
@@ -431,19 +449,9 @@ async function runFastForwardRequest(
     return { success: false, error: refusalCopy(plan.refusal) };
   }
 
-  const [firstStep] = plan.steps;
-  if (firstStep === 'invite' && expertProfileId === undefined) {
-    return {
-      success: false,
-      error: 'Pick an expert to invite before fast-forwarding to that status.',
-    };
-  }
-  if (
-    firstStep !== 'invite' &&
-    plan.steps.some((step) => NEEDS_RELATIONSHIP_STEPS.has(step)) &&
-    relationshipId === undefined
-  ) {
-    return { success: false, error: 'Pick a track before fast-forwarding to that status.' };
+  const missingInput = missingPlanInput(plan.steps, expertProfileId, relationshipId);
+  if (missingInput !== undefined) {
+    return { success: false, error: missingInput };
   }
 
   const fromStatus = initialRequest.status;

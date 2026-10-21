@@ -58,11 +58,14 @@ export const proposalDraftBaseFields = {
   pricingMethod: z.enum(['fixed', 'tm']),
   priceCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG),
   currency: z.string().min(1).max(8).optional(),
-  timeframeWeeks: z.number().int().positive().optional(),
-  exclusions: z.string().max(20_000).optional(),
-  depositCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).optional(),
-  rateCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).optional(),
-  cadence: z.enum(['monthly', 'fortnightly']).optional(),
+  // The optional header fields take `null` to CLEAR the stored column (a removed
+  // timeframe, emptied exclusions, or the T&M terms after a switch to Fixed);
+  // `undefined` leaves the column as it is.
+  timeframeWeeks: z.number().int().positive().nullable().optional(),
+  exclusions: z.string().max(20_000).nullable().optional(),
+  depositCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).nullable().optional(),
+  rateCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).nullable().optional(),
+  cadence: z.enum(['monthly', 'fortnightly']).nullable().optional(),
   milestones: z.array(milestoneSchema).max(50),
   installments: z.array(installmentSchema).max(50),
 };

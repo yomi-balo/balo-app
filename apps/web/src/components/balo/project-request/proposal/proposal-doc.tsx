@@ -347,6 +347,7 @@ function MilestoneRow({
   showValue: boolean;
   currency: string;
 }>): React.JSX.Element {
+  const valueCents = milestone.valueCents ?? 0;
   const hasDescription =
     milestone.descriptionHtml !== null && !isDescriptionEmpty(milestone.descriptionHtml);
   return (
@@ -357,9 +358,9 @@ function MilestoneRow({
       <div className="min-w-0 flex-1">
         <div className="flex justify-between gap-2.5">
           <p className="text-foreground text-sm font-semibold">{milestone.title}</p>
-          {showValue && milestone.valueCents !== null && (
+          {showValue && valueCents > 0 && (
             <p className="text-foreground shrink-0 text-sm font-semibold tabular-nums">
-              {formatWholeCurrency(milestone.valueCents, currency)}
+              {formatWholeCurrency(valueCents, currency)}
             </p>
           )}
         </div>

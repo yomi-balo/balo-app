@@ -73,9 +73,16 @@ const mockComposer = vi.hoisted(() => vi.fn());
 const mockReview = vi.hoisted(() => vi.fn());
 const mockSubmitted = vi.hoisted(() => vi.fn());
 vi.mock('@/components/balo/project-request/proposal/proposal-composer', () => ({
-  ProposalComposer: (props: unknown) => {
+  ProposalComposer: (props: { header: React.ReactNode }) => {
     mockComposer(props);
-    return <div data-testid="composer-stub" />;
+    return <div data-testid="composer-stub">{props.header}</div>;
+  },
+}));
+const mockSent = vi.hoisted(() => vi.fn());
+vi.mock('@/components/balo/project-request/proposal/proposal-sent', () => ({
+  ProposalSent: (props: unknown) => {
+    mockSent(props);
+    return <div data-testid="sent-stub" />;
   },
 }));
 vi.mock('@/components/balo/project-request/proposal/proposal-review', () => ({
@@ -264,13 +271,18 @@ function document(overrides: Partial<ProposalDocument> = {}): ProposalDocument {
 }
 
 async function renderPage(
-  ids: { requestId?: string; relationshipId?: string } = {}
+  ids: {
+    requestId?: string;
+    relationshipId?: string;
+    sent?: string | string[];
+  } = {}
 ): Promise<void> {
   const ui = await ProposalComposerPage({
     params: Promise.resolve({
       requestId: ids.requestId ?? REQUEST_ID,
       relationshipId: ids.relationshipId ?? RELATIONSHIP_ID,
     }),
+    searchParams: Promise.resolve(ids.sent === undefined ? {} : { sent: ids.sent }),
   });
   render(ui);
 }
@@ -387,16 +399,32 @@ describe('ProposalSurfacePage (RSC) — expert composer branch', () => {
 
     expect(screen.getByTestId('composer-stub')).toBeInTheDocument();
     expect(screen.getByText(/Back to CPQ implementation/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Draft your scope, milestones, and pricing for Dana\./i)
-    ).toBeInTheDocument();
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
+    expect(screen.getByText(/Proposal for/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: REQUEST_TITLE })).toBeInTheDocument();
+    // The draft shell carries neither the version chip nor the revise save note.
+    expect(screen.queryByText(/^Version \d+$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Not saved until you resend/i)).not.toBeInTheDocument();
 
     const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(props).toMatchObject({
       requestId: REQUEST_ID,
       relationshipId: RELATIONSHIP_ID,
       clientFirstName: 'Dana',
+      clientName: 'Dana Whitfield',
+      companyName: 'Northwind Industrial',
+      clientCompanyName: 'Northwind Industrial',
+      requestTitle: REQUEST_TITLE,
+      requestSummary: 'Brief',
+      expert: {
+        name: 'Priya Nair',
+        initials: 'PN',
+        company: null,
+        headline: null,
+        rating: null,
+      },
     });
+    expect(props.requestDescription).toBeTruthy();
     const initialState = props.initialState as Record<string, unknown>;
     expect(initialState).toMatchObject({
       proposalId: PROPOSAL_ID,
@@ -433,6 +461,69 @@ describe('ProposalSurfacePage (RSC) — expert composer branch', () => {
 
     const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(props.clientFirstName).toBe('the client');
+  });
+
+  it('falls back to "the client" for the company and the first name for the full name', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        company: undefined,
+        createdByUser: { id: 'user-client', firstName: 'Dana', lastName: null, email: 'd@x.test' },
+      })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(undefined);
+
+    await renderPage();
+
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props.companyName).toBe('the client');
+    expect(props.clientCompanyName).toBeNull();
+    expect(props.clientName).toBe('Dana');
+    expect(screen.getByText('the client')).toBeInTheDocument();
+  });
+
+  it('enables "Price each milestone" for a draft with a positive milestone amount', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'draft' }));
+    mockListMilestones.mockResolvedValue([milestone({ valueCents: 500_000 })]);
+    mockListInstallments.mockResolvedValue([]);
+    mockListDocuments.mockResolvedValue([]);
+
+    await renderPage();
+
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    const initialState = props.initialState as {
+      milestonePricingEnabled: boolean;
+      milestones: Array<{ valueCents: number | null }>;
+    };
+    expect(initialState.milestonePricingEnabled).toBe(true);
+    expect(initialState.milestones[0]?.valueCents).toBe(500_000);
+  });
+
+  it('hydrates a zero-seeded draft with the switch off and the amounts null', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'draft' }));
+    mockListMilestones.mockResolvedValue([
+      milestone({ id: 'ms-1', valueCents: 0 }),
+      milestone({ id: 'ms-2', valueCents: 0 }),
+    ]);
+    mockListInstallments.mockResolvedValue([]);
+    mockListDocuments.mockResolvedValue([]);
+
+    await renderPage();
+
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    const initialState = props.initialState as {
+      milestonePricingEnabled: boolean;
+      milestones: Array<{ valueCents: number | null }>;
+    };
+    expect(initialState.milestonePricingEnabled).toBe(false);
+    expect(initialState.milestones.map((m) => m.valueCents)).toEqual([null, null]);
   });
 
   it('skips the child loads entirely when no draft exists yet (empty initial state)', async () => {
@@ -528,6 +619,108 @@ describe('ProposalSurfacePage (RSC) — expert submitted view branch', () => {
   });
 });
 
+describe('ProposalSurfacePage (RSC) — in-place sent screen (?sent)', () => {
+  function seedSubmitted(version: number): void {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted', version }));
+    seedChildren();
+  }
+
+  it('renders the sent screen, with no header, when ?sent equals the latest version', async () => {
+    seedSubmitted(1);
+
+    await renderPage({ sent: '1' });
+
+    expect(screen.getByTestId('sent-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('submitted-stub')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Back to CPQ implementation/i)).not.toBeInTheDocument();
+    expect(mockSent.mock.calls[0]?.[0]).toEqual({
+      requestId: REQUEST_ID,
+      companyName: 'Northwind Industrial',
+      clientCompanyName: 'Northwind Industrial',
+      clientName: 'Dana Whitfield',
+      reviseMode: false,
+      version: 1,
+    });
+  });
+
+  it('passes no company to the person attribution when the request has none', async () => {
+    seedSubmitted(1);
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        company: undefined,
+        relationships: [relationship({ status: 'proposal_submitted' })],
+      })
+    );
+
+    await renderPage({ sent: '1' });
+
+    expect(mockSent.mock.calls[0]?.[0]).toMatchObject({
+      companyName: 'the client',
+      clientCompanyName: null,
+    });
+  });
+
+  it('falls through to the submitted view when the matching version has been decided', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'accepted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'accepted', version: 1 }));
+    seedChildren();
+
+    await renderPage({ sent: '1' });
+
+    expect(screen.getByTestId('submitted-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('sent-stub')).not.toBeInTheDocument();
+    expect(mockSent).not.toHaveBeenCalled();
+  });
+
+  it('marks a resend (version above 1) as revise mode', async () => {
+    seedSubmitted(3);
+
+    await renderPage({ sent: '3' });
+
+    expect(mockSent.mock.calls[0]?.[0]).toMatchObject({ reviseMode: true, version: 3 });
+  });
+
+  it.each(['2', '0', '-1', '1.5', 'abc', ''])(
+    'ignores a ?sent value (%s) that is not the latest version',
+    async (sent) => {
+      seedSubmitted(1);
+
+      await renderPage({ sent });
+
+      expect(screen.getByTestId('submitted-stub')).toBeInTheDocument();
+      expect(mockSent).not.toHaveBeenCalled();
+    }
+  );
+
+  it('ignores a repeated ?sent parameter', async () => {
+    seedSubmitted(1);
+
+    await renderPage({ sent: ['1', '1'] });
+
+    expect(screen.getByTestId('submitted-stub')).toBeInTheDocument();
+    expect(mockSent).not.toHaveBeenCalled();
+  });
+
+  it('shows the submitted view when ?sent is absent', async () => {
+    seedSubmitted(1);
+
+    await renderPage();
+
+    expect(screen.getByTestId('submitted-stub')).toBeInTheDocument();
+    expect(mockSent).not.toHaveBeenCalled();
+  });
+});
+
 describe('ProposalSurfacePage (RSC) — expert revise composer branch (A6.4)', () => {
   it('renders the composer in REVISE mode when the relationship is submitted but the current proposal is changes_requested', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
@@ -550,8 +743,12 @@ describe('ProposalSurfacePage (RSC) — expert revise composer branch (A6.4)', (
     // Loads the latest change-request note against the CURRENT proposal.
     expect(mockListChangeRequests).toHaveBeenCalledWith(PROPOSAL_ID);
     expect(screen.getByTestId('composer-stub')).toBeInTheDocument();
-    // The revise framing (heading copy) — not the draft "Build your proposal".
-    expect(screen.getByText(/Revise your proposal/i)).toBeInTheDocument();
+    // The revise shell: company line, version chip and request title. The save note
+    // belongs to the composer's save-status slot, never the server shell.
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
+    expect(screen.getByText('Version 2')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: REQUEST_TITLE })).toBeInTheDocument();
+    expect(screen.queryByText(/Not saved until you resend/i)).not.toBeInTheDocument();
 
     const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(props).toMatchObject({
@@ -560,6 +757,9 @@ describe('ProposalSurfacePage (RSC) — expert revise composer branch (A6.4)', (
       clientFirstName: 'Dana',
       fromProposalId: PROPOSAL_ID,
       currentVersion: 1,
+      clientName: 'Dana Whitfield',
+      companyName: 'Northwind Industrial',
+      requestTitle: REQUEST_TITLE,
     });
     expect(props.changeRequest).toEqual({ note: 'Lower the price, please.', section: 'pricing' });
     // Hydrated from the CURRENT (changes_requested) proposal + its children.

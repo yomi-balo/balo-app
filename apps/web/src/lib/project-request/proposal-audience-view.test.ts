@@ -6,7 +6,7 @@ import type {
   ProposalDocument,
   ProjectRequestWithRelations,
 } from '@balo/db';
-import { hydrateReviewDoc } from './proposal-audience-view';
+import { expertIdentityOf, hydrateReviewDoc } from './proposal-audience-view';
 
 /**
  * BAL-357 audience-boundary invariant. The serializer resolves money per audience
@@ -186,6 +186,44 @@ describe('hydrateReviewDoc — the expert rating aggregate', () => {
       expect(expert.rating).toBe(4.3);
       expect(expert.ratingCount).toBe(2);
     }
+  });
+});
+
+describe('expertIdentityOf', () => {
+  it('equals the expert block of hydrateReviewDoc for the same relationship', () => {
+    const doc = hydrateReviewDoc(
+      proposal,
+      milestones,
+      installments,
+      documents,
+      relationship,
+      'expert'
+    );
+    expect(expertIdentityOf(relationship)).toEqual(doc.expert);
+  });
+
+  it('builds name, initials, parsed rating and count, with company and headline null', () => {
+    expect(expertIdentityOf(relationship)).toEqual({
+      name: 'Priya Sharma',
+      initials: 'PS',
+      company: null,
+      headline: null,
+      rating: 4.3,
+      ratingCount: 2,
+    });
+  });
+
+  it('falls back to "Your expert" / "EX" when the name is blank', () => {
+    const blank = {
+      ...relationship,
+      expertProfile: {
+        ...relationship.expertProfile,
+        user: { id: 'user-9', firstName: ' ', lastName: null },
+      },
+    } as unknown as Relationship;
+    const identity = expertIdentityOf(blank);
+    expect(identity.name).toBe('Your expert');
+    expect(identity.initials).toBe('EX');
   });
 });
 
