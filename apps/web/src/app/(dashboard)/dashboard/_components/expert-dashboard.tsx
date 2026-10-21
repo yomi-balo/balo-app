@@ -100,16 +100,16 @@ export function ExpertDashboard({
       )}
       {checklistStatus && !isAllComplete && <GettingStartedChecklist status={checklistStatus} />}
 
-      {yourMove}
-
-      {/* Up next (or the ghost card) beside the earnings and Clients cards. */}
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      {/* Up next (or the ghost card) beside the earnings and Clients cards, then Your move. */}
+      <div className="mb-4 grid grid-cols-1 items-stretch gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         {upNext}
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
           <EarningsCard />
           <GhostClientsCard />
         </div>
       </div>
+
+      {yourMove}
     </div>
   );
 }

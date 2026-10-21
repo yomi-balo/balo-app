@@ -3,11 +3,16 @@
 import { useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { Gift } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { WalletWidget } from '@/components/balo/credit/wallet-widget';
 import { MemberWalletNudge } from '@/components/billing/top-up/MemberWalletNudge';
 import { track, WALLET_EVENTS } from '@/lib/analytics';
-import { resolveRestingState } from '@/lib/credit/display-constants';
+import {
+  DASHBOARD_WALLET_RESTING_SLOT_CLASS,
+  DASHBOARD_WALLET_SLOT_CLASS,
+  resolveRestingState,
+} from '@/lib/credit/display-constants';
 import type { DashboardWalletData } from '@/lib/credit/wallet-read';
 
 /** The card's data: the resolved server read, or an `error` sentinel from a failed slot read. */
@@ -29,6 +34,33 @@ function topUpButtonClassName(state: 'healthy' | 'low' | 'zero'): string {
     return `${base} border border-primary/20 bg-primary/10 text-primary hover:bg-primary/15`;
   }
   return base;
+}
+
+/**
+ * The standalone `/redeem` entry, inside the wallet card. `mt-auto` pins it to the card bottom
+ * when the card grows to the row height; `pt-3.5` is the minimum gap above its divider.
+ */
+function PromoEntry(): React.JSX.Element {
+  return (
+    <div className="mt-auto w-full pt-3.5">
+      <Link
+        href="/redeem"
+        className="group border-border focus-visible:ring-ring flex min-h-11 items-center gap-2.5 rounded-sm border-t pt-3.5 focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <span className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-lg">
+          <Gift className="size-[15px]" aria-hidden="true" />
+        </span>
+        <span className="min-w-0">
+          <span className="text-foreground group-hover:text-primary block text-[13.5px] font-semibold transition-colors">
+            Have a promo code?
+          </span>
+          <span className="text-muted-foreground block text-xs">
+            Redeem it to add credit — no card needed.
+          </span>
+        </span>
+      </Link>
+    </div>
+  );
 }
 
 interface DashboardWalletCardProps {
@@ -74,7 +106,9 @@ export function DashboardWalletCard({
   }, [router]);
 
   if (data.kind === 'error') {
-    return <WalletWidget state="error" onRetry={handleRetry} />;
+    return (
+      <WalletWidget state="error" onRetry={handleRetry} className={DASHBOARD_WALLET_SLOT_CLASS} />
+    );
   }
 
   if (data.kind === 'member') {
@@ -85,6 +119,8 @@ export function DashboardWalletCard({
         fx={null}
         hasEverHeldCredit={data.hasEverHeldCredit}
         onNudgeClick={handleNudgeClick}
+        className={DASHBOARD_WALLET_RESTING_SLOT_CLASS}
+        footer={<PromoEntry />}
       />
     );
   }
@@ -95,12 +131,17 @@ export function DashboardWalletCard({
       state={holderState}
       balanceMinor={data.balanceMinor}
       fx={data.fx}
+      className={DASHBOARD_WALLET_RESTING_SLOT_CLASS}
+      growFooter
       action={
-        <Button asChild variant="default" className={topUpButtonClassName(holderState)}>
-          <Link href="/billing/top-up" onClick={handleTopUpClick}>
-            Top up
-          </Link>
-        </Button>
+        <>
+          <Button asChild variant="default" className={topUpButtonClassName(holderState)}>
+            <Link href="/billing/top-up" onClick={handleTopUpClick}>
+              Top up
+            </Link>
+          </Button>
+          <PromoEntry />
+        </>
       }
     />
   );

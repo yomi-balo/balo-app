@@ -47,7 +47,7 @@ function status(overrides: Partial<ChecklistStatus> = {}): ChecklistStatus {
 }
 
 describe('ExpertDashboard (BAL-566 R2/D13)', () => {
-  it('places the Your move rail after the header and before the Up next grid', () => {
+  it('places Up next after the header and before the Your move rail', () => {
     render(
       <ExpertDashboard
         checklistStatus={status()}
@@ -59,11 +59,52 @@ describe('ExpertDashboard (BAL-566 R2/D13)', () => {
     const header = screen.getByText('Welcome back, Priya');
     const yourMove = screen.getByTestId('your-move');
     const upNext = screen.getByTestId('up-next');
+    expect(header.compareDocumentPosition(upNext) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
-      header.compareDocumentPosition(yourMove) & Node.DOCUMENT_POSITION_FOLLOWING
+      upNext.compareDocumentPosition(yourMove) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it('stretches the top-row grid', () => {
+    render(
+      <ExpertDashboard
+        checklistStatus={status()}
+        userName="Priya"
+        upNext={<div data-testid="up-next" />}
+        yourMove={<div data-testid="your-move" />}
+      />
+    );
+    const grid = screen.getByTestId('up-next').parentElement;
+    expect(grid).toHaveClass('items-stretch');
+    expect(grid).not.toHaveClass('items-start');
+  });
+
+  it('keeps the Clients card last in a flex-col side column', () => {
+    render(
+      <ExpertDashboard
+        checklistStatus={status()}
+        userName="Priya"
+        upNext={<div data-testid="up-next" />}
+        yourMove={<div data-testid="your-move" />}
+      />
+    );
+    const column = screen.getByTestId('ghost-clients').parentElement;
+    expect(column).toHaveClass('flex-col');
+    expect(column?.lastElementChild).toBe(screen.getByTestId('ghost-clients'));
+  });
+
+  it('places the checklist before Up next while setup is incomplete', () => {
+    render(
+      <ExpertDashboard
+        checklistStatus={status({ allComplete: false, completedCount: 3 })}
+        userName="Priya"
+        upNext={<div data-testid="up-next" />}
+        yourMove={<div data-testid="your-move" />}
+      />
+    );
     expect(
-      yourMove.compareDocumentPosition(upNext) & Node.DOCUMENT_POSITION_FOLLOWING
+      screen.getByTestId('checklist').compareDocumentPosition(screen.getByTestId('up-next')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 

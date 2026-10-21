@@ -90,7 +90,7 @@ export function UpNextCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.24, ease: 'easeOut' }}
       aria-labelledby="up-next-heading"
-      className="bg-card border-border rounded-2xl border px-[18px] pt-[18px] pb-1.5 shadow-sm"
+      className="bg-card border-border flex flex-col rounded-2xl border px-[18px] pt-[18px] pb-1.5 shadow-sm"
     >
       <h2 id="up-next-heading" className="text-foreground text-[17px] font-semibold tracking-tight">
         {UP_NEXT_TITLE}
@@ -145,21 +145,25 @@ export function UpNextCard({
 
       {/* The strip is a BORDER, so it only renders with links in it: `resolveUpNextFooterLinks`
           skips a nav entry the workspace doesn't have, and an empty list would otherwise draw a
-          bare rule above the card edge. */}
+          bare rule above the card edge. The spacer ahead of it absorbs spare height when the card
+          stretches, keeping the strip at the bottom. */}
       {footerLinks.length > 0 && (
-        <div className="border-border mt-1.5 flex gap-[18px] border-t pt-3 pb-2.5">
-          {footerLinks.map((link) => (
-            <Link
-              key={link.target}
-              href={link.href}
-              onClick={() => handleFooterLinkClick(link.target)}
-              className="text-primary inline-flex items-center gap-1 text-[12.5px] font-semibold"
-            >
-              {link.label}
-              <ArrowRight className="size-3" aria-hidden="true" />
-            </Link>
-          ))}
-        </div>
+        <>
+          <div aria-hidden="true" className="min-h-1.5 flex-1" />
+          <div className="border-border flex gap-[18px] border-t pt-3 pb-2.5">
+            {footerLinks.map((link) => (
+              <Link
+                key={link.target}
+                href={link.href}
+                onClick={() => handleFooterLinkClick(link.target)}
+                className="text-primary inline-flex items-center gap-1 text-[12.5px] font-semibold"
+              >
+                {link.label}
+                <ArrowRight className="size-3" aria-hidden="true" />
+              </Link>
+            ))}
+          </div>
+        </>
       )}
     </motion.section>
   );

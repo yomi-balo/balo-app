@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { axe } from '@/test/axe';
 
 import { WalletWidget } from './wallet-widget';
+import { DASHBOARD_WALLET_SLOT_CLASS } from '@/lib/credit/display-constants';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -118,6 +119,61 @@ describe('WalletWidget — indicative FX secondary', () => {
       <WalletWidget state="zero" balanceMinor={0} fx={{ currency: 'USD', audToQuote: 0.642 }} />
     );
     expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
+  });
+});
+
+describe('WalletWidget — chrome override', () => {
+  it('keeps the 380px cap and arbitrary shadow by default', () => {
+    const resting = render(<WalletWidget state="healthy" balanceMinor={34_700} />);
+    expect(resting.container.firstElementChild).toHaveClass('max-w-[380px]');
+    expect(resting.container.firstElementChild?.className).toContain('shadow-[');
+    resting.unmount();
+    render(<WalletWidget state="loading" />);
+    expect(screen.getByLabelText('Loading wallet balance')).toHaveClass('max-w-[380px]');
+  });
+
+  it('swaps the cap and shadow when given the dashboard slot class', () => {
+    const { container } = render(
+      <WalletWidget state="healthy" balanceMinor={34_700} className={DASHBOARD_WALLET_SLOT_CLASS} />
+    );
+    const root = container.firstElementChild;
+    expect(root).toHaveClass('max-w-none', 'shadow-sm', 'lg:flex-1');
+    expect(root).not.toHaveClass('flex-col');
+    expect(root).not.toHaveClass('max-w-[380px]');
+    expect(root?.className).not.toContain('shadow-[');
+  });
+
+  it('keeps the resting footer a plain block unless growFooter is set', () => {
+    const plain = render(
+      <WalletWidget state="healthy" balanceMinor={34_700} action={<a href="/x">Act</a>} />
+    );
+    expect(screen.getByRole('link', { name: 'Act' }).parentElement?.className).toBe('mt-4');
+    plain.unmount();
+    render(
+      <WalletWidget
+        state="healthy"
+        balanceMinor={34_700}
+        growFooter
+        action={<a href="/x">Act</a>}
+      />
+    );
+    expect(screen.getByRole('link', { name: 'Act' }).parentElement).toHaveClass(
+      'mt-4',
+      'flex',
+      'flex-1',
+      'flex-col'
+    );
+  });
+
+  it('renders the action only on resting states', () => {
+    const loading = render(<WalletWidget state="loading" action={<a href="/x">Act</a>} />);
+    expect(screen.queryByRole('link', { name: 'Act' })).toBeNull();
+    loading.unmount();
+    const error = render(<WalletWidget state="error" action={<a href="/x">Act</a>} />);
+    expect(screen.queryByRole('link', { name: 'Act' })).toBeNull();
+    error.unmount();
+    render(<WalletWidget state="healthy" balanceMinor={34_700} action={<a href="/x">Act</a>} />);
+    expect(screen.getByRole('link', { name: 'Act' })).toBeInTheDocument();
   });
 });
 

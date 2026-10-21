@@ -32,6 +32,10 @@ interface MemberWalletNudgeProps {
    * Both zero arms still emit `'zero'` — the copy variant is not an analytics distinction.
    */
   readonly onNudgeClick?: (state: 'low' | 'zero') => void;
+  /** Merged over the shared card chrome (the dashboard widens it to fill its column). */
+  readonly className?: string;
+  /** Rendered beneath the action on every state (the dashboard's promo entry). */
+  readonly footer?: React.ReactNode;
 }
 
 /**
@@ -54,7 +58,8 @@ function zeroBodyCopy(adminLabel: string, hasEverHeldCredit: boolean): string {
  * holder(s), so the copy is team-framed ("your team's balance") and names the holder who will
  * press Top up; "overdraft" never appears. The `LOW_BALANCE_MINOR` floor is shared with the
  * holder resting states, and {@link WALLET_CARD_CHROME} is the chrome the holder widget uses —
- * both single sources of truth, so the two lenses agree in the slot they share.
+ * both single sources of truth, so the two lenses agree in the slot they share. `className` is
+ * merged over the chrome and `footer` renders beneath the action.
  */
 export function MemberWalletNudge({
   balanceMinor,
@@ -62,6 +67,8 @@ export function MemberWalletNudge({
   fx,
   hasEverHeldCredit,
   onNudgeClick,
+  className,
+  footer,
 }: Readonly<MemberWalletNudgeProps>): React.JSX.Element {
   const [requested, setRequested] = useState(false);
   const [pending, setPending] = useState(false);
@@ -125,7 +132,9 @@ export function MemberWalletNudge({
   }
 
   return (
-    <div className={cn(WALLET_CARD_CHROME, isLow ? 'border-warning/40' : 'border-border')}>
+    <div
+      className={cn(WALLET_CARD_CHROME, isLow ? 'border-warning/40' : 'border-border', className)}
+    >
       <div className="flex items-center justify-between">
         <span className="text-muted-foreground inline-flex items-center gap-1.5 text-[11px] font-bold tracking-wide uppercase">
           <Users className="size-3.5" strokeWidth={2.4} aria-hidden="true" /> Team balance
@@ -160,6 +169,7 @@ export function MemberWalletNudge({
       </p>
 
       <div className="mt-4">{renderAction()}</div>
+      {footer}
     </div>
   );
 }

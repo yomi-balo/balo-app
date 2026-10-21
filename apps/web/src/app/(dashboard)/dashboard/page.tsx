@@ -1,6 +1,4 @@
-import Link from 'next/link';
 import { Suspense } from 'react';
-import { Gift } from 'lucide-react';
 import {
   getCurrentUser,
   getCompanyContext,
@@ -22,6 +20,7 @@ import { YourMoveSkeleton } from './_components/your-move-skeleton';
 import { ApplicationReviewBannerSlot } from './_components/application-review-banner-slot';
 import { resolveUpNextFooterLinks } from './_lib/up-next-footer-links';
 import { log } from '@/lib/logging';
+import { DASHBOARD_WALLET_SLOT_CLASS } from '@/lib/credit/display-constants';
 import type { UpNextFooterLink } from './_lib/up-next-view-types';
 
 /**
@@ -70,8 +69,8 @@ async function renderExpertDashboard(
 }
 
 /**
- * The company-workspace branch: header, Your move, then Up next at 2fr with the wallet and promo
- * link beside it at 1fr.
+ * The company-workspace branch: header, then Up next at 2fr beside the wallet (promo entry inside
+ * the card) at 1fr, stretched to one height, then Your move.
  */
 async function renderCompanyDashboard(
   footerLinks: readonly UpNextFooterLink[]
@@ -99,13 +98,7 @@ async function renderCompanyDashboard(
         <ApplicationReviewBannerSlot userId={actor.id} email={actor.email} />
       </Suspense>
 
-      <div className="mb-4">
-        <Suspense fallback={<YourMoveSkeleton />}>
-          <CompanyYourMoveSlot user={actor} companyId={companyId} companyName={companyName} />
-        </Suspense>
-      </div>
-
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+      <div className="mb-4 grid grid-cols-1 items-stretch gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Suspense fallback={<UpNextCardSkeleton />}>
           <CompanyUpNextSlot
             actorUserId={actor.id}
@@ -114,28 +107,19 @@ async function renderCompanyDashboard(
             footerLinks={footerLinks}
           />
         </Suspense>
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
           {/* BAL-402: the company workspace's wallet card, streamed in after the rest of the page paints. */}
-          <Suspense fallback={<WalletWidget state="loading" />}>
+          <Suspense
+            fallback={<WalletWidget state="loading" className={DASHBOARD_WALLET_SLOT_CLASS} />}
+          >
             <DashboardWalletSlot actor={actor} companyId={companyId} />
           </Suspense>
-          {/* BAL-383: a lightweight entry point to the standalone /redeem surface. */}
-          <Link
-            href="/redeem"
-            className="border-border bg-card hover:border-primary/40 focus-visible:ring-ring flex items-center gap-3 rounded-xl border p-4 transition-colors focus-visible:ring-2 focus-visible:outline-none"
-          >
-            <span className="bg-primary/10 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg">
-              <Gift className="text-primary h-4 w-4" aria-hidden="true" />
-            </span>
-            <span>
-              <span className="text-foreground block text-sm font-medium">Have a promo code?</span>
-              <span className="text-muted-foreground block text-xs">
-                Redeem it to add credit — no card needed.
-              </span>
-            </span>
-          </Link>
         </div>
       </div>
+
+      <Suspense fallback={<YourMoveSkeleton />}>
+        <CompanyYourMoveSlot user={actor} companyId={companyId} companyName={companyName} />
+      </Suspense>
     </div>
   );
 }

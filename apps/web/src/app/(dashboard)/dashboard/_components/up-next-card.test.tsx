@@ -457,6 +457,37 @@ describe('UpNextCard — F3(c) rendered row DOM content', () => {
 });
 
 describe('UpNextCard — footer links', () => {
+  it('is a flex column with an aria-hidden spacer directly above the footer strip', () => {
+    render(
+      <UpNextCard
+        data={{ kind: 'ready', rows: [] }}
+        workspaceType="company"
+        subtitle="sub"
+        footerLinks={FOOTER_LINKS}
+      />
+    );
+    const section = screen.getByRole('region', { name: /up next/i });
+    expect(section).toHaveClass('flex', 'flex-col');
+    const strip = screen.getByRole('link', { name: /Cases/ }).parentElement;
+    const spacer = strip?.previousElementSibling;
+    expect(spacer).toHaveAttribute('aria-hidden', 'true');
+    expect(spacer).toHaveClass('flex-1');
+    expect(strip).not.toHaveClass('mt-1.5');
+  });
+
+  it('renders no spacer when there are no footer links', () => {
+    render(
+      <UpNextCard
+        data={{ kind: 'ready', rows: [] }}
+        workspaceType="company"
+        subtitle="sub"
+        footerLinks={[]}
+      />
+    );
+    const section = screen.getByRole('region', { name: /up next/i });
+    expect(section.querySelector('.min-h-1\\.5')).toBeNull();
+  });
+
   it('renders each footer link and tracks the click with its target', async () => {
     const user = userEvent.setup();
     render(
