@@ -60,7 +60,7 @@ defineGuide('booking-a-consultation', [
       await page.getByRole('combobox', { name: /Bill this session to/ }).click();
       await page.getByRole('option', { name: /Northwind Industrial/ }).click();
     },
-    target: (page) => page.getByRole('radiogroup', { name: 'Which case is this for?' }),
+    target: (page) => page.getByRole('combobox', { name: 'Which case is this for?' }),
     cropArea: async (page, targetBox) => {
       const dialog = await page.getByRole('dialog').boundingBox();
       if (!dialog) {

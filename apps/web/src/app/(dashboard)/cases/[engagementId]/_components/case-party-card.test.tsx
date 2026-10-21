@@ -235,6 +235,17 @@ describe('CasePartyCard — CaseSlotQuickPick gating', () => {
     );
   });
 
+  it.each([
+    [true, true],
+    [false, false],
+  ])(
+    'forwards availableForWork=%s as newCaseAllowed=%s — a paused expert takes no new case',
+    (availableForWork, newCaseAllowed) => {
+      renderCard({ lens: 'client', isOpen: true, party: { ...PARTY, availableForWork } });
+      expect(mockQuickPickProps).toHaveBeenCalledWith(expect.objectContaining({ newCaseAllowed }));
+    }
+  );
+
   it('forwards null when the viewer domain is unknown', () => {
     renderCard({ lens: 'client', isOpen: true, viewerEmailDomain: null });
     expect(mockQuickPickProps).toHaveBeenCalledWith(

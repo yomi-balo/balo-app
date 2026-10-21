@@ -37,6 +37,8 @@ export interface StepConfirmProps {
   /** `null` (or empty) ⇒ no case dropdown: nothing to choose, a pinned recovery, or entry point 3
    *  before its open cases have loaded. */
   openCases: readonly OpenCaseForExpert[] | null;
+  /** `false` keeps "Start a new case" out of the dropdown — the expert has paused new work. */
+  offerNewCase: boolean;
   /**
    * UX-3 (BAL-400 round 2) — true only while a company (re)selection's open-cases read is in
    * flight. Design §Case choice section "Loading": a 2-row skeleton appears above the
@@ -153,6 +155,7 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
     expertFirstName,
     onChangeTime,
     openCases,
+    offerNewCase,
     caseChoiceLoading,
     caseSelection,
     onCaseSelectionChange,
@@ -191,8 +194,10 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
   const productIdSet = useMemo(() => new Set(productIds), [productIds]);
 
   const isNewCase = caseSelection.kind === 'new';
-  // The dropdown names the selected case in full, so the read-only case card would repeat it.
-  const showsCaseChoice = openCases !== null && openCases.length > 0;
+  // Shown only when there is something to switch to. It names the selected case in full, so the
+  // read-only case card would repeat it.
+  const showsCaseChoice =
+    openCases !== null && openCases.length > 0 && (offerNewCase || openCases.length > 1);
   const selectedEngagementId =
     caseSelection.kind === 'existing' ? caseSelection.engagementId : null;
   const trimmedTitle = title.trim();
@@ -255,6 +260,7 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
               )
             }
             expertFirstName={expertFirstName}
+            offerNewCase={offerNewCase}
           />
         </LockableGroup>
       )}

@@ -67,7 +67,7 @@ export interface BookingFlowExpert {
   similarExpertsHref?: string;
 }
 
-/** The case entry point 3 (D4a #3) fixes — no chooser, no company resolution. */
+/** The case entry point 3 opens from — preselected, and the only case until open cases load. */
 export interface FixedCaseSummary {
   engagementId: string;
   title: string;
@@ -84,10 +84,13 @@ export interface PresetSlot {
 }
 
 /**
- * The one axis that actually changes the wrapper's shape (D4a): whether the case-choice
- * section exists at all. `chooser` covers entry points 1/2/4 (identical wiring — they differ
- * only in `source` and whether an expert/slot is pre-filled); `fixed_case` is entry point 3,
- * where the case-choice section is ABSENT FROM THE TREE, not defaulted or collapsed.
+ * Where the booking starts, which decides the case dropdown's default. `chooser` covers entry
+ * points 1/2/4 (identical wiring — they differ only in `source` and whether an expert/slot is
+ * pre-filled): the context arrives with the entry and the dropdown defaults to "Start a new
+ * case". `fixed_case` is entry point 3, a booking started inside a case: that case is
+ * preselected, and the dialog loads the client's other open cases itself so the dropdown can
+ * switch away from it. Until they load — or if they can't be listed — the case stays fixed and
+ * reads as the read-only case card.
  */
 export type BookingEntry =
   | { mode: 'chooser'; context: BookingContext }
@@ -96,6 +99,12 @@ export type BookingEntry =
       fixedCase: FixedCaseSummary;
       /** `null` opens on Step 1's calendar; a slot jumps straight to confirm. */
       presetSlot: PresetSlot | null;
+      /**
+       * `false` while the expert has paused new work: the dropdown then lists open cases only.
+       * A follow-up on an open case is existing work, which a pause does not stop; a new case
+       * is new work, which the server refuses (`expert_unavailable`).
+       */
+      newCaseAllowed: boolean;
     };
 
 export interface BookingFlowDialogProps {
@@ -114,9 +123,8 @@ export interface BookingFlowDialogProps {
   onMessage: () => void;
   /**
    * The Salesforce-product picker's data (design §2.4/§2.5's "Products" field). Only reachable
-   * on the NEW-case path, which entry point 3 (`fixed_case`) never renders — callers that never
-   * reach the chooser (the case surface) may omit it. Defaults to an empty, browsable-nothing
-   * taxonomy.
+   * on the NEW-case path — a caller that can never offer a new case (entry point 3 with
+   * `newCaseAllowed: false`) may omit it. Defaults to an empty, browsable-nothing taxonomy.
    */
   productsTaxonomy?: ProductTaxonomy;
   /**

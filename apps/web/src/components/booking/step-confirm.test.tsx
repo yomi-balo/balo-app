@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
 import type { EligibleCompany } from '@balo/shared/credit';
 import { StepConfirm, type StepConfirmProps } from './step-confirm';
 import type { FixedCaseSummary } from './types';
+
+// Radix Select needs the Pointer Capture APIs jsdom lacks (`company-picker.test.tsx`).
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn();
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
+});
 
 vi.mock('motion/react', async () => {
   const { createMotionStub } = await import('@/test/motion-stub');
@@ -42,6 +50,7 @@ function renderStepConfirm(over: Partial<StepConfirmProps> = {}) {
     expertFirstName: 'Amara',
     onChangeTime: vi.fn(),
     openCases: null,
+    offerNewCase: true,
     caseChoiceLoading: false,
     caseSelection: { kind: 'existing', engagementId: 'engagement-1' },
     onCaseSelectionChange: vi.fn(),
@@ -268,6 +277,52 @@ describe('StepConfirm — inline funding section, draft notice and stale-slot fo
       'Flow interview loop'
     );
     expect(screen.queryByText(/so far · opened/)).not.toBeInTheDocument();
+  });
+
+  it('a paused expert: the dropdown lists open cases only, never "Start a new case"', async () => {
+    const user = userEvent.setup();
+    renderStepConfirm({
+      offerNewCase: false,
+      openCases: [
+        {
+          engagementId: 'engagement-1',
+          title: 'Flow interview loop',
+          createdAt: '2026-06-12T09:00:00Z',
+          lastActivityAt: '2026-06-13T09:00:00Z',
+          consultationCount: 2,
+        },
+        {
+          engagementId: 'engagement-2',
+          title: 'Duplicate cleanup',
+          createdAt: '2026-06-10T09:00:00Z',
+          lastActivityAt: '2026-06-11T09:00:00Z',
+          consultationCount: 1,
+        },
+      ],
+    });
+    await user.click(screen.getByRole('combobox', { name: 'Which case is this for?' }));
+    const options = await screen.findAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual([
+      expect.stringContaining('Flow interview loop'),
+      expect.stringContaining('Duplicate cleanup'),
+    ]);
+  });
+
+  it('a paused expert with only this case: nothing to switch to, so the card, not a dropdown', () => {
+    renderStepConfirm({
+      offerNewCase: false,
+      openCases: [
+        {
+          engagementId: 'engagement-1',
+          title: 'Flow interview loop',
+          createdAt: '2026-06-12T09:00:00Z',
+          lastActivityAt: '2026-06-13T09:00:00Z',
+          consultationCount: 2,
+        },
+      ],
+    });
+    expect(screen.queryByRole('combobox', { name: 'Which case is this for?' })).toBeNull();
+    expect(screen.getByText(/so far · opened/)).toBeInTheDocument();
   });
 
   it('shows the read-only case card when there is no dropdown', () => {

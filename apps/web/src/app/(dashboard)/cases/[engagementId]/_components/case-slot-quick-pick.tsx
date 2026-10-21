@@ -48,6 +48,12 @@ export interface CaseSlotQuickPickProps {
    * "same company as you" disclosure is honest from this entry point too. `null` when unknown.
    */
   viewerEmailDomain: string | null;
+  /**
+   * `false` while the expert has paused new work — the dialog's case dropdown then offers open
+   * cases only. Separate from `expert.availableForWork`, which stays `true` here so the strip
+   * reads `existing_work` slots (see `case-party-card.tsx`).
+   */
+  newCaseAllowed: boolean;
   /** The dialog's product picker, for when the client switches to "Start a new case". */
   productsTaxonomy?: ProductTaxonomy;
   /**
@@ -66,8 +72,9 @@ export interface CaseSlotQuickPickProps {
  * for a compact 3-pill strip — NOT a fork of the calendar UI itself, which stays untouched and
  * embedded, as shipped, inside `BookingFlowDialog`'s own Step 1.
  *
- * Tapping any pill jumps straight to the confirm step with the case FIXED — the case-choice
- * section is absent from the tree entirely, not defaulted or collapsed (D4a).
+ * Tapping any pill jumps straight to the confirm step with this case preselected. The dialog
+ * loads the client's other open cases behind it, so its case dropdown can still switch case or
+ * start a new one — a booking started inside a case defaults to that case, it does not lock it.
  *
  * The pill strip silently renders nothing when there is no ready availability
  * (`not_configured`, empty window, unreachable, error) — the party card's "Book with {expert}
@@ -84,6 +91,7 @@ export function CaseSlotQuickPick({
   expertProfileId,
   expert,
   viewerEmailDomain,
+  newCaseAllowed,
   productsTaxonomy,
   openRequest = NO_REQUEST,
 }: Readonly<CaseSlotQuickPickProps>): React.JSX.Element {
@@ -178,6 +186,7 @@ export function CaseSlotQuickPick({
               openedAtIso,
             },
             presetSlot: dialog.presetSlot,
+            newCaseAllowed,
           }}
           viewerEmailDomain={viewerEmailDomain}
           productsTaxonomy={productsTaxonomy}

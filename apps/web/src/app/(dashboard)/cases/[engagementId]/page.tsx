@@ -83,6 +83,10 @@ export default async function CasePage({
     redirect('/login');
   }
 
+  // Started beside `loadCase` so it adds no wait; used only where a new case can be booked
+  // (below). It is cached, and degrades to an empty taxonomy rather than throwing.
+  const productsTaxonomyRead = loadSearchTaxonomyCached();
+
   let view: Awaited<ReturnType<typeof loadCase>>;
   try {
     view = await loadCase(engagementId, user.id);
@@ -115,11 +119,11 @@ export default async function CasePage({
   // excludes `users.email`). Threaded so the case-surface quick-pick's guest disclosure (entry
   // point 3) is honest about same-domain access, same as the profile-page entry points.
   const viewerEmailDomain = extractEmailDomain(user.email);
-  // Only a client can book, and only into an open case — where "Start a new case" needs the
-  // product picker's taxonomy. Nobody else pays for the read.
+  // Only a client can book, only from an open case, and only an expert taking new work can be
+  // offered "Start a new case" — the one path that shows the product picker.
   const productsTaxonomy =
-    view.lens === 'client' && view.header.isOpen
-      ? await loadSearchTaxonomyCached()
+    view.lens === 'client' && view.header.isOpen && view.party.availableForWork
+      ? await productsTaxonomyRead
       : EMPTY_TAXONOMY;
 
   return (

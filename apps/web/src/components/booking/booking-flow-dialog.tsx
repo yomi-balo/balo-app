@@ -495,7 +495,8 @@ function buildFundingRequest(params: {
   };
 }
 
-/** The signed-in booker's id, for chooser entries that carry one; drafts exist only for those. */
+/** The signed-in booker's id, for chooser entries that carry one. Entry point 3 learns it from
+ *  its background context read instead (`loadedDraftOwner`). */
 function resolveDraftOwner(entry: BookingEntry): string | null {
   if (entry.mode !== 'chooser') return null;
   const { context } = entry;
@@ -703,6 +704,8 @@ export function BookingFlowDialog(
   const [fundingInFlight, setFundingInFlight] = useState(false);
   /** BAL-608 — the company name the saved-for-later result names. */
   const [savedCompanyName, setSavedCompanyName] = useState<string | null>(null);
+  /** Entry point 3 — the booker, once the background context read names them; keys the draft. */
+  const [loadedDraftOwner, setLoadedDraftOwner] = useState<string | null>(null);
 
   const openFiredRef = useRef(false);
   /**
@@ -717,8 +720,9 @@ export function BookingFlowDialog(
   const caseAlreadyCreatedRef = useRef(false);
 
   const fixedCase = entry.mode === 'fixed_case' ? entry.fixedCase : null;
+  const newCaseAllowed = entry.mode === 'chooser' || entry.newCaseAllowed;
 
-  const draftOwner = resolveDraftOwner(entry);
+  const draftOwner = resolveDraftOwner(entry) ?? loadedDraftOwner;
   const draftScope = useMemo(
     () => buildDraftScope(draftOwner, expert.expertProfileId),
     [draftOwner, expert.expertProfileId]
@@ -830,6 +834,7 @@ export function BookingFlowDialog(
     setDraftRestored(false);
     setFundingBusy(false);
     setSavedCompanyName(null);
+    setLoadedDraftOwner(null);
 
     if (entry.mode === 'fixed_case') {
       setPhase(entry.presetSlot === null ? 'pick_time' : 'confirm');
@@ -869,9 +874,11 @@ export function BookingFlowDialog(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset fires once per open, by design
   }, [open]);
 
-  // The case page opens on its own case; the client's other open cases with this expert load
-  // behind it, so the same dropdown can switch case or start a new one. Only a single-company
-  // context that still lists this case offers the dropdown — otherwise the case stays fixed.
+  // The case page opens on its own case — from "Book again" and from a quick-pick time alike —
+  // and the client's other open cases with this expert load behind it, so the same dropdown can
+  // switch case or (unless the expert has paused new work) start a new one. Only a
+  // single-company context that still lists this case offers the dropdown — otherwise the case
+  // stays fixed. The same read names the booker, so a new case typed here keeps its draft.
   useEffect(() => {
     if (!open || entry.mode !== 'fixed_case') return;
     const { engagementId } = entry.fixedCase;
@@ -886,6 +893,7 @@ export function BookingFlowDialog(
         setCompanyId(context.company.id);
         setOpenCases(context.openCases);
         setResolvedCaseCount(context.resolvedCaseCount);
+        setLoadedDraftOwner(context.viewerUserId);
       })
       .catch((error: unknown) => {
         // Silent degrade: the dialog still books into this case.
@@ -1565,6 +1573,7 @@ export function BookingFlowDialog(
                 expertFirstName={expert.firstName}
                 onChangeTime={handleChangeTime}
                 openCases={effectiveOpenCases}
+                offerNewCase={newCaseAllowed}
                 caseChoiceLoading={caseChoiceLoading}
                 caseSelection={
                   recovered === null

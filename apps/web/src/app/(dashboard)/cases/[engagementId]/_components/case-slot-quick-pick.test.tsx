@@ -56,6 +56,7 @@ const DEFAULT_PROPS = {
   expertProfileId: AVAILABILITY_EXPERT_ID,
   expert: EXPERT,
   viewerEmailDomain: null,
+  newCaseAllowed: true,
 };
 
 describe('CaseSlotQuickPick', () => {
@@ -162,9 +163,9 @@ describe('CaseSlotQuickPick', () => {
         endIso: '2026-06-05T10:00:00.000Z',
         durationMinutes: 60,
       },
+      newCaseAllowed: true,
     });
-    // D4a #3 — no case-choice section anywhere in this entry; nothing here even threads a
-    // companyId/eligible-company list, confirming the wrapper never needs one for this arm.
+    // Nothing here threads a company or an open-case list: the dialog loads those itself.
   });
 
   // UX-2 (BAL-400 round 2) — the caller-supplied domain must reach the dialog verbatim, not a
@@ -254,7 +255,23 @@ describe('CaseSlotQuickPick — an external follow-up request', () => {
           openedAtIso: '2026-06-12T09:00:00Z',
         },
         presetSlot: null,
+        newCaseAllowed: true,
       });
+    });
+  });
+
+  it('tells the dialog when a new case is off the table (a paused expert)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, SLOT_BODY));
+    render(
+      <CaseSlotQuickPick
+        {...DEFAULT_PROPS}
+        newCaseAllowed={false}
+        openRequest={{ seq: 1, source: 'book_again' }}
+      />
+    );
+    await waitFor(() => {
+      const props = mockDialogProps.mock.calls.at(-1)?.[0] as BookingFlowDialogProps | undefined;
+      expect(props?.entry).toMatchObject({ mode: 'fixed_case', newCaseAllowed: false });
     });
   });
 

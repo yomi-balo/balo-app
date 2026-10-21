@@ -11,7 +11,7 @@ import { TOP_UP_LIMITS_MINOR } from '@balo/shared/credit';
 import { companyWorkspaceKey } from '@balo/shared/workspaces';
 import { readBookingDraft, writeBookingDraft, type BookingDraft } from './booking-draft';
 import { refusedView } from './funding/funding-fixtures';
-import type { BookingFlowExpert, BookingContext } from './types';
+import type { BookingFlowExpert, BookingContext, OpenCaseForExpert, PresetSlot } from './types';
 
 vi.mock('motion/react', async () => {
   const { createMotionStub } = await import('@/test/motion-stub');
@@ -464,6 +464,7 @@ describe('BookingFlowDialog — entry point 3 (fixed case)', () => {
         source="case_quick_pick"
         entry={{
           mode: 'fixed_case',
+          newCaseAllowed: true,
           fixedCase: {
             engagementId: 'engagement-9',
             title: 'Flow interview loop',
@@ -502,6 +503,7 @@ describe('BookingFlowDialog — entry point 3 (fixed case)', () => {
         source="book_again"
         entry={{
           mode: 'fixed_case',
+          newCaseAllowed: true,
           fixedCase: {
             engagementId: 'engagement-9',
             title: 'Flow interview loop',
@@ -551,7 +553,9 @@ describe('BookingFlowDialog — entry point 3 switching case from the dropdown',
     consultationCount: 1,
   };
 
-  function renderFromCase(): void {
+  function renderFromCase(
+    over: Partial<{ newCaseAllowed: boolean; presetSlot: PresetSlot | null }> = {}
+  ): void {
     render(
       <BookingFlowDialog
         open
@@ -560,19 +564,57 @@ describe('BookingFlowDialog — entry point 3 switching case from the dropdown',
         source="book_again"
         entry={{
           mode: 'fixed_case',
+          newCaseAllowed: over.newCaseAllowed ?? true,
           fixedCase: {
             engagementId: 'engagement-9',
             title: 'Flow interview loop',
             consultationCount: 2,
             openedAtIso: '2026-06-01T00:00:00.000Z',
           },
-          presetSlot: null,
+          presetSlot: over.presetSlot ?? null,
         }}
         viewerEmailDomain={null}
         onMessage={vi.fn()}
       />
     );
   }
+
+  function loadsOpenCases(openCases: readonly OpenCaseForExpert[]): void {
+    vi.mocked(refetchBookingContextAction).mockResolvedValueOnce({
+      ok: true,
+      context: {
+        ...(SINGLE_COMPANY_NO_CASES as Extract<BookingContext, { arm: 'single_company' }>),
+        openCases,
+      },
+    });
+  }
+
+  it('a paused expert: switches between open cases, but never offers a new case', async () => {
+    const user = userEvent.setup();
+    loadsOpenCases([OTHER_CASE, THIS_CASE]);
+    renderFromCase({ newCaseAllowed: false });
+    await user.click(screen.getByText('Pick 9:00am slot'));
+
+    const dropdown = await screen.findByRole('combobox', { name: 'Which case is this for?' });
+    expect(dropdown).toHaveTextContent('Flow interview loop');
+    await user.click(dropdown);
+    expect(await screen.findByRole('option', { name: /Duplicate cleanup/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Start a new case/ })).toBeNull();
+  });
+
+  it('a quick-pick time lands on confirm with the same dropdown, this case preselected', async () => {
+    loadsOpenCases([OTHER_CASE, THIS_CASE]);
+    renderFromCase({
+      presetSlot: {
+        startIso: '2026-06-05T09:00:00.000Z',
+        endIso: '2026-06-05T09:30:00.000Z',
+        durationMinutes: 30,
+      },
+    });
+
+    const dropdown = await screen.findByRole('combobox', { name: 'Which case is this for?' });
+    expect(dropdown).toHaveTextContent('Flow interview loop');
+  });
 
   it('preselects this case, and can switch to another case or start a new one', async () => {
     const user = userEvent.setup();
@@ -1699,6 +1741,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
       renderDialog({
         mode: 'fixed_case',
+        newCaseAllowed: true,
         fixedCase: {
           engagementId: 'engagement-9',
           title: 'Flow interview loop',
@@ -2320,7 +2363,42 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       expect(screen.getByRole('combobox')).toBeDisabled();
     });
 
-    it('passes whether a draft is kept: yes for the chooser, no for the fixed case', async () => {
+    it('keeps a draft for a booking started in a case once its context names the booker', async () => {
+      mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
+      vi.mocked(refetchBookingContextAction).mockResolvedValueOnce({
+        ok: true,
+        context: {
+          ...(SINGLE_COMPANY_NO_CASES as Extract<BookingContext, { arm: 'single_company' }>),
+          openCases: [
+            {
+              engagementId: 'engagement-9',
+              title: 'Flow interview loop',
+              createdAt: '2026-06-01T00:00:00.000Z',
+              lastActivityAt: '2026-06-02T00:00:00.000Z',
+              consultationCount: 2,
+            },
+          ],
+        },
+      });
+      renderDialog({
+        mode: 'fixed_case',
+        newCaseAllowed: true,
+        fixedCase: {
+          engagementId: 'engagement-9',
+          title: 'Flow interview loop',
+          consultationCount: 2,
+          openedAtIso: '2026-06-01T00:00:00.000Z',
+        },
+        presetSlot: {
+          startIso: '2026-06-05T09:00:00.000Z',
+          endIso: '2026-06-05T09:30:00.000Z',
+          durationMinutes: 30,
+        },
+      });
+      expect(await screen.findByText('draft kept')).toBeInTheDocument();
+    });
+
+    it('passes whether a draft is kept: yes for the chooser, no for a fixed case whose context never loaded', async () => {
       const user = userEvent.setup();
       mockReadBookingFundingAction.mockResolvedValue(MEMBER_VIEW);
       const { unmount } = renderDialog();
@@ -2330,6 +2408,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
 
       renderDialog({
         mode: 'fixed_case',
+        newCaseAllowed: true,
         fixedCase: {
           engagementId: 'engagement-9',
           title: 'Flow interview loop',
@@ -2351,6 +2430,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       mockSaveBookingForLaterAction.mockResolvedValue({ ok: true });
       renderDialog({
         mode: 'fixed_case',
+        newCaseAllowed: true,
         fixedCase: {
           engagementId: 'engagement-9',
           title: 'Flow interview loop',
@@ -2583,6 +2663,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       writeBookingDraft(SCOPE, DRAFT);
       renderDialog({
         mode: 'fixed_case',
+        newCaseAllowed: true,
         fixedCase: {
           engagementId: 'engagement-9',
           title: 'Flow interview loop',

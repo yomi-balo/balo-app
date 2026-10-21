@@ -177,6 +177,7 @@ export function CasePartyCard({
           expertProfileId={expertProfileId}
           expert={quickPickExpert}
           viewerEmailDomain={viewerEmailDomain}
+          newCaseAllowed={party.availableForWork}
           productsTaxonomy={productsTaxonomy}
           openRequest={followUpRequest}
         />

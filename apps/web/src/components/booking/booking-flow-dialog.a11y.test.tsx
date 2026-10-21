@@ -88,6 +88,7 @@ describe('BookingFlowDialog — accessibility', () => {
         source="case_quick_pick"
         entry={{
           mode: 'fixed_case',
+          newCaseAllowed: true,
           fixedCase: {
             engagementId: 'engagement-9',
             title: 'Flow interview loop',
@@ -119,6 +120,7 @@ describe('BookingFlowDialog — accessibility', () => {
         source="case_quick_pick"
         entry={{
           mode: 'fixed_case',
+          newCaseAllowed: true,
           fixedCase: {
             engagementId: 'engagement-9',
             title: 'Flow interview loop',

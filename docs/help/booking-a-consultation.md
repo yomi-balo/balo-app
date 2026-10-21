@@ -6,7 +6,7 @@ category:
   client: calls
 order: 1
 published: true
-updated: 2026-10-21
+updated: 2026-10-22
 related: [your-cases, joining-a-call, buying-credit]
 ---
 
@@ -21,6 +21,9 @@ that expert stay together.
 3. Under **How long do you need?**, choose 15, 30, 45 or 60 minutes. The longest option is capped
    at the length of the slot you picked.
 4. On **Review & confirm**, check the details and choose **Confirm & book**.
+
+You can also book from an open case's page with **Book with {name} again**. Their calendar opens
+right there, with that case already chosen.
 
 ![The How long do you need? step after picking a time, with the 15, 30, 45 and 60 minute options highlighted.](01)
 
@@ -59,8 +62,10 @@ If you belong to more than one company, first choose which one pays under **Bill
 to**. Open cases are listed per company, so the case choice appears once you've picked.
 
 If you already have an open case with this expert, the confirm step asks which case the call is
-for. Choose an existing case, or **Start a new case** for a new issue with that expert. If you
-have no open case with them, there's nothing to choose and the call starts a new one.
+for. Pick from the list: an existing case, or **Start a new case** for a new issue with that
+expert. Booking from the expert's profile starts on **Start a new case**; booking from a case's
+page starts on that case. If you have no open case with them, there's nothing to choose and the
+call starts a new one.
 
 ![The confirm step asking which case the call is for, with Start a new case highlighted.](02)
 
@@ -107,6 +112,7 @@ right now" instead of open times, and you can't start a new case with them. You 
 
 If you already have an open case with that expert, you can still book follow-up consultations on
 it. Book it from that case's page, using **Book with {name} again** or **Book a consultation**,
-which opens their calendar right there, already attached to the case.
+which opens their calendar right there, already attached to the case. You can switch to another
+of your open cases with them, but not start a new one.
 
 ![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](06)

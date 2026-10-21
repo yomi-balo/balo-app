@@ -53,12 +53,14 @@ export interface CaseChoiceSectionProps {
   selectedEngagementId: string | null;
   onSelect: (engagementId: string | null) => void;
   expertFirstName: string | null;
+  /** `false` lists open cases only — the expert has paused new work. Defaults to `true`. */
+  offerNewCase?: boolean;
 }
 
 /**
  * BAL-400 §2.5 — the case choice, as ONE dropdown so the dialog stays the same height however
- * many open cases the client has with this expert. Absent from the tree entirely when
- * `openCases` is empty (the caller decides that — see `step-confirm.tsx`).
+ * many open cases the client has with this expert. Absent from the tree entirely when there is
+ * nothing to choose between (the caller decides that — see `step-confirm.tsx`).
  *
  * The trigger renders the selected option in full (icon, title, consultation count), so the
  * choice reads at a glance without opening the list.
@@ -68,6 +70,7 @@ export function CaseChoiceSection({
   selectedEngagementId,
   onSelect,
   expertFirstName,
+  offerNewCase = true,
 }: Readonly<CaseChoiceSectionProps>): React.JSX.Element {
   const newCaseOption = (
     <CaseOption
@@ -108,10 +111,14 @@ export function CaseChoiceSection({
           </SelectValue>
         </SelectTrigger>
         <SelectContent position="popper" className="max-h-80">
-          <SelectItem value={NEW_CASE_VALUE} className="py-2">
-            {newCaseOption}
-          </SelectItem>
-          <SelectSeparator />
+          {offerNewCase && (
+            <>
+              <SelectItem value={NEW_CASE_VALUE} className="py-2">
+                {newCaseOption}
+              </SelectItem>
+              <SelectSeparator />
+            </>
+          )}
           {openCases.map((c) => (
             <SelectItem key={c.engagementId} value={c.engagementId} className="py-2">
               {optionFor(c)}
