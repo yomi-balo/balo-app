@@ -970,7 +970,8 @@ describe('bookAndProvisionMeeting — idempotent replay (BAL-400 Decision 7)', (
 
 /**
  * BAL-607 — the phase recorder. A FRESH create reports `bookingTransaction` and `venue`
- * once each; neither replay return reports anything, which is the freshness predicate
+ * once each, plus `serviceReplayProbe` when a key is present; neither replay return reports
+ * `bookingTransaction`, which is the freshness predicate
  * the booking route reads (`hasRecorded('bookingTransaction')`).
  */
 describe('bookAndProvisionMeeting — phase recorder (BAL-607)', () => {
@@ -1026,7 +1027,7 @@ describe('bookAndProvisionMeeting — phase recorder (BAL-607)', () => {
     expect(phases).toEqual(['bookingTransaction', 'venue']);
   });
 
-  it('measures the booking transaction from before the service pre-probe', async () => {
+  it('times the service pre-probe and the booking transaction as separate phases', async () => {
     mockFindByBookingIdempotencyKey.mockImplementation(async () => {
       vi.advanceTimersByTime(40);
       return undefined;
@@ -1035,17 +1036,34 @@ describe('bookAndProvisionMeeting — phase recorder (BAL-607)', () => {
       vi.advanceTimersByTime(60);
       return { meeting: unstampedMeeting(), contexts: [], expertProfileId: 'expert_1' };
     });
-    const record = vi.fn();
+    const phases: [string, number][] = [];
 
     await bookAndProvisionMeeting({ ...baseInput, bookingIdempotencyKey: KEY }, log, {
+      provisioner: fakeProvisioner(),
+      phaseRecorder: { record: (phase, ms) => phases.push([phase, ms]) },
+    });
+
+    expect(phases.map(([phase]) => phase)).toEqual([
+      'serviceReplayProbe',
+      'bookingTransaction',
+      'venue',
+    ]);
+    expect(phases).toContainEqual(['serviceReplayProbe', 40]);
+    expect(phases).toContainEqual(['bookingTransaction', 60]);
+  });
+
+  it('records no serviceReplayProbe when no idempotency key is present', async () => {
+    const record = vi.fn();
+
+    await bookAndProvisionMeeting(baseInput, log, {
       provisioner: fakeProvisioner(),
       phaseRecorder: { record },
     });
 
-    expect(record).toHaveBeenCalledWith('bookingTransaction', 100);
+    expect(record).not.toHaveBeenCalledWith('serviceReplayProbe', expect.anything());
   });
 
-  it('the pre-probe replay records nothing', async () => {
+  it('the pre-probe replay records serviceReplayProbe but not bookingTransaction', async () => {
     replayableExisting();
     const record = vi.fn();
 
@@ -1055,10 +1073,11 @@ describe('bookAndProvisionMeeting — phase recorder (BAL-607)', () => {
     });
 
     expect(mockBookMeeting).not.toHaveBeenCalled();
-    expect(record).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith('serviceReplayProbe', expect.any(Number));
   });
 
-  it('the 23505 replay records nothing', async () => {
+  it('the 23505 replay records only the pre-probe, never bookingTransaction', async () => {
     mockFindByBookingIdempotencyKey.mockResolvedValueOnce(undefined);
     replayableExisting();
     mockFindByBookingIdempotencyKey.mockResolvedValueOnce({
@@ -1075,7 +1094,8 @@ describe('bookAndProvisionMeeting — phase recorder (BAL-607)', () => {
     });
 
     expect(mockBookMeeting).toHaveBeenCalledTimes(1);
-    expect(record).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith('serviceReplayProbe', expect.any(Number));
   });
 
   it('a failed create records nothing', async () => {

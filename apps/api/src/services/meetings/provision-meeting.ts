@@ -221,10 +221,11 @@ export interface ProvisionMeetingDeps {
   /** Defaults to the live `dailyRoomTeardown`; tests substitute their own. */
   teardown?: RoomTeardown;
   /**
-   * BAL-607 — receives `bookingTransaction` and `venue` elapsed ms from
-   * `bookAndProvisionMeeting` on a FRESH create only. Only the booking route passes it;
-   * `provisionMeeting` and both replay returns ignore it, so a recorder that never saw
-   * `bookingTransaction` identifies a replay.
+   * BAL-607 — receives `serviceReplayProbe` (when a key is present), `bookingTransaction` and
+   * `venue` elapsed ms from `bookAndProvisionMeeting`. `bookingTransaction` and `venue` are
+   * recorded on a FRESH create only. Only the booking route passes it; `provisionMeeting` and
+   * both replay returns ignore it, so a recorder that never saw `bookingTransaction`
+   * identifies a replay.
    */
   phaseRecorder?: BookingPhaseRecorder;
 }
@@ -605,14 +606,17 @@ export async function bookAndProvisionMeeting(
   log: FastifyBaseLogger,
   deps: ProvisionMeetingDeps = {}
 ): Promise<BookAndProvisionResult> {
-  const bookingStartedAt = Date.now();
-  if (input.bookingIdempotencyKey !== undefined) {
-    const replay = await replayByIdempotencyKey(input.bookingIdempotencyKey, input, log, deps);
+  const { bookingIdempotencyKey } = input;
+  if (bookingIdempotencyKey !== undefined) {
+    const replay = await timeBookingPhase(deps.phaseRecorder, 'serviceReplayProbe', () =>
+      replayByIdempotencyKey(bookingIdempotencyKey, input, log, deps)
+    );
     if (replay !== null) {
       return replay;
     }
   }
 
+  const bookingStartedAt = Date.now();
   let created: CreatedMeeting;
   try {
     created = await bookMeeting(

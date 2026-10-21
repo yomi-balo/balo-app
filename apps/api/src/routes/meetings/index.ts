@@ -175,6 +175,7 @@ import {
   lookupBookingReplay,
   BookingIdempotencyKeyConflictError,
   type BookAndProvisionInput,
+  type BookAndProvisionResult,
   type BookingReplayLookup,
 } from '../../services/meetings/provision-meeting.js';
 import { createMeetingBodySchema } from './schema.js';
@@ -418,7 +419,8 @@ async function authorizeBookingRequest(
  *
  * ⚠ Logged through the REQUEST logger so Fastify's `reqId` attaches and the line joins that
  * request's `responseTime`. `totalMs` starts at handler entry, so it excludes the `requireAuth`
- * preHandler and the body parse. A throw here is swallowed: the booking has committed and the
+ * preHandler and Fastify's JSON content-type parse (both run before the handler) but INCLUDES the
+ * `parseBodyOr400` Zod validation, which runs inside it. A throw here is swallowed: the booking has committed and the
  * response is already sent, so a logging failure must not reach the error handler.
  */
 function logBookingPhaseTimings(
@@ -458,8 +460,9 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
     const input = await resolveBookingInput(request, reply, userId, timer);
     if (input === null) return;
 
+    let result: BookAndProvisionResult;
     try {
-      const result = await bookAndProvisionMeeting(input, request.log, { phaseRecorder: timer });
+      result = await bookAndProvisionMeeting(input, request.log, { phaseRecorder: timer });
 
       // ⚠ 201 EVEN WHEN `provisioned` IS FALSE. The booking committed and the slot is
       // blocked; the join url is a MISSING ARTEFACT, not a failure. `provisioned: false` renders
@@ -476,7 +479,6 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
         dailyRoomName: result.dailyRoomName,
         joinUrl: result.joinUrl,
       });
-      logBookingPhaseTimings(request.log, timer, result.meeting.id, input, userId);
     } catch (error) {
       const mapped = bookingErrorResponse(error);
       log.error(
@@ -493,7 +495,12 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
       // Unmapped ⇒ rethrow to the Fastify error handler, which captures to Sentry and 500s.
       if (mapped === null) throw error;
       reply.code(mapped.status).send({ error: mapped.error });
+      return;
     }
+
+    // Outside the try: the reply is already sent and a throw from the logger must never reach
+    // the booking catch above. 201 path only.
+    logBookingPhaseTimings(request.log, timer, result.meeting.id, input, userId);
   });
 
   // BAL-408 — the guest participation surface (invite / list / remove / admit / deny). A
