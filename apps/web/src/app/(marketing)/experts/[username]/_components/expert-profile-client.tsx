@@ -14,11 +14,7 @@ import type { ProjectRequestTaxonomies } from '@/lib/project-request/load-projec
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useAuthModal } from '@/hooks/use-auth-modal';
-import {
-  BookingFlowDialog,
-  type BookingContext,
-  type BookingFlowExpert,
-} from '@/components/booking';
+import { BookingFlowDialog, type BookingContext } from '@/components/booking';
 import type { BookingSource } from '@/lib/analytics';
 import { Hero } from './hero';
 import { StickyNav, type NavSection } from './sticky-nav';
@@ -30,7 +26,7 @@ import { ReviewsSection } from './reviews-section';
 import { BookingCard } from './booking-card';
 import { ExpertProfileAnalytics } from './expert-profile-analytics';
 import { ProjectRequestPanel, type ProjectRouting } from '@/components/balo/project-request/panel';
-import { buildSimilarExpertsHref } from '@/lib/search/similar-experts-href';
+import { buildBookingFlowExpert } from '@/lib/booking/booking-flow-expert';
 
 interface ExpertProfileClientProps {
   view: ExpertProfileView;
@@ -226,28 +222,9 @@ export function ExpertProfileClient({
     openBookingFlow(autoOpenBookingSource);
   }, [autoOpenBooking, autoOpenBookingSource, openBookingFlow, view.availableForWork]);
 
-  const similarExpertsHref = useMemo(
-    () =>
-      buildSimilarExpertsHref({
-        verticalSlug: view.vertical.slug,
-        productId: view.competencies[0]?.id,
-      }),
-    [view.vertical.slug, view.competencies]
-  );
-
-  const bookingExpert: BookingFlowExpert = useMemo(
-    () => ({
-      expertProfileId: view.expertId,
-      name: view.name,
-      firstName: view.firstName,
-      initials: view.initials,
-      avatarUrl: bookingAvatarUrl,
-      partyLabel: view.agency?.name ?? view.name,
-      verified: view.baloVerified,
-      availableForWork: view.availableForWork,
-      similarExpertsHref,
-    }),
-    [view, bookingAvatarUrl, similarExpertsHref]
+  const bookingExpert = useMemo(
+    () => buildBookingFlowExpert(view, bookingAvatarUrl),
+    [view, bookingAvatarUrl]
   );
 
   const chooserContext: BookingContext = bookingContext ?? { arm: 'onboarding_required' };
@@ -344,7 +321,7 @@ export function ExpertProfileClient({
             availableForWork={view.availableForWork}
             firstName={view.firstName}
             verticalName={view.vertical.name}
-            similarExpertsHref={similarExpertsHref}
+            similarExpertsHref={bookingExpert.similarExpertsHref}
             onBook={onBook}
             onStartProject={onStartProject}
             onGetMatched={onGetMatched}

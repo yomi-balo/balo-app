@@ -12,17 +12,18 @@ interface SearchResultCardProps {
   position: number;
   sort: string;
   page: number;
+  onBook: (username: string) => void;
+  /** This card's booking is loading. */
+  bookPending: boolean;
 }
 
 /**
  * Client wrapper around `ExpertCard` that emits `search_result_clicked` and navigates
  * View-profile to `/experts/{username}`.
  *
- * BAL-400 (D4a entry point 2) — `onBook` navigates to `/experts/{username}?book=1&src=search`,
- * reusing the `handleViewProfile` precedent so the search grid needs no booking-context loader
- * of its own; `page.tsx` resolves `loadBookingContext` and auto-opens the wrapper there. Same
- * null-username guard as View-profile — a null `username` means no CTA at all, never a link to
- * `/experts/null`.
+ * Book a call opens the booking flow in place: `onBook` (owned by `ResultsGrid`, which mounts the
+ * one dialog) loads it for this expert's username. Same null-username guard as View-profile — a
+ * null `username` means no CTA at all, never a link to `/experts/null`.
  */
 export function SearchResultCard({
   expert,
@@ -30,6 +31,8 @@ export function SearchResultCard({
   position,
   sort,
   page,
+  onBook,
+  bookPending,
 }: Readonly<SearchResultCardProps>): React.JSX.Element {
   const router = useRouter();
 
@@ -46,10 +49,8 @@ export function SearchResultCard({
   }, [expert.id, expert.username, position, sort, page, router]);
 
   const handleBook = useCallback(() => {
-    if (expert.username) {
-      router.push(`/experts/${expert.username}?book=1&src=search`);
-    }
-  }, [expert.username, router]);
+    if (expert.username) onBook(expert.username);
+  }, [expert.username, onBook]);
 
   return (
     <ExpertCard
@@ -57,6 +58,7 @@ export function SearchResultCard({
       variant={variant}
       onViewProfile={expert.username ? handleViewProfile : undefined}
       onBook={expert.username ? handleBook : undefined}
+      bookPending={bookPending}
     />
   );
 }

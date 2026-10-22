@@ -346,6 +346,21 @@ describe('ExpertCard', () => {
     expect(onBook).toHaveBeenCalledOnce();
   });
 
+  it.each(['grid', 'list'] as const)(
+    'disables a pending Book a call and marks it busy (%s)',
+    async (variant) => {
+      const onBook = vi.fn();
+      const user = userEvent.setup();
+      render(<ExpertCard expert={makeExpert()} variant={variant} onBook={onBook} bookPending />);
+
+      const button = screen.getByRole('button', { name: /book a call/i });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('aria-busy', 'true');
+      await user.click(button);
+      expect(onBook).not.toHaveBeenCalled();
+    }
+  );
+
   it('toggles the favorite heart aria-label on click', async () => {
     const user = userEvent.setup();
     render(<ExpertCard expert={makeExpert()} />);

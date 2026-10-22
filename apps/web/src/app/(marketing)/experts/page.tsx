@@ -148,6 +148,7 @@ export default async function ExpertsPage({
                   layout={layout}
                   sort={filters.sort}
                   page={filters.page}
+                  productsTaxonomy={taxonomy}
                 />
                 <SearchPagination page={filters.page} total={total} pageSize={DEFAULT_PAGE_SIZE} />
               </>

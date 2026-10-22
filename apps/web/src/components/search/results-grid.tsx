@@ -1,14 +1,28 @@
 'use client';
 
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { toast } from 'sonner';
 import type { ExpertCardData } from '@/components/expert';
+import { BookingFlowDialog } from '@/components/booking';
+import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { SearchResultCard } from './search-result-card';
+import { useSearchBooking } from './use-search-booking';
 
 interface ResultsGridProps {
   experts: ExpertCardData[];
   layout: 'grid' | 'list';
   sort: string;
   page: number;
+  /** The booking flow's new-case product picker. */
+  productsTaxonomy: ProductTaxonomy;
+}
+
+interface BlockProps {
+  experts: ExpertCardData[];
+  sort: string;
+  page: number;
+  onBook: (username: string) => void;
+  pendingUsername: string | null;
 }
 
 const GRID_STYLE = {
@@ -19,7 +33,9 @@ function GridBlock({
   experts,
   sort,
   page,
-}: Readonly<{ experts: ExpertCardData[]; sort: string; page: number }>): React.JSX.Element {
+  onBook,
+  pendingUsername,
+}: Readonly<BlockProps>): React.JSX.Element {
   return (
     <div className="grid items-stretch gap-4 md:gap-5" style={GRID_STYLE}>
       {experts.map((expert, i) => (
@@ -30,6 +46,8 @@ function GridBlock({
           position={i + 1}
           sort={sort}
           page={page}
+          onBook={onBook}
+          bookPending={expert.username !== null && expert.username === pendingUsername}
         />
       ))}
     </div>
@@ -40,7 +58,9 @@ function ListBlock({
   experts,
   sort,
   page,
-}: Readonly<{ experts: ExpertCardData[]; sort: string; page: number }>): React.JSX.Element {
+  onBook,
+  pendingUsername,
+}: Readonly<BlockProps>): React.JSX.Element {
   // Single-column grid with `grid-auto-rows: 1fr` so every row equalises to the
   // TALLEST card's height (no clipping); the card's `min-h` sets a floor so rows
   // never get too short. Cards stretch to fill their row; CTAs bottom-align.
@@ -54,6 +74,8 @@ function ListBlock({
           position={i + 1}
           sort={sort}
           page={page}
+          onBook={onBook}
+          bookPending={expert.username !== null && expert.username === pendingUsername}
         />
       ))}
     </div>
@@ -68,25 +90,23 @@ function ListBlock({
  * zero client breakpoint code (no `window`/resize, no hydration mismatch).
  */
 function ResultsBlocks({
-  experts,
   layout,
-  sort,
-  page,
-}: Readonly<ResultsGridProps>): React.JSX.Element {
+  ...blockProps
+}: Readonly<BlockProps & { layout: 'grid' | 'list' }>): React.JSX.Element {
   if (layout === 'list') {
     return (
       <>
         <div className="md:hidden">
-          <GridBlock experts={experts} sort={sort} page={page} />
+          <GridBlock {...blockProps} />
         </div>
         <div className="hidden md:block">
-          <ListBlock experts={experts} sort={sort} page={page} />
+          <ListBlock {...blockProps} />
         </div>
       </>
     );
   }
 
-  return <GridBlock experts={experts} sort={sort} page={page} />;
+  return <GridBlock {...blockProps} />;
 }
 
 /**
@@ -101,27 +121,58 @@ function ResultsBlocks({
  *
  * Deliberately a cross-fade, NOT a shared-element morph (the avatar-glide morph
  * was prototyped and rejected as too busy at full-grid scale): grid and list stay
- * two separate components and we simply fade the whole region between them.
+ * two separate components and we simply fade the whole region between them. *
+ * Also owns the one booking dialog every card's "Book a call" opens in place
+ * (`useSearchBooking`), mounted outside the cross-fade so a layout toggle never
+ * remounts it.
  */
 export function ResultsGrid({
   experts,
   layout,
   sort,
   page,
+  productsTaxonomy,
 }: Readonly<ResultsGridProps>): React.JSX.Element {
   const reduceMotion = useReducedMotion();
+  const booking = useSearchBooking();
 
   return (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div
-        key={layout}
-        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
-        transition={{ duration: reduceMotion ? 0.12 : 0.2, ease: 'easeOut' }}
-      >
-        <ResultsBlocks experts={experts} layout={layout} sort={sort} page={page} />
-      </motion.div>
-    </AnimatePresence>
+    <>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={layout}
+          initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+          transition={{ duration: reduceMotion ? 0.12 : 0.2, ease: 'easeOut' }}
+        >
+          <ResultsBlocks
+            experts={experts}
+            layout={layout}
+            sort={sort}
+            page={page}
+            onBook={booking.book}
+            pendingUsername={booking.pendingUsername}
+          />
+        </motion.div>
+      </AnimatePresence>
+
+      {booking.launch && (
+        <BookingFlowDialog
+          key={booking.launch.expert.expertProfileId}
+          open={booking.open}
+          onClose={booking.close}
+          expert={booking.launch.expert}
+          source="search"
+          entry={{ mode: 'chooser', context: booking.launch.context }}
+          viewerEmailDomain={booking.launch.viewerEmailDomain}
+          onMessage={() => {
+            booking.close();
+            toast('Coming soon', { description: 'This flow is on its way.' });
+          }}
+          productsTaxonomy={productsTaxonomy}
+        />
+      )}
+    </>
   );
 }

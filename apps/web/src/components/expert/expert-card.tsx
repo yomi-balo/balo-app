@@ -17,6 +17,7 @@ import {
   Settings,
   Target,
   ChevronRight,
+  Loader2,
   type LucideIcon,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -521,18 +522,27 @@ function ViewProfileButton({ onClick }: Readonly<{ onClick?: () => void }>): Rea
   );
 }
 
-function BookCallButton({ onClick }: Readonly<{ onClick?: () => void }>): React.JSX.Element {
+function BookCallButton({
+  onClick,
+  pending = false,
+}: Readonly<{ onClick?: () => void; pending?: boolean }>): React.JSX.Element {
   const className =
-    'from-primary flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r to-violet-600 text-xs font-semibold text-white shadow-sm transition-shadow hover:shadow-md dark:to-violet-500';
+    'from-primary flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r to-violet-600 text-xs font-semibold text-white shadow-sm transition-shadow hover:shadow-md disabled:cursor-wait dark:to-violet-500';
   if (onClick) {
     return (
       <motion.button
         type="button"
         whileTap={{ scale: 0.98 }}
         onClick={onClick}
+        disabled={pending}
+        aria-busy={pending}
         className={className}
       >
-        <Video className="h-4 w-4" />
+        {pending ? (
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+        ) : (
+          <Video className="h-4 w-4" />
+        )}
         Book a call
       </motion.button>
     );
@@ -553,6 +563,7 @@ function GridCard({
   tagline,
   highlightedTagline,
   onBook,
+  bookPending,
   onViewProfile,
 }: Readonly<{
   expert: ExpertCardData;
@@ -560,6 +571,7 @@ function GridCard({
   tagline: string;
   highlightedTagline: React.ReactNode;
   onBook?: () => void;
+  bookPending?: boolean;
   onViewProfile?: () => void;
 }>): React.JSX.Element {
   return (
@@ -622,7 +634,7 @@ function GridCard({
         {/* CTA row */}
         <div className="mx-4 mt-auto flex gap-2 pt-3.5 pb-4">
           <ViewProfileButton onClick={onViewProfile} />
-          <BookCallButton onClick={onBook} />
+          <BookCallButton onClick={onBook} pending={bookPending} />
         </div>
       </Card>
     </motion.div>
@@ -637,6 +649,7 @@ function ListRow({
   tagline,
   highlightedTagline,
   onBook,
+  bookPending,
   onViewProfile,
 }: Readonly<{
   expert: ExpertCardData;
@@ -644,6 +657,7 @@ function ListRow({
   tagline: string;
   highlightedTagline: React.ReactNode;
   onBook?: () => void;
+  bookPending?: boolean;
   onViewProfile?: () => void;
 }>): React.JSX.Element {
   const meta = buildListMeta(expert);
@@ -700,7 +714,7 @@ function ListRow({
             <ViewProfileButton onClick={onViewProfile} />
           </div>
           <div className="flex max-w-[200px] flex-1">
-            <BookCallButton onClick={onBook} />
+            <BookCallButton onClick={onBook} pending={bookPending} />
           </div>
         </div>
       </div>
@@ -715,6 +729,7 @@ export function ExpertCard({
   orderBy,
   variant = 'grid',
   onBook,
+  bookPending,
   onViewProfile,
 }: Readonly<ExpertCardProps>): React.JSX.Element {
   const orderedExpertise = useMemo(
@@ -734,6 +749,7 @@ export function ExpertCard({
         tagline={tagline}
         highlightedTagline={highlightedTagline}
         onBook={onBook}
+        bookPending={bookPending}
         onViewProfile={onViewProfile}
       />
     );
@@ -746,6 +762,7 @@ export function ExpertCard({
       tagline={tagline}
       highlightedTagline={highlightedTagline}
       onBook={onBook}
+      bookPending={bookPending}
       onViewProfile={onViewProfile}
     />
   );
