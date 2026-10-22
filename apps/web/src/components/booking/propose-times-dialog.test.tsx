@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
 import type { AvailabilityView } from '@/components/availability/use-expert-availability';
@@ -50,7 +50,8 @@ const { mockPickerMountCount } = vi.hoisted(() => ({ mockPickerMountCount: { val
 const { mockAvailabilityView } = vi.hoisted(() => ({
   mockAvailabilityView: { value: { kind: 'not_configured' } as AvailabilityView },
 }));
-const { mockHookArgs, mockCalendarScope } = vi.hoisted(() => ({
+const { mockHookArgs, mockCalendarScope, mockConfirmAction } = vi.hoisted(() => ({
+  mockConfirmAction: { value: undefined as string | undefined },
   mockHookArgs: { value: [] as unknown[] },
   mockCalendarScope: { value: undefined as string | undefined },
 }));
@@ -66,11 +67,14 @@ vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: ({
     onSlotSelect,
     scope,
+    confirmAction,
   }: {
     onSlotSelect: (s: { start: string; end: string; duration: number }) => void;
     scope?: string;
+    confirmAction?: string;
   }) => {
     mockCalendarScope.value = scope;
+    mockConfirmAction.value = confirmAction;
     useEffect(() => {
       mockPickerMountCount.value += 1;
     }, []);
@@ -102,6 +106,9 @@ const BASE_PROPS = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Date only, so the file's September 2026 fixtures stay in the future whenever this runs.
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+  vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'));
   mockIsMobile.value = false;
   mockPickerMountCount.value = 0;
   mockAvailabilityView.value = { kind: 'not_configured' };
@@ -120,6 +127,10 @@ beforeEach(() => {
       },
     ],
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('existing-work scope (BAL-591)', () => {
@@ -148,6 +159,11 @@ describe('ProposeTimesDialog — picking up to 3 times', () => {
     expect(document.querySelector('[data-slot="dialog-content"]')).toHaveClass(
       'sm:max-w-[min(92vw,840px)]'
     );
+  });
+
+  it('asks the calendar for the "add" confirm label', () => {
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+    expect(mockConfirmAction.value).toBe('add');
   });
 
   it('adds a picked slot to the list and remounts the calendar for the next pick', async () => {
@@ -411,6 +427,17 @@ const SUGGESTED_DAY2 = /Wed, 2 Sept, 9:00 – 9:30 am · 30 min.*— add/;
 const SUGGESTED_DAY3 = /Thu, 3 Sept, 9:00 – 9:30 am · 30 min.*— add/;
 
 describe('ProposeTimesDialog — suggested times', () => {
+  it('drops a suggested time whose start has already passed', () => {
+    mockAvailabilityView.value = readyView([
+      '2026-08-30T09:00:00.000Z',
+      '2026-09-02T09:00:00.000Z',
+    ]);
+    render(<ProposeTimesDialog {...BASE_PROPS} />);
+
+    expect(screen.getByRole('button', { name: SUGGESTED_DAY2 })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sun, 30 Aug/ })).not.toBeInTheDocument();
+  });
+
   it('opens on suggested times when availability is ready with candidates', () => {
     mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
     render(<ProposeTimesDialog {...BASE_PROPS} />);

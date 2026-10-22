@@ -55,7 +55,7 @@ export const AVAILABILITY_CACHE_TTL_SECONDS = 60;
  * ⚠ INVARIANT: `AVAILABILITY_LEAD_GUARD_MINUTES * 60 >= AVAILABILITY_CACHE_TTL_SECONDS * 2 + 60`.
  *
  * TWO cache layers sit in series, not one: the Redis response cache (`AVAILABILITY_CACHE_TTL_SECONDS`)
- * AND the browser's, because the route sends `Cache-Control: public, max-age=60` and the hook
+ * AND the browser's, because the route sends `Cache-Control: private, max-age=60` and the hook
  * deliberately does not opt out of it. Worst-case machine-side staleness is therefore
  * `TTL * 2` = 120s, and the `+ 60` is one further minute for network latency, clock skew and the
  * user's think-time between seeing a slot and clicking it. An earlier draft sized this against

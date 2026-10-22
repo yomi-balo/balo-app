@@ -38,6 +38,23 @@ function renderStep(overrides: Record<string, unknown> = {}) {
 const FREE_LINE = 'Free — no charge, no commitment.';
 
 describe('StepConfirmIntroCall', () => {
+  it('shows the time as a range with the day, the length on the second line, and a Change button', () => {
+    const { container } = renderStep();
+
+    expect(screen.getByText(/Fri, 5 June, 9:00 – 9:30 am/)).toBeInTheDocument();
+    expect(container.querySelector('time')?.textContent).not.toMatch(/min/);
+    expect(screen.getByText('Intro call · 30 min')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'See other times' })).not.toBeInTheDocument();
+  });
+
+  it('marks the free line with a receipt icon, not sparkles', () => {
+    const { container } = renderStep();
+
+    expect(container.querySelector('svg.lucide-receipt')).not.toBeNull();
+    expect(container.querySelector('svg.lucide-sparkles')).toBeNull();
+  });
+
   it('shows the slot summary, the request-title context strip, and the free reassurance line', () => {
     renderStep();
     expect(screen.getByText('Intro call · 30 min')).toBeInTheDocument();
@@ -123,10 +140,10 @@ describe('StepConfirmIntroCall', () => {
     expect(screen.getByText('Booking…')).toBeInTheDocument();
   });
 
-  it('"See other times" and Back both invoke the change-time path', async () => {
+  it('"Change" and Back both invoke the change-time path', async () => {
     const user = userEvent.setup();
     const { onChangeTime, onBack } = renderStep();
-    await user.click(screen.getByRole('button', { name: 'See other times' }));
+    await user.click(screen.getByRole('button', { name: 'Change' }));
     expect(onChangeTime).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole('button', { name: /Back/ }));
     expect(onBack).toHaveBeenCalledTimes(1);

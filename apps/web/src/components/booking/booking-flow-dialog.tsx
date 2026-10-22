@@ -20,6 +20,7 @@ import { saveBookingForLaterAction } from '@/lib/booking/actions/save-booking-fo
 import type {
   BookingFundingRequest,
   BookingFundingView,
+  FundedVia,
 } from '@/lib/booking/actions/booking-funding-types';
 import { switchWorkspaceAction } from '@/lib/auth/actions/switch-workspace';
 import type { AvailabilitySlotSelection } from '@/components/availability';
@@ -32,7 +33,8 @@ import type {
 import { TOP_UP_LIMITS_MINOR, type EligibleCompany } from '@balo/shared/credit';
 import { companyWorkspaceKey } from '@balo/shared/workspaces';
 import { BookingHeader, type BookingStep } from './booking-header';
-import { StepPickTime } from './step-pick-time';
+import { StepPickTime, pickerRestoreFor, type PickerRestore } from './step-pick-time';
+import { LengthNote } from './billing-line';
 import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confirm';
 import { hasCaseChoice } from './case-choice-section';
 import { StepBooked } from './step-booked';
@@ -60,7 +62,6 @@ import {
 } from './booking-draft';
 import { findFirstInvalidField } from './focus-first-invalid';
 import { BookingFundingBlock } from './funding/booking-funding-block';
-import type { FundedVia } from '@/lib/booking/actions/booking-funding-types';
 import { resolveFundingDisposition, type RefusedFundingView } from './funding/funding-disposition';
 import {
   BALANCE_NOW_COVERS_COPY,
@@ -627,6 +628,44 @@ function buildBalancePanelProps(
   };
 }
 
+/** The case an entry is pinned to (entry point 3 only), and whether it may start a new one. */
+function entryCasePolicy(entry: BookingFlowDialogProps['entry']): {
+  fixedCase: FixedCaseSummary | null;
+  newCaseAllowed: boolean;
+} {
+  return {
+    fixedCase: entry.mode === 'fixed_case' ? entry.fixedCase : null,
+    newCaseAllowed: entry.mode === 'chooser' || entry.newCaseAllowed,
+  };
+}
+
+/** True when the selected existing case is the entry's fixed case. */
+function isFixedCaseSelected(
+  fixedCase: FixedCaseSummary | null,
+  caseSelection: CaseSelection
+): boolean {
+  return (
+    fixedCase !== null &&
+    caseSelection.kind === 'existing' &&
+    caseSelection.engagementId === fixedCase.engagementId
+  );
+}
+
+/** The chooser's "your last case … is resolved" note: a new case, and only resolved cases with this expert. */
+function isResolvedCaseNoteShown(
+  entryMode: BookingFlowDialogProps['entry']['mode'],
+  caseSelection: CaseSelection,
+  resolvedCaseCount: number,
+  openCases: readonly OpenCaseForExpert[] | null
+): boolean {
+  return (
+    entryMode === 'chooser' &&
+    caseSelection.kind === 'new' &&
+    resolvedCaseCount > 0 &&
+    (openCases?.length ?? 0) === 0
+  );
+}
+
 /**
  * BAL-400 — the booking flow's top-level orchestrator. Owns ALL form state (the sub-components
  * are presentational) plus the step machine, the idempotency nonce, and the two-hop submit.
@@ -654,6 +693,8 @@ export function BookingFlowDialog(
   const [phase, setPhase] = useState<Phase>('pick_time');
   const [viewerTimezone, setViewerTimezone] = useState('UTC');
   const [slot, setSlot] = useState<ConfirmSlot | null>(null);
+  /** What the picker reopens with after Change / Back, so the client's length and day survive. */
+  const [pickerRestore, setPickerRestore] = useState<PickerRestore | null>(null);
   const [nonce, setNonce] = useState(randomNonce);
 
   const [caseSelection, setCaseSelection] = useState<CaseSelection>({ kind: 'new' });
@@ -720,8 +761,7 @@ export function BookingFlowDialog(
   /** Frozen true the moment ANY submit creates a real case row (D4b) — see `handleSubmit`. */
   const caseAlreadyCreatedRef = useRef(false);
 
-  const fixedCase = entry.mode === 'fixed_case' ? entry.fixedCase : null;
-  const newCaseAllowed = entry.mode === 'chooser' || entry.newCaseAllowed;
+  const { fixedCase, newCaseAllowed } = entryCasePolicy(entry);
 
   // Entry point 3 keeps a draft only while a NEW case is selected: a follow-up into an existing
   // case is not what "Save and finish later" saves, and must never overwrite or clear a new-case
@@ -880,6 +920,7 @@ export function BookingFlowDialog(
     if (entry.mode === 'fixed_case') {
       setPhase(entry.presetSlot === null ? 'pick_time' : 'confirm');
       setSlot(entry.presetSlot);
+      setPickerRestore(null);
       setCaseSelection({ kind: 'existing', engagementId: entry.fixedCase.engagementId });
       setCompanies(null);
       setCompanyId(null);
@@ -889,6 +930,7 @@ export function BookingFlowDialog(
     } else {
       const { context } = entry;
       setSlot(null);
+      setPickerRestore(null);
       setCaseSelection({ kind: 'new' });
       setPhase(context.arm === 'onboarding_required' ? 'onboarding' : 'pick_time');
       setCompanyReadFailed(context.arm === 'company_read_failed');
@@ -1022,10 +1064,11 @@ export function BookingFlowDialog(
   );
 
   const handleChangeTime = useCallback(() => {
+    setPickerRestore(pickerRestoreFor(slot, staleSlot));
     setStaleSlot(false);
     setFunded(null);
     setPhase('pick_time');
-  }, []);
+  }, [staleSlot, slot]);
 
   // A preset slot was the whole reason the dialog opened, so Back leaves rather than offering
   // a calendar the client never asked for.
@@ -1035,8 +1078,9 @@ export function BookingFlowDialog(
       onClose();
       return;
     }
+    setPickerRestore(pickerRestoreFor(slot, staleSlot));
     setPhase('pick_time');
-  }, [backCloses, onClose]);
+  }, [backCloses, onClose, slot, staleSlot]);
 
   const handleRetryCompanies = useCallback(async () => {
     // M3 — `requireOnboardedUser()` inside the action can still reject (an expired session);
@@ -1353,8 +1397,9 @@ export function BookingFlowDialog(
   }, [handleSubmit]);
 
   const handleChooseDifferentTimeAfterPartial = useCallback(() => {
+    setPickerRestore(pickerRestoreFor(slot, true));
     setPhase('pick_time');
-  }, []);
+  }, [slot]);
 
   /** Keeps the typed fields on this device, for a client who leaves this dialog or is signed out. */
   const writeCurrentDraft = useCallback((): void => {
@@ -1538,10 +1583,7 @@ export function BookingFlowDialog(
       openedAtIso: match.createdAt,
     };
   }
-  const fixedCaseSelected =
-    fixedCase !== null &&
-    caseSelection.kind === 'existing' &&
-    caseSelection.engagementId === fixedCase.engagementId;
+  const fixedCaseSelected = isFixedCaseSelected(fixedCase, caseSelection);
   const caseContextSummary: FixedCaseSummary | null =
     recovered ?? (fixedCaseSelected ? fixedCase : resolveChooserCaseContext());
 
@@ -1551,11 +1593,12 @@ export function BookingFlowDialog(
   const effectiveOpenCases: readonly OpenCaseForExpert[] | null =
     recovered === null ? openCases : null;
 
-  const showResolvedCaseNote =
-    entry.mode === 'chooser' &&
-    caseSelection.kind === 'new' &&
-    resolvedCaseCount > 0 &&
-    (openCases?.length ?? 0) === 0;
+  const showResolvedCaseNote = isResolvedCaseNoteShown(
+    entry.mode,
+    caseSelection,
+    resolvedCaseCount,
+    openCases
+  );
 
   // `companies`/`companyId` are always kept in sync with the resolved arm (including after a
   // retry), so deriving from local state — rather than re-reading `entry.context` — is correct
@@ -1597,6 +1640,8 @@ export function BookingFlowDialog(
                 onMessage={onMessage}
                 scope={scope}
                 similarExpertsHref={expert.similarExpertsHref}
+                lengthNote={<LengthNote billing="per_minute" />}
+                {...pickerRestore}
               />
             </motion.div>
           )}

@@ -1,6 +1,6 @@
 ---
 title: 'Booking a consultation'
-summary: 'Pick a time with an expert, choose a length and confirm the call.'
+summary: 'Choose how long you need, pick a time with an expert and confirm the call.'
 audience: [client]
 category:
   client: calls
@@ -17,15 +17,21 @@ that expert stay together.
 ## How to book
 
 1. Open the expert's profile and choose **Book a consultation**.
-2. On **Choose a time**, pick a slot from their open times. Times show in your device's timezone.
-3. Under **How long do you need?**, choose 15, 30, 45 or 60 minutes. The longest option is capped
-   at the length of the slot you picked.
-4. On **Review & confirm**, check the details and choose **Confirm & book**.
+2. On **Choose a time**, answer **How long do you need?** first: choose 15, 30, 45 or 60 minutes.
+   60 minutes is preselected when the expert has room for it, otherwise the longest length that
+   fits. You can change it at any point.
+3. Pick a day, then a time. Times show as ranges at that length, in your device's timezone. If an
+   earlier slot only fits a shorter call, it's offered under **Need it sooner?**, and you can
+   switch to it in one click. Choose **Continue with** your time range when you've found the one you want.
+4. On **Review & confirm**, check the details and choose **Confirm & book**. Choose **Change** to
+   go back and pick a different length or time.
+
+You pay for the minutes you use, not the length you pick. There's a 15-minute minimum.
 
 You can also book from an open case's page with **Book with {name} again**. Their calendar opens
 right there, with that case already chosen.
 
-![The How long do you need? step after picking a time, with the 15, 30, 45 and 60 minute options highlighted.](01)
+![The Choose a time step, with the How long do you need? options and the billing note highlighted above the calendar.](01)
 
 ## If your balance is low when you book
 
@@ -67,7 +73,7 @@ expert. Booking from the expert's profile starts on **Start a new case**; bookin
 page starts on that case. If you have no open case with them, there's nothing to choose and the
 call starts a new one.
 
-![The confirm step asking which case the call is for, with Start a new case highlighted.](02)
+![The confirm step asking which case the call is for, with Start a new case highlighted.](03)
 
 ## Moving a consultation
 
@@ -78,7 +84,7 @@ consultation**. Same length, same link — nothing else about the consultation c
 You can move a consultation until the join window opens, 3 minutes before it starts, as long as the
 expert hasn't already suggested new times for it.
 
-![The Confirm the new time step of rescheduling, with the Move consultation button highlighted.](03)
+![The Confirm the new time step of rescheduling, with the Move consultation button highlighted.](04)
 
 ## When the expert suggests new times
 
@@ -90,7 +96,7 @@ keep it, your original time stands.
 There's a reply-by date on the suggestion, and no need to do anything before then. If it passes
 without a reply, your original time simply stands.
 
-![A case showing Pick a new time, with the suggested times and the Accept and Keep my time buttons highlighted.](04)
+![A case showing Pick a new time, with the suggested times and the Accept and Keep my time buttons highlighted.](05)
 
 ## Cancelling a consultation
 
@@ -99,7 +105,7 @@ time before the call starts. If you do cancel, nothing is charged and any credit
 goes back to your balance. If the time is the only problem, **Reschedule instead** in the same
 window moves the call rather than cancelling it. Choose **Keep it** to leave everything as it is.
 
-![The Cancel consultation window, with the Reschedule instead button and the note that nothing is charged highlighted.](05)
+![The Cancel consultation window, with the Reschedule instead button and the note that nothing is charged highlighted.](06)
 
 ## If an expert isn't taking on new work
 
@@ -115,4 +121,4 @@ it. Book it from that case's page, using **Book with {name} again** or **Book a 
 which opens their calendar right there, already attached to the case. You can switch to another
 of your open cases with them, but not start a new one.
 
-![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](06)
+![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](07)

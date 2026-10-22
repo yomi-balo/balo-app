@@ -46,7 +46,7 @@ const availabilityRateLimit = createRateLimitPreHandler({
   label: 'expert-availability',
 });
 
-export async function availabilityRoute(fastify: FastifyInstance): Promise<void> {
+export function availabilityRoute(fastify: FastifyInstance): Promise<void> {
   fastify.get(
     '/experts/:expertProfileId/availability',
     // ⚠ EXPLICIT — `expertsRoutes` has no plugin-level auth hook, so a route registered
@@ -168,7 +168,8 @@ export async function availabilityRoute(fastify: FastifyInstance): Promise<void>
           'Expert availability served'
         );
 
-        reply.header('Cache-Control', 'public, max-age=60');
+        // private: a shared cache must never hold a grid anchored to its own request time.
+        reply.header('Cache-Control', 'private, max-age=60');
         return response;
       } catch (error) {
         log.error(
@@ -188,4 +189,5 @@ export async function availabilityRoute(fastify: FastifyInstance): Promise<void>
       }
     }
   );
+  return Promise.resolve();
 }

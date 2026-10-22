@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
@@ -110,9 +110,16 @@ const BASE_PROPS = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Date only, so the file's September 2026 fixtures stay in the future whenever this runs.
+  vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+  vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'));
   mockIsMobile.value = false;
   mockPickerMountCount.value = 0;
   mockAvailabilityView.value = { kind: 'not_configured' };
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 async function advanceToConfirm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -453,7 +460,7 @@ describe('RescheduleDialog — T-WEB-UI', () => {
     expect(document.querySelector('[data-slot="sheet-content"]')).not.toBeInTheDocument();
   });
 
-  // Wide enough for the embedded ExpertAvailabilityCalendar's two-pane layout (300px slots
+  // Wide enough for the embedded ExpertAvailabilityCalendar's two-pane layout (340px slots
   // column + a month grid that doesn't bunch), capped so it never overflows a small viewport.
   it('is wide enough to host the two-pane calendar, capped against the viewport', () => {
     render(<RescheduleDialog {...BASE_PROPS} />);
@@ -527,9 +534,32 @@ describe('RescheduleDialog — suggested times', () => {
     expect(screen.queryByRole('button', { name: 'pick-slot' })).not.toBeInTheDocument();
   });
 
+  it('drops a suggested time whose start has already passed', () => {
+    mockAvailabilityView.value = readyView([
+      '2026-08-30T09:00:00.000Z',
+      '2026-09-02T09:00:00.000Z',
+    ]);
+    render(<RescheduleDialog {...BASE_PROPS} />);
+
+    expect(screen.getByRole('button', { name: SUGGESTED_TIME })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sun, 30 Aug/ })).not.toBeInTheDocument();
+  });
+
   it('opens straight on the calendar when availability is ready but nothing suggests', () => {
     mockAvailabilityView.value = readyView([]);
     render(<RescheduleDialog {...BASE_PROPS} />);
+
+    expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
+    expect(screen.queryByText('Suggested times')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the calendar when the suggestions run out while open', () => {
+    mockAvailabilityView.value = readyView(['2026-09-02T09:00:00.000Z']);
+    const { rerender } = render(<RescheduleDialog {...BASE_PROPS} />);
+    expect(screen.getByText('Suggested times')).toBeInTheDocument();
+
+    mockAvailabilityView.value = readyView([]);
+    rerender(<RescheduleDialog {...BASE_PROPS} />);
 
     expect(screen.getByRole('button', { name: 'pick-slot' })).toBeInTheDocument();
     expect(screen.queryByText('Suggested times')).not.toBeInTheDocument();

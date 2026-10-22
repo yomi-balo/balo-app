@@ -17,7 +17,8 @@ export const AVAILABILITY_EVENTS = {
   // BAL-236 — the ExpertAvailabilityCalendar slot picker.
   CALENDAR_VIEWED: 'availability_calendar_viewed',
   SLOT_SELECTED: 'availability_slot_selected',
-  DURATION_FILTER_USED: 'availability_duration_filter_used',
+  DURATION_CHOSEN: 'availability_duration_chosen',
+  SOONER_OFFER_SHOWN: 'availability_sooner_offer_shown',
   EMPTY_STATE_SHOWN: 'availability_empty_state_shown',
 } as const;
 
@@ -59,7 +60,7 @@ export interface AvailabilityEventMap {
     expert_profile_id: string;
   };
   /**
-   * ⚠ The four BAL-236 picker events carry `expert_id` (also `expert_profiles.id`) rather than
+   * ⚠ The five picker events carry `expert_id` (also `expert_profiles.id`) rather than
    * the `expert_profile_id` the BAL-416 pair uses — the two families were authored in parallel
    * against their own tickets' stated payloads. Same value, two property names in one family;
    * worth converging on `expert_profile_id` in a follow-up, but renaming a shipped wire property
@@ -76,14 +77,24 @@ export interface AvailabilityEventMap {
     slot_start_utc: string;
     duration_minutes: number;
     viewer_timezone: string;
+    /** True when the length was the effective default and the viewer never changed it. */
+    duration_is_default: boolean;
   };
-  [AVAILABILITY_EVENTS.DURATION_FILTER_USED]: {
+  [AVAILABILITY_EVENTS.DURATION_CHOSEN]: {
     expert_id: string;
-    filter_value: number | 'any';
+    duration_minutes: number;
+    previous_minutes: number;
+    /** BAL-614 — `pill` = the length control; `sooner_offer` = a "Need it sooner?" offer. */
+    source: 'pill' | 'sooner_offer';
+  };
+  [AVAILABILITY_EVENTS.SOONER_OFFER_SHOWN]: {
+    expert_id: string;
+    chosen_minutes: number;
+    offered_minutes: number[];
   };
   [AVAILABILITY_EVENTS.EMPTY_STATE_SHOWN]: {
     expert_id: string;
-    reason: 'not_configured' | 'no_slots' | 'unavailable' | 'no_slots_for_filter';
+    reason: 'not_configured' | 'no_slots' | 'unavailable' | 'no_slots_at_length';
   };
 }
 

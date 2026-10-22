@@ -44,8 +44,8 @@ import { useSuggestedTimesPicker } from './use-suggested-times-picker';
  *
  * ⚠ STEP 1 OPENS ON UP TO FOUR SUGGESTIONS, CALENDAR BEHIND "See more times". `pickerView`
  * stays `null` (a loading skeleton) until `useExpertAvailability` settles, so a slow fetch never
- * flips the view out from under a user already reading it — after that it only changes on a
- * click. `ExpertAvailabilityCalendar` still runs its own fetch when mounted (used exactly as
+ * flips the view out from under a user already reading it — after that it changes on a click,
+ * or falls back to the calendar if the suggestions run out (`useSuggestedTimesPicker`). `ExpertAvailabilityCalendar` still runs its own fetch when mounted (used exactly as
  * shipped, not fed this dialog's slots) — a second request against the same cached endpoint.
  */
 
@@ -473,8 +473,8 @@ export function RescheduleDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !next && resetAndClose()}>
       <DialogContent
-        // 300px slots column + ~440px for a seven-column month grid that doesn't bunch + the
-        // body's own p-6 (48px) needs ~790px; 840px leaves headroom. min(92vw, …) keeps it off
+        // 340px slots column + ~440px for a seven-column month grid that doesn't bunch + the
+        // body's own p-6 (48px) needs ~830px; 840px just clears it. min(92vw, …) keeps it off
         // a small laptop or a landscape tablet instead of a bare fixed width.
         className="max-h-[85vh] overflow-y-auto rounded-xl p-0 sm:max-w-[min(92vw,840px)]"
         onCloseAutoFocus={handleCloseAutoFocus}

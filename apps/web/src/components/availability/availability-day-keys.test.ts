@@ -3,8 +3,10 @@ import type { AvailabilitySlotDto } from '@balo/shared/availability';
 import {
   calendarDateToDayKey,
   dayKeyToCalendarDate,
+  formatOfferTime,
   formatSlotTime,
   formatTimezoneLabel,
+  formatWeekdayLong,
   formatWeekdayShort,
   groupSlotsByDay,
   slotCrossesMidnight,
@@ -115,5 +117,18 @@ describe('formatTimezoneLabel', () => {
   it('falls back to the raw IANA string when no city can be extracted', () => {
     const label = formatTimezoneLabel('UTC', new Date('2026-06-01T00:00:00Z'));
     expect(label).toContain('UTC');
+  });
+});
+
+describe('formatWeekdayLong', () => {
+  it('names the weekday of a floating day key', () => {
+    expect(formatWeekdayLong('2026-10-22')).toBe('Thursday');
+  });
+});
+
+describe('formatOfferTime', () => {
+  it('is lowercase am/pm in the viewer zone', () => {
+    expect(formatOfferTime('2026-06-01T09:00:00.000Z', 'UTC')).toBe('9:00 am');
+    expect(formatOfferTime('2026-06-01T21:30:00.000Z', 'UTC')).toBe('9:30 pm');
   });
 });

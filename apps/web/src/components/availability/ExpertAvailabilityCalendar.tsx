@@ -20,6 +20,8 @@ import { useExpertAvailability, type AvailabilityView } from './use-expert-avail
 import { AvailabilityMessage, AvailabilitySkeleton } from './availability-states';
 import { AvailabilityMonthCalendar } from './availability-month-calendar';
 import { AvailabilitySlotsPanel } from './availability-slots-panel';
+import { LengthControl } from './availability-length-control';
+import { useNowTick } from './use-now-tick';
 import {
   formatDayHeading,
   formatSlotTime,
@@ -28,7 +30,16 @@ import {
   slotDayKey,
   todayDayKey,
 } from './availability-day-keys';
-import { shouldResetFilter, type DurationFilter } from './availability-filters';
+import {
+  availableLengths,
+  dropPastSlots,
+  fallbackLength,
+  fitsLength,
+  nextDayAtLength,
+  soonerOffers,
+  splitDaysByLength,
+  type SoonerOffer,
+} from './availability-filters';
 
 export interface AvailabilitySlotSelection {
   /** UTC ISO-8601 instant. */
@@ -61,14 +72,27 @@ export interface ExpertAvailabilityCalendarProps {
    */
   daysAhead?: number;
   /**
-   * BAL-409 — pin the duration filter to a MEETING's existing length (a reschedule MOVES a
-   * booking, it does not resize it) and hide the manual duration pills. This is a UI AFFORDANCE
-   * ONLY — the server still pins the length regardless of what the picker returns, so this prop
-   * never enforces anything by itself; it exists so a client cannot pick a 30-minute slot for a
-   * 60-minute meeting and be met with a confusing `409`. Omit it (the default) for the shipped
-   * BAL-236 free-choice behaviour, unchanged.
+   * BAL-409 — pin the length to a MEETING's existing length (a reschedule MOVES a booking, it
+   * does not resize it): the length control is replaced by a read-only line, and there are no
+   * shorter-call offers or rings. This is a UI AFFORDANCE ONLY — the server still pins the
+   * length regardless of what the picker returns, so this prop never enforces anything by
+   * itself; it exists so a client cannot pick a 30-minute slot for a 60-minute meeting and be
+   * met with a confusing `409`. Omit it (the default) for the free length choice.
    */
   fixedDurationMinutes?: SlotDurationMinutes;
+  /** The length preselected when nothing else decides it. Default 60; stepped down the ladder
+   *  to the longest length some time can hold. Ignored when pinned. */
+  defaultDurationMinutes?: SlotDurationMinutes;
+  /** Restores a previous choice after "Change": its length and day, and its time if that time
+   *  is still offered at that length. */
+  initialSelection?: AvailabilitySlotSelection;
+  /** Restores only a previous LENGTH (a stale slot's, or a partial failure's), never a time.
+   *  Counts as a length the client already chose for `duration_is_default`. */
+  initialDurationMinutes?: SlotDurationMinutes;
+  /** The confirm button's verb. `continue` (default) advances a flow; `add` appends to a list. */
+  confirmAction?: 'continue' | 'add';
+  /** Billing copy under the length control. Never rendered while the length is pinned. */
+  lengthNote?: ReactNode;
   /** Selectable only. Called with the final selection. The component NEVER books. */
   onSlotSelect?: (selection: AvailabilitySlotSelection) => void;
   /** Analytics only — which side is looking. Default `'client'`. */
@@ -261,12 +285,39 @@ function AvailabilityStateMessage({
   );
 }
 
+type StateView = Exclude<AvailabilityView, { kind: 'ready' } | { kind: 'loading' }>;
+
+/** The view to render as a message, or `null` when the grid itself should render. */
+function nonContentView(view: AvailabilityView, liveSlotCount: number): StateView | null {
+  if (view.kind === 'loading') return null;
+  if (view.kind !== 'ready') return view;
+  return liveSlotCount === 0 ? { kind: 'empty_window', days: view.days } : null;
+}
+
+function PinnedLengthLine({
+  minutes,
+}: Readonly<{ minutes: SlotDurationMinutes }>): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-foreground text-sm font-medium">Length</span>
+      <span className="text-foreground text-sm font-medium">
+        {minutes} minutes — same as your current consultation
+      </span>
+    </div>
+  );
+}
+
 export function ExpertAvailabilityCalendar({
   expertProfileId,
   mode = 'selectable',
   viewerTimezone,
   daysAhead,
   fixedDurationMinutes,
+  defaultDurationMinutes,
+  initialSelection,
+  initialDurationMinutes,
+  confirmAction = 'continue',
+  lengthNote,
   onSlotSelect,
   viewerType = 'client',
   emptyAction,
@@ -296,17 +347,15 @@ export function ExpertAvailabilityCalendar({
   const [days, setDays] = useState(defaultDays);
 
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
-  const [durationFilter, setDurationFilter] = useState<DurationFilter>(
-    fixedDurationMinutes ?? 'any'
-  );
-  const [filterAutoReset, setFilterAutoReset] = useState(false);
-  const [selectedSlot, setSelectedSlot] = useState<AvailabilitySlotDto | null>(null);
-  const [confirmStep, setConfirmStep] = useState(false);
-  const [chosenDuration, setChosenDuration] = useState<SlotDurationMinutes | null>(null);
+  const [chosenLength, setChosenLength] = useState<SlotDurationMinutes | null>(null);
+  const [selectedStart, setSelectedStart] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [confirmedSummary, setConfirmedSummary] = useState<string | null>(null);
+  const lengthTouchedRef = useRef(false);
 
   const { view, reload } = useExpertAvailability(expertProfileId, days, scope, skipFetch);
+  const now = useNowTick();
+  const pinned = fixedDurationMinutes !== undefined;
 
   const viewedTrackedRef = useRef(false);
   useEffect(() => {
@@ -320,9 +369,20 @@ export function ExpertAvailabilityCalendar({
     }
   }, [view.kind, expertProfileId, mode, viewerType]);
 
+  // Slots whose start has passed are dropped at render, on the ticking clock — a grid fetched
+  // earlier must never keep offering a time that has already begun.
+  const liveSlots = useMemo(
+    () => (view.kind === 'ready' ? dropPastSlots(view.slots, now) : []),
+    [view, now]
+  );
+
+  const liveSlotCount = liveSlots.length;
   const emptyReasonTrackedRef = useRef<string | null>(null);
   useEffect(() => {
-    const reason = emptyStateReason(view.kind);
+    // A `ready` view whose slots have all started reads as an empty window, same as the server's.
+    const reason =
+      emptyStateReason(view.kind) ??
+      (view.kind === 'ready' && liveSlotCount === 0 ? 'no_slots' : null);
     if (reason && emptyReasonTrackedRef.current !== reason) {
       emptyReasonTrackedRef.current = reason;
       track(AVAILABILITY_EVENTS.EMPTY_STATE_SHOWN, { expert_id: expertProfileId, reason });
@@ -330,30 +390,84 @@ export function ExpertAvailabilityCalendar({
     if (!reason) {
       emptyReasonTrackedRef.current = null;
     }
-  }, [view.kind, expertProfileId]);
+  }, [view.kind, liveSlotCount, expertProfileId]);
 
   /**
    * ⚠ THE FALLBACK MAP IS TYPED. A bare `new Map()` widens the memo to
    * `Map<string, AvailabilitySlotDto[]> | Map<any, any>`, so `.get()` returns `any` and the slot
-   * type is erased for the whole downstream pipeline — `slotsForSelectedDay` flows unchecked
-   * into a `AvailabilitySlotDto[]` prop and a wire/shape regression in `groupSlotsByDay` would
-   * not be caught. No `any` token appears, but it is a `no any` breach in substance.
+   * type is erased for the whole downstream pipeline.
    */
   const slotsByDay = useMemo(
     () =>
-      view.kind === 'ready' && resolvedTimezone
-        ? groupSlotsByDay(view.slots, resolvedTimezone)
+      resolvedTimezone
+        ? groupSlotsByDay(liveSlots, resolvedTimezone)
         : new Map<string, AvailabilitySlotDto[]>(),
-    [view, resolvedTimezone]
+    [liveSlots, resolvedTimezone]
   );
-  const daysWithSlots = useMemo(() => new Set(slotsByDay.keys()), [slotsByDay]);
-  const slotsForSelectedDay: AvailabilitySlotDto[] = selectedDayKey
-    ? (slotsByDay.get(selectedDayKey) ?? [])
-    : [];
+  const sortedDayKeys = useMemo(
+    () => [...slotsByDay.keys()].sort((a, b) => a.localeCompare(b)),
+    [slotsByDay]
+  );
+  const lengthsOffered = useMemo(() => availableLengths(liveSlots), [liveSlots]);
+
+  // Derived, never set in an effect, so nothing slides on load or restore.
+  const restoredLength = initialSelection?.duration ?? initialDurationMinutes;
+  const effectiveDefault = fallbackLength(defaultDurationMinutes ?? 60, liveSlots);
+  const startLength =
+    restoredLength === undefined ? effectiveDefault : fallbackLength(restoredLength, liveSlots);
+  const length: SlotDurationMinutes = fixedDurationMinutes ?? chosenLength ?? startLength;
+
+  const { daysAtLength, daysShorterOnly } = useMemo(
+    () => splitDaysByLength(slotsByDay, length, pinned),
+    [slotsByDay, length, pinned]
+  );
+  const daySlots = useMemo(
+    () => (selectedDayKey ? (slotsByDay.get(selectedDayKey) ?? []) : []),
+    [slotsByDay, selectedDayKey]
+  );
+  const slotsAtLength = useMemo(
+    () => daySlots.filter((s) => fitsLength(s, length)),
+    [daySlots, length]
+  );
+  // A slot that has passed `now`, or no longer holds the length, deselects on render.
+  const selectedSlot = slotsAtLength.find((s) => s.start === selectedStart) ?? null;
+  const offers = useMemo(
+    () => (pinned ? [] : soonerOffers(daySlots, length)),
+    [pinned, daySlots, length]
+  );
+  const nextDayKey =
+    selectedDayKey && slotsAtLength.length === 0
+      ? nextDayAtLength(sortedDayKeys, selectedDayKey, daysAtLength)
+      : null;
+
+  const offerShownRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (pinned || !selectedDayKey || offers.length === 0) return;
+    const key = `${selectedDayKey}:${length}`;
+    if (offerShownRef.current.has(key)) return;
+    offerShownRef.current.add(key);
+    track(AVAILABILITY_EVENTS.SOONER_OFFER_SHOWN, {
+      expert_id: expertProfileId,
+      chosen_minutes: length,
+      offered_minutes: offers.map((o) => o.minutes),
+    });
+  }, [pinned, selectedDayKey, length, offers, expertProfileId]);
+
+  const emptyAtLengthRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (pinned || !selectedDayKey || daySlots.length === 0 || slotsAtLength.length > 0) return;
+    const key = `${selectedDayKey}:${length}`;
+    if (emptyAtLengthRef.current.has(key)) return;
+    emptyAtLengthRef.current.add(key);
+    track(AVAILABILITY_EVENTS.EMPTY_STATE_SHOWN, {
+      expert_id: expertProfileId,
+      reason: 'no_slots_at_length',
+    });
+  }, [pinned, selectedDayKey, length, daySlots, slotsAtLength, expertProfileId]);
 
   /**
    * ⚠ SELECTION IS PER-EXPERT. Without this, swapping `expertProfileId` keeps the previous
-   * expert's day/slot/duration selected while `track(SLOT_SELECTED, …)` reports the NEW expert —
+   * expert's day/slot/length selected while `track(SLOT_SELECTED, …)` reports the NEW expert —
    * the caller would book expert B at a time only expert A advertised. Latent while the only
    * shipped consumer is a fixed-id preview, but this is an exported reusable component and a
    * documented `key=` convention at call sites is not a control.
@@ -363,14 +477,33 @@ export function ExpertAvailabilityCalendar({
     if (knownExpertRef.current === expertProfileId) return;
     knownExpertRef.current = expertProfileId;
     setSelectedDayKey(null);
-    setSelectedSlot(null);
-    setConfirmStep(false);
-    setChosenDuration(null);
-    setDurationFilter(fixedDurationMinutes ?? 'any');
-    setFilterAutoReset(false);
+    setSelectedStart(null);
+    setChosenLength(null);
+    lengthTouchedRef.current = false;
+    offerShownRef.current.clear();
+    emptyAtLengthRef.current.clear();
     setConfirmed(false);
     setConfirmedSummary(null);
-  }, [expertProfileId, fixedDurationMinutes]);
+  }, [expertProfileId]);
+
+  // Restore once the grid is ready: the day, and the time only if it is still offered at the
+  // restored length.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || !initialSelection || view.kind !== 'ready' || !resolvedTimezone) {
+      return;
+    }
+    restoredRef.current = true;
+    const dayKey = slotDayKey(initialSelection.start, resolvedTimezone);
+    const restoredDaySlots = slotsByDay.get(dayKey);
+    if (!restoredDaySlots) return;
+    setSelectedDayKey(dayKey);
+    const stillOffered = restoredDaySlots.some(
+      (s) => s.start === initialSelection.start && fitsLength(s, length)
+    );
+    if (stillOffered && length === initialSelection.duration)
+      setSelectedStart(initialSelection.start);
+  }, [initialSelection, view.kind, resolvedTimezone, slotsByDay, length]);
 
   /**
    * ⚠ `confirmed` MUST BE PART OF EVERY RESET. It short-circuits the whole right-hand panel
@@ -381,9 +514,7 @@ export function ExpertAvailabilityCalendar({
    * confirmation panel also carries its own "Choose another time" action wired to this.
    */
   function resetSelection(): void {
-    setSelectedSlot(null);
-    setConfirmStep(false);
-    setChosenDuration(null);
+    setSelectedStart(null);
     setConfirmed(false);
     setConfirmedSummary(null);
   }
@@ -391,52 +522,50 @@ export function ExpertAvailabilityCalendar({
   function handleSelectDayKey(dayKey: string): void {
     setSelectedDayKey(dayKey);
     resetSelection();
-    const daySlots = slotsByDay.get(dayKey) ?? [];
-    // ⚠ B6(c) — THE AUTO-RESET SAFETY NET NEVER FIRES WHILE PINNED. Unpinned, widening to 'any'
-    // when a day has no slot at the user's chosen minimum is the right UX (never strand them on
-    // a blank day). PINNED, widening would silently offer 15/30-min slots as selectable for a
-    // 60-min meeting the server will refuse — exactly the `window_not_available` 409 the pin
-    // exists to prevent. A day with nothing at the pinned length is correctly an EMPTY day.
-    // `durationFilter` itself is NOT reset here — it stays the user's last explicit choice so
-    // the warning copy can still name it, and the panel derives the EFFECTIVE ('any') filter
-    // for the shown list from `filterAutoReset` alone. Pure predicate, no effect (D13).
-    if (fixedDurationMinutes === undefined && shouldResetFilter(daySlots, durationFilter)) {
-      setFilterAutoReset(true);
-      track(AVAILABILITY_EVENTS.EMPTY_STATE_SHOWN, {
-        expert_id: expertProfileId,
-        reason: 'no_slots_for_filter',
-      });
-    } else {
-      setFilterAutoReset(false);
-    }
   }
 
-  function handleFilterChange(filter: DurationFilter): void {
-    setDurationFilter(filter);
-    setFilterAutoReset(false);
-    resetSelection();
-    track(AVAILABILITY_EVENTS.DURATION_FILTER_USED, {
+  function chooseLength(next: SlotDurationMinutes, source: 'pill' | 'sooner_offer'): void {
+    if (next === length) return;
+    // Keep the chosen time when it can hold the new length; otherwise clear it.
+    if (!selectedSlot || !fitsLength(selectedSlot, next)) setSelectedStart(null);
+    setConfirmed(false);
+    setConfirmedSummary(null);
+    setChosenLength(next);
+    lengthTouchedRef.current = true;
+    track(AVAILABILITY_EVENTS.DURATION_CHOSEN, {
       expert_id: expertProfileId,
-      filter_value: filter,
+      duration_minutes: next,
+      previous_minutes: length,
+      source,
     });
   }
 
+  function handleTakeOffer(offer: SoonerOffer): void {
+    chooseLength(offer.minutes, 'sooner_offer');
+    if (mode === 'selectable') setSelectedStart(offer.start);
+  }
+
   function handleConfirm(): void {
-    if (!selectedSlot || !chosenDuration || !resolvedTimezone) return;
+    if (!selectedSlot || !resolvedTimezone) return;
     // ⚠ RE-VERIFY MEMBERSHIP, do not trust the render that produced the button. If the parent
     // swaps `expertProfileId` mid-flow, the panel re-renders the PREVIOUS expert's slot; emitting
-    // it would hand the caller a time the new expert never advertised. The reset effect below
+    // it would hand the caller a time the new expert never advertised. The reset effect above
     // clears this state, but this guard does not depend on the effect having run first.
-    if (!slotsForSelectedDay.some((s) => s.start === selectedSlot.start)) return;
+    if (!daySlots.some((s) => s.start === selectedSlot.start)) return;
     const start = selectedSlot.start;
-    const end = new Date(new Date(start).getTime() + chosenDuration * 60_000).toISOString();
-    const selection: AvailabilitySlotSelection = { start, end, duration: chosenDuration };
+    const end = new Date(Date.parse(start) + length * 60_000).toISOString();
+    const selection: AvailabilitySlotSelection = { start, end, duration: length };
 
     track(AVAILABILITY_EVENTS.SLOT_SELECTED, {
       expert_id: expertProfileId,
       slot_start_utc: start,
-      duration_minutes: chosenDuration,
+      duration_minutes: length,
       viewer_timezone: resolvedTimezone,
+      duration_is_default:
+        !pinned &&
+        !lengthTouchedRef.current &&
+        restoredLength === undefined &&
+        length === effectiveDefault,
     });
 
     if (onSlotSelect) {
@@ -450,7 +579,7 @@ export function ExpertAvailabilityCalendar({
     // twelve-slot day indistinguishable.
     const day = selectedDayKey ? formatDayHeading(selectedDayKey) : '';
     const time = formatSlotTime(start, resolvedTimezone);
-    setConfirmedSummary(`Time selected: ${day} at ${time}, ${chosenDuration} minutes.`);
+    setConfirmedSummary(`Time selected: ${day} at ${time}, ${length} minutes.`);
     setConfirmed(true);
   }
 
@@ -462,11 +591,13 @@ export function ExpertAvailabilityCalendar({
     );
   }
 
-  if (view.kind !== 'ready') {
+  // `ready` with every slot already started reads as an empty window.
+  const stateView = nonContentView(view, liveSlots.length);
+  if (stateView) {
     return (
       <div className={className}>
         <AvailabilityStateMessage
-          view={view}
+          view={stateView}
           mode={mode}
           viewerType={viewerType}
           emptyAction={emptyAction}
@@ -478,24 +609,37 @@ export function ExpertAvailabilityCalendar({
     );
   }
 
-  // view.kind === 'ready'
-  const now = new Date();
   const windowEnd = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
   const todayKey = todayDayKey(resolvedTimezone, now);
 
   return (
     <div className={className}>
-      <div className="text-muted-foreground mb-3 flex items-center gap-1.5 px-0.5 text-xs">
-        <Globe className="h-3 w-3" aria-hidden="true" />
-        <span>{formatTimezoneLabel(resolvedTimezone, now)}</span>
+      <div className="mb-3">
+        {fixedDurationMinutes === undefined ? (
+          <LengthControl
+            value={length}
+            onChange={(next) => chooseLength(next, 'pill')}
+            isAvailable={(d) => lengthsOffered.has(d)}
+            days={days}
+          />
+        ) : (
+          <PinnedLengthLine minutes={fixedDurationMinutes} />
+        )}
+        {!pinned && lengthNote && <div className="mt-2">{lengthNote}</div>}
+        <div className="text-muted-foreground mt-3 flex items-center gap-1.5 px-0.5 text-xs">
+          <Globe className="h-3 w-3" aria-hidden="true" />
+          <span>{formatTimezoneLabel(resolvedTimezone, now)}</span>
+        </div>
       </div>
 
-      <div className="bg-border grid grid-cols-1 gap-px overflow-hidden rounded-xl border md:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="bg-card p-6">
+      <div className="bg-border grid grid-cols-1 gap-px overflow-clip rounded-xl border md:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="bg-card p-6 md:p-4">
           <AvailabilityMonthCalendar
             selectedDayKey={selectedDayKey}
             onSelectDayKey={handleSelectDayKey}
-            daysWithSlots={daysWithSlots}
+            daysAtLength={daysAtLength}
+            daysShorterOnly={daysShorterOnly}
+            lengthMinutes={length}
             viewerTodayKey={todayKey}
             viewerWindowEndKey={slotDayKey(windowEnd.toISOString(), resolvedTimezone)}
           />
@@ -504,25 +648,18 @@ export function ExpertAvailabilityCalendar({
           <AvailabilitySlotsPanel
             dayKey={selectedDayKey}
             isToday={selectedDayKey === todayKey}
-            slotsForDay={slotsForSelectedDay}
             viewerTimezone={resolvedTimezone}
             mode={mode}
-            durationFilter={durationFilter}
-            filterAutoReset={filterAutoReset}
-            onFilterChange={handleFilterChange}
-            hideDurationFilter={fixedDurationMinutes !== undefined}
-            fixedDurationMinutes={fixedDurationMinutes}
+            length={length}
+            slotsAtLength={slotsAtLength}
+            offers={offers}
+            nextDayKey={nextDayKey}
             selectedSlot={selectedSlot}
-            onSelectSlot={setSelectedSlot}
-            confirmStep={confirmStep}
-            onContinue={() => setConfirmStep(true)}
-            onBack={() => {
-              setConfirmStep(false);
-              setChosenDuration(null);
-            }}
-            chosenDuration={chosenDuration}
-            onChooseDuration={setChosenDuration}
+            onSelectSlot={(slot) => setSelectedStart(slot.start)}
+            onTakeOffer={handleTakeOffer}
+            onGoToDay={handleSelectDayKey}
             onConfirm={handleConfirm}
+            confirmAction={confirmAction}
             confirmed={confirmed}
             confirmedSummary={confirmedSummary}
             onDismissConfirmation={resetSelection}

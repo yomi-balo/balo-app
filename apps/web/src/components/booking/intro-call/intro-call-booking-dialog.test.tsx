@@ -16,17 +16,33 @@ vi.mock('sonner', () => ({
 const { mockIsMobile } = vi.hoisted(() => ({ mockIsMobile: vi.fn(() => false) }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => mockIsMobile() }));
 
-const { mockOnSlotSelect, mockCalendarScope } = vi.hoisted(() => ({
+const { mockOnSlotSelect, mockCalendarScope, mockPickerProps } = vi.hoisted(() => ({
   mockOnSlotSelect: vi.fn(),
   mockCalendarScope: { value: undefined as string | undefined },
+  mockPickerProps: {
+    value: {} as {
+      initialSelection?: unknown;
+      defaultDurationMinutes?: unknown;
+      initialDurationMinutes?: unknown;
+    },
+  },
 }));
 vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: (props: {
     onSlotSelect?: (s: { start: string; end: string; duration: 15 | 30 | 45 | 60 }) => void;
     emptyAction?: React.ReactNode;
     scope?: string;
+    lengthNote?: React.ReactNode;
+    initialSelection?: unknown;
+    defaultDurationMinutes?: unknown;
+    initialDurationMinutes?: unknown;
   }) => {
     mockCalendarScope.value = props.scope;
+    mockPickerProps.value = {
+      initialSelection: props.initialSelection,
+      defaultDurationMinutes: props.defaultDurationMinutes,
+      initialDurationMinutes: props.initialDurationMinutes,
+    };
     mockOnSlotSelect.mockImplementation(() =>
       props.onSlotSelect?.({
         start: '2026-06-05T09:00:00.000Z',
@@ -39,6 +55,7 @@ vi.mock('@/components/availability', () => ({
         <button type="button" onClick={() => mockOnSlotSelect()}>
           Pick 9am slot
         </button>
+        {props.lengthNote}
         {props.emptyAction}
       </div>
     );
@@ -117,6 +134,52 @@ describe('IntroCallBookingDialog', () => {
   it('reads the slot grid as existing_work: an intro call on a submitted request survives a pause', () => {
     renderDialog();
     expect(mockCalendarScope.value).toBe('existing_work');
+  });
+
+  it('passes the project billing note to the picker', () => {
+    renderDialog();
+    expect(screen.getByText('Project calls are free at any length.')).toBeInTheDocument();
+  });
+
+  it('opens the picker with a 30-minute default length and nothing restored', () => {
+    renderDialog();
+    expect(mockPickerProps.value).toEqual({
+      initialSelection: undefined,
+      defaultDurationMinutes: 30,
+      initialDurationMinutes: undefined,
+    });
+  });
+
+  it('Change restores the whole previous choice', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await advanceToConfirm(user);
+    await user.click(screen.getByRole('button', { name: 'Change' }));
+
+    expect(mockPickerProps.value).toEqual({
+      initialSelection: {
+        start: '2026-06-05T09:00:00.000Z',
+        end: '2026-06-05T09:30:00.000Z',
+        duration: 30,
+      },
+      defaultDurationMinutes: 30,
+      initialDurationMinutes: undefined,
+    });
+  });
+
+  it('a stale slot restores only the previous length, never the taken time', async () => {
+    const user = userEvent.setup();
+    mockBookIntroCallAction.mockResolvedValue({ ok: false, code: 'slot_unavailable' });
+    renderDialog();
+    await advanceToConfirm(user);
+    await user.click(screen.getByRole('button', { name: 'Confirm & book call' }));
+    await user.click(await screen.findByRole('button', { name: 'Choose a new time' }));
+
+    expect(mockPickerProps.value).toEqual({
+      initialSelection: undefined,
+      defaultDurationMinutes: 30,
+      initialDurationMinutes: 30,
+    });
   });
 
   it('opens to pick_time and advances to confirm on slot select', async () => {

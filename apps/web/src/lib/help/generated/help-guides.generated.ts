@@ -5,7 +5,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
   {
     "slug": "booking-a-consultation",
     "title": "Booking a consultation",
-    "summary": "Pick a time with an expert, choose a length and confirm the call.",
+    "summary": "Choose how long you need, pick a time with an expert and confirm the call.",
     "audience": [
       "client"
     ],
@@ -33,16 +33,16 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<ol>\n<li>Open the expert's profile and choose <strong>Book a consultation</strong>.</li>\n<li>On <strong>Choose a time</strong>, pick a slot from their open times. Times show in your device's timezone.</li>\n<li>Under <strong>How long do you need?</strong>, choose 15, 30, 45 or 60 minutes. The longest option is capped\nat the length of the slot you picked.</li>\n<li>On <strong>Review &amp; confirm</strong>, check the details and choose <strong>Confirm &amp; book</strong>.</li>\n</ol>\n<p>You can also book from an open case's page with <strong>Book with {name} again</strong>. Their calendar opens\nright there, with that case already chosen.</p>",
+            "html": "<ol>\n<li>Open the expert's profile and choose <strong>Book a consultation</strong>.</li>\n<li>On <strong>Choose a time</strong>, answer <strong>How long do you need?</strong> first: choose 15, 30, 45 or 60 minutes.\n60 minutes is preselected when the expert has room for it, otherwise the longest length that\nfits. You can change it at any point.</li>\n<li>Pick a day, then a time. Times show as ranges at that length, in your device's timezone. If an\nearlier slot only fits a shorter call, it's offered under <strong>Need it sooner?</strong>, and you can\nswitch to it in one click. Choose <strong>Continue with</strong> your time range when you've found the one you want.</li>\n<li>On <strong>Review &amp; confirm</strong>, check the details and choose <strong>Confirm &amp; book</strong>. Choose <strong>Change</strong> to\ngo back and pick a different length or time.</li>\n</ol>\n<p>You pay for the minutes you use, not the length you pick. There's a 15-minute minimum.</p>\n<p>You can also book from an open case's page with <strong>Book with {name} again</strong>. Their calendar opens\nright there, with that case already chosen.</p>",
             "id": "s1-b0"
           }
         ],
         "screenshot": {
-          "alt": "The How long do you need? step after picking a time, with the 15, 30, 45 and 60 minute options highlighted.",
+          "alt": "The Choose a time step, with the How long do you need? options and the billing note highlighted above the calendar.",
           "lightSrc": "/help/booking-a-consultation/01-light.png",
           "darkSrc": "/help/booking-a-consultation/01-dark.png",
-          "width": 600,
-          "height": 1094
+          "width": 1680,
+          "height": 604
         }
       },
       {
@@ -69,10 +69,10 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "The confirm step asking which case the call is for, with Start a new case highlighted.",
-          "lightSrc": "/help/booking-a-consultation/02-light.png",
-          "darkSrc": "/help/booking-a-consultation/02-dark.png",
+          "lightSrc": "/help/booking-a-consultation/03-light.png",
+          "darkSrc": "/help/booking-a-consultation/03-dark.png",
           "width": 1680,
-          "height": 832
+          "height": 654
         }
       },
       {
@@ -87,8 +87,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "The Confirm the new time step of rescheduling, with the Move consultation button highlighted.",
-          "lightSrc": "/help/booking-a-consultation/03-light.png",
-          "darkSrc": "/help/booking-a-consultation/03-dark.png",
+          "lightSrc": "/help/booking-a-consultation/04-light.png",
+          "darkSrc": "/help/booking-a-consultation/04-dark.png",
           "width": 1712,
           "height": 876
         }
@@ -105,8 +105,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "A case showing Pick a new time, with the suggested times and the Accept and Keep my time buttons highlighted.",
-          "lightSrc": "/help/booking-a-consultation/04-light.png",
-          "darkSrc": "/help/booking-a-consultation/04-dark.png",
+          "lightSrc": "/help/booking-a-consultation/05-light.png",
+          "darkSrc": "/help/booking-a-consultation/05-dark.png",
           "width": 1920,
           "height": 646
         }
@@ -123,8 +123,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "The Cancel consultation window, with the Reschedule instead button and the note that nothing is charged highlighted.",
-          "lightSrc": "/help/booking-a-consultation/05-light.png",
-          "darkSrc": "/help/booking-a-consultation/05-dark.png",
+          "lightSrc": "/help/booking-a-consultation/06-light.png",
+          "darkSrc": "/help/booking-a-consultation/06-dark.png",
           "width": 1092,
           "height": 576
         }
@@ -141,8 +141,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.",
-          "lightSrc": "/help/booking-a-consultation/06-light.png",
-          "darkSrc": "/help/booking-a-consultation/06-dark.png",
+          "lightSrc": "/help/booking-a-consultation/07-light.png",
+          "darkSrc": "/help/booking-a-consultation/07-dark.png",
           "width": 848,
           "height": 1226
         }

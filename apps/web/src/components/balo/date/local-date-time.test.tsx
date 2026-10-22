@@ -138,5 +138,21 @@ describe('LocalDateTime', () => {
       expect(time?.textContent).toContain('6:00 – 6:30 pm · 30 min');
       expect(time?.textContent).not.toMatch(/Sept/);
     });
+
+    it('showLength={false} omits the " · N min" suffix; the default keeps it', () => {
+      const props = {
+        iso: '2026-09-22T08:00:00.000Z',
+        variant: 'day-month-time-range' as const,
+        timeZone: 'Australia/Sydney',
+        durationMinutes: 30,
+        showDay: false,
+      };
+      const { container, rerender } = render(<LocalDateTime {...props} showLength={false} />);
+      expect(container.querySelector('time')?.textContent).toContain('6:00 – 6:30 pm');
+      expect(container.querySelector('time')?.textContent).not.toMatch(/min/);
+
+      rerender(<LocalDateTime {...props} />);
+      expect(container.querySelector('time')?.textContent).toContain('6:00 – 6:30 pm · 30 min');
+    });
   });
 });

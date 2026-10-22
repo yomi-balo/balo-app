@@ -210,6 +210,19 @@ describe('StepConfirm — the case-choice loading skeleton (UX-3)', () => {
   });
 });
 
+describe('StepConfirm — summary (BAL-614)', () => {
+  it('shows the time as a range with the day, the length on the second line, and a Change button', () => {
+    renderStepConfirm();
+
+    // 04:00 – 04:30 UTC on Tue 1 Sept.
+    expect(screen.getByText(/Tue, 1 Sept, 4:00 – 4:30 am/)).toBeInTheDocument();
+    expect(screen.getByText('30-minute consultation')).toBeInTheDocument();
+    expect(screen.queryByText(/· 30 min/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'See other times' })).not.toBeInTheDocument();
+  });
+});
+
 describe('StepConfirm — inline funding section, draft notice and stale-slot follow-up (BAL-608)', () => {
   it('shows the normal Back / Confirm row when there is no funding section', () => {
     renderStepConfirm();
@@ -256,7 +269,7 @@ describe('StepConfirm — inline funding section, draft notice and stale-slot fo
       ],
     });
 
-    expect(screen.getByRole('button', { name: 'See other times' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Change' })).toBeDisabled();
     expect(screen.getByRole('combobox', { name: 'Which case is this for?' })).toBeDisabled();
   });
 
@@ -346,7 +359,7 @@ describe('StepConfirm — inline funding section, draft notice and stale-slot fo
   it('leaves the time live when nothing is under way', () => {
     renderStepConfirm();
 
-    expect(screen.getByRole('button', { name: 'See other times' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Change' })).toBeEnabled();
   });
 
   it('disables Confirm & book with a busy mark while the pre-flight is answering', () => {

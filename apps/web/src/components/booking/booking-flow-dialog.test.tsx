@@ -48,17 +48,33 @@ vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => mockIsMobile() }));
 // Step 1's calendar is embedded "as shipped" (D3) — mocked here so this file can drive slot
 // selection deterministically without exercising the calendar's own (separately tested) fetch
 // state machine.
-const { mockOnSlotSelect, mockCalendarScope } = vi.hoisted(() => ({
+const { mockOnSlotSelect, mockCalendarScope, mockPickerProps } = vi.hoisted(() => ({
   mockOnSlotSelect: vi.fn(),
   mockCalendarScope: { value: undefined as string | undefined },
+  mockPickerProps: {
+    value: {} as {
+      initialSelection?: unknown;
+      defaultDurationMinutes?: unknown;
+      initialDurationMinutes?: unknown;
+    },
+  },
 }));
 vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: (props: {
     onSlotSelect?: (s: { start: string; end: string; duration: 15 | 30 | 45 | 60 }) => void;
     emptyAction?: React.ReactNode;
     scope?: string;
+    lengthNote?: React.ReactNode;
+    initialSelection?: unknown;
+    defaultDurationMinutes?: unknown;
+    initialDurationMinutes?: unknown;
   }) => {
     mockCalendarScope.value = props.scope;
+    mockPickerProps.value = {
+      initialSelection: props.initialSelection,
+      defaultDurationMinutes: props.defaultDurationMinutes,
+      initialDurationMinutes: props.initialDurationMinutes,
+    };
     mockOnSlotSelect.mockImplementation(() =>
       props.onSlotSelect?.({
         start: '2026-06-05T09:00:00.000Z',
@@ -86,6 +102,7 @@ vi.mock('@/components/availability', () => ({
         >
           Pick 10:00am slot
         </button>
+        {props.lengthNote}
         {props.emptyAction}
       </div>
     );
@@ -1750,7 +1767,7 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       await screen.findByRole('button', { name: /Confirm & book/ });
       expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(1);
 
-      await user.click(screen.getByRole('button', { name: 'See other times' }));
+      await user.click(screen.getByRole('button', { name: 'Change' }));
       await user.click(screen.getByText('Pick 10:00am slot'));
 
       await vi.waitFor(() => expect(mockReadBookingFundingAction).toHaveBeenCalledTimes(2));
@@ -2373,12 +2390,12 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       });
       await user.click(screen.getByText('Pick 9:00am slot'));
       await screen.findByTestId('funding-block');
-      expect(screen.getByRole('button', { name: 'See other times' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Change' })).toBeEnabled();
       expect(screen.getByRole('combobox')).toBeEnabled();
 
       await user.click(screen.getByRole('button', { name: 'Stub busy' }));
 
-      expect(screen.getByRole('button', { name: 'See other times' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Change' })).toBeDisabled();
       expect(screen.getByRole('combobox')).toBeDisabled();
     });
 
@@ -2828,6 +2845,153 @@ describe('BookingFlowDialog — inline funding and the on-device draft (BAL-608)
       });
       expect(screen.getByLabelText(/^Title/)).toHaveValue('Seeded title');
       expect(screen.getByRole('combobox')).toHaveTextContent('Acme Corp');
+    });
+  });
+});
+
+describe('BookingFlowDialog — picker restore and billing note (BAL-614)', () => {
+  function renderChooser(): ReturnType<typeof render> {
+    return render(
+      <BookingFlowDialog
+        open
+        onClose={vi.fn()}
+        expert={EXPERT}
+        source="profile"
+        entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+      />
+    );
+  }
+
+  it('passes the per-minute billing note to the picker', () => {
+    renderChooser();
+    expect(
+      screen.getByText(/You pay for the minutes you use, not the length you pick/)
+    ).toBeInTheDocument();
+  });
+
+  it('opens the picker with nothing to restore on a fresh entry', () => {
+    renderChooser();
+    expect(mockPickerProps.value).toEqual({
+      initialSelection: undefined,
+      defaultDurationMinutes: undefined,
+      initialDurationMinutes: undefined,
+    });
+  });
+
+  it('Change restores the whole previous choice', async () => {
+    const user = userEvent.setup();
+    renderChooser();
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await user.click(screen.getByRole('button', { name: 'Change' }));
+
+    expect(mockPickerProps.value).toEqual({
+      initialSelection: {
+        start: '2026-06-05T09:00:00.000Z',
+        end: '2026-06-05T09:30:00.000Z',
+        duration: 30,
+      },
+      defaultDurationMinutes: undefined,
+      initialDurationMinutes: undefined,
+    });
+  });
+
+  it('Back restores the same way', async () => {
+    const user = userEvent.setup();
+    renderChooser();
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await user.click(screen.getByRole('button', { name: /Back/ }));
+
+    expect(mockPickerProps.value).toMatchObject({
+      initialSelection: { start: '2026-06-05T09:00:00.000Z', duration: 30 },
+    });
+  });
+
+  it('restores a preset slot on Change from the fixed-case entry', async () => {
+    const user = userEvent.setup();
+    render(
+      <BookingFlowDialog
+        open
+        onClose={vi.fn()}
+        expert={EXPERT}
+        source="profile"
+        entry={{
+          mode: 'fixed_case',
+          newCaseAllowed: true,
+          fixedCase: {
+            engagementId: 'engagement-9',
+            title: 'Flow interview loop',
+            consultationCount: 2,
+            openedAtIso: '2026-06-01T00:00:00.000Z',
+          },
+          presetSlot: {
+            startIso: '2026-06-05T09:00:00.000Z',
+            endIso: '2026-06-05T09:45:00.000Z',
+            durationMinutes: 45,
+          },
+        }}
+        viewerEmailDomain={null}
+        onMessage={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Change' }));
+
+    expect(mockPickerProps.value).toMatchObject({
+      initialSelection: { start: '2026-06-05T09:00:00.000Z', duration: 45 },
+    });
+  });
+
+  // A taken time must never be offered back: only its length carries over.
+  it('a stale slot restores only the previous length, never the taken time', async () => {
+    const user = userEvent.setup();
+    mockBookConsultationAction.mockResolvedValue({
+      ok: false,
+      stage: 'meeting',
+      code: 'slot_unavailable',
+      engagementId: 'engagement-6',
+      caseTitle: 'Migration planning',
+    });
+    renderChooser();
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+    await user.type(
+      screen.getByLabelText("What you'd like to discuss"),
+      'A real problem statement.'
+    );
+    await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
+    await user.click(await screen.findByRole('button', { name: 'Choose a new time' }));
+
+    expect(mockPickerProps.value).toEqual({
+      initialSelection: undefined,
+      defaultDurationMinutes: undefined,
+      initialDurationMinutes: 30,
+    });
+  });
+
+  it('"Choose a different time" after a partial failure passes the length only', async () => {
+    const user = userEvent.setup();
+    mockBookConsultationAction.mockResolvedValue({
+      ok: false,
+      stage: 'meeting',
+      code: 'booking_failed',
+      engagementId: 'engagement-5',
+      caseTitle: 'Migration planning',
+    });
+    renderChooser();
+    await user.click(screen.getByText('Pick 9:00am slot'));
+    await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+    await user.type(
+      screen.getByLabelText("What you'd like to discuss"),
+      'A real problem statement.'
+    );
+    await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
+    await user.click(await screen.findByRole('button', { name: 'Choose a different time' }));
+
+    expect(mockPickerProps.value).toEqual({
+      initialSelection: undefined,
+      defaultDurationMinutes: undefined,
+      initialDurationMinutes: 30,
     });
   });
 });

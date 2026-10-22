@@ -1,9 +1,9 @@
 'use client';
 
-import { ChevronLeft, Loader2, MessageSquare, Sparkles } from 'lucide-react';
+import { ChevronLeft, Loader2, MessageSquare, Receipt } from 'lucide-react';
 import type { SlotDurationMinutes } from '@balo/shared/availability';
 import { Button } from '@/components/ui/button';
-import { formatSlotDateTime } from '../format';
+import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { StaleSlotBanner } from '../booking-error-panels';
 import { GuestInviteComposer, type GuestDraft } from '../guest-invite-composer';
 
@@ -39,9 +39,10 @@ export interface StepConfirmIntroCallProps {
  *
  * ⚠⚠ NO `BillingLine`, NO `CancellationLine`, NO `CaseChoiceSection`, NO `CompanyPicker` — a
  * direct pin on "no money, ever, on this surface" (Ruling 2). The single reassurance line
- * below sits in `BillingLine`'s visual slot (same treatment, same icon-row pattern) but says
- * something genuinely different: `Sparkles`, never `Receipt` — the icon itself must not imply
- * money.
+ * below sits in `BillingLine`'s visual slot (same treatment, same icon-row pattern) and says
+ * something genuinely different: it names no rate and frames no money. BAL-614 records the
+ * owner's amendment of Ruling 2's icon: it is `Receipt`, as on the booking flow, because
+ * `Sparkles` read as an AI feature.
  */
 export function StepConfirmIntroCall({
   slot,
@@ -64,7 +65,13 @@ export function StepConfirmIntroCall({
       <div className="border-border bg-muted/30 flex items-center justify-between rounded-xl border p-4">
         <div>
           <p className="text-foreground text-sm font-semibold">
-            {formatSlotDateTime(slot.startIso, viewerTimezone)}
+            <LocalDateTime
+              iso={slot.startIso}
+              variant="day-month-time-range"
+              durationMinutes={slot.durationMinutes}
+              timeZone={viewerTimezone}
+              showLength={false}
+            />
           </p>
           <p className="text-muted-foreground text-xs">Intro call · {slot.durationMinutes} min</p>
         </div>
@@ -73,7 +80,7 @@ export function StepConfirmIntroCall({
           onClick={onChangeTime}
           className="text-primary focus-visible:ring-ring rounded-md text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
         >
-          See other times
+          Change
         </button>
       </div>
 
@@ -106,7 +113,7 @@ export function StepConfirmIntroCall({
       />
 
       <div className="text-muted-foreground flex items-center gap-2 text-xs">
-        <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <Receipt className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         Free — no charge, no commitment.
       </div>
 

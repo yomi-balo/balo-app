@@ -2,15 +2,33 @@ import { Receipt } from 'lucide-react';
 import { MIN_MEETING_MINUTES } from '@balo/shared/meetings';
 
 /**
- * BAL-400 (D4c) — the ONLY billing copy in the whole flow. No rate is rendered anywhere —
- * not here, not in the header, not on confirm, not in the booked state. The minimum is
- * INTERPOLATED from `MIN_MEETING_MINUTES`, never hardcoded (D1b).
+ * BAL-400 (D4c) — billing copy for the flow. No rate is rendered anywhere — not here, not in the
+ * header, not on confirm, not in the booked state. The minimum is INTERPOLATED from
+ * `MIN_MEETING_MINUTES`, never hardcoded (D1b). BAL-614 amends D4c: `LengthNote` is a second
+ * piece of billing copy, shown under the picker's length control; it still names no rate.
  */
 export function BillingLine(): React.JSX.Element {
   return (
     <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
       <Receipt className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       Charged only for time used · {MIN_MEETING_MINUTES}-minute minimum applies.
+    </p>
+  );
+}
+
+const LENGTH_NOTE_COPY = {
+  per_minute: `You pay for the minutes you use, not the length you pick. ${MIN_MEETING_MINUTES}-minute minimum.`,
+  project: 'Project calls are free at any length.',
+} as const;
+
+/** BAL-614 — what the picked length means for billing, under the picker's length control. */
+export function LengthNote({
+  billing,
+}: Readonly<{ billing: 'per_minute' | 'project' }>): React.JSX.Element {
+  return (
+    <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+      <Receipt className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      {LENGTH_NOTE_COPY[billing]}
     </p>
   );
 }

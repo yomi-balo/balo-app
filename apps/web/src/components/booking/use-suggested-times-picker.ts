@@ -7,6 +7,8 @@ import {
   useExpertAvailability,
   type AvailabilityView,
 } from '@/components/availability/use-expert-availability';
+import { dropPastSlots } from '@/components/availability/availability-filters';
+import { useNowTick } from '@/components/availability/use-now-tick';
 import { suggestTimes } from './suggest-times';
 
 export type SuggestedTimesPickerView = 'suggested' | 'calendar' | null;
@@ -45,21 +47,27 @@ export function useSuggestedTimesPicker(params: {
     // Reschedules serve work already in flight, so a paused expert still has a real grid.
     'existing_work'
   );
+  const now = useNowTick();
   const suggestions =
     fixedDurationMinutes !== undefined && availabilityView.kind === 'ready'
       ? suggestTimes(
-          availabilityView.slots.filter(
+          dropPastSlots(availabilityView.slots, now).filter(
             (slot) => slot.maxDuration >= fixedDurationMinutes && (extraFilter?.(slot) ?? true)
           ),
           originalStartIso
         )
       : [];
 
-  const [pickerView, setPickerView] = useState<SuggestedTimesPickerView>(null);
+  const [chosenView, setPickerView] = useState<SuggestedTimesPickerView>(null);
   useEffect(() => {
-    if (pickerView !== null || availabilityView.kind === 'loading') return;
+    if (chosenView !== null || availabilityView.kind === 'loading') return;
     setPickerView(suggestions.length > 0 ? 'suggested' : 'calendar');
-  }, [pickerView, availabilityView.kind, suggestions.length]);
+  }, [chosenView, availabilityView.kind, suggestions.length]);
+  // Reactive, unlike the initial decision: suggestions can run out while the dialog is open (a
+  // start passing, a background refresh, the last suggested day picked), and the calendar then
+  // takes over rather than leaving a "Suggested times" heading over nothing.
+  const pickerView =
+    chosenView === 'suggested' && suggestions.length === 0 ? 'calendar' : chosenView;
 
   return { availabilityView, suggestions, pickerView, setPickerView, reload };
 }
