@@ -527,14 +527,16 @@ function BookCallButton({
   pending = false,
 }: Readonly<{ onClick?: () => void; pending?: boolean }>): React.JSX.Element {
   const className =
-    'from-primary flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r to-violet-600 text-xs font-semibold text-white shadow-sm transition-shadow hover:shadow-md disabled:cursor-wait dark:to-violet-500';
+    'from-primary flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r to-violet-600 text-xs font-semibold text-white shadow-sm transition-shadow hover:shadow-md aria-disabled:cursor-wait dark:to-violet-500';
   if (onClick) {
     return (
       <motion.button
         type="button"
         whileTap={{ scale: 0.98 }}
-        onClick={onClick}
-        disabled={pending}
+        // `aria-disabled`, not `disabled`: a disabled button drops keyboard focus to the body,
+        // leaving the dialog nothing to return focus to on close.
+        onClick={pending ? undefined : onClick}
+        aria-disabled={pending}
         aria-busy={pending}
         className={className}
       >

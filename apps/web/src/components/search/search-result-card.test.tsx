@@ -128,21 +128,12 @@ describe('SearchResultCard', () => {
       />
     );
     await user.click(screen.getByRole('button', { name: 'Book' }));
-    expect(mockOnBook).toHaveBeenCalledWith('anil');
+    expect(mockOnBook).toHaveBeenCalledWith('anil', expect.any(Function));
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  it('emits search_result_clicked with action book before handing off to onBook', async () => {
+  it('emits search_result_clicked with action book only once the booking accepts the click', async () => {
     const user = userEvent.setup();
-    mockOnBook.mockImplementation(() => {
-      expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.RESULT_CLICKED, {
-        expert_id: 'e1',
-        action: 'book',
-        position: 4,
-        sort: 'soonest',
-        page: 2,
-      });
-    });
     render(
       <SearchResultCard
         expert={expert()}
@@ -155,7 +146,17 @@ describe('SearchResultCard', () => {
       />
     );
     await user.click(screen.getByRole('button', { name: 'Book' }));
-    expect(mockOnBook).toHaveBeenCalledOnce();
+    expect(mockTrack).not.toHaveBeenCalled();
+
+    const [[, onStart]] = mockOnBook.mock.calls as [[string, () => void]];
+    onStart();
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.RESULT_CLICKED, {
+      expert_id: 'e1',
+      action: 'book',
+      position: 4,
+      sort: 'soonest',
+      page: 2,
+    });
   });
 
   it('forwards bookPending to the card', () => {

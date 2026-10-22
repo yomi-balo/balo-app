@@ -56,10 +56,15 @@ describe('useSearchBooking', () => {
     mockLoad.mockReturnValue(new Promise((r) => (resolve = r)));
     const { result } = renderHook(() => useSearchBooking());
 
-    act(() => result.current.book('anil'));
-    act(() => result.current.book('freda'));
+    const anilStart = vi.fn();
+    const fredaStart = vi.fn();
+    act(() => result.current.book('anil', anilStart));
+    act(() => result.current.book('freda', fredaStart));
     expect(mockLoad).toHaveBeenCalledTimes(1);
     expect(result.current.pendingUsername).toBe('anil');
+    // Only the accepted click reports its start; the dropped one is never tracked.
+    expect(anilStart).toHaveBeenCalledOnce();
+    expect(fredaStart).not.toHaveBeenCalled();
 
     await act(async () => resolve(LOADED));
     expect(result.current.open).toBe(true);
@@ -92,6 +97,22 @@ describe('useSearchBooking', () => {
 
     await waitFor(() => expect(result.current.open).toBe(true));
     expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to the profile deep link when still signed out after signing in', async () => {
+    mockLoad.mockResolvedValue({ ok: false, reason: 'signed_out' });
+    const { result } = renderHook(() => useSearchBooking());
+
+    act(() => result.current.book('anil'));
+    await waitFor(() => expect(mockAuthOpen).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.pendingUsername).toBeNull());
+
+    const [[options]] = mockAuthOpen.mock.calls as [[{ onSuccess: () => void }]];
+    act(() => options.onSuccess());
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/experts/anil?book=1&src=search'));
+    expect(mockAuthOpen).toHaveBeenCalledTimes(1);
+    expect(result.current.open).toBe(false);
   });
 
   it('falls back to the profile deep link when the booking is unavailable here', async () => {

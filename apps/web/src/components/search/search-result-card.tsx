@@ -12,7 +12,8 @@ interface SearchResultCardProps {
   position: number;
   sort: string;
   page: number;
-  onBook: (username: string) => void;
+  /** `onStart` runs only if the booking accepts the click; this card tracks it there. */
+  onBook: (username: string, onStart: () => void) => void;
   /** This card's booking is loading. */
   bookPending: boolean;
 }
@@ -50,14 +51,16 @@ export function SearchResultCard({
   }, [expert.id, expert.username, position, sort, page, router]);
 
   const handleBook = useCallback(() => {
-    track(SEARCH_EVENTS.RESULT_CLICKED, {
-      expert_id: expert.id,
-      action: 'book',
-      position,
-      sort,
-      page,
-    });
-    if (expert.username) onBook(expert.username);
+    if (!expert.username) return;
+    onBook(expert.username, () =>
+      track(SEARCH_EVENTS.RESULT_CLICKED, {
+        expert_id: expert.id,
+        action: 'book',
+        position,
+        sort,
+        page,
+      })
+    );
   }, [expert.id, expert.username, position, sort, page, onBook]);
 
   return (

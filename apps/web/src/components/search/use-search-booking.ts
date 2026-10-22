@@ -19,7 +19,8 @@ interface SearchBooking {
   open: boolean;
   /** The username whose booking is loading, so only that card's button spins. */
   pendingUsername: string | null;
-  book: (username: string) => void;
+  /** `onStart` runs only when the click is accepted, not when a load already in flight drops it. */
+  book: (username: string, onStart?: () => void) => void;
   close: () => void;
 }
 
@@ -27,8 +28,9 @@ interface SearchBooking {
  * Opens the booking flow in place on the expert search grid. The click loads the expert's
  * booking context first and only then opens the dialog, so the wrapper never flashes a loading
  * state for the company question (same contract as the profile page's server read). A
- * signed-out visitor signs in and the load reruns; anything the profile page handles better
- * (paused or unknown expert, a failed load) falls back to its `?book=1` deep link.
+ * signed-out visitor signs in and the load reruns once; anything the profile page handles better
+ * (paused or unknown expert, a failed load, still signed out after that rerun) falls back to its
+ * `?book=1` deep link.
  */
 export function useSearchBooking(): SearchBooking {
   const router = useRouter();
@@ -38,9 +40,8 @@ export function useSearchBooking(): SearchBooking {
   const [pendingUsername, setPendingUsername] = useState<string | null>(null);
   const inFlightRef = useRef(false);
 
-  const book = useCallback(
-    (username: string) => {
-      if (inFlightRef.current) return;
+  const run = useCallback(
+    (username: string, retried: boolean) => {
       inFlightRef.current = true;
       setPendingUsername(username);
 
@@ -55,11 +56,11 @@ export function useSearchBooking(): SearchBooking {
               viewerEmailDomain: result.viewerEmailDomain,
             });
             setOpen(true);
-          } else if (result.reason === 'signed_out') {
+          } else if (result.reason === 'signed_out' && !retried) {
             authModal.open({
               onSuccess: () => {
                 router.refresh();
-                book(username);
+                run(username, true);
               },
             });
           } else {
@@ -76,6 +77,15 @@ export function useSearchBooking(): SearchBooking {
       void load();
     },
     [router, authModal]
+  );
+
+  const book = useCallback(
+    (username: string, onStart?: () => void) => {
+      if (inFlightRef.current) return;
+      onStart?.();
+      run(username, false);
+    },
+    [run]
   );
 
   const close = useCallback(() => setOpen(false), []);

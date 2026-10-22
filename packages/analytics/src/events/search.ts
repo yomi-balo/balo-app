@@ -45,6 +45,10 @@ export interface SearchEventMap {
     /**
      * Which of the card's two CTAs was taken. `book` fires before the booking flow loads, so a
      * signed-out visitor who stops at the auth modal is still counted.
+     *
+     * ⚠ Added 2026-10-23 (PR #411); Book clicks were untracked before then. Earlier events carry
+     * no `action` and are all profile clicks, so a profile-click insight must keep `action` unset
+     * OR `'profile'`, and the event's raw volume steps up from that date.
      */
     action: 'profile' | 'book';
     position: number;

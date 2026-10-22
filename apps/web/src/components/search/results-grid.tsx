@@ -21,7 +21,7 @@ interface BlockProps {
   experts: ExpertCardData[];
   sort: string;
   page: number;
-  onBook: (username: string) => void;
+  onBook: (username: string, onStart: () => void) => void;
   pendingUsername: string | null;
 }
 
