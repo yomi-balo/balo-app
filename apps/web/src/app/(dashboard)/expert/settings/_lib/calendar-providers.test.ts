@@ -30,13 +30,13 @@ describe('isCalendarCredentialStatus', () => {
     expect(isCalendarCredentialStatus('REVOKED')).toBe(true);
   });
 
-  it('rejects the retired legacy vocabulary and other garbage', () => {
+  it('rejects values outside the four stored statuses, including near-misses', () => {
     expect(isCalendarCredentialStatus('')).toBe(false);
     expect(isCalendarCredentialStatus(null)).toBe(false);
     expect(isCalendarCredentialStatus(undefined)).toBe(false);
     expect(isCalendarCredentialStatus('active')).toBe(false);
-    expect(isCalendarCredentialStatus('connected')).toBe(false);
-    expect(isCalendarCredentialStatus('auth_error')).toBe(false);
+    expect(isCalendarCredentialStatus('SYNC-PENDING')).toBe(false);
+    expect(isCalendarCredentialStatus('REVOKE')).toBe(false);
   });
 });
 

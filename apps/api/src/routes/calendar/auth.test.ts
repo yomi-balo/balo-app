@@ -132,6 +132,7 @@ describe('calendar auth routes (BAL-396)', () => {
   let app: FastifyInstance;
   let warnSpy: ReturnType<typeof vi.spyOn>;
   let infoSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeAll(async () => {
     process.env.INTERNAL_API_SECRET = TEST_SECRET;
@@ -140,10 +141,11 @@ describe('calendar auth routes (BAL-396)', () => {
     // BAL-575 — `logger: false` makes Fastify build its abstract-logging null logger for
     // `app.log`, whose `child()` returns itself (`fastify/lib/logger-factory.js`), so
     // `request.log === app.log` for every request this app handles. Spying once here observes
-    // every `request.log.warn` / `.info` call the route makes for the life of the suite;
-    // `vi.clearAllMocks()` in `beforeEach` clears call history without un-spying.
+    // every `request.log.warn` / `.info` / `.error` call the route makes for the life of the
+    // suite; `vi.clearAllMocks()` in `beforeEach` clears call history without un-spying.
     warnSpy = vi.spyOn(app.log, 'warn');
     infoSpy = vi.spyOn(app.log, 'info');
+    errorSpy = vi.spyOn(app.log, 'error');
   });
 
   afterAll(async () => {
@@ -372,6 +374,29 @@ describe('calendar auth routes (BAL-396)', () => {
       );
     });
 
+    it('still returns the authUrl with no loginHint when the stored-connection read rejects with a non-Error, logging its string form', async () => {
+      mockSignConnectState.mockReturnValue('signed-state');
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'google',
+        nonce: VALID_NONCE,
+      });
+      mockBuildApirocAuthorizeUrl.mockReturnValue('https://api.apiroc.com/oauth/authorize?test=1');
+      mockFindConnectionByExpertAndProvider.mockRejectedValue('upstream unavailable');
+
+      const res = await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'google' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(mockBuildApirocAuthorizeUrl.mock.calls[0]?.[0]).not.toHaveProperty('loginHint');
+      expect(warnSpy).toHaveBeenCalledWith(
+        { expertProfileId: EXPERT_UUID, provider: 'google', error: 'upstream unavailable' },
+        'apiroc_connect_login_hint_lookup_failed'
+      );
+    });
+
     it('returns 500 when buildApirocAuthorizeUrl throws', async () => {
       mockSignConnectState.mockReturnValue('signed-state');
       mockVerifyConnectState.mockReturnValue({
@@ -390,6 +415,36 @@ describe('calendar auth routes (BAL-396)', () => {
 
       expect(res.statusCode).toBe(500);
       expect(res.json().error).toBe('Failed to initiate calendar connection');
+    });
+
+    it('returns 500 and logs the string form when buildApirocAuthorizeUrl throws a non-Error', async () => {
+      mockSignConnectState.mockReturnValue('signed-state');
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'microsoft',
+        nonce: VALID_NONCE,
+      });
+      const nonError: unknown = 'upstream unavailable';
+      mockBuildApirocAuthorizeUrl.mockImplementationOnce(() => {
+        throw nonError;
+      });
+
+      const res = await injectConnect(
+        { expertProfileId: EXPERT_UUID, provider: 'microsoft' },
+        { 'x-internal-api-key': TEST_SECRET }
+      );
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe('Failed to initiate calendar connection');
+      expect(errorSpy).toHaveBeenCalledWith(
+        {
+          expertProfileId: EXPERT_UUID,
+          provider: 'microsoft',
+          error: 'upstream unavailable',
+          stack: undefined,
+        },
+        'Failed to generate Apiroc auth URL'
+      );
     });
 
     it('returns 500 when signConnectState throws, before buildApirocAuthorizeUrl runs', async () => {
@@ -565,8 +620,7 @@ describe('calendar auth routes (BAL-396)', () => {
 
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain('calendar_connected=true');
-      // BAL-397 §13.2 — the real DB vocabulary rides the wire now, not the retired
-      // `connected`/`sync_pending` strings.
+      // `calendar_status` carries the stored credential status.
       expect(res.headers.location).toContain('calendar_status=ACTIVE');
       // BAL-397 §13.1 — the callback lands on the Schedule tab (where the calendar section
       // actually renders), not the dead `?tab=calendar`.
@@ -624,7 +678,7 @@ describe('calendar auth routes (BAL-396)', () => {
       expect(setCookie[0]).toContain('Max-Age=0');
     });
 
-    it('SHAPE 2: SYNC_PENDING provisioning still redirects success with the sync_pending status', async () => {
+    it('SHAPE 2: SYNC_PENDING provisioning still redirects success with calendar_status=SYNC_PENDING', async () => {
       mockVerifyConnectState.mockReturnValue({
         expertProfileId: EXPERT_UUID,
         provider: 'google',
@@ -666,6 +720,34 @@ describe('calendar auth routes (BAL-396)', () => {
       expect(res.headers.location).not.toContain('calendar_error=callback_failed');
     });
 
+    it('SHAPE 2: a non-Error searchability reconcile rejection is logged by its string form and still redirects connected', async () => {
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'google',
+        nonce: VALID_NONCE,
+      });
+      mockPersistedConnection();
+      mockProvisionConnection.mockResolvedValue('ACTIVE');
+      mockReconcileExpertSearchability.mockRejectedValue('upstream unavailable');
+
+      const res = await injectCallback(
+        { endUserAccountId: 'eua-1', state: 'valid-state' },
+        nonceCookieHeader()
+      );
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain('calendar_connected=true');
+      expect(errorSpy).toHaveBeenCalledWith(
+        {
+          expertProfileId: EXPERT_UUID,
+          provider: 'google',
+          error: 'upstream unavailable',
+          stack: undefined,
+        },
+        'searchability_reconcile_failed'
+      );
+    });
+
     it('SHAPE 2: an expired state redirects state_expired without calling the connection services', async () => {
       mockVerifyConnectState.mockImplementation(() => {
         throw new Error('State has expired');
@@ -689,6 +771,24 @@ describe('calendar auth routes (BAL-396)', () => {
       expect(res.headers.location).toContain('calendar_error=invalid_state');
     });
 
+    it('SHAPE 2: a non-Error thrown by state verification redirects invalid_state and logs its string form', async () => {
+      mockReadStatePayloadUnverified.mockReturnValue({});
+      const nonError: unknown = 'upstream unavailable';
+      mockVerifyConnectState.mockImplementationOnce(() => {
+        throw nonError;
+      });
+
+      const res = await injectCallback({ endUserAccountId: 'eua-1', state: 'bad-state' });
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain('calendar_error=invalid_state');
+      expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        { error: 'upstream unavailable' },
+        'apiroc_callback_state_invalid'
+      );
+    });
+
     it('SHAPE 2: a post-verification failure (e.g. provisioning throws) redirects callback_failed', async () => {
       mockVerifyConnectState.mockReturnValue({
         expertProfileId: EXPERT_UUID,
@@ -705,6 +805,33 @@ describe('calendar auth routes (BAL-396)', () => {
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain('calendar_error=callback_failed');
       expect(res.headers.location).toContain('calendar_provider=google');
+    });
+
+    it('SHAPE 2: a non-Error post-verification failure redirects callback_failed and logs its string form', async () => {
+      mockVerifyConnectState.mockReturnValue({
+        expertProfileId: EXPERT_UUID,
+        provider: 'google',
+        nonce: VALID_NONCE,
+      });
+      mockPersistApirocConnection.mockRejectedValueOnce('upstream unavailable');
+
+      const res = await injectCallback(
+        { endUserAccountId: 'eua-1', state: 'valid-state' },
+        nonceCookieHeader()
+      );
+
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain('calendar_error=callback_failed');
+      expect(res.headers.location).toContain('calendar_provider=google');
+      expect(errorSpy).toHaveBeenCalledWith(
+        {
+          expertProfileId: EXPERT_UUID,
+          provider: 'google',
+          error: 'upstream unavailable',
+          stack: undefined,
+        },
+        'Apiroc OAuth callback failed after account creation'
+      );
     });
 
     // ── BAL-396 fix round, Finding 1 — the CSRF binding check itself ────────────────────
@@ -853,6 +980,23 @@ describe('calendar auth routes (BAL-396)', () => {
         expect(res.statusCode).toBe(302);
         expect(res.headers.location).toContain('calendar_error=state_csrf_mismatch');
         expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+      });
+
+      it('FAILS CLOSED when the account lookup rejects with a non-Error, logging its string form', async () => {
+        mockEndUserAccountsGet.mockRejectedValue('upstream unavailable');
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toContain('calendar_error=state_csrf_mismatch');
+        expect(mockPersistApirocConnection).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledWith(
+          { expertProfileId: EXPERT_UUID, error: 'upstream unavailable' },
+          'apiroc_callback_account_lookup_failed'
+        );
       });
 
       it('FAILS CLOSED on an account with no externalId — Balo did not create it', async () => {
@@ -1066,6 +1210,24 @@ describe('calendar auth routes (BAL-396)', () => {
         // ⚠ Exactly once, not twice: a cleanup failure must not fall through to the outer
         // catch and fire a SECOND `OAUTH_FAILED` under `callback_failed`.
         expect(trackServer).toHaveBeenCalledTimes(1);
+      });
+
+      it('a non-Error reference read rejection warns with its string form, deletes nothing at the vendor, and the refusal redirect is unaffected', async () => {
+        mockPersistApirocConnection.mockResolvedValue({ outcome: 'refused_account_mismatch' });
+        mockFindConnectionsByEndUserAccountId.mockRejectedValue('upstream unavailable');
+
+        const res = await injectCallback(
+          { endUserAccountId: 'eua-1', state: 'valid-state' },
+          nonceCookieHeader()
+        );
+
+        expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledWith(
+          { expertProfileId: EXPERT_UUID, provider: 'google', error: 'upstream unavailable' },
+          'apiroc_callback_refused_account_delete_failed'
+        );
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toContain('calendar_error=account_mismatch');
       });
 
       // BAL-575 — same End User Account, a different email than Balo last stored.

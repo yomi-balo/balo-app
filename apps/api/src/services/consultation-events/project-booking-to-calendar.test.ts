@@ -66,7 +66,6 @@ function connection(overrides: Partial<Record<string, unknown>> = {}) {
     credentialStatus: 'ACTIVE',
     credentialCheckedAt: null,
     reconnectNotifiedAt: null,
-    lastSyncedAt: null,
     targetCalendarId: 'calendar-1',
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-01T00:00:00.000Z'),

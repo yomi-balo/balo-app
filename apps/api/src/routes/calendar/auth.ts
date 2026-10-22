@@ -61,13 +61,12 @@ const callbackQuerySchema = z.object({
  * ⚠ THE APIROC CALLBACK ERROR VOCABULARY IS ONLY PARTLY KNOWN. The BAL-393 spike observed
  * exactly ONE callback value — `missing_required_permissions` (apiroc skill, "OAuth connect &
  * callback") — and never probed a Microsoft admin-consent denial. `access_denied`,
- * `consent_required` and `admin_approval` are Microsoft/AAD OAuth vocabulary carried over from
- * the Cronofy handler; they are PLAUSIBLE (Apiroc proxies the provider's OAuth error) and
- * UNVERIFIED.
+ * `consent_required` and `admin_approval` are Microsoft/AAD OAuth vocabulary; they are
+ * PLAUSIBLE (Apiroc proxies the provider's OAuth error) and UNVERIFIED.
  *
- * So: match defensively over BOTH `error` and `error_description`, keep every legacy marker,
- * and LOG anything unmatched under a named marker so the real vocabulary is learned from
- * production instead of guessed at again.
+ * So: match defensively over BOTH `error` and `error_description`, keep every unverified
+ * marker, and LOG anything unmatched under a named marker so the real vocabulary is learned
+ * from production instead of guessed at again.
  */
 const O365_ADMIN_MARKERS = ['access_denied', 'consent_required', 'admin_approval'] as const;
 const PARTIAL_GRANT_MARKERS = ['missing_required_permissions'] as const;
@@ -323,11 +322,11 @@ async function resolveOwnedEndUserAccount(
     // and logs misleadingly). Guard the read instead of trusting the type.
     const raw = typeof account.email === 'string' ? account.email.trim() : '';
     return { owned: true, email: raw.length > 0 ? raw : null };
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     request.log.warn(
       {
         expertProfileId,
-        error: err instanceof Error ? err.message : String(err),
+        error: error instanceof Error ? error.message : String(error),
       },
       'apiroc_callback_account_lookup_failed'
     );
@@ -356,13 +355,13 @@ async function reconcileAfterConnect(
       actorUserId: null,
       publishNotification: true,
     });
-  } catch (reconcileErr: unknown) {
+  } catch (error: unknown) {
     request.log.error(
       {
         expertProfileId,
         provider,
-        error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
-        stack: reconcileErr instanceof Error ? reconcileErr.stack : undefined,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       },
       'searchability_reconcile_failed'
     );
@@ -385,12 +384,12 @@ async function resolveConnectLoginHint(
       provider
     );
     return existingConnection?.providerEmail ?? undefined;
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     request.log.warn(
       {
         expertProfileId,
         provider,
-        error: err instanceof Error ? err.message : String(err),
+        error: error instanceof Error ? error.message : String(error),
       },
       'apiroc_connect_login_hint_lookup_failed'
     );
@@ -438,12 +437,12 @@ async function discardRefusedEndUserAccount(
     await callApiroc('endUserAccounts.delete', () =>
       client.endUserAccounts.delete(endUserAccountId)
     );
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     request.log.warn(
       {
         expertProfileId,
         provider,
-        error: err instanceof Error ? err.message : String(err),
+        error: error instanceof Error ? error.message : String(error),
       },
       'apiroc_callback_refused_account_delete_failed'
     );
@@ -545,12 +544,12 @@ async function persistAndRedirectConnected(
       await reconcileAfterConnect(expertProfileId, provider, request);
     }
 
-    // BAL-397 §13.2 — `calendar_status` on the wire now carries the REAL vocabulary
-    // (`provisionConnection` only ever returns 'ACTIVE' | 'SYNC_PENDING') so `apps/web` reads
-    // it through `isCalendarCredentialStatus` rather than the retired `connected`/`sync_pending`
-    // strings. `analyticsStatus` is kept as a SEPARATE local for the `trackServer` call only —
-    // that PostHog property has funnel history behind it, and changing its values would fork
-    // every existing funnel. Do not collapse the two back into one variable.
+    // `calendar_status` on the wire carries the stored credential-status vocabulary
+    // (`provisionConnection` only ever returns 'ACTIVE' | 'SYNC_PENDING'), which `apps/web`
+    // reads through `isCalendarCredentialStatus`. `analyticsStatus` is a SEPARATE local for the
+    // `trackServer` call only — that PostHog property keeps its `connected` / `sync_pending`
+    // values because it has funnel history behind it, and changing them would fork every
+    // existing funnel. Do not collapse the two into one variable.
     const analyticsStatus = status === 'ACTIVE' ? 'connected' : 'sync_pending';
     trackServer(CALENDAR_SERVER_EVENTS.OAUTH_COMPLETED, {
       provider,
@@ -570,13 +569,13 @@ async function persistAndRedirectConnected(
       `${ctx.webAppUrl}${ctx.settingsPath}&calendar_connected=true&calendar_status=${status}` +
         `&calendar_provider=${encodeURIComponent(provider)}`
     );
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     request.log.error(
       {
         expertProfileId,
         provider,
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       },
       'Apiroc OAuth callback failed after account creation'
     );
@@ -607,8 +606,8 @@ async function handleEndUserAccountIdShape(
   let statePayload: { expertProfileId: string; provider: string; nonce: string };
   try {
     statePayload = verifyConnectState(state);
-  } catch (err: unknown) {
-    return handleInvalidState(request, reply, ctx, state, err);
+  } catch (error: unknown) {
+    return handleInvalidState(request, reply, ctx, state, error);
   }
 
   const { expertProfileId, provider, nonce } = statePayload;
@@ -701,13 +700,13 @@ export async function calendarAuthRoutes(fastify: FastifyInstance): Promise<void
           ...(loginHint ? { loginHint } : {}),
         });
         return reply.send({ authUrl, nonce });
-      } catch (err: unknown) {
+      } catch (error: unknown) {
         request.log.error(
           {
             expertProfileId,
             provider,
-            error: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : undefined,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
           },
           'Failed to generate Apiroc auth URL'
         );

@@ -35,7 +35,7 @@ export interface ResolverInput {
   rules: ResolverRule[];
   /** Only `confirmed` consultations — the repository filter is the boundary. */
   baloConsultations: ResolverConsultation[];
-  /** Vendor free/busy windows; `[]` is valid until BAL-194/195 wires Cronofy. */
+  /** Vendor free/busy windows; `[]` is valid (no conflict-checked calendar, or none in range). */
   busyBlocks: BusyBlock[];
   /**
    * Full-day time-off blocks (holidays/leave) already expanded to UTC intervals
@@ -90,7 +90,7 @@ export interface WindowBookableInput {
   rules: ResolverRule[];
   /** Only `confirmed` consultations — the repository filter is the boundary. */
   baloConsultations: ResolverConsultation[];
-  /** Vendor free/busy windows; `[]` is valid until BAL-194/195 wires Cronofy. */
+  /** Vendor free/busy windows; `[]` is valid (no conflict-checked calendar, or none in range). */
   busyBlocks: BusyBlock[];
   /** Full-day time-off blocks, already expanded to UTC intervals. */
   overrideBlocks: BusyBlock[];

@@ -133,7 +133,6 @@ function makeConnection(overrides: Partial<CalendarConnection> = {}): CalendarCo
     credentialStatus: 'ACTIVE',
     credentialCheckedAt: null,
     reconnectNotifiedAt: null,
-    lastSyncedAt: null,
     targetCalendarId: 'primary-cal',
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -168,11 +167,10 @@ beforeEach(() => {
  * treats a connection as stale once `credential_checked_at` is older than
  * `STALENESS_CHECK_THRESHOLD_MS`, but under normal operation that column is refreshed only
  * once per `PROBE_INTERVAL_MS`. If a future change ever lowers `PROBE_INTERVAL_MS` to or
- * below the staleness threshold, `findStaleConnections` silently returns `[]` forever — the
- * exact permanent-no-op class round 1 closed for `last_synced_at`, re-armed by an unrelated
- * tuning change in a different file, with nothing else to catch it. This test fails the
- * instant that relationship inverts; `calendar-health-probe.ts` also asserts it at module
- * load, so the failure is loud in production too, not just in CI.
+ * below the staleness threshold, `findStaleConnections` silently returns `[]` forever — a
+ * permanent no-op caused by an unrelated tuning change in a different file, with nothing else
+ * to catch it. This test fails the instant that relationship inverts; `calendar-health-probe.ts`
+ * also asserts it at module load, so the failure is loud in production too, not just in CI.
  */
 describe('round-2 fix #8 — PROBE_INTERVAL_MS / STALENESS_CHECK_THRESHOLD_MS coupling', () => {
   it('keeps PROBE_INTERVAL_MS strictly greater than STALENESS_CHECK_THRESHOLD_MS', () => {

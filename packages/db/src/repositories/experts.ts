@@ -1020,10 +1020,10 @@ export const expertsRepository = {
    *
    * ⚠⚠ THIS EXISTS TO KEEP `rateCents` OFF A CLIENT-BOUND RENDER PATH. `expert_profiles.rate_cents`
    * is the UN-MARKED-UP consultant rate; the client lens already carries the all-in charge, so a
-   * payload holding both hands the client the Balo margin. `stripeConnectId` and
-   * `cronofyUserId` are vendor identifiers with no display use at all. `findProfileById` returns
-   * every one of them, and TypeScript will NOT catch a spread of the full row (excess-property
-   * checking does not apply to spreads). Concealment is enforced by what the row CAN hold.
+   * payload holding both hands the client the Balo margin. `stripeConnectId` is a vendor
+   * identifier with no display use at all. `findProfileById` returns both columns, and
+   * TypeScript will NOT catch a spread of the full row (excess-property checking does not apply
+   * to spreads). Concealment is enforced by what the row CAN hold.
    *
    * ⚠ BAL-422 WIDENED SIX COLUMNS TO EIGHT — `ratingAverage` + `ratingCount` — AND THAT LIGHTS
    * UP THREE SURFACES AT ONCE, because they all reach the expert through this ONE method:
@@ -1031,8 +1031,8 @@ export const expertsRepository = {
    * `resolve-counterparty.ts` that BAL-389 hoisted) the end-of-call screen. All three are
    * ACCEPTED and INTENDED; none is a leak. The two new columns are display aggregates a
    * client already sees on the expert's public card, so adding them does not weaken the
-   * concealment rationale above — `rateCents` / `stripeConnectId` / `cronofyUserId` remain
-   * structurally absent, which is still the whole reason this method exists.
+   * concealment rationale above — `rateCents` / `stripeConnectId` remain structurally absent,
+   * which is still the whole reason this method exists.
    *
    * ⚠ `ratingAverage` IS PARSED HERE, NOT PASSED THROUGH. The column is `numeric(2,1)` and
    * Drizzle infers that as `string` (`'4.3'`, not `4.3`), so this returns `number | null` via
@@ -1078,9 +1078,9 @@ export const expertsRepository = {
   /**
    * BAL-478 — THE ONE COLUMN the booking funding pre-check needs, and nothing else.
    *
-   * ⚠ WHY NOT `findProfileById`: that returns the FULL row (`stripeConnectId`, `cronofyUserId`,
-   * every staff-only flag). Same reasoning as `findDisplayProfileById`'s docblock — concealment
-   * is enforced by what the row CAN hold, because TypeScript does not catch a spread.
+   * ⚠ WHY NOT `findProfileById`: that returns the FULL row (`stripeConnectId`, every staff-only
+   * flag). Same reasoning as `findDisplayProfileById`'s docblock — concealment is enforced by
+   * what the row CAN hold, because TypeScript does not catch a spread.
    *
    * ⚠ THE RAW, UN-MARKED-UP CONSULTANT RATE (`experts.integration.test.ts` pins that invariant).
    * The Balo markup is applied by `deriveSessionEstimate` at the caller, never in `packages/db`.
@@ -1106,10 +1106,9 @@ export const expertsRepository = {
   /**
    * BAL-438 — the approved-expert guard's narrow read: ownership and approval, and nothing else.
    *
-   * ⚠ WHY NOT `findProfileById`: that returns the FULL row (`stripeConnectId`, `cronofyUserId`,
-   * `rateCents`, every staff-only flag), and the guard runs on every expert-settings write. The
-   * projection means the row CAN hold nothing the guard does not decide on, and it never returns
-   * the full row.
+   * ⚠ WHY NOT `findProfileById`: that returns the FULL row (`stripeConnectId`, `rateCents`, every
+   * staff-only flag), and the guard runs on every expert-settings write. The projection means the
+   * row CAN hold nothing the guard does not decide on, and it never returns the full row.
    *
    * `undefined` ⇒ no such profile. `{ approvedAt: null }` ⇒ a draft or declined profile. The
    * caller compares `userId` to the session user and decides; `expert_profiles` has no
@@ -1181,7 +1180,7 @@ export const expertsRepository = {
   /**
    * The full set of resolver inputs owned by the expert — timezone + the three
    * booking rules, plus the owning `userId` — in one `columns:`-projected read
-   * (never hydrate the whole row: it carries stripeConnectId / cronofyUserId /
+   * (never hydrate the whole row: it carries stripeConnectId and
    * PII the resolver must not see). Returns null if the profile doesn't exist
    * so the resolve-and-cache wire-up can short-circuit. Field names are the
    * resolver's own vocabulary (`bufferBeforeMinutes`, …), decoupled from the DB
@@ -1307,10 +1306,10 @@ export const expertsRepository = {
       ),
       // Defense-in-depth: explicit allowlist of the ONLY top-level columns the
       // public view-model + page consume. Keeps sensitive columns
-      // (stripeConnectId, cronofyUserId, cronofySyncStatus, internal flags) out
-      // of the RSC by construction — not just by mapper discipline. If the
-      // mapper/page later needs another column, the type narrows and typecheck
-      // fails until it's added here (the safety mechanism working).
+      // (stripeConnectId, internal flags) out of the RSC by construction — not
+      // just by mapper discipline. If the mapper/page later needs another
+      // column, the type narrows and typecheck fails until it's added here (the
+      // safety mechanism working).
       // ⚠ BAL-422 added `ratingAverage` / `ratingCount` for the hero rating stat and the
       // aggregate-aware reviews section. `ratingAverage` is `numeric` ⇒ Drizzle hands back a
       // STRING here: a relational `columns:` allow-list cannot reshape or cast, so the parse

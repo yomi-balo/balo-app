@@ -41,8 +41,7 @@ integration.
 | Cache rebuild on every meeting mutation           | BAL-428           | **Shipped, live**                                                                                                                                                                                                                                                                       |
 | Sync-capability matrix + delta-sync guard         | BAL-447           | **Shipped, inert by design** (a ruling, not machinery) — unchanged by BAL-396                                                                                                                                                                                                           |
 | Retry classification (`classifyRetry`)            | BAL-467           | **Shipped, but NOT consulted** by the free/busy path — see §3                                                                                                                                                                                                                           |
-| Cronofy calendar-change webhook receiver          | pre-ADR-1021      | **DELETED** by BAL-396 (`routes/calendar/webhook.ts` no longer exists)                                                                                                                                                                                                                  |
-| Apiroc/Svix calendar-change webhook receiver      | BAL-468           | **NOT BUILT** — no push trigger exists today; staleness is bounded by two 15-minute sweeps only (§6)                                                                                                                                                                                    |
+| Apiroc/Svix calendar-change webhook receiver      | BAL-468           | **Shipped** — `routes/calendar/webhook.ts`, a bare trigger: each new, verified `calendar.event.changed` delivery enqueues its expert's rebuild, one pending job per expert (§6)                                                                                                         |
 | Per-slot picker / slot-grid surface               | —                 | **NOT BUILT** — see the divergence note in §2 and §10                                                                                                                                                                                                                                   |
 
 > ⚠ **SKILL.md's Architecture Summary is closer to the tree than it used to be, but is still not
@@ -72,6 +71,9 @@ WRITE TRIGGERS (anything that can move an expert's calendar, or Balo's read of i
     OAuth callback                                                     + provisionConnection -> enqueue)
   · calendar disconnect              routes/calendar/api.ts           (per-provider or whole-account -> enqueue)
   · conflict-check toggle            routes/calendar/api.ts           (changes what listBusyReadTargets returns -> enqueue)
+  · calendar-change webhook          routes/calendar/webhook.ts       (each new, verified calendar.event.changed
+                                                                       delivery -> tryEnqueueAvailabilityCacheRebuild;
+                                                                       503 when it returns false; BAL-468)
   · schedule editor save/clear       routes/experts/schedule.ts       (3 call sites)
   · time-off create/delete           routes/experts/availability-overrides.ts (2 call sites)
   · book / reschedule / cancel /     services/meetings/meeting-availability.ts (BAL-428)
@@ -79,12 +81,12 @@ WRITE TRIGGERS (anything that can move an expert's calendar, or Balo's read of i
   · calendar health probe            jobs/calendar-health-probe.ts    (every 15 min - heals a connection -> enqueue;
     (heal or break)                                                    detects reconnect_required -> clearAvailabilityCache
                                                                         via services/calendar/credential-status.ts)
-  · staleness cron every 15 min      jobs/availability-cache.ts       (credential_checked_at older than 15 min -
-                                                                        see warning below)
+  · staleness cron every 15 min      jobs/availability-cache.ts       (credential_checked_at NULL or older than
+                                                                        15 min - §6)
         │
         ▼
   enqueueAvailabilityCacheRebuild(expertProfileId, log)
-        │  jobId: availability-{expertProfileId}   ← coalesces every trigger into ONE pending job
+        │  jobId: buildJobId('availability', expertProfileId)   ← coalesces every trigger into ONE pending job
         ▼
   BullMQ queue 'rebuild-availability-cache'  (worker concurrency 5)
         │
@@ -131,12 +133,8 @@ BOOK
         5. bookMeeting(...) → writes the consultations projection → enqueues the rebuild
 ```
 
-⚠ **`jobs/availability-cache.ts`'s own docblock on `startAvailabilityCacheWorker` still reads "BAL-243:
-this passes no `busyBlocks`, so the service reads vendor free/busy from the SHARED port
-(`services/availability/vendor-busy.ts`), which answers `[]` until BAL-194/195 wires Cronofy."** That
-is stale twice over: the port no longer answers `[]` (it makes a real, fanned-out `freeBusy.get`
-call), and the vendor it was ever going to wire is Apiroc, not Cronofy — BAL-396, this very ticket,
-did the wiring. See §10.
+The rebuild worker passes no `busyBlocks`, so the advertise read takes vendor busy from Apiroc
+through `vendorBusyProvider` (§3) — the same port the booking gate reads.
 
 ### Module table
 
@@ -470,9 +468,9 @@ partial on `deleted_at IS NULL`, and the reader the union needs is now LIVE:
 // packages/db/src/repositories/calendar.ts — the free/busy read's connection list
 calendarRepository.listBusyReadTargets(expertProfileId): Promise<BusyReadTarget[]>;
 // One round trip; returns EVERY live connection (any credentialStatus — see §3), each with its
-// conflict-checked calendar ids and a `provisioned` flag. Deliberately NOT
-// `findConnectionByExpertProfileId` — that returns ONE row (oldest live) and would silently
-// ignore the expert's second calendar, double-booking them.
+// conflict-checked calendar ids and a `provisioned` flag. Deliberately a list, never a
+// single-row lookup — one row would silently ignore the expert's second calendar,
+// double-booking them.
 ```
 
 **What is actually built, now:** `vendorBusyProvider.listBusyBlocks` calls `listBusyReadTargets`,
@@ -540,11 +538,10 @@ export const availabilityCache = pgTable(
 | `services/calendar/credential-status.ts`'s `flipToReconnectRequired`             | `calendarRepository.clearAvailabilityCache(id)` — called when the health probe confirms a connection now needs reconnecting (`EXPIRED`/`REVOKED`)                                                                                                               |
 | `services/calendar/apiroc-connection.ts`'s `provisionConnection`, two call sites | `calendarRepository.clearAvailabilityCache(id)` — a `calendars.list` failure, or a successful list with zero writable calendars, both persist `SYNC_PENDING` and clear the cache so a now-unreadable connection is not advertised on stale last-known-good data |
 
-`routes/calendar/webhook.ts` — the Cronofy-era route that used to own the `profile_disconnected`
-clear — **no longer exists** (deleted by BAL-396). `POST /api/calendar/disconnect` in
-`routes/calendar/api.ts` does not itself clear the cache; it calls `enqueueAvailabilityCacheRebuild`,
-which RECOMPUTES from whatever connections remain (nothing, if the expert had only one) rather than
-blanking the row directly — correct once an expert can hold two connections and disconnect only one.
+`POST /api/calendar/disconnect` in `routes/calendar/api.ts` does not itself clear the cache; it calls
+`enqueueAvailabilityCacheRebuild`, which RECOMPUTES from whatever connections remain (nothing, if the
+expert had only one) rather than blanking the row directly, because an expert can hold two
+connections and disconnect only one.
 
 ### The job
 
@@ -557,7 +554,7 @@ await queue.add(
   'rebuild-availability-cache',
   { expertProfileId },
   {
-    jobId: 'availability-' + expertProfileId, // THE DEDUP KEY
+    jobId: buildJobId('availability', expertProfileId), // THE DEDUP KEY
     removeOnComplete: true,
     removeOnFail: true, // a retained failed job would wedge this fixed jobId forever
     attempts: 3,
@@ -574,6 +571,9 @@ await queue.add(
 - **Enqueue never throws.** A Redis hiccup must not fail the caller's mutation, so
   `enqueueAvailabilityCacheRebuild` swallows and logs. ⚠ That means a booking can commit while its
   rebuild is silently lost — which is exactly what the staleness sweep and the next trigger repair.
+  The webhook is the one caller that must know: it calls `tryEnqueueAvailabilityCacheRebuild`,
+  which reports a failed enqueue as `false`, and answers `503` so the delivery stays in the
+  vendor's retry queue.
 - Worker `concurrency: 5`; emits `CALENDAR_SERVER_EVENTS.AVAILABILITY_CACHE_REBUILT` with
   `distinct_id: expertProfileId` **only when `result.status === 'completed'`** (round-2 fix #11) — a
   SKIPPED rebuild (settings missing, or an untrustworthy vendor read, §5) logs a distinguishable
@@ -583,22 +583,30 @@ await queue.add(
 
 ### How staleness is bounded
 
-There is still **no push trigger**. BAL-468 (Apiroc/Svix webhook) is not built; the Cronofy bare-
-trigger receiver BAL-396 deleted is not replaced yet. Staleness today is bounded by mutation triggers
-plus TWO independent 15-minute sweeps:
+Staleness is bounded by one push trigger, by mutation triggers, and by the staleness cron (the only
+periodic rebuild of a healthy connection), with the calendar health probe beside it (rebuild on
+heal, cache clear on break). The two crons both run every 15 minutes and are coupled through
+`credential_checked_at` (items 3 and 4):
 
-1. **Mutation** — every meeting write rebuilds via `services/meetings/meeting-availability.ts`
+1. **Push** — the Apiroc calendar-change webhook (`routes/calendar/webhook.ts`, BAL-468) is a bare
+   trigger: each new, verified `calendar.event.changed` delivery calls
+   `tryEnqueueAvailabilityCacheRebuild` for the subscription's expert, and answers `503` when the
+   enqueue does not land so the delivery stays in the vendor's retry queue. It reaches no vendor and
+   reads no event content (§7). Subscriptions cover each conflict-checked calendar and are registered
+   only when `APIROC_WEBHOOK_BASE_URL` is configured; the inbound contract is
+   `webhooks-and-events.md` Part A.
+2. **Mutation** — every meeting write rebuilds via `services/meetings/meeting-availability.ts`
    (BAL-428). `expertProfileId === null` (an `admin` meeting) rebuilds nobody, by design. Connect,
    disconnect and conflict-check-toggle also enqueue directly (§2's WRITE TRIGGERS table).
-2. **The staleness cron** (`registerStalenessCheckCron`, `jobs/availability-cache.ts`) runs
+3. **The staleness cron** (`registerStalenessCheckCron`, `jobs/availability-cache.ts`) runs
    `*/15 * * * *`; the worker takes `findStaleConnections(now − 15 min)` — live, `ACTIVE`
-   connections whose `credential_checked_at` is older than the threshold — and enqueues a rebuild for
-   each. ⚠⚠ **This key changed on this branch.** Before BAL-396's fix round it read
-   `last_synced_at`, whose only writer was the Cronofy-era webhook route BAL-396 deleted — so with no
-   writer left, that query was a PERMANENT no-op (every tick found nothing, and reported nothing
-   wrong). It now reads `credential_checked_at`, which the health probe and
-   `upsertApirocConnection` both stamp, restoring a genuine periodic rebuild.
-3. **The calendar health probe** (`registerCalendarHealthProbeCron`,
+   connections whose `credential_checked_at` is NULL or older than the threshold — and enqueues a
+   rebuild for each. ⚠ The health probe stamps `credential_checked_at` on every probe attempt, and
+   `upsertApirocConnection` stamps it when a reconnect updates a live row in place; a fresh connect
+   leaves it NULL, which matches at once. So a probe stamp holds its connection out of this sweep
+   for the next 15 minutes, and the failure mode is a writer whose re-stamp interval is at or below
+   the threshold, which silences the sweep (item 4).
+4. **The calendar health probe** (`registerCalendarHealthProbeCron`,
    `jobs/calendar-health-probe.ts`) runs on its OWN 15-minute cron, against a DIFFERENT candidate
    query (`listConnectionsDueForHealthCheck`, keyed on the same `credential_checked_at` column but
    including non-`ACTIVE` rows so it can heal them too) and makes an actual cheap Apiroc data call
@@ -606,16 +614,19 @@ plus TWO independent 15-minute sweeps:
    signal — it can flip a connection to `EXPIRED`/`REVOKED` (clearing the cache) or heal a
    `SYNC_PENDING`/broken one back to `ACTIVE` (enqueuing a rebuild) before any client ever hits it.
    `PROBE_INTERVAL_MS` (1 hour — its own re-probe cadence) is asserted at MODULE LOAD to stay
-   strictly greater than the staleness cron's 15-minute threshold, specifically to stop a future
-   tuning change from silently re-arming the same permanent-no-op failure class the `last_synced_at`
-   bug was. Full mechanics (the mass-failure circuit breaker, the re-provision heal path, the
+   strictly greater than the staleness cron's 15-minute threshold: at or below it, every
+   connection's `credential_checked_at` would always look fresh, `findStaleConnections` would
+   return `[]` on every tick, and the staleness cron would be a silent, permanent no-op that reports
+   nothing wrong. Full mechanics (the mass-failure circuit breaker, the re-provision heal path, the
    notify-once discipline) are `connect-and-credentials.md`'s scope, not this file's — this section
    only tracks it as an availability-rebuild/cache-clear trigger.
 
-So the bound is **~15 minutes plus one job**, now via two independent sweeps rather than one, and
-only for experts with a live calendar connection — an expert with no connection is refreshed only by
-their own edits and by bookings. There is still **no TTL** on the row and no read-through refresh: a
-stale row is served as-is until something enqueues.
+So for an expert with a live calendar connection, an external change on a subscribed calendar
+normally reaches the cache within one webhook delivery plus one job, and the staleness cron
+backstops whatever the push misses — a lost delivery, or a ping folded into a rebuild that had
+already read the calendar (a window `webhook.ts` accepts explicitly). An expert with no connection
+is refreshed only by their own edits and by bookings. There is **no TTL** on the row and no
+read-through refresh: a stale row is served as-is until something enqueues.
 
 ---
 
@@ -681,15 +692,15 @@ Three layers, **877 lines**, every Layer-3 scan deriving its subjects from a **d
 exactly the future files that matter, and that opt-out was empirically reproduced in review; the
 `.tsx` widening is itself a BAL-396 fix-round-2 finding — see below).
 
-| Layer / Scan   | Subject                                                                                                                          | Fails when                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **1 — DATA**   | the matrix                                                                                                                       | the Google/Microsoft divergence stops being recorded, or a row loses its `BAL-393` evidence (anchored by direction _and_ by §M2/§P3 refs)                                                                                                                                                                                                                                                                                          |
-| **2 — RULING** | `resolveSyncStrategy`, `SYNC_STRATEGIES`                                                                                         | a second strategy appears, or the strategy stops being identical for every provider. ⚠ Flipping a boolean cannot make this pass or fail — only rewriting the resolver can                                                                                                                                                                                                                                                          |
-| **3 / Scan A** | **all** of `apps/api/src` (exempt: the matrix file, `invariants/`)                                                               | any non-comment line anywhere contains `syncToken` / `SyncToken` / `sync_token`                                                                                                                                                                                                                                                                                                                                                    |
-| **3 / Scan B** | **all** of `apps/api/src` (exempt: `lib/apiroc/` — the vendor boundary; `routes/calendar/` — the connect surface)                | a file names `google`/`microsoft`/`apple`/`icloud` (after stripping two known-safe idioms, `googleapis`/`-apple-system`, from CSS font stacks), or contains `provider ===` / `switch (provider`                                                                                                                                                                                                                                    |
-| **3 / Scan C** | `services/availability/vendor-busy.ts`, and both its consumers                                                                   | the port stops containing a genuine `freeBusy.get` call, contains any event-content marker itself, or either consumer stops calling `vendorBusyProvider.listBusyBlocks` / starts calling `freeBusy`/`getApirocClient` directly. **Retired** the old webhook-route-scoped check — its subject, `routes/calendar/webhook.ts`, no longer exists                                                                                       |
-| **3 / Scan D** | `routes/calendar/types.ts`, `routes/calendar/auth.ts`                                                                            | the hand-written provider unions drift from `CALENDAR_PROVIDERS`                                                                                                                                                                                                                                                                                                                                                                   |
-| **3 / Scan E** | **all** of `apps/api/src` (exempt: `services/consultation-events/` — the one directory sanctioned for a full event-content read) | E1: `updatedAfter` or `expandRecurrences` appears ANYWHERE, no exemption at all. E2: `events.list` appears outside `services/consultation-events/`. E3: inside that one exemption, an `events.list` call is missing `metadataFilters` or `nextPageToken` (must be BOTH tag-filtered and paginated to exhaustion). E6: the Scan B and Scan E exemption sets are disjoint, and every file is covered by at least one of the two bans |
+| Layer / Scan   | Subject                                                                                                                          | Fails when                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1 — DATA**   | the matrix                                                                                                                       | the Google/Microsoft divergence stops being recorded, or a row loses its `BAL-393` evidence (anchored by direction _and_ by §M2/§P3 refs)                                                                                                                                                                                                                                                                                                                       |
+| **2 — RULING** | `resolveSyncStrategy`, `SYNC_STRATEGIES`                                                                                         | a second strategy appears, or the strategy stops being identical for every provider. ⚠ Flipping a boolean cannot make this pass or fail — only rewriting the resolver can                                                                                                                                                                                                                                                                                       |
+| **3 / Scan A** | **all** of `apps/api/src` (exempt: the matrix file, `invariants/`)                                                               | any non-comment line anywhere contains `syncToken` / `SyncToken` / `sync_token`                                                                                                                                                                                                                                                                                                                                                                                 |
+| **3 / Scan B** | **all** of `apps/api/src` (exempt: `lib/apiroc/` — the vendor boundary; `routes/calendar/` — the connect surface)                | a file names `google`/`microsoft`/`apple`/`icloud` (after stripping two known-safe idioms, `googleapis`/`-apple-system`, from CSS font stacks), or contains `provider ===` / `switch (provider`                                                                                                                                                                                                                                                                 |
+| **3 / Scan C** | `services/availability/vendor-busy.ts`, the shared loader `load-resolver-inputs.ts`, and its consumers                           | the port stops containing a genuine `freeBusy.get` call or contains any event-content marker; `load-resolver-inputs.ts` stops being the port's ONE call site, checked tree-wide; a consumer (`resolve-and-cache.ts`, `window-availability.ts`, `expert-slots.ts`) stops calling `loadResolverInputs(` or calls the port, `freeBusy` or `getApirocClient` directly; or any file other than `resolve-and-cache.ts` (the seed path) passes a `busyBlocks` override |
+| **3 / Scan D** | `routes/calendar/types.ts`, `routes/calendar/auth.ts`                                                                            | the hand-written provider unions drift from `CALENDAR_PROVIDERS`                                                                                                                                                                                                                                                                                                                                                                                                |
+| **3 / Scan E** | **all** of `apps/api/src` (exempt: `services/consultation-events/` — the one directory sanctioned for a full event-content read) | E1: `updatedAfter` or `expandRecurrences` appears ANYWHERE, no exemption at all. E2: `events.list` appears outside `services/consultation-events/`. E3: inside that one exemption, an `events.list` call is missing `metadataFilters` or `nextPageToken` (must be BOTH tag-filtered and paginated to exhaustion). E6: the Scan B and Scan E exemption sets are disjoint, and every file is covered by at least one of the two bans                              |
 
 Markers are matched against **raw source, line-classified** — a marker inside a string literal on a
 code line trips the scan (a comment-_stripping_ version was fail-open: it truncated a raw `fetch(...)`
@@ -720,7 +731,8 @@ case:
    `events.list`/`updatedAfter`/`expandRecurrences` on the availability path even though they contain
    no sync token: a timestamp-differenced listing read is the same rejected option in different
    clothing — and `calendar_connections.credentialCheckedAt` already exists and is already written on
-   health-probe attempts and on connect/reconnect, so the ingredients are on the shelf.
+   every health-probe attempt and when a reconnect updates a live row in place, so the ingredients
+   are on the shelf.
    ⚠ It is also **blind to deletions**, so a cancelled meeting would never leave the cache.
 3. **Capability is not uniform, so the "just" is a fork.** Microsoft never returns a token on any
    page (§M2, paginated to exhaustion at `pageSize=1`); Google returns one **only on the final page**,
@@ -831,16 +843,16 @@ territory, not reproduced here.
 Documented as-built; SKILL.md is not wrong so much as forward-looking in places, and BAL-396 closed
 several of the gaps this table used to describe.
 
-| Subject                          | SKILL.md says                                                                             | The shipped code does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Profile → slots                  | `freeBusy.get` on profile view, union across accounts, slot picker, short-TTL Redis cache | `freeBusy.get` IS called and IS unioned across every one of an expert's live connections — but only from the BullMQ rebuild job (ADVERTISE) and `POST /meetings` (ACCEPT), never synchronously "on profile view". Still no Redis cache, still **no slot picker** — the client-facing surface is `earliest_available_at` on the search/card path                                                                                                                                                                                                           |
-| Forward window                   | Constraint 6: "carry the 60-day convention"                                               | 14-day advertise horizon (`RESOLVER_HORIZON_DAYS`), 365-day booking horizon (`MAX_BOOKING_HORIZON_DAYS`). No 60-day value exists                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `calendar_connections`           | "still Cronofy-shaped: unique on `expertProfileId`"                                       | **Fully migrated off Cronofy by this ticket.** Unique on `(expert_profile_id, provider)` (BAL-467); `end_user_account_id` is the only vendor identity and is `NOT NULL` (migration 0069); the Cronofy token columns (`access_token`, `refresh_token`, `token_expires_at`, `channel_id`, `cronofy_sub`) and the `connected \| sync_pending \| auth_error` status vocabulary are ALL DROPPED — replaced by `ACTIVE \| SYNC_PENDING \| EXPIRED \| REVOKED` (migration 0068). The pre-BAL-396 version of this row was itself already stale the day it shipped |
-| Availability rules               | "BAL-195 weekly schedule … applied by Balo's slot calculator"                             | Accurate — plus BAL-235 date overrides and BAL-234 buffers/notice, which SKILL.md does not enumerate                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| The vendor to wire               | Apiroc, via BAL-396                                                                       | **Done.** `jobs/availability-cache.ts`'s own docblock on `startAvailabilityCacheWorker` still says "answers `[]` until BAL-194/195 wires Cronofy" — stale, pre-ADR-1021 wording, now doubly wrong (the vendor is Apiroc, and BAL-396 already wired it). `vendor-busy.ts`'s own docblock, by contrast, has been fully rewritten and is accurate; `lib/apiroc/index.ts`'s `callApiroc` docblock still says "Inert in this PR — no caller ships", which is also stale — it has five production callers today                                                 |
-| Retry on a failed `freeBusy.get` | (not previously addressed)                                                                | `classifyRetry` (`lib/apiroc/retry.ts`) is fully built and table-tested but has **no production caller** on the free/busy path: `fetchBusyForTarget` makes exactly one `callApiroc` attempt and any rejection becomes `VendorBusyUnavailableError` on the first try. The BullMQ job's `attempts: 3` retry is unconditional on error kind, not `classifyRetry`-aware                                                                                                                                                                                       |
-| Union across providers           | (not previously addressed — BAL-467's reader was inert)                                   | Live as of this ticket: `vendorBusyProvider.listBusyBlocks` fans out across every live connection via `listBusyReadTargets`, with a documented "refuse the whole answer if any connection is unreadable or fails" policy (§5)                                                                                                                                                                                                                                                                                                                             |
-| Calendar-change push trigger     | Cronofy webhook today, Apiroc/Svix (BAL-468) eventually                                   | The Cronofy webhook route is DELETED. The Apiroc/Svix webhook (BAL-468) is not yet built. There is currently **no push trigger at all** — staleness is bounded by two independent 15-minute sweeps (the staleness cron and the calendar health probe) plus direct mutation triggers (§6)                                                                                                                                                                                                                                                                  |
+| Subject                          | SKILL.md says                                                                             | The shipped code does                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Profile → slots                  | `freeBusy.get` on profile view, union across accounts, slot picker, short-TTL Redis cache | `freeBusy.get` IS called and IS unioned across every one of an expert's live connections — but only from the BullMQ rebuild job (ADVERTISE) and `POST /meetings` (ACCEPT), never synchronously "on profile view". Still no Redis cache, still **no slot picker** — the client-facing surface is `earliest_available_at` on the search/card path                     |
+| Forward window                   | Constraint 6: "carry the 60-day convention"                                               | 14-day advertise horizon (`RESOLVER_HORIZON_DAYS`), 365-day booking horizon (`MAX_BOOKING_HORIZON_DAYS`). No 60-day value exists                                                                                                                                                                                                                                    |
+| `calendar_connections`           | "unique on `(expertId, provider)`"                                                        | Accurate — the unique index is partial on `deleted_at IS NULL` (BAL-467); `end_user_account_id` is the only vendor identity and is `NOT NULL`; `credential_status` is `ACTIVE \| SYNC_PENDING \| EXPIRED \| REVOKED`                                                                                                                                                |
+| Availability rules               | "BAL-195 weekly schedule … applied by Balo's slot calculator"                             | Accurate — plus BAL-235 date overrides and BAL-234 buffers/notice, which SKILL.md does not enumerate                                                                                                                                                                                                                                                                |
+| The vendor to wire               | Apiroc, via BAL-396                                                                       | **Done** — `vendorBusyProvider` reads Apiroc `freeBusy.get` (§3). `lib/apiroc/index.ts`'s `callApiroc` docblock still says "Inert in this PR — no caller ships", which is stale: it has production callers across `services/`, `jobs/` and `routes/calendar/`                                                                                                       |
+| Retry on a failed `freeBusy.get` | (not previously addressed)                                                                | `classifyRetry` (`lib/apiroc/retry.ts`) is fully built and table-tested but has **no production caller** on the free/busy path: `fetchBusyForTarget` makes exactly one `callApiroc` attempt and any rejection becomes `VendorBusyUnavailableError` on the first try. The BullMQ job's `attempts: 3` retry is unconditional on error kind, not `classifyRetry`-aware |
+| Union across providers           | (not previously addressed — BAL-467's reader was inert)                                   | Live as of this ticket: `vendorBusyProvider.listBusyBlocks` fans out across every live connection via `listBusyReadTargets`, with a documented "refuse the whole answer if any connection is unreadable or fails" policy (§5)                                                                                                                                       |
+| Calendar-change push trigger     | "every change webhook enqueues a whole-window re-read"                                    | Accurate — each new, verified `calendar.event.changed` delivery to `routes/calendar/webhook.ts` (BAL-468) enqueues its expert's rebuild, one pending job per expert; the 15-minute staleness cron, the only periodic rebuild of a healthy connection, backstops it; the health probe rebuilds on heal, clears the cache on break; mutations enqueue directly (§6)   |
 
 ---
 
@@ -861,8 +873,7 @@ behaviour — the open question is whether that behaviour is what BAL-396 actual
    (fail closed fast, let the 15-minute sweeps repair it) rather than an oversight, but as shipped,
    the "shipped retry table" is not actually consulted anywhere reachable from this file's code
    paths.
-2. **Stale docblocks, not a behavioural bug.** Two pre-ADR-1021 docblocks survive in shipped code,
-   both naming Cronofy where the vendor is now Apiroc and already wired: `jobs/availability-cache.ts`'s
-   `startAvailabilityCacheWorker` docblock, and `lib/apiroc/index.ts`'s `callApiroc` docblock ("Inert
-   in this PR — no caller ships", despite five production callers). Neither changes runtime
-   behaviour, but both actively mislead a reader about whether the vendor integration is wired.
+2. **Stale docblock, not a behavioural bug.** `lib/apiroc/index.ts`'s `callApiroc` docblock still
+   says "Inert in this PR — no caller ships", though it has production callers across `services/`,
+   `jobs/` and `routes/calendar/`. It does not change runtime behaviour, but it misleads a reader
+   about whether the vendor integration is wired.

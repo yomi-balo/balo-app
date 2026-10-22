@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CalendarConnectionCard } from './calendar-connection-card';
@@ -26,7 +26,6 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
   provider: 'google',
   credentialStatus: 'ACTIVE',
   providerEmail: 'dana@example.com',
-  lastSyncedAt: null,
   targetCalendarId: 'cal-1',
   subCalendars: [makeSubCalendar()],
   isBookingTarget: true,
@@ -74,10 +73,6 @@ describe('CalendarConnectionCard', () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   // ── Header ────────────────────────────────────────────────────
 
   it('titles the row with the provider label and puts the account email on the subline', () => {
@@ -92,33 +87,13 @@ describe('CalendarConnectionCard', () => {
     expect(screen.getByText('Google Workspace or Gmail')).toBeInTheDocument();
   });
 
-  it('adds the last-synced time to the subline of a connected row', () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-22T12:00:00Z'));
-    renderRow('connected', makeConnection({ lastSyncedAt: '2026-09-22T09:00:00Z' }));
-    expect(screen.getByText('· Last synced 3h ago', { exact: false })).toBeInTheDocument();
-  });
-
-  it.each([
-    ['2026-09-22T11:59:40Z', 'Synced just now'],
-    ['2026-09-22T11:45:00Z', 'Last synced 15m ago'],
-    ['2026-09-19T12:00:00Z', 'Last synced 3d ago'],
-  ] as const)('formats a sync at %s as "%s"', (lastSyncedAt, words) => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-22T12:00:00Z'));
-    renderRow('connected', makeConnection({ lastSyncedAt }));
-    expect(screen.getByText(words, { exact: false })).toBeInTheDocument();
-  });
-
   // `providerEmail` is persisted on connect/reconnect since BAL-575, but rows connected earlier
-  // keep null until they reconnect, and `lastSyncedAt` is never written — so the null fixture
-  // still models real data.
-  it('never reads as pending or as an offer under a Connected pill when email and sync are unknown', () => {
+  // keep null until they reconnect — so the null fixture still models real data.
+  it('never reads as pending or as an offer under a Connected pill when the email is unknown', () => {
     renderRow(
       'connected',
       makeConnection({
         providerEmail: null,
-        lastSyncedAt: null,
         subCalendars: [makeSubCalendar({ name: 'dana@gmail.com' })],
       })
     );
@@ -163,29 +138,13 @@ describe('CalendarConnectionCard', () => {
     expect(subline).toHaveTextContent(/^Google Workspace or Gmail · Reading your calendars…$/);
   });
 
-  it('keeps the last-synced time on a row that needs reconnecting, once one is known', () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-22T12:00:00Z'));
-    renderRow(
-      'reconnect_needed',
-      makeConnection({ credentialStatus: 'EXPIRED', lastSyncedAt: '2026-09-19T12:00:00Z' })
-    );
-    const subline = screen.getByRole('heading', { level: 3 }).nextElementSibling;
-    expect(subline).toHaveTextContent(/^dana@example\.com · Last synced 3d ago$/);
-  });
-
   it.each(['reconnect_needed', 'connecting', 'attempt_failed', 'o365_waiting'] as const)(
-    'shows no sync fragment for %s without a known sync',
+    'shows no sync fragment for %s',
     (slotState) => {
       renderRow(slotState, slotState === 'reconnect_needed' ? makeConnection() : undefined);
-      expect(screen.queryByText(/synced|Reading your calendars/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Reading your calendars/i)).not.toBeInTheDocument();
     }
   );
-
-  it('reports no sync for a row still waiting to connect, even with a stale sync time', () => {
-    renderRow('connecting', makeConnection({ lastSyncedAt: '2026-09-19T12:00:00Z' }));
-    expect(screen.queryByText(/synced/i)).not.toBeInTheDocument();
-  });
 
   it.each([
     ['connected', 'Connected', 'success'],

@@ -130,10 +130,9 @@ export function resolveSyncStrategy(provider: CalendarProvider): SyncStrategy {
  * set, minus its own exemption. This array is kept only as a named pointer to the files that
  * matter most on the sync path, asserted to still exist and still be scanned.
  *
- * ⚠ `routes/calendar/webhook.ts` — Cronofy's bare-trigger receiver — is DELETED by BAL-396
- * (Cronofy removal). It carries no successor entry: the Apiroc/Svix webhook route (BAL-468)
- * lands under `routes/calendar/`, which Scan B still exempts (it legitimately names both
- * providers) and which Scan E still bans event-content reads in tree-wide.
+ * ⚠ `routes/calendar/webhook.ts` — the Apiroc/Svix calendar-change webhook, a bare trigger into
+ * this path — is deliberately NOT listed: it sits under `routes/calendar/`, which Scan B exempts
+ * (see the note on the subscription entries below), and Scan E bans event-content reads in it.
  */
 export const SYNC_PATH_FILES = [
   'jobs/availability-cache.ts',

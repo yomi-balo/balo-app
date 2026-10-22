@@ -5,8 +5,8 @@ sections. SKILL.md tells you _why_ the vendor SDK cannot be consumed directly (t
 wire envelopes, five SDK defects, an unsilenceable console logger); this file tells you what
 BAL-467 and BAL-396 actually shipped in `apps/api/src/lib/apiroc/` and exactly how to add a new
 Apiroc call on top of it. Read it when you are about to write code that talks to Apiroc — BAL-396
-(connect / free-busy / events / health probe, now shipped) or BAL-468 (webhooks / subscription
-lifecycle, still to come). Everything below is **as-built against commit `70fdfe7`** (BAL-396,
+(connect / free-busy / events / health probe) or BAL-468 (webhooks / subscription lifecycle),
+both shipped. Everything below is **as-built against commit `70fdfe7`** (BAL-396,
 which merged directly on top of BAL-467's `eb6d4b2` — the core adapter files below
 (`client.ts`, `errors.ts`, `interceptor.ts`, `retry.ts`, `logging.ts`, `sdk-shape.test.ts`) are
 byte-for-byte unchanged between the two commits; only `index.ts` (8 new export lines) and four
@@ -21,13 +21,11 @@ code.
 > are now called from `services/calendar/apiroc-connection.ts` (connect/provision/disconnect),
 > `services/calendar/credential-status.ts` (the reconnect-required flip), the free/busy read in
 > `services/availability/vendor-busy.ts` the booking gate depends on,
-> `services/consultation-events/` (event write/delete/reconcile), `jobs/calendar-health-probe.ts`,
-> and `routes/calendar/auth.ts` (the OAuth connect flow, via the new `oauth.ts` — see §1). Cronofy
-> is gone outright: there is no `services/cronofy/`, `lib/cronofy.ts`, or `withCronofyRetry`
-> anywhere left in the tree (`find apps/api/src -iname '*cronofy*'` returns nothing); the only
-> surviving trace repo-wide is the removal migration,
-> `packages/db/drizzle/0069_bal396_cronofy_removal.sql`. §4's call site and §8's checklist are no
-> longer hypothetical — read the real call sites they now point at.
+> `services/consultation-events/` (event write/delete/reconcile),
+> `services/calendar/subscription-reconcile.ts` (subscription create/list/delete, BAL-468),
+> `jobs/calendar-health-probe.ts`, and `routes/calendar/auth.ts` (the OAuth connect flow, via the new `oauth.ts` — see §1). §4's
+> call site and §8's checklist are no longer hypothetical — read the real call sites they now
+> point at.
 
 ---
 

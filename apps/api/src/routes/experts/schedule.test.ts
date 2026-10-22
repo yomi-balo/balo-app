@@ -83,14 +83,11 @@ vi.mock('@sentry/node', () => ({
   captureException: vi.fn(),
 }));
 
-// BAL-396 fix round 2, Finding 7 — synced to the REAL `CALENDAR_SERVER_EVENTS`
-// (packages/analytics/src/events/calendar.ts): dropped the two Cronofy-era keys that no
-// longer exist (`WEBHOOK_RECEIVED`, `RELINK_URL_GENERATED`), added the two BAL-396 keys that
-// do (`CREDENTIALS_REVOKED`, `RECONNECT_RESOLVED`), and added `toCalendarEventProvider` — which
-// `routes/calendar/auth.ts` now imports from this same module. This mock was previously only
-// exercised by tests that never reached those paths, so the drift shipped green; the next
-// route that imports the missing export fails with vitest's "No `toCalendarEventProvider`
-// export is defined on the mock".
+// `buildApp` also registers the calendar routes, so this mock carries `toCalendarEventProvider`,
+// which `routes/calendar/auth.ts` imports from this same module alongside
+// `CALENDAR_SERVER_EVENTS` (packages/analytics/src/events/calendar.ts). These tests never reach
+// those routes, so a missing export passes here unnoticed and fails only in a test that reaches
+// the code reading it, with vitest's "No `toCalendarEventProvider` export is defined on the mock".
 vi.mock('@balo/analytics/server', () => ({
   trackServer: vi.fn(),
   CALENDAR_SERVER_EVENTS: Object.freeze({

@@ -65,7 +65,7 @@ describe('initiateCalendarConnectAction', () => {
 
   it('returns connectUrl on success', async () => {
     mockCalendarApiFetch.mockResolvedValueOnce({
-      authUrl: 'https://cronofy.com/auth/url',
+      authUrl: 'https://apiroc.example.com/oauth/authorize/abc',
       nonce: 'nonce-abc',
     });
 
@@ -73,7 +73,7 @@ describe('initiateCalendarConnectAction', () => {
 
     expect(result).toEqual({
       success: true,
-      connectUrl: 'https://cronofy.com/auth/url',
+      connectUrl: 'https://apiroc.example.com/oauth/authorize/abc',
     });
     expect(mockCalendarApiFetch).toHaveBeenCalledWith('/api/calendar/connect', {
       method: 'POST',

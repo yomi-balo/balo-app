@@ -109,7 +109,6 @@ function buildConnection(overrides: Record<string, unknown> = {}) {
     provider: 'google',
     providerEmail: 'dana@example.com',
     credentialStatus: 'ACTIVE',
-    lastSyncedAt: null,
     targetCalendarId: 'cal-primary',
     ...overrides,
   };
@@ -219,7 +218,6 @@ describe('calendar API routes (BAL-396)', () => {
         provider: 'google',
         credentialStatus: 'ACTIVE',
         providerEmail: 'dana@example.com',
-        lastSyncedAt: null,
         targetCalendarId: 'cal-primary',
         subCalendars: [
           {
@@ -340,9 +338,9 @@ describe('calendar API routes (BAL-396)', () => {
       expect(res.json().connections[0].checkedForBusyTime).toBe(true);
     });
 
-    // BAL-397 — this is the regression the deleted `toLegacyStatus` adapter used to cause:
-    // EXPIRED and REVOKED must arrive DISTINCT on the wire (they share one UX client-side, but
-    // stay observable in logs/analytics), and every status round-trips verbatim.
+    // The stored credential status reaches the client un-collapsed: EXPIRED and REVOKED arrive
+    // DISTINCT on the wire (they share one UX client-side, but stay observable in
+    // logs/analytics), and every status round-trips verbatim.
     it.each([
       ['ACTIVE', 'ACTIVE'],
       ['SYNC_PENDING', 'SYNC_PENDING'],
@@ -363,11 +361,8 @@ describe('calendar API routes (BAL-396)', () => {
       expect(res.json().connections[0].credentialStatus).toBe(wireStatus);
     });
 
-    // BAL-396 fix round, Finding 7 — the `office365` translation was Cronofy-only and dead:
-    // migration 0069 deletes every Cronofy-era row (the only source of that value), and Apiroc
-    // always writes lowercase `google` / `microsoft` directly. What remains defensible is that
-    // `provider` is a bare `text` column with no CHECK, so `mapProvider` still narrows rather
-    // than asserts — this pins the fallback for a value outside the known union.
+    // `provider` is a bare `text` column with no CHECK, so `mapProvider` narrows rather than
+    // asserts — this pins the fallback for a value outside the known union.
     it('falls back to google for a provider value outside the known union (no CHECK constrains the column)', async () => {
       mockListConnectionsByExpertProfileId.mockResolvedValue([
         buildConnection({ provider: 'something-unexpected' }),
@@ -716,29 +711,6 @@ describe('calendar API routes (BAL-396)', () => {
         payload: { expertProfileId: EXPERT_UUID, targetCalendarId: 'cal-unknown' },
       });
 
-      expect(res.statusCode).toBe(404);
-    });
-  });
-
-  // ── Deleted endpoints ────────────────────────────────────────────
-
-  describe('deleted endpoints (BAL-396)', () => {
-    it('GET /api/calendar/relink no longer exists', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/calendar/relink?expertProfileId=${EXPERT_UUID}`,
-        headers: AUTH_HEADERS,
-      });
-      expect(res.statusCode).toBe(404);
-    });
-
-    it('POST /api/calendar/refresh-calendars no longer exists', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/calendar/refresh-calendars',
-        headers: AUTH_HEADERS,
-        payload: { expertProfileId: EXPERT_UUID },
-      });
       expect(res.statusCode).toBe(404);
     });
   });

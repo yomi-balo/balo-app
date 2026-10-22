@@ -30,6 +30,7 @@ vi.mock('../_lib/calendar-connect-cookie', () => ({
   setCalendarConnectNonceCookie: (...args: unknown[]) => mockSetCalendarConnectNonceCookie(...args),
 }));
 
+import { log } from '@/lib/logging';
 import { fixCalendarPermissionsAction } from './fix-calendar-permissions';
 
 const EXPERT_SESSION = {
@@ -63,7 +64,7 @@ describe('fixCalendarPermissionsAction', () => {
     expect(result).toEqual({ success: false, error: 'No expert profile found' });
   });
 
-  it('returns relink URL on success — BAL-396 §8.5: POST /api/calendar/connect, field name kept as relinkUrl', async () => {
+  it('posts to /api/calendar/connect and returns its authUrl as relinkUrl', async () => {
     mockCalendarApiFetch.mockResolvedValueOnce({
       authUrl: 'https://apiroc.example.com/oauth/authorize/abc',
       nonce: 'nonce-abc',
@@ -91,7 +92,7 @@ describe('fixCalendarPermissionsAction', () => {
     });
   });
 
-  it('binds the fix-permissions attempt to the browser via the CSRF nonce cookie (BAL-396 fix round, Finding 1 — "fix permissions" re-runs OAuth per §8.5)', async () => {
+  it('binds the fix-permissions attempt to the browser via the CSRF nonce cookie (it re-runs OAuth)', async () => {
     mockCalendarApiFetch.mockResolvedValueOnce({
       authUrl: 'https://apiroc.example.com/oauth/authorize/abc',
       nonce: 'nonce-abc',
@@ -101,11 +102,28 @@ describe('fixCalendarPermissionsAction', () => {
   });
 
   it('returns error when API call fails', async () => {
-    mockCalendarApiFetch.mockRejectedValueOnce(new Error('Connection not in sync_pending'));
+    mockCalendarApiFetch.mockRejectedValueOnce(new Error('Network error'));
     const result = await fixCalendarPermissionsAction('google');
     expect(result).toEqual({
       success: false,
       error: 'Failed to generate permission fix link',
     });
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to get relink URL',
+      expect.objectContaining({ error: 'Network error', stack: expect.any(String) })
+    );
+  });
+
+  it('logs a non-Error rejection as its string form, with no stack', async () => {
+    mockCalendarApiFetch.mockRejectedValueOnce('upstream unavailable');
+    const result = await fixCalendarPermissionsAction('google');
+    expect(result).toEqual({
+      success: false,
+      error: 'Failed to generate permission fix link',
+    });
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to get relink URL',
+      expect.objectContaining({ error: 'upstream unavailable', stack: undefined })
+    );
   });
 });

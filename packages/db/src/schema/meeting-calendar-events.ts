@@ -10,10 +10,8 @@ import { timestamps, softDelete } from './helpers';
  * ENTRY FOR ONE MEETING BECAME.
  *
  * Writing a consultation into the expert's own calendar produces one identifier Balo does
- * not own and cannot re-derive: the provider's event id. Before this table there was NO
- * column for it anywhere (verified: zero hits for `calendar_event_id` /
- * `external_event_id` / `cronofy_event_id` / `baloBookingId` across `packages/` and
- * `apps/api/src`), and both obvious homes are closed:
+ * not own and cannot re-derive: the provider's event id. No other column holds it, and both
+ * obvious homes are closed:
  *
  *   · **`meetings` is FORBIDDEN.** `invariants/meetings-no-context-column.test.ts` asserts
  *     that table declares no column name ending in `_id`, exactly ONE uuid column, and NO

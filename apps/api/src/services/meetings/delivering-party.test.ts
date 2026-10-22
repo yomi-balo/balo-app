@@ -78,9 +78,9 @@ describe('deliveringExpertUserId', () => {
 
   /**
    * ⚠ THE DISPLAY READ, NOT `findProfileById`. It projects eight columns and structurally cannot
-   * carry `rateCents` — the UN-MARKED-UP consultant rate — nor `stripeConnectId` /
-   * `cronofyUserId`. Nothing here renders, but the narrow read keeps those columns off a path
-   * that feeds a notification payload.
+   * carry `rateCents` — the UN-MARKED-UP consultant rate — nor `stripeConnectId`. Nothing here
+   * renders, but the narrow read keeps those columns off a path that feeds a notification
+   * payload.
    */
   it('⚠ uses the DISPLAY projection, which cannot carry rateCents', async () => {
     mockFindDisplayProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });

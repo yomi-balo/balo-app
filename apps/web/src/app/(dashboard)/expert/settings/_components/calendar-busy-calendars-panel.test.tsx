@@ -17,7 +17,6 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
   provider: 'google',
   credentialStatus: 'ACTIVE',
   providerEmail: 'dana@example.com',
-  lastSyncedAt: null,
   targetCalendarId: null,
   subCalendars: [makeSubCalendar()],
   isBookingTarget: false,

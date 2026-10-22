@@ -382,9 +382,9 @@ describe('expertSearchabilityRepository.loadInputs — projection', () => {
 
 describe('expertSearchabilityRepository.loadInputs — D4 ANY-ACTIVE over the connection SET', () => {
   /**
-   * ⚠⚠ THE TEST BAL-414 EXISTS FOR. `findConnectionByExpertProfileId` returns the OLDEST live
-   * connection, so reading through it here would answer EXPIRED for this expert and de-list
-   * someone whose Microsoft calendar is perfectly healthy — removing them from search AND
+   * ⚠⚠ THE TEST BAL-414 EXISTS FOR. A single-connection read that took the OLDEST live
+   * connection would answer EXPIRED for this expert and de-list someone whose Microsoft
+   * calendar is perfectly healthy — removing them from search AND
    * 404ing their public profile URL.
    */
   it('returns BOTH providers when Google is EXPIRED and Microsoft is ACTIVE', async () => {

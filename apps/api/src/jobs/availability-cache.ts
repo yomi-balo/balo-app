@@ -21,12 +21,12 @@ export const STALENESS_CHECK_QUEUE = 'staleness-check';
  * under NORMAL operation `credential_checked_at` is refreshed only once per
  * `PROBE_INTERVAL_MS` (the health probe's own re-probe cadence). If `PROBE_INTERVAL_MS` ever
  * drops to or below this threshold, every connection's `credential_checked_at` stays "fresh
- * enough" and `findStaleConnections` silently returns `[]` on every tick forever — the EXACT
- * permanent-no-op failure class this file's own docblock says round 1 just closed (the
- * `last_synced_at`-with-no-writer bug), re-armed by an unrelated tuning change in a different
- * file. `calendar-health-probe.ts` imports this constant and asserts the ordering at module
- * load — see its `PROBE_INTERVAL_MS` docblock — so the coupling fails LOUDLY instead of
- * silently if it is ever inverted.
+ * enough" and `findStaleConnections` silently returns `[]` on every tick forever — the only
+ * periodic rebuild of a healthy connection (`startStalenessCheckWorker`) becomes a permanent
+ * no-op, disabled by an unrelated tuning change in a different file.
+ * `calendar-health-probe.ts` imports this constant and asserts the ordering at module load —
+ * see its `PROBE_INTERVAL_MS` docblock — so the coupling fails LOUDLY instead of silently if it
+ * is ever inverted.
  */
 export const STALENESS_CHECK_THRESHOLD_MS = 15 * 60 * 1000;
 
@@ -84,9 +84,9 @@ export async function tryEnqueueAvailabilityCacheRebuild(
   try {
     await enqueueRebuild(expertProfileId);
     return true;
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     log.error(
-      { expertProfileId, error: err instanceof Error ? err.message : String(err) },
+      { expertProfileId, error: error instanceof Error ? error.message : String(error) },
       'Failed to enqueue availability cache rebuild job'
     );
     return false;
@@ -119,14 +119,14 @@ export async function enqueueAvailabilityCacheRebuild(
  * The worker stays thin: invoke, emit analytics, log.
  *
  * BAL-243: this passes no `busyBlocks`, so the service reads vendor free/busy
- * from the SHARED port (`services/availability/vendor-busy.ts`), which answers
- * `[]` until BAL-194/195 wires Cronofy.
+ * from the SHARED port (`services/availability/vendor-busy.ts`) — the same
+ * Apiroc read the booking gate `isWindowAvailableForExpert` makes.
  *
- * ⚠ BAL-194/195 MUST WIRE CRONOFY IN THAT PORT, **NOT** BY PASSING `busyBlocks`
- * FROM HERE (BAL-129). The `busyBlocks` option is a seed-only override; the
- * booking gate `isWindowAvailableForExpert` never sees it, so wiring a vendor
- * through this call site would leave bookings double-booking over an expert's
- * real external commitments with no type, test or helper failing.
+ * ⚠ VENDOR BUSY BELONGS IN THAT PORT, **NOT** IN `busyBlocks` PASSED FROM HERE
+ * (BAL-129). The `busyBlocks` option is a seed/test-only override; the booking
+ * gate never sees it, so busy time supplied through this call site would be
+ * advertised but never enforced — bookings would double-book over an expert's
+ * real external commitments.
  */
 export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData> {
   const worker = new Worker<AvailabilityCacheJobData>(
@@ -143,7 +143,7 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
       // on `earliestAvailableAt` being `null` — that is also the legitimate answer for an
       // expert who genuinely has no open slot.
       if (result.status === 'skipped') {
-        job.log(
+        await job.log(
           `Availability cache rebuild SKIPPED for expert ${expertProfileId} ` +
             `(${result.skipReason ?? 'unknown reason'}) — last-known-good cache left in place`
         );
@@ -154,7 +154,7 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
         distinct_id: expertProfileId,
       });
 
-      job.log(`Availability cache rebuilt for expert ${expertProfileId}`);
+      await job.log(`Availability cache rebuilt for expert ${expertProfileId}`);
     },
     {
       connection: createRedisConnection(),
@@ -186,13 +186,11 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
  * Checks for calendar connections whose credential hasn't been PROVEN in the last 15
  * minutes and enqueues rebuild jobs for each.
  *
- * ⚠⚠ BAL-396 FIX ROUND — THIS IS NOW THE PLATFORM'S ONLY TIME-BASED AVAILABILITY-REBUILD
- * TRIGGER. It used to key off `last_synced_at`, stamped only by the Cronofy-era webhook
- * route BAL-396 deletes — so with no writer left, this cron was a PERMANENT no-op (every
- * tick found zero stale connections and reported nothing wrong). `findStaleConnections` now
- * keys off `credential_checked_at` (stamped by the health probe and by connect/reconnect —
- * see `calendarRepository.findStaleConnections`'s docblock), restoring a real periodic
- * rebuild until BAL-468 ships the Apiroc webhook.
+ * ⚠⚠ THIS IS THE PLATFORM'S ONLY PERIODIC REBUILD OF A HEALTHY CONNECTION — the backstop
+ * behind the Apiroc webhook (`routes/calendar/webhook.ts`). It keys off `credential_checked_at`,
+ * stamped by the health probe and by a reconnect's in-place update; a fresh connect leaves it
+ * NULL, which `calendarRepository.findStaleConnections` matches at once (see its docblock).
+ * `STALENESS_CHECK_THRESHOLD_MS` above records the probe-cadence coupling that keeps it firing.
  */
 export function startStalenessCheckWorker(): Worker {
   const worker = new Worker(
@@ -202,7 +200,7 @@ export function startStalenessCheckWorker(): Worker {
       const staleConnections = await calendarRepository.findStaleConnections(staleThreshold);
 
       if (staleConnections.length === 0) {
-        job.log('No stale connections found');
+        await job.log('No stale connections found');
         return;
       }
 
@@ -226,7 +224,7 @@ export function startStalenessCheckWorker(): Worker {
         );
       }
 
-      job.log(`Enqueued ${staleConnections.length} stale connection rebuild jobs`);
+      await job.log(`Enqueued ${staleConnections.length} stale connection rebuild jobs`);
     },
     {
       connection: createRedisConnection(),

@@ -2067,10 +2067,10 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
    * EXHAUSTIVE key-set is the point — it is what makes the widening a deliberate, reviewed act
    * rather than something a careless `select` could smuggle in. The concealment rationale is
    * untouched: the two additions are display aggregates a client already sees on the expert's
-   * public card, while `rateCents` (the UN-MARKED-UP consultant rate) and the vendor ids stay
-   * structurally absent.
+   * public card, while `rateCents` (the UN-MARKED-UP consultant rate) and `stripeConnectId` (a
+   * vendor id) stay structurally absent.
    */
-  it('returns eight display columns and NEVER rateCents / stripeConnectId / cronofyUserId', async () => {
+  it('returns eight display columns and NEVER rateCents / stripeConnectId', async () => {
     const expert = await expertFactory();
     await db
       .update(expertProfiles)
@@ -2094,7 +2094,6 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
     ]);
     expect(row).not.toHaveProperty('rateCents');
     expect(row).not.toHaveProperty('stripeConnectId');
-    expect(row).not.toHaveProperty('cronofyUserId');
   });
 
   /**

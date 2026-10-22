@@ -149,12 +149,12 @@ export async function provisionConnection(
   let calendars: ListedCalendar[];
   try {
     calendars = await listAllCalendars(endUserAccountId);
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     log.warn(
       {
         connectionId: connection.id,
         expertProfileId: connection.expertProfileId,
-        error: err instanceof Error ? err.message : String(err),
+        error: error instanceof Error ? error.message : String(error),
       },
       'apiroc_provisioning_failed_sync_pending'
     );
@@ -225,7 +225,7 @@ export async function provisionConnection(
       isPrimary: cal.isPrimary,
       // A calendar Balo already knew about keeps whatever the expert last chose; a
       // genuinely NEW calendar defaults to the apiroc skill provider-parity table's rule —
-      // primary conflict-checked, everything else off (matches today's Cronofy default).
+      // primary conflict-checked, everything else off.
       //
       // ⚠ round-2 fix #3 — `cal.isPrimary ||` is a FLOOR, not a fallback: `api.ts:281`
       // refuses to let an expert disable conflict-checking on a PRIMARY calendar, because
@@ -282,12 +282,12 @@ async function deleteVendorSubscriptionsBestEffort(connection: CalendarConnectio
       await callApiroc('calendarSubscriptions.delete', () =>
         client.calendarSubscriptions.delete(connection.endUserAccountId, row.webhookSubscriptionId)
       );
-    } catch (err: unknown) {
+    } catch (error: unknown) {
       log.warn(
         {
           connectionId: connection.id,
           webhookSubscriptionId: row.webhookSubscriptionId,
-          reason: err instanceof Error ? err.message : String(err),
+          reason: error instanceof Error ? error.message : String(error),
           context: 'disconnect',
         },
         'apiroc_subscription_delete_failed'
@@ -332,13 +332,13 @@ async function deleteEndUserAccountBestEffort(connection: CalendarConnection): P
     await callApiroc('endUserAccounts.delete', () =>
       client.endUserAccounts.delete(connection.endUserAccountId)
     );
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     log.warn(
       {
         connectionId: connection.id,
         expertProfileId: connection.expertProfileId,
         stage,
-        error: err instanceof Error ? err.message : String(err),
+        error: error instanceof Error ? error.message : String(error),
       },
       'apiroc_disconnect_vendor_delete_failed'
     );

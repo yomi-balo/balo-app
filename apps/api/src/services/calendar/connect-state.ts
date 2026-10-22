@@ -8,20 +8,21 @@ import {
 
 /**
  * BAL-396 §10.3 — the OAuth connect-flow CSRF state, provider-agnostic (no provider literal
- * anywhere in this file — Scan B, `invariants/sync-token-parity.test.ts`). Reuses the shipped
- * HMAC shape (`services/cronofy/oauth.ts` — `base64url(payload).base64url(hmac)`, keyed on
- * `INTERNAL_API_SECRET`, `timingSafeEqual`, a TTL) rather than inventing a second one.
+ * anywhere in this file — Scan B, `invariants/sync-token-parity.test.ts`). The state is
+ * `base64url(payload).base64url(hmac)`: HMAC-SHA256 keyed on `INTERNAL_API_SECRET`, checked
+ * with `timingSafeEqual`, and bounded by a 10-minute TTL.
  *
  * ⚠ The import above names `CalendarConnectProvider` and iterates `CALENDAR_CONNECT_PROVIDERS`,
  * but never writes the literal `'google'` or `'microsoft'` — the values live in
  * `@balo/shared/calendar`, outside Scan B's walk root (`apps/api/src`), so this file's own
  * "provider-agnostic" claim stays true by construction, not by discipline.
  *
- * ⚠ THE `nonce` IS NOT A REPLAY GUARD. It adds per-request uniqueness inside the TTL so two
- * connect attempts for the same (expert, provider) in the same millisecond do not sign
- * identical states — but it is never checked against a server-side store (there is none). The
- * HMAC plus the TTL is the actual CSRF guard, exactly as the Cronofy state it replaces. Say so
- * here rather than implying replay protection that does not exist.
+ * ⚠ THE `nonce` IS NEVER CHECKED AGAINST A SERVER-SIDE STORE (there is none). It makes every
+ * signed state unique — two connect attempts for the same (expert, provider) in the same
+ * millisecond do not sign identical states — and it is the value the callback compares with the
+ * browser's connect-nonce cookie (`calendarConnectNonceCookieName` below). The CSRF guard is the
+ * three together: the HMAC and the TTL prove Balo minted the state recently, and that cookie
+ * binding proves the browser completing the callback is the one that started the flow.
  */
 export interface ConnectStatePayload {
   readonly expertProfileId: string;
@@ -184,8 +185,7 @@ export interface UnverifiedStateFields {
  * Best-effort, UNVERIFIED extraction of `expertProfileId` / `provider` from a state's
  * payload — used ONLY to label an OAuth-error redirect when the signature itself cannot be
  * trusted (an expired or tampered state, or the vendor's `error` shape, which carries no
- * guarantee the state is even well-formed). Mirrors `routes/calendar/auth.ts`'s existing
- * Cronofy-era pattern (`auth.ts:104-120`). Never use this for anything that requires trust —
+ * guarantee the state is even well-formed). Never use this for anything that requires trust —
  * call `verifyConnectState` for that.
  *
  * ⚠ BAL-397 fix round — `expertProfileId` is narrowed to a UUID SHAPE, not merely to

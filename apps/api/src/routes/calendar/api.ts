@@ -41,13 +41,10 @@ const setTargetCalendarSchema = z.object({
 // ── Helper: map DB data to frontend types ───────────────────────
 
 /**
- * BAL-396 fix round, Finding 7 — the `office365` translation was Cronofy-only, and migration
- * 0069 (`DELETE FROM calendar_connections WHERE end_user_account_id IS NULL`) removed every
- * Cronofy-era row, the only source of that value; Apiroc always writes lowercase `google` /
- * `microsoft` directly (`services/calendar/apiroc-connection.ts`). No CHECK constrains
- * `provider` (a bare `text` column), so this still narrows defensively rather than asserting —
- * `google` is the fallback only because a garbage value has no better answer, never because a
- * Cronofy row is still expected here.
+ * The connect flow only ever writes lowercase `google` / `microsoft`
+ * (`services/calendar/apiroc-connection.ts`), but no CHECK constrains `provider` (a bare `text`
+ * column), so this narrows defensively rather than asserting — `google` is the fallback only
+ * because a garbage value has no better answer.
  */
 function mapProvider(provider: string): CalendarProvider {
   return provider === 'microsoft' ? 'microsoft' : 'google';
@@ -65,9 +62,8 @@ function mapSubCalendar(sub: CalendarSubCalendar): SubCalendar {
 }
 
 /**
- * BAL-397 — the real DB vocabulary reaches the client verbatim. `status` is renamed to
- * `credentialStatus` so nobody mistakes the new four-value union (`ACTIVE | SYNC_PENDING |
- * EXPIRED | REVOKED`) for the retired three-value one on sight.
+ * The stored `credential_status` vocabulary (`ACTIVE | SYNC_PENDING | EXPIRED | REVOKED`)
+ * reaches the client verbatim as `credentialStatus`.
  */
 function mapConnectionSummary(
   connection: DbCalendarConnection,
@@ -80,7 +76,6 @@ function mapConnectionSummary(
     provider: mapProvider(connection.provider),
     credentialStatus: connection.credentialStatus,
     providerEmail: connection.providerEmail,
-    lastSyncedAt: connection.lastSyncedAt?.toISOString() ?? null,
     targetCalendarId: connection.targetCalendarId,
     subCalendars: subCalendars.map(mapSubCalendar),
     isBookingTarget,
@@ -225,10 +220,8 @@ export async function calendarApiRoutes(fastify: FastifyInstance): Promise<void>
   /**
    * POST /api/calendar/disconnect
    * `provider` present → disconnect that provider only. Absent → disconnect every live
-   * connection, then `softDeleteConnection` as a backstop for anything the per-provider loop
-   * did not name. (Migration 0069 already removes every Cronofy-era row at the DB level —
-   * this backstop is not for those; it is a defensive catch-all for a connection the
-   * per-provider loop above did not enumerate.)
+   * connection, then `softDeleteConnection` as a defensive catch-all for any live connection
+   * the per-provider loop did not name.
    *
    * ⚠ THE `provider`-ABSENT ARM HAS NO SHIPPED CALLER AS OF BAL-397. It used to back a
    * "Disconnect all calendars" affordance; that copy is gone — `calendar-disconnect-confirm.tsx`

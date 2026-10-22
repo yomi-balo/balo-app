@@ -32,9 +32,9 @@
  * asked of two different seams.
  *
  * ⚠ `findDisplayProfileById`, NOT `findProfileById`. The display read projects eight columns and
- * structurally cannot carry `rateCents` (the un-marked-up consultant rate), `stripeConnectId` or
- * `cronofyUserId`. Nothing here renders, but the narrow read is free and keeps those columns off
- * a code path that touches a notification payload.
+ * structurally cannot carry `rateCents` (the un-marked-up consultant rate) or `stripeConnectId`.
+ * Nothing here renders, but the narrow read is free and keeps those columns off a code path that
+ * touches a notification payload.
  */
 import {
   agenciesRepository,

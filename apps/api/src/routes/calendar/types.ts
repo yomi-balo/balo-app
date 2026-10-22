@@ -1,14 +1,13 @@
 /** Frontend-facing calendar types (mirrored from web app _types/calendar.ts) */
 
 /**
- * The REAL vocabulary, straight off `calendar_connections.credential_status`
- * (`CALENDAR_CREDENTIAL_STATUSES`, packages/db/src/schema/calendar.ts:33).
+ * The stored vocabulary, straight off `calendar_connections.credential_status`
+ * (`CALENDAR_CREDENTIAL_STATUSES`, packages/db/src/schema/calendar.ts).
  *
- * ⚠ BAL-397 removed `toLegacyStatus`, the Cronofy-era adapter that collapsed this to
- * `connected | sync_pending | auth_error`. `EXPIRED` and `REVOKED` render ONE shared
- * "Reconnect needed" UX (apiroc skill: "build no distinct UX for the two" — a user-initiated
- * revoke surfaces as EXPIRED anyway), but they stay DISTINCT on the wire so the difference
- * remains observable in logs and analytics. Do not re-collapse them at any boundary.
+ * ⚠ `EXPIRED` and `REVOKED` render ONE shared "Reconnect needed" UX (apiroc skill: "build no
+ * distinct UX for the two" — a user-initiated revoke surfaces as EXPIRED anyway), but they stay
+ * DISTINCT on the wire so the difference remains observable in logs and analytics. Do not
+ * collapse them at any boundary.
  */
 export type CalendarCredentialStatus = 'ACTIVE' | 'SYNC_PENDING' | 'EXPIRED' | 'REVOKED';
 export type CalendarProvider = 'google' | 'microsoft';
@@ -32,7 +31,6 @@ export interface CalendarConnection {
   provider: CalendarProvider;
   credentialStatus: CalendarCredentialStatus;
   providerEmail: string | null;
-  lastSyncedAt: string | null;
   targetCalendarId: string | null;
   subCalendars: SubCalendar[];
   /**

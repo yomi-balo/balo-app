@@ -57,8 +57,9 @@ import { ALL_SOURCE_FILES, codeLines, isUnderAny, markersInCode, readRaw } from 
  *   · Scan B (provider literals) now walks ALL of `apps/api/src`, exempting exactly
  *     `lib/apiroc/` (the vendor boundary — the SDK's uppercase `ProviderType` and the display
  *     labels it drives) and `routes/calendar/` (the connect surface — the `z.enum(['google',
- *     'microsoft'])` and the `office365` translation). Nowhere else may a provider name or a
- *     provider branch appear — this is now genuinely wider than the old boundary:
+ *     'microsoft'])` schemas, the `CalendarProvider` union and `api.ts`'s defensive
+ *     `mapProvider`). Nowhere else may a provider name or a provider branch appear — this is
+ *     now genuinely wider than the old boundary:
  *     `services/meetings/`, `services/consultation-events/`, `services/auth/`, all of `lib/`
  *     except `lib/apiroc/`, all of `routes/` except `routes/calendar/`, and `notifications/`
  *     are newly covered.
@@ -74,13 +75,12 @@ import { ALL_SOURCE_FILES, codeLines, isUnderAny, markersInCode, readRaw } from 
  *     final property): `services/consultation-events/` is scanned by Scan B (it may name no
  *     provider), and `lib/apiroc/` + `routes/calendar/` are scanned by Scan E (they may read
  *     no event content). No directory is exempt from both.
- *   · Scan C, scoped to the now-deleted `routes/calendar/webhook.ts` (Cronofy's bare-trigger
- *     receiver), is RETIRED — its subject no longer exists, and the property it guarded
- *     (`changes_since` declared but never read) is structurally unrepresentable once the
- *     Cronofy payload type is gone. It is REPLACED by a sharper assertion that the live
- *     Apiroc free/busy port (`services/availability/vendor-busy.ts`) makes a genuine
- *     `freeBusy.get` call, reads no event content, and is the ONLY thing either availability
- *     consumer calls into a vendor through.
+ *   · Scan C pins how availability reaches a vendor: the live Apiroc free/busy port
+ *     (`services/availability/vendor-busy.ts`) makes a genuine `freeBusy.get` call and reads
+ *     no event content; the shared loader (`services/availability/load-resolver-inputs.ts`) is
+ *     the port's ONE call site tree-wide; every availability consumer reads through that
+ *     loader; and only `resolve-and-cache.ts`'s seed path may skip the port with a
+ *     `busyBlocks` override.
  *
  * ⚠⚠ FIX ROUND 2 (BAL-396, Finding 3) — THE WALK PREVIOUSLY SAW NO `.tsx` FILE AT ALL. Scans B
  * and E's "tree-wide" claim above was true only of `.ts` files: `collectSourceFiles` filtered on
@@ -383,7 +383,7 @@ function providerNamesIn(raw: string): string[] {
  * sourced from free/busy (busy slots, no titles), never from event bodies. Banning the CURSOR
  * does not ban that harm. An adapter written as
  *
- *     events.list(acct, cal, { updatedAfter: connection.lastSyncedAt })
+ *     events.list(acct, cal, { updatedAfter: lastRebuiltAt })
  *
  * ships EXACTLY the option ADR-1021's 2026-08-15 amendment rejected — a full event-content read,
  * differenced by timestamp instead of by cursor — while containing none of `SYNC_TOKEN_MARKERS`.
@@ -411,7 +411,7 @@ const PROVIDER_SCAN_EXEMPT: readonly string[] = [
   MATRIX_REL, // the matrix declares the vocabulary it would be flagged for
   'invariants/', // guards must name what they forbid
   'lib/apiroc/', // THE VENDOR BOUNDARY — the SDK's uppercase ProviderType, and display labels
-  'routes/calendar/', // THE CONNECT SURFACE — z.enum + the office365 translation
+  'routes/calendar/', // THE CONNECT SURFACE — z.enum, the CalendarProvider union, mapProvider
 ];
 
 /**

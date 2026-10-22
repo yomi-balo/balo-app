@@ -134,7 +134,6 @@ const makeConnection = (overrides: Partial<CalendarConnection> = {}): CalendarCo
   provider: 'google',
   credentialStatus: 'ACTIVE',
   providerEmail: 'yomi@gmail.com',
-  lastSyncedAt: '2026-04-09T00:00:00Z',
   targetCalendarId: 'cal-1',
   subCalendars: [
     { id: 'cal-1', name: 'Work', provider: 'google', primary: true, conflictChecking: true },
