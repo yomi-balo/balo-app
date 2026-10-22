@@ -749,7 +749,7 @@ export function ConversationStage({
         setSending(false);
       }
     },
-    [activeThreadId, requestId, lens, threads, threadData, conversationIdOf, router]
+    [activeThreadId, requestId, lens, threads, threadData, conversationIdOf, router, viewerUserId]
   );
 
   // ── Call CTA (BAL-283) ───────────────────────────────────────────────────
