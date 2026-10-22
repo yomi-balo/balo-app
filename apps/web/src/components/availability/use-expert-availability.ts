@@ -26,8 +26,10 @@ export type AvailabilityView =
       slots: AvailabilitySlotDto[];
       expertTimezone: string;
       days: number;
-      /** UTC ISO — when the server computed this grid; drives the stale-tab refresh. Always set by this hook. */
-      generatedAt?: string;
+      /** Epoch ms on THIS browser's clock when the response arrived; drives the stale-tab refresh.
+       *  Never the server's `generatedAt`, so a skewed device clock can't force or suppress it.
+       *  Always set by this hook. */
+      receivedAt?: number;
     }
   | { kind: 'not_configured' }
   | { kind: 'empty_window'; days: number } // status 'no_slots'
@@ -92,18 +94,11 @@ function isPausedBody(value: unknown): boolean {
 }
 
 /**
- * A ready grid older than this is refetched when the tab returns. Twice the response-cache TTL
- * is the oldest a grid can be when it lands (server cache, then the browser's), so anything
- * beyond it was held by the page itself.
+ * A ready grid held on the page for longer than this is refetched when the tab returns. A grid
+ * can already be up to two cache lifetimes old when it lands (server cache, then the browser's),
+ * so a refresh keeps what's on screen within four.
  */
 const STALE_AFTER_MS = 2 * AVAILABILITY_CACHE_TTL_SECONDS * 1000;
-
-/** The server's computation instant, or receipt time when the body carries none usable. */
-function generatedAtOf(body: AvailabilityOkBody): string {
-  return Number.isFinite(Date.parse(body.generatedAt))
-    ? body.generatedAt
-    : new Date().toISOString();
-}
 
 /** Maps a response to the view it represents. Shared by the loading fetch and the silent one. */
 async function viewFromResponse(res: Response): Promise<AvailabilityView> {
@@ -124,7 +119,7 @@ async function viewFromResponse(res: Response): Promise<AvailabilityView> {
     slots: body.slots,
     expertTimezone: body.expertTimezone,
     days: body.days,
-    generatedAt: generatedAtOf(body),
+    receivedAt: Date.now(),
   };
 }
 
@@ -236,8 +231,8 @@ export function useExpertAvailability(
     const refreshIfStale = (): void => {
       const current = viewRef.current;
       if (controller !== null || current.kind !== 'ready') return;
-      if (current.generatedAt === undefined) return;
-      if (Date.now() - Date.parse(current.generatedAt) <= STALE_AFTER_MS) return;
+      if (current.receivedAt === undefined) return;
+      if (Date.now() - current.receivedAt <= STALE_AFTER_MS) return;
       const own = new AbortController();
       controller = own;
       fetch(availabilityUrl(expertProfileId, days, scope), {

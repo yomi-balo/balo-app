@@ -47,8 +47,8 @@ import { useSuggestedTimesPicker } from './use-suggested-times-picker';
  * of advancing a step. Suggestions exclude any day already IN `picked` — three options
  * should be three different days, not 6:00 and 6:15 on the same evening — and once picking has
  * exhausted every suggested day the calendar takes over automatically, not only on "See more
- * times": `showingCalendar` re-derives from `suggestions.length` on every render, it is never a
- * one-time decision the way the FIRST view is.
+ * times": `useSuggestedTimesPicker` falls back to the calendar whenever the suggestions run out,
+ * so this is never a one-time decision the way the FIRST view is.
  */
 
 export interface ProposeTimesDialogProps {
@@ -117,9 +117,6 @@ export function ProposeTimesDialog({
       originalStartIso: currentScheduledStartIso,
       extraFilter: (slot) => !pickedDays.has(localDayKey(slot.start)),
     });
-  // Reactive, unlike `pickerView`'s own initial decision: the LAST suggested day being picked
-  // must fall through to the calendar immediately, not only on the next "See more times" click.
-  const showingCalendar = pickerView === 'calendar' || suggestions.length === 0;
 
   /**
    * Item 20 — the `reschedule-dialog.tsx` precedent (`backButtonRef`/`headingRef`), applied to
@@ -270,7 +267,7 @@ export function ProposeTimesDialog({
     );
   } else if (availabilityView.kind === 'loading' || pickerView === null) {
     pickerPanel = <AvailabilitySkeleton />;
-  } else if (!showingCalendar && fixedDurationMinutes !== undefined) {
+  } else if (pickerView === 'suggested' && fixedDurationMinutes !== undefined) {
     pickerPanel = (
       <SuggestedTimesList
         slots={suggestions}

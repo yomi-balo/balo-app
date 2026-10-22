@@ -194,7 +194,7 @@ describe('useExpertAvailability', () => {
         slots: okBody().slots,
         expertTimezone: 'UTC',
         days: 14,
-        generatedAt: okBody().generatedAt,
+        receivedAt: expect.any(Number),
       })
     );
   });
@@ -285,8 +285,8 @@ describe('useExpertAvailability', () => {
 });
 
 describe('useExpertAvailability — stale-tab silent refresh', () => {
-  // The fixture grid is `generatedAt: 2026-06-01T00:00:00Z`; only `Date` is faked so
-  // testing-library's polling keeps running.
+  // The grid's age is measured from when the response arrived (00:00:30 below), on the browser's
+  // clock; only `Date` is faked so testing-library's polling keeps running.
   function setNow(iso: string): void {
     vi.setSystemTime(new Date(iso));
   }
@@ -358,6 +358,38 @@ describe('useExpertAvailability — stale-tab silent refresh', () => {
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a server clock far behind the browser's: a just-received grid is fresh", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { ...okBody(), generatedAt: '2020-01-01T00:00:00.000Z' })
+    );
+    const { result } = renderRecording();
+    await waitFor(() => expect(result.current.view.kind).toBe('ready'));
+    fetchMock.mockClear();
+
+    setNow('2026-06-01T00:00:40.000Z');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a server clock far ahead of the browser's: a long-held grid still refreshes", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { ...okBody(), generatedAt: '2099-01-01T00:00:00.000Z' })
+    );
+    const { result } = renderRecording();
+    await waitFor(() => expect(result.current.view.kind).toBe('ready'));
+    fetchMock.mockClear();
+
+    setNow('2026-06-01T00:03:00.000Z');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
   });
 
   it('keeps the old view when the silent refresh fails', async () => {

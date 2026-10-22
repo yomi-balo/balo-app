@@ -58,11 +58,16 @@ export function useSuggestedTimesPicker(params: {
         )
       : [];
 
-  const [pickerView, setPickerView] = useState<SuggestedTimesPickerView>(null);
+  const [chosenView, setPickerView] = useState<SuggestedTimesPickerView>(null);
   useEffect(() => {
-    if (pickerView !== null || availabilityView.kind === 'loading') return;
+    if (chosenView !== null || availabilityView.kind === 'loading') return;
     setPickerView(suggestions.length > 0 ? 'suggested' : 'calendar');
-  }, [pickerView, availabilityView.kind, suggestions.length]);
+  }, [chosenView, availabilityView.kind, suggestions.length]);
+  // Reactive, unlike the initial decision: suggestions can run out while the dialog is open (a
+  // start passing, a background refresh, the last suggested day picked), and the calendar then
+  // takes over rather than leaving a "Suggested times" heading over nothing.
+  const pickerView =
+    chosenView === 'suggested' && suggestions.length === 0 ? 'calendar' : chosenView;
 
   return { availabilityView, suggestions, pickerView, setPickerView, reload };
 }

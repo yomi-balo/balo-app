@@ -44,8 +44,8 @@ import { useSuggestedTimesPicker } from './use-suggested-times-picker';
  *
  * ⚠ STEP 1 OPENS ON UP TO FOUR SUGGESTIONS, CALENDAR BEHIND "See more times". `pickerView`
  * stays `null` (a loading skeleton) until `useExpertAvailability` settles, so a slow fetch never
- * flips the view out from under a user already reading it — after that it only changes on a
- * click. `ExpertAvailabilityCalendar` still runs its own fetch when mounted (used exactly as
+ * flips the view out from under a user already reading it — after that it changes on a click,
+ * or falls back to the calendar if the suggestions run out (`useSuggestedTimesPicker`). `ExpertAvailabilityCalendar` still runs its own fetch when mounted (used exactly as
  * shipped, not fed this dialog's slots) — a second request against the same cached endpoint.
  */
 
