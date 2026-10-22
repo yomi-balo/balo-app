@@ -643,14 +643,15 @@ export async function loadAdminPortfolio(
       })
       .map((r) => {
         const stall = adminStallDays(r, now);
-        const gateOwed =
-          r.status === 'accepted' &&
-          (r.clientBillingConfirmedAt === null || r.expertTermsConfirmedAt === null);
+        // An accepted request is held up on the client: billing details, or paying the
+        // upfront invoice Balo has raised.
         let stalledLabel: string | null = null;
         if (r.status === 'experts_invited' && stall !== null) {
           stalledLabel = `No EOIs · ${stall}d`;
-        } else if (gateOwed) {
+        } else if (r.status === 'accepted' && r.clientBillingConfirmedAt === null) {
           stalledLabel = 'Kickoff gate';
+        } else if (r.status === 'accepted' && r.upfrontInvoiceRaisedAt !== null) {
+          stalledLabel = 'Awaiting payment';
         }
         return {
           id: r.id,
@@ -674,7 +675,7 @@ export async function loadAdminPortfolio(
   const gate = requests.filter(
     (r) =>
       r.status === 'accepted' &&
-      (r.clientBillingConfirmedAt === null || r.expertTermsConfirmedAt === null)
+      (r.clientBillingConfirmedAt === null || r.upfrontInvoiceRaisedAt !== null)
   ).length;
 
   // "In delivery" — post-kickoff engagements still in flight (terminal excluded).

@@ -98,14 +98,28 @@ export const projectRequests = pgTable(
     // forward dependency. Typed uuid so the future FK is a no-op type change.
     packageId: uuid('package_id'),
 
-    // ── Kickoff gate state (BAL-291 / A6.5) ──────────────────────────────────
-    // Two of the three kickoff gates are persisted here; the third (admin "settle
-    // invoice + approve") is COLLAPSED into the status transition itself — the admin
-    // gate is `done ⟺ status === 'kickoff_approved'`, so it needs no column. These
-    // live on the request (not `engagements`) because the board renders during
-    // `accepted`, BEFORE the engagement is materialised at approval. Nullable,
-    // no default — NULL = outstanding; a timestamp is the "confirmed at" audit.
+    // ── Kickoff checklist state (BAL-291 / A6.5) ─────────────────────────────
+    // Client billing details → Balo raises the upfront invoice → the invoice is paid.
+    // The last step is COLLAPSED into the status transition (Balo confirming payment IS
+    // the approval: `done ⟺ status === 'kickoff_approved'`), so it needs no column. A
+    // deal with nothing due upfront (`upfrontDueCents === 0`, `@balo/shared`) skips the
+    // invoice and is approved straight after billing. These live on the request (not
+    // `engagements`) because the board renders during `accepted`, BEFORE the engagement
+    // is materialised at approval. Nullable, no default — NULL = outstanding; a
+    // timestamp is the "done at" audit.
     clientBillingConfirmedAt: timestamp('client_billing_confirmed_at', { withTimezone: true }),
+    upfrontInvoiceRaisedAt: timestamp('upfront_invoice_raised_at', { withTimezone: true }),
+    // The staffer who raised it (ADR-1030: a money-boundary act records WHO, not just
+    // when). Written together with `upfront_invoice_raised_at`, which the pair CHECK below
+    // enforces; the act is also audited (`project_request.upfront_invoice_raised`).
+    upfrontInvoiceRaisedByUserId: uuid('upfront_invoice_raised_by_user_id').references(
+      () => users.id,
+      { onDelete: 'restrict' }
+    ),
+    // RETIRED — the expert "confirm payment terms" step was removed (the expert authored
+    // those terms in the proposal the client accepted). Nothing reads or writes it; kept
+    // only so the deployed build that still selects it survives the migration window.
+    // Drop it in a follow-up migration once this change is deployed everywhere.
     expertTermsConfirmedAt: timestamp('expert_terms_confirmed_at', { withTimezone: true }),
 
     // ── Terminal close (BAL-540 / ADR-1025 Amendment 1) ──────────────────────
@@ -192,6 +206,8 @@ export const projectRequests = pgTable(
     // Same FK-column rule (BAL-541). It ALSO serves the future "requests I own" queue
     // (ADR-1055) and the restrict FK's delete-time scan.
     index('project_requests_balo_owner_idx').on(table.baloOwnerUserId),
+    // Same FK-column rule — also the restrict FK's delete-time scan.
+    index('project_requests_upfront_invoice_raised_by_idx').on(table.upfrontInvoiceRaisedByUserId),
     // Same FK-column rule (BAL-589). NOT PARTIAL — the SET NULL FK's delete-time scan ignores
     // `deleted_at`.
     index('project_requests_source_case_idx').on(table.sourceCaseId),
@@ -245,6 +261,11 @@ export const projectRequests = pgTable(
     check(
       'project_requests_balo_fee_bps_range',
       sql`${table.baloFeeBps} >= 0 AND ${table.baloFeeBps} <= 10000`
+    ),
+    // The raise and its actor are one fact: both set or both NULL.
+    check(
+      'project_requests_upfront_invoice_raised_pair',
+      sql`(${table.upfrontInvoiceRaisedAt} IS NULL) = (${table.upfrontInvoiceRaisedByUserId} IS NULL)`
     ),
   ]
 );

@@ -17,6 +17,7 @@ import {
 import { PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { upfrontForProposal } from '@/lib/project-request/kickoff-upfront';
 import { lockContentionFailure } from './_shared/deadlock';
 import { requireRequestStaffCapability } from './_shared/require-request-staff-capability';
 
@@ -34,7 +35,8 @@ export type ApproveKickoffResult =
 
 const INVALID_REQUEST = 'Invalid request.';
 const STALE = 'This request is no longer awaiting kickoff approval.';
-const GATES_INCOMPLETE = 'Client and expert must complete their steps first.';
+const GATES_INCOMPLETE =
+  'The client needs to add billing details, and the upfront invoice must be raised first.';
 const GENERIC_FAILURE = 'Could not approve this kickoff. Please try again.';
 // Defensive: a coherent accepted proposal's snapshotted terms always pass the
 // `@balo/db` engagement coherence guard, so this should never fire on this path —
@@ -57,9 +59,10 @@ interface ApprovableKickoff {
 /**
  * Load + verify everything the approval needs — never trust the admin's claim.
  * The request must be `accepted`, the claimed relationship must BE the accepted
- * one (the winning expert), both persisted gates must be confirmed, and the
- * accepted current proposal (whose commercial terms are snapshotted) must be
- * live. Returns the resolved graph, or a friendly error string for any failure.
+ * one (the winning expert), the client's billing must be confirmed, the accepted
+ * current proposal (whose commercial terms are snapshotted) must be live, and —
+ * when that proposal has anything due upfront — the upfront invoice must have been
+ * raised. Returns the resolved graph, or a friendly error string for any failure.
  */
 async function loadApprovableKickoff(
   requestId: string,
@@ -73,12 +76,11 @@ async function loadApprovableKickoff(
   // Must be an accepted request, and the claimed relationship must BE the
   // accepted one (the winning expert).
   const rel = request.relationships.find((r) => r.status === 'accepted');
-  if (request.status !== 'accepted' || rel === undefined || rel.id !== relationshipId) {
+  if (request.status !== 'accepted' || rel?.id !== relationshipId) {
     return { error: STALE };
   }
 
-  // Both persisted kickoff gates must be confirmed before approval.
-  if (request.clientBillingConfirmedAt === null || request.expertTermsConfirmedAt === null) {
+  if (request.clientBillingConfirmedAt === null) {
     return { error: GATES_INCOMPLETE };
   }
 
@@ -87,6 +89,12 @@ async function loadApprovableKickoff(
   const proposal = await proposalsRepository.findCurrentByRelationship(rel.id);
   if (proposal === undefined || !proposal.isCurrent || proposal.status !== 'accepted') {
     return { error: STALE };
+  }
+
+  // Confirming payment is only possible once there is an invoice to pay. A deal with
+  // nothing due upfront has no invoice step and is approved straight after billing.
+  if (request.upfrontInvoiceRaisedAt === null && (await upfrontForProposal(proposal)) !== null) {
+    return { error: GATES_INCOMPLETE };
   }
 
   return { request, rel, proposal };
@@ -152,16 +160,16 @@ async function commitKickoff(
 }
 
 /**
- * Admin approves a kickoff (BAL-291 / A6.5) — the third (settle-invoice +
- * approve) gate, collapsed into the request's `accepted → kickoff_approved`
- * transition. `commitKickoff` runs the transition AND engagement materialisation
+ * Admin approves a kickoff (BAL-291 / A6.5) — confirming the upfront invoice is
+ * paid (or, with nothing due upfront, approving straight after billing), collapsed
+ * into the request's `accepted → kickoff_approved` transition. `commitKickoff` runs the transition AND engagement materialisation
  * in one tx (snapshotting the accepted proposal's terms); then the client (and,
  * via the resolver, the delivering expert) is notified — fire-and-forget, AFTER
  * the commit.
  *
  * Control flow: requireRequestStaffCapability(MANAGE_ANY_KICKOFF_GATE) → validate input →
- * `loadApprovableKickoff` (request `accepted`, claimed relationship is the accepted one, both
- * gates confirmed, accepted current proposal live) → `commitKickoff` (typed transition errors →
+ * `loadApprovableKickoff` (request `accepted`, claimed relationship is the accepted one, billing
+ * confirmed, accepted current proposal live, upfront invoice raised when anything is due) → `commitKickoff` (typed transition errors →
  * friendly copy) → log → notify → revalidate → return.
  *
  * Analytics are fired CLIENT-side by the component (PROJECT_KICKOFF_APPROVED);

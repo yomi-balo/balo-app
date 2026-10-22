@@ -31,9 +31,11 @@ import {
   mapRequestToDetailView,
   type RequestDetailView,
   type ClosedSummaryInput,
+  type KickoffUpfront,
 } from '@/lib/project-request/request-detail-view';
 import { ensureAdminBillingAutoskip } from '@/lib/project-request/ensure-admin-billing-autoskip';
 import { loadAdminKickoffBilling } from '@/lib/project-request/load-admin-kickoff-billing';
+import { loadKickoffUpfront } from '@/lib/project-request/kickoff-upfront';
 import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickoff-billing-view';
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
@@ -96,6 +98,34 @@ async function loadBillingCapture(
           billingEmail: row.billingEmail,
         };
   return { companyId, canManage, details };
+}
+
+/**
+ * BAL-324 admin-only billing + payment-terms panel data. Only the observer (admin) lens
+ * with an active kickoff board pays for the extra reads.
+ */
+async function loadAdminBilling(
+  ctx: RequestViewerContext,
+  view: RequestDetailView,
+  companyId: string
+): Promise<AdminKickoffBillingView | null> {
+  if (ctx.archetype !== 'observer' || !view.kickoff) return null;
+  return loadAdminKickoffBilling(companyId, view.kickoff.acceptedRelationshipId);
+}
+
+/**
+ * The kickoff checklist's upfront amount — whether the deal has invoice steps at all, and
+ * the client's fee-inclusive invoice figure. The expert lens never sees a client price (the
+ * same audience rule as `hydrateReviewDoc`), so it gets the steps without the amount.
+ */
+async function loadKickoffUpfrontFor(
+  ctx: RequestViewerContext,
+  view: RequestDetailView
+): Promise<KickoffUpfront | null> {
+  if (!view.kickoff) return null;
+  const upfront = await loadKickoffUpfront(view.kickoff.acceptedRelationshipId);
+  if (upfront === null || ctx.lens !== 'expert') return upfront;
+  return { ...upfront, amountCents: null };
 }
 
 /** The `project_request.closed` audit row's `metadata.counts` shape (narrowed, never cast). */
@@ -352,17 +382,9 @@ export default async function RequestDetailPage({
     conversation = await loadConversationView(request, ctx, user);
   }
 
-  // BAL-324 admin-only billing + payment-terms panel data. Only the observer
-  // (admin) lens with an active kickoff board pays for the extra reads.
-  let adminBilling: AdminKickoffBillingView | null = null;
-  if (ctx.archetype === 'observer' && view.kickoff) {
-    adminBilling = await loadAdminKickoffBilling(
-      request.companyId,
-      view.kickoff.acceptedRelationshipId
-    );
-  }
-
+  const adminBilling = await loadAdminBilling(ctx, view, request.companyId);
   const billingCapture = await loadBillingCapture(ctx, view, user.companyRole, request.companyId);
+  const kickoffUpfront = await loadKickoffUpfrontFor(ctx, view);
 
   // BAL-331 deep-link: once the request is `kickoff_approved` a delivery
   // engagement exists — resolve its id so the shell can surface the "View delivery
@@ -409,6 +431,7 @@ export default async function RequestDetailPage({
         conversation={conversation}
         adminBilling={adminBilling}
         billingCapture={billingCapture}
+        kickoffUpfront={kickoffUpfront}
         deliveryEngagementId={deliveryEngagementId}
         viewerEmailDomain={viewerEmailDomain}
         requestFilesView={requestFilesView}

@@ -89,7 +89,7 @@ export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): Reac
   const clock = useViewerClock();
   const [overflows, setOverflows] = useState(false);
   const viewedRef = useRef(false);
-  const railRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLUListElement>(null);
   const [filter, setFilter] = useState<DashboardYourMoveChip>('all');
 
   const { cards } = data;
@@ -231,10 +231,9 @@ export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): Reac
       </div>
 
       {groups.length > 1 && (
-        <div
-          role="group"
+        <fieldset
           aria-label="Filter by type"
-          className="my-3.5 flex flex-nowrap gap-2 overflow-x-auto pr-4 sm:flex-wrap sm:overflow-x-visible sm:pr-[22px]"
+          className="my-3.5 flex min-w-0 flex-nowrap gap-2 overflow-x-auto pr-4 sm:flex-wrap sm:overflow-x-visible sm:pr-[22px]"
         >
           <FilterChip
             label="All"
@@ -251,13 +250,12 @@ export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): Reac
               onClick={() => handleFilter(group.chip)}
             />
           ))}
-        </div>
+        </fieldset>
       )}
 
       {cards.length > 0 && (
-        <div
+        <ul
           ref={railRef}
-          role="list"
           aria-label="Waiting on you"
           className={cn(
             'flex snap-x snap-mandatory items-stretch gap-3.5 overflow-x-auto pr-4 pb-3.5 sm:pr-[22px]',
@@ -273,7 +271,7 @@ export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): Reac
               onNavigate={(target) => handleNavigate(card, index + 1, target)}
             />
           ))}
-        </div>
+        </ul>
       )}
 
       {data.kind === 'error' && (

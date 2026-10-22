@@ -4,7 +4,7 @@ import {
   type PassableRelationshipStatus,
 } from '@balo/shared/project-requests';
 import { cn } from '@/lib/utils';
-import type { RequestDetailView } from '@/lib/project-request/request-detail-view';
+import type { KickoffUpfront, RequestDetailView } from '@/lib/project-request/request-detail-view';
 import {
   BEFORE_INVITE_STATUSES,
   requestPhase,
@@ -60,6 +60,11 @@ interface RequestDetailShellProps {
    * the client lens on an accepted request; forwarded to the KickoffBoard.
    */
   billingCapture?: KickoffBillingCapture | null;
+  /**
+   * The kickoff checklist's upfront amount, loaded by the page; forwarded to the
+   * KickoffBoard. Null when nothing is due upfront (or no kickoff board is active).
+   */
+  kickoffUpfront?: KickoffUpfront | null;
   /**
    * BAL-331 deep-link: the delivery engagement's id, resolved by the page ONLY
    * when the request is `kickoff_approved`. When set, every lens sees the "View
@@ -163,6 +168,67 @@ function owesDirectChoice(
   });
 }
 
+type ShellNudge = ReturnType<typeof nudgeFor>;
+
+/**
+ * The page nudge. Expert lens: the proposal-phase cells key on the VIEWER'S relationship
+ * status (BAL-272 divergence fix) — request status is the max-progress aggregate — and on
+ * the open change request on their own thread (the revise cell).
+ */
+function shellNudge(
+  view: RequestDetailView,
+  ctx: RequestViewerContext,
+  isExpertGated: boolean,
+  viewerThread: ConversationThreadView | null
+): ShellNudge {
+  if (isExpertGated) return EXPERT_GATED_NUDGE;
+  const directLeg = view.onDirectLeg
+    ? { companyName: view.companyName, owesChoice: owesDirectChoice(view, viewerThread) }
+    : null;
+  return nudgeFor(
+    ctx.lens,
+    view.status,
+    view.viewerRelationshipStatus,
+    viewerThread?.changeRequest ?? null,
+    directLeg
+  );
+}
+
+/** Whether the nudge itself carries a "Pass on this project" CTA. */
+function nudgeOffersPass(nudge: ShellNudge): boolean {
+  return nudge?.primary?.action === 'pass' || nudge?.secondary?.action === 'pass';
+}
+
+/**
+ * BAL-540 — whether the header's "Close request" control shows. Never once already closed,
+ * and never for the expert lens (an expert on a closed request never reaches this shell at
+ * all — `page.tsx`'s ended-track branch intercepts them first).
+ */
+function showsCloseControl(
+  ctx: RequestViewerContext,
+  isClosed: boolean,
+  canClose: boolean,
+  canCloseAsAdmin: boolean
+): boolean {
+  if (isClosed) return false;
+  return (ctx.lens === 'client' && canClose) || (ctx.lens === 'admin' && canCloseAsAdmin);
+}
+
+/** A client-lens member (not owner/admin) blocked from the outstanding billing step. */
+function isBillingBlocked(
+  ctx: RequestViewerContext,
+  view: RequestDetailView,
+  billingCapture: KickoffBillingCapture | null
+): billingCapture is KickoffBillingCapture {
+  return (
+    ctx.lens === 'client' &&
+    view.kickoff !== null &&
+    !view.kickoff.clientBillingConfirmed &&
+    billingCapture !== null &&
+    !billingCapture.canManage
+  );
+}
+
 /** "Viewing as {lens}" line + phase pill (participants only) + the BAL-540 close control. */
 function LensLine({
   ctx,
@@ -240,6 +306,7 @@ export function RequestDetailShell({
   conversation = null,
   adminBilling = null,
   billingCapture = null,
+  kickoffUpfront = null,
   deliveryEngagementId = null,
   viewerEmailDomain = null,
   requestFilesView = null,
@@ -260,56 +327,29 @@ export function RequestDetailShell({
   // draft state never lingers under B's URL (mirrors ConversationStage/EoiEntry below).
   const baloPanelNode =
     baloPanel === null ? null : <BaloPanel key={view.id} requestId={view.id} view={baloPanel} />;
-  // BAL-540 — the header's "Close request" control. Never rendered once already closed, and
-  // never for the expert lens (an expert on a closed request never reaches this shell at all —
-  // `page.tsx`'s ended-track branch intercepts them first).
-  const closeControl =
-    !isClosed &&
-    ((ctx.lens === 'client' && canClose) || (ctx.lens === 'admin' && canCloseAsAdmin)) ? (
-      <CloseRequestControl
-        requestId={view.id}
-        requestTitle={view.title}
-        companyName={view.companyName}
-        variant={ctx.lens === 'admin' ? 'admin' : 'client'}
-        liveTracks={view.liveTracksForClose}
-      />
-    ) : null;
-  // Expert lens: the proposal-phase nudge cells key on the VIEWER'S relationship
-  // status (BAL-272 divergence fix) — request status is the max-progress aggregate —
-  // and on the open change request on their own thread (the revise cell).
+  const closeControl = showsCloseControl(ctx, isClosed, canClose, canCloseAsAdmin) ? (
+    <CloseRequestControl
+      requestId={view.id}
+      requestTitle={view.title}
+      companyName={view.companyName}
+      variant={ctx.lens === 'admin' ? 'admin' : 'client'}
+      liveTracks={view.liveTracksForClose}
+    />
+  ) : null;
   const viewerThread =
     conversation?.threads.find((t) => t.relationshipId === ctx.relationshipId) ?? null;
-  const nudge = isExpertGated
-    ? EXPERT_GATED_NUDGE
-    : nudgeFor(
-        ctx.lens,
-        view.status,
-        view.viewerRelationshipStatus,
-        viewerThread?.changeRequest ?? null,
-        view.onDirectLeg
-          ? { companyName: view.companyName, owesChoice: owesDirectChoice(view, viewerThread) }
-          : null
-      );
+  const nudge = shellNudge(view, ctx, isExpertGated, viewerThread);
   // BAL-604 — the pass confirm's inputs, shared by the quiet control and a nudge `pass` CTA.
   const passableStatus = expertPassableStatus(view, ctx);
   // The nudge's own "Pass on this project" is the single Pass entry point while it is showing, so
   // the quiet control is not mounted beside it.
-  const nudgeCarriesPass =
-    !isExpertGated &&
-    !isClosed &&
-    (nudge?.primary?.action === 'pass' || nudge?.secondary?.action === 'pass');
+  const nudgeCarriesPass = !isExpertGated && !isClosed && nudgeOffersPass(nudge);
   // Health panel only once there are relationships (none before experts_invited).
   const showHealthPanel = ctx.archetype === 'observer' && view.relationships.length > 0;
 
-  // A client-lens member (not owner/admin) is blocked from the outstanding billing
-  // step. Fire the blocked-view event ONCE from here (the shell mounts once; the
-  // KickoffBoard mounts twice per client — desktop + mobile sheet).
-  const billingBlocked =
-    ctx.lens === 'client' &&
-    view.kickoff !== null &&
-    !view.kickoff.clientBillingConfirmed &&
-    billingCapture !== null &&
-    !billingCapture.canManage;
+  // Fire the blocked-view event ONCE from here (the shell mounts once; the KickoffBoard
+  // mounts twice per client — desktop + mobile sheet).
+  const billingBlocked = isBillingBlocked(ctx, view, billingCapture);
 
   // Phase-2 expert compact EOI card. Rendered at BOTH the mobile sheet and the desktop
   // right column, so it's built once here — sharing one element avoids duplicating the
@@ -350,7 +390,7 @@ export function RequestDetailShell({
           phase={phase}
         />
 
-        {billingBlocked && billingCapture && (
+        {billingBlocked && (
           <BillingBlockedViewTracker companyId={billingCapture.companyId} requestId={view.id} />
         )}
 
@@ -467,9 +507,11 @@ export function RequestDetailShell({
                     acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
                     lens={ctx.lens}
                     clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                    expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                    upfrontInvoiceRaised={view.kickoff.upfrontInvoiceRaised}
                     approved={view.kickoff.approved}
                     expertName={view.kickoff.expertName}
+                    clientCompanyName={view.companyName}
+                    upfront={kickoffUpfront}
                     billing={billingCapture}
                   />
                 )}
@@ -548,9 +590,11 @@ export function RequestDetailShell({
                           acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
                           lens={ctx.lens}
                           clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                          expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                          upfrontInvoiceRaised={view.kickoff.upfrontInvoiceRaised}
                           approved={view.kickoff.approved}
                           expertName={view.kickoff.expertName}
+                          clientCompanyName={view.companyName}
+                          upfront={kickoffUpfront}
                           billing={billingCapture}
                           mobile
                         />
@@ -599,9 +643,11 @@ export function RequestDetailShell({
                     acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
                     lens={ctx.lens}
                     clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                    expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                    upfrontInvoiceRaised={view.kickoff.upfrontInvoiceRaised}
                     approved={view.kickoff.approved}
                     expertName={view.kickoff.expertName}
+                    clientCompanyName={view.companyName}
+                    upfront={kickoffUpfront}
                     billing={billingCapture}
                   />
                 )}

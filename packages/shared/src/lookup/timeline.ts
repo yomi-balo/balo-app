@@ -208,10 +208,10 @@ function expertSearchabilitySourceLabel(source: string): string {
 export function humanizeActionTail(action: string): string {
   const dotIndex = action.indexOf('.');
   if (dotIndex === -1) {
-    return capitalizeFirst(action.split('_').join(' '));
+    return capitalizeFirst(action.replaceAll('_', ' '));
   }
   const namespaceParts = action.slice(0, dotIndex).split('_');
-  const lastNamespaceWord = namespaceParts[namespaceParts.length - 1] ?? '';
+  const lastNamespaceWord = namespaceParts.at(-1) ?? '';
   const tailWords = action.slice(dotIndex + 1).split('_');
   return capitalizeFirst([lastNamespaceWord, ...tailWords].join(' '));
 }
@@ -296,6 +296,7 @@ export const AUDIT_ACTION_SENTENCES: Record<
 
   'project_request.balo_fee_overridden': () => 'Balo fee overridden',
   'project_request.converted_from_case': () => 'Converted from a case',
+  'project_request.upfront_invoice_raised': () => 'Upfront invoice raised',
   'project_request.owner_assigned': (m) =>
     m.to === null ? 'Balo owner cleared' : 'Balo owner assigned',
   'project_request.closed': (m) => {

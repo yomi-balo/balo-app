@@ -756,11 +756,16 @@ describe('Group A — the per-request advisory lock is taken before any row lock
     const rel = await requestExpertRelationshipFactory({ invitedByUserId: inviter.id });
     const source = await proposalFactory({ relationship: rel, values: { status: 'accepted' } });
     const now = new Date();
+    const admin = await userFactory();
     await wardenDb
       .update(schema.projectRequests)
-      .set({ status: 'accepted', clientBillingConfirmedAt: now, expertTermsConfirmedAt: now })
+      .set({
+        status: 'accepted',
+        clientBillingConfirmedAt: now,
+        upfrontInvoiceRaisedAt: now,
+        upfrontInvoiceRaisedByUserId: admin.id,
+      })
       .where(eq(schema.projectRequests.id, source.projectRequestId));
-    const admin = await userFactory();
     seededRequestIds.push(source.projectRequestId);
     const seededRequest = await readRequest(source.projectRequestId);
     if (seededRequest === undefined) throw new Error('seeded request vanished');

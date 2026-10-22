@@ -299,10 +299,11 @@ describe('threadNudgeFor — expert lens', () => {
     expect(nudge?.headline).toBe('Offer the client a time to talk');
   });
 
-  it('accepted (won) → confirm payment terms stub', () => {
+  it('accepted (won) → waiting on kickoff, nothing for the expert to do', () => {
     const nudge = threadNudgeFor('expert', 'accepted', thread({ stage: 'won' }));
-    expect(nudge?.headline).toBe('Confirm payment terms for kickoff');
-    expect(nudge?.primary?.action).toBe('stub');
+    expect(nudge?.variant).toBe('waiting');
+    expect(nudge?.headline).toBe('Proposal accepted — kickoff is on its way 🎉');
+    expect(nudge?.primary).toBeUndefined();
   });
 
   it('kickoff_approved (won) → done workspace stub', () => {

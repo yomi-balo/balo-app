@@ -1,4 +1,6 @@
 import { and, asc, eq, gt, inArray, isNull, lte, notExists, sql, type SQL } from 'drizzle-orm';
+import { applyBaloFee } from '@balo/shared/pricing';
+import { upfrontDueCents } from '@balo/shared/project-requests';
 import { db } from '../client';
 import {
   engagementMilestones,
@@ -22,6 +24,7 @@ import { markNotSelectedByAward } from './request-expert-relationships';
 import { assertEngagementTermsCoherent } from './proposal-coherence';
 import { conversationsRepository } from './conversations';
 import { listByProposalTx } from './proposal-milestones';
+import { listByProposalTx as listInstallmentsTx } from './proposal-payment-installments';
 import { engagementMilestonesRepository, snapshotFromProposalTx } from './engagement-milestones';
 import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
 import {
@@ -69,14 +72,15 @@ function assertTermsBeforeInsert(input: {
 }
 
 /**
- * Both persisted kickoff gates (`client_billing` + `expert_terms`) must be
- * confirmed before a request can be approved and its engagement materialised.
- * The third (admin "settle invoice + approve") gate IS the approval action
- * itself, so it is not represented here.
+ * The kickoff checklist's earlier steps must be done before a request can be approved
+ * and its engagement materialised: the client's billing details are confirmed, and —
+ * when the accepted proposal has anything due upfront — Balo has raised the upfront
+ * invoice. Confirming that invoice paid IS the approval action, so it is not
+ * represented here.
  */
 export class KickoffGatesIncompleteError extends Error {
   constructor() {
-    super('Both client and expert kickoff gates must be confirmed before approval');
+    super('Client billing and the upfront invoice must be in place before approval');
     this.name = 'KickoffGatesIncompleteError';
   }
 }
@@ -954,7 +958,9 @@ export const projectEngagementsRepository = {
    *  - missing/soft-deleted request → `Error`
    *  - status is not `accepted` (or the edge to `kickoff_approved` is illegal) →
    *    `InvalidStatusTransitionError`
-   *  - either persisted kickoff gate is still NULL → `KickoffGatesIncompleteError`
+   *  - client billing unconfirmed, or the upfront invoice not yet raised on a proposal
+   *    with anything due upfront (`upfrontDueCents`, read from `sourceProposalId`'s
+   *    installments + the passed terms) → `KickoffGatesIncompleteError`
    *  - incoherent snapshotted terms → `EngagementTermsCoherenceError`
    *
    * The engagement's `billingModel`/`approvalModel`/`deliveryStatus`/`currency` come
@@ -1012,8 +1018,23 @@ export const projectEngagementsRepository = {
         throw new InvalidStatusTransitionError(current.status, 'kickoff_approved');
       }
 
-      if (current.clientBillingConfirmedAt === null || current.expertTermsConfirmedAt === null) {
+      if (current.clientBillingConfirmedAt === null) {
         throw new KickoffGatesIncompleteError();
+      }
+      if (current.upfrontInvoiceRaisedAt === null) {
+        // The client's fee-inclusive figure — the same derivation the web checklist and
+        // the accept modal's "Due now" use, so all three agree on whether anything is due.
+        const installments = await listInstallmentsTx(tx, input.sourceProposalId);
+        const fee = (cents: number): number => applyBaloFee(cents, input.baloFeeBps);
+        const dueCents = upfrontDueCents({
+          pricingMethod: input.pricingMethod,
+          priceCents: fee(input.priceCents),
+          depositCents: input.depositCents === undefined ? null : fee(input.depositCents),
+          installments,
+        });
+        if (dueCents > 0) {
+          throw new KickoffGatesIncompleteError();
+        }
       }
 
       // COHERENCE (BAL-293): guard the snapshotted terms BEFORE the direct inserts.

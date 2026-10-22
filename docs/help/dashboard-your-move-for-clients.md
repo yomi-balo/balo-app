@@ -20,6 +20,8 @@ cards, most pressing first. Scroll sideways to see them all.
 - Work an expert has marked complete, ready for your review.
 - A kickoff that needs billing confirmed. If someone else on your team confirms billing, the card
   lets you view the kickoff instead.
+- An upfront invoice to pay, once Balo has sent it. The project kicks off as soon as Balo sees
+  the payment.
 - An exploratory call with Balo to book, so we can find the right experts for your brief.
 - Experts who have replied to your request and are waiting to hear back.
 - A proposal to review.

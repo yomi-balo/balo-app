@@ -309,7 +309,6 @@ describe('rail/track agreement', () => {
     eoi_reply_owed: 'eoi',
     proposal_requested: 'prop_req',
     changes_requested: 'prop_in',
-    kickoff_terms: 'accepted',
     delivery_changes: 'kicked',
   } satisfies Record<ExpertMoveKind, StageKey>;
   const CLIENT_STAGE_OF = {
@@ -317,6 +316,7 @@ describe('rail/track agreement', () => {
     eoi_reply: 'eoi',
     proposal_review: 'prop_in',
     kickoff_billing: 'accepted',
+    kickoff_payment: 'accepted',
     completion: 'kicked',
   } satisfies Record<ClientMoveKind, StageKey>;
   const EXPERT_KINDS = Object.entries(EXPERT_STAGE_OF) as [ExpertMoveKind, StageKey][];

@@ -785,6 +785,13 @@
       "when": 1792623607942,
       "tag": "0111_drop_calendar_last_synced_at",
       "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1792663682823,
+      "tag": "0112_kickoff_upfront_invoice",
+      "breakpoints": true
     }
   ]
 }

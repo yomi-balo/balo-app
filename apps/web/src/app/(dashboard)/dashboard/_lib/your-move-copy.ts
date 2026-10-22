@@ -25,12 +25,6 @@ export const YOUR_MOVE_DRAFT_NOT_STARTED = 'Not started yet';
 export const YOUR_MOVE_ACTION_REPLY = 'Reply';
 export const YOUR_MOVE_ACTION_FINISH_PROPOSAL = 'Finish proposal';
 
-export const YOUR_MOVE_GATE_LABELS: Record<'billing' | 'terms' | 'approval', string> = {
-  billing: 'Client billing',
-  terms: 'Your terms',
-  approval: 'Balo approval',
-};
-
 /** `general` has no label: the card shows the note with no section chip. */
 export const YOUR_MOVE_SECTION_LABELS: Record<ProposalChangeSection, string | null> = {
   general: null,
@@ -67,10 +61,14 @@ export const YOUR_MOVE_BILLING_TITLE = 'Outstanding balance';
 export const YOUR_MOVE_BILLING_COUNTERPARTY = 'New bookings are on hold';
 export const YOUR_MOVE_BILLING_BODY = 'Settling it lifts the hold on new bookings.';
 
-export const YOUR_MOVE_CLIENT_GATE_LABELS: Record<'billing' | 'terms' | 'approval', string> = {
+export const YOUR_MOVE_CLIENT_GATE_LABELS: Record<
+  'billing' | 'invoice' | 'payment' | 'kickoff',
+  string
+> = {
   billing: 'Your billing',
-  terms: 'Expert terms',
-  approval: 'Balo approval',
+  invoice: 'Upfront invoice',
+  payment: 'Your payment',
+  kickoff: 'Balo kickoff',
 };
 
 /** The billing gate's label for a member who cannot confirm billing: it is not theirs to do. */

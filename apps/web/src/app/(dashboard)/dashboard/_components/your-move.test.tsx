@@ -54,15 +54,6 @@ const REALISTIC_CONTEXTS: Record<YourMoveCardView['kind'], YourMoveCardView['con
   },
   proposal_requested: { type: 'draft', label: 'Not started yet' },
   changes_requested: { type: 'change_note', note: 'Please tighten the scope', section: 'Pricing' },
-  kickoff_terms: {
-    type: 'gates',
-    gates: [
-      { label: 'Client billing', state: 'done' },
-      { label: 'Your terms', state: 'yours' },
-      { label: 'Balo approval', state: 'pending' },
-    ],
-    note: null,
-  },
   delivery_changes: { type: 'delivery', note: 'Rework the approval flow', done: 2, total: 5 },
   action_items: { type: 'items', items: [{ text: 'Send the SOW', overdue: true }], more: 1 },
   messages: { type: 'message', from: 'Northwind', at: '2h ago', snippet: 'Thanks, one question' },
@@ -82,8 +73,16 @@ const REALISTIC_CONTEXTS: Record<YourMoveCardView['kind'], YourMoveCardView['con
     type: 'gates',
     gates: [
       { label: 'Your billing', state: 'yours' },
-      { label: 'Expert terms', state: 'done' },
-      { label: 'Balo approval', state: 'pending' },
+      { label: 'Balo kickoff', state: 'pending' },
+    ],
+    note: null,
+  },
+  kickoff_payment: {
+    type: 'gates',
+    gates: [
+      { label: 'Your billing', state: 'done' },
+      { label: 'Upfront invoice', state: 'done' },
+      { label: 'Your payment', state: 'yours' },
     ],
     note: null,
   },
@@ -126,11 +125,13 @@ const ALL_KINDS: YourMoveCardView[] = DASHBOARD_YOUR_MOVE_CARD_KINDS.map((kind, 
   })
 );
 
-/** The card articles only: gate and item lists nest their own listitems. */
-const cardItems = (): HTMLElement[] =>
-  within(screen.getByRole('list', { name: 'Waiting on you' }))
+/** The cards only — the rail's own items; gate and item lists nest their own listitems. */
+const cardItems = (): HTMLElement[] => {
+  const rail = screen.getByRole('list', { name: 'Waiting on you' });
+  return within(rail)
     .getAllByRole('listitem')
-    .filter((el) => el.tagName === 'ARTICLE');
+    .filter((el) => el.parentElement === rail);
+};
 
 const ready = (cards: readonly YourMoveCardView[]): YourMoveData => ({ kind: 'ready', cards });
 

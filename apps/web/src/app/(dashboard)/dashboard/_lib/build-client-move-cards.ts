@@ -220,6 +220,38 @@ function proposalReviewParts({ row, detail, input }: ProjectInput): ProjectCardP
   };
 }
 
+/**
+ * The kickoff card's gates. Before Balo raises the upfront invoice the client owes billing,
+ * and whether an invoice step follows depends on the proposal (not loaded here), so the rest
+ * reads as one "Balo kickoff" gate. Once the invoice is raised the client owes payment.
+ */
+function kickoffContext(detail: ClientMoveDetail, canManageBilling: boolean): YourMoveContext {
+  if (detail.upfrontInvoiceRaisedAt !== null) {
+    return {
+      type: 'gates',
+      gates: [
+        { label: YOUR_MOVE_CLIENT_GATE_LABELS.billing, state: 'done' },
+        { label: YOUR_MOVE_CLIENT_GATE_LABELS.invoice, state: 'done' },
+        {
+          label: YOUR_MOVE_CLIENT_GATE_LABELS.payment,
+          state: canManageBilling ? 'yours' : 'pending',
+        },
+      ],
+      note: null,
+    };
+  }
+  return {
+    type: 'gates',
+    gates: [
+      canManageBilling
+        ? { label: YOUR_MOVE_CLIENT_GATE_LABELS.billing, state: 'yours' }
+        : { label: YOUR_MOVE_KICKOFF_MEMBER_BILLING_LABEL, state: 'pending' },
+      { label: YOUR_MOVE_CLIENT_GATE_LABELS.kickoff, state: 'pending' },
+    ],
+    note: canManageBilling ? null : YOUR_MOVE_KICKOFF_MEMBER_NOTE,
+  };
+}
+
 function kickoffParts({ row, detail, input }: ProjectInput): ProjectCardParts {
   const [accepted] = relationshipsAt(detail, 'accepted');
   return {
@@ -228,23 +260,7 @@ function kickoffParts({ row, detail, input }: ProjectInput): ProjectCardParts {
         ? UNNAMED_EXPERT
         : expertLabel(accepted.expertProfileId, input.expertNames).full,
     fact: yourMoveAcceptedFact(row.updatedRelative),
-    context:
-      detail === undefined
-        ? null
-        : {
-            type: 'gates',
-            gates: [
-              input.canManageBilling
-                ? { label: YOUR_MOVE_CLIENT_GATE_LABELS.billing, state: 'yours' }
-                : { label: YOUR_MOVE_KICKOFF_MEMBER_BILLING_LABEL, state: 'pending' },
-              {
-                label: YOUR_MOVE_CLIENT_GATE_LABELS.terms,
-                state: detail.expertTermsConfirmedAt === null ? 'pending' : 'done',
-              },
-              { label: YOUR_MOVE_CLIENT_GATE_LABELS.approval, state: 'pending' },
-            ],
-            note: input.canManageBilling ? null : YOUR_MOVE_KICKOFF_MEMBER_NOTE,
-          },
+    context: detail === undefined ? null : kickoffContext(detail, input.canManageBilling),
     actionLabel: input.canManageBilling ? undefined : YOUR_MOVE_ACTION_VIEW_KICKOFF,
   };
 }
@@ -274,6 +290,7 @@ const PROJECT_PARTS: Record<ClientMoveKind, (input: ProjectInput) => ProjectCard
   eoi_reply: eoiReplyParts,
   proposal_review: proposalReviewParts,
   kickoff_billing: kickoffParts,
+  kickoff_payment: kickoffParts,
   completion: completionParts,
 };
 

@@ -63,8 +63,12 @@ function proposal(
     ...over,
   };
 }
-function detail(id: string, relationships: Rel[], terms: Date | null = null): ClientMoveDetail {
-  return { projectRequestId: id, expertTermsConfirmedAt: terms, relationships };
+function detail(
+  id: string,
+  relationships: Rel[],
+  invoiceRaisedAt: Date | null = null
+): ClientMoveDetail {
+  return { projectRequestId: id, upfrontInvoiceRaisedAt: invoiceRaisedAt, relationships };
 }
 
 function build(over: Partial<BuildClientMoveCardsInput> = {}): YourMoveCardView[] {
@@ -90,6 +94,7 @@ describe('project cards', () => {
     'eoi_reply',
     'proposal_review',
     'kickoff_billing',
+    'kickoff_payment',
     'completion',
   ];
 
@@ -321,11 +326,9 @@ describe('kickoff billing', () => {
   const details = new Map([
     [
       'a',
-      detail(
-        'a',
-        [rel({ relationshipId: 'r1', expertProfileId: 'ep-agency', status: 'accepted' })],
-        hoursAgo(10)
-      ),
+      detail('a', [
+        rel({ relationshipId: 'r1', expertProfileId: 'ep-agency', status: 'accepted' }),
+      ]),
     ],
   ]);
 
@@ -339,8 +342,7 @@ describe('kickoff billing', () => {
         type: 'gates',
         gates: [
           { label: 'Your billing', state: 'yours' },
-          { label: 'Expert terms', state: 'done' },
-          { label: 'Balo approval', state: 'pending' },
+          { label: 'Balo kickoff', state: 'pending' },
         ],
         note: null,
       },
@@ -353,26 +355,49 @@ describe('kickoff billing', () => {
     expect(card?.context).toMatchObject({
       gates: [
         { label: 'Company billing', state: 'pending' },
-        { label: 'Expert terms', state: 'done' },
-        { label: 'Balo approval', state: 'pending' },
+        { label: 'Balo kickoff', state: 'pending' },
       ],
       note: YOUR_MOVE_KICKOFF_MEMBER_NOTE,
     });
   });
+});
 
-  it('unconfirmed expert terms read as pending', () => {
-    const [card] = build({
-      rows: [row('a', 'kickoff_billing')],
-      details: new Map([
-        [
-          'a',
-          detail('a', [
-            rel({ relationshipId: 'r1', expertProfileId: 'ep-solo', status: 'accepted' }),
-          ]),
+describe('kickoff payment', () => {
+  const details = new Map([
+    [
+      'a',
+      detail(
+        'a',
+        [rel({ relationshipId: 'r1', expertProfileId: 'ep-agency', status: 'accepted' })],
+        hoursAgo(10)
+      ),
+    ],
+  ]);
+
+  it('a billing holder gets Pay invoice once Balo has raised the upfront invoice', () => {
+    const [card] = build({ rows: [row('a', 'kickoff_payment')], details });
+    expect(card).toMatchObject({
+      counterparty: 'Maya Patel, Brightline Advisory',
+      actionLabel: 'Pay invoice',
+      context: {
+        type: 'gates',
+        gates: [
+          { label: 'Your billing', state: 'done' },
+          { label: 'Upfront invoice', state: 'done' },
+          { label: 'Your payment', state: 'yours' },
         ],
-      ]),
+        note: null,
+      },
     });
-    expect(card?.context).toMatchObject({ gates: [{}, { state: 'pending' }, {}] });
+  });
+
+  it('a plain member gets View kickoff, with the payment pending rather than theirs', () => {
+    const [card] = build({ rows: [row('a', 'kickoff_payment')], details, canManageBilling: false });
+    expect(card?.actionLabel).toBe('View kickoff');
+    expect(card?.context).toMatchObject({
+      gates: [{ state: 'done' }, { state: 'done' }, { label: 'Your payment', state: 'pending' }],
+      note: null,
+    });
   });
 });
 

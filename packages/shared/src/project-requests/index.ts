@@ -37,6 +37,10 @@ export * from './taxonomy-label';
 // The client-visibility rule: a client sees an expert only once their track has opened.
 export * from './client-visibility';
 
+// What an accepted proposal makes due before kickoff — shared by the accept modal, the kickoff
+// checklist and `@balo/db`'s kickoff approval guard.
+export * from './upfront-due';
+
 /**
  * The relationship statuses a track can actually be declined FROM — i.e. exactly the sources
  * whose `RELATIONSHIP_STATUS_TRANSITIONS` entry carries a `'declined'` edge. NOT `accepted`

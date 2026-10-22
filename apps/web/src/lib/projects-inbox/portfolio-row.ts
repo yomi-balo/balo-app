@@ -65,7 +65,6 @@ export type ExpertMoveKind =
   | 'eoi_reply_owed'
   | 'proposal_requested'
   | 'changes_requested'
-  | 'kickoff_terms'
   | 'delivery_changes';
 
 /**
@@ -78,6 +77,7 @@ export type ClientMoveKind =
   | 'eoi_reply'
   | 'proposal_review'
   | 'kickoff_billing'
+  | 'kickoff_payment'
   | 'completion';
 
 /** One message thread a row can open: a request relationship or a delivery engagement. */
@@ -431,12 +431,14 @@ function clientNeedsYou(
       return { needsYou: true, nudgeLabel: label, clientMoveKind: 'proposal_review' };
     }
     case 'accepted': {
-      const gateOwed = row.clientBillingConfirmedAt === null;
-      return {
-        needsYou: gateOwed,
-        nudgeLabel: gateOwed ? 'Confirm billing' : 'Awaiting kickoff',
-        clientMoveKind: gateOwed ? 'kickoff_billing' : null,
-      };
+      // Billing, then (once Balo has raised it) the upfront invoice, are the client's.
+      if (row.clientBillingConfirmedAt === null) {
+        return { needsYou: true, nudgeLabel: 'Confirm billing', clientMoveKind: 'kickoff_billing' };
+      }
+      if (row.upfrontInvoiceRaisedAt !== null) {
+        return { needsYou: true, nudgeLabel: 'Pay invoice', clientMoveKind: 'kickoff_payment' };
+      }
+      return { needsYou: false, nudgeLabel: 'Awaiting kickoff', clientMoveKind: null };
     }
     case 'kickoff_approved':
       return { needsYou: false, nudgeLabel: 'Live project', clientMoveKind: null };
@@ -449,11 +451,39 @@ function clientNeedsYou(
 
 // ── Expert lens needs-you + nudge (per-relationship) ───────────────
 
-/** The accepted expert owes the kickoff terms until `expertTermsConfirmedAt` is set. */
-function acceptedExpertResult(invitation: PortfolioInvitationRow): ExpertNeedsYouResult {
-  return invitation.expertTermsConfirmedAt === null
-    ? { needsYou: true, nudgeLabel: 'Confirm terms', moveKind: 'kickoff_terms' }
+/**
+ * A decided request (`accepted` / `kickoff_approved`): the surviving thread waits on kickoff
+ * (the checklist runs between the client and Balo); any other relationship lost.
+ */
+function decidedRequestResult(invitation: PortfolioInvitationRow): ExpertNeedsYouResult {
+  if (invitation.relationshipStatus !== 'accepted') {
+    return { needsYou: false, nudgeLabel: 'Not selected', moveKind: null };
+  }
+  return invitation.requestStatus === 'kickoff_approved'
+    ? { needsYou: false, nudgeLabel: 'Live project', moveKind: null }
     : { needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null };
+}
+
+/** After the expert's EOI: a direct request's choice, a reply owed, or times to propose. */
+function eoiSubmittedResult(
+  invitation: PortfolioInvitationRow,
+  signal: RequestThreadSignal
+): ExpertNeedsYouResult {
+  const owesChoice = directExpertOwesChoice({
+    onDirectLeg: invitation.onDirectLeg,
+    relationshipStatus: invitation.relationshipStatus,
+    availabilityShared: invitation.availabilitySharedAt !== null,
+    sentMessage: signal.viewerHasSentMessage,
+  });
+  if (owesChoice) {
+    return { needsYou: true, nudgeLabel: DIRECT_CHOICE_LABEL, moveKind: 'direct_request' };
+  }
+  const needsReply = signal.anyUnread || signal.awaitingViewerReply;
+  return {
+    needsYou: true,
+    nudgeLabel: needsReply ? 'Reply to client' : 'Propose times',
+    moveKind: needsReply ? 'eoi_reply_owed' : 'eoi_propose_times',
+  };
 }
 
 function expertNeedsYou(
@@ -467,38 +497,15 @@ function expertNeedsYou(
     return { needsYou: false, nudgeLabel: 'Closed', moveKind: null };
   }
 
-  // Request-level decision: if the request is accepted, the surviving thread owes
-  // the kickoff gate; a non-accepted relationship on a decided request is lost.
   if (invitation.requestStatus === 'accepted' || invitation.requestStatus === 'kickoff_approved') {
-    if (invitation.relationshipStatus === 'accepted') {
-      if (invitation.requestStatus === 'kickoff_approved') {
-        return { needsYou: false, nudgeLabel: 'Live project', moveKind: null };
-      }
-      return acceptedExpertResult(invitation);
-    }
-    return { needsYou: false, nudgeLabel: 'Not selected', moveKind: null };
+    return decidedRequestResult(invitation);
   }
 
   switch (invitation.relationshipStatus) {
     case 'invited':
       return { needsYou: true, nudgeLabel: 'Submit your EOI', moveKind: 'invitation' };
-    case 'eoi_submitted': {
-      const owesChoice = directExpertOwesChoice({
-        onDirectLeg: invitation.onDirectLeg,
-        relationshipStatus: invitation.relationshipStatus,
-        availabilityShared: invitation.availabilitySharedAt !== null,
-        sentMessage: signal.viewerHasSentMessage,
-      });
-      if (owesChoice) {
-        return { needsYou: true, nudgeLabel: DIRECT_CHOICE_LABEL, moveKind: 'direct_request' };
-      }
-      const needsReply = signal.anyUnread || signal.awaitingViewerReply;
-      return {
-        needsYou: true,
-        nudgeLabel: needsReply ? 'Reply to client' : 'Propose times',
-        moveKind: needsReply ? 'eoi_reply_owed' : 'eoi_propose_times',
-      };
-    }
+    case 'eoi_submitted':
+      return eoiSubmittedResult(invitation, signal);
     case 'proposal_requested':
       return {
         needsYou: true,
@@ -515,7 +522,7 @@ function expertNeedsYou(
       }
       return { needsYou: false, nudgeLabel: 'Waiting on client', moveKind: null };
     case 'accepted':
-      return acceptedExpertResult(invitation);
+      return { needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null };
     case 'declined':
     default:
       return { needsYou: false, nudgeLabel: 'Not selected', moveKind: null };
@@ -523,6 +530,18 @@ function expertNeedsYou(
 }
 
 // ── Admin lens needs-you + nudge ───────────────────────────────────
+
+/**
+ * An accepted request always has Balo in the loop: chasing billing, raising the upfront
+ * invoice, then confirming payment. Once billing is in, most deals' next step is the
+ * invoice; the rare deal with nothing due upfront shows Approve on the board instead (the
+ * inbox does not load the proposal, so it cannot tell the two apart).
+ */
+function adminKickoffLabel(row: PortfolioRequestRow): string {
+  if (row.clientBillingConfirmedAt === null) return 'Kickoff gate';
+  if (row.upfrontInvoiceRaisedAt === null) return 'Raise invoice';
+  return 'Awaiting payment';
+}
 
 function adminNeedsYou(row: PortfolioRequestRow, now: Date): NeedsYouResult {
   switch (row.status) {
@@ -538,10 +557,8 @@ function adminNeedsYou(row: PortfolioRequestRow, now: Date): NeedsYouResult {
       }
       return { needsYou: false, nudgeLabel: 'Experts invited' };
     }
-    case 'accepted': {
-      const gateOwed = row.clientBillingConfirmedAt === null || row.expertTermsConfirmedAt === null;
-      return { needsYou: gateOwed, nudgeLabel: gateOwed ? 'Kickoff gate' : 'Awaiting kickoff' };
-    }
+    case 'accepted':
+      return { needsYou: true, nudgeLabel: adminKickoffLabel(row) };
     case 'kickoff_approved':
       return { needsYou: false, nudgeLabel: 'Live project' };
     case 'eoi_submitted':

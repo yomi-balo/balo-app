@@ -1,0 +1,5 @@
+ALTER TABLE "project_requests" ADD COLUMN "upfront_invoice_raised_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "project_requests" ADD COLUMN "upfront_invoice_raised_by_user_id" uuid;--> statement-breakpoint
+ALTER TABLE "project_requests" ADD CONSTRAINT "project_requests_upfront_invoice_raised_by_user_id_users_id_fk" FOREIGN KEY ("upfront_invoice_raised_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "project_requests_upfront_invoice_raised_by_idx" ON "project_requests" USING btree ("upfront_invoice_raised_by_user_id");--> statement-breakpoint
+ALTER TABLE "project_requests" ADD CONSTRAINT "project_requests_upfront_invoice_raised_pair" CHECK (("project_requests"."upfront_invoice_raised_at" IS NULL) = ("project_requests"."upfront_invoice_raised_by_user_id" IS NULL));

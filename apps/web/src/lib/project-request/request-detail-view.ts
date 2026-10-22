@@ -43,16 +43,29 @@ export type RelationshipState =
   | 'declined';
 
 /**
- * Kickoff-board projection — the dual-confirmation gate state once a request has
- * an accepted expert. `approved` is the terminal flag (both sides confirmed +
- * status advanced to `kickoff_approved`).
+ * Kickoff-board projection — the checklist state once a request has an accepted
+ * expert: client billing → Balo raises the upfront invoice → the invoice is paid.
+ * `approved` is the terminal flag (Balo confirmed payment and the request advanced
+ * to `kickoff_approved`).
  */
 export interface KickoffView {
   acceptedRelationshipId: string;
   clientBillingConfirmed: boolean;
-  expertTermsConfirmed: boolean;
+  upfrontInvoiceRaised: boolean;
   approved: boolean;
   expertName: string;
+}
+
+/**
+ * What the accepted proposal makes due before kickoff (`upfrontDueCents`). Loaded
+ * by the page (`loadKickoffUpfront`); `null` when nothing is due upfront — the
+ * checklist then skips the invoice steps. `amountCents` is the client's
+ * fee-inclusive invoice amount, and is `null` for a viewer who must not see a
+ * client price (the expert lens).
+ */
+export interface KickoffUpfront {
+  amountCents: number | null;
+  currency: string;
 }
 
 /** Observer-only relationship projection (admin health panel). */
@@ -302,7 +315,7 @@ function deriveOnDirectLeg(
 }
 
 /**
- * Kickoff-board projection — the dual-confirmation gate state. Returns `null`
+ * Kickoff-board projection — the checklist state. Returns `null`
  * unless the request is at `accepted`/`kickoff_approved` AND has an accepted
  * relationship (it stays `accepted` even after `kickoff_approved` — there is no
  * `kickoff_approved` relationship status). The expert lens is gated to the
@@ -321,7 +334,7 @@ function deriveKickoffView(
   return {
     acceptedRelationshipId: accepted.id,
     clientBillingConfirmed: request.clientBillingConfirmedAt !== null,
-    expertTermsConfirmed: request.expertTermsConfirmedAt !== null,
+    upfrontInvoiceRaised: request.upfrontInvoiceRaisedAt !== null,
     approved: request.status === 'kickoff_approved',
     expertName: relationshipName(accepted),
   };
