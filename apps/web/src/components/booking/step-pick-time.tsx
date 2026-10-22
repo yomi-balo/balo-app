@@ -13,7 +13,7 @@ import {
 /** What the picker is reopened with after the client leaves the confirm step. */
 export interface PickerRestore {
   initialSelection?: AvailabilitySlotSelection;
-  defaultDurationMinutes?: SlotDurationMinutes;
+  initialDurationMinutes?: SlotDurationMinutes;
 }
 
 /**
@@ -25,7 +25,7 @@ export function pickerRestoreFor(
   stale: boolean
 ): PickerRestore | null {
   if (slot === null) return null;
-  if (stale) return { defaultDurationMinutes: slot.durationMinutes };
+  if (stale) return { initialDurationMinutes: slot.durationMinutes };
   return {
     initialSelection: {
       start: slot.startIso,
@@ -62,6 +62,7 @@ export function StepPickTime({
   similarExpertsHref,
   lengthNote,
   defaultDurationMinutes,
+  initialDurationMinutes,
   initialSelection,
 }: Readonly<{
   expertProfileId: string;
@@ -74,8 +75,10 @@ export function StepPickTime({
   similarExpertsHref?: string;
   /** Billing copy shown under the picker's length control. */
   lengthNote?: ReactNode;
-  /** The length preselected when there is no `initialSelection` (a stale slot's old length). */
+  /** The default length for this flow (not a restored choice). */
   defaultDurationMinutes?: SlotDurationMinutes;
+  /** Restores only the previous length (a stale slot's), never its time. */
+  initialDurationMinutes?: SlotDurationMinutes;
   /** Restores the previous choice after "Change". */
   initialSelection?: AvailabilitySlotSelection;
 }>): React.JSX.Element {
@@ -88,6 +91,7 @@ export function StepPickTime({
         scope={scope}
         lengthNote={lengthNote}
         defaultDurationMinutes={defaultDurationMinutes}
+        initialDurationMinutes={initialDurationMinutes}
         initialSelection={initialSelection}
         onSlotSelect={onSlotSelect}
         pausedAction={

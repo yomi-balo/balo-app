@@ -68,7 +68,7 @@ describe('pickerRestoreFor', () => {
   });
 
   it('carries only the length for a stale slot', () => {
-    expect(pickerRestoreFor(slot, true)).toEqual({ defaultDurationMinutes: 45 });
+    expect(pickerRestoreFor(slot, true)).toEqual({ initialDurationMinutes: 45 });
   });
 
   it('has nothing to restore without a slot', () => {
@@ -110,6 +110,20 @@ describe('StepPickTime forwards the picker props', () => {
 
     expect(await screen.findByText('Billing note')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: '30 min' })).toBeChecked();
+  });
+
+  it('restores a previous length from initialDurationMinutes without a time', async () => {
+    render(
+      <StepPickTime
+        expertProfileId="e1"
+        expertFirstName="Priya"
+        onSlotSelect={vi.fn()}
+        onMessage={vi.fn()}
+        initialDurationMinutes={30}
+      />
+    );
+
+    expect(await screen.findByRole('radio', { name: '30 min' })).toBeChecked();
   });
 
   it('restores the day from initialSelection', async () => {

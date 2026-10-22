@@ -316,6 +316,7 @@ export function IntroCallBookingDialog({
                 onMessage={onMessage}
                 scope="existing_work"
                 lengthNote={<LengthNote billing="project" />}
+                defaultDurationMinutes={30}
                 {...pickerRestore}
               />
             </motion.div>

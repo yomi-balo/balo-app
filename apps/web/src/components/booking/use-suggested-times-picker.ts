@@ -7,6 +7,8 @@ import {
   useExpertAvailability,
   type AvailabilityView,
 } from '@/components/availability/use-expert-availability';
+import { dropPastSlots } from '@/components/availability/availability-filters';
+import { useNowTick } from '@/components/availability/use-now-tick';
 import { suggestTimes } from './suggest-times';
 
 export type SuggestedTimesPickerView = 'suggested' | 'calendar' | null;
@@ -45,10 +47,11 @@ export function useSuggestedTimesPicker(params: {
     // Reschedules serve work already in flight, so a paused expert still has a real grid.
     'existing_work'
   );
+  const now = useNowTick();
   const suggestions =
     fixedDurationMinutes !== undefined && availabilityView.kind === 'ready'
       ? suggestTimes(
-          availabilityView.slots.filter(
+          dropPastSlots(availabilityView.slots, now).filter(
             (slot) => slot.maxDuration >= fixedDurationMinutes && (extraFilter?.(slot) ?? true)
           ),
           originalStartIso

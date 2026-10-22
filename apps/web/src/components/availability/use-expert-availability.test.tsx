@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import {
   AVAILABILITY_EXPERT_ID as EXPERT_ID,
   jsonResponse,
@@ -194,6 +194,7 @@ describe('useExpertAvailability', () => {
         slots: okBody().slots,
         expertTimezone: 'UTC',
         days: 14,
+        generatedAt: okBody().generatedAt,
       })
     );
   });
@@ -280,5 +281,116 @@ describe('useExpertAvailability', () => {
     });
     vi.useRealTimers();
     await waitFor(() => expect(result.current.view).toEqual({ kind: 'error' }));
+  });
+});
+
+describe('useExpertAvailability — stale-tab silent refresh', () => {
+  // The fixture grid is `generatedAt: 2026-06-01T00:00:00Z`; only `Date` is faked so
+  // testing-library's polling keeps running.
+  function setNow(iso: string): void {
+    vi.setSystemTime(new Date(iso));
+  }
+
+  function renderRecording(): {
+    kinds: string[];
+    result: ReturnType<
+      typeof renderHook<ReturnType<typeof useExpertAvailability>, unknown>
+    >['result'];
+  } {
+    const kinds: string[] = [];
+    const rendered = renderHook(() => {
+      const value = useExpertAvailability(EXPERT_ID, 14);
+      kinds.push(value.view.kind);
+      return value;
+    });
+    return { kinds, result: rendered.result };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    setNow('2026-06-01T00:00:30.000Z');
+  });
+
+  it('refetches silently with cache: reload when the tab returns to a 3-minute-old grid', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+    const { kinds, result } = renderRecording();
+    await waitFor(() => expect(result.current.view.kind).toBe('ready'));
+    fetchMock.mockClear();
+    kinds.length = 0;
+
+    setNow('2026-06-01T00:03:00.000Z');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.cache).toBe('reload');
+    await waitFor(() => expect(kinds.length).toBeGreaterThan(0));
+    expect(kinds).not.toContain('loading');
+    expect(result.current.view.kind).toBe('ready');
+  });
+
+  it.each(['focus', 'pageshow'])('also refetches on window %s', async (eventName) => {
+    fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+    const { result } = renderRecording();
+    await waitFor(() => expect(result.current.view.kind).toBe('ready'));
+    fetchMock.mockClear();
+
+    setNow('2026-06-01T00:03:00.000Z');
+    act(() => {
+      globalThis.dispatchEvent(new Event(eventName));
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not refetch while the grid is fresh', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+    const { result } = renderRecording();
+    await waitFor(() => expect(result.current.view.kind).toBe('ready'));
+    fetchMock.mockClear();
+
+    setNow('2026-06-01T00:01:30.000Z');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the old view when the silent refresh fails', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, okBody()));
+    const { kinds, result } = renderRecording();
+    await waitFor(() => expect(result.current.view.kind).toBe('ready'));
+    const before = result.current.view;
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, {}));
+    kinds.length = 0;
+
+    setNow('2026-06-01T00:03:00.000Z');
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.view).toBe(before);
+    expect(kinds).not.toContain('error');
+  });
+
+  it('removes its listeners on unmount', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+    const { result } = renderRecording();
+    await waitFor(() => expect(result.current.view.kind).toBe('ready'));
+    const removed = vi.spyOn(globalThis, 'removeEventListener');
+
+    cleanup();
+
+    expect(removed.mock.calls.map(([type]) => type)).toEqual(
+      expect.arrayContaining(['focus', 'pageshow'])
+    );
   });
 });

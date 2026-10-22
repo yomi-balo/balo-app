@@ -83,6 +83,8 @@ export interface AvailabilitySlotsPanelProps {
   onTakeOffer: (offer: SoonerOffer) => void;
   onGoToDay: (dayKey: string) => void;
   onConfirm: () => void;
+  /** The confirm button's verb: `continue` advances a flow, `add` appends to a list. */
+  confirmAction: 'continue' | 'add';
   /** Standalone confirmation (no `onSlotSelect` supplied by the consumer). */
   confirmed: boolean;
   confirmedSummary: string | null;
@@ -231,6 +233,7 @@ export function AvailabilitySlotsPanel({
   onTakeOffer,
   onGoToDay,
   onConfirm,
+  confirmAction,
   confirmed,
   confirmedSummary,
   onDismissConfirmation,
@@ -356,9 +359,9 @@ export function AvailabilitySlotsPanel({
         // list; inline from md up.
         <div className="bg-card sticky bottom-0 -mx-6 border-t px-6 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-6px_16px_rgba(16,24,40,0.06)] md:static md:mx-0 md:mt-3.5 md:border-0 md:p-0 md:shadow-none">
           <Button type="button" className="w-full" disabled={submitting} onClick={handleContinue}>
-            Continue with{' '}
-            <SlotRange start={selectedSlot.start} length={length} viewerTimezone={viewerTimezone} />{' '}
-            →
+            {confirmAction === 'add' ? 'Add' : 'Continue with'}{' '}
+            <SlotRange start={selectedSlot.start} length={length} viewerTimezone={viewerTimezone} />
+            {confirmAction === 'continue' && ' →'}
           </Button>
         </div>
       )}

@@ -1,7 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AvailabilityScope, AvailabilitySlotDto } from '@balo/shared/availability';
+import {
+  AVAILABILITY_CACHE_TTL_SECONDS,
+  type AvailabilityScope,
+  type AvailabilitySlotDto,
+} from '@balo/shared/availability';
 
 /**
  * BAL-236 — the fetch state machine for the public availability endpoint.
@@ -17,7 +21,14 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
 
 export type AvailabilityView =
   | { kind: 'loading' }
-  | { kind: 'ready'; slots: AvailabilitySlotDto[]; expertTimezone: string; days: number }
+  | {
+      kind: 'ready';
+      slots: AvailabilitySlotDto[];
+      expertTimezone: string;
+      days: number;
+      /** UTC ISO — when the server computed this grid; drives the stale-tab refresh. Always set by this hook. */
+      generatedAt?: string;
+    }
   | { kind: 'not_configured' }
   | { kind: 'empty_window'; days: number } // status 'no_slots'
   | { kind: 'unavailable' } // 503 — calendar unreachable, retryable
@@ -81,6 +92,55 @@ function isPausedBody(value: unknown): boolean {
 }
 
 /**
+ * A ready grid older than this is refetched when the tab returns. Twice the response-cache TTL
+ * is the oldest a grid can be when it lands (server cache, then the browser's), so anything
+ * beyond it was held by the page itself.
+ */
+const STALE_AFTER_MS = 2 * AVAILABILITY_CACHE_TTL_SECONDS * 1000;
+
+/** The server's computation instant, or receipt time when the body carries none usable. */
+function generatedAtOf(body: AvailabilityOkBody): string {
+  return Number.isFinite(Date.parse(body.generatedAt))
+    ? body.generatedAt
+    : new Date().toISOString();
+}
+
+/** Maps a response to the view it represents. Shared by the loading fetch and the silent one. */
+async function viewFromResponse(res: Response): Promise<AvailabilityView> {
+  if (res.status === 404) return { kind: 'not_published' };
+  if (res.status === 503) return { kind: 'unavailable' };
+  if (!res.ok) return { kind: 'error' };
+  const body: unknown = await res.json();
+  if (isPausedBody(body)) return { kind: 'paused' };
+  if (!isAvailabilityOkBody(body)) return { kind: 'error' };
+  if (body.status === 'not_configured') return { kind: 'not_configured' };
+  // Belt-and-braces for the server's own "derive status after the window filter" rule: an `ok`
+  // with nothing in it is an empty window, never a renderable calendar.
+  if (body.status === 'no_slots' || body.slots.length === 0) {
+    return { kind: 'empty_window', days: body.days };
+  }
+  return {
+    kind: 'ready',
+    slots: body.slots,
+    expertTimezone: body.expertTimezone,
+    days: body.days,
+    generatedAt: generatedAtOf(body),
+  };
+}
+
+function availabilityUrl(expertProfileId: string, days: number, scope: AvailabilityScope): string {
+  /**
+   * ⚠ THE ID IS ENCODED AND `days` GOES THROUGH `URLSearchParams`. The server validates the id
+   * as a uuid, but a consumer passing one containing `/`, `?` or `#` would otherwise re-target
+   * the request at a different path entirely before the server ever sees it.
+   */
+  const url = new URL(`${API_BASE}/experts/${encodeURIComponent(expertProfileId)}/availability`);
+  url.searchParams.set('days', String(days));
+  url.searchParams.set('scope', scope);
+  return url.toString();
+}
+
+/**
  * `scope` says which kind of work the grid is read for. `new_work` (the default and the
  * fail-safe) answers `paused` for an expert who has paused new work; `existing_work` always
  * serves the real grid (follow-ups, intro calls, reschedules).
@@ -119,14 +179,7 @@ export function useExpertAvailability(
 
     setView({ kind: 'loading' });
 
-    /**
-     * ⚠ THE ID IS ENCODED AND `days` GOES THROUGH `URLSearchParams`. The server validates the id
-     * as a uuid, but a consumer passing one containing `/`, `?` or `#` would otherwise re-target
-     * the request at a different path entirely before the server ever sees it.
-     */
-    const url = new URL(`${API_BASE}/experts/${encodeURIComponent(expertProfileId)}/availability`);
-    url.searchParams.set('days', String(days));
-    url.searchParams.set('scope', scope);
+    const url = availabilityUrl(expertProfileId, days, scope);
 
     /**
      * ⚠ EVERY COMMIT IS GUARDED BY `signal.aborted`. `AbortController` cancels the *request*,
@@ -141,7 +194,7 @@ export function useExpertAvailability(
       setView(next);
     };
 
-    fetch(url.toString(), {
+    fetch(url, {
       signal: controller.signal,
       // Retries (`reload()`, via `nonce`) bypass the browser HTTP cache; the initial fetch
       // deliberately does NOT set `cache: 'no-store'` — we WANT the browser to honour the
@@ -149,47 +202,7 @@ export function useExpertAvailability(
       cache: nonce > 0 ? 'reload' : undefined,
     })
       .then(async (res) => {
-        if (res.status === 404) {
-          commit({ kind: 'not_published' });
-          return;
-        }
-        if (res.status === 503) {
-          commit({ kind: 'unavailable' });
-          return;
-        }
-        if (!res.ok) {
-          commit({ kind: 'error' });
-          return;
-        }
-        const body: unknown = await res.json();
-        if (isPausedBody(body)) {
-          commit({ kind: 'paused' });
-          return;
-        }
-        if (!isAvailabilityOkBody(body)) {
-          commit({ kind: 'error' });
-          return;
-        }
-        if (body.status === 'not_configured') {
-          commit({ kind: 'not_configured' });
-          return;
-        }
-        if (body.status === 'no_slots') {
-          commit({ kind: 'empty_window', days: body.days });
-          return;
-        }
-        // Belt-and-braces for the server's own "derive status after the window filter" rule:
-        // an `ok` with nothing in it is an empty window, never a renderable calendar.
-        if (body.slots.length === 0) {
-          commit({ kind: 'empty_window', days: body.days });
-          return;
-        }
-        commit({
-          kind: 'ready',
-          slots: body.slots,
-          expertTimezone: body.expertTimezone,
-          days: body.days,
-        });
+        commit(await viewFromResponse(res));
       })
       .catch((error: unknown) => {
         // A timeout aborts too — but it is a failure the user must be able to retry from, not a
@@ -210,6 +223,52 @@ export function useExpertAvailability(
       controller.abort();
     };
   }, [expertProfileId, days, scope, nonce, skipFetch]);
+
+  // A ready grid left on screen for longer than it could have been cached is refetched when the
+  // tab returns. Silent: the current view keeps rendering until the answer lands, and a failed
+  // refresh leaves it in place (the pickers also drop any slot whose start has passed).
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  useEffect(() => {
+    if (skipFetch) return undefined;
+    let controller: AbortController | null = null;
+
+    const refreshIfStale = (): void => {
+      const current = viewRef.current;
+      if (controller !== null || current.kind !== 'ready') return;
+      if (current.generatedAt === undefined) return;
+      if (Date.now() - Date.parse(current.generatedAt) <= STALE_AFTER_MS) return;
+      const own = new AbortController();
+      controller = own;
+      fetch(availabilityUrl(expertProfileId, days, scope), {
+        signal: own.signal,
+        cache: 'reload',
+      })
+        .then(viewFromResponse)
+        .then((next) => {
+          if (own.signal.aborted || viewRef.current.kind !== 'ready') return;
+          if (next.kind === 'error' || next.kind === 'unavailable') return;
+          setView(next);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (controller === own) controller = null;
+        });
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') refreshIfStale();
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    globalThis.addEventListener('focus', refreshIfStale);
+    globalThis.addEventListener('pageshow', refreshIfStale);
+    return () => {
+      controller?.abort();
+      document.removeEventListener('visibilitychange', onVisibility);
+      globalThis.removeEventListener('focus', refreshIfStale);
+      globalThis.removeEventListener('pageshow', refreshIfStale);
+    };
+  }, [expertProfileId, days, scope, skipFetch]);
 
   return { view, reload };
 }

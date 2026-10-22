@@ -86,6 +86,11 @@ export interface ExpertAvailabilityCalendarProps {
   /** Restores a previous choice after "Change": its length and day, and its time if that time
    *  is still offered at that length. */
   initialSelection?: AvailabilitySlotSelection;
+  /** Restores only a previous LENGTH (a stale slot's, or a partial failure's), never a time.
+   *  Counts as a length the client already chose for `duration_is_default`. */
+  initialDurationMinutes?: SlotDurationMinutes;
+  /** The confirm button's verb. `continue` (default) advances a flow; `add` appends to a list. */
+  confirmAction?: 'continue' | 'add';
   /** Billing copy under the length control. Never rendered while the length is pinned. */
   lengthNote?: ReactNode;
   /** Selectable only. Called with the final selection. The component NEVER books. */
@@ -310,6 +315,8 @@ export function ExpertAvailabilityCalendar({
   fixedDurationMinutes,
   defaultDurationMinutes,
   initialSelection,
+  initialDurationMinutes,
+  confirmAction = 'continue',
   lengthNote,
   onSlotSelect,
   viewerType = 'client',
@@ -404,11 +411,11 @@ export function ExpertAvailabilityCalendar({
   const lengthsOffered = useMemo(() => availableLengths(liveSlots), [liveSlots]);
 
   // Derived, never set in an effect, so nothing slides on load or restore.
-  const effectiveDefault = fallbackLength(
-    initialSelection?.duration ?? defaultDurationMinutes ?? 60,
-    liveSlots
-  );
-  const length: SlotDurationMinutes = fixedDurationMinutes ?? chosenLength ?? effectiveDefault;
+  const restoredLength = initialSelection?.duration ?? initialDurationMinutes;
+  const effectiveDefault = fallbackLength(defaultDurationMinutes ?? 60, liveSlots);
+  const startLength =
+    restoredLength === undefined ? effectiveDefault : fallbackLength(restoredLength, liveSlots);
+  const length: SlotDurationMinutes = fixedDurationMinutes ?? chosenLength ?? startLength;
 
   const { daysAtLength, daysShorterOnly } = useMemo(
     () => splitDaysByLength(slotsByDay, length, pinned),
@@ -554,7 +561,11 @@ export function ExpertAvailabilityCalendar({
       slot_start_utc: start,
       duration_minutes: length,
       viewer_timezone: resolvedTimezone,
-      duration_is_default: !pinned && !lengthTouchedRef.current && length === effectiveDefault,
+      duration_is_default:
+        !pinned &&
+        !lengthTouchedRef.current &&
+        restoredLength === undefined &&
+        length === effectiveDefault,
     });
 
     if (onSlotSelect) {
@@ -648,6 +659,7 @@ export function ExpertAvailabilityCalendar({
             onTakeOffer={handleTakeOffer}
             onGoToDay={handleSelectDayKey}
             onConfirm={handleConfirm}
+            confirmAction={confirmAction}
             confirmed={confirmed}
             confirmedSummary={confirmedSummary}
             onDismissConfirmation={resetSelection}

@@ -20,7 +20,11 @@ const { mockOnSlotSelect, mockCalendarScope, mockPickerProps } = vi.hoisted(() =
   mockOnSlotSelect: vi.fn(),
   mockCalendarScope: { value: undefined as string | undefined },
   mockPickerProps: {
-    value: {} as { initialSelection?: unknown; defaultDurationMinutes?: unknown },
+    value: {} as {
+      initialSelection?: unknown;
+      defaultDurationMinutes?: unknown;
+      initialDurationMinutes?: unknown;
+    },
   },
 }));
 vi.mock('@/components/availability', () => ({
@@ -31,11 +35,13 @@ vi.mock('@/components/availability', () => ({
     lengthNote?: React.ReactNode;
     initialSelection?: unknown;
     defaultDurationMinutes?: unknown;
+    initialDurationMinutes?: unknown;
   }) => {
     mockCalendarScope.value = props.scope;
     mockPickerProps.value = {
       initialSelection: props.initialSelection,
       defaultDurationMinutes: props.defaultDurationMinutes,
+      initialDurationMinutes: props.initialDurationMinutes,
     };
     mockOnSlotSelect.mockImplementation(() =>
       props.onSlotSelect?.({
@@ -135,6 +141,15 @@ describe('IntroCallBookingDialog', () => {
     expect(screen.getByText('Project calls are free at any length.')).toBeInTheDocument();
   });
 
+  it('opens the picker with a 30-minute default length and nothing restored', () => {
+    renderDialog();
+    expect(mockPickerProps.value).toEqual({
+      initialSelection: undefined,
+      defaultDurationMinutes: 30,
+      initialDurationMinutes: undefined,
+    });
+  });
+
   it('Change restores the whole previous choice', async () => {
     const user = userEvent.setup();
     renderDialog();
@@ -147,7 +162,8 @@ describe('IntroCallBookingDialog', () => {
         end: '2026-06-05T09:30:00.000Z',
         duration: 30,
       },
-      defaultDurationMinutes: undefined,
+      defaultDurationMinutes: 30,
+      initialDurationMinutes: undefined,
     });
   });
 
@@ -162,6 +178,7 @@ describe('IntroCallBookingDialog', () => {
     expect(mockPickerProps.value).toEqual({
       initialSelection: undefined,
       defaultDurationMinutes: 30,
+      initialDurationMinutes: 30,
     });
   });
 

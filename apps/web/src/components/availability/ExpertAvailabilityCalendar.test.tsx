@@ -496,6 +496,81 @@ describe('ExpertAvailabilityCalendar', () => {
       );
     });
 
+    it('reports duration_is_default false when Change restored a length and the client continues', async () => {
+      mockSlots([slot(JUN5_9, 60)]);
+      const user = userEvent.setup();
+      renderPicker({
+        onSlotSelect: vi.fn(),
+        initialSelection: { start: JUN5_9, end: '2026-06-05T09:30:00.000Z', duration: 30 },
+      });
+      expect(await screen.findByRole('button', { name: /^9:00 – 9:30 am/ })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      );
+      await user.click(screen.getByRole('button', { name: /Continue with/ }));
+
+      expect(track).toHaveBeenCalledWith(
+        'availability_slot_selected',
+        expect.objectContaining({ duration_minutes: 30, duration_is_default: false })
+      );
+    });
+
+    it('reports duration_is_default false after a stale-slot restore (length only)', async () => {
+      mockSlots([slot(JUN5_9, 60)]);
+      const user = userEvent.setup();
+      renderPicker({ onSlotSelect: vi.fn(), initialDurationMinutes: 30 });
+      await screen.findByRole('radiogroup');
+      expect(radioNamed('30 min')).toBeChecked();
+      await openDay(user, /June 5th, 2026/);
+      await user.click(await screen.findByRole('button', { name: /^9:00 – 9:30 am/ }));
+      await user.click(screen.getByRole('button', { name: /Continue with/ }));
+
+      expect(track).toHaveBeenCalledWith(
+        'availability_slot_selected',
+        expect.objectContaining({ duration_minutes: 30, duration_is_default: false })
+      );
+    });
+
+    it('reports duration_is_default true when the ladder fallback default is left untouched', async () => {
+      mockSlots([slot(JUN5_9, 30)]);
+      const user = userEvent.setup();
+      renderPicker({ onSlotSelect: vi.fn() });
+      await screen.findByRole('radiogroup');
+      expect(radioNamed('30 min')).toBeChecked();
+      await openDay(user, /June 5th, 2026/);
+      await user.click(await screen.findByRole('button', { name: /^9:00 – 9:30 am/ }));
+      await user.click(screen.getByRole('button', { name: /Continue with/ }));
+
+      expect(track).toHaveBeenCalledWith(
+        'availability_slot_selected',
+        expect.objectContaining({ duration_minutes: 30, duration_is_default: true })
+      );
+    });
+
+    it('labels the confirm button "Continue with … →" by default', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const user = userEvent.setup();
+      renderPicker({ onSlotSelect: vi.fn() });
+      await openDay(user, /June 5th, 2026/);
+      await user.click(await screen.findByRole('button', { name: /9:00 – 10:00 am/ }));
+
+      expect(
+        screen.getByRole('button', { name: /^Continue with 9:00 – 10:00 am/ })
+      ).toHaveTextContent('→');
+    });
+
+    it('labels the confirm button "Add …" with no arrow when confirmAction is add', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const user = userEvent.setup();
+      renderPicker({ onSlotSelect: vi.fn(), confirmAction: 'add' });
+      await openDay(user, /June 5th, 2026/);
+      await user.click(await screen.findByRole('button', { name: /9:00 – 10:00 am/ }));
+
+      const add = screen.getByRole('button', { name: /^Add 9:00 – 10:00 am/ });
+      expect(add).not.toHaveTextContent('→');
+      expect(screen.queryByRole('button', { name: /Continue with/ })).not.toBeInTheDocument();
+    });
+
     it('pinned: emits the pinned length and reports it as not a default', async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
       const onSlotSelect = vi.fn();

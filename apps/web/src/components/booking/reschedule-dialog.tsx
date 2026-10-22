@@ -473,8 +473,8 @@ export function RescheduleDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !next && resetAndClose()}>
       <DialogContent
-        // 300px slots column + ~440px for a seven-column month grid that doesn't bunch + the
-        // body's own p-6 (48px) needs ~790px; 840px leaves headroom. min(92vw, …) keeps it off
+        // 340px slots column + ~440px for a seven-column month grid that doesn't bunch + the
+        // body's own p-6 (48px) needs ~830px; 840px just clears it. min(92vw, …) keeps it off
         // a small laptop or a landscape tablet instead of a bare fixed width.
         className="max-h-[85vh] overflow-y-auto rounded-xl p-0 sm:max-w-[min(92vw,840px)]"
         onCloseAutoFocus={handleCloseAutoFocus}

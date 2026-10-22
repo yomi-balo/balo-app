@@ -293,6 +293,7 @@ export function ProposeTimesDialog({
           viewerType="expert"
           scope="existing_work"
           fixedDurationMinutes={fixedDurationMinutes}
+          confirmAction="add"
           onSlotSelect={handleSlotSelect}
         />
       </>

@@ -52,7 +52,11 @@ const { mockOnSlotSelect, mockCalendarScope, mockPickerProps } = vi.hoisted(() =
   mockOnSlotSelect: vi.fn(),
   mockCalendarScope: { value: undefined as string | undefined },
   mockPickerProps: {
-    value: {} as { initialSelection?: unknown; defaultDurationMinutes?: unknown },
+    value: {} as {
+      initialSelection?: unknown;
+      defaultDurationMinutes?: unknown;
+      initialDurationMinutes?: unknown;
+    },
   },
 }));
 vi.mock('@/components/availability', () => ({
@@ -63,11 +67,13 @@ vi.mock('@/components/availability', () => ({
     lengthNote?: React.ReactNode;
     initialSelection?: unknown;
     defaultDurationMinutes?: unknown;
+    initialDurationMinutes?: unknown;
   }) => {
     mockCalendarScope.value = props.scope;
     mockPickerProps.value = {
       initialSelection: props.initialSelection,
       defaultDurationMinutes: props.defaultDurationMinutes,
+      initialDurationMinutes: props.initialDurationMinutes,
     };
     mockOnSlotSelect.mockImplementation(() =>
       props.onSlotSelect?.({
@@ -2870,6 +2876,7 @@ describe('BookingFlowDialog — picker restore and billing note (BAL-614)', () =
     expect(mockPickerProps.value).toEqual({
       initialSelection: undefined,
       defaultDurationMinutes: undefined,
+      initialDurationMinutes: undefined,
     });
   });
 
@@ -2886,6 +2893,7 @@ describe('BookingFlowDialog — picker restore and billing note (BAL-614)', () =
         duration: 30,
       },
       defaultDurationMinutes: undefined,
+      initialDurationMinutes: undefined,
     });
   });
 
@@ -2956,7 +2964,8 @@ describe('BookingFlowDialog — picker restore and billing note (BAL-614)', () =
 
     expect(mockPickerProps.value).toEqual({
       initialSelection: undefined,
-      defaultDurationMinutes: 30,
+      defaultDurationMinutes: undefined,
+      initialDurationMinutes: 30,
     });
   });
 
@@ -2981,7 +2990,8 @@ describe('BookingFlowDialog — picker restore and billing note (BAL-614)', () =
 
     expect(mockPickerProps.value).toEqual({
       initialSelection: undefined,
-      defaultDurationMinutes: 30,
+      defaultDurationMinutes: undefined,
+      initialDurationMinutes: 30,
     });
   });
 });
