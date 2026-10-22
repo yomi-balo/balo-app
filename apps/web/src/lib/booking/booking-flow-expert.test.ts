@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ExpertProfileView } from '@/components/expert/profile';
+import { buildSimilarExpertsHref } from '@/lib/search/similar-experts-href';
 import { buildBookingFlowExpert } from './booking-flow-expert';
 
 function view(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView {
@@ -28,7 +29,7 @@ describe('buildBookingFlowExpert', () => {
       partyLabel: 'Anil Pilania',
       verified: false,
       availableForWork: true,
-      similarExpertsHref: '/experts?vertical=salesforce&timeframe=week&sort=soonest',
+      similarExpertsHref: buildSimilarExpertsHref({ verticalSlug: 'salesforce' }),
     });
   });
 
