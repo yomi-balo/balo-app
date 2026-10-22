@@ -1,0 +1,28 @@
+{
+  "name": "bad-key",
+  "raw": {
+    "probe": "bad-key",
+    "request": {
+      "method": "GET",
+      "url": "https://api.apiroc.com/api/v1/endUserAccounts",
+      "authMode": "garbage",
+      "body": null
+    },
+    "durationMs": 278,
+    "response": {
+      "status": 401,
+      "statusText": "Unauthorized",
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "b95704e8ab090077ef6949fad7c44727",
+        "date": "Fri, 14 Aug 2026 07:28:27 GMT"
+      },
+      "bodyRaw": "{\"error\":\"Error\",\"message\":\"Invalid X-API-Key.\",\"requestId\":\"b95704e8ab090077ef6949fad7c44727\"}",
+      "bodyParsed": {
+        "error": "Error",
+        "message": "Invalid X-API-Key.",
+        "requestId": "b95704e8ab090077ef6949fad7c44727"
+      }
+    }
+  }
+}

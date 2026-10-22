@@ -1,0 +1,63 @@
+{
+  "probe": "metadata-roundtrip",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/events/cmssf6bhg1pnwoi2k3ovlula8/«email-redacted»?metadataFilters=%7B%22baloBookingId%22%3A%22spike-test-1%22%7D",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 563,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "14e312d2c4d1c473390db1d2d9b78048",
+      "date": "Fri, 14 Aug 2026 07:28:33 GMT"
+    },
+    "bodyRaw": "{\"data\":[{\"id\":\"kavrdnlpm8s67cm6gbbkpi29ek\",\"title\":\"BAL-393 spike — ignore\",\"description\":\"Created by the BAL-393 throwaway harness. Safe to delete.\\nhttps://balo.daily.co/spike-test-1\",\"etag\":\"\\\"3573385026103998\\\"\",\"createdAt\":\"2026-08-14T07:28:32.000Z\",\"updatedAt\":\"2026-08-14T07:28:33.051Z\",\"start\":{\"dateTime\":\"2026-08-20T20:00:00+10:00\",\"timeZone\":\"UTC\"},\"end\":{\"dateTime\":\"2026-08-20T20:30:00+10:00\",\"timeZone\":\"UTC\"},\"isAllDay\":false,\"privateExtendedProperties\":{\"baloBookingId\":\"spike-test-1\"},\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"recurrence\":null,\"webLink\":\"https://www.google.com/calendar/event?eid=a2F2cmRubHBtOHM2N2NtNmdiYmtwaTI5ZWsgeW9taWthZHJpMjAyM0Bt\",\"iCalUid\":\"kavrdnlpm8s67cm6gbbkpi29ek@google.com\",\"eventType\":\"default\",\"organizer\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"useDefault\":true}}],\"nextSyncToken\":\"CN_qwKTMn5YDEN_qwKTMn5YDGAUghdnxyAMohdnxyAM=\"}",
+    "bodyParsed": {
+      "data": [
+        {
+          "id": "kavrdnlpm8s67cm6gbbkpi29ek",
+          "title": "BAL-393 spike — ignore",
+          "description": "Created by the BAL-393 throwaway harness. Safe to delete.\nhttps://balo.daily.co/spike-test-1",
+          "etag": "\"3573385026103998\"",
+          "createdAt": "2026-08-14T07:28:32.000Z",
+          "updatedAt": "2026-08-14T07:28:33.051Z",
+          "start": {
+            "dateTime": "2026-08-20T20:00:00+10:00",
+            "timeZone": "UTC"
+          },
+          "end": {
+            "dateTime": "2026-08-20T20:30:00+10:00",
+            "timeZone": "UTC"
+          },
+          "isAllDay": false,
+          "privateExtendedProperties": {
+            "baloBookingId": "spike-test-1"
+          },
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "recurrence": null,
+          "webLink": "https://www.google.com/calendar/event?eid=a2F2cmRubHBtOHM2N2NtNmdiYmtwaTI5ZWsgeW9taWthZHJpMjAyM0Bt",
+          "iCalUid": "kavrdnlpm8s67cm6gbbkpi29ek@google.com",
+          "eventType": "default",
+          "organizer": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "useDefault": true
+          }
+        }
+      ],
+      "nextSyncToken": "CN_qwKTMn5YDEN_qwKTMn5YDGAUghdnxyAMohdnxyAM="
+    }
+  }
+}

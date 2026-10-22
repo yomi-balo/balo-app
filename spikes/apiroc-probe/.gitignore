@@ -1,0 +1,8 @@
+# Secrets — never commit. Root .gitignore already covers `.env`; repeated here deliberately
+# so the rule survives if this folder is ever copied out of the repo.
+.env
+.env.*
+!.env.example
+
+node_modules/
+pnpm-lock.yaml

@@ -1,0 +1,54 @@
+{
+  "probe": "calendars",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/calendars/cmssgqb791pukoi2kuqn2trt0",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 646,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "90e7b98f991e77778f56070d11f3be0f",
+      "date": "Fri, 14 Aug 2026 07:28:39 GMT"
+    },
+    "bodyRaw": "{\"data\":[{\"id\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA\",\"name\":\"Calendar\",\"readOnly\":false,\"inviteEmail\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA\",\"isPrimary\":true,\"isShared\":false,\"allowedOnlineMeetingProviders\":[],\"defaultOnlineMeetingProvider\":\"unknown\"},{\"id\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC3AAAA\",\"name\":\"United States holidays\",\"readOnly\":true,\"inviteEmail\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC3AAAA\",\"isPrimary\":false,\"isShared\":true,\"allowedOnlineMeetingProviders\":[],\"defaultOnlineMeetingProvider\":\"unknown\"},{\"id\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC5AAAA\",\"name\":\"Birthdays\",\"readOnly\":true,\"inviteEmail\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC5AAAA\",\"isPrimary\":false,\"isShared\":true,\"allowedOnlineMeetingProviders\":[],\"defaultOnlineMeetingProvider\":\"unknown\"}]}",
+    "bodyParsed": {
+      "data": [
+        {
+          "id": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA",
+          "name": "Calendar",
+          "readOnly": false,
+          "inviteEmail": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA",
+          "isPrimary": true,
+          "isShared": false,
+          "allowedOnlineMeetingProviders": [],
+          "defaultOnlineMeetingProvider": "unknown"
+        },
+        {
+          "id": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC3AAAA",
+          "name": "United States holidays",
+          "readOnly": true,
+          "inviteEmail": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC3AAAA",
+          "isPrimary": false,
+          "isShared": true,
+          "allowedOnlineMeetingProviders": [],
+          "defaultOnlineMeetingProvider": "unknown"
+        },
+        {
+          "id": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC5AAAA",
+          "name": "Birthdays",
+          "readOnly": true,
+          "inviteEmail": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC5AAAA",
+          "isPrimary": false,
+          "isShared": true,
+          "allowedOnlineMeetingProviders": [],
+          "defaultOnlineMeetingProvider": "unknown"
+        }
+      ]
+    }
+  }
+}

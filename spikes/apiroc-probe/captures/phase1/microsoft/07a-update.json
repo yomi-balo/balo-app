@@ -1,0 +1,70 @@
+{
+  "probe": "event-update",
+  "request": {
+    "method": "PUT",
+    "url": "https://api.apiroc.com/api/v1/events/cmssgqb791pukoi2kuqn2trt0/AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA/AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgENAAAADjIgqYA_gUmE3S5GKAxtJgAAAix7AAAA",
+    "authMode": "valid",
+    "body": {
+      "title": "BAL-393 spike — rescheduled",
+      "start": {
+        "dateTime": "2026-08-20T14:00:00Z",
+        "timeZone": "UTC"
+      },
+      "end": {
+        "dateTime": "2026-08-20T14:30:00Z",
+        "timeZone": "UTC"
+      }
+    }
+  },
+  "durationMs": 575,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "4681f19b4598839771f424e50ccc4671",
+      "date": "Fri, 14 Aug 2026 07:28:41 GMT"
+    },
+    "bodyRaw": "{\"id\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgENAAAADjIgqYA_gUmE3S5GKAxtJgAAAix7AAAA\",\"title\":\"BAL-393 spike — rescheduled\",\"etag\":\"DjIgqYA+gUmE3S5GKAxtJgAAAAARFw==\",\"createdAt\":\"2026-08-14T07:28:39.6689279Z\",\"updatedAt\":\"2026-08-14T07:28:41.3235894Z\",\"start\":{\"dateTime\":\"2026-08-20T14:00:00.000Z\",\"timeZone\":\"Etc/UTC\"},\"end\":{\"dateTime\":\"2026-08-20T14:30:00.000Z\",\"timeZone\":\"Etc/UTC\"},\"isAllDay\":false,\"publicExtendedProperties\":{},\"privateExtendedProperties\":{},\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"myResponseStatus\":\"accepted\",\"attendees\":[],\"visibility\":\"default\",\"webLink\":\"https://outlook.live.com/owa/?itemid=AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC%2BEwcADjIgqYA%2BgUmE3S5GKAxtJgAAAgENAAAADjIgqYA%2BgUmE3S5GKAxtJgAAAix7AAAA&exvsurl=1&path=/calendar/item\",\"transparency\":\"opaque\",\"eventType\":\"default\",\"organizer\":{\"name\":\"Yomi Balo\",\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"name\":\"Yomi Balo\",\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"isReminderOn\":true}}",
+    "bodyParsed": {
+      "id": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgENAAAADjIgqYA_gUmE3S5GKAxtJgAAAix7AAAA",
+      "title": "BAL-393 spike — rescheduled",
+      "etag": "DjIgqYA+gUmE3S5GKAxtJgAAAAARFw==",
+      "createdAt": "2026-08-14T07:28:39.6689279Z",
+      "updatedAt": "2026-08-14T07:28:41.3235894Z",
+      "start": {
+        "dateTime": "2026-08-20T14:00:00.000Z",
+        "timeZone": "Etc/UTC"
+      },
+      "end": {
+        "dateTime": "2026-08-20T14:30:00.000Z",
+        "timeZone": "Etc/UTC"
+      },
+      "isAllDay": false,
+      "publicExtendedProperties": {},
+      "privateExtendedProperties": {},
+      "isRecurring": false,
+      "isException": false,
+      "isCancelled": false,
+      "myResponseStatus": "accepted",
+      "attendees": [],
+      "visibility": "default",
+      "webLink": "https://outlook.live.com/owa/?itemid=AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC%2BEwcADjIgqYA%2BgUmE3S5GKAxtJgAAAgENAAAADjIgqYA%2BgUmE3S5GKAxtJgAAAix7AAAA&exvsurl=1&path=/calendar/item",
+      "transparency": "opaque",
+      "eventType": "default",
+      "organizer": {
+        "name": "Yomi Balo",
+        "email": "«email-redacted»",
+        "isSelf": true
+      },
+      "creator": {
+        "name": "Yomi Balo",
+        "email": "«email-redacted»",
+        "isSelf": true
+      },
+      "reminders": {
+        "isReminderOn": true
+      }
+    }
+  }
+}

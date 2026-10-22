@@ -1,0 +1,31 @@
+{
+  "probe": "freeBusy-before",
+  "request": {
+    "method": "POST",
+    "url": "https://api.apiroc.com/api/v1/freeBusy/cmssf6bhg1pnwoi2k3ovlula8",
+    "authMode": "valid",
+    "body": {
+      "startDateTime": "2026-08-20T10:00:00Z",
+      "endDateTime": "2026-08-20T10:30:00Z",
+      "timeZone": "UTC",
+      "calendarIds": ["«email-redacted»"]
+    }
+  },
+  "durationMs": 478,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "de9b33bbc0a6ef0b85fd9d3726e4fcc7",
+      "date": "Fri, 14 Aug 2026 07:28:31 GMT"
+    },
+    "bodyRaw": "[{\"calendarId\":\"«email-redacted»\",\"busySlots\":[]}]",
+    "bodyParsed": [
+      {
+        "calendarId": "«email-redacted»",
+        "busySlots": []
+      }
+    ]
+  }
+}

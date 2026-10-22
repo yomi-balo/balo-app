@@ -1,0 +1,28 @@
+{
+  "name": "missing-key",
+  "raw": {
+    "probe": "missing-key",
+    "request": {
+      "method": "GET",
+      "url": "https://api.apiroc.com/api/v1/endUserAccounts",
+      "authMode": "missing",
+      "body": null
+    },
+    "durationMs": 257,
+    "response": {
+      "status": 401,
+      "statusText": "Unauthorized",
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "f39c19810c0fb47ae966542dca67b45e",
+        "date": "Fri, 14 Aug 2026 07:28:27 GMT"
+      },
+      "bodyRaw": "{\"error\":\"Error\",\"message\":\"Missing X-API-Key header.\",\"requestId\":\"f39c19810c0fb47ae966542dca67b45e\"}",
+      "bodyParsed": {
+        "error": "Error",
+        "message": "Missing X-API-Key header.",
+        "requestId": "f39c19810c0fb47ae966542dca67b45e"
+      }
+    }
+  }
+}
