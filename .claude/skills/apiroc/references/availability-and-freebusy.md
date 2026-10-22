@@ -468,9 +468,9 @@ partial on `deleted_at IS NULL`, and the reader the union needs is now LIVE:
 // packages/db/src/repositories/calendar.ts — the free/busy read's connection list
 calendarRepository.listBusyReadTargets(expertProfileId): Promise<BusyReadTarget[]>;
 // One round trip; returns EVERY live connection (any credentialStatus — see §3), each with its
-// conflict-checked calendar ids and a `provisioned` flag. Deliberately NOT
-// `findConnectionByExpertProfileId` — that returns ONE row (oldest live) and would silently
-// ignore the expert's second calendar, double-booking them.
+// conflict-checked calendar ids and a `provisioned` flag. Deliberately a list, never a
+// single-row lookup — one row would silently ignore the expert's second calendar,
+// double-booking them.
 ```
 
 **What is actually built, now:** `vendorBusyProvider.listBusyBlocks` calls `listBusyReadTargets`,

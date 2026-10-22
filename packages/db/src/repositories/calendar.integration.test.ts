@@ -1123,39 +1123,6 @@ describe('calendarRepository — provider-scoped reads', () => {
   });
 });
 
-describe('calendarRepository — LEGACY-SINGLE-CONNECTION reads answer deterministically', () => {
-  it('findConnectionByExpertProfileId returns the OLDEST live connection, not an arbitrary one', async () => {
-    const expert = await expertDraftFactory();
-    const { google } = await seedGoogleThenMicrosoft(expert.id);
-
-    // Both rows are equally valid answers to a query that cannot name a provider. Pinning
-    // "oldest" means a caller's behaviour cannot flip between runs with no code change.
-    expect((await calendarRepository.findConnectionByExpertProfileId(expert.id))?.id).toBe(
-      google.id
-    );
-  });
-
-  it('findConnectionByExpertProfileId still returns the oldest when microsoft was connected FIRST', async () => {
-    const expert = await expertDraftFactory();
-    const { google, microsoft } = await seedGoogleThenMicrosoft(expert.id);
-    await stampCreatedAt(microsoft.id, '2025-01-01T00:00:00.000Z');
-
-    const found = await calendarRepository.findConnectionByExpertProfileId(expert.id);
-    expect(found?.id).toBe(microsoft.id);
-    expect(found?.id).not.toBe(google.id);
-  });
-
-  it('findConnectionByExpertProfileId skips to the surviving provider once the oldest is disconnected', async () => {
-    const expert = await expertDraftFactory();
-    const { microsoft } = await seedGoogleThenMicrosoft(expert.id);
-    await calendarRepository.softDeleteConnectionForProvider(expert.id, 'google');
-
-    expect((await calendarRepository.findConnectionByExpertProfileId(expert.id))?.id).toBe(
-      microsoft.id
-    );
-  });
-});
-
 // ── Writes: provider-scoped siblings vs the documented fan-out ───
 
 describe('calendarRepository — per-provider writes', () => {

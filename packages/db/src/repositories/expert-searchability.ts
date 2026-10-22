@@ -88,8 +88,7 @@ export interface ExpertSearchabilityConnectionState {
  * D4 — EVERY non-soft-deleted connection the expert holds, not "the expert's connection".
  * Connections are per-(expert, provider) since BAL-467, so the `calendar` item is defined over
  * the SET: at least one live connection whose credential is `ACTIVE`. Reducing this to one row
- * (the `findConnectionByExpertProfileId` shape, which returns the OLDEST live connection) would
- * read `calendar: false` for an expert holding an EXPIRED Google and a healthy Microsoft — and
+ * (say, the OLDEST live connection) would read `calendar: false` for an expert holding an EXPIRED Google and a healthy Microsoft — and
  * under symmetric revocation that latent bug becomes a WRONGFUL DE-LISTING that also 404s their
  * public profile page.
  *

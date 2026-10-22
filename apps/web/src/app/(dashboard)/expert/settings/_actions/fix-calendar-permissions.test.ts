@@ -30,6 +30,7 @@ vi.mock('../_lib/calendar-connect-cookie', () => ({
   setCalendarConnectNonceCookie: (...args: unknown[]) => mockSetCalendarConnectNonceCookie(...args),
 }));
 
+import { log } from '@/lib/logging';
 import { fixCalendarPermissionsAction } from './fix-calendar-permissions';
 
 const EXPERT_SESSION = {
@@ -107,5 +108,22 @@ describe('fixCalendarPermissionsAction', () => {
       success: false,
       error: 'Failed to generate permission fix link',
     });
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to get relink URL',
+      expect.objectContaining({ error: 'Network error', stack: expect.any(String) })
+    );
+  });
+
+  it('logs a non-Error rejection as its string form, with no stack', async () => {
+    mockCalendarApiFetch.mockRejectedValueOnce('upstream unavailable');
+    const result = await fixCalendarPermissionsAction('google');
+    expect(result).toEqual({
+      success: false,
+      error: 'Failed to generate permission fix link',
+    });
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to get relink URL',
+      expect.objectContaining({ error: 'upstream unavailable', stack: undefined })
+    );
   });
 });

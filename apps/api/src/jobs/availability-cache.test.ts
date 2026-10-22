@@ -142,6 +142,30 @@ describe('availability-cache jobs', () => {
       expect(loggedMessage).toContain('SKIPPED');
       expect(loggedMessage).toContain('vendor_busy_unavailable');
     });
+
+    it.each([
+      { outcome: 'completed', result: { status: 'completed', earliestAvailableAt: null } },
+      {
+        outcome: 'skipped',
+        result: {
+          status: 'skipped',
+          skipReason: 'vendor_busy_unavailable',
+          earliestAvailableAt: null,
+        },
+      },
+    ])(
+      'awaits the job log write when the rebuild is $outcome, so a failed write fails the job rather than floating',
+      async ({ result }) => {
+        startAvailabilityCacheWorker();
+        mockResolveAndCacheAvailability.mockResolvedValue(result);
+        const mockJob = {
+          data: { expertProfileId: 'expert-1' },
+          log: vi.fn(() => Promise.reject(new Error('redis unavailable'))),
+        };
+
+        await expect(capturedAvailabilityProcessor!(mockJob)).rejects.toThrow('redis unavailable');
+      }
+    );
   });
 
   describe('startStalenessCheckWorker', () => {
@@ -205,6 +229,21 @@ describe('availability-cache jobs', () => {
       expect(staleSweepJobId).toBe(directJobId);
       expect(staleSweepJobId).toBe('availability--expert-9');
     });
+
+    it.each([
+      { when: 'no connection is stale', stale: [] },
+      { when: 'connections are stale', stale: [{ expertProfileId: 'expert-1' }] },
+    ])(
+      'awaits the job log write when $when, so a failed write fails the job rather than floating',
+      async ({ stale }) => {
+        startStalenessCheckWorker();
+        mockFindStaleConnections.mockResolvedValue(stale);
+        mockQueueAdd.mockResolvedValue(undefined);
+        const mockJob = { log: vi.fn(() => Promise.reject(new Error('redis unavailable'))) };
+
+        await expect(capturedStalenessProcessor!(mockJob)).rejects.toThrow('redis unavailable');
+      }
+    );
   });
 
   describe('registerStalenessCheckCron', () => {
@@ -284,6 +323,19 @@ describe('availability-cache jobs', () => {
 
       expect(result).toBe(false);
       expect(log.error).toHaveBeenCalled();
+    });
+
+    it('returns false and logs a non-Error rejection by its string form', async () => {
+      const log = makeLog();
+      mockQueueAdd.mockRejectedValueOnce('upstream unavailable');
+
+      const result = await tryEnqueueAvailabilityCacheRebuild('expert-1', log);
+
+      expect(result).toBe(false);
+      expect(log.error).toHaveBeenCalledWith(
+        { expertProfileId: 'expert-1', error: 'upstream unavailable' },
+        'Failed to enqueue availability cache rebuild job'
+      );
     });
 
     it('enqueueAvailabilityCacheRebuild still swallows and returns void regardless of the result', async () => {

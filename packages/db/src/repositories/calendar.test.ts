@@ -88,26 +88,6 @@ describe('calendarRepository', () => {
     vi.clearAllMocks();
   });
 
-  describe('findConnectionByExpertProfileId', () => {
-    it('returns connection when found', async () => {
-      const mockConn = { id: 'conn-1', expertProfileId: 'ep-1', credentialStatus: 'ACTIVE' };
-      mockFindFirst.mockResolvedValue(mockConn);
-
-      const result = await calendarRepository.findConnectionByExpertProfileId('ep-1');
-
-      expect(result).toEqual(mockConn);
-      expect(mockFindFirst).toHaveBeenCalled();
-    });
-
-    it('returns undefined when not found', async () => {
-      mockFindFirst.mockResolvedValue(undefined);
-
-      const result = await calendarRepository.findConnectionByExpertProfileId('ep-none');
-
-      expect(result).toBeUndefined();
-    });
-  });
-
   describe('upsertApirocConnection', () => {
     /**
      * ⚠ THIS SUITE CANNOT PROVE THE ARBITER WORKS — it mocks the whole Drizzle client, so

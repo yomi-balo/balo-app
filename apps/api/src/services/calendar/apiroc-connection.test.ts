@@ -369,6 +369,23 @@ describe('provisionConnection', () => {
     expect(mockClearAvailabilityCache).toHaveBeenCalledWith('expert-1');
   });
 
+  it('a non-Error calendars.list rejection still persists SYNC_PENDING and logs its string form', async () => {
+    mockCalendarsList.mockRejectedValueOnce('upstream unavailable');
+
+    const status = await provisionConnection(buildConnection());
+
+    expect(status).toBe('SYNC_PENDING');
+    expect(mockSetCredentialStatusForProvider).toHaveBeenCalledWith(
+      'expert-1',
+      'exp-provider-a',
+      'SYNC_PENDING'
+    );
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      { connectionId: 'conn-1', expertProfileId: 'expert-1', error: 'upstream unavailable' },
+      'apiroc_provisioning_failed_sync_pending'
+    );
+  });
+
   /**
    * ⚠⚠ BAL-396 FIX ROUND — THE ABSORBING-STATE REGRESSION TEST. A `calendars.list` SUCCESS
    * with zero writable calendars (empty 200, or every calendar `readOnly`) used to still
@@ -609,6 +626,25 @@ describe('disconnectProvider', () => {
     expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
   });
 
+  it('a non-Error reference read rejection warns with its string form, deletes nothing at the vendor, and Balo-side teardown still runs', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockFindConnectionsByEndUserAccountId.mockRejectedValueOnce('upstream unavailable');
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockEndUserAccountsDelete).not.toHaveBeenCalled();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      {
+        connectionId: 'conn-1',
+        expertProfileId: 'expert-1',
+        stage: 'reference_read',
+        error: 'upstream unavailable',
+      },
+      'apiroc_disconnect_vendor_delete_failed'
+    );
+    expect(mockSoftDeleteConnectionForProvider).toHaveBeenCalledWith('expert-1', 'exp-provider-a');
+  });
+
   // ── BAL-468 §10 — subscription teardown ──────────────────────────────────────────────────
 
   it('⚠ orders subscription deletes, the shared-account reference read, the vendor account delete, then the Balo-side soft-deletes', async () => {
@@ -663,6 +699,28 @@ describe('disconnectProvider', () => {
 
     expect(mockLog.warn).toHaveBeenCalledWith(
       expect.objectContaining({ context: 'disconnect' }),
+      'apiroc_subscription_delete_failed'
+    );
+    expect(mockSoftDeleteByConnectionId).toHaveBeenCalledWith('conn-1');
+  });
+
+  it('a non-Error per-subscription vendor delete rejection is logged by its string form and does not abort teardown', async () => {
+    mockFindConnectionByExpertAndProvider.mockResolvedValue(buildConnection());
+    mockListLiveByConnectionId.mockResolvedValue([
+      { id: 'row-1', webhookSubscriptionId: 'wsub-1' },
+    ]);
+    mockCalendarSubscriptionsDelete.mockRejectedValueOnce('upstream unavailable');
+    mockEndUserAccountsDelete.mockResolvedValue({ success: true });
+
+    await disconnectProvider('expert-1', 'exp-provider-a');
+
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      {
+        connectionId: 'conn-1',
+        webhookSubscriptionId: 'wsub-1',
+        reason: 'upstream unavailable',
+        context: 'disconnect',
+      },
       'apiroc_subscription_delete_failed'
     );
     expect(mockSoftDeleteByConnectionId).toHaveBeenCalledWith('conn-1');

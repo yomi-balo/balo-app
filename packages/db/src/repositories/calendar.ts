@@ -44,11 +44,7 @@ export interface ConnectionAlertLabel {
  *   (a) PROVIDER-SCOPED — takes `provider`; correct under the new ruling.
  *   (b) FAN-OUT — deliberately acts on ALL of the expert's live connections; the docblock
  *       says so, so a reader is never surprised.
- *   (c) LEGACY-SINGLE-CONNECTION — returns ONE row, from an era that assumed there was
- *       only one. Given a deterministic `ORDER BY created_at, id` so the answer is the
- *       OLDEST live connection rather than whatever Postgres happens to return, plus a
- *       sibling in class (a) for callers that know which provider they mean.
- *   (d) ROW-ID-SCOPED — keyed on this table's primary key, so the ruling does not touch it
+ *   (c) ROW-ID-SCOPED — keyed on this table's primary key, so the ruling does not touch it
  *       at all: the answer is one row or none, by construction. Added by BAL-468, whose
  *       async subscription path starts from a bare `calendar_subscriptions.connection_id`
  *       and has no `expertProfileId` to scope by.
@@ -117,8 +113,8 @@ interface ReplaceSubCalendarInput {
 // ── Repository ───────────────────────────────────────────────────
 
 /**
- * The deterministic ordering for every LEGACY-SINGLE-CONNECTION read: oldest live
- * connection first. Without it, "the expert's connection" silently means "whichever row
+ * The deterministic ordering for every expert-scoped multi-row read: oldest live connection
+ * first. Without it, the order of an expert's connections silently means "whichever order
  * the planner happened to return", and a caller's behaviour can change with no code
  * change at all — a vacuum, an index rebuild, or a different row order is enough.
  *
@@ -134,29 +130,6 @@ interface ReplaceSubCalendarInput {
 const OLDEST_LIVE_FIRST = [asc(calendarConnections.createdAt), asc(calendarConnections.id)];
 
 export const calendarRepository = {
-  /**
-   * (c) LEGACY-SINGLE-CONNECTION — the OLDEST live connection for this expert, whichever
-   * provider that happens to be.
-   *
-   * ⚠ Since BAL-467 an expert may hold one Google AND one Microsoft connection. This
-   * method cannot express which one the caller means, so it answers deterministically
-   * (oldest first) rather than arbitrarily. No production code calls it today.
-   *
-   * NEW CODE SHOULD CALL `findConnectionByExpertAndProvider` INSTEAD. A caller that
-   * genuinely wants every provider wants `listConnectionsByExpertProfileId`.
-   */
-  async findConnectionByExpertProfileId(
-    expertProfileId: string
-  ): Promise<CalendarConnection | undefined> {
-    return db.query.calendarConnections.findFirst({
-      where: and(
-        eq(calendarConnections.expertProfileId, expertProfileId),
-        isNull(calendarConnections.deletedAt)
-      ),
-      orderBy: OLDEST_LIVE_FIRST,
-    });
-  },
-
   /**
    * (a) PROVIDER-SCOPED — the one live connection for this (expert, provider) pair.
    *
@@ -183,7 +156,7 @@ export const calendarRepository = {
   },
 
   /**
-   * (d) ROW-ID-SCOPED — the one live connection with this primary key.
+   * (c) ROW-ID-SCOPED — the one live connection with this primary key.
    *
    * BAL-468. Every other read on this table is keyed by `(expertProfileId[, provider])`, which
    * is right for the connect surface but useless to the async subscription path: a
@@ -212,8 +185,8 @@ export const calendarRepository = {
    *
    * The amendment's availability rule reads directly onto this method: "availability is
    * the union of busy blocks across ALL of the expert's connections". A free/busy caller
-   * that reaches for `findConnectionByExpertProfileId` instead would silently ignore the
-   * expert's second calendar and double-book them.
+   * that reads a single connection instead would silently ignore the expert's second
+   * calendar and double-book them.
    *
    * Live callers: `routes/calendar/api.ts` (`GET /connection`'s `connections` array,
    * `disconnect`'s whole-account loop, `findConnectionOwningCalendar`),
@@ -483,14 +456,13 @@ export const calendarRepository = {
    * Stamp a probe ATTEMPT against one connection — the probe's scan key, so a connection is
    * never re-selected twice in one interval.
    *
-   * ⚠⚠ BAL-396 FIX ROUND — STAMPED ON A CLASSIFIED FAILURE TOO, NOT ONLY ON SUCCESS. The
-   * original contract ("only a successful data call proves the credential works") is still
-   * true of the credential STATUS, which this method never writes. But this column is also
-   * `listConnectionsDueForHealthCheck`'s `ORDER BY ... ASC NULLS FIRST` scan key — and a
-   * connection whose calls keep failing was never stamped, so it sorted FIRST forever and
-   * starved every healthy connection out of the batch. Stamping on a CLASSIFIED failure too
-   * ("we attempted this connection at T, whatever the answer") fixes the starvation without
-   * touching credential status: the health probe still decides ACTIVE/EXPIRED/etc through
+   * ⚠⚠ STAMPED ON A CLASSIFIED FAILURE TOO, NOT ONLY ON SUCCESS. Only a successful data call
+   * proves the credential works, but that is a rule about the credential STATUS, which this
+   * method never writes. This column is `listConnectionsDueForHealthCheck`'s
+   * `ORDER BY ... ASC NULLS FIRST` scan key: a connection whose calls keep failing, if left
+   * unstamped, would sort FIRST forever and starve every healthy connection out of the batch.
+   * Stamping on a CLASSIFIED failure too ("we attempted this connection at T, whatever the
+   * answer") prevents that without touching credential status: the health probe still decides ACTIVE/EXPIRED/etc through
    * `applyCredentialFailure`/`setCredentialStatus`, never through this method.
    *
    * `checkedAt` is a parameter rather than `new Date()` so one sweep tick stamps ONE instant
@@ -654,10 +626,10 @@ export const calendarRepository = {
    * sort is not the cost that matters. `id` breaks ties so a tick's batch is stable rather
    * than planner-dependent (same reasoning as `OLDEST_LIVE_FIRST`).
    *
-   * ⚠ NO `end_user_account_id IS NOT NULL` FILTER — REMOVED IN THE BAL-396 FIX ROUND.
-   * Migration 0069 made the column `NOT NULL`, so every live row already carries a pointer;
-   * the predicate was vacuous (always true) rather than protective, and Postgres enforces it
-   * at the constraint level regardless of what this query asks for.
+   * ⚠ NO `end_user_account_id IS NOT NULL` FILTER. Migration 0069 made the column
+   * `NOT NULL`, so every live row already carries a pointer; the predicate would be vacuous
+   * (always true), and Postgres enforces it at the constraint level regardless of what this
+   * query asks for.
    */
   async listConnectionsDueForHealthCheck(
     checkedBefore: Date,
@@ -845,7 +817,7 @@ export const calendarRepository = {
   },
 
   /**
-   * (d) ROW-ID-SCOPED. BAL-548 / ADR-1055 — BATCH IDENTITY HYDRATION for the
+   * (c) ROW-ID-SCOPED. BAL-548 / ADR-1055 — BATCH IDENTITY HYDRATION for the
    * `calendar.subscription_lapse` alert: given the connection ids the three monitor arms
    * returned, resolve who each one belongs to.
    *

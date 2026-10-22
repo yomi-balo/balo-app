@@ -143,7 +143,7 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
       // on `earliestAvailableAt` being `null` — that is also the legitimate answer for an
       // expert who genuinely has no open slot.
       if (result.status === 'skipped') {
-        job.log(
+        await job.log(
           `Availability cache rebuild SKIPPED for expert ${expertProfileId} ` +
             `(${result.skipReason ?? 'unknown reason'}) — last-known-good cache left in place`
         );
@@ -154,7 +154,7 @@ export function startAvailabilityCacheWorker(): Worker<AvailabilityCacheJobData>
         distinct_id: expertProfileId,
       });
 
-      job.log(`Availability cache rebuilt for expert ${expertProfileId}`);
+      await job.log(`Availability cache rebuilt for expert ${expertProfileId}`);
     },
     {
       connection: createRedisConnection(),
@@ -200,7 +200,7 @@ export function startStalenessCheckWorker(): Worker {
       const staleConnections = await calendarRepository.findStaleConnections(staleThreshold);
 
       if (staleConnections.length === 0) {
-        job.log('No stale connections found');
+        await job.log('No stale connections found');
         return;
       }
 
@@ -224,7 +224,7 @@ export function startStalenessCheckWorker(): Worker {
         );
       }
 
-      job.log(`Enqueued ${staleConnections.length} stale connection rebuild jobs`);
+      await job.log(`Enqueued ${staleConnections.length} stale connection rebuild jobs`);
     },
     {
       connection: createRedisConnection(),
