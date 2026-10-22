@@ -1273,8 +1273,18 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R5 — the badg
           resolveTick1 = resolve;
         })
     );
-    // Tick 2 — de-escalates all the way back to healthy (rank 0).
-    load.mockResolvedValueOnce({ success: true, state: drawdownStateFor(), sessionId: 'sess-1' });
+    // Tick 2 — de-escalates all the way back to healthy (rank 0). ⚠ ALSO DEFERRED: the
+    // de-escalation must COMMIT (and its effect re-arm the announcement) before tick 3 fires.
+    // Resolved eagerly, ticks 2 and 3 can land in ONE React batch on a loaded runner — `key`
+    // then jumps grace → wrapped without ever rendering healthy, nothing re-arms, and the
+    // test fails for a reason the component cannot help (it flaked in CI exactly this way).
+    let resolveTick2: (result: GetMeetingDrawdownResult) => void = () => {};
+    load.mockImplementationOnce(
+      () =>
+        new Promise<GetMeetingDrawdownResult>((resolve) => {
+          resolveTick2 = resolve;
+        })
+    );
     // Tick 3+ — escalates again, past the threshold a SECOND time.
     load.mockResolvedValue({
       success: true,
@@ -1320,6 +1330,10 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R5 — the badg
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    // `await act` flushes the render AND its effects before returning — the re-arm has run.
+    await act(async () => {
+      resolveTick2({ success: true, state: drawdownStateFor(), sessionId: 'sess-1' });
+    });
 
     // Tick 3 — escalates again, past the threshold a second time.
     act(() => {
