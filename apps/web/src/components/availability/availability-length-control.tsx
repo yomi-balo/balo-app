@@ -30,12 +30,12 @@ function nextEnabled(
 ): SlotDurationMinutes | null {
   if (enabled.length === 0) return null;
   if (key === 'Home') return enabled[0] ?? null;
-  if (key === 'End') return enabled[enabled.length - 1] ?? null;
+  if (key === 'End') return enabled.at(-1) ?? null;
   const forward = key === 'ArrowRight' || key === 'ArrowDown';
   const backward = key === 'ArrowLeft' || key === 'ArrowUp';
   if (!forward && !backward) return null;
   const index = enabled.indexOf(current);
-  if (index === -1) return (forward ? enabled[0] : enabled[enabled.length - 1]) ?? null;
+  if (index === -1) return (forward ? enabled[0] : enabled.at(-1)) ?? null;
   return enabled[(index + (forward ? 1 : -1) + enabled.length) % enabled.length] ?? null;
 }
 

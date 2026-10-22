@@ -46,7 +46,7 @@ const availabilityRateLimit = createRateLimitPreHandler({
   label: 'expert-availability',
 });
 
-export async function availabilityRoute(fastify: FastifyInstance): Promise<void> {
+export function availabilityRoute(fastify: FastifyInstance): Promise<void> {
   fastify.get(
     '/experts/:expertProfileId/availability',
     // ⚠ EXPLICIT — `expertsRoutes` has no plugin-level auth hook, so a route registered
@@ -189,4 +189,5 @@ export async function availabilityRoute(fastify: FastifyInstance): Promise<void>
       }
     }
   );
+  return Promise.resolve();
 }

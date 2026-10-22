@@ -20,6 +20,7 @@ import { saveBookingForLaterAction } from '@/lib/booking/actions/save-booking-fo
 import type {
   BookingFundingRequest,
   BookingFundingView,
+  FundedVia,
 } from '@/lib/booking/actions/booking-funding-types';
 import { switchWorkspaceAction } from '@/lib/auth/actions/switch-workspace';
 import type { AvailabilitySlotSelection } from '@/components/availability';
@@ -61,7 +62,6 @@ import {
 } from './booking-draft';
 import { findFirstInvalidField } from './focus-first-invalid';
 import { BookingFundingBlock } from './funding/booking-funding-block';
-import type { FundedVia } from '@/lib/booking/actions/booking-funding-types';
 import { resolveFundingDisposition, type RefusedFundingView } from './funding/funding-disposition';
 import {
   BALANCE_NOW_COVERS_COPY,
@@ -628,6 +628,44 @@ function buildBalancePanelProps(
   };
 }
 
+/** The case an entry is pinned to (entry point 3 only), and whether it may start a new one. */
+function entryCasePolicy(entry: BookingFlowDialogProps['entry']): {
+  fixedCase: FixedCaseSummary | null;
+  newCaseAllowed: boolean;
+} {
+  return {
+    fixedCase: entry.mode === 'fixed_case' ? entry.fixedCase : null,
+    newCaseAllowed: entry.mode === 'chooser' || entry.newCaseAllowed,
+  };
+}
+
+/** True when the selected existing case is the entry's fixed case. */
+function isFixedCaseSelected(
+  fixedCase: FixedCaseSummary | null,
+  caseSelection: CaseSelection
+): boolean {
+  return (
+    fixedCase !== null &&
+    caseSelection.kind === 'existing' &&
+    caseSelection.engagementId === fixedCase.engagementId
+  );
+}
+
+/** The chooser's "your last case … is resolved" note: a new case, and only resolved cases with this expert. */
+function isResolvedCaseNoteShown(
+  entryMode: BookingFlowDialogProps['entry']['mode'],
+  caseSelection: CaseSelection,
+  resolvedCaseCount: number,
+  openCases: readonly OpenCaseForExpert[] | null
+): boolean {
+  return (
+    entryMode === 'chooser' &&
+    caseSelection.kind === 'new' &&
+    resolvedCaseCount > 0 &&
+    (openCases?.length ?? 0) === 0
+  );
+}
+
 /**
  * BAL-400 — the booking flow's top-level orchestrator. Owns ALL form state (the sub-components
  * are presentational) plus the step machine, the idempotency nonce, and the two-hop submit.
@@ -723,8 +761,7 @@ export function BookingFlowDialog(
   /** Frozen true the moment ANY submit creates a real case row (D4b) — see `handleSubmit`. */
   const caseAlreadyCreatedRef = useRef(false);
 
-  const fixedCase = entry.mode === 'fixed_case' ? entry.fixedCase : null;
-  const newCaseAllowed = entry.mode === 'chooser' || entry.newCaseAllowed;
+  const { fixedCase, newCaseAllowed } = entryCasePolicy(entry);
 
   // Entry point 3 keeps a draft only while a NEW case is selected: a follow-up into an existing
   // case is not what "Save and finish later" saves, and must never overwrite or clear a new-case
@@ -1546,10 +1583,7 @@ export function BookingFlowDialog(
       openedAtIso: match.createdAt,
     };
   }
-  const fixedCaseSelected =
-    fixedCase !== null &&
-    caseSelection.kind === 'existing' &&
-    caseSelection.engagementId === fixedCase.engagementId;
+  const fixedCaseSelected = isFixedCaseSelected(fixedCase, caseSelection);
   const caseContextSummary: FixedCaseSummary | null =
     recovered ?? (fixedCaseSelected ? fixedCase : resolveChooserCaseContext());
 
@@ -1559,11 +1593,12 @@ export function BookingFlowDialog(
   const effectiveOpenCases: readonly OpenCaseForExpert[] | null =
     recovered === null ? openCases : null;
 
-  const showResolvedCaseNote =
-    entry.mode === 'chooser' &&
-    caseSelection.kind === 'new' &&
-    resolvedCaseCount > 0 &&
-    (openCases?.length ?? 0) === 0;
+  const showResolvedCaseNote = isResolvedCaseNoteShown(
+    entry.mode,
+    caseSelection,
+    resolvedCaseCount,
+    openCases
+  );
 
   // `companies`/`companyId` are always kept in sync with the resolved arm (including after a
   // retry), so deriving from local state — rather than re-reading `entry.context` — is correct

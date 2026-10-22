@@ -397,7 +397,10 @@ export function ExpertAvailabilityCalendar({
         : new Map<string, AvailabilitySlotDto[]>(),
     [liveSlots, resolvedTimezone]
   );
-  const sortedDayKeys = useMemo(() => [...slotsByDay.keys()].sort(), [slotsByDay]);
+  const sortedDayKeys = useMemo(
+    () => [...slotsByDay.keys()].sort((a, b) => a.localeCompare(b)),
+    [slotsByDay]
+  );
   const lengthsOffered = useMemo(() => availableLengths(liveSlots), [liveSlots]);
 
   // Derived, never set in an effect, so nothing slides on load or restore.
