@@ -68,8 +68,8 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal', () =
 }));
 // KickoffBoard (BAL-291) client island — mock its two actions so the shell
 // renders the board in JSDOM without touching @balo/db / auth at runtime.
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/complete-kickoff-task', () => ({
-  completeKickoffTaskAction: vi.fn(),
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/mark-upfront-invoice-raised', () => ({
+  markUpfrontInvoiceRaisedAction: vi.fn(),
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/approve-kickoff', () => ({
   approveKickoffAction: vi.fn(),
@@ -198,7 +198,7 @@ function kickoff(
   return {
     acceptedRelationshipId: 'rel-1',
     clientBillingConfirmed: false,
-    expertTermsConfirmed: false,
+    upfrontInvoiceRaised: false,
     approved: false,
     expertName: 'Priya Nair',
     ...overrides,

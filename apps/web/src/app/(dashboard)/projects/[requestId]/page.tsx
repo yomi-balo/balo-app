@@ -31,9 +31,11 @@ import {
   mapRequestToDetailView,
   type RequestDetailView,
   type ClosedSummaryInput,
+  type KickoffUpfront,
 } from '@/lib/project-request/request-detail-view';
 import { ensureAdminBillingAutoskip } from '@/lib/project-request/ensure-admin-billing-autoskip';
 import { loadAdminKickoffBilling } from '@/lib/project-request/load-admin-kickoff-billing';
+import { loadKickoffUpfront } from '@/lib/project-request/kickoff-upfront';
 import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickoff-billing-view';
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
@@ -364,6 +366,16 @@ export default async function RequestDetailPage({
 
   const billingCapture = await loadBillingCapture(ctx, view, user.companyRole, request.companyId);
 
+  // The kickoff checklist's upfront amount — whether the deal has invoice steps at all, and
+  // the client's fee-inclusive invoice figure. The expert lens never sees a client price
+  // (the same audience rule as `hydrateReviewDoc`), so it gets the steps without the amount.
+  let kickoffUpfront: KickoffUpfront | null = null;
+  if (view.kickoff) {
+    const upfront = await loadKickoffUpfront(view.kickoff.acceptedRelationshipId);
+    kickoffUpfront =
+      upfront !== null && ctx.lens === 'expert' ? { ...upfront, amountCents: null } : upfront;
+  }
+
   // BAL-331 deep-link: once the request is `kickoff_approved` a delivery
   // engagement exists — resolve its id so the shell can surface the "View delivery
   // workspace" entry for every lens. `undefined` (no engagement yet / not that
@@ -409,6 +421,7 @@ export default async function RequestDetailPage({
         conversation={conversation}
         adminBilling={adminBilling}
         billingCapture={billingCapture}
+        kickoffUpfront={kickoffUpfront}
         deliveryEngagementId={deliveryEngagementId}
         viewerEmailDomain={viewerEmailDomain}
         requestFilesView={requestFilesView}

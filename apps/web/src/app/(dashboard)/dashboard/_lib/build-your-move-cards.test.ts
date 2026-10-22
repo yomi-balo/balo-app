@@ -45,8 +45,6 @@ function detail(id: string, over: Partial<ExpertMoveDetail> = {}): ExpertMoveDet
     timeline: 'Early December',
     productNames: ['Marketing Cloud', 'Data Cloud'],
     tagNames: ['Data Cloud', 'CPQ'],
-    clientBillingConfirmedAt: null,
-    expertTermsConfirmedAt: null,
     currentProposal: null,
     latestChangeRequest: null,
     ...over,
@@ -73,7 +71,6 @@ const ALL_KINDS: ExpertMoveKind[] = [
   'eoi_reply_owed',
   'proposal_requested',
   'changes_requested',
-  'kickoff_terms',
   'delivery_changes',
 ];
 
@@ -182,29 +179,6 @@ describe('project cards (AC1, AC2)', () => {
       section: 'Timeline',
     });
     expect(byId.get('b')?.context).toEqual({ type: 'change_note', note: 'Hmm', section: null });
-  });
-
-  it('kickoff_terms: gates follow billing and approval', () => {
-    const [open] = build({
-      rows: [row('a', { moveKind: 'kickoff_terms' })],
-      details: new Map([['a', detail('a', { clientBillingConfirmedAt: hoursAgo(5) })]]),
-    });
-    expect(open?.context).toEqual({
-      type: 'gates',
-      gates: [
-        { label: 'Client billing', state: 'done' },
-        { label: 'Your terms', state: 'yours' },
-        { label: 'Balo approval', state: 'pending' },
-      ],
-      note: null,
-    });
-    const [approved] = build({
-      rows: [row('a', { moveKind: 'kickoff_terms' })],
-      details: new Map([['a', detail('a', { requestStatus: 'kickoff_approved' })]]),
-    });
-    expect(approved?.context).toMatchObject({
-      gates: [{ state: 'pending' }, { state: 'yours' }, { state: 'done' }],
-    });
   });
 
   it('delivery_changes: note and counts from the row, no fact', () => {

@@ -3,23 +3,26 @@
 import { useCallback, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  BadgeCheck,
+  Banknote,
   Check,
   ClipboardCheck,
   Clock,
   Loader2,
   PartyPopper,
   Receipt,
-  ShieldCheck,
   User,
   type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { formatWholeCurrency } from '@/lib/utils/currency';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
+import type { KickoffUpfront } from '@/lib/project-request/request-detail-view';
 import { RequestCard } from '../request-card';
 import { ClientBillingAffordance } from './billing-details-dialog';
-import { completeKickoffTaskAction } from '@/app/(dashboard)/projects/[requestId]/_actions/complete-kickoff-task';
+import { markUpfrontInvoiceRaisedAction } from '@/app/(dashboard)/projects/[requestId]/_actions/mark-upfront-invoice-raised';
 import { approveKickoffAction } from '@/app/(dashboard)/projects/[requestId]/_actions/approve-kickoff';
 
 /** The viewer lens — selects which row is "yours" and which action it fires. */
@@ -30,9 +33,16 @@ interface KickoffBoardProps {
   acceptedRelationshipId: string;
   lens: KickoffLens;
   clientBillingConfirmed: boolean;
-  expertTermsConfirmed: boolean;
+  upfrontInvoiceRaised: boolean;
   approved: boolean;
   expertName: string;
+  /** The client company — named on the rows other viewers are waiting on it for. */
+  clientCompanyName: string;
+  /**
+   * What the accepted proposal makes due before kickoff, or `null` when nothing is —
+   * the checklist then drops the invoice steps for a single Balo approval.
+   */
+  upfront: KickoffUpfront | null;
   /**
    * Client billing-capture context (BAL-323). Non-null ONLY for the client lens —
    * drives the client row's capture form / member notice. `null` for expert/admin.
@@ -42,65 +52,158 @@ interface KickoffBoardProps {
   mobile?: boolean;
 }
 
-/** One checklist row's static identity — the dynamic `done` is derived per render. */
-interface KickoffTaskDef {
-  party: KickoffLens;
-  label: string;
-  doneCopy: string;
-  outstandingCopy: string;
-  icon: LucideIcon;
-}
-
 /**
- * The three kickoff gates, data-driven (never copy-pasted branches). Sub-copy is
- * generic — it never fabricates specific amounts, POs, or invoice numbers (those
- * are not in the view-model). Row order is client → expert → admin, mirroring the
- * dependency chain (admin settles only once both parties are ready).
+ * The checklist steps, in dependency order:
+ *  - `billing`  — the client adds billing details.
+ *  - `invoice`  — Balo raises the upfront invoice and marks it sent.
+ *  - `payment`  — the client pays it; Balo confirming payment IS the kickoff approval.
+ *  - `approval` — replaces `invoice` + `payment` when nothing is due upfront.
  */
-const KICKOFF_TASKS: readonly KickoffTaskDef[] = [
-  {
-    party: 'client',
-    label: 'Add billing details',
-    doneCopy: 'Billing details added',
-    outstandingCopy: 'Add your billing details',
-    icon: User,
-  },
-  {
-    party: 'expert',
-    label: 'Confirm payment terms',
-    doneCopy: 'Payment terms confirmed',
-    outstandingCopy: 'Confirm the payment terms',
-    icon: ShieldCheck,
-  },
-  {
-    party: 'admin',
-    label: 'Raise & settle upfront invoice',
-    doneCopy: 'Upfront invoice settled',
-    outstandingCopy: 'Settle the upfront invoice to approve',
-    icon: Receipt,
-  },
-] as const;
+type KickoffStepKey = 'billing' | 'invoice' | 'payment' | 'approval';
 
-/** Resolved per-row state the renderer reads (keeps the JSX free of branches). */
-interface KickoffRow extends KickoffTaskDef {
+/** One resolved checklist row — everything the renderer reads, so the JSX stays branch-free. */
+interface KickoffStep {
+  key: KickoffStepKey;
+  /** Whose step it is: earns the "You" pill and is named in other viewers' waiting copy. */
+  owner: 'client' | 'admin';
+  label: string;
+  icon: LucideIcon;
   done: boolean;
-  mine: boolean;
+  /** Every earlier step is done, so this one can be acted on now. */
+  ready: boolean;
   sub: string;
 }
 
-/** The action label for the viewer's own outstanding row. */
-function actionLabelFor(party: KickoffLens): 'Complete' | 'Approve' {
-  return party === 'admin' ? 'Approve' : 'Complete';
+/** The admin's action on a step. */
+interface AdminStepAction {
+  label: 'Mark sent' | 'Confirm payment' | 'Approve';
+  /** `approve` advances the request to `kickoff_approved` — it kicks the project off. */
+  handler: 'markInvoiceSent' | 'approve';
 }
 
 /** Notice shown on the client billing row for a member who can't complete it (never absence-framed). */
 export const KICKOFF_MEMBER_BLOCKED_SUB =
   'A company owner or admin needs to add these billing details before kickoff.';
 
-/** A row's sub-copy: the member notice for a blocked billing row, else done/outstanding. */
-function rowSubCopy(task: KickoffTaskDef, done: boolean, blocked: boolean): string {
-  if (blocked) return KICKOFF_MEMBER_BLOCKED_SUB;
-  return done ? task.doneCopy : task.outstandingCopy;
+/** Everything the step copy needs, resolved once per render. */
+interface StepCopyContext {
+  lens: KickoffLens;
+  company: string;
+  /** The formatted upfront amount, or `null` when withheld from this viewer. */
+  amount: string | null;
+  memberBlocked: boolean;
+}
+
+/** "the A$5,220 upfront invoice" — or "the upfront invoice" when the amount is withheld. */
+function theInvoice(amount: string | null): string {
+  return amount === null ? 'the upfront invoice' : `the ${amount} upfront invoice`;
+}
+
+function billingSub(done: boolean, c: StepCopyContext): string {
+  if (c.lens === 'client' && c.memberBlocked) return KICKOFF_MEMBER_BLOCKED_SUB;
+  if (done) return 'Billing details added';
+  if (c.lens === 'client') return 'Add your billing details';
+  return `Waiting on ${c.company} to add billing details`;
+}
+
+function invoiceSub(done: boolean, ready: boolean, c: StepCopyContext): string {
+  if (done) return c.amount === null ? 'Upfront invoice sent' : `Invoice for ${c.amount} sent`;
+  if (c.lens !== 'admin') return `Waiting on Balo to send ${theInvoice(c.amount)}`;
+  if (!ready) return 'Available once billing details are in';
+  return `Invoice ${c.company} for ${c.amount ?? 'the upfront amount'}, then mark it sent`;
+}
+
+function paymentSub(done: boolean, ready: boolean, c: StepCopyContext): string {
+  if (done) return 'Upfront invoice paid';
+  if (c.lens === 'client') {
+    return ready
+      ? `Pay ${theInvoice(c.amount)} Balo sent — kickoff follows as soon as it lands`
+      : `Due once Balo sends ${theInvoice(c.amount)}`;
+  }
+  if (c.lens === 'admin') {
+    return ready
+      ? `Confirm once ${c.company}'s payment lands — this kicks off the project`
+      : 'Available once the invoice is sent';
+  }
+  return `Waiting on ${c.company} to pay the upfront invoice`;
+}
+
+function approvalSub(done: boolean, ready: boolean, c: StepCopyContext): string {
+  if (done) return 'Kickoff approved';
+  if (c.lens !== 'admin') return 'Nothing is due upfront — waiting on Balo to approve kickoff';
+  return ready
+    ? 'Nothing is due upfront on this deal — approve to kick off'
+    : 'Available once billing details are in';
+}
+
+/**
+ * Resolve the checklist for this request. A deal with money due upfront gets three
+ * steps (billing → invoice → payment); one with nothing due gets two (billing →
+ * approval). Each step is `ready` once every earlier step is done.
+ */
+function resolveSteps(
+  state: { billingDone: boolean; invoiceRaised: boolean; approved: boolean; hasUpfront: boolean },
+  c: StepCopyContext
+): KickoffStep[] {
+  const { billingDone, invoiceRaised, approved, hasUpfront } = state;
+  const billing: KickoffStep = {
+    key: 'billing',
+    owner: 'client',
+    label: 'Add billing details',
+    icon: User,
+    done: billingDone,
+    ready: true,
+    sub: billingSub(billingDone, c),
+  };
+
+  if (!hasUpfront) {
+    return [
+      billing,
+      {
+        key: 'approval',
+        owner: 'admin',
+        label: 'Approve kickoff',
+        icon: BadgeCheck,
+        done: approved,
+        ready: billingDone,
+        sub: approvalSub(approved, billingDone, c),
+      },
+    ];
+  }
+
+  // A kickoff approved before the invoice step existed has no raise timestamp — it was
+  // necessarily invoiced, so approval implies the invoice step is done.
+  const invoiceDone = invoiceRaised || approved;
+  const paymentReady = billingDone && invoiceDone;
+  return [
+    billing,
+    {
+      key: 'invoice',
+      owner: 'admin',
+      label: 'Raise the upfront invoice',
+      icon: Receipt,
+      done: invoiceDone,
+      ready: billingDone,
+      sub: invoiceSub(invoiceDone, billingDone, c),
+    },
+    {
+      key: 'payment',
+      owner: 'client',
+      label: 'Pay the upfront invoice',
+      icon: Banknote,
+      done: approved,
+      ready: paymentReady,
+      sub: paymentSub(approved, paymentReady, c),
+    },
+  ];
+}
+
+/** The admin's action on a step, or `null` when the step carries none for the admin. */
+function adminActionFor(key: KickoffStepKey): AdminStepAction | null {
+  if (key === 'invoice') return { label: 'Mark sent', handler: 'markInvoiceSent' };
+  if (key === 'payment') return { label: 'Confirm payment', handler: 'approve' };
+  if (key === 'approval') return { label: 'Approve', handler: 'approve' };
+  return null;
 }
 
 export function KickoffBoard({
@@ -108,26 +211,16 @@ export function KickoffBoard({
   acceptedRelationshipId,
   lens,
   clientBillingConfirmed,
-  expertTermsConfirmed,
+  upfrontInvoiceRaised,
   approved,
   expertName,
+  clientCompanyName,
+  upfront,
   billing = null,
   mobile = false,
 }: Readonly<KickoffBoardProps>): React.JSX.Element {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-
-  // Per-party done flags. Admin "done" IS approval (no separate persisted gate).
-  const doneByParty: Record<KickoffLens, boolean> = {
-    client: clientBillingConfirmed,
-    expert: expertTermsConfirmed,
-    admin: approved,
-  };
-  const doneCount = [clientBillingConfirmed, expertTermsConfirmed, approved].filter(Boolean).length;
-
-  // Admin can only fire once both participant gates are in (the server enforces
-  // this too — but never offer the admin a doomed click).
-  const adminGatesReady = clientBillingConfirmed && expertTermsConfirmed;
 
   // A client-lens MEMBER (not owner/admin) is blocked from the outstanding billing
   // step — its row gets a "what happens next" notice. The blocked-VIEW analytics is
@@ -137,22 +230,30 @@ export function KickoffBoard({
   const memberBlocked =
     lens === 'client' && !clientBillingConfirmed && billing !== null && !billing.canManage;
 
-  const rows: KickoffRow[] = KICKOFF_TASKS.map((task) => {
-    const done = doneByParty[task.party];
-    const blockedHere = task.party === 'client' && memberBlocked;
-    return {
-      ...task,
-      done,
-      mine: task.party === lens,
-      sub: rowSubCopy(task, done, blockedHere),
-    };
-  });
+  const steps = resolveSteps(
+    {
+      billingDone: clientBillingConfirmed,
+      invoiceRaised: upfrontInvoiceRaised,
+      approved,
+      hasUpfront: upfront !== null,
+    },
+    {
+      lens,
+      company: clientCompanyName,
+      amount:
+        upfront?.amountCents == null
+          ? null
+          : formatWholeCurrency(upfront.amountCents, upfront.currency),
+      memberBlocked,
+    }
+  );
+  const doneCount = steps.filter((step) => step.done).length;
 
-  const handleComplete = useCallback((): void => {
+  const handleMarkInvoiceSent = useCallback((): void => {
     if (pending) return;
     startTransition(() => {
       void (async (): Promise<void> => {
-        const result = await completeKickoffTaskAction({
+        const result = await markUpfrontInvoiceRaisedAction({
           requestId,
           relationshipId: acceptedRelationshipId,
         });
@@ -160,15 +261,13 @@ export function KickoffBoard({
           toast.error(result.error);
           return;
         }
-        // Expert-only now — the client's billing gate is confirmed by the billing
-        // form (BAL-323), which emits its own `billing_details_submitted` event.
         track(PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED, {
           request_id: requestId,
           relationship_id: acceptedRelationshipId,
-          gate: result.gate,
-          actor: 'expert',
+          gate: 'upfront_invoice',
+          actor: 'admin',
         });
-        toast.success('Marked as done');
+        toast.success('Invoice marked as sent');
         router.refresh();
       })();
     });
@@ -217,10 +316,10 @@ export function KickoffBoard({
           <span
             className={cn(
               'shrink-0 text-xs font-semibold tabular-nums',
-              doneCount === 3 ? 'text-success' : 'text-muted-foreground'
+              doneCount === steps.length ? 'text-success' : 'text-muted-foreground'
             )}
           >
-            {doneCount}/3 ready
+            {doneCount}/{steps.length} ready
           </span>
         </div>
         <p className="text-muted-foreground mb-4 text-[12.5px] leading-relaxed">
@@ -229,18 +328,17 @@ export function KickoffBoard({
         </p>
 
         <ul className="flex flex-col gap-2.5">
-          {rows.map((row) => (
+          {steps.map((step) => (
             <KickoffRowItem
-              key={row.party}
-              row={row}
+              key={step.key}
+              step={step}
               lens={lens}
               expertName={expertName}
               pending={pending}
-              adminGatesReady={adminGatesReady}
               billing={billing}
               requestId={requestId}
               relationshipId={acceptedRelationshipId}
-              onComplete={handleComplete}
+              onMarkInvoiceSent={handleMarkInvoiceSent}
               onApprove={handleApprove}
             />
           ))}
@@ -268,46 +366,46 @@ function KickoffCelebration(): React.JSX.Element {
 }
 
 interface KickoffRowItemProps {
-  row: KickoffRow;
+  step: KickoffStep;
   lens: KickoffLens;
   expertName: string;
   pending: boolean;
-  adminGatesReady: boolean;
   billing: KickoffBillingCapture | null;
   requestId: string;
   relationshipId: string;
-  onComplete: () => void;
+  onMarkInvoiceSent: () => void;
   onApprove: () => void;
 }
 
 /**
- * One checklist row. Renders the status badge, the party icon, the label + "You"
- * pill, the generic sub-copy, and the trailing affordance (action button for the
- * viewer's own outstanding row, "Waiting" for someone else's, "Done" once met).
- * The client's own billing row swaps the generic affordance for the BAL-323 capture
- * flow (form / member notice / view-edit).
+ * One checklist row. Renders the status badge, the step icon, the label + "You"
+ * pill, the sub-copy, and the trailing affordance. The client's own billing row
+ * swaps the generic affordance for the BAL-323 capture flow (form / member notice /
+ * view-edit).
  */
 function KickoffRowItem({
-  row,
+  step,
   lens,
   expertName,
   pending,
-  adminGatesReady,
   billing,
   requestId,
   relationshipId,
-  onComplete,
+  onMarkInvoiceSent,
   onApprove,
 }: Readonly<KickoffRowItemProps>): React.JSX.Element {
-  const RowIcon = row.icon;
-  const highlight = row.mine && !row.done;
+  const RowIcon = step.icon;
+  const mine = step.owner === lens;
+  const adminAction = lens === 'admin' ? adminActionFor(step.key) : null;
+  // The row the viewer can act on right now gets the emphasis.
+  const highlight = !step.done && step.ready && (mine || adminAction !== null);
   // The client's billing row (client lens only) owns the capture flow.
-  const isClientBillingRow = lens === 'client' && row.party === 'client' && billing !== null;
+  const isClientBillingRow = lens === 'client' && step.key === 'billing' && billing !== null;
 
   return (
     <li
-      // `aria-current="step"` ties the visual emphasis of the viewer's own
-      // outstanding row (ring + "You" pill) to the assistive-tech tree.
+      // `aria-current="step"` ties the visual emphasis of the viewer's actionable
+      // row (ring) to the assistive-tech tree.
       aria-current={highlight ? 'step' : undefined}
       className={cn(
         'flex items-center gap-3 rounded-xl border p-3.5',
@@ -316,7 +414,7 @@ function KickoffRowItem({
           : 'border-border bg-card'
       )}
     >
-      <StatusBadge done={row.done} />
+      <StatusBadge done={step.done} />
 
       <span
         className="bg-muted/60 border-border flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border"
@@ -327,19 +425,19 @@ function KickoffRowItem({
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-foreground text-sm font-medium">{row.label}</p>
-          {row.mine && (
+          <p className="text-foreground text-sm font-medium">{step.label}</p>
+          {mine && (
             <span className="text-primary bg-primary/10 border-primary/20 inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase">
               You
             </span>
           )}
         </div>
-        <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-relaxed">{row.sub}</p>
+        <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-relaxed">{step.sub}</p>
       </div>
 
       {isClientBillingRow && billing !== null ? (
         <ClientBillingAffordance
-          done={row.done}
+          done={step.done}
           canManage={billing.canManage}
           requestId={requestId}
           relationshipId={relationshipId}
@@ -347,12 +445,12 @@ function KickoffRowItem({
         />
       ) : (
         <RowAffordance
-          row={row}
+          step={step}
+          mine={mine}
+          adminAction={adminAction}
           expertName={expertName}
           pending={pending}
-          adminGatesReady={adminGatesReady}
-          onComplete={onComplete}
-          onApprove={onApprove}
+          onAction={adminAction?.handler === 'markInvoiceSent' ? onMarkInvoiceSent : onApprove}
         />
       )}
     </li>
@@ -382,66 +480,57 @@ function StatusBadge({ done }: Readonly<{ done: boolean }>): React.JSX.Element {
 }
 
 interface RowAffordanceProps {
-  row: KickoffRow;
+  step: KickoffStep;
+  mine: boolean;
+  adminAction: AdminStepAction | null;
   expertName: string;
   pending: boolean;
-  adminGatesReady: boolean;
-  onComplete: () => void;
-  onApprove: () => void;
+  onAction: () => void;
 }
 
 /**
- * The trailing affordance for a row. Three terminal cases (done → "Done"; not
- * mine → "Waiting"; mine + outstanding → action button) selected via early
- * returns — no nested ternaries.
+ * The trailing affordance for a row, selected via early returns: done → "Done"; the
+ * admin's step action → a button (disabled until the step is ready); the client's own
+ * ready payment → "To pay" (paid via the invoice, confirmed by Balo); else "Waiting".
  */
 function RowAffordance({
-  row,
+  step,
+  mine,
+  adminAction,
   expertName,
   pending,
-  adminGatesReady,
-  onComplete,
-  onApprove,
+  onAction,
 }: Readonly<RowAffordanceProps>): React.JSX.Element {
-  if (row.done) {
+  if (step.done) {
     return <span className="text-success shrink-0 text-xs font-semibold">Done</span>;
   }
 
-  if (!row.mine) {
-    return <span className="text-warning shrink-0 text-xs font-semibold">Waiting</span>;
-  }
-
-  // The viewer's own outstanding row → the action button.
-  if (row.party === 'admin') {
-    const disabled = pending || !adminGatesReady;
-    const hint = adminGatesReady
-      ? `Approve kickoff for ${expertName}`
-      : 'Waiting on client & expert';
+  if (adminAction !== null) {
+    const hint =
+      step.ready && adminAction.handler === 'approve'
+        ? `Kick off the project with ${expertName}`
+        : step.sub;
     return (
       <KickoffActionButton
-        label="Approve"
-        onClick={onApprove}
-        disabled={disabled}
+        label={adminAction.label}
+        onClick={onAction}
+        disabled={pending || !step.ready}
         spinning={pending}
         title={hint}
-        ariaLabel={`${actionLabelFor('admin')} — ${hint}`}
+        ariaLabel={`${adminAction.label} — ${hint}`}
       />
     );
   }
 
-  return (
-    <KickoffActionButton
-      label="Complete"
-      onClick={onComplete}
-      disabled={pending}
-      spinning={pending}
-      ariaLabel={`${actionLabelFor(row.party)} ${row.label}`}
-    />
-  );
+  if (mine && step.ready) {
+    return <span className="text-warning shrink-0 text-xs font-semibold">To pay</span>;
+  }
+
+  return <span className="text-warning shrink-0 text-xs font-semibold">Waiting</span>;
 }
 
 interface KickoffActionButtonProps {
-  label: 'Complete' | 'Approve';
+  label: string;
   onClick: () => void;
   disabled: boolean;
   spinning: boolean;

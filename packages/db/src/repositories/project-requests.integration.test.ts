@@ -33,6 +33,7 @@ import {
   projectRequestsRepository,
   InvalidStatusTransitionError,
   InvalidKickoffStateError,
+  UpfrontInvoiceBeforeBillingError,
   DIRECT_REQUEST_EOI_MESSAGE,
 } from './project-requests';
 
@@ -1208,7 +1209,7 @@ describe('project_requests balo_fee_bps CHECK constraint (project_requests_balo_
 // ── confirmKickoffGate ───────────────────────────────────────────────
 
 describe('projectRequestsRepository.confirmKickoffGate', () => {
-  it('sets client_billing_confirmed_at when status is accepted, leaving the other gate null', async () => {
+  it('sets client_billing_confirmed_at when status is accepted, leaving the invoice step null', async () => {
     const created = await projectRequestFactory({ status: 'accepted' });
 
     const updated = await projectRequestsRepository.confirmKickoffGate({
@@ -1217,24 +1218,12 @@ describe('projectRequestsRepository.confirmKickoffGate', () => {
     });
 
     expect(updated.clientBillingConfirmedAt).toBeInstanceOf(Date);
-    expect(updated.expertTermsConfirmedAt).toBeNull();
+    expect(updated.upfrontInvoiceRaisedAt).toBeNull();
 
     // Persisted (not just returned).
     const reloaded = await projectRequestsRepository.findById(created.id);
     expect(reloaded?.clientBillingConfirmedAt).toBeInstanceOf(Date);
-    expect(reloaded?.expertTermsConfirmedAt).toBeNull();
-  });
-
-  it('sets expert_terms_confirmed_at when status is accepted, leaving the other gate null', async () => {
-    const created = await projectRequestFactory({ status: 'accepted' });
-
-    const updated = await projectRequestsRepository.confirmKickoffGate({
-      id: created.id,
-      gate: 'expert_terms',
-    });
-
-    expect(updated.expertTermsConfirmedAt).toBeInstanceOf(Date);
-    expect(updated.clientBillingConfirmedAt).toBeNull();
+    expect(reloaded?.upfrontInvoiceRaisedAt).toBeNull();
   });
 
   it('is idempotent — a second confirmation preserves the original timestamp', async () => {
@@ -1280,6 +1269,69 @@ describe('projectRequestsRepository.confirmKickoffGate', () => {
 
     await expect(
       projectRequestsRepository.confirmKickoffGate({ id: created.id, gate: 'client_billing' })
+    ).rejects.toThrow();
+  });
+});
+
+// ── markUpfrontInvoiceRaised ─────────────────────────────────────────
+
+describe('projectRequestsRepository.markUpfrontInvoiceRaised', () => {
+  it('sets upfront_invoice_raised_at once billing is confirmed on an accepted request', async () => {
+    const created = await projectRequestFactory({
+      status: 'accepted',
+      clientBillingConfirmedAt: new Date(),
+    });
+
+    const updated = await projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id });
+
+    expect(updated.upfrontInvoiceRaisedAt).toBeInstanceOf(Date);
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.upfrontInvoiceRaisedAt).toBeInstanceOf(Date);
+    expect(reloaded?.status).toBe('accepted');
+  });
+
+  it('is idempotent — a second mark preserves the original timestamp', async () => {
+    const created = await projectRequestFactory({
+      status: 'accepted',
+      clientBillingConfirmedAt: new Date(),
+    });
+
+    const first = await projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id });
+    const firstAt = first.upfrontInvoiceRaisedAt;
+    expect(firstAt).toBeInstanceOf(Date);
+
+    const second = await projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id });
+    expect(second.upfrontInvoiceRaisedAt?.getTime()).toBe(firstAt?.getTime());
+  });
+
+  it('throws UpfrontInvoiceBeforeBillingError before billing is confirmed, leaving the row unchanged', async () => {
+    const created = await projectRequestFactory({ status: 'accepted' });
+
+    await expect(
+      projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id })
+    ).rejects.toBeInstanceOf(UpfrontInvoiceBeforeBillingError);
+
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.upfrontInvoiceRaisedAt).toBeNull();
+  });
+
+  it('throws InvalidKickoffStateError when status is not accepted, leaving the row unchanged', async () => {
+    const created = await projectRequestFactory({
+      status: 'kickoff_approved',
+      clientBillingConfirmedAt: new Date(),
+    });
+
+    await expect(
+      projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id })
+    ).rejects.toBeInstanceOf(InvalidKickoffStateError);
+
+    const reloaded = await projectRequestsRepository.findById(created.id);
+    expect(reloaded?.upfrontInvoiceRaisedAt).toBeNull();
+  });
+
+  it('throws for an unknown id', async () => {
+    await expect(
+      projectRequestsRepository.markUpfrontInvoiceRaised({ id: randomUUID() })
     ).rejects.toThrow();
   });
 });

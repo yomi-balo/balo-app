@@ -90,16 +90,24 @@ export class InvalidStatusTransitionError extends Error {
 }
 
 /**
- * The two persisted kickoff gates (BAL-291 / A6.5). The third — the admin
- * "settle invoice + approve" gate — is collapsed into the status transition
- * (`done ⟺ status === 'kickoff_approved'`), so it has no gate value here.
+ * The participant-confirmed kickoff gate (BAL-291 / A6.5). Balo's two steps — raising
+ * the upfront invoice (`markUpfrontInvoiceRaised`) and confirming it paid (the
+ * `accepted → kickoff_approved` transition itself) — are not participant gates.
  */
-export type KickoffGate = 'client_billing' | 'expert_terms';
+export type KickoffGate = 'client_billing';
 
 export class InvalidKickoffStateError extends Error {
   constructor(public readonly status: ProjectRequestStatus) {
     super(`Kickoff gate cannot be set while request is ${status}`);
     this.name = 'InvalidKickoffStateError';
+  }
+}
+
+/** The upfront invoice is raised from the client's billing details, so they must exist first. */
+export class UpfrontInvoiceBeforeBillingError extends Error {
+  constructor() {
+    super('The upfront invoice cannot be raised before client billing details are confirmed');
+    this.name = 'UpfrontInvoiceBeforeBillingError';
   }
 }
 
@@ -469,7 +477,7 @@ export const projectRequestsRepository = {
         baloFeeBps: true,
         timeline: true,
         clientBillingConfirmedAt: true,
-        expertTermsConfirmedAt: true,
+        upfrontInvoiceRaisedAt: true,
         createdAt: true,
         updatedAt: true,
         // BAL-540 — the four terminal-close columns. `request-detail-view.ts`'s
@@ -665,7 +673,7 @@ export const projectRequestsRepository = {
   },
 
   /**
-   * Confirm a kickoff gate (`client_billing` or `expert_terms`) on a request.
+   * Confirm the participant kickoff gate (`client_billing`) on a request.
    * Idempotent — the first confirmation's timestamp is PRESERVED on re-confirm
    * (the audit records when the gate was FIRST cleared, not the latest click).
    * Status-guarded to `accepted` (the only state the kickoff board renders in):
@@ -690,14 +698,52 @@ export const projectRequestsRepository = {
         throw new InvalidKickoffStateError(current.status);
       }
 
-      const set =
-        input.gate === 'client_billing'
-          ? { clientBillingConfirmedAt: current.clientBillingConfirmedAt ?? new Date() }
-          : { expertTermsConfirmedAt: current.expertTermsConfirmedAt ?? new Date() };
+      const [updated] = await tx
+        .update(projectRequests)
+        .set({ clientBillingConfirmedAt: current.clientBillingConfirmedAt ?? new Date() })
+        .where(eq(projectRequests.id, input.id))
+        .returning();
+
+      if (updated === undefined) {
+        throw new Error(`Failed to update project request: ${input.id}`);
+      }
+
+      return updated;
+    });
+  },
+
+  /**
+   * Record that Balo has raised the upfront invoice for an accepted request — the
+   * kickoff checklist's middle step. Same contract as `confirmKickoffGate`: idempotent
+   * (the FIRST raise's timestamp is preserved), status-guarded to `accepted`
+   * (`InvalidKickoffStateError`), and FOR UPDATE-locked. Additionally refuses to run
+   * before the client's billing details are confirmed
+   * (`UpfrontInvoiceBeforeBillingError`) — the invoice is raised from them. Whether the
+   * deal has anything due upfront is the caller's check (it reads the proposal).
+   */
+  async markUpfrontInvoiceRaised(input: { id: string }): Promise<ProjectRequest> {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(projectRequests)
+        .where(and(eq(projectRequests.id, input.id), isNull(projectRequests.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Project request not found: ${input.id}`);
+      }
+
+      if (current.status !== 'accepted') {
+        throw new InvalidKickoffStateError(current.status);
+      }
+
+      if (current.clientBillingConfirmedAt === null) {
+        throw new UpfrontInvoiceBeforeBillingError();
+      }
 
       const [updated] = await tx
         .update(projectRequests)
-        .set(set)
+        .set({ upfrontInvoiceRaisedAt: current.upfrontInvoiceRaisedAt ?? new Date() })
         .where(eq(projectRequests.id, input.id))
         .returning();
 

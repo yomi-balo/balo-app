@@ -3,7 +3,6 @@ import {
   Calendar,
   Check,
   Clock,
-  DollarSign,
   FileText,
   MessageSquare,
   Zap,
@@ -279,13 +278,15 @@ function expertNudge(
 
   // Request decided — the surviving (won) thread shows the REQUEST-keyed
   // kickoff cells regardless of its frozen relationship status.
+  // Nothing is the expert's to do here: the kickoff checklist runs between the client and
+  // Balo (billing details, then the upfront invoice when anything is due upfront).
   if (status === 'accepted') {
     return {
-      variant: 'action',
-      icon: DollarSign,
-      headline: 'Confirm payment terms for kickoff',
-      sub: 'The client accepted your proposal. Confirm terms so Balo can invoice and kick off.',
-      primary: { label: 'Confirm payment terms', icon: Check, action: 'stub' },
+      variant: 'waiting',
+      icon: Clock,
+      headline: 'Proposal accepted — kickoff is on its way 🎉',
+      sub: `Nothing for you to do yet — Balo is sorting billing with ${clientParty}, and you'll hear the moment the project kicks off.`,
+      secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
     };
   }
 

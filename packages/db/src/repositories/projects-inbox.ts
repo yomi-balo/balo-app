@@ -133,7 +133,7 @@ async function queryPortfolioRequests(filter: {
       status: true,
       title: true,
       clientBillingConfirmedAt: true,
-      expertTermsConfirmedAt: true,
+      upfrontInvoiceRaisedAt: true,
       createdAt: true,
       updatedAt: true,
       // BAL-541 — THE USER ID ONLY, on a query the CLIENT and EXPERT lenses also run.
@@ -280,8 +280,6 @@ export const projectsInboxRepository = {
         title: projectRequests.title,
         companyId: companies.id,
         companyName: companies.name,
-        clientBillingConfirmedAt: projectRequests.clientBillingConfirmedAt,
-        expertTermsConfirmedAt: projectRequests.expertTermsConfirmedAt,
         currentProposalStatus: proposals.status,
       })
       .from(requestExpertRelationships)
@@ -353,8 +351,6 @@ export const projectsInboxRepository = {
       title: row.title,
       companyId: row.companyId,
       companyName: row.companyName,
-      clientBillingConfirmedAt: row.clientBillingConfirmedAt,
-      expertTermsConfirmedAt: row.expertTermsConfirmedAt,
       currentProposalStatus: row.currentProposalStatus,
       newestEoiAt: newestEoiByRelationship.get(row.relationshipId) ?? null,
     }));
@@ -389,8 +385,6 @@ export const projectsInboxRepository = {
           requestStatus: projectRequests.status,
           descriptionHtml: projectRequests.description,
           timeline: projectRequests.timeline,
-          clientBillingConfirmedAt: projectRequests.clientBillingConfirmedAt,
-          expertTermsConfirmedAt: projectRequests.expertTermsConfirmedAt,
           proposalId: proposals.id,
           proposalStatus: proposals.status,
           proposalVersion: proposals.version,
@@ -496,8 +490,6 @@ export const projectsInboxRepository = {
         timeline: row.timeline,
         productNames: productsByRequest.get(row.projectRequestId) ?? [],
         tagNames: tagsByRequest.get(row.projectRequestId) ?? [],
-        clientBillingConfirmedAt: row.clientBillingConfirmedAt,
-        expertTermsConfirmedAt: row.expertTermsConfirmedAt,
         currentProposal:
           row.proposalId === null ||
           row.proposalStatus === null ||
@@ -539,7 +531,7 @@ export const projectsInboxRepository = {
     const rows = await db
       .select({
         projectRequestId: projectRequests.id,
-        expertTermsConfirmedAt: projectRequests.expertTermsConfirmedAt,
+        upfrontInvoiceRaisedAt: projectRequests.upfrontInvoiceRaisedAt,
         relationshipId: requestExpertRelationships.id,
         expertProfileId: requestExpertRelationships.expertProfileId,
         relationshipStatus: requestExpertRelationships.status,
@@ -599,7 +591,7 @@ export const projectsInboxRepository = {
     for (const row of rows) {
       const detail = result.get(row.projectRequestId) ?? {
         projectRequestId: row.projectRequestId,
-        expertTermsConfirmedAt: row.expertTermsConfirmedAt,
+        upfrontInvoiceRaisedAt: row.upfrontInvoiceRaisedAt,
         relationships: [],
       };
       if (
@@ -658,10 +650,6 @@ export interface PortfolioInvitationRow {
   title: string;
   companyId: string;
   companyName: string;
-  /** Kickoff gate: the client's billing confirmation (null = outstanding). */
-  clientBillingConfirmedAt: Date | null;
-  /** Kickoff gate: the expert's terms confirmation (null = outstanding). */
-  expertTermsConfirmedAt: Date | null;
   /** Status of the relationship's LIVE current proposal (null = none). */
   currentProposalStatus: ProposalStatus | null;
   newestEoiAt: Date | null;
@@ -678,8 +666,6 @@ export interface ExpertMoveDetail {
   timeline: string | null;
   productNames: string[];
   tagNames: string[];
-  clientBillingConfirmedAt: Date | null;
-  expertTermsConfirmedAt: Date | null;
   currentProposal: { id: string; status: ProposalStatus; version: number; updatedAt: Date } | null;
   latestChangeRequest: {
     note: string;
@@ -694,7 +680,8 @@ export interface ExpertMoveDetail {
  */
 export interface ClientMoveDetail {
   projectRequestId: string;
-  expertTermsConfirmedAt: Date | null;
+  /** When Balo raised the upfront invoice (null = not yet, or nothing is due upfront). */
+  upfrontInvoiceRaisedAt: Date | null;
   relationships: {
     relationshipId: string;
     expertProfileId: string;

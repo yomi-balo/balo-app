@@ -206,6 +206,7 @@ export {
   isAllowedTransition,
   InvalidStatusTransitionError,
   InvalidKickoffStateError,
+  UpfrontInvoiceBeforeBillingError,
   type ProjectRequestStatus,
   type ProjectRequestWithRelations,
   type KickoffGate,

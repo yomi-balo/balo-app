@@ -14,10 +14,8 @@ import {
   YOUR_MOVE_CALENDAR_COUNTERPARTY,
   YOUR_MOVE_CALENDAR_TITLE,
   YOUR_MOVE_DRAFT_NOT_STARTED,
-  YOUR_MOVE_GATE_LABELS,
   YOUR_MOVE_ONGOING_ENGAGEMENT,
   YOUR_MOVE_SECTION_LABELS,
-  yourMoveAcceptedFact,
   yourMoveAskedFact,
   yourMoveCompaniesSentence,
   yourMoveDraftSaved,
@@ -125,8 +123,6 @@ function factFor(moveKind: ExpertMoveKind, rel: string): string | null {
       return yourMoveRequestedFact(rel);
     case 'changes_requested':
       return yourMoveAskedFact(rel);
-    case 'kickoff_terms':
-      return yourMoveAcceptedFact(rel);
     case 'delivery_changes':
       return null;
   }
@@ -207,28 +203,6 @@ function changesRequestedContext({ detail }: ProjectContextInput): ProjectContex
   };
 }
 
-function kickoffContext({ detail }: ProjectContextInput): ProjectContext {
-  if (detail === undefined) return NO_CONTEXT;
-  return {
-    context: {
-      type: 'gates',
-      gates: [
-        {
-          label: YOUR_MOVE_GATE_LABELS.billing,
-          state: detail.clientBillingConfirmedAt === null ? 'pending' : 'done',
-        },
-        { label: YOUR_MOVE_GATE_LABELS.terms, state: 'yours' },
-        {
-          label: YOUR_MOVE_GATE_LABELS.approval,
-          state: detail.requestStatus === 'kickoff_approved' ? 'done' : 'pending',
-        },
-      ],
-      note: null,
-    },
-    actionLabel: null,
-  };
-}
-
 function deliveryContext({ row }: ProjectContextInput): ProjectContext {
   const delivery = row.delivery ?? null;
   if (delivery === null) return NO_CONTEXT;
@@ -253,7 +227,6 @@ const PROJECT_CONTEXT_BUILDERS: Record<
   eoi_propose_times: ({ row }) => introSentence(row),
   proposal_requested: proposalRequestedContext,
   changes_requested: changesRequestedContext,
-  kickoff_terms: kickoffContext,
   delivery_changes: deliveryContext,
 };
 

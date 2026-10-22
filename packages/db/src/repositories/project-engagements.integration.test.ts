@@ -12,6 +12,7 @@ import {
   projectEngagements,
   projectRequests,
   proposalMilestones,
+  proposalPaymentInstallments,
   proposals,
   requestExpertRelationships,
   type AuditEvent,
@@ -67,8 +68,8 @@ async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
 
 /**
  * Seed the A6.5 kickoff fixture: a proposal whose request is advanced to
- * `accepted`, the proposal itself to `accepted`, and (optionally) both persisted
- * kickoff gates confirmed. Returns the proposal-factory result plus the request's
+ * `accepted`, the proposal itself to `accepted`, and (optionally) the client's
+ * billing confirmed AND the upfront invoice raised. Returns the proposal-factory result plus the request's
  * resolved `companyId` — the FK ids `materializeFromKickoff` needs.
  */
 async function seedAcceptedKickoff(
@@ -97,7 +98,7 @@ async function seedAcceptedKickoff(
     .set({
       status: 'accepted',
       clientBillingConfirmedAt: gates,
-      expertTermsConfirmedAt: gates,
+      upfrontInvoiceRaisedAt: gates,
     })
     .where(eq(projectRequests.id, source.projectRequestId));
 
@@ -900,39 +901,105 @@ describe('projectEngagementsRepository.materializeFromKickoff — accept→appro
     expect(rows).toHaveLength(1);
   });
 
-  it('throws KickoffGatesIncompleteError when a gate is still null, leaving the request accepted and no engagement', async () => {
-    // Only the client_billing gate set; expert_terms left null.
+  /**
+   * Seed an accepted request with the given checklist state and (optionally) the
+   * proposal's installments, then attempt approval with fixed 500,000 terms.
+   */
+  async function approveWith(state: {
+    billing: boolean;
+    invoiceRaised: boolean;
+    installmentPcts?: number[];
+  }): Promise<{ attempt: Promise<unknown>; projectRequestId: string }> {
     const source = await proposalFactory({ values: { status: 'accepted' } });
     await db
       .update(projectRequests)
-      .set({ status: 'accepted', clientBillingConfirmedAt: new Date() })
+      .set({
+        status: 'accepted',
+        clientBillingConfirmedAt: state.billing ? new Date() : null,
+        upfrontInvoiceRaisedAt: state.invoiceRaised ? new Date() : null,
+      })
       .where(eq(projectRequests.id, source.projectRequestId));
+    const pcts = state.installmentPcts ?? [];
+    if (pcts.length > 0) {
+      await db.insert(proposalPaymentInstallments).values(
+        pcts.map((pct, sortOrder) => ({
+          proposalId: source.proposal.id,
+          sortOrder,
+          label: `Payment ${sortOrder + 1}`,
+          pct,
+        }))
+      );
+    }
     const request = await projectRequestsRepository.findById(source.projectRequestId);
     if (request === undefined) throw new Error('seeded request vanished');
     const admin = await userFactory({ platformRole: 'admin' });
 
-    await expect(
-      projectEngagementsRepository.materializeFromKickoff({
-        requestId: source.projectRequestId,
-        companyId: request.companyId,
-        expertProfileId: source.expertProfileId,
-        sourceProposalId: source.proposal.id,
-        relationshipId: source.relationshipId,
-        approvingAdminUserId: admin.id,
-        pricingMethod: 'fixed',
-        priceCents: 500_000,
-        baloFeeBps: 2500,
-      })
-    ).rejects.toBeInstanceOf(KickoffGatesIncompleteError);
+    const attempt = projectEngagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId: request.companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: admin.id,
+      pricingMethod: 'fixed',
+      priceCents: 500_000,
+      baloFeeBps: 2500,
+    });
+    return { attempt, projectRequestId: source.projectRequestId };
+  }
 
-    // Request untouched, no engagement.
-    const reloaded = await projectRequestsRepository.findById(source.projectRequestId);
+  async function expectNothingMaterialised(projectRequestId: string): Promise<void> {
+    const reloaded = await projectRequestsRepository.findById(projectRequestId);
     expect(reloaded?.status).toBe('accepted');
     const rows = await db
       .select()
       .from(projectEngagements)
-      .where(eq(projectEngagements.projectRequestId, source.projectRequestId));
+      .where(eq(projectEngagements.projectRequestId, projectRequestId));
     expect(rows).toHaveLength(0);
+  }
+
+  it('throws KickoffGatesIncompleteError when the upfront invoice is not raised on a proposal with money due upfront', async () => {
+    const { attempt, projectRequestId } = await approveWith({
+      billing: true,
+      invoiceRaised: false,
+      installmentPcts: [30, 70],
+    });
+
+    await expect(attempt).rejects.toBeInstanceOf(KickoffGatesIncompleteError);
+    await expectNothingMaterialised(projectRequestId);
+  });
+
+  it('treats a fixed proposal with no installments as fully due upfront', async () => {
+    const { attempt, projectRequestId } = await approveWith({
+      billing: true,
+      invoiceRaised: false,
+    });
+
+    await expect(attempt).rejects.toBeInstanceOf(KickoffGatesIncompleteError);
+    await expectNothingMaterialised(projectRequestId);
+  });
+
+  it('throws KickoffGatesIncompleteError when client billing is unconfirmed, even with the invoice raised', async () => {
+    const { attempt, projectRequestId } = await approveWith({
+      billing: false,
+      invoiceRaised: true,
+      installmentPcts: [30, 70],
+    });
+
+    await expect(attempt).rejects.toBeInstanceOf(KickoffGatesIncompleteError);
+    await expectNothingMaterialised(projectRequestId);
+  });
+
+  it('approves without an invoice when nothing is due upfront (0% first installment)', async () => {
+    const { attempt, projectRequestId } = await approveWith({
+      billing: true,
+      invoiceRaised: false,
+      installmentPcts: [0, 100],
+    });
+
+    await expect(attempt).resolves.toBeDefined();
+    const reloaded = await projectRequestsRepository.findById(projectRequestId);
+    expect(reloaded?.status).toBe('kickoff_approved');
   });
 
   it('throws InvalidStatusTransitionError when the request is not accepted (e.g. proposal_submitted)', async () => {
@@ -943,7 +1010,7 @@ describe('projectEngagementsRepository.materializeFromKickoff — accept→appro
       .set({
         status: 'proposal_submitted',
         clientBillingConfirmedAt: new Date(),
-        expertTermsConfirmedAt: new Date(),
+        upfrontInvoiceRaisedAt: new Date(),
       })
       .where(eq(projectRequests.id, source.projectRequestId));
     const request = await projectRequestsRepository.findById(source.projectRequestId);

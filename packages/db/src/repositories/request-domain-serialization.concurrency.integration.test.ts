@@ -758,7 +758,7 @@ describe('Group A — the per-request advisory lock is taken before any row lock
     const now = new Date();
     await wardenDb
       .update(schema.projectRequests)
-      .set({ status: 'accepted', clientBillingConfirmedAt: now, expertTermsConfirmedAt: now })
+      .set({ status: 'accepted', clientBillingConfirmedAt: now, upfrontInvoiceRaisedAt: now })
       .where(eq(schema.projectRequests.id, source.projectRequestId));
     const admin = await userFactory();
     seededRequestIds.push(source.projectRequestId);

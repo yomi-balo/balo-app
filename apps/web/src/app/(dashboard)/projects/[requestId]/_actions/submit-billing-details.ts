@@ -71,7 +71,7 @@ async function authorizeClientBillingSubmit(
   if (!canManageBilling(user.companyRole)) {
     return { ok: false, error: NOT_AUTHORIZED };
   }
-  // The capture step exists only for the accepted deal (mirrors complete-kickoff-task).
+  // The capture step exists only for the accepted deal.
   if (access.request.status !== 'accepted' || access.relationship.status !== 'accepted') {
     return { ok: false, error: STALE };
   }

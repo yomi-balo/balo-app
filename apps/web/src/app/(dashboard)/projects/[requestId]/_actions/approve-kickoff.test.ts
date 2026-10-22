@@ -37,6 +37,7 @@ vi.mock('@/lib/notifications/publish', () => ({
 const {
   mockFindByIdWithRelations,
   mockFindCurrentByRelationship,
+  mockListInstallments,
   mockMaterializeFromKickoff,
   InvalidStatusTransitionError,
   KickoffGatesIncompleteError,
@@ -55,6 +56,7 @@ const {
   return {
     mockFindByIdWithRelations: vi.fn(),
     mockFindCurrentByRelationship: vi.fn(),
+    mockListInstallments: vi.fn(),
     mockMaterializeFromKickoff: vi.fn(),
     InvalidStatusTransitionError,
     KickoffGatesIncompleteError,
@@ -65,6 +67,9 @@ const {
 vi.mock('@balo/db', () => ({
   proposalsRepository: {
     findCurrentByRelationship: (...a: unknown[]) => mockFindCurrentByRelationship(...a),
+  },
+  proposalPaymentInstallmentsRepository: {
+    listByProposal: (...a: unknown[]) => mockListInstallments(...a),
   },
   projectRequestsRepository: {
     findByIdWithRelations: (...a: unknown[]) => mockFindByIdWithRelations(...a),
@@ -85,6 +90,8 @@ const ADMIN = { id: 'user-admin', platformRole: 'admin' as const };
 const PERMISSION_DENIED = 'You do not have permission to do this.';
 
 const VALID_INPUT = { requestId: REQUEST_ID, relationshipId: REL_ID };
+const GATES_INCOMPLETE =
+  'The client needs to add billing details, and the upfront invoice must be raised first.';
 
 const PROPOSAL = {
   id: PROPOSAL_ID,
@@ -107,7 +114,7 @@ function requestGraph(overrides: Record<string, unknown> = {}) {
     title: 'CPQ implementation',
     createdByUserId: CLIENT_USER_ID,
     clientBillingConfirmedAt: new Date('2026-06-01T00:00:00Z'),
-    expertTermsConfirmedAt: new Date('2026-06-02T00:00:00Z'),
+    upfrontInvoiceRaisedAt: new Date('2026-06-02T00:00:00Z'),
     company: { id: 'company-1', name: 'Acme Corp' },
     createdByUser: { id: CLIENT_USER_ID, firstName: 'Grace', lastName: 'Hopper' },
     relationships: [
@@ -129,6 +136,7 @@ describe('approveKickoffAction', () => {
     mockActorHoldsLive.mockImplementation(async () => true);
     mockFindByIdWithRelations.mockResolvedValue(requestGraph());
     mockFindCurrentByRelationship.mockResolvedValue({ ...PROPOSAL });
+    mockListInstallments.mockResolvedValue([{ pct: 30 }, { pct: 70 }]);
     mockMaterializeFromKickoff.mockResolvedValue({
       engagement: { id: ENGAGEMENT_ID },
       request: { id: REQUEST_ID, status: 'kickoff_approved' },
@@ -240,13 +248,33 @@ describe('approveKickoffAction', () => {
     expect(mockMaterializeFromKickoff).not.toHaveBeenCalled();
   });
 
-  it('rejects when a kickoff gate is incomplete', async () => {
-    mockFindByIdWithRelations.mockResolvedValue(requestGraph({ expertTermsConfirmedAt: null }));
+  it('rejects while client billing is unconfirmed', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(requestGraph({ clientBillingConfirmedAt: null }));
     expect(await approveKickoffAction(VALID_INPUT)).toEqual({
       success: false,
-      error: 'Client and expert must complete their steps first.',
+      error: GATES_INCOMPLETE,
     });
     expect(mockMaterializeFromKickoff).not.toHaveBeenCalled();
+  });
+
+  it('rejects while the upfront invoice is unraised on a proposal with money due upfront', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(requestGraph({ upfrontInvoiceRaisedAt: null }));
+    expect(await approveKickoffAction(VALID_INPUT)).toEqual({
+      success: false,
+      error: GATES_INCOMPLETE,
+    });
+    expect(mockListInstallments).toHaveBeenCalledWith(PROPOSAL_ID);
+    expect(mockMaterializeFromKickoff).not.toHaveBeenCalled();
+  });
+
+  it('approves without an invoice when nothing is due upfront', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(requestGraph({ upfrontInvoiceRaisedAt: null }));
+    mockListInstallments.mockResolvedValue([{ pct: 0 }, { pct: 100 }]);
+    expect(await approveKickoffAction(VALID_INPUT)).toEqual({
+      success: true,
+      engagementId: ENGAGEMENT_ID,
+    });
+    expect(mockMaterializeFromKickoff).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a missing accepted current proposal', async () => {
@@ -358,7 +386,7 @@ describe('approveKickoffAction', () => {
     mockMaterializeFromKickoff.mockRejectedValue(new KickoffGatesIncompleteError());
     expect(await approveKickoffAction(VALID_INPUT)).toEqual({
       success: false,
-      error: 'Client and expert must complete their steps first.',
+      error: GATES_INCOMPLETE,
     });
   });
 

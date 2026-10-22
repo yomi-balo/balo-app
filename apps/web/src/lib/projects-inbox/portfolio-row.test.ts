@@ -51,7 +51,7 @@ function makeRequest(overrides: Partial<PortfolioRequestRow> = {}): PortfolioReq
     status: 'requested',
     title: 'CPQ implementation',
     clientBillingConfirmedAt: null,
-    expertTermsConfirmedAt: null,
+    upfrontInvoiceRaisedAt: null,
     createdAt: day(20),
     updatedAt: day(20),
     // BAL-541 — the SHARED portfolio query now selects the Balo owner id, so the repository
@@ -78,8 +78,6 @@ function makeInvitation(overrides: Partial<PortfolioInvitationRow> = {}): Portfo
     title: 'Experience Cloud portal',
     companyId: 'company-1',
     companyName: 'Harbour Health',
-    clientBillingConfirmedAt: null,
-    expertTermsConfirmedAt: null,
     currentProposalStatus: null,
     newestEoiAt: null,
     ...overrides,
@@ -333,17 +331,20 @@ describe('needsYouFor — client lens', () => {
     for (const status of statuses) {
       for (const signal of [SIGNAL_UNREAD, SIGNAL_QUIET]) {
         for (const clientBillingConfirmedAt of [null, day(1)]) {
-          const res = needsYouFor(
-            'client',
-            makeRequest({
-              status,
-              clientBillingConfirmedAt,
-              relationships: [makeRelationship({ status: 'proposal_submitted' })],
-            }),
-            signal,
-            NOW
-          );
-          expect(res.needsYou).toBe(res.clientMoveKind !== null);
+          for (const upfrontInvoiceRaisedAt of [null, day(1)]) {
+            const res = needsYouFor(
+              'client',
+              makeRequest({
+                status,
+                clientBillingConfirmedAt,
+                upfrontInvoiceRaisedAt,
+                relationships: [makeRelationship({ status: 'proposal_submitted' })],
+              }),
+              signal,
+              NOW
+            );
+            expect(res.needsYou).toBe(res.clientMoveKind !== null);
+          }
         }
       }
     }
@@ -381,14 +382,32 @@ describe('needsYouFor — client lens', () => {
     });
   });
 
-  it('accepted with billing confirmed → not needs-you', () => {
+  it('accepted with billing confirmed, invoice not yet raised → not needs-you, awaiting kickoff', () => {
     const res = needsYouFor(
       'client',
       makeRequest({ status: 'accepted', clientBillingConfirmedAt: day(1) }),
       SIGNAL_QUIET,
       NOW
     );
-    expect(res.needsYou).toBe(false);
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Awaiting kickoff', clientMoveKind: null });
+  });
+
+  it('accepted with the upfront invoice raised → needs-you, pay invoice', () => {
+    const res = needsYouFor(
+      'client',
+      makeRequest({
+        status: 'accepted',
+        clientBillingConfirmedAt: day(2),
+        upfrontInvoiceRaisedAt: day(1),
+      }),
+      SIGNAL_QUIET,
+      NOW
+    );
+    expect(res).toEqual({
+      needsYou: true,
+      nudgeLabel: 'Pay invoice',
+      clientMoveKind: 'kickoff_payment',
+    });
   });
 
   it('kickoff_approved → not needs-you, live project', () => {
@@ -523,40 +542,18 @@ describe('needsYouForExpert', () => {
     expect(res.nudgeLabel).toBe('Waiting on client');
   });
 
-  it('won (relationship accepted, request accepted) → confirm terms', () => {
+  it('won (relationship accepted, request accepted) → awaiting kickoff, nothing owed', () => {
     const res = needsYouForExpert(
       makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'accepted' })
     );
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Confirm terms', moveKind: 'kickoff_terms' });
-  });
-
-  it('won with terms already confirmed → awaiting kickoff, not needs-you', () => {
-    const res = needsYouForExpert(
-      makeInvitation({
-        relationshipStatus: 'accepted',
-        requestStatus: 'accepted',
-        expertTermsConfirmedAt: day(1),
-      })
-    );
     expect(res).toEqual({ needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null });
   });
 
-  it('accepted relationship on a not-yet-accepted request, terms confirmed → awaiting kickoff', () => {
-    const res = needsYouForExpert(
-      makeInvitation({
-        relationshipStatus: 'accepted',
-        requestStatus: 'proposal_submitted',
-        expertTermsConfirmedAt: day(1),
-      })
-    );
-    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null });
-  });
-
-  it('accepted relationship on a not-yet-accepted request, terms outstanding → confirm terms', () => {
+  it('accepted relationship on a not-yet-accepted request → awaiting kickoff', () => {
     const res = needsYouForExpert(
       makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'proposal_submitted' })
     );
-    expect(res.moveKind).toBe('kickoff_terms');
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null });
   });
 
   it('proposal_submitted with a changes_requested current proposal → revise your proposal', () => {
@@ -606,18 +603,11 @@ describe('needsYouForExpert', () => {
       for (const requestStatus of requestStatuses) {
         for (const currentProposalStatus of [null, 'changes_requested', 'submitted'] as const) {
           for (const signal of [SIGNAL_UNREAD, SIGNAL_QUIET]) {
-            for (const expertTermsConfirmedAt of [null, day(1)]) {
-              const res = needsYouForExpert(
-                makeInvitation({
-                  relationshipStatus,
-                  requestStatus,
-                  currentProposalStatus,
-                  expertTermsConfirmedAt,
-                }),
-                signal
-              );
-              expect(res.needsYou).toBe(res.moveKind !== null);
-            }
+            const res = needsYouForExpert(
+              makeInvitation({ relationshipStatus, requestStatus, currentProposalStatus }),
+              signal
+            );
+            expect(res.needsYou).toBe(res.moveKind !== null);
           }
         }
       }
@@ -638,7 +628,7 @@ describe('needsYouForExpert', () => {
     expect(res).toEqual({ needsYou: false, nudgeLabel: 'Live project', moveKind: null });
   });
 
-  it('closed request, even an ACCEPTED relationship → closed, not "Confirm terms" (BAL-540)', () => {
+  it('closed request, even an ACCEPTED relationship → closed, not "Awaiting kickoff" (BAL-540)', () => {
     const res = needsYouForExpert(
       makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'closed' })
     );
@@ -860,14 +850,30 @@ describe('adminNeedsYou + adminStallDays', () => {
     expect(res.needsYou).toBe(false);
   });
 
-  it('accepted with a gate owed → kickoff gate needs-you', () => {
-    const row = makeRequest({
-      status: 'accepted',
-      clientBillingConfirmedAt: day(1),
-      expertTermsConfirmedAt: null,
-    });
-    const res = needsYouFor('admin', row, SIGNAL_QUIET, NOW);
-    expect(res).toEqual({ needsYou: true, nudgeLabel: 'Kickoff gate', clientMoveKind: null });
+  it.each([
+    [
+      'billing owed',
+      { clientBillingConfirmedAt: null, upfrontInvoiceRaisedAt: null },
+      'Kickoff gate',
+    ],
+    [
+      'billing in, invoice not raised',
+      { clientBillingConfirmedAt: day(2), upfrontInvoiceRaisedAt: null },
+      'Ready for kickoff',
+    ],
+    [
+      'invoice raised',
+      { clientBillingConfirmedAt: day(2), upfrontInvoiceRaisedAt: day(1) },
+      'Awaiting payment',
+    ],
+  ] as const)('accepted, %s → needs-you', (_case, gates, nudgeLabel) => {
+    const res = needsYouFor(
+      'admin',
+      makeRequest({ status: 'accepted', ...gates }),
+      SIGNAL_QUIET,
+      NOW
+    );
+    expect(res).toEqual({ needsYou: true, nudgeLabel, clientMoveKind: null });
   });
 
   it('adminStallDays returns null below the threshold', () => {

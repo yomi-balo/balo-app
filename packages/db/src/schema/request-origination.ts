@@ -144,8 +144,8 @@ export const requestExpertRelationships = pgTable(
      * a track "not selected" as soon as the REQUEST reaches `accepted`. That is a RENDER
      * label; this is the ACCESS instant, and it is stamped later, at kickoff approval,
      * because Ruling 2 requires closure and lineage to fire from ONE hook. During the
-     * kickoff window (gated on `client_billing_confirmed_at` + `expert_terms_confirmed_at`,
-     * potentially days) the two disagree BY DESIGN: the UI says "not selected" while files
+     * kickoff window (client billing, then the upfront invoice raised and paid — potentially
+     * days) the two disagree BY DESIGN: the UI says "not selected" while files
      * still flow. Accepted in OSD-5 — do NOT "reconcile" them by adding a second stamp at
      * `proposalsRepository.accept` without a ruling; that is the "two mechanisms" Ruling 2
      * forbids.

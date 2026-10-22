@@ -205,8 +205,6 @@ const EXCLUSIONS: readonly ViewGateExclusion[] = [
       ['remove-proposal-document.ts', "access.ctx.lens !== 'expert'"],
       ['get-proposal-document-download.ts', "access.ctx.lens !== 'expert'"],
       ['withdraw-eoi.ts', "ctx.lens !== 'expert'"],
-      ['complete-kickoff-task.ts', "access.ctx.lens === 'client'"],
-      ['complete-kickoff-task.ts', "access.ctx.lens !== 'expert'"],
     ] as const satisfies readonly (readonly [string, string])[]
   ).map(
     ([name, comparison]): ViewGateExclusion => ({

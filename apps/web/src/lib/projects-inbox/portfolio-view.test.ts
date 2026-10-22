@@ -77,7 +77,7 @@ function requestRow(overrides: Record<string, unknown> = {}): Record<string, unk
     status: 'experts_invited',
     title: 'CPQ implementation',
     clientBillingConfirmedAt: null,
-    expertTermsConfirmedAt: null,
+    upfrontInvoiceRaisedAt: null,
     createdAt: day(10),
     updatedAt: day(10),
     // BAL-541 — the SHARED portfolio query now selects the Balo owner id on every lens'
@@ -104,8 +104,6 @@ function invitationRow(overrides: Record<string, unknown> = {}): Record<string, 
     title: 'Experience Cloud portal',
     companyId: 'company-9',
     companyName: 'Harbour Health',
-    clientBillingConfirmedAt: null,
-    expertTermsConfirmedAt: null,
     currentProposalStatus: null,
     newestEoiAt: null,
     ...overrides,
@@ -593,8 +591,7 @@ describe('loadAdminPortfolio', () => {
     const gateRequest = requestRow({
       id: 'gate-1',
       status: 'accepted',
-      clientBillingConfirmedAt: day(1),
-      expertTermsConfirmedAt: null,
+      clientBillingConfirmedAt: null,
     });
     const liveRequest = requestRow({ id: 'live-1', status: 'kickoff_approved' });
     mockListAll.mockResolvedValue([triageRequest, stalled, exploratory, gateRequest, liveRequest]);
@@ -622,6 +619,34 @@ describe('loadAdminPortfolio', () => {
     // Pipeline tile spans origination columns only (kickoff_approved excluded).
     expect(dto.tiles).toEqual({ untriaged: 1, stalled: 2, pipeline: 3, gate: 1 });
     expect(dto.isEmpty).toBe(false);
+  });
+
+  it('holds an accepted request on the client for billing or payment, never while Balo invoices', async () => {
+    mockListAll.mockResolvedValue([
+      requestRow({ id: 'billing-owed', status: 'accepted', clientBillingConfirmedAt: null }),
+      requestRow({
+        id: 'balo-to-invoice',
+        status: 'accepted',
+        clientBillingConfirmedAt: day(2),
+        upfrontInvoiceRaisedAt: null,
+      }),
+      requestRow({
+        id: 'payment-owed',
+        status: 'accepted',
+        clientBillingConfirmedAt: day(3),
+        upfrontInvoiceRaisedAt: day(1),
+      }),
+    ]);
+
+    const dto = await loadAdminPortfolio(['admin'], NOW);
+
+    const accepted = dto.kanban.find((c) => c.stage === 'accepted');
+    const labelOf = (id: string): string | null | undefined =>
+      accepted?.items.find((i) => i.id === id)?.stalledLabel;
+    expect(labelOf('billing-owed')).toBe('Kickoff gate');
+    expect(labelOf('balo-to-invoice')).toBeNull();
+    expect(labelOf('payment-owed')).toBe('Awaiting payment');
+    expect(dto.tiles.gate).toBe(2);
   });
 
   it('appends an "In delivery" kanban column of in-flight engagements', async () => {
@@ -731,13 +756,9 @@ describe('BAL-541 (D9) — Balo owner never leaks into a client/expert portfolio
 describe('portfolio rows — kickoff and proposal-changes rules', () => {
   const expertUser = { ...USER, expertProfileId: 'expert-1' };
 
-  it('an accepted expert with terms confirmed is awaiting kickoff, not needs-you', async () => {
+  it('an accepted expert is awaiting kickoff, not needs-you', async () => {
     mockListInvitationsByExpert.mockResolvedValue([
-      invitationRow({
-        relationshipStatus: 'accepted',
-        requestStatus: 'accepted',
-        expertTermsConfirmedAt: day(1),
-      }),
+      invitationRow({ relationshipStatus: 'accepted', requestStatus: 'accepted' }),
     ]);
     mockListPortfolioEngagements.mockResolvedValue([]);
 

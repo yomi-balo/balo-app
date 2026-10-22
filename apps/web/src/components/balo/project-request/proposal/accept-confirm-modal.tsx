@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
+import { upfrontDueCents } from '@balo/shared/project-requests';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
@@ -51,7 +52,7 @@ function moneyRows(doc: ProposalReviewDoc): MoneyRow[] {
   const total = formatWholeCurrency(doc.priceCents, doc.currency);
 
   if (doc.pricingMethod === 'tm') {
-    const dueNowCents = doc.depositCents ?? 0;
+    const dueNowCents = upfrontDueCents(doc);
     const thenSub =
       doc.rateCents === null
         ? 'billed against time'
@@ -76,7 +77,7 @@ function moneyRows(doc: ProposalReviewDoc): MoneyRow[] {
     ];
   }
 
-  const dueNowCents = Math.round((doc.priceCents * upfront.pct) / 100);
+  const dueNowCents = upfrontDueCents(doc);
   const thenCents = doc.priceCents - dueNowCents;
   return [
     { label: 'Total', value: total, sub: pricingMethodLabel(doc.pricingMethod) },
@@ -235,8 +236,10 @@ export function AcceptConfirmModal({
             >
               I agree to <strong className="text-foreground">Balo&apos;s standard terms</strong> and{' '}
               {expertFirst}&apos;s additional terms, and understand accepting commits{' '}
-              {clientCompanyName} to these terms. Balo will raise the upfront invoice and tell the
-              other experts they weren&apos;t selected.
+              {clientCompanyName} to these terms.{' '}
+              {upfrontDueCents(doc) > 0
+                ? "Balo will raise the upfront invoice and tell the other experts they weren't selected."
+                : "Balo will tell the other experts they weren't selected."}
             </span>
           </label>
         </div>

@@ -56,7 +56,7 @@ function request(
     baloFeeBps: 2500,
     timeline: 'Target go-live: end of Q3',
     clientBillingConfirmedAt: null,
-    expertTermsConfirmedAt: null,
+    upfrontInvoiceRaisedAt: null,
     createdAt: new Date('2025-01-07T00:00:00Z'),
     updatedAt: new Date('2025-01-07T00:00:00Z'),
     company: { id: 'company-1', name: 'Northwind Industrial' },
@@ -548,7 +548,7 @@ describe('mapRequestToDetailView — kickoff (BAL-291)', () => {
     expect(view.kickoff).toBeNull();
   });
 
-  it('populates at accepted with both gates false when timestamps are null', () => {
+  it('populates at accepted with every step outstanding when timestamps are null', () => {
     const view = mapRequestToDetailView(
       request({ status: 'accepted', relationships: [acceptedRel] }),
       ctx({ lens: 'client', relationshipId: null }),
@@ -557,38 +557,38 @@ describe('mapRequestToDetailView — kickoff (BAL-291)', () => {
     expect(view.kickoff).toEqual<KickoffView>({
       acceptedRelationshipId: 'rel-1',
       clientBillingConfirmed: false,
-      expertTermsConfirmed: false,
+      upfrontInvoiceRaised: false,
       approved: false,
       expertName: 'Priya Nair',
     });
   });
 
-  it('reflects each gate when its timestamp is set', () => {
+  it('reflects each step when its timestamp is set', () => {
     const view = mapRequestToDetailView(
       request({
         status: 'accepted',
         relationships: [acceptedRel],
         clientBillingConfirmedAt: new Date('2025-01-09T00:00:00Z'),
-        expertTermsConfirmedAt: null,
+        upfrontInvoiceRaisedAt: null,
       }),
       ctx({ lens: 'client', relationshipId: null }),
       NOW
     );
     expect(view.kickoff?.clientBillingConfirmed).toBe(true);
-    expect(view.kickoff?.expertTermsConfirmed).toBe(false);
+    expect(view.kickoff?.upfrontInvoiceRaised).toBe(false);
 
     const both = mapRequestToDetailView(
       request({
         status: 'accepted',
         relationships: [acceptedRel],
         clientBillingConfirmedAt: new Date('2025-01-09T00:00:00Z'),
-        expertTermsConfirmedAt: new Date('2025-01-09T00:00:00Z'),
+        upfrontInvoiceRaisedAt: new Date('2025-01-10T00:00:00Z'),
       }),
       ctx({ lens: 'client', relationshipId: null }),
       NOW
     );
     expect(both.kickoff?.clientBillingConfirmed).toBe(true);
-    expect(both.kickoff?.expertTermsConfirmed).toBe(true);
+    expect(both.kickoff?.upfrontInvoiceRaised).toBe(true);
   });
 
   it('marks approved true at kickoff_approved (relationship stays accepted)', () => {
@@ -597,7 +597,7 @@ describe('mapRequestToDetailView — kickoff (BAL-291)', () => {
         status: 'kickoff_approved',
         relationships: [acceptedRel],
         clientBillingConfirmedAt: new Date('2025-01-09T00:00:00Z'),
-        expertTermsConfirmedAt: new Date('2025-01-09T00:00:00Z'),
+        upfrontInvoiceRaisedAt: new Date('2025-01-09T00:00:00Z'),
       }),
       ctx({ lens: 'client', relationshipId: null }),
       NOW

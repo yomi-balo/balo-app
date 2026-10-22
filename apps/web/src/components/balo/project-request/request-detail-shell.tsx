@@ -4,7 +4,7 @@ import {
   type PassableRelationshipStatus,
 } from '@balo/shared/project-requests';
 import { cn } from '@/lib/utils';
-import type { RequestDetailView } from '@/lib/project-request/request-detail-view';
+import type { KickoffUpfront, RequestDetailView } from '@/lib/project-request/request-detail-view';
 import {
   BEFORE_INVITE_STATUSES,
   requestPhase,
@@ -60,6 +60,11 @@ interface RequestDetailShellProps {
    * the client lens on an accepted request; forwarded to the KickoffBoard.
    */
   billingCapture?: KickoffBillingCapture | null;
+  /**
+   * The kickoff checklist's upfront amount, loaded by the page; forwarded to the
+   * KickoffBoard. Null when nothing is due upfront (or no kickoff board is active).
+   */
+  kickoffUpfront?: KickoffUpfront | null;
   /**
    * BAL-331 deep-link: the delivery engagement's id, resolved by the page ONLY
    * when the request is `kickoff_approved`. When set, every lens sees the "View
@@ -240,6 +245,7 @@ export function RequestDetailShell({
   conversation = null,
   adminBilling = null,
   billingCapture = null,
+  kickoffUpfront = null,
   deliveryEngagementId = null,
   viewerEmailDomain = null,
   requestFilesView = null,
@@ -467,9 +473,11 @@ export function RequestDetailShell({
                     acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
                     lens={ctx.lens}
                     clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                    expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                    upfrontInvoiceRaised={view.kickoff.upfrontInvoiceRaised}
                     approved={view.kickoff.approved}
                     expertName={view.kickoff.expertName}
+                    clientCompanyName={view.companyName}
+                    upfront={kickoffUpfront}
                     billing={billingCapture}
                   />
                 )}
@@ -548,9 +556,11 @@ export function RequestDetailShell({
                           acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
                           lens={ctx.lens}
                           clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                          expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                          upfrontInvoiceRaised={view.kickoff.upfrontInvoiceRaised}
                           approved={view.kickoff.approved}
                           expertName={view.kickoff.expertName}
+                          clientCompanyName={view.companyName}
+                          upfront={kickoffUpfront}
                           billing={billingCapture}
                           mobile
                         />
@@ -599,9 +609,11 @@ export function RequestDetailShell({
                     acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
                     lens={ctx.lens}
                     clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
-                    expertTermsConfirmed={view.kickoff.expertTermsConfirmed}
+                    upfrontInvoiceRaised={view.kickoff.upfrontInvoiceRaised}
                     approved={view.kickoff.approved}
                     expertName={view.kickoff.expertName}
+                    clientCompanyName={view.companyName}
+                    upfront={kickoffUpfront}
                     billing={billingCapture}
                   />
                 )}

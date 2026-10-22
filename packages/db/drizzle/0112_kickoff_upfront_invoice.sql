@@ -1,0 +1,1 @@
+ALTER TABLE "project_requests" ADD COLUMN "upfront_invoice_raised_at" timestamp with time zone;

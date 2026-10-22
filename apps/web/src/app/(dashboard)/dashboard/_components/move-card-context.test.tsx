@@ -89,18 +89,18 @@ describe('MoveCardContext', () => {
         context={{
           type: 'gates',
           gates: [
-            { label: 'Client billing', state: 'done' },
-            { label: 'Your terms', state: 'yours' },
-            { label: 'Balo approval', state: 'pending' },
+            { label: 'Your billing', state: 'done' },
+            { label: 'Your payment', state: 'yours' },
+            { label: 'Balo kickoff', state: 'pending' },
           ],
           note: null,
         }}
       />
     );
     const list = screen.getByRole('list', { name: 'Kickoff gates' });
-    expect(list).toHaveTextContent('Client billing, done');
-    expect(list).toHaveTextContent('Your terms, waiting on you');
-    expect(list).toHaveTextContent('Balo approval, not yet');
+    expect(list).toHaveTextContent('Your billing, done');
+    expect(list).toHaveTextContent('Your payment, waiting on you');
+    expect(list).toHaveTextContent('Balo kickoff, not yet');
   });
 
   it('delivery: note, progress and milestone count', () => {

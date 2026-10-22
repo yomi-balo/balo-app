@@ -447,15 +447,10 @@ describe('projectsInboxRepository.listInvitationsByExpert — declined tracks on
   });
 });
 
-describe('projectsInboxRepository.listInvitationsByExpert — kickoff gates + current proposal', () => {
-  it('passes the kickoff gate timestamps through and reports null status without a proposal', async () => {
+describe('projectsInboxRepository.listInvitationsByExpert — current proposal', () => {
+  it('reports null status without a proposal', async () => {
     const expert = await expertDraftFactory();
-    const billingAt = new Date('2026-05-01T00:00:00.000Z');
     const request = await projectRequestFactory({ status: 'accepted' });
-    await db
-      .update(projectRequests)
-      .set({ clientBillingConfirmedAt: billingAt })
-      .where(eq(projectRequests.id, request.id));
     await requestExpertRelationshipFactory({
       projectRequestId: request.id,
       expertProfileId: expert.id,
@@ -463,8 +458,6 @@ describe('projectsInboxRepository.listInvitationsByExpert — kickoff gates + cu
     });
 
     const [row] = await projectsInboxRepository.listInvitationsByExpert(expert.id);
-    expect(row?.clientBillingConfirmedAt?.getTime()).toBe(billingAt.getTime());
-    expect(row?.expertTermsConfirmedAt).toBeNull();
     expect(row?.currentProposalStatus).toBeNull();
   });
 
@@ -755,10 +748,8 @@ describe('projectsInboxRepository.listExpertMoveDetails', () => {
       projectRequestIds: [request.id],
     });
     expect(Object.keys(result.get(request.id) ?? {}).sort((a, b) => a.localeCompare(b))).toEqual([
-      'clientBillingConfirmedAt',
       'currentProposal',
       'descriptionHtml',
-      'expertTermsConfirmedAt',
       'latestChangeRequest',
       'productNames',
       'projectRequestId',
@@ -920,7 +911,7 @@ describe('projectsInboxRepository.listClientMoveDetails', () => {
       projectRequestIds: [request.id],
     });
     const detail = result.get(request.id);
-    expect(detail?.expertTermsConfirmedAt).toBeNull();
+    expect(detail?.upfrontInvoiceRaisedAt).toBeNull();
     expect(detail?.relationships).toHaveLength(1);
     expect(detail?.relationships[0]).toEqual({
       relationshipId: relationship.relationship.id,

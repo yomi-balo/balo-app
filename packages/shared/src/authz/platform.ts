@@ -363,9 +363,9 @@ export const PLATFORM_CAPABILITIES = {
   MANAGE_ANY_REQUEST_SOURCING: 'manage_any_request_sourcing',
   /**
    * BAL-558 / ADR-1035 — operate the KICKOFF GATE on ANY accepted project request, on any tenant:
-   * approve a kickoff (`accepted → kickoff_approved`, which MATERIALISES the paid delivery
-   * engagement from the accepted proposal's snapshotted terms) and remind the client to complete
-   * the billing-details prerequisite that approval waits on.
+   * record the upfront invoice as raised, approve a kickoff (`accepted → kickoff_approved`, which
+   * MATERIALISES the paid delivery engagement from the accepted proposal's snapshotted terms) and
+   * remind the client to complete the billing-details prerequisite that approval waits on.
    *
    * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the same argument as its siblings. In
    * particular it is NOT `MANAGE_ANY_REQUEST_SOURCING`: inviting a candidate and starting a paid
@@ -377,8 +377,7 @@ export const PLATFORM_CAPABILITIES = {
    * the `client_billing` gate the approval depends on — a kickoff-gate act.
    *
    * The PLATFORM axis is right because the Balo arm holds no membership on either party; the
-   * parties' own kickoff steps (`submit-billing-details.ts`, `complete-kickoff-task.ts`) are
-   * separate arms and untouched. It REPLACES a `requireAdmin()` role-set read (BAL-558).
+   * client's own kickoff step (`submit-billing-details.ts`) is a separate arm and untouched. It REPLACES a `requireAdmin()` role-set read (BAL-558).
    *
    * Granted to BOTH staff roles: `PLATFORM_STAFF_BUNDLE`, exactly `{admin, super_admin}` — the set
    * `requireAdmin()` admitted. A consistency migration, NOT an escalation or a narrowing. Pinned by
