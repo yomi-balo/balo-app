@@ -1,5 +1,5 @@
 ---
-description: Run pre-PR checks — format, lint, typecheck, build, tests, SonarCloud readiness.
+description: Run pre-PR checks — format, lint, typecheck, build, tests, SonarCloud readiness, help screenshots.
 model: sonnet
 ---
 
@@ -172,7 +172,46 @@ Only run this if the diff includes files in `packages/db/src/` — specifically 
 
 Integration tests require Docker. If Docker is not available, note it clearly in the output and flag it as a manual verification step.
 
-### 8. E2E tests (skipped locally)
+### 8. Help screenshots (if UI or a guide changed)
+
+Help guides embed PNGs captured from the running app (`e2e/help-screenshots/`, see its README). CI never runs the capture, so a UI change can leave a published guide showing a screen that no longer exists. Recapture here so the PR ships the images.
+
+**Run it when** the branch changes a non-test file under any of these paths:
+
+```bash
+git diff origin/main...HEAD --name-only \
+  | grep -E '^(apps/web/src/|docs/help/|e2e/help-screenshots/|packages/db/src/help-seed/)' \
+  | grep -vE '\.(test|spec)\.'
+```
+
+If the work isn't committed yet, run the same filter over `git diff --cached --name-only`.
+
+**Run it last and alone**, after every other check has passed, with no other test run, agent or build on the machine. The runner fails on any console error, and hydration only misbehaves under load.
+
+**Prerequisites** (full list in `e2e/help-screenshots/README.md`). Check each one. If one is missing, report a BLOCKER with the exact step for the user. Never skip the capture.
+
+- Docker Postgres and Redis are up (`docker ps`), and the local database is migrated and seeded (`pnpm db:migrate`, `pnpm db:seed`).
+- `packages/db/.env` has a `DATABASE_URL` whose host is `localhost`, `127.0.0.1` or `::1`.
+- `E2E_TEST_SECRET`, `WORKOS_COOKIE_PASSWORD` and `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` are set in the shell.
+- Nothing is listening on :3000 (`lsof -i :3000`). The runner reuses any server it finds there, so a server from another checkout would be captured instead of this branch. Let the runner build and start this branch's web itself.
+- The API is up on :3002 against the same database. If the branch changes `apps/api/`, start the API from this worktree.
+
+**Capture every guide:**
+
+```bash
+pnpm help:screenshots
+```
+
+Capture all guides, not only the obvious one. Shared components appear in several guides, and the runner writes a PNG only when its pixels change, so unchanged screens add nothing to the diff. Each file prints `written` or `unchanged`.
+
+**Then:**
+
+1. Open each `written` PNG, light and dark, and check it still frames what its guide section describes. A crop tuned for an older layout can clip the target or drift off it.
+2. If a capture throws (locator not found, or a clip outside 1280×800), the spec targets UI that moved. Update `e2e/help-screenshots/guides/<slug>.ts` and rerun that guide with `pnpm help:screenshots <slug>`. A `pageerror` or `console.error` is an application bug, so report it as a BLOCKER (rule 8).
+3. Stage the written PNGs under `apps/web/public/help/` and any spec fixes, by path.
+4. The runner's teardown resets the fixture. If a run was interrupted, run `pnpm --filter @balo/db help:reset`.
+
+### 9. E2E tests (skipped locally)
 
 CI runs Playwright E2E tests (`pnpm test:e2e`). These require a full build + running server and are too slow for a local pre-PR gate. Note in the output that E2E tests were skipped and will run in CI.
 
@@ -204,6 +243,7 @@ Checks run:
   [PASS] SonarJS smells on changed files (pnpm lint:sonar:diff)
   [PASS] SonarCloud readiness (sonar-project.properties verified)
   [PASS] Integration tests (pnpm test:integration)   ← only if run
+  [PASS] Help screenshots (pnpm help:screenshots)   ← only if run; e.g. 2 written, 61 unchanged
   [SKIP] E2E tests (run in CI only)
 
 Auto-fixed:
@@ -243,3 +283,4 @@ Auto-fixed (already staged):
 6. **Be specific about blockers** — file, line, error text, and what action is needed. The developer must be able to fix it without re-running the checks themselves.
 7. **Report `sonar-project.properties` gaps as CRITICAL** — it will fail CI silently in a way that's hard to debug later
 8. **Do not modify application logic to pass checks** — fix types, formatting, lint, and test issues only. If a test fails because the implementation is wrong, that's a BLOCKER for the user to decide on.
+9. **Help screenshots run last and alone**, against this branch's own web server on :3000, never a server another checkout started. A missing prerequisite is a BLOCKER, never a skip: a skipped capture is how a PR ships a guide showing a screen that no longer exists.
