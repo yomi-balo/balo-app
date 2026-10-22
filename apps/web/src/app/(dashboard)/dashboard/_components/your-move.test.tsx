@@ -125,11 +125,13 @@ const ALL_KINDS: YourMoveCardView[] = DASHBOARD_YOUR_MOVE_CARD_KINDS.map((kind, 
   })
 );
 
-/** The card articles only: gate and item lists nest their own listitems. */
-const cardItems = (): HTMLElement[] =>
-  within(screen.getByRole('list', { name: 'Waiting on you' }))
+/** The cards only — the rail's own items; gate and item lists nest their own listitems. */
+const cardItems = (): HTMLElement[] => {
+  const rail = screen.getByRole('list', { name: 'Waiting on you' });
+  return within(rail)
     .getAllByRole('listitem')
-    .filter((el) => el.tagName === 'ARTICLE');
+    .filter((el) => el.parentElement === rail);
+};
 
 const ready = (cards: readonly YourMoveCardView[]): YourMoveData => ({ kind: 'ready', cards });
 

@@ -451,6 +451,41 @@ function clientNeedsYou(
 
 // ── Expert lens needs-you + nudge (per-relationship) ───────────────
 
+/**
+ * A decided request (`accepted` / `kickoff_approved`): the surviving thread waits on kickoff
+ * (the checklist runs between the client and Balo); any other relationship lost.
+ */
+function decidedRequestResult(invitation: PortfolioInvitationRow): ExpertNeedsYouResult {
+  if (invitation.relationshipStatus !== 'accepted') {
+    return { needsYou: false, nudgeLabel: 'Not selected', moveKind: null };
+  }
+  return invitation.requestStatus === 'kickoff_approved'
+    ? { needsYou: false, nudgeLabel: 'Live project', moveKind: null }
+    : { needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null };
+}
+
+/** After the expert's EOI: a direct request's choice, a reply owed, or times to propose. */
+function eoiSubmittedResult(
+  invitation: PortfolioInvitationRow,
+  signal: RequestThreadSignal
+): ExpertNeedsYouResult {
+  const owesChoice = directExpertOwesChoice({
+    onDirectLeg: invitation.onDirectLeg,
+    relationshipStatus: invitation.relationshipStatus,
+    availabilityShared: invitation.availabilitySharedAt !== null,
+    sentMessage: signal.viewerHasSentMessage,
+  });
+  if (owesChoice) {
+    return { needsYou: true, nudgeLabel: DIRECT_CHOICE_LABEL, moveKind: 'direct_request' };
+  }
+  const needsReply = signal.anyUnread || signal.awaitingViewerReply;
+  return {
+    needsYou: true,
+    nudgeLabel: needsReply ? 'Reply to client' : 'Propose times',
+    moveKind: needsReply ? 'eoi_reply_owed' : 'eoi_propose_times',
+  };
+}
+
 function expertNeedsYou(
   invitation: PortfolioInvitationRow,
   signal: RequestThreadSignal
@@ -462,37 +497,15 @@ function expertNeedsYou(
     return { needsYou: false, nudgeLabel: 'Closed', moveKind: null };
   }
 
-  // Request-level decision: the surviving thread waits on kickoff (the checklist runs
-  // between the client and Balo); a non-accepted relationship on a decided request is lost.
   if (invitation.requestStatus === 'accepted' || invitation.requestStatus === 'kickoff_approved') {
-    if (invitation.relationshipStatus === 'accepted') {
-      return invitation.requestStatus === 'kickoff_approved'
-        ? { needsYou: false, nudgeLabel: 'Live project', moveKind: null }
-        : { needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null };
-    }
-    return { needsYou: false, nudgeLabel: 'Not selected', moveKind: null };
+    return decidedRequestResult(invitation);
   }
 
   switch (invitation.relationshipStatus) {
     case 'invited':
       return { needsYou: true, nudgeLabel: 'Submit your EOI', moveKind: 'invitation' };
-    case 'eoi_submitted': {
-      const owesChoice = directExpertOwesChoice({
-        onDirectLeg: invitation.onDirectLeg,
-        relationshipStatus: invitation.relationshipStatus,
-        availabilityShared: invitation.availabilitySharedAt !== null,
-        sentMessage: signal.viewerHasSentMessage,
-      });
-      if (owesChoice) {
-        return { needsYou: true, nudgeLabel: DIRECT_CHOICE_LABEL, moveKind: 'direct_request' };
-      }
-      const needsReply = signal.anyUnread || signal.awaitingViewerReply;
-      return {
-        needsYou: true,
-        nudgeLabel: needsReply ? 'Reply to client' : 'Propose times',
-        moveKind: needsReply ? 'eoi_reply_owed' : 'eoi_propose_times',
-      };
-    }
+    case 'eoi_submitted':
+      return eoiSubmittedResult(invitation, signal);
     case 'proposal_requested':
       return {
         needsYou: true,

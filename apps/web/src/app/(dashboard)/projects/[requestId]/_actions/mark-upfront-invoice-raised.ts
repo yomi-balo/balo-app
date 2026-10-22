@@ -13,6 +13,7 @@ import {
 import { PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
 import { upfrontForProposal } from '@/lib/project-request/kickoff-upfront';
+import type { KickoffUpfront } from '@/lib/project-request/request-detail-view';
 import { requireRequestStaffCapability } from './_shared/require-request-staff-capability';
 
 const inputSchema = z.object({
@@ -32,16 +33,60 @@ const NOTHING_DUE = 'Nothing is due upfront on this deal — approve kickoff ins
 const GENERIC_FAILURE = 'Could not record the invoice. Please try again.';
 
 /**
+ * Load + verify everything raising the invoice needs — never trust the admin's claim.
+ * The request must be `accepted`, the claimed relationship must BE the accepted one, the
+ * client's billing must be confirmed, and the accepted current proposal must have
+ * something due upfront. Returns that amount, or a friendly error string.
+ */
+async function loadRaisableInvoice(
+  requestId: string,
+  relationshipId: string
+): Promise<{ upfront: KickoffUpfront } | { error: string }> {
+  const request = await projectRequestsRepository.findByIdWithRelations(requestId);
+  if (request === undefined) {
+    return { error: INVALID_REQUEST };
+  }
+  const rel = request.relationships.find((r) => r.status === 'accepted');
+  if (request.status !== 'accepted' || rel?.id !== relationshipId) {
+    return { error: STALE };
+  }
+  if (request.clientBillingConfirmedAt === null) {
+    return { error: BILLING_FIRST };
+  }
+
+  const proposal = await proposalsRepository.findCurrentByRelationship(relationshipId);
+  if (proposal?.isCurrent !== true || proposal.status !== 'accepted') {
+    return { error: STALE };
+  }
+  const upfront = await upfrontForProposal(proposal);
+  return upfront === null ? { error: NOTHING_DUE } : { upfront };
+}
+
+/** Record the raise; the repository's typed refusals map to friendly copy, anything else rethrows. */
+async function recordInvoiceRaised(requestId: string): Promise<{ error: string } | null> {
+  try {
+    await projectRequestsRepository.markUpfrontInvoiceRaised({ id: requestId });
+    return null;
+  } catch (error) {
+    if (error instanceof InvalidKickoffStateError) {
+      return { error: STALE };
+    }
+    if (error instanceof UpfrontInvoiceBeforeBillingError) {
+      return { error: BILLING_FIRST };
+    }
+    throw error;
+  }
+}
+
+/**
  * Balo records that it has raised the upfront invoice — the kickoff checklist's
  * middle step, between the client's billing details and Balo confirming payment
  * (`approve-kickoff.ts`). The invoice itself is raised outside Balo for now; this
  * records the fact so the client sees it is theirs to pay.
  *
  * Control flow: requireRequestStaffCapability(MANAGE_ANY_KICKOFF_GATE) → validate
- * input → request `accepted` and the claimed relationship is the accepted one →
- * billing confirmed → the accepted current proposal has something due upfront →
- * `markUpfrontInvoiceRaised` (idempotent; typed errors → friendly copy) → log →
- * revalidate → return. Analytics fire client-side (PROJECT_KICKOFF_GATE_CONFIRMED).
+ * input → `loadRaisableInvoice` → `recordInvoiceRaised` (idempotent; typed errors →
+ * friendly copy) → log → revalidate → return. Analytics fire client-side (PROJECT_KICKOFF_GATE_CONFIRMED).
  */
 export async function markUpfrontInvoiceRaisedAction(
   input: MarkUpfrontInvoiceRaisedInput
@@ -59,37 +104,15 @@ export async function markUpfrontInvoiceRaisedAction(
   const { requestId, relationshipId } = parsed.data;
 
   try {
-    const request = await projectRequestsRepository.findByIdWithRelations(requestId);
-    if (request === undefined) {
-      return { success: false, error: INVALID_REQUEST };
+    const loaded = await loadRaisableInvoice(requestId, relationshipId);
+    if ('error' in loaded) {
+      return { success: false, error: loaded.error };
     }
-    const rel = request.relationships.find((r) => r.status === 'accepted');
-    if (request.status !== 'accepted' || rel === undefined || rel.id !== relationshipId) {
-      return { success: false, error: STALE };
-    }
-    if (request.clientBillingConfirmedAt === null) {
-      return { success: false, error: BILLING_FIRST };
-    }
+    const { upfront } = loaded;
 
-    const proposal = await proposalsRepository.findCurrentByRelationship(rel.id);
-    if (proposal === undefined || !proposal.isCurrent || proposal.status !== 'accepted') {
-      return { success: false, error: STALE };
-    }
-    const upfront = await upfrontForProposal(proposal);
-    if (upfront === null) {
-      return { success: false, error: NOTHING_DUE };
-    }
-
-    try {
-      await projectRequestsRepository.markUpfrontInvoiceRaised({ id: requestId });
-    } catch (error) {
-      if (error instanceof InvalidKickoffStateError) {
-        return { success: false, error: STALE };
-      }
-      if (error instanceof UpfrontInvoiceBeforeBillingError) {
-        return { success: false, error: BILLING_FIRST };
-      }
-      throw error;
+    const refused = await recordInvoiceRaised(requestId);
+    if (refused !== null) {
+      return { success: false, error: refused.error };
     }
 
     // Key business event (after the commit).

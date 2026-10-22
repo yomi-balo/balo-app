@@ -91,97 +91,105 @@ export function MoveCard({
   const ticket = card.kind === 'invitation';
 
   return (
-    <article
-      role="listitem"
+    <li
       aria-label={`${meta.label}: ${card.title}`}
       data-kind={card.kind}
       data-featured={featured ? 'true' : undefined}
-      className={cn(
-        'bg-card relative flex w-[292px] shrink-0 snap-start flex-col overflow-hidden rounded-[14px] border',
-        featured ? 'shadow-lg sm:w-[384px]' : 'shadow-sm sm:w-[300px]',
-        blocker ? 'border-warning/35' : 'border-border'
-      )}
+      className="flex shrink-0 snap-start"
     >
-      <span aria-hidden="true" className={cn('h-1 shrink-0', blocker ? 'bg-warning' : tone.band)} />
-      <div className="flex flex-1 flex-col gap-3 px-4 pt-3.5">
-        <div className="flex items-center gap-2">
-          <span
-            aria-hidden="true"
-            className={cn(
-              'inline-flex size-7 shrink-0 items-center justify-center rounded-lg',
-              tone.tile
-            )}
-          >
-            <Icon className="size-[15px]" />
-          </span>
-          <span className={cn('text-xs font-semibold', tone.label)}>{meta.label}</span>
-        </div>
-        <div>
-          <h3
-            className={cn(
-              'text-foreground line-clamp-2 leading-snug font-semibold tracking-tight',
-              featured ? 'text-[17px]' : 'text-[15.5px]'
-            )}
-          >
-            <Link
-              href={card.href}
-              tabIndex={-1}
-              onClick={() => onNavigate('card')}
-              className="focus-visible:ring-ring rounded-sm hover:underline focus-visible:ring-2 focus-visible:outline-none"
-            >
-              {card.title}
-            </Link>
-          </h3>
-          <p className="text-muted-foreground mt-[3px] truncate text-[13px]">{card.counterparty}</p>
-        </div>
-        {card.context !== null && (
-          <MoveCardContext
-            context={card.context}
-            href={card.href}
-            clock={clock}
-            onNavigate={onNavigate}
-          />
-        )}
-      </div>
-      <div
+      <article
         className={cn(
-          'border-border relative mt-3.5 flex items-center justify-between gap-2.5 px-4 pt-3 pb-3.5',
-          ticket ? 'border-t-[1.5px] border-dashed' : 'border-t'
+          'bg-card relative flex w-[292px] shrink-0 flex-col overflow-hidden rounded-[14px] border',
+          featured ? 'shadow-lg sm:w-[384px]' : 'shadow-sm sm:w-[300px]',
+          blocker ? 'border-warning/35' : 'border-border'
         )}
       >
-        {ticket && (
-          <>
-            <span
-              aria-hidden="true"
-              className="bg-primary/5 border-primary/15 absolute -top-[9px] -left-[9px] size-4 rounded-full border"
-            />
-            <span
-              aria-hidden="true"
-              className="bg-primary/5 border-primary/15 absolute -top-[9px] -right-[9px] size-4 rounded-full border"
-            />
-          </>
-        )}
         <span
+          aria-hidden="true"
+          className={cn('h-1 shrink-0', blocker ? 'bg-warning' : tone.band)}
+        />
+        <div className="flex flex-1 flex-col gap-3 px-4 pt-3.5">
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className={cn(
+                'inline-flex size-7 shrink-0 items-center justify-center rounded-lg',
+                tone.tile
+              )}
+            >
+              <Icon className="size-[15px]" />
+            </span>
+            <span className={cn('text-xs font-semibold', tone.label)}>{meta.label}</span>
+          </div>
+          <div>
+            <h3
+              className={cn(
+                'text-foreground line-clamp-2 leading-snug font-semibold tracking-tight',
+                featured ? 'text-[17px]' : 'text-[15.5px]'
+              )}
+            >
+              <Link
+                href={card.href}
+                tabIndex={-1}
+                onClick={() => onNavigate('card')}
+                className="focus-visible:ring-ring rounded-sm hover:underline focus-visible:ring-2 focus-visible:outline-none"
+              >
+                {card.title}
+              </Link>
+            </h3>
+            <p className="text-muted-foreground mt-[3px] truncate text-[13px]">
+              {card.counterparty}
+            </p>
+          </div>
+          {card.context !== null && (
+            <MoveCardContext
+              context={card.context}
+              href={card.href}
+              clock={clock}
+              onNavigate={onNavigate}
+            />
+          )}
+        </div>
+        <div
           className={cn(
-            'min-w-0 text-xs',
-            card.factTone === 'warning'
-              ? 'text-warning-strong font-semibold'
-              : 'text-muted-foreground font-medium'
+            'border-border relative mt-3.5 flex items-center justify-between gap-2.5 px-4 pt-3 pb-3.5',
+            ticket ? 'border-t-[1.5px] border-dashed' : 'border-t'
           )}
         >
-          {factText(card, clock)}
-        </span>
-        <Button
-          asChild
-          size="sm"
-          variant={blocker || featured ? 'default' : 'outline'}
-          className="min-h-11 shrink-0"
-        >
-          <Link href={card.href} onClick={() => onNavigate('action')}>
-            {card.actionLabel}
-          </Link>
-        </Button>
-      </div>
-    </article>
+          {ticket && (
+            <>
+              <span
+                aria-hidden="true"
+                className="bg-primary/5 border-primary/15 absolute -top-[9px] -left-[9px] size-4 rounded-full border"
+              />
+              <span
+                aria-hidden="true"
+                className="bg-primary/5 border-primary/15 absolute -top-[9px] -right-[9px] size-4 rounded-full border"
+              />
+            </>
+          )}
+          <span
+            className={cn(
+              'min-w-0 text-xs',
+              card.factTone === 'warning'
+                ? 'text-warning-strong font-semibold'
+                : 'text-muted-foreground font-medium'
+            )}
+          >
+            {factText(card, clock)}
+          </span>
+          <Button
+            asChild
+            size="sm"
+            variant={blocker || featured ? 'default' : 'outline'}
+            className="min-h-11 shrink-0"
+          >
+            <Link href={card.href} onClick={() => onNavigate('action')}>
+              {card.actionLabel}
+            </Link>
+          </Button>
+        </div>
+      </article>
+    </li>
   );
 }

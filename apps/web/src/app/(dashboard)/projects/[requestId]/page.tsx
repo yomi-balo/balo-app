@@ -100,6 +100,34 @@ async function loadBillingCapture(
   return { companyId, canManage, details };
 }
 
+/**
+ * BAL-324 admin-only billing + payment-terms panel data. Only the observer (admin) lens
+ * with an active kickoff board pays for the extra reads.
+ */
+async function loadAdminBilling(
+  ctx: RequestViewerContext,
+  view: RequestDetailView,
+  companyId: string
+): Promise<AdminKickoffBillingView | null> {
+  if (ctx.archetype !== 'observer' || !view.kickoff) return null;
+  return loadAdminKickoffBilling(companyId, view.kickoff.acceptedRelationshipId);
+}
+
+/**
+ * The kickoff checklist's upfront amount — whether the deal has invoice steps at all, and
+ * the client's fee-inclusive invoice figure. The expert lens never sees a client price (the
+ * same audience rule as `hydrateReviewDoc`), so it gets the steps without the amount.
+ */
+async function loadKickoffUpfrontFor(
+  ctx: RequestViewerContext,
+  view: RequestDetailView
+): Promise<KickoffUpfront | null> {
+  if (!view.kickoff) return null;
+  const upfront = await loadKickoffUpfront(view.kickoff.acceptedRelationshipId);
+  if (upfront === null || ctx.lens !== 'expert') return upfront;
+  return { ...upfront, amountCents: null };
+}
+
 /** The `project_request.closed` audit row's `metadata.counts` shape (narrowed, never cast). */
 interface CloseAuditCounts {
   tracksDeclined: number;
@@ -354,27 +382,9 @@ export default async function RequestDetailPage({
     conversation = await loadConversationView(request, ctx, user);
   }
 
-  // BAL-324 admin-only billing + payment-terms panel data. Only the observer
-  // (admin) lens with an active kickoff board pays for the extra reads.
-  let adminBilling: AdminKickoffBillingView | null = null;
-  if (ctx.archetype === 'observer' && view.kickoff) {
-    adminBilling = await loadAdminKickoffBilling(
-      request.companyId,
-      view.kickoff.acceptedRelationshipId
-    );
-  }
-
+  const adminBilling = await loadAdminBilling(ctx, view, request.companyId);
   const billingCapture = await loadBillingCapture(ctx, view, user.companyRole, request.companyId);
-
-  // The kickoff checklist's upfront amount — whether the deal has invoice steps at all, and
-  // the client's fee-inclusive invoice figure. The expert lens never sees a client price
-  // (the same audience rule as `hydrateReviewDoc`), so it gets the steps without the amount.
-  let kickoffUpfront: KickoffUpfront | null = null;
-  if (view.kickoff) {
-    const upfront = await loadKickoffUpfront(view.kickoff.acceptedRelationshipId);
-    kickoffUpfront =
-      upfront !== null && ctx.lens === 'expert' ? { ...upfront, amountCents: null } : upfront;
-  }
+  const kickoffUpfront = await loadKickoffUpfrontFor(ctx, view);
 
   // BAL-331 deep-link: once the request is `kickoff_approved` a delivery
   // engagement exists — resolve its id so the shell can surface the "View delivery
