@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import * as Sentry from '@sentry/nextjs';
 import {
   Dialog,
   DialogContent,
@@ -180,7 +181,8 @@ export function AcceptConfirmModal({
         setPending(false);
       }
     };
-    run();
+    // `run` handles its own failures; this catches only what escapes its `finally`.
+    run().catch((error: unknown) => Sentry.captureException(error));
   }, [pending, ack, requestId, doc.relationshipId, doc.id, onOpenChange, router]);
 
   return (

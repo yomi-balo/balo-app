@@ -231,10 +231,9 @@ export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): Reac
       </div>
 
       {groups.length > 1 && (
-        <div
-          role="group"
+        <fieldset
           aria-label="Filter by type"
-          className="my-3.5 flex flex-nowrap gap-2 overflow-x-auto pr-4 sm:flex-wrap sm:overflow-x-visible sm:pr-[22px]"
+          className="my-3.5 flex min-w-0 flex-nowrap gap-2 overflow-x-auto pr-4 sm:flex-wrap sm:overflow-x-visible sm:pr-[22px]"
         >
           <FilterChip
             label="All"
@@ -251,7 +250,7 @@ export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): Reac
               onClick={() => handleFilter(group.chip)}
             />
           ))}
-        </div>
+        </fieldset>
       )}
 
       {cards.length > 0 && (

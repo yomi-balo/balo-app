@@ -208,10 +208,10 @@ function expertSearchabilitySourceLabel(source: string): string {
 export function humanizeActionTail(action: string): string {
   const dotIndex = action.indexOf('.');
   if (dotIndex === -1) {
-    return capitalizeFirst(action.split('_').join(' '));
+    return capitalizeFirst(action.replaceAll('_', ' '));
   }
   const namespaceParts = action.slice(0, dotIndex).split('_');
-  const lastNamespaceWord = namespaceParts[namespaceParts.length - 1] ?? '';
+  const lastNamespaceWord = namespaceParts.at(-1) ?? '';
   const tailWords = action.slice(dotIndex + 1).split('_');
   return capitalizeFirst([lastNamespaceWord, ...tailWords].join(' '));
 }

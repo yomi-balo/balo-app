@@ -76,7 +76,7 @@ async function loadApprovableKickoff(
   // Must be an accepted request, and the claimed relationship must BE the
   // accepted one (the winning expert).
   const rel = request.relationships.find((r) => r.status === 'accepted');
-  if (request.status !== 'accepted' || rel === undefined || rel.id !== relationshipId) {
+  if (request.status !== 'accepted' || rel?.id !== relationshipId) {
     return { error: STALE };
   }
 
