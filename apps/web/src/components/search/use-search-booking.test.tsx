@@ -65,7 +65,7 @@ describe('useSearchBooking', () => {
     expect(result.current.open).toBe(true);
   });
 
-  it('closes without dropping the launch, so the dialog can animate out', async () => {
+  it('close flips open without dropping the launch', async () => {
     mockLoad.mockResolvedValue(LOADED);
     const { result } = renderHook(() => useSearchBooking());
     act(() => result.current.book('anil'));

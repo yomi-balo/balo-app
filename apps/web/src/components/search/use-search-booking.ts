@@ -14,7 +14,7 @@ export interface SearchBookingLaunch {
 }
 
 interface SearchBooking {
-  /** The last loaded booking; kept after close so the dialog can animate out. */
+  /** The last loaded booking. Close only flips `open`; the next Book click replaces it. */
   launch: SearchBookingLaunch | null;
   open: boolean;
   /** The username whose booking is loading, so only that card's button spins. */

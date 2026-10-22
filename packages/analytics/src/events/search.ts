@@ -42,6 +42,11 @@ export interface SearchComposerSnapshot {
 export interface SearchEventMap {
   [SEARCH_EVENTS.RESULT_CLICKED]: {
     expert_id: string;
+    /**
+     * Which of the card's two CTAs was taken. `book` fires before the booking flow loads, so a
+     * signed-out visitor who stops at the auth modal is still counted.
+     */
+    action: 'profile' | 'book';
     position: number;
     sort: string;
     page: number;

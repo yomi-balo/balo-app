@@ -18,8 +18,8 @@ interface SearchResultCardProps {
 }
 
 /**
- * Client wrapper around `ExpertCard` that emits `search_result_clicked` and navigates
- * View-profile to `/experts/{username}`.
+ * Client wrapper around `ExpertCard` that emits `search_result_clicked` (action `'profile'` or
+ * `'book'`) and navigates View-profile to `/experts/{username}`.
  *
  * Book a call opens the booking flow in place: `onBook` (owned by `ResultsGrid`, which mounts the
  * one dialog) loads it for this expert's username. Same null-username guard as View-profile — a
@@ -39,6 +39,7 @@ export function SearchResultCard({
   const handleViewProfile = useCallback(() => {
     track(SEARCH_EVENTS.RESULT_CLICKED, {
       expert_id: expert.id,
+      action: 'profile',
       position,
       sort,
       page,
@@ -49,8 +50,15 @@ export function SearchResultCard({
   }, [expert.id, expert.username, position, sort, page, router]);
 
   const handleBook = useCallback(() => {
+    track(SEARCH_EVENTS.RESULT_CLICKED, {
+      expert_id: expert.id,
+      action: 'book',
+      position,
+      sort,
+      page,
+    });
     if (expert.username) onBook(expert.username);
-  }, [expert.username, onBook]);
+  }, [expert.id, expert.username, position, sort, page, onBook]);
 
   return (
     <ExpertCard

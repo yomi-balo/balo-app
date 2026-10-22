@@ -16,7 +16,8 @@ that expert stay together.
 
 ## How to book
 
-1. Open the expert's profile and choose **Book a consultation**.
+1. Open the expert's profile and choose **Book a consultation**, or choose **Book a call** on
+   their card in the search results.
 2. On **Choose a time**, answer **How long do you need?** first: choose 15, 30, 45 or 60 minutes.
    60 minutes is preselected when the expert has room for it, otherwise the longest length that
    fits. You can change it at any point.
@@ -69,9 +70,9 @@ to**. Open cases are listed per company, so the case choice appears once you've 
 
 If you already have an open case with this expert, the confirm step asks which case the call is
 for. Pick from the list: an existing case, or **Start a new case** for a new issue with that
-expert. Booking from the expert's profile starts on **Start a new case**; booking from a case's
-page starts on that case. If you have no open case with them, there's nothing to choose and the
-call starts a new one.
+expert. Booking from the expert's profile or the search results starts on **Start a new case**;
+booking from a case's page starts on that case. If you have no open case with them, there's
+nothing to choose and the call starts a new one.
 
 ![The confirm step asking which case the call is for, with Start a new case highlighted.](03)
 

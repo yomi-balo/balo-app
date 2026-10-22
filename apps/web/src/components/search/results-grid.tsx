@@ -121,7 +121,8 @@ function ResultsBlocks({
  *
  * Deliberately a cross-fade, NOT a shared-element morph (the avatar-glide morph
  * was prototyped and rejected as too busy at full-grid scale): grid and list stay
- * two separate components and we simply fade the whole region between them. *
+ * two separate components and we simply fade the whole region between them.
+ *
  * Also owns the one booking dialog every card's "Book a call" opens in place
  * (`useSearchBooking`), mounted outside the cross-fade so a layout toggle never
  * remounts it.
