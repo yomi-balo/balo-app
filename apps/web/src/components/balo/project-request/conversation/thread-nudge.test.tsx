@@ -55,7 +55,7 @@ describe('ThreadNudge', () => {
     expect(onReply).toHaveBeenCalled();
   });
 
-  it('renders stub CTAs disabled (A5/A6.3 own them)', () => {
+  it('renders stub CTAs disabled', () => {
     renderNudge(
       nudge({
         variant: 'commit',
@@ -92,6 +92,41 @@ describe('ThreadNudge', () => {
       })
     );
     expect(screen.getByRole('button', { name: 'Build proposal' })).toBeDisabled();
+  });
+
+  it('wires the accept primary and view secondary to onAccept/onView', async () => {
+    const user = userEvent.setup();
+    const onAccept = vi.fn();
+    const onView = vi.fn();
+    render(
+      <ThreadNudge
+        nudge={nudge({
+          variant: 'commit',
+          primary: { label: "Accept Priya's proposal", icon: Calendar, action: 'accept' },
+          secondary: { label: 'View full proposal', icon: Calendar, action: 'view' },
+        })}
+        callPending={false}
+        onReply={vi.fn()}
+        onCall={vi.fn()}
+        onAccept={onAccept}
+        onView={onView}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: "Accept Priya's proposal" }));
+    expect(onAccept).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'View full proposal' }));
+    expect(onView).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the accept primary disabled when no onAccept handler is provided', () => {
+    renderNudge(
+      nudge({
+        variant: 'commit',
+        primary: { label: "Accept Priya's proposal", icon: Calendar, action: 'accept' },
+        secondary: undefined,
+      })
+    );
+    expect(screen.getByRole('button', { name: "Accept Priya's proposal" })).toBeDisabled();
   });
 
   it('uses the waiting/done eyebrows for those variants', () => {

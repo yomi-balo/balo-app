@@ -11,6 +11,7 @@ import {
   PROJECT_EVENTS,
   type ConversationCallSurface,
   type ConversationProposalCta,
+  type ConversationProposalSurface,
 } from '@/lib/analytics';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import {
@@ -194,17 +195,15 @@ const noopDraftChange = (): void => {
 };
 
 /**
- * Fire the proposal-CTA-click funnel event for a header/rail surface. The nudge
- * surface passes `undefined` and navigates without re-firing the event. Extracted
- * to module scope so the build/view navigation callbacks stay branch-light.
+ * Fire the proposal-CTA-click funnel event. Extracted to module scope so the
+ * build/view navigation callbacks stay branch-light.
  */
 function trackProposalCtaClick(
-  surface: 'header' | 'rail' | undefined,
+  surface: ConversationProposalSurface,
   requestId: string,
   relationshipId: string,
   cta: ConversationProposalCta
 ): void {
-  if (surface === undefined) return;
   track(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
     request_id: requestId,
     relationship_id: relationshipId,
@@ -226,7 +225,7 @@ function openProposalComposer(args: {
   threadId: string | null;
   status: string | undefined;
   revising: boolean;
-  surface?: 'header' | 'rail';
+  surface: ConversationProposalSurface;
 }): void {
   const { push, requestId, threadId, status, revising, surface } = args;
   const isRevise = status === 'proposal_submitted' && revising;
@@ -238,25 +237,29 @@ function openProposalComposer(args: {
 /**
  * Open the read-only proposal surface for `threadId` (client review / expert &
  * admin submitted view — the route dispatches by lens). No-op unless the thread is
- * submitted/accepted. Module scope keeps the `handleViewProposal` callback branch-free.
+ * submitted/accepted. `accept` adds `?accept=1`, which the client review reads to
+ * open its accept confirmation on arrival. Module scope keeps the
+ * `handleViewProposal` callback branch-free.
  */
 function openProposalSurface(args: {
   push: (href: string) => void;
   requestId: string;
   threadId: string | null;
   status: string | undefined;
-  surface?: 'header' | 'rail';
+  surface: ConversationProposalSurface;
+  accept?: boolean;
 }): void {
-  const { push, requestId, threadId, status, surface } = args;
+  const { push, requestId, threadId, status, surface, accept = false } = args;
   if (threadId === null || !PROPOSAL_VIEW_STATUSES.has(status ?? '')) return;
-  trackProposalCtaClick(surface, requestId, threadId, 'view');
-  push(`/projects/${requestId}/proposal/${threadId}`);
+  trackProposalCtaClick(surface, requestId, threadId, accept ? 'accept' : 'view');
+  push(`/projects/${requestId}/proposal/${threadId}${accept ? '?accept=1' : ''}`);
 }
 
 interface LensProposalHandlers {
   onHeaderRequestProposal: (() => void) | null;
   onHeaderBuildProposal: (() => void) | null;
   onNudgeBuild: (() => void) | undefined;
+  onNudgeAccept: (() => void) | undefined;
   onRailProposal: (() => void) | null;
   onRailBuildProposal: (() => void) | null;
 }
@@ -273,6 +276,7 @@ function resolveLensProposalHandlers(args: {
   headerRequestProposal: () => void;
   headerBuild: () => void;
   nudgeBuild: () => void;
+  nudgeAccept: () => void;
   railProposal: () => void;
   railBuild: () => void;
 }): LensProposalHandlers {
@@ -282,6 +286,7 @@ function resolveLensProposalHandlers(args: {
     onHeaderRequestProposal: isClient ? args.headerRequestProposal : null,
     onHeaderBuildProposal: isExpert ? args.headerBuild : null,
     onNudgeBuild: isExpert ? args.nudgeBuild : undefined,
+    onNudgeAccept: isClient ? args.nudgeAccept : undefined,
     onRailProposal: isClient && args.railProposalKind === 'request' ? args.railProposal : null,
     onRailBuildProposal: isExpert ? args.railBuild : null,
   };
@@ -574,7 +579,7 @@ export function ConversationStage({
 
       setThreadData((prev) => {
         const data = prev[threadId];
-        if (data === undefined || data.state !== 'ready') return prev;
+        if (data?.state !== 'ready') return prev;
         if (data.messages.some((m) => m.id === message.id)) return prev;
         return { ...prev, [threadId]: { ...data, messages: [...data.messages, message] } };
       });
@@ -588,6 +593,7 @@ export function ConversationStage({
             latestMessagePreview: previewOfHtml(message.bodyHtml),
             latestMessageAtIso: message.createdAtIso,
             latestMessageFromViewer: fromViewer,
+            latestMessageFromExpert: message.senderUserId === t.expertUserId,
             latestInboundActivityAtIso: fromViewer
               ? t.latestInboundActivityAtIso
               : message.createdAtIso,
@@ -698,7 +704,7 @@ export function ConversationStage({
         const { message } = result;
         setThreadData((prev) => {
           const data = prev[threadId];
-          if (data === undefined || data.state !== 'ready') return prev;
+          if (data?.state !== 'ready') return prev;
           if (data.messages.some((m) => m.id === message.id)) return prev;
           return { ...prev, [threadId]: { ...data, messages: [...data.messages, message] } };
         });
@@ -710,6 +716,7 @@ export function ConversationStage({
                   latestMessagePreview: previewOfHtml(message.bodyHtml),
                   latestMessageAtIso: message.createdAtIso,
                   latestMessageFromViewer: true,
+                  latestMessageFromExpert: viewerUserId === t.expertUserId,
                   viewerHasSentMessage: true,
                 }
               : t
@@ -742,7 +749,7 @@ export function ConversationStage({
         setSending(false);
       }
     },
-    [activeThreadId, requestId, lens, threads, threadData, conversationIdOf, router]
+    [activeThreadId, requestId, lens, threads, threadData, conversationIdOf, router, viewerUserId]
   );
 
   // ── Call CTA (BAL-283) ───────────────────────────────────────────────────
@@ -916,11 +923,9 @@ export function ConversationStage({
   // Opens the proposal composer for the active thread. Gated to the expert
   // lens AND a `proposal_requested` relationship, or a `proposal_submitted` one
   // with an open change request (defence-in-depth: the Build/Revise CTA only
-  // renders at those states). `surface` (`header`/`rail`) feeds the
-  // existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel; the nudge surface (no
-  // matching surface value on that event) navigates without re-firing it.
+  // renders at those states). `surface` feeds the CONVERSATION_PROPOSAL_CTA_CLICKED funnel.
   const handleBuildProposal = useCallback(
-    (surface?: 'header' | 'rail'): void => {
+    (surface: ConversationProposalSurface): void => {
       openProposalComposer({
         push: (href) => router.push(href),
         requestId,
@@ -946,16 +951,19 @@ export function ConversationStage({
     (): void => handleBuildProposal('rail'),
     [handleBuildProposal]
   );
-  const handleNudgeBuild = useCallback((): void => handleBuildProposal(), [handleBuildProposal]);
+  const handleNudgeBuild = useCallback(
+    (): void => handleBuildProposal('nudge'),
+    [handleBuildProposal]
+  );
 
   // ── View proposal (BAL-289 / A6.3 — BOTH lenses) ───────────────────────────
   // Opens the read-only proposal surface for the active thread. The route
   // dispatches by lens (client → review, expert/admin → submitted view), so the
   // same push serves both. Gated to a submitted/accepted relationship (defence-
-  // in-depth: the View CTA only renders at those states). `surface`
-  // (`header`/`rail`) feeds the existing CONVERSATION_PROPOSAL_CTA_CLICKED funnel.
+  // in-depth: the View CTA only renders at those states). `surface` feeds the
+  // CONVERSATION_PROPOSAL_CTA_CLICKED funnel.
   const handleViewProposal = useCallback(
-    (surface?: 'header' | 'rail'): void => {
+    (surface: ConversationProposalSurface): void => {
       openProposalSurface({
         push: (href) => router.push(href),
         requestId,
@@ -971,6 +979,20 @@ export function ConversationStage({
     [handleViewProposal]
   );
   const handleRailView = useCallback((): void => handleViewProposal('rail'), [handleViewProposal]);
+  const handleNudgeView = useCallback(
+    (): void => handleViewProposal('nudge'),
+    [handleViewProposal]
+  );
+  const handleNudgeAccept = useCallback((): void => {
+    openProposalSurface({
+      push: (href) => router.push(href),
+      requestId,
+      threadId: activeThreadId,
+      status: activeThread?.relationshipStatus,
+      surface: 'nudge',
+      accept: true,
+    });
+  }, [activeThreadId, activeThread?.relationshipStatus, requestId, router]);
 
   const handleProposalConfirm = useCallback(async (): Promise<RequestProposalResult> => {
     const context = proposalContextRef.current;
@@ -1101,6 +1123,7 @@ export function ConversationStage({
     onHeaderRequestProposal,
     onHeaderBuildProposal,
     onNudgeBuild,
+    onNudgeAccept,
     onRailProposal,
     onRailBuildProposal,
   } = resolveLensProposalHandlers({
@@ -1109,6 +1132,7 @@ export function ConversationStage({
     headerRequestProposal: handleHeaderProposal,
     headerBuild: handleHeaderBuild,
     nudgeBuild: handleNudgeBuild,
+    nudgeAccept: handleNudgeAccept,
     railProposal: handleRailProposal,
     railBuild: handleRailBuild,
   });
@@ -1180,6 +1204,8 @@ export function ConversationStage({
             onReply={focusComposer}
             onCall={handleNudgeCall}
             onBuild={onNudgeBuild}
+            onView={handleNudgeView}
+            onAccept={onNudgeAccept}
           />
         </div>
       )}

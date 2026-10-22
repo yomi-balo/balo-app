@@ -298,17 +298,6 @@ describe('mapCaseConsultations — state derivation', () => {
       expect(row).not.toHaveProperty('clientSideEverPresent');
       expect(JSON.stringify(row)).not.toMatch(/presen/i);
     });
-
-    it('keeps the recap link on a nobody_joined row — the not-held panel explains it', () => {
-      const [row] = mapCaseConsultations(
-        [meeting({ id: 'm1', ...MISSED })],
-        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', false]]) },
-        NOW,
-        NO_ACTION
-      );
-      expect(row?.state).toBe('nobody_joined');
-      expect(row?.recapHref).toBe('/meetings/m1?from=case_surface');
-    });
   });
 
   it('warns when a meeting ENDED with no outcome recorded — it must not be invisible', () => {
@@ -398,17 +387,18 @@ describe('mapCaseConsultations — roomReady', () => {
 });
 
 /**
- * ⚠ ONLY AN `ended` MEETING HAS A RECAP LINK. `loadRecap` returns `null` — and the recap page
- * 404s — for the three non-terminal statuses, so linking one would send the viewer from their
- * own case to a dead end. `cancelled` renders a recap (the not-held panel), but that panel is
+ * ⚠ ONLY AN `ended` MEETING WITH SOMETHING TO SHOW HAS A RECAP LINK. `loadRecap` returns
+ * `null` — and the recap page 404s — for the three non-terminal statuses, so linking one would
+ * send the viewer from their own case to a dead end. `cancelled` renders a recap (the not-held panel), but that panel is
  * `body: 'This consultation was cancelled.'` and nothing else — no money block, no artifacts —
- * so its link would lead somewhere emptier than the row itself. NEVER a disabled link.
+ * so its link would lead somewhere emptier than the row itself. The same holds for a call the
+ * expert never joined (`missed_call`, `nobody_joined`) or whose room was never ready
+ * (`venue_unavailable`): nothing charged, no artifacts. NEVER a disabled link.
  */
 describe('mapCaseConsultations — recapHref', () => {
   it.each([
     ['held', { status: 'ended', outcome: 'completed' }],
     ['no_show_client', { status: 'ended', outcome: 'no_show_client' }],
-    ['missed_call', { status: 'ended', outcome: 'missed_call' }],
     ['outcome_pending', { status: 'ended', outcome: null }],
   ])('EMITS a recap link for %s', (_label, row) => {
     const [mapped] = mapCaseConsultations(
@@ -425,6 +415,8 @@ describe('mapCaseConsultations — recapHref', () => {
     ['waiting_for_participants', { status: 'waiting_for_participants', outcome: null }],
     ['in_progress', { status: 'in_progress', outcome: null }],
     ['cancelled', { status: 'cancelled', outcome: null }],
+    ['missed_call', { status: 'ended', outcome: 'missed_call' }],
+    ['venue_unavailable', { status: 'ended', outcome: 'venue_unavailable' }],
   ])('emits NO recap link for %s — an absent action beats a dead one', (_label, row) => {
     const [mapped] = mapCaseConsultations(
       [meeting({ id: 'm1', ...(row as Partial<Meeting>) })],
@@ -432,6 +424,17 @@ describe('mapCaseConsultations — recapHref', () => {
       NOW,
       NO_ACTION
     );
+    expect(mapped?.recapHref).toBeNull();
+  });
+
+  it('emits NO recap link for nobody_joined — derived from missed_call, still nothing to view', () => {
+    const [mapped] = mapCaseConsultations(
+      [meeting({ id: 'm1', status: 'ended', outcome: 'missed_call' })],
+      { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', false]]) },
+      NOW,
+      NO_ACTION
+    );
+    expect(mapped?.state).toBe('nobody_joined');
     expect(mapped?.recapHref).toBeNull();
   });
 

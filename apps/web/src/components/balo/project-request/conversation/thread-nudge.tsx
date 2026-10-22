@@ -19,6 +19,13 @@ interface ThreadNudgeProps {
    * disabled, as for `stub`.
    */
   onBuild?: () => void;
+  /** Handler for the `view` action — opens the proposal surface. */
+  onView?: () => void;
+  /**
+   * Handler for the `accept` action (client "Accept {name}'s proposal" — opens the
+   * review with the accept confirmation up). Undefined → the button renders disabled.
+   */
+  onAccept?: () => void;
 }
 
 /**
@@ -27,7 +34,8 @@ interface ThreadNudgeProps {
  * only) but is its OWN client component: `NudgeBar` is a server component
  * hard-wired to `NudgeActions`' WIRED map, while this nudge's CTAs are thread-
  * scoped (`reply` focuses the composer, `call` hits the mock seam, `build`
- * opens the proposal composer, `stub` renders disabled for A5/A6.3).
+ * opens the proposal composer, `view`/`accept` open the proposal surface,
+ * `stub` renders disabled).
  */
 
 const EYEBROW: Record<ThreadNudgeContent['variant'], string> = {
@@ -85,6 +93,8 @@ export function ThreadNudge({
   onReply,
   onCall,
   onBuild,
+  onView,
+  onAccept,
 }: Readonly<ThreadNudgeProps>): React.JSX.Element {
   const a = accentClasses(nudge.variant);
   const Icon = nudge.icon;
@@ -93,7 +103,9 @@ export function ThreadNudge({
     if (button.action === 'reply') return onReply;
     if (button.action === 'call') return onCall;
     if (button.action === 'build') return onBuild;
-    return undefined; // stub — disabled, owned by A5/A6.3
+    if (button.action === 'view') return onView;
+    if (button.action === 'accept') return onAccept;
+    return undefined; // stub — disabled
   };
 
   const renderButton = (button: ThreadNudgeButton, className: string): React.JSX.Element => {

@@ -15,7 +15,10 @@ import {
 import { log } from '@/lib/logging';
 import { deriveConsultationOrdinal } from '@/lib/meetings/derive-consultation-ordinal';
 import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
-import type { CaseConsultationRowView } from '@/lib/cases/case-view-types';
+import type {
+  CaseConsultationRowView,
+  CaseConsultationStateLabel,
+} from '@/lib/cases/case-view-types';
 
 /**
  * BAL-421 — `Meeting[]` → `CaseConsultationRowView[]`. **THE PROJECTION BOUNDARY.**
@@ -105,12 +108,23 @@ function durationMinutesOf(meeting: Meeting): number | null {
 }
 
 /**
- * `/meetings/{id}?from=case_surface` for an `ended` meeting only, `null` otherwise — including
- * `cancelled`, whose recap has no money block or artifacts, so the link would lead somewhere
- * emptier than the row itself.
+ * The states whose recap has something to show beyond the row itself: a held call's artifacts,
+ * a client no-show's minimum charge, and an unrecorded outcome (which may still have either).
+ *
+ * ⚠ `missed_call`, `nobody_joined` and `venue_unavailable` are absent: the expert never joined
+ * or the room was never ready, so nothing was charged and no artifact can exist — their recap
+ * repeats the row's own note and nothing else. `cancelled` is absent for the same reason, and
+ * the upcoming states have no recap yet (the page 404s on a non-`ended` meeting).
  */
-function recapHrefOf(meeting: Meeting): string | null {
-  if (meeting.status !== 'ended') return null;
+const STATES_WITH_RECAP: ReadonlySet<CaseConsultationStateLabel> = new Set([
+  'held',
+  'no_show_client',
+  'outcome_pending',
+]);
+
+/** `/meetings/{id}?from=case_surface`, or `null` when the recap would add nothing to the row. */
+function recapHrefOf(meeting: Meeting, state: CaseConsultationStateLabel): string | null {
+  if (!STATES_WITH_RECAP.has(state)) return null;
   return '/meetings/' + meeting.id + '?from=case_surface';
 }
 
@@ -177,7 +191,7 @@ export function mapCaseConsultations(
       scheduledStartIso: meeting.scheduledStart.toISOString(),
       startedAtIso: meeting.startedAt?.toISOString() ?? null,
       durationMinutes: durationMinutesOf(meeting),
-      recapHref: recapHrefOf(meeting),
+      recapHref: recapHrefOf(meeting, state),
       actionItemCount: counts.actionItemCountByMeetingId.get(meeting.id) ?? 0,
       fileCount: counts.fileCountByMeetingId.get(meeting.id) ?? 0,
       hasTranscript: counts.meetingIdsWithTranscript.has(meeting.id),

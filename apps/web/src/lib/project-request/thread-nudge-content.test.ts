@@ -3,7 +3,7 @@ import { threadNudgeFor } from './thread-nudge-content';
 import { thread as baseThread } from '@/test/fixtures/conversation';
 import type { ConversationThreadView } from './conversation-view-types';
 
-/** This suite's default thread carries fresh inbound activity. */
+/** This suite's default thread carries fresh inbound activity — the expert's message. */
 const CHANGE_REQUEST = {
   requestedBy: 'Dana @ Northwind',
   notePreview: 'Add more deliverables',
@@ -15,6 +15,7 @@ function thread(overrides: Partial<ConversationThreadView> = {}): ConversationTh
     latestMessagePreview: 'Quick question about CPQ scope',
     latestMessageAtIso: '2026-06-09T00:00:00.000Z',
     latestInboundActivityAtIso: '2026-06-09T00:00:00.000Z',
+    latestMessageFromExpert: true,
     ...overrides,
   });
 }
@@ -42,7 +43,7 @@ describe('threadNudgeFor — client lens', () => {
     const nudge = threadNudgeFor(
       'client',
       'eoi_submitted',
-      thread({ latestMessageFromViewer: true })
+      thread({ latestMessageFromViewer: true, latestMessageFromExpert: false })
     );
     expect(nudge?.headline).toBe("Meet Priya — they're keen to help");
     expect(nudge?.primary).toMatchObject({ label: 'Book a call with Priya', action: 'call' });
@@ -53,7 +54,11 @@ describe('threadNudgeFor — client lens', () => {
     const nudge = threadNudgeFor(
       'client',
       'eoi_submitted',
-      thread({ latestMessagePreview: null, latestMessageAtIso: null })
+      thread({
+        latestMessagePreview: null,
+        latestMessageAtIso: null,
+        latestMessageFromExpert: false,
+      })
     );
     expect(nudge?.headline).toBe("Meet Priya — they're keen to help");
   });
@@ -69,7 +74,7 @@ describe('threadNudgeFor — client lens', () => {
     expect(nudge?.secondary?.action).toBe('reply');
   });
 
-  it('relationship proposal_submitted → commit with stubbed accept/view CTAs', () => {
+  it('relationship proposal_submitted → commit with live accept/view CTAs', () => {
     const nudge = threadNudgeFor(
       'client',
       'proposal_submitted',
@@ -77,8 +82,63 @@ describe('threadNudgeFor — client lens', () => {
     );
     expect(nudge?.variant).toBe('commit');
     expect(nudge?.headline).toBe("Priya's proposal is ready");
-    expect(nudge?.primary).toMatchObject({ label: "Accept Priya's proposal", action: 'stub' });
-    expect(nudge?.secondary).toMatchObject({ label: 'View full proposal', action: 'stub' });
+    expect(nudge?.primary).toMatchObject({ label: "Accept Priya's proposal", action: 'accept' });
+    expect(nudge?.secondary).toMatchObject({ label: 'View full proposal', action: 'view' });
+  });
+
+  it('proposal ready → the sub is about the proposal, never the latest message', () => {
+    const nudge = threadNudgeFor(
+      'client',
+      'proposal_submitted',
+      thread({ relationshipStatus: 'proposal_submitted', latestMessageFromViewer: false })
+    );
+    expect(nudge?.sub).toBe('Read it in full, then accept it or ask for changes.');
+  });
+
+  it("status cells never quote the viewer's own last message back to them", () => {
+    const ownLast = {
+      latestMessagePreview: 'hello priya',
+      latestMessageFromViewer: true,
+      latestMessageFromExpert: false,
+    };
+    const preparing = threadNudgeFor(
+      'client',
+      'proposal_requested',
+      thread({ relationshipStatus: 'proposal_requested', ...ownLast })
+    );
+    const won = threadNudgeFor('client', 'kickoff_approved', thread({ stage: 'won', ...ownLast }));
+    expect(preparing?.sub).toBeUndefined();
+    expect(won?.sub).toBeUndefined();
+  });
+
+  it("a client teammate's latest message is never framed as the expert's", () => {
+    const teammateLast = {
+      latestMessagePreview: 'I looped in finance',
+      latestMessageFromViewer: false,
+      latestMessageFromExpert: false,
+    };
+    const eoi = threadNudgeFor(
+      'client',
+      'eoi_submitted',
+      thread({ unread: true, ...teammateLast })
+    );
+    expect(eoi?.headline).toBe("Meet Priya — they're keen to help");
+    expect(eoi?.composerPlaceholder).toBeUndefined();
+    const preparing = threadNudgeFor(
+      'client',
+      'proposal_requested',
+      thread({ relationshipStatus: 'proposal_requested', ...teammateLast })
+    );
+    expect(preparing?.sub).toBeUndefined();
+  });
+
+  it("status cells quote the expert's latest message", () => {
+    const preparing = threadNudgeFor(
+      'client',
+      'proposal_requested',
+      thread({ relationshipStatus: 'proposal_requested', latestMessageFromViewer: false })
+    );
+    expect(preparing?.sub).toBe('Quick question about CPQ scope');
   });
 
   it('open change request → waiting on the revision, never "proposal is ready"', () => {
@@ -100,7 +160,11 @@ describe('threadNudgeFor — client lens', () => {
     const nudge = threadNudgeFor(
       'client',
       'proposal_requested',
-      thread({ relationshipStatus: 'eoi_submitted', latestMessageFromViewer: true })
+      thread({
+        relationshipStatus: 'eoi_submitted',
+        latestMessageFromViewer: true,
+        latestMessageFromExpert: false,
+      })
     );
     expect(nudge?.headline).toBe("Meet Priya — they're keen to help");
   });
@@ -138,6 +202,7 @@ describe('threadNudgeFor — client lens', () => {
       'eoi_submitted',
       thread({
         latestMessageFromViewer: true,
+        latestMessageFromExpert: false,
         availabilitySharedAtIso: '2026-08-20T00:00:00.000Z',
       })
     );

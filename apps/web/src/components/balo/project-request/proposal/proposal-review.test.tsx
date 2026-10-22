@@ -101,7 +101,11 @@ function marcus(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
   });
 }
 
-function renderReview(proposals: ProposalReviewDoc[], activeRelationshipId = 'rel-priya'): void {
+function renderReview(
+  proposals: ProposalReviewDoc[],
+  activeRelationshipId = 'rel-priya',
+  openAccept = false
+): void {
   render(
     <ProposalReview
       requestId="req-1"
@@ -109,6 +113,7 @@ function renderReview(proposals: ProposalReviewDoc[], activeRelationshipId = 're
       activeRelationshipId={activeRelationshipId}
       clientCompanyName="Northwind"
       clientFirstName="Dana"
+      openAccept={openAccept}
     />
   );
 }
@@ -277,6 +282,39 @@ describe('ProposalReview', () => {
 
     await user.click(screen.getByRole('button', { name: 'Request changes' }));
     expect(screen.getByText('Request changes from Priya')).toBeInTheDocument();
+  });
+
+  it('keeps the accept confirmation closed on arrival by default', () => {
+    renderReview([doc()]);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('openAccept opens the accept confirmation on arrival and drops ?accept=1 from the URL', () => {
+    window.history.replaceState(null, '', '/projects/req-1/proposal/rel-priya?accept=1');
+    renderReview([doc()], 'rel-priya', true);
+    expect(screen.getByRole('dialog')).toHaveTextContent(/Accept .*proposal\?/);
+    expect(window.location.search).toBe('');
+    expect(window.location.pathname).toBe('/projects/req-1/proposal/rel-priya');
+  });
+
+  it("openAccept never opens the confirmation for another expert's proposal", () => {
+    // The URL's relationship has no reviewable proposal, so the review falls back to
+    // showing Marcus — the binding confirmation must not pre-open for him.
+    renderReview([marcus()], 'rel-priya', true);
+    expect(screen.getAllByText('Marcus overview').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('openAccept removes only ?accept=1, keeping other params and the hash', () => {
+    window.history.replaceState(null, '', '/projects/req-1/proposal/rel-priya?accept=1&x=2#terms');
+    renderReview([doc()], 'rel-priya', true);
+    expect(window.location.search).toBe('?x=2');
+    expect(window.location.hash).toBe('#terms');
+  });
+
+  it('openAccept never opens the confirmation for a proposal that is not submitted', () => {
+    renderReview([doc({ status: 'changes_requested' })], 'rel-priya', true);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('does not render the changes actions when the proposal is not submitted (accepted)', () => {

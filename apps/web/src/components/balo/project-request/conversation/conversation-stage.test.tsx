@@ -518,6 +518,16 @@ describe('ConversationStage — realtime ingestion', () => {
     expect(await screen.findByText('Unread activity')).toBeInTheDocument();
   });
 
+  it("a realtime message from the expert prompts a reply; a client teammate's does not", async () => {
+    renderStage(view({ threads: [thread({ latestMessagePreview: null })] }));
+    act(() => realtimeCapture.input?.onMessage(message('m-t', { senderUserId: 'user-teammate' })));
+    expect(await screen.findByText("Meet Priya — they're keen to help")).toBeInTheDocument();
+    act(() => realtimeCapture.input?.onMessage(message('m-e')));
+    expect(
+      await screen.findByText('Priya sent a message — reply to keep momentum')
+    ).toBeInTheDocument();
+  });
+
   it('never flags own multi-device messages unread', () => {
     renderStage(
       view({
@@ -1075,6 +1085,10 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
       await user.click(cta);
       expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
     }
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED,
+      expect.objectContaining({ surface: 'nudge', cta: 'build' })
+    );
   });
 
   it("client + proposal_submitted: 'View proposal' is LIVE — pushes the review route + fires the funnel (A6.3)", async () => {
@@ -1118,6 +1132,40 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
       CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED,
       expect.objectContaining({ surface: 'rail' })
     );
+  });
+
+  it("client + proposal_submitted: the nudge's Accept opens the review with the confirmation up, View opens it plain", async () => {
+    const user = userEvent.setup();
+    render(
+      <ConversationStage
+        requestId={REQUEST_ID}
+        lens="client"
+        requestStatus="proposal_submitted"
+        view={view({ threads: [thread({ relationshipStatus: 'proposal_submitted' })] })}
+        requestTitle="CPQ implementation"
+        clientCompanyName="Northwind Industrial"
+        viewerEmailDomain="northwind.example"
+      />
+    );
+    await user.click(screen.getByRole('button', { name: "Accept Priya's proposal" }));
+    expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1?accept=1`);
+
+    expect(mockTrack).toHaveBeenCalledWith(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      surface: 'nudge',
+      cta: 'accept',
+    });
+
+    mockPush.mockClear();
+    await user.click(screen.getByRole('button', { name: 'View full proposal' }));
+    expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/rel-1`);
+    expect(mockTrack).toHaveBeenCalledWith(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      surface: 'nudge',
+      cta: 'view',
+    });
   });
 
   it("expert + proposal_submitted: 'View submitted proposal' is LIVE — pushes the submitted route (A6.3)", async () => {

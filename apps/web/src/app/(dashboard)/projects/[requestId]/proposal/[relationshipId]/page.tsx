@@ -47,7 +47,7 @@ import type { SharedLinkView } from '@/lib/project-request/proposal/share-view-t
 
 interface ProposalComposerPageProps {
   params: Promise<{ requestId: string; relationshipId: string }>;
-  searchParams: Promise<{ sent?: string | string[] }>;
+  searchParams: Promise<{ sent?: string | string[]; accept?: string | string[] }>;
 }
 
 type Relationship = ProjectRequestWithRelations['relationships'][number];
@@ -505,7 +505,8 @@ async function renderClientReview(
   request: ProjectRequestWithRelations,
   requestId: string,
   relationshipId: string,
-  clientFirstName: string
+  clientFirstName: string,
+  openAccept: boolean
 ): Promise<React.JSX.Element | null> {
   if (ctx.lens !== 'client' || !SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
     return null;
@@ -551,6 +552,7 @@ async function renderClientReview(
         clientFirstName={clientFirstName}
         sharedLinksByRelationship={sharedLinksByRelationship}
         shareLinksErrored={shareLinksErrored}
+        openAccept={openAccept}
       />
     </ReviewShell>
   );
@@ -604,7 +606,11 @@ export default async function ProposalComposerPage({
   searchParams,
 }: Readonly<ProposalComposerPageProps>): Promise<React.JSX.Element> {
   const { requestId, relationshipId } = await params;
-  const sent = parseSentVersion((await searchParams).sent);
+  const query = await searchParams;
+  const sent = parseSentVersion(query.sent);
+  // `?accept=1` — the conversation nudge's "Accept {name}'s proposal" opens the review
+  // with its accept confirmation up. A UI hint only: accepting still goes through the modal.
+  const openAccept = query.accept === '1';
 
   const user = await getCurrentUser();
   if (!user) {
@@ -661,7 +667,8 @@ export default async function ProposalComposerPage({
     request,
     requestId,
     relationshipId,
-    clientFirstName
+    clientFirstName,
+    openAccept
   );
   if (client !== null) return client;
 
