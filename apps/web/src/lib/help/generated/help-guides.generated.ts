@@ -69,8 +69,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "The confirm step asking which case the call is for, with Start a new case highlighted.",
-          "lightSrc": "/help/booking-a-consultation/02-light.png",
-          "darkSrc": "/help/booking-a-consultation/02-dark.png",
+          "lightSrc": "/help/booking-a-consultation/03-light.png",
+          "darkSrc": "/help/booking-a-consultation/03-dark.png",
           "width": 1680,
           "height": 832
         }
@@ -87,8 +87,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "The Confirm the new time step of rescheduling, with the Move consultation button highlighted.",
-          "lightSrc": "/help/booking-a-consultation/03-light.png",
-          "darkSrc": "/help/booking-a-consultation/03-dark.png",
+          "lightSrc": "/help/booking-a-consultation/04-light.png",
+          "darkSrc": "/help/booking-a-consultation/04-dark.png",
           "width": 1712,
           "height": 876
         }
@@ -105,8 +105,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "A case showing Pick a new time, with the suggested times and the Accept and Keep my time buttons highlighted.",
-          "lightSrc": "/help/booking-a-consultation/04-light.png",
-          "darkSrc": "/help/booking-a-consultation/04-dark.png",
+          "lightSrc": "/help/booking-a-consultation/05-light.png",
+          "darkSrc": "/help/booking-a-consultation/05-dark.png",
           "width": 1920,
           "height": 646
         }
@@ -123,8 +123,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "The Cancel consultation window, with the Reschedule instead button and the note that nothing is charged highlighted.",
-          "lightSrc": "/help/booking-a-consultation/05-light.png",
-          "darkSrc": "/help/booking-a-consultation/05-dark.png",
+          "lightSrc": "/help/booking-a-consultation/06-light.png",
+          "darkSrc": "/help/booking-a-consultation/06-dark.png",
           "width": 1092,
           "height": 576
         }
@@ -141,8 +141,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         ],
         "screenshot": {
           "alt": "An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.",
-          "lightSrc": "/help/booking-a-consultation/06-light.png",
-          "darkSrc": "/help/booking-a-consultation/06-dark.png",
+          "lightSrc": "/help/booking-a-consultation/07-light.png",
+          "darkSrc": "/help/booking-a-consultation/07-dark.png",
           "width": 848,
           "height": 1226
         }

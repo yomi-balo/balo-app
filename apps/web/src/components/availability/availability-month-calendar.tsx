@@ -103,7 +103,7 @@ export function AvailabilityMonthCalendar({
         // Fit at the 640px dialog: left cell is 640 - 2 (border) - 48 (step p-6) - 340 - 1 = 249px;
         // with its md p-4 (32) the month gets 217px, so 7 cells at 28px (196) + gaps fit where the
         // default p-3 + 7 x 32px (248) did not.
-        className="w-full p-0 md:[--cell-size:--spacing(7)]"
+        className="w-full bg-transparent p-0 md:[--cell-size:--spacing(7)]"
       />
       <div className="border-border mt-4 flex items-center gap-2 border-t pt-3.5">
         <span aria-hidden="true" className="bg-primary h-1.5 w-1.5 rounded-full" />

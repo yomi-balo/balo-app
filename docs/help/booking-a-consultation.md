@@ -73,7 +73,7 @@ expert. Booking from the expert's profile starts on **Start a new case**; bookin
 page starts on that case. If you have no open case with them, there's nothing to choose and the
 call starts a new one.
 
-![The confirm step asking which case the call is for, with Start a new case highlighted.](02)
+![The confirm step asking which case the call is for, with Start a new case highlighted.](03)
 
 ## Moving a consultation
 
@@ -84,7 +84,7 @@ consultation**. Same length, same link — nothing else about the consultation c
 You can move a consultation until the join window opens, 3 minutes before it starts, as long as the
 expert hasn't already suggested new times for it.
 
-![The Confirm the new time step of rescheduling, with the Move consultation button highlighted.](03)
+![The Confirm the new time step of rescheduling, with the Move consultation button highlighted.](04)
 
 ## When the expert suggests new times
 
@@ -96,7 +96,7 @@ keep it, your original time stands.
 There's a reply-by date on the suggestion, and no need to do anything before then. If it passes
 without a reply, your original time simply stands.
 
-![A case showing Pick a new time, with the suggested times and the Accept and Keep my time buttons highlighted.](04)
+![A case showing Pick a new time, with the suggested times and the Accept and Keep my time buttons highlighted.](05)
 
 ## Cancelling a consultation
 
@@ -105,7 +105,7 @@ time before the call starts. If you do cancel, nothing is charged and any credit
 goes back to your balance. If the time is the only problem, **Reschedule instead** in the same
 window moves the call rather than cancelling it. Choose **Keep it** to leave everything as it is.
 
-![The Cancel consultation window, with the Reschedule instead button and the note that nothing is charged highlighted.](05)
+![The Cancel consultation window, with the Reschedule instead button and the note that nothing is charged highlighted.](06)
 
 ## If an expert isn't taking on new work
 
@@ -121,4 +121,4 @@ it. Book it from that case's page, using **Book with {name} again** or **Book a 
 which opens their calendar right there, already attached to the case. You can switch to another
 of your open cases with them, but not start a new one.
 
-![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](06)
+![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](07)

@@ -57,7 +57,7 @@ defineGuide('booking-a-consultation', [
     cropPadding: 0,
   },
   {
-    section: 2,
+    section: 3,
     as: 'client',
     state: 'available',
     route: PROFILE_ROUTE,
@@ -83,16 +83,18 @@ defineGuide('booking-a-consultation', [
     cropPadding: 0,
   },
   {
-    section: 3,
+    section: 4,
     as: 'client',
     state: 'available',
     route: CASE_ROUTE,
     setup: async (page) => {
       await settle(page);
       await page.getByRole('button', { name: 'Reschedule', exact: true }).first().click();
+      // The second suggested time: the seed anchor moves with the calendar, so never a fixed date.
       await page
         .getByRole('dialog')
-        .getByRole('button', { name: /Tue, 20 Oct/ })
+        .getByRole('button', { name: / · \d+ min \(/ })
+        .nth(1)
         .click();
     },
     target: (page) => page.getByRole('button', { name: 'Move consultation' }),
@@ -100,7 +102,7 @@ defineGuide('booking-a-consultation', [
     cropPadding: 8,
   },
   {
-    section: 4,
+    section: 5,
     as: 'client',
     state: 'proposal',
     route: CASE_ROUTE,
@@ -108,7 +110,7 @@ defineGuide('booking-a-consultation', [
     target: (page) => page.getByRole('region', { name: /Reschedule proposal/ }),
   },
   {
-    section: 5,
+    section: 6,
     as: 'client',
     state: 'available',
     route: CASE_ROUTE,
@@ -121,7 +123,7 @@ defineGuide('booking-a-consultation', [
     cropPadding: 8,
   },
   {
-    section: 6,
+    section: 7,
     as: 'client',
     state: 'paused',
     route: PROFILE_ROUTE,
