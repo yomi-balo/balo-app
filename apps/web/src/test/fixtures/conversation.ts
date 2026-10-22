@@ -11,6 +11,7 @@ export function thread(overrides: Partial<ConversationThreadView> = {}): Convers
     // BAL-424 — the Ably channel + every wire payload key on this, not on `relationshipId`.
     conversationId: 'conv-1',
     expertProfileId: 'exp-1',
+    expertUserId: 'user-expert',
     expertName: 'Priya Nair',
     expertFirstName: 'Priya',
     expertInitials: 'PN',
@@ -22,6 +23,7 @@ export function thread(overrides: Partial<ConversationThreadView> = {}): Convers
     latestMessagePreview: null,
     latestMessageAtIso: null,
     latestMessageFromViewer: false,
+    latestMessageFromExpert: false,
     viewerHasSentMessage: false,
     latestInboundActivityAtIso: null,
     lastReadAtIso: null,

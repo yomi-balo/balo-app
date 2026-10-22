@@ -297,6 +297,21 @@ describe('ProposalReview', () => {
     expect(window.location.pathname).toBe('/projects/req-1/proposal/rel-priya');
   });
 
+  it("openAccept never opens the confirmation for another expert's proposal", () => {
+    // The URL's relationship has no reviewable proposal, so the review falls back to
+    // showing Marcus — the binding confirmation must not pre-open for him.
+    renderReview([marcus()], 'rel-priya', true);
+    expect(screen.getAllByText('Marcus overview').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('openAccept removes only ?accept=1, keeping other params and the hash', () => {
+    window.history.replaceState(null, '', '/projects/req-1/proposal/rel-priya?accept=1&x=2#terms');
+    renderReview([doc()], 'rel-priya', true);
+    expect(window.location.search).toBe('?x=2');
+    expect(window.location.hash).toBe('#terms');
+  });
+
   it('openAccept never opens the confirmation for a proposal that is not submitted', () => {
     renderReview([doc({ status: 'changes_requested' })], 'rel-priya', true);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();

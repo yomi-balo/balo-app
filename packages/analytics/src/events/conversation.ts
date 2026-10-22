@@ -29,10 +29,17 @@ export type ConversationFilesSurface = 'header' | 'tabstrip';
  */
 export const CONVERSATION_CALL_SURFACES = ['header', 'rail', 'nudge', 'page_nudge'] as const;
 export type ConversationCallSurface = (typeof CONVERSATION_CALL_SURFACES)[number];
-/** Where the client's Request-proposal CTA was clicked (A5: no nudge surface). */
-export type ConversationProposalSurface = 'header' | 'rail';
-/** Which proposal CTA was clicked — each is a distinct funnel step. */
-export type ConversationProposalCta = 'request' | 'build' | 'revise' | 'view';
+/**
+ * Where a proposal CTA was clicked. `nudge` is the conversation thread's own nudge, which
+ * carries Build/Revise, View and Accept — never Request (A5: Request has no nudge surface).
+ */
+export type ConversationProposalSurface = 'header' | 'rail' | 'nudge';
+/**
+ * Which proposal CTA was clicked — each is a distinct funnel step. `accept` is the nudge's
+ * "Accept {name}'s proposal", which opens the review with the binding confirmation up; it
+ * records intent, not an acceptance.
+ */
+export type ConversationProposalCta = 'request' | 'build' | 'revise' | 'view' | 'accept';
 
 /**
  * What a conversation is ANCHORED to (BAL-424 / ADR-1045 §2) — the seam, restated for the

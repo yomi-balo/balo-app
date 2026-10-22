@@ -325,6 +325,7 @@ export async function loadConversationView(
       relationshipId: relationship.id,
       conversationId,
       expertProfileId: relationship.expertProfileId,
+      expertUserId: expertUser.id,
       expertName,
       expertFirstName: firstWord ?? expertName,
       expertInitials: initialsOf(expertUser.firstName, expertUser.lastName),
@@ -336,6 +337,8 @@ export async function loadConversationView(
       latestMessagePreview: latestMessage === null ? null : previewOfHtml(latestMessage.body),
       latestMessageAtIso: latestMessage === null ? null : latestMessage.createdAt.toISOString(),
       latestMessageFromViewer: latestMessage !== null && latestMessage.senderUserId === user.id,
+      latestMessageFromExpert:
+        latestMessage !== null && latestMessage.senderUserId === expertUser.id,
       viewerHasSentMessage: (summary?.latestOutboundMessageAt ?? null) !== null,
       latestInboundActivityAtIso: latestInboundAt === null ? null : latestInboundAt.toISOString(),
       lastReadAtIso: lastReadAt === null ? null : lastReadAt.toISOString(),

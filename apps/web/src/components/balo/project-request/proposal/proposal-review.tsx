@@ -36,7 +36,7 @@ interface ProposalReviewProps {
   shareLinksErrored?: boolean;
   /**
    * Open the accept confirmation on arrival (`?accept=1`, from the conversation nudge).
-   * Honoured only when the first-opened proposal is still `submitted`.
+   * Honoured only when the proposal for `activeRelationshipId` is still `submitted`.
    */
   openAccept?: boolean;
 }
@@ -77,20 +77,22 @@ export function ProposalReview({
   shareLinksErrored = false,
   openAccept = false,
 }: Readonly<ProposalReviewProps>): React.JSX.Element {
-  const initial = useMemo(
-    () =>
-      proposals.find((proposal) => proposal.relationshipId === activeRelationshipId) ??
-      proposals[0],
+  const matched = useMemo(
+    () => proposals.find((proposal) => proposal.relationshipId === activeRelationshipId),
     [proposals, activeRelationshipId]
   );
 
-  const [activeId, setActiveId] = useState(initial?.id ?? '');
-  const [modalOpen, setModalOpen] = useState(openAccept && initial?.status === 'submitted');
+  const [activeId, setActiveId] = useState(matched?.id ?? proposals[0]?.id ?? '');
+  // Keyed on the MATCHED proposal, never the `proposals[0]` display fallback: the
+  // confirmation is binding, so it only pre-opens for the expert the client clicked.
+  const [modalOpen, setModalOpen] = useState(openAccept && matched?.status === 'submitted');
 
   // Drop `?accept=1` once honoured, so a refresh or back-navigation doesn't reopen it.
   useEffect(() => {
     if (!openAccept) return;
-    window.history.replaceState(null, '', window.location.pathname);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('accept');
+    window.history.replaceState(window.history.state, '', url);
   }, [openAccept]);
   const [changesOpen, setChangesOpen] = useState(false);
 

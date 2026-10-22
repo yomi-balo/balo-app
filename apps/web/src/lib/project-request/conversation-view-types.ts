@@ -166,6 +166,11 @@ export interface ConversationThreadView {
    */
   conversationId: string;
   expertProfileId: string;
+  /**
+   * The relationship's expert's user id — the sender the nudge copy names ("Priya sent a
+   * message"). Lets a realtime message set {@link latestMessageFromExpert} client-side.
+   */
+  expertUserId: string;
   /** Full name (fallback 'Invited expert', mirrors `relationshipName()`). */
   expertName: string;
   /** Tab label. */
@@ -184,6 +189,12 @@ export interface ConversationThreadView {
   latestMessagePreview: string | null;
   latestMessageAtIso: string | null;
   latestMessageFromViewer: boolean;
+  /**
+   * The latest message was sent by THIS thread's expert. Not the inverse of
+   * `latestMessageFromViewer`: a client teammate's message is from neither, and must never
+   * be quoted or prompted for as if the expert wrote it.
+   */
+  latestMessageFromExpert: boolean;
   /** The viewer has written at least one live message in this thread (any position). */
   viewerHasSentMessage: boolean;
   latestInboundActivityAtIso: string | null;

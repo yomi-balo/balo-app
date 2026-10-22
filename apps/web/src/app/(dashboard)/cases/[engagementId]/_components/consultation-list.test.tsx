@@ -20,9 +20,8 @@ import { ConsultationList } from './consultation-list';
  *      two are asserted to differ from each other on the SAME lens. `nobody_joined` is the
  *      third: no wronged party, so it names nobody on either lens.
  *   2. THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'` — the component renders
- *      whatever `recapHref` says, never re-deriving from `state`. `recapHrefOf` emits a href
- *      for every terminal OUTCOME (where the not-held panel explains a no-show), but never for
- *      `cancelled` — that recap has no money block or artifacts to show.
+ *      whatever `recapHref` says, never re-deriving from `state`. `recapHrefOf` decides which
+ *      states get one (see `map-case-consultations.test.ts`).
  *   3. THE CONTENT INDICATORS DO stay under `held` — the exact inverse of (2), and a real
  *      divergence rather than an oversight: a transcript or file count on a call that never
  *      happened would promise artefacts that cannot exist.

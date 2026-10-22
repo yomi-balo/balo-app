@@ -382,10 +382,10 @@ function ConsultationRow({
         </div>
 
         {/* ⚠ THE RECAP LINK FOLLOWS `recapHref`, NOT `state === 'held'`. `recapHrefOf` emits a
-            href for every terminal OUTCOME (no_show_client, missed_call, nobody_joined,
-            venue_unavailable, outcome_pending), so the not-held panel it lands on
-            (`resolveNotHeld`) is reachable — but not for `cancelled`, whose recap has no money
-            block or artifacts to show. CONTENT INDICATORS below still gate on `held`: a
+            href for `held`, `no_show_client` (its minimum charge) and `outcome_pending` — never
+            for a call nothing came of (`missed_call`, `nobody_joined`, `venue_unavailable`,
+            `cancelled`), whose recap would only repeat this row's note. CONTENT INDICATORS
+            below still gate on `held`: a
             transcript or file count on a call that never happened would promise artefacts that
             cannot exist. */}
         {(row.recapHref !== null || row.state === 'held') && (
