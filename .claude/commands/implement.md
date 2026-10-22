@@ -274,12 +274,14 @@ After the fixers finish, check their work: look for scope creep, and for tests w
 
 After all review phases pass, run the pre-PR gate to catch CI failures before the PR is raised.
 
+Nothing else may run while this gate runs. Its help-screenshot step (`pre-pr.md` §8) captures the live app and fails under load, so every review and fix agent must have finished first.
+
 Spawn the pre-pr sub-agent:
 
 ```bash
 claude -p --model sonnet --effort medium \
   --system-prompt "$(cat .claude/commands/pre-pr.md)" \
-  "Run all pre-PR checks on the current branch. The feature implementation is complete and reviewed. Run format, lint, typecheck, build, tests, and SonarCloud readiness checks. Fix what you can, report what you can't."
+  "Run all pre-PR checks on the current branch. The feature implementation is complete and reviewed. Run format, lint, typecheck, build, tests, SonarCloud readiness and, if the UI or a guide changed, help screenshots (§8). Fix what you can, report what you can't."
 ```
 
 **Output:** Either a GREEN LIGHT (all checks pass) or BLOCKED with specific issues.
@@ -288,6 +290,7 @@ claude -p --model sonnet --effort medium \
 
 - write one log per check and a one-line `summary.txt` (`<check> exit=<code> <secs>s`);
 - run vitest per package, and run `apps/web` with `TZ=UTC`, split by `src/lib`, `src/components` and `src/app`;
+- run the help screenshots (`pre-pr.md` §8) last in the same script, after the tests finish, never alongside them;
 - read back only the summary and the `Test Files` lines.
 
 `next-env.d.ts`, which the build regenerates, is in the root `.prettierignore`, so `format:check` stays green after a local build.
@@ -319,7 +322,7 @@ Once Phase 7 is GREEN and Phase 8 has reported success, finalize the work into a
      --title "<same as the commit subject>" \
      --body-file <path-to-body.md>
    ```
-   The PR body should cover: what & why (link the Linear ticket), what's built, any approved scope additions, security/quality notes, any help-guide edits (so MJ can check them), testing (and what's deferred to CI — e.g. integration tests, the production build), and the deliberately-stubbed boundary. End the body with:
+   The PR body should cover: what & why (link the Linear ticket), what's built, any approved scope additions, security/quality notes, any help-guide edits and recaptured help screenshots (so MJ can check them), testing (and what's deferred to CI — e.g. integration tests, the production build), and the deliberately-stubbed boundary. End the body with:
    `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
 5. **Report the PR URL.** Then offer to watch CI and/or move the Linear ticket to In Review with the PR attached.
 6. **Worktree cleanup (offer, never auto-run).** Leave the worktree in place until the PR merges. After merge, offer to remove it: `git worktree remove ../balo-app-bal-<NNN>` (only add `--force`, and only if the user confirms discarding leftover changes). Never remove a worktree that still has uncommitted or unmerged work.
