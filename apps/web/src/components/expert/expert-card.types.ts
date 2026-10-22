@@ -64,5 +64,7 @@ export interface ExpertCardProps {
   orderBy?: string[];
   variant?: 'grid' | 'list';
   onBook?: () => void;
+  /** `onBook` is loading what the booking flow needs: the button spins and ignores clicks. */
+  bookPending?: boolean;
   onViewProfile?: () => void;
 }

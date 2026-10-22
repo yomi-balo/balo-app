@@ -73,7 +73,7 @@ export function LengthControl({
   }
 
   return (
-    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-3">
+    <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-3.5">
       <span id={labelId} className="text-foreground text-sm font-medium">
         How long do you need?
       </span>

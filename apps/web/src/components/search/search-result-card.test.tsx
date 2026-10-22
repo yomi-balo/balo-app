@@ -14,12 +14,14 @@ vi.mock('@/components/expert', () => ({
     expert,
     onViewProfile,
     onBook,
+    bookPending,
   }: {
     expert: { name: string };
     onViewProfile?: () => void;
     onBook?: () => void;
+    bookPending?: boolean;
   }) => (
-    <div>
+    <div data-book-pending={String(bookPending)}>
       <span>{expert.name}</span>
       {onViewProfile ? (
         <button type="button" onClick={onViewProfile}>
@@ -42,6 +44,7 @@ vi.mock('@/components/expert', () => ({
 import { SearchResultCard } from './search-result-card';
 
 const mockTrack = vi.mocked(track);
+const mockOnBook = vi.fn();
 
 function expert(overrides: Partial<ExpertCardData> = {}): ExpertCardData {
   return {
@@ -73,11 +76,20 @@ describe('SearchResultCard', () => {
   it('emits search_result_clicked with position/sort/page and navigates on View profile', async () => {
     const user = userEvent.setup();
     render(
-      <SearchResultCard expert={expert()} variant="grid" position={3} sort="soonest" page={2} />
+      <SearchResultCard
+        expert={expert()}
+        variant="grid"
+        position={3}
+        sort="soonest"
+        page={2}
+        onBook={mockOnBook}
+        bookPending={false}
+      />
     );
     await user.click(screen.getByRole('button', { name: 'View profile' }));
     expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.RESULT_CLICKED, {
       expert_id: 'e1',
+      action: 'profile',
       position: 3,
       sort: 'soonest',
       page: 2,
@@ -93,6 +105,8 @@ describe('SearchResultCard', () => {
         position={1}
         sort="best_match"
         page={1}
+        onBook={mockOnBook}
+        bookPending={false}
       />
     );
     // No button is wired — the card renders the default inert label.
@@ -100,14 +114,64 @@ describe('SearchResultCard', () => {
     expect(screen.getByText('View profile')).toBeInTheDocument();
   });
 
-  // BAL-400 (D4a entry point 2)
-  it('navigates onBook to /experts/{username}?book=1&src=search', async () => {
+  it('hands Book to onBook with the username, without navigating', async () => {
     const user = userEvent.setup();
     render(
-      <SearchResultCard expert={expert()} variant="grid" position={1} sort="soonest" page={1} />
+      <SearchResultCard
+        expert={expert()}
+        variant="grid"
+        position={1}
+        sort="soonest"
+        page={1}
+        onBook={mockOnBook}
+        bookPending={false}
+      />
     );
     await user.click(screen.getByRole('button', { name: 'Book' }));
-    expect(mockPush).toHaveBeenCalledWith('/experts/anil?book=1&src=search');
+    expect(mockOnBook).toHaveBeenCalledWith('anil', expect.any(Function));
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('emits search_result_clicked with action book only once the booking accepts the click', async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchResultCard
+        expert={expert()}
+        variant="grid"
+        position={4}
+        sort="soonest"
+        page={2}
+        onBook={mockOnBook}
+        bookPending={false}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Book' }));
+    expect(mockTrack).not.toHaveBeenCalled();
+
+    const [[, onStart]] = mockOnBook.mock.calls as [[string, () => void]];
+    onStart();
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.RESULT_CLICKED, {
+      expert_id: 'e1',
+      action: 'book',
+      position: 4,
+      sort: 'soonest',
+      page: 2,
+    });
+  });
+
+  it('forwards bookPending to the card', () => {
+    const { container } = render(
+      <SearchResultCard
+        expert={expert()}
+        variant="grid"
+        position={1}
+        sort="soonest"
+        page={1}
+        onBook={mockOnBook}
+        bookPending
+      />
+    );
+    expect(container.querySelector('[data-book-pending="true"]')).not.toBeNull();
   });
 
   it('renders an inert Book CTA (no handler) when the expert has no username', () => {
@@ -118,6 +182,8 @@ describe('SearchResultCard', () => {
         position={1}
         sort="best_match"
         page={1}
+        onBook={mockOnBook}
+        bookPending={false}
       />
     );
     expect(screen.queryByRole('button', { name: 'Book' })).not.toBeInTheDocument();

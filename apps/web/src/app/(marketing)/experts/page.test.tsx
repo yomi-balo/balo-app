@@ -20,6 +20,13 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+// The cards' in-place booking: its auth modal lives in the app's providers, and its loader is a
+// DB-backed Server Action.
+vi.mock('@/hooks/use-auth-modal', () => ({ useAuthModal: () => ({ open: vi.fn() }) }));
+vi.mock('@/lib/booking/actions/load-search-booking', () => ({
+  loadSearchBookingAction: vi.fn(),
+}));
+
 import ExpertsPage from './page';
 
 function makeExpert(overrides: Partial<ExpertSearchResultDTO> = {}): ExpertSearchResultDTO {
