@@ -12,8 +12,10 @@ import {
 } from '@balo/db';
 import { PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
-import { upfrontForProposal } from '@/lib/project-request/kickoff-upfront';
-import type { KickoffUpfront } from '@/lib/project-request/request-detail-view';
+import {
+  upfrontForProposal,
+  type ResolvedKickoffUpfront,
+} from '@/lib/project-request/kickoff-upfront';
 import { requireRequestStaffCapability } from './_shared/require-request-staff-capability';
 
 const inputSchema = z.object({
@@ -24,7 +26,10 @@ const inputSchema = z.object({
 
 export type MarkUpfrontInvoiceRaisedInput = z.infer<typeof inputSchema>;
 
-export type MarkUpfrontInvoiceRaisedResult = { success: true } | { success: false; error: string };
+/** `changed: false` — the invoice was already marked raised; nothing was written. */
+export type MarkUpfrontInvoiceRaisedResult =
+  | { success: true; changed: boolean }
+  | { success: false; error: string };
 
 const INVALID_REQUEST = 'Invalid request.';
 const STALE = 'This request is no longer awaiting kickoff.';
@@ -41,7 +46,7 @@ const GENERIC_FAILURE = 'Could not record the invoice. Please try again.';
 async function loadRaisableInvoice(
   requestId: string,
   relationshipId: string
-): Promise<{ upfront: KickoffUpfront } | { error: string }> {
+): Promise<{ upfront: ResolvedKickoffUpfront } | { error: string }> {
   const request = await projectRequestsRepository.findByIdWithRelations(requestId);
   if (request === undefined) {
     return { error: INVALID_REQUEST };
@@ -62,11 +67,23 @@ async function loadRaisableInvoice(
   return upfront === null ? { error: NOTHING_DUE } : { upfront };
 }
 
-/** Record the raise; the repository's typed refusals map to friendly copy, anything else rethrows. */
-async function recordInvoiceRaised(requestId: string): Promise<{ error: string } | null> {
+/**
+ * Record the raise — who raised it and for how much (audited in the repository, ADR-1030).
+ * The repository's typed refusals map to friendly copy; anything else rethrows.
+ */
+async function recordInvoiceRaised(
+  requestId: string,
+  actorUserId: string,
+  upfront: ResolvedKickoffUpfront
+): Promise<{ changed: boolean } | { error: string }> {
   try {
-    await projectRequestsRepository.markUpfrontInvoiceRaised({ id: requestId });
-    return null;
+    const { changed } = await projectRequestsRepository.markUpfrontInvoiceRaised({
+      id: requestId,
+      actorUserId,
+      amountCents: upfront.amountCents,
+      currency: upfront.currency,
+    });
+    return { changed };
   } catch (error) {
     if (error instanceof InvalidKickoffStateError) {
       return { error: STALE };
@@ -86,7 +103,8 @@ async function recordInvoiceRaised(requestId: string): Promise<{ error: string }
  *
  * Control flow: requireRequestStaffCapability(MANAGE_ANY_KICKOFF_GATE) → validate
  * input → `loadRaisableInvoice` → `recordInvoiceRaised` (idempotent; typed errors →
- * friendly copy) → log → revalidate → return. Analytics fire client-side (PROJECT_KICKOFF_GATE_CONFIRMED).
+ * friendly copy) → log → revalidate → return. Analytics fire client-side (PROJECT_UPFRONT_INVOICE_RAISED),
+ * only when `changed`.
  */
 export async function markUpfrontInvoiceRaisedAction(
   input: MarkUpfrontInvoiceRaisedInput
@@ -110,9 +128,9 @@ export async function markUpfrontInvoiceRaisedAction(
     }
     const { upfront } = loaded;
 
-    const refused = await recordInvoiceRaised(requestId);
-    if (refused !== null) {
-      return { success: false, error: refused.error };
+    const recorded = await recordInvoiceRaised(requestId, admin.id, upfront);
+    if ('error' in recorded) {
+      return { success: false, error: recorded.error };
     }
 
     // Key business event (after the commit).
@@ -121,12 +139,13 @@ export async function markUpfrontInvoiceRaisedAction(
       relationshipId,
       amountCents: upfront.amountCents,
       currency: upfront.currency,
+      changed: recorded.changed,
       userId: admin.id,
     });
 
     revalidatePath(`/projects/${requestId}`);
 
-    return { success: true };
+    return { success: true, changed: recorded.changed };
   } catch (error) {
     log.error('Failed to mark upfront invoice raised', {
       requestId,

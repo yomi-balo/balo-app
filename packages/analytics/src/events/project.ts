@@ -46,11 +46,13 @@ export const PROJECT_EVENTS = {
   CHANGES_REQUESTED: 'project_changes_requested',
   PROPOSAL_RESUBMITTED: 'project_proposal_resubmitted',
   PROJECT_KICKOFF_APPROVED: 'project_kickoff_approved',
-  // BAL-291 (A6.5): Balo marked the upfront invoice raised on the KickoffBoard — the
-  // checklist's middle step. Fired client-side so the kickoff funnel can measure dwell
-  // (accept → billing → invoice raised → paid/approved). Client billing has its own
-  // `billing_details_submitted` event; approval is PROJECT_KICKOFF_APPROVED.
-  PROJECT_KICKOFF_GATE_CONFIRMED: 'project_kickoff_gate_confirmed',
+  // Balo marked the upfront invoice raised on the KickoffBoard — the checklist's middle
+  // step. Fired client-side, once per raise (not on an idempotent repeat), so the kickoff
+  // funnel can measure dwell (accept → billing → invoice raised → paid/approved). Client
+  // billing has its own `billing_details_submitted` event; approval is
+  // PROJECT_KICKOFF_APPROVED. Replaces the retired `project_kickoff_gate_confirmed`
+  // (the expert payment-terms gate), whose payload no longer applies.
+  PROJECT_UPFRONT_INVOICE_RAISED: 'project_upfront_invoice_raised',
   // Request-detail page (A1 / BAL-268) viewer-occurrence signals, fired from the
   // client analytics island. DETAIL_VIEWED on mount; PHASE_FLIPPED the first time
   // a viewer sees this request in Phase 2 (per request+lens, sessionStorage-guarded
@@ -288,10 +290,9 @@ export interface ProjectEventMap {
     request_id: string;
     actor: 'admin';
   };
-  [PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED]: {
+  [PROJECT_EVENTS.PROJECT_UPFRONT_INVOICE_RAISED]: {
     request_id: string;
     relationship_id: string;
-    gate: 'upfront_invoice';
     actor: 'admin';
   };
   [PROJECT_EVENTS.PROJECT_REQUEST_DETAIL_VIEWED]: {

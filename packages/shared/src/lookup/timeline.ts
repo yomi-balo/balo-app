@@ -296,6 +296,7 @@ export const AUDIT_ACTION_SENTENCES: Record<
 
   'project_request.balo_fee_overridden': () => 'Balo fee overridden',
   'project_request.converted_from_case': () => 'Converted from a case',
+  'project_request.upfront_invoice_raised': () => 'Upfront invoice raised',
   'project_request.owner_assigned': (m) =>
     m.to === null ? 'Balo owner cleared' : 'Balo owner assigned',
   'project_request.closed': (m) => {

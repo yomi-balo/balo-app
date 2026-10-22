@@ -859,7 +859,7 @@ describe('adminNeedsYou + adminStallDays', () => {
     [
       'billing in, invoice not raised',
       { clientBillingConfirmedAt: day(2), upfrontInvoiceRaisedAt: null },
-      'Ready for kickoff',
+      'Raise invoice',
     ],
     [
       'invoice raised',

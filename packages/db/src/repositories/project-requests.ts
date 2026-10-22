@@ -714,14 +714,26 @@ export const projectRequestsRepository = {
 
   /**
    * Record that Balo has raised the upfront invoice for an accepted request — the
-   * kickoff checklist's middle step. Same contract as `confirmKickoffGate`: idempotent
-   * (the FIRST raise's timestamp is preserved), status-guarded to `accepted`
-   * (`InvalidKickoffStateError`), and FOR UPDATE-locked. Additionally refuses to run
-   * before the client's billing details are confirmed
-   * (`UpfrontInvoiceBeforeBillingError`) — the invoice is raised from them. Whether the
-   * deal has anything due upfront is the caller's check (it reads the proposal).
+   * kickoff checklist's middle step, and a money-boundary act (ADR-1030): it records
+   * WHO raised it (`upfront_invoice_raised_by_user_id`) and appends ONE
+   * `project_request.upfront_invoice_raised` audit row carrying the invoiced amount,
+   * in the same transaction as the write.
+   *
+   * Idempotent on the `updateBaloFeeBps` pattern: a repeat raise is a genuine no-op —
+   * the FIRST raise's timestamp and actor are preserved and no second audit row is
+   * written (`changed: false`). Status-guarded to `accepted` (`InvalidKickoffStateError`)
+   * and FOR UPDATE-locked. Refuses to run before the client's billing details are
+   * confirmed (`UpfrontInvoiceBeforeBillingError`) — the invoice is raised from them.
+   * Whether the deal has anything due upfront is the caller's check (it reads the
+   * proposal, and passes the amount it found).
    */
-  async markUpfrontInvoiceRaised(input: { id: string }): Promise<ProjectRequest> {
+  async markUpfrontInvoiceRaised(input: {
+    id: string;
+    actorUserId: string;
+    /** The client's fee-inclusive invoice amount, recorded on the audit row. */
+    amountCents: number;
+    currency: string;
+  }): Promise<{ request: ProjectRequest; changed: boolean }> {
     return db.transaction(async (tx) => {
       const [current] = await tx
         .select()
@@ -741,9 +753,16 @@ export const projectRequestsRepository = {
         throw new UpfrontInvoiceBeforeBillingError();
       }
 
+      if (current.upfrontInvoiceRaisedAt !== null) {
+        return { request: current, changed: false };
+      }
+
       const [updated] = await tx
         .update(projectRequests)
-        .set({ upfrontInvoiceRaisedAt: current.upfrontInvoiceRaisedAt ?? new Date() })
+        .set({
+          upfrontInvoiceRaisedAt: new Date(),
+          upfrontInvoiceRaisedByUserId: input.actorUserId,
+        })
         .where(eq(projectRequests.id, input.id))
         .returning();
 
@@ -751,7 +770,18 @@ export const projectRequestsRepository = {
         throw new Error(`Failed to update project request: ${input.id}`);
       }
 
-      return updated;
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: 'project_request.upfront_invoice_raised',
+          entityType: 'project_request',
+          entityId: input.id,
+          metadata: { amount_cents: input.amountCents, currency: input.currency },
+        },
+        tx
+      );
+
+      return { request: updated, changed: true };
     });
   },
 

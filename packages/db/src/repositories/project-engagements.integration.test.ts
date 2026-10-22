@@ -92,6 +92,8 @@ async function seedAcceptedKickoff(
     );
   }
 
+  const admin = await userFactory({ platformRole: 'admin' });
+
   const gates = options.bothGates === true ? new Date() : null;
   await db
     .update(projectRequests)
@@ -99,13 +101,12 @@ async function seedAcceptedKickoff(
       status: 'accepted',
       clientBillingConfirmedAt: gates,
       upfrontInvoiceRaisedAt: gates,
+      upfrontInvoiceRaisedByUserId: gates === null ? null : admin.id,
     })
     .where(eq(projectRequests.id, source.projectRequestId));
 
   const request = await projectRequestsRepository.findById(source.projectRequestId);
   if (request === undefined) throw new Error('seeded request vanished');
-
-  const admin = await userFactory({ platformRole: 'admin' });
 
   return { source, companyId: request.companyId, adminId: admin.id };
 }
@@ -911,12 +912,14 @@ describe('projectEngagementsRepository.materializeFromKickoff — accept→appro
     installmentPcts?: number[];
   }): Promise<{ attempt: Promise<unknown>; projectRequestId: string }> {
     const source = await proposalFactory({ values: { status: 'accepted' } });
+    const admin = await userFactory({ platformRole: 'admin' });
     await db
       .update(projectRequests)
       .set({
         status: 'accepted',
         clientBillingConfirmedAt: state.billing ? new Date() : null,
         upfrontInvoiceRaisedAt: state.invoiceRaised ? new Date() : null,
+        upfrontInvoiceRaisedByUserId: state.invoiceRaised ? admin.id : null,
       })
       .where(eq(projectRequests.id, source.projectRequestId));
     const pcts = state.installmentPcts ?? [];
@@ -932,7 +935,6 @@ describe('projectEngagementsRepository.materializeFromKickoff — accept→appro
     }
     const request = await projectRequestsRepository.findById(source.projectRequestId);
     if (request === undefined) throw new Error('seeded request vanished');
-    const admin = await userFactory({ platformRole: 'admin' });
 
     const attempt = projectEngagementsRepository.materializeFromKickoff({
       requestId: source.projectRequestId,
@@ -1005,18 +1007,19 @@ describe('projectEngagementsRepository.materializeFromKickoff — accept→appro
   it('throws InvalidStatusTransitionError when the request is not accepted (e.g. proposal_submitted)', async () => {
     // Both gates set, but the request status is proposal_submitted (not accepted).
     const source = await proposalFactory();
+    const admin = await userFactory({ platformRole: 'admin' });
     await db
       .update(projectRequests)
       .set({
         status: 'proposal_submitted',
         clientBillingConfirmedAt: new Date(),
         upfrontInvoiceRaisedAt: new Date(),
+        upfrontInvoiceRaisedByUserId: admin.id,
       })
       .where(eq(projectRequests.id, source.projectRequestId));
     const request = await projectRequestsRepository.findById(source.projectRequestId);
     if (request === undefined) throw new Error('seeded request vanished');
     expect(request.status).toBe('proposal_submitted');
-    const admin = await userFactory({ platformRole: 'admin' });
 
     await expect(
       projectEngagementsRepository.materializeFromKickoff({

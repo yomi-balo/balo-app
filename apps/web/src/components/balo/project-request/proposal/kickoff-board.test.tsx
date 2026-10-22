@@ -168,7 +168,7 @@ describe('KickoffBoard — admin actions', () => {
   });
 
   it('Mark sent records the invoice, fires the gate event, toasts, and refreshes', async () => {
-    mockMarkInvoiceSent.mockResolvedValue({ success: true });
+    mockMarkInvoiceSent.mockResolvedValue({ success: true, changed: true });
     renderBoard({ lens: 'admin', clientBillingConfirmed: true });
 
     fireEvent.click(screen.getByRole('button', { name: /^Mark sent/ }));
@@ -179,15 +179,35 @@ describe('KickoffBoard — admin actions', () => {
         relationshipId: RELATIONSHIP_ID,
       });
     });
-    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED, {
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_UPFRONT_INVOICE_RAISED, {
       request_id: REQUEST_ID,
       relationship_id: RELATIONSHIP_ID,
-      gate: 'upfront_invoice',
       actor: 'admin',
     });
     expect(mockToast.success).toHaveBeenCalledWith('Invoice marked as sent');
     expect(mockRefresh).toHaveBeenCalled();
     expect(mockApproveKickoff).not.toHaveBeenCalled();
+  });
+
+  it('a repeat raise (already recorded) refreshes without firing the event again', async () => {
+    mockMarkInvoiceSent.mockResolvedValue({ success: true, changed: false });
+    renderBoard({ lens: 'admin', clientBillingConfirmed: true });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Mark sent/ }));
+
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('shows the invoice amount to the cent — it is what the admin types into the invoice', () => {
+    renderBoard({
+      lens: 'admin',
+      clientBillingConfirmed: true,
+      upfront: { amountCents: 462_938, currency: 'aud' },
+    });
+    expect(
+      screen.getByText('Invoice Northwind Industrial for A$4,629.38, then mark it sent')
+    ).toBeInTheDocument();
   });
 
   it('toasts the error and does not refresh when Mark sent fails', async () => {

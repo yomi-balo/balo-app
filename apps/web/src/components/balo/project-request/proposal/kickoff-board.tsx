@@ -16,12 +16,12 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { formatWholeCurrency } from '@/lib/utils/currency';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import type { KickoffUpfront } from '@/lib/project-request/request-detail-view';
 import { RequestCard } from '../request-card';
 import { ClientBillingAffordance } from './billing-details-dialog';
+import { formatProposalAmount } from './proposal-format';
 import { markUpfrontInvoiceRaisedAction } from '@/app/(dashboard)/projects/[requestId]/_actions/mark-upfront-invoice-raised';
 import { approveKickoffAction } from '@/app/(dashboard)/projects/[requestId]/_actions/approve-kickoff';
 
@@ -89,7 +89,10 @@ export const KICKOFF_MEMBER_BLOCKED_SUB =
 interface StepCopyContext {
   lens: KickoffLens;
   company: string;
-  /** The formatted upfront amount, or `null` when withheld from this viewer. */
+  /**
+   * The upfront amount, exact to the cent (it is what goes on the invoice), or `null`
+   * when withheld from this viewer.
+   */
   amount: string | null;
   memberBlocked: boolean;
 }
@@ -243,7 +246,7 @@ export function KickoffBoard({
       amount:
         upfront?.amountCents == null
           ? null
-          : formatWholeCurrency(upfront.amountCents, upfront.currency),
+          : formatProposalAmount(upfront.amountCents, upfront.currency),
       memberBlocked,
     }
   );
@@ -261,12 +264,13 @@ export function KickoffBoard({
           toast.error(result.error);
           return;
         }
-        track(PROJECT_EVENTS.PROJECT_KICKOFF_GATE_CONFIRMED, {
-          request_id: requestId,
-          relationship_id: acceptedRelationshipId,
-          gate: 'upfront_invoice',
-          actor: 'admin',
-        });
+        if (result.changed) {
+          track(PROJECT_EVENTS.PROJECT_UPFRONT_INVOICE_RAISED, {
+            request_id: requestId,
+            relationship_id: acceptedRelationshipId,
+            actor: 'admin',
+          });
+        }
         toast.success('Invoice marked as sent');
         router.refresh();
       })();

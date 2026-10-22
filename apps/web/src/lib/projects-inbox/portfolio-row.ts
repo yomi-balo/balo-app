@@ -533,11 +533,13 @@ function expertNeedsYou(
 
 /**
  * An accepted request always has Balo in the loop: chasing billing, raising the upfront
- * invoice (or approving when nothing is due upfront), then confirming payment.
+ * invoice, then confirming payment. Once billing is in, most deals' next step is the
+ * invoice; the rare deal with nothing due upfront shows Approve on the board instead (the
+ * inbox does not load the proposal, so it cannot tell the two apart).
  */
 function adminKickoffLabel(row: PortfolioRequestRow): string {
   if (row.clientBillingConfirmedAt === null) return 'Kickoff gate';
-  if (row.upfrontInvoiceRaisedAt === null) return 'Ready for kickoff';
+  if (row.upfrontInvoiceRaisedAt === null) return 'Raise invoice';
   return 'Awaiting payment';
 }
 

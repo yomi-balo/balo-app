@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   companies,
@@ -28,6 +28,7 @@ import {
   projectTagFactory,
   requestExpertRelationshipFactory,
 } from '../test/factories';
+import { expectCheckViolation } from '../test/helpers/expect-check-violation';
 import { referenceDataRepository } from './reference-data';
 import {
   projectRequestsRepository,
@@ -1275,64 +1276,141 @@ describe('projectRequestsRepository.confirmKickoffGate', () => {
 
 // ── markUpfrontInvoiceRaised ─────────────────────────────────────────
 
+/** The upfront-invoice audit rows for one request (test-local). */
+async function invoiceRaisedAuditRows(
+  requestId: string
+): Promise<(typeof auditEvents.$inferSelect)[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityId, requestId),
+        eq(auditEvents.action, 'project_request.upfront_invoice_raised')
+      )
+    );
+}
+
 describe('projectRequestsRepository.markUpfrontInvoiceRaised', () => {
-  it('sets upfront_invoice_raised_at once billing is confirmed on an accepted request', async () => {
+  /** An accepted request with billing confirmed, plus the staffer raising its invoice. */
+  async function seedRaisable(): Promise<{ requestId: string; actorUserId: string }> {
     const created = await projectRequestFactory({
       status: 'accepted',
       clientBillingConfirmedAt: new Date(),
     });
+    const actor = await userFactory();
+    return { requestId: created.id, actorUserId: actor.id };
+  }
 
-    const updated = await projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id });
+  const AMOUNT = { amountCents: 522_000, currency: 'aud' };
 
-    expect(updated.upfrontInvoiceRaisedAt).toBeInstanceOf(Date);
-    const reloaded = await projectRequestsRepository.findById(created.id);
+  it('records when, who, and one audit row with the invoiced amount', async () => {
+    const { requestId, actorUserId } = await seedRaisable();
+
+    const result = await projectRequestsRepository.markUpfrontInvoiceRaised({
+      id: requestId,
+      actorUserId,
+      ...AMOUNT,
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.request.upfrontInvoiceRaisedAt).toBeInstanceOf(Date);
+    expect(result.request.upfrontInvoiceRaisedByUserId).toBe(actorUserId);
+    const reloaded = await projectRequestsRepository.findById(requestId);
     expect(reloaded?.upfrontInvoiceRaisedAt).toBeInstanceOf(Date);
+    expect(reloaded?.upfrontInvoiceRaisedByUserId).toBe(actorUserId);
     expect(reloaded?.status).toBe('accepted');
+
+    const rows = await invoiceRaisedAuditRows(requestId);
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    expect(row?.actorUserId).toBe(actorUserId);
+    expect(row?.entityType).toBe('project_request');
+    expect(row?.metadata).toEqual({ amount_cents: 522_000, currency: 'aud' });
   });
 
-  it('is idempotent — a second mark preserves the original timestamp', async () => {
-    const created = await projectRequestFactory({
-      status: 'accepted',
-      clientBillingConfirmedAt: new Date(),
+  it('is a no-op on a repeat raise — first timestamp and actor kept, no second audit row', async () => {
+    const { requestId, actorUserId } = await seedRaisable();
+    const first = await projectRequestsRepository.markUpfrontInvoiceRaised({
+      id: requestId,
+      actorUserId,
+      ...AMOUNT,
+    });
+    const otherStaffer = await userFactory();
+
+    const second = await projectRequestsRepository.markUpfrontInvoiceRaised({
+      id: requestId,
+      actorUserId: otherStaffer.id,
+      ...AMOUNT,
     });
 
-    const first = await projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id });
-    const firstAt = first.upfrontInvoiceRaisedAt;
-    expect(firstAt).toBeInstanceOf(Date);
-
-    const second = await projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id });
-    expect(second.upfrontInvoiceRaisedAt?.getTime()).toBe(firstAt?.getTime());
+    expect(second.changed).toBe(false);
+    expect(second.request.upfrontInvoiceRaisedAt?.getTime()).toBe(
+      first.request.upfrontInvoiceRaisedAt?.getTime()
+    );
+    expect(second.request.upfrontInvoiceRaisedByUserId).toBe(actorUserId);
+    expect(await invoiceRaisedAuditRows(requestId)).toHaveLength(1);
   });
 
-  it('throws UpfrontInvoiceBeforeBillingError before billing is confirmed, leaving the row unchanged', async () => {
+  it('throws UpfrontInvoiceBeforeBillingError before billing is confirmed, writing nothing', async () => {
     const created = await projectRequestFactory({ status: 'accepted' });
+    const actor = await userFactory();
 
     await expect(
-      projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id })
+      projectRequestsRepository.markUpfrontInvoiceRaised({
+        id: created.id,
+        actorUserId: actor.id,
+        ...AMOUNT,
+      })
     ).rejects.toBeInstanceOf(UpfrontInvoiceBeforeBillingError);
 
     const reloaded = await projectRequestsRepository.findById(created.id);
     expect(reloaded?.upfrontInvoiceRaisedAt).toBeNull();
+    expect(reloaded?.upfrontInvoiceRaisedByUserId).toBeNull();
+    expect(await invoiceRaisedAuditRows(created.id)).toHaveLength(0);
   });
 
-  it('throws InvalidKickoffStateError when status is not accepted, leaving the row unchanged', async () => {
+  it('throws InvalidKickoffStateError when status is not accepted, writing nothing', async () => {
     const created = await projectRequestFactory({
       status: 'kickoff_approved',
       clientBillingConfirmedAt: new Date(),
     });
+    const actor = await userFactory();
 
     await expect(
-      projectRequestsRepository.markUpfrontInvoiceRaised({ id: created.id })
+      projectRequestsRepository.markUpfrontInvoiceRaised({
+        id: created.id,
+        actorUserId: actor.id,
+        ...AMOUNT,
+      })
     ).rejects.toBeInstanceOf(InvalidKickoffStateError);
 
     const reloaded = await projectRequestsRepository.findById(created.id);
     expect(reloaded?.upfrontInvoiceRaisedAt).toBeNull();
+    expect(await invoiceRaisedAuditRows(created.id)).toHaveLength(0);
   });
 
   it('throws for an unknown id', async () => {
+    const actor = await userFactory();
     await expect(
-      projectRequestsRepository.markUpfrontInvoiceRaised({ id: randomUUID() })
+      projectRequestsRepository.markUpfrontInvoiceRaised({
+        id: randomUUID(),
+        actorUserId: actor.id,
+        ...AMOUNT,
+      })
     ).rejects.toThrow();
+  });
+
+  it('the DB refuses a raise timestamp without its actor, and an actor without a timestamp', async () => {
+    const { requestId, actorUserId } = await seedRaisable();
+    await expectCheckViolation(
+      sql`UPDATE project_requests SET upfront_invoice_raised_at = now() WHERE id = ${requestId}`,
+      'project_requests_upfront_invoice_raised_pair'
+    );
+    await expectCheckViolation(
+      sql`UPDATE project_requests SET upfront_invoice_raised_by_user_id = ${actorUserId} WHERE id = ${requestId}`,
+      'project_requests_upfront_invoice_raised_pair'
+    );
   });
 });
 

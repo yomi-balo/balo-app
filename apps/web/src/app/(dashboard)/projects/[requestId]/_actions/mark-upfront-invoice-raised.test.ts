@@ -98,7 +98,7 @@ describe('markUpfrontInvoiceRaisedAction', () => {
     mockFindByIdWithRelations.mockResolvedValue(requestGraph());
     mockFindCurrentByRelationship.mockResolvedValue({ ...PROPOSAL });
     mockListInstallments.mockResolvedValue([{ pct: 30 }, { pct: 70 }]);
-    mockMarkRaised.mockResolvedValue({ id: REQUEST_ID });
+    mockMarkRaised.mockResolvedValue({ request: { id: REQUEST_ID }, changed: true });
   });
 
   it('denies a session-uncapable caller; nothing is read or written', async () => {
@@ -175,15 +175,32 @@ describe('markUpfrontInvoiceRaisedAction', () => {
     expect(mockMarkRaised).not.toHaveBeenCalled();
   });
 
-  it('records the raised invoice, logs the business event, and revalidates the page', async () => {
-    expect(await markUpfrontInvoiceRaisedAction(VALID_INPUT)).toEqual({ success: true });
-    expect(mockMarkRaised).toHaveBeenCalledWith({ id: REQUEST_ID });
+  it('records who raised it and for how much, logs the business event, and revalidates', async () => {
+    expect(await markUpfrontInvoiceRaisedAction(VALID_INPUT)).toEqual({
+      success: true,
+      changed: true,
+    });
+    // The client's fee-inclusive figure: 30% of 500,000 grossed up by 25%.
+    expect(mockMarkRaised).toHaveBeenCalledWith({
+      id: REQUEST_ID,
+      actorUserId: ADMIN.id,
+      amountCents: 187500,
+      currency: 'aud',
+    });
     expect(log.info).toHaveBeenCalledWith(
       'Upfront invoice marked raised',
       // The client's fee-inclusive figure: 30% of 500,000 grossed up by 25%.
       expect.objectContaining({ requestId: REQUEST_ID, amountCents: 187500, currency: 'aud' })
     );
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+
+  it('passes an idempotent repeat through as changed: false', async () => {
+    mockMarkRaised.mockResolvedValue({ request: { id: REQUEST_ID }, changed: false });
+    expect(await markUpfrontInvoiceRaisedAction(VALID_INPUT)).toEqual({
+      success: true,
+      changed: false,
+    });
   });
 
   it('maps InvalidKickoffStateError (status moved on) to stale copy', async () => {

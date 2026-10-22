@@ -1,5 +1,5 @@
 {
-  "id": "db02bc6e-892b-4682-ba36-b5284af0a431",
+  "id": "9ae6392f-2baa-4e95-86d6-7221e5b2fc5e",
   "prevId": "41aa05bf-a9f7-454b-8e7b-8ffa2ebd05cb",
   "version": "7",
   "dialect": "postgresql",
@@ -6445,6 +6445,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "upfront_invoice_raised_by_user_id": {
+          "name": "upfront_invoice_raised_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "expert_terms_confirmed_at": {
           "name": "expert_terms_confirmed_at",
           "type": "timestamp with time zone",
@@ -6585,6 +6591,21 @@
           "method": "btree",
           "with": {}
         },
+        "project_requests_upfront_invoice_raised_by_idx": {
+          "name": "project_requests_upfront_invoice_raised_by_idx",
+          "columns": [
+            {
+              "expression": "upfront_invoice_raised_by_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "project_requests_source_case_idx": {
           "name": "project_requests_source_case_idx",
           "columns": [
@@ -6651,6 +6672,15 @@
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
+        "project_requests_upfront_invoice_raised_by_user_id_users_id_fk": {
+          "name": "project_requests_upfront_invoice_raised_by_user_id_users_id_fk",
+          "tableFrom": "project_requests",
+          "tableTo": "users",
+          "columnsFrom": ["upfront_invoice_raised_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
         "project_requests_closed_by_user_id_users_id_fk": {
           "name": "project_requests_closed_by_user_id_users_id_fk",
           "tableFrom": "project_requests",
@@ -6708,6 +6738,10 @@
         "project_requests_balo_fee_bps_range": {
           "name": "project_requests_balo_fee_bps_range",
           "value": "\"project_requests\".\"balo_fee_bps\" >= 0 AND \"project_requests\".\"balo_fee_bps\" <= 10000"
+        },
+        "project_requests_upfront_invoice_raised_pair": {
+          "name": "project_requests_upfront_invoice_raised_pair",
+          "value": "(\"project_requests\".\"upfront_invoice_raised_at\" IS NULL) = (\"project_requests\".\"upfront_invoice_raised_by_user_id\" IS NULL)"
         }
       },
       "isRLSEnabled": false
